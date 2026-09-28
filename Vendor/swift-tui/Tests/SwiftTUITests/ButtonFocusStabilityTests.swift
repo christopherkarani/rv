@@ -1,0 +1,791 @@
+import Foundation
+import Testing
+
+@_spi(Testing) @testable import SwiftTUICore
+@testable import SwiftTUIRuntime
+@testable import SwiftTUIViews
+
+// Regression tests for calculator-driven framework bugs:
+//   1. Plain Button bounds must not shift when focus arrives — otherwise
+//      a mouseDown-followed-by-mouseUp on the same pointer location
+//      misses the armed route and the action never dispatches.
+//   2. `.fixedSize()` on a VStack must still reconcile inner flexible
+//      rows (Spacer, frame(maxWidth:.infinity)) against the widest
+//      sibling's ideal cross, so right-aligned display text and
+//      bottom-row spacer distribution work.
+//   3. An action closure that captures `self` from an outer view (e.g.
+//      a CalculatorTab whose buttons live inside a custom
+//      `CalculatorButton` wrapper) must mutate that outer view's @State
+//      when the button is clicked — not the wrapper view's state slot.
+
+@MainActor
+@Suite
+struct ButtonFocusStabilityTests {
+  @Test("plain Button bounds stay stable across focus transitions")
+  func plainButtonFocusDoesNotShiftBounds() throws {
+    let size = CellSize(width: 20, height: 3)
+    let rootIdentity = testIdentity("PlainButtonFocus")
+
+    func render(focus: Identity?) -> RenderSnapshot {
+      var env = EnvironmentValues()
+      env.terminalSize = size
+      env.focusedIdentity = focus
+      return DefaultRenderer().render(
+        HStack(spacing: 1) {
+          Button(action: {}) {
+            Text("AC").frame(minWidth: 5, maxWidth: 5)
+          }
+          .buttonStyle(.plain)
+          Button(action: {}) {
+            Text("OK").frame(minWidth: 5, maxWidth: 5)
+          }
+          .buttonStyle(.plain)
+        },
+        context: .init(identity: rootIdentity, environmentValues: env),
+        proposal: .init(width: size.width, height: size.height)
+      )
+    }
+
+    let unfocused = render(focus: nil)
+    let firstButtonIdentity = try #require(
+      unfocused.semanticSnapshot.interactionRegions.first?.identity
+    )
+    let firstButtonRect = try #require(
+      unfocused.semanticSnapshot.interactionRegions.first?.rect
+    )
+
+    let focused = render(focus: firstButtonIdentity)
+    let focusedFirstButtonRect =
+      focused.semanticSnapshot.interactionRegions.first {
+        $0.identity == firstButtonIdentity
+      }?.rect
+
+    #expect(firstButtonRect == focusedFirstButtonRect)
+  }
+
+  @Test("click on a plain Button wrapped by a custom view updates the outer view's @State")
+  func plainButtonInsideWrapperMutatesOwnerState() async throws {
+    let terminalSize = CellSize(width: 20, height: 3)
+    let rootIdentity = testIdentity("WrappedButtonStateRepro")
+    let tapCount = LockedBox<Int>(0)
+
+    // Button lives inside a custom View wrapper (`WrapperButton`) and
+    // its action closure captures `self` from the outer `Fixture`
+    // view. If the framework routes the @State mutation through the
+    // wrapper's authoring scope instead of the owning view's, the
+    // setter writes to the wrapper's state slot and the display stays
+    // at "A". With the fix the display must flip to "B" after the
+    // click and the tap count must reach 1.
+    struct WrapperButton: View {
+      let action: @MainActor @Sendable () -> Void
+      var body: some View {
+        Button(action: action) {
+          Text("Go")
+            .frame(minWidth: 5, maxWidth: 5)
+            .background { Rectangle().fill(Color.gray) }
+        }
+        .buttonStyle(.plain)
+      }
+    }
+
+    struct Fixture: View {
+      let tapCount: LockedBox<Int>
+      @State private var value: String = "A"
+      var body: some View {
+        VStack {
+          Text("v=\(value)")
+          WrapperButton(action: { setValue() })
+        }
+      }
+      private func setValue() {
+        tapCount.value += 1
+        value = "B"
+      }
+    }
+
+    let view = Fixture(tapCount: tapCount)
+
+    var env = EnvironmentValues()
+    env.terminalSize = terminalSize
+    let initial = DefaultRenderer().render(
+      view,
+      context: .init(identity: rootIdentity, environmentValues: env),
+      proposal: .init(width: terminalSize.width, height: terminalSize.height)
+    )
+    let goNode = try #require(
+      initial.placedTree.flattenedDescendants.first { node in
+        if case .text("Go") = node.drawPayload { return true }
+        return false
+      }
+    )
+    let center = Point(CellPoint(x: goNode.bounds.origin.x, y: goNode.bounds.origin.y))
+
+    let host = RecordingTerminalHostLocal(size: terminalSize)
+    _ = try await Self.runHarness(
+      host: host,
+      events: [
+        .mouse(.init(kind: .down(.primary), location: center)),
+        .mouse(.init(kind: .up(.primary), location: center)),
+      ],
+      rootIdentity: rootIdentity,
+      terminalSize: terminalSize
+    ) {
+      view
+    }
+
+    let finalSurface = try #require(host.lastPresentedSurface)
+    #expect(tapCount.value == 1, "action closure should have fired")
+    #expect(finalSurface.lines.contains(where: { $0.contains("v=B") }), "display should show v=B")
+    #expect(
+      !finalSurface.lines.contains(where: { $0.contains("v=A") }),
+      "display should not still show v=A")
+  }
+
+  @Test("deeply nested Button action mutates its authored @State owner")
+  func deeplyNestedButtonMutatesAuthoredStateOwner() async throws {
+    let terminalSize = CellSize(width: 100, height: 40)
+    let rootIdentity = testIdentity("DeepButtonStateOwner")
+    let trace = DeepButtonStateOwnerTrace()
+    let view = DeepButtonStateOwnerFixture(trace: trace)
+
+    var env = EnvironmentValues()
+    env.terminalSize = terminalSize
+    let initial = DefaultRenderer().render(
+      view,
+      context: .init(identity: rootIdentity, environmentValues: env),
+      proposal: .init(width: terminalSize.width, height: terminalSize.height)
+    )
+    let buttonLabel = try #require(
+      initial.placedTree.flattenedDescendants.first { node in
+        if case .text("inc") = node.drawPayload { return true }
+        return false
+      }
+    )
+
+    let host = RecordingTerminalHostLocal(size: terminalSize)
+    _ = try await Self.runHarness(
+      host: host,
+      events: [
+        .mouse(.init(kind: .down(.primary), location: Point(buttonLabel.bounds.origin))),
+        .mouse(.init(kind: .up(.primary), location: Point(buttonLabel.bounds.origin))),
+      ],
+      rootIdentity: rootIdentity,
+      terminalSize: terminalSize
+    ) {
+      view
+    }
+
+    let finalSurface = try #require(host.lastPresentedSurface)
+    #expect(trace.actionCount == 1, "the deeply nested Button action must execute exactly once")
+    #expect(
+      trace.actionOwner != trace.authoredOwner,
+      "the fixture must exercise a forwarded action whose Button owner differs from its @State owner"
+    )
+    #expect(
+      finalSurface.lines.contains(where: { $0.contains("count 1") }),
+      "the action's @State write must land on the current live authored owner"
+    )
+  }
+
+  @Test("Button in an offset conditional overlay closes its authored state owner")
+  func conditionalOverlayButtonMutatesAuthoredStateOwner() async throws {
+    let terminalSize = CellSize(width: 30, height: 8)
+    let rootIdentity = testIdentity("ConditionalOverlayStateOwner")
+    let actionCount = LockedBox<Int>(0)
+
+    struct Fixture: View {
+      let actionCount: LockedBox<Int>
+      @State private var menuPresented = true
+
+      var body: some View {
+        ZStack(alignment: .topLeading) {
+          Text("App shell")
+          if menuPresented {
+            VStack(alignment: .leading, spacing: 0) {
+              Text("Menu body")
+              Button("close menu") {
+                actionCount.value += 1
+                menuPresented = false
+              }
+            }
+            .offset(x: 1, y: 1)
+          }
+        }
+      }
+    }
+
+    let view = Fixture(actionCount: actionCount)
+    var environment = EnvironmentValues()
+    environment.terminalSize = terminalSize
+    let initial = DefaultRenderer().render(
+      view,
+      context: .init(identity: rootIdentity, environmentValues: environment),
+      proposal: .init(width: terminalSize.width, height: terminalSize.height)
+    )
+    let closeLabel = try #require(
+      initial.placedTree.flattenedDescendants.first { node in
+        if case .text("close menu") = node.drawPayload { return true }
+        return false
+      }
+    )
+
+    let host = RecordingTerminalHostLocal(size: terminalSize)
+    _ = try await Self.runHarness(
+      host: host,
+      events: [
+        .mouse(.init(kind: .down(.primary), location: Point(closeLabel.bounds.origin))),
+        .mouse(.init(kind: .up(.primary), location: Point(closeLabel.bounds.origin))),
+      ],
+      rootIdentity: rootIdentity,
+      terminalSize: terminalSize
+    ) {
+      view
+    }
+
+    let finalSurface = try #require(host.lastPresentedSurface)
+    #expect(actionCount.value == 1)
+    #expect(!finalSurface.lines.contains(where: { $0.contains("Menu body") }))
+  }
+
+  @Test("trailing delete Button inside selected TabView content mutates content state")
+  func trailingDeleteButtonInsideSelectedTabViewContentMutatesState() async throws {
+    let terminalSize = CellSize(width: 20, height: 6)
+    let rootIdentity = testIdentity("TabViewTrailingDeleteButtonClick")
+    let tapCount = LockedBox<Int>(0)
+
+    enum TabSelection: Hashable {
+      case counter
+      case todo
+    }
+
+    struct Item: Identifiable, Hashable {
+      let id: Int
+      var title: String
+      var done = false
+    }
+
+    struct Fixture: View {
+      let tapCount: LockedBox<Int>
+      @State private var selection: TabSelection = .todo
+      @State private var items = [
+        Item(id: 1, title: "One"),
+        Item(id: 2, title: "Two"),
+      ]
+
+      var body: some View {
+        TabView(selection: $selection) {
+          Tab("Counter", value: TabSelection.counter) {
+            Text("Counter")
+          }
+          Tab("Todo", value: TabSelection.todo) {
+            VStack(alignment: .leading, spacing: 0) {
+              ForEach(items) { item in
+                HStack(spacing: 1) {
+                  Toggle(item.title, isOn: doneBinding(for: item))
+                  Spacer()
+                  Button("×", role: .destructive) {
+                    tapCount.value += 1
+                    items.removeAll { $0.id == item.id }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      private func doneBinding(for item: Item) -> Binding<Bool> {
+        Binding(
+          get: {
+            items.first { $0.id == item.id }?.done ?? false
+          },
+          set: { newValue in
+            guard let index = items.firstIndex(where: { $0.id == item.id }) else {
+              return
+            }
+            items[index].done = newValue
+          }
+        )
+      }
+    }
+
+    let view = Fixture(tapCount: tapCount)
+
+    var env = EnvironmentValues()
+    env.terminalSize = terminalSize
+    let initial = DefaultRenderer().render(
+      view,
+      context: .init(identity: rootIdentity, environmentValues: env),
+      proposal: .init(width: terminalSize.width, height: terminalSize.height)
+    )
+    let deleteLabel = try #require(
+      initial.placedTree.flattenedDescendants.first { node in
+        guard case .text("×") = node.drawPayload else { return false }
+        return node.bounds.origin.y > 1
+      }
+    )
+    let clickPoint = Point(deleteLabel.bounds.origin)
+
+    let host = RecordingTerminalHostLocal(size: terminalSize)
+    _ = try await Self.runHarness(
+      host: host,
+      events: [
+        .mouse(.init(kind: .down(.primary), location: clickPoint)),
+        .mouse(.init(kind: .up(.primary), location: clickPoint)),
+      ],
+      rootIdentity: rootIdentity,
+      terminalSize: terminalSize
+    ) {
+      view
+    }
+
+    let finalSurface = try #require(host.lastPresentedSurface)
+    #expect(tapCount.value == 1)
+    #expect(!finalSurface.lines.contains(where: { $0.contains("One") }))
+    #expect(finalSurface.lines.contains(where: { $0.contains("Two") }))
+    #expect(finalSurface.lines.contains(where: { $0.contains("Todo") }))
+  }
+
+  @Test("fixedSize VStack reconciles inner row Spacer against widest sibling")
+  func fixedSizeReconcilesInnerRowSpacer() throws {
+    let size = CellSize(width: 40, height: 10)
+    let rootIdentity = testIdentity("FixedSizeSpacer")
+    var env = EnvironmentValues()
+    env.terminalSize = size
+
+    let artifacts = DefaultRenderer().render(
+      VStack(alignment: .leading, spacing: 0) {
+        Text("abcdefghij")  // 10 wide
+        HStack(spacing: 0) {
+          Text("L")
+          Spacer()
+          Text("R")
+        }
+      }
+      .fixedSize(),
+      context: .init(identity: rootIdentity, environmentValues: env),
+      proposal: .init(width: size.width, height: size.height)
+    )
+
+    let placed = artifacts.placedTree
+    let rows = placed.flattenedDescendants
+      .filter { $0.kind == .view("HStack") }
+    let innerRow = try #require(rows.first)
+    #expect(innerRow.bounds.size.width == 10)
+
+    let texts = innerRow.flattenedDescendants.filter {
+      if case .text = $0.drawPayload { return true }
+      return false
+    }
+    let leftText = try #require(
+      texts.first { node in
+        if case .text(let content) = node.drawPayload { return content == "L" }
+        return false
+      })
+    let rightText = try #require(
+      texts.first { node in
+        if case .text(let content) = node.drawPayload { return content == "R" }
+        return false
+      })
+    #expect(leftText.bounds.origin.x == innerRow.bounds.origin.x)
+    #expect(
+      rightText.bounds.origin.x + rightText.bounds.size.width
+        == innerRow.bounds.origin.x + innerRow.bounds.size.width
+    )
+  }
+
+  @Test("focused single-character plain Button keeps its label visible")
+  func focusedSingleCharPlainButtonStaysVisible() throws {
+    // Regression: a leading-aligned overlay rail (▌) painted on top of
+    // the label would overdraw column 0, erasing the entire icon for a
+    // 1-cell label and leaving an apparently empty control. The fix
+    // routes plain buttons through `controlFocusRow` with a reserved
+    // rail gutter, so the rail and the label never share a cell.
+    let buttonId = testIdentity("SingleCharPlainButton")
+    var env = EnvironmentValues()
+    env.focusedIdentity = buttonId
+
+    let artifacts = DefaultRenderer().render(
+      Button("X") {}
+        .buttonStyle(.plain)
+        .id(buttonId),
+      context: .init(identity: testIdentity("Root"), environmentValues: env),
+      proposal: .init(width: 4, height: 1)
+    )
+
+    let surface = artifacts.rasterSurface.lines.joined(separator: "\n")
+    #expect(
+      surface.contains("X"),
+      "single-character plain button label must remain visible when focused; rendered: \(surface.debugDescription)"
+    )
+    #expect(
+      surface.contains("▌"),
+      "focused plain button must still surface the focus rail; rendered: \(surface.debugDescription)"
+    )
+  }
+
+  @Test("focused multi-character plain Button keeps its first letter")
+  func focusedMultiCharPlainButtonKeepsFirstLetter() throws {
+    // Regression: with the leading overlay rail, the first character of
+    // a multi-letter label was overwritten on focus ("File" → "ile",
+    // "Edit" → "dit"). The reserved-gutter layout keeps the full label
+    // on screen.
+    let buttonId = testIdentity("MultiCharPlainButton")
+    var env = EnvironmentValues()
+    env.focusedIdentity = buttonId
+
+    let artifacts = DefaultRenderer().render(
+      Button("File") {}
+        .buttonStyle(.plain)
+        .id(buttonId),
+      context: .init(identity: testIdentity("Root"), environmentValues: env),
+      proposal: .init(width: 8, height: 1)
+    )
+
+    let surface = artifacts.rasterSurface.lines.joined(separator: "\n")
+    #expect(
+      surface.contains("File"),
+      "focused plain button label must keep its first letter; rendered: \(surface.debugDescription)"
+    )
+    #expect(
+      surface.contains("▌"),
+      "focused plain button must still surface the focus rail; rendered: \(surface.debugDescription)"
+    )
+  }
+
+  @Test("focused plain Button rail and label occupy disjoint cells")
+  func focusedPlainButtonRailDoesNotOverlapLabel() throws {
+    // The structural invariant behind the two regression tests above:
+    // the cell holding "▌" must be strictly to the left of the cell
+    // holding the first character of the label. This catches future
+    // regressions where the rail re-acquires an overlay placement that
+    // happens to leave the *visible* glyph intact (e.g. drawn in a
+    // background colour) while still corrupting cell semantics.
+    let buttonId = testIdentity("RailDisjointPlainButton")
+    var env = EnvironmentValues()
+    env.focusedIdentity = buttonId
+
+    let artifacts = DefaultRenderer().render(
+      Button("File") {}
+        .buttonStyle(.plain)
+        .id(buttonId),
+      context: .init(identity: testIdentity("Root"), environmentValues: env),
+      proposal: .init(width: 8, height: 1)
+    )
+
+    let row = try #require(artifacts.rasterSurface.cells.first)
+    let railColumn = try #require(
+      row.firstIndex(where: { $0.character == "▌" }),
+      "focused plain button must place ▌ somewhere in the row"
+    )
+    let firstLabelColumn = try #require(
+      row.firstIndex(where: { $0.character == "F" }),
+      "focused plain button must place 'F' somewhere in the row"
+    )
+    #expect(
+      railColumn < firstLabelColumn,
+      "rail must occupy a cell to the left of the label's first letter (rail at \(railColumn), label at \(firstLabelColumn))"
+    )
+  }
+
+  @Test("horizontally fixed VStack reconciles cross width under finite height proposal")
+  func horizontallyFixedVStackReconcilesCrossWidthWithFiniteMainProposal() throws {
+    let size = CellSize(width: 40, height: 10)
+    let rootIdentity = testIdentity("HorizontallyFixedSpacer")
+    var env = EnvironmentValues()
+    env.terminalSize = size
+
+    let artifacts = DefaultRenderer().render(
+      VStack(alignment: .leading, spacing: 0) {
+        Text("abcdefghij")  // 10 wide
+        HStack(spacing: 0) {
+          Text("L")
+          Spacer()
+          Text("R")
+        }
+      }
+      .fixedSize(horizontal: true, vertical: false),
+      context: .init(identity: rootIdentity, environmentValues: env),
+      proposal: .init(width: size.width, height: size.height)
+    )
+
+    let innerRow = try #require(
+      artifacts.placedTree.flattenedDescendants.first { $0.kind == .view("HStack") }
+    )
+    #expect(innerRow.bounds.size.width == 10)
+
+    let texts = innerRow.flattenedDescendants.filter {
+      if case .text = $0.drawPayload { return true }
+      return false
+    }
+    let rightText = try #require(
+      texts.first { node in
+        if case .text(let content) = node.drawPayload { return content == "R" }
+        return false
+      })
+    #expect(
+      rightText.bounds.origin.x + rightText.bounds.size.width
+        == innerRow.bounds.origin.x + innerRow.bounds.size.width
+    )
+  }
+
+  // MARK: - Harness plumbing
+
+  @MainActor
+  private static func runHarness<V: View>(
+    host: RecordingTerminalHostLocal,
+    events: [InputEvent],
+    rootIdentity: Identity,
+    terminalSize: CellSize,
+    viewBuilder: @escaping () -> V
+  ) async throws -> RunLoopResult<Int> {
+    var env = EnvironmentValues()
+    env.terminalSize = terminalSize
+    let runLoop = RunLoop(
+      rootIdentity: rootIdentity,
+      presentationSurface: host,
+      terminalInputReader: LocalScriptedInput(events: events),
+      signalReader: LocalEmptySignals(),
+      scheduler: FrameScheduler(),
+      stateContainer: StateContainer(
+        initialState: 0,
+        invalidationIdentities: [rootIdentity]
+      ),
+      focusTracker: FocusTracker(
+        invalidationIdentities: [rootIdentity]
+      ),
+      environmentValues: env,
+      proposal: .init(width: terminalSize.width, height: terminalSize.height),
+      viewBuilder: { _, _ in viewBuilder() }
+    )
+    return try await runLoop.run()
+  }
+}
+
+@MainActor
+private final class DeepButtonStateOwnerTrace {
+  var actionCount = 0
+  var authoredOwner: StateOwnerHandle?
+  var actionOwner: StateOwnerHandle?
+}
+
+private struct DeepButtonStateOwnerFixture: View {
+  let trace: DeepButtonStateOwnerTrace
+  @State private var count = 0
+
+  var body: some View {
+    trace.authoredOwner = currentImperativeAuthoringContextSnapshot()?.stateOwnerHandle
+    DeepButtonTree.root(counterValue: count) {
+      trace.actionCount += 1
+      trace.actionOwner = currentImperativeAuthoringContextSnapshot()?.stateOwnerHandle
+      count += 1
+    }
+  }
+}
+
+private struct DeepButtonLeaf: View {
+  let isCounter: Bool
+  let counterValue: Int
+  let increment: @MainActor @Sendable () -> Void
+
+  var body: some View {
+    if isCounter {
+      VStack(alignment: .leading, spacing: 0) {
+        Text("count \(counterValue)")
+        Button("inc", action: increment)
+      }
+    } else {
+      Text("cell")
+    }
+  }
+}
+
+private struct DeepButtonSplit<Child: View>: View {
+  let horizontal: Bool
+  let first: Child
+  let second: Child
+
+  var body: some View {
+    if horizontal {
+      HStack(alignment: .top, spacing: 0) {
+        first
+        second
+      }
+    } else {
+      VStack(alignment: .leading, spacing: 0) {
+        first
+        second
+      }
+    }
+  }
+}
+
+@MainActor
+private enum DeepButtonTree {
+  typealias L1 = DeepButtonSplit<DeepButtonLeaf>
+  typealias L2 = DeepButtonSplit<L1>
+  typealias L3 = DeepButtonSplit<L2>
+  typealias L4 = DeepButtonSplit<L3>
+  typealias L5 = DeepButtonSplit<L4>
+  typealias L6 = DeepButtonSplit<L5>
+  typealias L7 = DeepButtonSplit<L6>
+  typealias L8 = DeepButtonSplit<L7>
+
+  struct Region {
+    var rowBase: Int
+    var columnBase: Int
+    var rows: Int
+    var columns: Int
+  }
+
+  static func root(
+    counterValue: Int,
+    increment: @escaping @MainActor @Sendable () -> Void
+  ) -> L8 {
+    l8(
+      Region(rowBase: 0, columnBase: 0, rows: 16, columns: 16),
+      counterValue: counterValue,
+      increment: increment
+    )
+  }
+
+  private static func split<Child: View>(
+    depth: Int,
+    _ region: Region,
+    child: (Region) -> Child
+  ) -> DeepButtonSplit<Child> {
+    if depth % 2 == 1 {
+      let half = region.columns / 2
+      var left = region
+      left.columns = half
+      var right = region
+      right.columnBase += half
+      right.columns = region.columns - half
+      return DeepButtonSplit(horizontal: true, first: child(left), second: child(right))
+    }
+    let half = region.rows / 2
+    var top = region
+    top.rows = half
+    var bottom = region
+    bottom.rowBase += half
+    bottom.rows = region.rows - half
+    return DeepButtonSplit(horizontal: false, first: child(top), second: child(bottom))
+  }
+
+  private static func leaf(
+    _ region: Region,
+    counterValue: Int,
+    increment: @escaping @MainActor @Sendable () -> Void
+  ) -> DeepButtonLeaf {
+    DeepButtonLeaf(
+      isCounter: region.rowBase == 0 && region.columnBase == 0,
+      counterValue: counterValue,
+      increment: increment
+    )
+  }
+
+  private static func l1(
+    _ region: Region, counterValue: Int, increment: @escaping @MainActor @Sendable () -> Void
+  ) -> L1 {
+    split(depth: 1, region) { leaf($0, counterValue: counterValue, increment: increment) }
+  }
+
+  private static func l2(
+    _ region: Region, counterValue: Int, increment: @escaping @MainActor @Sendable () -> Void
+  ) -> L2 {
+    split(depth: 2, region) { l1($0, counterValue: counterValue, increment: increment) }
+  }
+
+  private static func l3(
+    _ region: Region, counterValue: Int, increment: @escaping @MainActor @Sendable () -> Void
+  ) -> L3 {
+    split(depth: 3, region) { l2($0, counterValue: counterValue, increment: increment) }
+  }
+
+  private static func l4(
+    _ region: Region, counterValue: Int, increment: @escaping @MainActor @Sendable () -> Void
+  ) -> L4 {
+    split(depth: 4, region) { l3($0, counterValue: counterValue, increment: increment) }
+  }
+
+  private static func l5(
+    _ region: Region, counterValue: Int, increment: @escaping @MainActor @Sendable () -> Void
+  ) -> L5 {
+    split(depth: 5, region) { l4($0, counterValue: counterValue, increment: increment) }
+  }
+
+  private static func l6(
+    _ region: Region, counterValue: Int, increment: @escaping @MainActor @Sendable () -> Void
+  ) -> L6 {
+    split(depth: 6, region) { l5($0, counterValue: counterValue, increment: increment) }
+  }
+
+  private static func l7(
+    _ region: Region, counterValue: Int, increment: @escaping @MainActor @Sendable () -> Void
+  ) -> L7 {
+    split(depth: 7, region) { l6($0, counterValue: counterValue, increment: increment) }
+  }
+
+  private static func l8(
+    _ region: Region, counterValue: Int, increment: @escaping @MainActor @Sendable () -> Void
+  ) -> L8 {
+    split(depth: 8, region) { l7($0, counterValue: counterValue, increment: increment) }
+  }
+}
+
+private final class LocalScriptedInput: TerminalInputReading {
+  private let scriptedEvents: [InputEvent]
+  init(events: [InputEvent]) { self.scriptedEvents = events }
+  func inputEvents() -> AsyncStream<InputEvent> {
+    AsyncStream { continuation in
+      for event in scriptedEvents {
+        continuation.yield(event)
+      }
+      continuation.finish()
+    }
+  }
+}
+
+private final class LocalEmptySignals: SignalReading {
+  func events() -> AsyncStream<String> {
+    AsyncStream { continuation in
+      continuation.finish()
+    }
+  }
+}
+
+private final class RecordingTerminalHostLocal: PresentationSurface {
+  let surfaceSize: CellSize
+  let capabilityProfile: TerminalCapabilityProfile = .previewUnicode
+  let appearance: TerminalAppearance = .fallback
+  private(set) var lastPresentedSurface: RasterSurface?
+
+  init(size: CellSize) { self.surfaceSize = size }
+
+  func enableRawMode() throws {}
+  func disableRawMode() throws {}
+  func write(_: String) throws {}
+  func clearScreen() throws {}
+  func moveCursor(to _: CellPoint) throws {}
+
+  @discardableResult
+  func present(_ surface: RasterSurface) throws -> TerminalPresentationMetrics {
+    lastPresentedSurface = surface
+    return .init(bytesWritten: 0, linesTouched: 0, cellsChanged: 0, strategy: .fullRepaint)
+  }
+}
+
+extension PlacedNode {
+  fileprivate var flattenedDescendants: [PlacedNode] {
+    var result: [PlacedNode] = []
+    collectDescendants(into: &result)
+    return result
+  }
+
+  private func collectDescendants(into result: inout [PlacedNode]) {
+    result.append(self)
+    for child in children {
+      child.collectDescendants(into: &result)
+    }
+  }
+}

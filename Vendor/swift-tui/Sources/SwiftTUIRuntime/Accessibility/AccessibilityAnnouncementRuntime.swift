@@ -1,0 +1,30 @@
+import SwiftTUICore
+import SwiftTUIViews
+
+extension RunLoop {
+  package func announceAccessibility(_ announcement: AccessibilityAnnouncement) {
+    guard publishesAccessibilityAnnouncements else {
+      return
+    }
+
+    pendingAccessibilityAnnouncements.append(announcement)
+    scheduler.requestInvalidation(of: [rootIdentity])
+  }
+
+  private var publishesAccessibilityAnnouncements: Bool {
+    guard
+      let semanticHostFrameSurface =
+        presentationSurface as? any SemanticHostFramePresentationSurface
+    else {
+      return false
+    }
+    return semanticHostFrameSurface.semanticHostFrameCapabilities
+      .contains(.accessibilityAnnouncements)
+  }
+
+  package func drainPendingAccessibilityAnnouncements() -> [AccessibilityAnnouncement] {
+    let announcements = pendingAccessibilityAnnouncements
+    pendingAccessibilityAnnouncements.removeAll(keepingCapacity: true)
+    return announcements
+  }
+}

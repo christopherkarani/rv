@@ -4,59 +4,10 @@ import Foundation
 import RVDomain
 import Synchronization
 
-enum LegacyTerminalEnsureLock {
-    static var directoryPath: String {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-terminal-ensure-\(getuid())", isDirectory: true)
-            .path
-    }
-
-    static var lockPath: String {
-        URL(fileURLWithPath: directoryPath)
-            .appendingPathComponent("ensure.lock")
-            .path
-    }
-
-    static func acquire() -> Int32? {
-        guard WorkspaceControlSocket.prepareDirectory(directoryPath) else { return nil }
-        let path = lockPath
-        let fd = path.withCString {
-            Darwin.open($0, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, mode_t(S_IRUSR | S_IWUSR))
-        }
-        guard fd >= 0 else { return nil }
-        var info = stat()
-        guard fstat(fd, &info) == 0,
-            info.st_uid == getuid(),
-            (info.st_mode & S_IFMT) == S_IFREG,
-            (info.st_mode & 0o077) == 0
-        else {
-            Darwin.close(fd)
-            return nil
-        }
-        while flock(fd, LOCK_EX) != 0 {
-            guard errno == EINTR else {
-                Darwin.close(fd)
-                return nil
-            }
-        }
-        return fd
-    }
-
-    static func release(_ fd: Int32) {
-        _ = flock(fd, LOCK_UN)
-        Darwin.close(fd)
-    }
-
-    static func withLock<Value>(_ body: () -> Value) -> Value? {
-        guard let fd = acquire() else { return nil }
-        defer { release(fd) }
-        return body()
-    }
-}
-
 public enum WorkspaceClientFailure: Error, Sendable, Equatable {
     case disconnected
     case malformed
+    case queueOverloaded
     case timedOut
     case incompatibleProtocol
     case unauthorizedClient
@@ -64,6 +15,9 @@ public enum WorkspaceClientFailure: Error, Sendable, Equatable {
     case workspaceClosed
     case runtimeNotFound
     case invalidRequest
+    case launchCommandTooLarge
+    case resourceProfileUnavailable
+    case resourceStagingFailed(String)
     case recoveryRequired
     case childTeardownFailed
     case runtimeLimit
@@ -80,9 +34,12 @@ public struct WorkspaceTerminalEvent: Sendable, Equatable {
     public var body: Body
 
     public enum Body: Sendable, Equatable {
+        case replayBegin(batch: UUID, truncated: Bool, byteCount: Int)
         case replay(sequence: Int64, bytes: Data)
+        case replayEnd(batch: UUID)
         case output(sequence: Int64, bytes: Data)
         case inputOwner(Bool)
+        case window(rows: Int, columns: Int)
         case exited(Int32)
         case overflow
     }
@@ -124,21 +81,14 @@ public final class WorkspaceClient: Sendable {
     private let writeLock = Mutex<Void>(())
     private let events = EventBoard()
 
-    /// True when the host advertised `ensureTerminalRuntime`. Read from the
-    /// Mutex-protected state so the Sendable client holds no mutable storage.
-    var supportsEnsureTerminalRuntime: Bool {
-        io.withLock { $0.supportsEnsureTerminalRuntime }
-    }
-
     private struct ClientState {
         var fd: Int32
         var open: Bool
-        var supportsEnsureTerminalRuntime: Bool
     }
 
     private init(fd: Int32, endpoint: WorkspaceEndpoint) {
         self.endpoint = endpoint
-        self.io = Mutex(ClientState(fd: fd, open: true, supportsEnsureTerminalRuntime: false))
+        self.io = Mutex(ClientState(fd: fd, open: true))
     }
 
     deinit {
@@ -191,10 +141,9 @@ public final class WorkspaceClient: Sendable {
                 client.finish()
                 return .failure(error)
             case .success(let features):
-                client.io.withLock {
-                    $0.supportsEnsureTerminalRuntime = features.contains(
-                        WorkspaceControlFeature.ensureTerminalRuntime
-                    )
+                guard Self.acceptsHostFeatures(features) else {
+                    client.finish()
+                    return .failure(.incompatibleProtocol)
                 }
             }
             return .success(client)
@@ -226,17 +175,29 @@ public final class WorkspaceClient: Sendable {
     public func launchRuntime(
         executable: String,
         arguments: [String] = [],
-        hookHost: HookHost? = nil,
+        hook: String? = nil,
         terminalRows: Int? = nil,
-        terminalColumns: Int? = nil
+        terminalColumns: Int? = nil,
+        resourceProfileID: String? = nil
     ) -> Result<WorkspaceRuntimeReport, WorkspaceClientFailure> {
+        guard WorkspaceControlCodec.launchCommandFits(executable: executable, arguments: arguments),
+            executable.utf8.count <= WorkspaceControlLimits.maxExecutableBytes,
+            arguments.count <= WorkspaceControlLimits.maxArguments
+        else { return .failure(.launchCommandTooLarge) }
+        guard WorkspaceControlCodec.resourceProfileIDFits(resourceProfileID) else {
+            return .failure(.invalidRequest)
+        }
+        if let hook, LaunchAgentTag.isValid(hook) == false {
+            return .failure(.invalidRequest)
+        }
         var message = WorkspaceControlMessage(
             version: WorkspaceControlLimits.version,
             id: UUID(),
             op: WorkspaceControlOp.launchRuntime.rawValue,
             executable: executable,
             arguments: arguments,
-            hook: hookHost?.rawValue
+            resourceProfileID: resourceProfileID,
+            hook: hook
         )
         switch (terminalRows, terminalColumns) {
         case (nil, nil):
@@ -247,6 +208,9 @@ public final class WorkspaceClient: Sendable {
             message.columns = columns
         default:
             return .failure(.invalidRequest)
+        }
+        guard WorkspaceControlCodec.encode(message) != nil else {
+            return .failure(.launchCommandTooLarge)
         }
         switch transact(&message, timeout: WorkspaceControlLimits.launchTimeoutSeconds) {
         case .failure(let error):
@@ -275,9 +239,10 @@ public final class WorkspaceClient: Sendable {
     public func ensureTerminalRuntime(
         executable: String,
         arguments: [String] = [],
-        hookHost: HookHost? = nil,
+        hook: String? = nil,
         terminalRows: Int,
-        terminalColumns: Int
+        terminalColumns: Int,
+        resourceProfileID: String? = nil
     ) -> Result<WorkspaceRuntimeReport, WorkspaceClientFailure> {
         guard executable.hasPrefix("/"),
             IsolatedCommand(executable: executable, arguments: arguments) != nil,
@@ -285,14 +250,14 @@ public final class WorkspaceClient: Sendable {
         else {
             return .failure(.invalidRequest)
         }
-        guard supportsEnsureTerminalRuntime else {
-            return ensureTerminalRuntimeOnLegacyHost(
-                executable: executable,
-                arguments: arguments,
-                hookHost: hookHost,
-                terminalRows: terminalRows,
-                terminalColumns: terminalColumns
-            )
+        if let hook, LaunchAgentTag.isValid(hook) == false {
+            return .failure(.invalidRequest)
+        }
+        guard WorkspaceControlCodec.launchCommandFits(executable: executable, arguments: arguments),
+            executable.utf8.count <= WorkspaceControlLimits.maxExecutableBytes
+        else { return .failure(.launchCommandTooLarge) }
+        guard WorkspaceControlCodec.resourceProfileIDFits(resourceProfileID) else {
+            return .failure(.invalidRequest)
         }
         var message = WorkspaceControlMessage(
             version: WorkspaceControlLimits.version,
@@ -300,11 +265,15 @@ public final class WorkspaceClient: Sendable {
             op: WorkspaceControlOp.ensureTerminalRuntime.rawValue,
             executable: executable,
             arguments: arguments,
-            hook: hookHost?.rawValue,
+            resourceProfileID: resourceProfileID,
+            hook: hook,
             io: "terminal",
             rows: terminalRows,
             columns: terminalColumns
         )
+        guard WorkspaceControlCodec.encode(message) != nil else {
+            return .failure(.launchCommandTooLarge)
+        }
         switch transact(&message, timeout: WorkspaceControlLimits.launchTimeoutSeconds) {
         case .failure(let error):
             return .failure(error)
@@ -332,11 +301,16 @@ public final class WorkspaceClient: Sendable {
     /// `resubscribeTerminal` to resume from replay, then re-acquire input if
     /// this client held it.
     public func subscribeTerminal(_ runtime: UUID) -> Result<Void, WorkspaceClientFailure> {
+        // A prior client-side overflow would swallow this subscription's
+        // output; clear the mark before the RPC so the fresh replay and
+        // live frames are admitted. Queued backlog is untouched.
+        events.clearOverflowed(runtime)
         var message = WorkspaceControlMessage(
             version: WorkspaceControlLimits.version,
             id: UUID(),
             op: WorkspaceControlOp.subscribeTerminal.rawValue,
-            runtime: runtime
+            runtime: runtime,
+            features: [WorkspaceControlFeature.terminalWindowNoticesV1]
         )
         let result = transact(
             &message,
@@ -352,10 +326,18 @@ public final class WorkspaceClient: Sendable {
     /// Re-establishes a terminal subscription after the host dropped it for
     /// overflow. The host replays recent bytes, then live output resumes.
     /// Re-acquire input after this returns if the client held the lease.
-    /// Manual recovery: call this after `.overflow`, or detach and connect a
-    /// fresh client to start over.
+    /// The TUI calls this automatically after `.overflow` and after a failed
+    /// acquire on a believed-subscribed pane. Heartbeat probes use plain
+    /// subscribe (read-only on healthy duplicates); a successful probe may
+    /// briefly duplicate backlog with replay, which the flood context makes
+    /// invisible.
     public func resubscribeTerminal(_ runtime: UUID) -> Result<Void, WorkspaceClientFailure> {
-        _ = unsubscribeTerminal(runtime)
+        switch unsubscribeTerminal(runtime) {
+        case .failure(let error):
+            return .failure(error)
+        case .success:
+            events.resetRuntime(runtime)
+        }
         return subscribeTerminal(runtime)
     }
 
@@ -504,15 +486,22 @@ public final class WorkspaceClient: Sendable {
         )
     }
 
-    /// Maps a capabilities RPC to its feature list. Older persistent hosts
-    /// reject the operation with `invalidRequest`; they remain usable through
-    /// the serialized ensure fallback below.
+    static func acceptsHostFeatures(_ features: [String]) -> Bool {
+        features.contains(WorkspaceControlFeature.ensureTerminalRuntime)
+            && features.contains(WorkspaceControlFeature.resizeLeaseAuthority)
+            && features.contains(WorkspaceControlFeature.runtimeResourceProfilesV1)
+            && features.contains(WorkspaceControlFeature.terminalReplayBatchesV1)
+    }
+
+    /// Maps a capabilities RPC to its feature list. An older host that rejects
+    /// this operation cannot advertise lease-safe resize and is refused by
+    /// `connect`; it is never silently reused for a workspace view.
     static func negotiatedFeatures(
         from result: Result<WorkspaceControlMessage, WorkspaceClientFailure>
     ) -> Result<[String], WorkspaceClientFailure> {
         switch result {
         case .failure(.invalidRequest):
-            return .success([])
+            return .failure(.incompatibleProtocol)
         case .failure(let error):
             return .failure(error)
         case .success(let message):
@@ -521,43 +510,6 @@ public final class WorkspaceClient: Sendable {
             }
             return .success(message.features ?? [])
         }
-    }
-
-    /// Forces the legacy ensure path for tests. Production sets this once
-    /// from the capabilities negotiation in `connect`.
-    func testingSetSupportsEnsureTerminalRuntime(_ value: Bool) {
-        io.withLock { $0.supportsEnsureTerminalRuntime = value }
-    }
-
-    private func ensureTerminalRuntimeOnLegacyHost(
-        executable: String,
-        arguments: [String],
-        hookHost: HookHost?,
-        terminalRows: Int,
-        terminalColumns: Int
-    ) -> Result<WorkspaceRuntimeReport, WorkspaceClientFailure> {
-        let fallback = LegacyTerminalEnsureLock.withLock {
-            switch listRuntimes() {
-            case .failure(let error):
-                return Result<WorkspaceRuntimeReport, WorkspaceClientFailure>.failure(error)
-            case .success(let runtimes):
-                if let existing = runtimes
-                    .filter({ $0.running && $0.terminal })
-                    .sorted(by: { $0.runtime.uuidString < $1.runtime.uuidString })
-                    .first
-                {
-                    return .success(existing)
-                }
-                return launchRuntime(
-                    executable: executable,
-                    arguments: arguments,
-                    hookHost: hookHost,
-                    terminalRows: terminalRows,
-                    terminalColumns: terminalColumns
-                )
-            }
-        }
-        return fallback ?? .failure(.timedOut)
     }
 
     private func transact(
@@ -750,7 +702,7 @@ public final class WorkspaceClient: Sendable {
             guard let code = message.error.flatMap(WorkspaceControlCode.init(rawValue:)) else {
                 return .failure(.malformed)
             }
-            return .failure(clientFailure(code))
+            return .failure(clientFailure(code, detail: message.detail))
         }
         return .success(message)
     }
@@ -790,12 +742,15 @@ public final class WorkspaceClient: Sendable {
     }
 }
 
-private func clientFailure(_ code: WorkspaceControlCode) -> WorkspaceClientFailure {
+private func clientFailure(_ code: WorkspaceControlCode, detail: String?) -> WorkspaceClientFailure {
     switch code {
     case .workspaceClosing: .workspaceClosing
     case .workspaceClosed: .workspaceClosed
     case .runtimeNotFound: .runtimeNotFound
     case .invalidRequest: .invalidRequest
+    case .launchCommandTooLarge: .launchCommandTooLarge
+    case .resourceProfileUnavailable: .resourceProfileUnavailable
+    case .resourceStagingFailed: .resourceStagingFailed(detail ?? "unknown grant")
     case .incompatibleProtocol: .incompatibleProtocol
     case .unauthorizedClient: .unauthorizedClient
     case .recoveryRequired: .recoveryRequired
@@ -808,7 +763,7 @@ private func clientFailure(_ code: WorkspaceControlCode) -> WorkspaceClientFailu
 }
 }
 
-private final class ReplyWaiter: Sendable {
+final class ReplyWaiter: Sendable {
     private let group = DispatchGroup()
     private let state = Mutex<State>(State())
 
@@ -848,7 +803,8 @@ private final class ReplyWaiter: Sendable {
             if let message = state.message {
                 return message.ok == false
                     ? .failure(
-                        message.error.flatMap(WorkspaceControlCode.init(rawValue:)).map(clientFailure)
+                        message.error.flatMap(WorkspaceControlCode.init(rawValue:))
+                            .map { clientFailure($0, detail: message.detail) }
                             ?? .malformed
                     )
                     : .success(message)
@@ -864,9 +820,18 @@ private final class ReplyWaiter: Sendable {
 // NSCondition is load-bearing: `next(timeout:)` waits on a multi-predicate
 // queue (messages/failed) with broadcast wakeups, and the client API is
 // synchronous. Mutex has no condition wait; an async rewrite is out of scope.
-private final class EventBoard: @unchecked Sendable {
-    /// Replay plus one live queue. Framing is not counted; only terminal bytes are.
+final class EventBoard: @unchecked Sendable {
+    /// One replay plus one live queue across all subscribed runtimes.
     static let queueLimit = TerminalStreamLimits.replayBytes + TerminalStreamLimits.subscriberQueueBytes
+    static let runtimeLimit = TerminalStreamLimits.subscriberQueueBytes
+    /// Leave room for one owner, overflow, and exit notice per host runtime.
+    /// A healthy PTY can emit hundreds of short frames before its consumer
+    /// wakes. The byte cap still bounds bulk output; reserve 320 slots for
+    /// replay begin/end, owner, overflow, and exit notices across the
+    /// 64-runtime envelope (five control notices per runtime).
+    static let outputFrameLimit = 704
+    /// Tiny output frames and control notices must not grow without bound.
+    static let frameLimit = 1_024
 
     static func payloadBytes(_ message: WorkspaceControlMessage) -> Int {
         guard let encoded = message.bytes else { return 0 }
@@ -886,6 +851,40 @@ private final class EventBoard: @unchecked Sendable {
     private var waiters: [UUID: ReplyWaiter] = [:]
     private var messages: [WorkspaceControlMessage] = []
     private var queuedBytes = 0
+    private var runtimeBytes: [UUID: Int] = [:]
+    private var overflowed: Set<UUID> = []
+    private var replayBatches: [UUID: (id: UUID, remaining: Int)] = [:]
+    private var lastServedRuntime: UUID?
+
+    var queuedTerminalBytes: Int {
+        condition.lock()
+        let value = queuedBytes
+        condition.unlock()
+        return value
+    }
+
+    var queuedTerminalFrames: Int {
+        condition.lock()
+        let value = messages.count
+        condition.unlock()
+        return value
+    }
+
+    func queuedTerminalBytes(for runtime: UUID) -> Int {
+        condition.lock()
+        let value = runtimeBytes[runtime] ?? 0
+        condition.unlock()
+        return value
+    }
+
+    func hasOverflowNotice(for runtime: UUID) -> Bool {
+        condition.lock()
+        let value = messages.contains {
+            $0.runtime == runtime && $0.op == WorkspaceControlOp.terminalOverflow.rawValue
+        }
+        condition.unlock()
+        return value
+    }
 
     var isStreaming: Bool {
         condition.lock()
@@ -936,46 +935,221 @@ private final class EventBoard: @unchecked Sendable {
         waiter?.fail(error)
     }
 
+    /// A new subscription starts a fresh replay epoch. Drop any bytes or
+    /// overflow notice from the previous subscription before its reply arrives.
+    func resetRuntime(_ runtime: UUID) {
+        condition.lock()
+        messages.removeAll { $0.runtime == runtime }
+        queuedBytes -= runtimeBytes.removeValue(forKey: runtime) ?? 0
+        overflowed.remove(runtime)
+        replayBatches.removeValue(forKey: runtime)
+        condition.unlock()
+    }
+
+    /// Clears only the swallow-output mark, keeping queued frames and replay
+    /// tracking intact. Every (re)subscribe calls this before its RPC so a
+    /// previously poisoned board admits the fresh replay and live output.
+    /// Safe on healthy subscriptions: their queued backlog is untouched and
+    /// an in-flight replay batch keeps its exact accounting.
+    func clearOverflowed(_ runtime: UUID) {
+        condition.lock()
+        overflowed.remove(runtime)
+        condition.unlock()
+    }
+
     /// False when the frame is neither a matching reply nor a terminal event.
     func deliver(_ message: WorkspaceControlMessage) -> Bool {
         condition.lock()
+        guard failed == nil else {
+            condition.unlock()
+            return false
+        }
         if let id = message.id, let waiter = waiters.removeValue(forKey: id) {
             condition.unlock()
             waiter.succeed(message)
             return true
         }
-        guard workspaceTerminalEvent(message) != nil
-            || message.op == WorkspaceControlOp.workspaceClosed.rawValue
-        else {
+        if message.op == WorkspaceControlOp.workspaceClosed.rawValue {
+            condition.unlock()
+            return true
+        }
+        guard workspaceTerminalEvent(message) != nil, let runtime = message.runtime else {
             condition.unlock()
             return false
         }
-        let weight = EventBoard.payloadBytes(message)
-        switch planClientTerminalFrame(
-            queued: queuedBytes,
-            incoming: weight,
-            limit: EventBoard.queueLimit
-        ) {
-        case .store(let sum):
-            messages.append(message)
-            queuedBytes = sum
-        case .overflow:
-            let alreadyNoticed = messages.contains {
-                $0.op == WorkspaceControlOp.terminalOverflow.rawValue
+        let accepted: Bool
+        var invalidBatch = false
+        switch message.op {
+        case WorkspaceControlOp.terminalReplayBegin.rawValue:
+            // Once a runtime overflows, its batch is incomplete. Ignore any
+            // remaining boundaries until a new subscription resets its queue.
+            if overflowed.contains(runtime) {
+                accepted = true
+            } else if let batch = message.batch, let byteCount = message.replayLength,
+                replayBatches[runtime] == nil
+            {
+                accepted = messages.count < EventBoard.frameLimit
+                if accepted {
+                    replayBatches[runtime] = (batch, byteCount)
+                    messages.append(message)
+                }
+            } else {
+                invalidBatch = true
+                accepted = false
             }
-            if alreadyNoticed == false {
-                messages.append(
-                    WorkspaceControlMessage(
-                        version: WorkspaceControlLimits.version,
-                        op: WorkspaceControlOp.terminalOverflow.rawValue,
-                        runtime: message.runtime,
-                        ok: true
-                    )
-                )
+        case WorkspaceControlOp.terminalReplay.rawValue:
+            if overflowed.contains(runtime) {
+                accepted = true
+            } else if var batch = replayBatches[runtime] {
+                let weight = EventBoard.payloadBytes(message)
+                if weight > 0, weight <= batch.remaining {
+                    batch.remaining -= weight
+                    replayBatches[runtime] = batch
+                    accepted = admitOutput(message, runtime: runtime)
+                } else {
+                    invalidBatch = true
+                    accepted = false
+                }
+            } else {
+                invalidBatch = true
+                accepted = false
             }
+        case WorkspaceControlOp.terminalReplayEnd.rawValue:
+            if overflowed.contains(runtime) {
+                accepted = true
+            } else if let batch = replayBatches[runtime], batch.id == message.batch,
+                batch.remaining == 0
+            {
+                accepted = messages.count < EventBoard.frameLimit
+                if accepted {
+                    replayBatches.removeValue(forKey: runtime)
+                    messages.append(message)
+                }
+            } else {
+                invalidBatch = true
+                accepted = false
+            }
+        case WorkspaceControlOp.terminalOutput.rawValue:
+            invalidBatch = replayBatches[runtime] != nil
+            accepted = replayBatches[runtime] == nil && admitOutput(message, runtime: runtime)
+        case WorkspaceControlOp.terminalOverflow.rawValue:
+            accepted = markOverflow(runtime)
+        case WorkspaceControlOp.terminalInputOwner.rawValue:
+            // Only the latest occupancy state is useful to an attached view.
+            messages.removeAll {
+                $0.runtime == runtime && $0.op == WorkspaceControlOp.terminalInputOwner.rawValue
+            }
+            accepted = messages.count < EventBoard.frameLimit
+            if accepted { messages.append(message) }
+        case WorkspaceControlOp.terminalWindow.rawValue:
+            // Only the latest actual dimensions are useful to an attached view.
+            messages.removeAll {
+                $0.runtime == runtime && $0.op == WorkspaceControlOp.terminalWindow.rawValue
+            }
+            accepted = messages.count < EventBoard.frameLimit
+            if accepted { messages.append(message) }
+        case WorkspaceControlOp.runtimeExited.rawValue:
+            if messages.contains(where: {
+                $0.runtime == runtime && $0.op == WorkspaceControlOp.runtimeExited.rawValue
+            }) == false {
+                accepted = messages.count < EventBoard.frameLimit
+                if accepted { messages.append(message) }
+            } else {
+                accepted = true
+            }
+        default:
+            condition.unlock()
+            return false
+        }
+        guard accepted else {
+            condition.unlock()
+            failAll(invalidBatch ? .malformed : .queueOverloaded)
+            return false
         }
         condition.broadcast()
         condition.unlock()
+        return true
+    }
+
+    private static func isOutput(_ message: WorkspaceControlMessage) -> Bool {
+        message.op == WorkspaceControlOp.terminalReplay.rawValue
+            || message.op == WorkspaceControlOp.terminalOutput.rawValue
+    }
+
+    /// Reserve room for the first output from a different runtime by dropping
+    /// the largest queued stream and attributing that loss to its source.
+    private func admitOutput(_ message: WorkspaceControlMessage, runtime: UUID) -> Bool {
+        if overflowed.contains(runtime) { return true }
+        let weight = EventBoard.payloadBytes(message)
+        guard weight > 0, weight <= EventBoard.runtimeLimit else {
+            return markOverflow(runtime)
+        }
+        let runtimeTotal = (runtimeBytes[runtime] ?? 0).addingReportingOverflow(weight)
+        guard runtimeTotal.overflow == false,
+            runtimeTotal.partialValue <= EventBoard.runtimeLimit
+        else {
+            return markOverflow(runtime)
+        }
+        if canQueueOutput(weight: weight) == false, runtimeBytes[runtime] == nil {
+            while canQueueOutput(weight: weight) == false,
+                let victim = largestQueuedOutput(excluding: runtime)
+            {
+                guard markOverflow(victim) else { return false }
+            }
+        }
+        guard canQueueOutput(weight: weight) else { return markOverflow(runtime) }
+        messages.append(message)
+        runtimeBytes[runtime] = runtimeTotal.partialValue
+        queuedBytes += weight
+        return true
+    }
+
+    private func canQueueOutput(weight: Int) -> Bool {
+        let total = queuedBytes.addingReportingOverflow(weight)
+        return total.overflow == false
+            && total.partialValue <= EventBoard.queueLimit
+            && messages.filter({ EventBoard.isOutput($0) }).count < EventBoard.outputFrameLimit
+            && messages.count < EventBoard.frameLimit
+    }
+
+    private func largestQueuedOutput(excluding newcomer: UUID) -> UUID? {
+        var frames: [UUID: Int] = [:]
+        for message in messages where EventBoard.isOutput(message) {
+            if let runtime = message.runtime, runtime != newcomer {
+                frames[runtime, default: 0] += 1
+            }
+        }
+        return frames.keys.sorted { first, second in
+            let firstBytes = runtimeBytes[first] ?? 0
+            let secondBytes = runtimeBytes[second] ?? 0
+            if firstBytes != secondBytes { return firstBytes > secondBytes }
+            if frames[first] != frames[second] { return frames[first, default: 0] > frames[second, default: 0] }
+            return first.uuidString < second.uuidString
+        }.first
+    }
+
+    /// Lose only this runtime's incomplete output. Its exit/owner events and
+    /// every other runtime's queued bytes remain available to the UI.
+    private func markOverflow(_ runtime: UUID) -> Bool {
+        messages.removeAll { message in
+            guard message.runtime == runtime else { return false }
+            return EventBoard.isOutput(message)
+                || message.op == WorkspaceControlOp.terminalReplayBegin.rawValue
+                || message.op == WorkspaceControlOp.terminalReplayEnd.rawValue
+        }
+        queuedBytes -= runtimeBytes.removeValue(forKey: runtime) ?? 0
+        replayBatches.removeValue(forKey: runtime)
+        if overflowed.contains(runtime) { return true }
+        guard messages.count < EventBoard.frameLimit else { return false }
+        overflowed.insert(runtime)
+        messages.append(
+            WorkspaceControlMessage(
+                version: WorkspaceControlLimits.version,
+                op: WorkspaceControlOp.terminalOverflow.rawValue,
+                runtime: runtime,
+                ok: true
+            )
+        )
         return true
     }
 
@@ -1000,7 +1174,7 @@ private final class EventBoard: @unchecked Sendable {
                 return .success(nil)
             }
         }
-        if let failed, failed == .workspaceClosed || failed == .disconnected {
+        if let failed, failed == .queueOverloaded || failed == .malformed {
             condition.unlock()
             return .failure(failed)
         }
@@ -1008,21 +1182,62 @@ private final class EventBoard: @unchecked Sendable {
             condition.unlock()
             return .failure(failed)
         }
-        let message = messages.removeFirst()
-        queuedBytes = max(0, queuedBytes - EventBoard.payloadBytes(message))
+        let index = nextIndex()
+        let message = messages.remove(at: index)
+        lastServedRuntime = message.runtime
+        let weight = EventBoard.payloadBytes(message)
+        queuedBytes -= weight
+        if let runtime = message.runtime, weight > 0 {
+            let remainder = (runtimeBytes[runtime] ?? 0) - weight
+            runtimeBytes[runtime] = remainder > 0 ? remainder : nil
+        }
         condition.unlock()
         return .success(message)
+    }
+
+    /// Choose a runtime with a pending exit first, but drain its own earlier
+    /// bytes before the exit. Otherwise rotate between runtime heads.
+    private func nextIndex() -> Int {
+        var heads: [Int] = []
+        var seen: Set<UUID> = []
+        let exiting = Set(messages.compactMap { message -> UUID? in
+            message.op == WorkspaceControlOp.runtimeExited.rawValue ? message.runtime : nil
+        })
+        for index in messages.indices {
+            guard let runtime = messages[index].runtime, seen.insert(runtime).inserted else {
+                continue
+            }
+            heads.append(index)
+        }
+        let preferred = heads.filter { index in
+            messages[index].runtime.map(exiting.contains) == true
+        }
+        let candidates = preferred.isEmpty ? heads : preferred
+        return candidates.first { messages[$0].runtime != lastServedRuntime }
+            ?? candidates.first
+            ?? 0
     }
 }
 
 private func workspaceTerminalEvent(_ message: WorkspaceControlMessage) -> WorkspaceTerminalEvent? {
     guard let runtime = message.runtime else { return nil }
     switch message.op {
+    case WorkspaceControlOp.terminalReplayBegin.rawValue:
+        guard let batch = message.batch, let truncated = message.truncated,
+            let byteCount = message.replayLength
+        else { return nil }
+        return WorkspaceTerminalEvent(
+            runtime: runtime,
+            body: .replayBegin(batch: batch, truncated: truncated, byteCount: byteCount)
+        )
     case WorkspaceControlOp.terminalReplay.rawValue:
         guard let sequence = message.sequence, let bytes = message.bytes,
             let data = TerminalBytesCodec.decode(bytes, maximum: TerminalStreamLimits.readChunkBytes)
         else { return nil }
         return WorkspaceTerminalEvent(runtime: runtime, body: .replay(sequence: sequence, bytes: data))
+    case WorkspaceControlOp.terminalReplayEnd.rawValue:
+        guard let batch = message.batch else { return nil }
+        return WorkspaceTerminalEvent(runtime: runtime, body: .replayEnd(batch: batch))
     case WorkspaceControlOp.terminalOutput.rawValue:
         guard let sequence = message.sequence, let bytes = message.bytes,
             let data = TerminalBytesCodec.decode(bytes, maximum: TerminalStreamLimits.readChunkBytes)
@@ -1031,6 +1246,11 @@ private func workspaceTerminalEvent(_ message: WorkspaceControlMessage) -> Works
     case WorkspaceControlOp.terminalInputOwner.rawValue:
         guard let owned = message.inputOwner else { return nil }
         return WorkspaceTerminalEvent(runtime: runtime, body: .inputOwner(owned))
+    case WorkspaceControlOp.terminalWindow.rawValue:
+        guard let rows = message.rows, let columns = message.columns,
+            TerminalStreamLimits.accepts(rows: rows, columns: columns)
+        else { return nil }
+        return WorkspaceTerminalEvent(runtime: runtime, body: .window(rows: rows, columns: columns))
     case WorkspaceControlOp.runtimeExited.rawValue:
         guard let status = message.exitStatus else { return nil }
         return WorkspaceTerminalEvent(runtime: runtime, body: .exited(status))

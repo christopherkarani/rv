@@ -1,0 +1,377 @@
+// Excluded from Windows builds (Windows plan, Stage 6 item 3): exercises the
+// POSIX dispatch-source InputReader arm through pipe file descriptors and
+// fcntl nonblocking flags; Windows input rides the console record pump, a
+// different reader arm with no fd seam.
+#if !os(Windows)
+
+  import Synchronization
+  import Testing
+
+  @_spi(Runners) @testable import SwiftTUIRuntime
+
+  #if canImport(Darwin)
+    import Darwin
+  #elseif canImport(Glibc)
+    import Glibc
+  #endif
+
+  @MainActor
+  @Suite
+  struct InputReaderControlMessageTests {
+    #if os(Linux)
+      @Test("STUI-73: PTY bytes preceding EIO reach both input streams", arguments: [false, true])
+      func ptyFinalBytesBeforeReadFailure(terminalEvents: Bool) async throws {
+        func makeClosedSlave() throws -> Int32 {
+          var master: Int32 = -1
+          var slave: Int32 = -1
+          try #require(unsafe openpty(&master, &slave, nil, nil, nil) == 0)
+          let flags = fcntl(master, F_GETFL)
+          try #require(fcntl(master, F_SETFL, flags | O_NONBLOCK) == 0)
+          try writeAllBytes(Array("qr".utf8), to: slave)
+          _ = close(slave)
+          return master
+        }
+        let probe = try makeClosedSlave()
+        let drained = drainAvailableTerminalInput(from: probe, maxBytesPerRead: 256)
+        _ = close(probe)
+        #expect(drained.bytes == Array("qr".utf8))
+        #expect(drained.failureErrno == EIO)
+
+        let descriptor = try makeClosedSlave()
+        defer { _ = close(descriptor) }
+        let reader = InputReader(fileDescriptor: descriptor)
+        var received: [InputEvent] = []
+        if terminalEvents {
+          for await event in reader.inputEvents() { received.append(event) }
+        } else {
+          for await key in reader.events() { received.append(.key(key)) }
+        }
+        #expect(received == [.key(.character("q")), .key(.character("r"))])
+        #expect(reader.liveReadSourceCount == 0)
+      }
+    #endif
+
+    @Test("T260: a live input decoder refreshes coordinate mode without losing buffered bytes")
+    func liveMouseModeRefresh() async throws {
+      var descriptors: [Int32] = [0, 0]
+      #expect(unsafe pipe(&descriptors) == 0)
+      let readDescriptor = descriptors[0]
+      let writeDescriptor = descriptors[1]
+      var writerClosed = false
+      defer {
+        _ = close(readDescriptor)
+        if !writerClosed { _ = close(writeDescriptor) }
+      }
+      let flags = fcntl(readDescriptor, F_GETFL)
+      #expect(flags >= 0)
+      #expect(fcntl(readDescriptor, F_SETFL, flags | O_NONBLOCK) >= 0)
+      let reader = InputReader(fileDescriptor: readDescriptor)
+      let stream = reader.inputEvents()
+      var iterator = stream.makeAsyncIterator()
+      // A preceding key acknowledges parsing the chunk that also contains
+      // the incomplete mouse report. Updating must preserve that buffer.
+      try writeAllBytes(Array("q\u{001B}[<0;17;".utf8), to: writeDescriptor)
+      let key = await iterator.next()
+      #expect(key == .key(.character("q")))
+      let firstMetrics = CellPixelMetrics(width: 8, height: 16, source: .reported)
+      let secondMetrics = CellPixelMetrics(width: 10, height: 20, source: .reported)
+      let modes: [MouseCoordinateMode] = [
+        .pixels(metrics: firstMetrics, source: .terminalPixels),
+        .pixels(metrics: secondMetrics, source: .terminalPixels),
+        .cells,
+      ]
+      let expected: [PointerLocation] = [
+        .subCell(
+          location: Point(x: 2, y: 2), source: .terminalPixels,
+          metrics: firstMetrics, rawPixel: PixelPoint(x: 16, y: 32)),
+        .subCell(
+          location: Point(x: 1.6, y: 1.6), source: .terminalPixels,
+          metrics: secondMetrics, rawPixel: PixelPoint(x: 16, y: 32)),
+        .cellFallback(CellPoint(x: 16, y: 32)),
+      ]
+      for index in modes.indices {
+        reader.updateInputCapabilities(.init(mouseCoordinateMode: modes[index]))
+        let bytes = index == 0 ? "33M" : "\u{001B}[<0;17;33M"
+        try writeAllBytes(Array(bytes.utf8), to: writeDescriptor)
+        let event = await iterator.next()
+        #expect(event == .mouse(MouseEvent(kind: .down(.primary), location: expected[index])))
+      }
+      _ = close(writeDescriptor)
+      writerClosed = true
+      let end = await iterator.next()
+      #expect(end == nil)
+    }
+
+    @Test("input reader routes resize control messages without leaking them as key input")
+    func inputReaderRoutesResizeControlMessages() async throws {
+      var descriptors: [Int32] = [0, 0]
+      #expect(unsafe pipe(&descriptors) == 0)
+
+      let readDescriptor = descriptors[0]
+      let writeDescriptor = descriptors[1]
+      var didCloseReadDescriptor = false
+      var didCloseWriteDescriptor = false
+      defer {
+        if !didCloseReadDescriptor {
+          _ = close(readDescriptor)
+        }
+        if !didCloseWriteDescriptor {
+          _ = close(writeDescriptor)
+        }
+      }
+
+      let currentFlags = fcntl(readDescriptor, F_GETFL)
+      #expect(currentFlags >= 0)
+      #expect(fcntl(readDescriptor, F_SETFL, currentFlags | O_NONBLOCK) >= 0)
+
+      let receivedMessages = Mutex<[TerminalControlMessage]>([])
+      let inputReader = InputReader(
+        fileDescriptor: readDescriptor,
+        controlHandler: { message in
+          receivedMessages.withLock { messages in
+            messages.append(message)
+          }
+        }
+      )
+
+      let eventsTask = Task {
+        var events: [KeyPress] = []
+        for await event in inputReader.events() {
+          events.append(event)
+        }
+        return events
+      }
+
+      let controlPayload = Array("\u{001E}resize:120:40\nq".utf8)
+      try writeAllBytes(controlPayload, to: writeDescriptor)
+      _ = close(writeDescriptor)
+      didCloseWriteDescriptor = true
+
+      let events = await eventsTask.value
+
+      _ = close(readDescriptor)
+      didCloseReadDescriptor = true
+
+      #expect(receivedMessages.withLock { $0 } == [.resize(.init(width: 120, height: 40))])
+      #expect(events == [KeyPress(.character("q"))])
+    }
+
+    @Test("input reader routes style control messages without leaking them as key input")
+    func inputReaderRoutesStyleControlMessages() async throws {
+      var descriptors: [Int32] = [0, 0]
+      #expect(unsafe pipe(&descriptors) == 0)
+
+      let readDescriptor = descriptors[0]
+      let writeDescriptor = descriptors[1]
+      var didCloseReadDescriptor = false
+      var didCloseWriteDescriptor = false
+      defer {
+        if !didCloseReadDescriptor {
+          _ = close(readDescriptor)
+        }
+        if !didCloseWriteDescriptor {
+          _ = close(writeDescriptor)
+        }
+      }
+
+      let currentFlags = fcntl(readDescriptor, F_GETFL)
+      #expect(currentFlags >= 0)
+      #expect(fcntl(readDescriptor, F_SETFL, currentFlags | O_NONBLOCK) >= 0)
+
+      let receivedMessages = Mutex<[TerminalControlMessage]>([])
+      let inputReader = InputReader(
+        fileDescriptor: readDescriptor,
+        controlHandler: { message in
+          receivedMessages.withLock { messages in
+            messages.append(message)
+          }
+        }
+      )
+
+      let eventsTask = Task {
+        var events: [KeyPress] = []
+        for await event in inputReader.events() {
+          events.append(event)
+        }
+        return events
+      }
+
+      let style = TerminalRenderStyle(
+        appearance: .init(
+          foregroundColor: .black,
+          backgroundColor: .white,
+          tintColor: .blue,
+          source: .override
+        ),
+        theme: .init(
+          foreground: try! .hex("#101820"),
+          background: try! .hex("#F5F5F5"),
+          tint: try! .hex("#0F4C81"),
+          separator: try! .hex("#C8CDD4"),
+          selection: try! .hex("#DCE7F7"),
+          placeholder: try! .hex("#8A94A6"),
+          link: try! .hex("#0F4C81"),
+          fill: try! .hex("#EEF2F6"),
+          windowBackground: try! .hex("#E6EBF2"),
+          success: try! .hex("#0F9D58"),
+          warning: try! .hex("#F4B400"),
+          danger: try! .hex("#DB4437"),
+          info: try! .hex("#4285F4"),
+          muted: try! .hex("#6B7280")
+        )
+      )
+      let encoded = try #require(TerminalRenderStyleCodec.encodeBase64(style))
+      let controlPayload = Array("\u{001E}style:\(encoded)\nq".utf8)
+      try writeAllBytes(controlPayload, to: writeDescriptor)
+      _ = close(writeDescriptor)
+      didCloseWriteDescriptor = true
+
+      let events = await eventsTask.value
+
+      _ = close(readDescriptor)
+      didCloseReadDescriptor = true
+
+      #expect(receivedMessages.withLock { $0 } == [.style(style)])
+      #expect(events == [KeyPress(.character("q"))])
+    }
+
+    @Test("input reader applies resolved terminal-pixel mouse coordinates")
+    func inputReaderAppliesResolvedTerminalPixelMouseCoordinates() async throws {
+      var descriptors: [Int32] = [0, 0]
+      #expect(unsafe pipe(&descriptors) == 0)
+
+      let readDescriptor = descriptors[0]
+      let writeDescriptor = descriptors[1]
+      var didCloseReadDescriptor = false
+      var didCloseWriteDescriptor = false
+      defer {
+        if !didCloseReadDescriptor {
+          _ = close(readDescriptor)
+        }
+        if !didCloseWriteDescriptor {
+          _ = close(writeDescriptor)
+        }
+      }
+
+      let currentFlags = fcntl(readDescriptor, F_GETFL)
+      #expect(currentFlags >= 0)
+      #expect(fcntl(readDescriptor, F_SETFL, currentFlags | O_NONBLOCK) >= 0)
+
+      let metrics = CellPixelMetrics(width: 8, height: 16, source: .reported)
+      let inputReader = InputReader(
+        fileDescriptor: readDescriptor
+      )
+      inputReader.updateInputCapabilities(
+        ResolvedTerminalInputCapabilities(
+          mouseCoordinateMode: .pixels(metrics: metrics, source: .terminalPixels)
+        )
+      )
+
+      let eventsTask = Task {
+        var events: [InputEvent] = []
+        for await event in inputReader.inputEvents() {
+          events.append(event)
+        }
+        return events
+      }
+
+      try writeAllBytes(Array("\u{001B}[<0;17;33Mq".utf8), to: writeDescriptor)
+      _ = close(writeDescriptor)
+      didCloseWriteDescriptor = true
+
+      let events = await eventsTask.value
+
+      _ = close(readDescriptor)
+      didCloseReadDescriptor = true
+
+      #expect(
+        events == [
+          .mouse(
+            MouseEvent(
+              kind: .down(.primary),
+              location: .subCell(
+                location: Point(x: 2.0, y: 2.0),
+                source: .terminalPixels,
+                metrics: metrics,
+                rawPixel: PixelPoint(x: 16, y: 32)
+              )
+            )
+          ),
+          .key(.character("q")),
+        ])
+    }
+
+    @Test("the event stream ends only after its read source is cancelled")
+    func inputStreamEndsAfterSourceCancellation() async throws {
+      var descriptors: [Int32] = [0, 0]
+      #expect(unsafe pipe(&descriptors) == 0)
+
+      let readDescriptor = descriptors[0]
+      let writeDescriptor = descriptors[1]
+      var didCloseWriteDescriptor = false
+      defer {
+        _ = close(readDescriptor)
+        if !didCloseWriteDescriptor {
+          _ = close(writeDescriptor)
+        }
+      }
+
+      let currentFlags = fcntl(readDescriptor, F_GETFL)
+      #expect(currentFlags >= 0)
+      #expect(fcntl(readDescriptor, F_SETFL, currentFlags | O_NONBLOCK) >= 0)
+
+      let inputReader = InputReader(fileDescriptor: readDescriptor)
+      let eventsTask = Task {
+        var events: [InputEvent] = []
+        for await event in inputReader.inputEvents() {
+          events.append(event)
+        }
+        return events
+      }
+
+      try writeAllBytes(Array("q".utf8), to: writeDescriptor)
+      _ = close(writeDescriptor)
+      didCloseWriteDescriptor = true
+
+      let events = await eventsTask.value
+      // libdispatch forbids closing a descriptor while a read source is still
+      // registered on it. The reader finishes its stream from the source's
+      // cancel handler, so once the loop ends the source is unregistered and
+      // the deferred close above cannot race the manager thread.
+      #expect(inputReader.liveReadSourceCount == 0)
+      #expect(events == [.key(.character("q"))])
+    }
+  }
+
+  private func writeAllBytes(
+    _ bytes: [UInt8],
+    to fileDescriptor: Int32
+  ) throws {
+    var bytesWritten = 0
+    while bytesWritten < bytes.count {
+      let written = bytes.withUnsafeBytes { buffer -> Int in
+        guard let baseAddress = buffer.baseAddress else {
+          return 0
+        }
+        let nextAddress = unsafe baseAddress.advanced(by: bytesWritten)
+        return unsafe write(
+          fileDescriptor,
+          nextAddress,
+          bytes.count - bytesWritten
+        )
+      }
+
+      if written > 0 {
+        bytesWritten += written
+        continue
+      }
+
+      throw InputReaderControlMessageTestError.writeFailed
+    }
+  }
+
+  private enum InputReaderControlMessageTestError: Error {
+    case writeFailed
+  }
+
+#endif

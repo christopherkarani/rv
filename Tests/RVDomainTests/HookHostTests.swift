@@ -42,3 +42,19 @@ import Testing
     #expect(HookHost(rawValue: "cursor") == .cursor)
     #expect(HookHost.allCases.map(\.rawValue).contains("cursor"))
 }
+
+@Test func launchAgentTag_acceptsHostAndStagingOnlyNames() {
+    #expect(LaunchAgentTag.isValid("codex"))
+    #expect(LaunchAgentTag.isValid("muse"))
+    #expect(LaunchAgentTag.isValid("bogus-hook"))
+    #expect(LaunchAgentTag.isValid("agent_2.0-x"))
+    #expect(LaunchAgentTag.isValid(String(repeating: "a", count: 32)))
+}
+
+@Test func launchAgentTag_rejectsMalformedTags() {
+    #expect(LaunchAgentTag.isValid("") == false)
+    #expect(LaunchAgentTag.isValid("has space") == false)
+    #expect(LaunchAgentTag.isValid("../escape") == false)
+    #expect(LaunchAgentTag.isValid("semi;colon") == false)
+    #expect(LaunchAgentTag.isValid(String(repeating: "a", count: 33)) == false)
+}

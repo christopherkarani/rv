@@ -12,7 +12,7 @@ struct Workspace: AsyncParsableCommand {
         abstract: "Attach to the persistent workspace host.",
         subcommands: [
             WorkspaceStart.self, WorkspaceAttach.self, WorkspaceStatus.self, WorkspaceClose.self,
-            WorkspaceRun.self, WorkspaceTUI.self,
+            WorkspaceRun.self, WorkspaceTUI.self, WorkspaceAbandon.self,
         ]
     )
 }
@@ -75,12 +75,21 @@ struct WorkspaceRun: AsyncParsableCommand {
     @Option(name: .long, help: "Initial terminal columns. Defaults to the current terminal, or 80.")
     var columns: Int?
 
+    @Option(name: .long, help: "Owner-authorized runtime resource profile ID. No profile is selected by executable name.")
+    var resourceProfile: String?
+
+    @Option(name: .long, help: "Launch agent tag for credential staging (e.g. opencode). Hook protocol applies only when the tag names a hook host.")
+    var hook: String?
+
     @Argument(parsing: .captureForPassthrough, help: "Absolute executable and arguments.")
     var command: [String] = []
 
     func run() throws {
         let argv = command.first == "--" ? Array(command.dropFirst()) : command
-        try WorkspaceCommandRun.run(path.workspace, rows: rows, columns: columns, command: argv)
+        try WorkspaceCommandRun.run(
+            path.workspace, rows: rows, columns: columns, command: argv,
+            resourceProfileID: resourceProfile, hook: hook
+        )
     }
 }
 
@@ -94,6 +103,19 @@ struct WorkspaceClose: AsyncParsableCommand {
 
     func run() throws {
         try WorkspaceCommandRun.close(path.workspace)
+    }
+}
+
+struct WorkspaceAbandon: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "abandon",
+        abstract: "Abandon a blocked workspace, discarding its unpublished volume and restoring the saved tree."
+    )
+
+    @OptionGroup var path: WorkspacePath
+
+    func run() throws {
+        try WorkspaceCommandRun.abandon(path.workspace)
     }
 }
 
@@ -198,7 +220,26 @@ enum WorkspaceCommandRun {
         #endif
     }
 
-    static func run(_ raw: String?, rows: Int?, columns: Int?, command: [String]) throws {
+    static func abandon(_ raw: String?) throws {
+        #if !os(macOS)
+        throw ValidationError("contained workspace host is unavailable")
+        #else
+        let project = try requireProject(raw)
+        switch WorkspaceHosts.abandon(project: project) {
+        case .abandoned(let report):
+            emit(lines(report))
+        case .refused(let refusal):
+            throw ValidationError(text(refusal))
+        case .failed(let reason):
+            throw ValidationError(reason.map { "abandon stopped: \($0.rawValue)" } ?? "abandon failed")
+        }
+        #endif
+    }
+
+    static func run(
+        _ raw: String?, rows: Int?, columns: Int?, command: [String],
+        resourceProfileID: String? = nil, hook: String? = nil
+    ) throws {
         #if !os(macOS)
         throw ValidationError("contained workspace host is unavailable")
         #else
@@ -208,6 +249,9 @@ enum WorkspaceCommandRun {
         let arguments = Array(command.dropFirst())
         guard arguments.contains(where: { $0.contains("\0") }) == false else {
             throw ValidationError("executable must be an absolute path")
+        }
+        if let hook, LaunchAgentTag.isValid(hook) == false {
+            throw ValidationError("hook must be an agent tag of 1-32 letters, digits, '-', '.', or '_'")
         }
         let project = try requireProject(raw)
         let endpoint = try requireEndpoint(
@@ -225,14 +269,16 @@ enum WorkspaceCommandRun {
         let launched = client.launchRuntime(
             executable: executable,
             arguments: arguments,
+            hook: hook,
             terminalRows: rows,
-            terminalColumns: columns
+            terminalColumns: columns,
+            resourceProfileID: resourceProfileID
         )
         let runtime: UUID
         switch launched {
         case .failure(let error):
             _ = client.detach()
-            throw ValidationError(text(error))
+            throw ValidationError(text(error, resourceProfileID: resourceProfileID))
         case .success(let report):
             guard report.terminal else {
                 _ = client.detach()
@@ -292,6 +338,10 @@ enum WorkspaceCommandRun {
             case .success(.event(let event)):
                 guard event.runtime == runtime else { continue }
                 switch event.body {
+                case .replayBegin, .replayEnd:
+                    // The direct CLI writes a fresh byte stream to stdout; it
+                    // has no retained terminal screen to reconcile.
+                    break
                 case .replay(_, let bytes), .output(_, let bytes):
                     FileHandle.standardOutput.write(bytes)
                 case .exited(let status):
@@ -303,7 +353,7 @@ enum WorkspaceCommandRun {
                     restorer?.restore()
                     _ = client.detach()
                     throw ValidationError("terminal client fell behind")
-                case .inputOwner:
+                case .inputOwner, .window:
                     break
                 }
             }
@@ -373,6 +423,33 @@ enum WorkspaceCommandRun {
         """
     }
 
+    private static func lines(_ report: WorkspaceAbandonReport) -> String {
+        var emitted = [
+            "abandoned \(report.workspace.uuidString)",
+            "restored \(report.originalPath)",
+        ]
+        if report.volumePresent {
+            emitted.append("volume discarded")
+        } else {
+            emitted.append("volume missing")
+        }
+        emitted.append("discarded \(report.discardedCount)")
+        for relative in report.discarded {
+            emitted.append("discarded-path \(relative)")
+        }
+        emitted.append("retained \(report.retainedCount)")
+        for relative in report.retained {
+            emitted.append("retained-path \(relative)")
+        }
+        if report.uncomparedCount > 0 {
+            emitted.append("uncompared \(report.uncomparedCount)")
+        }
+        if report.truncated {
+            emitted.append("truncated")
+        }
+        return emitted.joined(separator: "\n")
+    }
+
     private static func text(_ attachment: WorkspaceAttachment) -> String {
         switch attachment {
         case .absent:
@@ -391,6 +468,19 @@ enum WorkspaceCommandRun {
             "stale endpoint"
         case .unsupported:
             "contained workspace host is unavailable"
+        }
+    }
+
+    private static func text(_ refusal: WorkspaceAbandonRefusal) -> String {
+        switch refusal {
+        case .live:
+            "workspace is live; close it instead"
+        case .notBlocked:
+            "workspace is not blocked"
+        case .unsafeReason(let reason):
+            "abandon refused: \(reason.rawValue)"
+        case .unprovenOwner:
+            "abandon refused: workspace ownership is unproven"
         }
     }
 
@@ -419,10 +509,23 @@ enum WorkspaceCommandRun {
         }
     }
 
+    /// Launch-failure text with the requested profile echoed. The id appears
+    /// only when the request carried one; other failures are unchanged.
+    static func text(_ error: WorkspaceClientFailure, resourceProfileID: String?) -> String {
+        if error == .resourceProfileUnavailable, let resourceProfileID {
+            return "runtime resource profile '\(resourceProfileID)' is unavailable for this project"
+        }
+        if case .resourceStagingFailed(let detail) = error, let resourceProfileID {
+            return "runtime resource profile '\(resourceProfileID)' staging failed: \(detail) is unusable"
+        }
+        return text(error)
+    }
+
     private static func text(_ error: WorkspaceClientFailure) -> String {
         switch error {
         case .disconnected: "workspace host disconnected"
         case .malformed: "workspace host rejected the request"
+        case .queueOverloaded: "workspace host client queue is overloaded"
         case .timedOut: "workspace host timed out"
         case .incompatibleProtocol: "incompatible workspace protocol"
         case .unauthorizedClient: "unauthorized workspace client"
@@ -430,6 +533,9 @@ enum WorkspaceCommandRun {
         case .workspaceClosed: "workspace is closed"
         case .runtimeNotFound: "runtime not found"
         case .invalidRequest: "invalid workspace request"
+        case .launchCommandTooLarge: "runtime command exceeds the launch size limit"
+        case .resourceProfileUnavailable: "runtime resource profile is unavailable"
+        case .resourceStagingFailed(let detail): "runtime resource staging failed: \(detail) is unusable"
         case .recoveryRequired: "workspace recovery is required"
         case .childTeardownFailed: "runtime teardown failed"
         case .runtimeLimit: "workspace runtime limit reached"

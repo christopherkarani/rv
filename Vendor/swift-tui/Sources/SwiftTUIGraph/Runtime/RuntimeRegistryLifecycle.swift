@@ -1,0 +1,198 @@
+/// The closed, total list of runtime registration families the frame
+/// lifecycle fans out over. `RuntimeRegistrationSet` iterates its member
+/// registries for every bulk operation (reset, subtree removal, restore,
+/// fingerprinting, frame-drop blockers), so a family participates in every
+/// fan-out by construction once its registry conforms to ``RuntimeRegistry``.
+/// Case order is the canonical fan-out order.
+package enum RuntimeRegistrationKind: CaseIterable, Sendable {
+  case action
+  case keyHandler
+  case termination
+  case pointerHandler
+  case gesture
+  case gestureState
+  case defaultFocus
+  case focusBinding
+  case focusedValues
+  case scrollPosition
+  case lifecycle
+  case task
+  case preferenceObservation
+  case command
+  case dropDestination
+}
+
+/// Cross-registry teardown context for `reset`/`removeSubtrees`. Computed
+/// once by ``RuntimeRegistrationSet`` BEFORE the fan-out loop so no registry's
+/// teardown observes another registry's partial teardown through it.
+package struct RuntimeRegistrationLifetimeContext: Sendable {
+  /// Identities with a mid-interaction gesture recognizer. The pointer,
+  /// gesture, and gesture-state registries spare these during teardown so an
+  /// in-flight interaction survives republication; other registries ignore
+  /// this.
+  package var preservedGestureIdentities: Set<Identity>
+
+  package init(preservedGestureIdentities: Set<Identity> = []) {
+    self.preservedGestureIdentities = preservedGestureIdentities
+  }
+}
+
+/// Cross-registry context for restoring one node's recorded registrations.
+package struct RuntimeRegistrationRestoreContext: Sendable {
+  /// The restoring node's visited-frame stamp; the hover registry uses it to
+  /// let a fresher capture evict an abandoned node's shadowed copy.
+  package var recency: UInt64
+
+  /// Identities with a mid-interaction gesture recognizer at restore time.
+  /// The pointer registry skips recorded route registrations that a live
+  /// re-registered gesture handler already covers under a re-minted owner.
+  package var activeGestureIdentities: Set<Identity>
+
+  package init(
+    recency: UInt64 = 0,
+    activeGestureIdentities: Set<Identity> = []
+  ) {
+    self.recency = recency
+    self.activeGestureIdentities = activeGestureIdentities
+  }
+}
+
+/// Accumulates the order-insensitive `registry|key` count buckets the F04
+/// publication oracle compares between a scoped restore and a scratch full
+/// rebuild. Handlers are closures and cannot be compared for equality; keys
+/// and per-key counts are exactly the surface the scoped-restore bug class
+/// corrupts (missing, stale, or duplicated registrations after a partial
+/// republication).
+package struct RuntimeRegistrationFingerprintBuilder {
+  package private(set) var fingerprint: [String: Int] = [:]
+
+  package init() {}
+
+  package mutating func add(_ registry: String, _ key: String, count: Int = 1) {
+    guard count > 0 else {
+      return
+    }
+    fingerprint["\(registry)|\(key)", default: 0] += count
+  }
+}
+
+/// One registration family's per-node recorded slice: the registrations plus
+/// their owner keys and ordinals, bundled as one value so `NodeHandlers` holds
+/// exactly one field per family and its whole-bag operations (empty check,
+/// absorb adoption) are uniform one-line folds instead of per-field merge
+/// logic. Records must keep "absorb keeps the absorber's entries on
+/// collision" semantics — see `NodeHandlers.absorbAdopted`.
+package protocol RuntimeNodeRecord {
+  init()
+  var isEmpty: Bool { get }
+  mutating func absorbAdopted(_ departing: Self)
+}
+
+/// The uniform lifecycle contract every runtime registry implements. The
+/// bulk operations on ``RuntimeRegistrationSet`` are loops over its member
+/// registries through this protocol, so a registry cannot join the set
+/// without participating in reset, subtree removal, restore, publication
+/// fingerprinting, and frame-drop blocking. Dispatch-side queries stay on the
+/// concrete classes — only the frame lifecycle is unified here.
+@MainActor
+package protocol RuntimeRegistry: AnyObject {
+  static var kind: RuntimeRegistrationKind { get }
+
+  /// The frame-drop blocker this registry raises while it holds any state a
+  /// dropped frame would fail to (re)install, or nil when currently empty.
+  var activeFrameDropEligibilityBlocker: FrameDropBlocker? { get }
+
+  /// Whether this registry belongs to the low-volume effect subset
+  /// (lifecycle/task/preference observation) that is re-published from EVERY
+  /// live node even on scoped-publication frames.
+  var isEffectRegistry: Bool { get }
+
+  func reset(context: RuntimeRegistrationLifetimeContext)
+
+  func removeSubtrees(
+    rootedAt roots: [Identity],
+    context: RuntimeRegistrationLifetimeContext
+  )
+
+  /// Restores this registry's slice of one node's recorded registrations.
+  func restore(
+    from handlers: NodeHandlers,
+    context: RuntimeRegistrationRestoreContext
+  )
+
+  /// Re-sorts globally order-observable registration lists into canonical
+  /// identity order after a scoped restore. No-op for the dict/route-keyed
+  /// registries, whose restore order is not observable.
+  func normalizeOrderByIdentity()
+
+  /// Drops registrations owned by nodes that are no longer live. Overridden by
+  /// the gesture registries and by ``LocalKeyHandlerRegistry``; no-op
+  /// elsewhere. The key registry's leg was added after reviewing the F101
+  /// sequencing below and does not disturb it: that hazard is the pointer
+  /// registry's live captures and hover recency, while key handlers are
+  /// stateless dispatch closures with no interaction state to strand. Its
+  /// buckets are otherwise unreachable — `removeSubtrees(rootedAt:)` matches
+  /// the owner's identity, which an `.id(_:)`-re-rooted control holds stable
+  /// while its registering node re-mints. NOTE (F101): the
+  /// pointer registry also carries node-liveness-coupled interaction state
+  /// (hover recency eviction, owner-paired route resolution) but deliberately
+  /// does NOT override this — its stale capture/hover routes are re-keyed or
+  /// released by `RunLoop.processFocusSyncIteration`'s paired-region pass,
+  /// which is sequenced immediately after `pruneOrphanedGestures` and must
+  /// stay there. Its ONE liveness leg is the paired sweep
+  /// `pruneOrphanedGestures` runs after this fan-out
+  /// (``LocalPointerHandlerRegistry/removeUnpairedGestureFamilyRoutes(pairedIdentities:keeping:)``),
+  /// scoped to gesture-family routes whose recognizer is gone and whose
+  /// owner node departed. A future `prune` override here must review that
+  /// sequencing.
+  func prune(keeping liveNodeIDs: Set<ViewNodeID>)
+
+  /// Drops registrations no live node record justifies, on the publication
+  /// path itself (F04). `record` returns the owning node's current
+  /// registration record, or nil when that node has left the graph.
+  ///
+  /// This is the NODE axis of teardown, and nothing else on the scoped
+  /// publication path has it. `removeSubtrees(rootedAt:)` selects on the
+  /// registration KEY's identity prefix; the scoped restore selects the nodes
+  /// to republish and only ever WRITES. The two miss the same population from
+  /// opposite sides: a registration whose identity sits outside the removed
+  /// roots survives the reset no matter what happened to the node that
+  /// published it. Measured, that is an `.id(_:)`-re-rooted control whose
+  /// registration identity is pinned while its node re-mints (a stale bucket
+  /// stacked under the arriving one), and a live node that stopped recording
+  /// a registration it once made (a handler no rebuild can re-derive, still
+  /// dispatchable). A full rebuild has neither, because it resets and then
+  /// republishes from live node records only — so without this the scoped
+  /// restore is not the rebuild it stands in for.
+  ///
+  /// Implemented by the owner-keyed families that hold no interaction state:
+  /// the key registry and everything on ``IdentityKeyedRegistryStorage``. The
+  /// pointer/gesture/gesture-state trio deliberately does NOT implement it.
+  /// Their node-liveness cleanup is `pruneOrphanedGestures` followed by
+  /// `RunLoop.processFocusSyncIteration`'s paired-region pass, whose ordering
+  /// is load-bearing (F101): releasing a mid-interaction capture here would
+  /// destroy exactly what the re-key path exists to preserve.
+  func removeUnjustifiedRegistrations(
+    _ record: (ViewNodeID) -> NodeHandlers?
+  )
+
+  /// Contributes this registry's keyed contents to the publication oracle
+  /// fingerprint. Every family must project each registration into at least
+  /// one `registry|key` bucket (with stacked-handler counts where handlers
+  /// stack) or the F04 oracle is blind to its bug class.
+  func fingerprint(into builder: inout RuntimeRegistrationFingerprintBuilder)
+}
+
+extension RuntimeRegistry {
+  package var isEffectRegistry: Bool {
+    false
+  }
+
+  package func normalizeOrderByIdentity() {}
+
+  package func prune(keeping liveNodeIDs: Set<ViewNodeID>) {}
+
+  package func removeUnjustifiedRegistrations(
+    _ record: (ViewNodeID) -> NodeHandlers?
+  ) {}
+}

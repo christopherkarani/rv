@@ -30,6 +30,12 @@ public final class SwiftTermAdapter: TerminalEmulating {
 
     public var columns: Int { terminal.cols }
     public var rows: Int { terminal.rows }
+    public var inputModes: TerminalInputModes {
+        TerminalInputModes(
+            applicationCursor: terminal.applicationCursor,
+            bracketedPaste: terminal.bracketedPasteMode
+        )
+    }
 
     public func feed(_ bytes: Data) {
         guard bytes.isEmpty == false else { return }
@@ -57,20 +63,7 @@ public final class SwiftTermAdapter: TerminalEmulating {
                 guard let data = terminal.getCharData(col: column, row: row) else {
                     return TerminalCell(text: " ")
                 }
-                let style = data.attribute.style
-                let text = data.width == 0 ? "" : String(terminal.getCharacter(for: data))
-                return TerminalCell(
-                    text: text,
-                    bold: style.contains(.bold),
-                    underline: style.contains(.underline),
-                    inverse: style.contains(.inverse),
-                    foreground: Self.color(data.attribute.fg),
-                    background: Self.color(data.attribute.bg),
-                    italic: style.contains(.italic),
-                    dim: style.contains(.dim),
-                    strikethrough: style.contains(.crossedOut),
-                    cursor: cursor?.column == column && cursor?.row == row
-                )
+                return cell(for: data, cursor: cursor?.column == column && cursor?.row == row)
             }
         }
         return TerminalFrame(
@@ -79,6 +72,59 @@ public final class SwiftTermAdapter: TerminalEmulating {
             cells: cells,
             cursor: cursor,
             generation: generation
+        )
+    }
+
+    public func historyDescription() -> TerminalHistoryDescription {
+        guard terminal.isCurrentBufferAlternate == false else {
+            return TerminalHistoryDescription(linesAbove: 0, alternateScreen: true)
+        }
+        return TerminalHistoryDescription(linesAbove: max(0, terminal.buffer.yDisp), alternateScreen: false)
+    }
+
+    public func historyFrame(anchor: Int, rows: Int, columns: Int) -> TerminalFrame? {
+        guard terminal.isCurrentBufferAlternate == false else { return nil }
+        let depth = max(0, terminal.buffer.yDisp)
+        let clamped = min(depth, max(0, anchor))
+        let height = max(0, rows)
+        let width = max(0, columns)
+        // Scroll-invariant rows count from the scrollback start; the live
+        // viewport top is `totalLinesTrimmed + yDisp`.
+        let top = terminal.buffer.totalLinesTrimmed + depth - clamped
+        let cells = (0..<height).map { row -> [TerminalCell] in
+            guard let line = terminal.getScrollInvariantLine(row: top + row) else {
+                return Array(repeating: TerminalCell(text: " "), count: width)
+            }
+            return (0..<width).map { column in
+                guard column < line.count else { return TerminalCell(text: " ") }
+                return cell(for: line[column], cursor: false)
+            }
+        }
+        return TerminalFrame(columns: width, rows: height, cells: cells, cursor: nil, generation: generation)
+    }
+
+    private func cell(for data: CharData, cursor: Bool) -> TerminalCell {
+        let style = data.attribute.style
+        // SwiftTerm reports untouched cells as NUL; a cell is one visible
+        // column, so NUL renders as a blank, never as U+FFFD.
+        let text: String
+        if data.width == 0 {
+            text = ""
+        } else {
+            let character = terminal.getCharacter(for: data)
+            text = character == "\0" ? " " : String(character)
+        }
+        return TerminalCell(
+            text: text,
+            bold: style.contains(.bold),
+            underline: style.contains(.underline),
+            inverse: style.contains(.inverse),
+            foreground: Self.color(data.attribute.fg),
+            background: Self.color(data.attribute.bg),
+            italic: style.contains(.italic),
+            dim: style.contains(.dim),
+            strikethrough: style.contains(.crossedOut),
+            cursor: cursor
         )
     }
 

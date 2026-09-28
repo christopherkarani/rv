@@ -59,6 +59,67 @@ public enum WorkspaceRecoveryOutcome: Equatable, Sendable {
     case failed
 }
 
+/// What abandoning a blocked workspace destroyed and kept.
+///
+/// `discarded` holds volume-side content that is gone: names that only
+/// existed on the volume, plus names whose volume content differed from the
+/// saved tree. `retained` holds names that only existed in the saved tree;
+/// they survive in the restored original. Both lists are sorted relative
+/// paths, capped, and advisory: they describe a volume that no longer exists.
+public struct WorkspaceAbandonReport: Equatable, Sendable {
+    public var workspace: UUID
+    public var originalPath: String
+    public var volumePresent: Bool
+    public var discarded: [String]
+    public var discardedCount: Int
+    public var retained: [String]
+    public var retainedCount: Int
+    public var uncomparedCount: Int
+    public var truncated: Bool
+
+    public init(
+        workspace: UUID,
+        originalPath: String,
+        volumePresent: Bool,
+        discarded: [String],
+        discardedCount: Int,
+        retained: [String],
+        retainedCount: Int,
+        uncomparedCount: Int,
+        truncated: Bool
+    ) {
+        self.workspace = workspace
+        self.originalPath = originalPath
+        self.volumePresent = volumePresent
+        self.discarded = discarded
+        self.discardedCount = discardedCount
+        self.retained = retained
+        self.retainedCount = retainedCount
+        self.uncomparedCount = uncomparedCount
+        self.truncated = truncated
+    }
+}
+
+/// Why abandonment refused to touch the workspace. Nothing was mutated.
+public enum WorkspaceAbandonRefusal: Equatable, Sendable {
+    /// A live or recovering owner holds the workspace.
+    case live
+    /// The workspace is clean, recoverable, or absent. Start or recover it instead.
+    case notBlocked
+    /// Blocked, but the reason is one abandonment cannot resolve.
+    case unsafeReason(WorkspaceRecoveryBlock.Reason)
+    /// Ownership continuity is unverifiable. No live owner was proven either.
+    case unprovenOwner
+}
+
+public enum WorkspaceAbandonOutcome: Equatable, Sendable {
+    case abandoned(WorkspaceAbandonReport)
+    case refused(WorkspaceAbandonRefusal)
+    /// A reused step stopped for safety (`.some`), or IO failed (`.none`).
+    /// Another attempt may proceed; every step is idempotent.
+    case failed(WorkspaceRecoveryBlock.Reason?)
+}
+
 /// Reconstructs an incomplete protected workspace and reclaims it before a new one is created.
 enum WorkspaceRecovery {
     static func snapshotURL(directory: URL, id: UUID) -> URL {
@@ -138,6 +199,151 @@ extension WorkspaceRecovery {
         case .finished(let outcome):
             return outcome
         }
+    }
+
+    /// Abandon a blocked workspace: drop its volume without copying, restore
+    /// the hidden saved tree, and close the journal so the path is usable.
+    ///
+    /// Only `.publicationConflict` and `.missingVolume` are abandonable: both
+    /// leave the saved tree authoritative. Every other state refuses without
+    /// mutating anything. Unlike `recover`, this never copies the volume onto
+    /// the saved tree, so a tampered volume cannot pollute the restored
+    /// original. The report lists what the volume held so the caller can show
+    /// what was lost before this ran.
+    public static func abandon(
+        _ workspace: WorkingDirectory,
+        lifecycleLog: URL,
+        runtimeLog: URL
+    ) -> WorkspaceAbandonOutcome {
+        guard let canonical = canonicalProject(workspace) else {
+            return .failed(nil)
+        }
+        if WorkspaceOwnerRegistry.current(canonical) != nil {
+            return .refused(.live)
+        }
+        let reconstruction: WorkspaceReconstruction
+        switch history(canonicalPath: canonical, log: lifecycleLog) {
+        case .workspace(let workspace):
+            reconstruction = workspace
+        case .clean:
+            return .refused(.notBlocked)
+        case .torn:
+            return .refused(.unsafeReason(.tornLog))
+        case .unreadable, .corrupt:
+            return .refused(.unsafeReason(.corrupt))
+        }
+        switch reconstruction.phase {
+        case .blocked(.publicationConflict), .blocked(.missingVolume):
+            break
+        case .blocked(let reason):
+            return .refused(.unsafeReason(reason))
+        case .corrupt:
+            return .refused(.unsafeReason(.corrupt))
+        case .recoverable, .closed:
+            return .refused(.notBlocked)
+        }
+        guard let identity = reconstruction.identity,
+            identityUsable(identity),
+            savedTreeRelationship(original: reconstruction.originalPath, identity: identity),
+            reconstruction.protectedPath == reconstruction.originalPath
+        else {
+            return .refused(.unprovenOwner)
+        }
+        guard WorkspaceOwnerRegistry.beginOpening(canonical) else {
+            return .refused(.live)
+        }
+        defer { WorkspaceOwnerRegistry.cancelOpening(canonical) }
+        switch WorkspaceOwnerLock.acquire(path: identity.lockPath, create: false) {
+        case .busy:
+            return .refused(.live)
+        case .missing, .mismatched, .unavailable:
+            return .refused(.unprovenOwner)
+        case .acquired(let lock):
+            defer { lock.release() }
+            guard lock.matches(
+                device: identity.lockDevice,
+                inode: identity.lockInode,
+                token: identity.ownerToken
+            ) else {
+                return .refused(.unprovenOwner)
+            }
+            return abandonLocked(
+                reconstruction,
+                identity: identity,
+                lifecycleLog: lifecycleLog,
+                runtimeLog: runtimeLog
+            )
+        }
+    }
+
+    private static func abandonLocked(
+        _ workspace: WorkspaceReconstruction,
+        identity: WorkspaceDurableIdentity,
+        lifecycleLog: URL,
+        runtimeLog: URL
+    ) -> WorkspaceAbandonOutcome {
+        var progress = Set(workspace.records.map(\.kind))
+        let observation = workspaceMountObservation(identity: identity, project: workspace.originalPath)
+        var volumePresent = false
+        var diff = WorkspaceVolumeDiff.empty
+        if observation == .ownedMount {
+            volumePresent = true
+            guard
+                let compared = WorkspaceVolumeDiffer.compare(
+                    volumeRoot: workspace.originalPath,
+                    volumeDevice: identity.volumeDevice,
+                    savedRoot: identity.savedPath,
+                    savedDevice: identity.savedDevice
+                )
+            else {
+                return .failed(nil)
+            }
+            diff = compared
+        }
+        guard mark(.recoveryBegan, workspace, log: lifecycleLog, progress: &progress) else {
+            return .failed(nil)
+        }
+        switch teardownChildren(workspace, runtimeLog: runtimeLog, log: lifecycleLog, progress: &progress) {
+        case .done:
+            break
+        case .blocked(let reason):
+            return .failed(reason)
+        case .failed:
+            return .failed(nil)
+        }
+        switch detach(workspace, identity: identity, log: lifecycleLog, progress: &progress) {
+        case .done:
+            break
+        case .blocked(let reason):
+            return .failed(reason)
+        case .failed:
+            return .failed(nil)
+        }
+        switch restore(workspace, identity: identity, log: lifecycleLog, progress: &progress) {
+        case .done:
+            break
+        case .blocked(let reason):
+            return .failed(reason)
+        case .failed:
+            return .failed(nil)
+        }
+        guard cleanupOwnedFiles(identity) else { return .failed(nil) }
+        guard mark(.closed, workspace, log: lifecycleLog, progress: &progress) else {
+            return .failed(nil)
+        }
+        return .abandoned(
+            WorkspaceAbandonReport(
+                workspace: workspace.id,
+                originalPath: workspace.originalPath,
+                volumePresent: volumePresent,
+                discarded: diff.discarded,
+                discardedCount: diff.discardedCount,
+                retained: diff.retained,
+                retainedCount: diff.retainedCount,
+                uncomparedCount: diff.uncomparedCount,
+                truncated: diff.truncated
+            )
+        )
     }
 
     /// Serialize creation for `canonicalPath` and recover an orphan first.

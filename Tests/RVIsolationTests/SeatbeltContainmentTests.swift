@@ -225,11 +225,16 @@ private func recordUnexpectedContainmentError(
         )
     case .profileNotApplicable:
         Issue.record("expected \(expected), got profileNotApplicable", sourceLocation: sourceLocation)
+    case .resourceStagingFailed(let detail):
+        Issue.record(
+            "expected \(expected), got resourceStagingFailed(\(detail))",
+            sourceLocation: sourceLocation
+        )
     case .processSpawnFailed:
         Issue.record("expected \(expected), got processSpawnFailed", sourceLocation: sourceLocation)
     case .commandContainsNUL:
         Issue.record("unexpected NUL command rejection")
-    case .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled, .workspaceUnresolved:
+    case .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled, .workspaceUnresolved, .resourceStagingFailed:
         Issue.record(
             "expected \(expected), got commandExecutableMustBeAbsolute",
             sourceLocation: sourceLocation

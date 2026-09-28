@@ -1,0 +1,101 @@
+package struct RuntimeRegistrationPublicationDiagnostics: Equatable, Sendable {
+  package var publicationMode: String
+  package var dirtyPlanResult: String
+  package var subtreeRootCount: Int
+  package var restoredNodeCount: Int?
+  package var invalidatedIdentityCount: Int
+  package var unmappedInvalidatedIdentityCount: Int
+  package var unmappedInvalidatedIdentitySample: [Identity]
+  package var remappedInvalidatedIdentityCount: Int
+  package var droppedInvalidatedIdentityCount: Int
+  package var reconciledInvalidatedNodeCount: Int
+  package var selectiveEvaluationDisabledReasons: [String]
+  package var presentationPortalRootQueued: Bool?
+  package var presentationPortalRootPredicted: Bool?
+  package var presentationPortalEscalated: Bool?
+  package var graphCheckpointBaselineNodeCount: Int?
+  package var graphCheckpointPreparedNodeCount: Int?
+  package var graphCheckpointDirtySubtreeCandidateNodeCount: Int?
+  package var graphCheckpointStrategy: String?
+  package var graphDeltaCheckpointNodeCount: Int?
+  package var graphDeltaCheckpointCreatedNodeCount: Int?
+  package var graphDeltaCheckpointRemovedNodeCount: Int?
+  package var graphDeltaCheckpointEpochDelta: UInt64?
+  package var graphCheckpointRestoreStrategy: String?
+  package var graphCheckpointRestoreFallbackReason: String?
+  package var graphCheckpointDeltaRestoreCount: Int
+  package var graphCheckpointFallbackRestoreCount: Int
+  package var nonGraphCheckpointPresent: Bool?
+
+  package init(
+    publicationMode: String = "-",
+    dirtyPlanResult: String = "-",
+    subtreeRootCount: Int = 0,
+    restoredNodeCount: Int? = nil,
+    invalidatedIdentityCount: Int = 0,
+    unmappedInvalidatedIdentityCount: Int = 0,
+    unmappedInvalidatedIdentitySample: [Identity] = [],
+    remappedInvalidatedIdentityCount: Int = 0,
+    droppedInvalidatedIdentityCount: Int = 0,
+    reconciledInvalidatedNodeCount: Int = 0,
+    selectiveEvaluationDisabledReasons: [String] = [],
+    presentationPortalRootQueued: Bool? = nil,
+    presentationPortalRootPredicted: Bool? = nil,
+    presentationPortalEscalated: Bool? = nil,
+    graphCheckpointBaselineNodeCount: Int? = nil,
+    graphCheckpointPreparedNodeCount: Int? = nil,
+    graphCheckpointDirtySubtreeCandidateNodeCount: Int? = nil,
+    graphCheckpointStrategy: String? = nil,
+    graphDeltaCheckpointNodeCount: Int? = nil,
+    graphDeltaCheckpointCreatedNodeCount: Int? = nil,
+    graphDeltaCheckpointRemovedNodeCount: Int? = nil,
+    graphDeltaCheckpointEpochDelta: UInt64? = nil,
+    graphCheckpointRestoreStrategy: String? = nil,
+    graphCheckpointRestoreFallbackReason: String? = nil,
+    graphCheckpointDeltaRestoreCount: Int = 0,
+    graphCheckpointFallbackRestoreCount: Int = 0,
+    nonGraphCheckpointPresent: Bool? = nil
+  ) {
+    self.publicationMode = publicationMode
+    self.dirtyPlanResult = dirtyPlanResult
+    self.subtreeRootCount = subtreeRootCount
+    self.restoredNodeCount = restoredNodeCount
+    self.invalidatedIdentityCount = invalidatedIdentityCount
+    self.unmappedInvalidatedIdentityCount = unmappedInvalidatedIdentityCount
+    self.unmappedInvalidatedIdentitySample = unmappedInvalidatedIdentitySample
+    self.remappedInvalidatedIdentityCount = remappedInvalidatedIdentityCount
+    self.droppedInvalidatedIdentityCount = droppedInvalidatedIdentityCount
+    self.reconciledInvalidatedNodeCount = reconciledInvalidatedNodeCount
+    self.selectiveEvaluationDisabledReasons = selectiveEvaluationDisabledReasons
+    self.presentationPortalRootQueued = presentationPortalRootQueued
+    self.presentationPortalRootPredicted = presentationPortalRootPredicted
+    self.presentationPortalEscalated = presentationPortalEscalated
+    self.graphCheckpointBaselineNodeCount = graphCheckpointBaselineNodeCount
+    self.graphCheckpointPreparedNodeCount = graphCheckpointPreparedNodeCount
+    self.graphCheckpointDirtySubtreeCandidateNodeCount =
+      graphCheckpointDirtySubtreeCandidateNodeCount
+    self.graphCheckpointStrategy = graphCheckpointStrategy
+    self.graphDeltaCheckpointNodeCount = graphDeltaCheckpointNodeCount
+    self.graphDeltaCheckpointCreatedNodeCount = graphDeltaCheckpointCreatedNodeCount
+    self.graphDeltaCheckpointRemovedNodeCount = graphDeltaCheckpointRemovedNodeCount
+    self.graphDeltaCheckpointEpochDelta = graphDeltaCheckpointEpochDelta
+    self.graphCheckpointRestoreStrategy = graphCheckpointRestoreStrategy
+    self.graphCheckpointRestoreFallbackReason = graphCheckpointRestoreFallbackReason
+    self.graphCheckpointDeltaRestoreCount = graphCheckpointDeltaRestoreCount
+    self.graphCheckpointFallbackRestoreCount = graphCheckpointFallbackRestoreCount
+    self.nonGraphCheckpointPresent = nonGraphCheckpointPresent
+  }
+}
+
+@MainActor
+package enum RuntimeRegistrationPublicationDiagnosticsConfiguration {
+  package static let environmentVariableName = "SWIFTTUI_PUBLICATION_DIAGNOSTICS"
+  package static var isEnabled: Bool = environmentDefault()
+
+  private static func environmentDefault() -> Bool {
+    guard FeatureFlags.environmentValue(named: environmentVariableName) != nil else {
+      return DebugTraceSelection.current.isArmed("publication")
+    }
+    return FeatureFlags.isEnabled(named: environmentVariableName, default: false)
+  }
+}

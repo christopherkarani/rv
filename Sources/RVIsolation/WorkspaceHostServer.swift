@@ -113,6 +113,8 @@ final class WorkspaceHostServer: Sendable {
     private let hostID: WorkspaceHostID
     private let credential: WorkspaceOwnerCredential
     private let sessionStore: RuntimeSessionStore
+    private let resourcePolicy: RuntimeResourcePolicy
+    private let advertisedFeatures: [String]
     private let listenFD: Int32
     private let endpointFile: URL
     private let socketDirectory: String
@@ -134,6 +136,8 @@ final class WorkspaceHostServer: Sendable {
         credential: WorkspaceOwnerCredential,
         endpoint: WorkspaceEndpoint,
         sessionStore: RuntimeSessionStore,
+        resourcePolicy: RuntimeResourcePolicy,
+        advertisedFeatures: [String],
         listenFD: Int32,
         endpointFile: URL,
         socketDirectory: String,
@@ -144,6 +148,8 @@ final class WorkspaceHostServer: Sendable {
         self.credential = credential
         self.endpoint = endpoint
         self.sessionStore = sessionStore
+        self.resourcePolicy = resourcePolicy
+        self.advertisedFeatures = advertisedFeatures
         self.listenFD = listenFD
         self.endpointFile = endpointFile
         self.socketDirectory = socketDirectory
@@ -153,7 +159,9 @@ final class WorkspaceHostServer: Sendable {
     static func start(
         supervisor: WorkspaceSessionSupervisor,
         configurationDirectory: URL,
-        sessionStore: RuntimeSessionStore
+        sessionStore: RuntimeSessionStore,
+        resourcePolicy: RuntimeResourcePolicy = .empty,
+        advertisedFeatures: [String]? = nil
     ) -> Result<WorkspaceHostServer, WorkspaceHostFailure> {
         guard let credential = supervisor.ownerCredential() else {
             return .failure(.endpointUnavailable)
@@ -216,6 +224,13 @@ final class WorkspaceHostServer: Sendable {
             credential: credential,
             endpoint: record.endpoint(),
             sessionStore: sessionStore,
+            resourcePolicy: resourcePolicy,
+            advertisedFeatures: advertisedFeatures ?? [
+                WorkspaceControlFeature.ensureTerminalRuntime,
+                WorkspaceControlFeature.resizeLeaseAuthority,
+                WorkspaceControlFeature.runtimeResourceProfilesV1,
+                WorkspaceControlFeature.terminalReplayBatchesV1,
+            ],
             listenFD: listened.0,
             endpointFile: endpointFile,
             socketDirectory: prepared.directory,
@@ -427,7 +442,7 @@ final class WorkspaceHostServer: Sendable {
                     id: message.id,
                     op: op.rawValue,
                     ok: true,
-                    features: [WorkspaceControlFeature.ensureTerminalRuntime]
+                    features: advertisedFeatures
                 )
             )
         case .ping:
@@ -462,7 +477,8 @@ final class WorkspaceHostServer: Sendable {
                 ),
                 endConnection: true
             )
-        case .workspaceClosed, .terminalReplay, .terminalOutput, .terminalInputOwner,
+        case .workspaceClosed, .terminalReplayBegin, .terminalReplay, .terminalReplayEnd,
+            .terminalOutput, .terminalInputOwner, .terminalWindow,
             .runtimeExited, .terminalOverflow:
             return Reply(message: failure(message, .invalidRequest))
         case .subscribeTerminal:
@@ -476,7 +492,7 @@ final class WorkspaceHostServer: Sendable {
         case .releaseTerminalInput:
             return release(message, connection: connection)
         case .resizeTerminal:
-            return resize(message)
+            return resize(message, connection: connection)
         }
     }
 
@@ -527,6 +543,11 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func ensureTerminalRuntime(_ message: WorkspaceControlMessage) -> WorkspaceControlMessage {
+        // An explicit profile rides along to creation, where launch()
+        // adjudicates it; the existing-runtime shortcut below stays
+        // ID-agnostic, matching the client's re-attach to the first
+        // terminal runtime. A reused runtime keeps the grants it was
+        // created with, which may be fewer than requested, never more.
         terminalEnsureLock.lock()
         defer { terminalEnsureLock.unlock() }
 
@@ -534,7 +555,7 @@ final class WorkspaceHostServer: Sendable {
         guard phase.acceptsRuntime else {
             return failure(message, workspaceControlCode(.notAcceptingRuntime(phase)))
         }
-        if let rawHook = message.hook, HookHost(rawValue: rawHook) == nil {
+        if let rawHook = message.hook, LaunchAgentTag.isValid(rawHook) == false {
             return failure(message, .invalidRequest)
         }
         guard let executable = message.executable, executable.hasPrefix("/"),
@@ -579,14 +600,40 @@ final class WorkspaceHostServer: Sendable {
         guard let executable = message.executable, executable.hasPrefix("/") else {
             return failure(message, .invalidRequest)
         }
+        guard WorkspaceControlCodec.launchCommandFits(
+            executable: executable,
+            arguments: message.arguments
+        ) else {
+            return failure(message, .launchCommandTooLarge)
+        }
+        // Explicit selection only: a missing ID always means the base fence.
+        // The policy's defaultProfile is a UI hint the host never consults.
+        let resourceProfile: RuntimeResourceProfile?
+        if let id = message.resourceProfileID {
+            guard let selected = resourcePolicy.profile(
+                id: id,
+                project: supervisor.snapshot.originalPath.rawValue
+            ) else {
+                return failure(message, .resourceProfileUnavailable)
+            }
+            resourceProfile = selected
+        } else {
+            resourceProfile = nil
+        }
+        // The hook wire carries the launch's agent tag. A tag that names
+        // a HookHost also selects hook protocol participation; any other
+        // well-formed tag is staging-only credential selection.
         let hook: HookHost?
+        let stagingAgent: String?
         if let raw = message.hook {
-            guard let parsed = HookHost(rawValue: raw) else {
+            guard LaunchAgentTag.isValid(raw) else {
                 return failure(message, .invalidRequest)
             }
-            hook = parsed
+            hook = HookHost(rawValue: raw)
+            stagingAgent = raw
         } else {
             hook = nil
+            stagingAgent = nil
         }
         guard let command = IsolatedCommand(
             executable: executable,
@@ -604,13 +651,17 @@ final class WorkspaceHostServer: Sendable {
         let plan = compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace)
         switch supervisor.launch(
             host: hook,
+            stagingAgent: stagingAgent,
             command: command,
             plan: plan,
             io: io,
+            resourceProfile: resourceProfile,
             admission: .failClosed,
             sessionStore: sessionStore,
             runningLimit: WorkspaceControlLimits.maxRuntimes
         ) {
+        case .failure(.apply(.resourceStagingFailed(let detail))):
+            return failure(message, .resourceStagingFailed, detail: detail)
         case .failure(let error):
             return failure(message, workspaceControlCode(error))
         case .success(let running):
@@ -659,9 +710,14 @@ final class WorkspaceHostServer: Sendable {
             return Reply(message: failure(message, .invalidRequest))
         }
         let client = connection.id
-        switch supervisor.subscribeTerminal(runtime: runtime, client: client, emit: { notice in
-            connection.send(workspaceTerminalMessage(notice, runtime: runtime))
-        }) {
+        let windowNotices = message.features?.contains(WorkspaceControlFeature.terminalWindowNoticesV1) == true
+        switch supervisor.subscribeTerminal(
+            runtime: runtime, client: client,
+            emit: { notice in
+                connection.send(workspaceTerminalMessage(notice, runtime: runtime))
+            },
+            windowNotices: windowNotices
+        ) {
         case .failure(let code):
             return Reply(message: failure(message, code))
         case .success:
@@ -781,11 +837,14 @@ final class WorkspaceHostServer: Sendable {
         }
     }
 
-    private func resize(_ message: WorkspaceControlMessage) -> Reply {
+    private func resize(
+        _ message: WorkspaceControlMessage,
+        connection: WorkspaceControlConnection
+    ) -> Reply {
         guard let runtime = message.runtime, let rows = message.rows, let columns = message.columns else {
             return Reply(message: failure(message, .invalidRequest))
         }
-        switch supervisor.resizeTerminal(runtime: runtime, rows: rows, columns: columns) {
+        switch supervisor.resizeTerminal(runtime: runtime, client: connection.id, rows: rows, columns: columns) {
         case .failure(let code):
             return Reply(message: failure(message, code))
         case .success:
@@ -855,9 +914,10 @@ final class WorkspaceHostServer: Sendable {
 
     private func failure(
         _ message: WorkspaceControlMessage,
-        _ code: WorkspaceControlCode
+        _ code: WorkspaceControlCode,
+        detail: String? = nil
     ) -> WorkspaceControlMessage {
-        WorkspaceControlMessage.error(id: message.id, op: message.op, code: code)
+        WorkspaceControlMessage.error(id: message.id, op: message.op, code: code, detail: detail)
     }
 
     private func announceClosed(excluding: UUID?) {
@@ -931,6 +991,16 @@ private func workspaceTerminalMessage(
     runtime: UUID
 ) -> WorkspaceControlMessage {
     switch notice {
+    case .replayBegin(let batch, let truncated, let byteCount):
+        WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            op: WorkspaceControlOp.terminalReplayBegin.rawValue,
+            runtime: runtime,
+            ok: true,
+            batch: batch,
+            truncated: truncated,
+            replayLength: byteCount
+        )
     case .replay(let sequence, let bytes):
         WorkspaceControlMessage(
             version: WorkspaceControlLimits.version,
@@ -939,6 +1009,14 @@ private func workspaceTerminalMessage(
             ok: true,
             sequence: sequence,
             bytes: TerminalBytesCodec.encode(bytes)
+        )
+    case .replayEnd(let batch):
+        WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            op: WorkspaceControlOp.terminalReplayEnd.rawValue,
+            runtime: runtime,
+            ok: true,
+            batch: batch
         )
     case .output(let sequence, let bytes):
         WorkspaceControlMessage(
@@ -956,6 +1034,15 @@ private func workspaceTerminalMessage(
             runtime: runtime,
             ok: true,
             inputOwner: owned
+        )
+    case .window(let rows, let columns):
+        WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            op: WorkspaceControlOp.terminalWindow.rawValue,
+            runtime: runtime,
+            ok: true,
+            rows: rows,
+            columns: columns
         )
     case .exited(let status):
         WorkspaceControlMessage(

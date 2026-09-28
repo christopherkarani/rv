@@ -1,0 +1,281 @@
+/// A view that cycles through a sequence of phases.
+/// It applies an animation between each pair of consecutive phases.
+///
+/// It matches the SwiftUI `phaseAnimator` family of APIs.
+/// It has two modes:
+///
+/// ### Loop mode
+///
+/// `init(_:content:animation:)` starts a background task.
+/// The task walks the phases in a loop forever.
+/// It advances after each animation completes through the
+/// ``withAnimation(_:completionCriteria:_:completion:)`` batch drain.
+///
+///     PhaseAnimator([Phase.a, .b, .c]) { phase in
+///       Text("hello").foregroundStyle(phase.color)
+///     } animation: { phase in
+///       .easeInOut(duration: .milliseconds(500))
+///     }
+///
+/// ### Trigger mode
+///
+/// `init(_:trigger:content:animation:)` walks through the phases
+/// exactly once whenever the external `trigger` value changes.
+/// Starting from the current phase, the animator advances one step
+/// at a time until it returns to phase 0 (the rest state).
+/// This behavior matches the trigger-driven SwiftUI phase animator.
+/// It produces the classic "press button, bounce, return to rest" pattern:
+///
+///     @State private var tapCount = 0
+///     PhaseAnimator([Phase.rest, .grow, .shrink], trigger: tapCount) {
+///       phase in
+///       Text("★").scaleEffect(phase.scale)
+///     }
+///     Button("bounce") { tapCount += 1 }
+///
+/// The initial mount is not a trigger change.
+/// The view renders at phase 0 without an animation. It reacts only to subsequent changes.
+/// Reduce motion reconciles the retained phase to phase 0 and consumes trigger
+/// changes without playing a cycle. Restoring motion keeps the animator at rest.
+///
+/// ### Animation curve
+///
+/// The `animation` closure returns the curve to use when
+/// transitioning INTO the given phase.  Returning nil snaps to that
+/// phase without animating (the content still updates but the
+/// controller does not add an animation to the queue).
+///
+/// - Note: The phases array must not be empty. Calling
+///   `PhaseAnimator([])` is a programmer error and will stop in
+///   debug builds.
+public struct PhaseAnimator<Phase: Equatable & Sendable, Content: View>: View {
+  private let phases: [Phase]
+  private let content: @MainActor (Phase) -> Content
+  private let animation: @Sendable (Phase) -> Animation?
+  // nil → loop mode; concrete key → trigger mode keyed on this value.
+  // The key stores the trigger VALUE and compares by opened equality: a
+  // hash would conflate distinct values on collision, so a changed trigger
+  // whose hash collided with the previous value would silently never
+  // restart the phase cycle (F176).
+  private let trigger: PhaseAnimatorTriggerKey?
+  /// The authoring context of the body that created `content`; the closure
+  /// is evaluated under it so an enclosing view's `@State` reads through its
+  /// own owner (see ``KeyframeAnimator``).
+  private let contentAuthoringContext: AuthoringContext?
+
+  @State private var currentPhase: Phase
+  // Trigger mode: the trigger value the last cycle ran for, or the value
+  // seen at mount (which runs nothing). Only a *change* runs a cycle. A
+  // dormant tab archives this value with the rest of the view's state, so
+  // an unchanged trigger does not replay the cycle when the tab is shown
+  // again, while a trigger that changed while the tab was dormant runs one
+  // cycle on re-mount — SwiftUI observes the change at re-mount. The
+  // previous seen-once flag survived the round trip as `true` and made the
+  // re-mounted `.task(id:)` replay the bounce on every return.
+  @State private var lastRunTrigger: PhaseAnimatorTriggerKey? = nil
+
+  public init(
+    _ phases: [Phase],
+    @ViewBuilder content: @escaping @MainActor (Phase) -> Content,
+    animation: @escaping @Sendable (Phase) -> Animation? = { _ in .default }
+  ) {
+    precondition(
+      !phases.isEmpty,
+      "PhaseAnimator requires at least one phase"
+    )
+    self.phases = phases
+    self.content = content
+    self.animation = animation
+    self.trigger = nil
+    contentAuthoringContext = currentAuthoringContext()
+    _currentPhase = State(wrappedValue: phases[0])
+  }
+
+  public init<Trigger: Hashable & Sendable>(
+    _ phases: [Phase],
+    trigger: Trigger,
+    @ViewBuilder content: @escaping @MainActor (Phase) -> Content,
+    animation: @escaping @Sendable (Phase) -> Animation? = { _ in .default }
+  ) {
+    precondition(
+      !phases.isEmpty,
+      "PhaseAnimator requires at least one phase"
+    )
+    self.phases = phases
+    self.content = content
+    self.animation = animation
+    let triggerKey = PhaseAnimatorTriggerKey(base: trigger)
+    self.trigger = triggerKey
+    contentAuthoringContext = currentAuthoringContext()
+    _currentPhase = State(wrappedValue: phases[0])
+    // Mount must establish the baseline before its task can be cancelled by
+    // a trigger change. Existing graph state still wins on body re-evaluation
+    // and dormant-tab restoration.
+    _lastRunTrigger = State(wrappedValue: triggerKey)
+  }
+
+  public var body: some View {
+    EnvironmentReader(\.renderingReduceMotion) { renderingReduceMotion in
+      phaseAnimatorBody(accessibilityReduceMotion: renderingReduceMotion)
+    }
+  }
+
+  @ViewBuilder
+  private func phaseAnimatorBody(accessibilityReduceMotion: Bool) -> some View {
+    // Bind both task-written slots even when the reduced branch renders the
+    // constant rest phase, so its reconciliation writes reach mounted state.
+    _ = currentPhase
+    _ = lastRunTrigger
+    if accessibilityReduceMotion {
+      if currentPhase != phases[0] || lastRunTrigger != trigger {
+        phaseContent(phases[0])
+          .task(id: trigger) { @MainActor in
+            guard !Task.isCancelled else { return }
+            currentPhase = phases[0]
+            lastRunTrigger = trigger
+          }
+      } else {
+        phaseContent(phases[0])
+      }
+    } else if let trigger {
+      // Touch `lastRunTrigger` in body so `State.remember(...)`
+      // registers a per-instance location for it during the normal
+      // `withAuthoringContext` body evaluation. Without this read, the
+      // only access to the property happens inside the `.task(id:)`
+      // closure — which runs after the body has already returned, so
+      // no authoring context is active and writes fall through to
+      // `updateSeedValue(...)` (global seed) instead of persisting on
+      // this PhaseAnimator instance.
+      _ = lastRunTrigger
+      phaseContent(currentPhase)
+        .task(id: trigger) { @MainActor in
+          // .task(id:) fires on initial appearance and on every re-mount
+          // (a dormant tab returning), not only on trigger changes. Run a
+          // cycle only for a trigger the animator has not run yet. Defensively
+          // establish a baseline if the trigger history is uninitialized.
+          guard let lastRunTrigger else {
+            self.lastRunTrigger = trigger
+            return
+          }
+          guard trigger != lastRunTrigger else { return }
+          self.lastRunTrigger = trigger
+          await runCycleOnce()
+        }
+    } else {
+      phaseContent(currentPhase)
+        .task { @MainActor in
+          await runPhaseLoop()
+        }
+    }
+  }
+
+  /// Evaluates the enclosing view's closure under the context that authored
+  /// it. `phase` is read from this animator's own slot by the caller.
+  private func phaseContent(_ phase: Phase) -> Content {
+    withAuthoringContext(contentAuthoringContext) { content(phase) }
+  }
+
+  @MainActor
+  private func runPhaseLoop() async {
+    // Find the index of the current phase in the array.  The loop
+    // advances to (index + 1) % count and waits for that
+    // transition's animation to drain before continuing.
+    var currentIndex = phases.firstIndex(of: currentPhase) ?? 0
+    while !Task.isCancelled {
+      let nextIndex = (currentIndex + 1) % phases.count
+      let nextPhase = phases[nextIndex]
+      let nextAnimation = animation(nextPhase)
+
+      await advance(to: nextPhase, with: nextAnimation)
+
+      if Task.isCancelled { break }
+      currentIndex = nextIndex
+    }
+  }
+
+  @MainActor
+  private func runCycleOnce() async {
+    // Walk from the current phase through the remaining phases
+    // and back around to phase 0 — exactly one full traversal.
+    // If we're already at phase 0, this is (count - 1) + 1 = count
+    // transitions, forming a complete round trip.
+    guard phases.count > 1 else { return }
+    var index = phases.firstIndex(of: currentPhase) ?? 0
+    let restIndex = 0
+    repeat {
+      index = (index + 1) % phases.count
+      let nextPhase = phases[index]
+      let nextAnimation = animation(nextPhase)
+
+      await advance(to: nextPhase, with: nextAnimation)
+
+      if Task.isCancelled { return }
+    } while index != restIndex
+  }
+
+  @MainActor
+  private func advance(to phase: Phase, with animation: Animation?) async {
+    guard !Task.isCancelled else {
+      return
+    }
+
+    let completionGate = OneShotContinuationGate()
+
+    // Completion-driven advance is the normal path. But a `withAnimation`
+    // completion can be dropped by the frame pipeline: a completion deferred
+    // during a frame-head transaction is lost when that frame is discarded /
+    // superseded / off-screen-elided (frequent behind a capture-host seam such
+    // as the gallery's lazy tab + scroll viewport), which would deadlock this
+    // loop on the very first phase. Arm a fallback that advances after the
+    // animation's own duration so the cycle can never stall waiting on a missed
+    // completion. The gate is one-shot, so whichever signal arrives first wins
+    // and the other is a no-op; the fallback is cancelled as soon as `advance`
+    // returns, so the fast (completion-driven) path stays the steady state.
+    let fallbackDelay = animation?.totalDuration.map { $0 + .milliseconds(120) }
+    let fallbackTask: Task<Void, Never>? = fallbackDelay.map { delay in
+      Task { @MainActor in
+        try? await Task.sleep(for: delay)
+        completionGate.resume()
+      }
+    }
+    defer { fallbackTask?.cancel() }
+
+    await withTaskCancellationHandler {
+      await withCheckedContinuation {
+        (continuation: CheckedContinuation<Void, Never>) in
+        completionGate.install(continuation)
+        guard !Task.isCancelled else {
+          completionGate.resume()
+          return
+        }
+        withAnimation(animation) {
+          currentPhase = phase
+        } completion: {
+          completionGate.resume()
+        }
+      }
+    } onCancel: {
+      completionGate.resume()
+    }
+  }
+}
+
+/// Value-equality key for trigger-mode's `.task(id:)` (F176). Stores the
+/// trigger VALUE and compares by opening the concrete type: a stored hash
+/// would conflate distinct trigger values whose hashes collide, so a real
+/// trigger change could silently keep the original task and never re-run
+/// the phase cycle. Type mismatch compares unequal (a changed trigger type
+/// is a changed trigger).
+struct PhaseAnimatorTriggerKey: Equatable, Sendable {
+  let base: any Hashable & Sendable
+
+  static func == (lhs: Self, rhs: Self) -> Bool {
+    func open<T: Equatable>(_ lhsBase: T) -> Bool {
+      guard let rhsBase = rhs.base as? T else {
+        return false
+      }
+      return lhsBase == rhsBase
+    }
+    return open(lhs.base)
+  }
+}

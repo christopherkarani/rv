@@ -1,0 +1,542 @@
+import Testing
+
+@_spi(Testing) @testable import SwiftTUICore
+@testable import SwiftTUIGraph
+
+@Suite
+struct AccessibilityNodeExtractionTests {
+  @Test("disabled dismissal focus never enables pointer routing or crosses a sealed host")
+  func disabledDismissalFocus() {
+    let identity = testIdentity("DismissalTarget")
+    var metadata = SemanticMetadata(
+      isFocusable: true, participatesInPointerHitTesting: true, accessibilityRole: .button)
+    var placed = placedNode(identity: identity, semanticMetadata: metadata)
+    placed.environmentSnapshot.style.isEnabled = false
+    #expect(SemanticExtractor().extract(from: placed).focusRegions.isEmpty)
+
+    metadata.allowsFocusWhenDisabled = true
+    placed.semanticMetadata = metadata.merging(.init(accessibilityLabel: "Dismiss"))
+    let snapshot = SemanticExtractor().extract(from: placed)
+    #expect(snapshot.focusRegions.map(\.identity) == [identity])
+    #expect(snapshot.interactionRegions.isEmpty)
+    #expect(!placed.environmentSnapshot.style.isEnabled)
+
+    var parentMetadata = SemanticMetadata()
+    parentMetadata.sealsFocusDescendants = true
+    let sealed = placedNode(
+      identity: testIdentity("Sealed"), semanticMetadata: parentMetadata, children: [placed])
+    #expect(SemanticExtractor().extract(from: sealed).focusRegions.isEmpty)
+    parentMetadata.sealsFocusDescendants = false
+    parentMetadata.interactionAvailability = .disabled(reason: .modalOverlay)
+    let suppressed = placedNode(
+      identity: testIdentity("Suppressed"), semanticMetadata: parentMetadata, children: [placed])
+    #expect(SemanticExtractor().extract(from: suppressed).focusRegions.isEmpty)
+  }
+
+  @Test("Button role emits a node with label inferred from rendered text")
+  func buttonRoleEmitsInferredTextLabel() throws {
+    let buttonID = testIdentity("Button")
+    let buttonRect = rect(x: 0, y: 0, width: 4, height: 1)
+    let placed = placedNode(
+      identity: buttonID,
+      bounds: buttonRect,
+      semanticMetadata: .init(accessibilityRole: .button),
+      drawPayload: .text("Save")
+    )
+
+    let nodes = SemanticExtractor().extract(from: placed).accessibilityNodes
+
+    #expect(
+      nodes == [
+        AccessibilityNode(
+          identity: buttonID,
+          rect: buttonRect,
+          role: .button,
+          label: "Save"
+        )
+      ]
+    )
+  }
+
+  @Test("Explicit accessibility label wins over inferred text")
+  func explicitLabelWinsOverInferredText() throws {
+    let buttonID = testIdentity("Button")
+    let placed = placedNode(
+      identity: buttonID,
+      semanticMetadata: .init(
+        accessibilityRole: .button,
+        accessibilityLabel: "Remove item"
+      ),
+      drawPayload: .text("Delete")
+    )
+
+    let node = try #require(SemanticExtractor().extract(from: placed).accessibilityNodes.first)
+
+    #expect(node.label == "Remove item")
+  }
+
+  @Test("Accessibility hidden skips the node and descendants")
+  func accessibilityHiddenSkipsSubtree() {
+    let rootID = testIdentity("Root")
+    let hiddenID = testIdentity("Hidden")
+    let hiddenButtonID = testIdentity("Hidden", "Button")
+    let visibleButtonID = testIdentity("Visible", "Button")
+    let hiddenSubtree = placedNode(
+      identity: hiddenID,
+      semanticMetadata: .init(accessibilityHidden: true),
+      children: [
+        placedNode(
+          identity: hiddenButtonID,
+          semanticMetadata: .init(accessibilityRole: .button),
+          drawPayload: .text("Secret")
+        )
+      ]
+    )
+    let visibleButton = placedNode(
+      identity: visibleButtonID,
+      semanticMetadata: .init(accessibilityRole: .button),
+      drawPayload: .text("Visible")
+    )
+    let root = placedNode(
+      identity: rootID,
+      children: [hiddenSubtree, visibleButton]
+    )
+
+    let nodes = SemanticExtractor().extract(from: root).accessibilityNodes
+    let identities = Set(nodes.map(\.identity))
+
+    #expect(identities.contains(rootID))
+    #expect(identities.contains(visibleButtonID))
+    #expect(!identities.contains(hiddenID))
+    #expect(!identities.contains(hiddenButtonID))
+  }
+
+  @Test("Structural group ancestors preserve parent identity")
+  func structuralGroupAncestorPreservesParentIdentity() throws {
+    let rootID = testIdentity("Root")
+    let childID = testIdentity("Root", "Child")
+    let root = placedNode(
+      identity: rootID,
+      children: [
+        placedNode(
+          identity: childID,
+          semanticMetadata: .init(accessibilityRole: .button),
+          drawPayload: .text("Run")
+        )
+      ]
+    )
+
+    let nodes = SemanticExtractor().extract(from: root).accessibilityNodes
+    let rootNode = try #require(nodes.first { $0.identity == rootID })
+    let childNode = try #require(nodes.first { $0.identity == childID })
+
+    #expect(rootNode.role == .group)
+    #expect(rootNode.label == nil)
+    #expect(rootNode.parentIdentity == nil)
+    #expect(childNode.label == "Run")
+    #expect(childNode.parentIdentity == rootID)
+  }
+
+  @Test("Focus-chain nodes emit without authored labels")
+  func focusChainNodesEmitWithoutAuthoredLabels() throws {
+    let focusID = testIdentity("Focusable")
+    let placed = placedNode(
+      identity: focusID,
+      semanticMetadata: .init(isFocusable: true)
+    )
+
+    let snapshot = SemanticExtractor().extract(from: placed)
+    let node = try #require(snapshot.accessibilityNodes.first)
+
+    #expect(snapshot.focusRegions.map(\.identity) == [focusID])
+    #expect(node.identity == focusID)
+    #expect(node.role == .group)
+    #expect(node.label == nil)
+  }
+
+  @Test("Accessibility node order follows layout reading order")
+  func nodeOrderFollowsLayoutReadingOrder() {
+    let rootID = testIdentity("Root")
+    let leftID = testIdentity("Root", "Left")
+    let rightID = testIdentity("Root", "Right")
+    let root = placedNode(
+      identity: rootID,
+      children: [
+        placedNode(
+          identity: leftID,
+          semanticMetadata: .init(accessibilityRole: .button),
+          drawPayload: .text("Left")
+        ),
+        placedNode(
+          identity: rightID,
+          semanticMetadata: .init(accessibilityRole: .link),
+          drawPayload: .text("Right")
+        ),
+      ]
+    )
+
+    let identities = SemanticExtractor().extract(from: root).accessibilityNodes.map(\.identity)
+
+    #expect(identities == [rootID, leftID, rightID])
+  }
+
+  @Test("Text input caret anchors hoist onto the owning accessibility node")
+  func textInputCaretAnchorHoistsToOwnerNode() throws {
+    let ownerID = testIdentity("TextField")
+    let contentID = testIdentity("TextField", "Content")
+    let root = placedNode(
+      identity: testIdentity("Root"),
+      children: [
+        placedNode(
+          identity: ownerID,
+          semanticMetadata: .init(accessibilityRole: .textField),
+          children: [
+            placedNode(
+              identity: contentID,
+              bounds: rect(x: 4, y: 2, width: 8, height: 1),
+              semanticMetadata: .init(
+                textInputAccessibilityCursorAnchor: .init(
+                  ownerIdentity: ownerID,
+                  anchor: CellPoint(x: 3, y: 0)
+                )
+              ),
+              drawPayload: .text("abc")
+            )
+          ]
+        )
+      ]
+    )
+
+    let nodes = SemanticExtractor().extract(from: root).accessibilityNodes
+    let ownerNode = try #require(nodes.first { $0.identity == ownerID })
+
+    #expect(ownerNode.cursorAnchor == CellPoint(x: 7, y: 2))
+    #expect(!nodes.contains { $0.identity == contentID })
+  }
+
+  @Test("Explicit accessibility cursor anchors still apply to their own node")
+  func explicitCursorAnchorStillAppliesToOwnNode() throws {
+    let identity = testIdentity("Custom")
+    let placed = placedNode(
+      identity: identity,
+      bounds: rect(x: 2, y: 3, width: 8, height: 1),
+      semanticMetadata: .init(
+        accessibilityRole: .button,
+        accessibilityCursorAnchor: CellPoint(x: 5, y: 0)
+      ),
+      drawPayload: .text("Run")
+    )
+
+    let node = try #require(SemanticExtractor().extract(from: placed).accessibilityNodes.first)
+
+    #expect(node.cursorAnchor == CellPoint(x: 7, y: 3))
+  }
+
+  @Test("Unlabeled visual content is skipped and reported as an accessibility warning")
+  func unlabeledVisualContentIsSkippedAndWarned() {
+    let imageID = testIdentity("Image")
+    let placed = placedNode(
+      identity: imageID,
+      semanticMetadata: .init(
+        accessibilityRole: .image,
+        accessibilityVisualContent: .init(kind: "Image")
+      )
+    )
+
+    let snapshot = SemanticExtractor().extract(from: placed)
+
+    #expect(snapshot.accessibilityNodes.isEmpty)
+    #expect(
+      snapshot.accessibilityWarnings == [
+        AccessibilityWarning(
+          identity: imageID,
+          kind: "Image",
+          message:
+            "Image omitted from accessibility output; add accessibilityLabel(...) or accessibilityHidden(true)."
+        )
+      ])
+  }
+
+  @Test("extractsAccessibilityWarnings:false suppresses warnings but is otherwise a no-op")
+  func accessibilityWarningGateSuppressesWarningsOnly() {
+    let imageID = testIdentity("Image")
+    let placed = placedNode(
+      identity: imageID,
+      semanticMetadata: .init(
+        accessibilityRole: .image,
+        accessibilityVisualContent: .init(kind: "Image")
+      )
+    )
+
+    let onSnapshot = SemanticExtractor(extractsAccessibilityWarnings: true).extract(from: placed)
+    let offSnapshot = SemanticExtractor(extractsAccessibilityWarnings: false).extract(from: placed)
+
+    // Gate off: warnings suppressed (the dead-on-no-AT walk is skipped)...
+    #expect(!onSnapshot.accessibilityWarnings.isEmpty)
+    #expect(offSnapshot.accessibilityWarnings.isEmpty)
+    // ...but every other field is byte-identical — the gate is a pure no-op on
+    // the consumed (focus/scroll/accessibility-node) fields.
+    #expect(offSnapshot.accessibilityNodes == onSnapshot.accessibilityNodes)
+    #expect(offSnapshot.focusRegions == onSnapshot.focusRegions)
+    #expect(offSnapshot.scrollRoutes == onSnapshot.scrollRoutes)
+    #expect(offSnapshot.scrollTargets == onSnapshot.scrollTargets)
+    #expect(offSnapshot.interactionRegions == onSnapshot.interactionRegions)
+  }
+
+  @Test("Labeled visual content emits an image node without a warning")
+  func labeledVisualContentEmitsImageNode() throws {
+    let canvasID = testIdentity("Canvas")
+    let placed = placedNode(
+      identity: canvasID,
+      semanticMetadata: .init(
+        accessibilityRole: .image,
+        accessibilityLabel: "CPU sparkline",
+        accessibilityVisualContent: .init(kind: "Canvas")
+      )
+    )
+
+    let snapshot = SemanticExtractor().extract(from: placed)
+    let node = try #require(snapshot.accessibilityNodes.first)
+
+    #expect(node.identity == canvasID)
+    #expect(node.role == .image)
+    #expect(node.label == "CPU sparkline")
+    #expect(snapshot.accessibilityWarnings.isEmpty)
+  }
+
+  @Test("An outer label consumes one unique unlabeled image descendant")
+  func outerLabelConsumesUniqueImageDescendant() throws {
+    let wrapperID = testIdentity("Wrapper")
+    let imageID = testIdentity("Wrapper", "Image")
+    let placed = placedNode(
+      identity: wrapperID,
+      semanticMetadata: .init(accessibilityLabel: "Preview image"),
+      children: [
+        placedNode(
+          identity: testIdentity("Wrapper", "Background")
+        ),
+        placedNode(
+          identity: imageID,
+          semanticMetadata: .init(
+            accessibilityRole: .image,
+            accessibilityVisualContent: .init(kind: "Image")
+          )
+        ),
+      ]
+    )
+
+    let snapshot = SemanticExtractor().extract(from: placed)
+    let node = try #require(snapshot.accessibilityNodes.first)
+
+    #expect(snapshot.accessibilityNodes.count == 1)
+    #expect(node.identity == wrapperID)
+    #expect(node.parentIdentity == nil)
+    #expect(node.role == .image)
+    #expect(node.label == "Preview image")
+    #expect(snapshot.accessibilityWarnings.isEmpty)
+  }
+
+  @Test("An outer label does not choose arbitrarily between image descendants")
+  func outerLabelDoesNotChooseBetweenImages() throws {
+    let wrapperID = testIdentity("Gallery")
+    let firstID = testIdentity("Gallery", "First")
+    let secondID = testIdentity("Gallery", "Second")
+    let imageMetadata = SemanticMetadata(
+      accessibilityRole: .image,
+      accessibilityVisualContent: .init(kind: "Image")
+    )
+    let placed = placedNode(
+      identity: wrapperID,
+      semanticMetadata: .init(accessibilityLabel: "Gallery"),
+      children: [
+        placedNode(identity: firstID, semanticMetadata: imageMetadata),
+        placedNode(identity: secondID, semanticMetadata: imageMetadata),
+      ]
+    )
+
+    let snapshot = SemanticExtractor().extract(from: placed)
+    let node = try #require(snapshot.accessibilityNodes.first)
+
+    #expect(snapshot.accessibilityNodes.count == 1)
+    #expect(node.role == .group)
+    #expect(node.label == "Gallery")
+    #expect(Set(snapshot.accessibilityWarnings.map(\.identity)) == [firstID, secondID])
+  }
+
+  @Test("Equal image identities remain two ambiguous visual descendants")
+  func equalImageIdentitiesRemainAmbiguous() throws {
+    let wrapperID = testIdentity("DuplicateGallery")
+    let imageID = testIdentity("DuplicateGallery", "Image")
+    let imageMetadata = SemanticMetadata(
+      accessibilityRole: .image,
+      accessibilityVisualContent: .init(kind: "Image")
+    )
+    let placed = placedNode(
+      identity: wrapperID,
+      semanticMetadata: .init(accessibilityLabel: "Duplicate gallery"),
+      children: [
+        placedNode(identity: imageID, semanticMetadata: imageMetadata),
+        placedNode(identity: imageID, semanticMetadata: imageMetadata),
+      ]
+    )
+
+    let snapshot = SemanticExtractor().extract(from: placed)
+    let node = try #require(snapshot.accessibilityNodes.first)
+
+    #expect(node.role == .group)
+    #expect(snapshot.accessibilityWarnings.count == 2)
+  }
+
+  @Test("Equal wrapper identities do not share inferred image roles")
+  func equalWrapperIdentitiesDoNotShareImageInference() throws {
+    let wrapperID = testIdentity("DuplicateWrapper")
+    let placed = placedNode(
+      identity: testIdentity("Root"),
+      children: [
+        placedNode(
+          identity: wrapperID,
+          semanticMetadata: .init(accessibilityLabel: "Artwork"),
+          children: [
+            placedNode(
+              identity: testIdentity("DuplicateWrapper", "Image"),
+              semanticMetadata: .init(
+                accessibilityRole: .image,
+                accessibilityVisualContent: .init(kind: "Image")
+              )
+            )
+          ]
+        ),
+        placedNode(
+          identity: wrapperID,
+          semanticMetadata: .init(accessibilityLabel: "Notes")
+        ),
+      ]
+    )
+
+    let snapshot = SemanticExtractor().extract(from: placed)
+    let artwork = try #require(
+      snapshot.accessibilityNodes.first { $0.label == "Artwork" }
+    )
+    let notes = try #require(
+      snapshot.accessibilityNodes.first { $0.label == "Notes" }
+    )
+
+    #expect(artwork.role == .image)
+    #expect(notes.role == .group)
+    #expect(snapshot.accessibilityWarnings.isEmpty)
+  }
+
+  @Test("An explicit outer role wins while consuming its unique image")
+  func explicitOuterRoleWinsOverImageInference() throws {
+    let wrapperID = testIdentity("ArtworkButton")
+    let imageID = testIdentity("ArtworkButton", "Image")
+    let placed = placedNode(
+      identity: wrapperID,
+      semanticMetadata: .init(
+        accessibilityRole: .button,
+        accessibilityLabel: "Open artwork"
+      ),
+      children: [
+        placedNode(
+          identity: imageID,
+          semanticMetadata: .init(
+            accessibilityRole: .image,
+            accessibilityVisualContent: .init(kind: "Image")
+          )
+        )
+      ]
+    )
+
+    let snapshot = SemanticExtractor().extract(from: placed)
+    let node = try #require(snapshot.accessibilityNodes.first)
+
+    #expect(snapshot.accessibilityNodes.count == 1)
+    #expect(node.role == .button)
+    #expect(node.label == "Open artwork")
+    #expect(snapshot.accessibilityWarnings.isEmpty)
+  }
+
+  @Test("Hidden and transient images cannot drive outer role inference")
+  func hiddenAndTransientImagesCannotDriveOuterRoleInference() throws {
+    let wrapperID = testIdentity("HiddenArtwork")
+    let placed = placedNode(
+      identity: wrapperID,
+      semanticMetadata: .init(accessibilityLabel: "Hidden artwork"),
+      children: [
+        placedNode(
+          identity: testIdentity("HiddenArtwork", "Hidden"),
+          semanticMetadata: .init(
+            accessibilityRole: .image,
+            accessibilityHidden: true,
+            accessibilityVisualContent: .init(kind: "Image")
+          )
+        ),
+        placedNode(
+          identity: testIdentity("HiddenArtwork", "Transient"),
+          semanticMetadata: .init(
+            accessibilityRole: .image,
+            accessibilityVisualContent: .init(kind: "Image")
+          ),
+          isTransient: true
+        ),
+      ]
+    )
+
+    let snapshot = SemanticExtractor().extract(from: placed)
+    let node = try #require(snapshot.accessibilityNodes.first)
+
+    #expect(snapshot.accessibilityNodes.count == 1)
+    #expect(node.role == .group)
+    #expect(node.label == "Hidden artwork")
+    #expect(snapshot.accessibilityWarnings.isEmpty)
+  }
+
+  @Test("Hidden visual content is skipped without warning")
+  func hiddenVisualContentIsSkippedWithoutWarning() {
+    let imageID = testIdentity("HiddenImage")
+    let placed = placedNode(
+      identity: imageID,
+      semanticMetadata: .init(
+        accessibilityRole: .image,
+        accessibilityHidden: true,
+        accessibilityVisualContent: .init(kind: "Image")
+      )
+    )
+
+    let snapshot = SemanticExtractor().extract(from: placed)
+
+    #expect(snapshot.accessibilityNodes.isEmpty)
+    #expect(snapshot.accessibilityWarnings.isEmpty)
+  }
+}
+
+private func placedNode(
+  identity: Identity,
+  bounds: CellRect = rect(x: 0, y: 0, width: 10, height: 1),
+  semanticMetadata: SemanticMetadata = .init(),
+  children: [PlacedNode] = [],
+  drawPayload: DrawPayload = .none,
+  isTransient: Bool = false
+) -> PlacedNode {
+  PlacedNode(
+    identity: identity,
+    kind: .view("Test"),
+    bounds: bounds,
+    children: children,
+    semanticMetadata: semanticMetadata,
+    drawPayload: drawPayload,
+    isTransient: isTransient
+  )
+}
+
+private func rect(
+  x: Int,
+  y: Int,
+  width: Int,
+  height: Int
+) -> CellRect {
+  CellRect(
+    origin: CellPoint(x: x, y: y),
+    size: CellSize(width: width, height: height)
+  )
+}

@@ -29,6 +29,10 @@ public enum IsolationApplyError: Error, Sendable, Equatable {
     case workspaceInodeBoundaryFailed
     case containedGuaranteesUnsupported
     case profileNotApplicable
+    /// A resource-profile grant could not be staged. The payload names
+    /// the operator-authored item (link name, credential destination),
+    /// never a host path. The command was not executed.
+    case resourceStagingFailed(String)
     case processSpawnFailed
     case commandExecutableMustBeAbsolute
     case commandContainsNUL
@@ -116,6 +120,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
     public let family: IsolationBackendFamily
     let launch: Launch
     let io: IsolatedIO
+    let resources: RuntimeResourceManifest?
     /// Test-only. Production launches leave this nil. A fault fails the
     /// launch before the payload is reported running.
     let spawnFault: RuntimeSpawnFault?
@@ -153,6 +158,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         command: IsolatedCommand,
         launch: Launch,
         io: IsolatedIO = .discard,
+        resources: RuntimeResourceManifest? = nil,
         spawnFault: RuntimeSpawnFault? = nil
     ) {
         switch (launch, plan.mode) {
@@ -171,6 +177,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         self.command = command
         self.launch = launch
         self.io = io
+        self.resources = resources
         self.spawnFault = spawnFault
     }
 
@@ -192,6 +199,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         self.family = request.family
         self.launch = request.launch
         self.io = io
+        self.resources = request.resources
         self.spawnFault = spawnFault
     }
 
@@ -201,6 +209,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
             && lhs.family == rhs.family
             && lhs.launch == rhs.launch
             && lhs.io == rhs.io
+            && lhs.resources == rhs.resources
             && lhs.spawnFault == rhs.spawnFault
     }
 
@@ -320,7 +329,7 @@ public enum IsolationBackends {
     public static func seatbelt() -> IsolationBackend {
         IsolationBackend(
             family: .seatbelt,
-            prepare: prepareSeatbelt,
+            prepare: { plan, command in prepareSeatbelt(plan, command) },
             run: runSeatbelt
         )
     }
@@ -449,7 +458,8 @@ extension IsolationBackend {
 
 func prepareSeatbelt(
     _ plan: IsolationPlan,
-    _ command: IsolatedCommand
+    _ command: IsolatedCommand,
+    resourceProfile: RuntimeResourceProfile? = nil
 ) -> Result<IsolatedLaunchRequest, IsolationApplyError> {
     switch plan.mode {
     case .observed, .mediated:
@@ -459,12 +469,11 @@ func prepareSeatbelt(
         case .failure(let error):
             return .failure(error)
         case .success(let compiled):
+            let resources = resourceProfile.map(RuntimeResourceManifest.init)
             var profile = compiled.allowingExecutable(command.executable)
                 .allowingLoopbackEgress()
-            if let agentBin = AgentBin.installedDirectory(),
-                let home = ProcessInfo.processInfo.environment["HOME"]
-            {
-                profile = profile.allowingAgentBin(AgentBin.resolve(binDirectory: agentBin, home: home))
+            if let resources {
+                profile = profile.allowingResources(resources)
             }
             guard let workspace = plan.workspace else {
                 return .failure(.containedGuaranteesUnsupported)
@@ -487,7 +496,8 @@ func prepareSeatbelt(
                 let request = IsolatedLaunchRequest(
                     plan: plan,
                     command: command,
-                    launch: .seatbelt(profile)
+                    launch: .seatbelt(profile),
+                    resources: resources
                 )
             else {
                 return .failure(.containedGuaranteesUnsupported)

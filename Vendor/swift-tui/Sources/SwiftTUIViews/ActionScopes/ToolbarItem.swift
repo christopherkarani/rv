@@ -1,0 +1,193 @@
+import SwiftTUICore
+
+/// A declarative description of a single toolbar item contributed by a
+/// descendant view via `.toolbarItem(_:)`.
+///
+/// Items are hoisted up the resolved tree via `ToolbarItemsPreferenceKey`
+/// until the nearest ancestor `ActionScope` with a `.toolbar()`
+/// modifier absorbs them and renders a toolbar strip.
+public struct ToolbarItemConfig: Sendable {
+  public enum Position: Sendable {
+    case top
+    case bottom
+    case automatic
+  }
+
+  public var title: String
+  public var icon: Image?
+  public var position: Position
+  public var isEnabled: Bool
+  public var systemHint: String?
+  public var action: @MainActor @Sendable () -> Void
+  package var sourceIdentity: Identity?
+
+  @MainActor
+  public init(
+    title: String,
+    icon: Image? = nil,
+    position: Position = .automatic,
+    isEnabled: Bool = true,
+    systemHint: String? = nil,
+    action: @escaping @MainActor @Sendable () -> Void
+  ) {
+    let authoringContext = currentImperativeAuthoringContextSnapshot()
+    self.title = title
+    self.icon = icon
+    self.position = position
+    self.isEnabled = isEnabled
+    self.systemHint = Button<Text>.normalizeSystemHint(systemHint)
+    sourceIdentity = nil
+    if let authoringContext {
+      self.action = {
+        withImperativeAuthoringContext(authoringContext) {
+          action()
+        }
+      }
+    } else {
+      self.action = action
+    }
+  }
+}
+
+extension ToolbarItemConfig: TypedReuseEqualityProviding {
+  package func isEqualForReuse(to other: any Sendable) -> Bool {
+    guard let other = other as? Self else {
+      return false
+    }
+    // The action registry refreshes handlers independently of resolved-tree
+    // product equality. Compare the authored toolbar contract while excluding
+    // only that refreshed closure, matching the registry's ownership seam.
+    return title == other.title
+      && toolbarImagesEqual(icon, other.icon)
+      && toolbarPositionsEqual(position, other.position)
+      && isEnabled == other.isEnabled
+      && systemHint == other.systemHint
+      && sourceIdentity == other.sourceIdentity
+  }
+}
+
+private func toolbarImagesEqual(_ left: Image?, _ right: Image?) -> Bool {
+  switch (left, right) {
+  case (nil, nil):
+    return true
+  case (let left?, let right?):
+    return left.source == right.source
+      && left.isResizable == right.isResizable
+      && left.scalingMode == right.scalingMode
+  default:
+    return false
+  }
+}
+
+private func toolbarPositionsEqual(
+  _ left: ToolbarItemConfig.Position,
+  _ right: ToolbarItemConfig.Position
+) -> Bool {
+  switch (left, right) {
+  case (.top, .top), (.bottom, .bottom), (.automatic, .automatic):
+    return true
+  default:
+    return false
+  }
+}
+
+/// Preference key that accumulates toolbar-item contributions from
+/// descendants up to the nearest ActionScope that has declared a
+/// toolbar. Consumed and cleared at that scope.
+package enum ToolbarItemsPreferenceKey: PreferenceKey {
+  package static var defaultValue: [ToolbarItemConfig] { [] }
+
+  package static func reduce(
+    value: inout [ToolbarItemConfig],
+    nextValue: () -> [ToolbarItemConfig]
+  ) {
+    value.append(contentsOf: nextValue())
+  }
+}
+
+private enum DirectToolbarItemContributionsKey {}
+
+private let directToolbarItemContributionsMetadataKey = ObjectIdentifier(
+  DirectToolbarItemContributionsKey.self
+)
+
+private struct DirectToolbarItemContributions: Sendable {
+  var items: [ToolbarItemConfig]
+}
+
+extension ResolvedNode {
+  /// Toolbar preferences attached to this node rather than inherited from a
+  /// child. `ResolvedNode.children` correctly rebuilds aggregate preferences
+  /// from the replacement children, so late toolbar reconciliation reapplies
+  /// these authored contributions afterward instead of silently dropping
+  /// them on a retained-snapshot rebuild.
+  package var directToolbarItemContributions: [ToolbarItemConfig] {
+    layoutMetadata.layoutValue(
+      for: directToolbarItemContributionsMetadataKey,
+      as: DirectToolbarItemContributions.self
+    )?.items ?? []
+  }
+
+  package mutating func appendDirectToolbarItemContribution(
+    _ item: ToolbarItemConfig
+  ) {
+    var items = directToolbarItemContributions
+    items.append(item)
+    layoutMetadata = layoutMetadata.settingLayoutValue(
+      DirectToolbarItemContributions(items: items),
+      for: directToolbarItemContributionsMetadataKey,
+      debugName: "toolbar-item-contributions",
+      debugValue: items.map(\.title).joined(separator: "|")
+    )
+  }
+}
+
+extension View {
+  /// Contributes a single toolbar item to the nearest enclosing
+  /// ActionScope that has declared a `.toolbar()` modifier.
+  ///
+  /// Contributions accumulate in declaration order and are delivered
+  /// as a single aggregated list to the absorbing scope.
+  @MainActor
+  public func toolbarItem(_ config: ToolbarItemConfig) -> some View {
+    modifier(
+      ToolbarItemContributionModifier(
+        config: config,
+        authoringContext: currentImperativeAuthoringContextSnapshot()
+      )
+    )
+  }
+}
+
+public struct ToolbarItemContributionModifier: IterativePrimitiveViewModifier, Sendable {
+  package let config: ToolbarItemConfig
+  package let authoringContext: ImperativeAuthoringContextSnapshot?
+
+  package func makeResolveWork<Content: View>(
+    content: ModifierContentInputs<Content>,
+    in context: ResolveContext
+  ) -> ResolveWork<[ResolvedNode]> {
+    return content.resolveWork(in: context).map { completed in
+      var node = completed
+      let intake = HandlerDescriptorIntake(
+        context: context,
+        preferringSnapshot: authoringContext
+      )
+      var wrappedConfig = config
+      wrappedConfig.sourceIdentity = node.identity
+      // Nested wrap: the config's own construction-time capture (if any) stays
+      // innermost and wins at dispatch; this attachment-scope wrap is the
+      // fallback for configs constructed outside any authoring context. The
+      // attachment itself is authored in the enclosing body, so that captured
+      // owner wins over the lower node where this contribution resolves.
+      wrappedConfig.action = intake.wrappingSendable(config.action)
+      node.appendDirectToolbarItemContribution(wrappedConfig)
+      node.preferenceValues.merge(
+        ToolbarItemsPreferenceKey.self,
+        value: [wrappedConfig]
+      )
+      return [node]
+
+    }
+  }
+}

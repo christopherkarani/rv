@@ -145,6 +145,7 @@ final class LiveSeatbeltChild: Sendable {
     /// Parent-side descriptors that must not appear in the child.
     private let retainedDescriptors: [Int32]
     let pty: RuntimeTerminal?
+    let resources: RuntimeResourceManifest?
     private let handshakeIO = Mutex<HandshakeIO>(HandshakeIO())
 
     private struct HandshakeIO: Sendable {
@@ -180,7 +181,8 @@ final class LiveSeatbeltChild: Sendable {
         admission: RuntimeAdmissionSession,
         parentDescriptors: [Int32],
         handshakeRead: Int32,
-        terminal: RuntimeTerminal?
+        terminal: RuntimeTerminal?,
+        resources: RuntimeResourceManifest?
     ) {
         self.session = session
         self.capability = capability
@@ -189,6 +191,7 @@ final class LiveSeatbeltChild: Sendable {
         self.admission = admission
         self.retainedDescriptors = parentDescriptors
         self.pty = terminal
+        self.resources = resources
         self.handshakeRead = handshakeRead
     }
 
@@ -302,7 +305,10 @@ func spawnSeatbeltProcess(
     boundary: WorkspaceInodeBoundary,
     started: RuntimeSession,
     admission: RuntimeAdmissionConfiguration,
-    egressProxyPort: Int? = nil
+    egressProxyPort: Int? = nil,
+    host: HookHost? = nil,
+    stagingAgent: String? = nil,
+    keychainReader: KeychainReader = .live
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
     guard profile.source.contains("(deny file-link)") else {
         return .failure(.seatbeltNotEstablished)
@@ -465,14 +471,32 @@ func spawnSeatbeltProcess(
         request.command.executable,
     ])
     arguments.append(contentsOf: request.command.arguments)
-    if case .pseudoTerminal = request.io {
-        stageAgentHomes(workspace: workspace)
+    let agentName = stagingAgent ?? host?.rawValue
+    if let resources = request.resources {
+        switch resources.stage(forAgent: agentName) {
+        case .success:
+            break
+        case .failure(let staging):
+            return .failure(.resourceStagingFailed(staging.detail))
+        }
+    }
+    var resourceStageHandedOff = false
+    defer { if !resourceStageHandedOff { request.resources?.remove() } }
+    var keychain: [(name: String, value: String)] = []
+    if let resources = request.resources {
+        switch resources.keychainEnvironment(forAgent: agentName, reader: keychainReader) {
+        case .success(let entries):
+            keychain = entries
+        case .failure(let staging):
+            return .failure(.resourceStagingFailed(staging.detail))
+        }
     }
     let environment = containedRuntimeEnvironment(
         workspace: workspace,
         io: request.io,
-        agentBin: AgentBin.installedDirectory(),
-        egressProxyPort: egressProxyPort
+        resources: request.resources,
+        egressProxyPort: egressProxyPort,
+        keychain: keychain
     )
     let argv = SpawnPointers(arguments)
     let envp = SpawnPointers(environment)
@@ -576,60 +600,41 @@ func spawnSeatbeltProcess(
         admission: admitted,
         parentDescriptors: [ownedRead, parentRead, parentWrite],
         handshakeRead: ownedRead,
-        terminal: terminal
+        terminal: terminal,
+        resources: request.resources
     )
     handedOff = true
+    resourceStageHandedOff = true
     return .success(child)
 }
 
 func containedRuntimeEnvironment(
     workspace: String,
     io: IsolatedIO,
-    agentBin: String? = nil,
+    resources: RuntimeResourceManifest? = nil,
     egressProxyPort: Int? = nil,
-    hostEnvironment: [String: String]? = nil
+    hostEnvironment: [String: String]? = nil,
+    keychain: [(name: String, value: String)] = []
 ) -> [String] {
-    guard case .pseudoTerminal = io else {
-        // One-shot contained runs stay byte-identical: no agent PATH, no
-        // proxy, workspace TMPDIR.
-        return [
-            "PATH=/usr/bin:/bin",
-            "LANG=C",
-            "LC_ALL=C",
-            "HOME=\(workspace)",
-            "TMPDIR=\(workspace)",
-        ]
-    }
     var values = [
-        "PATH=/usr/bin:/bin",
+        "PATH=\(resources.map { "\($0.bin):" } ?? "")/usr/bin:/bin",
         "LANG=C",
         "LC_ALL=C",
-        "HOME=\(workspace)",
-        "TMPDIR=\(workspace)/\(AgentHomeStaging.cageTmpSubpath)",
+        "HOME=\(resources?.privateHome ?? workspace)",
+        "TMPDIR=\(resources?.tmp ?? workspace)",
     ]
+    guard case .pseudoTerminal = io else {
+        return addingKeychainEnvironment(
+            addingResourceEnvironment(values, resources: resources, hostEnvironment: hostEnvironment),
+            keychain: keychain
+        )
+    }
     values.append("TERM=\(TerminalStreamLimits.supportedTerm)")
     // The sandbox cannot see user dotfiles, so interactive shells start
     // bare. Standard color output only; zsh ignores an inherited PS1, so
     // the prompt stays its default unless the user creates a
     // workspace-local .zshrc (HOME is the workspace).
     values.append("CLICOLOR=1")
-    if let agentBin {
-        values[0] = "PATH=\(agentBin):/usr/bin:/bin"
-        // The cage cannot manage host services or rewrite installs, so
-        // agent self-update and service-ensure steps stay off.
-        values.append("OCX_SHIM_BYPASS=1")
-        values.append("MUSE_NO_AUTO_UPDATE=1")
-        values.append("DISABLE_AUTOUPDATER=1")
-        let host = hostEnvironment ?? ProcessInfo.processInfo.environment
-        for name in AgentHomeStaging.gatewayPassthrough + AgentHomeStaging.apiKeyPassthrough {
-            if let value = host[name], value.contains("\0") == false {
-                values.append("\(name)=\(value)")
-            }
-        }
-        if values.allSatisfy({ $0.hasPrefix("ANTHROPIC_API_KEY=") == false }) {
-            values.append("ANTHROPIC_API_KEY=\(AgentHomeStaging.anthropicGatewayPlaceholder)")
-        }
-    }
     if let port = egressProxyPort, (1...65535).contains(port) {
         let proxy = "http://127.0.0.1:\(port)"
         values.append("HTTPS_PROXY=\(proxy)")
@@ -641,6 +646,36 @@ func containedRuntimeEnvironment(
         // loopback absolute-URI requests for clients that do not.
         values.append("NO_PROXY=localhost,127.0.0.1")
         values.append("no_proxy=localhost,127.0.0.1")
+    }
+    return addingKeychainEnvironment(
+        addingResourceEnvironment(values, resources: resources, hostEnvironment: hostEnvironment),
+        keychain: keychain
+    )
+}
+
+private func addingResourceEnvironment(
+    _ values: [String],
+    resources: RuntimeResourceManifest?,
+    hostEnvironment: [String: String]?
+) -> [String] {
+    var values = values
+    let host = hostEnvironment ?? ProcessInfo.processInfo.environment
+    for entry in resources?.profile.environment ?? [] {
+        let value = entry.literalValue ?? entry.hostVariable.flatMap { host[$0] }
+        guard let value, !value.contains("\0"), value.utf8.count <= 8_192 else { continue }
+        values.append("\(entry.name)=\(value)")
+    }
+    return values
+}
+
+private func addingKeychainEnvironment(
+    _ values: [String],
+    keychain: [(name: String, value: String)]
+) -> [String] {
+    var values = values
+    for entry in keychain {
+        guard !entry.value.contains("\0"), entry.value.utf8.count <= 8_192 else { continue }
+        values.append("\(entry.name)=\(entry.value)")
     }
     return values
 }
@@ -664,6 +699,7 @@ func watchSeatbeltProcess(
         pgid: live.pid,
         also: outcome.recordedPIDs.union([live.pid])
     )
+    if dead { live.resources?.remove() }
     let mounted: MountedSeatbeltOutcome
     if dead == false {
         mounted = MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)

@@ -121,6 +121,12 @@ import RVTheme
     #expect(text.contains("Interactive terminal workspace for contained runtimes"))
 }
 
+@Test func helpText_workspaceListsTheAbandonCommand() {
+    let text = HelpDispatch.text(.workspace, palette: colorOffPalette)
+    #expect(text.contains("rv workspace abandon [--workspace <absolute-path>]"))
+    #expect(text.contains("Discard a blocked workspace's unpublished volume and restore the saved tree"))
+}
+
 @Test func helpText_hook_hasNoFakeFileExamples() {
     let text = HelpDispatch.text(.hook, palette: colorOffPalette)
     #expect(text.contains("Examples") == false)

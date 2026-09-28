@@ -1,0 +1,535 @@
+/// Structured metadata for a tab item label.
+public struct TabItemLabel: Equatable, Sendable, CustomStringConvertible {
+  public var title: String
+  public var detail: String?
+  public var badge: String?
+
+  public init<S: StringProtocol>(
+    _ title: S,
+    detail: S? = nil,
+    badge: S? = nil
+  ) {
+    self.title = String(title)
+    self.detail = detail.map { String($0) }
+    self.badge = badge.map { String($0) }
+  }
+
+  public var displayText: String {
+    var parts: [String] = [title]
+    if let detail, !detail.isEmpty {
+      parts.append(detail)
+    }
+    if let badge, !badge.isEmpty {
+      parts.append("[\(badge)]")
+    }
+    return parts.joined(separator: " · ")
+  }
+
+  public var description: String {
+    displayText
+  }
+}
+
+/// Marker for visual-only content that needs an accessibility label or hidden policy.
+///
+/// Attach this value through ``SemanticMetadata/init(isFocusable:focusInteractions:participatesInPointerHitTesting:captureOnPress:allowsHitTesting:scrollRole:sectionRole:accessibilityRole:accessibilityLabel:accessibilityHint:accessibilityHidden:accessibilityLiveRegion:accessibilityVisualContent:selectionTag:tabItemLabel:explicitInteractionRect:explicitInteractionPath:namedCoordinateSpace:)``.
+/// Then accessibility renderers can diagnose visual views that reach users without a label.
+/// The `kind` names the visual family (for example
+/// `"BarChart"` or `"Image"`) in those diagnostics.
+public struct AccessibilityVisualContent: Equatable, Sendable {
+  /// The visual family named in missing-label diagnostics.
+  public var kind: String
+
+  /// Creates a marker for a visual family such as `"BarChart"`.
+  public init(kind: String) {
+    self.kind = kind
+  }
+}
+
+/// Semantic and interaction metadata attached to a resolved node.
+public struct SemanticMetadata: Equatable, Sendable {
+  private var flags: UInt16
+  package var focusScopeIdentity: Identity?
+  /// When `true`, focusable descendants of this node are suppressed
+  /// during semantic extraction. The node remains focusable if its other metadata specifies focus.
+  /// Its descendants do not
+  /// appear in the focus region list. Set by
+  /// `Panel.focusContainment(.sealed)`.
+  public var focusInteractions: FocusInteractions
+  public var scrollRole: ScrollRole?
+  public var sectionRole: SectionRole?
+  public var accessibilityRole: AccessibilityRole?
+  public var accessibilityLabel: String?
+  /// Authored label slots contribute names only to their nearest primitive owner.
+  package var accessibilityLabelSource: AccessibilityLabelSource? {
+    get {
+      guard flag(Self.accessibilityLabelSourceFlag) else { return nil }
+      return flag(Self.accessibilityLabelContinuationFlag) ? .continuation : .start
+    }
+    set {
+      setFlag(Self.accessibilityLabelSourceFlag, to: newValue != nil)
+      setFlag(Self.accessibilityLabelContinuationFlag, to: newValue == .continuation)
+    }
+  }
+  package var usesAuthoredAccessibilityLabel: Bool {
+    get { flag(Self.usesAuthoredAccessibilityLabelFlag) }
+    set { setFlag(Self.usesAuthoredAccessibilityLabelFlag, to: newValue) }
+  }
+  /// A literal title remains available when a style omits its visual label slot.
+  package var accessibilityTitle: String?
+  public var accessibilityHint: String?
+  public var accessibilityLiveRegion: AccessibilityPoliteness?
+  package var accessibilityVisualContent: AccessibilityVisualContent?
+  package var accessibilityCursorAnchor: CellPoint?
+  package var textInputAccessibilityCursorAnchor: TextInputAccessibilityCursorAnchor?
+  public var selectionTag: SelectionTag?
+  public var tabItemLabel: TabItemLabel?
+  public var explicitInteractionRect: CellRect?
+  public var explicitInteractionPath: Path?
+  public var namedCoordinateSpace: NamedCoordinateSpace?
+  package var interactionAvailability: InteractionAvailability
+  /// Gesture-specific pointer precedence. Kept package-only because it is a
+  /// routing product of gesture modifiers, not author-facing semantic data.
+  package var pointerGesturePriority: PointerGesturePriority
+  /// When set, the semantics walk mints this node's pointer route from this
+  /// identity instead of the node's structural identity. Stamped by gesture
+  /// attachment when the gesture keys its registration on an entity-rerooted
+  /// descendant (`.id` below the chain): the region's route and the
+  /// registration then share one identity, so pointer capture survives a
+  /// conditional-branch re-resolve that re-mints the chain node. Region
+  /// identity, rect, and focus stay structural.
+  package var explicitRouteIdentity: Identity?
+  package var hostedCollectionContainer: HostedCollectionContainerMetadata?
+  package var hostedCollectionItem: HostedCollectionItemMetadata?
+  package var isHostedCollectionRowBoundary: Bool
+
+  package var focusScopeBoundary: Bool {
+    get { flag(Self.focusScopeBoundaryFlag) }
+    set { setFlag(Self.focusScopeBoundaryFlag, to: newValue) }
+  }
+
+  package var focusSectionBoundary: Bool {
+    get { flag(Self.focusSectionBoundaryFlag) }
+    set { setFlag(Self.focusSectionBoundaryFlag, to: newValue) }
+  }
+
+  package var sealsFocusDescendants: Bool {
+    get { flag(Self.sealsFocusDescendantsFlag) }
+    set { setFlag(Self.sealsFocusDescendantsFlag, to: newValue) }
+  }
+
+  /// Whether this node is a command/chrome-hosting region (the Role-A
+  /// view-controller analogue: `Panel`, `NavigationStack`, …).
+  ///
+  /// A command host hoists toolbar / palette / key commands to top-level
+  /// regions and is a focus *scope* (`focusScopeBoundary`), but it is **not**
+  /// a focus *target*: it does not participate in top-level focus, so Tab
+  /// passes through it to item leaves and it classifies structurally as a
+  /// container, not a control. Its commands activate by the active/visible
+  /// context (or, when a descendant is focused, the focus chain), never by
+  /// focusing the host. Orthogonal to `isFocusable`/focus participation; it
+  /// marks the hosting *capability* only.
+  package var isCommandHost: Bool {
+    get { flag(Self.isCommandHostFlag) }
+    set { setFlag(Self.isCommandHostFlag, to: newValue) }
+  }
+
+  /// Keeps a keyboard dismissal target reachable when its commands become
+  /// disabled. Pointer regions and activation remain subject to enablement.
+  package var allowsFocusWhenDisabled: Bool {
+    get { flag(Self.allowsFocusWhenDisabledFlag) }
+    set { setFlag(Self.allowsFocusWhenDisabledFlag, to: newValue) }
+  }
+
+  public var participatesInPointerHitTesting: Bool {
+    get { flag(Self.participatesInPointerHitTestingFlag) }
+    set { setFlag(Self.participatesInPointerHitTestingFlag, to: newValue) }
+  }
+
+  public var captureOnPress: Bool {
+    get { flag(Self.captureOnPressFlag) }
+    set { setFlag(Self.captureOnPressFlag, to: newValue) }
+  }
+
+  public var allowsHitTesting: Bool {
+    get { flag(Self.allowsHitTestingFlag) }
+    set { setFlag(Self.allowsHitTestingFlag, to: newValue) }
+  }
+
+  public var accessibilityHidden: Bool {
+    get { flag(Self.accessibilityHiddenFlag) }
+    set { setFlag(Self.accessibilityHiddenFlag, to: newValue) }
+  }
+
+  public var isFocusable: Bool {
+    get { explicitFocusability ?? false }
+    set { explicitFocusability = newValue }
+  }
+
+  package var focusParticipation: FocusParticipation {
+    switch explicitFocusability {
+    case true?:
+      return .included
+    case false?:
+      return .excluded
+    case nil:
+      return .automatic
+    }
+  }
+
+  private var explicitFocusability: Bool? {
+    get {
+      guard flag(Self.explicitFocusabilityHasValueFlag) else {
+        return nil
+      }
+      return flag(Self.explicitFocusabilityValueFlag)
+    }
+    set {
+      guard let newValue else {
+        setFlag(Self.explicitFocusabilityHasValueFlag, to: false)
+        setFlag(Self.explicitFocusabilityValueFlag, to: false)
+        return
+      }
+      setFlag(Self.explicitFocusabilityHasValueFlag, to: true)
+      setFlag(Self.explicitFocusabilityValueFlag, to: newValue)
+    }
+  }
+
+  public init(
+    isFocusable: Bool? = nil,
+    focusInteractions: FocusInteractions = .automatic,
+    participatesInPointerHitTesting: Bool = false,
+    captureOnPress: Bool = false,
+    allowsHitTesting: Bool = true,
+    scrollRole: ScrollRole? = nil,
+    sectionRole: SectionRole? = nil,
+    accessibilityRole: AccessibilityRole? = nil,
+    accessibilityLabel: String? = nil,
+    accessibilityHint: String? = nil,
+    accessibilityHidden: Bool = false,
+    accessibilityLiveRegion: AccessibilityPoliteness? = nil,
+    accessibilityVisualContent: AccessibilityVisualContent? = nil,
+    selectionTag: SelectionTag? = nil,
+    tabItemLabel: TabItemLabel? = nil,
+    explicitInteractionRect: CellRect? = nil,
+    explicitInteractionPath: Path? = nil,
+    namedCoordinateSpace: NamedCoordinateSpace? = nil
+  ) {
+    self.init(
+      isFocusable: isFocusable,
+      focusScopeBoundary: false,
+      focusScopeIdentity: nil,
+      focusSectionBoundary: false,
+      sealsFocusDescendants: false,
+      focusInteractions: focusInteractions,
+      participatesInPointerHitTesting: participatesInPointerHitTesting,
+      captureOnPress: captureOnPress,
+      allowsHitTesting: allowsHitTesting,
+      scrollRole: scrollRole,
+      sectionRole: sectionRole,
+      accessibilityRole: accessibilityRole,
+      accessibilityLabel: accessibilityLabel,
+      accessibilityHint: accessibilityHint,
+      accessibilityHidden: accessibilityHidden,
+      accessibilityLiveRegion: accessibilityLiveRegion,
+      accessibilityVisualContent: accessibilityVisualContent,
+      selectionTag: selectionTag,
+      tabItemLabel: tabItemLabel,
+      explicitInteractionRect: explicitInteractionRect,
+      explicitInteractionPath: explicitInteractionPath,
+      namedCoordinateSpace: namedCoordinateSpace
+    )
+  }
+
+  package init(
+    isFocusable: Bool? = nil,
+    focusScopeBoundary: Bool = false,
+    focusScopeIdentity: Identity? = nil,
+    focusSectionBoundary: Bool = false,
+    sealsFocusDescendants: Bool = false,
+    isCommandHost: Bool = false,
+    focusInteractions: FocusInteractions = .automatic,
+    participatesInPointerHitTesting: Bool = false,
+    captureOnPress: Bool = false,
+    allowsHitTesting: Bool = true,
+    scrollRole: ScrollRole? = nil,
+    sectionRole: SectionRole? = nil,
+    accessibilityRole: AccessibilityRole? = nil,
+    accessibilityLabel: String? = nil,
+    accessibilityHint: String? = nil,
+    accessibilityHidden: Bool = false,
+    accessibilityLiveRegion: AccessibilityPoliteness? = nil,
+    accessibilityVisualContent: AccessibilityVisualContent? = nil,
+    accessibilityCursorAnchor: CellPoint? = nil,
+    textInputAccessibilityCursorAnchor: TextInputAccessibilityCursorAnchor? = nil,
+    selectionTag: SelectionTag? = nil,
+    tabItemLabel: TabItemLabel? = nil,
+    explicitInteractionRect: CellRect? = nil,
+    explicitInteractionPath: Path? = nil,
+    namedCoordinateSpace: NamedCoordinateSpace? = nil,
+    interactionAvailability: InteractionAvailability = .enabled,
+    pointerGesturePriority: PointerGesturePriority = .ordinary,
+    hostedCollectionContainer: HostedCollectionContainerMetadata? = nil,
+    hostedCollectionItem: HostedCollectionItemMetadata? = nil,
+    isHostedCollectionRowBoundary: Bool = false
+  ) {
+    flags = Self.makeFlags(
+      isFocusable: isFocusable,
+      focusScopeBoundary: focusScopeBoundary,
+      focusSectionBoundary: focusSectionBoundary,
+      sealsFocusDescendants: sealsFocusDescendants,
+      isCommandHost: isCommandHost,
+      participatesInPointerHitTesting: participatesInPointerHitTesting,
+      captureOnPress: captureOnPress,
+      allowsHitTesting: allowsHitTesting,
+      accessibilityHidden: accessibilityHidden
+    )
+    self.focusScopeIdentity = focusScopeIdentity
+    self.focusInteractions = focusInteractions
+    self.scrollRole = scrollRole
+    self.sectionRole = sectionRole
+    self.accessibilityRole = accessibilityRole
+    self.accessibilityLabel = accessibilityLabel
+    self.accessibilityHint = accessibilityHint
+    self.accessibilityLiveRegion = accessibilityLiveRegion
+    self.accessibilityVisualContent = accessibilityVisualContent
+    self.accessibilityCursorAnchor = accessibilityCursorAnchor
+    self.textInputAccessibilityCursorAnchor = textInputAccessibilityCursorAnchor
+    self.selectionTag = selectionTag
+    self.tabItemLabel = tabItemLabel
+    self.explicitInteractionRect = explicitInteractionRect
+    self.explicitInteractionPath = explicitInteractionPath
+    self.namedCoordinateSpace = namedCoordinateSpace
+    self.interactionAvailability = interactionAvailability
+    self.pointerGesturePriority = pointerGesturePriority
+    self.hostedCollectionContainer = hostedCollectionContainer
+    self.hostedCollectionItem = hostedCollectionItem
+    self.isHostedCollectionRowBoundary = isHostedCollectionRowBoundary
+  }
+
+  public func merging(_ other: Self) -> Self {
+    var merged = Self(
+      isFocusable: other.explicitFocusability ?? explicitFocusability,
+      focusScopeBoundary: other.focusScopeBoundary || focusScopeBoundary,
+      focusScopeIdentity: other.focusScopeIdentity ?? focusScopeIdentity,
+      focusSectionBoundary: other.focusSectionBoundary || focusSectionBoundary,
+      sealsFocusDescendants: other.sealsFocusDescendants || sealsFocusDescendants,
+      isCommandHost: other.isCommandHost || isCommandHost,
+      focusInteractions: other.focusInteractions == .automatic
+        ? focusInteractions
+        : other.focusInteractions,
+      participatesInPointerHitTesting: other.participatesInPointerHitTesting
+        || participatesInPointerHitTesting,
+      captureOnPress: other.captureOnPress || captureOnPress,
+      allowsHitTesting: other.allowsHitTesting && allowsHitTesting,
+      scrollRole: other.scrollRole ?? scrollRole,
+      sectionRole: other.sectionRole ?? sectionRole,
+      accessibilityRole: other.accessibilityRole ?? accessibilityRole,
+      accessibilityLabel: other.accessibilityLabel ?? accessibilityLabel,
+      accessibilityHint: other.accessibilityHint ?? accessibilityHint,
+      accessibilityHidden: other.accessibilityHidden || accessibilityHidden,
+      accessibilityLiveRegion: other.accessibilityLiveRegion ?? accessibilityLiveRegion,
+      accessibilityVisualContent: other.accessibilityVisualContent ?? accessibilityVisualContent,
+      accessibilityCursorAnchor: other.accessibilityCursorAnchor ?? accessibilityCursorAnchor,
+      textInputAccessibilityCursorAnchor: other.textInputAccessibilityCursorAnchor
+        ?? textInputAccessibilityCursorAnchor,
+      selectionTag: other.selectionTag ?? selectionTag,
+      tabItemLabel: other.tabItemLabel ?? tabItemLabel,
+      explicitInteractionRect: other.explicitInteractionRect ?? explicitInteractionRect,
+      explicitInteractionPath: other.explicitInteractionPath ?? explicitInteractionPath,
+      namedCoordinateSpace: other.namedCoordinateSpace ?? namedCoordinateSpace,
+      interactionAvailability: mergedInteractionAvailability(
+        interactionAvailability,
+        other.interactionAvailability
+      ),
+      pointerGesturePriority: other.pointerGesturePriority == .high
+        ? .high
+        : pointerGesturePriority,
+      hostedCollectionContainer: other.hostedCollectionContainer ?? hostedCollectionContainer,
+      hostedCollectionItem: other.hostedCollectionItem ?? hostedCollectionItem,
+      isHostedCollectionRowBoundary: isHostedCollectionRowBoundary
+        || other.isHostedCollectionRowBoundary
+    )
+    merged.explicitRouteIdentity = other.explicitRouteIdentity ?? explicitRouteIdentity
+    merged.accessibilityLabelSource = other.accessibilityLabelSource ?? accessibilityLabelSource
+    merged.usesAuthoredAccessibilityLabel =
+      usesAuthoredAccessibilityLabel || other.usesAuthoredAccessibilityLabel
+    merged.accessibilityTitle = other.accessibilityTitle ?? accessibilityTitle
+    merged.allowsFocusWhenDisabled = allowsFocusWhenDisabled || other.allowsFocusWhenDisabled
+    return merged
+  }
+
+  private static let explicitFocusabilityHasValueFlag: UInt16 = 1 << 0
+  private static let explicitFocusabilityValueFlag: UInt16 = 1 << 1
+  private static let focusScopeBoundaryFlag: UInt16 = 1 << 2
+  private static let focusSectionBoundaryFlag: UInt16 = 1 << 3
+  private static let sealsFocusDescendantsFlag: UInt16 = 1 << 4
+  private static let participatesInPointerHitTestingFlag: UInt16 = 1 << 5
+  private static let captureOnPressFlag: UInt16 = 1 << 6
+  private static let allowsHitTestingFlag: UInt16 = 1 << 7
+  private static let accessibilityHiddenFlag: UInt16 = 1 << 8
+  private static let isCommandHostFlag: UInt16 = 1 << 9
+  private static let allowsFocusWhenDisabledFlag: UInt16 = 1 << 10
+  private static let accessibilityLabelSourceFlag: UInt16 = 1 << 11
+  private static let accessibilityLabelContinuationFlag: UInt16 = 1 << 12
+  private static let usesAuthoredAccessibilityLabelFlag: UInt16 = 1 << 13
+
+  private func flag(_ bit: UInt16) -> Bool {
+    flags & bit != 0
+  }
+
+  private mutating func setFlag(
+    _ bit: UInt16,
+    to value: Bool
+  ) {
+    if value {
+      flags |= bit
+    } else {
+      flags &= ~bit
+    }
+  }
+
+  private static func makeFlags(
+    isFocusable: Bool?,
+    focusScopeBoundary: Bool,
+    focusSectionBoundary: Bool,
+    sealsFocusDescendants: Bool,
+    isCommandHost: Bool,
+    participatesInPointerHitTesting: Bool,
+    captureOnPress: Bool,
+    allowsHitTesting: Bool,
+    accessibilityHidden: Bool
+  ) -> UInt16 {
+    var flags: UInt16 = 0
+    if let isFocusable {
+      flags |= explicitFocusabilityHasValueFlag
+      if isFocusable {
+        flags |= explicitFocusabilityValueFlag
+      }
+    }
+    if focusScopeBoundary {
+      flags |= focusScopeBoundaryFlag
+    }
+    if focusSectionBoundary {
+      flags |= focusSectionBoundaryFlag
+    }
+    if sealsFocusDescendants {
+      flags |= sealsFocusDescendantsFlag
+    }
+    if isCommandHost {
+      flags |= isCommandHostFlag
+    }
+    if participatesInPointerHitTesting {
+      flags |= participatesInPointerHitTestingFlag
+    }
+    if captureOnPress {
+      flags |= captureOnPressFlag
+    }
+    if allowsHitTesting {
+      flags |= allowsHitTestingFlag
+    }
+    if accessibilityHidden {
+      flags |= accessibilityHiddenFlag
+    }
+    return flags
+  }
+}
+
+/// Multiple roots in one authored slot share a start followed by continuations.
+/// A repeated style placement starts a new slot, so its name is not repeated.
+package enum AccessibilityLabelSource: Equatable, Sendable {
+  case start
+  case continuation
+}
+
+/// Pointer hit-test precedence stamped by gesture attachment.
+///
+/// This stays package-only: public authors express it through
+/// `highPriorityGesture`, while semantic extraction and the run loop carry
+/// the resolved routing decision.
+package enum PointerGesturePriority: Equatable, Sendable {
+  case ordinary
+  case high
+}
+
+package enum HostedCollectionContainerKind: Equatable, Sendable {
+  case list
+  case table
+}
+
+package struct HostedCollectionContainerMetadata: Equatable, Sendable {
+  package var kind: HostedCollectionContainerKind
+  package var isSourceBacked: Bool
+
+  package init(
+    kind: HostedCollectionContainerKind,
+    isSourceBacked: Bool = false
+  ) {
+    self.kind = kind
+    self.isSourceBacked = isSourceBacked
+  }
+}
+
+package enum HostedCollectionItemRole: Equatable, Sendable {
+  case listHeader
+  case listFooter
+  case listRow(rowIndex: Int)
+  case listSectionBreak
+  case tableRow(rowIndex: Int)
+}
+
+package struct HostedCollectionItemMetadata: Equatable, Sendable {
+  package var role: HostedCollectionItemRole
+  package var isSelectable: Bool
+
+  package init(
+    role: HostedCollectionItemRole,
+    isSelectable: Bool = false
+  ) {
+    self.role = role
+    self.isSelectable = isSelectable
+  }
+}
+
+/// Sparse immutable routing data. Keeping the payload out of line avoids
+/// enlarging every resolved node when only text inputs need wrapped caret data.
+package final class TextInputAccessibilityCursorAnchor: Equatable, Sendable {
+  package let ownerIdentity: Identity
+  package let anchor: CellPoint
+  package let wrappedText: String?
+  package let characterOffset: Int
+
+  package static func == (
+    lhs: TextInputAccessibilityCursorAnchor, rhs: TextInputAccessibilityCursorAnchor
+  ) -> Bool {
+    lhs === rhs
+      || (lhs.ownerIdentity == rhs.ownerIdentity && lhs.anchor == rhs.anchor
+        && lhs.wrappedText == rhs.wrappedText && lhs.characterOffset == rhs.characterOffset)
+  }
+
+  package init(
+    ownerIdentity: Identity,
+    anchor: CellPoint,
+    wrappedText: String? = nil,
+    characterOffset: Int = 0
+  ) {
+    self.ownerIdentity = ownerIdentity
+    self.anchor = anchor
+    self.wrappedText = wrappedText
+    self.characterOffset = characterOffset
+  }
+}
+
+private func mergedInteractionAvailability(
+  _ current: InteractionAvailability,
+  _ next: InteractionAvailability
+) -> InteractionAvailability {
+  switch (current, next) {
+  case (_, .disabled):
+    next
+  case (.disabled, _):
+    current
+  case (.enabled, .enabled):
+    .enabled
+  }
+}

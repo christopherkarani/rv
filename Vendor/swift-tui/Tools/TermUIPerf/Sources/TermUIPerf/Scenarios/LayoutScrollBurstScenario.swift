@@ -1,0 +1,61 @@
+@_spi(Runners) import SwiftTUI
+
+public struct LayoutScrollBurstScenario: PerfScenario {
+  public let name: PerfScenarioName = .layoutScrollBurst
+  public let defaultTerminalSize = PerfTerminalSize(columns: 90, rows: 28)
+  public let scriptedEvents = ["scroll vertical layout viewport"]
+  public let visualMarkers = ["row 3"]
+  public let settlingDescription = "first frame whose scroll viewport shows row 3"
+
+  public init() {}
+
+  @MainActor
+  public func run(options: PerfScenarioRunOptions) async throws -> PerfScenarioRunResult {
+    try await PerfScenarioRunner.runWindow(
+      scenario: self,
+      options: options
+    ) {
+      PerfVerticalScrollProbeView()
+    } drive: { driver in
+      _ = try await driver.waitForFrame(containing: "row 0")
+      let dispatchTime = monotonicSeconds()
+      let frameBeforeScroll = driver.terminalHost.presentedFrames.last?.frameNumber ?? 0
+      driver.sendScroll(deltaY: 3, at: CellPoint(x: 4, y: 4))
+      let matchingFrame = try await driver.waitForFrame(
+        containing: "row 3",
+        afterFrame: frameBeforeScroll
+      )
+      return [
+        PerfEventRecord(
+          eventID: "layout-scroll-burst-1",
+          eventType: "scroll",
+          dispatchTimeSeconds: dispatchTime,
+          expectedVisualMarker: "row 3",
+          firstMatchingFrame: matchingFrame.frameNumber,
+          firstMatchingTimeSeconds: matchingFrame.timestampSeconds,
+          finalSettledFrame: matchingFrame.frameNumber,
+          finalSettledTimeSeconds: matchingFrame.timestampSeconds
+        )
+      ]
+    }
+  }
+}
+
+private struct PerfVerticalScrollProbeView: View {
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Text("Vertical scroll measures content").foregroundStyle(.muted)
+      ScrollView {
+        VStack(alignment: .leading, spacing: 0) {
+          ForEach(0..<30, id: \.self) { index in
+            Text("row \(index)")
+          }
+        }
+        .padding(1)
+      }
+      .frame(height: 8)
+      .border(.separator)
+    }
+    .padding(1)
+  }
+}

@@ -35,25 +35,34 @@ struct WorkspaceShellApp: App {
             }
         }
         // In terminal mode plain d is consumed by the terminal key handler.
-        // After Ctrl-G d, the handler deliberately returns ignored so
+        // After Ctrl-B q, the handler deliberately returns ignored so
         // SwiftTUI performs its normal shutdown and restores the user's tty.
-        .exitOnKey(.character("d"))
+        .exitOnKey(.character("q"))
     }
 }
 
 struct WorkspaceShellView: View {
     let model: WorkspaceTUIModel
     @State private var revision = 0
+    @Environment(\.requestTermination) private var requestTermination
 
     var body: some View {
         let _ = revision
         let snapshot = model.snapshot()
+        let terminate = requestTermination
         VStack(alignment: .leading, spacing: 0) {
             header(snapshot)
+            tabStrip(snapshot)
             content(snapshot)
+            footer(snapshot)
         }
         .onKeyPress(.any) { press in
             handle(press)
+        }
+        .onPaste { content in
+            model.handlePaste(content)
+            revision &+= 1
+            return .handled
         }
         .focusable()
         .task {
@@ -68,6 +77,13 @@ struct WorkspaceShellView: View {
                 if refreshGate.consume(model.snapshot().presentationRevision) {
                     revision &+= 1
                 }
+            }
+            // shouldExit can also come from closing the final pane, where no
+            // exit key was pressed. Terminate programmatically so every
+            // detach path shuts the scene down; the Ctrl-B q binding may have
+            // already done so, which is idempotent.
+            if Task.isCancelled == false, model.snapshot().shouldExit {
+                terminate()
             }
         }
     }
@@ -98,41 +114,91 @@ struct WorkspaceShellView: View {
 
     @ViewBuilder
     private func content(_ snapshot: WorkspaceTUISnapshot) -> some View {
-        if snapshot.connection == .disconnected {
-            Text("workspace disconnected")
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        } else if snapshot.terminal == nil {
-            emptyWorkspace(snapshot)
-        } else {
-            TerminalView(model: model)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        ZStack(alignment: .bottomLeading) {
+            WorkspacePaneViewport(model: model, snapshot: snapshot)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            if snapshot.mode == .help {
+                Text(WorkspaceHelp.text)
+                    .foregroundStyle(Color.yellow)
+            }
+            if snapshot.mode == .launcher {
+                Text(launcherText(snapshot.launcher) + "    Esc close")
+                    .foregroundStyle(Color.yellow)
+            }
+            if case .runCommand(let input, let error) = snapshot.mode {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Run command: " + input).foregroundStyle(Color.yellow).lineLimit(1)
+                    if let error {
+                        Text(error).foregroundStyle(Color.red).lineLimit(1)
+                    }
+                    Text("Enter run · Esc launcher").foregroundStyle(Color.gray)
+                }
+            }
+            if snapshot.mode == .resize {
+                Text(WorkspaceOverlayText.resizeHelp())
+                    .foregroundStyle(Color.yellow)
+            }
+            if case .scroll(let pane) = snapshot.mode {
+                Text(WorkspaceOverlayText.scrollStatus(
+                    anchor: snapshot.scrollAnchors[pane] ?? 0, unread: false
+                ))
+                .foregroundStyle(Color.yellow)
+            }
+            if case .navigator(let index) = snapshot.mode {
+                Text(WorkspaceOverlayText.navigatorRows(
+                    items: snapshot.navigatorItems,
+                    selected: index,
+                    tabTitles: navigatorTabTitles(snapshot.view)
+                ).joined(separator: "\n"))
+                .foregroundStyle(Color.yellow)
+            }
+            if case .confirmCancel(let pane) = snapshot.mode {
+                let title = snapshot.view.panes[pane].map {
+                    WorkspacePaneChrome.title($0, terminal: snapshot.terminals[pane])
+                }
+                Text(WorkspaceOverlayText.confirmText(paneTitle: title))
+                    .foregroundStyle(Color.red)
+            }
         }
-        if snapshot.mode == .help, snapshot.terminal != nil {
-            Text(WorkspaceHelp.text)
-        }
-        if snapshot.mode == .launcher, snapshot.terminal != nil {
-            Text(launcherText(snapshot.launcher))
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder
-    private func emptyWorkspace(_ snapshot: WorkspaceTUISnapshot) -> some View {
-        if snapshot.mode == .launcher {
-            VStack(alignment: .center, spacing: 1) {
-                Text("New runtime").bold()
-                Text("Choose what to launch in this workspace")
-                    .foregroundStyle(Color.gray)
-                Text(launcherText(snapshot.launcher))
-                Text("Esc to cancel").foregroundStyle(Color.gray)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        } else if snapshot.mode == .help {
-            Text(WorkspaceHelp.text)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        } else {
-            Text(" ")
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    private func tabStrip(_ snapshot: WorkspaceTUISnapshot) -> some View {
+        let tabs = snapshot.view.tabs.enumerated().map { index, tab in
+            let title = WorkspacePaneChrome.safe(tab.userTitle) ?? "tab \(index + 1)"
+            return "\(tab.id == snapshot.view.activeTabID ? "●" : "○") \(index + 1):\(String(title.prefix(12)))"
         }
+        Text(tabs.isEmpty ? "No tabs" : tabs.joined(separator: "   "))
+            .foregroundStyle(Color.gray)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func footer(_ snapshot: WorkspaceTUISnapshot) -> some View {
+        let count = snapshot.view.activeTab?.tree.leafCount ?? 0
+        let connection: String
+        if snapshot.connection == .disconnected {
+            connection = snapshot.reconnecting ? " · reconnecting…" : " · workspace disconnected · Enter retry"
+        } else {
+            connection = ""
+        }
+        let hint = snapshot.feedback
+            ?? WorkspaceOverlayText.modeHint(for: snapshot.mode)
+            ?? "\(snapshot.view.tabs.count) tabs · \(count) panes\(connection) · Ctrl-B ? help · Ctrl-B w runtimes"
+        Text(hint)
+            .foregroundStyle(snapshot.feedback == nil ? Color.gray : Color.yellow)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func navigatorTabTitles(_ view: WorkspaceView) -> [TabID: String] {
+        var titles: [TabID: String] = [:]
+        for (index, tab) in view.tabs.enumerated() {
+            titles[tab.id] = tab.userTitle ?? "tab \(index + 1)"
+        }
+        return titles
     }
 
     private func launcherText(_ choices: [RuntimeLaunchChoice]) -> String {
@@ -146,54 +212,35 @@ struct WorkspaceShellView: View {
         guard let key = TUIKeyDecoder.decode(press) else { return .ignored }
         model.handle(key)
         revision &+= 1
-        // The exit binding below is reached only for Ctrl-G d. A plain d in
+        // The exit binding below is reached only for Ctrl-B q. A plain q in
         // terminal mode is consumed above and sent to the runtime.
         return model.snapshot().shouldExit ? .ignored : .handled
     }
 }
 
-struct TerminalView: View {
-    var model: WorkspaceTUIModel
+/// One pane's content as a single multiline Text. A per-row ForEach costs
+/// one subtree per row in every frame's resolve/measure/place/commit pass;
+/// at 8 panes that is thousands of nodes and seconds per frame. Rows are
+/// pre-clipped to the content width so no wrapping can reflow the block.
+struct TerminalBlock: View {
+    var rows: [[TerminalCell]]
 
     var body: some View {
-        GeometryReader { proxy in
-            let rows = max(1, Int(proxy.size.height))
-            let columns = max(1, Int(proxy.size.width))
-            let _ = model.noteSize(rows: rows, columns: columns, now: Date())
-            TerminalCells(frame: model.terminalFrame(), rows: rows, columns: columns)
-        }
-    }
-}
-
-struct TerminalCells: View {
-    var frame: TerminalFrame?
-    var rows: Int
-    var columns: Int
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(0..<max(rows, 1), id: \.self) { row in
-                if let frame, frame.cells.indices.contains(row) {
-                    TerminalLine(cells: Array(frame.cells[row].prefix(columns)))
-                } else {
-                    Text(String(repeating: " ", count: columns))
-                }
-            }
-        }
-    }
-}
-
-private struct TerminalLine: View {
-    var cells: [TerminalCell]
-
-    var body: some View {
-        let runs = makeRuns(cells)
+        let rowRuns = rows.map(makeRuns)
         var interpolation = Text.RichContent.StringInterpolation(
             literalCapacity: 0,
-            interpolationCount: runs.count
+            interpolationCount: rowRuns.reduce(0) { $0 + $1.count }
         )
-        for run in runs {
-            interpolation.appendInterpolation(styledText(run))
+        for (index, runs) in rowRuns.enumerated() {
+            // A lone "\n" segment renders as U+FFFD, so the break rides
+            // inside the row's final run instead.
+            let suffixed = index + 1 < rowRuns.count
+            // Rows arrive pre-padded to the content width, so runs is only
+            // empty for a zero-width pane, where nothing can show anyway.
+            for (runIndex, run) in runs.enumerated() {
+                let text = runIndex + 1 == runs.count && suffixed ? run.text + "\n" : run.text
+                interpolation.appendInterpolation(styledText(run, text: text))
+            }
         }
         return Text(Text.RichContent(stringInterpolation: interpolation))
     }
@@ -220,8 +267,8 @@ private struct TerminalLine: View {
         return runs
     }
 
-    private func styledText(_ run: TerminalTextRun) -> Text {
-        var text = Text(run.text)
+    private func styledText(_ run: TerminalTextRun, text content: String? = nil) -> Text {
+        var text = Text(content ?? run.text)
         if let foreground = run.style.foreground {
             text = text.foregroundStyle(color(foreground))
         }
@@ -264,7 +311,11 @@ private struct TerminalTextRun {
 
 enum WorkspaceHelp {
     static let text = """
-    ^G d detach    ^G ? help
+    ^B v split right   ^B - split below   ^B h/j/k/l focus   ^B z zoom
+    ^B c new tab       ^B n/p next/previous tab       ^B x close pane
+    ^B r resize        ^B [ scroll        ^B w runtimes      ^B a launcher
+    ^B ! cancel runtime (confirm)         ^B q detach       ^B ^B literal Ctrl-B
+    Esc closes help and menus
     """
 }
 

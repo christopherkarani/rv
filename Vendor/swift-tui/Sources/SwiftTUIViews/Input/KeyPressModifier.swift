@@ -1,0 +1,118 @@
+public import SwiftTUICore
+
+/// Matches focused key input for `View.onKeyPress`.
+public struct KeyPressMatch: Equatable, Sendable {
+  private enum Storage: Equatable, Sendable {
+    case any
+    case exact(KeyPress)
+  }
+
+  private let storage: Storage
+
+  private init(storage: Storage) {
+    self.storage = storage
+  }
+
+  /// Matches every key press delivered to the focused view.
+  public static let any = Self(storage: .any)
+
+  /// Matches an exact key plus modifier combination.
+  public static func key(
+    _ key: KeyEvent,
+    modifiers: EventModifiers = []
+  ) -> Self {
+    Self(storage: .exact(KeyPress(key, modifiers: modifiers)))
+  }
+
+  /// Matches an exact key press.
+  public static func keyPress(_ keyPress: KeyPress) -> Self {
+    Self(storage: .exact(keyPress))
+  }
+
+  package func matches(_ keyPress: KeyPress) -> Bool {
+    switch storage {
+    case .any:
+      true
+    case .exact(let expected):
+      expected == keyPress
+    }
+  }
+}
+
+extension View {
+  /// Registers a key handler while this view or its hosted content has focus.
+  ///
+  /// Return `.handled` to consume the key press. Return `.ignored` to leave it
+  /// available to handlers closer to the focused target and then to default
+  /// control behavior. Enclosing handlers run first; handlers stacked on the
+  /// same identity run outermost modifier first.
+  @MainActor
+  public func onKeyPress(
+    _ match: KeyPressMatch = .any,
+    perform action: @escaping @MainActor @Sendable (KeyPress) -> KeyPressResult
+  ) -> ModifiedContent<Self, KeyPressModifier> {
+    modifier(
+      KeyPressModifier(
+        match: match,
+        authoringContext: currentImperativeAuthoringContextSnapshot(),
+        action: action
+      )
+    )
+  }
+
+  /// Registers a key handler for an exact key plus modifier combination while
+  /// this view or its hosted content has focus.
+  @MainActor
+  public func onKeyPress(
+    _ key: KeyEvent,
+    modifiers: EventModifiers = [],
+    perform action: @escaping @MainActor @Sendable (KeyPress) -> KeyPressResult
+  ) -> ModifiedContent<Self, KeyPressModifier> {
+    onKeyPress(.key(key, modifiers: modifiers), perform: action)
+  }
+}
+
+public struct KeyPressModifier: IterativePrimitiveViewModifier, Sendable {
+  package let match: KeyPressMatch
+  package let authoringContext: ImperativeAuthoringContextSnapshot?
+  package let action: @MainActor @Sendable (KeyPress) -> KeyPressResult
+
+  package init(
+    match: KeyPressMatch,
+    authoringContext: ImperativeAuthoringContextSnapshot?,
+    action: @escaping @MainActor @Sendable (KeyPress) -> KeyPressResult
+  ) {
+    self.match = match
+    self.authoringContext = authoringContext
+    self.action = action
+  }
+
+  package func makeResolveWork<Content: View>(
+    content: ModifierContentInputs<Content>,
+    in context: ResolveContext
+  ) -> ResolveWork<[ResolvedNode]> {
+    return content.resolveWork(in: context).map { completed in
+      let node = completed
+      // A disabled ancestor must suppress key-press handling, matching how
+      // `Button`/`Toggle` skip action registration when `isEnabled` is false.
+      // Without this guard a `.disabled(true)` subtree still registers focused
+      // key-press handlers, so the key would dispatch to a view the user cannot
+      // interact with.
+      guard context.environmentValues.isEnabled else {
+        return [node]
+      }
+      let intake = HandlerDescriptorIntake(
+        context: context,
+        preferringSnapshot: authoringContext
+      )
+      intake.registerKeyPressHandler(identity: node.identity, phase: .interception) { keyPress in
+        guard match.matches(keyPress) else {
+          return false
+        }
+        return action(keyPress) == .handled
+      }
+      return [node]
+
+    }
+  }
+}

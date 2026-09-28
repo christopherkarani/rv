@@ -1,0 +1,258 @@
+# Runtime Behavior
+
+The lifecycle, state, observation, input, and incremental delivery models.
+
+## Overview
+
+This article is the stable reference for ``RunLoop`` and the surrounding
+runtime. It starts after the runtime resolves authored `View`, ``Scene``, and
+``App`` values into frame artifacts.
+
+## Runtime Shape
+
+The runtime presents one committed frame at a time through the same strict pipeline used everywhere else:
+
+```text
+resolve -> measure -> place -> semantics -> draw -> raster -> commit
+```
+
+``RunLoop`` integrates terminal I/O, invalidation scheduling, input, signals, lifecycle staging, and task reconciliation around that pure frame pipeline.
+
+For interactive sessions, the runtime owns the terminal alternate-screen buffer while running. That gives each ``WindowGroup`` a clean full-canvas presentation surface and restores the previous shell buffer on exit.
+
+For the underlying phase products and runtime scheduling, see
+<doc:Runtime-Render-Pipeline>.
+
+## Root-Hoisted Presentations
+
+Built-in presentations (`alert`, `confirmationDialog`, `sheet`, `popover`,
+`popoverTip`, menus, and `toast`) are authored inside the base view tree but
+displayed through root-level composition.
+
+- Base resolution collects presentation declarations during the ordinary
+  resolve pass.
+- Portal roots reconcile those declarations. Then they compose visible overlay
+  payloads around the resolved base tree.
+- Presentation hosts derive visible overlay state from the current resolved
+  base declarations before overlay composition. Wrapper-hosted and selectively
+  re-evaluated subtrees do not wait for an outer host rerender. An existing
+  declaration appears immediately.
+- Each active sheet, full-screen cover, popover, and menu produces its own
+  stable overlay entry. Later activations compose above earlier activations
+  without unmounting the covered entry.
+- Alerts and confirmation dialogs expose only their oldest active entry and
+  advance in first-in, first-out order. Toasts remain one aggregate entry.
+- Escape and other stack-wide dismissal routes consider visible entries only,
+  then select the most recently activated entry across presentation families.
+- The renderer composes the base root and overlay stack for downstream measure,
+  place, semantics, draw, raster, and commit work.
+- Opening or dismissing a presentation does not re-resolve the displayed base
+  subtree under a synthetic identity path. Presentation churn does not affect
+  the selected tab or child owner. A presentation action can still select
+  different content through a state change.
+- Dismissing a presentation prunes only its overlay-owned subtree identities.
+  It must not remove unrelated retained content.
+- Modal overlays can still suppress base interaction through the composed
+  frame's semantic state.
+
+## Input, Focus, And Interaction
+
+The runtime is keyboard-first, but it is not keyboard-only.
+
+- Keyboard input is parsed into `KeyEvent` and `InputEvent` values.
+- On terminals that support the kitty keyboard protocol, the host enables its disambiguation flag automatically (opt out with `SWIFTTUI_KITTY_KEYBOARD=0`), so keys the legacy byte encoding conflates (Escape vs. Alt-prefixed keys, Ctrl+J vs. Enter, Ctrl+I vs. Tab) arrive as distinct events
+- Terminals that advertise mouse reporting feed pointer events into the same
+  semantic routing layer.
+- Focus routing remains the authoritative target-selection system for keyboard
+  interaction.
+- Pointer interaction augments authored controls and collections. It does not
+  replace the focus model.
+
+Control activation, selection changes, scrolling, and editing use the same
+semantic and lifecycle system. This rule applies to keyboard events and events
+from the mouse-reporting stream.
+
+Pointer input is normalized into `PointerLocation` before dispatch. Semantic
+routing uses the containing integer cell, while gestures, hover handlers, and
+spatial drop destinations receive continuous cell-space `Point` values. On
+cell-only terminals those points are synthesized at cell centers. Native, web,
+and terminal-pixel hosts can provide sub-cell locations.
+
+The runtime writes `PointerInputCapabilities` and `CellPixelMetrics` into the
+environment before each render. Use those values for optional precision
+indicators or direct-manipulation affordances. Layout itself remains cell-based.
+
+Terminal-native sessions resolve mouse precision before the event pump starts.
+`TerminalMouseInputResolution.preResolved` skips probing and uses the supplied
+answer. Automatic resolution requires trustworthy cell metrics. Then it queries
+SGR-Pixels 1016 with `CSI ? 1016 $ p`. Finally, it uses the documented compatibility
+matrix only when the selected `TerminalMouseInputTrustPolicy` allows it.
+All-motion hover reporting is enabled only while rendered views have
+`onPointerHover` subscribers, then disabled again when the subscribers
+disappear.
+
+For the deeper focus model, see the `Focus` article in the `SwiftTUIViews`
+module.
+
+## Commit, Lifecycle, And Tasks
+
+Lifecycle is driven by runtime lifetimes, with the resolved `Identity` kept as
+the public/debug projection that appears in lifecycle events.
+
+- A node appears when its `ViewNodeID` is present in the next committed tree but
+  absent from the previous one
+- A node disappears when its `ViewNodeID` is present in the previous committed
+  tree but absent from the next one
+- Reordering, layout movement, focus changes, clipping changes, or
+  scroll-position changes do not count as lifecycle transitions if the runtime
+  lifetime is preserved
+- Off-screen or clipped nodes that remain in the tree do not disappear
+
+The view graph finalizes each frame into explicit lifecycle events. The commit
+planner packages these events into the lifecycle slot of the commit plan. This
+slot also contains semantic handler-installation work.
+
+### Ordering Rules
+
+- Removal cancels any owned task before running disappear handlers
+- Insertion runs appear handlers before starting any owned task
+- Task replacement on a stable identity cancels the old task before starting the new one
+
+### Task Rules
+
+- A task starts when a runtime node appears with a task descriptor
+- A task also starts when a stable runtime node gains a task descriptor
+- A task survives ordinary frame updates when the runtime node and task
+  descriptor are unchanged
+- A task also survives a backing-node migration when its identity uniquely
+  matches a single incoming runtime node and its task descriptor is
+  unchanged; its running handle is transferred to the new owner
+- A task restarts when the descriptor changes on the same runtime node
+- A task also restarts when explicit identity replacement creates a new
+  runtime lifetime, even if the descriptor compares equal
+- A task cancels when its runtime node disappears with no uniquely matched
+  replacement, when its descriptor is replaced, or when the runtime shuts
+  down
+- Selective dirty evaluation must re-run the graph node that authored lifecycle
+  metadata before it commits a descendant update that can drop that
+  metadata. The lifecycle identity remains the resolved node identity. The
+  evaluation owner is an internal graph-retention detail.
+
+The practical rule is simple: if the runtime lifetime is preserved, it is not a
+lifecycle transition.
+
+## State, Environment, Observation, And Isolation
+
+The package uses `.defaultIsolation(.none)` in its package configuration. The
+model uses explicit `@MainActor` annotations for SwiftUI-style authoring
+isolation. It does not use blanket target isolation.
+
+The shipped ownership model is split into three categories:
+
+- Main-actor authoring and body evaluation:
+  - `View`, ``Scene``, and ``App``
+  - `Resolver.resolve(...)`
+  - ``DefaultRenderer/render(_:context:proposal:frameInstant:)``
+  - scene collection helpers, typed ``WindowIdentifier`` values, and ``WindowGroup`` root-view construction
+  - action-bearing authoring APIs such as `Binding.init(get:set:)`, button actions, `OpenLinkAction` over typed `LinkDestination` values, `.onAppear`, `.onDisappear`, `.onChange(of:initial:_:)`, and `.task(...)`
+- Main-actor runtime coordination and ownership:
+  - ``RunLoop``
+  - the state container
+  - local action, focused-value, key, lifecycle, task, and pointer registries
+  - retained frame and resolve-reuse stores
+  - focus, pressed identity, lifecycle staging, and task reconciliation
+  - terminal presentation commit boundaries
+- Pure nonisolated frame products:
+  - resolve context, environment snapshots, and resolved, measured, placed, semantic, draw, raster, and commit artifacts
+- Genuinely concurrent I/O and host plumbing:
+  - input readers
+  - signal readers
+  - terminal-host I/O
+  - graphics or image transport support
+
+### State Model
+
+- `@State` persistence is keyed by graph scope, owner `ViewNodeID`, and the
+  declaration's source-location ordinal
+- Unkeyed owners follow their `StructuralPath`. Explicitly keyed owners can
+  route the same `ViewNodeID` across structural moves through `EntityIdentity`
+- Live runtime writes belong to the view graph that registered the callback.
+  Another live graph can mount the same stateful view instance without
+  inheriting the first graph's imperative writes
+- Rebinding the same unkeyed view instance into a different structural position
+  creates a different state slot. Rebinding a keyed entity can preserve state
+  when the entity identity proves it is the same logical value
+- Keying preserves state only while the owning runtime lifetime survives or is
+  entity-routed. Own longer-lived state above the seams for active-tab bodies,
+  deferred content, or presentation churn. Pass it down through bindings or
+  explicit model state
+- Active-tab local state can be intentionally temporary across tab changes.
+  `TabView` resolves only the selected body. Hoist only the state that must
+  survive tab churn. Opening or closing a presentation must not cause the same
+  reset.
+- The state container invalidates only when an `Equatable` state change actually changes value
+- Projected bindings and local actions route through the same invalidation path
+- Direct local actions restore the dynamic-property scope they were registered
+  under so mutations remain bound to the right runtime graph
+- Button actions, key-command handlers, dismiss closures, projected bindings,
+  and other imperative paths must preserve the same authoring scope and
+  dynamic-property scope. Each path then invalidates the same owner
+- `@GestureState` follows the same graph-scoped binding lookup for imperative
+  gesture updates, while still resetting to its construction-time seed when
+  the gesture ends
+- No-invalidator `DefaultRenderer` snapshots preserve same-instance test and
+  preview ergonomics. If a reused view instance receives an imperative write,
+  a later snapshot of that instance can observe it without a live invalidator
+
+For the deeper keying tradeoffs, see the `State-Keying` article in the
+`SwiftTUIViews` module.
+
+### Environment Model
+
+- An environment key's `Value` is `Sendable`
+- Environment storage uses typed sendable boxes rather than raw erased payloads
+- Environment snapshots use immutable value-style replacement semantics
+- Style-affecting environment updates can change presentation without implying layout changes
+
+### Observation Model
+
+Observation uses the same invalidation path as `@State`. It does not use a
+separate runtime.
+
+- `resolveBody` and `EnvironmentReader` track observable reads through an internal observation bridge
+- observable writes may occur on any executor, matching SwiftUI's allowance for background-task model writes; the bridge marshals them instead of trapping
+- callbacks filter staleness and wake the scheduler at fire time, then the graph invalidation for the exact observed identity applies on the main actor at the next frame head
+- generation tracking suppresses stale callbacks from older frames
+- committed-frame pruning stops removed identities from continuing to invalidate hidden subtrees
+- the package provides its own `Bindable`
+
+Supported scenarios include body-driven reads, environment-driven observable
+reads, bindable editing, and renders after observable edits.
+
+## Incremental Delivery
+
+The runtime is incremental in common steady-state paths. Idle renders reuse
+measured and placed work and write no bytes. Local subtree updates keep work on
+the dirty path. Focused-button and single-character-input frames do less work
+than the initial paint. Full repaints still occur for the first frame, surface
+resizes, raster attachment changes, and raster metadata changes. The
+presentation boundary sanitizes terminal text and OSC 8 hyperlink destinations
+before it writes bytes. `SIGWINCH` reads the terminal size and schedules a
+fresh frame. It does not exit the run loop.
+
+## Crash Recovery
+
+The CLI runner installs a crash guard before the session enters raw mode. If
+the process crashes because of `fatalError`, a segmentation fault, or another
+fatal signal, the guard resets the terminal. The guard
+disables mouse reporting, shows the cursor, resets style, exits the alternate
+screen, and restores termios. Then it raises the signal again. Thus, the
+terminal does not stay in raw mode.
+
+## See Also
+
+- <doc:Architecture>
+- <doc:Runtime-Render-Pipeline>
+- <doc:Vision>
+- <doc:Host-Integration>
+- <doc:Running-Apps>

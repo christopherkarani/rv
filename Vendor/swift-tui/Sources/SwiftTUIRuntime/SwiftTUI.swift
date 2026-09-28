@@ -1,0 +1,1093 @@
+@_exported import SwiftTUICore
+@_exported import SwiftTUIVendorFigletEmbeddedFonts
+@_exported import SwiftTUIViews
+
+/// Renders authored terminal views through the full frame pipeline.
+///
+/// `DefaultRenderer` is the public one-shot entry point for turning a `View`
+/// into a committed-frame `RenderSnapshot` for previews, snapshot tests,
+/// diagnostics, or custom presentation.
+public struct DefaultRenderer {
+  private static let latePreferenceReconciliationPolicy =
+    LatePreferenceReconciliationPolicy.toolbarHostRuntimeBound
+
+  package let resolver: Resolver
+  package let layoutEngine: LayoutEngine
+  package let semanticExtractor: SemanticExtractor
+  package let drawExtractor: DrawExtractor
+  package let rasterizer: Rasterizer
+  package let commitPlanner: CommitPlanner
+  private let imageRepository: ImageAssetRepository
+  let viewGraph: ViewGraph
+  private let frameState: FrameResolveState
+  private let frameInputs: FrameResolveInputBox
+  private let presentationPortalState: PresentationPortalState
+  private let committedPresentationDismissStack: CommittedPresentationDismissStack
+  private let debugObservationBridgeTracker: DebugObservationBridgeTracker
+  private let animationController: AnimationController
+  private let renderGenerationSequencer: RenderGenerationSequencer
+  private let elidedFrameCounter: ElidedFrameCounter
+  private let elidedFrameTimingRecorder: ElidedFrameTimingRecorder
+  private let frameCommitSequence: FrameCommitSequence
+  // Run of consecutive completed frames dropped visual-only; feeds the
+  // forward-progress guard in `CompletedFramePolicy.decide`. A reference box
+  // (the renderer is a struct copied into closures) shared by every copy.
+  // Visibility note: internal (not `private`) so
+  // `DefaultRenderer+CompletedFrameCandidates.swift` can maintain it at the
+  // drop decision.
+  let visualOnlyDropRun = VisualOnlyDropRunCounter()
+
+  let frameTailRenderer: FrameTailRenderer
+  /// Cross-frame author `Layout.Cache` persistence (plan 2026-08-11-004
+  /// Stage 2), owned beside the measurement cache. `nil` when
+  /// `SWIFTTUI_PERSISTENT_LAYOUT_CACHE=0` disables persistence — a nil
+  /// store restores per-pass `makeCache` wholesale.
+  package let customLayoutCacheStore: CustomLayoutCacheStore?
+  // Visibility note: `frameTailCoordinator` and `prepareFrameHead` are
+  // file-internal rather than `private` so the test-only hooks in
+  // `DefaultRenderer+TestingHooks.swift` can reach them.
+  var frameTailCoordinator: DefaultRendererFrameTailCoordinator {
+    .init(
+      frameTailRenderer: frameTailRenderer,
+      latePreferenceReconciliationPolicy: Self.latePreferenceReconciliationPolicy
+    )
+  }
+  @MainActor
+  private var frameHeadCoordinator: DefaultRendererFrameHeadCoordinator {
+    let observationBridgeTracker = debugObservationBridgeTracker
+    return .init(
+      resolver: resolver,
+      imageRepository: imageRepository,
+      viewGraph: viewGraph,
+      frameState: frameState,
+      frameInputs: frameInputs,
+      presentationPortalState: presentationPortalState,
+      animationController: animationController,
+      renderGenerationSequencer: renderGenerationSequencer,
+      elidedFrameTimingRecorder: elidedFrameTimingRecorder,
+      frameTailRenderer: frameTailRenderer,
+      customLayoutCacheStore: customLayoutCacheStore,
+      storeObservationBridge: { bridge in
+        observationBridgeTracker.store(bridge)
+      },
+      renderPipelineContentTree: renderPipelineTree(from:),
+      frameCommitSequence: frameCommitSequence
+    )
+  }
+
+  /// Creates a renderer with default pipeline components.
+  @MainActor
+  public init() {
+    self.init(
+      resolver: .init(),
+      layoutEngine: .init(cache: MeasurementCache()),
+      semanticExtractor: .init(),
+      drawExtractor: .init(),
+      rasterizer: .init(),
+      commitPlanner: .init()
+    )
+  }
+
+  /// Creates a renderer with the supplied pipeline components.
+  @MainActor
+  package init(
+    resolver: Resolver = .init(),
+    layoutEngine: LayoutEngine = .init(cache: MeasurementCache()),
+    semanticExtractor: SemanticExtractor = .init(),
+    drawExtractor: DrawExtractor = .init(),
+    rasterizer: Rasterizer = .init(),
+    commitPlanner: CommitPlanner = .init()
+  ) {
+    self.resolver = resolver
+    self.layoutEngine = layoutEngine
+    self.semanticExtractor = semanticExtractor
+    self.drawExtractor = drawExtractor
+    self.rasterizer = rasterizer
+    self.commitPlanner = commitPlanner
+    imageRepository = sharedImageAssetRepository
+    viewGraph = .init()
+    frameState = .init()
+    frameInputs = .init()
+    presentationPortalState = .init()
+    committedPresentationDismissStack = .init()
+    debugObservationBridgeTracker = .init()
+    animationController = .init()
+    renderGenerationSequencer = .init()
+    elidedFrameCounter = .init()
+    elidedFrameTimingRecorder = .init()
+    frameCommitSequence = .init()
+    frameTailRenderer = .init(
+      layoutEngine: layoutEngine,
+      semanticExtractor: semanticExtractor,
+      drawExtractor: drawExtractor,
+      rasterizer: rasterizer
+    )
+    customLayoutCacheStore =
+      FeatureGate.persistentCustomLayoutCache.initialIsEnabled()
+      ? CustomLayoutCacheStore() : nil
+  }
+
+  /// Package-only accessor so the run loop can register animations
+  /// against the renderer's controller before a `withAnimation` body
+  /// executes.
+  @MainActor
+  package var internalAnimationController: AnimationController {
+    animationController
+  }
+
+  /// Package-only accessor so the run loop can route framework-reserved
+  /// single-key events (currently Escape) to the active presentation
+  /// dismiss stack. Returns the dismiss closure of the topmost
+  /// Escape-dismissible portal entry, or nil when none is active.
+  @MainActor
+  package func topmostEscapeDismissAction() -> (@MainActor @Sendable () -> Void)? {
+    committedPresentationDismissStack.topmostEscapeDismissAction()
+  }
+
+  /// Package-only accessor so the run loop can route framework-reserved
+  /// Escape handling to the active destination stack after modal presentation
+  /// dismissal has had first claim.
+  @MainActor
+  package func topmostNavigationDestinationPopAction(
+    along scopePath: [Identity]
+  ) -> (@MainActor @Sendable () -> Void)? {
+    let resolved = renderPipelineTree(from: viewGraph.snapshot())
+    return navigationDestinationPopAction(
+      in: resolved,
+      along: scopePath
+    )
+  }
+
+  @MainActor
+  package func debugRuntimeSubsystemSnapshot() -> RuntimeSubsystemSnapshot {
+    let presentationEntries = presentationPortalState.overlayEntries().map {
+      RuntimeSubsystemSnapshot.PresentationPortalSnapshot.EntrySnapshot(
+        id: $0.id,
+        ordering: $0.ordering,
+        kindName: $0.kindName,
+        modalPolicy: $0.modalPolicy,
+        acceptsEscape: $0.acceptsEscape,
+        hasDismissAction: $0.dismiss != nil
+      )
+    }
+    let observationBridgeSnapshot = debugObservationBridgeTracker.bridge.map { bridge in
+      let checkpoint = bridge.makeCheckpoint()
+      return RuntimeSubsystemSnapshot.ObservationBridgeSnapshot(
+        currentPass: checkpoint.currentPass,
+        observedPasses: checkpoint.observedPasses,
+        invalidatorID: checkpoint.invalidator.map(ObjectIdentifier.init),
+        viewGraphID: checkpoint.viewGraph.map(ObjectIdentifier.init)
+      )
+    }
+    return RuntimeSubsystemSnapshot(
+      viewGraph: viewGraph.debugTotalStateSnapshot(),
+      frameState: frameState.debugStateSnapshot(),
+      frameInputs: frameInputs.debugStateSnapshot(),
+      presentationPortalState: .init(overlayEntries: presentationEntries),
+      observationBridge: observationBridgeSnapshot,
+      animationController: animationController.debugStateSnapshot()
+    )
+  }
+
+  // Test-only pipeline-stage hooks live in
+  // `DefaultRenderer+TestingHooks.swift`.
+
+  /// Renders `root` into a committed frame snapshot.
+  ///
+  /// This is a one-shot entry point for snapshots and previews.
+  /// It is **not safe for focus or press reuse across successive calls on the same renderer**.
+  /// Focus and press state are runtime side fields that the reuse-equality snapshot excludes.
+  /// Correct memoized-body reuse depends on the retained-reuse suppression scope of the run loop.
+  /// The one-shot path does not compute this scope.
+  /// Thus, an `Equatable` or `View.equatable()` boundary can show stale focus or press output.
+  /// This error can occur after focus or press changes and an ancestor invalidates the control.
+  /// For interactive rendering, drive frames through the run loop
+  /// (`TerminalRunner`/host integration), which suppresses reuse of focus/press
+  /// cones. Use `render(_:)` for snapshots, previews, and tests.
+  @MainActor
+  public func render<V: View>(
+    _ root: V,
+    context: ResolveContext = .init(),
+    proposal: ProposedSize = .unspecified,
+    frameInstant: MonotonicInstant = .now()
+  ) -> RenderSnapshot {
+    renderArtifacts(
+      root,
+      context: context,
+      proposal: proposal,
+      frameInstant: frameInstant
+    ).renderSnapshot
+  }
+
+  /// Renders `root` into complete frame artifacts for package tests and runtime
+  /// internals that intentionally inspect phase IR.
+  @MainActor
+  package func renderArtifacts<V: View>(
+    _ root: V,
+    context: ResolveContext = .init(),
+    proposal: ProposedSize = .unspecified,
+    frameInstant: MonotonicInstant = .now()
+  ) -> FrameArtifacts {
+    switch renderView(
+      root,
+      context: context,
+      proposal: proposal,
+      frameInstant: frameInstant,
+      elisionCauses: [],
+      elisionHasExplicitAnimationTransactions: false
+    ) {
+    case .rendered(let artifacts):
+      return artifacts
+    case .elided:
+      preconditionFailure(
+        "Off-screen elision must never fire for the public one-shot renderer (empty causes)."
+      )
+    }
+  }
+
+  /// Renders `root` into a committed frame snapshot, suspending while the
+  /// frame-tail worker computes the Sendable semantics, draw, and raster phases.
+  @MainActor
+  public func renderAsync<V: View>(
+    _ root: V,
+    context: ResolveContext = .init(),
+    proposal: ProposedSize = .unspecified,
+    frameInstant: MonotonicInstant = .now()
+  ) async -> RenderSnapshot {
+    await renderArtifactsAsync(
+      root,
+      context: context,
+      proposal: proposal,
+      frameInstant: frameInstant
+    ).renderSnapshot
+  }
+
+  /// Renders `root` into complete frame artifacts for package tests and runtime
+  /// internals that intentionally inspect phase IR.
+  @MainActor
+  package func renderArtifactsAsync<V: View>(
+    _ root: V,
+    context: ResolveContext = .init(),
+    proposal: ProposedSize = .unspecified,
+    frameInstant: MonotonicInstant = .now()
+  ) async -> FrameArtifacts {
+    switch await renderViewAsync(
+      root,
+      context: context,
+      proposal: proposal,
+      frameInstant: frameInstant,
+      elisionCauses: [],
+      elisionHasExplicitAnimationTransactions: false
+    ) {
+    case .rendered(let artifacts):
+      return artifacts
+    case .elided:
+      preconditionFailure(
+        "Off-screen elision must never fire for the public async renderer (empty causes)."
+      )
+    }
+  }
+
+  /// Run-loop entry point for the synchronous one-shot path that may elide an
+  /// off-screen-only animation tick. Returns ``RenderExecutionResult/elided``
+  /// when the gate fires (the reduced commit has already run); otherwise the
+  /// committed artifacts.
+  @MainActor
+  package func renderEliding<V: View>(
+    _ root: V,
+    context: ResolveContext,
+    proposal: ProposedSize,
+    frameInstant: MonotonicInstant,
+    elisionCauses: Set<WakeCause>,
+    elisionHasExplicitAnimationTransactions: Bool
+  ) -> RenderExecutionResult {
+    renderView(
+      root,
+      context: context,
+      proposal: proposal,
+      frameInstant: frameInstant,
+      elisionCauses: elisionCauses,
+      elisionHasExplicitAnimationTransactions: elisionHasExplicitAnimationTransactions
+    )
+  }
+
+  /// Run-loop entry point for the abortable async path that may elide an
+  /// off-screen-only animation tick. See
+  /// ``renderEliding(_:context:proposal:elisionCauses:elisionHasExplicitAnimationTransactions:)``.
+  @MainActor
+  package func renderAsyncEliding<V: View>(
+    _ root: V,
+    context: ResolveContext,
+    proposal: ProposedSize,
+    frameInstant: MonotonicInstant,
+    elisionCauses: Set<WakeCause>,
+    elisionHasExplicitAnimationTransactions: Bool
+  ) async -> RenderExecutionResult {
+    await renderViewAsync(
+      root,
+      context: context,
+      proposal: proposal,
+      frameInstant: frameInstant,
+      elisionCauses: elisionCauses,
+      elisionHasExplicitAnimationTransactions: elisionHasExplicitAnimationTransactions
+    )
+  }
+
+  @MainActor
+  package func renderAsyncCancellable<V: View>(
+    _ root: V,
+    context: ResolveContext,
+    proposal: ProposedSize,
+    frameInstant: MonotonicInstant = .now(),
+    newestDesiredGeneration: @escaping @MainActor @Sendable () -> RenderGeneration? = { nil },
+    completedFramePolicy: CompletedFramePolicy? = nil,
+    completedFrameAdditionalBlockers:
+      @escaping @MainActor @Sendable (FrameArtifacts) -> Set<FrameDropEligibility.Blocker> = {
+        _ in []
+      },
+    redundantHandlerInstallationsAreVisualOnly:
+      @escaping @MainActor @Sendable (FrameArtifacts) -> Bool = { _ in false },
+    awaitQueuedCancellationSignal:
+      @escaping @MainActor @Sendable (any PendingFrameWaitReleasing) async -> Void = { _ in },
+    shouldCancelQueued: @escaping @MainActor @Sendable () async -> Bool
+  ) async -> CancellableRenderOutcome {
+    switch await renderCancellableExecution(
+      root,
+      context: context,
+      proposal: proposal,
+      frameInstant: frameInstant,
+      elisionCauses: [],
+      elisionHasExplicitAnimationTransactions: false,
+      newestDesiredGeneration: newestDesiredGeneration,
+      completedFramePolicy: completedFramePolicy,
+      completedFrameAdditionalBlockers: completedFrameAdditionalBlockers,
+      redundantHandlerInstallationsAreVisualOnly: redundantHandlerInstallationsAreVisualOnly,
+      awaitQueuedCancellationSignal: awaitQueuedCancellationSignal,
+      shouldCancelQueued: shouldCancelQueued
+    ) {
+    case .rendered(let outcome):
+      return outcome
+    case .elided:
+      preconditionFailure(
+        "Off-screen elision must never fire for renderAsyncCancellable (empty causes)."
+      )
+    }
+  }
+
+  /// Run-loop entry point for the cancellable async path that may elide an
+  /// off-screen-only animation tick. Returns
+  /// ``CancellableRenderExecutionResult/elided`` when the gate fires (the
+  /// reduced commit has already run); otherwise the cancellable outcome.
+  @MainActor
+  package func renderAsyncCancellableEliding<V: View>(
+    _ root: V,
+    context: ResolveContext,
+    proposal: ProposedSize,
+    frameInstant: MonotonicInstant,
+    elisionCauses: Set<WakeCause>,
+    elisionHasExplicitAnimationTransactions: Bool,
+    newestDesiredGeneration: @escaping @MainActor @Sendable () -> RenderGeneration? = { nil },
+    completedFramePolicy: CompletedFramePolicy? = nil,
+    completedFrameAdditionalBlockers:
+      @escaping @MainActor @Sendable (FrameArtifacts) -> Set<FrameDropEligibility.Blocker> = {
+        _ in []
+      },
+    redundantHandlerInstallationsAreVisualOnly:
+      @escaping @MainActor @Sendable (FrameArtifacts) -> Bool = { _ in false },
+    awaitQueuedCancellationSignal:
+      @escaping @MainActor @Sendable (any PendingFrameWaitReleasing) async -> Void = { _ in },
+    shouldCancelQueued: @escaping @MainActor @Sendable () async -> Bool
+  ) async -> CancellableRenderExecutionResult {
+    await renderCancellableExecution(
+      root,
+      context: context,
+      proposal: proposal,
+      frameInstant: frameInstant,
+      elisionCauses: elisionCauses,
+      elisionHasExplicitAnimationTransactions: elisionHasExplicitAnimationTransactions,
+      newestDesiredGeneration: newestDesiredGeneration,
+      completedFramePolicy: completedFramePolicy,
+      completedFrameAdditionalBlockers: completedFrameAdditionalBlockers,
+      redundantHandlerInstallationsAreVisualOnly: redundantHandlerInstallationsAreVisualOnly,
+      awaitQueuedCancellationSignal: awaitQueuedCancellationSignal,
+      shouldCancelQueued: shouldCancelQueued
+    )
+  }
+
+  @MainActor
+  private func renderCancellableExecution<V: View>(
+    _ root: V,
+    context: ResolveContext,
+    proposal: ProposedSize,
+    frameInstant: MonotonicInstant,
+    elisionCauses: Set<WakeCause>,
+    elisionHasExplicitAnimationTransactions: Bool,
+    newestDesiredGeneration: @escaping @MainActor @Sendable () -> RenderGeneration?,
+    completedFramePolicy: CompletedFramePolicy?,
+    completedFrameAdditionalBlockers:
+      @escaping @MainActor @Sendable (FrameArtifacts) -> Set<FrameDropEligibility.Blocker>,
+    redundantHandlerInstallationsAreVisualOnly:
+      @escaping @MainActor @Sendable (FrameArtifacts) -> Bool,
+    awaitQueuedCancellationSignal:
+      @escaping @MainActor @Sendable (any PendingFrameWaitReleasing) async -> Void,
+    shouldCancelQueued: @escaping @MainActor @Sendable () async -> Bool
+  ) async -> CancellableRenderExecutionResult {
+    let renderer = self
+    // Sampled before computeFrameHead latches the proposal into the selector
+    // memory; both elision gates refuse to elide while a changed proposal is
+    // in hand (see makeCommitElidedFrameIfOffscreen).
+    let proposalChanged = proposal != frameState.lastPreparedProposal
+    if renderer.elideOffscreenAnimationBeforeFrameHeadIfPossible(
+      elisionCauses: elisionCauses,
+      elisionHasExplicitAnimationTransactions: elisionHasExplicitAnimationTransactions,
+      proposalChanged: proposalChanged,
+      frameInstant: frameInstant
+    ) {
+      return .elided
+    }
+    let draft = renderer.computeFrameHead(
+      root,
+      context: context,
+      proposal: proposal,
+      frameInstant: frameInstant,
+      mode: .abortable
+    )
+    return await RuntimeRenderPipeline().renderAsync(
+      head: draft,
+      handlers: AsyncRenderStageHandlers<
+        CancellableFrameTailLayoutStageOutput, CancellableRenderOutcome
+      >(
+        animationInjection: { draft in
+          renderer.injectAnimations(
+            into: draft,
+            mode: .abortable
+          )
+        },
+        commitElidedFrameIfOffscreen: renderer.makeCommitElidedFrameIfOffscreen(
+          elisionCauses: elisionCauses,
+          elisionHasExplicitAnimationTransactions: elisionHasExplicitAnimationTransactions,
+          proposalChanged: proposalChanged
+        ),
+        latePreferenceReconciliation: { draft in
+          switch await renderer.frameTailCoordinator.renderFrameTailLayoutStage(
+            draft,
+            cancellation: FrameTailCancellationStrategy(
+              awaitQueuedCancellationSignal: awaitQueuedCancellationSignal,
+              shouldCancelQueued: shouldCancelQueued
+            )
+          ) {
+          case .cancelledBeforeStart:
+            // Finishing here is what "cancelled before start" means: the tail
+            // never runs, so the prepared head is abandoned and the frame
+            // reports the cancellation as its outcome.
+            renderer.abortPreparedFrameHead(draft)
+            return .finished(
+              CancellableRenderOutcome(
+                artifacts: nil,
+                runtimeIssues: draft.runtimeIssues,
+                renderGeneration: draft.renderGeneration,
+                newestDesiredGeneration: nil,
+                tailJobState: .cancelledBeforeStart,
+                tailCancelReason: "newer_render_intent",
+                completedFrameDropDecision: nil
+              )
+            )
+          case .output(let layoutStage, let cancellationToken):
+            guard let cancellationToken else {
+              preconditionFailure("Cancellable layout stage completed without a token.")
+            }
+            return .layout(
+              CancellableFrameTailLayoutStageOutput(
+                layoutStage: layoutStage,
+                cancellationToken: cancellationToken
+              )
+            )
+          }
+        },
+        fusedFrameTail: { draft, layoutStage in
+          await renderer.frameTailCoordinator.renderFrameTailRasterStage(
+            draft: draft,
+            layoutStage: layoutStage.layoutStage,
+            completionToken: layoutStage.cancellationToken
+          )
+        },
+        commit: { draft, tailOutput in
+          let newestGeneration = newestDesiredGeneration() ?? draft.renderGeneration
+          switch renderer.resolveCompletedFrameCandidate(
+            draft: draft,
+            tailOutput: tailOutput,
+            newestDesiredGeneration: newestGeneration,
+            completedFramePolicy: completedFramePolicy,
+            additionalBlockers: completedFrameAdditionalBlockers,
+            redundantHandlerInstallationsAreVisualOnly:
+              redundantHandlerInstallationsAreVisualOnly
+          ) {
+          case .dropped(let runtimeIssues, let dropDecision):
+            return CancellableRenderOutcome(
+              artifacts: nil,
+              runtimeIssues: runtimeIssues,
+              renderGeneration: draft.renderGeneration,
+              newestDesiredGeneration: newestGeneration,
+              tailJobState: .droppedCompleted,
+              tailCancelReason: nil,
+              completedFrameDropDecision: dropDecision
+            )
+          case .skippedStaleBaseline(let runtimeIssues):
+            // Report as cancelled-before-start so the run loop replays the
+            // frame intent: the skipped content re-renders against the graph
+            // state the sibling commit left behind.
+            return CancellableRenderOutcome(
+              artifacts: nil,
+              runtimeIssues: runtimeIssues,
+              renderGeneration: draft.renderGeneration,
+              newestDesiredGeneration: newestGeneration,
+              tailJobState: .cancelledBeforeStart,
+              tailCancelReason: "stale_baseline",
+              completedFrameDropDecision: nil
+            )
+          case .committed(let artifacts, let dropDecision):
+            return CancellableRenderOutcome(
+              artifacts: artifacts,
+              runtimeIssues: artifacts.diagnostics.runtime.issues,
+              renderGeneration: draft.renderGeneration,
+              newestDesiredGeneration: newestGeneration,
+              tailJobState: .completed,
+              tailCancelReason: nil,
+              completedFrameDropDecision: dropDecision
+            )
+          }
+        }
+      )
+    )
+  }
+
+  /// Builds the executor-stage off-screen elision closure. The closure runs
+  /// the gate predicate against the post-animation-injection draft tick and,
+  /// when it fires, performs the reduced commit (``commitElidedFrame(draft:)``)
+  /// before returning `true`. When `elisionCauses` is empty (the public
+  /// preview entry points) the predicate can never fire.
+  ///
+  /// `proposalChanged` is captured BEFORE `computeFrameHead` (whose
+  /// `prepareInputs` latches the proposal into the selector memory): a head
+  /// that consumed a changed surface proposal must not be elided —
+  /// `commitElidedFrame` commits the latched proposal without presenting,
+  /// so the resize it carried would never render (the web/hosted resize
+  /// freeze: a skipped SIGWINCH frame followed by an elided deadline tick
+  /// left every later frame comparing proposal-equal against a size no
+  /// frame ever presented).
+  @MainActor
+  private func makeCommitElidedFrameIfOffscreen(
+    elisionCauses: Set<WakeCause>,
+    elisionHasExplicitAnimationTransactions: Bool,
+    proposalChanged: Bool
+  ) -> (FrameHeadDraft) -> Bool {
+    // Preserve the barrier through the last tick: animation injection may
+    // retire the slot before this closure runs, but its final geometry still
+    // needs layout and presentation on this frame.
+    let hadLayoutAnimation = animationController.hasLayoutAffectingPropertyAnimation
+    return { [self] draft in
+      guard !proposalChanged else {
+        return false
+      }
+      let controller = draft.animationDraft.controller
+      guard !hadLayoutAnimation, !controller.hasLayoutAffectingPropertyAnimation else {
+        return false
+      }
+      let tick = controller.lastTickResult
+      guard
+        OffscreenFrameElision.shouldElide(
+          causes: elisionCauses,
+          hasExplicitAnimationTransactions: elisionHasExplicitAnimationTransactions,
+          redrawIdentities: tick.redrawIdentities,
+          drawnIdentities: frameTailRenderer.previousDrawnIdentities,
+          hasPlacedPassOwnedAnimationWork: controller.hasPlacedPassOwnedAnimationWork
+        )
+      else {
+        return false
+      }
+      commitElidedFrame(draft: draft)
+      return true
+    }
+  }
+
+  @MainActor
+  private func elideOffscreenAnimationBeforeFrameHeadIfPossible(
+    elisionCauses: Set<WakeCause>,
+    elisionHasExplicitAnimationTransactions: Bool,
+    proposalChanged: Bool,
+    frameInstant: MonotonicInstant
+  ) -> Bool {
+    guard !animationController.hasLayoutAffectingPropertyAnimation else { return false }
+    // A deadline tick that arrives while an unrendered proposal is
+    // outstanding (a resize whose SIGWINCH frame was cancelled or dropped)
+    // must run a real frame: eliding it presents nothing and leaves no other
+    // wake that would ever render the new size.
+    guard !proposalChanged else {
+      return false
+    }
+    guard
+      let redrawIdentities =
+        animationController.preFrameHeadOffscreenPropertyAnimationRedrawIdentities
+    else {
+      return false
+    }
+    guard
+      OffscreenFrameElision.shouldElide(
+        causes: elisionCauses,
+        hasExplicitAnimationTransactions: elisionHasExplicitAnimationTransactions,
+        redrawIdentities: redrawIdentities,
+        drawnIdentities: frameTailRenderer.previousDrawnIdentities,
+        // Redundant with the eligibility gate above (which returns nil unless
+        // every active animation is a `.property` and nothing is removing), but
+        // stated rather than assumed: the pre-head tick only advances property
+        // scopes.
+        hasPlacedPassOwnedAnimationWork: animationController.hasPlacedPassOwnedAnimationWork
+      )
+    else {
+      return false
+    }
+
+    elidedFrameTimingRecorder.reset()
+    let tickStart = elidedFrameTimingRecorder.start()
+    animationController.advancePreFrameHeadOffscreenPropertyAnimationTick(
+      at: frameInstant
+    )
+    elidedFrameTimingRecorder.record(.animationTick, since: tickStart)
+    recordElidedFrame()
+    return true
+  }
+
+  @MainActor
+  private func renderView<V: View>(
+    _ root: V,
+    context: ResolveContext,
+    proposal: ProposedSize,
+    frameInstant: MonotonicInstant,
+    elisionCauses: Set<WakeCause>,
+    elisionHasExplicitAnimationTransactions: Bool
+  ) -> RenderExecutionResult {
+    let renderer = self
+    // Sampled before computeFrameHead latches the proposal (see
+    // makeCommitElidedFrameIfOffscreen).
+    let proposalChanged = proposal != frameState.lastPreparedProposal
+    if renderer.elideOffscreenAnimationBeforeFrameHeadIfPossible(
+      elisionCauses: elisionCauses,
+      elisionHasExplicitAnimationTransactions: elisionHasExplicitAnimationTransactions,
+      proposalChanged: proposalChanged,
+      frameInstant: frameInstant
+    ) {
+      return .elided
+    }
+    let draft = renderer.computeFrameHead(
+      root,
+      context: context,
+      proposal: proposal,
+      frameInstant: frameInstant,
+      mode: .oneShot
+    )
+    return RuntimeRenderPipeline().renderOneShot(
+      head: draft,
+      handlers: OneShotRenderStageHandlers(
+        animationInjection: { draft in
+          renderer.injectAnimations(
+            into: draft,
+            mode: .oneShot
+          )
+        },
+        commitElidedFrameIfOffscreen: renderer.makeCommitElidedFrameIfOffscreen(
+          elisionCauses: elisionCauses,
+          elisionHasExplicitAnimationTransactions: elisionHasExplicitAnimationTransactions,
+          proposalChanged: proposalChanged
+        ),
+        latePreferenceReconciliation: { draft in
+          renderer.frameTailCoordinator.renderLayoutResolvingLatePreferences(
+            draft
+          )
+        },
+        fusedFrameTail: { draft, reconciledTailLayout in
+          renderer.frameTailCoordinator.renderFusedFrameTail(
+            draft: draft,
+            reconciledTailLayout: reconciledTailLayout
+          )
+        },
+        commit: { draft, reconciledTailLayout, tail in
+          renderer.commitOneShotFrame(
+            draft: draft,
+            reconciledTailLayout: reconciledTailLayout,
+            tail: tail
+          )
+        }
+      )
+    )
+  }
+
+  @MainActor
+  private func commitOneShotFrame(
+    draft: FrameHeadDraft,
+    reconciledTailLayout: ReconciledFrameTailLayout,
+    tail: FrameTailOutput
+  ) -> FrameArtifacts {
+    let layout = reconciledTailLayout.layout
+    let resolved = reconciledTailLayout.resolved
+    let workerTimings = CommittedFrameArtifactBuilder.workerTimings(
+      draft: draft,
+      tail: tail
+    )
+    let effects = commitFrameEffects(
+      draft: draft,
+      canonicalResolved: reconciledTailLayout.input.canonicalResolved,
+      resolved: resolved,
+      placed: tail.placed,
+      semantics: tail.semantics,
+      workerCustomLayoutCacheUpdates: layout.workerCustomLayoutCacheUpdates
+    )
+    let artifacts = CommittedFrameArtifactBuilder.makeOneShotArtifacts(
+      draft: draft,
+      reconciledTailLayout: reconciledTailLayout,
+      tail: tail,
+      commit: effects.commitPlan,
+      commitDuration: effects.commitDuration,
+      workerTimings: workerTimings,
+      runtimeRegistrationDiagnostics: effects.runtimeRegistrationDiagnostics
+    )
+    publishCommittedFrame(
+      artifacts,
+      draft: draft,
+      baselinePlacedTree: tail.baselinePlaced,
+      overlayHasTransientDecoration: tail.overlayHasTransientDecoration
+    )
+    return artifacts
+  }
+
+  @MainActor
+  private func renderViewAsync<V: View>(
+    _ root: V,
+    context: ResolveContext,
+    proposal: ProposedSize,
+    frameInstant: MonotonicInstant,
+    elisionCauses: Set<WakeCause>,
+    elisionHasExplicitAnimationTransactions: Bool
+  ) async -> RenderExecutionResult {
+    let renderer = self
+    // Sampled before computeFrameHead latches the proposal (see
+    // makeCommitElidedFrameIfOffscreen).
+    let proposalChanged = proposal != frameState.lastPreparedProposal
+    if renderer.elideOffscreenAnimationBeforeFrameHeadIfPossible(
+      elisionCauses: elisionCauses,
+      elisionHasExplicitAnimationTransactions: elisionHasExplicitAnimationTransactions,
+      proposalChanged: proposalChanged,
+      frameInstant: frameInstant
+    ) {
+      return .elided
+    }
+    let draft = renderer.computeFrameHead(
+      root,
+      context: context,
+      proposal: proposal,
+      frameInstant: frameInstant,
+      mode: .abortable
+    )
+    return await RuntimeRenderPipeline().renderAsync(
+      head: draft,
+      handlers: AsyncRenderStageHandlers(
+        animationInjection: { draft in
+          renderer.injectAnimations(
+            into: draft,
+            mode: .abortable
+          )
+        },
+        commitElidedFrameIfOffscreen: renderer.makeCommitElidedFrameIfOffscreen(
+          elisionCauses: elisionCauses,
+          elisionHasExplicitAnimationTransactions: elisionHasExplicitAnimationTransactions,
+          proposalChanged: proposalChanged
+        ),
+        latePreferenceReconciliation: { draft in
+          switch await renderer.frameTailCoordinator.renderFrameTailLayoutStage(draft) {
+          case .cancelledBeforeStart:
+            // This path passes no cancellation strategy, so the layout stage
+            // has nothing to cancel against.
+            preconditionFailure("Non-cancellable frame tail unexpectedly cancelled.")
+          case .output(let layoutStage, _):
+            return .layout(layoutStage)
+          }
+        },
+        fusedFrameTail: { draft, layoutStage in
+          await renderer.frameTailCoordinator.renderFrameTailRasterStage(
+            draft: draft,
+            layoutStage: layoutStage
+          )
+        },
+        commit: { draft, tailOutput in
+          switch renderer.resolveCompletedFrameCandidate(
+            draft: draft,
+            tailOutput: tailOutput,
+            newestDesiredGeneration: draft.renderGeneration
+          ) {
+          case .committed(let artifacts, _):
+            return artifacts
+          case .dropped:
+            preconditionFailure("Non-cancellable frame unexpectedly dropped.")
+          case .skippedStaleBaseline:
+            // No event pump drives sibling commits on this path; a stale
+            // baseline here means an unexpected interleaved driver.
+            preconditionFailure("Non-cancellable frame had a stale baseline.")
+          }
+        }
+      )
+    )
+  }
+
+  /// Resolves `root` and prepares the shared frame head consumed by both the
+  /// synchronous one-shot renderer and the abortable async renderer.
+  ///
+  /// `mode` selects execution-strategy-specific head work: `.abortable`
+  /// captures the five-subsystem checkpoint bundle before each subsystem is
+  /// mutated, while `.oneShot` skips the checkpoint cost. Worker-safe indexed
+  /// child snapshotting happens after the animation-injection stage.
+  @MainActor
+  private func computeFrameHead<V: View>(
+    _ root: V,
+    context: ResolveContext,
+    proposal: ProposedSize,
+    frameInstant: MonotonicInstant,
+    mode: FrameHeadMode
+  ) -> FrameHeadDraft {
+    frameHeadCoordinator.computeFrameHead(
+      root,
+      context: context,
+      proposal: proposal,
+      frameInstant: frameInstant,
+      mode: mode
+    )
+  }
+
+  @MainActor
+  private func injectAnimations(
+    into draft: FrameHeadDraft,
+    mode: FrameHeadMode
+  ) -> FrameHeadDraft {
+    frameHeadCoordinator.injectAnimations(
+      into: draft,
+      mode: mode
+    )
+  }
+
+  // Visibility: file-internal (see note on `frameTailCoordinator`) so the
+  // test-only hooks can prepare a frame head directly.
+  @MainActor
+  func prepareFrameHead<V: View>(
+    _ root: V,
+    context: ResolveContext,
+    proposal: ProposedSize,
+    frameInstant: MonotonicInstant = .now()
+  ) -> FrameHeadDraft {
+    frameHeadCoordinator.prepareFrameHead(
+      root,
+      context: context,
+      proposal: proposal,
+      frameInstant: frameInstant
+    )
+  }
+
+  @MainActor
+  func storeCommittedPresentationPortalState() {
+    committedPresentationDismissStack.store(presentationPortalState.dismissStack())
+  }
+
+  /// Enables selective dirty-frontier evaluation for subsequent frames.
+  /// Call after the first full render has established the tree and
+  /// evaluator closures.
+  ///
+  /// WASI builds stay on full-root evaluation: JavaScriptCore executes wasm
+  /// calls on the host thread's native stack, and worker threads get a small
+  /// fraction of the main-thread budget (~1/16 in measurement). The selective
+  /// path re-enters stored evaluators, stacking a deeper per-level call
+  /// sandwich than a fresh root resolve — deep enough that the browser demo's
+  /// second frame overflowed the worker stack on WebKit while the first
+  /// (full-root) frame fit. Until frontier re-entry is depth-bounded, a wasm
+  /// frame must never be deeper than the boot frame; there is deliberately no
+  /// environment opt-in for WASI.
+  @MainActor
+  package func enableSelectiveEvaluation() {
+    guard !stackLeanResolveProfile else { return }
+    frameState.selectiveEvaluationEnabled = true
+  }
+
+  /// Forces the next render to use root evaluation regardless of whether
+  /// selective evaluation would otherwise apply.
+  @MainActor
+  package func forceRootEvaluation(
+    source: ForceRootEvaluationSource = .unattributed
+  ) {
+    frameState.forceRootEvaluation = true
+    frameState.forceRootEvaluationSources.insert(source)
+  }
+
+  /// Suppresses retained reuse for a scoped set of identities on the next
+  /// render. Finite focus/press scopes may be queued as graph-local dirty work
+  /// during frame head preparation; animation and identity-agnostic safety
+  /// scopes are paired with root evaluation by run-loop policy.
+  @MainActor
+  package func suppressRetainedReuseForNextFrame(
+    _ scope: RetainedReuseSuppressionScope
+  ) {
+    frameState.retainedReuseSuppressionScope = scope
+  }
+
+  /// Suppresses retained reuse for every reached node on the next render.
+  @MainActor
+  package func suppressRetainedReuseForNextFrame() {
+    suppressRetainedReuseForNextFrame(.all)
+  }
+
+  @MainActor
+  package func runtimeFocusStateDependentIdentities() -> Set<Identity> {
+    viewGraph.environmentDependentIdentities(
+      for: EnvironmentValues.runtimeFocusStateDependencyKeys
+    )
+  }
+
+  /// Whether the control at `identity` declared focus-presentation-inert
+  /// slots — see `ViewGraph.hasFocusPresentationInertSlots(for:)`.
+  @MainActor
+  package func hasFocusPresentationInertSlots(for identity: Identity) -> Bool {
+    viewGraph.hasFocusPresentationInertSlots(for: identity)
+  }
+
+  /// Whether any node on the root path to `identity` consulted the
+  /// runtime-focus side-fields during its last evaluation in a way a move
+  /// onto/off `identity` can affect — the predicate that keeps a focus/press
+  /// move's old/new identity a FULL suppression member. A path free of
+  /// affected readers demotes it to a chrome-only member: its focus
+  /// presentation is host-side chrome (semantic snapshot + tracker), no
+  /// resolve output on that path can vary with the move. Target-scoped
+  /// readers (`focusedIdentity(comparedAgainst:)`) count only when
+  /// `identity` is among their declared comparison targets.
+  @MainActor
+  package func hasRuntimeFocusReaderOnPath(to identity: Identity) -> Bool {
+    viewGraph.hasRuntimeFocusReaderOnPath(
+      affecting: identity,
+      broadKey: EnvironmentValues.runtimeFocusSideFieldReadDependencyKey,
+      targetScopedKey: EnvironmentValues.runtimeFocusTargetScopedReadDependencyKey
+    )
+  }
+
+  /// Identities of the `@FocusedValue`/`@FocusedBinding` readers, derived from the
+  /// focused-value reader attribution recorded during resolve. Single-pass
+  /// focus-sync invalidates exactly these on a pure focused-value change so the
+  /// readers re-resolve next frame while sibling subtrees stay reused.
+  @MainActor
+  package func focusedValuesDependentIdentities() -> Set<Identity> {
+    viewGraph.environmentDependentIdentities(
+      for: EnvironmentValues.focusedValuesDependencyKeys
+    )
+  }
+
+  @MainActor
+  package func liveIdentitySnapshot() -> Set<Identity> {
+    viewGraph.liveIdentitySnapshot()
+  }
+
+  /// Whether the queue boundary can still resolve an invalidation of
+  /// `identity` onto graph work (a live node, or a nearest-live-ancestor
+  /// remap). See `ViewGraph.hasLiveInvalidationTarget(for:)`.
+  @MainActor
+  package func hasLiveInvalidationTarget(for identity: Identity) -> Bool {
+    viewGraph.hasLiveInvalidationTarget(for: identity)
+  }
+
+  /// Resolves a rerender pass's invalidation set onto live graph targets:
+  /// identities are first translated through the presentation-portal mapping
+  /// (an overlay-hosted identity resolves to its live host, exactly as the
+  /// frame head would translate them), then filtered to identities the queue
+  /// boundary can still resolve — a live node, or a departed identity with a
+  /// live ancestor that `ViewGraph.nodeIDsForInvalidation` remaps at queue
+  /// time (keeping the departed identity itself in the set preserves its
+  /// narrow ancestor-chain reuse-denial cone). A raw liveness filter would
+  /// silently drop portal-translatable identities; see ``RunLoop``
+  /// `rerenderScheduledFrame(from:convergence:)` for why dropping the
+  /// no-live-ancestor remainder is sound there.
+  @MainActor
+  package func rerenderInvalidationTargets(
+    _ identities: Set<Identity>,
+    contentRootIdentity: Identity
+  ) -> Set<Identity> {
+    let translated = viewGraph.translatePresentationPortalInvalidations(
+      identities,
+      portalRootIdentity: presentationPortalIdentity(for: contentRootIdentity)
+    )
+    return translated.filter { viewGraph.hasLiveInvalidationTarget(for: $0) }
+  }
+
+  /// Filters a focus-sync rerender's RE-CARRIED original invalidation set:
+  /// live presentation trigger leaves are dropped. The trigger is a
+  /// childless zero-size leaf whose activation read was fully consumed by
+  /// the pass that already resolved it — there is no subtree under it for
+  /// the re-carry's conflict cone to protect, and its body reads only the
+  /// presentation activation state, which cannot change between passes of
+  /// the same frame (state writes route through the scheduler to the next
+  /// frame). Re-carrying it re-queues it dirty, and a queued-dirty
+  /// declared-source emitter makes the frame head predict a portal
+  /// reconcile escalation — rooting the whole rerender pass at the portal
+  /// and re-resolving background + overlay a second time per open. Callers
+  /// must never apply this to mid-frame relocation invalidations: a genuine
+  /// mid-frame activation change (a `@FocusState`-derived binding) reaches
+  /// the trigger through reader attribution on that set and must re-dirty
+  /// it.
+  @MainActor
+  package func droppingInertPresentationTriggerLeaves(
+    from identities: Set<Identity>
+  ) -> Set<Identity> {
+    identities.filter { identity in
+      !viewGraph.isChildlessLeaf(
+        identity,
+        kind: .view(PresentationTriggerLeafNode.kindName)
+      )
+    }
+  }
+
+  @MainActor
+  package func liveNodeIDSnapshot() -> Set<ViewNodeID> {
+    viewGraph.liveNodeIDSnapshot()
+  }
+
+  @MainActor
+  package func setFrameTailRenderHooks(
+    _ hooks: FrameTailRenderHooks?
+  ) {
+    frameTailRenderer.setRenderHooks(hooks)
+  }
+
+  @MainActor
+  package func setFrameRenderSuspensionHooks(
+    _ hooks: FrameRenderSuspensionHooks?
+  ) {
+    frameTailRenderer.setRenderSuspensionHooks(hooks)
+  }
+
+  /// The number of frames that have been recorded as elided (off-screen).
+  /// Starts at zero; incremented by ``recordElidedFrame()``.
+  @MainActor
+  package var elidedFrameCount: Int {
+    elidedFrameCounter.count
+  }
+
+  /// Records one elided frame, incrementing ``elidedFrameCount``.
+  /// Called from the run loop's elided-frame path (the `.elided` arm in
+  /// `renderPendingFramesAsync`) when a frame is skipped because all drawn
+  /// identities are off-screen.
+  @MainActor
+  package func recordElidedFrame() {
+    elidedFrameCounter.increment()
+  }
+
+  @MainActor
+  package func setElidedFrameTimingDiagnosticsEnabled(_ isEnabled: Bool) {
+    elidedFrameTimingRecorder.isEnabled = isEnabled
+  }
+
+  @MainActor
+  package var elidedFrameTimings: ElidedFrameTimings {
+    elidedFrameTimingRecorder.snapshot
+  }
+}

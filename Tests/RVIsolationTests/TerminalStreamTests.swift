@@ -161,6 +161,46 @@ struct TerminalStreamTests {
         #expect(WorkspaceControlCodec.decode(oversizedBytes) == .invalid)
     }
 
+    @Test func denialDetailRoundTripsAndOversizeFailsClosed() {
+        let denial = WorkspaceControlMessage.error(
+            id: UUID(), op: WorkspaceControlOp.launchRuntime.rawValue,
+            code: .resourceStagingFailed, detail: "executable link 'grok'"
+        )
+        guard let encoded = WorkspaceControlCodec.encode(denial),
+            case .message(let decoded) = WorkspaceControlCodec.decode(encoded)
+        else {
+            Issue.record("denial detail should round-trip")
+            return
+        }
+        #expect(decoded.error == WorkspaceControlCode.resourceStagingFailed.rawValue)
+        #expect(decoded.detail == "executable link 'grok'")
+
+        let oversized = WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            id: UUID(),
+            op: WorkspaceControlOp.launchRuntime.rawValue,
+            ok: false,
+            error: WorkspaceControlCode.resourceStagingFailed.rawValue,
+            detail: String(repeating: "x", count: WorkspaceControlLimits.maxDetailBytes + 1)
+        )
+        guard let oversizedBytes = WorkspaceControlCodec.encode(oversized) else {
+            Issue.record("oversize denial test frame should fit the control frame")
+            return
+        }
+        #expect(WorkspaceControlCodec.decode(oversizedBytes) == .invalid)
+
+        // The error constructor clamps: a hand-built overlong detail
+        // never leaves the host, and control bytes never reach chrome.
+        let clamped = WorkspaceControlMessage.error(
+            id: UUID(), op: WorkspaceControlOp.launchRuntime.rawValue,
+            code: .resourceStagingFailed,
+            detail: "credential 'a\u{07}b" + String(repeating: "x", count: 200)
+        )
+        let text = clamped.detail ?? ""
+        #expect(text.contains("\u{07}") == false)
+        #expect(text.utf8.count <= WorkspaceControlLimits.maxDetailBytes)
+    }
+
     #if os(Linux)
     @Test func linuxContainedTerminalLaunchStaysRefused() async throws {
         let tree = try ContainmentTree()

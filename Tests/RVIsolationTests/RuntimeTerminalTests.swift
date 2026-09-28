@@ -117,6 +117,39 @@ struct RuntimeTerminalTests {
         #expect(terminal.hasInputOwner == false)
     }
 
+    @Test func resizePublishesActualWindowOnlyToOptedInSubscribers() throws {
+        let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
+        let slave = try openSlave(terminal.slavePath)
+        defer {
+            close(slave)
+            terminal.shutdownMaster()
+        }
+        terminal.startReader()
+        let owner = NoticeBox()
+        let observer = NoticeBox()
+        let legacy = NoticeBox()
+        let ownerID = UUID()
+        let observerID = UUID()
+        let legacyID = UUID()
+        #expect(terminal.subscribe(client: ownerID, emit: owner.append, windowNotices: true).isSuccess)
+        #expect(terminal.subscribe(client: observerID, emit: observer.append, windowNotices: true).isSuccess)
+        #expect(terminal.subscribe(client: legacyID, emit: legacy.append).isSuccess)
+        terminal.activate(client: ownerID)
+        terminal.activate(client: observerID)
+        terminal.activate(client: legacyID)
+        #expect(terminal.acquireInput(client: ownerID).isSuccess)
+        #expect(terminal.resize(client: observerID, rows: 17, columns: 53).isFailure)
+        #expect(terminal.resize(client: ownerID, rows: 17, columns: 53).isSuccess)
+        #expect(waitUntil(seconds: 3) {
+            owner.notices.contains(.window(rows: 17, columns: 53))
+                && observer.notices.contains(.window(rows: 17, columns: 53))
+        })
+        Thread.sleep(forTimeInterval: 0.2)
+        #expect(legacy.notices.contains { if case .window = $0 { true } else { false } } == false)
+        #expect(terminal.window().rows == 17)
+        #expect(terminal.window().columns == 53)
+    }
+
     @Test func replayKeepsOnlyTheRecentSuffixAndLiveBytesFollow() throws {
         let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
         let slave = try openSlave(terminal.slavePath)
@@ -142,7 +175,47 @@ struct RuntimeTerminalTests {
         #expect(payload.suffix(replay.count) == replay)
         #expect(late.bytes.starts(with: replay))
         #expect(late.sequences == late.sequences.sorted())
+        let notices = late.notices
+        guard let first = notices.first,
+            case .replayBegin(let batch, let truncated, let byteCount) = first else {
+            Issue.record("replay must declare its batch before retained bytes")
+            return
+        }
+        #expect(truncated)
+        #expect(byteCount == replay.count)
+        let end = notices.firstIndex { notice in
+            if case .replayEnd(let candidate) = notice { return candidate == batch }
+            return false
+        }
+        let live = notices.firstIndex { notice in
+            if case .output = notice { return true }
+            return false
+        }
+        #expect(end != nil)
+        #expect(live != nil)
+        if let end, let live { #expect(end < live) }
         terminal.finish(status: 0)
+    }
+
+    @Test func emptyAttachmentStillDeclaresAReplayBatch() throws {
+        let terminal = try #require(RuntimeTerminal.open(rows: 24, columns: 80))
+        defer { terminal.shutdownMaster() }
+        let box = NoticeBox()
+        let client = UUID()
+        #expect(terminal.subscribe(client: client, emit: box.append).isSuccess)
+        terminal.activate(client: client)
+        #expect(waitUntil(seconds: 2) { box.notices.count >= 2 })
+        let notices = box.notices
+        guard notices.count >= 2,
+            case .replayBegin(let batch, let truncated, let byteCount) = notices[0],
+            case .replayEnd(let endBatch) = notices[1]
+        else {
+            Issue.record("empty replay must have begin and end markers")
+            return
+        }
+        #expect(batch == endBatch)
+        #expect(truncated == false)
+        #expect(byteCount == 0)
     }
 
     @Test func slowSubscriberIsDroppedAndDoesNotStallTheReader() throws {
@@ -290,9 +363,13 @@ struct RuntimeTerminalTests {
         #expect(ioctl(slave, TIOCGWINSZ, &size) == 0)
         #expect(size.ws_row == 24)
         #expect(size.ws_col == 80)
-        #expect(terminal.resize(rows: 0, columns: 80).isFailure)
-        #expect(terminal.resize(rows: 24, columns: 513).isFailure)
-        #expect(terminal.resize(rows: 40, columns: 120).isSuccess)
+        let client = UUID()
+        #expect(terminal.subscribe(client: client, emit: { _ in true }).isSuccess)
+        terminal.activate(client: client)
+        #expect(terminal.acquireInput(client: client).isSuccess)
+        #expect(terminal.resize(client: client, rows: 0, columns: 80).isFailure)
+        #expect(terminal.resize(client: client, rows: 24, columns: 513).isFailure)
+        #expect(terminal.resize(client: client, rows: 40, columns: 120).isSuccess)
         #expect(ioctl(slave, TIOCGWINSZ, &size) == 0)
         #expect(size.ws_row == 40)
         #expect(size.ws_col == 120)
@@ -475,6 +552,8 @@ struct RuntimeTerminalTests {
         ).get()
         #expect(waitUntil(seconds: 20) { FileManager.default.fileExists(atPath: initial.path) })
         #expect(try String(contentsOf: initial, encoding: .utf8).contains("24 80"))
+        #expect(client.subscribeTerminal(runtime.runtime).isSuccess)
+        #expect(client.acquireTerminalInput(runtime.runtime).isSuccess)
         #expect(client.resizeTerminal(runtime.runtime, rows: 0, columns: 80).isFailure(.invalidRequest))
         #expect(client.resizeTerminal(runtime.runtime, rows: 24, columns: 513).isFailure(.invalidRequest))
         #expect(client.resizeTerminal(runtime.runtime, rows: 40, columns: 100).isSuccess)
@@ -485,6 +564,41 @@ struct RuntimeTerminalTests {
         let text = (try? String(contentsOf: resized, encoding: .utf8)) ?? ""
         #expect(text.contains("40 100"))
         #expect(text.contains("signal 1"))
+    }
+
+    @Test func onlyInputLeaseOwnerCanResizeTerminal() throws {
+        let opened = try PTYHost()
+        defer { opened.close() }
+        let owner = try WorkspaceClient.connect(opened.server.endpoint).get()
+        let observer = try WorkspaceClient.connect(opened.server.endpoint).get()
+        let runtime = try owner.launchRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 30"],
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        #expect(owner.subscribeTerminal(runtime.runtime).isSuccess)
+        #expect(observer.subscribeTerminal(runtime.runtime).isSuccess)
+
+        #expect(observer.resizeTerminal(runtime.runtime, rows: 40, columns: 100).isFailure(.terminalBusy))
+        #expect(owner.acquireTerminalInput(runtime.runtime).isSuccess)
+        #expect(owner.resizeTerminal(runtime.runtime, rows: 40, columns: 100).isSuccess)
+        var actual = try #require(observer.listRuntimes().get().first { $0.runtime == runtime.runtime })
+        #expect(actual.rows == 40)
+        #expect(actual.columns == 100)
+
+        #expect(observer.resizeTerminal(runtime.runtime, rows: 50, columns: 120).isFailure(.terminalBusy))
+        actual = try #require(observer.listRuntimes().get().first { $0.runtime == runtime.runtime })
+        #expect(actual.rows == 40)
+        #expect(actual.columns == 100)
+
+        #expect(owner.releaseTerminalInput(runtime.runtime).isSuccess)
+        #expect(observer.acquireTerminalInput(runtime.runtime).isSuccess)
+        #expect(owner.resizeTerminal(runtime.runtime, rows: 60, columns: 130).isFailure(.terminalBusy))
+        #expect(observer.resizeTerminal(runtime.runtime, rows: 50, columns: 120).isSuccess)
+        actual = try #require(owner.listRuntimes().get().first { $0.runtime == runtime.runtime })
+        #expect(actual.rows == 50)
+        #expect(actual.columns == 120)
     }
 
     @Test func twoViewersDetachReattachAndKeepInputExclusive() throws {
@@ -568,35 +682,6 @@ struct RuntimeTerminalTests {
         #expect(activeTerminals.count == 1)
         #expect(activeTerminals.first?.runtime == results.first?.runtime)
         #expect(clients[0].cancelRuntime(results[0].runtime).isSuccess)
-    }
-
-    @Test func legacyEnsureFallbackLockSerializesCallers() {
-        let probe = CriticalSectionProbe()
-        DispatchQueue.concurrentPerform(iterations: 4) { _ in
-            _ = LegacyTerminalEnsureLock.withLock {
-                probe.enter()
-                Thread.sleep(forTimeInterval: 0.02)
-                probe.leave()
-            }
-        }
-
-        #expect(probe.maximumConcurrency == 1)
-        #expect(probe.entries == 4)
-    }
-
-    @Test func legacyEnsureFallbackLockUsesAPrivateDirectory() throws {
-        let fd = try #require(LegacyTerminalEnsureLock.acquire())
-        defer { LegacyTerminalEnsureLock.release(fd) }
-        var directory = stat()
-        #expect(LegacyTerminalEnsureLock.directoryPath.withCString { lstat($0, &directory) } == 0)
-        #expect(directory.st_uid == getuid())
-        #expect((directory.st_mode & S_IFMT) == S_IFDIR)
-        #expect((directory.st_mode & 0o777) == 0o700)
-        var file = stat()
-        #expect(LegacyTerminalEnsureLock.lockPath.withCString { lstat($0, &file) } == 0)
-        #expect(file.st_uid == getuid())
-        #expect((file.st_mode & S_IFMT) == S_IFREG)
-        #expect((file.st_mode & 0o777) == 0o600)
     }
 
     @Test func inputReachesOnlyTheAddressedRuntime() throws {
@@ -1222,6 +1307,8 @@ private final class NoticeBox: Sendable {
         return true
     }
 
+    var notices: [TerminalNotice] { box.withLock { $0 } }
+
     var bytes: Data {
         let copy = box.withLock { $0 }
         return copy.reduce(into: Data()) { partial, notice in
@@ -1440,7 +1527,7 @@ private func readUntil(_ client: WorkspaceClient, contains needle: Data, seconds
                 if data.contains(needle) { return data }
             case .exited:
                 return data
-            case .overflow, .inputOwner:
+            case .overflow, .inputOwner, .replayBegin, .replayEnd, .window:
                 break
             }
         }
@@ -1519,39 +1606,6 @@ private final class RuntimeReportBox: @unchecked Sendable {
     func append(_ report: WorkspaceRuntimeReport) {
         lock.lock()
         reports.append(report)
-        lock.unlock()
-    }
-}
-
-private final class CriticalSectionProbe: @unchecked Sendable {
-    private let lock = NSLock()
-    private var active = 0
-    private var maximum = 0
-    private var entryCount = 0
-
-    var maximumConcurrency: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return maximum
-    }
-
-    var entries: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return entryCount
-    }
-
-    func enter() {
-        lock.lock()
-        active += 1
-        entryCount += 1
-        maximum = max(maximum, active)
-        lock.unlock()
-    }
-
-    func leave() {
-        lock.lock()
-        active -= 1
         lock.unlock()
     }
 }

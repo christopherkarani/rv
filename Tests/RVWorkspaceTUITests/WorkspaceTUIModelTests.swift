@@ -18,6 +18,7 @@ final class FakeWorkspaceSession: WorkspaceTUISession, @unchecked Sendable {
     private var storedWrites: [(UUID, Data)] = []
     private var storedCancels: [UUID] = []
     private var storedSubscribes: [UUID] = []
+    private var storedResubscribes: [UUID] = []
     private var storedUnsubscribes: [UUID] = []
     private var storedAcquires: [UUID] = []
     private var storedReleases: [UUID] = []
@@ -25,6 +26,7 @@ final class FakeWorkspaceSession: WorkspaceTUISession, @unchecked Sendable {
     private var storedDetached = false
     private var storedEvents: [WorkspaceTUIEvent] = []
     private var storedLaunchAttempts = 0
+    private var storedLaunchedParams: [(executable: String, hook: String?, resourceProfileID: String?)] = []
     private var launchesToBlock = 0
     private var writesToBlock = 0
     private var resizesToBlock = 0
@@ -82,12 +84,16 @@ final class FakeWorkspaceSession: WorkspaceTUISession, @unchecked Sendable {
     var writes: [(UUID, Data)] { withLock { storedWrites } }
     var cancels: [UUID] { withLock { storedCancels } }
     var subscribes: [UUID] { withLock { storedSubscribes } }
+    var resubscribes: [UUID] { withLock { storedResubscribes } }
     var unsubscribes: [UUID] { withLock { storedUnsubscribes } }
     var acquires: [UUID] { withLock { storedAcquires } }
     var releases: [UUID] { withLock { storedReleases } }
     var resizes: [(UUID, Int, Int)] { withLock { storedResizes } }
     var detached: Bool { withLock { storedDetached } }
     var launchAttempts: Int { withLock { storedLaunchAttempts } }
+    var launchedParams: [(executable: String, hook: String?, resourceProfileID: String?)] {
+        withLock { storedLaunchedParams }
+    }
     var events: [WorkspaceTUIEvent] {
         get { withLock { storedEvents } }
         set { withLock { storedEvents = newValue } }
@@ -100,6 +106,12 @@ final class FakeWorkspaceSession: WorkspaceTUISession, @unchecked Sendable {
             protected: true,
             workspace: UUID()
         )
+    }
+
+    func reconnect() -> Result<Void, WorkspaceTUIError> {
+        // No model caller yet; the conformance keeps the fake compiling
+        // while reconnect integration is pending.
+        .success(())
     }
 
     func inventory() -> Result<SessionInventory, WorkspaceTUIError> {
@@ -125,6 +137,20 @@ final class FakeWorkspaceSession: WorkspaceTUISession, @unchecked Sendable {
         return .owned
     }
 
+    func observe(_ id: UUID) -> SessionAttachOutcome {
+        let (fails, disconnected) = withLock {
+            storedSubscribes.append(id)
+            return (storedFailSubscribe, storedDisconnectOnAttach)
+        }
+        if disconnected { return .disconnected }
+        return fails ? .unavailable : .readOnly
+    }
+
+    func releaseInput(_ id: UUID) -> Result<Void, WorkspaceTUIError> {
+        withLock { storedReleases.append(id) }
+        return .success(())
+    }
+
     func reacquire(_ id: UUID) -> SessionAttachOutcome {
         let busy = withLock {
             if storedBusyInput { return true }
@@ -132,6 +158,18 @@ final class FakeWorkspaceSession: WorkspaceTUISession, @unchecked Sendable {
             return false
         }
         return busy ? .readOnly : .owned
+    }
+
+    func resubscribe(_ id: UUID) -> SessionAttachOutcome {
+        let (fails, busy, disconnected) = withLock {
+            storedResubscribes.append(id)
+            return (storedFailSubscribe, storedBusyInput, storedDisconnectOnAttach)
+        }
+        if disconnected { return .disconnected }
+        if fails { return .unavailable }
+        if busy { return .readOnly }
+        withLock { storedAcquires.append(id) }
+        return .owned
     }
 
     func launch(
@@ -157,12 +195,28 @@ final class FakeWorkspaceSession: WorkspaceTUISession, @unchecked Sendable {
         return .success(runtime)
     }
 
+    func launch(
+        executable: String,
+        arguments: [String],
+        hook: String?,
+        rows: Int,
+        columns: Int,
+        resourceProfileID: String?
+    ) -> Result<ListedRuntime, WorkspaceTUIError> {
+        withLock { storedLaunchedParams.append((executable, hook, resourceProfileID)) }
+        return launch(
+            executable: executable, arguments: arguments, hook: hook,
+            rows: rows, columns: columns
+        )
+    }
+
     func ensureTerminal(
         executable: String,
         arguments: [String],
         hook: String?,
         rows: Int,
-        columns: Int
+        columns: Int,
+        resourceProfileID: String?
     ) -> Result<ListedRuntime, WorkspaceTUIError> {
         if case .success(let inventoried) = inventory(),
             let existing = inventoried.terminals
@@ -176,7 +230,8 @@ final class FakeWorkspaceSession: WorkspaceTUISession, @unchecked Sendable {
             arguments: arguments,
             hook: hook,
             rows: rows,
-            columns: columns
+            columns: columns,
+            resourceProfileID: resourceProfileID
         )
     }
 
@@ -360,6 +415,24 @@ private func model(_ session: FakeWorkspaceSession) -> WorkspaceTUIModel {
     #expect(shell.snapshot().mode == .terminal)
 }
 
+@Test func overflowResubscribesThroughTheSession() throws {
+    // Recovery must tear down stale subscription state (a bare subscribe
+    // would leave the client's swallow-output mark set and the pane dark).
+    let session = FakeWorkspaceSession()
+    let attached = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    session.runtimes = [
+        ListedRuntime(id: attached, hook: nil, running: true, terminal: true),
+    ]
+    let shell = model(session)
+    try shell.connect().get()
+    let subscribesBefore = session.subscribes.count
+    shell.apply([.overflow(runtime: attached)])
+    #expect(session.resubscribes == [attached])
+    #expect(session.subscribes.count == subscribesBefore)
+    #expect(shell.snapshot().terminal?.subscribed == true)
+    #expect(shell.snapshot().terminal?.lease == .owned)
+}
+
 @Test func failedLaunchDoesNotCreateATerminal() throws {
     let session = FakeWorkspaceSession()
     let shell = model(session)
@@ -491,6 +564,32 @@ private func model(_ session: FakeWorkspaceSession) -> WorkspaceTUIModel {
     shell.launchDefaultRuntimeIfEmpty()
     Thread.sleep(forTimeInterval: 0.05)
     #expect(session.launchAttempts == 1)
+}
+
+@Test func defaultShellVariantReachesEnsureWithItsProfile() throws {
+    let session = FakeWorkspaceSession()
+    let variant = RuntimeLaunchChoice(
+        id: "shell:docs", title: "shell · docs (default)", executable: "/bin/sh",
+        arguments: [], hook: nil, resourceProfileID: "docs"
+    )
+    let shell = WorkspaceTUIModel(
+        session: session,
+        emulators: RecordingFactory(),
+        summary: session.summary,
+        launcher: [
+            RuntimeLaunchChoice(id: "shell", title: "shell", executable: "/bin/sh", arguments: [], hook: nil),
+            variant,
+        ],
+        defaultShellID: "shell:docs"
+    )
+    try shell.connect().get()
+
+    shell.launchDefaultRuntimeIfEmpty()
+
+    #expect(session.launchAttempts == 1)
+    #expect(session.launchedParams.count == 1)
+    #expect(session.launchedParams.first?.resourceProfileID == "docs")
+    #expect(shell.snapshot().terminal?.title == "shell · docs (default)")
 }
 
 @Test func defaultShellDoesNotLaunchWhenAnExistingRuntimeIsAttached() throws {
@@ -719,8 +818,8 @@ private func model(_ session: FakeWorkspaceSession) -> WorkspaceTUIModel {
     #expect(waitForModel { session.writes.count == 1 })
     #expect(session.writes.first?.0 == runtime)
     #expect(session.writes.first?.1 == Data("A".utf8))
-    shell.handle(.control("g"))
-    shell.handle(.character("d"))
+    shell.handle(.control("b"))
+    shell.handle(.character("q"))
     #expect(shell.snapshot().shouldExit)
     #expect(session.detached == false)
     shell.detachSession()
@@ -1014,3 +1113,57 @@ private func waitForModel(
     }
 }
 
+@Test func profiledRunCommandKeepsHookNilAndTitlesByBasename() throws {
+    // Ad-hoc launches never infer hook identity: the run box sets only the
+    // explicit profile, and the pane title stays the executable basename.
+    let session = FakeWorkspaceSession()
+    let shell = WorkspaceTUIModel(
+        session: session,
+        emulators: RecordingFactory(),
+        summary: session.summary,
+        launcher: [
+            RuntimeLaunchChoice(id: "shell", title: "shell", executable: "/bin/sh", arguments: [], hook: nil),
+            RuntimeLaunchChoice(id: "run", title: "Run command…", executable: "", arguments: [], hook: nil),
+        ]
+    )
+    try shell.connect().get()
+    shell.handle(.control("b"))
+    shell.handle(.character("a"))
+    #expect(shell.snapshot().mode == .launcher)
+    shell.handle(.character("2"))
+    #expect(shell.snapshot().mode == .runCommand(input: "", error: nil))
+    for character in "profile:docs /bin/sh" {
+        shell.handle(.character(character))
+    }
+    #expect(shell.snapshot().mode == .runCommand(input: "profile:docs /bin/sh", error: nil))
+    shell.handle(.enter)
+    #expect(waitForModel { session.launchedParams.count == 1 })
+    let launched = try #require(session.launchedParams.first)
+    #expect(launched.executable == "/bin/sh")
+    #expect(launched.hook == nil)
+    #expect(launched.resourceProfileID == "docs")
+    #expect(waitForModel { shell.snapshot().terminal?.title == "sh" })
+}
+
+@Test func hookSharingRuntimesStillRouteEventsByUUID() throws {
+    // Turn association is by runtime UUID only: a shared hook must not steer
+    // bytes, exits, or leases to the wrong pane.
+    let session = FakeWorkspaceSession()
+    let attached = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    let other = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+    session.runtimes = [
+        ListedRuntime(id: attached, hook: "opencode", running: true, terminal: true),
+        ListedRuntime(id: other, hook: "opencode", running: true, terminal: true),
+    ]
+    let shell = model(session)
+    try shell.connect().get()
+    shell.apply([
+        .bytes(runtime: other, data: Data("elsewhere".utf8)),
+        .exited(runtime: other, status: 3),
+        .inputOwner(runtime: other, owned: false),
+    ])
+    #expect(shell.snapshot().terminal?.runtime == attached)
+    #expect(shell.snapshot().terminal?.running == true)
+    #expect(shell.snapshot().terminal?.lease == .owned)
+    #expect(shell.snapshot().mode == .terminal)
+}

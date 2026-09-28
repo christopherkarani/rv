@@ -436,6 +436,169 @@ struct WorkspaceRecoveryTests {
         #expect(kinds.contains(.recoveryCompleted) == false)
         #expect(try String(contentsOf: tree.workspaceURL.appendingPathComponent("done.txt"), encoding: .utf8) == "ok")
     }
+
+    @Test func abandonBlockedConflictRestoresSavedAndDiscardsVolume() throws {
+        let tree = try ContainmentTree()
+        defer { cleanupVolume(in: tree) }
+        try Data("before\n".utf8).write(to: tree.workspaceURL.appendingPathComponent("original.txt"))
+        let logs = RecoveryLogs(tree: tree)
+        let opened = try openWorkspace(tree, logs: logs)
+        let id = opened.supervisor.id.rawValue
+        _ = try launch(opened, script: "printf 'after\\n' > original.txt; printf vol > only-on-volume.txt")
+        #expect(waitFor(tree.workspaceURL.appendingPathComponent("only-on-volume.txt")))
+        let created = try createdRecord(logs.life, workspace: id)
+        let savedFile = try #require(created.identity).savedPath.appendingPath("original.txt")
+        #expect(unlink(savedFile) == 0)
+        try Data("replaced".utf8).write(to: URL(fileURLWithPath: savedFile))
+        let device = opened.supervisor.volumeDevice
+        opened.supervisor.abandonForCrashSimulation()
+        let blocked = WorkspaceRecovery.recover(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime)
+        guard case .blocked(let block) = blocked, block.reason == .publicationConflict else {
+            Issue.record("conflict must block, got \(blocked)")
+            return
+        }
+        let outcome = WorkspaceRecovery.abandon(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime)
+        guard case .abandoned(let report) = outcome else {
+            Issue.record("abandon must succeed, got \(outcome)")
+            return
+        }
+        #expect(report.workspace == id)
+        #expect(report.volumePresent)
+        #expect(report.discardedCount == 2)
+        #expect(Set(report.discarded) == ["only-on-volume.txt", "original.txt"])
+        #expect(report.retainedCount == 0)
+        #expect(report.truncated == false)
+        #expect(try String(contentsOf: tree.workspaceURL.appendingPathComponent("original.txt"), encoding: .utf8) == "replaced")
+        #expect(FileManager.default.fileExists(atPath: tree.workspaceURL.appendingPathComponent("only-on-volume.txt").path) == false)
+        #expect(workspacePathIdentity(tree.workspaceURL.path)?.device != device)
+        let records = WorkspaceLifecycleLog.records(at: logs.life).filter { $0.workspace == id }
+        #expect(records.contains { $0.kind == .closed })
+        #expect(records.contains { $0.kind == .publicationCompleted } == false)
+        #expect(WorkspaceRecovery.recover(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime) == .clean)
+        #expect(WorkspaceRecovery.abandon(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime) == .refused(.notBlocked))
+        let reopened = try WorkspaceSessionSupervisor.open(
+            try workspace(tree),
+            lifecycleLog: .file(logs.life),
+            runtimeLog: logs.runtime
+        ).get()
+        defer { _ = reopened.close() }
+        #expect(reopened.id.rawValue != id)
+        #expect(try String(contentsOf: tree.workspaceURL.appendingPathComponent("original.txt"), encoding: .utf8) == "replaced")
+    }
+
+    @Test func abandonWithIdenticalContentReportsNothingDiscarded() throws {
+        let tree = try ContainmentTree()
+        defer { cleanupVolume(in: tree) }
+        try Data("shared".utf8).write(to: tree.workspaceURL.appendingPathComponent("target.txt"))
+        #expect(symlink("target.txt", tree.workspaceURL.appendingPathComponent("link").path) == 0)
+        let logs = RecoveryLogs(tree: tree)
+        let opened = try openWorkspace(tree, logs: logs)
+        let id = opened.supervisor.id.rawValue
+        let created = try createdRecord(logs.life, workspace: id)
+        let savedLink = try #require(created.identity).savedPath.appendingPath("link")
+        #expect(unlink(savedLink) == 0)
+        #expect(symlink("target.txt", savedLink) == 0)
+        opened.supervisor.abandonForCrashSimulation()
+        let blocked = WorkspaceRecovery.recover(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime)
+        guard case .blocked(let block) = blocked, block.reason == .publicationConflict else {
+            Issue.record("inode drift must block, got \(blocked)")
+            return
+        }
+        let outcome = WorkspaceRecovery.abandon(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime)
+        guard case .abandoned(let report) = outcome else {
+            Issue.record("abandon must succeed, got \(outcome)")
+            return
+        }
+        #expect(report.workspace == id)
+        #expect(report.volumePresent)
+        #expect(report.discardedCount == 0)
+        #expect(report.discarded.isEmpty)
+        #expect(report.retainedCount == 0)
+        #expect(report.truncated == false)
+        #expect(try String(contentsOf: tree.workspaceURL.appendingPathComponent("link"), encoding: .utf8) == "shared")
+        #expect(WorkspaceRecovery.recover(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime) == .clean)
+    }
+
+    @Test func abandonMissingVolumeRestoresSaved() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        try Data("keep".utf8).write(to: tree.workspaceURL.appendingPathComponent("keep.txt"))
+        let logs = RecoveryLogs(tree: tree)
+        let opened = try openWorkspace(tree, logs: logs)
+        let id = opened.supervisor.id.rawValue
+        let created = try createdRecord(logs.life, workspace: id)
+        let identity = try #require(created.identity)
+        opened.supervisor.abandonForCrashSimulation()
+        detach(identity.disk, mountPoint: tree.workspaceURL.path)
+        #expect(waitUntil(seconds: 5) {
+            workspacePathIdentity(tree.workspaceURL.path)?.device != identity.volumeDevice
+        })
+        let blocked = WorkspaceRecovery.recover(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime)
+        guard case .blocked(let block) = blocked, block.reason == .missingVolume else {
+            Issue.record("missing mount must block, got \(blocked)")
+            return
+        }
+        let outcome = WorkspaceRecovery.abandon(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime)
+        guard case .abandoned(let report) = outcome else {
+            Issue.record("abandon must succeed, got \(outcome)")
+            return
+        }
+        #expect(report.workspace == id)
+        #expect(report.volumePresent == false)
+        #expect(try String(contentsOf: tree.workspaceURL.appendingPathComponent("keep.txt"), encoding: .utf8) == "keep")
+        #expect(workspacePathIdentity(tree.workspaceURL.path)?.device != identity.volumeDevice)
+        #expect(WorkspaceRecovery.recover(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime) == .clean)
+    }
+
+    @Test func abandonRefusesLiveOwner() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        let opened = try openWorkspace(tree, logs: logs)
+        defer { _ = opened.supervisor.close() }
+        let running = try launch(opened, script: "printf owned > owned.txt; /bin/sleep 30")
+        #expect(waitFor(tree.workspaceURL.appendingPathComponent("owned.txt")))
+        let outcome = WorkspaceRecovery.abandon(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime)
+        #expect(outcome == .refused(.live))
+        let pid = try #require(running.session.child?.pid)
+        #expect(kill(pid, 0) == 0)
+        #expect(opened.supervisor.snapshot.phase == .active)
+    }
+
+    @Test func abandonRefusesUnrelatedMount() throws {
+        let tree = try ContainmentTree()
+        defer { cleanupVolume(in: tree) }
+        let logs = RecoveryLogs(tree: tree)
+        let opened = try openWorkspace(tree, logs: logs)
+        let device = opened.supervisor.volumeDevice
+        opened.supervisor.abandonForCrashSimulation()
+        let tampered = tree.rootURL.appendingPathComponent("tampered.jsonl")
+        try tamper(logs.life, into: tampered) { object in
+            object["volumeDevice"] = 1
+            var identity = object["identity"] as? [String: Any] ?? [:]
+            identity["volumeDevice"] = 1
+            identity["mountSource"] = "/dev/disk-not-rv"
+            object["identity"] = identity
+        }
+        let blocked = WorkspaceRecovery.recover(try workspace(tree), lifecycleLog: tampered, runtimeLog: logs.runtime)
+        guard case .blocked(let block) = blocked else {
+            Issue.record("unrelated mount must block, got \(blocked)")
+            return
+        }
+        #expect(
+            WorkspaceRecovery.abandon(try workspace(tree), lifecycleLog: tampered, runtimeLog: logs.runtime)
+                == .refused(.unsafeReason(block.reason))
+        )
+        #expect(workspacePathIdentity(tree.workspaceURL.path)?.device == device)
+    }
+
+    @Test func abandonWithoutAWorkspaceRefuses() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        let outcome = WorkspaceRecovery.abandon(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime)
+        #expect(outcome == .refused(.notBlocked))
+    }
 }
 
 private struct RecoveryLogs {

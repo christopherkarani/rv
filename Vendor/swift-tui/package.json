@@ -1,0 +1,23 @@
+{
+  "name": "swift-tui-workspace",
+  "private": true,
+  "version": "0.3.3",
+  "license": "MIT",
+  "scripts": {
+    "perf:bench": "swiftly run swift run -c release --package-path Tools/TermUIPerf termui-perf bench",
+    "perf:bench:update-baseline": "swiftly run swift run -c release --package-path Tools/TermUIPerf termui-perf bench --update-baseline",
+    "perf:compare": "swiftly run swift run -c release --package-path Tools/TermUIPerf termui-perf compare",
+    "perf:list": "swiftly run swift run --package-path Tools/TermUIPerf termui-perf list-scenarios",
+    "perf:run": "swiftly run swift run -c release --package-path Tools/TermUIPerf termui-perf run",
+    "test": "sh ./Scripts/test_gate.sh",
+    "test:gate": "sh ./Scripts/test_gate.sh",
+    "test:clean": "sh ./Scripts/test_gate.sh --clean",
+    "test:all": "sh ./Scripts/test_all.sh",
+    "test:all:clean": "sh ./Scripts/test_all.sh --clean",
+    "test:coverage": "sh ./Scripts/report_test_coverage.sh"
+  },
+  "workspaces": [],
+  "devDependencies": {
+    "yaml": "^2.9.0"
+  }
+}

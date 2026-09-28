@@ -3,6 +3,15 @@ import Darwin
 import Foundation
 import Synchronization
 
+/// Upgrade cleanup only. New launches never stage credentials in a workspace.
+private enum LegacyAgentHomeLinks {
+    static let paths = [
+        ".codex/auth.json", ".codex/config.toml", ".config/muse/auth.json",
+        ".claude/.credentials.json", ".claude/settings.json", ".claude/settings.local.json",
+        ".local/share/opencode/auth.json",
+    ]
+}
+
 /// Identity of one workspace name, captured before the contained process runs.
 struct WorkspaceInodeStamp: Equatable, Sendable {
     var device: UInt64
@@ -221,14 +230,14 @@ final class WorkspaceInodeBoundary {
     /// decision.
     func scrubHostStagedAgentHomes() {
         let manager = FileManager.default
-        for link in AgentHomeStaging.credentialLinks {
-            guard snapshot[link.relative] == nil else { continue }
-            let path = "\(workspacePath)/\(link.relative)"
+        for relative in LegacyAgentHomeLinks.paths {
+            guard snapshot[relative] == nil else { continue }
+            let path = "\(workspacePath)/\(relative)"
             guard (try? manager.destinationOfSymbolicLink(atPath: path)) != nil else { continue }
             try? manager.removeItem(atPath: path)
         }
-        guard snapshot[AgentHomeStaging.cageDirectoryName] == nil else { return }
-        try? manager.removeItem(atPath: "\(workspacePath)/\(AgentHomeStaging.cageDirectoryName)")
+        guard snapshot[".rv-cage"] == nil else { return }
+        try? manager.removeItem(atPath: "\(workspacePath)/.rv-cage")
     }
 
     /// Copy volume contents onto the original inodes, then put that directory
@@ -456,7 +465,7 @@ final class WorkspaceInodeBoundary {
             guard let source = openVolume(relative, directory: false), source >= 0 else { return false }
             defer { close(source) }
             guard let dest = openSaved(relative, directory: false, writable: true), dest >= 0 else {
-                return false
+                return updateReadOnlySaved(relative, from: source, captured: captured, mode: entry.mode)
             }
             defer { close(dest) }
             var status = stat()
@@ -482,6 +491,80 @@ final class WorkspaceInodeBoundary {
                 target.withCString { link in
                     symlinkat(link, parent.fd, name) == 0
                 }
+            }
+        }
+    }
+
+    /// Copy back onto a saved file that refuses `O_RDWR`, such as the mode-444
+    /// files dependency managers ship. Untouched content needs no write at
+    /// all; edited content takes a momentary owner-write bit that the final
+    /// chmod restores, so the mode survives the round trip. The inode is
+    /// never replaced, and every open re-verifies the captured identity, so
+    /// the authority check keeps its meaning. A failure after the mode bit
+    /// is set leaves content intact with owner-write added; the next publish
+    /// takes the writable path and restores the volume mode.
+    private func updateReadOnlySaved(
+        _ relative: String,
+        from source: Int32,
+        captured: WorkspaceInodeStamp,
+        mode: mode_t
+    ) -> Bool {
+        guard let parent = savedParent(relative) else { return false }
+        defer { close(parent.fd) }
+        let readOnly = parent.name.withCString { name in
+            openat(parent.fd, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        }
+        guard readOnly >= 0 else { return false }
+        defer { close(readOnly) }
+        var status = stat()
+        guard fstat(readOnly, &status) == 0, acceptableSavedInode(captured, status) else {
+            return false
+        }
+        guard let same = savedContentsEqual(source, readOnly) else { return false }
+        if same {
+            if modeBits(status.st_mode) == mode { return true }
+            return fchmod(readOnly, mode) == 0
+        }
+        guard fchmod(readOnly, modeBits(status.st_mode) | 0o200) == 0 else { return false }
+        let dest = parent.name.withCString { name in
+            openat(parent.fd, name, O_RDWR | O_NOFOLLOW | O_CLOEXEC)
+        }
+        guard dest >= 0 else { return false }
+        defer { close(dest) }
+        var fresh = stat()
+        guard fstat(dest, &fresh) == 0, acceptableSavedInode(captured, fresh) else { return false }
+        guard lseek(source, 0, SEEK_SET) == 0 else { return false }
+        guard ftruncate(dest, 0) == 0 else { return false }
+        guard fcopyfile(source, dest, nil, copyfile_flags_t(COPYFILE_DATA | COPYFILE_XATTR)) == 0
+        else { return false }
+        return fchmod(dest, mode) == 0
+    }
+
+    /// Byte-compare two descriptors from their starts. Nil when either side
+    /// is unreadable. Leaves both offsets at end-of-file.
+    private func savedContentsEqual(_ left: Int32, _ right: Int32) -> Bool? {
+        guard lseek(left, 0, SEEK_SET) == 0, lseek(right, 0, SEEK_SET) == 0 else { return nil }
+        var leftBuffer = [UInt8](repeating: 0, count: 64 * 1024)
+        var rightBuffer = [UInt8](repeating: 0, count: 64 * 1024)
+        while true {
+            let leftCount = readDescriptor(left, into: &leftBuffer)
+            let rightCount = readDescriptor(right, into: &rightBuffer)
+            guard leftCount >= 0, rightCount >= 0 else { return nil }
+            guard leftCount == rightCount else { return false }
+            if leftCount == 0 { return true }
+            guard leftBuffer.prefix(leftCount).elementsEqual(rightBuffer.prefix(rightCount)) else {
+                return false
+            }
+        }
+    }
+
+    private func readDescriptor(_ fd: Int32, into buffer: inout [UInt8]) -> Int {
+        buffer.withUnsafeMutableBytes { raw -> Int in
+            guard let base = raw.baseAddress else { return -1 }
+            while true {
+                let count = read(fd, base, raw.count)
+                if count < 0, errno == EINTR { continue }
+                return count
             }
         }
     }
@@ -1150,7 +1233,7 @@ func copyTree(
     return true
 }
 
-private func directoryNames(_ dirfd: Int32, isWorkspaceRoot: Bool) -> [String]? {
+func directoryNames(_ dirfd: Int32, isWorkspaceRoot: Bool) -> [String]? {
     let copy = dup(dirfd)
     guard copy >= 0 else { return nil }
     // `dup` shares the directory offset. A previous listing leaves it at the
@@ -1228,7 +1311,7 @@ private func stamp(of status: stat) -> WorkspaceInodeStamp? {
     )
 }
 
-private func kind(of mode: mode_t) -> WorkspaceInodeStamp.Kind? {
+func kind(of mode: mode_t) -> WorkspaceInodeStamp.Kind? {
     switch mode & S_IFMT {
     case S_IFREG: return .regular
     case S_IFDIR: return .directory
@@ -1237,11 +1320,11 @@ private func kind(of mode: mode_t) -> WorkspaceInodeStamp.Kind? {
     }
 }
 
-private func modeBits(_ mode: mode_t) -> mode_t {
+func modeBits(_ mode: mode_t) -> mode_t {
     mode & 0o777
 }
 
-private func device(of status: stat) -> UInt64 {
+func device(of status: stat) -> UInt64 {
     UInt64(status.st_dev)
 }
 

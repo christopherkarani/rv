@@ -1,0 +1,414 @@
+import Foundation
+@_spi(Testing) import SwiftTUITestSupport
+import Testing
+
+@_spi(Testing) @testable import SwiftTUICore
+@_spi(Runners) @testable import SwiftTUIRuntime
+@testable import SwiftTUIViews
+
+/// Stage K0 runtime pins for `KeyframeAnimator` (plan 2026-08-25-002 §4),
+/// driven through a real `RunLoop` so the `.task` driver, state writes, and
+/// the controller all take part.
+@MainActor
+@Suite(.serialized)
+struct KeyframeAnimatorRuntimeTests {
+  private static let bumpLabel = "bump"
+
+  // MARK: - Trigger mode
+
+  @Test("trigger mode does not animate on mount")
+  func triggerModeIsQuietOnMount() async throws {
+    let probe = KeyframeValueProbe()
+    let harness = try AnimatorRuntimeHarness {
+      KeyframeTriggerFixture(probe: probe, duration: .milliseconds(200))
+    }
+    defer { harness.shutdown() }
+
+    try await harness.hold(for: .milliseconds(250))
+    #expect(Set(probe.values) == [0], "values: \(probe.values)")
+  }
+
+  @Test("one trigger change advances monotonically and lands on the end value exactly once")
+  func oneTriggerRunsToTheEnd() async throws {
+    let probe = KeyframeValueProbe()
+    let harness = try AnimatorRuntimeHarness {
+      KeyframeTriggerFixture(probe: probe, duration: .milliseconds(800))
+    }
+    defer { harness.shutdown() }
+
+    // Intentionally keep mount, click, and render synchronous. The initial
+    // mount task is cancelled before entry; the first change must still run.
+    try harness.clickText(Self.bumpLabel)
+    try await harness.wait(until: { probe.values.last == 10 })
+    // Let a few more ticks' worth of wall clock pass: nothing else may write.
+    try await harness.hold(for: .milliseconds(150))
+
+    let distinct = probe.distinctRun
+    #expect(distinct.first == 0)
+    #expect(distinct.last == 10)
+    #expect(distinct.count > 2, "expected intermediate values, got \(distinct)")
+    #expect(distinct == distinct.sorted(), "not monotone: \(distinct)")
+    #expect(
+      distinct.filter { $0 == 10 }.count == 1, "end value written more than once: \(distinct)")
+  }
+
+  @Test("a retrigger mid-flight restarts from the current interpolated value")
+  func retriggerContinuesFromCurrentValue() async throws {
+    let probe = KeyframeValueProbe()
+    let harness = try AnimatorRuntimeHarness {
+      KeyframeTriggerFixture(probe: probe, duration: .milliseconds(1_200))
+    }
+    defer { harness.shutdown() }
+
+    try harness.clickText(Self.bumpLabel)
+    try await harness.wait(until: { (probe.values.last ?? 0) >= 3 })
+    let before = try #require(probe.values.last)
+    let countBefore = probe.values.count
+
+    try harness.clickText(Self.bumpLabel)
+    try await harness.wait(until: { probe.values.count >= countBefore + 3 })
+    let after = Array(probe.values.dropFirst(countBefore))
+    #expect(
+      after.allSatisfy { $0 >= before - 0.5 },
+      "retrigger jumped back below \(before): \(after)"
+    )
+    try await harness.wait(until: { probe.values.last == 10 })
+  }
+
+  @Test("a retrigger carries velocity into a leading cubic keyframe")
+  func retriggerCarriesVelocity() async throws {
+    let probe = KeyframeValueProbe()
+    let harness = try AnimatorRuntimeHarness {
+      KeyframeCubicTriggerFixture(probe: probe)
+    }
+    defer { harness.shutdown() }
+
+    try harness.clickText(Self.bumpLabel)
+    // Midway through a rest-to-rest cubic the velocity is at its peak.
+    try await harness.wait(until: { (probe.values.last ?? 0) >= 4 })
+    let countBefore = probe.distinctRun.count
+    let turningPoint = try #require(probe.distinctRun.last)
+
+    // The retrigger's keyframes turn around and head back to zero, which
+    // gives the inbound velocity a signature the frame rate cannot blur. A
+    // cubic restarted at rest leaves rest with zero slope, so it can only
+    // fall away from `turningPoint`; a seeded one has to carry on upward
+    // first and overshoot before it comes back. Comparing two frame-sampled
+    // deltas instead would measure frame spacing as much as velocity: their
+    // ratio is ~0.95 on an idle machine and ~0.35 on a loaded runner that
+    // drops four frames before the retrigger and none after it.
+    try harness.clickText(Self.bumpLabel)
+    try await harness.wait(until: { probe.values.last == 0 })
+
+    let after = Array(probe.distinctRun.dropFirst(countBefore))
+    let peak = try #require(after.max())
+    // Measured on this fixture: a restart at rest peaks 0.013 *below*
+    // `turningPoint` — it never rises at all — while a fully seeded restart
+    // peaks 1.49 above it and stays at least 0.25 above it for ~650ms, or 13
+    // consecutive writes at the animator's cadence. The threshold therefore
+    // sits ~6x under the seeded peak, and losing it takes 13 dropped frames
+    // in a row rather than the handful that skew a frame-sampled step. It
+    // pins magnitude and not just sign too: a seed scaled to less than ~30%
+    // of the inbound velocity peaks below 0.25.
+    #expect(
+      peak >= turningPoint + 0.25,
+      "the retrigger did not carry velocity: peak \(peak) from \(turningPoint), after: \(after)"
+    )
+  }
+
+  // MARK: - Repeating mode
+
+  @Test("repeating mode wraps around and stays inside the keyframe range")
+  func repeatingModeWraps() async throws {
+    let probe = KeyframeValueProbe()
+    let harness = try AnimatorRuntimeHarness {
+      KeyframeRepeatingFixture(probe: probe)
+    }
+    defer { harness.shutdown() }
+
+    // Wait for both halves of the claim, not just the wrap. A loaded runner
+    // drops enough frames that the first wrap can land on a three-entry run
+    // ([0, 10, 0]) — which satisfied a wrap-only predicate while failing the
+    // count below. Repeating mode keeps cycling, so the fourth distinct write
+    // costs another tick rather than a flake; the values that satisfy the
+    // expectations are unchanged.
+    try await harness.wait(until: {
+      let run = probe.distinctRun
+      return run.count >= 4 && zip(run.dropFirst(), run).contains { $0 < $1 }
+    })
+    #expect(probe.values.allSatisfy { $0 >= 0 && $0 <= 10 }, "\(probe.values)")
+    #expect(probe.distinctRun.count >= 4)
+  }
+
+  // MARK: - Ancestor animations
+
+  @Test("coincident ancestor withAnimation and .animation(_:value:) do not animate keyframe slots")
+  func ancestorAnimationsDoNotReachKeyframeSlots() async throws {
+    let probe = KeyframeValueProbe()
+    let harness = try AnimatorRuntimeHarness {
+      KeyframeAncestorAnimationFixture(probe: probe)
+    }
+    defer { harness.shutdown() }
+    let controller = harness.runLoop.renderer.internalAnimationController
+
+    try harness.clickText(Self.bumpLabel)
+    var sawOffsetAnimation = false
+    try await harness.wait(until: {
+      let keys = controller.debugStateSnapshot().activeAnimationKeys
+      if keys.contains(where: { $0.scope == .property(.offset) }) {
+        sawOffsetAnimation = true
+      }
+      return probe.values.last == 10
+    })
+    #expect(!sawOffsetAnimation, "the keyframe-driven offset picked up an ancestor animation")
+    #expect(probe.distinctRun.count > 2, "\(probe.distinctRun)")
+  }
+
+  // MARK: - Tabs
+
+  @Test("leaving a tab stops the loop and returning with an unchanged trigger does not replay")
+  func tabSwitchStopsAndReturnDoesNotReplay() async throws {
+    let probe = KeyframeValueProbe()
+    let harness = try AnimatorRuntimeHarness(size: .init(width: 60, height: 10)) {
+      KeyframeTabFixture(probe: probe)
+    }
+    defer { harness.shutdown() }
+
+    try harness.clickText(Self.bumpLabel)
+    try await harness.wait(until: { (probe.values.last ?? 0) >= 2 })
+
+    try harness.clickText("PlainTab")
+    #expect(harness.frame.contains("plain-pane"))
+    let frozen = try #require(probe.values.last)
+    let countAtSwitch = probe.values.count
+    try await harness.hold(for: .milliseconds(300))
+    #expect(
+      probe.values.count == countAtSwitch,
+      "the keyframe loop kept writing after its tab went dormant: \(probe.values)"
+    )
+
+    try harness.clickText("AnimTab")
+    try await harness.hold(for: .milliseconds(300))
+    let afterReturn = Array(probe.values.dropFirst(countAtSwitch))
+    #expect(
+      afterReturn.allSatisfy { $0 == frozen },
+      "returning to the tab replayed the keyframes: \(afterReturn) (frozen \(frozen))"
+    )
+  }
+
+  // MARK: - Enclosing state
+
+  @Test("content reads the enclosing view's @State through a run, not its seed")
+  func contentReadsEnclosingStateDuringRun() async throws {
+    // Plan 2026-08-25-003 P2 (plan 002 §12.1 #4): `content` is a closure
+    // captured at `init` and evaluated inside the animator's body; a
+    // `@State` owned by the *enclosing* view must read through that owner's
+    // binding, and a write from inside `content` must land on it.
+    let probe = KeyframeOuterStateProbe()
+    let harness = try AnimatorRuntimeHarness {
+      KeyframeOuterStateFixture(probe: probe)
+    }
+    defer { harness.shutdown() }
+
+    try harness.clickText(Self.bumpLabel)
+    try await harness.wait(until: { probe.samples.last?.value == 10 })
+
+    let duringRun = probe.samples.filter { $0.value > 0 }
+    #expect(duringRun.count > 2, "\(probe.samples)")
+    #expect(
+      duringRun.allSatisfy { $0.outer == 7 },
+      "content read the enclosing @State's seed during the run: \(duringRun)"
+    )
+    // `.onChange` inside `content` writes the enclosing view's counter; the
+    // next evaluation of `content` must see that write.
+    let ticksSeen = try #require(probe.samples.last?.ticks)
+    #expect(ticksSeen >= 2, "content never saw the counter it advances: \(probe.samples)")
+  }
+
+  // MARK: - Reduce motion
+
+  @Test("under reduce motion a trigger change snaps to the end value")
+  func reduceMotionSnapsTriggerToEnd() async throws {
+    let probe = KeyframeValueProbe()
+    let harness = try AnimatorRuntimeHarness(motion: .reduced) {
+      KeyframeTriggerFixture(probe: probe, duration: .milliseconds(400))
+    }
+    defer { harness.shutdown() }
+
+    try harness.clickText(Self.bumpLabel)
+    try await harness.wait(until: { probe.values.last == 10 })
+    #expect(
+      Set(probe.values) == [0, 10], "intermediate values under reduce motion: \(probe.values)")
+  }
+
+  @Test("under reduce motion repeating mode never writes")
+  func reduceMotionRestsRepeatingMode() async throws {
+    let probe = KeyframeValueProbe()
+    let harness = try AnimatorRuntimeHarness(motion: .reduced) {
+      KeyframeRepeatingFixture(probe: probe)
+    }
+    defer { harness.shutdown() }
+
+    try await harness.hold(for: .milliseconds(300))
+    #expect(Set(probe.values) == [0], "\(probe.values)")
+    #expect(harness.activeTaskCount == 0)
+  }
+}
+
+// MARK: - Probe
+
+@MainActor
+private final class KeyframeValueProbe {
+  private(set) var values: [Double] = []
+
+  func record(_ value: Double) {
+    values.append(value)
+  }
+
+  /// `values` with consecutive duplicates collapsed: body re-evaluations
+  /// that did not change the value do not count as writes.
+  var distinctRun: [Double] {
+    var run: [Double] = []
+    for value in values where run.last != value {
+      run.append(value)
+    }
+    return run
+  }
+}
+
+// MARK: - Fixtures
+
+@MainActor
+private struct KeyframeTriggerFixture: View {
+  let probe: KeyframeValueProbe
+  let duration: Duration
+  @State private var bumps = 0
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("bump") { bumps += 1 }
+      KeyframeAnimator(initialValue: 0.0, trigger: bumps) { value in
+        let _ = probe.record(value)
+        Text("v=\(Int(value.rounded()))")
+      } keyframes: { _ in
+        LinearKeyframe(10.0, duration: duration)
+      }
+    }
+  }
+}
+
+/// A single leading cubic that climbs from rest on the first trigger and
+/// turns around on any later one: a run that starts from a value already in
+/// flight heads back to zero. The turn is what makes a carried-over velocity
+/// observable as an overshoot rather than as a frame-spacing-sensitive step.
+@MainActor
+private struct KeyframeCubicTriggerFixture: View {
+  let probe: KeyframeValueProbe
+  @State private var bumps = 0
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("bump") { bumps += 1 }
+      KeyframeAnimator(initialValue: 0.0, trigger: bumps) { value in
+        let _ = probe.record(value)
+        Text("v=\(Int(value.rounded()))")
+      } keyframes: { start in
+        CubicKeyframe(start > 0 ? 0.0 : 10.0, duration: .milliseconds(1_500))
+      }
+    }
+  }
+}
+
+@MainActor
+private struct KeyframeRepeatingFixture: View {
+  let probe: KeyframeValueProbe
+
+  var body: some View {
+    KeyframeAnimator(initialValue: 0.0, repeating: true) { value in
+      let _ = probe.record(value)
+      Text("v=\(Int(value.rounded()))")
+    } keyframes: { _ in
+      LinearKeyframe(10.0, duration: .milliseconds(200))
+    }
+  }
+}
+
+@MainActor
+private struct KeyframeAncestorAnimationFixture: View {
+  let probe: KeyframeValueProbe
+  @State private var bumps = 0
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("bump") {
+        withAnimation(.linear(duration: .seconds(2))) {
+          bumps += 1
+        }
+      }
+      KeyframeAnimator(initialValue: 0.0, trigger: bumps) { value in
+        let _ = probe.record(value)
+        Text("★").offset(x: Int(value.rounded()), y: 0)
+      } keyframes: { _ in
+        LinearKeyframe(10.0, duration: .milliseconds(800))
+      }
+    }
+    .animation(.linear(duration: .seconds(2)), value: bumps)
+  }
+}
+
+@MainActor
+private struct KeyframeTabFixture: View {
+  let probe: KeyframeValueProbe
+  @State private var selection = 0
+
+  var body: some View {
+    TabView(selection: $selection) {
+      Tab("AnimTab", value: 0) {
+        KeyframeTriggerFixture(probe: probe, duration: .seconds(1))
+      }
+      Tab("PlainTab", value: 1) {
+        Text("plain-pane")
+      }
+    }
+    .tabViewStyle(.literalTabs)
+  }
+}
+
+@MainActor
+private final class KeyframeOuterStateProbe {
+  struct Sample: Equatable {
+    var value: Double
+    var outer: Int
+    var ticks: Int
+  }
+
+  private(set) var samples: [Sample] = []
+
+  func record(value: Double, outer: Int, ticks: Int) {
+    samples.append(.init(value: value, outer: outer, ticks: ticks))
+  }
+}
+
+@MainActor
+private struct KeyframeOuterStateFixture: View {
+  let probe: KeyframeOuterStateProbe
+  @State private var bumps = 0
+  @State private var outerCounter = 0
+  @State private var ticks = 0
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("bump") {
+        bumps += 1
+        outerCounter = 7
+      }
+      KeyframeAnimator(initialValue: 0.0, trigger: bumps) { value in
+        let _ = probe.record(value: value, outer: outerCounter, ticks: ticks)
+        Text("v=\(Int(value.rounded())) o=\(outerCounter) t=\(ticks)")
+          .onChange(of: value) { ticks += 1 }
+      } keyframes: { _ in
+        LinearKeyframe(10.0, duration: .milliseconds(600))
+      }
+    }
+  }
+}

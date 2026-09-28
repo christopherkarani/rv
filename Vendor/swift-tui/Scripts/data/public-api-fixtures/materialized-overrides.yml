@@ -1,0 +1,5 @@
+classifications:
+  canonical:
+    - SwiftTUI.Known
+    - SwiftTUI.NewSurface
+default: pending-review

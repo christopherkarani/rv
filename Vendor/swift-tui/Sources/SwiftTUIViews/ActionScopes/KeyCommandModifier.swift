@@ -1,0 +1,103 @@
+public import SwiftTUICore
+
+extension ActionScope where Self: View & Sendable {
+  /// Declares a keyboard-shortcut command at this scope's root.
+  ///
+  /// Fires only if this scope is on the current focus chain.
+  /// No shallower scope on that chain can claim the same `(key, modifiers)` combination.
+  /// The shallowest scope wins.
+  ///
+  /// `modifiers` must be non-empty unless `key` is a function key
+  /// (`.functionKey`): F-keys never produce text, so bare F-key commands
+  /// are permitted. For every other key, single-key bindings are reserved
+  /// for framework-internal dispatch (typing, arrow navigation, Tab,
+  /// Enter, and Escape). The framework ignores modifier-less registrations,
+  /// and the command will never fire.
+  @MainActor
+  public func keyCommand(
+    _ description: String,
+    key: KeyEvent,
+    modifiers: EventModifiers,
+    isEnabled: Bool = true,
+    action: @escaping @MainActor @Sendable () -> Void
+  ) -> some View & ActionScope & Sendable {
+    modifier(
+      KeyCommandRegistrationModifier(
+        binding: KeyBinding(key: key, modifiers: modifiers),
+        description: description,
+        isEnabled: isEnabled,
+        authoringContext: currentImperativeAuthoringContextSnapshot(),
+        action: action
+      )
+    )
+  }
+}
+
+public struct KeyCommandRegistrationModifier: IterativePrimitiveViewModifier, Sendable {
+  package let binding: KeyBinding
+  package let description: String
+  package let isEnabled: Bool
+  package let authoringContext: ImperativeAuthoringContextSnapshot?
+  package let action: @MainActor @Sendable () -> Void
+
+  package init(
+    binding: KeyBinding,
+    description: String,
+    isEnabled: Bool,
+    authoringContext: ImperativeAuthoringContextSnapshot?,
+    action: @escaping @MainActor @Sendable () -> Void
+  ) {
+    self.binding = binding
+    self.description = description
+    self.isEnabled = isEnabled
+    self.authoringContext = authoringContext
+    self.action = action
+  }
+
+  package func makeResolveWork<Content: View>(
+    content: ModifierContentInputs<Content>,
+    in context: ResolveContext
+  ) -> ResolveWork<[ResolvedNode]> {
+    return content.resolveWork(in: context).map { completed in
+      let node = completed
+      guard
+        !binding.modifiers.isEmpty
+          || KeyBinding.allowsModifierlessCommands(for: binding.key)
+      else {
+        // Modifier-less registrations are framework-reserved for typing,
+        // arrow navigation, Tab, Enter, and Escape (function keys are the
+        // exception — they never produce text). Drop the registration — the
+        // command can never fire — but say so: a silently inert binding
+        // reads as a broken app, not a reserved key.
+        context.viewGraph?.recordFrameRuntimeIssue(
+          RuntimeIssue(
+            severity: .warning,
+            code: "keyCommand.modifierlessIgnored",
+            message:
+              "The key command \"\(description)\" binds \(binding.key) with no "
+              + "modifiers; modifier-less keys are reserved for typing and "
+              + "built-in navigation, so this registration is ignored and the "
+              + "command will never fire. Add a modifier (for example .ctrl) "
+              + "to the binding.",
+            identity: node.identity,
+            source: ".keyCommand"
+          )
+        )
+        return [node]
+      }
+      let intake = HandlerDescriptorIntake(
+        context: context,
+        preferringSnapshot: authoringContext
+      )
+      intake.registerKeyCommand(
+        at: node.identity,
+        binding: binding,
+        description: description,
+        isEnabled: isEnabled,
+        action: action
+      )
+      return [node]
+
+    }
+  }
+}

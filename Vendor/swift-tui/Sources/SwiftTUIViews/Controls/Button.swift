@@ -1,0 +1,152 @@
+public import SwiftTUICore
+
+/// A focusable control that triggers an action when activated.
+public struct Button<Label: View>: PrimitiveView, IterativeResolvableView {
+  public var role: ButtonRole?
+  package var systemHintText: String?
+  private var action: (@MainActor @Sendable () -> Void)?
+  private var label: Label
+  private let authoringScope: AuthoringContext?
+
+  public init(
+    _ title: String,
+    role: ButtonRole? = nil,
+    action: @escaping @MainActor @Sendable () -> Void
+  ) where Label == Text {
+    let authoringContext = currentAuthoringContext()
+    self.role = role
+    self.action = action
+    label = Text(title)
+    authoringScope = authoringContext
+  }
+
+  public init(
+    role: ButtonRole? = nil,
+    action: @escaping @MainActor @Sendable () -> Void,
+    @ViewBuilder label: () -> Label
+  ) {
+    let authoringContext = currentAuthoringContext()
+    self.role = role
+    self.action = action
+    self.label = label()
+    authoringScope = authoringContext
+  }
+
+  package func makeResolveWork(
+    in context: ResolveContext
+  ) -> ResolveWork<[ResolvedNode]> {
+    resolvedNode(in: context).map { [$0] }
+  }
+
+  package func resolve(
+    in context: ResolveContext
+  ) -> ResolvedNode {
+    resolvedNode(in: context).run()
+  }
+
+  /// Attaches a muted, right-aligned shortcut hint inside the button label area.
+  /// Thus, the active control chrome covers the hint.
+  /// This chrome includes the focus highlight, press state, and role color.
+  ///
+  /// The hint uses `Spacer(minLength: 1)` between the label and the
+  /// hint text. If the row provides extra width, the spacer expands and the hint rests
+  /// against the trailing edge. A width-equalized menu row is one example.
+  /// If the row uses its intrinsic size, the spacer collapses to a single-cell gap.
+  /// A toolbar item is one example. Then the hint sits flush after the label.
+  ///
+  /// A `nil`, empty, or whitespace-only hint suppresses the suffix
+  /// entirely. The button output is the same as the output without the
+  /// modifier. It adds no unused spacer or trailing whitespace.
+  public func systemHint(_ hint: String?) -> Button {
+    var copy = self
+    copy.systemHintText = Self.normalizeSystemHint(hint)
+    return copy
+  }
+
+  package static func normalizeSystemHint(_ hint: String?) -> String? {
+    guard let hint else { return nil }
+    // Stdlib-only trim to avoid pulling Foundation into the Controls
+    // module just for `trimmingCharacters(in:)`.
+    let lead = hint.drop(while: { $0.isWhitespace })
+    var trailingEnd = lead.endIndex
+    while trailingEnd > lead.startIndex {
+      let prior = lead.index(before: trailingEnd)
+      if !lead[prior].isWhitespace { break }
+      trailingEnd = prior
+    }
+    let trimmed = String(lead[lead.startIndex..<trailingEnd])
+    return trimmed.isEmpty ? nil : trimmed
+  }
+}
+
+extension Button {
+  private func resolvedNode(
+    in context: ResolveContext
+  ) -> ResolveWork<ResolvedNode> {
+    let styleEnvironment = context.environmentValues.styleEnvironmentSnapshot
+    let isFocused =
+      context.environmentValues.focusedIdentity(comparedAgainst: [context.identity])
+      == context.identity
+    let showsFocusEffect = context.environmentValues.isFocusEffectEnabled
+    let isPressed =
+      context.environmentValues.pressedIdentity(comparedAgainst: [context.identity])
+      == context.identity
+    let buttonStyle = context.environmentValues.buttonStyle
+
+    if context.environmentValues.isEnabled, let action {
+      let intake = HandlerDescriptorIntake(
+        context: context,
+        preferringAuthoringScope: authoringScope
+      )
+      intake.registerAction(identity: context.identity) {
+        action()
+        return true
+      }
+    }
+
+    let effectiveProminence = buttonStyle.resolvedProminence(
+      base: context.environmentValues.controlProminence
+    )
+    let resolvedHint = systemHintText
+    let originalLabel = label
+    let configuration = ButtonStyleConfiguration(
+      label: .init(authoringContext: authoringScope) {
+        if let hint = resolvedHint {
+          HStack(spacing: 0) {
+            originalLabel.authoredAccessibilityLabel()
+            Spacer(minLength: 1)
+            Text(hint).foregroundStyle(.muted)
+          }
+        } else {
+          originalLabel.authoredAccessibilityLabel()
+        }
+      },
+      role: role,
+      isEnabled: context.environmentValues.isEnabled,
+      isFocused: isFocused,
+      showsFocusEffect: showsFocusEffect,
+      isPressed: isPressed,
+      controlProminence: effectiveProminence,
+      buttonBorderShape: context.environmentValues.buttonBorderShape,
+      styleEnvironment: styleEnvironment
+    )
+    return buttonStyle.resolveBody(
+      configuration: configuration,
+      in: context.child(component: .named("ButtonBody"))
+    ).map { child in
+
+      return ResolvedNode(
+        identity: context.identity,
+        kind: .view("Button"),
+        children: [child],
+        environmentSnapshot: context.environment,
+        transactionSnapshot: context.transaction,
+        semanticMetadata: focusableControlMetadata(
+          focusInteractions: .activate,
+          accessibilityRole: .button
+        ).namingControl(with: label)
+      )
+
+    }
+  }
+}

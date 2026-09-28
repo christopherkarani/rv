@@ -1,0 +1,428 @@
+import Foundation
+import Testing
+
+@testable import SwiftTUICore
+@testable import SwiftTUIRuntime
+@testable import SwiftTUIViews
+
+@MainActor
+@Suite
+struct ResolveReuseAncestorInvalidationTests {
+  @Test("captured binding hazard: ancestor invalidation recomputes binding-driven descendants")
+  func ancestorInvalidationRecomputesBindingDrivenDescendants() {
+    struct BindingDrivenRoot: View {
+      let selection: Binding<String>
+
+      var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+          Text("Header")
+          Text(selection.wrappedValue)
+        }
+      }
+    }
+
+    // One two-frame render under whichever gate setting is active: frame one
+    // seeds "Overview", then the external box flips to "Styling" and the root
+    // is invalidated for frame two (returned).
+    func renderFrames() -> RenderSnapshot {
+      let renderer = DefaultRenderer(
+        layoutEngine: .init(cache: MeasurementCache())
+      )
+      let rootIdentity = testIdentity("Root")
+      final class SelectionBox: Sendable {
+        private let valueStorage = LockedBox("Overview")
+
+        var value: String {
+          get { valueStorage.value }
+          set { valueStorage.value = newValue }
+        }
+      }
+      let box = SelectionBox()
+      let selection = Binding<String>(
+        get: { box.value },
+        set: { box.value = $0 }
+      )
+
+      _ = renderer.render(
+        BindingDrivenRoot(selection: selection),
+        context: .init(identity: rootIdentity)
+      )
+      box.value = "Styling"
+
+      return renderer.render(
+        BindingDrivenRoot(selection: selection),
+        context: .init(
+          identity: rootIdentity,
+          invalidatedIdentities: [rootIdentity]
+        )
+      )
+    }
+
+    // Soundness invariant: the binding-driven Text must reflect the new external
+    // value, never the stale one.
+    let updated = renderFrames()
+    let rendered = updated.rasterSurface.lines.joined(separator: "\n")
+    #expect(rendered.contains("Styling"))
+    #expect(!rendered.contains("Overview"))
+
+    // Memo reuse is `Equatable`-only. `Text` is `Equatable`, so the unchanged
+    // `Text("Header")` is the tree's one memo candidate and is reused. The
+    // binding-driven `Text` compares unequal across frames and must recompute —
+    // exactly one reused node proves the hazard cannot materialize.
+    #expect(updated.diagnostics.work.resolvedNodesReused == 1)
+  }
+
+  @Test("only Equatable clean descendants are memo-reused (the gate is Equatable-only)")
+  func ancestorInvalidationCleanDescendantIsNotMemoReused() {
+    struct StableRoot: View {
+      var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+          Text("Stable")
+          Text("AlsoStable")
+        }
+      }
+    }
+
+    func renderFrames() -> RenderSnapshot {
+      let renderer = DefaultRenderer(
+        layoutEngine: .init(cache: MeasurementCache())
+      )
+      let rootIdentity = testIdentity("Root")
+
+      _ = renderer.render(
+        StableRoot(),
+        context: .init(identity: rootIdentity)
+      )
+
+      return renderer.render(
+        StableRoot(),
+        context: .init(
+          identity: rootIdentity,
+          invalidatedIdentities: [rootIdentity]
+        )
+      )
+    }
+
+    // The memo gate is `Equatable`-only. The two unchanged `Text` leaves are
+    // `Equatable` memo candidates and are reused; the `VStack` is not
+    // `Equatable`, so it is not a candidate and recomputes.
+    let updated = renderFrames()
+    let rendered = updated.rasterSurface.lines.joined(separator: "\n")
+    #expect(rendered.contains("Stable"))
+    #expect(rendered.contains("AlsoStable"))
+    #expect(updated.diagnostics.work.resolvedNodesReused == 2)
+    #expect(updated.diagnostics.work.resolvedNodesComputed > 0)
+  }
+
+  @Test("ancestor invalidation recomputes List row labels derived from root state")
+  func ancestorInvalidationRecomputesListRowLabels() {
+    let renderer = DefaultRenderer(
+      layoutEngine: .init(cache: MeasurementCache())
+    )
+    let rootIdentity = testIdentity("Root")
+
+    final class SelectionBox: Sendable {
+      private let selectedIndexStorage = LockedBox(0)
+
+      var selectedIndex: Int {
+        get { selectedIndexStorage.value }
+        set { selectedIndexStorage.value = newValue }
+      }
+    }
+    let selectionBox = SelectionBox()
+
+    struct RootList: View {
+      let value: Int
+      let selection: Binding<Int>
+
+      var body: some View {
+        List(selection: selection) {
+          ForEach([0, 2, 4], id: \.self) { preset in
+            Text(preset == value ? "\(preset) *" : "\(preset)")
+              .tag(preset)
+          }
+        }
+        .frame(width: 16, height: 6, alignment: .topLeading)
+      }
+    }
+
+    let selection = Binding<Int>(
+      get: { selectionBox.selectedIndex },
+      set: { selectionBox.selectedIndex = $0 }
+    )
+
+    _ = renderer.render(
+      RootList(value: 0, selection: selection),
+      context: .init(identity: rootIdentity)
+    )
+    selectionBox.selectedIndex = 2
+
+    let updated = renderer.render(
+      RootList(value: 2, selection: selection),
+      context: .init(
+        identity: rootIdentity,
+        invalidatedIdentities: [rootIdentity]
+      )
+    )
+
+    let rendered = updated.rasterSurface.lines.joined(separator: "\n")
+    #expect(rendered.contains("2 *"))
+    #expect(!rendered.contains("0 *"))
+  }
+
+  /// Guards the H2 enabler (`TransactionSnapshot.isReuseEquivalent`): a sibling
+  /// disjoint from the invalidation must reuse across frames even though the
+  /// per-frame transaction `debugSignature` (the frame's cause summary) changes
+  /// every frame. Before the enabler, `canReuse`'s full `==` on the transaction
+  /// saw the changing `debugSignature` and defeated all retained reuse, so the
+  /// whole tree re-resolved every invalidation frame.
+  @Test("disjoint-sibling reuse survives a per-frame transaction debugSignature change")
+  func disjointSiblingReuseSurvivesDebugSignatureChange() {
+    let renderer = DefaultRenderer(
+      layoutEngine: .init(cache: MeasurementCache())
+    )
+    let rootIdentity = testIdentity("DisjointReuse")
+    let aID = testIdentity("DisjointReuse", "A")
+    let bID = testIdentity("DisjointReuse", "B")
+
+    struct TwoSiblings: View {
+      let aID: Identity
+      let bID: Identity
+
+      var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+          VStack(alignment: .leading, spacing: 0) {
+            Text("A0")
+            Text("A1")
+          }
+          .id(aID)
+          VStack(alignment: .leading, spacing: 0) {
+            Text("B0")
+            Text("B1")
+          }
+          .id(bID)
+        }
+      }
+    }
+
+    _ = renderer.render(
+      TwoSiblings(aID: aID, bID: bID),
+      context: .init(
+        identity: rootIdentity,
+        transaction: TransactionSnapshot(debugSignature: "frame-1")
+      )
+    )
+
+    // Invalidate only the A subtree, under a DIFFERENT debugSignature than the
+    // first frame. The B subtree is disjoint and must reuse despite the
+    // signature change.
+    let second = renderer.render(
+      TwoSiblings(aID: aID, bID: bID),
+      context: .init(
+        identity: rootIdentity,
+        transaction: TransactionSnapshot(debugSignature: "frame-2"),
+        invalidatedIdentities: [aID]
+      )
+    )
+
+    #expect(second.diagnostics.work.resolvedNodesReused > 0)
+    let rendered = second.rasterSurface.lines.joined(separator: "\n")
+    #expect(rendered.contains("A0"))
+    #expect(rendered.contains("B0"))
+  }
+
+  @Test("scoped retained-reuse suppression recomputes only affected reached subtrees")
+  func scopedRetainedReuseSuppressionKeepsUnaffectedReachedSubtreesReusable() {
+    let renderer = DefaultRenderer(
+      layoutEngine: .init(cache: MeasurementCache())
+    )
+    let rootIdentity = testIdentity("ScopedSuppression")
+    let aID = testIdentity("ScopedSuppression", "A")
+    let bID = testIdentity("ScopedSuppression", "B")
+    let cID = testIdentity("ScopedSuppression", "C")
+
+    struct ThreeSiblings: View {
+      let aValue: String
+      let aID: Identity
+      let bID: Identity
+      let cID: Identity
+
+      var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+          VStack(alignment: .leading, spacing: 0) {
+            Text("A:\(aValue)")
+          }
+          .id(aID)
+          VStack(alignment: .leading, spacing: 0) {
+            Text("B:stable")
+          }
+          .id(bID)
+          VStack(alignment: .leading, spacing: 0) {
+            Text("C:stable")
+          }
+          .id(cID)
+        }
+      }
+    }
+
+    _ = renderer.render(
+      ThreeSiblings(aValue: "0", aID: aID, bID: bID, cID: cID),
+      context: .init(identity: rootIdentity)
+    )
+
+    renderer.enableSelectiveEvaluation()
+    renderer.forceRootEvaluation()
+    renderer.suppressRetainedReuseForNextFrame(
+      .init(identities: [bID])
+    )
+
+    let updated = renderer.render(
+      ThreeSiblings(aValue: "1", aID: aID, bID: bID, cID: cID),
+      context: .init(
+        identity: rootIdentity,
+        invalidatedIdentities: [aID]
+      )
+    )
+
+    let rendered = updated.rasterSurface.lines.joined(separator: "\n")
+    #expect(rendered.contains("A:1"))
+    #expect(rendered.contains("B:stable"))
+    #expect(rendered.contains("C:stable"))
+    #expect(updated.diagnostics.work.resolvedNodesReused > 0)
+    #expect(updated.diagnostics.work.resolvedNodesComputed > 0)
+  }
+
+  @Test("finite focus suppression reaches focus readers without root force")
+  func finiteFocusSuppressionReachesFocusReadersWithoutRootForce() {
+    let renderer = DefaultRenderer(
+      layoutEngine: .init(cache: MeasurementCache())
+    )
+    let rootIdentity = testIdentity("FiniteFocusSuppression")
+    let readoutID = testIdentity("FiniteFocusSuppression", "Readout")
+    let previousID = testIdentity("FiniteFocusSuppression", "Previous")
+    let currentID = testIdentity("FiniteFocusSuppression", "Current")
+    let stableID = testIdentity("FiniteFocusSuppression", "Stable")
+
+    struct FocusReaderShell: View {
+      let readoutID: Identity
+      let previousID: Identity
+      let currentID: Identity
+      let stableID: Identity
+
+      var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+          EnvironmentReader(\.focusedIdentity) { focusedIdentity in
+            Text(focusLabel(focusedIdentity))
+          }
+          .id(readoutID)
+          Button("previous") {}
+            .id(previousID)
+          Button("current") {}
+            .id(currentID)
+          VStack(alignment: .leading, spacing: 0) {
+            Text("stable sibling")
+          }
+          .id(stableID)
+        }
+      }
+
+      private func focusLabel(_ focusedIdentity: Identity?) -> String {
+        if focusedIdentity == currentID {
+          return "focus current"
+        }
+        if focusedIdentity == previousID {
+          return "focus previous"
+        }
+        return "focus none"
+      }
+    }
+
+    var environmentValues = EnvironmentValues()
+    environmentValues.focusedIdentity = previousID
+    _ = renderer.render(
+      FocusReaderShell(
+        readoutID: readoutID,
+        previousID: previousID,
+        currentID: currentID,
+        stableID: stableID
+      ),
+      context: .init(
+        identity: rootIdentity,
+        environmentValues: environmentValues
+      )
+    )
+
+    renderer.enableSelectiveEvaluation()
+    environmentValues.focusedIdentity = currentID
+    var suppressionIdentities = renderer.runtimeFocusStateDependentIdentities()
+    #expect(!suppressionIdentities.isEmpty)
+    suppressionIdentities.insert(previousID)
+    suppressionIdentities.insert(currentID)
+    renderer.suppressRetainedReuseForNextFrame(
+      .init(identities: suppressionIdentities)
+    )
+
+    let updated = renderer.render(
+      FocusReaderShell(
+        readoutID: readoutID,
+        previousID: previousID,
+        currentID: currentID,
+        stableID: stableID
+      ),
+      context: .init(
+        identity: rootIdentity,
+        environmentValues: environmentValues
+      )
+    )
+
+    let rendered = updated.rasterSurface.lines.joined(separator: "\n")
+    #expect(rendered.contains("focus current"))
+    #expect(!rendered.contains("focus previous"))
+    #expect(updated.diagnostics.work.resolvedNodesComputed > 0)
+    #expect(
+      renderer.debugRuntimeSubsystemSnapshot().frameInputs.inputs?
+        .usesSelectiveEvaluation == true
+    )
+  }
+
+  @Test("runtime focus-state dependency tracking is limited to authored environment readers")
+  func runtimeFocusStateDependencyTrackingFindsEnvironmentReadersOnly() {
+    let renderer = DefaultRenderer(
+      layoutEngine: .init(cache: MeasurementCache())
+    )
+    let rootIdentity = testIdentity("RuntimeFocusDependency")
+    let readoutID = testIdentity("RuntimeFocusDependency", "Readout")
+    let buttonID = testIdentity("RuntimeFocusDependency", "Button")
+
+    struct FocusDependencyProbe: View {
+      let readoutID: Identity
+      let buttonID: Identity
+
+      var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+          EnvironmentReader(\.focusedIdentity) { focusedIdentity in
+            Text("Focus: \(focusedIdentity.map(\.description) ?? "none")")
+          }
+          .id(readoutID)
+          Button("Focusable") {}
+            .id(buttonID)
+        }
+      }
+    }
+
+    _ = renderer.render(
+      FocusDependencyProbe(readoutID: readoutID, buttonID: buttonID),
+      context: .init(identity: rootIdentity)
+    )
+
+    let dependencies = renderer.runtimeFocusStateDependentIdentities()
+    #expect(
+      dependencies.contains { identity in
+        identity == readoutID
+          || identity.isAncestor(of: readoutID)
+          || identity.isDescendant(of: readoutID)
+      }
+    )
+    #expect(!dependencies.contains(buttonID))
+  }
+}

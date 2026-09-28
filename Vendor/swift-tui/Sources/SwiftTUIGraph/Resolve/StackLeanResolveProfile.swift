@@ -1,0 +1,116 @@
+#if os(Windows)
+  import WinSDK
+#endif
+
+/// Whether this process runs the stack-lean resolve profile.
+///
+/// JavaScriptCore executes wasm calls on the host thread's native stack, and
+/// worker threads get a small fraction of the main-thread budget (~1/16 in
+/// measurement), so every call frame the resolve descent spends per view
+/// level is scarce there. The profile swaps the resolve pass's per-level
+/// `TaskLocal` bindings for plain MainActor save/restore slots (three binds
+/// per level — ambient environment, authoring context, and view-node
+/// context — cost several frames each through `TaskLocal.withValue`), and
+/// disables the retained-reuse/memo gates plus selective evaluation so every
+/// frame keeps the boot frame's (known-fitting) stack shape. Retained reuse
+/// alone can be re-enabled under lean via ``leanRetainedReuse`` — a reuse hit
+/// short-circuits descent, so it only ever shallows the frame; memo and
+/// selective evaluation stay off.
+///
+/// Only *synchronous* bindings go through the lean slots: a synchronous bind
+/// cannot suspend, so MainActor exclusivity makes save/restore equivalent to
+/// the task-local scope. Async bindings keep `TaskLocal` (they can suspend
+/// mid-scope, where a plain slot would leak across interleaved jobs).
+///
+/// Defaults on for WASI builds; opt back out with
+/// `SWIFTTUI_STACK_LEAN_PROFILE=0`. Native processes default off but may opt
+/// IN with `SWIFTTUI_STACK_LEAN_PROFILE=1`, which runs the exact WASI resolve
+/// shape (lean ambient slots, reuse/memo/selective off, iterative descent) for
+/// composed-runtime debugging and profile-shaped gate lanes.
+@MainActor
+package let stackLeanResolveProfile: Bool = {
+  if let explicit = stackLeanExplicitEnvironmentChoice {
+    return explicit
+  }
+  #if os(WASI) && canImport(WASILibc)
+    return true
+  #elseif os(Windows)
+    return stackLeanArmedByWindowsStackFloor
+  #else
+    return false
+  #endif
+}()
+
+/// The operator's explicit `SWIFTTUI_STACK_LEAN_PROFILE` choice, if any.
+///
+/// Documented grammar exception (unlike the shared `FeatureFlags.isEnabled`
+/// boolean rule): only the exact values `0` / `1` are respected, so a typo
+/// can never flip a whole engine profile.
+package let stackLeanExplicitEnvironmentChoice: Bool? = {
+  switch FeatureFlags.environmentValue(named: "SWIFTTUI_STACK_LEAN_PROFILE") {
+  case "0":
+    false
+  case "1":
+    true
+  default:
+    nil
+  }
+}()
+
+/// The smallest main-thread stack reserve the full engine profile is safe
+/// under. POSIX main threads get 8 MiB; the engine's resolve descent is
+/// budgeted against that, and the Windows default reserve — 1 MiB from the
+/// PE header unless the link sets `/STACK` — overflows it in debug builds
+/// (`0xC00000FD`, the plan's Stage 6 item-9 finding). Anything below this
+/// floor runs the stack-lean profile instead of crashing.
+package let fullEngineStackReserveFloor = 8 << 20
+
+/// Whether a below-floor Windows main-thread stack reserve armed the lean
+/// profile (as opposed to WASI's default or an explicit environment choice).
+/// The session launch path reads this to emit the loud debug diagnostic
+/// naming the `/STACK:16777216` remedy.
+@MainActor
+package let stackLeanArmedByWindowsStackFloor: Bool = {
+  #if os(Windows)
+    return stackLeanExplicitEnvironmentChoice == nil
+      && windowsMainThreadStackReserve() < fullEngineStackReserveFloor
+  #else
+    return false
+  #endif
+}()
+
+#if os(Windows)
+  /// The calling thread's full stack reserve in bytes
+  /// (`GetCurrentThreadStackLimits`, Windows 8+ — inside the declared
+  /// Windows 10 1809 platform floor). `@MainActor` so the lazy globals above
+  /// measure the main thread, whose reserve is the one the resolve descent
+  /// runs against.
+  @MainActor
+  package func windowsMainThreadStackReserve() -> Int {
+    var lowLimit: ULONG_PTR = 0
+    var highLimit: ULONG_PTR = 0
+    unsafe GetCurrentThreadStackLimits(&lowLimit, &highLimit)
+    return Int(highLimit &- lowLimit)
+  }
+#endif
+
+/// Opt-in: retained reuse under the stack-lean profile
+/// (`SWIFTTUI_LEAN_RETAINED_REUSE=1`; bounded-depth-reuse program).
+///
+/// The lean profile historically disabled all three reuse layers because the
+/// selective-evaluation frontier re-entry stacks a deeper per-level call
+/// sandwich than a fresh root resolve — the shape that overflowed WebKit's
+/// worker stack. The retained-reuse gate is different: it is a descent
+/// *short-circuit* inside the root resolve (a hit serves the committed
+/// subtree instead of descending), so with the registration-restore walks
+/// iterative it strictly shallows the frame relative to reuse-off. Memoized
+/// reuse and selective evaluation remain off under lean regardless of this
+/// flag. Ignored when the lean profile itself is off (the gate short-circuits
+/// on `!stackLeanResolveProfile`).
+@MainActor
+package let leanRetainedReuse: Bool = {
+  // Documented grammar exception: only the exact value `1` opts in — this
+  // widens the engine's reuse behavior under an already-tight stack budget,
+  // so nothing short of an explicit `1` may arm it.
+  FeatureFlags.environmentValue(named: "SWIFTTUI_LEAN_RETAINED_REUSE") == "1"
+}()

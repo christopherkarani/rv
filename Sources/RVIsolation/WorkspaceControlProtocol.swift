@@ -7,11 +7,18 @@ public enum WorkspaceControlLimits {
     public static let name = "rv.workspace.v1"
     public static let maxBodyBytes = 16_384
     public static let maxExecutableBytes = 1_024
-    public static let maxArgumentBytes = 256
-    public static let maxArguments = 16
+    /// Interactive commands may contain long prompts. Bound the whole
+    /// executable and argv payload rather than each individual argument.
+    public static let maxLaunchCommandBytes = 8_192
+    public static let maxArguments = 128
+    public static let maxResourceProfileIDBytes = 64
     public static let maxRuntimes = 64
     public static let maxProjectBytes = 1_024
     public static let maxErrorBytes = 64
+    /// Bounded operator-legible denial detail. Carries only names from
+    /// the operator's own policy file (link names, credential
+    /// destinations), never host paths or internal error text.
+    public static let maxDetailBytes = 128
     public static let maxHookBytes = 32
     public static let maxOperationBytes = 64
     public static let maxFeatures = 32
@@ -23,12 +30,16 @@ public enum WorkspaceControlLimits {
     public static let connectTimeoutSeconds: TimeInterval = 3
 }
 
-/// Closed set of attach-protocol failures. No internal Swift error text.
+/// Closed set of attach-protocol failures. No internal Swift error text;
+/// the optional `detail` field carries only policy-authored names.
 public enum WorkspaceControlCode: String, Error, Sendable, Equatable, Codable {
     case workspaceClosing
     case workspaceClosed
     case runtimeNotFound
     case invalidRequest
+    case launchCommandTooLarge
+    case resourceProfileUnavailable
+    case resourceStagingFailed
     case incompatibleProtocol
     case unauthorizedClient
     case recoveryRequired
@@ -58,15 +69,26 @@ public enum WorkspaceControlOp: String, Sendable, Equatable {
     case acquireTerminalInput
     case releaseTerminalInput
     case resizeTerminal
+    case terminalReplayBegin
     case terminalReplay
+    case terminalReplayEnd
     case terminalOutput
     case terminalInputOwner
+    case terminalWindow
     case runtimeExited
     case terminalOverflow
 }
 
 enum WorkspaceControlFeature {
     static let ensureTerminalRuntime = "ensureTerminalRuntime"
+    /// Resize requests are accepted only from the connection holding input.
+    static let resizeLeaseAuthority = "resizeLeaseAuthority"
+    static let runtimeResourceProfilesV1 = "runtimeResourceProfilesV1"
+    static let terminalReplayBatchesV1 = "terminalReplayBatchesV1"
+    /// A subscriber opts in by naming this feature in its subscribe request.
+    /// The host sends `terminalWindow` only to opted-in subscribers, so an
+    /// older client (whose reader fails closed on unknown ops) never sees it.
+    static let terminalWindowNoticesV1 = "terminalWindowNoticesV1"
 }
 
 /// One runtime as a control client may see it.
@@ -129,10 +151,12 @@ struct WorkspaceControlMessage: Sendable, Equatable {
     var token: UUID?
     var executable: String?
     var arguments: [String]?
+    var resourceProfileID: String?
     var runtime: UUID?
     var hook: String?
     var ok: Bool?
     var error: String?
+    var detail: String?
     var workspace: UUID?
     var host: UUID?
     var phase: String?
@@ -144,6 +168,9 @@ struct WorkspaceControlMessage: Sendable, Equatable {
     var rows: Int?
     var columns: Int?
     var sequence: Int64?
+    var batch: UUID?
+    var truncated: Bool?
+    var replayLength: Int?
     var bytes: String?
     var exitStatus: Int32?
     var terminal: Bool?
@@ -154,15 +181,31 @@ struct WorkspaceControlMessage: Sendable, Equatable {
     static func error(
         id: UUID?,
         op: String,
-        code: WorkspaceControlCode
+        code: WorkspaceControlCode,
+        detail: String? = nil
     ) -> WorkspaceControlMessage {
         WorkspaceControlMessage(
             version: WorkspaceControlLimits.version,
             id: id,
             op: op,
             ok: false,
-            error: code.rawValue
+            error: code.rawValue,
+            detail: detail.map(Self.boundedDenialDetail)
         )
+    }
+
+    /// Clamp denial detail to the wire bound on a scalar boundary and
+    /// strip control characters: the detail renders in client chrome,
+    /// where control bytes must never become terminal control.
+    private static func boundedDenialDetail(_ raw: String) -> String {
+        let filtered = String(raw.unicodeScalars.filter {
+            CharacterSet.controlCharacters.contains($0) == false
+        })
+        var cut = filtered
+        while cut.utf8.count > WorkspaceControlLimits.maxDetailBytes, cut.isEmpty == false {
+            cut.removeLast()
+        }
+        return cut
     }
 }
 
@@ -198,8 +241,9 @@ func workspaceLaunchIO(
 enum WorkspaceControlCodec {
     private static let rootKeys: Set<String> = [
         "v", "id", "op", "token", "executable", "arguments", "runtime", "hook",
-        "ok", "error", "workspace", "host", "phase", "project", "runtimes",
-        "attached", "running", "io", "rows", "cols", "sequence", "bytes", "exit",
+        "resourceProfileID", "ok", "error", "detail", "workspace", "host", "phase", "project", "runtimes",
+        "attached", "running", "io", "rows", "cols", "sequence", "batch",
+        "truncated", "replayLength", "bytes", "exit",
         "terminal", "input", "created", "features",
     ]
     private static let runtimeKeys: Set<String> = [
@@ -222,17 +266,20 @@ enum WorkspaceControlCodec {
         }
         guard fits(envelope.op, WorkspaceControlLimits.maxOperationBytes),
             fits(envelope.executable, WorkspaceControlLimits.maxExecutableBytes),
+            resourceProfileIDFits(envelope.resourceProfileID),
             fits(envelope.hook, WorkspaceControlLimits.maxHookBytes),
             fits(envelope.error, WorkspaceControlLimits.maxErrorBytes),
+            fits(envelope.detail, WorkspaceControlLimits.maxDetailBytes),
             fits(envelope.phase, 32),
             fits(envelope.project, WorkspaceControlLimits.maxProjectBytes),
             featuresFit(envelope.features),
-            argumentsFit(envelope.arguments),
+            launchCommandFits(executable: envelope.executable, arguments: envelope.arguments),
             attachedFits(envelope.attached),
             ioFits(envelope.io),
             dimensionFits(envelope.rows, maximum: TerminalStreamLimits.maximumRows),
             dimensionFits(envelope.columns, maximum: TerminalStreamLimits.maximumColumns),
             sequenceFits(envelope.sequence),
+            replayLengthFits(envelope.replayLength),
             encodedBytesFit(envelope.bytes)
         else {
             return .invalid
@@ -243,6 +290,9 @@ enum WorkspaceControlCodec {
     }
 
     static func encode(_ message: WorkspaceControlMessage) -> Data? {
+        guard launchCommandFits(executable: message.executable, arguments: message.arguments),
+            resourceProfileIDFits(message.resourceProfileID)
+        else { return nil }
         let envelope = Envelope(message)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -270,12 +320,21 @@ enum WorkspaceControlCodec {
         return value.utf8.count <= limit && value.contains("\0") == false
     }
 
-    private static func argumentsFit(_ values: [String]?) -> Bool {
-        guard let values else { return true }
+    static func launchCommandFits(executable: String?, arguments values: [String]?) -> Bool {
+        let values = values ?? []
         guard values.count <= WorkspaceControlLimits.maxArguments else { return false }
-        return values.allSatisfy {
-            $0.utf8.count <= WorkspaceControlLimits.maxArgumentBytes && $0.contains("\0") == false
-        }
+        guard values.allSatisfy({ !$0.contains("\0") }) else { return false }
+        let total = (executable?.utf8.count ?? 0) + values.reduce(0) { $0 + $1.utf8.count }
+        return total <= WorkspaceControlLimits.maxLaunchCommandBytes
+    }
+
+    static func resourceProfileIDFits(_ id: String?) -> Bool {
+        guard let id else { return true }
+        return !id.isEmpty && id.utf8.count <= WorkspaceControlLimits.maxResourceProfileIDBytes
+            && id.utf8.allSatisfy {
+                ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122)
+                    || ($0 >= 48 && $0 <= 57) || $0 == 45 || $0 == 46 || $0 == 95
+            }
     }
 
     private static func runtimesFit(_ values: [WorkspaceRuntimeReport]?) -> Bool {
@@ -302,6 +361,11 @@ enum WorkspaceControlCodec {
     private static func sequenceFits(_ value: Int64?) -> Bool {
         guard let value else { return true }
         return value >= 0
+    }
+
+    private static func replayLengthFits(_ value: Int?) -> Bool {
+        guard let value else { return true }
+        return (0...TerminalStreamLimits.replayBytes).contains(value)
     }
 
     private static func encodedBytesFit(_ value: String?) -> Bool {
@@ -342,10 +406,12 @@ private struct Envelope: Codable {
     var token: UUID?
     var executable: String?
     var arguments: [String]?
+    var resourceProfileID: String?
     var runtime: UUID?
     var hook: String?
     var ok: Bool?
     var error: String?
+    var detail: String?
     var workspace: UUID?
     var host: UUID?
     var phase: String?
@@ -357,6 +423,9 @@ private struct Envelope: Codable {
     var rows: Int?
     var columns: Int?
     var sequence: Int64?
+    var batch: UUID?
+    var truncated: Bool?
+    var replayLength: Int?
     var bytes: String?
     var exitStatus: Int32?
     var terminal: Bool?
@@ -454,10 +523,12 @@ private struct Envelope: Codable {
         case token
         case executable
         case arguments
+        case resourceProfileID
         case runtime
         case hook
         case ok
         case error
+        case detail
         case workspace
         case host
         case phase
@@ -469,6 +540,9 @@ private struct Envelope: Codable {
         case rows
         case columns = "cols"
         case sequence
+        case batch
+        case truncated
+        case replayLength
         case bytes
         case exitStatus = "exit"
         case terminal
@@ -481,8 +555,9 @@ private struct Envelope: Codable {
         let keys = try KeyScan(from: decoder)
         guard keys.keys.isSubset(of: [
             "v", "id", "op", "token", "executable", "arguments", "runtime", "hook",
-            "ok", "error", "workspace", "host", "phase", "project", "runtimes",
-            "attached", "running", "io", "rows", "cols", "sequence", "bytes", "exit",
+            "resourceProfileID", "ok", "error", "detail", "workspace", "host", "phase", "project", "runtimes",
+            "attached", "running", "io", "rows", "cols", "sequence", "batch",
+            "truncated", "replayLength", "bytes", "exit",
             "terminal", "input", "created", "features",
         ]) else {
             throw DecodingError.dataCorrupted(
@@ -496,10 +571,12 @@ private struct Envelope: Codable {
         token = try container.decodeIfPresent(UUID.self, forKey: .token)
         executable = try container.decodeIfPresent(String.self, forKey: .executable)
         arguments = try container.decodeIfPresent([String].self, forKey: .arguments)
+        resourceProfileID = try container.decodeIfPresent(String.self, forKey: .resourceProfileID)
         runtime = try container.decodeIfPresent(UUID.self, forKey: .runtime)
         hook = try container.decodeIfPresent(String.self, forKey: .hook)
         ok = try container.decodeIfPresent(Bool.self, forKey: .ok)
         error = try container.decodeIfPresent(String.self, forKey: .error)
+        detail = try container.decodeIfPresent(String.self, forKey: .detail)
         workspace = try container.decodeIfPresent(UUID.self, forKey: .workspace)
         host = try container.decodeIfPresent(UUID.self, forKey: .host)
         phase = try container.decodeIfPresent(String.self, forKey: .phase)
@@ -511,6 +588,9 @@ private struct Envelope: Codable {
         rows = try container.decodeIfPresent(Int.self, forKey: .rows)
         columns = try container.decodeIfPresent(Int.self, forKey: .columns)
         sequence = try container.decodeIfPresent(Int64.self, forKey: .sequence)
+        batch = try container.decodeIfPresent(UUID.self, forKey: .batch)
+        truncated = try container.decodeIfPresent(Bool.self, forKey: .truncated)
+        replayLength = try container.decodeIfPresent(Int.self, forKey: .replayLength)
         bytes = try container.decodeIfPresent(String.self, forKey: .bytes)
         exitStatus = try container.decodeIfPresent(Int32.self, forKey: .exitStatus)
         terminal = try container.decodeIfPresent(Bool.self, forKey: .terminal)
@@ -527,10 +607,12 @@ private struct Envelope: Codable {
         try container.encodeIfPresent(token, forKey: .token)
         try container.encodeIfPresent(executable, forKey: .executable)
         try container.encodeIfPresent(arguments, forKey: .arguments)
+        try container.encodeIfPresent(resourceProfileID, forKey: .resourceProfileID)
         try container.encodeIfPresent(runtime, forKey: .runtime)
         try container.encodeIfPresent(hook, forKey: .hook)
         try container.encodeIfPresent(ok, forKey: .ok)
         try container.encodeIfPresent(error, forKey: .error)
+        try container.encodeIfPresent(detail, forKey: .detail)
         try container.encodeIfPresent(workspace, forKey: .workspace)
         try container.encodeIfPresent(host, forKey: .host)
         try container.encodeIfPresent(phase, forKey: .phase)
@@ -542,6 +624,9 @@ private struct Envelope: Codable {
         try container.encodeIfPresent(rows, forKey: .rows)
         try container.encodeIfPresent(columns, forKey: .columns)
         try container.encodeIfPresent(sequence, forKey: .sequence)
+        try container.encodeIfPresent(batch, forKey: .batch)
+        try container.encodeIfPresent(truncated, forKey: .truncated)
+        try container.encodeIfPresent(replayLength, forKey: .replayLength)
         try container.encodeIfPresent(bytes, forKey: .bytes)
         try container.encodeIfPresent(exitStatus, forKey: .exitStatus)
         try container.encodeIfPresent(terminal, forKey: .terminal)
@@ -557,10 +642,12 @@ private struct Envelope: Codable {
         token = message.token
         executable = message.executable
         arguments = message.arguments
+        resourceProfileID = message.resourceProfileID
         runtime = message.runtime
         hook = message.hook
         ok = message.ok
         error = message.error
+        detail = message.detail
         workspace = message.workspace
         host = message.host
         phase = message.phase
@@ -582,6 +669,9 @@ private struct Envelope: Codable {
         rows = message.rows
         columns = message.columns
         sequence = message.sequence
+        batch = message.batch
+        truncated = message.truncated
+        replayLength = message.replayLength
         bytes = message.bytes
         exitStatus = message.exitStatus
         terminal = message.terminal
@@ -598,10 +688,12 @@ private struct Envelope: Codable {
             token: token,
             executable: executable,
             arguments: arguments,
+            resourceProfileID: resourceProfileID,
             runtime: runtime,
             hook: hook,
             ok: ok,
             error: error,
+            detail: detail,
             workspace: workspace,
             host: host,
             phase: phase,
@@ -623,6 +715,9 @@ private struct Envelope: Codable {
             rows: rows,
             columns: columns,
             sequence: sequence,
+            batch: batch,
+            truncated: truncated,
+            replayLength: replayLength,
             bytes: bytes,
             exitStatus: exitStatus,
             terminal: terminal,
@@ -649,6 +744,8 @@ func workspaceControlCode(_ error: WorkspaceSessionError) -> WorkspaceControlCod
         .runtimeLimit
     case .ownedByLiveProcess, .recoveryInProgress, .unresolvedWorkspace:
         .recoveryRequired
+    case .apply(.resourceStagingFailed):
+        .resourceStagingFailed
     case .apply, .cleanupFailed:
         .invalidRequest
     }

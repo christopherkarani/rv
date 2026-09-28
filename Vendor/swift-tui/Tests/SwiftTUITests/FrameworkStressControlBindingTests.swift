@@ -1,0 +1,1267 @@
+import Foundation
+import SwiftTUITestSupport
+import Testing
+
+@_spi(Testing) @testable import SwiftTUICore
+@_spi(Runners) @testable import SwiftTUIRuntime
+@testable import SwiftTUIViews
+
+@MainActor
+@Suite(
+  "SwiftTUI control and binding stress behavior",
+  .serialized,
+  FailOnSoundnessViolationGrowth()
+)
+struct FrameworkStressControlBindingTests {}
+
+@MainActor
+private final class ControlStressProbe<Value> {
+  var value: Value
+  var writes: [Value] = []
+
+  init(_ value: Value) {
+    self.value = value
+  }
+
+  func binding() -> Binding<Value> {
+    Binding(
+      get: { self.value },
+      set: {
+        self.value = $0
+        self.writes.append($0)
+      }
+    )
+  }
+}
+
+extension FrameworkStressControlBindingTests {
+  @Test(
+    "T256: bounds-inactive Stepper input cannot rewrite an out-of-range model", arguments: 0..<14)
+  func inactiveStepperPreservesRawValue(combination: Int) throws {
+    let useDouble = combination % 2 == 1
+    let below = (combination / 2) % 2 == 1
+    let input = combination / 4
+    // Activation is the increment action, so only the upper boundary applies.
+    let raw = below ? -5 : 10
+    let integer = ControlStressProbe(raw)
+    let floating = ControlStressProbe(Double(raw))
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("T256", "Root"), size: .init(width: 42, height: 4)
+    ) {
+      VStack(alignment: .leading, spacing: 0) {
+        if useDouble {
+          Stepper("Bounded", value: floating.binding(), in: 0.0...5.0)
+        } else {
+          Stepper("Bounded", value: integer.binding(), in: 0...5)
+        }
+      }
+    }
+    defer { harness.shutdown() }
+    #expect(harness.frame.contains(below ? "◁" : "▷"))
+    switch input {
+    case 0: _ = try harness.clickText(below ? "◁" : "▷")
+    case 1: _ = try harness.pressKey(KeyPress(below ? .arrowLeft : .arrowRight))
+    case 2:
+      let point = try #require(harness.point(forText: "Bounded"))
+      _ = try harness.scrollPointer(at: point, deltaY: below ? 1 : -1)
+    default: _ = try harness.pressKey(KeyPress(.return))
+    }
+    #expect(integer.value == raw)
+    #expect(floating.value == Double(raw))
+    #expect(integer.writes.isEmpty)
+    #expect(floating.writes.isEmpty)
+  }
+}
+
+// MARK: - Attempt 001: button action reinstall after enablement churn
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 001 reenabled button installs its current action")
+  func stressControlBinding001ReenabledButtonInstallsCurrentAction() throws {
+    // Hypothesis: removing a disabled Button registration and later restoring the same identity
+    // can resurrect the action closure captured before the disabled interval.
+    let probe = ControlStressProbe<[Int]>([])
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress001", "Root"),
+      size: .init(width: 54, height: 10)
+    ) {
+      ControlStress001Fixture(probe: probe)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Disable target 001")
+    _ = try harness.clickText("Advance action 001")
+    _ = try harness.clickText("Enable target 001")
+    _ = try harness.clickText("Fresh button 001 generation 1")
+
+    #expect(probe.value == [1])
+  }
+}
+
+@MainActor
+private struct ControlStress001Fixture: View {
+  let probe: ControlStressProbe<[Int]>
+  @State private var generation = 0
+  @State private var isEnabled = true
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Disable target 001") { isEnabled = false }
+      Button("Advance action 001") { generation += 1 }
+      Button("Enable target 001") { isEnabled = true }
+      Button("Fresh button 001 generation \(generation)") {
+        probe.value.append(generation)
+      }
+      .id("stable-button-001")
+      .disabled(!isEnabled)
+    }
+  }
+}
+
+// MARK: - Attempt 002: duplicate-label button entity reorder
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 002 reordered duplicate buttons dispatch by entity")
+  func stressControlBinding002ReorderedDuplicateButtonsDispatchByEntity() throws {
+    // Hypothesis: after stable ForEach entities reorder, duplicate visible labels can leave their
+    // pointer routes associated with the former occurrence order instead of the current entities.
+    let probe = ControlStressProbe<[Int]>([])
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress002", "Root"),
+      size: .init(width: 48, height: 9)
+    ) {
+      ControlStress002Fixture(probe: probe)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Reverse buttons 002")
+    _ = try harness.clickText("Duplicate action 002")
+    _ = try harness.clickText("Duplicate action 002", chooseLast: true)
+
+    #expect(probe.value == [2, 1])
+  }
+}
+
+@MainActor
+private struct ControlStress002Fixture: View {
+  let probe: ControlStressProbe<[Int]>
+  @State private var isReversed = false
+
+  private var values: [Int] {
+    isReversed ? [2, 1] : [1, 2]
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Reverse buttons 002") { isReversed = true }
+      ForEach(values, id: \.self) { value in
+        Button("Duplicate action 002") {
+          probe.value.append(value)
+        }
+      }
+    }
+  }
+}
+
+// MARK: - Attempt 003: button disabled during pointer press
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 003 disabling a pressed button cancels activation")
+  func stressControlBinding003DisablingPressedButtonCancelsActivation() throws {
+    // Hypothesis: pointer press capture can retain a Button action after the same control becomes
+    // disabled, allowing the later mouse-up to dispatch through a now-inert registration.
+    let probe = ControlStressProbe(0)
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress003", "Root"),
+      size: .init(width: 46, height: 8)
+    ) {
+      ControlStress003Fixture(probe: probe)
+    }
+    defer { harness.shutdown() }
+
+    let target = try #require(harness.point(forText: "Press target 003"))
+    _ = try harness.sendMouse(.down(.primary), at: target)
+    _ = try harness.pressKey(KeyPress(.character("c"), modifiers: .ctrl))
+    _ = try harness.sendMouse(.up(.primary), at: target)
+
+    #expect(probe.value == 0)
+  }
+}
+
+@MainActor
+private struct ControlStress003Fixture: View {
+  let probe: ControlStressProbe<Int>
+  @State private var isEnabled = true
+
+  var body: some View {
+    Panel(id: testIdentity("ControlStress003", "Panel")) {
+      VStack(alignment: .leading, spacing: 0) {
+        Text(isEnabled ? "Target enabled 003" : "Target disabled 003")
+        Button("Press target 003") {
+          probe.value += 1
+        }
+        .disabled(!isEnabled)
+      }
+    }
+    .keyCommand("Disable target 003", key: .character("c"), modifiers: .ctrl) {
+      isEnabled = false
+    }
+  }
+}
+
+// MARK: - Attempt 004: button role branch replacement
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 004 role replacement refreshes button action")
+  func stressControlBinding004RoleReplacementRefreshesButtonAction() throws {
+    // Hypothesis: replacing a same-identity Button across role-specialized conditional branches
+    // can restore the old action registration while rendering the new role and payload.
+    let probe = ControlStressProbe<[Int]>([])
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress004", "Root"),
+      size: .init(width: 52, height: 8)
+    ) {
+      ControlStress004Fixture(probe: probe)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Replace role 004")
+    _ = try harness.clickText("Role target 004 generation 1")
+
+    #expect(probe.value == [1])
+  }
+}
+
+@MainActor
+private struct ControlStress004Fixture: View {
+  let probe: ControlStressProbe<[Int]>
+  @State private var generation = 0
+  @State private var isDestructive = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Replace role 004") {
+        generation = 1
+        isDestructive = true
+      }
+      if isDestructive {
+        Button("Role target 004 generation \(generation)", role: .destructive) {
+          probe.value.append(generation)
+        }
+        .id("role-target-004")
+      } else {
+        Button("Role target 004 generation \(generation)") {
+          probe.value.append(generation)
+        }
+        .id("role-target-004")
+      }
+    }
+  }
+}
+
+// MARK: - Attempt 005: toggle binding retarget across disabled teardown
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 005 reenabled toggle writes its retargeted binding")
+  func stressControlBinding005ReenabledToggleWritesRetargetedBinding() throws {
+    // Hypothesis: a Toggle action removed while disabled can be restored with the pre-disable
+    // binding even when the same control identity is retargeted before it is enabled again.
+    let first = ControlStressProbe(false)
+    let second = ControlStressProbe(false)
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress005", "Root"),
+      size: .init(width: 52, height: 9)
+    ) {
+      ControlStress005Fixture(first: first, second: second)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Retarget and disable 005")
+    _ = try harness.clickText("Reenable toggle 005")
+    _ = try harness.clickText("Retargeted toggle 005")
+
+    #expect(first.value == false)
+    #expect(first.writes.isEmpty)
+    #expect(second.value == true)
+    #expect(second.writes == [true])
+  }
+}
+
+@MainActor
+private struct ControlStress005Fixture: View {
+  let first: ControlStressProbe<Bool>
+  let second: ControlStressProbe<Bool>
+  @State private var usesSecond = false
+  @State private var isEnabled = true
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Retarget and disable 005") {
+        usesSecond = true
+        isEnabled = false
+      }
+      Button("Reenable toggle 005") { isEnabled = true }
+      Toggle(
+        "Retargeted toggle 005",
+        isOn: usesSecond ? second.binding() : first.binding()
+      )
+      .id("retargeted-toggle-005")
+      .disabled(!isEnabled)
+    }
+  }
+}
+
+// MARK: - Attempt 006: duplicate-label toggle entity reorder
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 006 reordered duplicate toggles write by entity")
+  func stressControlBinding006ReorderedDuplicateTogglesWriteByEntity() throws {
+    // Hypothesis: Toggle action routes can follow occurrence order across a ForEach reorder and
+    // mutate the binding formerly displayed at that row rather than the current entity binding.
+    let probe = ControlStress006Probe()
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress006", "Root"),
+      size: .init(width: 50, height: 9)
+    ) {
+      ControlStress006Fixture(probe: probe)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Reverse toggles 006")
+    _ = try harness.clickText("Duplicate toggle 006")
+    _ = try harness.clickText("Duplicate toggle 006", chooseLast: true)
+
+    #expect(probe.values == [1: true, 2: true])
+    #expect(probe.writtenIDs == [2, 1])
+  }
+}
+
+@MainActor
+private final class ControlStress006Probe {
+  var values = [1: false, 2: false]
+  var writtenIDs: [Int] = []
+
+  func binding(for id: Int) -> Binding<Bool> {
+    Binding(
+      get: { self.values[id, default: false] },
+      set: {
+        self.values[id] = $0
+        self.writtenIDs.append(id)
+      }
+    )
+  }
+}
+
+@MainActor
+private struct ControlStress006Fixture: View {
+  let probe: ControlStress006Probe
+  @State private var isReversed = false
+
+  private var values: [Int] {
+    isReversed ? [2, 1] : [1, 2]
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Reverse toggles 006") { isReversed = true }
+      ForEach(values, id: \.self) { value in
+        Toggle("Duplicate toggle 006", isOn: probe.binding(for: value))
+      }
+    }
+  }
+}
+
+// MARK: - Attempt 007: toggle external write during pointer press
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 007 pressed toggle flips the latest external value")
+  func stressControlBinding007PressedToggleFlipsLatestExternalValue() throws {
+    // Hypothesis: a Toggle pointer press can snapshot the old Boolean and overwrite a newer
+    // external binding value when the release activation arrives after an intervening render.
+    let probe = ControlStressProbe(false)
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress007", "Root"),
+      size: .init(width: 48, height: 8)
+    ) {
+      ControlStress007Fixture(probe: probe)
+    }
+    defer { harness.shutdown() }
+
+    let target = try #require(harness.point(forText: "Press toggle 007"))
+    _ = try harness.sendMouse(.down(.primary), at: target)
+    _ = try harness.pressKey(KeyPress(.character("e"), modifiers: .ctrl))
+    _ = try harness.sendMouse(.up(.primary), at: target)
+
+    #expect(probe.value == false)
+    #expect(probe.writes == [false])
+  }
+}
+
+@MainActor
+private struct ControlStress007Fixture: View {
+  let probe: ControlStressProbe<Bool>
+  @State private var externalRevision = 0
+
+  var body: some View {
+    Panel(id: testIdentity("ControlStress007", "Panel")) {
+      VStack(alignment: .leading, spacing: 0) {
+        Text("External revision 007 \(externalRevision)")
+        Toggle("Press toggle 007", isOn: probe.binding())
+      }
+    }
+    .keyCommand("Externally enable 007", key: .character("e"), modifiers: .ctrl) {
+      probe.value = true
+      externalRevision += 1
+    }
+  }
+}
+
+// MARK: - Attempt 008: radio picker option-prefix insertion
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 008 inserted picker prefix keeps option routes aligned")
+  func stressControlBinding008InsertedPickerPrefixKeepsOptionRoutesAligned() throws {
+    // Hypothesis: inserting an option before a stable radio Picker can preserve index-derived
+    // pointer handlers from the prior option list and write the tag formerly at the clicked row.
+    let selection = ControlStressProbe("a")
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress008", "Root"),
+      size: .init(width: 48, height: 11)
+    ) {
+      ControlStress008Fixture(selection: selection)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Prepend option 008")
+    _ = try harness.clickText("Beta option 008")
+
+    #expect(selection.value == "b")
+    #expect(selection.writes == ["b"])
+  }
+}
+
+@MainActor
+private struct ControlStress008Fixture: View {
+  let selection: ControlStressProbe<String>
+  @State private var includesPrefix = false
+
+  private var options: [(String, String)] {
+    var result = [("a", "Alpha option 008"), ("b", "Beta option 008")]
+    if includesPrefix {
+      result.insert(("x", "Prefix option 008"), at: 0)
+    }
+    return result
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Prepend option 008") { includesPrefix = true }
+      Picker("Radio picker 008", selection: selection.binding()) {
+        ForEach(options, id: \.0) { option in
+          Text(option.1).tag(option.0)
+        }
+      }
+      .id("radio-picker-008")
+      .pickerStyle(.radioGroup)
+    }
+  }
+}
+
+// MARK: - Attempt 009: picker wheel binding retarget
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 009 picker wheel writes only its current binding")
+  func stressControlBinding009PickerWheelWritesOnlyCurrentBinding() throws {
+    // Hypothesis: the Picker root pointer route can retain a superseded selection binding even
+    // when keyboard navigation for the same stable control has been refreshed correctly.
+    let first = ControlStressProbe("c")
+    let second = ControlStressProbe("a")
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress009", "Root"),
+      size: .init(width: 52, height: 9)
+    ) {
+      ControlStress009Fixture(first: first, second: second)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Retarget picker wheel 009")
+    let pickerPoint = try #require(harness.point(forText: "Wheel picker 009"))
+    _ = try harness.scrollPointer(at: pickerPoint, deltaY: 1)
+
+    #expect(first.value == "c")
+    #expect(first.writes.isEmpty)
+    #expect(second.value == "b")
+    #expect(second.writes == ["b"])
+  }
+}
+
+@MainActor
+private struct ControlStress009Fixture: View {
+  let first: ControlStressProbe<String>
+  let second: ControlStressProbe<String>
+  @State private var usesSecond = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Retarget picker wheel 009") { usesSecond = true }
+      Picker(
+        "Wheel picker 009",
+        selection: usesSecond ? second.binding() : first.binding()
+      ) {
+        Text("Alpha 009").tag("a")
+        Text("Beta 009").tag("b")
+        Text("Gamma 009").tag("c")
+      }
+      .id("wheel-picker-009")
+      .pickerStyle(.segmented)
+    }
+  }
+}
+
+// MARK: - Attempt 010: picker option-order replacement while disabled
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 010 reenabled picker navigates its reordered tags")
+  func stressControlBinding010ReenabledPickerNavigatesReorderedTags() throws {
+    // Hypothesis: Picker key handlers removed during a disabled interval can be restored with the
+    // pre-disable ordered-tag snapshot after options reorder behind the inert control.
+    let selection = ControlStressProbe("b")
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress010", "Root"),
+      size: .init(width: 52, height: 10)
+    ) {
+      ControlStress010Fixture(selection: selection)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Disable and reverse 010")
+    _ = try harness.clickText("Reenable picker 010")
+    _ = try harness.focusText("Order picker 010")
+    _ = try harness.pressKey(KeyPress(.arrowRight))
+
+    #expect(selection.value == "a")
+    #expect(selection.writes == ["a"])
+  }
+}
+
+@MainActor
+private struct ControlStress010Fixture: View {
+  let selection: ControlStressProbe<String>
+  @State private var isEnabled = true
+  @State private var isReversed = false
+
+  private var options: [String] {
+    isReversed ? ["c", "b", "a"] : ["a", "b", "c"]
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Disable and reverse 010") {
+        isEnabled = false
+        isReversed = true
+      }
+      Button("Reenable picker 010") { isEnabled = true }
+      Picker("Order picker 010", selection: selection.binding()) {
+        ForEach(options, id: \.self) { option in
+          Text("Option 010 \(option)").tag(option)
+        }
+      }
+      .id("order-picker-010")
+      .pickerStyle(.segmented)
+      .disabled(!isEnabled)
+    }
+  }
+}
+
+// MARK: - Attempt 011: duplicate picker tags avoid redundant writes
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 011 duplicate selected tag avoids binding write")
+  func stressControlBinding011DuplicateSelectedTagAvoidsBindingWrite() throws {
+    // Hypothesis: option occurrence routing may bypass Picker's selection equality check when two
+    // distinct rows carry the same tag, producing a redundant external binding write.
+    let selection = ControlStressProbe("shared")
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress011", "Root"),
+      size: .init(width: 44, height: 8)
+    ) {
+      Picker("Alias picker 011", selection: selection.binding()) {
+        Text("First alias 011").tag("shared")
+        Text("Second alias 011").tag("shared")
+      }
+      .pickerStyle(.radioGroup)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Second alias 011")
+
+    #expect(selection.value == "shared")
+    #expect(selection.writes.isEmpty)
+  }
+}
+
+// MARK: - Attempt 012: picker backward navigation from missing selection
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 012 picker backward navigation recovers to last tag")
+  func stressControlBinding012PickerBackwardNavigationRecoversToLastTag() throws {
+    // Hypothesis: a Picker whose external selection has no current option can retain a stale
+    // selected index and move backward from that index instead of recovering to the last live tag.
+    let selection = ControlStressProbe("missing")
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress012", "Root"),
+      size: .init(width: 48, height: 8)
+    ) {
+      Picker("Recovery picker 012", selection: selection.binding()) {
+        Text("Alpha recovery 012").tag("a")
+        Text("Beta recovery 012").tag("b")
+        Text("Gamma recovery 012").tag("c")
+      }
+      .pickerStyle(.segmented)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.focusText("Recovery picker 012")
+    _ = try harness.pressKey(KeyPress(.arrowLeft))
+
+    #expect(selection.value == "c")
+    #expect(selection.writes == ["c"])
+  }
+}
+
+// MARK: - Attempt 013: slider wheel binding retarget
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 013 slider wheel writes only its current binding")
+  func stressControlBinding013SliderWheelWritesOnlyCurrentBinding() throws {
+    // Hypothesis: Slider's root wheel route can preserve the original numeric binding after the
+    // stable control retargets even when its keyboard and track routes use the replacement.
+    let first = ControlStressProbe(8)
+    let second = ControlStressProbe(1)
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress013", "Root"),
+      size: .init(width: 54, height: 9)
+    ) {
+      ControlStress013Fixture(first: first, second: second)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Retarget slider wheel 013")
+    let sliderPoint = try #require(harness.point(forText: "Wheel slider 013"))
+    _ = try harness.scrollPointer(at: sliderPoint, deltaY: -1)
+
+    #expect(first.value == 8)
+    #expect(first.writes.isEmpty)
+    #expect(second.value == 2)
+    #expect(second.writes == [2])
+  }
+}
+
+@MainActor
+private struct ControlStress013Fixture: View {
+  let first: ControlStressProbe<Int>
+  let second: ControlStressProbe<Int>
+  @State private var usesSecond = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Retarget slider wheel 013") { usesSecond = true }
+      Slider(
+        "Wheel slider 013",
+        value: usesSecond ? second.binding() : first.binding(),
+        in: 0...10
+      )
+      .id("wheel-slider-013")
+    }
+  }
+}
+
+// MARK: - Attempt 014: slider track range replacement
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 014 slider track uses its replacement range")
+  func stressControlBinding014SliderTrackUsesReplacementRange() throws {
+    // Hypothesis: a stable Slider can redraw for new bounds while its index-derived track pointer
+    // route continues mapping locations through the old range and step contract.
+    let value = ControlStressProbe(8)
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress014", "Root"),
+      size: .init(width: 58, height: 9)
+    ) {
+      ControlStress014Fixture(value: value)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Replace slider range 014")
+    let leftThumb = try #require(harness.point(forText: "●"))
+    _ = try harness.click(Point(x: leftThumb.x + 7, y: leftThumb.y))
+
+    #expect(value.value == 20)
+    #expect(value.writes == [20, 20])
+  }
+}
+
+@MainActor
+private struct ControlStress014Fixture: View {
+  let value: ControlStressProbe<Int>
+  @State private var usesReplacementRange = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Replace slider range 014") { usesReplacementRange = true }
+      Slider(
+        "Track slider 014",
+        value: value.binding(),
+        in: usesReplacementRange ? 10...20 : 0...10,
+        step: usesReplacementRange ? 5 : 1
+      )
+      .id("track-slider-014")
+      Text("Slider value 014 \(value.value)")
+    }
+  }
+}
+
+// MARK: - Attempt 015: slider numeric storage kind replacement
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 015 slider replacement switches numeric binding type")
+  func stressControlBinding015SliderReplacementSwitchesNumericBindingType() throws {
+    // Hypothesis: replacing an integer Slider with a same-identity Double Slider can restore the
+    // integer key handler because both variants publish the same control registration shape.
+    let integer = ControlStressProbe(4)
+    let double = ControlStressProbe(0.25)
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress015", "Root"),
+      size: .init(width: 58, height: 9)
+    ) {
+      ControlStress015Fixture(integer: integer, double: double)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Use double slider 015")
+    _ = try harness.focusText("Numeric slider 015")
+    _ = try harness.pressKey(KeyPress(.arrowRight))
+
+    #expect(integer.value == 4)
+    #expect(integer.writes.isEmpty)
+    #expect(double.value == 0.5)
+    #expect(double.writes == [0.5])
+  }
+}
+
+@MainActor
+private struct ControlStress015Fixture: View {
+  let integer: ControlStressProbe<Int>
+  let double: ControlStressProbe<Double>
+  @State private var usesDouble = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Use double slider 015") { usesDouble = true }
+      if usesDouble {
+        Slider("Numeric slider 015", value: double.binding(), in: 0.0...1.0, step: 0.25)
+          .id("numeric-slider-015")
+      } else {
+        Slider("Numeric slider 015", value: integer.binding(), in: 0...8, step: 2)
+          .id("numeric-slider-015")
+      }
+    }
+  }
+}
+
+// MARK: - Attempt 016: slider activation at and after upper bound
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 016 slider activation respects the live upper bound")
+  func stressControlBinding016SliderActivationRespectsLiveUpperBound() throws {
+    // Hypothesis: Slider's activation action can either issue a redundant write at its upper bound
+    // or remain inert after an external replacement moves the value back into the live range.
+    let value = ControlStressProbe(10)
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress016", "Root"),
+      size: .init(width: 54, height: 9)
+    ) {
+      ControlStress016Fixture(value: value)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.focusText("Activation slider 016")
+    _ = try harness.pressKey(KeyPress(.return))
+    #expect(value.value == 10)
+    #expect(value.writes.isEmpty)
+
+    _ = try harness.clickText("Reset slider to nine 016")
+    _ = try harness.focusText("Activation slider 016")
+    _ = try harness.pressKey(KeyPress(.space))
+    #expect(value.value == 10)
+    #expect(value.writes == [10])
+  }
+}
+
+@MainActor
+private struct ControlStress016Fixture: View {
+  let value: ControlStressProbe<Int>
+  @State private var externalRevision = 0
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Reset slider to nine 016") {
+        value.value = 9
+        externalRevision += 1
+      }
+      Slider("Activation slider 016", value: value.binding(), in: 0...10)
+      Text("External slider revision 016 \(externalRevision)")
+    }
+  }
+}
+
+// MARK: - Attempt 017: stepper increment route binding retarget
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 017 stepper increment writes only its current binding")
+  func stressControlBinding017StepperIncrementWritesOnlyCurrentBinding() throws {
+    // Hypothesis: Stepper's child increment pointer route can retain the first binding after the
+    // stable root control retargets, diverging from its root activation and keyboard handlers.
+    let first = ControlStressProbe(8)
+    let second = ControlStressProbe(1)
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress017", "Root"),
+      size: .init(width: 54, height: 9)
+    ) {
+      ControlStress017Fixture(first: first, second: second)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Retarget stepper increment 017")
+    _ = try harness.clickText("▶")
+
+    #expect(first.value == 8)
+    #expect(first.writes.isEmpty)
+    #expect(second.value == 2)
+    #expect(second.writes == [2])
+  }
+}
+
+@MainActor
+private struct ControlStress017Fixture: View {
+  let first: ControlStressProbe<Int>
+  let second: ControlStressProbe<Int>
+  @State private var usesSecond = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Retarget stepper increment 017") { usesSecond = true }
+      Stepper(
+        "Pointer stepper 017",
+        value: usesSecond ? second.binding() : first.binding(),
+        in: 0...10
+      )
+      .id("pointer-stepper-017")
+    }
+  }
+}
+
+// MARK: - Attempt 018: stepper decrement route bounds replacement
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 018 stepper decrement honors replacement lower bound")
+  func stressControlBinding018StepperDecrementHonorsReplacementLowerBound() throws {
+    // Hypothesis: Stepper can render its decrement affordance as unavailable for new bounds while
+    // the retained decrement pointer route still applies the previous range contract.
+    let value = ControlStressProbe(5)
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress018", "Root"),
+      size: .init(width: 54, height: 9)
+    ) {
+      ControlStress018Fixture(value: value)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Raise stepper minimum 018")
+    _ = try harness.clickText("◁")
+
+    #expect(value.value == 5 && value.writes.isEmpty)
+  }
+}
+
+@MainActor
+private struct ControlStress018Fixture: View {
+  let value: ControlStressProbe<Int>
+  @State private var usesRaisedMinimum = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Raise stepper minimum 018") { usesRaisedMinimum = true }
+      Stepper(
+        "Bounded stepper 018",
+        value: value.binding(),
+        in: usesRaisedMinimum ? 5...15 : 0...10,
+        step: usesRaisedMinimum ? 2 : 1
+      )
+      .id("bounded-stepper-018")
+    }
+  }
+}
+
+// MARK: - Attempt 019: stepper wheel step replacement
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 019 stepper wheel uses its replacement step")
+  func stressControlBinding019StepperWheelUsesReplacementStep() throws {
+    // Hypothesis: Stepper's root wheel handler can retain the original step while the child
+    // affordances and keyboard registration resolve the replacement adjustment contract.
+    let value = ControlStressProbe(0)
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress019", "Root"),
+      size: .init(width: 52, height: 9)
+    ) {
+      ControlStress019Fixture(value: value)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Use step three 019")
+    let stepperPoint = try #require(harness.point(forText: "Wheel stepper 019"))
+    _ = try harness.scrollPointer(at: stepperPoint, deltaY: -1)
+
+    #expect(value.value == 3)
+    #expect(value.writes == [3])
+  }
+}
+
+@MainActor
+private struct ControlStress019Fixture: View {
+  let value: ControlStressProbe<Int>
+  @State private var usesLargeStep = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Use step three 019") { usesLargeStep = true }
+      Stepper(
+        "Wheel stepper 019",
+        value: value.binding(),
+        in: 0...12,
+        step: usesLargeStep ? 3 : 1
+      )
+      .id("wheel-stepper-019")
+    }
+  }
+}
+
+// MARK: - Attempt 020: stepper route recovery after disabled bound reset
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 020 reenabled stepper increments externally reset value once")
+  func stressControlBinding020ReenabledStepperIncrementsExternallyResetValueOnce() throws {
+    // Hypothesis: a Stepper disabled at its upper bound can restore either no increment route or
+    // duplicate routes when its binding is externally reset before the control is reenabled.
+    let value = ControlStressProbe(10)
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress020", "Root"),
+      size: .init(width: 58, height: 10)
+    ) {
+      ControlStress020Fixture(value: value)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Disable and reset stepper 020")
+    _ = try harness.clickText("Reenable stepper 020")
+    _ = try harness.clickText("▶")
+
+    #expect(value.value == 5)
+    #expect(value.writes == [5])
+  }
+}
+
+@MainActor
+private struct ControlStress020Fixture: View {
+  let value: ControlStressProbe<Int>
+  @State private var isEnabled = true
+  @State private var externalRevision = 0
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Disable and reset stepper 020") {
+        isEnabled = false
+        value.value = 4
+        externalRevision += 1
+      }
+      Button("Reenable stepper 020") { isEnabled = true }
+      Stepper("Recovered stepper 020", value: value.binding(), in: 0...10)
+        .id("recovered-stepper-020")
+        .disabled(!isEnabled)
+      Text("Stepper external revision 020 \(externalRevision)")
+    }
+  }
+}
+
+// MARK: - Attempt 021: duplicate-label disclosure entity reorder
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 021 reordered disclosures expand by entity")
+  func stressControlBinding021ReorderedDisclosuresExpandByEntity() throws {
+    // Hypothesis: after DisclosureGroup entities reorder, duplicate labels can retain occurrence-
+    // indexed action routes that toggle the binding and content formerly occupying that row.
+    let probe = ControlStress021Probe()
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress021", "Root"),
+      size: .init(width: 54, height: 11)
+    ) {
+      ControlStress021Fixture(probe: probe)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Reverse disclosures 021")
+    let frame = try harness.clickText("Duplicate disclosure 021")
+
+    #expect(probe.values == [1: false, 2: true])
+    #expect(probe.writtenIDs == [2])
+    #expect(frame.contains("Disclosure body 021 2"))
+    #expect(!frame.contains("Disclosure body 021 1"))
+  }
+}
+
+@MainActor
+private final class ControlStress021Probe {
+  var values = [1: false, 2: false]
+  var writtenIDs: [Int] = []
+
+  func binding(for id: Int) -> Binding<Bool> {
+    Binding(
+      get: { self.values[id, default: false] },
+      set: {
+        self.values[id] = $0
+        self.writtenIDs.append(id)
+      }
+    )
+  }
+}
+
+@MainActor
+private struct ControlStress021Fixture: View {
+  let probe: ControlStress021Probe
+  @State private var isReversed = false
+
+  private var values: [Int] {
+    isReversed ? [2, 1] : [1, 2]
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Reverse disclosures 021") { isReversed = true }
+      ForEach(values, id: \.self) { value in
+        DisclosureGroup(
+          "Duplicate disclosure 021",
+          isExpanded: probe.binding(for: value)
+        ) {
+          Text("Disclosure body 021 \(value)")
+        }
+      }
+    }
+  }
+}
+
+// MARK: - Attempt 022: disclosure external expansion while disabled
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 022 reenabled disclosure collapses external expansion")
+  func stressControlBinding022ReenabledDisclosureCollapsesExternalExpansion() throws {
+    // Hypothesis: a DisclosureGroup disabled while its binding changes externally can restore an
+    // action that toggles a cached pre-disable value instead of the current expanded binding.
+    let expansion = ControlStressProbe(false)
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress022", "Root"),
+      size: .init(width: 56, height: 10)
+    ) {
+      ControlStress022Fixture(expansion: expansion)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Disable and expand 022")
+    var frame = try harness.clickText("Reenable disclosure 022")
+    #expect(frame.contains("Externally expanded body 022"))
+    frame = try harness.clickText("External disclosure 022")
+
+    #expect(expansion.value == false)
+    #expect(expansion.writes == [false])
+    #expect(!frame.contains("Externally expanded body 022"))
+  }
+}
+
+@MainActor
+private struct ControlStress022Fixture: View {
+  let expansion: ControlStressProbe<Bool>
+  @State private var isEnabled = true
+  @State private var externalRevision = 0
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Disable and expand 022") {
+        isEnabled = false
+        expansion.value = true
+        externalRevision += 1
+      }
+      Button("Reenable disclosure 022") { isEnabled = true }
+      DisclosureGroup("External disclosure 022", isExpanded: expansion.binding()) {
+        Text("Externally expanded body 022")
+      }
+      .id("external-disclosure-022")
+      .disabled(!isEnabled)
+      Text("Disclosure external revision 022 \(externalRevision)")
+    }
+  }
+}
+
+// MARK: - Attempt 023: open menu duplicate-label action reorder
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 023 open menu reorder dispatches current entity action")
+  func stressControlBinding023OpenMenuReorderDispatchesCurrentEntityAction() throws {
+    // Hypothesis: reordering stable Menu items with duplicate labels while the portal is open can
+    // update row order without updating occurrence-indexed action registrations.
+    let probe = ControlStressProbe<[Int]>([])
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress023", "Root"),
+      size: .init(width: 58, height: 12)
+    ) {
+      ControlStress023Fixture(probe: probe)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Entity menu 023")
+    _ = try harness.clickText("Reverse open menu 023")
+    _ = try harness.clickText("Duplicate menu action 023")
+
+    #expect(probe.value == [2])
+  }
+}
+
+@MainActor
+private struct ControlStress023Fixture: View {
+  let probe: ControlStressProbe<[Int]>
+  @State private var isReversed = false
+
+  private var values: [Int] {
+    isReversed ? [2, 1] : [1, 2]
+  }
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 2) {
+      Menu("Entity menu 023") {
+        ForEach(values, id: \.self) { value in
+          Button("Duplicate menu action 023") {
+            probe.value.append(value)
+          }
+        }
+      }
+      Button("Reverse open menu 023") { isReversed = true }
+    }
+  }
+}
+
+// MARK: - Attempt 024: standalone link destination replacement
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 024 standalone link opens its replacement destination")
+  func stressControlBinding024StandaloneLinkOpensReplacementDestination() throws {
+    // Hypothesis: a same-label standalone Link can redraw hyperlink cells for a new destination
+    // while its stable activation registration continues opening the original destination.
+    let opened = ControlStressProbe<[String]>([])
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress024", "Root"),
+      size: .init(width: 58, height: 8)
+    ) {
+      ControlStress024Fixture(opened: opened)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.clickText("Replace link destination 024")
+    _ = try harness.clickText("Stable standalone link 024")
+
+    #expect(opened.value == ["https://replacement.example/024"])
+  }
+}
+
+@MainActor
+private struct ControlStress024Fixture: View {
+  let opened: ControlStressProbe<[String]>
+  @State private var usesReplacement = false
+
+  private var destination: LinkDestination {
+    LinkDestination(
+      usesReplacement
+        ? "https://replacement.example/024"
+        : "https://original.example/024"
+    )
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button("Replace link destination 024") { usesReplacement = true }
+      Link("Stable standalone link 024", destination: destination)
+        .id("stable-link-024")
+    }
+    .openLinkAction(
+      OpenLinkAction { destination in
+        opened.value.append(destination.rawValue)
+        return true
+      }
+    )
+  }
+}
+
+// MARK: - Attempt 025: text field disabled external replacement
+
+extension FrameworkStressControlBindingTests {
+  @Test("stress control binding 025 text field resumes from disabled replacement value")
+  func stressControlBinding025TextFieldResumesFromDisabledReplacementValue() throws {
+    // Hypothesis: disabling a focused TextField while replacing its external binding can leave a
+    // live key handler during the inert interval or restore the pre-replacement editing buffer.
+    let text = ControlStressProbe("alpha")
+    let harness = try StressRuntimeHarness(
+      rootIdentity: testIdentity("ControlStress025", "Root"),
+      size: .init(width: 54, height: 9)
+    ) {
+      ControlStress025Fixture(text: text)
+    }
+    defer { harness.shutdown() }
+
+    _ = try harness.focus(ControlStress025Fixture.fieldIdentity)
+    _ = try harness.pressKey(KeyPress(.character("c"), modifiers: .ctrl))
+    _ = try harness.pressKey(KeyPress(.character("x")))
+    #expect(text.value == "beta")
+    #expect(text.writes.isEmpty)
+
+    _ = try harness.clickText("Reenable text field 025")
+    _ = try harness.focus(ControlStress025Fixture.fieldIdentity)
+    _ = try harness.pressKey(KeyPress(.character("!")))
+    #expect(text.value == "beta!")
+    #expect(text.writes == ["beta!"])
+  }
+}
+
+@MainActor
+private struct ControlStress025Fixture: View {
+  static let fieldIdentity = testIdentity("ControlStress025", "Field")
+
+  let text: ControlStressProbe<String>
+  @State private var isEnabled = true
+  @State private var externalRevision = 0
+
+  var body: some View {
+    Panel(id: testIdentity("ControlStress025", "Panel")) {
+      VStack(alignment: .leading, spacing: 0) {
+        Button("Reenable text field 025") { isEnabled = true }
+        Text("Text field external revision 025 \(externalRevision)")
+        TextField("Bound field 025", text: text.binding())
+          .id(Self.fieldIdentity)
+          .textFieldStyle(.plain)
+          .disabled(!isEnabled)
+      }
+    }
+    .keyCommand("Disable and replace field 025", key: .character("c"), modifiers: .ctrl) {
+      isEnabled = false
+      text.value = "beta"
+      externalRevision += 1
+    }
+  }
+}

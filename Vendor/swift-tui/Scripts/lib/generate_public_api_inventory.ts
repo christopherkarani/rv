@@ -1,0 +1,1334 @@
+#!/usr/bin/env bun
+//
+// generate_public_api_inventory.ts
+//
+// Reads the symbol-graph JSON files emitted by `swift package
+// dump-symbol-graph` and the evaluated manifest. Produces committed artefacts:
+//
+//   docs/PUBLIC_API_BASELINE.md    — curated, classification-grouped list of
+//                                    every public top-level symbol per module.
+//                                    Reviewers read this.
+//   docs/.public-api-baseline.txt  — flat sorted list of every public symbol
+//                                    path (top-level + members). Reviewers
+//                                    git-diff this.
+//   docs/PUBLIC_MODULE_MAP.md      — product roots, supported imports, ownership
+//                                    counts, and conditional re-export paths.
+//
+// Classifications come from docs/public_api_overrides.yml. Symbols not in
+// that file fall into the `pending-review` bucket.
+//
+// `--check` also runs a report-only doc-comment ratchet over `canonical`
+// symbols (see ENFORCE_DOC_COMMENTS).
+//
+// Run via `Scripts/generate_public_api_inventory.sh`. The shell wrapper
+// handles the swift toolchain invocation; this file is pure parse + emit.
+
+import { Glob } from "bun";
+import { dirname, join, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
+import { parse as parseYaml } from "yaml";
+
+// ---------------------------------------------------------------------------
+// CLI args
+
+interface Args {
+  symbolgraphDir: string;
+  overrides: string;
+  baselineMd: string;
+  baselineFlat: string;
+  /** SPI-inclusive symbol graph dir; enables the SPI baseline (F58). */
+  spiSymbolgraphDir?: string;
+  /** Output path for the flat SPI-only baseline; paired with the above. */
+  baselineSpi?: string;
+  /** Evaluated manifest and source membership from swift package describe --type json. */
+  packageManifest: string;
+  packageRoot: string;
+  moduleMap: string;
+  check: boolean;
+  allowMissingModules: string[];
+}
+
+function parseArgs(argv: readonly string[]): Args {
+  const get = (flag: string): string | undefined => {
+    const i = argv.indexOf(flag);
+    return i >= 0 ? argv[i + 1] : undefined;
+  };
+  const required = (flag: string): string => {
+    const v = get(flag);
+    if (!v) {
+      throw new Error(`Missing required argument: ${flag}`);
+    }
+    return v;
+  };
+  const spiSymbolgraphDir = get("--spi-symbolgraph-dir");
+  const baselineSpi = get("--baseline-spi");
+  if ((spiSymbolgraphDir === undefined) !== (baselineSpi === undefined)) {
+    throw new Error(
+      "--spi-symbolgraph-dir and --baseline-spi must be passed together",
+    );
+  }
+  return {
+    symbolgraphDir: required("--symbolgraph-dir"),
+    overrides: required("--overrides"),
+    baselineMd: required("--baseline-md"),
+    baselineFlat: required("--baseline-flat"),
+    spiSymbolgraphDir,
+    baselineSpi,
+    packageManifest: required("--package-manifest"),
+    packageRoot: get("--package-root") ?? ".",
+    moduleMap: get("--module-map") ?? "docs/PUBLIC_MODULE_MAP.md",
+    check: argv.includes("--check"),
+    allowMissingModules: values(argv, "--allow-missing-module"),
+  };
+}
+
+function values(argv: readonly string[], flag: string): string[] {
+  const result: string[] = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === flag && argv[i + 1]) {
+      result.push(argv[i + 1]!);
+    }
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Symbol graph types
+//
+// We use a permissive interface — the symbol graph schema has many fields
+// we don't care about, so we narrow only what we read.
+
+interface SymbolGraphSymbol {
+  identifier: { precise: string };
+  pathComponents: string[];
+  kind: { identifier: string; displayName: string };
+  accessLevel: string;
+  names: { title: string };
+  declarationFragments?: ReadonlyArray<{ kind: string; spelling: string }>;
+  /** Present when the declaration carries a `///` documentation comment. */
+  docComment?: { lines: ReadonlyArray<{ text: string }> };
+}
+
+interface SymbolGraph {
+  module: { name: string };
+  symbols: SymbolGraphSymbol[];
+}
+
+// ---------------------------------------------------------------------------
+// Module configuration
+//
+// This is the symbol-graph census, not a product list. Product membership is
+// derived from the evaluated manifest; names of products and modules may differ.
+
+export const ALL_MODULES = [
+  "SwiftTUI",
+  "SwiftTUIRuntime",
+  "SwiftTUIProfiling",
+  "SwiftTUIViews",
+  "SwiftTUIAnimatedImage",
+  "SwiftTUIArguments",
+  "SwiftTUIPTYPrimitives",
+  "SwiftTUITerminalCLI",
+  "SwiftTUICLIAttach",
+  "SwiftTUICLI",
+  "SwiftTUIWASI",
+  "SwiftTUIWebHost",
+  "SwiftTUIWebHostCLI",
+  "SwiftTUIAndroidHost",
+  "SwiftTUICore",
+  "SwiftTUIPrimitives",
+  "SwiftTUIGraph",
+  "SwiftTUIPTYCPrimitives",
+  "SwiftTUIPlatformIO",
+  "SwiftTUITestSupport",
+] as const;
+const TEST_SUPPORT_MODULES = ["SwiftTUITestSupport"] as const;
+
+// Library products which intentionally do not participate in the inventory.
+// Keep this empty unless a product has a reviewed reason to be absent.
+const EXCLUDED_PRODUCTS: readonly string[] = [];
+
+// SwiftPM emits graphs for non-product implementation and vendored targets as
+// well as the configured public/test-support modules. Every blind spot is
+// named, rather than hidden behind a prefix rule.
+const KNOWN_UNSCANNED_MODULES = [
+  // Executable entry-point support; it is not a library product or API surface.
+  "CEntryPointImageLocator",
+  // Vendored FIGlet implementation; consumers use SwiftTUI's Image surface.
+  "SwiftTUIVendorFiglet",
+  // Generated FIGlet font payload support; it is not a standalone product.
+  "SwiftTUIVendorFigletEmbeddedFonts",
+  // Vendored image decoders are implementation details of SwiftTUIAnimatedImage.
+  "SwiftTUIVendorGIF",
+  "SwiftTUIVendorJPEG",
+  "SwiftTUIVendorPNG",
+  // Vendored signal handling is an implementation detail of terminal hosts.
+  "SwiftTUIVendorUnixSignals",
+  // WASI host bridge implementation; consumers use the SwiftTUIWASI product.
+  "SwiftTUIWASISurfaceBridge",
+] as const;
+
+type ModuleName = (typeof ALL_MODULES)[number];
+
+// ---------------------------------------------------------------------------
+// Classification
+
+type Classification =
+  | "canonical"
+  | "package-only-seam"
+  | "test-support"
+  | "deprecated"
+  | "removed"
+  | "pending-review";
+
+const CLASSIFICATION_ORDER: readonly Classification[] = [
+  "canonical",
+  "package-only-seam",
+  "test-support",
+  "deprecated",
+  "pending-review",
+  "removed",
+];
+
+const CLASSIFICATION_HEADINGS: Record<Classification, string> = {
+  canonical: "Canonical surface",
+  "package-only-seam": "Package-only seams",
+  "test-support": "Test-support",
+  deprecated: "Deprecated",
+  removed: "Removed (must not appear)",
+  "pending-review": "Pending review ⚠",
+};
+
+// Doc-comment coverage gate.
+//
+// `--check` reports how many `canonical`-classified top-level symbols carry no
+// `///` summary. The consumer-facing surface is not yet fully documented, so
+// this is a report-only ratchet: the count is printed but does not fail the
+// gate. Flip ENFORCE_DOC_COMMENTS to `true` once the count reaches zero — that
+// turns it into a hard gate that locks the canonical surface documented.
+const ENFORCE_DOC_COMMENTS = false;
+
+interface OverrideFile {
+  classifications?: Partial<Record<Classification, string[]>>;
+  /** Module-level fallback. Applied before the global `default`. */
+  module_defaults?: Partial<Record<string, Classification>>;
+  /** Global fallback for any symbol not otherwise classified. */
+  default?: Classification;
+  notes?: Record<string, string>;
+  /**
+   * Qualified symbols that are known to be compiled out on some platforms.
+   * They are still validated on every platform where they appear.
+   */
+  platform_exceptions?: string[];
+  /**
+   * Qualified symbols that carry a SwiftUI name with deliberately different
+   * semantics. Orthogonal to the classification axis. `--check` requires each
+   * listed symbol to be live and to be named in the divergence register
+   * (`Divergences-And-Gaps.md`), so the register cannot silently rot.
+   */
+  swiftui_divergent?: string[];
+}
+
+/** Register article that every `swiftui_divergent` symbol must appear in. */
+const DIVERGENCE_REGISTER_PATH = join(
+  "Sources",
+  "SwiftTUIViews",
+  "SwiftTUIViews.docc",
+  "Divergences-And-Gaps.md",
+);
+
+// ---------------------------------------------------------------------------
+// Data model
+
+const KIND_LABELS: Record<string, string> = {
+  "swift.struct": "struct",
+  "swift.class": "class",
+  "swift.enum": "enum",
+  "swift.protocol": "protocol",
+  "swift.typealias": "typealias",
+  "swift.actor": "actor",
+  "swift.func": "func",
+  "swift.func.op": "operator",
+  "swift.method": "method",
+  "swift.init": "init",
+  "swift.deinit": "deinit",
+  "swift.property": "property",
+  "swift.type.property": "static property",
+  "swift.type.method": "static method",
+  "swift.subscript": "subscript",
+  "swift.enum.case": "case",
+  "swift.var": "var",
+  "swift.let": "let",
+  "swift.associatedtype": "associatedtype",
+};
+
+interface TopLevelEntry {
+  /** "SwiftTUI.RunLoop" */
+  qualifiedName: string;
+  /** "RunLoop" */
+  name: string;
+  /** "class" / "struct" / etc. */
+  kindLabel: string;
+  /** raw kind id from the symbol graph */
+  kindId: string;
+  /** members nested inside this top-level type */
+  members: MemberEntry[];
+  classification: Classification;
+  /** whether the declaration carries a `///` documentation comment */
+  hasDoc: boolean;
+  /**
+   * True when this entry is not a type defined by the module but an extension
+   * the module adds to a type owned by another module (e.g. `Scene.profiling`).
+   * Such entries contribute their members to the flat baseline but never a bare
+   * owner line, and are exempt from the doc-comment ratchet.
+   */
+  isExternalExtension: boolean;
+}
+
+interface MemberEntry {
+  /** "RunLoop.run()" */
+  pathInModule: string;
+  kindLabel: string;
+}
+
+interface ModuleReport {
+  module: ModuleName;
+  topLevel: TopLevelEntry[];
+}
+
+// ---------------------------------------------------------------------------
+// Loading
+
+async function loadOverrides(path: string): Promise<{
+  classification: Map<string, Classification>;
+  moduleDefaults: Map<string, Classification>;
+  defaultClassification: Classification;
+  notes: Map<string, string>;
+  platformExceptions: Set<string>;
+  swiftuiDivergent: string[];
+}> {
+  const file = Bun.file(path);
+  if (!(await file.exists())) {
+    return {
+      classification: new Map(),
+      moduleDefaults: new Map(),
+      defaultClassification: "pending-review",
+      notes: new Map(),
+      platformExceptions: new Set(),
+      swiftuiDivergent: [],
+    };
+  }
+  const raw = await file.text();
+  const parsed = (parseYaml(raw) ?? {}) as OverrideFile;
+  const classification = new Map<string, Classification>();
+  for (const cls of CLASSIFICATION_ORDER) {
+    const list = parsed.classifications?.[cls] ?? [];
+    for (const sym of list) {
+      classification.set(sym, cls);
+    }
+  }
+  const moduleDefaults = new Map<string, Classification>(
+    Object.entries(parsed.module_defaults ?? {}) as [string, Classification][],
+  );
+  const notes = new Map(Object.entries(parsed.notes ?? {}));
+  return {
+    classification,
+    moduleDefaults,
+    defaultClassification: parsed.default ?? "pending-review",
+    notes,
+    platformExceptions: new Set(parsed.platform_exceptions ?? []),
+    swiftuiDivergent: parsed.swiftui_divergent ?? [],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Configuration validation
+
+function qualifiedModule(name: string): string | undefined {
+  const match = name.match(
+    /^([A-Za-z_][A-Za-z0-9_]*)\.[A-Za-z_][A-Za-z0-9_]*(?:\([^.\s*]*\))?$/,
+  );
+  return match?.[1];
+}
+
+function validateQualifiedKey(
+  key: string,
+  source: string,
+  knownModules: ReadonlySet<string>,
+  failures: string[],
+): string | undefined {
+  const module = qualifiedModule(key);
+  if (!module) {
+    failures.push(`${source} key '${key}' must have Module.Name shape`);
+    return undefined;
+  }
+  if (!knownModules.has(module)) {
+    failures.push(`${source} key '${key}' names unknown module '${module}'`);
+    return undefined;
+  }
+  return module;
+}
+
+function validateOverrides(
+  overrides: Awaited<ReturnType<typeof loadOverrides>>,
+  reports: ReadonlyArray<ModuleReport>,
+  options: {
+    missingModules: ReadonlySet<string>;
+    allowedMissingModules: ReadonlySet<string>;
+  },
+): void {
+  const failures: string[] = [];
+  const knownModules = new Set<string>(ALL_MODULES);
+  const emittedTopLevel = new Set<string>();
+  for (const report of reports) {
+    for (const entry of report.topLevel) {
+      emittedTopLevel.add(entry.qualifiedName);
+    }
+  }
+
+  for (const module of overrides.moduleDefaults.keys()) {
+    if (!knownModules.has(module)) {
+      failures.push(
+        `module_defaults key '${module}' is not a configured module`,
+      );
+    }
+  }
+
+  for (const key of overrides.platformExceptions) {
+    validateQualifiedKey(key, "platform_exceptions", knownModules, failures);
+    if (
+      !overrides.classification.has(key) &&
+      !overrides.notes.has(key)
+    ) {
+      failures.push(
+        `platform_exceptions key '${key}' is unused; add it to classifications or notes`,
+      );
+    }
+  }
+
+  const validatePresentKey = (
+    key: string,
+    source: string,
+  ): void => {
+    const localFailures: string[] = [];
+    const module = validateQualifiedKey(key, source, knownModules, localFailures);
+    if (!module) {
+      failures.push(...localFailures);
+      return;
+    }
+    if (emittedTopLevel.has(key)) return;
+    if (overrides.platformExceptions.has(key)) return;
+    if (
+      options.missingModules.has(module) &&
+      options.allowedMissingModules.has(module)
+    ) {
+      return;
+    }
+    failures.push(
+      `${source} key '${key}' does not match a top-level dump symbol`,
+    );
+  };
+
+  for (const [key, classification] of overrides.classification) {
+    if (classification === "removed") {
+      validateQualifiedKey(key, "removed", knownModules, failures);
+    } else {
+      validatePresentKey(
+        key,
+        `classifications.${classification}`,
+      );
+    }
+  }
+  for (const key of overrides.notes.keys()) {
+    validatePresentKey(key, "notes");
+  }
+  for (const key of overrides.swiftuiDivergent) {
+    validatePresentKey(key, "swiftui_divergent");
+  }
+
+  if (failures.length > 0) {
+    throw new Error(
+      "Invalid docs/public_api_overrides.yml:\n" +
+        failures.map((failure) => `  - ${failure}`).join("\n"),
+    );
+  }
+}
+
+export interface PackageDescription {
+  products: { name: string; targets: string[]; type: { library?: string[] } }[];
+  targets: { name: string; type: string; path: string; sources: string[] }[];
+}
+
+export function libraryProducts(manifest: PackageDescription) {
+  return manifest.products.filter((product) => product.type.library !== undefined)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function emittedGraphModules(symbolgraphDir: string): Promise<string[]> {
+  const modules = new Set<string>();
+  const glob = new Glob("*.symbols.json");
+  for await (const name of glob.scan({ cwd: symbolgraphDir, onlyFiles: true })) {
+    const graph = (await Bun.file(join(symbolgraphDir, name)).json()) as SymbolGraph;
+    modules.add(graph.module.name);
+  }
+  return [...modules].sort();
+}
+
+async function validateModuleReconciliation(
+  args: Args,
+  manifest: PackageDescription,
+): Promise<void> {
+  const configuredModules = new Set<string>(ALL_MODULES);
+  const excludedProducts = new Set(EXCLUDED_PRODUCTS);
+  const knownUnscanned = new Set<string>(KNOWN_UNSCANNED_MODULES);
+  const failures: string[] = [];
+
+  const targets = new Set(manifest.targets.map((target) => target.name));
+  for (const product of libraryProducts(manifest)) {
+    for (const target of product.targets) {
+      if (!targets.has(target)) failures.push(`product '${product.name}' has unknown target '${target}'`);
+      if (!configuredModules.has(target) && !excludedProducts.has(product.name)) {
+        failures.push(`library product '${product.name}' target '${target}' is missing from ALL_MODULES`);
+      }
+    }
+  }
+
+  for (const module of await emittedGraphModules(args.symbolgraphDir)) {
+    if (!configuredModules.has(module) && !knownUnscanned.has(module)) {
+      failures.push(
+        `symbol-graph module '${module}' is neither configured nor explicitly unscanned`,
+      );
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new Error(
+      "Public API module reconciliation failed:\n" +
+        failures.map((failure) => `  - ${failure}`).join("\n"),
+    );
+  }
+}
+
+/**
+ * Symbols for one module, split by provenance. `main` comes from
+ * `${module}.symbols.json`; `external` is the union of every
+ * `${module}@Other.symbols.json` extension graph — the symbols the module adds
+ * to types it does not own. Returns `undefined` only when the main graph is
+ * absent (used for missing-module detection).
+ */
+async function loadModuleSymbols(
+  symbolgraphDir: string,
+  module: ModuleName,
+): Promise<{ main: SymbolGraphSymbol[]; external: SymbolGraphSymbol[] } | undefined> {
+  const mainFile = Bun.file(join(symbolgraphDir, `${module}.symbols.json`));
+  if (!(await mainFile.exists())) {
+    return undefined;
+  }
+  const main = ((await mainFile.json()) as SymbolGraph).symbols;
+
+  const external: SymbolGraphSymbol[] = [];
+  const glob = new Glob(`${module}@*.symbols.json`);
+  for await (const name of glob.scan({ cwd: symbolgraphDir, onlyFiles: true })) {
+    const graph = (await Bun.file(join(symbolgraphDir, name)).json()) as SymbolGraph;
+    external.push(...graph.symbols);
+  }
+  return { main, external };
+}
+
+// ---------------------------------------------------------------------------
+// Build the report
+
+function buildModuleReport(
+  mainSymbols: ReadonlyArray<SymbolGraphSymbol>,
+  externalSymbols: ReadonlyArray<SymbolGraphSymbol>,
+  module: ModuleName,
+  classifications: ReadonlyMap<string, Classification>,
+  moduleDefaults: ReadonlyMap<string, Classification>,
+  defaultClassification: Classification,
+): ModuleReport {
+  const moduleDefault =
+    moduleDefaults.get(module) ?? defaultClassification;
+  const topLevelByName = new Map<string, TopLevelEntry>();
+  const orphanMembers: SymbolGraphSymbol[] = [];
+
+  // First pass: top-level symbols the module defines itself (types as well as
+  // free functions / properties / operators).
+  for (const sym of mainSymbols) {
+    if (isSynthesizedSymbol(sym)) continue;
+    if (sym.accessLevel !== "public" && sym.accessLevel !== "open") continue;
+    if (sym.pathComponents.length !== 1) continue;
+    const name = sym.pathComponents[0]!;
+    const qualifiedName = `${module}.${name}`;
+    topLevelByName.set(name, {
+      qualifiedName,
+      name,
+      kindLabel: KIND_LABELS[sym.kind.identifier] ?? sym.kind.identifier,
+      kindId: sym.kind.identifier,
+      members: [],
+      classification: classifications.get(qualifiedName) ?? moduleDefault,
+      hasDoc: hasDocComment(sym),
+      isExternalExtension: false,
+    });
+  }
+
+  // Second pass: members the module defines on its own top-level types.
+  for (const sym of mainSymbols) {
+    if (isSynthesizedSymbol(sym)) continue;
+    if (sym.accessLevel !== "public" && sym.accessLevel !== "open") continue;
+    if (sym.pathComponents.length < 2) continue;
+    const owner = topLevelByName.get(sym.pathComponents[0]!);
+    if (!owner) {
+      orphanMembers.push(sym);
+      continue;
+    }
+    owner.members.push({
+      pathInModule: sym.pathComponents.join("."),
+      kindLabel: KIND_LABELS[sym.kind.identifier] ?? sym.kind.identifier,
+    });
+  }
+
+  // Third pass: members the module adds to types it does not own (extensions on
+  // external types, from `${module}@Other.symbols.json`). Each distinct
+  // external owner becomes a synthetic `isExternalExtension` entry. Members are
+  // de-duplicated by path so overloads that share one textual signature (e.g.
+  // `App.main()`) collapse to a single flat-baseline line.
+  for (const sym of externalSymbols) {
+    if (isSynthesizedSymbol(sym)) continue;
+    if (sym.accessLevel !== "public" && sym.accessLevel !== "open") continue;
+    if (sym.pathComponents.length < 2) continue;
+    const ownerName = sym.pathComponents[0]!;
+    let owner = topLevelByName.get(ownerName);
+    if (!owner) {
+      const qualifiedName = `${module}.${ownerName}`;
+      owner = {
+        qualifiedName,
+        name: ownerName,
+        kindLabel: "extension",
+        kindId: "swift.extension",
+        members: [],
+        classification: classifications.get(qualifiedName) ?? moduleDefault,
+        hasDoc: true,
+        isExternalExtension: true,
+      };
+      topLevelByName.set(ownerName, owner);
+    }
+    const pathInModule = sym.pathComponents.join(".");
+    if (owner.members.some((m) => m.pathInModule === pathInModule)) continue;
+    owner.members.push({
+      pathInModule,
+      kindLabel: KIND_LABELS[sym.kind.identifier] ?? sym.kind.identifier,
+    });
+  }
+
+  // Sort members for stable output.
+  for (const entry of topLevelByName.values()) {
+    entry.members.sort((a, b) => a.pathInModule.localeCompare(b.pathInModule));
+  }
+
+  const topLevel = Array.from(topLevelByName.values()).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+
+  return { module, topLevel };
+}
+
+function isSynthesizedSymbol(sym: SymbolGraphSymbol): boolean {
+  return sym.identifier.precise.includes("::SYNTHESIZED::");
+}
+
+function hasDocComment(sym: SymbolGraphSymbol): boolean {
+  return (sym.docComment?.lines ?? []).some(
+    (line) => line.text.trim().length > 0,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Render outputs
+
+export interface ReexportEdge {
+  from: string;
+  to: string;
+  condition: string;
+  spi: string;
+  source: string;
+}
+
+// Mask comments and literals while preserving newlines. Imports inside examples,
+// nested block comments, and raw/multiline strings are not declarations.
+function maskSwiftTokens(source: string): string {
+  let result = "";
+  for (let i = 0; i < source.length;) {
+    const start = i;
+    if (source.startsWith("//", i)) {
+      const end = source.indexOf("\n", i);
+      i = end < 0 ? source.length : end;
+    } else if (source.startsWith("/*", i)) {
+      let depth = 1;
+      i += 2;
+      while (i < source.length && depth > 0) {
+        if (source.startsWith("/*", i)) { depth++; i += 2; }
+        else if (source.startsWith("*/", i)) { depth--; i += 2; }
+        else i++;
+      }
+    } else {
+      if (source[i] !== '"' && source[i] !== "#") { result += source[i++]; continue; }
+      const literal = source.slice(i).match(/^(#*)("""|")/);
+      if (!literal) { result += source[i++]; continue; }
+      const hashes = literal[1]!;
+      const delimiter = literal[2]! + hashes;
+      i += literal[0].length;
+      while (i < source.length) {
+        if (source.startsWith("\\" + hashes, i)) i += hashes.length + 2;
+        else if (source.startsWith(delimiter, i)) { i += delimiter.length; break; }
+        else i++;
+      }
+    }
+    result += source.slice(start, i).replace(/[^\n]/g, " ");
+  }
+  return result;
+}
+
+export function parseReexports(source: string, module: string, path: string): ReexportEdge[] {
+  const edges: ReexportEdge[] = [];
+  const conditions: { alternatives: string[]; active: string }[] = [];
+  for (const line of maskSwiftTokens(source).split("\n")) {
+    const directive = line.trim().match(/^#(if|elseif|else|endif)\b\s*(.*)$/);
+    if (directive) {
+      const [, kind, expression] = directive;
+      if (kind === "if") conditions.push({ alternatives: [expression!], active: expression! });
+      else {
+        const current = conditions.at(-1);
+        if (!current) throw new Error(`Unbalanced conditional in ${path}`);
+        if (kind === "endif") conditions.pop();
+        else {
+          const previous = current.alternatives.map((item) => `(${item})`).join(" || ");
+          current.active = `!(${previous})` + (kind === "elseif" ? ` && (${expression})` : "");
+          if (kind === "elseif") current.alternatives.push(expression!);
+        }
+      }
+      continue;
+    }
+    if (!line.includes("@_exported")) continue;
+    const match = line.trim().match(/^(?:(?:@\w+(?:\([^)]*\))?|public)\s+)*import\s+([A-Za-z_][A-Za-z0-9_]*)\s*;?$/);
+    if (!match) throw new Error(`Unsupported re-export declaration in ${path}: ${line.trim()}`);
+    edges.push({
+      from: module,
+      to: match[1]!,
+      condition: conditions.map((item) => `(${item.active})`).join(" && ") || "always",
+      spi: [...line.matchAll(/@_spi\(([^)]+)\)/g)].map((match) => match[1]).join(", ") || "none",
+      source: path,
+    });
+  }
+  if (conditions.length) throw new Error(`Unbalanced conditional in ${path}`);
+  return edges;
+}
+
+export async function loadReexports(manifest: PackageDescription, root: string): Promise<ReexportEdge[]> {
+  const edges: ReexportEdge[] = [];
+  for (const target of manifest.targets.filter((target) => target.type === "library")) {
+    for (const source of target.sources.filter((source) => source.endsWith(".swift"))) {
+      const path = join(target.path, source);
+      edges.push(...parseReexports(await Bun.file(join(root, path)).text(), target.name, path));
+    }
+  }
+  return edges.sort((a, b) =>
+    `${a.from}/${a.to}/${a.condition}/${a.source}`.localeCompare(`${b.from}/${b.to}/${b.condition}/${b.source}`)
+  );
+}
+
+export function reachableModules(module: string, edges: readonly ReexportEdge[]): string[] {
+  const visited = new Set<string>([module]);
+  const pending = [module];
+  while (pending.length) {
+    const from = pending.pop()!;
+    for (const edge of edges.filter((edge) => edge.from === from)) {
+      if (visited.has(edge.to)) continue;
+      visited.add(edge.to);
+      pending.push(edge.to);
+    }
+  }
+  visited.delete(module);
+  return [...visited].sort();
+}
+
+export function renderModuleMap(
+  manifest: PackageDescription,
+  reports: readonly ModuleReport[],
+  edges: readonly ReexportEdge[],
+): string {
+  const codeList = (names: readonly string[]) => names.map((name) => `\`${name}\``).join(", ") || "—";
+  const products = libraryProducts(manifest);
+  const lines = [
+    "# Public product and module map", "",
+    "<!-- DO NOT EDIT — regenerated by Scripts/generate_public_api_inventory.sh -->", "",
+    "Product-to-target edges and source membership come from the evaluated manifest",
+    "(`swift package describe --type json`). Public owner counts reuse the symbol-graph",
+    "inventory in [PUBLIC_API_BASELINE.md](PUBLIC_API_BASELINE.md); re-exports come from",
+    "`@_exported import` declarations in those targets' Swift sources.", "",
+    "## Supported direct imports", "",
+    "External packages may depend on a library product below and directly import its listed",
+    "root module(s). A transitive build dependency is not a supported direct-import contract.",
+    "Non-product modules expose their classified public declarations through re-exports where",
+    "listed; `public` access alone does not promise a stable application API. See",
+    "[PUBLIC-API.md](PUBLIC-API.md) for classifications and platform-specific host contracts.",
+    "`SwiftTUITestSupport` is supported for downstream tests only. Product presence does not",
+    "promise every host API on every platform; source conditions below still apply.", "",
+    "| Library product | Root target / supported direct import |",
+    "|---|---|",
+    ...products.map((product) => `| \`${product.name}\` | ${codeList([...product.targets].sort())} |`), "",
+    "## Public declaration ownership", "",
+    "Counts and owner attribution match the existing inventory, including extension members.",
+    "Re-exporting a declaration does not change its owning module. Explicitly unscanned",
+    "implementation/vendor targets are named below; they have no symbol count here.", "",
+    "| Owning module | Direct product roots | Top-level | All public |",
+    "|---|---|---:|---:|",
+    ...reports.map((report) => {
+      const roots = products.filter((product) => product.targets.includes(report.module)).map((product) => product.name);
+      const count = report.topLevel.length + report.topLevel.reduce((sum, entry) => sum + entry.members.length, 0);
+      return `| [\`${report.module}\`](PUBLIC_API_BASELINE.md#${report.module.toLowerCase()}) | ${roots.length ? codeList(roots) : "None (non-product support target)"} | ${report.topLevel.length} | ${count} |`;
+    }), "",
+    `Explicitly unscanned: ${codeList([...KNOWN_UNSCANNED_MODULES].sort())}.`, "",
+    "## Re-export edges", "",
+    "These are source-declared edges across all conditional branches, not ordinary imports",
+    "or manifest dependency edges. `public import` alone is not a re-export. SPI annotations",
+    "also expose the named SPI to the importing module; they do not make SPI declarations",
+    "ordinary public API (tracked separately in [.spi-api-baseline.txt](.spi-api-baseline.txt)).", "",
+    "| Importing module | Re-exported module | Source condition | SPI annotation | Declaration source |",
+    "|---|---|---|---|---|",
+    ...edges.map((edge) => `| \`${edge.from}\` | \`${edge.to}\` | \`${edge.condition.replaceAll("|", "\\|")}\` | ${edge.spi} | [source](../${edge.source}) |`), "",
+    "## Reachability through re-exports", "",
+    "This is the union of potentially reachable modules across source conditions. It is not",
+    "a promise that all paths coexist on any one platform: apply every edge condition above.",
+    "It includes unscanned and external modules so those paths are visible without inventing",
+    "a second symbol census. Use the owner table and baseline for inventoried declarations.", "",
+    "| Supported direct import | Other modules reachable through re-exports |",
+    "|---|---|",
+    ...[...new Set(products.flatMap((product) => product.targets))].sort().map((module) =>
+      `| \`${module}\` | ${codeList(reachableModules(module, edges))} |`
+    ), "",
+    "## Consumer evidence", "",
+    "`Scripts/check_public_import_consumers.sh` builds separate external SwiftPM consumers",
+    "with only the `SwiftTUIViews` or `SwiftTUIRuntime` product dependency. They use owning",
+    "module APIs plus re-exported view, style, geometry, and graph vocabulary without",
+    "importing non-product targets. The repository policy gate runs these builds.", "",
+  ];
+  return lines.join("\n");
+}
+
+function renderBaselineMarkdown(
+  reports: ReadonlyArray<ModuleReport>,
+  notes: ReadonlyMap<string, string>,
+  generatedAt: string,
+  manifest: PackageDescription,
+): string {
+  const lines: string[] = [];
+  lines.push("# Public API Baseline");
+  lines.push("");
+  lines.push(
+    "<!-- DO NOT EDIT — regenerated by Scripts/generate_public_api_inventory.sh -->",
+  );
+  lines.push(`<!-- Generated: ${generatedAt} -->`);
+  lines.push("");
+  lines.push(
+    "This file is the authoritative enumeration of every public Swift symbol",
+  );
+  lines.push(
+    "in the package, derived from `swift package dump-symbol-graph` and",
+  );
+  lines.push(
+    "classified through [`docs/public_api_overrides.yml`](public_api_overrides.yml).",
+  );
+  lines.push("");
+  lines.push(
+    "PRs that add or remove a public symbol see the change show up here. The",
+  );
+  lines.push(
+    "companion flat list at [`.public-api-baseline.txt`](.public-api-baseline.txt)",
+  );
+  lines.push(
+    "is the machine-grep target; this file is grouped for human review.",
+  );
+  lines.push("");
+  lines.push("For prose context, see [PUBLIC-API.md](PUBLIC-API.md).");
+  lines.push("For products, supported imports, and re-export reachability, see [PUBLIC_MODULE_MAP.md](PUBLIC_MODULE_MAP.md).");
+  lines.push("");
+
+  // Summary table
+  lines.push("## Summary");
+  lines.push("");
+  lines.push("| Module | Top-level | All public |");
+  lines.push("|---|---:|---:|");
+  for (const report of reports) {
+    const topLevel = report.topLevel.length;
+    const allPublic =
+      topLevel +
+      report.topLevel.reduce((sum, t) => sum + t.members.length, 0);
+    lines.push(`| \`${report.module}\` | ${topLevel} | ${allPublic} |`);
+  }
+  lines.push("");
+
+  // Per-module sections
+  for (const report of reports) {
+    const isPackageOnly = !libraryProducts(manifest).some((product) =>
+      product.targets.includes(report.module)
+    );
+    const isTestSupport = (TEST_SUPPORT_MODULES as readonly string[]).includes(
+      report.module,
+    );
+    lines.push(`## ${report.module}`);
+    lines.push("");
+    if (isPackageOnly) {
+      lines.push(
+        `> \`${report.module}\` is not shipped as a library product. Symbols here`,
+      );
+      lines.push(
+        `> carry \`public\` access but do not establish a supported direct import.`,
+      );
+      lines.push(`> See the module map for re-export paths and symbol classifications below.`);
+      lines.push("");
+    }
+    if (isTestSupport) {
+      lines.push(
+        `> \`${report.module}\` is a test-support library product. Symbols here`,
+      );
+      lines.push(
+        `> are public only for package and downstream integration tests, not`,
+      );
+      lines.push(`> ordinary application use.`);
+      lines.push("");
+    }
+
+    const grouped = new Map<Classification, TopLevelEntry[]>();
+    for (const entry of report.topLevel) {
+      const list = grouped.get(entry.classification) ?? [];
+      list.push(entry);
+      grouped.set(entry.classification, list);
+    }
+
+    for (const cls of CLASSIFICATION_ORDER) {
+      const list = grouped.get(cls);
+      if (!list || list.length === 0) continue;
+
+      lines.push(`### ${CLASSIFICATION_HEADINGS[cls]} (${list.length})`);
+      lines.push("");
+      for (const entry of list) {
+        const memberSummary = entry.members.length > 0
+          ? ` — ${entry.members.length} member${entry.members.length === 1 ? "" : "s"}`
+          : "";
+        const note = notes.get(entry.qualifiedName);
+        const noteSuffix = note ? ` _(${note})_` : "";
+        lines.push(
+          `- \`${entry.name}\` — ${entry.kindLabel}${memberSummary}${noteSuffix}`,
+        );
+      }
+      lines.push("");
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function renderFlatBaseline(reports: ReadonlyArray<ModuleReport>): string {
+  const lines: string[] = [];
+  for (const report of reports) {
+    for (const entry of report.topLevel) {
+      // External-extension entries do not define the owner type, so emit only
+      // their member lines, never a bare `Module.Owner` line.
+      if (!entry.isExternalExtension) {
+        lines.push(`${report.module}.${entry.name}`);
+      }
+      for (const m of entry.members) {
+        lines.push(`${report.module}.${m.pathInModule}`);
+      }
+    }
+  }
+  lines.sort();
+  return lines.join("\n") + "\n";
+}
+
+// ---------------------------------------------------------------------------
+// SPI baseline (F58)
+//
+// The public baseline above intentionally excludes SPI. The SPI baseline is a
+// second, classification-free flat ratchet for the `@_spi` host contract
+// (`@_spi(Runners)` is what the swiftui/web/android host repos consume):
+// SPI-only symbols = (SPI-inclusive dump) − (public dump), both collected the
+// same raw way so the subtraction is exact and the public pipeline stays
+// byte-identical.
+
+/**
+ * Every non-synthesized public/open symbol under `symbolgraphDir` for the
+ * configured modules, as `Module.path.components` lines. Raw — no
+ * classification, no external-extension shaping — so two dumps subtract
+ * cleanly. Returns the modules with no main symbol graph alongside the set.
+ */
+async function rawFlatSymbolSet(
+  symbolgraphDir: string,
+): Promise<{ lines: Set<string>; missingModules: ModuleName[] }> {
+  const lines = new Set<string>();
+  const missingModules: ModuleName[] = [];
+  for (const module of ALL_MODULES) {
+    const symbols = await loadModuleSymbols(symbolgraphDir, module);
+    if (!symbols) {
+      missingModules.push(module);
+      continue;
+    }
+    for (const sym of [...symbols.main, ...symbols.external]) {
+      if (isSynthesizedSymbol(sym)) continue;
+      if (sym.accessLevel !== "public" && sym.accessLevel !== "open") continue;
+      lines.add(`${module}.${sym.pathComponents.join(".")}`);
+    }
+  }
+  return { lines, missingModules };
+}
+
+function renderSpiFlatBaseline(
+  spiLines: ReadonlySet<string>,
+  publicLines: ReadonlySet<string>,
+): string {
+  const spiOnly = [...spiLines].filter((line) => !publicLines.has(line));
+  spiOnly.sort();
+  return spiOnly.join("\n") + "\n";
+}
+
+// ---------------------------------------------------------------------------
+// Drift detection
+
+interface DriftReport {
+  pendingReview: ReadonlyArray<{ module: ModuleName; qualifiedName: string }>;
+  removedButPresent: ReadonlyArray<{ module: ModuleName; qualifiedName: string }>;
+  /** `canonical`-classified top-level symbols with no `///` doc comment. */
+  undocumentedCanonical: ReadonlyArray<{
+    module: ModuleName;
+    qualifiedName: string;
+  }>;
+  baselineStale: boolean;
+  partialBaseline: boolean;
+}
+
+async function checkDrift(
+  reports: ReadonlyArray<ModuleReport>,
+  paths: { baselineMd: string; baselineFlat: string },
+  rendered: { md: string; flat: string },
+  options: { partialBaseline: boolean },
+): Promise<DriftReport> {
+  const pendingReview: { module: ModuleName; qualifiedName: string }[] = [];
+  const removedButPresent: { module: ModuleName; qualifiedName: string }[] = [];
+  const undocumentedCanonical: {
+    module: ModuleName;
+    qualifiedName: string;
+  }[] = [];
+
+  for (const report of reports) {
+    for (const entry of report.topLevel) {
+      if (entry.classification === "pending-review") {
+        pendingReview.push({
+          module: report.module,
+          qualifiedName: entry.qualifiedName,
+        });
+      } else if (entry.classification === "removed") {
+        removedButPresent.push({
+          module: report.module,
+          qualifiedName: entry.qualifiedName,
+        });
+      } else if (
+        entry.classification === "canonical" &&
+        !entry.hasDoc &&
+        !entry.isExternalExtension
+      ) {
+        undocumentedCanonical.push({
+          module: report.module,
+          qualifiedName: entry.qualifiedName,
+        });
+      }
+    }
+  }
+
+  const existingMd = await readFileIfExists(paths.baselineMd);
+  const existingFlat = await readFileIfExists(paths.baselineFlat);
+  const baselineStale = options.partialBaseline
+    ? false
+    : existingMd !== rendered.md || existingFlat !== rendered.flat;
+
+  return {
+    pendingReview,
+    removedButPresent,
+    undocumentedCanonical,
+    baselineStale,
+    partialBaseline: options.partialBaseline,
+  };
+}
+
+async function readFileIfExists(path: string): Promise<string | undefined> {
+  const f = Bun.file(path);
+  if (!(await f.exists())) return undefined;
+  return await f.text();
+}
+
+function extractGeneratedAt(contents: string | undefined): string | undefined {
+  return contents?.match(
+    /<!-- Generated: ([0-9]{4}-[0-9]{2}-[0-9]{2}) -->/,
+  )?.[1];
+}
+
+// ---------------------------------------------------------------------------
+// Output
+
+async function writeFileEnsuringDir(path: string, contents: string): Promise<void> {
+  const dir = dirname(resolve(path));
+  if (!existsSync(dir)) {
+    await mkdir(dir, { recursive: true });
+  }
+  await Bun.write(path, contents);
+}
+
+// ---------------------------------------------------------------------------
+// Main
+
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2));
+  const overrides = await loadOverrides(args.overrides);
+  const manifest = await Bun.file(args.packageManifest).json() as PackageDescription;
+  await validateModuleReconciliation(args, manifest);
+  const existingBaselineMd = await readFileIfExists(args.baselineMd);
+  const generatedAt = args.check
+    ? extractGeneratedAt(existingBaselineMd) ??
+      new Date().toISOString().slice(0, 10)
+    : new Date().toISOString().slice(0, 10);
+
+  const reports: ModuleReport[] = [];
+  const missingModules: ModuleName[] = [];
+  for (const module of ALL_MODULES) {
+    const symbols = await loadModuleSymbols(args.symbolgraphDir, module);
+    if (!symbols) {
+      console.error(
+        `[generate_public_api_inventory] WARN: no symbol graph for ${module}`,
+      );
+      missingModules.push(module);
+      continue;
+    }
+    reports.push(
+      buildModuleReport(
+        symbols.main,
+        symbols.external,
+        module,
+        overrides.classification,
+        overrides.moduleDefaults,
+        overrides.defaultClassification,
+      ),
+    );
+  }
+
+  const allowedMissingModules = new Set(args.allowMissingModules);
+  validateOverrides(overrides, reports, {
+    missingModules: new Set(missingModules),
+    allowedMissingModules,
+  });
+
+  if (missingModules.length > 0) {
+    const unexpectedMissing = missingModules.filter(
+      (module) => !allowedMissingModules.has(module),
+    );
+    if (!args.check) {
+      console.error(
+        "[generate_public_api_inventory] Refusing to regenerate a partial public API baseline.",
+      );
+      console.error(
+        `[generate_public_api_inventory] Missing module(s): ${missingModules.join(", ")}`,
+      );
+      process.exit(1);
+    }
+    if (unexpectedMissing.length > 0) {
+      console.error(
+        "[generate_public_api_inventory] Missing required module symbol graph(s): " +
+          unexpectedMissing.join(", "),
+      );
+      process.exit(1);
+    }
+    console.error(
+      `[generate_public_api_inventory] Performing partial check without allowed missing module(s): ${missingModules.join(", ")}`,
+    );
+    console.error(
+      "[generate_public_api_inventory] Skipping exact baseline comparison; " +
+        "it requires a symbol graph for every public module.",
+    );
+  }
+
+  const edges = await loadReexports(manifest, args.packageRoot);
+  const renderedMap = renderModuleMap(manifest, reports, edges);
+  const moduleMapStale = await readFileIfExists(args.moduleMap) !== renderedMap;
+  const renderedMd = renderBaselineMarkdown(reports, overrides.notes, generatedAt, manifest);
+  const renderedFlat = renderFlatBaseline(reports);
+  const drift = await checkDrift(
+    reports,
+    args,
+    {
+      md: renderedMd,
+      flat: renderedFlat,
+    },
+    {
+      partialBaseline: missingModules.length > 0,
+    },
+  );
+
+  let renderedSpiFlat: string | undefined;
+  let spiBaselineStale = false;
+  let spiPartial = false;
+  if (args.spiSymbolgraphDir && args.baselineSpi) {
+    const spiSet = await rawFlatSymbolSet(args.spiSymbolgraphDir);
+    const publicSet = await rawFlatSymbolSet(args.symbolgraphDir);
+    spiPartial =
+      spiSet.missingModules.length > 0 || publicSet.missingModules.length > 0;
+    renderedSpiFlat = renderSpiFlatBaseline(spiSet.lines, publicSet.lines);
+    if (!spiPartial) {
+      const existingSpi = await readFileIfExists(args.baselineSpi);
+      spiBaselineStale = existingSpi !== renderedSpiFlat;
+    } else if (args.check) {
+      console.error(
+        "[generate_public_api_inventory] Skipping exact SPI baseline comparison; " +
+          "it requires a symbol graph for every public module.",
+      );
+    }
+  }
+
+  if (args.check) {
+    const failures: string[] = [];
+    if (moduleMapStale && missingModules.length === 0) {
+      failures.push("Public module map is stale. Run Scripts/generate_public_api_inventory.sh to regenerate.");
+    }
+    {
+      // Every `swiftui_divergent` symbol must be named in the divergence
+      // register, so the register stays true without manual sweeps (D64).
+      const registerPath = join(
+        dirname(dirname(resolve(args.overrides))),
+        DIVERGENCE_REGISTER_PATH,
+      );
+      const registerText = await readFileIfExists(registerPath);
+      if (registerText === undefined) {
+        failures.push(
+          `swiftui_divergent check: register article not found at ${registerPath}.`,
+        );
+      } else {
+        for (const key of overrides.swiftuiDivergent) {
+          const baseName = key.split(".").pop() ?? key;
+          // Code-voice prefix: matches `Name` and member/call forms such as
+          // `Name(minLength:)` or `Name.member`.
+          if (!registerText.includes(`\`${baseName}`)) {
+            failures.push(
+              `swiftui_divergent symbol '${key}' is not named (as \`${baseName}\`...) ` +
+                `in ${DIVERGENCE_REGISTER_PATH}. Add a register entry or drop ` +
+                "the annotation.",
+            );
+          }
+        }
+      }
+    }
+    if (spiBaselineStale) {
+      failures.push(
+        "SPI API baseline is stale (the @_spi host contract changed). " +
+          "Run Scripts/generate_public_api_inventory.sh to regenerate, and " +
+          "coordinate the change with the swiftui/web/android host repos.",
+      );
+    }
+    if (drift.baselineStale) {
+      const message = drift.partialBaseline
+        ? "Public API baseline is stale for modules emitted on this platform. " +
+          "Regenerate on a platform that emits every public module."
+        : "Public API baseline is stale. " +
+          "Run Scripts/generate_public_api_inventory.sh to regenerate.";
+      failures.push(message);
+    }
+    if (drift.pendingReview.length > 0) {
+      failures.push(
+        `${drift.pendingReview.length} top-level symbol(s) are classified ` +
+          `"pending-review" ⚠:`,
+      );
+      for (const p of drift.pendingReview.slice(0, 10)) {
+        failures.push(`  - ${p.qualifiedName}`);
+      }
+      if (drift.pendingReview.length > 10) {
+        failures.push(`  - ...and ${drift.pendingReview.length - 10} more.`);
+      }
+      failures.push(
+        "Add them to docs/public_api_overrides.yml under the appropriate classification.",
+      );
+    }
+    if (drift.removedButPresent.length > 0) {
+      failures.push(
+        `${drift.removedButPresent.length} symbol(s) are classified "removed" but still present:`,
+      );
+      for (const p of drift.removedButPresent) {
+        failures.push(`  - ${p.qualifiedName}`);
+      }
+    }
+    if (drift.undocumentedCanonical.length > 0) {
+      const summary =
+        `${drift.undocumentedCanonical.length} canonical public ` +
+        "symbol(s) have no doc comment";
+      if (ENFORCE_DOC_COMMENTS) {
+        failures.push(`${summary}:`);
+        for (const p of drift.undocumentedCanonical.slice(0, 10)) {
+          failures.push(`  - ${p.qualifiedName}`);
+        }
+        if (drift.undocumentedCanonical.length > 10) {
+          failures.push(
+            `  - ...and ${drift.undocumentedCanonical.length - 10} more.`,
+          );
+        }
+        failures.push(
+          "Add a /// summary to each, or reclassify it in " +
+            "docs/public_api_overrides.yml if it is not consumer-facing.",
+        );
+      } else {
+        console.error(
+          `[generate_public_api_inventory] NOTE: ${summary} — ` +
+            "report-only ratchet, not failing the gate. Add `///` summaries " +
+            "to drive this to zero, then set ENFORCE_DOC_COMMENTS = true.",
+        );
+      }
+    }
+    if (failures.length > 0) {
+      for (const f of failures) console.error(f);
+      process.exit(1);
+    }
+    console.log(
+      `[generate_public_api_inventory] OK — baseline current; ${reports.reduce((s, r) => s + r.topLevel.length, 0)} top-level public symbols.`,
+    );
+    return;
+  }
+
+  await writeFileEnsuringDir(args.baselineMd, renderedMd);
+  await writeFileEnsuringDir(args.moduleMap, renderedMap);
+  await writeFileEnsuringDir(args.baselineFlat, renderedFlat);
+  console.log(
+    `[generate_public_api_inventory] Wrote ${args.baselineMd}, ${args.baselineFlat}, and ${args.moduleMap}.`,
+  );
+  if (renderedSpiFlat !== undefined && args.baselineSpi) {
+    if (spiPartial) {
+      console.error(
+        "[generate_public_api_inventory] Refusing to regenerate a partial SPI baseline.",
+      );
+      process.exit(1);
+    }
+    await writeFileEnsuringDir(args.baselineSpi, renderedSpiFlat);
+    console.log(`[generate_public_api_inventory] Wrote ${args.baselineSpi}.`);
+  }
+  if (drift.pendingReview.length > 0) {
+    console.log(
+      `[generate_public_api_inventory] NOTE: ${drift.pendingReview.length} top-level symbol(s) classified as "pending-review". See ${args.baselineMd}.`,
+    );
+  }
+  if (drift.removedButPresent.length > 0) {
+    console.error(
+      `[generate_public_api_inventory] WARN: ${drift.removedButPresent.length} "removed" symbol(s) are still present in the source.`,
+    );
+  }
+  if (drift.undocumentedCanonical.length > 0) {
+    console.log(
+      `[generate_public_api_inventory] NOTE: ${drift.undocumentedCanonical.length} canonical symbol(s) have no doc comment. See --check output.`,
+    );
+  }
+}
+
+if (import.meta.main) await main();

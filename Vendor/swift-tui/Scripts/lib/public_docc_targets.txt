@@ -1,0 +1,40 @@
+# DocC targets generated for the public website.
+# Format: target-name|docc-catalog-directory
+#
+# The published archive is scoped to the app-facing surface: the products an
+# app imports and the host/integration products it deploys with. A library
+# product may be intentionally absent when app code never names its types;
+# record each omission here.
+#
+# Intentionally not published:
+#   - SwiftTUIPrimitives, SwiftTUIGraph, SwiftTUICore — the engine/vocabulary
+#     tier. They carry `public` access only so the authoring surface can
+#     `@_exported`-re-export their vocabulary (`Color`, `Alignment`,
+#     `CellSize`, `PreferenceKey`, `DynamicProperty`); the API inventory
+#     classifies them `package-only-seam`, not canonical product surface, and
+#     the site's own module guide calls them "rarely imported directly."
+#     Publishing all three (plus their synthesized-conformance member pages)
+#     pushed the hosted DocC archive past Cloudflare Pages' 20,000-file
+#     per-project limit (the 0.9.10 deploy failed at 20,196 files). Their
+#     symbols remain reachable through the modules that re-export them.
+#   - SwiftTUIPTYPrimitives — PTY plumbing shared by CLI attach and terminal embedding.
+#     ChildProcessPty lives here; publication remains deferred under the
+#     Cloudflare per-project file budget.
+#   - SwiftTUICLIAttach — the POSIX-only attach subsystem behind SwiftTUICLI;
+#     apps never name its one public type (ScenePty).
+#   - Example packages in SwiftTUI/swift-tui-examples — runnable samples and
+#     regression surfaces, not externally linked products.
+#
+# Keep .spi.yml's documentation_targets aligned with this list.
+SwiftTUIViews|Sources/SwiftTUIViews/SwiftTUIViews.docc
+SwiftTUIRuntime|Sources/SwiftTUIRuntime/SwiftTUIRuntime.docc
+SwiftTUI|Sources/SwiftTUI/SwiftTUI.docc
+SwiftTUIArguments|Platforms/Arguments/Sources/SwiftTUIArguments/SwiftTUIArguments.docc
+SwiftTUITerminalCLI|Platforms/CLI/Sources/SwiftTUITerminalCLI/SwiftTUITerminalCLI.docc
+SwiftTUICLI|Platforms/CLI/Sources/SwiftTUICLI/SwiftTUICLI.docc
+SwiftTUIWASI|Platforms/WASI/Sources/SwiftTUIWASI/SwiftTUIWASI.docc
+SwiftTUIWebHost|Platforms/WebHost/Sources/SwiftTUIWebHost/SwiftTUIWebHost.docc
+SwiftTUIWebHostCLI|Platforms/WebHost/Sources/SwiftTUIWebHostCLI/SwiftTUIWebHostCLI.docc
+SwiftTUIAndroidHost|Platforms/Android/Sources/SwiftTUIAndroidHost/SwiftTUIAndroidHost.docc
+SwiftTUIAnimatedImage|Sources/SwiftTUIAnimatedImage/SwiftTUIAnimatedImage.docc
+SwiftTUIProfiling|Sources/SwiftTUIProfiling/SwiftTUIProfiling.docc
