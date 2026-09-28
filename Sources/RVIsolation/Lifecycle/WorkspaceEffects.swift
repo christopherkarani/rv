@@ -23,7 +23,7 @@ public enum WorkspaceEffect: Sendable, Equatable {
     /// Join the close already in flight instead of leading a new one.
     case awaitClose
     /// Refuse a spawn; the reason maps to today's session errors.
-    case replySpawnRefused(RuntimeSessionID, WorkspaceSpawnRefusal)
+    case replySpawnRefused(runtime: RuntimeSessionID, reason: WorkspaceSpawnRefusal)
     /// The named runtime is unknown in this phase.
     case replyUnknownRuntime(RuntimeSessionID)
     /// The named runtime is already gone; cancel succeeds.
@@ -52,15 +52,4 @@ public enum WorkspaceSpawnRefusal: Sendable, Equatable {
     case limitReached
     /// The inode boundary no longer holds.
     case boundaryLost
-}
-
-/// The spawned work, log appends, and replies one transition emits.
-public struct WorkspaceEffects: Sendable, Equatable {
-    public var effects: [WorkspaceEffect]
-
-    public init(_ effects: [WorkspaceEffect] = []) {
-        self.effects = effects
-    }
-
-    public static var none: Self { Self([]) }
 }

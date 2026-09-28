@@ -13,12 +13,12 @@ struct WorkspaceLifecycleTests {
     private func step(
         _ state: WorkspaceSupervisorState,
         _ event: WorkspaceEvent
-    ) -> (state: WorkspaceSupervisorState, effects: WorkspaceEffects) {
+    ) -> (state: WorkspaceSupervisorState, effects: [WorkspaceEffect]) {
         T.transition(state: state, event: event)
     }
 
     private func run(
-        from initial: WorkspaceSupervisorState = .initial(),
+        from initial: WorkspaceSupervisorState = WorkspaceSupervisorState(),
         _ events: [WorkspaceEvent]
     ) -> (state: WorkspaceSupervisorState, effects: [[WorkspaceEffect]]) {
         var state = initial
@@ -26,7 +26,7 @@ struct WorkspaceLifecycleTests {
         for event in events {
             let out = T.transition(state: state, event: event)
             state = out.state
-            all.append(out.effects.effects)
+            all.append(out.effects)
         }
         return (state, all)
     }
@@ -59,13 +59,17 @@ struct WorkspaceLifecycleTests {
         #expect(state.phase == .closed)
         // Terminal: later inputs drain without new work.
         let id = RuntimeSessionID()
-        #expect(step(state, .recoveryReported(.clean)).effects.effects == [])
+        #expect(step(state, .recoveryReported(.clean)).effects == [])
         #expect(
-            step(state, .spawnRequested(id)).effects.effects
-                == [.replySpawnRefused(id, .notAccepting(.closed))]
+            step(state, .spawnRequested(id)).effects
+                == [.replySpawnRefused(runtime: id, reason: .notAccepting(.closed))]
         )
-        #expect(step(state, .closeRequested(publish: true)).effects.effects == [.replyAlreadyClosed])
-        #expect(step(state, .controlReplyReceived(id)).effects.effects == [])
+        #expect(step(state, .closeRequested(publish: true)).effects == [.replyAlreadyClosed])
+        #expect(step(state, .controlReplyReceived(id)).effects == [])
+        // Terminal: a late boundary loss drains without moving state.
+        let lost = step(state, .boundaryLost)
+        #expect(lost.effects == [])
+        #expect(lost.state == state)
     }
 
     @Test func blockedRecoveryRefusesOpen() {
@@ -109,7 +113,7 @@ struct WorkspaceLifecycleTests {
     @Test func duplicateRecoveryReportDrains() {
         let (state, _) = run([.recoveryReported(.clean)])
         let out = step(state, .recoveryReported(.clean))
-        #expect(out.effects.effects == [])
+        #expect(out.effects == [])
         #expect(out.state == state)
     }
 
@@ -139,7 +143,12 @@ struct WorkspaceLifecycleTests {
             [.spawnRequested(id), .spawnFailed(id)]
         )
         #expect(effects[1] == [.appendRuntimeEnded(id)])
-        #expect(state.runtimes[id] == nil)
+        #expect(state.runtimes[id] == .failed)
+        // A failed spawn cancels successfully and is then forgotten.
+        #expect(step(state, .cancelRequested(id)).effects == [.replyCancelled(id)])
+        let forgotten = step(state, .runtimeForgotten(id))
+        #expect(forgotten.effects == [])
+        #expect(forgotten.state.runtimes[id] == nil)
     }
 
     @Test func duplicateSpawnRequestDrains() {
@@ -147,13 +156,13 @@ struct WorkspaceLifecycleTests {
         // already-tracked runtime and drains without a second spawn.
         let id = RuntimeSessionID()
         let requested = step(active(), .spawnRequested(id))
-        #expect(requested.effects.effects == [.spawnRuntime(id)])
+        #expect(requested.effects == [.spawnRuntime(id)])
         let duplicate = step(requested.state, .spawnRequested(id))
-        #expect(duplicate.effects.effects == [])
+        #expect(duplicate.effects == [])
         #expect(duplicate.state == requested.state)
         // Still tracked after a duplicate: the original request proceeds.
         let recorded = step(duplicate.state, .spawnRecorded(id))
-        #expect(recorded.effects.effects == [.resumeRuntime(id)])
+        #expect(recorded.effects == [.resumeRuntime(id)])
         #expect(recorded.state.runtimes[id] == .handshaking)
     }
 
@@ -179,7 +188,7 @@ struct WorkspaceLifecycleTests {
         ]
         for event in mismatches {
             let out = step(state, event)
-            #expect(out.effects.effects == [], "mismatched \(event) must drain")
+            #expect(out.effects == [], "mismatched \(event) must drain")
             #expect(out.state == state, "mismatched \(event) must not move state")
         }
     }
@@ -191,10 +200,10 @@ struct WorkspaceLifecycleTests {
             state = step(state, event).state
         }
         let out = step(state, .handshakeFailed(id))
-        #expect(out.effects.effects == [.appendRuntimeEnded(id)])
+        #expect(out.effects == [.appendRuntimeEnded(id)])
         #expect(out.state.runtimes[id] == .failed)
         // A failed runtime cancels successfully and is then forgotten.
-        #expect(step(out.state, .cancelRequested(id)).effects.effects == [.replyCancelled(id)])
+        #expect(step(out.state, .cancelRequested(id)).effects == [.replyCancelled(id)])
         let forgotten = step(out.state, .runtimeForgotten(id))
         #expect(forgotten.state.runtimes[id] == nil)
     }
@@ -202,13 +211,13 @@ struct WorkspaceLifecycleTests {
     @Test func spawnRefusedOutsideActive() {
         let id = RuntimeSessionID()
         for phaseState in [
-            WorkspaceSupervisorState.initial(),
+            WorkspaceSupervisorState(),
             run([.recoveryReported(.clean), .openCompleted, .closeRequested(publish: false)]).state,
             run([.recoveryReported(.liveOwner(nil))]).state,
         ] {
             let out = step(phaseState, .spawnRequested(id))
             #expect(
-                out.effects.effects == [.replySpawnRefused(id, .notAccepting(phaseState.phase))]
+                out.effects == [.replySpawnRefused(runtime: id, reason: .notAccepting(phaseState.phase))]
             )
             #expect(out.state == phaseState)
         }
@@ -217,29 +226,29 @@ struct WorkspaceLifecycleTests {
     @Test func spawnRefusedAtLimit() {
         let first = RuntimeSessionID()
         let second = RuntimeSessionID()
-        var state = WorkspaceSupervisorState.initial(runningLimit: 1)
+        var state = WorkspaceSupervisorState(runningLimit: 1)
         for event: WorkspaceEvent in [.recoveryReported(.clean), .openCompleted] {
             state = step(state, event).state
         }
         state = step(state, .spawnRequested(first)).state
         let refused = step(state, .spawnRequested(second))
-        #expect(refused.effects.effects == [.replySpawnRefused(second, .limitReached)])
+        #expect(refused.effects == [.replySpawnRefused(runtime: second, reason: .limitReached)])
         #expect(refused.state.runtimes[second] == nil)
         // Configuration: the transition never mutates the cap.
         #expect(refused.state.runningLimit == 1)
         // An exited runtime frees its slot without being forgotten.
         let exited = step(state, .runtimeExited(first)).state
         let admitted = step(exited, .spawnRequested(second))
-        #expect(admitted.effects.effects == [.spawnRuntime(second)])
+        #expect(admitted.effects == [.spawnRuntime(second)])
     }
 
     @Test func spawnRefusedWhenBoundaryLost() {
         let id = RuntimeSessionID()
         let lost = step(active(), .boundaryLost)
-        #expect(lost.effects.effects == [])
+        #expect(lost.effects == [])
         #expect(lost.state.boundaryEstablished == false)
         let refused = step(lost.state, .spawnRequested(id))
-        #expect(refused.effects.effects == [.replySpawnRefused(id, .boundaryLost)])
+        #expect(refused.effects == [.replySpawnRefused(runtime: id, reason: .boundaryLost)])
         // Losing the boundary twice changes nothing further.
         #expect(step(lost.state, .boundaryLost).state == lost.state)
     }
@@ -251,44 +260,44 @@ struct WorkspaceLifecycleTests {
             state = step(state, event).state
         }
         let cancelled = step(state, .cancelRequested(id))
-        #expect(cancelled.effects.effects == [.stopRuntime(id)])
+        #expect(cancelled.effects == [.stopRuntime(id)])
         #expect(cancelled.state.runtimes[id] == .exiting)
         // Cancel is idempotent while the runtime is still going.
-        #expect(step(cancelled.state, .cancelRequested(id)).effects.effects == [.stopRuntime(id)])
+        #expect(step(cancelled.state, .cancelRequested(id)).effects == [.stopRuntime(id)])
         let exited = step(cancelled.state, .runtimeExited(id))
-        #expect(exited.effects.effects == [.appendRuntimeEnded(id)])
+        #expect(exited.effects == [.appendRuntimeEnded(id)])
         #expect(exited.state.runtimes[id] == .exited)
     }
 
     @Test func cancelUnknownRuntimeReplies() {
         let id = RuntimeSessionID()
-        #expect(step(active(), .cancelRequested(id)).effects.effects == [.replyUnknownRuntime(id)])
+        #expect(step(active(), .cancelRequested(id)).effects == [.replyUnknownRuntime(id)])
         let closed = run([.recoveryReported(.liveOwner(nil))]).state
-        #expect(step(closed, .cancelRequested(id)).effects.effects == [.replyUnknownRuntime(id)])
-        #expect(step(.initial(), .cancelRequested(id)).effects.effects == [.replyUnknownRuntime(id)])
+        #expect(step(closed, .cancelRequested(id)).effects == [.replyUnknownRuntime(id)])
+        #expect(step(WorkspaceSupervisorState(), .cancelRequested(id)).effects == [.replyUnknownRuntime(id)])
     }
 
     @Test func closePublishesAnEmptyWorkspace() {
         let requested = step(active(), .closeRequested(publish: true))
         #expect(requested.state.phase == .closing)
         #expect(requested.state.closeAccepted)
-        #expect(requested.effects.effects == [.finishTeardown(publish: true)])
+        #expect(requested.effects == [.finishTeardown(publish: true)])
         let finished = step(requested.state, .closeSucceeded(published: true))
         #expect(
-            finished.effects.effects
+            finished.effects
                 == [.appendClosed(published: true), .releaseOwnership, .replyClosed(published: true)]
         )
         #expect(finished.state.phase == .closed)
         #expect(finished.state.publishCount == 1)
         // A second close replays the terminal answer without new work.
         let again = step(finished.state, .closeRequested(publish: true))
-        #expect(again.effects.effects == [.replyAlreadyClosed])
+        #expect(again.effects == [.replyAlreadyClosed])
         #expect(again.state == finished.state)
     }
 
     @Test func closeWithoutPublishDoesNotCount() {
         let requested = step(active(), .closeRequested(publish: false))
-        #expect(requested.effects.effects == [.finishTeardown(publish: false)])
+        #expect(requested.effects == [.finishTeardown(publish: false)])
         let finished = step(requested.state, .closeSucceeded(published: false))
         #expect(finished.state.publishCount == 0)
         #expect(finished.state.phase == .closed)
@@ -305,19 +314,19 @@ struct WorkspaceLifecycleTests {
         }
         let requested = step(state, .closeRequested(publish: true))
         #expect(requested.state.phase == .closing)
-        let stops = requested.effects.effects
+        let stops = requested.effects
         let ordered = [first, second].sorted { $0.rawValue.uuidString < $1.rawValue.uuidString }
         #expect(stops == [.stopRuntime(ordered[0]), .stopRuntime(ordered[1]), .finishTeardown(publish: true)])
         // No new spawns while closing; exits only append records.
         let third = RuntimeSessionID()
         #expect(
-            step(requested.state, .spawnRequested(third)).effects.effects
-                == [.replySpawnRefused(third, .notAccepting(.closing))]
+            step(requested.state, .spawnRequested(third)).effects
+                == [.replySpawnRefused(runtime: third, reason: .notAccepting(.closing))]
         )
         var closing = requested.state
         for id in [first, second] {
             let exited = step(closing, .runtimeExited(id))
-            #expect(exited.effects.effects == [.appendRuntimeEnded(id)])
+            #expect(exited.effects == [.appendRuntimeEnded(id)])
             closing = exited.state
         }
         let finished = step(closing, .closeSucceeded(published: true))
@@ -328,7 +337,7 @@ struct WorkspaceLifecycleTests {
     @Test func closeDuringClosingWaitsForTheLeader() {
         let requested = step(active(), .closeRequested(publish: true))
         let waiter = step(requested.state, .closeRequested(publish: false))
-        #expect(waiter.effects.effects == [.awaitClose])
+        #expect(waiter.effects == [.awaitClose])
         #expect(waiter.state == requested.state)
     }
 
@@ -340,7 +349,7 @@ struct WorkspaceLifecycleTests {
         }
         let requested = step(state, .closeRequested(publish: true))
         let failed = step(requested.state, .closeFailed(.childrenAlive))
-        #expect(failed.effects.effects == [.replyCloseFailed(.childrenAlive)])
+        #expect(failed.effects == [.replyCloseFailed(.childrenAlive)])
         #expect(failed.state.phase == .closing)
         #expect(failed.state.terminalCloseFailure == nil)
         // Only successful publishes count; attempts do not.
@@ -348,7 +357,7 @@ struct WorkspaceLifecycleTests {
         // The next close leads again with its own publish flag.
         let reled = step(failed.state, .closeRequested(publish: false))
         #expect(
-            reled.effects.effects == [.stopRuntime(first), .finishTeardown(publish: false)]
+            reled.effects == [.stopRuntime(first), .finishTeardown(publish: false)]
         )
         #expect(reled.state.closePublish == false)
         let exited = step(reled.state, .runtimeExited(first)).state
@@ -359,23 +368,23 @@ struct WorkspaceLifecycleTests {
     @Test func teardownFailedIsTerminal() {
         let requested = step(active(), .closeRequested(publish: true))
         let failed = step(requested.state, .closeFailed(.teardownFailed))
-        #expect(failed.effects.effects == [.replyCloseFailed(.teardownFailed)])
+        #expect(failed.effects == [.replyCloseFailed(.teardownFailed)])
         #expect(failed.state.phase == .closing)
         #expect(failed.state.publishCount == 0)
         // Later closes replay the failure without new work.
         let replayed = step(failed.state, .closeRequested(publish: false))
-        #expect(replayed.effects.effects == [.replyCloseFailed(.teardownFailed)])
+        #expect(replayed.effects == [.replyCloseFailed(.teardownFailed)])
         #expect(replayed.state == failed.state)
         let third = RuntimeSessionID()
         #expect(
-            step(failed.state, .spawnRequested(third)).effects.effects
-                == [.replySpawnRefused(third, .notAccepting(.closing))]
+            step(failed.state, .spawnRequested(third)).effects
+                == [.replySpawnRefused(runtime: third, reason: .notAccepting(.closing))]
         )
     }
 
     @Test func closeDuringCreatingIsRefused() {
-        let out = step(.initial(), .closeRequested(publish: true))
-        #expect(out.effects.effects == [.replyCloseRefused(.creating)])
+        let out = step(WorkspaceSupervisorState(), .closeRequested(publish: true))
+        #expect(out.effects == [.replyCloseRefused(.creating)])
         #expect(out.state.phase == .creating)
     }
 
@@ -391,15 +400,15 @@ struct WorkspaceLifecycleTests {
         state = step(state, .runtimeExited(gone)).state
         // A reply for a running runtime is forwarded ...
         #expect(
-            step(state, .controlReplyReceived(running)).effects.effects
+            step(state, .controlReplyReceived(running)).effects
                 == [.forwardControlReply(running)]
         )
         // ... but a reply that races an exit, names an unknown runtime, or
         // arrives after close drains to a no-op.
-        #expect(step(state, .controlReplyReceived(gone)).effects.effects == [])
-        #expect(step(state, .controlReplyReceived(RuntimeSessionID())).effects.effects == [])
+        #expect(step(state, .controlReplyReceived(gone)).effects == [])
+        #expect(step(state, .controlReplyReceived(RuntimeSessionID())).effects == [])
         let closed = run([.recoveryReported(.liveOwner(nil))]).state
-        #expect(step(closed, .controlReplyReceived(running)).effects.effects == [])
+        #expect(step(closed, .controlReplyReceived(running)).effects == [])
     }
 
     @Test func strayCompletionsDrain() {
@@ -419,7 +428,7 @@ struct WorkspaceLifecycleTests {
         ]
         for event in strays {
             let out = step(state, event)
-            #expect(out.effects.effects == [], "stray \(event) must drain")
+            #expect(out.effects == [], "stray \(event) must drain")
             #expect(out.state == state, "stray \(event) must not move state")
         }
         // A duplicate exit drains as well.
@@ -429,7 +438,7 @@ struct WorkspaceLifecycleTests {
         }
         let exited = step(established, .runtimeExited(id))
         let duplicate = step(exited.state, .runtimeExited(id))
-        #expect(duplicate.effects.effects == [])
+        #expect(duplicate.effects == [])
         #expect(duplicate.state == exited.state)
     }
 
@@ -446,7 +455,7 @@ struct WorkspaceLifecycleTests {
         #expect(step(state, .runtimeForgotten(running)).state == state)
         #expect(step(state, .runtimeForgotten(RuntimeSessionID())).state == state)
         let pruned = step(state, .runtimeForgotten(finished))
-        #expect(pruned.effects.effects == [])
+        #expect(pruned.effects == [])
         #expect(pruned.state.runtimes[finished] == nil)
         #expect(pruned.state.runtimes[running] == .established)
     }

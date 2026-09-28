@@ -11,10 +11,11 @@ import RVDomain
 /// because `RVDomain.WorkspaceTransition` already names the three domain
 /// phase moves; T7 reconciles the two when the supervisors rewire.
 public enum WorkspaceLifecycleTransition {
+    /// Decide the next state and effects for one event; stray inputs drain.
     public static func transition(
         state: WorkspaceSupervisorState,
         event: WorkspaceEvent
-    ) -> (state: WorkspaceSupervisorState, effects: WorkspaceEffects) {
+    ) -> (state: WorkspaceSupervisorState, effects: [WorkspaceEffect]) {
         var next = state
         var effects: [WorkspaceEffect] = []
         switch event {
@@ -47,18 +48,18 @@ public enum WorkspaceLifecycleTransition {
 
         case .spawnRequested(let id):
             guard next.phase == .active, next.closeAccepted == false else {
-                effects = [.replySpawnRefused(id, .notAccepting(next.phase))]
+                effects = [.replySpawnRefused(runtime: id, reason: .notAccepting(next.phase))]
                 break
             }
             guard next.runtimes[id] == nil else { break }
             guard next.boundaryEstablished else {
-                effects = [.replySpawnRefused(id, .boundaryLost)]
+                effects = [.replySpawnRefused(runtime: id, reason: .boundaryLost)]
                 break
             }
             if let limit = next.runningLimit,
-                next.runningRuntimeIDs.count >= limit
+                next.runningRuntimeCount >= limit
             {
-                effects = [.replySpawnRefused(id, .limitReached)]
+                effects = [.replySpawnRefused(runtime: id, reason: .limitReached)]
                 break
             }
             next.runtimes[id] = .starting
@@ -71,7 +72,7 @@ public enum WorkspaceLifecycleTransition {
 
         case .spawnFailed(let id):
             guard next.runtimes[id] == .starting else { break }
-            next.runtimes[id] = nil
+            next.runtimes[id] = .failed
             effects = [.appendRuntimeEnded(id)]
 
         case .handshakeSucceeded(let id):
@@ -168,6 +169,7 @@ public enum WorkspaceLifecycleTransition {
             }
 
         case .boundaryLost:
+            guard next.phase != .closed else { break }
             next.boundaryEstablished = false
 
         case .controlReplyReceived(let id):
@@ -178,6 +180,6 @@ public enum WorkspaceLifecycleTransition {
             else { break }
             effects = [.forwardControlReply(id)]
         }
-        return (next, WorkspaceEffects(effects))
+        return (next, effects)
     }
 }

@@ -60,8 +60,9 @@ public struct WorkspaceSupervisorState: Sendable, Equatable {
     /// Successful `close(publish: true)` completions.
     public var publishCount: Int
     /// Concurrent running-runtime cap. Configuration: set at init, never
-    /// mutated by the transition.
+    /// mutated by the transition. Must be non-negative (`nil` means uncapped).
     public var runningLimit: Int?
+    /// Tracked runtimes by id; finished entries stay until forgotten.
     public var runtimes: [RuntimeSessionID: WorkspaceRuntimePhase]
 
     public init(
@@ -76,6 +77,7 @@ public struct WorkspaceSupervisorState: Sendable, Equatable {
         runningLimit: Int? = nil,
         runtimes: [RuntimeSessionID: WorkspaceRuntimePhase] = [:]
     ) {
+        precondition((runningLimit ?? 0) >= 0, "runningLimit must be non-negative")
         self.phase = phase
         self.admissionPending = admissionPending
         self.boundaryEstablished = boundaryEstablished
@@ -88,16 +90,16 @@ public struct WorkspaceSupervisorState: Sendable, Equatable {
         self.runtimes = runtimes
     }
 
-    /// Fresh supervisor state for one open attempt.
-    public static func initial(runningLimit: Int? = nil) -> Self {
-        Self(runningLimit: runningLimit)
-    }
-
     /// Running runtimes in stable report order.
     public var runningRuntimeIDs: [RuntimeSessionID] {
         runtimes
             .filter { $0.value.isRunning }
             .map(\.key)
             .sorted { $0.rawValue.uuidString < $1.rawValue.uuidString }
+    }
+
+    /// Live running-runtime count without sorting the report order.
+    public var runningRuntimeCount: Int {
+        runtimes.values.count(where: \.isRunning)
     }
 }
