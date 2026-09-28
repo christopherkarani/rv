@@ -582,7 +582,10 @@ func spawnSeatbeltProcessBody(
         close(admissionPipes.responseRead)
         admissionPipes.responseRead = -1
     }
-    guard let spawnResult, spawnResult == 0, pid > 1 else {
+    // Doubly nested withPointers yields Int??; unwrap both levels
+    // explicitly so inner nil fails closed without relying on
+    // Optional-promoted ==.
+    guard let spawnResult, let spawnStatus = spawnResult, spawnStatus == 0, pid > 1 else {
         return .failure(.processSpawnFailed)
     }
     // The wait loop polls this fd. A blocking read would ignore cancellation

@@ -322,7 +322,12 @@ private func spawnAdmittedCommand(
     writeEnd = -1
     close(nullFD)
     nullFD = -1
-    guard let spawned, spawned == 0, pid > 1 else { return .failure(.spawnFailed) }
+    // Doubly nested withPointers yields Int??; unwrap both levels
+    // explicitly so inner nil fails closed without relying on
+    // Optional-promoted ==.
+    guard let spawned, let status = spawned, status == 0, pid > 1 else {
+        return .failure(.spawnFailed)
+    }
     let flagsNow = fcntl(readEnd, F_GETFL)
     guard flagsNow >= 0, fcntl(readEnd, F_SETFL, flagsNow | O_NONBLOCK) >= 0 else {
         killAdmitted(pid)

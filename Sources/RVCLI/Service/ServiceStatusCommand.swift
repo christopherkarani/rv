@@ -40,6 +40,10 @@ public struct ServiceStatusReport: Sendable, Equatable {
 }
 
 public enum ServiceStatusCommand {
+    /// Robot rendering for a status report. The `.serviceStatus` arm is a
+    /// pure string join and cannot fail today; `throws` is deliberate
+    /// uniformity so every robot render shares one honest path (and one
+    /// public error, `RobotRenderError`) instead of trapping.
     public static func robotText(_ report: ServiceStatusReport) throws -> String {
         try RobotDocument.serviceStatus(report).render()
     }

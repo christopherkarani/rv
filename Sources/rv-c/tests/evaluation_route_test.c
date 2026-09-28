@@ -11,6 +11,11 @@
 
 static int g_fails;
 
+/* Exact data-row count of evaluation_route_vectors.tsv (bump with the file;
+ * EvaluationRouteTests pins the same count). A dropped or commented row must
+ * fail loudly, not silently weaken the parity lock. */
+#define EXPECTED_CASES 24
+
 static void fail(int lineno, const char *detail) {
     fprintf(stderr, "FAIL vectors.tsv:%d: %s\n", lineno, detail);
     g_fails += 1;
@@ -92,6 +97,11 @@ int main(int argc, char **argv) {
         if (len > 0 && line[len - 1] == '\r') {
             line[len - 1] = '\0';
         }
+        /* Skip post-strip empties (lone-CR lines): the Swift harness drops
+         * them as empty subsequences, so failing here would diverge. */
+        if (line[0] == '\0') {
+            continue;
+        }
         cursor = line;
         client = take_field(&cursor);
         service = take_field(&cursor);
@@ -127,8 +137,8 @@ int main(int argc, char **argv) {
         cases += 1;
     }
     fclose(vectors);
-    if (cases == 0) {
-        fprintf(stderr, "FAIL: vectors file %s contributed zero cases\n", argv[1]);
+    if (cases != EXPECTED_CASES) {
+        fprintf(stderr, "FAIL: vectors file %s contributed %d cases, want %d\n", argv[1], cases, EXPECTED_CASES);
         return 1;
     }
     if (g_fails) return 1;

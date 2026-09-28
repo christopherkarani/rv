@@ -3,13 +3,14 @@ public enum ProtocolVersion: Sendable {
     /// Handshake / doctor semver. Swift constant (not bundle or git describe).
     public static let serviceSemver = "1.0.0"
 
+    /// Major version of a `"<head>.<rest>"` semver, or nil on miss.
+    ///
+    /// Grammar (mirrors `rv_semver_major` in `Sources/rv-c/evaluation_route.h`):
+    /// the head before the first `.` must be 1-15 ASCII digits and fit INT_MAX.
+    /// Misses (empty head, non-digit bytes like `+1`/`-0`, 16+ chars, overflow)
+    /// return nil; callers that must fail closed treat nil as incompatible.
     public static func major(of semver: String) -> Int? {
         let head = semver.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false).first
-        // Mirror rv_semver_major (Sources/rv-c/evaluation_route.h): the head
-        // must be non-empty ASCII digits (Swift Int accepts "+1"/"-0"; C
-        // rejects any non-digit head), shorter than 16 chars (C rejects
-        // n >= sizeof buffer regardless of numeric value, so zero-padded
-        // heads like "0000000000000001" miss on both sides), and fit INT_MAX.
         guard let head, head.isEmpty == false, head.count < 16,
               head.allSatisfy({ $0 >= "0" && $0 <= "9" })
         else {
@@ -19,6 +20,10 @@ public enum ProtocolVersion: Sendable {
         return value
     }
 
+    /// True only when both semvers parse and their majors differ.
+    /// Unparseable input is not skew (returns false); callers that must fail
+    /// closed on garbage check `major(of:)` for nil separately — see
+    /// `EvaluationRoute.path`, which routes any miss to `.inProcess`.
     public static func isMajorSkew(clientSemver: String, serviceSemver: String) -> Bool {
         guard let client = major(of: clientSemver), let service = major(of: serviceSemver) else {
             return false

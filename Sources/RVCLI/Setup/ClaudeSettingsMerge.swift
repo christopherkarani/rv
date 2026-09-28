@@ -232,7 +232,7 @@ enum ClaudeSettingsMerge {
 
 }
 
-enum ClaudeSettingsMergeError: Error, Equatable {
+enum ClaudeSettingsMergeError: Error, Sendable, Equatable {
     case unreadable
     /// `merge` refused occupied settings without `force`. Setup surfaces this
     /// as `SetupError.hostHookOccupiedNeedsForce`; the user reruns with `--force`.

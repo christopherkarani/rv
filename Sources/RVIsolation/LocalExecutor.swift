@@ -154,8 +154,14 @@ actor LocalExecutor {
             } catch let error as LocalExecutorError {
                 return .failure(.execute(error))
             } catch is CancellationError {
+                // Defensive: run throws only LocalExecutorError and awaiting
+                // the continuation never raises bare CancellationError, so no
+                // seam reaches this arm today. A future typed-contract change
+                // must still map cancellation to .cancelled, not .unexpected.
                 return .failure(.execute(.cancelled))
             } catch {
+                // Defensive: unreachable by construction (see above), kept so
+                // a future untyped throw fails closed instead of trapping.
                 return .failure(.execute(.unexpected(String(describing: error))))
             }
         }

@@ -10,8 +10,11 @@
 #   - "NULL" service = absent (C NULL / Swift nil). Client is never NULL.
 #   - Empty field = empty string (distinct from NULL).
 #   - expect: "service" (trust) or "inProcess" (miss/fallback).
-# Rows (including the newline) must fit the C harness 4096-byte line
-# buffer; longer rows fail loudly in C while Swift parses them whole.
+# Rows (including the newline) must fit in 4095 bytes: fgets needs NUL
+# room in the C harness 4096-byte buffer, so a 4096-byte row already fails
+# loudly in C while Swift parses it whole. Both harnesses also pin the
+# exact row count below; bump the pins when adding rows.
+#   data rows: 24
 1.0.0	NULL	inProcess
 1.0.0		inProcess
 1.0.0	not-a-version	inProcess
@@ -39,3 +42,8 @@ not-a-version	1.0.0	inProcess
 # buffer, so both sides must miss even when the padded value equals 1.
 0000000000000001.0.0	1.0.0	inProcess
 0000000000000001.0.0	0000000000000001.0.0	inProcess
+# 15-char zero-padded heads: the longest C-accepted width (n < 16), so
+# the padded value 1 routes to service on both sides. Pins the accept
+# side of the width boundary; the rows above pin the 16-char reject side.
+000000000000001.0.0	1.0.0	service
+000000000000001.0.0	000000000000001.0.0	service

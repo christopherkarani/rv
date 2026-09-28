@@ -119,7 +119,10 @@ struct EvaluationRouteTests {
             )
             cases += 1
         }
-        #expect(cases > 0, "vectors file contributed zero cases")
+        // Exact pin (mirror EXPECTED_CASES in evaluation_route_test.c):
+        // the routing-tightening adversarials live ONLY in these rows, so a
+        // dropped row must fail, not silently weaken the lock. Bump with the file.
+        #expect(cases == 24, "vectors file contributed \(cases) cases, want 24")
     }
 }
 
