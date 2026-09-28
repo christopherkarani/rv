@@ -55,13 +55,17 @@ import RVDomain
         #expect(ShellPipeline.parse("$'sudo' git status").matching == "git status")
     }
 
-    @Test func adapters_delegateToSingleParse() {
+    @Test func adapters_agreeWithSingleParse() {
         // Both thin adapters must agree with the facade on every input shape,
-        // including the empty and budget-limited paths.
+        // including the empty and budget-limited paths. The matching entries
+        // use the matching-only fast path while `peel` delegates to `parse`;
+        // `bash -c` is the only shape where a complete peel carries
+        // `executing` != `matching`.
         let inputs = [
             "sudo git reset --hard",
             "\"git\" reset --hard",
             "git commit -m \"git reset --hard\"",
+            "bash -c 'git reset --hard'",
             "cat > /tmp/note.md << 'EOF'\nSee git reset --hard\nEOF",
             "cat <<'EOF' | bash\ngit reset --hard\nEOF",
             "$'sudo' git status",
@@ -107,6 +111,29 @@ import RVDomain
         #expect(parsed.error == nil)
     }
 
+    @Test func parse_segmentsIncludeHeredocBodyLines() {
+        // Segments derive from raw (unpeeled) tokens: the masked body line
+        // still surfaces as an `Argv` segment. Only `matching` sees the
+        // heredoc-masked text.
+        let parsed = ShellPipeline.parse(
+            "cat > /tmp/note.md << 'EOF'\nSee git reset --hard\nEOF"
+        )
+        #expect(parsed.segments.map(\.program) == ["cat", "See", "EOF"])
+        #expect(
+            parsed.segments.map(\.args) == [
+                [">", "/tmp/note.md", "<<", "EOF"],
+                ["git", "reset", "--hard"],
+                [],
+            ]
+        )
+        #expect(parsed.matching.rawValue.contains("reset") == false)
+    }
+
+    @Test func parse_shellCommandOverloadMatchesStringEntry() {
+        let command = ShellCommand(rawValue: "sudo git reset --hard")
+        #expect(ShellPipeline.parse(command) == ShellPipeline.parse(command.rawValue))
+    }
+
     @Test func parse_emptyInput_reportsEmptyCommand() {
         for input in ["", "   "] {
             let parsed = ShellPipeline.parse(input)
@@ -139,7 +166,7 @@ import RVDomain
 
     @Test func parse_bashDashC_keepsGrantKey() {
         let parsed = ShellPipeline.parse("bash -c 'git reset --hard'")
-        #expect(parsed.matching.rawValue.contains("bash"))
+        #expect(parsed.matching.rawValue == "bash -c git reset --hard")
         #expect(parsed.executing?.rawValue == "git reset --hard")
         #expect(parsed.layers == [.bash])
         #expect(parsed.error == nil)
@@ -150,7 +177,7 @@ import RVDomain
         #expect(parsed.error == .unwrapLimited(layers: [.sudo]))
         #expect(parsed.executing == nil)
         #expect(parsed.layers == [.sudo])
-        #expect(parsed.matching.rawValue.contains("sudo"))
+        #expect(parsed.matching.rawValue == "sudo --not-a-flag git status")
     }
 
     @Test func peelStage_masksHeredocWriteBody() {
@@ -159,6 +186,13 @@ import RVDomain
         )
         #expect(write.contains("reset") == false)
         #expect(write.contains("cat"))
+        // Exact golden mirrors the facade golden: the masked body line keeps
+        // its width as spaces while the header and delimiter survive verbatim.
+        #expect(
+            write == "cat > /tmp/note.md << 'EOF'\n"
+                + String(repeating: " ", count: "See git reset --hard".count)
+                + "\nEOF"
+        )
         let sink = "cat <<'EOF' | bash\ngit reset --hard\nEOF"
         #expect(ShellPipeline.peelStage(sink) == sink)
         #expect(ShellPipeline.peelStage("   ") == "")
@@ -196,7 +230,10 @@ import RVDomain
         let inputs = [
             "sudo -E \"git\" reset --'hard'",
             "git commit -m \"git reset --hard\"",
+            "git commit --message=\"git reset --hard\"",
+            "git config user.name \"$(evil)\"",
             "echo \"git reset --hard\" && \"git\" reset --'hard'",
+            "echo `id`",
             "rm $'-rf' /",
             "echo a\ngit status",
             "cat > /tmp/note.md << 'EOF'\nSee git reset --hard\nEOF",

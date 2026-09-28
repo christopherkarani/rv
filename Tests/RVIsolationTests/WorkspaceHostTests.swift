@@ -518,6 +518,38 @@ struct WorkspaceHostTests {
         }
     }
 
+    @Test func streamingClientMultiplexesOverlappedCalls() throws {
+        let opened = try TestHost()
+        defer { opened.close() }
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = client.detach() }
+        let runtime = try client.launchRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 30"],
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        try client.subscribeTerminal(runtime.runtime).get()
+        // Post-subscribe transacts multiplex replies through ReplyWaiter /
+        // EventBoard instead of the pre-streaming locked RPC path above.
+        let box = OverlapBox()
+        for _ in 0..<8 {
+            box.reset()
+            let thread = Thread {
+                box.finish(client.ping())
+            }
+            thread.start()
+            let primary = client.ping()
+            let deadline = Date().addingTimeInterval(5)
+            while box.secondary == nil, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            #expect(primary.isSuccess)
+            #expect(box.secondary?.isSuccess == true)
+        }
+        #expect(client.cancelRuntime(runtime.runtime).isSuccess)
+    }
+
     @Test func negotiatedFeaturesRejectHostsWithoutRequiredCapabilities() {
         #expect(WorkspaceClient.negotiatedFeatures(from: .failure(.invalidRequest))
             .isFailure(.incompatibleProtocol))

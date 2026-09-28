@@ -4,7 +4,7 @@ import Darwin
 import Foundation
 import RVDomain
 
-public enum WorkspaceLayoutStoreError: Error, Equatable {
+public enum WorkspaceLayoutStoreError: Error, Sendable, Equatable {
     case invalidProject
     case unsafeDirectory
     case invalidView

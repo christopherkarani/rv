@@ -12,7 +12,8 @@ func clusteredShorts(_ token: String) -> [Character]? {
 /// Git long-option `=value`. Named apart from unwrap's private `attachedValue`.
 func gitAttachedValue(_ token: String, long: String) -> String? {
     guard case .long(let name, let value) = FlagToken.classify(token),
-        "--" + name == long,
+        long.hasPrefix("--"),
+        name == long.dropFirst(2),
         let value,
         value.isEmpty == false
     else {

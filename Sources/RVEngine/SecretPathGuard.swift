@@ -180,7 +180,6 @@ private func operandCandidate(_ decoded: String) -> String? {
 /// and otherwise the first positional is the pattern. Newline words classify
 /// as `.positional` and count as positionals, as before.
 private func grepCandidates(_ words: [String]) -> [String] {
-    let tokens = words.map(FlagToken.classify)
     var collected: [String] = []
     var skipFirstPositional = true
     var expectRegexp = false
@@ -193,7 +192,7 @@ private func grepCandidates(_ words: [String]) -> [String] {
         collected.append(value)
     }
 
-    for (word, token) in zip(words, tokens) {
+    for (word, token) in zip(words, words.lazy.map(FlagToken.classify)) {
         if collected.count >= SecretPathGuard.candidateCap { break }
         if expectRegexp {
             expectRegexp = false
@@ -256,7 +255,6 @@ private func grepCandidates(_ words: [String]) -> [String] {
 /// `singleDashWord` (which matches exactly those three literals), skip their
 /// value, since patterns are not paths.
 private func findCandidates(_ words: [String]) -> [String] {
-    let tokens = words.map(FlagToken.classify)
     var collected: [String] = []
     var beforePredicate = true
     var skipValue = false
@@ -267,7 +265,7 @@ private func findCandidates(_ words: [String]) -> [String] {
         collected.append(value)
     }
 
-    for token in tokens {
+    for token in words.lazy.map(FlagToken.classify) {
         if collected.count >= SecretPathGuard.candidateCap { break }
         if skipValue {
             skipValue = false

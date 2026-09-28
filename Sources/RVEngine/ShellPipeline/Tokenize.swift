@@ -1,8 +1,9 @@
-/// C1 shell-pipeline entry point (T1 seam: tokenizer only).
+/// C1 shell-pipeline entry point.
 ///
-/// Later tickets extend this enum with `parse` (T4) backed by the unwrap
-/// (T2) and flag-grammar (T3) stages. `Normalize` keeps its signatures and
-/// becomes a thin adapter over this pipeline.
+/// `parse` is the single entry over the typed stage chain (tokenize ->
+/// peel -> unwrap -> parse -> classify); `tokenize` stays public for
+/// stage-level use. `Normalize` and `CommandPeelCore` are thin adapters
+/// over this pipeline.
 public enum ShellPipeline {
     /// Splits `input` into tokens with quoting/ANSI-C provenance.
     ///

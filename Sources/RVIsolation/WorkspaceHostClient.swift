@@ -1193,7 +1193,10 @@ final class EventBoard: @unchecked Sendable {
         let index = nextIndex()
         let message = messages.remove(at: index)
         lastServedRuntime = message.runtime
-        let weight = EventBoard.payloadBytes(message)
+        // Only output frames ever increment the byte budget (via
+        // `admitOutput`); a control notice carrying bytes must not refund
+        // bytes it never charged.
+        let weight = EventBoard.isOutput(message) ? EventBoard.payloadBytes(message) : 0
         queuedBytes = max(0, queuedBytes - weight)
         if let runtime = message.runtime, weight > 0 {
             let remainder = (runtimeBytes[runtime] ?? 0) - weight

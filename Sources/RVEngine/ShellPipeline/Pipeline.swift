@@ -29,12 +29,33 @@ public struct ParsedCommand: Sendable, Equatable {
     /// Stage 3 output: recursive extract; `nil` when budget-limited.
     public var unwrapped: UnwrappedCommand?
     /// Stage 4 output: one typed `Argv` per newline-delimited segment.
+    /// Built from the raw stage-1 tokens, so non-executing heredoc body
+    /// lines surface as segments; `matching` is the heredoc-masked view.
     public var segments: [Argv]
     /// Stage 5 output: role-aware grant key.
     public var matching: MatchingView
     /// First stage error encountered, if any. `parse` stays total; the
     /// remaining fields still carry their legacy-compatible values.
     public var error: PipelineStageError?
+
+    /// Facade-produced values only: `ShellPipeline.parse` is the single
+    /// producer. Public so tests and future producers can spell goldens
+    /// without reflection.
+    public init(
+        tokens: [Token],
+        peeled: String,
+        unwrapped: UnwrappedCommand?,
+        segments: [Argv],
+        matching: MatchingView,
+        error: PipelineStageError?
+    ) {
+        self.tokens = tokens
+        self.peeled = peeled
+        self.unwrapped = unwrapped
+        self.segments = segments
+        self.matching = matching
+        self.error = error
+    }
 }
 
 extension ParsedCommand {
@@ -63,6 +84,9 @@ extension ShellPipeline {
         let unwrapped = unwrapStage(input)
         let segments = parseStage(tokens)
         let matching = classifyStage(peeled)
+        // Unwrap failure implies a non-newline token, hence a segment, so
+        // `.emptyCommand` can only fire when unwrap succeeded; the order is
+        // defensive, never a real choice.
         let error: PipelineStageError? =
             if case .failure(let stageError) = unwrapped {
                 stageError
@@ -79,6 +103,23 @@ extension ShellPipeline {
             matching: matching,
             error: error
         )
+    }
+
+    /// Single entry over `ShellCommand`, matching the sibling seams
+    /// (`Normalize.matchingView(of:)`, `CommandPeelCore.peel`,
+    /// `unwrapCommand`) so callers stop spelling `.rawValue`.
+    public static func parse(_ command: ShellCommand) -> ParsedCommand {
+        parse(command.rawValue)
+    }
+
+    /// Matching-only fast path: peel -> classify without unwrap/parse.
+    ///
+    /// Byte-identical to `parse(input).matching`: `classifyStage` reads
+    /// only the peeled text, so matching-only callers skip the unwrap
+    /// recursion and `Argv` segment build the pre-T4 `matchingView` never
+    /// paid for.
+    static func matchingView(of input: String) -> MatchingView {
+        classifyStage(peelStage(input))
     }
 
     /// Stage 2: trim, then mask non-executing heredoc bodies. Total: without
@@ -103,9 +144,24 @@ extension ShellPipeline {
     }
 
     /// Stage 4: one `Argv` per newline-delimited token segment. Fails typed
-    /// when no command words exist.
+    /// when no command words exist. Built from raw (unpeeled) tokens, so
+    /// non-executing heredoc body lines surface as segments.
     static func parseStage(_ tokens: [Token]) -> Result<[Argv], PipelineStageError> {
-        let segments = tokens.split { $0.isNewline }.compactMap { Argv(tokens: Array($0)) }
+        var segments: [Argv] = []
+        var current: [Token] = []
+        for token in tokens {
+            if token.isNewline {
+                if let argv = Argv(tokens: current) {
+                    segments.append(argv)
+                }
+                current = []
+            } else {
+                current.append(token)
+            }
+        }
+        if let argv = Argv(tokens: current) {
+            segments.append(argv)
+        }
         guard segments.isEmpty == false else {
             return .failure(.emptyCommand)
         }

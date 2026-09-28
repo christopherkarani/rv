@@ -31,14 +31,14 @@ func splitFlagTerminator(_ events: [FlagToken]) -> (flags: [FlagToken], rest: [S
 /// pending-aware terminator keeps both readings exact.
 func scanFilesystemFlags(
     _ argv: Argv,
-    values spec: FlagValueSpec
+    spec: FlagValueSpec
 ) -> (flags: [FlagToken], rest: [String]) {
-    guard let cut = terminatorIndex(in: argv.args, values: spec) else {
-        return splitFlagTerminator(ShellPipeline.scanFlags(argv, values: spec))
+    guard let cut = terminatorIndex(in: argv.args, spec: spec) else {
+        return splitFlagTerminator(ShellPipeline.scanFlags(argv, spec: spec))
     }
     let head = Argv(program: argv.program, args: Array(argv.args[..<cut]))
     return (
-        ShellPipeline.scanFlags(head, values: spec),
+        ShellPipeline.scanFlags(head, spec: spec),
         Array(argv.args[(cut + 1)...])
     )
 }
@@ -47,7 +47,7 @@ func scanFilesystemFlags(
 /// pending-value consumption wins over the terminator test, mirroring
 /// `ShellPipeline.scanFlags` value consumption (including
 /// `rejectsDashValues`, which leaves a dash-led word unconsumed).
-private func terminatorIndex(in words: [String], values spec: FlagValueSpec) -> Int? {
+private func terminatorIndex(in words: [String], spec: FlagValueSpec) -> Int? {
     var pending = false
     for (index, word) in words.enumerated() {
         if pending {
@@ -247,8 +247,7 @@ private let mvSkipLong: Set<String> = [
 private let mvShorts: Set<Character> = ["f", "i", "n", "v", "u"]
 
 func parseTruncate(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let spec = FlagValueSpec(valueShorts: ["s"], valueLongs: ["size"])
-    let (flags, rest) = scanFilesystemFlags(argv, values: spec)
+    let (flags, rest) = scanFilesystemFlags(argv, spec: truncateFlagValues)
     var paths: [String] = []
     for event in flags {
         switch event {
@@ -279,6 +278,8 @@ func parseTruncate(_ args: [String]) -> ParsedFilesystemCommand? {
     parseTruncate(Argv(program: "truncate", args: args))
 }
 
+private let truncateFlagValues = FlagValueSpec(valueShorts: ["s"], valueLongs: ["size"])
+
 private let truncateSkip: Set<String> = [
     "--no-create", "--io-blocks", "--verbose",
 ]
@@ -286,8 +287,7 @@ private let truncateSkip: Set<String> = [
 private let truncateShorts: Set<Character> = ["c", "o", "r", "s"]
 
 func parseShred(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let spec = FlagValueSpec(valueShorts: ["n", "s"], valueLongs: ["iterations", "size"])
-    let (flags, rest) = scanFilesystemFlags(argv, values: spec)
+    let (flags, rest) = scanFilesystemFlags(argv, spec: shredFlagValues)
     var paths: [String] = []
     for event in flags {
         switch event {
@@ -319,6 +319,8 @@ func parseShred(_ argv: Argv) -> ParsedFilesystemCommand? {
 func parseShred(_ args: [String]) -> ParsedFilesystemCommand? {
     parseShred(Argv(program: "shred", args: args))
 }
+
+private let shredFlagValues = FlagValueSpec(valueShorts: ["n", "s"], valueLongs: ["iterations", "size"])
 
 private let shredSkipLong: Set<String> = [
     "--force", "--remove", "--zero", "--verbose", "--exact",

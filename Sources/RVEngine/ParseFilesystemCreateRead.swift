@@ -62,8 +62,7 @@ func isChmodMode(_ token: String) -> Bool {
 }
 
 func parseTouch(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let spec = FlagValueSpec(valueShorts: ["t", "d"], valueLongs: ["date", "time"])
-    let (flags, rest) = scanFilesystemFlags(argv, values: spec)
+    let (flags, rest) = scanFilesystemFlags(argv, spec: touchFlagValues)
     var paths: [String] = []
     for event in flags {
         switch event {
@@ -94,6 +93,8 @@ func parseTouch(_ args: [String]) -> ParsedFilesystemCommand? {
     parseTouch(Argv(program: "touch", args: args))
 }
 
+private let touchFlagValues = FlagValueSpec(valueShorts: ["t", "d"], valueLongs: ["date", "time"])
+
 private let touchSkipLong: Set<String> = [
     "--no-create", "--no-dereference", "--help", "--version",
 ]
@@ -101,8 +102,7 @@ private let touchSkipLong: Set<String> = [
 private let touchShorts: Set<Character> = ["a", "c", "f", "h", "m", "t", "d"]
 
 func parseMkdir(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let spec = FlagValueSpec(valueShorts: ["m"], valueLongs: ["mode"])
-    let (flags, rest) = scanFilesystemFlags(argv, values: spec)
+    let (flags, rest) = scanFilesystemFlags(argv, spec: mkdirFlagValues)
     var paths: [String] = []
     for event in flags {
         switch event {
@@ -132,6 +132,8 @@ func parseMkdir(_ argv: Argv) -> ParsedFilesystemCommand? {
 func parseMkdir(_ args: [String]) -> ParsedFilesystemCommand? {
     parseMkdir(Argv(program: "mkdir", args: args))
 }
+
+private let mkdirFlagValues = FlagValueSpec(valueShorts: ["m"], valueLongs: ["mode"])
 
 private let mkdirSkipLong: Set<String> = [
     "--parents", "--verbose", "--help", "--version",

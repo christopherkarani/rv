@@ -5,7 +5,7 @@ public enum Normalize {
     public static let maxWrapperIterations = 32
 
     public static func matchingView(of command: String) -> MatchingView {
-        ShellPipeline.parse(command).matching
+        ShellPipeline.matchingView(of: command)
     }
 
     /// Returns the matching view of `command`.

@@ -196,7 +196,9 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     public func processPendingWork(now: Date = Date()) {
         drain(.tick(now: now), route: {
             switch $0 {
-            case .resize, .acquire: .terminal
+            // Tick-emitted attach/observe carry blocking subscribe RPCs;
+            // they must not run synchronously on the MainActor tick.
+            case .resize, .acquire, .attach, .observe: .terminal
             case .reconnectQuery: .command
             default: .inline
             }

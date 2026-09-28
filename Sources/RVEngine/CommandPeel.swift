@@ -9,10 +9,11 @@ public enum CommandPeel: Sendable, Equatable {
 /// One peel entry. `matchingView` stays the outer grant key; `executing` is
 /// the unwrapped inner command analyzers consume.
 ///
-/// Thin adapter: both entries delegate to the single `ShellPipeline.parse`.
+/// Thin adapter: `peel` delegates to the single `ShellPipeline.parse`;
+/// `matchingView` uses the matching-only fast path (byte-identical).
 public enum CommandPeelCore {
     public static func matchingView(of command: String) -> MatchingView {
-        ShellPipeline.parse(command).matching
+        ShellPipeline.matchingView(of: command)
     }
 
     public static func peel(_ command: ShellCommand) -> CommandPeel {

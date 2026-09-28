@@ -19,7 +19,7 @@ extension ShellPipeline {
     /// `.dangling` (today's `checkout -b` / `switch -c` behavior).
     public static func scanFlags(
         _ argv: Argv,
-        values spec: FlagValueSpec = .none
+        spec: FlagValueSpec = .none
     ) -> [FlagToken] {
         var out: [FlagToken] = []
         out.reserveCapacity(argv.args.count)
@@ -113,5 +113,5 @@ public struct FlagValueSpec: Sendable, Hashable {
     }
 
     /// No flag takes a value; every word classifies structurally.
-    public static let none = FlagValueSpec()
+    public static let none: FlagValueSpec = FlagValueSpec()
 }

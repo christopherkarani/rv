@@ -697,7 +697,11 @@ private func model(_ session: FakeWorkspaceSession) -> WorkspaceTUIModel {
     try shell.connect().get()
 
     let resizeDate = Date().addingTimeInterval(1)
+    let preTickRevision = shell.snapshot().presentationRevision
     shell.processPendingWork(now: resizeDate)
+    // The tick's probe completion bumps the revision on the terminal
+    // worker; wait for it to land before capturing the idle baseline.
+    #expect(waitForModel { shell.snapshot().presentationRevision != preTickRevision })
     let idleRevision = shell.snapshot().presentationRevision
     for _ in 0..<130_609 {
         shell.processPendingWork(now: resizeDate.addingTimeInterval(1))
