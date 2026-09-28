@@ -129,16 +129,6 @@ func productionHostCodec(_ host: HookHost) -> ProductionHostCodec {
     }
 }
 
-/// Mixed-list factory. Ask encoding uses `productionHostCodec`, not this existential.
-public func makeHostCodec(_ host: HookHost) -> any HostCodec {
-    switch productionHostCodec(host) {
-    case .ask(let codec):
-        codec
-    case .denyOnly(let codec):
-        codec
-    }
-}
-
 extension HostCodec {
     /// Maps a decoded request to a proposed action.
     ///
