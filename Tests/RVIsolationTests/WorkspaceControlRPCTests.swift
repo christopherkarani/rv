@@ -31,14 +31,14 @@ private func sortedJSON<T: Encodable>(_ value: T) throws -> Data {
 
 @Test func controlRPCRequestRoundTrips() throws {
     let requests: [WorkspaceControlRequest] = [
-        WorkspaceControlRequest(id: ControlRPCFixtures.id, operation: .hello, token: ControlRPCFixtures.token),
-        WorkspaceControlRequest(id: ControlRPCFixtures.id, operation: .capabilities),
-        WorkspaceControlRequest(id: ControlRPCFixtures.id, operation: .ping),
-        WorkspaceControlRequest(id: ControlRPCFixtures.id, operation: .describeWorkspace),
-        WorkspaceControlRequest(id: ControlRPCFixtures.id, operation: .listRuntimes),
+        WorkspaceControlRequest(operation: .hello, id: ControlRPCFixtures.id, token: ControlRPCFixtures.token),
+        WorkspaceControlRequest(operation: .capabilities, id: ControlRPCFixtures.id),
+        WorkspaceControlRequest(operation: .ping, id: ControlRPCFixtures.id),
+        WorkspaceControlRequest(operation: .describeWorkspace, id: ControlRPCFixtures.id),
+        WorkspaceControlRequest(operation: .listRuntimes, id: ControlRPCFixtures.id),
         WorkspaceControlRequest(
-            id: ControlRPCFixtures.id,
             operation: .launchRuntime,
+            id: ControlRPCFixtures.id,
             executable: "/bin/sh",
             arguments: ["-c", "echo hi"],
             hook: "pre",
@@ -47,29 +47,29 @@ private func sortedJSON<T: Encodable>(_ value: T) throws -> Data {
             columns: 80
         ),
         WorkspaceControlRequest(
-            id: ControlRPCFixtures.id,
             operation: .ensureTerminalRuntime,
+            id: ControlRPCFixtures.id,
             executable: "/bin/sh",
             io: "terminal",
             rows: 24,
             columns: 80
         ),
-        WorkspaceControlRequest(id: ControlRPCFixtures.id, operation: .cancelRuntime, runtime: ControlRPCFixtures.runtime),
-        WorkspaceControlRequest(id: ControlRPCFixtures.id, operation: .closeWorkspace),
-        WorkspaceControlRequest(id: ControlRPCFixtures.id, operation: .detach),
-        WorkspaceControlRequest(id: ControlRPCFixtures.id, operation: .subscribeTerminal, runtime: ControlRPCFixtures.runtime),
-        WorkspaceControlRequest(id: ControlRPCFixtures.id, operation: .unsubscribeTerminal, runtime: ControlRPCFixtures.runtime),
+        WorkspaceControlRequest(operation: .cancelRuntime, id: ControlRPCFixtures.id, runtime: ControlRPCFixtures.runtime),
+        WorkspaceControlRequest(operation: .closeWorkspace, id: ControlRPCFixtures.id),
+        WorkspaceControlRequest(operation: .detach, id: ControlRPCFixtures.id),
+        WorkspaceControlRequest(operation: .subscribeTerminal, id: ControlRPCFixtures.id, runtime: ControlRPCFixtures.runtime),
+        WorkspaceControlRequest(operation: .unsubscribeTerminal, id: ControlRPCFixtures.id, runtime: ControlRPCFixtures.runtime),
         WorkspaceControlRequest(
-            id: ControlRPCFixtures.id,
             operation: .terminalInput,
+            id: ControlRPCFixtures.id,
             runtime: ControlRPCFixtures.runtime,
             bytes: TerminalBytesCodec.encode(Data("ls\n".utf8))
         ),
-        WorkspaceControlRequest(id: ControlRPCFixtures.id, operation: .acquireTerminalInput, runtime: ControlRPCFixtures.runtime),
-        WorkspaceControlRequest(id: ControlRPCFixtures.id, operation: .releaseTerminalInput, runtime: ControlRPCFixtures.runtime),
+        WorkspaceControlRequest(operation: .acquireTerminalInput, id: ControlRPCFixtures.id, runtime: ControlRPCFixtures.runtime),
+        WorkspaceControlRequest(operation: .releaseTerminalInput, id: ControlRPCFixtures.id, runtime: ControlRPCFixtures.runtime),
         WorkspaceControlRequest(
-            id: ControlRPCFixtures.id,
             operation: .resizeTerminal,
+            id: ControlRPCFixtures.id,
             runtime: ControlRPCFixtures.runtime,
             rows: 30,
             columns: 100
@@ -89,22 +89,22 @@ private func sortedJSON<T: Encodable>(_ value: T) throws -> Data {
 @Test func controlRPCResponseRoundTrips() throws {
     let responses: [WorkspaceControlResponse] = [
         WorkspaceControlResponse(
-            id: ControlRPCFixtures.id,
             operation: .hello,
+            id: ControlRPCFixtures.id,
             ok: true,
             workspace: ControlRPCFixtures.workspace,
             host: ControlRPCFixtures.host
         ),
         WorkspaceControlResponse(
-            id: ControlRPCFixtures.id,
             operation: .capabilities,
+            id: ControlRPCFixtures.id,
             ok: true,
             features: [WorkspaceControlFeature.ensureTerminalRuntime]
         ),
-        WorkspaceControlResponse(id: ControlRPCFixtures.id, operation: .ping, ok: true, host: ControlRPCFixtures.host),
+        WorkspaceControlResponse(operation: .ping, id: ControlRPCFixtures.id, ok: true, host: ControlRPCFixtures.host),
         WorkspaceControlResponse(
-            id: ControlRPCFixtures.id,
             operation: .describeWorkspace,
+            id: ControlRPCFixtures.id,
             ok: true,
             workspace: ControlRPCFixtures.workspace,
             host: ControlRPCFixtures.host,
@@ -113,8 +113,8 @@ private func sortedJSON<T: Encodable>(_ value: T) throws -> Data {
             attached: 2
         ),
         WorkspaceControlResponse(
-            id: ControlRPCFixtures.id,
             operation: .listRuntimes,
+            id: ControlRPCFixtures.id,
             ok: true,
             runtimes: [
                 WorkspaceRuntimeReport(
@@ -129,8 +129,8 @@ private func sortedJSON<T: Encodable>(_ value: T) throws -> Data {
             ]
         ),
         WorkspaceControlResponse(
-            id: ControlRPCFixtures.id,
             operation: .launchRuntime,
+            id: ControlRPCFixtures.id,
             runtime: ControlRPCFixtures.runtime,
             ok: true,
             running: true,
@@ -140,8 +140,8 @@ private func sortedJSON<T: Encodable>(_ value: T) throws -> Data {
             inputOwner: false
         ),
         WorkspaceControlResponse(
-            id: ControlRPCFixtures.id,
             operation: .ensureTerminalRuntime,
+            id: ControlRPCFixtures.id,
             runtime: ControlRPCFixtures.runtime,
             ok: true,
             running: true,
@@ -149,8 +149,18 @@ private func sortedJSON<T: Encodable>(_ value: T) throws -> Data {
             inputOwner: false,
             created: true
         ),
-        WorkspaceControlResponse(id: ControlRPCFixtures.id, operation: .cancelRuntime, runtime: ControlRPCFixtures.runtime, ok: true),
-        WorkspaceControlResponse(id: ControlRPCFixtures.id, operation: .detach, ok: true),
+        WorkspaceControlResponse(operation: .cancelRuntime, id: ControlRPCFixtures.id, runtime: ControlRPCFixtures.runtime, ok: true),
+        WorkspaceControlResponse(operation: .detach, id: ControlRPCFixtures.id, ok: true),
+        WorkspaceControlResponse(
+            operation: .closeWorkspace,
+            id: ControlRPCFixtures.id,
+            ok: true,
+            workspace: ControlRPCFixtures.workspace,
+            host: ControlRPCFixtures.host,
+            phase: "closed",
+            project: "/tmp/demo",
+            attached: 0
+        ),
         WorkspaceControlResponse(
             operation: .workspaceClosed,
             ok: true,
@@ -275,8 +285,8 @@ private func sortedJSON<T: Encodable>(_ value: T) throws -> Data {
     for legacy in legacyMessages {
         let legacyBody = try #require(WorkspaceControlCodec.encode(legacy))
         let request = WorkspaceControlRequest(
-            id: legacy.id,
             operation: try #require(WorkspaceControlOp(rawValue: legacy.op)),
+            id: legacy.id,
             token: legacy.token,
             executable: legacy.executable,
             arguments: legacy.arguments,
@@ -303,8 +313,8 @@ private func sortedJSON<T: Encodable>(_ value: T) throws -> Data {
             features: legacy.features
         )
         let response = WorkspaceControlResponse(
-            id: legacy.id,
             operation: try #require(WorkspaceControlOp(rawValue: legacy.op)),
+            id: legacy.id,
             token: legacy.token,
             executable: legacy.executable,
             arguments: legacy.arguments,
@@ -407,4 +417,143 @@ private func sortedJSON<T: Encodable>(_ value: T) throws -> Data {
     let valid = Data("{\"v\":1,\"op\":\"ping\"}".utf8)
     #expect(try decoder.decode(WorkspaceControlRequest.self, from: valid).operation == .ping)
     #expect(try decoder.decode(WorkspaceControlResponse.self, from: valid).operation == .ping)
+}
+
+@Test func controlRPCFailureTypedOverloadShape() throws {
+    let failure = WorkspaceControlResponse.failure(
+        id: ControlRPCFixtures.id,
+        operation: .ping,
+        code: .invalidRequest
+    )
+    #expect(failure.ok == false)
+    #expect(failure.error == WorkspaceControlCode.invalidRequest.rawValue)
+    #expect(failure.code == .invalidRequest)
+    #expect(failure.operation == .ping)
+    #expect(failure.rawOperation == WorkspaceControlOp.ping.rawValue)
+    #expect(failure.id == ControlRPCFixtures.id)
+    let legacy = WorkspaceControlMessage.error(
+        id: ControlRPCFixtures.id,
+        op: WorkspaceControlOp.ping.rawValue,
+        code: .invalidRequest
+    )
+    #expect(failure.encode() == WorkspaceControlCodec.encode(legacy))
+}
+
+@Test func controlRPCResponseCodeRoundTrips() {
+    var response = WorkspaceControlResponse(operation: .ping, ok: false, error: "bogus")
+    #expect(response.code == nil)
+    response.error = nil
+    #expect(response.code == nil)
+    response.code = .terminalBusy
+    #expect(response.error == WorkspaceControlCode.terminalBusy.rawValue)
+    #expect(response.code == .terminalBusy)
+    response.code = nil
+    #expect(response.error == nil)
+    #expect(response.code == nil)
+}
+
+@Test func controlRPCCodableEncodeAgreesWithValidatedEncode() throws {
+    let oversized = String(repeating: "x", count: WorkspaceControlLimits.maxBodyBytes)
+    let request = WorkspaceControlRequest(
+        operation: .launchRuntime,
+        id: ControlRPCFixtures.id,
+        executable: oversized
+    )
+    #expect(request.encode() == nil)
+    do {
+        _ = try JSONEncoder().encode(request)
+        Issue.record("generic encode of an oversized request must throw")
+    } catch {
+        // Expected: the body cap rejects the frame on both encode paths.
+    }
+    let response = WorkspaceControlResponse(
+        operation: .describeWorkspace,
+        id: ControlRPCFixtures.id,
+        ok: true,
+        project: oversized
+    )
+    #expect(response.encode() == nil)
+    do {
+        _ = try JSONEncoder().encode(response)
+        Issue.record("generic encode of an oversized response must throw")
+    } catch {
+        // Expected: the body cap rejects the frame on both encode paths.
+    }
+    let overField = String(repeating: "x", count: WorkspaceControlLimits.maxExecutableBytes + 1)
+    let limited = WorkspaceControlRequest(
+        operation: .launchRuntime,
+        id: ControlRPCFixtures.id,
+        executable: overField
+    )
+    #expect(try #require(limited.encode()).count <= WorkspaceControlLimits.maxBodyBytes)
+    do {
+        _ = try JSONEncoder().encode(limited)
+        Issue.record("generic encode of an over-limit request must throw")
+    } catch {
+        // Expected: per-field limits fail closed on the Codable path.
+    }
+    let valid = WorkspaceControlRequest(operation: .ping, id: ControlRPCFixtures.id)
+    #expect(try JSONEncoder().encode(valid).isEmpty == false)
+}
+
+@Test func controlRPCLimitBatteryRejectsIdenticalFramesOnBothPaths() {
+    let decoder = JSONDecoder()
+    let uuid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
+    func over(_ count: Int) -> String { String(repeating: "x", count: count) }
+    let manyArguments = Array(repeating: "\"a\"", count: WorkspaceControlLimits.maxArguments + 1).joined(
+        separator: ","
+    )
+    let manyFeatures = Array(repeating: "\"f\"", count: WorkspaceControlLimits.maxFeatures + 1).joined(
+        separator: ","
+    )
+    let runtimeEntry = "{\"runtime\":\"\(uuid)\",\"running\":true}"
+    let manyRuntimes = Array(repeating: runtimeEntry, count: WorkspaceControlLimits.maxRuntimes + 1).joined(
+        separator: ","
+    )
+    let frames: [String] = [
+        "{\"v\":1,\"op\":\"\(over(WorkspaceControlLimits.maxOperationBytes + 1))\"}",
+        "{\"v\":1,\"op\":\"ping\",\"executable\":\"\(over(WorkspaceControlLimits.maxExecutableBytes + 1))\"}",
+        "{\"v\":1,\"op\":\"ping\",\"hook\":\"\(over(WorkspaceControlLimits.maxHookBytes + 1))\"}",
+        "{\"v\":1,\"op\":\"ping\",\"error\":\"\(over(WorkspaceControlLimits.maxErrorBytes + 1))\"}",
+        "{\"v\":1,\"op\":\"ping\",\"phase\":\"\(over(33))\"}",
+        "{\"v\":1,\"op\":\"ping\",\"project\":\"\(over(WorkspaceControlLimits.maxProjectBytes + 1))\"}",
+        "{\"v\":1,\"op\":\"ping\",\"arguments\":[\(manyArguments)]}",
+        "{\"v\":1,\"op\":\"ping\",\"arguments\":[\"\(over(WorkspaceControlLimits.maxArgumentBytes + 1))\"]}",
+        "{\"v\":1,\"op\":\"ping\",\"features\":[\(manyFeatures)]}",
+        "{\"v\":1,\"op\":\"ping\",\"features\":[\"\(over(WorkspaceControlLimits.maxFeatureBytes + 1))\"]}",
+        "{\"v\":1,\"op\":\"ping\",\"attached\":\(WorkspaceControlLimits.maxConnections + 1)}",
+        "{\"v\":1,\"op\":\"ping\",\"attached\":-1}",
+        "{\"v\":1,\"op\":\"ping\",\"io\":\"bogus\"}",
+        "{\"v\":1,\"op\":\"ping\",\"rows\":0}",
+        "{\"v\":1,\"op\":\"ping\",\"rows\":\(TerminalStreamLimits.maximumRows + 1)}",
+        "{\"v\":1,\"op\":\"ping\",\"cols\":0}",
+        "{\"v\":1,\"op\":\"ping\",\"cols\":\(TerminalStreamLimits.maximumColumns + 1)}",
+        "{\"v\":1,\"op\":\"ping\",\"sequence\":-1}",
+        "{\"v\":1,\"op\":\"ping\",\"bytes\":\"!!!\"}",
+        "{\"v\":1,\"op\":\"ping\",\"runtimes\":[\(manyRuntimes)]}",
+        "{\"v\":1,\"op\":\"ping\",\"runtimes\":[{\"runtime\":\"\(uuid)\",\"running\":true,\"hook\":\"\(over(WorkspaceControlLimits.maxHookBytes + 1))\"}]}",
+        "{\"v\":1,\"op\":\"ping\",\"runtimes\":[{\"runtime\":\"\(uuid)\",\"running\":true,\"rows\":0}]}",
+        "{\"v\":1,\"op\":\"ping\",\"executable\":\"a\\u0000b\"}",
+    ]
+    for frame in frames {
+        let data = Data(frame.utf8)
+        guard data.count <= WorkspaceControlLimits.maxBodyBytes else {
+            Issue.record("battery frame trips the body cap instead of its field limit: \(frame.prefix(80))")
+            continue
+        }
+        #expect(WorkspaceControlRequest.decode(data) == .invalid)
+        #expect(WorkspaceControlResponse.decode(data) == .invalid)
+        do {
+            _ = try decoder.decode(WorkspaceControlRequest.self, from: data)
+            Issue.record("request Codable init accepted \(frame.prefix(80))")
+        } catch {
+            // Expected: every over-limit frame fails closed.
+        }
+        do {
+            _ = try decoder.decode(WorkspaceControlResponse.self, from: data)
+            Issue.record("response Codable init accepted \(frame.prefix(80))")
+        } catch {
+            // Expected: every over-limit frame fails closed.
+        }
+    }
 }

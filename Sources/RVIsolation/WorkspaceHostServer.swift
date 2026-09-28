@@ -399,8 +399,8 @@ final class WorkspaceHostServer: Sendable {
         connection.markHello()
         return Reply(
             message: WorkspaceControlResponse(
-                id: message.id,
                 operation: .hello,
+                id: message.id,
                 ok: true,
                 workspace: supervisor.id.rawValue,
                 host: hostID.rawValue
@@ -421,8 +421,8 @@ final class WorkspaceHostServer: Sendable {
         case .capabilities:
             return Reply(
                 message: WorkspaceControlResponse(
-                    id: message.id,
                     operation: op,
+                    id: message.id,
                     ok: true,
                     features: [WorkspaceControlFeature.ensureTerminalRuntime]
                 )
@@ -430,8 +430,8 @@ final class WorkspaceHostServer: Sendable {
         case .ping:
             return Reply(
                 message: WorkspaceControlResponse(
-                    id: message.id,
                     operation: op,
+                    id: message.id,
                     ok: true,
                     host: hostID.rawValue
                 )
@@ -451,8 +451,8 @@ final class WorkspaceHostServer: Sendable {
         case .detach:
             return Reply(
                 message: WorkspaceControlResponse(
-                    id: message.id,
                     operation: op,
+                    id: message.id,
                     ok: true
                 ),
                 endConnection: true
@@ -484,8 +484,8 @@ final class WorkspaceHostServer: Sendable {
             state.connections.values.filter(\.isHello).count
         }
         return WorkspaceControlResponse(
-            id: message.id,
             operation: .describeWorkspace,
+            id: message.id,
             ok: true,
             workspace: snapshot.id.rawValue,
             host: hostID.rawValue,
@@ -502,8 +502,8 @@ final class WorkspaceHostServer: Sendable {
             return failure(message, .runtimeLimit)
         }
         return WorkspaceControlResponse(
-            id: message.id,
             operation: .listRuntimes,
+            id: message.id,
             ok: true,
             runtimes: facts.map {
                 WorkspaceRuntimeReport(
@@ -544,8 +544,8 @@ final class WorkspaceHostServer: Sendable {
             .first
         {
             return WorkspaceControlResponse(
-                id: message.id,
                 operation: .ensureTerminalRuntime,
+                id: message.id,
                 runtime: existing.id,
                 hook: existing.hookHost,
                 ok: true,
@@ -621,8 +621,8 @@ final class WorkspaceHostServer: Sendable {
                 launchedColumns = nil
             }
             return WorkspaceControlResponse(
-                id: message.id,
                 operation: responseOp,
+                id: message.id,
                 runtime: running.id.rawValue,
                 hook: running.session.host?.rawValue,
                 ok: true,
@@ -659,8 +659,8 @@ final class WorkspaceHostServer: Sendable {
             let window = supervisor.terminalWindow(runtime: runtime)
             return Reply(
                 message: WorkspaceControlResponse(
-                    id: message.id,
                     operation: .subscribeTerminal,
+                    id: message.id,
                     runtime: runtime,
                     ok: true,
                     rows: window?.rows,
@@ -687,8 +687,8 @@ final class WorkspaceHostServer: Sendable {
         case .success:
             return Reply(
                 message: WorkspaceControlResponse(
-                    id: message.id,
                     operation: .unsubscribeTerminal,
+                    id: message.id,
                     runtime: runtime,
                     ok: true
                 )
@@ -712,8 +712,8 @@ final class WorkspaceHostServer: Sendable {
         case .success:
             return Reply(
                 message: WorkspaceControlResponse(
-                    id: message.id,
                     operation: .terminalInput,
+                    id: message.id,
                     runtime: runtime,
                     ok: true
                 )
@@ -734,8 +734,8 @@ final class WorkspaceHostServer: Sendable {
         case .success:
             return Reply(
                 message: WorkspaceControlResponse(
-                    id: message.id,
                     operation: .acquireTerminalInput,
+                    id: message.id,
                     runtime: runtime,
                     ok: true,
                     inputOwner: true
@@ -757,8 +757,8 @@ final class WorkspaceHostServer: Sendable {
         case .success:
             return Reply(
                 message: WorkspaceControlResponse(
-                    id: message.id,
                     operation: .releaseTerminalInput,
+                    id: message.id,
                     runtime: runtime,
                     ok: true,
                     inputOwner: false
@@ -777,8 +777,8 @@ final class WorkspaceHostServer: Sendable {
         case .success:
             return Reply(
                 message: WorkspaceControlResponse(
-                    id: message.id,
                     operation: .resizeTerminal,
+                    id: message.id,
                     runtime: runtime,
                     ok: true,
                     rows: rows,
@@ -795,8 +795,8 @@ final class WorkspaceHostServer: Sendable {
         switch supervisor.cancel(runtime: runtime) {
         case .success:
             return WorkspaceControlResponse(
-                id: message.id,
                 operation: .cancelRuntime,
+                id: message.id,
                 runtime: runtime,
                 ok: true
             )
@@ -819,8 +819,8 @@ final class WorkspaceHostServer: Sendable {
         switch result {
         case .success where closed:
             response = WorkspaceControlResponse(
-                id: message.id,
                 operation: .closeWorkspace,
+                id: message.id,
                 ok: true,
                 workspace: supervisor.id.rawValue,
                 host: hostID.rawValue,

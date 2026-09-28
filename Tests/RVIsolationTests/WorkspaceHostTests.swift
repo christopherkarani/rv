@@ -510,12 +510,14 @@ struct WorkspaceHostTests {
     }
 
     @Test func negotiatedFeaturesTreatInvalidRequestAsLegacy() {
-        guard case .success(let empty) = WorkspaceClient.negotiatedFeatures(from: .failure(.invalidRequest)) else {
+        let legacyInvalid: Result<WorkspaceControlMessage, WorkspaceClientFailure> = .failure(.invalidRequest)
+        guard case .success(let empty) = WorkspaceClient.negotiatedFeatures(from: legacyInvalid) else {
             Issue.record("invalidRequest must map to an empty feature list")
             return
         }
         #expect(empty.isEmpty)
-        #expect(WorkspaceClient.negotiatedFeatures(from: .failure(.timedOut)).isFailure)
+        let legacyTimeout: Result<WorkspaceControlMessage, WorkspaceClientFailure> = .failure(.timedOut)
+        #expect(WorkspaceClient.negotiatedFeatures(from: legacyTimeout).isFailure)
         let reply = WorkspaceControlMessage(
             version: 1,
             id: UUID(),
@@ -536,6 +538,79 @@ struct WorkspaceHostTests {
             features: []
         )
         #expect(WorkspaceClient.negotiatedFeatures(from: .success(wrongOp)).isFailure)
+    }
+
+    @Test func negotiatedFeaturesAcceptsOnlyTypedCapabilitiesReplies() {
+        let reply = WorkspaceControlResponse(
+            operation: .capabilities,
+            id: UUID(),
+            ok: true,
+            features: [WorkspaceControlFeature.ensureTerminalRuntime]
+        )
+        guard case .success(let features) = WorkspaceClient.negotiatedFeatures(from: .success(reply)) else {
+            Issue.record("typed capabilities reply must map to its features")
+            return
+        }
+        #expect(features == [WorkspaceControlFeature.ensureTerminalRuntime])
+        let failed = WorkspaceControlResponse(
+            operation: .capabilities,
+            id: UUID(),
+            ok: false,
+            error: WorkspaceControlCode.invalidRequest.rawValue
+        )
+        #expect(WorkspaceClient.negotiatedFeatures(from: .success(failed)).isFailure)
+        let unknownOp = WorkspaceControlResponse(
+            WorkspaceControlMessage(
+                version: 1,
+                id: UUID(),
+                op: "killProcess",
+                ok: true,
+                features: [WorkspaceControlFeature.ensureTerminalRuntime]
+            )
+        )
+        #expect(unknownOp.operation == nil)
+        #expect(WorkspaceClient.negotiatedFeatures(from: .success(unknownOp)).isFailure)
+    }
+
+    @Test func unknownOperationReceivesAnInvalidRequestEcho() throws {
+        let opened = try TestHost()
+        defer { opened.close() }
+        let fd = try WorkspaceControlSocket.connect(
+            path: opened.server.endpoint.socketPath,
+            timeout: 2
+        ).get()
+        defer { close(fd) }
+        let hello = try #require(WorkspaceControlCodec.encode(
+            WorkspaceControlMessage(
+                version: 1,
+                id: UUID(),
+                op: WorkspaceControlOp.hello.rawValue,
+                token: opened.server.endpoint.ownerToken
+            )
+        ))
+        #expect(WorkspaceControlSocket.writeFrame(fd: fd, body: hello))
+        let greeting = try WorkspaceControlSocket.readFrame(fd: fd, timeout: 2).get()
+        guard case .message(let welcomed) = WorkspaceControlCodec.decode(greeting),
+            welcomed.ok == true
+        else {
+            Issue.record("raw hello must succeed before the unknown-op probe")
+            return
+        }
+        let probeID = UUID()
+        let probe = Data("{\"v\":1,\"id\":\"\(probeID.uuidString)\",\"op\":\"killProcess\"}".utf8)
+        #expect(WorkspaceControlSocket.writeFrame(fd: fd, body: probe))
+        let raw = try WorkspaceControlSocket.readFrame(fd: fd, timeout: 2).get()
+        guard case .response(let reply) = WorkspaceControlResponse.decode(raw) else {
+            Issue.record("unknown op must receive a typed failure echo")
+            return
+        }
+        #expect(reply.operation == nil)
+        #expect(reply.rawOperation == "killProcess")
+        #expect(reply.id == probeID)
+        #expect(reply.ok == false)
+        #expect(reply.code == .invalidRequest)
+        #expect(opened.supervisor.snapshot.phase == .active)
+        #expect(opened.supervisor.runtimeFacts().isEmpty)
     }
 
     @Test func legacyEnsureReusesARunningTerminalAndLaunchesWhenEmpty() throws {

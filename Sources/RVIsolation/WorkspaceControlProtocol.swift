@@ -251,7 +251,7 @@ enum WorkspaceControlCodec {
         else {
             return false
         }
-        return runtimesFit(envelope.message.runtimes)
+        return runtimeWiresFit(envelope.runtimes)
     }
 
     static func encode(_ message: WorkspaceControlMessage) -> Data? {
@@ -290,7 +290,9 @@ enum WorkspaceControlCodec {
         }
     }
 
-    private static func runtimesFit(_ values: [WorkspaceRuntimeReport]?) -> Bool {
+    /// Validates against the wire form so `limitsValid` never maps
+    /// `envelope.message` (the caller maps it once more on success).
+    private static func runtimeWiresFit(_ values: [Envelope.RuntimeWire]?) -> Bool {
         guard let values else { return true }
         guard values.count <= WorkspaceControlLimits.maxRuntimes else { return false }
         return values.allSatisfy { fits($0.hook, WorkspaceControlLimits.maxHookBytes) }
@@ -694,15 +696,17 @@ public enum WorkspaceControlResponseDecode: Sendable, Equatable {
 /// conversion so callers never handle op strings.
 /// Mirror of `WorkspaceControlResponse` — see the T6 drift guard above.
 public struct WorkspaceControlRequest: Sendable, Equatable, Codable {
-    var message: WorkspaceControlMessage
+    private(set) var message: WorkspaceControlMessage
 
     init(_ message: WorkspaceControlMessage) {
         self.message = message
     }
 
+    /// Mirrors the wire shape; set only the fields the operation defines.
+    /// The server rejects shapes its per-op guards do not accept.
     public init(
-        id: UUID? = nil,
         operation: WorkspaceControlOp,
+        id: UUID? = nil,
         token: UUID? = nil,
         executable: String? = nil,
         arguments: [String]? = nil,
@@ -776,8 +780,36 @@ public struct WorkspaceControlRequest: Sendable, Equatable, Codable {
         message = envelope.message
     }
 
+    /// Validated encode for generic encoders. Throws when the frame
+    /// violates limits or the body cap; prefer `encode()` for the
+    /// canonical wire bytes.
     public func encode(to encoder: Encoder) throws {
-        try Envelope(message).encode(to: encoder)
+        let envelope = Envelope(message)
+        guard WorkspaceControlCodec.versionMatches(envelope),
+            WorkspaceControlCodec.limitsValid(envelope)
+        else {
+            throw EncodingError.invalidValue(
+                message,
+                EncodingError.Context(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "invalid control frame"
+                )
+            )
+        }
+        let measurer = JSONEncoder()
+        measurer.outputFormatting = [.sortedKeys]
+        guard let measured = try? measurer.encode(envelope),
+            measured.count <= WorkspaceControlLimits.maxBodyBytes
+        else {
+            throw EncodingError.invalidValue(
+                message,
+                EncodingError.Context(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "control frame exceeds body cap"
+                )
+            )
+        }
+        try envelope.encode(to: encoder)
     }
 
     /// Validated encode. Byte-identical to `WorkspaceControlCodec.encode`.
@@ -910,15 +942,17 @@ public struct WorkspaceControlRequest: Sendable, Equatable, Codable {
 /// Typed server→client control RPC. Same wire encoding as the request side.
 /// Mirror of `WorkspaceControlRequest` — see the T6 drift guard above.
 public struct WorkspaceControlResponse: Sendable, Equatable, Codable {
-    var message: WorkspaceControlMessage
+    private(set) var message: WorkspaceControlMessage
 
     init(_ message: WorkspaceControlMessage) {
         self.message = message
     }
 
+    /// Mirrors the wire shape; set only the fields the operation defines.
+    /// Replies and events leave request-only fields unset.
     public init(
-        id: UUID? = nil,
         operation: WorkspaceControlOp,
+        id: UUID? = nil,
         token: UUID? = nil,
         executable: String? = nil,
         arguments: [String]? = nil,
@@ -989,6 +1023,7 @@ public struct WorkspaceControlResponse: Sendable, Equatable, Codable {
         )
     }
 
+    /// Failure for a known operation; unknown-op echoes use the `request:` overload.
     public static func failure(
         id: UUID?,
         operation: WorkspaceControlOp,
@@ -1020,8 +1055,36 @@ public struct WorkspaceControlResponse: Sendable, Equatable, Codable {
         message = envelope.message
     }
 
+    /// Validated encode for generic encoders. Throws when the frame
+    /// violates limits or the body cap; prefer `encode()` for the
+    /// canonical wire bytes.
     public func encode(to encoder: Encoder) throws {
-        try Envelope(message).encode(to: encoder)
+        let envelope = Envelope(message)
+        guard WorkspaceControlCodec.versionMatches(envelope),
+            WorkspaceControlCodec.limitsValid(envelope)
+        else {
+            throw EncodingError.invalidValue(
+                message,
+                EncodingError.Context(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "invalid control frame"
+                )
+            )
+        }
+        let measurer = JSONEncoder()
+        measurer.outputFormatting = [.sortedKeys]
+        guard let measured = try? measurer.encode(envelope),
+            measured.count <= WorkspaceControlLimits.maxBodyBytes
+        else {
+            throw EncodingError.invalidValue(
+                message,
+                EncodingError.Context(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "control frame exceeds body cap"
+                )
+            )
+        }
+        try envelope.encode(to: encoder)
     }
 
     /// Validated encode. Byte-identical to `WorkspaceControlCodec.encode`.
@@ -1042,6 +1105,7 @@ public struct WorkspaceControlResponse: Sendable, Equatable, Codable {
     }
 
     public var version: Int { message.version }
+    /// Nil when the peer sent an unknown op; `rawOperation` still echoes it.
     public var operation: WorkspaceControlOp? {
         WorkspaceControlOp(rawValue: message.op)
     }

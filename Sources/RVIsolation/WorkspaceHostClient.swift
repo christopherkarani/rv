@@ -231,8 +231,8 @@ public final class WorkspaceClient: Sendable {
         terminalColumns: Int? = nil
     ) -> Result<WorkspaceRuntimeReport, WorkspaceClientFailure> {
         var message = WorkspaceControlRequest(
-            id: UUID(),
             operation: .launchRuntime,
+            id: UUID(),
             executable: executable,
             arguments: arguments,
             hook: hookHost?.rawValue
@@ -247,7 +247,7 @@ public final class WorkspaceClient: Sendable {
         default:
             return .failure(.invalidRequest)
         }
-        switch transact(&message, timeout: WorkspaceControlLimits.launchTimeoutSeconds) {
+        switch transact(message, timeout: WorkspaceControlLimits.launchTimeoutSeconds) {
         case .failure(let error):
             return .failure(error)
         case .success(let reply):
@@ -293,9 +293,9 @@ public final class WorkspaceClient: Sendable {
                 terminalColumns: terminalColumns
             )
         }
-        var message = WorkspaceControlRequest(
-            id: UUID(),
+        let message = WorkspaceControlRequest(
             operation: .ensureTerminalRuntime,
+            id: UUID(),
             executable: executable,
             arguments: arguments,
             hook: hookHost?.rawValue,
@@ -303,7 +303,7 @@ public final class WorkspaceClient: Sendable {
             rows: terminalRows,
             columns: terminalColumns
         )
-        switch transact(&message, timeout: WorkspaceControlLimits.launchTimeoutSeconds) {
+        switch transact(message, timeout: WorkspaceControlLimits.launchTimeoutSeconds) {
         case .failure(let error):
             return .failure(error)
         case .success(let reply):
@@ -330,13 +330,13 @@ public final class WorkspaceClient: Sendable {
     /// `resubscribeTerminal` to resume from replay, then re-acquire input if
     /// this client held it.
     public func subscribeTerminal(_ runtime: UUID) -> Result<Void, WorkspaceClientFailure> {
-        var message = WorkspaceControlRequest(
-            id: UUID(),
+        let message = WorkspaceControlRequest(
             operation: .subscribeTerminal,
+            id: UUID(),
             runtime: runtime
         )
         let result = transact(
-            &message,
+            message,
             timeout: WorkspaceControlLimits.launchTimeoutSeconds,
             beginStreaming: true
         )
@@ -357,43 +357,43 @@ public final class WorkspaceClient: Sendable {
     }
 
     public func unsubscribeTerminal(_ runtime: UUID) -> Result<Void, WorkspaceClientFailure> {
-        var message = WorkspaceControlRequest(
-            id: UUID(),
+        let message = WorkspaceControlRequest(
             operation: .unsubscribeTerminal,
+            id: UUID(),
             runtime: runtime
         )
-        return transact(&message, timeout: WorkspaceControlLimits.describeTimeoutSeconds).map { _ in () }
+        return transact(message, timeout: WorkspaceControlLimits.describeTimeoutSeconds).map { _ in () }
     }
 
     public func acquireTerminalInput(_ runtime: UUID) -> Result<Void, WorkspaceClientFailure> {
-        var message = WorkspaceControlRequest(
-            id: UUID(),
+        let message = WorkspaceControlRequest(
             operation: .acquireTerminalInput,
+            id: UUID(),
             runtime: runtime
         )
-        return transact(&message, timeout: WorkspaceControlLimits.describeTimeoutSeconds).map { _ in () }
+        return transact(message, timeout: WorkspaceControlLimits.describeTimeoutSeconds).map { _ in () }
     }
 
     public func releaseTerminalInput(_ runtime: UUID) -> Result<Void, WorkspaceClientFailure> {
-        var message = WorkspaceControlRequest(
-            id: UUID(),
+        let message = WorkspaceControlRequest(
             operation: .releaseTerminalInput,
+            id: UUID(),
             runtime: runtime
         )
-        return transact(&message, timeout: WorkspaceControlLimits.describeTimeoutSeconds).map { _ in () }
+        return transact(message, timeout: WorkspaceControlLimits.describeTimeoutSeconds).map { _ in () }
     }
 
     public func writeTerminal(_ runtime: UUID, bytes: Data) -> Result<Void, WorkspaceClientFailure> {
         guard bytes.isEmpty == false, bytes.count <= TerminalStreamLimits.maximumInputBytes else {
             return .failure(.invalidRequest)
         }
-        var message = WorkspaceControlRequest(
-            id: UUID(),
+        let message = WorkspaceControlRequest(
             operation: .terminalInput,
+            id: UUID(),
             runtime: runtime,
             bytes: TerminalBytesCodec.encode(bytes)
         )
-        return transact(&message, timeout: WorkspaceControlLimits.describeTimeoutSeconds).map { _ in () }
+        return transact(message, timeout: WorkspaceControlLimits.describeTimeoutSeconds).map { _ in () }
     }
 
     public func resizeTerminal(
@@ -404,14 +404,14 @@ public final class WorkspaceClient: Sendable {
         guard TerminalStreamLimits.accepts(rows: rows, columns: columns) else {
             return .failure(.invalidRequest)
         }
-        var message = WorkspaceControlRequest(
-            id: UUID(),
+        let message = WorkspaceControlRequest(
             operation: .resizeTerminal,
+            id: UUID(),
             runtime: runtime,
             rows: rows,
             columns: columns
         )
-        return transact(&message, timeout: WorkspaceControlLimits.describeTimeoutSeconds).map { _ in () }
+        return transact(message, timeout: WorkspaceControlLimits.describeTimeoutSeconds).map { _ in () }
     }
 
     public func nextTerminalEvent(
@@ -430,12 +430,12 @@ public final class WorkspaceClient: Sendable {
     }
 
     public func cancelRuntime(_ runtime: UUID) -> Result<Void, WorkspaceClientFailure> {
-        var message = WorkspaceControlRequest(
-            id: UUID(),
+        let message = WorkspaceControlRequest(
             operation: .cancelRuntime,
+            id: UUID(),
             runtime: runtime
         )
-        return transact(&message, timeout: WorkspaceControlLimits.launchTimeoutSeconds).map { _ in () }
+        return transact(message, timeout: WorkspaceControlLimits.launchTimeoutSeconds).map { _ in () }
     }
 
     public func closeWorkspace() -> Result<WorkspaceDescription, WorkspaceClientFailure> {
@@ -480,17 +480,17 @@ public final class WorkspaceClient: Sendable {
     }
 
     private func hello() -> Result<WorkspaceControlResponse, WorkspaceClientFailure> {
-        var message = WorkspaceControlRequest(
-            id: UUID(),
+        let message = WorkspaceControlRequest(
             operation: .hello,
+            id: UUID(),
             token: endpoint.ownerToken
         )
-        return transact(&message, timeout: WorkspaceControlLimits.connectTimeoutSeconds)
+        return transact(message, timeout: WorkspaceControlLimits.connectTimeoutSeconds)
     }
 
     private func negotiateCapabilities() -> Result<[String], WorkspaceClientFailure> {
         Self.negotiatedFeatures(
-            fromResponse: transact(op: .capabilities, timeout: WorkspaceControlLimits.describeTimeoutSeconds)
+            from: transact(op: .capabilities, timeout: WorkspaceControlLimits.describeTimeoutSeconds)
         )
     }
 
@@ -498,22 +498,22 @@ public final class WorkspaceClient: Sendable {
     /// reject the operation with `invalidRequest`; they remain usable through
     /// the serialized ensure fallback below.
     /// Legacy-message entry kept for existing tests outside T6's
-    /// exclusive writes; production uses `negotiatedFeatures(fromResponse:)`.
+    /// exclusive writes; production uses the typed `from:` overload.
     static func negotiatedFeatures(
         from result: Result<WorkspaceControlMessage, WorkspaceClientFailure>
     ) -> Result<[String], WorkspaceClientFailure> {
         switch result {
         case .failure(let error):
             negotiatedFeatures(
-                fromResponse: Result<WorkspaceControlResponse, WorkspaceClientFailure>.failure(error)
+                from: Result<WorkspaceControlResponse, WorkspaceClientFailure>.failure(error)
             )
         case .success(let message):
-            negotiatedFeatures(fromResponse: .success(WorkspaceControlResponse(message)))
+            negotiatedFeatures(from: .success(WorkspaceControlResponse(message)))
         }
     }
 
     static func negotiatedFeatures(
-        fromResponse result: Result<WorkspaceControlResponse, WorkspaceClientFailure>
+        from result: Result<WorkspaceControlResponse, WorkspaceClientFailure>
     ) -> Result<[String], WorkspaceClientFailure> {
         switch result {
         case .failure(.invalidRequest):
@@ -569,23 +569,23 @@ public final class WorkspaceClient: Sendable {
         op: WorkspaceControlOp,
         timeout: TimeInterval
     ) -> Result<WorkspaceControlResponse, WorkspaceClientFailure> {
-        var message = WorkspaceControlRequest(
-            id: UUID(),
-            operation: op
+        let message = WorkspaceControlRequest(
+            operation: op,
+            id: UUID()
         )
-        return transact(&message, timeout: timeout)
+        return transact(message, timeout: timeout)
     }
 
     private func transact(
-        _ message: inout WorkspaceControlRequest,
+        _ message: WorkspaceControlRequest,
         timeout: TimeInterval,
         beginStreaming: Bool = false
     ) -> Result<WorkspaceControlResponse, WorkspaceClientFailure> {
         if events.isStreaming {
-            return streamingTransact(&message, timeout: timeout)
+            return streamingTransact(message, timeout: timeout)
         }
-        guard let rpc = rpcTransact(&message, timeout: timeout, beginStreaming: beginStreaming) else {
-            return streamingTransact(&message, timeout: timeout)
+        guard let rpc = rpcTransact(message, timeout: timeout, beginStreaming: beginStreaming) else {
+            return streamingTransact(message, timeout: timeout)
         }
         return rpc
     }
@@ -593,7 +593,7 @@ public final class WorkspaceClient: Sendable {
     /// Nil means a terminal reader owns the socket and the caller must retry
     /// on the streaming path. The request was not written.
     private func rpcTransact(
-        _ message: inout WorkspaceControlRequest,
+        _ message: WorkspaceControlRequest,
         timeout: TimeInterval,
         beginStreaming: Bool
     ) -> Result<WorkspaceControlResponse, WorkspaceClientFailure>? {
@@ -638,7 +638,7 @@ public final class WorkspaceClient: Sendable {
     }
 
     private func streamingTransact(
-        _ message: inout WorkspaceControlRequest,
+        _ message: WorkspaceControlRequest,
         timeout: TimeInterval
     ) -> Result<WorkspaceControlResponse, WorkspaceClientFailure> {
         guard let body = message.encode(), let requestID = message.id else {
