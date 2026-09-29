@@ -141,7 +141,7 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
         if let masked = maskAttachedDataValue(
             command: commandBase,
             gitSubcommand: gitSubcommand,
-            token: token
+            decoded: decoded
         ) {
             tokens[index].lexeme = masked
             pendingDataFlag = false

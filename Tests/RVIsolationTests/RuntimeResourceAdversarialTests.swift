@@ -93,7 +93,7 @@ import Testing
     let host = [
         "ANTHROPIC_API_KEY": "synthetic-ambient-secret",
         "HOME": "/Users/operator",
-        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "PATH": "/usr/bin:/bin",
     ]
     for io in [IsolatedIO.discard, .inherit, .pseudoTerminal(rows: 24, columns: 80)] {
         let bare = containedRuntimeEnvironment(workspace: "/tmp/ws", io: io, hostEnvironment: host)
@@ -147,7 +147,8 @@ import Testing
     let server = try WorkspaceHostServer.start(
         supervisor: supervisor, configurationDirectory: config,
         sessionStore: .file(config.appendingPathComponent("runtime.jsonl")),
-        resourcePolicy: policy
+        resourcePolicy: policy,
+    admission: .failClosed
     ).get()
     defer { server.stop(); _ = supervisor.close() }
     let client = try WorkspaceClient.connect(server.endpoint).get()
@@ -188,7 +189,8 @@ import Testing
     let server = try WorkspaceHostServer.start(
         supervisor: supervisor, configurationDirectory: config,
         sessionStore: .file(config.appendingPathComponent("runtime.jsonl")),
-        resourcePolicy: policy
+        resourcePolicy: policy,
+    admission: .failClosed
     ).get()
     defer { server.stop(); _ = supervisor.close() }
     let client = try WorkspaceClient.connect(server.endpoint).get()
@@ -246,7 +248,8 @@ import Testing
     let server = try WorkspaceHostServer.start(
         supervisor: supervisor, configurationDirectory: config,
         sessionStore: .file(config.appendingPathComponent("runtime.jsonl")),
-        resourcePolicy: policy
+        resourcePolicy: policy,
+    admission: .failClosed
     ).get()
     defer { server.stop(); _ = supervisor.close() }
     let client = try WorkspaceClient.connect(server.endpoint).get()
@@ -274,7 +277,8 @@ import Testing
     ).get()
     let server = try WorkspaceHostServer.start(
         supervisor: supervisor, configurationDirectory: config,
-        sessionStore: .file(config.appendingPathComponent("runtime.jsonl"))
+        sessionStore: .file(config.appendingPathComponent("runtime.jsonl")),
+    admission: .failClosed
     ).get()
     defer { server.stop(); _ = supervisor.close() }
     let raw = try WorkspaceControlSocket.connect(path: server.endpoint.socketPath, timeout: 2).get()
@@ -328,7 +332,8 @@ import Testing
     let server = try WorkspaceHostServer.start(
         supervisor: supervisor, configurationDirectory: config,
         sessionStore: .file(config.appendingPathComponent("runtime.jsonl")),
-        resourcePolicy: policy
+        resourcePolicy: policy,
+    admission: .failClosed
     ).get()
     defer { server.stop(); _ = supervisor.close() }
     let client = try WorkspaceClient.connect(server.endpoint).get()

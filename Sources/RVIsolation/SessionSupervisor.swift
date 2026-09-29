@@ -579,8 +579,8 @@ func spawnSeatbeltProcessBody(
     let environment = containedRuntimeEnvironment(
         workspace: workspace,
         io: request.io,
-        resources: request.resources,
         agentBin: agentBin,
+        resources: request.resources,
         egressProxyPort: egressProxyPort,
         keychain: keychain,
         productive: productive
@@ -721,10 +721,10 @@ enum ContainedCagePaths {
 func containedRuntimeEnvironment(
     workspace: String,
     io: IsolatedIO,
+    agentBin: String? = nil,
     resources: RuntimeResourceManifest? = nil,
     egressProxyPort: Int? = nil,
     hostEnvironment: [String: String]? = nil,
-    agentBin: String? = nil,
     keychain: [(name: String, value: String)] = [],
     productive: ProductiveWorkspaceResolution? = nil,
     probe: ContainedPATHProbe = .live

@@ -151,7 +151,7 @@ import RVDomain
             let parsed = ShellPipeline.parse(input)
             #expect(parsed.error == .emptyCommand)
             #expect(parsed.segments == [])
-            #expect(parsed.tokens == [Token(lexeme: "\n", wasQuoted: false)])
+            #expect(parsed.tokens == [ShellPipeline.Token(lexeme: "\n", wasQuoted: false)])
             #expect(parsed.matching == "")
         }
     }

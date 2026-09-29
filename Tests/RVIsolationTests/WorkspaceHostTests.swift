@@ -30,10 +30,10 @@ import Testing
     )
     #expect(acceptedArgument.count <= WorkspaceControlLimits.maxBodyBytes)
     guard case .message = WorkspaceControlCodec.decode(acceptedArgument) else {
-        Issue.record("a long argument within the total command budget should decode")
+        Issue.record("a long argument within the per-argument bound should decode")
         return
     }
-    let oversized = String(repeating: "a", count: WorkspaceControlLimits.maxLaunchCommandBytes)
+    let oversized = String(repeating: "a", count: WorkspaceControlLimits.maxArgumentBytes + 1)
     let oversizedCommand = Data(
         """
         {"v":1,"id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","op":"launchRuntime","executable":"/bin/sh","arguments":["\(oversized)"]}
@@ -684,7 +684,8 @@ struct WorkspaceHostTests {
         let server = try WorkspaceHostServer.start(
             supervisor: supervisor, configurationDirectory: config,
             sessionStore: .file(config.appendingPathComponent("runtime.jsonl")),
-            resourcePolicy: policy
+            resourcePolicy: policy,
+        admission: .failClosed
         ).get()
         defer { server.stop(); _ = supervisor.close() }
         let client = try WorkspaceClient.connect(server.endpoint).get()
@@ -899,7 +900,8 @@ struct WorkspaceHostTests {
         let server = try WorkspaceHostServer.start(
             supervisor: supervisor, configurationDirectory: config,
             sessionStore: .file(config.appendingPathComponent("runtime.jsonl")),
-            resourcePolicy: policy
+            resourcePolicy: policy,
+        admission: .failClosed
         ).get()
         defer { server.stop(); _ = supervisor.close() }
         let client = try WorkspaceClient.connect(server.endpoint).get()

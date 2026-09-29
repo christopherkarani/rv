@@ -23,7 +23,7 @@ public enum PipelineStageError: Error, Sendable, Equatable {
 /// One parsed shell command: every stage output in a single value.
 public struct ParsedCommand: Sendable, Equatable {
     /// Stage 1 output: lexical tokens with quoting/ANSI-C provenance.
-    public var tokens: [Token]
+    public var tokens: [ShellPipeline.Token]
     /// Stage 2 output: trimmed input with non-executing heredoc bodies masked.
     public var peeled: String
     /// Stage 3 output: recursive extract; `nil` when budget-limited.
@@ -42,7 +42,7 @@ public struct ParsedCommand: Sendable, Equatable {
     /// producer. Public so tests and future producers can spell goldens
     /// without reflection.
     public init(
-        tokens: [Token],
+        tokens: [ShellPipeline.Token],
         peeled: String,
         unwrapped: UnwrappedCommand?,
         segments: [Argv],
@@ -146,9 +146,9 @@ extension ShellPipeline {
     /// Stage 4: one `Argv` per newline-delimited token segment. Fails typed
     /// when no command words exist. Built from raw (unpeeled) tokens, so
     /// non-executing heredoc body lines surface as segments.
-    static func parseStage(_ tokens: [Token]) -> Result<[Argv], PipelineStageError> {
+    static func parseStage(_ tokens: [ShellPipeline.Token]) -> Result<[Argv], PipelineStageError> {
         var segments: [Argv] = []
-        var current: [Token] = []
+        var current: [ShellPipeline.Token] = []
         for token in tokens {
             if token.isNewline {
                 if let argv = Argv(tokens: current) {

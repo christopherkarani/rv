@@ -40,9 +40,10 @@ import Testing
     #expect(values.allSatisfy { $0.hasPrefix("PS1=") == false })
     #expect(values.contains("PATH=/usr/bin:/bin"))
     #expect(values.contains("HOME=/tmp/ws"))
-    // Empty host env means no usable home, so the cage falls back to the
-    // workspace itself. Real runs always resolve an RV-managed home/tmp.
-    #expect(values.contains("TMPDIR=/tmp/ws"))
+    // Profile-less PTY shells get a dedicated cage scratch dir (staged at
+    // spawn) instead of the workspace root, so tmp files never pollute it.
+    // Real runs always resolve an RV-managed home/tmp.
+    #expect(values.contains("TMPDIR=/tmp/ws/.rv-cage/tmp"))
 }
 
 @Test func nonTerminalEnvironmentStaysNonInteractive() {

@@ -206,6 +206,10 @@ struct OpenCodeFrontendTests {
         )
         #expect(launched.status == 0)
         let marker = fixture.workspace.appendingPathComponent("marker")
+        let context = CLIProcess.Context(
+            environment: environment,
+            workspacePath: fixture.workspace.path
+        )
         #if os(macOS)
         #expect(try runInstalledOpenCode(
             [],
@@ -239,6 +243,59 @@ struct OpenCodeFrontendTests {
         #expect(launched.status == 0)
         #expect(try String(contentsOf: marker, encoding: .utf8) == payload)
     }
+
+    @Test func frontend_missingWorkspaceDoesNotRunCommand() throws {
+        let fixture = try OpenCodeFrontendFixture()
+        defer { fixture.remove() }
+        let missing = fixture.root.appendingPathComponent("missing").path
+        let marker = fixture.root.appendingPathComponent("not-run")
+        let launched = try runRV(
+            [
+                "opencode", "--executable", "/bin/sh", "--workspace", missing,
+                "--", "-c", "printf escape > \"$1\"", "sh", marker.path,
+            ],
+            environment: fixture.environment
+        )
+        #expect(launched.status != 0)
+        #expect(FileManager.default.fileExists(atPath: marker.path) == false)
+    }
+
+    @Test func frontend_matchesWorkspaceRunEnvironment() throws {
+        let fixture = try OpenCodeFrontendFixture()
+        defer { fixture.remove() }
+        let viaRun = try runRV(
+            ["workspace", "run", "--workspace", fixture.workspace.path, "--", "/usr/bin/env"],
+            environment: fixture.environment
+        )
+        #expect(viaRun.status == 0)
+        let viaOpencode = try runRV(
+            ["opencode", "--executable", "/usr/bin/env", "--workspace", fixture.workspace.path],
+            environment: fixture.environment
+        )
+        #expect(viaOpencode.status == 0)
+        // Same host, same workspace, same invoking environment: the two
+        // frontends must observe the identical cage environment.
+        #expect(normalizedEnvironment(viaRun.stdout) == normalizedEnvironment(viaOpencode.stdout))
+        #expect(normalizedEnvironment(viaRun.stdout).isEmpty == false)
+    }
+}
+#else
+@Suite("OpenCode frontend")
+struct OpenCodeFrontendTests {
+    @Test func frontend_linuxRefusesWithoutAHost() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-opencode-linux-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let launched = try runRV(
+            ["opencode", "--executable", "/bin/sh", "--workspace", home.path, "--", "-c", "exit 0"],
+            environment: ["HOME": home.path, "PATH": "/usr/bin:/bin"]
+        )
+        #expect(launched.status != 0)
+        #expect(launched.stderr.contains("contained workspace host is unavailable"))
+    }
+}
+#endif
 
 private func runInstalledOpenCode(
     _ arguments: [String],
@@ -301,58 +358,28 @@ private func launchedOrRefusedOnLinux(
     }
 }
 
-    @Test func frontend_missingWorkspaceDoesNotRunCommand() throws {
-        let fixture = try OpenCodeFrontendFixture()
-        defer { fixture.remove() }
-        let missing = fixture.root.appendingPathComponent("missing").path
-        let marker = fixture.root.appendingPathComponent("not-run")
-        let launched = try runRV(
-            [
-                "opencode", "--executable", "/bin/sh", "--workspace", missing,
-                "--", "-c", "printf escape > \"$1\"", "sh", marker.path,
-            ],
-            environment: fixture.environment
-        )
-        #expect(launched.status != 0)
-        #expect(FileManager.default.fileExists(atPath: marker.path) == false)
+private struct OpenCodeCommandFixture {
+    let root: URL
+    let workspace: URL
+
+    init() throws {
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-opencode-command-\(UUID().uuidString)", isDirectory: true)
+        workspace = root.appendingPathComponent("workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
     }
 
-    @Test func frontend_matchesWorkspaceRunEnvironment() throws {
-        let fixture = try OpenCodeFrontendFixture()
-        defer { fixture.remove() }
-        let viaRun = try runRV(
-            ["workspace", "run", "--workspace", fixture.workspace.path, "--", "/usr/bin/env"],
-            environment: fixture.environment
-        )
-        #expect(viaRun.status == 0)
-        let viaOpencode = try runRV(
-            ["opencode", "--executable", "/usr/bin/env", "--workspace", fixture.workspace.path],
-            environment: fixture.environment
-        )
-        #expect(viaOpencode.status == 0)
-        // Same host, same workspace, same invoking environment: the two
-        // frontends must observe the identical cage environment.
-        #expect(normalizedEnvironment(viaRun.stdout) == normalizedEnvironment(viaOpencode.stdout))
-        #expect(normalizedEnvironment(viaRun.stdout).isEmpty == false)
+    func remove() {
+        #if os(macOS)
+        if case .live(let endpoint) = WorkspaceHosts.inspect(project: workspace.path),
+            case .success(let client) = WorkspaceClient.connect(endpoint)
+        {
+            _ = client.closeWorkspace()
+        }
+        #endif
+        try? FileManager.default.removeItem(at: root)
     }
 }
-#else
-@Suite("OpenCode frontend")
-struct OpenCodeFrontendTests {
-    @Test func frontend_linuxRefusesWithoutAHost() throws {
-        let home = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-opencode-linux-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: home) }
-        let launched = try runRV(
-            ["opencode", "--executable", "/bin/sh", "--workspace", home.path, "--", "-c", "exit 0"],
-            environment: ["HOME": home.path, "PATH": "/usr/bin:/bin"]
-        )
-        #expect(launched.status != 0)
-        #expect(launched.stderr.contains("contained workspace host is unavailable"))
-    }
-}
-#endif
 
 private func openCodeCommand(_ arguments: [String]) throws -> any AsyncParsableCommand {
     try #require(RV.parseAsRoot(["opencode"] + arguments) as? any AsyncParsableCommand)

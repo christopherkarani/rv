@@ -597,12 +597,6 @@ final class WorkspaceHostServer: Sendable {
         guard let executable = message.executable, executable.hasPrefix("/") else {
             return failure(message, .invalidRequest)
         }
-        guard WorkspaceControlCodec.launchFits(
-            executable: executable,
-            arguments: message.arguments ?? []
-        ) else {
-            return failure(message, .requestTooLarge)
-        }
         // Explicit selection only: a missing ID always means the base fence.
         // The policy's defaultProfile is a UI hint the host never consults.
         let resourceProfile: RuntimeResourceProfile?
@@ -980,9 +974,8 @@ private func workspaceTerminalMessage(
 ) -> WorkspaceControlResponse {
     switch notice {
     case .replayBegin(let batch, let truncated, let byteCount):
-        WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            op: WorkspaceControlOp.terminalReplayBegin.rawValue,
+        WorkspaceControlResponse(
+            operation: .terminalReplayBegin,
             runtime: runtime,
             ok: true,
             batch: batch,
@@ -998,9 +991,8 @@ private func workspaceTerminalMessage(
             bytes: TerminalBytesCodec.encode(bytes)
         )
     case .replayEnd(let batch):
-        WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            op: WorkspaceControlOp.terminalReplayEnd.rawValue,
+        WorkspaceControlResponse(
+            operation: .terminalReplayEnd,
             runtime: runtime,
             ok: true,
             batch: batch
@@ -1021,9 +1013,8 @@ private func workspaceTerminalMessage(
             inputOwner: owned
         )
     case .window(let rows, let columns):
-        WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            op: WorkspaceControlOp.terminalWindow.rawValue,
+        WorkspaceControlResponse(
+            operation: .terminalWindow,
             runtime: runtime,
             ok: true,
             rows: rows,

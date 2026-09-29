@@ -478,7 +478,7 @@ struct RuntimeTerminalTests {
         ).get()
         let hooked = try second.launchRuntime(
             executable: "/usr/bin/env",
-            hookHost: .opencode,
+            hook: HookHost.opencode.rawValue,
             terminalRows: 24,
             terminalColumns: 80
         ).get()
