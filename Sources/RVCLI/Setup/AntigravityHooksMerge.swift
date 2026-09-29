@@ -128,10 +128,12 @@ enum AntigravityHooksMerge {
                 context: HookCommandContext(rvPath: rvPath, adapterPath: adapterPath),
                 willMerge: { root in
                     if force == false, inspectionState(of: root) == .occupied {
-                        preconditionFailure("merge called on occupied hooks without --force")
+                        throw AntigravityHooksMergeError.occupiedWithoutForce
                     }
                 }
             )
+        } catch let error as AntigravityHooksMergeError {
+            throw error
         } catch {
             throw AntigravityHooksMergeError.unreadable
         }
@@ -198,4 +200,7 @@ enum AntigravityHooksMerge {
 
 enum AntigravityHooksMergeError: Error, Equatable {
     case unreadable
+    /// `merge` refused occupied hooks without `force`. Setup surfaces this
+    /// as `SetupError.hostHookOccupiedNeedsForce`; the user reruns with `--force`.
+    case occupiedWithoutForce
 }

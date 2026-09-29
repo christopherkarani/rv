@@ -35,7 +35,7 @@ struct ResidualLinuxCoverageTests {
             home: home
         )
         #expect(viaWDDirectory.decision == .allow)
-        let runViaWDDirectory = await CommandRun.run(
+        let runViaWDDirectory = try await CommandRun.run(
             kind: .test,
             command: "echo ok",
             probe: probe,

@@ -233,13 +233,13 @@ extension EvaluationOutcome {
 }
 
 /// Wire-level rejection of EvaluationResult field combinations no producer emits.
-public struct EvaluationResultDecodingError: Error, Equatable, Sendable, CustomStringConvertible {
-    public let decision: Decision
-    public let matchedPresent: Bool
-    public let matchedSafePresent: Bool
-    public let quickRejected: Bool
+package struct EvaluationResultDecodingError: Error, Equatable, Sendable, CustomStringConvertible {
+    package let decision: Decision
+    package let matchedPresent: Bool
+    package let matchedSafePresent: Bool
+    package let quickRejected: Bool
 
-    public var description: String {
+    package var description: String {
         "impossible EvaluationResult combination: decision=\(decision) "
             + "matched=\(matchedPresent) matchedSafe=\(matchedSafePresent) "
             + "quickRejected=\(quickRejected)"

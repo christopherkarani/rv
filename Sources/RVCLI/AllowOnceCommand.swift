@@ -221,7 +221,7 @@ struct AllowOnceList: AsyncParsableCommand {
         let rows = await AllowOnceCLI.store(home: try AllowOnceCLI.requireHome()).list(now: Date())
         if format.json || format.robot {
             let document = RobotDocument.allowOnceList(allowOnceRobotRows(from: rows))
-            FileHandle.standardOutput.write(Data((document.render() + "\n").utf8))
+            FileHandle.standardOutput.write(Data((try document.render() + "\n").utf8))
             return
         }
         if rows.isEmpty {

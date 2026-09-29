@@ -52,7 +52,24 @@ clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   -I "$SRC" \
   -o "$OUT/evaluation_route_test" \
   "$SRC/tests/evaluation_route_test.c"
-"$OUT/evaluation_route_test"
+# Shared vectors: the same file drives EvaluationRouteTests.sharedVectorsMatchC
+# on the Swift side. A vector both harnesses disagree on fails both suites.
+"$OUT/evaluation_route_test" "$SRC/tests/evaluation_route_vectors.tsv"
+
+# Overlong-row guard: a 4095-content-byte row (+ newline = 4096 bytes) needs
+# NUL room the 4096-byte fgets buffer lacks, so C must fail loudly with the
+# overlong diagnostic instead of mis-parsing a fragment Swift parses whole.
+OVERLONG="$OUT/overlong-vectors.tsv"
+cp "$SRC/tests/evaluation_route_vectors.tsv" "$OVERLONG"
+awk 'BEGIN { for (i = 0; i < 4075; i++) printf "9"; print ".0.0\t1.0.0\tinProcess" }' >> "$OVERLONG"
+set +e
+"$OUT/evaluation_route_test" "$OVERLONG" 2>"$OUT/overlong.err"
+overlong_st=$?
+set -e
+if [[ "$overlong_st" -eq 0 ]] || ! grep -q "overlong" "$OUT/overlong.err"; then
+  printf "rv-c tests: overlong vector row must fail evaluation_route_test with the overlong diagnostic\n" >&2
+  exit 1
+fi
 
 clang -Os "${CLANG_OS_FLAGS[@]}" -std=c11 -Wall \
   -I "$SRC" \

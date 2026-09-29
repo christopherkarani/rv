@@ -58,7 +58,7 @@ package struct HostAdapterResource: Sendable {
 /// (no surrounding quotes). Shared by Grok JSON and Pi/OpenCode literals.
 enum HostAdapterString {
     static func escape(_ value: String) -> String {
-        guard let data = try? JSONSerialization.data(
+        if let data = try? JSONSerialization.data(
             withJSONObject: value,
             options: [.fragmentsAllowed]
         ),
@@ -66,13 +66,48 @@ enum HostAdapterString {
             encoded.count >= 2,
             encoded.first == "\"",
             encoded.last == "\""
-        else {
-            preconditionFailure("JSONSerialization must encode String")
+        {
+            // Foundation may emit `\/`; JSON and JS both treat `/` as unescaped.
+            // Keep ordinary paths byte-identical to pre-escape installs.
+            return String(encoded.dropFirst().dropLast())
+                .replacingOccurrences(of: "\\/", with: "/")
         }
-        // Foundation may emit `\/`; JSON and JS both treat `/` as unescaped.
-        // Keep ordinary paths byte-identical to pre-escape installs.
-        return String(encoded.dropFirst().dropLast())
-            .replacingOccurrences(of: "\\/", with: "/")
+        // Total fallback if Foundation ever refuses a String: minimal JSON
+        // string-content escaping. Same contract (`/` stays bare).
+        return manualEscape(value)
+    }
+
+    // Internal (not private) so RVHooksTests pins it directly. Non-short
+    // escapes intentionally diverge from Foundation: uppercase `\u00XX`
+    // hex here vs Foundation's lowercase, and U+007F escaped here vs raw
+    // there. Both spellings decode identically, so the divergence is
+    // accepted; do not "fix" it into an escape()-coupled tautology.
+    static func manualEscape(_ value: String) -> String {
+        var out = ""
+        out.reserveCapacity(value.count)
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\"":
+                out.append("\\\"")
+            case "\\":
+                out.append("\\\\")
+            case "\n":
+                out.append("\\n")
+            case "\r":
+                out.append("\\r")
+            case "\t":
+                out.append("\\t")
+            case "\u{8}":
+                out.append("\\b")
+            case "\u{C}":
+                out.append("\\f")
+            case "\u{0}"..."\u{1F}", "\u{7F}":
+                out.append(String(format: "\\u%04X", scalar.value))
+            default:
+                out.append(Character(scalar))
+            }
+        }
+        return out
     }
 
     static func unescape(_ value: String) -> String? {

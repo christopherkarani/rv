@@ -103,6 +103,50 @@ func hostAdapter_controlAndBackslashPath_roundTrips(host: HookHost) throws {
     }
 }
 
+@Test(arguments: [
+    // Spec-derived vectors (RFC 8259 §7): quote, backslash, short escapes.
+    ("\"", "\\\""),
+    ("\\", "\\\\"),
+    ("\n", "\\n"),
+    ("\r", "\\r"),
+    ("\t", "\\t"),
+    ("\u{8}", "\\b"),
+    ("\u{C}", "\\f"),
+    // Remaining C0 controls use uppercase \u00XX; DEL is escaped too.
+    ("\u{0}", "\\u0000"),
+    ("\u{1}", "\\u0001"),
+    ("\u{1B}", "\\u001B"),
+    ("\u{1F}", "\\u001F"),
+    ("\u{7F}", "\\u007F"),
+    // Forward slash stays bare; ordinary and non-ASCII text passes through.
+    ("/opt/rv/bin/rv", "/opt/rv/bin/rv"),
+    ("plain", "plain"),
+    ("café 🪝", "café 🪝"),
+    ("/tmp/a\"b\\c\nd", "/tmp/a\\\"b\\\\c\\nd"),
+] as [(String, String)])
+func hostAdapter_manualEscape_pinsSpecVectors(input: String, expected: String) {
+    #expect(HostAdapterString.manualEscape(input) == expected)
+}
+
+@Test func hostAdapter_manualEscape_agreesWithEscapeOnSharedAlphabet() {
+    // The fallback and Foundation agree exactly on this alphabet (short
+    // escapes, quote, backslash, bare slash, printable and non-ASCII
+    // text). Other C0 controls and DEL intentionally diverge in spelling
+    // (see manualEscape); both decode identically, so only the shared
+    // alphabet is coupled here.
+    let inputs = [
+        "/opt/rv/bin/rv",
+        #"/tmp/rv-"bin"/rv"#,
+        "/tmp/rv-\t\"bin\"\\\r/rv",
+        "tab\there newline\n backspace\u{8} formfeed\u{C} end",
+        "café 🪝 naïve",
+        "",
+    ]
+    for input in inputs {
+        #expect(HostAdapterString.escape(input) == HostAdapterString.manualEscape(input))
+    }
+}
+
 private func grokHookCommand(_ json: Any) throws -> String {
     let root = try #require(json as? [String: Any])
     let hooks = try #require(root["hooks"] as? [String: Any])

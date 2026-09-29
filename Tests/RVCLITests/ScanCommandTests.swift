@@ -220,7 +220,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
         let report = try ScanRun.run(
             .fixture(home: home)
         )
-        let json = renderScanSessionsRobot(from: report, showCommand: false)
+        let json = try renderScanSessionsRobot(from: report, showCommand: false)
         let object = try decodedJSON(json)
         #expect(object["schema"] as? String == "rv.scan.sessions.v1")
         #expect(RobotSchema.scanSessions == "rv.scan.sessions.v1")
@@ -239,7 +239,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
         let report = try ScanRun.run(
             .fixture(home: home)
         )
-        let json = renderScanSessionsRobot(from: report, showCommand: true)
+        let json = try renderScanSessionsRobot(from: report, showCommand: true)
         let object = try decodedJSON(json)
         let findings = try #require(object["findings"] as? [[String: Any]])
         let row = try #require(findings.first)
@@ -254,7 +254,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
         let report = try ScanRun.run(
             .fixture(home: home)
         )
-        let outcome = ScanRun.render(
+        let outcome = try ScanRun.render(
             report: report,
             showCommand: false,
             appearance: .pretty(colorOffPalette),
@@ -291,7 +291,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
             .fixture(home: home)
         )
 
-        let pretty = ScanRun.render(
+        let pretty = try ScanRun.render(
             report: report,
             showCommand: false,
             appearance: .pretty(colorOffPalette),
@@ -306,7 +306,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
                 )
             )
         )
-        let robot = renderScanSessionsRobot(from: report, showCommand: false)
+        let robot = try renderScanSessionsRobot(from: report, showCommand: false)
         let object = try decodedJSON(robot)
         let findings = try #require(object["findings"] as? [[String: Any]])
         #expect(findings.count == 1)

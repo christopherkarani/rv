@@ -34,6 +34,9 @@ enum SetupError: Error, Equatable, Sendable {
     case configDirectoryCreateFailed
     /// Could not move an occupied owned hook aside during --force.
     case hostHookClearFailed(HookHost)
+    /// Occupied hook refused without --force (merge-time guard, not the
+    /// plan-level skip). The stderr line tells the user to rerun with --force.
+    case hostHookOccupiedNeedsForce(HookHost)
     /// Could not write an owned hook payload.
     case hostHookWriteFailed(HookHost)
     /// Could not write the LaunchAgent plist.
@@ -80,6 +83,9 @@ func setupFailureOutput(
         exitCode = EX_CANTCREAT
     case .hostHookClearFailed(let host):
         phrase = "unable to clear occupied \(host.rawValue) hook"
+        exitCode = EX_CANTCREAT
+    case .hostHookOccupiedNeedsForce(let host):
+        phrase = "occupied \(host.rawValue) hook; rerun with --force"
         exitCode = EX_CANTCREAT
     case .hostHookWriteFailed(let host):
         phrase = "unable to write \(host.rawValue) hook"

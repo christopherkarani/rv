@@ -29,7 +29,7 @@ public enum PackFallback: Sendable, Equatable, Codable {
 /// `rules` are restrict-only: typed allow cannot weaken a built-in hard deny.
 public struct EffectiveActionPolicy: Sendable, Equatable, Codable {
     public var overlay: ActionPolicyOverlay
-    public var packFallback: PackFallback
+    package var packFallback: PackFallback
     public var rules: [TypedRule]
 
     public init(
@@ -47,11 +47,11 @@ public struct EffectiveActionPolicy: Sendable, Equatable, Codable {
 
 /// Tiny two-run explanation. Not `rv explain` (OPE-168).
 public struct ActionPolicyExplanation: Sendable, Equatable, Codable {
-    public var zone: ActionPolicyZone
+    package var zone: ActionPolicyZone
     public var ruleID: RuleID
     public var reason: String
 
-    public init(zone: ActionPolicyZone, ruleID: RuleID, reason: String) {
+    package init(zone: ActionPolicyZone, ruleID: RuleID, reason: String) {
         self.zone = zone
         self.ruleID = ruleID
         self.reason = reason
@@ -62,7 +62,7 @@ public struct ActionPolicyVerdict: Sendable, Equatable, Codable {
     public var decision: HardPolicyDecision
     public var explanation: ActionPolicyExplanation
 
-    public init(decision: HardPolicyDecision, explanation: ActionPolicyExplanation) {
+    package init(decision: HardPolicyDecision, explanation: ActionPolicyExplanation) {
         self.decision = decision
         self.explanation = explanation
     }

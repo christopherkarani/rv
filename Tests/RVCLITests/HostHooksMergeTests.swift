@@ -397,6 +397,23 @@ private func syntheticContext() -> HookCommandContext {
     #expect(ClaudeSettingsMerge.inspectionState(of: merged.data) == .wired(bakedPath: "/r"))
 }
 
+@Test func mergeEngine_claudeOccupiedWithoutForceThrows() {
+    let occupied = Data(
+        """
+        {"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"python3 /opt/other/rv-guard.py","timeout":10}]}]}}
+        """.utf8
+    )
+    #expect(ClaudeSettingsMerge.inspectionState(of: occupied) == .occupied)
+    #expect(throws: ClaudeSettingsMergeError.occupiedWithoutForce) {
+        _ = try ClaudeSettingsMerge.merge(
+            existingData: occupied,
+            rvPath: "/r",
+            adapterPath: "/c/hooks/rv-guard.py",
+            force: false
+        )
+    }
+}
+
 @Test func mergeEngine_claudeStaleRewritesWithoutForce() throws {
     let stale = Data(
         """

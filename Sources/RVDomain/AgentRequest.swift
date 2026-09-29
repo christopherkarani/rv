@@ -2,8 +2,8 @@ import Foundation
 
 /// Upper bound for a process-request command, in UTF-8 bytes.
 /// Must stay equal to `commandByteCap` in RVEngine (asserted there).
-public enum AgentRequestLimits {
-    public static let maxCommandUTF8Count = 65_536
+package enum AgentRequestLimits {
+    package static let maxCommandUTF8Count = 65_536
 }
 
 /// Fail-closed validation of an untrusted process request.

@@ -325,6 +325,8 @@ extension SetupRun {
                 force: force
             )
             merged = (applied.data, applied.wrote)
+        } catch ClaudeSettingsMergeError.occupiedWithoutForce {
+            throw SetupError.hostHookOccupiedNeedsForce(.claude)
         } catch {
             throw SetupError.hostHookWriteFailed(.claude)
         }
@@ -380,6 +382,8 @@ extension SetupRun {
                 force: force
             )
             merged = (applied.data, applied.wrote)
+        } catch AntigravityHooksMergeError.occupiedWithoutForce {
+            throw SetupError.hostHookOccupiedNeedsForce(.antigravity)
         } catch {
             throw SetupError.hostHookWriteFailed(.antigravity)
         }

@@ -91,8 +91,7 @@ enum ScanStoreWorkingDirectory {
 
     private static func fromJSONString(_ value: Any?, depth: Int) -> WorkingDirectory? {
         guard let raw = value as? String, raw.isEmpty == false,
-              let data = raw.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+              let object = JSONParse.object(raw)
         else {
             return nil
         }

@@ -28,7 +28,7 @@ public enum FilesystemScope: Sendable, Equatable, Codable {
 }
 
 /// Closed filesystem mutation family used by policy. Write covers overwrite and mode change.
-public enum FilesystemOperationKind: String, Sendable, Equatable, Codable {
+package enum FilesystemOperationKind: String, Sendable, Equatable, Codable {
     case read
     case write
     case create
@@ -109,7 +109,7 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
     case create(targets: [FilesystemTarget])
     case read(targets: [FilesystemTarget])
 
-    public var operationKind: FilesystemOperationKind {
+    package var operationKind: FilesystemOperationKind {
         switch self {
         case .read:
             return .read

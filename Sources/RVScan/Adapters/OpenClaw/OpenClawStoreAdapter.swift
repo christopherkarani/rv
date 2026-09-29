@@ -59,9 +59,7 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
     }
 
     private static func extractCommand(from eventJSON: String) -> ExtractedShell? {
-        guard let data = eventJSON.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
+        guard let object = JSONParse.object(eventJSON) else {
             return nil
         }
         return extractCommand(from: object)

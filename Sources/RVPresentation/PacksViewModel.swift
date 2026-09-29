@@ -32,7 +32,7 @@ public struct PacksViewModel: Equatable, Sendable {
     }
 }
 
-public func packsViewModel(enabled: [PackID], catalog: [(PackID, String)]) -> PacksViewModel {
+package func packsViewModel(enabled: [PackID], catalog: [(PackID, String)]) -> PacksViewModel {
     PacksViewModel.make(enabled: enabled, catalog: catalog.map { (id: $0.0, summary: $0.1) })
 }
 
