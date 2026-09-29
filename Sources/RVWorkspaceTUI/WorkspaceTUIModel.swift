@@ -3,9 +3,7 @@ import Foundation
 /// Presentation state for one workspace shell.
 ///
 /// Process groups, PTYs, capabilities, and recovery stay in the workspace host.
-/// This model owns the one visible terminal, its render state, and
-/// command-prefix mode. Panes and tabs are deferred: at most one runtime is
-/// attached, and a later attach reuses the existing runtime inventory.
+/// This model owns pane-keyed terminal emulators and executes host effects.
 ///
 /// All decisions live in the pure `WorkspaceTUIReducer`. This class is the
 /// thin runtime: it owns the session, the emulator object, the lock, and the
@@ -22,27 +20,59 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     private let terminalQueue = DispatchQueue(label: "rv.workspace-tui.terminal")
     private var state: WorkspaceTUIState
     private var pump: SessionEventPump?
-    /// The emulator for the attached terminal. Created, fed, resized, and read
-    /// only while `lock` is held; renderers use `terminalFrame()` snapshots.
-    private var emulator: (runtime: UUID, emulator: any TerminalEmulating)?
+    /// Serializes concurrent `startEventDelivery` calls and `detachSession`.
+    /// A start whose sequence is stale by install time drops its pump
+    /// unstarted instead of orphaning (or resurrecting) a live reader.
+    /// Always under `lock`.
+    private var pumpSequence: UInt64 = 0
+    private struct EmulatorSlot {
+        var binding: PaneBindingKey
+        var emulator: any TerminalEmulating
+        var revision: UInt64
+    }
+    /// Created, fed, resized, and read only under `lock`.
+    private var emulatorSlots: [PaneID: EmulatorSlot] = [:]
+    private var frameRevisionCounter: UInt64 = 0
     /// connect()'s query failure, when the reducer stayed retryable. Written
     /// by `.queryConnect` and read by `connect()`; always under `lock`.
     private var connectError: WorkspaceTUIError?
+    /// Fires after a reduce that changed the durable view, outside `lock`.
+    /// The save pump uses it to commit without waiting for its poll tick.
+    private var onViewChanged: (@Sendable () -> Void)?
+    /// Fires with the new view after a reduce that changed bindings or
+    /// structure (anything `equalIgnoringFocus` counts), outside `lock`.
+    /// The save pump commits synchronously so a crash cannot strand a
+    /// binding that already reached the screen.
+    private var onDurableViewChanged: (@Sendable (WorkspaceView) -> Void)?
 
     public init(
         session: any WorkspaceTUISession,
         emulators: any TerminalEmulatorFactory = SwiftTermFactory(),
         summary: WorkspaceTUISummary,
         launcher: [RuntimeLaunchChoice],
+        defaultShellID: String = RuntimeLaunchChoice.shellID,
         rows: Int = 24,
-        columns: Int = 80
+        columns: Int = 80,
+        restoredView: WorkspaceView? = nil,
+        initialViewID: ViewID? = nil
     ) {
         self.session = session
         self.emulators = emulators
+        let acceptedView = restoredView.flatMap { view -> WorkspaceView? in
+            // A restored view suppresses the initial launch, so it must be
+            // able to host a terminal: structurally valid, workspace-bound,
+            // and non-empty. Anything else falls back to a fresh view.
+            guard view.validate().isEmpty,
+                  view.panes.isEmpty == false,
+                  view.panes.values.allSatisfy({ $0.binding?.workspace.rawValue == summary.workspace || $0.binding == nil })
+            else { return nil }
+            return view
+        }
         self.state = WorkspaceTUIState(
             lifecycle: .neverConnected,
             summary: summary,
             launcher: launcher,
+            defaultShellID: defaultShellID,
             initialRows: Self.bound(rows),
             initialColumns: Self.bound(columns),
             mode: .terminal,
@@ -52,7 +82,9 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             shouldExit: false,
             initialLaunchRequested: false,
             viewSize: nil,
-            presentationRevision: 0
+            presentationRevision: 0,
+            viewID: initialViewID ?? ViewID(),
+            restoredView: acceptedView
         )
     }
 
@@ -81,16 +113,29 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         return .success(())
     }
 
-    /// Starts the session's event reader. Idempotent; the reader stops inside
+    /// Starts the session's event reader. Restart-safe: a dead pump from a
+    /// previous disconnect is stopped and replaced, so reconnect can resume
+    /// delivery on the reopened connections. The reader stops inside
     /// `detachSession`. The app calls this once after `connect` succeeds.
     public func startEventDelivery() {
         lock.lock()
-        if pump == nil {
-            pump = SessionEventPump()
-        }
-        let pump = pump
+        pumpSequence &+= 1
+        let sequence = pumpSequence
+        let old = pump
+        pump = nil
         lock.unlock()
-        pump?.start(
+        old?.stop()
+        let fresh = SessionEventPump()
+        lock.lock()
+        guard sequence == pumpSequence else {
+            // Superseded by a newer start or by detach: never start, so no
+            // orphan pump delivers events past its replacement.
+            lock.unlock()
+            return
+        }
+        pump = fresh
+        lock.unlock()
+        fresh.start(
             session: session,
             onEvents: { [weak self] in self?.apply($0) },
             onDisconnect: { [weak self] in self?.hostDisconnected() }
@@ -107,8 +152,8 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         _ = now
         drain(.key(key), route: {
             switch $0 {
-            case .queueSend: .terminal
-            case .queueLaunch: .command
+            case .queueSend, .queueKey, .queuePaste, .queueEmulatorResponse, .releaseInput: .terminal
+            case .queueLaunch, .refreshInventory: .command
             default: .inline
             }
         })
@@ -119,7 +164,16 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     /// lock. Emulator replies are sent only after the lock is released.
     public func apply(_ events: [WorkspaceTUIEvent]) {
         drain(.hostEvents(events), route: {
-            if case .queueSend = $0 { .terminal } else { .inline }
+            switch $0 {
+            case .queueSend, .queueEmulatorResponse: .terminal
+            default: .inline
+            }
+        })
+    }
+
+    public func handlePaste(_ content: String) {
+        drain(.paste(content), route: {
+            if case .queuePaste = $0 { .terminal } else { .inline }
         })
     }
 
@@ -133,12 +187,23 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         drain(.sizeNoted(rows: rows, columns: columns, now: now), route: { _ in .inline })
     }
 
+    public func noteSize(for paneID: PaneID, rows: Int, columns: Int, now: Date = Date()) {
+        drain(.paneSizeNoted(pane: paneID, rows: rows, columns: columns, now: now), route: { _ in .inline })
+    }
+
+    public func noteViewport(rows: Int, columns: Int) {
+        drain(.viewportNoted(rows: rows, columns: columns), route: { _ in .inline })
+    }
+
     /// Called by the app's single coalescing timer. Equal dimensions never
     /// produce another RPC; changed dimensions wait for the debounce window.
     public func processPendingWork(now: Date = Date()) {
         drain(.tick(now: now), route: {
             switch $0 {
-            case .resize, .acquire: .terminal
+            // Tick-emitted attach/observe carry blocking subscribe RPCs;
+            // they must not run synchronously on the MainActor tick.
+            case .resize, .acquire, .attach, .observe: .terminal
+            case .reconnectQuery: .command
             default: .inline
             }
         })
@@ -157,14 +222,86 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             mode: state.mode,
             launcher: state.launcher,
             presentationRevision: state.presentationRevision,
-            shouldExit: state.shouldExit
+            shouldExit: state.shouldExit,
+            feedback: state.feedback,
+            view: state.view,
+            terminals: state.terminals.mapValues(\.state),
+            recentOutputOnly: state.recentOutputOnly,
+            scrollAnchors: state.scrollAnchors,
+            navigatorItems: state.navigatorItems,
+            knownRuntimes: state.knownRuntimes,
+            reconnecting: state.lifecycle == .disconnected
+                && (state.reconnectInflight || state.reconnectFiresAt != nil
+                    || state.reconnectAttempt < WorkspaceTUIReducer.maxReconnectAttempts),
+            frameRevisions: emulatorSlots.mapValues(\.revision)
         )
+    }
+
+    public func snapshotView() -> WorkspaceView {
+        lock.lock()
+        defer { lock.unlock() }
+        return state.view
+    }
+
+    /// Registers the hook `reduceAndApply` fires after a view-changing
+    /// reduce. Called outside the model lock; must never reduce re-entrantly.
+    public func setViewChangedHook(_ hook: (@Sendable () -> Void)?) {
+        lock.lock()
+        onViewChanged = hook
+        lock.unlock()
+    }
+
+    /// Registers the hook `reduceAndApply` fires with the new view after
+    /// a durable (bindings/structure) change. Runs on the reducing thread
+    /// outside the model lock; keep it to the synchronous save, which is
+    /// rare (launches, splits, closes) and never on the typing path.
+    public func setDurableViewChangedHook(_ hook: (@Sendable (WorkspaceView) -> Void)?) {
+        lock.lock()
+        onDurableViewChanged = hook
+        lock.unlock()
+    }
+
+    public func reportNotice(_ message: String) {
+        drain(.notice(message), route: { _ in .inline })
     }
 
     public func terminalFrame() -> TerminalFrame? {
         lock.lock()
         defer { lock.unlock() }
-        return emulator?.emulator.frame()
+        guard let binding = state.activeBindingKey,
+              let slot = emulatorSlots[binding.pane], slot.binding == binding else { return nil }
+        return slot.emulator.frame()
+    }
+
+    public func terminalFrame(for paneID: PaneID) -> TerminalFrame? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let tab = state.view.activeTab,
+              (tab.zoomedPaneID.map { $0 == paneID } ?? tab.tree.leafIDs.contains(paneID)) else { return nil }
+        guard let binding = state.bindingKey(for: paneID),
+              let slot = emulatorSlots[paneID], slot.binding == binding else { return nil }
+        return slot.emulator.frame()
+    }
+
+    /// Scrollback viewport for scroll mode. Returns nil at anchor 0, on the
+    /// alternate screen, or without a bound emulator, so the caller renders
+    /// the live frame instead.
+    public func scrollFrame(for paneID: PaneID, rows: Int) -> TerminalFrame? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let tab = state.view.activeTab,
+              (tab.zoomedPaneID.map { $0 == paneID } ?? tab.tree.leafIDs.contains(paneID)) else { return nil }
+        guard let binding = state.bindingKey(for: paneID),
+              let slot = emulatorSlots[paneID], slot.binding == binding else { return nil }
+        let anchor = state.scrollAnchors[paneID] ?? 0
+        guard anchor > 0 else { return nil }
+        return slot.emulator.historyFrame(anchor: anchor, rows: rows, columns: slot.emulator.columns)
+    }
+
+    public func terminalSize(for paneID: PaneID) -> (rows: Int, columns: Int)? {
+        lock.lock()
+        defer { lock.unlock() }
+        return state.terminals[paneID]?.resize.effectiveSize
     }
 
     public func terminalSize() -> (rows: Int, columns: Int)? {
@@ -177,6 +314,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     /// or closes the workspace.
     public func detachSession() {
         lock.lock()
+        pumpSequence &+= 1
         let pump = self.pump
         self.pump = nil
         lock.unlock()
@@ -234,7 +372,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
                     }
                 case .command:
                     commandQueue.async { [weak self] in
-                        guard let self, self.commandsAllowed() else { return }
+                        guard let self, self.commandsAllowed(for: effect) else { return }
                         self.runRouted(effect)
                     }
                 }
@@ -247,10 +385,26 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     /// move that landed while the work was queued still wins.
     private func runRouted(_ effect: TUIRuntimeEffect) {
         switch effect {
-        case .queueSend(let runtime, let bytes):
-            drain(.sendDue(runtime: runtime, bytes: bytes), route: { _ in .inline })
-        case .queueLaunch(let choice):
-            drain(.launchDue(choice: choice), route: { _ in .inline })
+        case .queuePaste(let binding, let text):
+            lock.lock()
+            let modes = emulatorSlots[binding.pane].flatMap { $0.binding == binding ? $0.emulator.inputModes : nil }
+                ?? TerminalInputModes()
+            lock.unlock()
+            drain(.sendDue(binding: binding, bytes: TerminalInputEncoding.paste(text, modes: modes)),
+                  route: { _ in .inline })
+        case .queueEmulatorResponse(let binding, let bytes):
+            drain(.emulatorSendDue(binding: binding, bytes: bytes), route: { _ in .inline })
+        case .queueKey(let binding, let key):
+            lock.lock()
+            let modes = emulatorSlots[binding.pane].flatMap { $0.binding == binding ? $0.emulator.inputModes : nil }
+                ?? TerminalInputModes()
+            lock.unlock()
+            drain(.sendDue(binding: binding, bytes: TerminalInputEncoding.bytes(for: key, modes: modes)),
+                  route: { _ in .inline })
+        case .queueSend(let binding, let bytes):
+            drain(.sendDue(binding: binding, bytes: bytes), route: { _ in .inline })
+        case .queueLaunch(let target, let choice):
+            drain(.launchDue(target: target, choice: choice), route: { _ in .inline })
         default:
             var followups: [WorkspaceTUIReducerEvent] = []
             runInline(effect, followups: &followups)
@@ -277,30 +431,45 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         remaining.reserveCapacity(transition.effects.count)
         for effect in transition.effects {
             switch effect {
-            case .createEmulator(let runtime, let rows, let columns):
-                emulator = (runtime, emulators.make(columns: columns, rows: rows))
-            case .feedEmulator(let runtime, let data):
-                if emulator?.runtime == runtime {
-                    emulator?.emulator.feed(data)
-                    let responses = emulator?.emulator.takeResponses() ?? []
+            case .createEmulator(let binding, let rows, let columns):
+                frameRevisionCounter &+= 1
+                emulatorSlots[binding.pane] = EmulatorSlot(
+                    binding: binding, emulator: emulators.make(columns: columns, rows: rows),
+                    revision: frameRevisionCounter
+                )
+            case .feedEmulator(let binding, let data):
+                if let slot = emulatorSlots[binding.pane], slot.binding == binding {
+                    slot.emulator.feed(data)
+                    frameRevisionCounter &+= 1
+                    emulatorSlots[binding.pane]?.revision = frameRevisionCounter
+                    let responses = slot.emulator.takeResponses()
                     if responses.isEmpty == false {
-                        followups.append(.emulatorResponded(runtime: runtime, responses: responses))
+                        followups.append(.emulatorResponded(binding: binding, responses: responses))
                     }
                 }
-            case .resizeEmulator(let runtime, let rows, let columns):
-                if emulator?.runtime == runtime {
-                    emulator?.emulator.resize(columns: columns, rows: rows)
+            case .resizeEmulator(let binding, let rows, let columns):
+                if let slot = emulatorSlots[binding.pane], slot.binding == binding {
+                    slot.emulator.resize(columns: columns, rows: rows)
+                    frameRevisionCounter &+= 1
+                    emulatorSlots[binding.pane]?.revision = frameRevisionCounter
                 }
-            case .dropEmulator(let runtime):
-                if emulator?.runtime == runtime {
-                    emulator = nil
+            case .dropEmulator(let binding):
+                if emulatorSlots[binding.pane]?.binding == binding {
+                    emulatorSlots[binding.pane] = nil
                 }
             default:
                 remaining.append(effect)
             }
         }
+        let viewChanged = transition.state.view != state.view
+        let hook = viewChanged ? onViewChanged : nil
+        let durableHook = viewChanged
+            && transition.state.view.equalIgnoringFocus(state.view) == false ? onDurableViewChanged : nil
+        let durableView = transition.state.view
         state = transition.state
         lock.unlock()
+        hook?()
+        if let durableHook { durableHook(durableView) }
         return (remaining, followups)
     }
 
@@ -319,110 +488,236 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
                 followups.append(.connectQueryFailed)
             }
 
-        case .ensureShell(let choice, let rows, let columns):
+        case .ensureShell(let target, let choice, let rows, let columns):
             switch session.ensureTerminal(
                 executable: choice.executable,
                 arguments: choice.arguments,
                 hook: choice.hook,
                 rows: rows,
-                columns: columns
+                columns: columns,
+                resourceProfileID: choice.resourceProfileID
             ) {
             case .success(let runtime):
-                followups.append(.ensureSucceeded(runtime: runtime, shell: choice))
+                followups.append(.ensureSucceeded(target: target, runtime: runtime, shell: choice))
             case .failure(let error):
-                followups.append(.ensureFailed(disconnected: error == .disconnected))
+                followups.append(.ensureFailed(
+                    target: target, error: error, profileID: choice.resourceProfileID
+                ))
             }
 
-        case .queueSend(let runtime, let bytes):
+        case .queueSend(let binding, let bytes):
             // Inline fallback; queue-routed callers reduce `.sendDue` on the
             // terminal worker instead.
-            followups.append(.sendDue(runtime: runtime, bytes: bytes))
+            followups.append(.sendDue(binding: binding, bytes: bytes))
 
-        case .queueLaunch(let choice):
+        case .queueEmulatorResponse(let binding, let bytes):
+            followups.append(.emulatorSendDue(binding: binding, bytes: bytes))
+
+        case .queueKey(let binding, let key):
+            lock.lock()
+            let modes = emulatorSlots[binding.pane].flatMap { $0.binding == binding ? $0.emulator.inputModes : nil }
+                ?? TerminalInputModes()
+            lock.unlock()
+            followups.append(.sendDue(
+                binding: binding, bytes: TerminalInputEncoding.bytes(for: key, modes: modes)
+            ))
+
+        case .queuePaste(let binding, let text):
+            lock.lock()
+            let modes = emulatorSlots[binding.pane].flatMap { $0.binding == binding ? $0.emulator.inputModes : nil }
+                ?? TerminalInputModes()
+            lock.unlock()
+            followups.append(.sendDue(
+                binding: binding, bytes: TerminalInputEncoding.paste(text, modes: modes)
+            ))
+
+        case .resolveRunCommand(let target, let input):
+            guard let selection = RunCommandSelection.splitProfile(input) else {
+                followups.append(.runCommandFailed(target: target, message: "Invalid resource profile"))
+                return
+            }
+            let parsed: ParsedRuntimeCommand
+            switch RunCommandParser.parse(selection.command) {
+            case .success(let value): parsed = value
+            case .failure(let error):
+                followups.append(.runCommandFailed(target: target, message: error.message))
+                return
+            }
+            switch RunCommandParser.resolve(
+                parsed, path: ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+            ) {
+            case .success(let resolved):
+                followups.append(.runCommandResolved(target: target, choice: RuntimeLaunchChoice(
+                    id: RuntimeLaunchChoice.runPromptID,
+                    title: URL(fileURLWithPath: resolved.executable).lastPathComponent,
+                    executable: resolved.executable, arguments: resolved.arguments,
+                    hook: nil, resourceProfileID: selection.profileID
+                )))
+            case .failure(let error):
+                followups.append(.runCommandFailed(target: target, message: error.message))
+            }
+
+        case .queueLaunch(let target, let choice):
             // Inline fallback; queue-routed callers reduce `.launchDue` on the
             // command worker instead.
-            followups.append(.launchDue(choice: choice))
+            followups.append(.launchDue(target: target, choice: choice))
 
-        case .launchQuery(let choice, let rows, let columns):
+        case .launchQuery(let target, let choice, let rows, let columns):
             switch session.launch(
                 executable: choice.executable,
                 arguments: choice.arguments,
                 hook: choice.hook,
                 rows: rows,
-                columns: columns
+                columns: columns,
+                resourceProfileID: choice.resourceProfileID
             ) {
             case .success(let runtime):
-                followups.append(.launchQuerySucceeded(choice: choice, runtime: runtime, rows: rows, columns: columns))
-            case .failure:
-                followups.append(.launchQueryFailed)
+                followups.append(.launchQuerySucceeded(
+                    target: target, choice: choice, runtime: runtime, rows: rows, columns: columns
+                ))
+            case .failure(let error):
+                followups.append(.launchQueryFailed(target: target, choice: choice, error: error))
             }
 
-        case .attach(let runtime, let context):
-            followups.append(.attachCompleted(runtime: runtime, context: context, outcome: session.attach(runtime)))
+        case .attach(let binding, let context):
+            // Resubscribe recovery tears down stale subscription state and
+            // clears the client's queued backlog; a bare attach would leave
+            // the swallow-output mark set and the pane dark.
+            let outcome: SessionAttachOutcome
+            if context == .resubscribe || context == .resubscribeRetry {
+                outcome = session.resubscribe(binding.runtime)
+            } else {
+                outcome = session.attach(binding.runtime)
+            }
+            followups.append(.attachCompleted(
+                binding: binding, context: context, outcome: outcome
+            ))
+
+        case .observe(let binding, let context):
+            lock.lock()
+            let observe = state.bindingKey(for: binding.pane) == binding
+                && state.terminals[binding.pane]?.state.running == true
+            lock.unlock()
+            guard observe else { return }
+            followups.append(.attachCompleted(
+                binding: binding, context: context, outcome: session.observe(binding.runtime)
+            ))
+
+        case .reconnectQuery:
+            switch session.reconnect() {
+            case .failure(let error):
+                followups.append(.reconnectFailed(error: error))
+            case .success:
+                switch session.inventory() {
+                case .success(let inventoried):
+                    followups.append(.reconnectSucceeded(terminals: inventoried.terminals))
+                case .failure(let error):
+                    followups.append(.reconnectFailed(error: error))
+                }
+            }
+
+        case .restartEvents:
+            startEventDelivery()
 
         case .release(let runtime):
             session.release(runtime)
+        case .releaseInput(let binding):
+            lock.lock()
+            let attempt = state.lifecycle == .connected && state.shouldExit == false
+                && state.bindingKey(for: binding.pane) == binding
+            lock.unlock()
+            guard attempt else { return }
+            followups.append(.releaseInputCompleted(
+                binding: binding, outcome: .from(session.releaseInput(binding.runtime))
+            ))
+        case .refreshInventory:
+            switch session.inventory() {
+            case .success(let inventoried):
+                followups.append(.inventoryRefreshed(terminals: inventoried.terminals))
+            case .failure(.disconnected):
+                followups.append(.hostDisconnected)
+            case .failure:
+                break
+            }
         case .cancel(let runtime):
             session.cancel(runtime)
         case .detach:
             session.close()
 
-        case .acquire(let runtime):
+        case .acquire(let binding):
             // Narrow the race between the reducer's gate and the RPC: a
             // detach that lands in between skips the call. A success that
             // still arrives stale is released by `.acquireCompleted`.
             lock.lock()
             let attempt = state.lifecycle == .connected && state.shouldExit == false
-                && state.terminal?.state.runtime == runtime
-                && state.terminal?.state.running == true
+                && state.bindingKey(for: binding.pane) == binding
+                && state.terminals[binding.pane]?.state.running == true
             lock.unlock()
             guard attempt else { return }
             let outcome: TUIRPCOutcome
-            switch session.reacquire(runtime) {
+            switch session.reacquire(binding.runtime) {
             case .owned:
                 outcome = .ok
-            case .readOnly, .unavailable:
+            case .readOnly:
                 outcome = .busy
+            case .unavailable:
+                outcome = .unavailable
             case .disconnected:
                 outcome = .disconnected
             }
-            followups.append(.acquireCompleted(runtime: runtime, outcome: outcome))
+            followups.append(.acquireCompleted(binding: binding, outcome: outcome))
 
-        case .write(let runtime, let bytes):
+        case .write(let binding, let bytes):
             guard bytes.isEmpty == false else { return }
-            followups.append(.writeCompleted(runtime: runtime, outcome: .from(session.send(bytes, to: runtime))))
+            followups.append(.writeCompleted(
+                binding: binding, bytes: bytes, outcome: .from(session.send(bytes, to: binding.runtime))
+            ))
 
-        case .resize(let runtime, let rows, let columns):
-            followups.append(.resizeCompleted(runtime: runtime, outcome: .from(session.resize(runtime, rows: rows, columns: columns))))
+        case .resize(let binding, let rows, let columns):
+            followups.append(.resizeCompleted(
+                binding: binding,
+                rows: rows,
+                columns: columns,
+                outcome: .from(session.resize(binding.runtime, rows: rows, columns: columns)),
+                now: Date()
+            ))
 
-        case .createEmulator(let runtime, let rows, let columns):
+        case .createEmulator(let binding, let rows, let columns):
             lock.lock()
-            emulator = (runtime, emulators.make(columns: columns, rows: rows))
+            frameRevisionCounter &+= 1
+            emulatorSlots[binding.pane] = EmulatorSlot(
+                binding: binding, emulator: emulators.make(columns: columns, rows: rows),
+                revision: frameRevisionCounter
+            )
             lock.unlock()
 
-        case .feedEmulator(let runtime, let data):
+        case .feedEmulator(let binding, let data):
             lock.lock()
             var responses: [Data] = []
-            if emulator?.runtime == runtime {
-                emulator?.emulator.feed(data)
-                responses = emulator?.emulator.takeResponses() ?? []
+            if let slot = emulatorSlots[binding.pane], slot.binding == binding {
+                slot.emulator.feed(data)
+                frameRevisionCounter &+= 1
+                emulatorSlots[binding.pane]?.revision = frameRevisionCounter
+                responses = slot.emulator.takeResponses()
             }
             lock.unlock()
             if responses.isEmpty == false {
-                followups.append(.emulatorResponded(runtime: runtime, responses: responses))
+                followups.append(.emulatorResponded(binding: binding, responses: responses))
             }
 
-        case .resizeEmulator(let runtime, let rows, let columns):
+        case .resizeEmulator(let binding, let rows, let columns):
             lock.lock()
-            if emulator?.runtime == runtime {
-                emulator?.emulator.resize(columns: columns, rows: rows)
+            if let slot = emulatorSlots[binding.pane], slot.binding == binding {
+                slot.emulator.resize(columns: columns, rows: rows)
+                frameRevisionCounter &+= 1
+                emulatorSlots[binding.pane]?.revision = frameRevisionCounter
             }
             lock.unlock()
 
-        case .dropEmulator(let runtime):
+        case .dropEmulator(let binding):
             lock.lock()
-            if emulator?.runtime == runtime {
-                emulator = nil
+            if emulatorSlots[binding.pane]?.binding == binding {
+                emulatorSlots[binding.pane] = nil
             }
             lock.unlock()
         }
@@ -437,6 +732,17 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     private func commandsAllowed() -> Bool {
         lock.lock()
         defer { lock.unlock() }
+        return state.lifecycle == .connected && state.shouldExit == false
+    }
+
+    private func commandsAllowed(for effect: TUIRuntimeEffect) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        // Reconnect is the one command-queue effect that must run while
+        // disconnected; everything else stays gated on a live session.
+        if case .reconnectQuery = effect {
+            return state.lifecycle == .disconnected && state.shouldExit == false
+        }
         return state.lifecycle == .connected && state.shouldExit == false
     }
 
@@ -467,6 +773,15 @@ public struct WorkspaceTUISnapshot: Equatable, Sendable {
     public var launcher: [RuntimeLaunchChoice]
     public var presentationRevision: UInt64
     public var shouldExit: Bool
+    public var feedback: String?
+    public var view: WorkspaceView
+    public var terminals: [PaneID: WorkspaceTerminalState]
+    public var recentOutputOnly: Set<PaneID>
+    public var scrollAnchors: [PaneID: Int]
+    public var navigatorItems: [NavigatorItem]
+    public var knownRuntimes: [ListedRuntime]
+    public var reconnecting: Bool
+    public var frameRevisions: [PaneID: UInt64]
 }
 
 struct WorkspaceTUIRefreshGate {

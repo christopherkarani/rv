@@ -515,6 +515,8 @@ private func sortedJSON<T: Encodable>(_ value: T) throws -> Data {
         "{\"v\":1,\"op\":\"ping\",\"executable\":\"\(over(WorkspaceControlLimits.maxExecutableBytes + 1))\"}",
         "{\"v\":1,\"op\":\"ping\",\"hook\":\"\(over(WorkspaceControlLimits.maxHookBytes + 1))\"}",
         "{\"v\":1,\"op\":\"ping\",\"error\":\"\(over(WorkspaceControlLimits.maxErrorBytes + 1))\"}",
+        "{\"v\":1,\"op\":\"ping\",\"resourceProfileID\":\"\(over(WorkspaceControlLimits.maxResourceProfileIDBytes + 1))\"}",
+        "{\"v\":1,\"op\":\"ping\",\"Detail\":\"\(over(WorkspaceControlLimits.maxDetailBytes + 1))\"}",
         "{\"v\":1,\"op\":\"ping\",\"phase\":\"\(over(33))\"}",
         "{\"v\":1,\"op\":\"ping\",\"project\":\"\(over(WorkspaceControlLimits.maxProjectBytes + 1))\"}",
         "{\"v\":1,\"op\":\"ping\",\"arguments\":[\(manyArguments)]}",

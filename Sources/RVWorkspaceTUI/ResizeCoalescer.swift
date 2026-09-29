@@ -79,4 +79,19 @@ public struct ResizeCoalescer: Equatable, Sendable {
         guard let rows = pendingRows, let columns = pendingColumns else { return nil }
         return propose(rows: rows, columns: columns, now: now)
     }
+
+    /// Returns a failed send to pending so a later tick retries it. Only the
+    /// size the host actually rejected is un-applied: a completion for any
+    /// other size is stale and leaves the coalescer alone, and a newer
+    /// pending size is never clobbered by an older failure.
+    public mutating func nack(rows: Int, columns: Int, now: Date) {
+        guard lastSentRows == rows, lastSentColumns == columns else { return }
+        lastSentRows = nil
+        lastSentColumns = nil
+        if pendingRows == nil || pendingColumns == nil {
+            pendingRows = rows
+            pendingColumns = columns
+            pendingAt = now
+        }
+    }
 }

@@ -395,17 +395,21 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
     /// A second call does not create another volume.
     func launch(
         host: HookHost?,
+        stagingAgent: String? = nil,
         command: IsolatedCommand,
         plan: ContainedPlan,
         io: IsolatedIO = .discard,
+        resourceProfile: RuntimeResourceProfile? = nil,
         admission: RuntimeAdmissionConfiguration = .failClosed,
         spawnFault: RuntimeSpawnFault? = nil
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         launch(
             host: host,
+            stagingAgent: stagingAgent,
             command: command,
             plan: plan,
             io: io,
+            resourceProfile: resourceProfile,
             admission: admission,
             sessionStore: .production,
             spawnFault: spawnFault
@@ -414,16 +418,19 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
 
     func launch(
         host: HookHost?,
+        stagingAgent: String? = nil,
         command: IsolatedCommand,
         plan: ContainedPlan,
         io: IsolatedIO,
+        resourceProfile: RuntimeResourceProfile? = nil,
         admission: RuntimeAdmissionConfiguration,
         sessionStore: RuntimeSessionStore,
         runningLimit: Int? = nil,
+        keychainReader: KeychainReader = .live,
         spawnFault: RuntimeSpawnFault? = nil
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         let request: IsolatedLaunchRequest
-        switch prepareSeatbelt(plan.isolationPlan(), command) {
+        switch prepareSeatbelt(plan.isolationPlan(), command, resourceProfile: resourceProfile) {
         case .failure(let error):
             return .failure(.apply(error))
         case .success(let prepared):
@@ -439,10 +446,12 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         let spawned: Result<WorkspaceChild, WorkspaceSessionError> = spawn(
             request,
             host: host,
+            stagingAgent: stagingAgent,
             sessionStore: sessionStore,
             admission: admission,
             register: true,
-            runningLimit: runningLimit
+            runningLimit: runningLimit,
+            keychainReader: keychainReader
         )
         switch spawned {
         case .failure(let error):
@@ -547,15 +556,33 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
     private func spawn(
         _ request: IsolatedLaunchRequest,
         host: HookHost?,
+        stagingAgent: String? = nil,
         sessionStore: RuntimeSessionStore,
         admission: RuntimeAdmissionConfiguration,
         register: Bool,
-        runningLimit: Int? = nil
+        runningLimit: Int? = nil,
+        keychainReader: KeychainReader = .live
     ) -> Result<WorkspaceChild, WorkspaceSessionError> {
         guard let profile = request.seatbeltProfile,
             let workspace = request.containedWorkspacePath
         else {
             return .failure(.apply(.containedGuaranteesUnsupported))
+        }
+        // Keychain reads run before the state lock: SecItemCopyMatching can
+        // present an unbounded host prompt, and holding the supervisor
+        // lock across it would stall cancel/close/launch. Values are
+        // reused by the spawn retry, so a launch prompts at most once.
+        let agentName = stagingAgent ?? host?.rawValue
+        let keychain: [(name: String, value: String)]
+        if let resources = request.resources {
+            switch resources.keychainEnvironment(forAgent: agentName, reader: keychainReader) {
+            case .success(let entries):
+                keychain = entries
+            case .failure(let staging):
+                return .failure(.apply(.resourceStagingFailed(staging.detail)))
+            }
+        } else {
+            keychain = []
         }
         var slot = WorkspaceChildSlot()
         let result: Result<Void, WorkspaceSessionError> = state.withLock { state in
@@ -590,7 +617,10 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
                 boundary: boundary,
                 started: session,
                 admission: admission,
-                egressProxyPort: egressPort
+                egressProxyPort: egressPort,
+                host: host,
+                stagingAgent: stagingAgent,
+                keychain: keychain
             ) {
             case .failure(let error):
                 return .failure(.apply(error))
@@ -679,6 +709,10 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
                 )
             )
         }
+        // The staged private home holds credential copies; the watch path
+        // removes it on the normal teardown, so the retire path must too.
+        // `remove` is `try? rm -rf`: idempotent if a watcher also fires.
+        child.live.resources?.remove()
         noteRuntimeEnded(session)
     }
 
@@ -917,12 +951,15 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
     func subscribeTerminal(
         runtime: UUID,
         client: UUID,
-        emit: @escaping @Sendable (TerminalNotice) -> Bool
+        emit: @escaping @Sendable (TerminalNotice) -> Bool,
+        windowNotices: Bool = false,
+        replayBatches: Bool = true
     ) -> Result<Void, WorkspaceControlCode> {
         guard let terminal = terminal(runtime) else {
             return .failure(terminalMissing(runtime))
         }
-        return terminal.subscribe(client: client, emit: emit).mapError { self.controlCode($0) }
+        return terminal.subscribe(client: client, emit: emit, windowNotices: windowNotices, replayBatches: replayBatches)
+            .mapError { self.controlCode($0) }
     }
 
     func activateTerminal(runtime: UUID, client: UUID) {
@@ -965,11 +1002,17 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         return terminal.writeInput(client: client, bytes: bytes).mapError { self.controlCode($0) }
     }
 
-    func resizeTerminal(runtime: UUID, rows: Int, columns: Int) -> Result<Void, WorkspaceControlCode> {
+    func resizeTerminal(
+        runtime: UUID,
+        client: UUID,
+        rows: Int,
+        columns: Int
+    ) -> Result<Void, WorkspaceControlCode> {
         guard let terminal = terminal(runtime) else {
             return .failure(terminalMissing(runtime))
         }
-        return terminal.resize(rows: rows, columns: columns).mapError { self.controlCode($0) }
+        return terminal.resize(client: client, rows: rows, columns: columns)
+            .mapError { self.controlCode($0) }
     }
 
     func terminalWindow(runtime: UUID) -> (rows: Int, columns: Int)? {

@@ -43,16 +43,22 @@ public struct ListedRuntime: Equatable, Sendable {
 }
 
 public enum WorkspaceTUIEvent: Equatable, Sendable {
+    case replayBegin(runtime: UUID, batch: UUID, truncated: Bool, byteCount: Int)
+    case replayEnd(runtime: UUID, batch: UUID)
     case bytes(runtime: UUID, data: Data)
     case overflow(runtime: UUID)
     case exited(runtime: UUID, status: Int32)
     case inputOwner(runtime: UUID, owned: Bool)
+    case window(runtime: UUID, rows: Int, columns: Int)
 }
 
 public enum WorkspaceTUIError: Error, Equatable, Sendable {
     case disconnected
+    case incompatibleHost
     case busy
     case unavailable
+    case resourceProfileUnavailable
+    case resourceStagingFailed(String)
     case rejected
 }
 
@@ -85,19 +91,34 @@ public enum SessionPoll: Equatable, Sendable {
 }
 
 /// The only path from the TUI to a workspace. Production wraps two host
-/// connections (control and terminal); the pairing, the subscribe/acquire and
-/// release/unsubscribe coupling, and error collapse all live behind this seam.
+/// connections (control and terminal) for every pane in one view; subscription,
+/// input ownership, and errors are mediated behind this seam.
 /// Every method is a blocking host RPC; the model serializes calls on its own
 /// command and terminal queues.
 public protocol WorkspaceTUISession: AnyObject, Sendable {
     func inventory() -> Result<SessionInventory, WorkspaceTUIError>
+    /// Reopens the same pair of host connections after a transient disconnect.
+    /// The model re-inventories and reattaches before enabling writes.
+    func reconnect() -> Result<Void, WorkspaceTUIError>
+    /// Subscribes without taking input ownership. A pane may remain an observer
+    /// after its input lease is released.
+    func observe(_ id: UUID) -> SessionAttachOutcome
     /// Subscribes to the runtime, then acquires its input lease. A failed
     /// subscribe reports `unavailable` without acquiring.
     func attach(_ id: UUID) -> SessionAttachOutcome
-    /// Acquires the input lease for an already-subscribed runtime. The host
-    /// rejects a second subscribe, so lease retries must not re-attach.
-    /// Never reports `unavailable`; a failed acquire degrades to `readOnly`.
+    /// Acquires the input lease for an already-subscribed runtime. Contention
+    /// degrades to `readOnly`; `unavailable` means the host has no
+    /// subscription for this client (a silent overflow drop) and the caller
+    /// must resubscribe rather than retry the acquire.
     func reacquire(_ id: UUID) -> SessionAttachOutcome
+    /// Tears down any subscription state, clears the client's queued backlog
+    /// for the runtime, subscribes fresh, then acquires the input lease.
+    /// This is the only recovery path after `.overflow` or a silent drop:
+    /// a bare subscribe would leave the client's swallow-output mark set and
+    /// the pane dark.
+    func resubscribe(_ id: UUID) -> SessionAttachOutcome
+    /// Releases only the input lease, retaining the terminal subscription.
+    func releaseInput(_ id: UUID) -> Result<Void, WorkspaceTUIError>
     /// An unknown `hook` string is `rejected` without ensuring anything;
     /// it never falls back to an unhooked runtime.
     func ensureTerminal(
@@ -105,7 +126,8 @@ public protocol WorkspaceTUISession: AnyObject, Sendable {
         arguments: [String],
         hook: String?,
         rows: Int,
-        columns: Int
+        columns: Int,
+        resourceProfileID: String?
     ) -> Result<ListedRuntime, WorkspaceTUIError>
     /// An unknown `hook` string is `rejected` without launching anything;
     /// it never falls back to an unhooked runtime.
@@ -115,6 +137,16 @@ public protocol WorkspaceTUISession: AnyObject, Sendable {
         hook: String?,
         rows: Int,
         columns: Int
+    ) -> Result<ListedRuntime, WorkspaceTUIError>
+    /// A resource profile is an explicit owner-selected policy identifier.
+    /// The host loads and adjudicates it; executable metadata never selects one.
+    func launch(
+        executable: String,
+        arguments: [String],
+        hook: String?,
+        rows: Int,
+        columns: Int,
+        resourceProfileID: String?
     ) -> Result<ListedRuntime, WorkspaceTUIError>
     func cancel(_ id: UUID)
     /// Releases the input lease, then unsubscribes. Best-effort: releasing a
@@ -128,7 +160,22 @@ public protocol WorkspaceTUISession: AnyObject, Sendable {
     func close()
 }
 
-/// One reader for the attached runtime. It batches polls before touching the
+public extension WorkspaceTUISession {
+    func launch(
+        executable: String,
+        arguments: [String],
+        hook: String?,
+        rows: Int,
+        columns: Int,
+        resourceProfileID: String?
+    ) -> Result<ListedRuntime, WorkspaceTUIError> {
+        guard resourceProfileID == nil else { return .failure(.rejected) }
+        return launch(executable: executable, arguments: arguments, hook: hook,
+                      rows: rows, columns: columns)
+    }
+}
+
+/// One reader for all subscribed runtimes. It batches polls before touching the
 /// model. The model owns this pump: it starts on `startEventDelivery` and
 /// stops inside `detachSession`.
 final class SessionEventPump: @unchecked Sendable {

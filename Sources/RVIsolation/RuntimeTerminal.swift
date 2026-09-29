@@ -17,9 +17,12 @@ enum TerminalOpenFault: Equatable, Sendable {
 
 /// One notice the single PTY reader fans out. Bytes are unmodified master output.
 enum TerminalNotice: Sendable, Equatable {
+    case replayBegin(batch: UUID, truncated: Bool, byteCount: Int)
     case replay(sequence: Int64, bytes: Data)
+    case replayEnd(batch: UUID)
     case output(sequence: Int64, bytes: Data)
     case inputOwner(Bool)
+    case window(rows: Int, columns: Int)
     case exited(Int32)
     case overflow
 }
@@ -61,6 +64,7 @@ final class RuntimeTerminal: @unchecked Sendable {
     private var rows: Int
     private var columns: Int
     private var replay = TerminalReplayBuffer()
+    private var replayTruncated = false
     private var nextSequence: Int64 = 1
     private var subscribers: [UUID: Subscriber] = [:]
     /// Clients whose flush thread is inside `emit`. Detach waits for this set
@@ -358,7 +362,9 @@ final class RuntimeTerminal: @unchecked Sendable {
     /// `WorkspaceClient.resubscribeTerminal`).
     func subscribe(
         client: UUID,
-        emit: @escaping @Sendable (TerminalNotice) -> Bool
+        emit: @escaping @Sendable (TerminalNotice) -> Bool,
+        windowNotices: Bool = false,
+        replayBatches: Bool = true
     ) -> Result<Void, TerminalControlError> {
         condition.lock()
         if flushing.contains(client) {
@@ -373,7 +379,8 @@ final class RuntimeTerminal: @unchecked Sendable {
             condition.unlock()
             return .failure(.limit)
         }
-        let subscriber = Subscriber(id: client, emit: emit)
+        let subscriber = Subscriber(id: client, emit: emit, windowNotices: windowNotices, replayBatches: replayBatches)
+        subscriber.replayTruncated = replayTruncated
         for chunk in replay.chunks {
             subscriber.chunks.append(.replay(sequence: chunk.sequence, bytes: chunk.bytes))
             subscriber.queuedBytes += chunk.bytes.count
@@ -403,6 +410,8 @@ final class RuntimeTerminal: @unchecked Sendable {
         }
         subscriber.chunks.removeAll()
         subscriber.queuedBytes = 0
+        subscriber.replayBatch = UUID()
+        subscriber.replayTruncated = replayTruncated
         for chunk in replay.chunks {
             subscriber.chunks.append(.replay(sequence: chunk.sequence, bytes: chunk.bytes))
             subscriber.queuedBytes += chunk.bytes.count
@@ -493,7 +502,7 @@ final class RuntimeTerminal: @unchecked Sendable {
         }
     }
 
-    func resize(rows: Int, columns: Int) -> Result<Void, TerminalControlError> {
+    func resize(client: UUID, rows: Int, columns: Int) -> Result<Void, TerminalControlError> {
         guard TerminalStreamLimits.accepts(rows: rows, columns: columns) else {
             return .failure(.invalid)
         }
@@ -502,18 +511,22 @@ final class RuntimeTerminal: @unchecked Sendable {
             condition.unlock()
             return .failure(.unavailable)
         }
-        let fd = Darwin.dup(master)
-        condition.unlock()
-        guard fd >= 0 else { return .failure(.unavailable) }
-        defer { Darwin.close(fd) }
-        guard Self.applyWindow(rows: rows, columns: columns, fd: fd) else {
+        guard inputOwner == client else {
+            condition.unlock()
+            return .failure(.busy)
+        }
+        // Keep the lease and PTY check atomic with the ioctl. A release or
+        // takeover cannot authorize a resize from a previous lease epoch.
+        guard Self.applyWindow(rows: rows, columns: columns, fd: master) else {
+            condition.unlock()
             return .failure(.unavailable)
         }
-        condition.lock()
-        if masterClosed == false {
-            self.rows = rows
-            self.columns = columns
-        }
+        self.rows = rows
+        self.columns = columns
+        enqueueWindowLocked(rows: rows, columns: columns)
+        // Every other chunk-append site broadcasts: a parked flush loop
+        // waits on this condition and would miss the notice on an idle PTY.
+        condition.broadcast()
         condition.unlock()
         return .success(())
     }
@@ -521,6 +534,16 @@ final class RuntimeTerminal: @unchecked Sendable {
     private func enqueueOwnerLocked(_ owned: Bool) {
         let notice = TerminalNotice.inputOwner(owned)
         for subscriber in subscribers.values where subscriber.dropped == false && subscriber.stopped == false {
+            subscriber.chunks.append(notice)
+        }
+    }
+
+    /// Publishes actual PTY dimensions to opted-in subscribers only. Older
+    /// subscribers fail closed on unknown stream ops, so they are skipped.
+    private func enqueueWindowLocked(rows: Int, columns: Int) {
+        let notice = TerminalNotice.window(rows: rows, columns: columns)
+        for subscriber in subscribers.values
+            where subscriber.windowNotices && subscriber.dropped == false && subscriber.stopped == false {
             subscriber.chunks.append(notice)
         }
     }
@@ -617,6 +640,9 @@ final class RuntimeTerminal: @unchecked Sendable {
         let sequence = nextSequence
         nextSequence += 1
         var cursor = nextSequence
+        if replay.byteCount + data.count > TerminalStreamLimits.replayBytes {
+            replayTruncated = true
+        }
         replay.append(
             sequence: sequence,
             bytes: data,
@@ -661,20 +687,42 @@ final class RuntimeTerminal: @unchecked Sendable {
                 condition.unlock()
                 return
             }
-            while subscriber.chunks.isEmpty && subscriber.dropped == false && subscriber.stopped == false {
+            while subscriber.chunks.isEmpty && subscriber.primed
+                && subscriber.dropped == false && subscriber.stopped == false {
                 condition.wait()
             }
             if subscriber.stopped {
                 condition.unlock()
                 return
             }
-            let batch = subscriber.chunks
+            var batch = subscriber.chunks
             subscriber.chunks.removeAll()
             // `queuedBytes` tracks waiting chunks only. Keep the detached
             // batch bounded separately so live output can queue while replay
             // is being emitted without falsely overflowing at the 64 KiB
             // replay boundary.
             subscriber.queuedBytes = 0
+            // Older subscribers fail closed on unknown stream ops: frame the
+            // replay only for clients that opted in via subscribe features.
+            if subscriber.primed == false, subscriber.replayBatches {
+                let replayCount = batch.prefix { notice in
+                    if case .replay = notice { return true }
+                    return false
+                }.count
+                let byteCount = batch.prefix(replayCount).reduce(0) { total, notice in
+                    if case .replay(_, let bytes) = notice { return total + bytes.count }
+                    return total
+                }
+                batch.insert(
+                    .replayBegin(
+                        batch: subscriber.replayBatch,
+                        truncated: subscriber.replayTruncated,
+                        byteCount: byteCount
+                    ),
+                    at: 0
+                )
+                batch.insert(.replayEnd(batch: subscriber.replayBatch), at: replayCount + 1)
+            }
             subscriber.primed = true
             let dropped = subscriber.dropped
             flushing.insert(subscriber.id)
@@ -774,7 +822,7 @@ final class RuntimeTerminal: @unchecked Sendable {
                 switch notice {
                 case .output, .replay:
                     return true
-                case .inputOwner, .exited, .overflow:
+                case .inputOwner, .window, .exited, .overflow, .replayBegin, .replayEnd:
                     return false
                 }
             }) else {
@@ -783,7 +831,8 @@ final class RuntimeTerminal: @unchecked Sendable {
             switch subscriber.chunks.remove(at: index) {
             case .output(_, let bytes), .replay(_, let bytes):
                 subscriber.queuedBytes -= bytes.count
-            case .inputOwner, .exited, .overflow:
+                subscriber.replayTruncated = true
+            case .inputOwner, .window, .exited, .overflow, .replayBegin, .replayEnd:
                 break
             }
         }
@@ -828,16 +877,22 @@ final class RuntimeTerminal: @unchecked Sendable {
 private final class Subscriber: @unchecked Sendable {
     let id: UUID
     let emit: @Sendable (TerminalNotice) -> Bool
+    let windowNotices: Bool
+    let replayBatches: Bool
     var chunks: [TerminalNotice] = []
     var queuedBytes = 0
+    var replayBatch = UUID()
+    var replayTruncated = false
     var deliver = false
     var primed = false
     var dropped = false
     var stopped = false
 
-    init(id: UUID, emit: @escaping @Sendable (TerminalNotice) -> Bool) {
+    init(id: UUID, emit: @escaping @Sendable (TerminalNotice) -> Bool, windowNotices: Bool = false, replayBatches: Bool = true) {
         self.id = id
         self.emit = emit
+        self.windowNotices = windowNotices
+        self.replayBatches = replayBatches
     }
 }
 #endif

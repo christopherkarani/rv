@@ -1,7 +1,33 @@
 #if os(macOS)
 import Foundation
+import RVDomain
 import Testing
 @testable import RVIsolation
+
+@Test func unselectedRuntimeStripsSecretsButProjectsNonSecretVars() {
+    let host = ["META_API_KEY": "secret", "ANTHROPIC_BASE_URL": "http://localhost:10000"]
+    for io in [IsolatedIO.inherit, .pseudoTerminal(rows: 24, columns: 80)] {
+        let values = containedRuntimeEnvironment(workspace: "/tmp/ws", io: io, hostEnvironment: host)
+        #expect(values.contains("PATH=/usr/bin:/bin"))
+        #expect(values.contains("HOME=/tmp/ws"))
+        // Secrets never cross; non-secret gateway routing survives the
+        // projection (the landed projection contract).
+        #expect(values.allSatisfy { !$0.hasPrefix("META_API_KEY=") })
+        #expect(values.contains("ANTHROPIC_BASE_URL=http://localhost:10000"))
+    }
+}
+
+@Test func profileLessTmpdirStaysOutOfTheWorkspaceRoot() {
+    let oneShot = containedRuntimeEnvironment(
+        workspace: "/tmp/ws", io: .inherit, hostEnvironment: [:]
+    )
+    #expect(oneShot.contains("TMPDIR=/tmp/ws"))
+    let terminal = containedRuntimeEnvironment(
+        workspace: "/tmp/ws", io: .pseudoTerminal(rows: 24, columns: 80),
+        hostEnvironment: [:]
+    )
+    #expect(terminal.contains("TMPDIR=/tmp/ws/.rv-cage/tmp"))
+}
 
 @Test func pseudoTerminalEnvironmentAdvertisesColorOutput() {
     let values = containedRuntimeEnvironment(
@@ -14,9 +40,10 @@ import Testing
     #expect(values.allSatisfy { $0.hasPrefix("PS1=") == false })
     #expect(values.contains("PATH=/usr/bin:/bin"))
     #expect(values.contains("HOME=/tmp/ws"))
-    // Empty host env means no usable home, so the cage falls back to the
-    // workspace itself. Real runs always resolve an RV-managed home/tmp.
-    #expect(values.contains("TMPDIR=/tmp/ws"))
+    // Profile-less PTY shells get a dedicated cage scratch dir (staged at
+    // spawn) instead of the workspace root, so tmp files never pollute it.
+    // Real runs always resolve an RV-managed home/tmp.
+    #expect(values.contains("TMPDIR=/tmp/ws/.rv-cage/tmp"))
 }
 
 @Test func nonTerminalEnvironmentStaysNonInteractive() {
@@ -74,25 +101,60 @@ import Testing
     )
     #expect(oneShot.contains("PATH=/usr/bin:/bin"))
 }
-@Test func terminalEnvironmentExposesEgressProxy() {
+
+@Test func selectedManifestIsIdenticalForOneShotAndTerminalResources() {
+    let profile = RuntimeResourceProfile(
+        id: "profile-a", projects: ["/tmp/project"],
+        environment: [
+            .init(name: "SELECTED_KEY", hostVariable: "HOST_KEY"),
+            .init(name: "TOOL_NO_UPDATE", literalValue: "1"),
+        ]
+    )
+    let resources = RuntimeResourceManifest(profile)
+    let host = ["HOST_KEY": "synthetic", "OTHER_KEY": "hidden"]
+    for io in [IsolatedIO.inherit, .pseudoTerminal(rows: 24, columns: 80)] {
+        let values = containedRuntimeEnvironment(
+            workspace: "/tmp/ws", io: io, resources: resources, hostEnvironment: host
+        )
+        #expect(values.contains("HOME=\(resources.privateHome)"))
+        #expect(values.contains("TMPDIR=\(resources.tmp)"))
+        #expect(values.contains("PATH=\(resources.bin):/usr/bin:/bin"))
+        #expect(values.contains("SELECTED_KEY=synthetic"))
+        #expect(values.contains("TOOL_NO_UPDATE=1"))
+        #expect(values.allSatisfy { !$0.hasPrefix("OTHER_KEY=") })
+    }
+}
+
+@Test func keychainValuesLandInEnvironmentForAnyIO() {
+    for io in [IsolatedIO.inherit, .pseudoTerminal(rows: 24, columns: 80)] {
+        let values = containedRuntimeEnvironment(
+            workspace: "/tmp/ws", io: io, hostEnvironment: [:],
+            keychain: [("RV_SYNTH_KEY", "synthetic-secret")]
+        )
+        #expect(values.contains("RV_SYNTH_KEY=synthetic-secret"))
+    }
+}
+
+@Test func terminalEnvironmentKeepsColorAndBoundedLoopbackProxy() {
     let values = containedRuntimeEnvironment(
         workspace: "/tmp/ws", io: .pseudoTerminal(rows: 24, columns: 80),
         egressProxyPort: 39321, hostEnvironment: [:]
     )
+    #expect(values.contains("TERM=xterm-256color"))
+    #expect(values.contains("CLICOLOR=1"))
     #expect(values.contains("HTTPS_PROXY=http://127.0.0.1:39321"))
     #expect(values.contains("HTTP_PROXY=http://127.0.0.1:39321"))
     #expect(values.contains("https_proxy=http://127.0.0.1:39321"))
     #expect(values.contains("http_proxy=http://127.0.0.1:39321"))
     #expect(values.contains("NO_PROXY=localhost,127.0.0.1,::1"))
     #expect(values.contains("no_proxy=localhost,127.0.0.1,::1"))
+    #expect(values.allSatisfy { !$0.hasPrefix("PS1=") })
     for bad in [0, -1, 70_000] {
         let omitted = containedRuntimeEnvironment(
             workspace: "/tmp/ws", io: .pseudoTerminal(rows: 24, columns: 80),
             egressProxyPort: bad, hostEnvironment: [:]
         )
-        #expect(omitted.allSatisfy { $0.hasPrefix("HTTPS_PROXY=") == false })
-        #expect(omitted.allSatisfy { $0.hasPrefix("NO_PROXY=") == false })
-        #expect(omitted.allSatisfy { $0.hasPrefix("no_proxy=") == false })
+        #expect(omitted.allSatisfy { !$0.hasPrefix("HTTPS_PROXY=") })
     }
     let missing = containedRuntimeEnvironment(
         workspace: "/tmp/ws", io: .pseudoTerminal(rows: 24, columns: 80),

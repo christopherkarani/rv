@@ -283,7 +283,10 @@ public enum WorkspaceTerminalDriver {
                 case .overflow:
                     _ = client.detach()
                     throw WorkspaceTerminalDriveError.client(.terminalLimit)
-                case .inputOwner:
+                case .inputOwner, .replayBegin, .replayEnd, .window:
+                    // Replay boundaries describe this attachment only; this local
+                    // terminal does not use them as a durable output offset.
+                    // Window notices only matter to emulating observers.
                     break
                 }
             }

@@ -11,6 +11,11 @@ struct WorkspaceSessionDomainTests {
         #expect(first.rawValue != RuntimeSessionID().rawValue || first != second)
     }
 
+    @Test func workspaceIdentifierCanNameAnExistingHostSession() {
+        let wireID = UUID()
+        #expect(WorkspaceSessionID(rawValue: wireID).rawValue == wireID)
+    }
+
     @Test func runtimeStartsOnlyWhileTheWorkspaceIsActive() {
         var life = WorkspaceLifecycle.creating
         #expect(life.acceptsRuntime == false)

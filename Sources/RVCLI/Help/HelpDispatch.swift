@@ -141,11 +141,13 @@ public enum HelpDispatch {
         var index = tokens.startIndex
         while index < tokens.endIndex {
             let token = tokens[index]
-            if token == "--executable" || token == "--workspace" {
+            if token == "--executable" || token == "--workspace" || token == "--resource-profile" {
                 let value = tokens.index(after: index)
                 guard value < tokens.endIndex else { return false }
                 index = tokens.index(after: value)
-            } else if token.hasPrefix("--executable=") || token.hasPrefix("--workspace=") {
+            } else if token.hasPrefix("--executable=") || token.hasPrefix("--workspace=")
+                || token.hasPrefix("--resource-profile=")
+            {
                 index = tokens.index(after: index)
             } else {
                 return false
@@ -158,17 +160,24 @@ public enum HelpDispatch {
         var index = tokens.startIndex
         while index < tokens.endIndex {
             let token = tokens[index]
-            if token == "start" || token == "attach" || token == "status" || token == "close" {
+            if token == "start" || token == "attach" || token == "status" || token == "close"
+                || token == "run" || token == "tui" || token == "abandon"
+            {
                 index = tokens.index(after: index)
                 continue
             }
-            if token == "--workspace" {
+            if token == "--workspace" || token == "--rows" || token == "--columns"
+                || token == "--resource-profile" || token == "--hook"
+            {
                 let value = tokens.index(after: index)
                 guard value < tokens.endIndex else { return false }
                 index = tokens.index(after: value)
                 continue
             }
-            if token.hasPrefix("--workspace=") {
+            if token.hasPrefix("--workspace=") || token.hasPrefix("--rows=")
+                || token.hasPrefix("--columns=") || token.hasPrefix("--resource-profile=")
+                || token.hasPrefix("--hook=")
+            {
                 index = tokens.index(after: index)
                 continue
             }

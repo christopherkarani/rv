@@ -93,15 +93,42 @@ public struct TerminalColor: Equatable, Sendable {
     }
 }
 
+/// How much scrollback sits above the live viewport. SwiftTerm owns the
+/// history; this only describes it so scroll mode can clamp its anchor.
+public struct TerminalHistoryDescription: Equatable, Sendable {
+    /// Retained lines above the live viewport. Zero on the alternate screen.
+    public var linesAbove: Int
+    public var alternateScreen: Bool
+
+    public init(linesAbove: Int, alternateScreen: Bool) {
+        self.linesAbove = linesAbove
+        self.alternateScreen = alternateScreen
+    }
+}
+
 /// One emulator. Implementations must accept raw bytes, including split UTF-8.
 public protocol TerminalEmulating: AnyObject {
     var columns: Int { get }
     var rows: Int { get }
     var generation: Int { get }
+    var inputModes: TerminalInputModes { get }
     func feed(_ bytes: Data)
     func resize(columns: Int, rows: Int)
     func frame() -> TerminalFrame
     func takeResponses() -> [Data]
+    func historyDescription() -> TerminalHistoryDescription
+    /// Viewport of `rows` lines ending `anchor` lines above the live bottom.
+    /// Anchor 0 is the live frame minus the cursor; the cursor is always nil.
+    /// Returns nil when there is no history (e.g. alternate screen).
+    func historyFrame(anchor: Int, rows: Int, columns: Int) -> TerminalFrame?
+}
+
+extension TerminalEmulating {
+    public var inputModes: TerminalInputModes { TerminalInputModes() }
+    public func historyDescription() -> TerminalHistoryDescription {
+        TerminalHistoryDescription(linesAbove: 0, alternateScreen: false)
+    }
+    public func historyFrame(anchor: Int, rows: Int, columns: Int) -> TerminalFrame? { nil }
 }
 
 public struct WorkspaceTerminalState: Equatable, Sendable {

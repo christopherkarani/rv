@@ -32,6 +32,21 @@ import Testing
     #expect(terminal.frame().cursor != nil)
 }
 
+@Test func untouchedCellsSurfaceAsBlanksNeverNUL() {
+    let terminal = SwiftTermAdapter(columns: 10, rows: 2)
+    terminal.feed(Data("hi".utf8))
+    let frame = terminal.frame()
+    #expect(frame.cells[0][0].text == "h")
+    #expect(frame.cells[0][1].text == "i")
+    for row in frame.cells {
+        for cell in row {
+            #expect(cell.text.contains("\0") == false)
+        }
+    }
+    #expect(frame.cells[0][2].text == " ")
+    #expect(frame.cells[1][0].text == " ")
+}
+
 @Test func splitUTF8IsNotDecodedAsTextBeforeTheEmulator() {
     let terminal = SwiftTermAdapter(columns: 10, rows: 2)
     let scalar = Array("é".utf8)

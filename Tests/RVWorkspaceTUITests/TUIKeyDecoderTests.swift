@@ -11,8 +11,8 @@ import Testing
     #expect(TerminalInputEncoder.bytes(for: .alt(.character("b"))) == Data([0x1b, 0x62]))
 }
 
-@Test func controlGIsDecodedForTheWorkspacePrefix() {
-    let press = KeyPress(.character("g"), modifiers: .ctrl)
-    #expect(TUIKeyDecoder.decode(press) == .control("g"))
+@Test func controlBIsDecodedForTheWorkspacePrefix() {
+    let press = KeyPress(.character("b"), modifiers: .ctrl)
+    #expect(TUIKeyDecoder.decode(press) == .control("b"))
 }
 #endif

@@ -90,11 +90,12 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv opencode [--executable <absolute-path>] [--workspace <path>] [--] <agent-arguments>"),
+                HelpRow(name: "rv opencode [--executable <absolute-path>] [--workspace <absolute-path>] [--resource-profile <id>] [--] <agent-arguments>"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--executable", description: "Absolute executable; default searches absolute PATH directories"),
                 HelpRow(name: "--workspace", description: "Writable workspace; default is the current directory"),
+                HelpRow(name: "--resource-profile", description: "Owner-authorized resource profile ID; without one no credentials are staged"),
                 HelpRow(name: "--", description: "Pass all following arguments to OpenCode, including --help"),
             ]),
             HelpSection(heading: "Isolation", rows: [
@@ -115,11 +116,14 @@ enum HelpCatalog {
                 HelpRow(name: "rv workspace attach [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace status [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace close [--workspace <absolute-path>]"),
-                HelpRow(name: "rv workspace run [--rows N] [--columns N] -- <absolute-executable> [args...]"),
+                HelpRow(name: "rv workspace run [--rows N] [--columns N] [--resource-profile <id>] [--hook <tag>] -- <absolute-executable> [args...]"),
                 HelpRow(name: "rv workspace tui [--workspace <project-path>]", description: "Interactive terminal workspace for contained runtimes"),
+                HelpRow(name: "rv workspace abandon [--workspace <absolute-path>]", description: "Discard a blocked workspace's unpublished volume and restore the saved tree"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--workspace", description: "Project path; default is the current directory"),
+                HelpRow(name: "--resource-profile", description: "Owner-authorized runtime resource profile ID"),
+                HelpRow(name: "--hook", description: "Launch agent tag for credential staging"),
             ]),
         ],
         examples: ["rv workspace start", "rv workspace status"]

@@ -73,9 +73,8 @@ func isDataConsumingFlag(command: String?, gitSubcommand: String?, flag: String)
 func maskAttachedDataValue(
     command: String?,
     gitSubcommand: String?,
-    token: CommandToken
+    decoded: String
 ) -> String? {
-    let decoded = token.decoded
     guard let command else { return nil }
     if command == "git", decoded.hasPrefix("--message=") {
         let valueCount = decoded.dropFirst("--message=".count).count

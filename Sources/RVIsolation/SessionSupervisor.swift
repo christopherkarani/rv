@@ -145,6 +145,7 @@ final class LiveSeatbeltChild: Sendable {
     /// Parent-side descriptors that must not appear in the child.
     private let retainedDescriptors: [Int32]
     let pty: RuntimeTerminal?
+    let resources: RuntimeResourceManifest?
     private let handshakeIO = Mutex<HandshakeIO>(HandshakeIO())
 
     private struct HandshakeIO: Sendable {
@@ -180,7 +181,8 @@ final class LiveSeatbeltChild: Sendable {
         admission: RuntimeAdmissionSession,
         parentDescriptors: [Int32],
         handshakeRead: Int32,
-        terminal: RuntimeTerminal?
+        terminal: RuntimeTerminal?,
+        resources: RuntimeResourceManifest?
     ) {
         self.session = session
         self.capability = capability
@@ -189,6 +191,7 @@ final class LiveSeatbeltChild: Sendable {
         self.admission = admission
         self.retainedDescriptors = parentDescriptors
         self.pty = terminal
+        self.resources = resources
         self.handshakeRead = handshakeRead
     }
 
@@ -302,7 +305,10 @@ func spawnSeatbeltProcess(
     boundary: WorkspaceInodeBoundary,
     started: RuntimeSession,
     admission: RuntimeAdmissionConfiguration,
-    egressProxyPort: Int? = nil
+    egressProxyPort: Int? = nil,
+    host: HookHost? = nil,
+    stagingAgent: String? = nil,
+    keychain: [(name: String, value: String)] = []
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
     let first = spawnSeatbeltProcessBody(
         request,
@@ -311,7 +317,10 @@ func spawnSeatbeltProcess(
         boundary: boundary,
         started: started,
         admission: admission,
-        egressProxyPort: egressProxyPort
+        egressProxyPort: egressProxyPort,
+        host: host,
+        stagingAgent: stagingAgent,
+        keychain: keychain
     )
     guard case .failure(.processSpawnFailed) = first else { return first }
     if blockingWorkIsCancelled() { return first }
@@ -328,7 +337,10 @@ func spawnSeatbeltProcess(
         boundary: boundary,
         started: started,
         admission: admission,
-        egressProxyPort: egressProxyPort
+        egressProxyPort: egressProxyPort,
+        host: host,
+        stagingAgent: stagingAgent,
+        keychain: keychain
     )
 }
 
@@ -356,7 +368,10 @@ func spawnSeatbeltProcessBody(
     boundary: WorkspaceInodeBoundary,
     started: RuntimeSession,
     admission: RuntimeAdmissionConfiguration,
-    egressProxyPort: Int? = nil
+    egressProxyPort: Int? = nil,
+    host: HookHost? = nil,
+    stagingAgent: String? = nil,
+    keychain: [(name: String, value: String)] = []
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
     guard profile.source.contains("(deny file-link)") else {
         return .failure(.seatbeltNotEstablished)
@@ -521,6 +536,25 @@ func spawnSeatbeltProcessBody(
         request.command.executable,
     ])
     arguments.append(contentsOf: request.command.arguments)
+    let agentName = stagingAgent ?? host?.rawValue
+    if let resources = request.resources {
+        switch resources.stage(forAgent: agentName) {
+        case .success:
+            break
+        case .failure(let staging):
+            return .failure(.resourceStagingFailed(staging.detail))
+        }
+    } else if case .pseudoTerminal = request.io {
+        // Profile-less PTY shells point TMPDIR at the workspace-local cage
+        // dir. Best-effort like the pre-profile staging: the shell reports
+        // its own failure if the directory cannot be created.
+        try? FileManager.default.createDirectory(
+            atPath: "\(workspace)/\(ContainedCagePaths.tmpSubpath)",
+            withIntermediateDirectories: true
+        )
+    }
+    var resourceStageHandedOff = false
+    defer { if !resourceStageHandedOff { request.resources?.remove() } }
     let agentBin = AgentBin.installedDirectory()
     let productive =
         request.productive
@@ -537,7 +571,9 @@ func spawnSeatbeltProcessBody(
         workspace: workspace,
         io: request.io,
         agentBin: agentBin,
+        resources: request.resources,
         egressProxyPort: egressProxyPort,
+        keychain: keychain,
         productive: productive
     )
     let argv = SpawnPointers(arguments)
@@ -649,10 +685,20 @@ func spawnSeatbeltProcessBody(
         admission: admitted,
         parentDescriptors: [ownedRead, parentRead, parentWrite],
         handshakeRead: ownedRead,
-        terminal: terminal
+        terminal: terminal,
+        resources: request.resources
     )
     handedOff = true
+    resourceStageHandedOff = true
     return .success(child)
+}
+
+/// Workspace-local fallback for a PTY launch with no resource profile.
+/// Staged launches use the manifest's private tmp; one-shot launches keep
+/// the byte-identical workspace TMPDIR. Without this, profile-less shells
+/// would scatter temp files across the workspace root.
+enum ContainedCagePaths {
+    static let tmpSubpath = ".rv-cage/tmp"
 }
 
 /// Cage environment for one spawn: the projected host environment plus
@@ -667,8 +713,10 @@ func containedRuntimeEnvironment(
     workspace: String,
     io: IsolatedIO,
     agentBin: String? = nil,
+    resources: RuntimeResourceManifest? = nil,
     egressProxyPort: Int? = nil,
     hostEnvironment: [String: String]? = nil,
+    keychain: [(name: String, value: String)] = [],
     productive: ProductiveWorkspaceResolution? = nil,
     probe: ContainedPATHProbe = .live
 ) -> [String] {
@@ -770,7 +818,77 @@ func containedRuntimeEnvironment(
         values.append(("NO_PROXY", "localhost,127.0.0.1,::1"))
         values.append(("no_proxy", "localhost,127.0.0.1,::1"))
     }
-    return values.map { "\($0.0)=\($0.1)" }
+    return addingKeychainEnvironment(
+        addingResourceEnvironment(
+            values,
+            workspace: workspace,
+            io: io,
+            resources: resources,
+            hostEnvironment: hostEnvironment
+        ),
+        keychain: keychain
+    ).map { "\($0.0)=\($0.1)" }
+}
+
+private func addingResourceEnvironment(
+    _ values: [(String, String)],
+    workspace: String,
+    io: IsolatedIO,
+    resources: RuntimeResourceManifest?,
+    hostEnvironment: [String: String]?
+) -> [(String, String)] {
+    var values = values
+    var present = Set(values.map(\.0))
+    if let resources {
+        values.removeAll { $0.0 == "HOME" || $0.0 == "TMPDIR" || $0.0 == "TEMP" || $0.0 == "TMP" }
+        values.append(("HOME", resources.privateHome))
+        values.append(("TMPDIR", resources.tmp))
+        values.append(("TEMP", resources.tmp))
+        values.append(("TMP", resources.tmp))
+        if let pathIndex = values.firstIndex(where: { $0.0 == "PATH" }) {
+            values[pathIndex].1 = "\(resources.bin):\(values[pathIndex].1)"
+        }
+        present = Set(values.map(\.0))
+    } else if case .pseudoTerminal = io {
+        values.removeAll { $0.0 == "TMPDIR" || $0.0 == "TEMP" || $0.0 == "TMP" }
+        let tmpdir = "\(workspace)/\(ContainedCagePaths.tmpSubpath)"
+        values.append(("TMPDIR", tmpdir))
+        values.append(("TEMP", tmpdir))
+        values.append(("TMP", tmpdir))
+        present = Set(values.map(\.0))
+    }
+    let host = hostEnvironment ?? ProcessInfo.processInfo.environment
+    for entry in resources?.profile.environment ?? [] {
+        let value: String?
+        switch entry.resolvedSource {
+        case .hostVariable(let variable):
+            value = host[variable]
+        case .literal(let literal):
+            value = literal
+        case nil:
+            continue
+        }
+        guard let value, !value.contains("\0"), value.utf8.count <= 8_192 else { continue }
+        guard present.insert(entry.name).inserted else { continue }
+        values.append((entry.name, value))
+    }
+    return values
+}
+
+private func addingKeychainEnvironment(
+    _ values: [(String, String)],
+    keychain: [(name: String, value: String)]
+) -> [(String, String)] {
+    var values = values
+    // First spelling wins: `execve` lookup returns the first match, so
+    // later duplicates would be dead entries that only confuse auditors.
+    var present = Set(values.map(\.0))
+    for entry in keychain {
+        guard !entry.value.contains("\0"), entry.value.utf8.count <= 8_192 else { continue }
+        guard present.insert(entry.name).inserted else { continue }
+        values.append((entry.name, entry.value))
+    }
+    return values
 }
 
 func watchSeatbeltProcess(
@@ -792,6 +910,7 @@ func watchSeatbeltProcess(
         pgid: live.pid,
         also: outcome.recordedPIDs.union([live.pid])
     )
+    if dead { live.resources?.remove() }
     let mounted: MountedSeatbeltOutcome
     if dead == false {
         mounted = MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)

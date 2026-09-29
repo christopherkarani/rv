@@ -44,6 +44,22 @@ import Testing
     #expect(HookHost.allCases.map(\.rawValue).contains("cursor"))
 }
 
+@Test func agentTagValidator_acceptsHostAndStagingOnlyNames() {
+    #expect(AgentTagValidator.isValid("codex"))
+    #expect(AgentTagValidator.isValid("muse"))
+    #expect(AgentTagValidator.isValid("bogus-hook"))
+    #expect(AgentTagValidator.isValid("agent_2.0-x"))
+    #expect(AgentTagValidator.isValid(String(repeating: "a", count: 32)))
+}
+
+@Test func agentTagValidator_rejectsMalformedTags() {
+    #expect(AgentTagValidator.isValid("") == false)
+    #expect(AgentTagValidator.isValid("has space") == false)
+    #expect(AgentTagValidator.isValid("../escape") == false)
+    #expect(AgentTagValidator.isValid("semi;colon") == false)
+    #expect(AgentTagValidator.isValid(String(repeating: "a", count: 33)) == false)
+}
+
 @Test func hookHost_antigravityIsAHookHost() {
     #expect(HookHost(rawValue: "antigravity") == .antigravity)
     #expect(HookHost.allCases.map(\.rawValue).contains("antigravity"))

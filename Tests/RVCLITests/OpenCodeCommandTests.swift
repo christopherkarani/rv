@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import RVIsolation
 import RVTheme
 import Testing
 @testable import RVCLI
@@ -13,6 +14,59 @@ struct OpenCodeCommandTests {
         #expect(HelpDispatch.topic(arguments: ["opencode", "--help"]) != nil)
         #expect(HelpDispatch.topic(arguments: ["opencode", "--", "--help"]) == nil)
         #expect(HelpDispatch.topic(arguments: ["opencode", "run", "--help"]) == nil)
+    }
+
+    @Test func launch_realShellPreservesArgumentsAndDeniesOutsideWrite() async throws {
+        let fixture = try OpenCodeCommandFixture()
+        defer { fixture.remove() }
+        let inside = fixture.workspace.appendingPathComponent("inside")
+        let outside = fixture.root.appendingPathComponent("outside")
+        let script = "printf '%s' \"$1\" > \"$2\"; if printf escape > \"$3\"; then exit 90; fi"
+        let arguments = [
+            "--executable", "/bin/sh", "--workspace", fixture.workspace.path,
+            "--", "-c", script, "sh", "value with --help and spaces", inside.path, outside.path,
+        ]
+
+        #if os(macOS)
+        #expect(try runInstalledOpenCode(arguments) == 0)
+        #else
+        var command = try openCodeCommand(arguments)
+        guard try await launchedOrRefusedOnLinux(&command, absent: [inside, outside]) else { return }
+        #endif
+
+        #expect(try String(contentsOf: inside, encoding: .utf8) == "value with --help and spaces")
+        #expect(FileManager.default.fileExists(atPath: outside.path) == false)
+        #if os(macOS)
+        guard case .live(let endpoint) = WorkspaceHosts.inspect(project: fixture.workspace.path) else {
+            Issue.record("rv opencode must leave a persistent workspace host")
+            return
+        }
+        let client = try WorkspaceClient.connect(endpoint).get()
+        #expect(try client.listRuntimes().get().count == 1)
+        _ = client.detach()
+        #endif
+    }
+
+    @Test func launch_childExitStatusPropagates() async throws {
+        let fixture = try OpenCodeCommandFixture()
+        defer { fixture.remove() }
+        let arguments = [
+            "--executable", "/bin/sh", "--workspace", fixture.workspace.path,
+            "--", "-c", "exit 37",
+        ]
+        #if os(macOS)
+        #expect(try runInstalledOpenCode(arguments) == 37)
+        #else
+        var command = try openCodeCommand(arguments)
+        do {
+            try await command.run()
+            Issue.record("the child exit status must propagate")
+        } catch let error as ExitCode {
+            #expect(error.rawValue == 37)
+        } catch let error as ValidationError {
+            #expect(String(describing: error).contains("contained workspace host is unavailable"))
+        }
+        #endif
     }
 
     @Test func helpDescribesProxiedNetworkNotDeniedNetwork() {
@@ -152,6 +206,23 @@ struct OpenCodeFrontendTests {
         )
         #expect(launched.status == 0)
         let marker = fixture.workspace.appendingPathComponent("marker")
+        let context = CLIProcess.Context(
+            environment: environment,
+            workspacePath: fixture.workspace.path
+        )
+        #if os(macOS)
+        #expect(try runInstalledOpenCode(
+            [],
+            environment: context.environment,
+            currentDirectory: fixture.workspace
+        ) == 0)
+        #else
+        let launched = try await CLIProcess.$context.withValue(context) {
+            var command = try openCodeCommand([])
+            return try await launchedOrRefusedOnLinux(&command, absent: [marker])
+        }
+        guard launched else { return }
+        #endif
         #expect(try String(contentsOf: marker, encoding: .utf8) == "installed")
     }
 
@@ -226,6 +297,100 @@ struct OpenCodeFrontendTests {
 }
 #endif
 
+private func runInstalledOpenCode(
+    _ arguments: [String],
+    environment: [String: String]? = nil,
+    currentDirectory: URL? = nil
+) throws -> Int32 {
+    let repository = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let executable = repository.appendingPathComponent(".build/debug/rv")
+    let host = repository.appendingPathComponent(".build/debug/rv-workspace-host")
+    #expect(FileManager.default.isExecutableFile(atPath: executable.path))
+    #expect(FileManager.default.isExecutableFile(atPath: host.path))
+    let process = Process()
+    process.executableURL = executable
+    process.arguments = ["opencode"] + arguments
+    process.currentDirectoryURL = currentDirectory
+    if var environment {
+        if environment["PWD"] == nil, let currentDirectory {
+            // Model a shell: PWD tracks the cwd. Without this the
+            // inherited runner PWD hijacks workspace resolution.
+            environment["PWD"] = currentDirectory.path
+        }
+        process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+    }
+    let output = Pipe()
+    process.standardOutput = output
+    process.standardError = output
+    try process.run()
+    process.waitUntilExit()
+    return process.terminationStatus
+}
+
+private func launchedOrRefusedOnLinux(
+    _ command: inout any AsyncParsableCommand,
+    absent: [URL]
+) async throws -> Bool {
+    do {
+        try await command.run()
+        #if os(Linux)
+        Issue.record("Linux rv opencode must refuse the contained launch")
+        return false
+        #else
+        return true
+        #endif
+    } catch let status as ExitCode {
+        #if os(Linux)
+        Issue.record("Linux rv opencode must refuse the contained launch: \(status)")
+        return false
+        #else
+        #expect(status.rawValue == 0)
+        return status.rawValue == 0
+        #endif
+    } catch let error as ValidationError {
+        #if os(Linux)
+        #expect(String(describing: error).contains("contained workspace host is unavailable"))
+        for url in absent {
+            #expect(FileManager.default.fileExists(atPath: url.path) == false)
+        }
+        return false
+        #else
+        throw error
+        #endif
+    }
+}
+
+private struct OpenCodeCommandFixture {
+    let root: URL
+    let workspace: URL
+
+    init() throws {
+        // Rooted at the shared system temp, NOT the per-user temp: the
+        // per-user temp dir is sanctioned tool-temp (SwiftBuild backend
+        // tasks fall back to it), so the outside-fence probe must live
+        // where the fence actually holds. `/tmp` exists on macOS and Linux.
+        root = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("rv-opencode-command-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        workspace = root.appendingPathComponent("workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+    }
+
+    func remove() {
+        #if os(macOS)
+        if case .live(let endpoint) = WorkspaceHosts.inspect(project: workspace.path),
+            case .success(let client) = WorkspaceClient.connect(endpoint)
+        {
+            _ = client.closeWorkspace()
+        }
+        #endif
+        try? FileManager.default.removeItem(at: root)
+    }
+}
+
 private func openCodeCommand(_ arguments: [String]) throws -> any AsyncParsableCommand {
     try #require(RV.parseAsRoot(["opencode"] + arguments) as? any AsyncParsableCommand)
 }
@@ -255,6 +420,13 @@ private struct OpenCodeFrontendFixture {
     }
 
     func remove() {
+        #if os(macOS)
+        if case .live(let endpoint) = WorkspaceHosts.inspect(project: workspace.path),
+            case .success(let client) = WorkspaceClient.connect(endpoint)
+        {
+            _ = client.closeWorkspace()
+        }
+        #endif
         if let rv = try? builtRV() {
             let close = Process()
             close.executableURL = rv

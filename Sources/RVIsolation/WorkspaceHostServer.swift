@@ -113,6 +113,8 @@ final class WorkspaceHostServer: Sendable {
     private let hostID: WorkspaceHostID
     private let credential: WorkspaceOwnerCredential
     private let sessionStore: RuntimeSessionStore
+    private let resourcePolicy: RuntimeResourcePolicy
+    private let advertisedFeatures: [String]
     private let admission: RuntimeAdmissionConfiguration
     private let listenFD: Int32
     private let endpointFile: URL
@@ -135,6 +137,8 @@ final class WorkspaceHostServer: Sendable {
         credential: WorkspaceOwnerCredential,
         endpoint: WorkspaceEndpoint,
         sessionStore: RuntimeSessionStore,
+        resourcePolicy: RuntimeResourcePolicy,
+        advertisedFeatures: [String],
         admission: RuntimeAdmissionConfiguration,
         listenFD: Int32,
         endpointFile: URL,
@@ -146,6 +150,8 @@ final class WorkspaceHostServer: Sendable {
         self.credential = credential
         self.endpoint = endpoint
         self.sessionStore = sessionStore
+        self.resourcePolicy = resourcePolicy
+        self.advertisedFeatures = advertisedFeatures
         self.admission = admission
         self.listenFD = listenFD
         self.endpointFile = endpointFile
@@ -157,6 +163,8 @@ final class WorkspaceHostServer: Sendable {
         supervisor: WorkspaceSessionSupervisor,
         configurationDirectory: URL,
         sessionStore: RuntimeSessionStore,
+        resourcePolicy: RuntimeResourcePolicy = .empty,
+        advertisedFeatures: [String]? = nil,
         admission: RuntimeAdmissionConfiguration
     ) -> Result<WorkspaceHostServer, WorkspaceHostFailure> {
         guard let credential = supervisor.ownerCredential() else {
@@ -220,6 +228,13 @@ final class WorkspaceHostServer: Sendable {
             credential: credential,
             endpoint: record.endpoint(),
             sessionStore: sessionStore,
+            resourcePolicy: resourcePolicy,
+            advertisedFeatures: advertisedFeatures ?? [
+                WorkspaceControlFeature.ensureTerminalRuntime,
+                WorkspaceControlFeature.resizeLeaseAuthority,
+                WorkspaceControlFeature.runtimeResourceProfilesV1,
+                WorkspaceControlFeature.terminalReplayBatchesV1,
+            ],
             admission: admission,
             listenFD: listened.0,
             endpointFile: endpointFile,
@@ -429,7 +444,7 @@ final class WorkspaceHostServer: Sendable {
                     operation: op,
                     id: message.id,
                     ok: true,
-                    features: [WorkspaceControlFeature.ensureTerminalRuntime]
+                    features: advertisedFeatures
                 )
             )
         case .ping:
@@ -462,7 +477,8 @@ final class WorkspaceHostServer: Sendable {
                 ),
                 endConnection: true
             )
-        case .workspaceClosed, .terminalReplay, .terminalOutput, .terminalInputOwner,
+        case .workspaceClosed, .terminalReplayBegin, .terminalReplay, .terminalReplayEnd,
+            .terminalOutput, .terminalInputOwner, .terminalWindow,
             .runtimeExited, .terminalOverflow:
             return Reply(message: failure(message, .invalidRequest))
         case .subscribeTerminal:
@@ -476,7 +492,7 @@ final class WorkspaceHostServer: Sendable {
         case .releaseTerminalInput:
             return release(message, connection: connection)
         case .resizeTerminal:
-            return resize(message)
+            return resize(message, connection: connection)
         }
     }
 
@@ -525,6 +541,15 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func ensureTerminalRuntime(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
+        // An explicit profile rides along to creation, where launch()
+        // adjudicates it; the existing-runtime shortcut below stays
+        // ID-agnostic, matching the client's re-attach to the first
+        // terminal runtime. The shortcut is executable-agnostic too, by
+        // design: `ensure` names the workspace's canonical shell terminal
+        // and concurrent callers converge on one runtime. Callers that
+        // need a specific command use `launchRuntime`. A reused runtime
+        // keeps the grants it was created with, which may be fewer than
+        // requested, never more.
         terminalEnsureLock.lock()
         defer { terminalEnsureLock.unlock() }
 
@@ -532,7 +557,7 @@ final class WorkspaceHostServer: Sendable {
         guard phase.acceptsRuntime else {
             return failure(message, workspaceControlCode(.notAcceptingRuntime(phase)))
         }
-        if let rawHook = message.hook, HookHost(rawValue: rawHook) == nil {
+        if let rawHook = message.hook, AgentTagValidator.isValid(rawHook) == false {
             return failure(message, .invalidRequest)
         }
         guard let executable = message.executable, executable.hasPrefix("/"),
@@ -576,14 +601,34 @@ final class WorkspaceHostServer: Sendable {
         guard let executable = message.executable, executable.hasPrefix("/") else {
             return failure(message, .invalidRequest)
         }
+        // Explicit selection only: a missing ID always means the base fence.
+        // The policy's defaultProfile is a UI hint the host never consults.
+        let resourceProfile: RuntimeResourceProfile?
+        if let id = message.resourceProfileID {
+            guard let selected = resourcePolicy.profile(
+                id: id,
+                project: supervisor.snapshot.originalPath.rawValue
+            ) else {
+                return failure(message, .resourceProfileUnavailable)
+            }
+            resourceProfile = selected
+        } else {
+            resourceProfile = nil
+        }
+        // The hook wire carries the launch's agent tag. A tag that names
+        // a HookHost also selects hook protocol participation; any other
+        // well-formed tag is staging-only credential selection.
         let hook: HookHost?
+        let stagingAgent: String?
         if let raw = message.hook {
-            guard let parsed = HookHost(rawValue: raw) else {
+            guard AgentTagValidator.isValid(raw) else {
                 return failure(message, .invalidRequest)
             }
-            hook = parsed
+            hook = HookHost(rawValue: raw)
+            stagingAgent = raw
         } else {
             hook = nil
+            stagingAgent = nil
         }
         guard let command = IsolatedCommand(
             executable: executable,
@@ -601,13 +646,17 @@ final class WorkspaceHostServer: Sendable {
         let plan = compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace)
         switch supervisor.launch(
             host: hook,
+            stagingAgent: stagingAgent,
             command: command,
             plan: plan,
             io: io,
+            resourceProfile: resourceProfile,
             admission: admission,
             sessionStore: sessionStore,
             runningLimit: WorkspaceControlLimits.maxRuntimes
         ) {
+        case .failure(.apply(.resourceStagingFailed(let detail))):
+            return failure(message, .resourceStagingFailed, detail: detail)
         case .failure(let error):
             return failure(message, workspaceControlCode(error))
         case .success(let running):
@@ -655,9 +704,16 @@ final class WorkspaceHostServer: Sendable {
             return Reply(message: failure(message, .invalidRequest))
         }
         let client = connection.id
-        switch supervisor.subscribeTerminal(runtime: runtime, client: client, emit: { notice in
-            connection.send(workspaceTerminalMessage(notice, runtime: runtime))
-        }) {
+        let windowNotices = message.features?.contains(WorkspaceControlFeature.terminalWindowNoticesV1) == true
+        let replayBatches = message.features?.contains(WorkspaceControlFeature.terminalReplayBatchesV1) == true
+        switch supervisor.subscribeTerminal(
+            runtime: runtime, client: client,
+            emit: { notice in
+                connection.send(workspaceTerminalMessage(notice, runtime: runtime))
+            },
+            windowNotices: windowNotices,
+            replayBatches: replayBatches
+        ) {
         case .failure(let code):
             return Reply(message: failure(message, code))
         case .success:
@@ -772,11 +828,14 @@ final class WorkspaceHostServer: Sendable {
         }
     }
 
-    private func resize(_ message: WorkspaceControlRequest) -> Reply {
+    private func resize(
+        _ message: WorkspaceControlRequest,
+        connection: WorkspaceControlConnection
+    ) -> Reply {
         guard let runtime = message.runtime, let rows = message.rows, let columns = message.columns else {
             return Reply(message: failure(message, .invalidRequest))
         }
-        switch supervisor.resizeTerminal(runtime: runtime, rows: rows, columns: columns) {
+        switch supervisor.resizeTerminal(runtime: runtime, client: connection.id, rows: rows, columns: columns) {
         case .failure(let code):
             return Reply(message: failure(message, code))
         case .success:
@@ -843,9 +902,10 @@ final class WorkspaceHostServer: Sendable {
 
     private func failure(
         _ message: WorkspaceControlRequest,
-        _ code: WorkspaceControlCode
+        _ code: WorkspaceControlCode,
+        detail: String? = nil
     ) -> WorkspaceControlResponse {
-        WorkspaceControlResponse.failure(request: message, code: code)
+        WorkspaceControlResponse.failure(request: message, code: code, detail: detail)
     }
 
     private func announceClosed(excluding: UUID?) {
@@ -917,6 +977,15 @@ private func workspaceTerminalMessage(
     runtime: UUID
 ) -> WorkspaceControlResponse {
     switch notice {
+    case .replayBegin(let batch, let truncated, let byteCount):
+        WorkspaceControlResponse(
+            operation: .terminalReplayBegin,
+            runtime: runtime,
+            ok: true,
+            batch: batch,
+            truncated: truncated,
+            replayLength: byteCount
+        )
     case .replay(let sequence, let bytes):
         WorkspaceControlResponse(
             operation: .terminalReplay,
@@ -924,6 +993,13 @@ private func workspaceTerminalMessage(
             ok: true,
             sequence: sequence,
             bytes: TerminalBytesCodec.encode(bytes)
+        )
+    case .replayEnd(let batch):
+        WorkspaceControlResponse(
+            operation: .terminalReplayEnd,
+            runtime: runtime,
+            ok: true,
+            batch: batch
         )
     case .output(let sequence, let bytes):
         WorkspaceControlResponse(
@@ -939,6 +1015,14 @@ private func workspaceTerminalMessage(
             runtime: runtime,
             ok: true,
             inputOwner: owned
+        )
+    case .window(let rows, let columns):
+        WorkspaceControlResponse(
+            operation: .terminalWindow,
+            runtime: runtime,
+            ok: true,
+            rows: rows,
+            columns: columns
         )
     case .exited(let status):
         WorkspaceControlResponse(

@@ -2,20 +2,6 @@ import ArgumentParser
 import Foundation
 import RVDomain
 
-enum OpenCodeLaunchError: Error, Sendable, Equatable {
-    case executableMustBeAbsolute
-    case executableUnavailable
-
-    var message: String {
-        switch self {
-        case .executableMustBeAbsolute:
-            "--executable must be an absolute path without NUL bytes."
-        case .executableUnavailable:
-            "OpenCode executable unavailable; supply --executable or an absolute PATH directory."
-        }
-    }
-}
-
 enum OpenCodeRun {
     /// Compatibility frontend: this command owns no workspace and no
     /// runtime. It resolves the agent executable, attaches to the
@@ -23,6 +9,12 @@ enum OpenCodeRun {
     /// host-owned terminal until the runtime exits.
     static let isolationNotice =
         "rv opencode: runs on the persistent workspace host. Writes stay in the workspace. Reads include that workspace and the system locations needed to start programs. Public HTTPS goes through the RV proxy; direct public and LAN connections are denied. Signals to processes outside the sandbox are denied. On Linux this launch is refused until the kernel backend enforces those limits.\n"
+
+    /// No profile is implicit: without one the host stages no credentials
+    /// and provider auth fails inside the cage. Warn instead of failing so
+    /// keyless runs (local models, `--help`) keep working.
+    static let missingProfileWarning =
+        "rv opencode: no --resource-profile selected; provider credentials are unstaged and agent auth will fail. Pass --resource-profile <id> to stage them.\n"
 
     static func resolveExecutable(
         _ explicit: String?,
@@ -65,6 +57,9 @@ struct OpenCode: AsyncParsableCommand {
     @Option(help: "Project path; default is the current directory.")
     var workspace: String?
 
+    @Option(name: .long, help: "Owner-authorized runtime resource profile ID. No profile is selected by executable name.")
+    var resourceProfile: String?
+
     @Argument(parsing: .captureForPassthrough, help: "Arguments passed unchanged to OpenCode.")
     var agentArguments: [String] = []
 
@@ -72,12 +67,21 @@ struct OpenCode: AsyncParsableCommand {
         guard Task.isCancelled == false else { throw ExitCode(130) }
         let arguments = agentArguments.first == "--" ? Array(agentArguments.dropFirst()) : agentArguments
         FileHandle.standardError.write(Data(OpenCodeRun.isolationNotice.utf8))
-        let path: String
-        switch OpenCodeRun.resolveExecutable(executable, environment: CLIProcess.environment()) {
-        case .success(let resolved):
-            path = resolved
+        let project = workspace ?? CLIProcess.workspacePath()
+        let command: OpenCodePreparedCommand
+        switch OpenCodeRun.prepare(
+            executable: executable,
+            arguments: arguments,
+            workspace: project,
+            environment: CLIProcess.environment()
+        ) {
+        case .success(let prepared):
+            command = prepared
         case .failure(let error):
             throw ValidationError(error.message)
+        }
+        if resourceProfile == nil {
+            FileHandle.standardError.write(Data(OpenCodeRun.missingProfileWarning.utf8))
         }
         #if !os(macOS)
         throw ValidationError("contained workspace host is unavailable")
@@ -88,11 +92,12 @@ struct OpenCode: AsyncParsableCommand {
                 currentDirectory: FileManager.default.currentDirectoryPath,
                 environment: CLIProcess.environment()
             ),
-            executable: path,
-            arguments: arguments,
+            executable: command.executable,
+            arguments: command.arguments,
             hook: .opencode,
             rows: nil,
-            columns: nil
+            columns: nil,
+            resourceProfileID: resourceProfile
         )
         #endif
     }

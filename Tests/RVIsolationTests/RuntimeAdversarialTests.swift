@@ -172,7 +172,7 @@ struct RuntimeAdversarialTests {
             case .backendUnavailable, .backendMismatch, .workspaceMustBeAbsolute,
                 .workspaceDoesNotExist, .workspacePathUnresolvable, .workspacePathUnsafe,
                 .containedGuaranteesUnsupported, .profileNotApplicable, .processSpawnFailed,
-                .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled, .workspaceUnresolved, .workspaceInodeBoundaryFailed:
+                .commandContainsNUL, .commandExecutableMustBeAbsolute, .sessionRecordFailed, .seatbeltNotEstablished, .lifetimeBoundaryFailed, .cancelled, .workspaceUnresolved, .workspaceInodeBoundaryFailed, .resourceStagingFailed:
                 Issue.record("preexisting hardlink must be workspaceContainsInodeAlias, got \(error)")
             }
         }

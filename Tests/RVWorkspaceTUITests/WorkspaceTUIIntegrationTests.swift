@@ -188,18 +188,34 @@ struct WorkspaceTUIIntegrationTests {
     let probe = try WorkspaceClient.connect(host.server.endpoint).get()
     defer { session.close() }
     guard case .failure(.rejected) = session.launch(
-        executable: "/bin/sh", arguments: [], hook: "bogus-hook", rows: 12, columns: 40
+        executable: "/bin/sh", arguments: [], hook: "bogus hook!", rows: 12, columns: 40
     ) else {
-        Issue.record("an unknown hook must fail instead of launching unhooked")
+        Issue.record("a malformed hook tag must fail instead of launching untagged")
         return
     }
     guard case .failure(.rejected) = session.ensureTerminal(
-        executable: "/bin/sh", arguments: [], hook: "bogus-hook", rows: 12, columns: 40
+        executable: "/bin/sh", arguments: [], hook: "bogus hook!", rows: 12, columns: 40,
+        resourceProfileID: nil
     ) else {
-        Issue.record("an unknown hook must fail instead of ensuring unhooked")
+        Issue.record("a malformed hook tag must fail instead of ensuring untagged")
         return
     }
     #expect(try probe.listRuntimes().get().isEmpty)
+}
+
+@Test func stagingOnlyHookTagLaunchesWithoutHookProtocol() throws {
+    let host = try OpenedHost()
+    defer { host.close() }
+    let session = try LiveWorkspaceTUISession.connect(host.server.endpoint).get()
+    defer { session.close() }
+    // "muse" names no HookHost: the tag still travels for credential
+    // staging, but the host records no hook protocol participation.
+    let launched = try session.launch(
+        executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"],
+        hook: "muse", rows: 12, columns: 40
+    ).get()
+    #expect(launched.hook == nil)
+    session.cancel(launched.id)
 }
 
 private func screen(_ model: WorkspaceTUIModel) -> String {

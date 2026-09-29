@@ -391,6 +391,111 @@ struct WorkspaceSessionTests {
         #expect(supervisor.snapshot.phase == .active)
         #expect(savedNames(in: tree.workspaceURL.deletingLastPathComponent().path).count == 1)
     }
+
+    @Test func closeKeepsReadOnlyFilesReadable() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let file = tree.workspaceURL.appendingPathComponent("ro.txt")
+        try Data("frozen".utf8).write(to: file)
+        #expect(chmod(file.path, 0o444) == 0)
+        let opened = try openWorkspace(tree)
+        #expect(succeeded(opened.supervisor.close()))
+        #expect(try String(contentsOf: file, encoding: .utf8) == "frozen")
+        #expect(fileMode(file.path) == 0o444)
+    }
+
+    @Test func closePublishesEditedReadOnlyFile() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let file = tree.workspaceURL.appendingPathComponent("ro.txt")
+        try Data("before".utf8).write(to: file)
+        #expect(chmod(file.path, 0o444) == 0)
+        let opened = try openWorkspace(tree)
+        let volumeFile = tree.workspaceURL.appendingPathComponent("ro.txt")
+        #expect(chmod(volumeFile.path, 0o644) == 0)
+        try Data("after".utf8).write(to: volumeFile)
+        #expect(succeeded(opened.supervisor.close()))
+        #expect(try String(contentsOf: file, encoding: .utf8) == "after")
+        #expect(fileMode(file.path) == 0o644)
+    }
+    @Test func keychainEntryReachesOnlyMatchingAgentRuntime() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let opened = try openWorkspace(tree)
+        defer { _ = opened.supervisor.close() }
+        let supervisor = opened.supervisor
+        let profile = RuntimeResourceProfile(
+            id: "agents", projects: [supervisor.snapshot.originalPath.rawValue],
+            keychain: [.init(
+                service: "synthetic.service", account: "synthetic-account",
+                field: "api_key", env: "RV_SYNTH_KEY", agents: ["muse"]
+            )]
+        )
+        let reader = KeychainReader(read: { _, _ in
+            Data(#"{"api_key":"synthetic-secret"}"#.utf8)
+        })
+        let plan = compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace)
+        _ = try supervisor.launch(
+            host: nil, stagingAgent: "muse",
+            command: shell("printf '%s' \"$RV_SYNTH_KEY\" > muse-key.txt"),
+            plan: plan, io: .discard, resourceProfile: profile,
+            admission: .failClosed, sessionStore: .file(opened.runtimeLog),
+            keychainReader: reader
+        ).get()
+        #expect(waitFor(tree.workspaceURL.appendingPathComponent("muse-key.txt")))
+        #expect(try String(
+            contentsOf: tree.workspaceURL.appendingPathComponent("muse-key.txt"), encoding: .utf8
+        ) == "synthetic-secret")
+        _ = try supervisor.launch(
+            host: .codex,
+            command: shell("printf '%s' \"${RV_SYNTH_KEY-unset}\" > codex-key.txt"),
+            plan: plan, io: .discard, resourceProfile: profile,
+            admission: .failClosed, sessionStore: .file(opened.runtimeLog),
+            keychainReader: reader
+        ).get()
+        #expect(waitFor(tree.workspaceURL.appendingPathComponent("codex-key.txt")))
+        #expect(try String(
+            contentsOf: tree.workspaceURL.appendingPathComponent("codex-key.txt"), encoding: .utf8
+        ) == "unset")
+    }
+
+    @Test func keychainReadFailureFailsLaunchClosed() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let opened = try openWorkspace(tree)
+        defer { _ = opened.supervisor.close() }
+        let supervisor = opened.supervisor
+        let profile = RuntimeResourceProfile(
+            id: "agents", projects: [supervisor.snapshot.originalPath.rawValue],
+            keychain: [.init(
+                service: "synthetic.missing", account: "nobody",
+                env: "RV_SYNTH_KEY", agents: ["muse"]
+            )]
+        )
+        let plan = compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace)
+        let refused = supervisor.launch(
+            host: nil, stagingAgent: "muse",
+            command: try shell("printf no > must-not-spawn.txt"),
+            plan: plan, io: .discard, resourceProfile: profile,
+            admission: .failClosed, sessionStore: .file(opened.runtimeLog),
+            keychainReader: KeychainReader(read: { _, _ in nil })
+        )
+        guard case .failure(.apply(.resourceStagingFailed(let detail))) = refused else {
+            Issue.record("a missing keychain item must fail staging, got \(refused)")
+            return
+        }
+        #expect(detail == "keychain 'RV_SYNTH_KEY'")
+        #expect(FileManager.default.fileExists(
+            atPath: tree.workspaceURL.appendingPathComponent("must-not-spawn.txt").path
+        ) == false)
+    }
+
+}
+
+private func fileMode(_ path: String) -> mode_t? {
+    var status = stat()
+    guard path.withCString({ lstat($0, &status) == 0 }) else { return nil }
+    return status.st_mode & 0o777
 }
 
 private struct OpenedWorkspace {

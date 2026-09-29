@@ -1,5 +1,5 @@
 {
-  "originHash" : "81dd6d32e8028f474de04ff27271c08379dd089adead4d1820c895fc75cdb020",
+  "originHash" : "b6f76f36f000e0d8d5e101abafdf7d9fc893449850bb08fa6bfba26f7c695dc8",
   "pins" : [
     {
       "identity" : "swift-argument-parser",
@@ -8,15 +8,6 @@
       "state" : {
         "revision" : "6a52f3251125d74daf04fcbd5e6f08a75d074382",
         "version" : "1.8.2"
-      }
-    },
-    {
-      "identity" : "swift-asn1",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-asn1.git",
-      "state" : {
-        "revision" : "a9a5efd40eaf558a2bcd48d64b1d1646be686008",
-        "version" : "1.7.1"
       }
     },
     {
@@ -38,21 +29,12 @@
       }
     },
     {
-      "identity" : "swift-crypto",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-crypto",
-      "state" : {
-        "revision" : "47d3869a7291f085c1fb9fb1e6d3b97a793f45c6",
-        "version" : "4.5.1"
-      }
-    },
-    {
       "identity" : "swift-tui",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/SwiftTUI/swift-tui",
+      "location" : "https://github.com/christopherkarani/swift-tui.git",
       "state" : {
-        "revision" : "581c3ab7e2383ce86fcebe36e81041aecac443a5",
-        "version" : "0.14.0"
+        "revision" : "aaa92345d30e281af61389683d9c755b6656e5ce",
+        "version" : "0.14.0-rv1"
       }
     },
     {

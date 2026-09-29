@@ -4,12 +4,20 @@ import Foundation
 ///
 /// This is not `RuntimeSessionID` and not hook `SessionID`. `init()` always
 /// mints a new value. A path, a volume name, or a UUID chosen by an agent
-/// cannot become a workspace id.
+/// cannot create a live workspace or confer authority. `init(rawValue:)`
+/// names a host-issued ID for inventory and layout reconciliation only.
 public struct WorkspaceSessionID: Hashable, Sendable, Equatable {
     public let rawValue: UUID
 
     public init() {
         self.rawValue = UUID()
+    }
+
+    /// Names an identifier already minted by RV, for host inventory or saved
+    /// layout reconciliation. Naming one does not create a workspace or grant
+    /// a capability.
+    public init(rawValue: UUID) {
+        self.rawValue = rawValue
     }
 }
 

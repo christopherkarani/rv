@@ -22,14 +22,25 @@ import Testing
         return
     }
     #expect(WorkspaceControlOp(rawValue: message.op) == nil)
-    let long = String(repeating: "a", count: WorkspaceControlLimits.maxArgumentBytes + 1)
-    let oversizedArgument = Data(
+    let long = String(repeating: "a", count: 2_048)
+    let acceptedArgument = Data(
         """
         {"v":1,"id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","op":"launchRuntime","executable":"/bin/sh","arguments":["\(long)"]}
         """.utf8
     )
-    #expect(oversizedArgument.count <= WorkspaceControlLimits.maxBodyBytes)
-    #expect(WorkspaceControlCodec.decode(oversizedArgument) == .invalid)
+    #expect(acceptedArgument.count <= WorkspaceControlLimits.maxBodyBytes)
+    guard case .message = WorkspaceControlCodec.decode(acceptedArgument) else {
+        Issue.record("a long argument within the per-argument bound should decode")
+        return
+    }
+    let oversized = String(repeating: "a", count: WorkspaceControlLimits.maxArgumentBytes + 1)
+    let oversizedCommand = Data(
+        """
+        {"v":1,"id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","op":"launchRuntime","executable":"/bin/sh","arguments":["\(oversized)"]}
+        """.utf8
+    )
+    #expect(oversizedCommand.count <= WorkspaceControlLimits.maxBodyBytes)
+    #expect(WorkspaceControlCodec.decode(oversizedCommand) == .invalid)
     var header = UInt32(WorkspaceControlLimits.maxBodyBytes + 1).bigEndian
     let declared = Data(bytes: &header, count: 4)
     #expect(WorkspaceControlCodec.headerCount(declared).isFailure)
@@ -98,8 +109,6 @@ struct WorkspaceHostTests {
         defer { opened.close() }
         let first = try WorkspaceClient.connect(opened.server.endpoint).get()
         let second = try WorkspaceClient.connect(opened.server.endpoint).get()
-        #expect(first.supportsEnsureTerminalRuntime)
-        #expect(second.supportsEnsureTerminalRuntime)
         let described = try first.describe().get()
         #expect(described.workspace == opened.supervisor.id.rawValue)
         #expect(described.host == opened.server.endpoint.host)
@@ -545,6 +554,38 @@ struct WorkspaceHostTests {
         }
     }
 
+    @Test func streamingClientMultiplexesOverlappedCalls() throws {
+        let opened = try TestHost()
+        defer { opened.close() }
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = client.detach() }
+        let runtime = try client.launchRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 30"],
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        try client.subscribeTerminal(runtime.runtime).get()
+        // Post-subscribe transacts multiplex replies through ReplyWaiter /
+        // EventBoard instead of the pre-streaming locked RPC path above.
+        let box = OverlapBox()
+        for _ in 0..<8 {
+            box.reset()
+            let thread = Thread {
+                box.finish(client.ping())
+            }
+            thread.start()
+            let primary = client.ping()
+            let deadline = Date().addingTimeInterval(5)
+            while box.secondary == nil, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            #expect(primary.isSuccess)
+            #expect(box.secondary?.isSuccess == true)
+        }
+        #expect(client.cancelRuntime(runtime.runtime).isSuccess)
+    }
+
     @Test func negotiatedFeaturesTreatInvalidRequestAsLegacy() {
         let legacyInvalid: Result<WorkspaceControlMessage, WorkspaceClientFailure> = .failure(.invalidRequest)
         guard case .success(let empty) = WorkspaceClient.negotiatedFeatures(from: legacyInvalid) else {
@@ -554,18 +595,31 @@ struct WorkspaceHostTests {
         #expect(empty.isEmpty)
         let legacyTimeout: Result<WorkspaceControlMessage, WorkspaceClientFailure> = .failure(.timedOut)
         #expect(WorkspaceClient.negotiatedFeatures(from: legacyTimeout).isFailure)
+    }
+
+    @Test func negotiatedFeaturesMapCapabilitiesReplyToFeatures() {
         let reply = WorkspaceControlMessage(
             version: 1,
             id: UUID(),
             op: WorkspaceControlOp.capabilities.rawValue,
             ok: true,
-            features: [WorkspaceControlFeature.ensureTerminalRuntime]
+            features: [
+                WorkspaceControlFeature.ensureTerminalRuntime,
+                WorkspaceControlFeature.resizeLeaseAuthority,
+                WorkspaceControlFeature.runtimeResourceProfilesV1,
+                WorkspaceControlFeature.terminalReplayBatchesV1,
+            ]
         )
         guard case .success(let features) = WorkspaceClient.negotiatedFeatures(from: .success(reply)) else {
             Issue.record("capabilities reply must map to its features")
             return
         }
-        #expect(features == [WorkspaceControlFeature.ensureTerminalRuntime])
+        #expect(features == [
+            WorkspaceControlFeature.ensureTerminalRuntime,
+            WorkspaceControlFeature.resizeLeaseAuthority,
+            WorkspaceControlFeature.runtimeResourceProfilesV1,
+            WorkspaceControlFeature.terminalReplayBatchesV1,
+        ])
         let wrongOp = WorkspaceControlMessage(
             version: 1,
             id: UUID(),
@@ -575,6 +629,137 @@ struct WorkspaceHostTests {
         )
         #expect(WorkspaceClient.negotiatedFeatures(from: .success(wrongOp)).isFailure)
     }
+
+    @Test func legacyHostStaysUsableAndGatesProfilesPerCall() throws {
+        let opened = try TestHost(advertisedFeatures: [WorkspaceControlFeature.ensureTerminalRuntime])
+        defer { opened.close() }
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = client.detach() }
+        // Legacy hosts connect fine; profile-scoped launches fail per call
+        // instead of silently running under the base fence.
+        let gated = client.launchRuntime(
+            executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"],
+            resourceProfileID: "alpha"
+        )
+        #expect(gated.isFailure(.incompatibleProtocol))
+        // Unprofiled launches still work against the old host.
+        let plain = try client.launchRuntime(
+            executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"]
+        ).get()
+        #expect(plain.running)
+        #expect(client.cancelRuntime(plain.runtime).isSuccess)
+    }
+
+    @Test func explicitProfilesKeepSyntheticCredentialsAndSupportDisjoint() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let config = tree.rootURL.appendingPathComponent("config", isDirectory: true)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        let sourceA = tree.rootURL.appendingPathComponent("credential-a")
+        let sourceB = tree.rootURL.appendingPathComponent("credential-b")
+        let supportA = tree.rootURL.appendingPathComponent("support-a")
+        let supportB = tree.rootURL.appendingPathComponent("support-b")
+        for (url, value) in [
+            (sourceA, "synthetic-a"), (sourceB, "synthetic-b"),
+            (supportA, "support-a"), (supportB, "support-b"),
+        ] {
+            try Data(value.utf8).write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        }
+        let directory = try #require(WorkingDirectory(validating: tree.workspaceURL.path))
+        let supervisor = try WorkspaceSessionSupervisor.open(
+            directory, lifecycleLog: .file(config.appendingPathComponent("life.jsonl"))
+        ).get()
+        let canonicalProject = supervisor.snapshot.originalPath.rawValue
+        let policy = RuntimeResourcePolicy(profiles: [
+            RuntimeResourceProfile(
+                id: "alpha", projects: [canonicalProject], readFiles: [supportA.path],
+                credentials: [.init(source: sourceA.path, destination: ".config/auth")]
+            ),
+            RuntimeResourceProfile(
+                id: "beta", projects: [canonicalProject], readFiles: [supportB.path],
+                credentials: [.init(source: sourceB.path, destination: ".config/auth")]
+            ),
+        ])
+        let server = try WorkspaceHostServer.start(
+            supervisor: supervisor, configurationDirectory: config,
+            sessionStore: .file(config.appendingPathComponent("runtime.jsonl")),
+            resourcePolicy: policy,
+        admission: .failClosed
+        ).get()
+        defer { server.stop(); _ = supervisor.close() }
+        let client = try WorkspaceClient.connect(server.endpoint).get()
+
+        let marker = tree.workspaceURL.appendingPathComponent("unapproved-marker")
+        let tooLong = String(repeating: "x", count: WorkspaceControlLimits.maxArgumentBytes + 1)
+        #expect(client.launchRuntime(executable: "/bin/sh", arguments: ["-c", tooLong])
+            .isFailure(.requestTooLarge))
+        let denied = client.launchRuntime(
+            executable: "/bin/sh", arguments: ["-c", "echo bad > unapproved-marker"],
+            resourceProfileID: "missing"
+        )
+        #expect(denied.isFailure(.resourceProfileUnavailable))
+        #expect(FileManager.default.fileExists(atPath: marker.path) == false)
+
+        _ = try client.launchRuntime(
+            executable: "/bin/sh",
+            arguments: [
+                "-c",
+                "cat \"$HOME/.config/auth\" > selected-a; cat \"$1\" > seen-a; "
+                    + "if cat \"$2\" >/dev/null 2>&1; then echo leak > leak-b; fi; "
+                    + "printf '%s' \"$HOME\" > home-a; /bin/sleep 30",
+                "rv", supportA.path, supportB.path,
+            ],
+            resourceProfileID: "alpha"
+        ).get()
+        #expect(waitFor(tree.workspaceURL.appendingPathComponent("home-a")))
+        #expect(try String(contentsOf: tree.workspaceURL.appendingPathComponent("selected-a"), encoding: .utf8)
+            == "synthetic-a")
+        #expect(try String(contentsOf: tree.workspaceURL.appendingPathComponent("seen-a"), encoding: .utf8)
+            == "support-a")
+        #expect(FileManager.default.fileExists(atPath: tree.workspaceURL.appendingPathComponent("leak-b").path) == false)
+
+        _ = try client.launchRuntime(
+            executable: "/bin/sh",
+            arguments: [
+                "-c",
+                "cat \"$HOME/.config/auth\" > selected-b; "
+                    + "if cat \"$(cat home-a)/.config/auth\" >/dev/null 2>&1; then echo leak > leak-a; fi",
+            ],
+            resourceProfileID: "beta"
+        ).get()
+        #expect(waitFor(tree.workspaceURL.appendingPathComponent("selected-b")))
+        #expect(try String(contentsOf: tree.workspaceURL.appendingPathComponent("selected-b"), encoding: .utf8)
+            == "synthetic-b")
+        #expect(FileManager.default.fileExists(atPath: tree.workspaceURL.appendingPathComponent("leak-a").path) == false)
+        #expect(FileManager.default.fileExists(atPath: tree.workspaceURL.appendingPathComponent(".config/auth").path)
+            == false)
+    }
+
+    @Test func hookAndProfileStayOrthogonalAtLaunch() throws {
+        let opened = try TestHost()
+        defer { opened.close() }
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = client.detach() }
+        // A declared hook does not bypass profile enforcement.
+        let refused = client.launchRuntime(
+            executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"],
+            hookHost: .opencode, resourceProfileID: "missing"
+        )
+        #expect(refused.isFailure(.resourceProfileUnavailable))
+        // A declared hook is recorded and echoed back.
+        let hooked = try client.launchRuntime(
+            executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"], hookHost: .codex
+        ).get()
+        #expect(hooked.hook == "codex")
+        #expect(opened.supervisor.runtimeFacts().contains { $0.id == hooked.runtime && $0.hookHost == "codex" })
+        // A hook-less launch stays hook-less: no backfill from behavior.
+        let plain = try client.launchRuntime(
+            executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"]
+        ).get()
+        #expect(plain.hook == nil)
+    }
+
 
     @Test func negotiatedFeaturesAcceptsOnlyTypedCapabilitiesReplies() {
         let reply = WorkspaceControlResponse(
@@ -676,6 +861,148 @@ struct WorkspaceHostTests {
         #expect(try client.listRuntimes().get().filter(\.terminal).count == 1)
         #expect(client.cancelRuntime(created.runtime).isSuccess)
     }
+
+    @Test func ensureTerminalRuntimeIsExecutableAgnosticByContract() throws {
+        // Canonical-shell contract: ensure converges concurrent callers
+        // on one runtime. The executable selects the command only when
+        // creating; a different executable re-attaches, it never forks.
+        let opened = try TestHost()
+        defer { opened.close() }
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = client.detach() }
+        let created = try client.ensureTerminalRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 30"],
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        let reused = try client.ensureTerminalRuntime(
+            executable: "/bin/zsh",
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        #expect(reused.runtime == created.runtime)
+        #expect(reused.created == false)
+        #expect(try client.listRuntimes().get().filter(\.terminal).count == 1)
+        #expect(client.cancelRuntime(created.runtime).isSuccess)
+    }
+    @Test func malformedHookTagIsRefusedClientSideBeforeSpawn() throws {
+        let opened = try TestHost()
+        defer { opened.close() }
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = client.detach() }
+        let factsBefore = opened.supervisor.runtimeFacts().count
+        #expect(client.launchRuntime(
+            executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"], stagingAgent: "not a tag!"
+        ).isFailure(.invalidRequest))
+        #expect(client.ensureTerminalRuntime(
+            executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"],
+            terminalRows: 24, terminalColumns: 80, stagingAgent: "not a tag!"
+        ).isFailure(.invalidRequest))
+        #expect(opened.supervisor.runtimeFacts().count == factsBefore)
+    }
+
+    @Test func stagingOnlyTagStagesFilteredCredentialsWithoutHookRecord() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let config = tree.rootURL.appendingPathComponent("config", isDirectory: true)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        let secret = tree.rootURL.appendingPathComponent("synthetic-muse.auth")
+        try Data("synthetic-muse-secret".utf8).write(to: secret)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: secret.path)
+        let directory = try #require(WorkingDirectory(validating: tree.workspaceURL.path))
+        let supervisor = try WorkspaceSessionSupervisor.open(
+            directory, lifecycleLog: .file(config.appendingPathComponent("life.jsonl"))
+        ).get()
+        let policy = RuntimeResourcePolicy(profiles: [
+            RuntimeResourceProfile(
+                id: "phase04", projects: [supervisor.snapshot.originalPath.rawValue],
+                credentials: [.init(
+                    source: secret.path, destination: ".config/staged.auth", agents: ["muse"]
+                )]
+            ),
+        ])
+        let server = try WorkspaceHostServer.start(
+            supervisor: supervisor, configurationDirectory: config,
+            sessionStore: .file(config.appendingPathComponent("runtime.jsonl")),
+            resourcePolicy: policy,
+        admission: .failClosed
+        ).get()
+        defer { server.stop(); _ = supervisor.close() }
+        let client = try WorkspaceClient.connect(server.endpoint).get()
+        defer { _ = client.detach() }
+        // "muse" names no HookHost: staging-only. The filtered credential
+        // stages, but no hook protocol participation is recorded or echoed.
+        let staged = try client.launchRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "cat \"$HOME/.config/staged.auth\" > proved-muse.txt"],
+            resourceProfileID: "phase04",
+            stagingAgent: "muse"
+        ).get()
+        #expect(staged.hook == nil)
+        #expect(openedHookHost(supervisor, staged.runtime) == nil)
+        // Poll for content, not mere existence: the shell creates the file
+        // before `cat` finishes writing it.
+        #expect(waitUntil(seconds: 20) {
+            (try? String(
+                contentsOf: tree.workspaceURL.appendingPathComponent("proved-muse.txt"), encoding: .utf8
+            )) == "synthetic-muse-secret"
+        })
+        // A known host that does not match the filter stages nothing.
+        _ = try client.launchRuntime(
+            executable: "/bin/sh",
+            arguments: [
+                "-c",
+                "if cat \"$HOME/.config/staged.auth\" >/dev/null 2>&1; then echo leak > leak-codex.txt; fi; "
+                    + "printf launched > launched-codex.txt",
+            ],
+            hookHost: .codex,
+            resourceProfileID: "phase04"
+        ).get()
+        // The marker prints last, so its presence proves the leak branch ran.
+        #expect(waitFor(tree.workspaceURL.appendingPathComponent("launched-codex.txt")))
+        #expect(FileManager.default.fileExists(atPath: tree.workspaceURL.appendingPathComponent("leak-codex.txt").path)
+            == false)
+    }
+
+    @Test func malformedHookTagIsRefusedBeforeSpawn() throws {
+        let opened = try TestHost()
+        defer { opened.close() }
+        let factsBefore = opened.supervisor.runtimeFacts().count
+        let raw = try WorkspaceControlSocket.connect(path: opened.server.endpoint.socketPath, timeout: 2).get()
+        defer { close(raw) }
+        let hello = WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            id: UUID(),
+            op: WorkspaceControlOp.hello.rawValue,
+            token: opened.server.endpoint.ownerToken
+        )
+        let helloBody = try #require(WorkspaceControlCodec.encode(hello))
+        #expect(WorkspaceControlSocket.writeFrame(fd: raw, body: helloBody))
+        _ = try WorkspaceControlSocket.readFrame(fd: raw, timeout: 2).get()
+        let launch = WorkspaceControlMessage(
+            version: WorkspaceControlLimits.version,
+            id: UUID(),
+            op: WorkspaceControlOp.launchRuntime.rawValue,
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 30"],
+            hook: "not a tag!",
+            io: "terminal",
+            rows: 24,
+            columns: 80
+        )
+        let launchBody = try #require(WorkspaceControlCodec.encode(launch))
+        #expect(WorkspaceControlSocket.writeFrame(fd: raw, body: launchBody))
+        let reply = try WorkspaceControlSocket.readFrame(fd: raw, timeout: 10).get()
+        guard case .message(let refused) = WorkspaceControlCodec.decode(reply) else {
+            Issue.record("malformed-hook launch response did not decode")
+            return
+        }
+        #expect(refused.ok != true)
+        #expect(refused.error == WorkspaceControlCode.invalidRequest.rawValue)
+        #expect(opened.supervisor.runtimeFacts().count == factsBefore)
+    }
+
 
     @Test func controlLaunchBounds_fitDeveloperCommands() throws {
         let opened = try TestHost()
@@ -931,7 +1258,7 @@ private struct TestHost {
     var server: WorkspaceHostServer
     var lifeLog: URL
 
-    init() throws {
+    init(advertisedFeatures: [String]? = nil) throws {
         tree = try ContainmentTree()
         let config = tree.rootURL.appendingPathComponent("config", isDirectory: true)
         try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
@@ -943,6 +1270,7 @@ private struct TestHost {
             supervisor: supervisor,
             configurationDirectory: config,
             sessionStore: .file(runtime),
+            advertisedFeatures: advertisedFeatures,
             admission: .failClosed
         ).get()
     }
@@ -970,6 +1298,10 @@ private func waitLive(project: String, configuration: URL, seconds: TimeInterval
 
 private func waitFor(_ url: URL) -> Bool {
     waitUntil(seconds: 20) { FileManager.default.fileExists(atPath: url.path) }
+}
+
+private func openedHookHost(_ supervisor: WorkspaceSessionSupervisor, _ id: UUID) -> String? {
+    supervisor.runtimeFacts().first { $0.id == id }?.hookHost
 }
 
 private func waitUntil(seconds: TimeInterval, _ condition: () -> Bool) -> Bool {

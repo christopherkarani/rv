@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import RVDomain
+import RVPolicy
 
 /// `rvd` is the user-wide hook and policy service. It idle-exits and does not
 /// own a workspace volume, owner lock, or runtime process group. A workspace
@@ -18,6 +19,21 @@ public enum WorkspaceHostProcess {
             complain("workspace host failed")
             return WorkspaceHostExit.failed
         }
+        let resourcePolicy: RuntimeResourcePolicy
+        guard let passwd = getpwuid(getuid()), let homePointer = passwd.pointee.pw_dir else {
+            complain("runtime resource policy home unavailable")
+            return WorkspaceHostExit.failed
+        }
+        let resourceConfiguration = URL(fileURLWithPath: String(cString: homePointer), isDirectory: true)
+            .appendingPathComponent(".config", isDirectory: true)
+            .appendingPathComponent("rv", isDirectory: true)
+        switch RuntimeResourcePolicyStore.load(from: resourceConfiguration) {
+        case .failure:
+            complain("runtime resource policy invalid or unsafe")
+            return WorkspaceHostExit.failed
+        case .success(let loaded):
+            resourcePolicy = loaded
+        }
         let supervisor: WorkspaceSessionSupervisor
         switch WorkspaceSessionSupervisor.open(directory) {
         case .failure(let error):
@@ -30,6 +46,7 @@ public enum WorkspaceHostProcess {
             supervisor: supervisor,
             configurationDirectory: configuration,
             sessionStore: .file(runtime),
+            resourcePolicy: resourcePolicy,
             admission: admission
         ) {
         case .failure:
@@ -133,6 +150,22 @@ public enum WorkspaceHosts {
         return WorkspaceDiscovery.inspect(project: project, configurationDirectory: directory)
     }
 
+    /// Abandon the blocked workspace for this project, if one exists. Refusals
+    /// leave the workspace untouched; only an explicit abandon call runs this.
+    public static func abandon(project: String) -> WorkspaceAbandonOutcome {
+        guard let configuration = WorkspaceHostLocation.configurationDirectory() else {
+            return .refused(.configurationUnavailable)
+        }
+        guard let directory = WorkingDirectory(validating: project) else {
+            return .refused(.unsafeReason(.corrupt))
+        }
+        return WorkspaceRecovery.abandon(
+            directory,
+            lifecycleLog: WorkspaceHostLocation.lifecycleLog(in: configuration),
+            runtimeLog: WorkspaceHostLocation.runtimeLog(in: configuration)
+        )
+    }
+
     /// Starts a host when this project has none, or returns the live endpoint.
     /// A lost creation race attaches to the winner instead of mounting again.
     public static func ensure(
@@ -152,13 +185,14 @@ public enum WorkspaceHosts {
         project: String,
         executable: URL,
         timeout: TimeInterval = 90,
-        homeDirectory: String
+        homeDirectory: String,
+        inspect: (String) -> WorkspaceAttachment = WorkspaceHosts.inspect
     ) -> Result<WorkspaceEndpoint, WorkspaceHostFailure> {
         let deadline = Date().addingTimeInterval(timeout)
         var child: pid_t = -1
         var spawned = false
         while Date() < deadline {
-            switch inspect(project: project) {
+            switch inspect(project) {
             case .live(let endpoint):
                 switch WorkspaceClient.connect(endpoint) {
                 case .success(let client):
@@ -177,6 +211,11 @@ public enum WorkspaceHosts {
                     if usable {
                         return .success(endpoint)
                     }
+                case .failure(.incompatibleProtocol):
+                    // A live owner may still have active PTYs. Replacing it
+                    // would destroy those runtimes, so require a deliberate
+                    // compatible-host restart instead of retrying until timeout.
+                    return .failure(.control(.incompatibleProtocol))
                 case .failure:
                     break
                 }

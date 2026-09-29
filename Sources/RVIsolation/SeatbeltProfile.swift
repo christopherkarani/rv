@@ -118,6 +118,47 @@ public struct SeatbeltProfile: Sendable, Equatable {
         return SeatbeltProfile(source: source + addition, workspacePath: workspacePath)
     }
 
+    /// Explicit, project-scoped resources selected by profile ID. The
+    /// credential originals are deliberately absent: only private copies in
+    /// `privateHome` can be seen by the contained process.
+    func allowingResources(_ resources: RuntimeResourceManifest) -> SeatbeltProfile {
+        var additions = """
+
+        (allow file-read* file-write*
+            (subpath "\(escapeSeatbeltSubpath(resources.privateHome))"))
+        """
+        for link in resources.profile.executableLinks {
+            let target = canonicalResourcePath(link.target)
+            additions += """
+
+            (allow file-read* file-map-executable
+                (literal "\(escapeSeatbeltSubpath(target))"))
+            """
+        }
+        for path in resources.profile.readFiles {
+            additions += """
+
+            (allow file-read* file-map-executable
+                (literal "\(escapeSeatbeltSubpath(canonicalResourcePath(path)))"))
+            """
+        }
+        for path in resources.profile.readTrees {
+            additions += """
+
+            (allow file-read* file-map-executable
+                (subpath "\(escapeSeatbeltSubpath(canonicalResourcePath(path)))"))
+            """
+        }
+        for path in resources.profile.writeTrees {
+            additions += """
+
+            (allow file-read* file-write*
+                (subpath "\(escapeSeatbeltSubpath(canonicalResourcePath(path)))"))
+            """
+        }
+        return SeatbeltProfile(source: source + additions, workspacePath: workspacePath)
+    }
+
     /// Loopback servers. The cage may bind, listen, and accept for local
     /// dev servers and test fixtures; the loopback interface is host-wide,
     /// so a port collision with another workspace or host process fails
@@ -830,6 +871,16 @@ func posixRealpath(_ path: String) -> String? {
         defer { free(buffer) }
         return String(cString: buffer)
     }
+}
+
+private func canonicalResourcePath(_ path: String) -> String {
+    if let resolved = posixRealpath(path) { return resolved }
+    let parent = (path as NSString).deletingLastPathComponent
+    let name = (path as NSString).lastPathComponent
+    if let resolvedParent = posixRealpath(parent) {
+        return "\(resolvedParent)/\(name)"
+    }
+    return path
 }
 
 func compileFirstSliceProfile(

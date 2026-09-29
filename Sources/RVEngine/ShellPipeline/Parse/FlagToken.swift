@@ -9,7 +9,7 @@
 ///
 /// `classify` is purely structural: it never consumes neighboring words.
 /// `ShellPipeline.scanFlags` builds the value-taking scan on top of it.
-public enum FlagToken: Sendable, Hashable, Equatable {
+public enum FlagToken: Sendable, Hashable {
     /// A plain operand. Words after `--` still classify structurally here
     /// only when they carry no dash prefix; consumers split on `.terminator`.
     case positional(String)

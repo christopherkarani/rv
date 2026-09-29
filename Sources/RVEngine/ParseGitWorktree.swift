@@ -356,8 +356,8 @@ func parseClean(_ argv: Argv) -> GitAction? {
 
 // MARK: - `[String]` adapters
 //
-// `AnalyzeGit` and the existing goldens still thread `[String]`; T4 moves
-// the call sites onto `Argv` and deletes these.
+// `AnalyzeGit` and the existing goldens still thread `[String]`; a follow-up
+// moves the call sites onto `Argv` and deletes these.
 
 @available(*, deprecated, message: "Use the Argv overload; T4 deletes this adapter")
 func parseCheckout(_ args: [String]) -> GitAction? {

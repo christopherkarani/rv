@@ -22,3 +22,17 @@ public enum HookHost: String, Codable, Hashable, Sendable, CaseIterable {
         .grok, .pi, .opencode, .claude, .openclaw, .hermes, .codex, .cursor, .antigravity,
     ]
 }
+
+/// Agent-tag validation for the launch hook wire. The wire carries the
+/// launch's agent name: when it names a `HookHost`, hook protocol applies,
+/// otherwise it is staging-only (credential `agents` selection with no
+/// hook participation). The 32-byte cap mirrors the control codec's hook
+/// budget so client-side rejection matches the server exactly.
+public enum AgentTagValidator {
+    public static func isValid(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 32 && value.utf8.allSatisfy {
+            ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122)
+                || ($0 >= 48 && $0 <= 57) || $0 == 45 || $0 == 46 || $0 == 95
+        }
+    }
+}
