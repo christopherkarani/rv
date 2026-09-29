@@ -41,7 +41,7 @@ struct ExplainWrapperSemanticsTests {
 }
 
 private func explain(_ command: String) async throws -> CLIResult {
-    await CommandRun.run(
+    try await CommandRun.run(
         kind: .explain,
         command: command,
         probe: ThemeProbe(

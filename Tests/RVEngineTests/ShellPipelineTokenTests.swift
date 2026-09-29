@@ -9,15 +9,35 @@ import Testing
         expectParity(input)
     }
 
-    @Test func tokenize_specExample() {
+    @Test func tokenize_specExample() throws {
         let tokens = ShellPipeline.tokenize(#"rm -- "a b" 'c"d' --force"#)
         #expect(tokens.map(\.lexeme) == ["rm", "--", "a b", #"c"d"#, "--force"])
         #expect(tokens.map(\.wasQuoted) == [false, false, true, true, false])
         #expect(tokens.allSatisfy { $0.wasAnsiC == false })
 
-        let argv = Argv(tokens: tokens)
-        #expect(argv?.program == "rm")
-        #expect(argv?.args == ["--", "a b", #"c"d"#, "--force"])
+        let argv = try #require(Argv(tokens: tokens))
+        #expect(argv.program == "rm")
+        #expect(argv.args == ["--", "a b", #"c"d"#, "--force"])
+    }
+
+    /// Direct goldens for behaviors the parity corpus only covers indirectly.
+    @Test func tokenize_keyBehaviors() {
+        // ANSI-C keeps the `$` marker in the lexeme; decoding happens downstream.
+        let ansi = ShellPipeline.tokenize("rm $'-rf' /")
+        #expect(ansi.map(\.lexeme) == ["rm", "$-rf", "/"])
+        #expect(ansi.map(\.wasQuoted) == [false, true, false])
+        #expect(ansi.map(\.wasAnsiC) == [false, true, false])
+        // Newline runs collapse to one structural token.
+        #expect(ShellPipeline.tokenize("echo a\n\n\nb").map(\.lexeme) == ["echo", "a", "\n", "b"])
+        // Empty quotes still emit a token.
+        let empty = ShellPipeline.tokenize(#""""#)
+        #expect(empty.count == 1)
+        #expect(empty.first?.lexeme == "")
+        #expect(empty.first?.wasQuoted == true)
+        // Quotes concatenate with adjacent runs.
+        let concat = ShellPipeline.tokenize(#"one""two"#)
+        #expect(concat.map(\.lexeme) == ["onetwo"])
+        #expect(concat.map(\.wasQuoted) == [true])
     }
 }
 
@@ -27,9 +47,10 @@ private func expectParity(
 ) {
     let legacy = tokenizeCommand(input)
     let tokens = ShellPipeline.tokenize(input)
-    #expect(tokens.map(\.lexeme) == legacy.map(\.decoded), sourceLocation: sourceLocation)
-    #expect(tokens.map(\.wasQuoted) == legacy.map(\.wasQuoted), sourceLocation: sourceLocation)
-    #expect(tokens.map(\.wasAnsiC) == legacy.map(\.wasAnsiC), sourceLocation: sourceLocation)
+    let context: Comment = "input: \(input.debugDescription)"
+    #expect(tokens.map(\.lexeme) == legacy.map(\.decoded), context, sourceLocation: sourceLocation)
+    #expect(tokens.map(\.wasQuoted) == legacy.map(\.wasQuoted), context, sourceLocation: sourceLocation)
+    #expect(tokens.map(\.wasAnsiC) == legacy.map(\.wasAnsiC), context, sourceLocation: sourceLocation)
 }
 
 private let parityCorpus: [String] = [
@@ -104,18 +125,21 @@ private let parityCorpus: [String] = [
 
 @Suite struct ShellPipelineVocabularyTests {
     @Test func token_defaultsAndNewline() {
-        #expect(Token(lexeme: "git", wasQuoted: false).wasAnsiC == false)
-        #expect(Token(lexeme: "\n", wasQuoted: false).isNewline)
-        #expect(Token(lexeme: "\n", wasQuoted: true).isNewline == false)
-        #expect(Token(lexeme: "\n", wasQuoted: false, wasAnsiC: true).isNewline == false)
-        #expect(Token(lexeme: "a\nb", wasQuoted: true).isNewline == false)
-        #expect(Token(lexeme: "git", wasQuoted: false).description == "git")
+        #expect(ShellPipeline.Token(lexeme: "git", wasQuoted: false).wasAnsiC == false)
+        #expect(ShellPipeline.Token(lexeme: "\n", wasQuoted: false).isNewline)
+        #expect(ShellPipeline.Token(lexeme: "\n", wasQuoted: true).isNewline == false)
+        #expect(ShellPipeline.Token(lexeme: "\n", wasQuoted: false, wasAnsiC: true).isNewline == false)
+        #expect(ShellPipeline.Token(lexeme: "a\nb", wasQuoted: true).isNewline == false)
+        #expect(ShellPipeline.Token(lexeme: "git", wasQuoted: false).description == "git")
+        #expect(ShellPipeline.Token(lexeme: "x", wasQuoted: false, wasAnsiC: true).wasQuoted)
     }
 
     @Test func token_marksInlineCode() {
-        #expect(Token(lexeme: "$(git status)", wasQuoted: false).containsInlineCode)
-        #expect(Token(lexeme: "`git status`", wasQuoted: false).containsInlineCode)
-        #expect(Token(lexeme: "git status", wasQuoted: false).containsInlineCode == false)
+        #expect(ShellPipeline.Token(lexeme: "$(git status)", wasQuoted: false).containsInlineCode)
+        #expect(ShellPipeline.Token(lexeme: "`git status`", wasQuoted: false).containsInlineCode)
+        #expect(ShellPipeline.Token(lexeme: "git status", wasQuoted: false).containsInlineCode == false)
+        #expect(ShellPipeline.Token(lexeme: "$", wasQuoted: false).containsInlineCode == false)
+        #expect(ShellPipeline.Token(lexeme: "${x}", wasQuoted: false).containsInlineCode == false)
     }
 
     @Test func argv_defaultsAndFullCommand() {
@@ -129,6 +153,8 @@ private let parityCorpus: [String] = [
     @Test func argv_redactionMarks() {
         var argv = Argv(program: "git", args: ["commit", "-m", "oops"])
         #expect(argv.isRedacted(at: 2) == false)
+        #expect(argv.isRedacted(at: 9) == false)
+        #expect(argv.isRedacted(at: -1) == false)
         argv.markRedacted(at: 2)
         #expect(argv.isRedacted(at: 2))
         argv.markRedacted(at: 9)
@@ -139,23 +165,46 @@ private let parityCorpus: [String] = [
         #expect(masked.redacted == [0, 2])
         #expect(argv.redacted == [2])
 
+        // Mutating args prunes marks that no longer index an argument.
+        argv.args = ["commit"]
+        #expect(argv.redacted == [])
+
         #expect(Argv(program: "g", args: ["a"], redacted: [0, 7, -1]).redacted == [0])
     }
 
-    @Test func argv_fromTokens() {
+    @Test func argv_fromTokens() throws {
         #expect(Argv(tokens: []) == nil)
-        #expect(Argv(tokens: [Token(lexeme: "\n", wasQuoted: false)]) == nil)
-        let argv = Argv(tokens: [
-            Token(lexeme: "git", wasQuoted: false),
-            Token(lexeme: "\n", wasQuoted: false),
-            Token(lexeme: "status", wasQuoted: true),
-            // Quoted newline is data, not a separator: it must survive the
-            // structural-newline filter.
-            Token(lexeme: "\n", wasQuoted: true),
-        ])
-        #expect(argv?.program == "git")
-        #expect(argv?.args == ["status", "\n"])
-        #expect(argv?.redacted == [])
+        #expect(Argv(tokens: [ShellPipeline.Token(lexeme: "\n", wasQuoted: false)]) == nil)
+        // Leading newline: no words precede the first separator.
+        #expect(
+            Argv(tokens: [
+                ShellPipeline.Token(lexeme: "\n", wasQuoted: false),
+                ShellPipeline.Token(lexeme: "git", wasQuoted: false),
+            ]) == nil
+        )
+        let argv = try #require(
+            Argv(tokens: [
+                ShellPipeline.Token(lexeme: "git", wasQuoted: false),
+                ShellPipeline.Token(lexeme: "status", wasQuoted: true),
+                // Quoted newline is data, not a separator: it must survive.
+                ShellPipeline.Token(lexeme: "\n", wasQuoted: true),
+            ])
+        )
+        #expect(argv.program == "git")
+        #expect(argv.args == ["status", "\n"])
+        #expect(argv.redacted == [])
+        // Stops at the first structural newline: multi-segment input never
+        // merges into one command.
+        let truncated = try #require(
+            Argv(tokens: [
+                ShellPipeline.Token(lexeme: "echo", wasQuoted: false),
+                ShellPipeline.Token(lexeme: "a", wasQuoted: false),
+                ShellPipeline.Token(lexeme: "\n", wasQuoted: false),
+                ShellPipeline.Token(lexeme: "git", wasQuoted: false),
+            ])
+        )
+        #expect(truncated.program == "echo")
+        #expect(truncated.args == ["a"])
     }
 }
 
@@ -191,14 +240,17 @@ private struct XorShift64: Sendable {
             let lexemes = randomLexemes(rng: &rng)
             let emitted = emit(lexemes: lexemes, rng: &rng, trailingSeparator: true)
             let tokens = ShellPipeline.tokenize(emitted.text)
-            #expect(tokens.map(\.lexeme) == emitted.expected)
+            #expect(tokens.map(\.lexeme) == emitted.expected, "text: \(emitted.text.debugDescription)")
             let requoted = emit(
                 lexemes: tokens.map(\.lexeme),
                 rng: &rng,
                 trailingSeparator: false,
                 newlineSeparators: false
             )
-            #expect(ShellPipeline.tokenize(requoted.text) == tokens)
+            #expect(
+                ShellPipeline.tokenize(requoted.text) == tokens,
+                "requoted: \(requoted.text.debugDescription)"
+            )
         }
     }
 

@@ -420,6 +420,42 @@ struct WorkspaceHostTests {
         #expect(try client.closeWorkspace().get().phase == .closed)
     }
 
+    @Test func rvSpawnedHostDiesOnSIGTERM() throws {
+        let home = try shortDirectory(prefix: "/tmp/rvk")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let workspace = home.appendingPathComponent("ws", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let rvBinary = try builtProduct("rv")
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = home.path
+        let start = Process()
+        start.executableURL = rvBinary
+        start.arguments = ["workspace", "start", "--workspace", workspace.path]
+        start.environment = environment
+        try start.run()
+        start.waitUntilExit()
+        #expect(start.terminationStatus == 0)
+        let config = home.appendingPathComponent(".config/rv", isDirectory: true)
+        let endpoint = try #require(waitLive(project: workspace.path, configuration: config, seconds: 60))
+        // `rv` spawns from a Swift cooperative thread with SIGTERM blocked;
+        // the host resets its own mask so kill-based supervision works.
+        let pid = try #require(try hostPID(commandContaining: "rv-workspace-host --workspace \(workspace.path)"))
+        kill(pid, SIGTERM)
+        #expect(waitUntil(seconds: 10) { kill(pid, 0) != 0 })
+        // Crash recovery still reclaims the workspace on the next start.
+        let restart = Process()
+        restart.executableURL = rvBinary
+        restart.arguments = ["workspace", "start", "--workspace", workspace.path]
+        restart.environment = environment
+        try restart.run()
+        restart.waitUntilExit()
+        #expect(restart.terminationStatus == 0)
+        let recovered = try #require(waitLive(project: workspace.path, configuration: config, seconds: 90))
+        #expect(recovered.workspace != endpoint.workspace)
+        let closing = try WorkspaceClient.connect(recovered).get()
+        #expect(try closing.closeWorkspace().get().phase == .closed)
+    }
+
     @Test func simultaneousCreatorsProduceOneOwner() throws {
         let home = try shortDirectory(prefix: "/tmp/rvr")
         defer { try? FileManager.default.removeItem(at: home) }
@@ -550,10 +586,18 @@ struct WorkspaceHostTests {
         #expect(client.cancelRuntime(runtime.runtime).isSuccess)
     }
 
-    @Test func negotiatedFeaturesRejectHostsWithoutRequiredCapabilities() {
-        #expect(WorkspaceClient.negotiatedFeatures(from: .failure(.invalidRequest))
-            .isFailure(.incompatibleProtocol))
-        #expect(WorkspaceClient.negotiatedFeatures(from: .failure(.timedOut)).isFailure)
+    @Test func negotiatedFeaturesTreatInvalidRequestAsLegacy() {
+        let legacyInvalid: Result<WorkspaceControlMessage, WorkspaceClientFailure> = .failure(.invalidRequest)
+        guard case .success(let empty) = WorkspaceClient.negotiatedFeatures(from: legacyInvalid) else {
+            Issue.record("invalidRequest must map to an empty feature list")
+            return
+        }
+        #expect(empty.isEmpty)
+        let legacyTimeout: Result<WorkspaceControlMessage, WorkspaceClientFailure> = .failure(.timedOut)
+        #expect(WorkspaceClient.negotiatedFeatures(from: legacyTimeout).isFailure)
+    }
+
+    @Test func negotiatedFeaturesMapCapabilitiesReplyToFeatures() {
         let reply = WorkspaceControlMessage(
             version: 1,
             id: UUID(),
@@ -570,7 +614,12 @@ struct WorkspaceHostTests {
             Issue.record("capabilities reply must map to its features")
             return
         }
-        #expect(WorkspaceClient.acceptsHostFeatures(features))
+        #expect(features == [
+            WorkspaceControlFeature.ensureTerminalRuntime,
+            WorkspaceControlFeature.resizeLeaseAuthority,
+            WorkspaceControlFeature.runtimeResourceProfilesV1,
+            WorkspaceControlFeature.terminalReplayBatchesV1,
+        ])
         let wrongOp = WorkspaceControlMessage(
             version: 1,
             id: UUID(),
@@ -581,72 +630,24 @@ struct WorkspaceHostTests {
         #expect(WorkspaceClient.negotiatedFeatures(from: .success(wrongOp)).isFailure)
     }
 
-    @Test func leaseResizeResourcesAndReplayBatchesAreRequiredHostFeatures() {
-        #expect(WorkspaceClient.acceptsHostFeatures([]) == false)
-        #expect(WorkspaceClient.acceptsHostFeatures([WorkspaceControlFeature.ensureTerminalRuntime]) == false)
-        #expect(WorkspaceClient.acceptsHostFeatures([WorkspaceControlFeature.resizeLeaseAuthority]) == false)
-        #expect(WorkspaceClient.acceptsHostFeatures([
-            WorkspaceControlFeature.ensureTerminalRuntime,
-            WorkspaceControlFeature.resizeLeaseAuthority,
-        ]) == false)
-        #expect(WorkspaceClient.acceptsHostFeatures([
-            WorkspaceControlFeature.ensureTerminalRuntime,
-            WorkspaceControlFeature.resizeLeaseAuthority,
-            WorkspaceControlFeature.runtimeResourceProfilesV1,
-        ]) == false)
-        #expect(WorkspaceClient.acceptsHostFeatures([
-            WorkspaceControlFeature.ensureTerminalRuntime,
-            WorkspaceControlFeature.resizeLeaseAuthority,
-            WorkspaceControlFeature.runtimeResourceProfilesV1,
-            WorkspaceControlFeature.terminalReplayBatchesV1,
-        ]))
-    }
-
-    @Test func oldLiveHostRequiresRestartWithoutStoppingItsRuntime() throws {
+    @Test func legacyHostStaysUsableAndGatesProfilesPerCall() throws {
         let opened = try TestHost(advertisedFeatures: [WorkspaceControlFeature.ensureTerminalRuntime])
         defer { opened.close() }
-        let raw = try WorkspaceControlSocket.connect(path: opened.server.endpoint.socketPath, timeout: 2).get()
-        defer { close(raw) }
-        let hello = WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            id: UUID(),
-            op: WorkspaceControlOp.hello.rawValue,
-            token: opened.server.endpoint.ownerToken
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = client.detach() }
+        // Legacy hosts connect fine; profile-scoped launches fail per call
+        // instead of silently running under the base fence.
+        let gated = client.launchRuntime(
+            executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"],
+            resourceProfileID: "alpha"
         )
-        let helloBody = try #require(WorkspaceControlCodec.encode(hello))
-        #expect(WorkspaceControlSocket.writeFrame(fd: raw, body: helloBody))
-        _ = try WorkspaceControlSocket.readFrame(fd: raw, timeout: 2).get()
-        let launch = WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            id: UUID(),
-            op: WorkspaceControlOp.launchRuntime.rawValue,
-            executable: "/bin/sh",
-            arguments: ["-c", "/bin/sleep 30"],
-            io: "terminal",
-            rows: 24,
-            columns: 80
-        )
-        let launchBody = try #require(WorkspaceControlCodec.encode(launch))
-        #expect(WorkspaceControlSocket.writeFrame(fd: raw, body: launchBody))
-        let reply = try WorkspaceControlSocket.readFrame(fd: raw, timeout: 10).get()
-        guard case .message(let launched) = WorkspaceControlCodec.decode(reply) else {
-            Issue.record("legacy host launch response did not decode")
-            return
-        }
-        let runtime = try #require(launched.runtime)
-        #expect(launched.ok == true)
-        #expect(WorkspaceClient.connect(opened.server.endpoint).isFailure(.incompatibleProtocol))
-
-        let ensured = WorkspaceHosts.ensure(
-            project: opened.tree.workspaceURL.path,
-            executable: URL(fileURLWithPath: "/missing-rv-workspace-host"),
-            timeout: 1,
-            homeDirectory: "/not-the-workspace",
-            inspect: { _ in .live(opened.server.endpoint) }
-        )
-        #expect(ensured == .failure(.control(.incompatibleProtocol)))
-        #expect(opened.supervisor.runtimeFacts().contains { $0.id == runtime && $0.running })
-        #expect(opened.supervisor.snapshot.phase == .active)
+        #expect(gated.isFailure(.incompatibleProtocol))
+        // Unprofiled launches still work against the old host.
+        let plain = try client.launchRuntime(
+            executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"]
+        ).get()
+        #expect(plain.running)
+        #expect(client.cancelRuntime(plain.runtime).isSuccess)
     }
 
     @Test func explicitProfilesKeepSyntheticCredentialsAndSupportDisjoint() throws {
@@ -689,11 +690,9 @@ struct WorkspaceHostTests {
         let client = try WorkspaceClient.connect(server.endpoint).get()
 
         let marker = tree.workspaceURL.appendingPathComponent("unapproved-marker")
-        let oversized = client.launchRuntime(
-            executable: "/bin/sh",
-            arguments: [String(repeating: "x", count: WorkspaceControlLimits.maxLaunchCommandBytes)]
-        )
-        #expect(oversized.isFailure(.launchCommandTooLarge))
+        let tooLong = String(repeating: "x", count: WorkspaceControlLimits.maxArgumentBytes + 1)
+        #expect(client.launchRuntime(executable: "/bin/sh", arguments: ["-c", tooLong])
+            .isFailure(.requestTooLarge))
         let denied = client.launchRuntime(
             executable: "/bin/sh", arguments: ["-c", "echo bad > unapproved-marker"],
             resourceProfileID: "missing"
@@ -760,6 +759,107 @@ struct WorkspaceHostTests {
         #expect(plain.hook == nil)
     }
 
+
+    @Test func negotiatedFeaturesAcceptsOnlyTypedCapabilitiesReplies() {
+        let reply = WorkspaceControlResponse(
+            operation: .capabilities,
+            id: UUID(),
+            ok: true,
+            features: [WorkspaceControlFeature.ensureTerminalRuntime]
+        )
+        guard case .success(let features) = WorkspaceClient.negotiatedFeatures(from: .success(reply)) else {
+            Issue.record("typed capabilities reply must map to its features")
+            return
+        }
+        #expect(features == [WorkspaceControlFeature.ensureTerminalRuntime])
+        let failed = WorkspaceControlResponse(
+            operation: .capabilities,
+            id: UUID(),
+            ok: false,
+            error: WorkspaceControlCode.invalidRequest.rawValue
+        )
+        #expect(WorkspaceClient.negotiatedFeatures(from: .success(failed)).isFailure)
+        let unknownOp = WorkspaceControlResponse(
+            WorkspaceControlMessage(
+                version: 1,
+                id: UUID(),
+                op: "killProcess",
+                ok: true,
+                features: [WorkspaceControlFeature.ensureTerminalRuntime]
+            )
+        )
+        #expect(unknownOp.operation == nil)
+        #expect(WorkspaceClient.negotiatedFeatures(from: .success(unknownOp)).isFailure)
+    }
+
+    @Test func unknownOperationReceivesAnInvalidRequestEcho() throws {
+        let opened = try TestHost()
+        defer { opened.close() }
+        let fd = try WorkspaceControlSocket.connect(
+            path: opened.server.endpoint.socketPath,
+            timeout: 2
+        ).get()
+        defer { close(fd) }
+        let hello = try #require(WorkspaceControlCodec.encode(
+            WorkspaceControlMessage(
+                version: 1,
+                id: UUID(),
+                op: WorkspaceControlOp.hello.rawValue,
+                token: opened.server.endpoint.ownerToken
+            )
+        ))
+        #expect(WorkspaceControlSocket.writeFrame(fd: fd, body: hello))
+        let greeting = try WorkspaceControlSocket.readFrame(fd: fd, timeout: 2).get()
+        guard case .message(let welcomed) = WorkspaceControlCodec.decode(greeting),
+            welcomed.ok == true
+        else {
+            Issue.record("raw hello must succeed before the unknown-op probe")
+            return
+        }
+        let probeID = UUID()
+        let probe = Data("{\"v\":1,\"id\":\"\(probeID.uuidString)\",\"op\":\"killProcess\"}".utf8)
+        #expect(WorkspaceControlSocket.writeFrame(fd: fd, body: probe))
+        let raw = try WorkspaceControlSocket.readFrame(fd: fd, timeout: 2).get()
+        guard case .response(let reply) = WorkspaceControlResponse.decode(raw) else {
+            Issue.record("unknown op must receive a typed failure echo")
+            return
+        }
+        #expect(reply.operation == nil)
+        #expect(reply.rawOperation == "killProcess")
+        #expect(reply.id == probeID)
+        #expect(reply.ok == false)
+        #expect(reply.code == .invalidRequest)
+        #expect(opened.supervisor.snapshot.phase == .active)
+        #expect(opened.supervisor.runtimeFacts().isEmpty)
+    }
+
+    @Test func legacyEnsureReusesARunningTerminalAndLaunchesWhenEmpty() throws {
+        let opened = try TestHost()
+        defer { opened.close() }
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = client.detach() }
+        #expect(client.supportsEnsureTerminalRuntime)
+        client.testingSetSupportsEnsureTerminalRuntime(false)
+        #expect(client.supportsEnsureTerminalRuntime == false)
+
+        let created = try client.ensureTerminalRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 30"],
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        #expect(created.terminal)
+        #expect(created.running)
+        let reused = try client.ensureTerminalRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 30"],
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        #expect(reused.runtime == created.runtime)
+        #expect(try client.listRuntimes().get().filter(\.terminal).count == 1)
+        #expect(client.cancelRuntime(created.runtime).isSuccess)
+    }
     @Test func malformedHookTagIsRefusedClientSideBeforeSpawn() throws {
         let opened = try TestHost()
         defer { opened.close() }
@@ -876,7 +976,216 @@ struct WorkspaceHostTests {
         #expect(opened.supervisor.runtimeFacts().count == factsBefore)
     }
 
+
+    @Test func controlLaunchBounds_fitDeveloperCommands() throws {
+        let opened = try TestHost()
+        defer { opened.close() }
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = client.detach() }
+        // A 300-byte argument crosses the old 256-byte cliff and must execute.
+        let padding = String(repeating: "#", count: 300)
+        let launched = try client.launchRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "printf ok > cliff.txt; : '\(padding)'"]
+        ).get()
+        // The command exits at once; the file proves the 300-byte argument
+        // crossed the protocol and executed.
+        #expect(waitFor(opened.tree.workspaceURL.appendingPathComponent("cliff.txt")))
+        // Oversize launches fail before send with a size error, never as an
+        // opaque host rejection, and the host stays usable afterwards.
+        let tooLong = String(repeating: "a", count: WorkspaceControlLimits.maxArgumentBytes + 1)
+        #expect(
+            client.launchRuntime(executable: "/bin/sh", arguments: ["-c", tooLong])
+                == .failure(.requestTooLarge)
+        )
+        let tooMany = Array(repeating: "x", count: WorkspaceControlLimits.maxArguments + 1)
+        #expect(
+            client.launchRuntime(executable: "/bin/sh", arguments: tooMany)
+                == .failure(.requestTooLarge)
+        )
+        let tooBig = Array(
+            repeating: String(
+                repeating: "b",
+                count: WorkspaceControlLimits.maxArgumentBytes
+            ),
+            count: WorkspaceControlLimits.maxArguments
+        )
+        #expect(
+            client.launchRuntime(executable: "/bin/sh", arguments: tooBig)
+                == .failure(.requestTooLarge)
+        )
+        #expect(try client.describe().get().phase == .active)
+        #expect(try client.listRuntimes().get().contains { $0.runtime == launched.runtime })
+    }
+
+    @Test func hostBinaryRunsTheProductionAdmission() throws {
+        let home = try shortDirectory(prefix: "/tmp/rva")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let workspace = home.appendingPathComponent("ws", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let speaker = try compileAdmissionSpeaker(in: workspace)
+        let hostBinary = try builtProduct("rv-workspace-host")
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = home.path
+        let host = Process()
+        host.executableURL = hostBinary
+        host.arguments = ["--workspace", workspace.path]
+        host.environment = environment
+        host.standardInput = FileHandle.nullDevice
+        host.standardOutput = FileHandle.nullDevice
+        host.standardError = FileHandle.nullDevice
+        try host.run()
+        defer { terminate(host.processIdentifier) }
+        let config = home.appendingPathComponent(".config/rv", isDirectory: true)
+        let endpoint = try #require(waitLive(project: workspace.path, configuration: config, seconds: 90))
+        let client = try WorkspaceClient.connect(endpoint).get()
+        let reply = workspace.appendingPathComponent("admission-reply")
+        let marker = workspace.appendingPathComponent("admitted-marker")
+        let launched = try client.launchRuntime(
+            executable: speaker.path,
+            arguments: [reply.path],
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        #expect(launched.terminal)
+        _ = try client.subscribeTerminal(launched.runtime).get()
+        #expect(drainTerminal(client, seconds: 60) == 0)
+        // The live production normalize allowed the in-repo touch and the
+        // contained executor performed it. A failClosed host would answer
+        // evaluationFailed and create nothing.
+        let text = try String(contentsOf: reply, encoding: .utf8)
+        #expect(text.contains("\"status\":\"executed\""))
+        #expect(FileManager.default.fileExists(atPath: marker.path))
+        #expect(try client.closeWorkspace().get().phase == .closed)
+        host.waitUntilExit()
+    }
 }
+
+private func drainTerminal(_ client: WorkspaceClient, seconds: TimeInterval) -> Int32? {
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline {
+        switch client.nextTerminalEvent(timeout: 0.5) {
+        case .failure:
+            return nil
+        case .success(.waiting):
+            continue
+        case .success(.event(let event)):
+            if case .exited(let status) = event.body {
+                return status
+            }
+        }
+    }
+    return nil
+}
+
+private func compileAdmissionSpeaker(in workspace: URL) throws -> URL {
+    let file = workspace.appendingPathComponent("admission-speaker.c")
+    let binary = workspace.appendingPathComponent("admission-speaker")
+    try Data(admissionSpeakerSource.utf8).write(to: file)
+    let compile = Process()
+    compile.executableURL = URL(fileURLWithPath: "/usr/bin/clang")
+    compile.arguments = ["-O2", "-o", binary.path, file.path]
+    compile.standardOutput = FileHandle.nullDevice
+    compile.standardError = FileHandle.nullDevice
+    try compile.run()
+    compile.waitUntilExit()
+    try #require(compile.terminationStatus == 0)
+    return binary
+}
+
+/// One deterministic exchange: read the grant, ask for an in-repo touch,
+/// write the raw response to argv[1]. No replay probes and no live network.
+private let admissionSpeakerSource = #"""
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+static int read_full(int fd, void *buffer, size_t count) {
+    unsigned char *bytes = buffer;
+    size_t got = 0;
+    while (got < count) {
+        ssize_t n = read(fd, bytes + got, count - got);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return -1;
+        got += (size_t)n;
+    }
+    return 0;
+}
+
+static int write_full(int fd, const void *buffer, size_t count) {
+    const unsigned char *bytes = buffer;
+    size_t sent = 0;
+    while (sent < count) {
+        ssize_t n = write(fd, bytes + sent, count - sent);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return -1;
+        sent += (size_t)n;
+    }
+    return 0;
+}
+
+static int read_frame(int fd, char *body, size_t cap) {
+    unsigned char header[4];
+    if (read_full(fd, header, 4) != 0) return -1;
+    size_t length = ((size_t)header[0] << 24) | ((size_t)header[1] << 16)
+        | ((size_t)header[2] << 8) | (size_t)header[3];
+    if (length == 0 || length + 1 > cap) return -1;
+    if (read_full(fd, body, length) != 0) return -1;
+    body[length] = 0;
+    return (int)length;
+}
+
+static int write_frame(int fd, const char *body) {
+    size_t length = strlen(body);
+    unsigned char header[4] = {
+        (unsigned char)((length >> 24) & 0xff),
+        (unsigned char)((length >> 16) & 0xff),
+        (unsigned char)((length >> 8) & 0xff),
+        (unsigned char)(length & 0xff),
+    };
+    if (write_full(fd, header, 4) != 0) return -1;
+    return write_full(fd, body, length);
+}
+
+static int extract(const char *json, const char *key, char *out, size_t cap) {
+    char pattern[64];
+    snprintf(pattern, sizeof pattern, "\"%s\":\"", key);
+    const char *found = strstr(json, pattern);
+    if (found == NULL) return -1;
+    found += strlen(pattern);
+    size_t used = 0;
+    while (found[used] != 0 && found[used] != '"' && used + 1 < cap) {
+        out[used] = found[used];
+        used++;
+    }
+    if (found[used] != '"') return -1;
+    out[used] = 0;
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 2;
+    char grant[8192];
+    if (read_frame(5, grant, sizeof grant) < 0) return 3;
+    char capability[80];
+    char session[80];
+    if (extract(grant, "capability", capability, sizeof capability) != 0) return 4;
+    if (extract(grant, "session", session, sizeof session) != 0) return 4;
+    FILE *reply = fopen(argv[1], "w");
+    if (reply == NULL) return 5;
+    char body[1024];
+    snprintf(body, sizeof body,
+        "{\"v\":1,\"id\":\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\",\"capability\":\"%s\",\"session\":\"%s\",\"command\":\"touch admitted-marker\"}",
+        capability, session);
+    if (write_frame(4, body) != 0) return 6;
+    char incoming[8192];
+    if (read_frame(5, incoming, sizeof incoming) < 0) return 7;
+    if (fprintf(reply, "%s\n", incoming) < 0) return 8;
+    fclose(reply);
+    return 0;
+}
+"""#
 
 private final class WatchBox: Sendable {
     private let box = Mutex<Result<WorkspaceDescription, WorkspaceClientFailure>?>(nil)
@@ -934,7 +1243,8 @@ private struct TestHost {
             supervisor: supervisor,
             configurationDirectory: config,
             sessionStore: .file(runtime),
-            advertisedFeatures: advertisedFeatures
+            advertisedFeatures: advertisedFeatures,
+            admission: .failClosed
         ).get()
     }
 
@@ -1014,6 +1324,22 @@ private func terminate(_ pid: pid_t) {
     kill(pid, SIGKILL)
     var status: Int32 = 0
     _ = waitpid(pid, &status, WNOHANG)
+}
+
+private func hostPID(commandContaining pattern: String) throws -> pid_t? {
+    let pgrep = Process()
+    pgrep.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+    pgrep.arguments = ["-f", pattern]
+    let out = Pipe()
+    pgrep.standardOutput = out
+    pgrep.standardError = FileHandle.nullDevice
+    try pgrep.run()
+    pgrep.waitUntilExit()
+    let text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    let pids = text.split(separator: "\n").compactMap {
+        pid_t($0.trimmingCharacters(in: .whitespaces))
+    }
+    return pids.count == 1 ? pids[0] : nil
 }
 
 private func writeAll(fd: Int32, data: Data) -> Bool {

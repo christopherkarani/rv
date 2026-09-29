@@ -57,7 +57,7 @@ enum HelpCatalog {
                 HelpRow(name: "packs", description: "List and enable or disable packs"),
                 HelpRow(name: "policy", description: "Show, draft, or share typed rules"),
                 HelpRow(name: "allowlist", description: "Permanent user-layer exceptions"),
-                HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor)"),
+                HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor / Antigravity)"),
                 HelpRow(name: "uninstall", description: "Remove rv-owned hooks, config, and LaunchAgent"),
             ]),
         ],
@@ -101,7 +101,7 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Isolation", rows: [
                 HelpRow(name: "files", description: "Workspace read and write, plus the system locations needed to start programs. Children inherit those rules"),
-                HelpRow(name: "limits", description: "Network is denied. Signals outside the sandbox are denied. Linux refuses launch until it can enforce the same limits"),
+                HelpRow(name: "limits", description: "Public HTTPS through the RV proxy; loopback allowed. Direct public, LAN, and metadata connections denied, as are Unix-socket connections to host sockets. Signals outside the sandbox are denied. Linux refuses launch until it can enforce the same limits"),
                 HelpRow(name: "failure", description: "Sandbox initialization failure stops execution; no unrestricted fallback"),
             ]),
         ],
@@ -216,7 +216,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv hook [--host <host>]"),
             ]),
             HelpSection(heading: "Flags", rows: [
-                HelpRow(name: "--host <host>", description: "Host codec: grok (default), pi, opencode, claude, openclaw, hermes, codex, cursor"),
+                HelpRow(name: "--host <host>", description: "Host codec: grok (default), pi, opencode, claude, openclaw, hermes, codex, cursor, antigravity"),
             ]),
         ]
     )

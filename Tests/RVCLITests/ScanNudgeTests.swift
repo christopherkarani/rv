@@ -113,7 +113,7 @@ private func runPiScan(home: ScanHome) throws -> ScanRunResult {
         let result = try runPiScan(home: home)
         #expect(result.report.findings.isEmpty == false)
 
-        let outcome = ScanRun.render(
+        let outcome = try ScanRun.render(
             report: result.report,
             showCommand: false,
             failOnFindings: false,
@@ -130,7 +130,7 @@ private func runPiScan(home: ScanHome) throws -> ScanRunResult {
         let result = try runPiScan(home: home)
         #expect(result.report.findings.isEmpty == false)
 
-        let outcome = ScanRun.render(
+        let outcome = try ScanRun.render(
             report: result.report,
             showCommand: false,
             failOnFindings: true,
@@ -159,7 +159,7 @@ private func runPiScan(home: ScanHome) throws -> ScanRunResult {
         )
         #expect(result.report.findings.isEmpty)
 
-        let outcome = ScanRun.render(
+        let outcome = try ScanRun.render(
             report: result.report,
             showCommand: false,
             failOnFindings: true,
@@ -185,7 +185,7 @@ private func runPiScan(home: ScanHome) throws -> ScanRunResult {
         #expect(nudge)
         #expect(result.report.eventsExtracted > 0)
 
-        let outcome = ScanRun.render(
+        let outcome = try ScanRun.render(
             report: result.report,
             showCommand: false,
             setupNudgeRecommended: nudge,
@@ -222,7 +222,7 @@ private func runPiScan(home: ScanHome) throws -> ScanRunResult {
         )
         #expect(nudge == false)
 
-        let outcome = ScanRun.render(
+        let outcome = try ScanRun.render(
             report: result.report,
             showCommand: false,
             setupNudgeRecommended: nudge,
@@ -295,7 +295,7 @@ private func runPiScan(home: ScanHome) throws -> ScanRunResult {
     try withTempScanHome { home, _ in
         let result = try ScanRun.execute(.fixture(home: home))
         let off = try JSONSerialization.jsonObject(
-            with: Data(renderScanSessionsRobot(
+            with: Data(try renderScanSessionsRobot(
                 from: result.report,
                 showCommand: false,
                 setupNudge: false
@@ -303,7 +303,7 @@ private func runPiScan(home: ScanHome) throws -> ScanRunResult {
         ) as? [String: Any]
         #expect(off?["setup_nudge"] as? Bool == false)
         let on = try JSONSerialization.jsonObject(
-            with: Data(renderScanSessionsRobot(
+            with: Data(try renderScanSessionsRobot(
                 from: result.report,
                 showCommand: false,
                 setupNudge: true

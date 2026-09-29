@@ -24,8 +24,13 @@ enum OpenCodeLaunchError: Error, Sendable, Equatable {
 }
 
 enum OpenCodeRun {
+    /// Compatibility frontend: this command owns no workspace and no
+    /// runtime. It resolves the agent executable, attaches to the
+    /// persistent workspace host for the project, and streams one
+    /// host-owned terminal until the runtime exits.
     static let isolationNotice =
-        "rv opencode: launching through the persistent workspace host; sandbox access follows workspace host policy.\n"
+        "rv opencode: runs on the persistent workspace host. Writes stay in the workspace. Reads include that workspace and the system locations needed to start programs. Public HTTPS goes through the RV proxy; direct public and LAN connections are denied. Signals to processes outside the sandbox are denied. On Linux this launch is refused until the kernel backend enforces those limits.\n"
+
     /// No profile is implicit: without one the host stages no credentials
     /// and provider auth fails inside the cage. Warn instead of failing so
     /// keyless runs (local models, `--help`) keep working.
@@ -54,7 +59,7 @@ enum OpenCodeRun {
         }
     }
 
-    private static func resolveExecutable(
+    static func resolveExecutable(
         _ explicit: String?,
         environment: [String: String]
     ) -> Result<String, OpenCodeLaunchError> {
@@ -86,13 +91,13 @@ enum OpenCodeRun {
 struct OpenCode: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "opencode",
-        abstract: "Launch OpenCode inside a workspace-scoped sandbox."
+        abstract: "Launch OpenCode on the persistent workspace host."
     )
 
     @Option(help: "Absolute OpenCode executable; otherwise search absolute PATH directories.")
     var executable: String?
 
-    @Option(help: "Absolute writable workspace (default: current directory).")
+    @Option(help: "Project path; default is the current directory.")
     var workspace: String?
 
     @Option(name: .long, help: "Owner-authorized runtime resource profile ID. No profile is selected by executable name.")
@@ -107,6 +112,7 @@ struct OpenCode: AsyncParsableCommand {
     func run() throws {
         guard Task.isCancelled == false else { throw ExitCode(130) }
         let arguments = agentArguments.first == "--" ? Array(agentArguments.dropFirst()) : agentArguments
+        FileHandle.standardError.write(Data(OpenCodeRun.isolationNotice.utf8))
         let project = workspace ?? CLIProcess.workspacePath()
         let command: IsolatedCommand
         switch OpenCodeRun.prepare(
@@ -120,17 +126,25 @@ struct OpenCode: AsyncParsableCommand {
         case .failure(let error):
             throw ValidationError(error.message)
         }
-        FileHandle.standardError.write(Data(OpenCodeRun.isolationNotice.utf8))
         if resourceProfile == nil {
             FileHandle.standardError.write(Data(OpenCodeRun.missingProfileWarning.utf8))
         }
-        try WorkspaceCommandRun.run(
-            project,
+        #if !os(macOS)
+        throw ValidationError("contained workspace host is unavailable")
+        #else
+        try WorkspaceCommandRun.runInteractive(
+            project: WorkspaceCommandRun.requireProject(
+                workspace,
+                currentDirectory: FileManager.default.currentDirectoryPath,
+                environment: CLIProcess.environment()
+            ),
+            executable: command.executable,
+            arguments: command.arguments,
+            hook: hook,
             rows: nil,
             columns: nil,
-            command: [command.executable] + command.arguments,
-            resourceProfileID: resourceProfile,
-            hook: hook
+            resourceProfileID: resourceProfile
         )
+        #endif
     }
 }

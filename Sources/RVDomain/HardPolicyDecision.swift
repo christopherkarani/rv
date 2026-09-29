@@ -1,6 +1,6 @@
 /// Closed evaluation zone. Carried on `ActionPolicyExplanation` so two runs
 /// can compare zone + rule + reason without a full explain pipeline.
-public enum ActionPolicyZone: String, Sendable, Equatable, Codable {
+package enum ActionPolicyZone: String, Sendable, Equatable, Codable {
     case hardAllow
     case mandatoryHuman
     case hardDeny
@@ -16,7 +16,7 @@ public enum HardPolicyDecision: Sendable, Equatable, Codable {
     /// that wins when the review is missing, weak, or conflicting.
     case reviewEligible(fallback: Deny)
 
-    public var zone: ActionPolicyZone {
+    package var zone: ActionPolicyZone {
         switch self {
         case .hardAllow:
             return .hardAllow
@@ -65,8 +65,8 @@ public enum BoundReview: Sendable, Equatable {
 
 /// Pure bind of hard policy to a review `Result`. Callers await the reviewer
 /// outside Domain; provider identity never enters this type.
-public enum ReviewBind: Sendable {
-    public static func apply(
+package enum ReviewBind: Sendable {
+    package static func apply(
         hardDecision: HardPolicyDecision,
         review: Result<ActionReview, ActionReviewerError>
     ) -> BoundReview {

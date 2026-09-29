@@ -11,14 +11,15 @@ import Testing
     #expect(HookHost.hermes.rawValue == "hermes")
     #expect(HookHost.codex.rawValue == "codex")
     #expect(HookHost.cursor.rawValue == "cursor")
+    #expect(HookHost.antigravity.rawValue == "antigravity")
 }
 
 @Test func hookHost_allCasesAreDeclarationOrder() {
-    #expect(HookHost.allCases.map(\.rawValue) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex", "cursor"])
+    #expect(HookHost.allCases.map(\.rawValue) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex", "cursor", "antigravity"])
 }
 
 @Test func hookHost_setupSlotOrderIncludesOpenClawHermesCodexAndCursor() {
-    #expect(HookHost.setupSlotOrder.map(\.rawValue) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex", "cursor"])
+    #expect(HookHost.setupSlotOrder.map(\.rawValue) == ["grok", "pi", "opencode", "claude", "openclaw", "hermes", "codex", "cursor", "antigravity"])
 }
 
 @Test func hookHost_codableIsJSONString() throws {
@@ -57,4 +58,9 @@ import Testing
     #expect(AgentTagValidator.isValid("../escape") == false)
     #expect(AgentTagValidator.isValid("semi;colon") == false)
     #expect(AgentTagValidator.isValid(String(repeating: "a", count: 33)) == false)
+}
+
+@Test func hookHost_antigravityIsAHookHost() {
+    #expect(HookHost(rawValue: "antigravity") == .antigravity)
+    #expect(HookHost.allCases.map(\.rawValue).contains("antigravity"))
 }

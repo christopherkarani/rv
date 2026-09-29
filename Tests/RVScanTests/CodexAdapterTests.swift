@@ -67,6 +67,16 @@ import RVDomain
     #expect(events.map { $0.workingDirectory?.rawValue } == ["/tmp"])
 }
 
+@Test func codexAdapter_payloadOnlySessionBeatsFilenameFallback() throws {
+    let payload = """
+    {"payload":{"session_id":"sess_nested_only","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status"}}}
+    """
+    let url = URL(fileURLWithPath: "/tmp/rollout-fallback.jsonl")
+    let events = try CodexStoreAdapter().extract(fileURL: url, data: Data(payload.utf8))
+    #expect(events.map(\.command.rawValue) == ["git status"])
+    #expect(events.allSatisfy { $0.sessionID == SessionID(validating: "sess_nested_only") })
+}
+
 @Test func codexAdapter_emptyOrUnreadableThrows() throws {
     let adapter = CodexStoreAdapter()
     let source = URL(fileURLWithPath: "/tmp/codex-unreadable.jsonl")

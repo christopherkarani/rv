@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import Synchronization
 import Testing
 @testable import RVIsolation
 #if canImport(Darwin)
@@ -165,16 +166,65 @@ struct ExecutorLifecycleRegressionTests {
     }
 
     #if os(macOS)
-    @Test func cancellingAHelperDoesNotWaitForItToExit() async throws {
-        let task = Task { cancellableHelperProbe() }
-        try await Task.sleep(nanoseconds: 200_000_000)
-        task.cancel()
+    @Test func cancellingAHelperDoesNotWaitForItToExit() throws {
+        // Off the cooperative pool: the assertion is helper
+        // responsiveness, not executor scheduling under suite load. A
+        // `Task`-based probe starves when every pool thread is blocked,
+        // which measures the runner, not the helper.
+        let box = HelperCancelBox()
+        let thread = Thread {
+            let flag = CooperativeLaunchStop.Flag()
+            CooperativeLaunchStop.install(flag)
+            box.publishFlag(flag)
+            box.finish(status: cancellableHelperProbe())
+        }
+        thread.start()
+        let deadline = Date().addingTimeInterval(30)
+        var flag: CooperativeLaunchStop.Flag?
+        while flag == nil, Date() < deadline {
+            flag = box.flag()
+            if flag == nil { usleep(10_000) }
+        }
+        let installed = try #require(flag)
+        Thread.sleep(forTimeInterval: 0.2)
+        installed.cancel()
         let cancelledAt = Date()
-        let status = await task.value
+        var status: Int32?
+        while status == nil, Date() < deadline {
+            status = box.status()
+            if status == nil { usleep(10_000) }
+        }
         #expect(Date().timeIntervalSince(cancelledAt) < 3)
-        #expect(status < 0)
+        #expect((try #require(status)) < 0)
     }
     #endif
+}
+
+/// Off-pool cancellation probe state for
+/// `cancellingAHelperDoesNotWaitForItToExit`.
+private final class HelperCancelBox: Sendable {
+    private let state = Mutex<HelperCancelState>(HelperCancelState())
+
+    func publishFlag(_ flag: CooperativeLaunchStop.Flag) {
+        state.withLock { $0.flag = flag }
+    }
+
+    func finish(status: Int32) {
+        state.withLock { $0.status = status }
+    }
+
+    func flag() -> CooperativeLaunchStop.Flag? {
+        state.withLock { $0.flag }
+    }
+
+    func status() -> Int32? {
+        state.withLock { $0.status }
+    }
+}
+
+private struct HelperCancelState: Sendable {
+    var flag: CooperativeLaunchStop.Flag?
+    var status: Int32?
 }
 
 private enum ExecutorLifecycleFixtureError: Error {

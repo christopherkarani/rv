@@ -254,6 +254,34 @@ enum WorkspaceCommandRun {
             throw ValidationError("hook must be an agent tag of 1-32 letters, digits, '-', '.', or '_'")
         }
         let project = try requireProject(raw)
+        try runInteractive(
+            project: project,
+            executable: executable,
+            arguments: arguments,
+            hook: hook,
+            rows: rows,
+            columns: columns,
+            resourceProfileID: resourceProfileID
+        )
+        #endif
+    }
+
+    /// One interactive launch path for every agent frontend. `workspace run`
+    /// and the `rv opencode` compatibility command both arrive here, so PTY
+    /// ownership, the terminal bridge, resize, and exit propagation cannot
+    /// drift between entrypoints.
+    static func runInteractive(
+        project: String,
+        executable: String,
+        arguments: [String],
+        hook: String?,
+        rows: Int?,
+        columns: Int?,
+        resourceProfileID: String? = nil
+    ) throws {
+        #if !os(macOS)
+        throw ValidationError("contained workspace host is unavailable")
+        #else
         let endpoint = try requireEndpoint(
             WorkspaceHosts.ensure(project: project, executable: try hostBinary())
         )
@@ -528,6 +556,8 @@ enum WorkspaceCommandRun {
         case .disconnected: "workspace host disconnected"
         case .malformed: "workspace host rejected the request"
         case .queueOverloaded: "workspace host client queue is overloaded"
+        case .requestTooLarge:
+            "command exceeds the workspace control limit (\(WorkspaceControlLimits.maxArguments) arguments, \(WorkspaceControlLimits.maxArgumentBytes) bytes each, \(WorkspaceControlLimits.maxBodyBytes) bytes total)"
         case .timedOut: "workspace host timed out"
         case .incompatibleProtocol: "incompatible workspace protocol; close the workspace and retry (rv workspace close)"
         case .unauthorizedClient: "unauthorized workspace client"
@@ -535,7 +565,6 @@ enum WorkspaceCommandRun {
         case .workspaceClosed: "workspace is closed"
         case .runtimeNotFound: "runtime not found"
         case .invalidRequest: "invalid workspace request"
-        case .launchCommandTooLarge: "runtime command exceeds the launch size limit"
         case .resourceProfileUnavailable: "runtime resource profile is unavailable"
         case .resourceStagingFailed(let detail): "runtime resource staging failed: \(detail) is unusable"
         case .recoveryRequired: "workspace recovery is required"

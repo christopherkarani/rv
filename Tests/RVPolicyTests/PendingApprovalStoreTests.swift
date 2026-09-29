@@ -293,6 +293,33 @@ struct PendingApprovalStoreTests {
         #expect(store.baseDirectory == RVPolicyPaths.configDirectory(home: home))
     }
 
+    @Test func saveFailureSurfacesAsEncodeFailed() async throws {
+        let root = try isolatedDirectory()
+        // Directory at the JSONL path: rename(2) onto a directory fails, so
+        // save throws ioFailed and the store surfaces domain encodeFailed.
+        try FileManager.default.createDirectory(
+            at: RVPolicyPaths.pendingApprovalsFile(inConfigDir: root),
+            withIntermediateDirectories: false
+        )
+        let store = PendingApprovalStore(baseDirectory: root)
+        await #expect(throws: PendingApprovalError.encodeFailed) {
+            _ = try await store.create(Self.request(id: "io-1"), now: Self.now)
+        }
+    }
+
+    @Test func lockSetupFailureSurfacesAsEncodeFailed() async throws {
+        // File blocking the config dir path: withLock prepareDirectory fails
+        // with ioFailed before the body runs, and the store surfaces domain
+        // encodeFailed.
+        let occupied = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-pending-occupied-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: occupied.path, contents: Data())
+        let store = PendingApprovalStore(baseDirectory: occupied)
+        await #expect(throws: PendingApprovalError.encodeFailed) {
+            _ = try await store.create(Self.request(id: "lock-setup-1"), now: Self.now)
+        }
+    }
+
     @Test func corruptJSONLLineIsSkipped() async throws {
         let root = try isolatedDirectory()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

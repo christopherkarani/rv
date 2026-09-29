@@ -24,11 +24,11 @@ public enum HTTPEgressFailure: Error, Sendable, Equatable {
     case opened(HTTPOpenFailure)
 }
 
-public struct HTTPResponseHeader: Sendable, Equatable, Codable {
-    public var name: String
-    public var value: String
+package struct HTTPResponseHeader: Sendable, Equatable, Codable {
+    package var name: String
+    package var value: String
 
-    public init(name: String, value: String) {
+    package init(name: String, value: String) {
         self.name = name
         self.value = value
     }
@@ -38,10 +38,10 @@ public struct HTTPResponseHeader: Sendable, Equatable, Codable {
 public struct HTTPExecutionReceipt: Sendable, Equatable, Codable {
     public var status: Int
     public var destination: String
-    public var headers: [HTTPResponseHeader]
+    package var headers: [HTTPResponseHeader]
     public var body: Data
 
-    public init(status: Int, destination: String, headers: [HTTPResponseHeader], body: Data) {
+    package init(status: Int, destination: String, headers: [HTTPResponseHeader], body: Data) {
         self.status = status
         self.destination = destination
         self.headers = headers

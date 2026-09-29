@@ -281,7 +281,8 @@ private struct PTYWorkspaceHost {
         server = try WorkspaceHostServer.start(
             supervisor: supervisor,
             configurationDirectory: config,
-            sessionStore: .file(runtime)
+            sessionStore: .file(runtime),
+            admission: .failClosed
         ).get()
     }
 

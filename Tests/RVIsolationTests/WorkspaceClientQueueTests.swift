@@ -33,13 +33,13 @@ struct WorkspaceClientQueueTests {
 
         let first = try Self.next(board)
         #expect(first.runtime == flooding)
-        #expect(first.op == WorkspaceControlOp.terminalOverflow.rawValue)
+        #expect(first.operation == .terminalOverflow)
         let second = try Self.next(board)
         #expect(second.runtime == alsoFlooding)
-        #expect(second.op == WorkspaceControlOp.terminalOverflow.rawValue)
+        #expect(second.operation == .terminalOverflow)
         let third = try Self.next(board)
         #expect(third.runtime == healthy)
-        #expect(third.op == WorkspaceControlOp.terminalOutput.rawValue)
+        #expect(third.operation == .terminalOutput)
         #expect(try board.next(timeout: 0).get() == nil)
     }
 
@@ -81,7 +81,7 @@ struct WorkspaceClientQueueTests {
             let frame = try Self.next(board)
             #expect(frame.runtime == runtime)
             #expect(frame.sequence == Int64(sequence))
-            #expect(frame.op == WorkspaceControlOp.terminalOutput.rawValue)
+            #expect(frame.operation == .terminalOutput)
         }
         #expect(try board.next(timeout: 0).get() == nil)
     }
@@ -103,11 +103,11 @@ struct WorkspaceClientQueueTests {
         #expect(begin.truncated == true)
         #expect(begin.replayLength == 3)
         #expect(try Self.next(board).runtime == other)
-        #expect(try Self.next(board).op == WorkspaceControlOp.terminalReplay.rawValue)
+        #expect(try Self.next(board).operation == .terminalReplay)
         let end = try Self.next(board)
-        #expect(end.op == WorkspaceControlOp.terminalReplayEnd.rawValue)
+        #expect(end.operation == .terminalReplayEnd)
         #expect(end.batch == batch)
-        #expect(try Self.next(board).op == WorkspaceControlOp.terminalOutput.rawValue)
+        #expect(try Self.next(board).operation == .terminalOutput)
     }
 
     @Test func overflowDiscardsQueuedReplayMetadataUntilResubscribe() throws {
@@ -126,8 +126,8 @@ struct WorkspaceClientQueueTests {
         #expect(board.deliver(Self.replayBegin(runtime, batch: UUID(), truncated: false, byteCount: 0)))
         #expect(board.deliver(Self.replayEnd(runtime, batch: UUID())))
         let notices = [try Self.next(board), try Self.next(board)]
-        #expect(notices.contains { $0.runtime == runtime && $0.op == WorkspaceControlOp.terminalOverflow.rawValue })
-        #expect(notices.contains { $0.runtime == healthy && $0.op == WorkspaceControlOp.terminalOutput.rawValue })
+        #expect(notices.contains { $0.runtime == runtime && $0.operation == .terminalOverflow })
+        #expect(notices.contains { $0.runtime == healthy && $0.operation == .terminalOutput })
         #expect(try board.next(timeout: 0).get() == nil)
 
         board.resetRuntime(runtime)
@@ -151,12 +151,12 @@ struct WorkspaceClientQueueTests {
         // backlog is untouched and fresh output is admitted again.
         board.clearOverflowed(runtime)
         #expect(board.deliver(Self.output(runtime, sequence: 100, count: 3)))
-        var ops: [String] = []
+        var ops: [WorkspaceControlOp?] = []
         while let message = try board.next(timeout: 0).get() {
-            ops.append(message.op)
+            ops.append(message.operation)
         }
-        #expect(ops.contains(WorkspaceControlOp.terminalOverflow.rawValue))
-        #expect(ops.filter { $0 == WorkspaceControlOp.terminalOutput.rawValue }.count == 2)
+        #expect(ops.contains(.terminalOverflow))
+        #expect(ops.filter { $0 == .terminalOutput }.count == 2)
     }
 
     @Test func mismatchedReplayBoundaryOverflowsOnlyItsRuntime() throws {
@@ -172,8 +172,19 @@ struct WorkspaceClientQueueTests {
         #expect(board.hasOverflowNotice(for: runtime))
         #expect(board.queuedTerminalBytes(for: runtime) == 0)
         let notices = [try Self.next(board), try Self.next(board)]
-        #expect(notices.contains { $0.runtime == runtime && $0.op == WorkspaceControlOp.terminalOverflow.rawValue })
-        #expect(notices.contains { $0.runtime == healthy && $0.op == WorkspaceControlOp.terminalOutput.rawValue })
+        #expect(notices.contains { $0.runtime == runtime && $0.operation == .terminalOverflow })
+        #expect(notices.contains { $0.runtime == healthy && $0.operation == .terminalOutput })
+        #expect(try board.next(timeout: 0).get() == nil)
+    }
+
+    @Test func unframedReplayIsAdmittedForLegacyHosts() throws {
+        let board = EventBoard()
+        board.supportsReplayBatches = false
+        let runtime = UUID()
+        #expect(board.deliver(Self.replay(runtime, sequence: 1, count: 3)))
+        let frame = try Self.next(board)
+        #expect(frame.runtime == runtime)
+        #expect(frame.operation == .terminalReplay)
         #expect(try board.next(timeout: 0).get() == nil)
     }
 
@@ -230,7 +241,7 @@ struct WorkspaceClientQueueTests {
         #expect(try Self.next(board).runtime == flooding)
         let firstNew = try Self.next(board)
         #expect(firstNew.runtime == newcomer)
-        #expect(firstNew.op == WorkspaceControlOp.terminalOutput.rawValue)
+        #expect(firstNew.operation == .terminalOutput)
     }
 
     @Test func firstOutputSurvivesAnAggregateByteCapFilledByOtherRuntimes() throws {
@@ -258,9 +269,8 @@ struct WorkspaceClientQueueTests {
         }
         #expect(board.deliver(Self.output(exiting, sequence: 1, count: 2)))
         #expect(board.deliver(
-            WorkspaceControlMessage(
-                version: WorkspaceControlLimits.version,
-                op: WorkspaceControlOp.runtimeExited.rawValue,
+            WorkspaceControlResponse(
+                operation: .runtimeExited,
                 runtime: exiting,
                 exitStatus: 7
             )
@@ -272,7 +282,7 @@ struct WorkspaceClientQueueTests {
         #expect(finalOutput.sequence == 1)
         let exit = try Self.next(board)
         #expect(exit.runtime == exiting)
-        #expect(exit.op == WorkspaceControlOp.runtimeExited.rawValue)
+        #expect(exit.operation == .runtimeExited)
         #expect(exit.exitStatus == 7)
     }
 
@@ -301,20 +311,18 @@ struct WorkspaceClientQueueTests {
         #expect(try Self.next(board).runtime == other)
     }
 
-    private static func output(_ runtime: UUID, sequence: Int64, count: Int) -> WorkspaceControlMessage {
-        WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            op: WorkspaceControlOp.terminalOutput.rawValue,
+    private static func output(_ runtime: UUID, sequence: Int64, count: Int) -> WorkspaceControlResponse {
+        WorkspaceControlResponse(
+            operation: .terminalOutput,
             runtime: runtime,
             sequence: sequence,
             bytes: TerminalBytesCodec.encode(Data(repeating: 0x61, count: count))
         )
     }
 
-    private static func owner(_ runtime: UUID) -> WorkspaceControlMessage {
-        WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            op: WorkspaceControlOp.terminalInputOwner.rawValue,
+    private static func owner(_ runtime: UUID) -> WorkspaceControlResponse {
+        WorkspaceControlResponse(
+            operation: .terminalInputOwner,
             runtime: runtime,
             inputOwner: true
         )
@@ -326,16 +334,15 @@ struct WorkspaceClientQueueTests {
         #expect(board.deliver(Self.window(runtime, rows: 24, columns: 80)))
         #expect(board.deliver(Self.window(runtime, rows: 17, columns: 53)))
         let only = try Self.next(board)
-        #expect(only.op == WorkspaceControlOp.terminalWindow.rawValue)
+        #expect(only.operation == .terminalWindow)
         #expect(only.rows == 17)
         #expect(only.columns == 53)
         #expect(try board.next(timeout: 0).get() == nil)
     }
 
-    private static func window(_ runtime: UUID, rows: Int, columns: Int) -> WorkspaceControlMessage {
-        WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            op: WorkspaceControlOp.terminalWindow.rawValue,
+    private static func window(_ runtime: UUID, rows: Int, columns: Int) -> WorkspaceControlResponse {
+        WorkspaceControlResponse(
+            operation: .terminalWindow,
             runtime: runtime,
             rows: rows,
             columns: columns
@@ -347,10 +354,9 @@ struct WorkspaceClientQueueTests {
         batch: UUID,
         truncated: Bool,
         byteCount: Int
-    ) -> WorkspaceControlMessage {
-        WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            op: WorkspaceControlOp.terminalReplayBegin.rawValue,
+    ) -> WorkspaceControlResponse {
+        WorkspaceControlResponse(
+            operation: .terminalReplayBegin,
             runtime: runtime,
             batch: batch,
             truncated: truncated,
@@ -358,26 +364,24 @@ struct WorkspaceClientQueueTests {
         )
     }
 
-    private static func replay(_ runtime: UUID, sequence: Int64, count: Int) -> WorkspaceControlMessage {
-        WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            op: WorkspaceControlOp.terminalReplay.rawValue,
+    private static func replay(_ runtime: UUID, sequence: Int64, count: Int) -> WorkspaceControlResponse {
+        WorkspaceControlResponse(
+            operation: .terminalReplay,
             runtime: runtime,
             sequence: sequence,
             bytes: TerminalBytesCodec.encode(Data(repeating: 0x61, count: count))
         )
     }
 
-    private static func replayEnd(_ runtime: UUID, batch: UUID) -> WorkspaceControlMessage {
-        WorkspaceControlMessage(
-            version: WorkspaceControlLimits.version,
-            op: WorkspaceControlOp.terminalReplayEnd.rawValue,
+    private static func replayEnd(_ runtime: UUID, batch: UUID) -> WorkspaceControlResponse {
+        WorkspaceControlResponse(
+            operation: .terminalReplayEnd,
             runtime: runtime,
             batch: batch
         )
     }
 
-    private static func next(_ board: EventBoard) throws -> WorkspaceControlMessage {
+    private static func next(_ board: EventBoard) throws -> WorkspaceControlResponse {
         let message = try board.next(timeout: 0).get()
         return try #require(message)
     }

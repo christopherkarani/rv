@@ -11,6 +11,19 @@ import RVIsolation
 
 @main
 enum WorkspaceHostMain {
+    #if os(macOS)
+    /// The daemon owns its signal mask. `rv` spawns the host from a Swift
+    /// cooperative thread, where SIGTERM/SIGINT arrive blocked, and
+    /// `posix_spawn` inherits the spawner's mask. Without this reset the
+    /// host ignores SIGTERM despite the default disposition, so kill-based
+    /// supervision and crash recovery never trigger.
+    private static func resetHostSignalMask() {
+        var empty = sigset_t()
+        sigemptyset(&empty)
+        _ = pthread_sigmask(SIG_SETMASK, &empty, nil)
+    }
+    #endif
+
     static func main() {
         #if !os(macOS)
         FileHandle.standardError.write(
@@ -33,9 +46,15 @@ enum WorkspaceHostMain {
         // The creating terminal may close. A client disconnect must not kill the host.
         // SIGTERM and SIGINT keep the default terminate action so the lock drops
         // and the next start recovers.
+        resetHostSignalMask()
         signal(SIGHUP, SIG_IGN)
         signal(SIGPIPE, SIG_IGN)
-        Darwin.exit(WorkspaceHostProcess.run(workspace: arguments[1]))
+        Darwin.exit(
+            WorkspaceHostProcess.run(
+                workspace: arguments[1],
+                admission: HostRuntimeAdmission.configuration()
+            )
+        )
         #endif
     }
 }

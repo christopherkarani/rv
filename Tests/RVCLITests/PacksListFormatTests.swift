@@ -93,7 +93,7 @@ import Testing
             destructivePatternCount: $0.destructivePatternCount
         )
     }
-    let json = RobotDocument.packsList(
+    let json = try RobotDocument.packsList(
         packsRobotPayload(
             rows: rows,
             enabledCount: filtered.enabledCount,

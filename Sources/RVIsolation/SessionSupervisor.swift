@@ -310,6 +310,69 @@ func spawnSeatbeltProcess(
     stagingAgent: String? = nil,
     keychainReader: KeychainReader = .live
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
+    let first = spawnSeatbeltProcessBody(
+        request,
+        workspace: workspace,
+        profile: profile,
+        boundary: boundary,
+        started: started,
+        admission: admission,
+        egressProxyPort: egressProxyPort,
+        host: host,
+        stagingAgent: stagingAgent,
+        keychainReader: keychainReader
+    )
+    guard case .failure(.processSpawnFailed) = first else { return first }
+    if blockingWorkIsCancelled() { return first }
+    // One retry: pipe/fork pressure under parallel load fails a spawn a
+    // few times per suite run, and the next attempt succeeds. The attempt
+    // closes every descriptor it opened, so the retry starts clean, and
+    // deterministic failures fail twice with the same error.
+    usleep(100_000)
+    if blockingWorkIsCancelled() { return first }
+    return spawnSeatbeltProcessBody(
+        request,
+        workspace: workspace,
+        profile: profile,
+        boundary: boundary,
+        started: started,
+        admission: admission,
+        egressProxyPort: egressProxyPort,
+        host: host,
+        stagingAgent: stagingAgent,
+        keychainReader: keychainReader
+    )
+}
+
+/// Map a request-scoped launch fault to the PTY-open stage it fails.
+/// Non-PTY faults fail at their own gates, not here.
+func terminalOpenFault(for fault: RuntimeSpawnFault?) -> TerminalOpenFault? {
+    switch fault {
+    case .openpt:
+        return .master
+    case .grant:
+        return .grant
+    case .unlock:
+        return .unlock
+    case .slave:
+        return .slaveOpen
+    case .spawn, .register, nil:
+        return nil
+    }
+}
+
+func spawnSeatbeltProcessBody(
+    _ request: IsolatedLaunchRequest,
+    workspace: String,
+    profile: SeatbeltProfile,
+    boundary: WorkspaceInodeBoundary,
+    started: RuntimeSession,
+    admission: RuntimeAdmissionConfiguration,
+    egressProxyPort: Int? = nil,
+    host: HookHost? = nil,
+    stagingAgent: String? = nil,
+    keychainReader: KeychainReader = .live
+) -> Result<LiveSeatbeltChild, IsolationApplyError> {
     guard profile.source.contains("(deny file-link)") else {
         return .failure(.seatbeltNotEstablished)
     }
@@ -363,14 +426,16 @@ func spawnSeatbeltProcess(
         terminal = nil
         spawnFlags = Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT) | suspended | signals
     case .pseudoTerminal(let rows, let columns):
-        guard let opened = RuntimeTerminal.open(rows: rows, columns: columns) else {
+        guard
+            let opened = RuntimeTerminal.open(
+                rows: rows,
+                columns: columns,
+                openFault: terminalOpenFault(for: request.spawnFault)
+            )
+        else {
             return .failure(.processSpawnFailed)
         }
         terminal = opened
-        if request.spawnFault == .spawn {
-            opened.shutdownMaster()
-            return .failure(.processSpawnFailed)
-        }
         // SETSID is not combined with SETPGROUP. The recorded process group
         // is the session leader's pid. START_SUSPENDED holds the image until
         // that group is durable.
@@ -499,12 +564,26 @@ func spawnSeatbeltProcess(
             return .failure(.resourceStagingFailed(staging.detail))
         }
     }
+    let agentBin = AgentBin.installedDirectory()
+    let productive =
+        request.productive
+        ?? resolveProductiveWorkspace(
+            workspacePath: workspace,
+            agentBin: agentBin
+        )
+    if case .pseudoTerminal = request.io {
+        // Stage into the RV-managed home; the degraded workspace home
+        // keeps staging working when no managed home exists.
+        stageAgentHomes(cageHome: productive.developerHome?.home ?? workspace)
+    }
     let environment = containedRuntimeEnvironment(
         workspace: workspace,
         io: request.io,
         resources: request.resources,
+        agentBin: agentBin,
         egressProxyPort: egressProxyPort,
-        keychain: keychain
+        keychain: keychain,
+        productive: productive
     )
     let argv = SpawnPointers(arguments)
     let envp = SpawnPointers(environment)
@@ -513,7 +592,9 @@ func spawnSeatbeltProcess(
         envp.release()
     }
 
-    if TerminalTestInjection.failSpawn.withLock({ $0 }) {
+    // Request-scoped: a global flag here would fail parallel sibling
+    // launches that share this process.
+    if request.spawnFault == .spawn {
         return .failure(.processSpawnFailed)
     }
 
@@ -546,7 +627,10 @@ func spawnSeatbeltProcess(
         close(admissionPipes.responseRead)
         admissionPipes.responseRead = -1
     }
-    guard spawnResult == 0, pid > 1 else {
+    // Doubly nested withPointers yields Int??; unwrap both levels
+    // explicitly so inner nil fails closed without relying on
+    // Optional-promoted ==.
+    guard let spawnResult, let spawnStatus = spawnResult, spawnStatus == 0, pid > 1 else {
         return .failure(.processSpawnFailed)
     }
     // The wait loop polls this fd. A blocking read would ignore cancellation
@@ -589,7 +673,9 @@ func spawnSeatbeltProcess(
             ),
             profileSource: profile.source,
             workspacePath: workspace,
-            sessionLeader: pid
+            sessionLeader: pid,
+            egressProxyPort: egressProxyPort,
+            productive: productive
         ),
         requestRead: parentRead,
         responseWrite: parentWrite
@@ -624,66 +710,162 @@ enum ContainedCagePaths {
     static let tmpSubpath = ".rv-cage/tmp"
 }
 
+/// Cage environment for one spawn: the projected host environment plus
+/// runtime-owned values.
+///
+/// The defaults are effectful: a nil host reads the live process
+/// environment, and a nil productive re-resolves the workspace (live
+/// probes plus idempotent `ensure`, and possibly a `git` spawn for
+/// commit-identity seeding). The spawn path passes prepare-time facts
+/// explicitly so each launch resolves once.
 func containedRuntimeEnvironment(
     workspace: String,
     io: IsolatedIO,
     resources: RuntimeResourceManifest? = nil,
     egressProxyPort: Int? = nil,
     hostEnvironment: [String: String]? = nil,
-    keychain: [(name: String, value: String)] = []
+    agentBin: String? = nil,
+    keychain: [(name: String, value: String)] = [],
+    productive: ProductiveWorkspaceResolution? = nil,
+    probe: ContainedPATHProbe = .live
 ) -> [String] {
-    let tmpdir: String
-    if let resources {
-        tmpdir = resources.tmp
-    } else if case .pseudoTerminal = io {
-        tmpdir = "\(workspace)/\(ContainedCagePaths.tmpSubpath)"
-    } else {
-        tmpdir = workspace
-    }
-    var values = [
-        "PATH=\(resources.map { "\($0.bin):" } ?? "")/usr/bin:/bin",
-        "LANG=C",
-        "LC_ALL=C",
-        "HOME=\(resources?.privateHome ?? workspace)",
-        "TMPDIR=\(tmpdir)",
-    ]
-    guard case .pseudoTerminal = io else {
-        return addingKeychainEnvironment(
-            addingResourceEnvironment(values, resources: resources, hostEnvironment: hostEnvironment),
-            keychain: keychain
+    let host = hostEnvironment ?? ProcessInfo.processInfo.environment
+    let context =
+        productive
+        ?? resolveProductiveWorkspace(
+            workspacePath: workspace,
+            hostEnvironment: host,
+            agentBin: agentBin,
+            probe: probe
         )
+    let cageHome = context.developerHome?.home ?? workspace
+    let cageTmp = context.developerHome.map { $0.tmp + "/" } ?? workspace
+    // Projected host context first. Runtime-managed names never appear
+    // here, so the owned values appended below cannot collide.
+    var values = ContainedEnvironmentPolicy.project(host: host)
+    values.append(("PATH", context.pathValue))
+    if values.allSatisfy({ $0.0 != "LANG" }) {
+        values.append(("LANG", "C"))
     }
-    values.append("TERM=\(TerminalStreamLimits.supportedTerm)")
-    // The sandbox cannot see user dotfiles, so interactive shells start
-    // bare. Standard color output only; zsh ignores an inherited PS1, so
-    // the prompt stays its default unless the user creates a
-    // workspace-local .zshrc (HOME is the workspace).
-    values.append("CLICOLOR=1")
+    if values.allSatisfy({ $0.0 != "LC_ALL" }) {
+        values.append(("LC_ALL", "C"))
+    }
+    values.append(("HOME", cageHome))
+    values.append(("TMPDIR", cageTmp))
+    values.append(("TEMP", cageTmp))
+    values.append(("TMP", cageTmp))
+    if let developerHome = context.developerHome {
+        values.append(("XDG_CACHE_HOME", developerHome.cache))
+        values.append(("XDG_CONFIG_HOME", "\(cageHome)/.config"))
+        values.append(("XDG_DATA_HOME", "\(cageHome)/.local/share"))
+        values.append(("XDG_STATE_HOME", "\(cageHome)/.local/state"))
+        // SwiftPM honors this override for manifest and target module
+        // caches. Without it the compiler writes to the confstr user
+        // cache directory, which no sandbox can redirect and which must
+        // stay unshared with the host.
+        values.removeAll { $0.0 == "SWIFTPM_MODULECACHE_OVERRIDE" }
+        values.append(("SWIFTPM_MODULECACHE_OVERRIDE", "\(developerHome.cache)/swift-modulecache"))
+    }
+    values.append(("PWD", workspace))
+    if let candidate = host["SHELL"], isUsableAbsolutePath(candidate),
+        probe.isExecutable(candidate)
+    {
+        values.append(("SHELL", candidate))
+    } else {
+        values.append(("SHELL", "/bin/zsh"))
+    }
+    // One entry per name: the projection may carry host values the runtime
+    // overrides below.
+    values.removeAll { $0.0 == "TERM" || $0.0 == "CLICOLOR" }
+    switch io {
+    case .pseudoTerminal:
+        values.append(("TERM", TerminalStreamLimits.supportedTerm))
+        // The sandbox cannot see user dotfiles, so interactive shells
+        // start bare. Standard color output only; zsh ignores an inherited
+        // PS1, so the prompt stays its default unless the user creates a
+        // cage-home .zshrc.
+        values.append(("CLICOLOR", "1"))
+    case .discard, .inherit:
+        if let term = host["TERM"], term.isEmpty == false,
+            ContainedEnvironmentPolicy.isSaneValue(term)
+        {
+            values.append(("TERM", term))
+        }
+    }
+    if agentBin != nil {
+        // The cage cannot manage host services or rewrite installs, so
+        // agent self-update and service-ensure steps stay off.
+        let owned: Set<String> = [
+            "OCX_SHIM_BYPASS", "MUSE_NO_AUTO_UPDATE", "DISABLE_AUTOUPDATER",
+        ]
+        let compat = Set(AgentHomeStaging.gatewayPassthrough + AgentHomeStaging.apiKeyPassthrough)
+        values.removeAll { owned.contains($0.0) || compat.contains($0.0) }
+        values.append(("OCX_SHIM_BYPASS", "1"))
+        values.append(("MUSE_NO_AUTO_UPDATE", "1"))
+        values.append(("DISABLE_AUTOUPDATER", "1"))
+        // Temporary pre-secret-broker compatibility: re-injected after the
+        // generic policy strip, never widened. The generic runtime does not
+        // depend on these.
+        for name in AgentHomeStaging.gatewayPassthrough + AgentHomeStaging.apiKeyPassthrough {
+            if let value = host[name], value.contains("\0") == false {
+                values.append((name, value))
+            }
+        }
+        if values.allSatisfy({ $0.0 != "ANTHROPIC_API_KEY" }) {
+            values.append(("ANTHROPIC_API_KEY", AgentHomeStaging.anthropicGatewayPlaceholder))
+        }
+    }
     if let port = egressProxyPort, (1...65535).contains(port) {
         let proxy = "http://127.0.0.1:\(port)"
-        values.append("HTTPS_PROXY=\(proxy)")
-        values.append("HTTP_PROXY=\(proxy)")
-        values.append("https_proxy=\(proxy)")
-        values.append("http_proxy=\(proxy)")
+        values.append(("HTTPS_PROXY", proxy))
+        values.append(("HTTP_PROXY", proxy))
+        values.append(("https_proxy", proxy))
+        values.append(("http_proxy", proxy))
         // Loopback bypasses the proxy when the client honors it (the
         // seatbelt rule admits it directly); the proxy also relays
         // loopback absolute-URI requests for clients that do not.
-        values.append("NO_PROXY=localhost,127.0.0.1")
-        values.append("no_proxy=localhost,127.0.0.1")
+        values.append(("NO_PROXY", "localhost,127.0.0.1,::1"))
+        values.append(("no_proxy", "localhost,127.0.0.1,::1"))
     }
     return addingKeychainEnvironment(
-        addingResourceEnvironment(values, resources: resources, hostEnvironment: hostEnvironment),
+        addingResourceEnvironment(
+            values,
+            workspace: workspace,
+            io: io,
+            resources: resources,
+            hostEnvironment: hostEnvironment
+        ),
         keychain: keychain
-    )
+    ).map { "\($0.0)=\($0.1)" }
 }
 
 private func addingResourceEnvironment(
-    _ values: [String],
+    _ values: [(String, String)],
+    workspace: String,
+    io: IsolatedIO,
     resources: RuntimeResourceManifest?,
     hostEnvironment: [String: String]?
-) -> [String] {
+) -> [(String, String)] {
     var values = values
-    var present = environmentNames(values)
+    var present = Set(values.map(\.0))
+    if let resources {
+        values.removeAll { $0.0 == "HOME" || $0.0 == "TMPDIR" || $0.0 == "TEMP" || $0.0 == "TMP" }
+        values.append(("HOME", resources.privateHome))
+        values.append(("TMPDIR", resources.tmp))
+        values.append(("TEMP", resources.tmp))
+        values.append(("TMP", resources.tmp))
+        if let pathIndex = values.firstIndex(where: { $0.0 == "PATH" }) {
+            values[pathIndex].1 = "\(resources.bin):\(values[pathIndex].1)"
+        }
+        present = Set(values.map(\.0))
+    } else if case .pseudoTerminal = io {
+        values.removeAll { $0.0 == "TMPDIR" || $0.0 == "TEMP" || $0.0 == "TMP" }
+        let tmpdir = "\(workspace)/\(ContainedCagePaths.tmpSubpath)"
+        values.append(("TMPDIR", tmpdir))
+        values.append(("TEMP", tmpdir))
+        values.append(("TMP", tmpdir))
+        present = Set(values.map(\.0))
+    }
     let host = hostEnvironment ?? ProcessInfo.processInfo.environment
     for entry in resources?.profile.environment ?? [] {
         let value: String?
@@ -697,30 +879,25 @@ private func addingResourceEnvironment(
         }
         guard let value, !value.contains("\0"), value.utf8.count <= 8_192 else { continue }
         guard present.insert(entry.name).inserted else { continue }
-        values.append("\(entry.name)=\(value)")
+        values.append((entry.name, value))
     }
     return values
 }
 
 private func addingKeychainEnvironment(
-    _ values: [String],
+    _ values: [(String, String)],
     keychain: [(name: String, value: String)]
-) -> [String] {
+) -> [(String, String)] {
     var values = values
-    var present = environmentNames(values)
+    // First spelling wins: `execve` lookup returns the first match, so
+    // later duplicates would be dead entries that only confuse auditors.
+    var present = Set(values.map(\.0))
     for entry in keychain {
         guard !entry.value.contains("\0"), entry.value.utf8.count <= 8_192 else { continue }
         guard present.insert(entry.name).inserted else { continue }
-        values.append("\(entry.name)=\(entry.value)")
+        values.append((entry.name, entry.value))
     }
     return values
-}
-
-/// Names already carried by `NAME=value` entries. First spelling wins:
-/// `execve` lookup returns the first match, so later duplicates would be
-/// dead entries that only confuse auditors.
-private func environmentNames(_ values: [String]) -> Set<String> {
-    Set(values.compactMap { $0.split(separator: "=", maxSplits: 1).first.map(String.init) })
 }
 
 func watchSeatbeltProcess(
@@ -1307,13 +1484,15 @@ private struct SpawnPointers {
         storage.append(nil)
     }
 
+    /// Runs `body` with the vector base pointer. Nil only when the vector is
+    /// empty, which construction forbids (init always appends the terminator).
     func withPointers<T>(
         _ body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> T
-    ) -> T {
+    ) -> T? {
         var values = storage
         return values.withUnsafeMutableBufferPointer { buffer in
             guard let base = buffer.baseAddress else {
-                preconditionFailure("spawn argument vector is empty")
+                return nil
             }
             return body(base)
         }

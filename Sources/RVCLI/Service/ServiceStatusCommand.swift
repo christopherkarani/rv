@@ -40,18 +40,22 @@ public struct ServiceStatusReport: Sendable, Equatable {
 }
 
 public enum ServiceStatusCommand {
-    public static func robotText(_ report: ServiceStatusReport) -> String {
-        RobotDocument.serviceStatus(report).render()
+    /// Robot rendering for a status report. The `.serviceStatus` arm is a
+    /// pure string join and cannot fail today; `throws` is deliberate
+    /// uniformity so every robot render shares one honest path (and one
+    /// public error, `RobotRenderError`) instead of trapping.
+    public static func robotText(_ report: ServiceStatusReport) throws -> String {
+        try RobotDocument.serviceStatus(report).render()
     }
 
     public static func plainText(_ report: ServiceStatusReport) -> String {
         report.plainLines.joined(separator: "\n")
     }
 
-    static func text(_ report: ServiceStatusReport, appearance: CLIAppearance) -> String {
+    static func text(_ report: ServiceStatusReport, appearance: CLIAppearance) throws -> String {
         switch appearance {
         case .robot:
-            return robotText(report)
+            return try robotText(report)
         case .pretty:
             return plainText(report)
         }

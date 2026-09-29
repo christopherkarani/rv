@@ -250,7 +250,8 @@ private struct OpenedHost {
         server = try WorkspaceHostServer.start(
             supervisor: supervisor,
             configurationDirectory: config,
-            sessionStore: .file(config.appendingPathComponent("runtime-sessions.jsonl"))
+            sessionStore: .file(config.appendingPathComponent("runtime-sessions.jsonl")),
+            admission: .failClosed
         ).get()
     }
 

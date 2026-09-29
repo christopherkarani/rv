@@ -54,27 +54,31 @@ enum SecretPathGuard {
     }
 
     private static func candidates(in haystack: String, includeMetadata: Bool) -> [String] {
-        // C1: lex via the shared pipeline, then route on Argv. The Argv is
-        // built manually (not via Argv(tokens:)) so newline lexemes survive:
-        // they are load-bearing operands below, exactly as when the legacy
-        // tokenizeCommand stream carried them. A leading "\n" routes to
-        // `.other` (basename can never equal a head name), and interior
-        // "\n" words count as grep positionals and find path operands.
+        // C1: lex via the shared pipeline, then route on the head word. The
+        // args array is built manually (not via Argv(tokens:)) so newline
+        // lexemes survive: they are load-bearing operands below, exactly as
+        // when the legacy tokenizeCommand stream carried them. A leading "\n"
+        // routes to `.other` (basename can never equal a head name), and
+        // interior "\n" words count as grep positionals and find path operands.
+        // Routing happens first so `.nonPath` and metadata-excluded inputs
+        // return before the args array is materialized.
         let tokens = ShellPipeline.tokenize(haystack)
         guard let head = tokens.first else { return [] }
-        let argv = Argv(program: head.lexeme, args: tokens.dropFirst().map(\.lexeme))
-        switch headKind(basename(argv.program)) {
+        let kind = headKind(basename(head.lexeme))
+        // Deferred so only the consuming arm pays for materialization.
+        func args() -> [String] { tokens.dropFirst().map(\.lexeme) }
+        switch kind {
         case .nonPath:
             return []
         case .grep:
-            return grepCandidates(argv.args)
+            return grepCandidates(args())
         case .find:
-            return findCandidates(argv.args)
+            return findCandidates(args())
         case .metadata:
             guard includeMetadata else { return [] }
-            return otherCandidates(argv.args)
+            return otherCandidates(args())
         case .other:
-            return otherCandidates(argv.args)
+            return otherCandidates(args())
         }
     }
 }
@@ -143,13 +147,21 @@ private func operandFlag(for token: FlagToken) -> OperandFlag? {
             return .ignore
         }
     case .shorts(let letters, _):
-        guard letters.allSatisfy({ $0.isASCII && $0.isLetter }) else {
-            return .ignore
+        // Single pass: legacy required all-ASCII-letters, with `f` winning
+        // over `e` when both cluster together.
+        var sawFile = false
+        var sawRegexp = false
+        for letter in letters {
+            guard letter.isASCII, letter.isLetter else {
+                return .ignore
+            }
+            if letter == "f" { sawFile = true }
+            if letter == "e" { sawRegexp = true }
         }
-        if letters.contains("f") {
+        if sawFile {
             return .file(attached: nil)
         }
-        if letters.contains("e") {
+        if sawRegexp {
             return .regexp(attached: nil)
         }
         return .ignore
@@ -192,7 +204,7 @@ private func grepCandidates(_ words: [String]) -> [String] {
         collected.append(value)
     }
 
-    for (word, token) in zip(words, words.lazy.map(FlagToken.classify)) {
+    for word in words {
         if collected.count >= SecretPathGuard.candidateCap { break }
         if expectRegexp {
             expectRegexp = false
@@ -211,6 +223,9 @@ private func grepCandidates(_ words: [String]) -> [String] {
             add(word)
             continue
         }
+        // Classified lazily so the cap break and the consuming states above
+        // skip the work on long argvs.
+        let token = FlagToken.classify(word)
         if case .terminator = token {
             afterDoubleDash = true
             continue
@@ -251,9 +266,8 @@ private func grepCandidates(_ words: [String]) -> [String] {
 ///
 /// A word starts the predicate section exactly when the legacy test held:
 /// every dash-led word (all non-`.positional` grammar cases) plus the bare
-/// `(`, `!`, and `;` operands. `-name`/`-iname`/`-path`, read via
-/// `singleDashWord` (which matches exactly those three literals), skip their
-/// value, since patterns are not paths.
+/// `(`, `!`, and `;` operands. The `-name`/`-iname`/`-path` literals skip
+/// their value, since patterns are not paths.
 private func findCandidates(_ words: [String]) -> [String] {
     var collected: [String] = []
     var beforePredicate = true
@@ -265,24 +279,26 @@ private func findCandidates(_ words: [String]) -> [String] {
         collected.append(value)
     }
 
-    for token in words.lazy.map(FlagToken.classify) {
+    for word in words {
         if collected.count >= SecretPathGuard.candidateCap { break }
         if skipValue {
             skipValue = false
             continue
         }
-        switch token {
+        // Classified lazily so the cap break skips the work on long argvs.
+        switch FlagToken.classify(word) {
         case .positional("("), .positional("!"), .positional(";"):
             beforePredicate = false
-        case .positional(let word):
-            if beforePredicate, let candidate = operandCandidate(word) {
+        case .positional(let operand):
+            if beforePredicate, let candidate = operandCandidate(operand) {
                 add(candidate)
             }
-        default:
+        case .terminator, .loneDash, .long, .shorts, .shortEquals, .dangling:
             beforePredicate = false
-            if let nameWord = token.singleDashWord,
-                nameWord == "name" || nameWord == "iname" || nameWord == "path"
-            {
+            // Match the raw word: exactly the `-name`/`-iname`/`-path`
+            // literals take a value, and this skips the String(letters)
+            // rebuild `singleDashWord` performs per dash-led word.
+            if word == "-name" || word == "-iname" || word == "-path" {
                 skipValue = true
             }
         }
@@ -290,6 +306,7 @@ private func findCandidates(_ words: [String]) -> [String] {
     return collected
 }
 
+/// Default candidate extraction: every non-flag operand word verbatim.
 private func otherCandidates(_ words: [String]) -> [String] {
     var collected: [String] = []
     for word in words {

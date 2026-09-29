@@ -10,6 +10,7 @@ import RVDomain
 // Parsed `GitAction` output is unchanged, including the dead skip entries
 // (`-m` in restore) that legacy rejects via its cluster-first ordering.
 
+/// Parses `git checkout` argv into branch-create, branch-switch, or worktree-discard.
 func parseCheckout(_ argv: Argv) -> GitAction? {
     var create = false
     var forceCreate = false
@@ -106,6 +107,7 @@ private let checkoutSkipLongs: Set<String> = [
     "ours", "theirs",
 ]
 
+/// Parses `git switch` argv into branch-create or branch-switch.
 func parseSwitch(_ argv: Argv) -> GitAction? {
     var create = false
     var forceCreate = false
@@ -168,6 +170,7 @@ private let switchSkipLongs: Set<String> = [
     "ignore-other-worktrees", "recurse-submodules", "no-recurse-submodules",
 ]
 
+/// Parses `git restore` argv into a restore with destination and source.
 func parseRestore(_ argv: Argv) -> GitAction? {
     var staged = false
     var worktree = false
@@ -239,6 +242,7 @@ private let restoreSkipLongs: Set<String> = [
     "overlay", "no-overlay",
 ]
 
+/// Parses `git reset` argv into a reset (or hard-reset-with-pathspecs discard).
 func parseReset(_ argv: Argv) -> GitAction? {
     var mode: GitResetMode = .mixed
     var sawMode = false
@@ -297,6 +301,7 @@ func parseReset(_ argv: Argv) -> GitAction? {
     return .reset(mode: mode, target: target)
 }
 
+/// Parses `git clean` argv; rejects attached `--exclude=x` and interactive flags.
 func parseClean(_ argv: Argv) -> GitAction? {
     var force = false
     var dryRun = false
@@ -317,7 +322,7 @@ func parseClean(_ argv: Argv) -> GitAction? {
         case .long("exclude", nil):
             pendingExclude = true
         case .shorts(let letters, _):
-            if letters == ["e"] {
+            if letters.count == 1 && letters.first == "e" {
                 pendingExclude = true
             } else {
                 for letter in letters {
@@ -354,22 +359,27 @@ func parseClean(_ argv: Argv) -> GitAction? {
 // `AnalyzeGit` and the existing goldens still thread `[String]`; a follow-up
 // moves the call sites onto `Argv` and deletes these.
 
+@available(*, deprecated, message: "Use the Argv overload; T4 deletes this adapter")
 func parseCheckout(_ args: [String]) -> GitAction? {
     parseCheckout(Argv(program: "git", args: args))
 }
 
+@available(*, deprecated, message: "Use the Argv overload; T4 deletes this adapter")
 func parseSwitch(_ args: [String]) -> GitAction? {
     parseSwitch(Argv(program: "git", args: args))
 }
 
+@available(*, deprecated, message: "Use the Argv overload; T4 deletes this adapter")
 func parseRestore(_ args: [String]) -> GitAction? {
     parseRestore(Argv(program: "git", args: args))
 }
 
+@available(*, deprecated, message: "Use the Argv overload; T4 deletes this adapter")
 func parseReset(_ args: [String]) -> GitAction? {
     parseReset(Argv(program: "git", args: args))
 }
 
+@available(*, deprecated, message: "Use the Argv overload; T4 deletes this adapter")
 func parseClean(_ args: [String]) -> GitAction? {
     parseClean(Argv(program: "git", args: args))
 }

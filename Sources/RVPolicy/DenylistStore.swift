@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVFileStore
 
 public struct DenylistStore: Sendable {
     public var baseDirectory: URL

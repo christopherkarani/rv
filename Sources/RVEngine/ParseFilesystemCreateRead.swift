@@ -1,7 +1,7 @@
 import RVDomain
 
 func parseChmod(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = splitFlagTerminator(ShellPipeline.scanFlags(argv))
+    let (flags, rest) = splitFlagTerminator(argv)
     var recursive = false
     var mode: String?
     var paths: [String] = []
@@ -142,7 +142,7 @@ private let mkdirSkipLong: Set<String> = [
 private let mkdirShorts: Set<Character> = ["p", "v", "m"]
 
 func parseCat(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = splitFlagTerminator(ShellPipeline.scanFlags(argv))
+    let (flags, rest) = splitFlagTerminator(argv)
     var paths: [String] = []
     for event in flags {
         switch event {

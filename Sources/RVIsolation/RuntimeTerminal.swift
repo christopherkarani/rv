@@ -1,22 +1,18 @@
 #if os(macOS)
 import Darwin
 import Foundation
-import Synchronization
 
+/// Test-only PTY-open failure stage. Request-scoped like
+/// `RuntimeSpawnFault`: a global flag would fail parallel sibling opens
+/// that share this process. Production leaves this nil.
 enum TerminalOpenFault: Equatable, Sendable {
     case master
     case grant
+    case unlock
     case slaveName
     case slaveOpen
     case configure
     case stopPipe
-}
-
-/// Test-only launch failures. Production leaves every flag clear.
-enum TerminalTestInjection {
-    static let openFault = Mutex<TerminalOpenFault?>(nil)
-    static let failSpawn = Mutex(false)
-    static let failRegistration = Mutex(false)
 }
 
 /// One notice the single PTY reader fans out. Bytes are unmodified master output.
@@ -105,7 +101,8 @@ final class RuntimeTerminal: @unchecked Sendable {
 
     /// Allocates a PTY, configures termios and the initial window, and keeps
     /// only the master. The slave path is opened again by the child.
-    static func open(rows: Int, columns: Int) -> RuntimeTerminal? {
+    static func open(rows: Int, columns: Int, openFault: TerminalOpenFault? = nil) -> RuntimeTerminal? {
+        func injected(_ fault: TerminalOpenFault) -> Bool { fault == openFault }
         guard TerminalStreamLimits.accepts(rows: rows, columns: columns) else { return nil }
         if injected(.master) { return nil }
         var master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC)
@@ -118,7 +115,15 @@ final class RuntimeTerminal: @unchecked Sendable {
             Darwin.close(master)
             return nil
         }
-        guard grantpt(master) == 0, unlockpt(master) == 0 else {
+        guard grantpt(master) == 0 else {
+            Darwin.close(master)
+            return nil
+        }
+        if injected(.unlock) {
+            Darwin.close(master)
+            return nil
+        }
+        guard unlockpt(master) == 0 else {
             Darwin.close(master)
             return nil
         }
@@ -358,7 +363,8 @@ final class RuntimeTerminal: @unchecked Sendable {
     func subscribe(
         client: UUID,
         emit: @escaping @Sendable (TerminalNotice) -> Bool,
-        windowNotices: Bool = false
+        windowNotices: Bool = false,
+        replayBatches: Bool = true
     ) -> Result<Void, TerminalControlError> {
         condition.lock()
         if flushing.contains(client) {
@@ -373,7 +379,7 @@ final class RuntimeTerminal: @unchecked Sendable {
             condition.unlock()
             return .failure(.limit)
         }
-        let subscriber = Subscriber(id: client, emit: emit, windowNotices: windowNotices)
+        let subscriber = Subscriber(id: client, emit: emit, windowNotices: windowNotices, replayBatches: replayBatches)
         subscriber.replayTruncated = replayTruncated
         for chunk in replay.chunks {
             subscriber.chunks.append(.replay(sequence: chunk.sequence, bytes: chunk.bytes))
@@ -696,7 +702,9 @@ final class RuntimeTerminal: @unchecked Sendable {
             // is being emitted without falsely overflowing at the 64 KiB
             // replay boundary.
             subscriber.queuedBytes = 0
-            if subscriber.primed == false {
+            // Older subscribers fail closed on unknown stream ops: frame the
+            // replay only for clients that opted in via subscribe features.
+            if subscriber.primed == false, subscriber.replayBatches {
                 let replayCount = batch.prefix { notice in
                     if case .replay = notice { return true }
                     return false
@@ -830,10 +838,6 @@ final class RuntimeTerminal: @unchecked Sendable {
         }
     }
 
-    private static func injected(_ fault: TerminalOpenFault) -> Bool {
-        TerminalTestInjection.openFault.withLock { $0 == fault }
-    }
-
     private static func setControlCharacter(_ term: inout termios, _ index: Int32, _ value: UInt8) {
         withUnsafeMutableBytes(of: &term.c_cc) { raw in
             let offset = Int(index)
@@ -874,6 +878,7 @@ private final class Subscriber: @unchecked Sendable {
     let id: UUID
     let emit: @Sendable (TerminalNotice) -> Bool
     let windowNotices: Bool
+    let replayBatches: Bool
     var chunks: [TerminalNotice] = []
     var queuedBytes = 0
     var replayBatch = UUID()
@@ -883,10 +888,11 @@ private final class Subscriber: @unchecked Sendable {
     var dropped = false
     var stopped = false
 
-    init(id: UUID, emit: @escaping @Sendable (TerminalNotice) -> Bool, windowNotices: Bool = false) {
+    init(id: UUID, emit: @escaping @Sendable (TerminalNotice) -> Bool, windowNotices: Bool = false, replayBatches: Bool = true) {
         self.id = id
         self.emit = emit
         self.windowNotices = windowNotices
+        self.replayBatches = replayBatches
     }
 }
 #endif

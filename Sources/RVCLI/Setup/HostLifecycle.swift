@@ -31,6 +31,7 @@ enum HostLifecycle {
             hermes: .skipped,
             codex: .skipped,
             cursor: .skipped,
+            antigravity: .skipped,
             wrote: []
         )
 
@@ -82,6 +83,7 @@ enum HostLifecycle {
             hermes: slots.hermes,
             codex: slots.codex,
             cursor: slots.cursor,
+            antigravity: slots.antigravity,
             wrote: slots.wrote
         )
         env.installAnalytics.captureInstall(hosts: InstallAnalyticsHosts.from(report.slots))
@@ -215,6 +217,14 @@ enum HostLifecycle {
                 if try SetupRun.stripClaudeFingerprintLeavingOccupied(at: path, files: files) {
                     enacted.changed = true
                 }
+            case .removeAntigravityRVHooks(let path):
+                if try SetupRun.removeAntigravityRVHooks(at: path, files: files) {
+                    enacted.changed = true
+                }
+            case .stripAntigravityFingerprintLeavingOccupied(let path):
+                if try SetupRun.stripAntigravityFingerprintLeavingOccupied(at: path, files: files) {
+                    enacted.changed = true
+                }
             case .removeCodexRVHooks(let path):
                 _ = try SetupRun.removeCodexRVHooks(at: path, files: files)
             case .removeCursorRVHooks(let path):
@@ -240,6 +250,7 @@ private extension SetupSlotSnapshot {
         case .hermes: hermes = kind
         case .codex: codex = kind
         case .cursor: cursor = kind
+        case .antigravity: antigravity = kind
         }
     }
 }

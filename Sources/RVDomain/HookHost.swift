@@ -14,10 +14,12 @@ public enum HookHost: String, Codable, Hashable, Sendable, CaseIterable {
     case codex
     /// Cursor hooks.json wire, not a host protocol.
     case cursor
+    /// Antigravity hooks.json wire, not a host protocol.
+    case antigravity
 
     /// Setup/doctor slots. Claude is settings-merge, not an exclusive owned file.
     public static let setupSlotOrder: [HookHost] = [
-        .grok, .pi, .opencode, .claude, .openclaw, .hermes, .codex, .cursor,
+        .grok, .pi, .opencode, .claude, .openclaw, .hermes, .codex, .cursor, .antigravity,
     ]
 }
 

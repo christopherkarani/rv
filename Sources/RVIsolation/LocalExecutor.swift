@@ -2,10 +2,13 @@ import Foundation
 import RVDomain
 import Synchronization
 
-public enum LocalExecutorError: Error, Sendable, Equatable {
+enum LocalExecutorError: Error, Sendable, Equatable {
     case cancelled
     case alreadyExecuted(ActionFingerprint)
     case applyFailed(IsolationApplyError)
+    /// Awaited work threw outside the typed contract. Carries the description;
+    /// no silent precondition trap on a path a future edit may open.
+    case unexpected(String)
 }
 
 /// Cancellation for blocking supervision that has left the cooperative pool.
@@ -56,13 +59,17 @@ private final class ExecutorApplyGate: Sendable {
 ///
 /// Spawn is only `IsolationBackends.apply`. The contained plan is converted
 /// to `IsolationPlan` at that call.
-public actor LocalExecutor {
+///
+/// Executor-internal: admitted-command machinery and tests only. Interactive
+/// commands never touch this actor; they attach to the workspace host
+/// through `WorkspaceClient`.
+actor LocalExecutor {
     private var dispatched: Set<ActionFingerprint> = []
     private let applyGate = ExecutorApplyGate()
 
-    public init() {}
+    init() {}
 
-    public func run(_ executable: ExecutableAction) async throws -> IsolatedRunResult {
+    func run(_ executable: ExecutableAction) async throws -> IsolatedRunResult {
         guard Task.isCancelled == false else {
             throw LocalExecutorError.cancelled
         }
@@ -117,7 +124,7 @@ public actor LocalExecutor {
     /// Allowed compiles and runs. Denied returns without spawn. Pending
     /// without approval waits. Pending with approval goes through `step`,
     /// which maps the ledger click through `humanDecision` before `resolve`.
-    public func perform(
+    func perform(
         _ authorization: AgentAuthorization,
         plan: ContainedPlan,
         approval: Result<ApprovalDecision, AgentApprovalError>? = nil
@@ -146,8 +153,16 @@ public actor LocalExecutor {
                 return .success(.executed(try await run(executable)))
             } catch let error as LocalExecutorError {
                 return .failure(.execute(error))
+            } catch is CancellationError {
+                // Defensive: run throws only LocalExecutorError and awaiting
+                // the continuation never raises bare CancellationError, so no
+                // seam reaches this arm today. A future typed-contract change
+                // must still map cancellation to .cancelled, not .unexpected.
+                return .failure(.execute(.cancelled))
             } catch {
-                preconditionFailure("LocalExecutor.run throws only LocalExecutorError")
+                // Defensive: unreachable by construction (see above), kept so
+                // a future untyped throw fails closed instead of trapping.
+                return .failure(.execute(.unexpected(String(describing: error))))
             }
         }
     }

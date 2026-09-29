@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVFileStore
 
 public enum TypedRuleStoreError: Error, Sendable, Equatable {
     case lockFailed

@@ -1,15 +1,34 @@
 import RVDomain
 
-/// Splits scanned flag events at the first `--` terminator.
+/// Scans `argv` per `spec` and splits at the first `--` terminator.
 ///
 /// Pre-terminator events keep their T3a grammar reading; post-terminator
 /// words are recovered verbatim, matching the legacy loops where `--` made
 /// every later word a positional.
 ///
-/// Only for value-free scans: with a value-taking spec the scan must stop
-/// at `--` instead (see `scanFilesystemFlags`), because consumption past
-/// `--` cannot be recovered verbatim.
-func splitFlagTerminator(_ events: [FlagToken]) -> (flags: [FlagToken], rest: [String]) {
+/// Split-after-scan is only exact for value-free specs: with a value-taking
+/// spec the scan must stop at `--` instead (see `scanFilesystemFlags`),
+/// because consumption past `--` cannot be recovered verbatim. That routing
+/// is enforced here by construction — value-taking specs dispatch to the
+/// pending-aware pre-split — instead of a doc-only precondition on the
+/// events split.
+func splitFlagTerminator(
+    _ argv: Argv,
+    values spec: FlagValueSpec = .none
+) -> (flags: [FlagToken], rest: [String]) {
+    guard spec.isValueFree else {
+        return scanFilesystemFlags(argv, values: spec)
+    }
+    return splitScannedTerminator(ShellPipeline.scanFlags(argv, valueSpec: spec))
+}
+
+/// Splits scanned value-free flag events at the first `--` terminator.
+///
+/// Private: only scans that perform no value consumption may split after
+/// the fact. A consumed value shares its case with the attached form, so
+/// `verbatimWords` would re-emit it merged (`--name=value`) instead of as
+/// the two original words.
+private func splitScannedTerminator(_ events: [FlagToken]) -> (flags: [FlagToken], rest: [String]) {
     guard let cut = events.firstIndex(of: .terminator) else {
         return (events, [])
     }
@@ -31,40 +50,36 @@ func splitFlagTerminator(_ events: [FlagToken]) -> (flags: [FlagToken], rest: [S
 /// pending-aware terminator keeps both readings exact.
 func scanFilesystemFlags(
     _ argv: Argv,
-    spec: FlagValueSpec
+    values spec: FlagValueSpec
 ) -> (flags: [FlagToken], rest: [String]) {
-    guard let cut = terminatorIndex(in: argv.args, spec: spec) else {
-        return splitFlagTerminator(ShellPipeline.scanFlags(argv, spec: spec))
+    guard let cut = terminatorIndex(in: argv.args, values: spec) else {
+        // No `--` word, so no post-`--` recovery runs: the split is exact
+        // for any spec here.
+        return splitScannedTerminator(ShellPipeline.scanFlags(argv, valueSpec: spec))
     }
     let head = Argv(program: argv.program, args: Array(argv.args[..<cut]))
     return (
-        ShellPipeline.scanFlags(head, spec: spec),
+        ShellPipeline.scanFlags(head, valueSpec: spec),
         Array(argv.args[(cut + 1)...])
     )
 }
 
 /// Index of the first `--` the legacy loops would treat as a terminator:
-/// pending-value consumption wins over the terminator test, mirroring
-/// `ShellPipeline.scanFlags` value consumption (including
-/// `rejectsDashValues`, which leaves a dash-led word unconsumed).
-private func terminatorIndex(in words: [String], spec: FlagValueSpec) -> Int? {
+/// pending-value consumption wins over the terminator test. The cut shares
+/// `FlagValueSpec`'s consumption predicate with `ShellPipeline.scanFlags`,
+/// so the pre-split cannot desync from the scan it precedes.
+private func terminatorIndex(in words: [String], values spec: FlagValueSpec) -> Int? {
     var pending = false
     for (index, word) in words.enumerated() {
         if pending {
             pending = false
-            let consumed = spec.rejectsDashValues == false || word.hasPrefix("-") == false
-            if consumed { continue }
+            if spec.consumesValueWord(word) { continue }
         }
         if word == "--" {
             return index
         }
-        switch FlagToken.classify(word) {
-        case .long(let name, nil) where spec.valueLongs.contains(name):
+        if spec.takesValue(FlagToken.classify(word)) {
             pending = true
-        case .shorts(let letters, _) where letters.contains(where: spec.valueShorts.contains):
-            pending = true
-        default:
-            break
         }
     }
     return nil
@@ -73,9 +88,9 @@ private func terminatorIndex(in words: [String], spec: FlagValueSpec) -> Int? {
 /// Recovers the raw argv words behind one structurally classified event:
 /// the exact inverse of `FlagToken.classify` for post-`--` recovery.
 ///
-/// No valued events reach here: a consumed value shares its case with the
-/// attached form and cannot be unmerged, and any structural terminator
-/// implies a pre-split cut. Value-taking parsers must pre-split with
+/// Only `scanFlags` output without value consumption (`.none` spec) may
+/// reach here: a consumed value shares its case with the attached form
+/// and cannot be unmerged. Value-taking parsers must pre-split with
 /// `scanFilesystemFlags` instead.
 func verbatimWords(of event: FlagToken) -> [String] {
     switch event {
@@ -100,7 +115,7 @@ func verbatimWords(of event: FlagToken) -> [String] {
 }
 
 func parseRm(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = splitFlagTerminator(ShellPipeline.scanFlags(argv))
+    let (flags, rest) = splitFlagTerminator(argv)
     var recursive = false
     var force = false
     var paths: [String] = []
@@ -149,7 +164,7 @@ private let rmSkipLong: Set<String> = [
 private let rmShorts: Set<Character> = ["r", "R", "d", "f", "v", "i", "I"]
 
 func parseUnlink(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = splitFlagTerminator(ShellPipeline.scanFlags(argv))
+    let (flags, rest) = splitFlagTerminator(argv)
     var paths: [String] = []
     for event in flags {
         switch event {
@@ -175,7 +190,7 @@ func parseUnlink(_ args: [String]) -> ParsedFilesystemCommand? {
 }
 
 func parseRmdir(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = splitFlagTerminator(ShellPipeline.scanFlags(argv))
+    let (flags, rest) = splitFlagTerminator(argv)
     var paths: [String] = []
     for event in flags {
         switch event {
@@ -211,7 +226,7 @@ private let rmdirSkip: Set<String> = [
 private let rmdirShorts: Set<Character> = ["p", "v"]
 
 func parseMv(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = splitFlagTerminator(ShellPipeline.scanFlags(argv))
+    let (flags, rest) = splitFlagTerminator(argv)
     var paths: [String] = []
     for event in flags {
         switch event {
@@ -247,7 +262,8 @@ private let mvSkipLong: Set<String> = [
 private let mvShorts: Set<Character> = ["f", "i", "n", "v", "u"]
 
 func parseTruncate(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = scanFilesystemFlags(argv, spec: truncateFlagValues)
+    let spec = FlagValueSpec(valueShorts: ["s"], valueLongs: ["size"])
+    let (flags, rest) = scanFilesystemFlags(argv, values: spec)
     var paths: [String] = []
     for event in flags {
         switch event {
@@ -278,8 +294,6 @@ func parseTruncate(_ args: [String]) -> ParsedFilesystemCommand? {
     parseTruncate(Argv(program: "truncate", args: args))
 }
 
-private let truncateFlagValues = FlagValueSpec(valueShorts: ["s"], valueLongs: ["size"])
-
 private let truncateSkip: Set<String> = [
     "--no-create", "--io-blocks", "--verbose",
 ]
@@ -287,14 +301,13 @@ private let truncateSkip: Set<String> = [
 private let truncateShorts: Set<Character> = ["c", "o", "r", "s"]
 
 func parseShred(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = scanFilesystemFlags(argv, spec: shredFlagValues)
+    let spec = FlagValueSpec(valueShorts: ["n", "s"], valueLongs: ["iterations", "size"])
+    let (flags, rest) = scanFilesystemFlags(argv, values: spec)
     var paths: [String] = []
     for event in flags {
         switch event {
         case .positional(let word):
             paths.append(word)
-        case .long(let name, nil) where shredValueLong.contains("--" + name):
-            continue
         case .long(let name, nil) where shredSkipLong.contains("--" + name):
             continue
         case .long(let name, _) where shredAttachedLongs.contains(name):
@@ -320,13 +333,8 @@ func parseShred(_ args: [String]) -> ParsedFilesystemCommand? {
     parseShred(Argv(program: "shred", args: args))
 }
 
-private let shredFlagValues = FlagValueSpec(valueShorts: ["n", "s"], valueLongs: ["iterations", "size"])
-
 private let shredSkipLong: Set<String> = [
     "--force", "--remove", "--zero", "--verbose", "--exact",
-]
-private let shredValueLong: Set<String> = [
-    "--iterations", "--size",
 ]
 private let shredAttachedLongs: Set<String> = [
     "remove", "iterations", "size",

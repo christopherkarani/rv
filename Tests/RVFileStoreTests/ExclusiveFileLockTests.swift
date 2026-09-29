@@ -6,7 +6,7 @@ import Glibc
 import Foundation
 import Synchronization
 import Testing
-@testable import RVPolicy
+import RVFileStore
 
 struct ExclusiveFileLockTests {
     @Test func concurrentBodiesSerializeOnSameLock() async throws {
