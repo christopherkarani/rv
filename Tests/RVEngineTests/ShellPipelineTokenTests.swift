@@ -45,7 +45,7 @@ private func expectParity(
     _ input: String,
     sourceLocation: SourceLocation = #_sourceLocation
 ) {
-    let legacy = tokenizeCommand(input)
+    let legacy = legacyTokenizeCommand(input)
     let tokens = ShellPipeline.tokenize(input)
     let context: Comment = "input: \(input.debugDescription)"
     #expect(tokens.map(\.lexeme) == legacy.map(\.decoded), context, sourceLocation: sourceLocation)
@@ -341,4 +341,128 @@ private func quoteIfNeeded(_ lexeme: String) -> String {
     if lexeme.contains("`") || lexeme.contains("$(") { return "\"\(lexeme)\"" }
     if lexeme.contains(where: { $0.isWhitespace }) { return "\"\(lexeme)\"" }
     return lexeme
+}
+
+/// Frozen pre-facade tokenizer (main's byte loop, verbatim). The
+/// differential oracle for `ShellPipeline.tokenize`: never evolve this to
+/// match production — a mismatch here is a production regression.
+/// Source: `Normalize.tokenizeCommand` at the T4 merge base.
+private func legacyTokenizeCommand(_ text: String) -> [CommandToken] {
+    var tokens: [CommandToken] = []
+    let utf8 = text.utf8
+    var index = utf8.startIndex
+
+    while index < utf8.endIndex {
+        var emittedNewline = false
+        while index < utf8.endIndex {
+            if let width = newlineWidth(utf8, at: index) {
+                if emittedNewline == false {
+                    tokens.append(CommandToken(decoded: "\n", wasQuoted: false))
+                    emittedNewline = true
+                }
+                index = utf8.index(index, offsetBy: width)
+                continue
+            }
+            let width = whitespaceLength(utf8, at: index)
+            if width == 0 { break }
+            index = utf8.index(index, offsetBy: width)
+        }
+        guard index < utf8.endIndex else { break }
+
+        let tokenStart = index
+        var decoded = ""
+        var wasQuoted = false
+        var wasAnsiC = false
+
+        while index < utf8.endIndex, whitespaceLength(utf8, at: index) == 0 {
+            let byte = utf8[index]
+            if byte == UInt8(ascii: "$"),
+               utf8.index(after: index) < utf8.endIndex,
+               utf8[utf8.index(after: index)] == UInt8(ascii: "(")
+            {
+                let start = index
+                index = utf8.index(after: utf8.index(after: index))
+                var depth = 1
+                while index < utf8.endIndex, depth > 0 {
+                    let current = utf8[index]
+                    if current == UInt8(ascii: "(") { depth += 1 }
+                    else if current == UInt8(ascii: ")") { depth -= 1 }
+                    utf8.formIndex(after: &index)
+                }
+                decoded.append(contentsOf: text[start..<index])
+                continue
+            }
+            if byte == UInt8(ascii: "$"),
+               utf8.index(after: index) < utf8.endIndex,
+               utf8[utf8.index(after: index)] == UInt8(ascii: "'")
+            {
+                wasQuoted = true
+                wasAnsiC = true
+                utf8.formIndex(after: &index)
+                utf8.formIndex(after: &index)
+                let innerStart = index
+                while index < utf8.endIndex, utf8[index] != UInt8(ascii: "'") {
+                    utf8.formIndex(after: &index)
+                }
+                decoded.append("$")
+                decoded.append(contentsOf: text[innerStart..<index])
+                if index < utf8.endIndex {
+                    utf8.formIndex(after: &index)
+                }
+                continue
+            }
+            if byte == UInt8(ascii: "`") {
+                let start = index
+                utf8.formIndex(after: &index)
+                while index < utf8.endIndex, utf8[index] != UInt8(ascii: "`") {
+                    utf8.formIndex(after: &index)
+                }
+                if index < utf8.endIndex {
+                    utf8.formIndex(after: &index)
+                }
+                decoded.append(contentsOf: text[start..<index])
+                continue
+            }
+            if byte == UInt8(ascii: "\"") || byte == UInt8(ascii: "'") {
+                wasQuoted = true
+                utf8.formIndex(after: &index)
+                let innerStart = index
+                while index < utf8.endIndex, utf8[index] != byte {
+                    utf8.formIndex(after: &index)
+                }
+                decoded.append(contentsOf: text[innerStart..<index])
+                if index < utf8.endIndex {
+                    utf8.formIndex(after: &index)
+                }
+                continue
+            }
+            let runStart = index
+            while index < utf8.endIndex, whitespaceLength(utf8, at: index) == 0 {
+                let current = utf8[index]
+                if current == UInt8(ascii: "`")
+                    || current == UInt8(ascii: "\"")
+                    || current == UInt8(ascii: "'")
+                {
+                    break
+                }
+                if current == UInt8(ascii: "$"),
+                   utf8.index(after: index) < utf8.endIndex
+                {
+                    let next = utf8[utf8.index(after: index)]
+                    if next == UInt8(ascii: "(") || next == UInt8(ascii: "'") {
+                        break
+                    }
+                }
+                index = nextScalarIndex(utf8, index)
+            }
+            if index > runStart {
+                decoded.append(contentsOf: text[runStart..<index])
+            }
+        }
+
+        if index > tokenStart {
+            tokens.append(CommandToken(decoded: decoded, wasQuoted: wasQuoted, wasAnsiC: wasAnsiC))
+        }
+    }
+    return tokens
 }

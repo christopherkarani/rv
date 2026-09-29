@@ -58,6 +58,63 @@ Neither profile is selected automatically.
 }
 ```
 
+## Agent scoping, keychain broker, and the TUI default
+
+Three shipped fields narrow or extend the staging surface above:
+
+- `agents` (profile): launcher ids this profile serves (e.g. `muse`,
+  `codex`). Empty preserves legacy link-name matching. `agents` on a
+  `credentials` or `keychain` entry narrows that entry to launches whose
+  agent tag matches; nil (an empty list normalizes to nil at decode)
+  stages for every launch. The tag travels on the launch hook wire: a
+  tag naming a `HookHost` also selects hook protocol participation; any
+  other well-formed tag is staging-only credential selection.
+- `keychain`: host-keychain secrets the unsandboxed host reads at spawn
+  and injects as environment variables. `service`/`account` locate a
+  generic-password item, `field` selects a string from a JSON secret
+  (without it the whole secret must decode as UTF-8 text), and `env`
+  names the variable. The sandbox never touches the keychain: it
+  receives only the extracted value, exactly like a staged credential
+  copy. A missing item or undecodable secret fails the launch closed
+  with `resourceStagingFailed` before spawn; the first read may present
+  a keychain access prompt on the host.
+- `defaultProfile` (top level): operator-declared default the TUI
+  attaches to its auto-opened shell. The host never consults it: every
+  launch must still name its profile explicitly, and an unnamed launch
+  gets the base workspace fence only.
+
+Sketch of the new fields (same `/ABSOLUTE/...` inspection rule as the
+template above):
+
+```json
+{
+  "version": 1,
+  "defaultProfile": "coding-a",
+  "profiles": [
+    {
+      "id": "coding-a",
+      "projects": ["/ABSOLUTE/CANONICAL/PROJECT"],
+      "agents": ["muse"],
+      "executableLinks": [],
+      "readFiles": [],
+      "readTrees": [],
+      "writeTrees": [],
+      "credentials": [
+        {
+          "source": "/ABSOLUTE/HOME/.config/muse/auth.json",
+          "destination": ".config/staged.auth",
+          "agents": ["muse"]
+        }
+      ],
+      "environment": [],
+      "keychain": [
+        { "service": "rv-muse", "account": "api-key", "env": "META_API_KEY", "agents": ["muse"] }
+      ]
+    }
+  ]
+}
+```
+
 ## Migrating existing agent resources
 
 Inventory the actual installed binary, its symlink target, and the support

@@ -744,12 +744,12 @@ struct WorkspaceHostTests {
         // A declared hook does not bypass profile enforcement.
         let refused = client.launchRuntime(
             executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"],
-            hook: "opencode", resourceProfileID: "missing"
+            hookHost: .opencode, resourceProfileID: "missing"
         )
         #expect(refused.isFailure(.resourceProfileUnavailable))
         // A declared hook is recorded and echoed back.
         let hooked = try client.launchRuntime(
-            executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"], hook: "codex"
+            executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"], hookHost: .codex
         ).get()
         #expect(hooked.hook == "codex")
         #expect(opened.supervisor.runtimeFacts().contains { $0.id == hooked.runtime && $0.hookHost == "codex" })
@@ -861,6 +861,31 @@ struct WorkspaceHostTests {
         #expect(try client.listRuntimes().get().filter(\.terminal).count == 1)
         #expect(client.cancelRuntime(created.runtime).isSuccess)
     }
+
+    @Test func ensureTerminalRuntimeIsExecutableAgnosticByContract() throws {
+        // Canonical-shell contract: ensure converges concurrent callers
+        // on one runtime. The executable selects the command only when
+        // creating; a different executable re-attaches, it never forks.
+        let opened = try TestHost()
+        defer { opened.close() }
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = client.detach() }
+        let created = try client.ensureTerminalRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 30"],
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        let reused = try client.ensureTerminalRuntime(
+            executable: "/bin/zsh",
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        #expect(reused.runtime == created.runtime)
+        #expect(reused.created == false)
+        #expect(try client.listRuntimes().get().filter(\.terminal).count == 1)
+        #expect(client.cancelRuntime(created.runtime).isSuccess)
+    }
     @Test func malformedHookTagIsRefusedClientSideBeforeSpawn() throws {
         let opened = try TestHost()
         defer { opened.close() }
@@ -868,11 +893,11 @@ struct WorkspaceHostTests {
         defer { _ = client.detach() }
         let factsBefore = opened.supervisor.runtimeFacts().count
         #expect(client.launchRuntime(
-            executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"], hook: "not a tag!"
+            executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"], stagingAgent: "not a tag!"
         ).isFailure(.invalidRequest))
         #expect(client.ensureTerminalRuntime(
-            executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"], hook: "not a tag!",
-            terminalRows: 24, terminalColumns: 80
+            executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"],
+            terminalRows: 24, terminalColumns: 80, stagingAgent: "not a tag!"
         ).isFailure(.invalidRequest))
         #expect(opened.supervisor.runtimeFacts().count == factsBefore)
     }
@@ -911,8 +936,8 @@ struct WorkspaceHostTests {
         let staged = try client.launchRuntime(
             executable: "/bin/sh",
             arguments: ["-c", "cat \"$HOME/.config/staged.auth\" > proved-muse.txt"],
-            hook: "muse",
-            resourceProfileID: "phase04"
+            resourceProfileID: "phase04",
+            stagingAgent: "muse"
         ).get()
         #expect(staged.hook == nil)
         #expect(openedHookHost(supervisor, staged.runtime) == nil)
@@ -931,7 +956,7 @@ struct WorkspaceHostTests {
                 "if cat \"$HOME/.config/staged.auth\" >/dev/null 2>&1; then echo leak > leak-codex.txt; fi; "
                     + "printf launched > launched-codex.txt",
             ],
-            hook: "codex",
+            hookHost: .codex,
             resourceProfileID: "phase04"
         ).get()
         // The marker prints last, so its presence proves the leak branch ran.

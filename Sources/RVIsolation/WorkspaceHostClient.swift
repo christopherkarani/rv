@@ -222,8 +222,8 @@ public final class WorkspaceClient: Sendable {
                         WorkspaceControlFeature.runtimeResourceProfilesV1
                     )
                 }
-                client.events.supportsReplayBatches = features.contains(
-                    WorkspaceControlFeature.terminalReplayBatchesV1
+                client.events.setSupportsReplayBatches(
+                    features.contains(WorkspaceControlFeature.terminalReplayBatchesV1)
                 )
             }
             return .success(client)
@@ -255,10 +255,11 @@ public final class WorkspaceClient: Sendable {
     public func launchRuntime(
         executable: String,
         arguments: [String] = [],
-        hook: String? = nil,
+        hookHost: HookHost? = nil,
         terminalRows: Int? = nil,
         terminalColumns: Int? = nil,
-        resourceProfileID: String? = nil
+        resourceProfileID: String? = nil,
+        stagingAgent: String? = nil
     ) -> Result<WorkspaceRuntimeReport, WorkspaceClientFailure> {
         guard WorkspaceControlCodec.launchFits(executable: executable, arguments: arguments) else {
             return .failure(.requestTooLarge)
@@ -266,7 +267,7 @@ public final class WorkspaceClient: Sendable {
         guard WorkspaceControlCodec.resourceProfileIDFits(resourceProfileID) else {
             return .failure(.invalidRequest)
         }
-        if let hook, AgentTagValidator.isValid(hook) == false {
+        if let stagingAgent, AgentTagValidator.isValid(stagingAgent) == false {
             return .failure(.invalidRequest)
         }
         if resourceProfileID != nil, supportsResourceProfiles == false {
@@ -278,7 +279,7 @@ public final class WorkspaceClient: Sendable {
             executable: executable,
             arguments: arguments,
             resourceProfileID: resourceProfileID,
-            hook: hook
+            hook: hookHost?.rawValue ?? stagingAgent
         )
         switch (terminalRows, terminalColumns) {
         case (nil, nil):
@@ -314,13 +315,20 @@ public final class WorkspaceClient: Sendable {
 
     /// Ensures at least one running host-owned terminal exists. Concurrent
     /// callers are serialized by the host and receive the same runtime.
+    ///
+    /// Canonical-shell contract: when a running terminal exists it is
+    /// returned regardless of the requested executable, arguments, hook,
+    /// or profile — those select the command only when creating. A reused
+    /// runtime keeps the grants it was created with. Callers that need a
+    /// specific command must use `launchRuntime`.
     public func ensureTerminalRuntime(
         executable: String,
         arguments: [String] = [],
-        hook: String? = nil,
+        hookHost: HookHost? = nil,
         terminalRows: Int,
         terminalColumns: Int,
-        resourceProfileID: String? = nil
+        resourceProfileID: String? = nil,
+        stagingAgent: String? = nil
     ) -> Result<WorkspaceRuntimeReport, WorkspaceClientFailure> {
         guard executable.hasPrefix("/"),
             IsolatedCommand(executable: executable, arguments: arguments) != nil,
@@ -328,7 +336,7 @@ public final class WorkspaceClient: Sendable {
         else {
             return .failure(.invalidRequest)
         }
-        if let hook, AgentTagValidator.isValid(hook) == false {
+        if let stagingAgent, AgentTagValidator.isValid(stagingAgent) == false {
             return .failure(.invalidRequest)
         }
         guard WorkspaceControlCodec.launchFits(executable: executable, arguments: arguments) else {
@@ -344,7 +352,7 @@ public final class WorkspaceClient: Sendable {
             return ensureTerminalRuntimeOnLegacyHost(
                 executable: executable,
                 arguments: arguments,
-                hookHost: hook.flatMap(HookHost.init(rawValue:)),
+                hookHost: hookHost,
                 terminalRows: terminalRows,
                 terminalColumns: terminalColumns
             )
@@ -355,7 +363,7 @@ public final class WorkspaceClient: Sendable {
             executable: executable,
             arguments: arguments,
             resourceProfileID: resourceProfileID,
-            hook: hook,
+            hook: hookHost?.rawValue ?? stagingAgent,
             io: "terminal",
             rows: terminalRows,
             columns: terminalColumns
@@ -635,7 +643,7 @@ public final class WorkspaceClient: Sendable {
                 return launchRuntime(
                     executable: executable,
                     arguments: arguments,
-                    hook: hookHost?.rawValue,
+                    hookHost: hookHost,
                     terminalRows: terminalRows,
                     terminalColumns: terminalColumns
                 )
@@ -990,7 +998,16 @@ final class EventBoard: @unchecked Sendable {
     /// False when the host predates replay-batch framing: unframed replay
     /// content is admitted as plain output instead of failing the batch.
     /// Strict by default; `connect` sets it from negotiated features.
+    /// Written under the condition lock (read by the event reader thread).
     var supportsReplayBatches = true
+
+    /// Records the negotiated replay-framing support. Lock-guarded: the
+    /// event reader consults the flag on every replay frame.
+    func setSupportsReplayBatches(_ value: Bool) {
+        condition.lock()
+        supportsReplayBatches = value
+        condition.unlock()
+    }
     private var lastServedRuntime: UUID?
 
     var queuedTerminalBytes: Int {

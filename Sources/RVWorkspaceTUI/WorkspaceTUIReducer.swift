@@ -173,12 +173,22 @@ struct WorkspaceTUIState: Equatable, Sendable {
 
     /// Holds typeahead for a lease that has not landed yet. Bytes past one
     /// host write are dropped while the lease is out; the pane keeps
-    /// responding instead of wedging on an unbounded queue.
-    mutating func queuePendingInput(_ bytes: Data, for binding: PaneBindingKey) {
-        guard bytes.isEmpty == false else { return }
+    /// responding instead of wedging on an unbounded queue. Returns true
+    /// when bytes were dropped so the caller can surface the loss: a
+    /// truncated paste is data loss, never a quiet cap.
+    mutating func queuePendingInput(_ bytes: Data, for binding: PaneBindingKey) -> Bool {
+        guard bytes.isEmpty == false else { return false }
         var current = pendingInput[binding.pane].flatMap { $0.binding == binding ? $0.bytes : nil } ?? Data()
-        current.append(bytes.prefix(Self.maximumPendingInputBytes - min(current.count, Self.maximumPendingInputBytes)))
+        let room = Self.maximumPendingInputBytes - min(current.count, Self.maximumPendingInputBytes)
+        let admitted = bytes.prefix(room)
+        current.append(admitted)
         pendingInput[binding.pane] = PendingPaneInput(binding: binding, bytes: current)
+        let truncated = admitted.count < bytes.count
+        if truncated {
+            feedback = "Typeahead full; dropped \(bytes.count - admitted.count) bytes"
+            feedbackTicks = 60
+        }
+        return truncated
     }
 
     /// Takes bytes queued for exactly this binding. Anything else stays put.
@@ -224,7 +234,7 @@ struct WorkspaceTUIState: Equatable, Sendable {
         lifecycle: WorkspaceTUILifecycle,
         summary: WorkspaceTUISummary,
         launcher: [RuntimeLaunchChoice],
-        defaultShellID: String = "shell",
+        defaultShellID: String = RuntimeLaunchChoice.shellID,
         initialRows: Int,
         initialColumns: Int,
         mode: CommandMode,
@@ -840,7 +850,9 @@ enum WorkspaceTUIReducer {
             guard next.leasedBindings.contains(binding) else {
                 // The attach is still in flight; hold the keystrokes as
                 // typeahead instead of dropping them on the floor.
-                next.queuePendingInput(bytes, for: binding)
+                if next.queuePendingInput(bytes, for: binding) {
+                    presentationChanged = true
+                }
                 break
             }
             effects = [.write(binding: binding, bytes: bytes)]
@@ -850,7 +862,9 @@ enum WorkspaceTUIReducer {
                   next.bindingKey(for: binding.pane) == binding,
                   next.terminals[binding.pane]?.state.running == true else { break }
             guard next.leasedBindings.contains(binding) else {
-                next.queuePendingInput(bytes, for: binding)
+                if next.queuePendingInput(bytes, for: binding) {
+                    presentationChanged = true
+                }
                 break
             }
             effects = [.write(binding: binding, bytes: bytes)]
@@ -1106,7 +1120,9 @@ enum WorkspaceTUIReducer {
                 // typeahead (bounded) instead of dropping the keystroke:
                 // the next grant flushes them, so input across a wedge
                 // (overflow drop, lost lease race) is delayed, not lost.
-                next.queuePendingInput(bytes, for: binding)
+                if next.queuePendingInput(bytes, for: binding) {
+                    presentationChanged = true
+                }
                 // A refused write on a subscribed pane may mean the host
                 // silently dropped the subscription (overflow) rather than
                 // contention. One acquire distinguishes: unavailable
@@ -1123,8 +1139,25 @@ enum WorkspaceTUIReducer {
                 if next.lifecycle == .connected {
                     next.lifecycle = .disconnected
                 }
-            case .ok, .unavailable, .rejected:
+            case .ok:
                 break
+            case .unavailable:
+                // The runtime is gone; in-flight bytes died with it. The
+                // pane exit covers that, so feedback only fires when the
+                // pane still claims running (a genuinely surprising loss).
+                if next.terminals[binding.pane]?.state.running == true {
+                    next.feedback = "Terminal unavailable; input dropped"
+                    next.feedbackTicks = 60
+                    presentationChanged = true
+                }
+            case .rejected:
+                if bytes.count > TerminalInputChunks.maximumTotalBytes {
+                    next.feedback = "Input exceeds 1 MiB; rejected"
+                } else {
+                    next.feedback = "Write rejected; input dropped"
+                }
+                next.feedbackTicks = 60
+                presentationChanged = true
             }
 
         case .acquireCompleted(let binding, let outcome):
@@ -1727,7 +1760,7 @@ enum WorkspaceTUIReducer {
 
     private static func defaultShell(_ state: WorkspaceTUIState) -> RuntimeLaunchChoice? {
         state.launcher.first { $0.id == state.defaultShellID }
-            ?? state.launcher.first { $0.id == "shell" }
+            ?? state.launcher.first { $0.id == RuntimeLaunchChoice.shellID }
     }
 
     private static func launchSize(for pane: PaneID, in state: WorkspaceTUIState) -> WorkspaceTUIState.ViewSize {

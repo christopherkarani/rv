@@ -143,7 +143,9 @@ struct RuntimeTerminalTests {
             owner.notices.contains(.window(rows: 17, columns: 53))
                 && observer.notices.contains(.window(rows: 17, columns: 53))
         })
-        Thread.sleep(forTimeInterval: 0.2)
+        // No sleep: `enqueueWindowLocked` filters on `windowNotices`
+        // synchronously, so a legacy subscriber can never observe a
+        // window notice. The wait above only gates the positive asserts.
         #expect(legacy.notices.contains { if case .window = $0 { true } else { false } } == false)
         #expect(terminal.window().rows == 17)
         #expect(terminal.window().columns == 53)
@@ -478,7 +480,7 @@ struct RuntimeTerminalTests {
         ).get()
         let hooked = try second.launchRuntime(
             executable: "/usr/bin/env",
-            hook: HookHost.opencode.rawValue,
+            hookHost: .opencode,
             terminalRows: 24,
             terminalColumns: 80
         ).get()
@@ -887,6 +889,44 @@ struct RuntimeTerminalTests {
         #expect(opened.supervisor.runtimeFacts().contains { $0.running } == false)
         #expect(opened.supervisor.snapshot.phase == .active)
         #expect(ttyPaths().subtracting(before).isEmpty)
+    }
+
+    @Test func registerFaultRetiresTheStagedPrivateHome() throws {
+        // retireUnrecorded must remove the staged credential home, like
+        // the normal watch-path teardown does.
+        let opened = try PTYHost()
+        defer { opened.close() }
+        let command = try #require(IsolatedCommand(
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 30"]
+        ))
+        let plan = compileContainedPlan(workspace: opened.supervisor.snapshot.policyWorkspace)
+        let profile = RuntimeResourceProfile(
+            id: "retire-probe", projects: [opened.tree.workspaceURL.path]
+        )
+        #if os(macOS)
+        let stagingParent = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+        #else
+        let stagingParent = FileManager.default.temporaryDirectory
+        #endif
+        let before = (try? FileManager.default.contentsOfDirectory(atPath: stagingParent.path)) ?? []
+        let faulted = opened.supervisor.launch(
+            host: nil,
+            command: command,
+            plan: plan,
+            io: .pseudoTerminal(rows: 24, columns: 80),
+            resourceProfile: profile,
+            admission: .failClosed,
+            sessionStore: .file(opened.tree.rootURL.appendingPathComponent("retire.jsonl")),
+            spawnFault: .register
+        )
+        guard case .failure(.apply(.lifetimeBoundaryFailed)) = faulted else {
+            Issue.record("registration fault must retire the runtime, got \(faulted)")
+            return
+        }
+        let after = (try? FileManager.default.contentsOfDirectory(atPath: stagingParent.path)) ?? []
+        let leaked = Set(after).subtracting(before).filter { $0.hasPrefix("rv-runtime-") }
+        #expect(leaked.isEmpty)
     }
 
     @Test func closingTheWorkspaceKillsEveryPTYRuntime() throws {

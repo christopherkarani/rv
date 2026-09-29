@@ -258,10 +258,11 @@ enum WorkspaceCommandRun {
             project: project,
             executable: executable,
             arguments: arguments,
-            hook: hook,
+            hook: hook.flatMap(HookHost.init(rawValue:)),
             rows: rows,
             columns: columns,
-            resourceProfileID: resourceProfileID
+            resourceProfileID: resourceProfileID,
+            stagingAgent: hook
         )
         #endif
     }
@@ -274,10 +275,11 @@ enum WorkspaceCommandRun {
         project: String,
         executable: String,
         arguments: [String],
-        hook: String?,
+        hook: HookHost?,
         rows: Int?,
         columns: Int?,
-        resourceProfileID: String? = nil
+        resourceProfileID: String? = nil,
+        stagingAgent: String? = nil
     ) throws {
         #if !os(macOS)
         throw ValidationError("contained workspace host is unavailable")
@@ -297,10 +299,11 @@ enum WorkspaceCommandRun {
         let launched = client.launchRuntime(
             executable: executable,
             arguments: arguments,
-            hook: hook,
+            hookHost: hook,
             terminalRows: rows,
             terminalColumns: columns,
-            resourceProfileID: resourceProfileID
+            resourceProfileID: resourceProfileID,
+            stagingAgent: stagingAgent ?? hook?.rawValue
         )
         let runtime: UUID
         switch launched {

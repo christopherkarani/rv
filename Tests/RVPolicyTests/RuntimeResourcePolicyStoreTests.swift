@@ -150,6 +150,11 @@ struct RuntimeResourcePolicyStoreTests {
         #expect(result(for: ["muse", "muse"]) == .failure(.invalidDocument))
         #expect(result(for: ["not an id"]) == .failure(.invalidDocument))
         #expect(result(for: Array(repeating: "muse", count: 9)) == .failure(.invalidDocument))
+        // Marks match the launch's agent tag: the 32-byte hook-wire cap
+        // applies, not the 64-byte profile-ID cap.
+        #expect(try result(for: [String(repeating: "a", count: 32)]).get().profiles[0].agents
+            == [String(repeating: "a", count: 32)])
+        #expect(result(for: [String(repeating: "a", count: 33)]) == .failure(.invalidDocument))
     }
 
     @Test func agentMarksAcceptAnyIdentifier() throws {
@@ -179,6 +184,7 @@ struct RuntimeResourcePolicyStoreTests {
         #expect(result(for: ["muse", "muse"]) == .failure(.invalidDocument))
         #expect(result(for: ["not an id"]) == .failure(.invalidDocument))
         #expect(result(for: Array(repeating: "muse", count: 9)) == .failure(.invalidDocument))
+        #expect(result(for: [String(repeating: "a", count: 33)]) == .failure(.invalidDocument))
     }
 
     @Test func defaultProfileMustNameAProfileInTheSameDocument() throws {

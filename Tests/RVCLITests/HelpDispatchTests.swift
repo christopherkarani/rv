@@ -44,6 +44,21 @@ import RVTheme
     #expect(HelpDispatch.topic(arguments: ["blocks", "--json", "--help"]) == .blocks)
 }
 
+@Test func helpTopic_workspaceAndOpenCodePaths() {
+    #expect(HelpDispatch.topic(arguments: ["workspace", "--help"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--help"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["workspace", "tui", "--help"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["workspace", "abandon", "--help"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["help", "workspace", "abandon"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--hook", "opencode", "--help"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--resource-profile=x", "--help"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["opencode", "--resource-profile", "x", "--help"]) == .opencode)
+    // A bare `--` is a passthrough boundary: `--help` past it belongs to
+    // the executable, never to help dispatch.
+    #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--", "--help"]) == nil)
+    #expect(HelpDispatch.topic(arguments: ["opencode", "--", "--help"]) == nil)
+}
+
 @Test func helpTopic_doesNotStealCommandArgs() {
     #expect(HelpDispatch.topic(arguments: ["test", "git", "status"]) == nil)
     #expect(HelpDispatch.topic(arguments: ["test", "echo", "--help"]) == nil)

@@ -568,6 +568,22 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         else {
             return .failure(.apply(.containedGuaranteesUnsupported))
         }
+        // Keychain reads run before the state lock: SecItemCopyMatching can
+        // present an unbounded host prompt, and holding the supervisor
+        // lock across it would stall cancel/close/launch. Values are
+        // reused by the spawn retry, so a launch prompts at most once.
+        let agentName = stagingAgent ?? host?.rawValue
+        let keychain: [(name: String, value: String)]
+        if let resources = request.resources {
+            switch resources.keychainEnvironment(forAgent: agentName, reader: keychainReader) {
+            case .success(let entries):
+                keychain = entries
+            case .failure(let staging):
+                return .failure(.apply(.resourceStagingFailed(staging.detail)))
+            }
+        } else {
+            keychain = []
+        }
         var slot = WorkspaceChildSlot()
         let result: Result<Void, WorkspaceSessionError> = state.withLock { state in
             guard state.closeAccepted == false, state.lifecycle.acceptsRuntime else {
@@ -604,7 +620,7 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
                 egressProxyPort: egressPort,
                 host: host,
                 stagingAgent: stagingAgent,
-                keychainReader: keychainReader
+                keychain: keychain
             ) {
             case .failure(let error):
                 return .failure(.apply(error))
@@ -693,6 +709,10 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
                 )
             )
         }
+        // The staged private home holds credential copies; the watch path
+        // removes it on the normal teardown, so the retire path must too.
+        // `remove` is `try? rm -rf`: idempotent if a watcher also fires.
+        child.live.resources?.remove()
         noteRuntimeEnded(session)
     }
 

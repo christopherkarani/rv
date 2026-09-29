@@ -59,7 +59,11 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         self.session = session
         self.emulators = emulators
         let acceptedView = restoredView.flatMap { view -> WorkspaceView? in
+            // A restored view suppresses the initial launch, so it must be
+            // able to host a terminal: structurally valid, workspace-bound,
+            // and non-empty. Anything else falls back to a fresh view.
             guard view.validate().isEmpty,
+                  view.panes.isEmpty == false,
                   view.panes.values.allSatisfy({ $0.binding?.workspace.rawValue == summary.workspace || $0.binding == nil })
             else { return nil }
             return view

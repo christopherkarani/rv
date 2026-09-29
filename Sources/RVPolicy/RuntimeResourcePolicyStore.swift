@@ -97,8 +97,12 @@ public enum RuntimeResourcePolicyStore {
             // Marks accept any identifier: the launcher derives entries from
             // them, so a closed set here would reintroduce per-agent source
             // edits. Unknown names simply match nothing with a hook wire.
+            // Agent marks match the launch's agent tag, so they obey the
+            // 32-byte hook-wire tag rules, not the 64-byte profile-ID rules.
+            // A longer mark could never match and would only build dead
+            // launcher rows whose launches the wire rejects.
             guard profile.agents.count <= 8,
-                profile.agents.allSatisfy(identifier),
+                profile.agents.allSatisfy(AgentTagValidator.isValid),
                 Set(profile.agents).count == profile.agents.count
             else { return false }
             var names = Set<String>()
@@ -110,11 +114,11 @@ public enum RuntimeResourcePolicyStore {
             for credential in profile.credentials {
                 guard absolutePath(credential.source), relativePath(credential.destination),
                     destinations.insert(credential.destination).inserted else { return false }
-                // Credential agent filters use the same identifier rules
-                // as profile marks; an absent filter stages everywhere.
+                // Credential agent filters use the same tag rules as
+                // profile marks; an absent filter stages everywhere.
                 if let agents = credential.agents {
                     guard agents.count <= 8,
-                        agents.allSatisfy(identifier),
+                        agents.allSatisfy(AgentTagValidator.isValid),
                         Set(agents).count == agents.count
                     else { return false }
                 }
@@ -144,7 +148,7 @@ public enum RuntimeResourcePolicyStore {
                 else { return false }
                 if let agents = entry.agents {
                     guard agents.count <= 8,
-                        agents.allSatisfy(identifier),
+                        agents.allSatisfy(AgentTagValidator.isValid),
                         Set(agents).count == agents.count
                     else { return false }
                 }

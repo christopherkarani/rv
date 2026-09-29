@@ -308,7 +308,7 @@ func spawnSeatbeltProcess(
     egressProxyPort: Int? = nil,
     host: HookHost? = nil,
     stagingAgent: String? = nil,
-    keychainReader: KeychainReader = .live
+    keychain: [(name: String, value: String)] = []
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
     let first = spawnSeatbeltProcessBody(
         request,
@@ -320,7 +320,7 @@ func spawnSeatbeltProcess(
         egressProxyPort: egressProxyPort,
         host: host,
         stagingAgent: stagingAgent,
-        keychainReader: keychainReader
+        keychain: keychain
     )
     guard case .failure(.processSpawnFailed) = first else { return first }
     if blockingWorkIsCancelled() { return first }
@@ -340,7 +340,7 @@ func spawnSeatbeltProcess(
         egressProxyPort: egressProxyPort,
         host: host,
         stagingAgent: stagingAgent,
-        keychainReader: keychainReader
+        keychain: keychain
     )
 }
 
@@ -371,7 +371,7 @@ func spawnSeatbeltProcessBody(
     egressProxyPort: Int? = nil,
     host: HookHost? = nil,
     stagingAgent: String? = nil,
-    keychainReader: KeychainReader = .live
+    keychain: [(name: String, value: String)] = []
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
     guard profile.source.contains("(deny file-link)") else {
         return .failure(.seatbeltNotEstablished)
@@ -555,15 +555,6 @@ func spawnSeatbeltProcessBody(
     }
     var resourceStageHandedOff = false
     defer { if !resourceStageHandedOff { request.resources?.remove() } }
-    var keychain: [(name: String, value: String)] = []
-    if let resources = request.resources {
-        switch resources.keychainEnvironment(forAgent: agentName, reader: keychainReader) {
-        case .success(let entries):
-            keychain = entries
-        case .failure(let staging):
-            return .failure(.resourceStagingFailed(staging.detail))
-        }
-    }
     let agentBin = AgentBin.installedDirectory()
     let productive =
         request.productive

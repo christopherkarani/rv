@@ -1,27 +1,6 @@
 import ArgumentParser
 import Foundation
 import RVDomain
-import RVIsolation
-
-enum OpenCodeLaunchError: Error, Sendable, Equatable {
-    case executableMustBeAbsolute
-    case executableUnavailable
-    case workspaceMustBeAbsolute
-    case command(IsolationApplyError)
-
-    var message: String {
-        switch self {
-        case .executableMustBeAbsolute:
-            "--executable must be an absolute path without NUL bytes."
-        case .executableUnavailable:
-            "OpenCode executable unavailable; supply --executable or an absolute PATH directory."
-        case .workspaceMustBeAbsolute:
-            "--workspace must be an absolute path without NUL bytes."
-        case .command(let error):
-            "invalid agent command: \(error)."
-        }
-    }
-}
 
 enum OpenCodeRun {
     /// Compatibility frontend: this command owns no workspace and no
@@ -36,28 +15,6 @@ enum OpenCodeRun {
     /// keyless runs (local models, `--help`) keep working.
     static let missingProfileWarning =
         "rv opencode: no --resource-profile selected; provider credentials are unstaged and agent auth will fail. Pass --resource-profile <id> to stage them.\n"
-
-    static func prepare(
-        executable: String?,
-        arguments: [String],
-        workspace: String,
-        environment: [String: String]
-    ) -> Result<IsolatedCommand, OpenCodeLaunchError> {
-        let path: String
-        switch resolveExecutable(executable, environment: environment) {
-        case .success(let resolved): path = resolved
-        case .failure(let error): return .failure(error)
-        }
-        guard workspace.hasPrefix("/"), workspace.contains("\0") == false,
-            WorkingDirectory(validating: workspace) != nil
-        else {
-            return .failure(.workspaceMustBeAbsolute)
-        }
-        switch IsolatedCommand.make(executable: path, arguments: arguments) {
-        case .success(let validated): return .success(validated)
-        case .failure(let error): return .failure(.command(error))
-        }
-    }
 
     static func resolveExecutable(
         _ explicit: String?,
@@ -103,9 +60,6 @@ struct OpenCode: AsyncParsableCommand {
     @Option(name: .long, help: "Owner-authorized runtime resource profile ID. No profile is selected by executable name.")
     var resourceProfile: String?
 
-    @Option(name: .long, help: "Launch agent tag for credential staging. Hook protocol applies only when the tag names a hook host.")
-    var hook: String = "opencode"
-
     @Argument(parsing: .captureForPassthrough, help: "Arguments passed unchanged to OpenCode.")
     var agentArguments: [String] = []
 
@@ -114,7 +68,7 @@ struct OpenCode: AsyncParsableCommand {
         let arguments = agentArguments.first == "--" ? Array(agentArguments.dropFirst()) : agentArguments
         FileHandle.standardError.write(Data(OpenCodeRun.isolationNotice.utf8))
         let project = workspace ?? CLIProcess.workspacePath()
-        let command: IsolatedCommand
+        let command: OpenCodePreparedCommand
         switch OpenCodeRun.prepare(
             executable: executable,
             arguments: arguments,
@@ -140,7 +94,7 @@ struct OpenCode: AsyncParsableCommand {
             ),
             executable: command.executable,
             arguments: command.arguments,
-            hook: hook,
+            hook: .opencode,
             rows: nil,
             columns: nil,
             resourceProfileID: resourceProfile

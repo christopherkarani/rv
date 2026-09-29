@@ -213,10 +213,11 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession, @unchecked Send
         return controlClient.ensureTerminalRuntime(
             executable: executable,
             arguments: arguments,
-            hook: hook,
+            hookHost: hook.flatMap(HookHost.init(rawValue:)),
             terminalRows: rows,
             terminalColumns: columns,
-            resourceProfileID: resourceProfileID
+            resourceProfileID: resourceProfileID,
+            stagingAgent: hook
         ).map(Self.listed).mapError(Self.failure)
     }
 
@@ -247,10 +248,11 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession, @unchecked Send
         return controlClient.launchRuntime(
             executable: executable,
             arguments: arguments,
-            hook: hook,
+            hookHost: hook.flatMap(HookHost.init(rawValue:)),
             terminalRows: rows,
             terminalColumns: columns,
-            resourceProfileID: resourceProfileID
+            resourceProfileID: resourceProfileID,
+            stagingAgent: hook
         ).map(Self.listed).mapError(Self.failure)
     }
 

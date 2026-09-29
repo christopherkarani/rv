@@ -544,8 +544,12 @@ final class WorkspaceHostServer: Sendable {
         // An explicit profile rides along to creation, where launch()
         // adjudicates it; the existing-runtime shortcut below stays
         // ID-agnostic, matching the client's re-attach to the first
-        // terminal runtime. A reused runtime keeps the grants it was
-        // created with, which may be fewer than requested, never more.
+        // terminal runtime. The shortcut is executable-agnostic too, by
+        // design: `ensure` names the workspace's canonical shell terminal
+        // and concurrent callers converge on one runtime. Callers that
+        // need a specific command use `launchRuntime`. A reused runtime
+        // keeps the grants it was created with, which may be fewer than
+        // requested, never more.
         terminalEnsureLock.lock()
         defer { terminalEnsureLock.unlock() }
 

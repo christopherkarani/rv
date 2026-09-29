@@ -314,7 +314,12 @@ private func runInstalledOpenCode(
     process.executableURL = executable
     process.arguments = ["opencode"] + arguments
     process.currentDirectoryURL = currentDirectory
-    if let environment {
+    if var environment {
+        if environment["PWD"] == nil, let currentDirectory {
+            // Model a shell: PWD tracks the cwd. Without this the
+            // inherited runner PWD hijacks workspace resolution.
+            environment["PWD"] = currentDirectory.path
+        }
         process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
     }
     let output = Pipe()
@@ -363,8 +368,13 @@ private struct OpenCodeCommandFixture {
     let workspace: URL
 
     init() throws {
-        root = FileManager.default.temporaryDirectory
+        // Rooted at the shared system temp, NOT the per-user temp: the
+        // per-user temp dir is sanctioned tool-temp (SwiftBuild backend
+        // tasks fall back to it), so the outside-fence probe must live
+        // where the fence actually holds. `/tmp` exists on macOS and Linux.
+        root = URL(fileURLWithPath: "/tmp", isDirectory: true)
             .appendingPathComponent("rv-opencode-command-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
         workspace = root.appendingPathComponent("workspace", isDirectory: true)
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
     }

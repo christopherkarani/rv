@@ -566,6 +566,25 @@ private func model(_ session: FakeWorkspaceSession) -> WorkspaceTUIModel {
     #expect(session.launchAttempts == 1)
 }
 
+@Test func emptyRestoredViewFallsBackToFreshLaunch() throws {
+    // An empty view validates clean but hosts no terminal; accepting it
+    // would suppress the initial launch and strand a blank TUI.
+    let session = FakeWorkspaceSession()
+    let shell = WorkspaceTUIModel(
+        session: session,
+        emulators: RecordingFactory(),
+        summary: session.summary,
+        launcher: [
+            RuntimeLaunchChoice(id: "shell", title: "shell", executable: "/bin/sh", arguments: [], hook: nil),
+        ],
+        restoredView: WorkspaceView(id: ViewID())
+    )
+    try shell.connect().get()
+    shell.launchDefaultRuntimeIfEmpty()
+    #expect(session.launchAttempts == 1)
+    #expect(shell.snapshot().terminal?.title == "shell")
+}
+
 @Test func defaultShellVariantReachesEnsureWithItsProfile() throws {
     let session = FakeWorkspaceSession()
     let variant = RuntimeLaunchChoice(

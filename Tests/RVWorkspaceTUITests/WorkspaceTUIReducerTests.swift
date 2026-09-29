@@ -1017,6 +1017,52 @@ private func connectedState(
         #expect(granted.state.pendingInput[paneID] == nil)
     }
 
+    @Test func rejectedWriteSurfacesFeedback() {
+        let before = connectedState()
+        let oversize = WorkspaceTUIReducer.reduce(
+            before,
+            .writeCompleted(
+                runtime: runtimeA,
+                bytes: Data(repeating: 0x61, count: TerminalInputChunks.maximumTotalBytes + 1),
+                outcome: .rejected
+            )
+        )
+        #expect(oversize.state.feedback == "Input exceeds 1 MiB; rejected")
+        #expect(oversize.state.feedbackTicks == 60)
+        let small = WorkspaceTUIReducer.reduce(
+            before, .writeCompleted(runtime: runtimeA, bytes: Data("z".utf8), outcome: .rejected)
+        )
+        #expect(small.state.feedback == "Write rejected; input dropped")
+    }
+
+    @Test func unavailableWriteWarnsOnlyWhileRunning() {
+        var running = connectedState()
+        running.terminals[paneID]?.state.running = true
+        let warned = WorkspaceTUIReducer.reduce(
+            running, .writeCompleted(runtime: runtimeA, bytes: Data("z".utf8), outcome: .unavailable)
+        )
+        #expect(warned.state.feedback == "Terminal unavailable; input dropped")
+        var exited = connectedState()
+        exited.terminals[paneID]?.state.running = false
+        let quiet = WorkspaceTUIReducer.reduce(
+            exited, .writeCompleted(runtime: runtimeA, bytes: Data("z".utf8), outcome: .unavailable)
+        )
+        #expect(quiet.state.feedback == nil)
+        #expect(quiet.state == exited)
+    }
+
+    @Test func typeaheadTruncationSurfacesFeedback() {
+        var readOnly = connectedState()
+        readOnly.leasedRuntime = nil
+        readOnly.terminal?.state.lease = .readOnly
+        let big = Data(repeating: 0x61, count: 5000)
+        let held = WorkspaceTUIReducer.reduce(readOnly, .sendDue(runtime: runtimeA, bytes: big))
+        #expect(held.effects == [])
+        #expect(held.state.pendingInput[paneID]?.bytes.count == 4096)
+        #expect(held.state.feedback?.hasPrefix("Typeahead full; dropped ") == true)
+        #expect(held.state.feedbackTicks == 60)
+    }
+
     @Test func writeOutcomesAreScopedToTheAttachedRuntime() {
         let before = connectedState()
         let other = WorkspaceTUIReducer.reduce(before, .writeCompleted(runtime: runtimeB, outcome: .busy))
