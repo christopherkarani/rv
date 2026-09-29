@@ -205,6 +205,23 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
     )
 }
 
+@Test func antigravityMerge_occupiedWithoutForceThrows() {
+    let occupied = Data(
+        """
+        {"rv-guard":{"enabled":true,"PreToolUse":[{"matcher":"run_command","hooks":[{"type":"command","command":"python3 /opt/other/rv-guard.py","timeout":10}]}]}}
+        """.utf8
+    )
+    #expect(AntigravityHooksMerge.inspectionState(of: occupied) == .occupied)
+    #expect(throws: AntigravityHooksMergeError.occupiedWithoutForce) {
+        _ = try AntigravityHooksMerge.merge(
+            existingData: occupied,
+            rvPath: antigravityRvPath,
+            adapterPath: antigravityAdapter,
+            force: false
+        )
+    }
+}
+
 @Test func antigravityMerge_outdatedRewritesWithoutForce() throws {
     let shellOnly = Data(
         """
