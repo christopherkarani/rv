@@ -93,7 +93,9 @@ public struct IsolatedCommand: Sendable, Equatable {
     }
 }
 
-/// Where a PTY launch is forced to fail. Production leaves this unset.
+/// Where a test launch is forced to fail. Production leaves this unset.
+/// The PTY stages fail `RuntimeTerminal.open` at the named step and apply
+/// to pseudo-terminal launches only.
 enum RuntimeSpawnFault: Equatable, Sendable {
     case openpt
     case grant
@@ -119,6 +121,12 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
     /// Test-only. Production launches leave this nil. A fault fails the
     /// launch before the payload is reported running.
     let spawnFault: RuntimeSpawnFault?
+    /// Prepare-time productive-workspace facts. Prepare resolves once for
+    /// the profile grants; the spawn body reuses this instead of
+    /// re-resolving (probes plus idempotent `ensure`). Nil on paths that
+    /// never prepared one (landlock, unsandboxed, direct construction),
+    /// where the spawn body resolves itself.
+    let productive: ProductiveWorkspaceResolution?
 
     var seatbeltProfile: SeatbeltProfile? {
         switch launch {
@@ -153,7 +161,8 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         command: IsolatedCommand,
         launch: Launch,
         io: IsolatedIO = .discard,
-        spawnFault: RuntimeSpawnFault? = nil
+        spawnFault: RuntimeSpawnFault? = nil,
+        productive: ProductiveWorkspaceResolution? = nil
     ) {
         switch (launch, plan.mode) {
         case (.seatbelt, .contained):
@@ -172,6 +181,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         self.launch = launch
         self.io = io
         self.spawnFault = spawnFault
+        self.productive = productive
     }
 
     func withIO(_ io: IsolatedIO) -> IsolatedLaunchRequest {
@@ -193,6 +203,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         self.launch = request.launch
         self.io = io
         self.spawnFault = spawnFault
+        self.productive = request.productive
     }
 
     public static func == (lhs: IsolatedLaunchRequest, rhs: IsolatedLaunchRequest) -> Bool {
@@ -202,6 +213,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
             && lhs.launch == rhs.launch
             && lhs.io == rhs.io
             && lhs.spawnFault == rhs.spawnFault
+            && lhs.productive == rhs.productive
     }
 
     /// Executable `run` will start. Observed / mediated never use a helper.
@@ -309,7 +321,10 @@ public struct IsolationBackend: Sendable {
     }
 }
 
-public enum IsolationBackends {
+/// Executor-internal backend doors. `LocalExecutor` and tests only.
+/// Interactive commands attach to the workspace host through
+/// `WorkspaceClient` and never call these.
+enum IsolationBackends {
     static let sandboxExecPath = "/usr/bin/sandbox-exec"
     static let isolationExecName = "rv-isolation-exec"
     /// Trampoline reserved exit: apply failed, inner was not exec'd.
@@ -317,7 +332,7 @@ public enum IsolationBackends {
     /// Trampoline reserved exit: Landlock applied, then `execve` failed.
     static let isolationExecExecFailedExit: Int32 = 126
 
-    public static func seatbelt() -> IsolationBackend {
+    static func seatbelt() -> IsolationBackend {
         IsolationBackend(
             family: .seatbelt,
             prepare: prepareSeatbelt,
@@ -325,7 +340,7 @@ public enum IsolationBackends {
         )
     }
 
-    public static func unavailable() -> IsolationBackend {
+    static func unavailable() -> IsolationBackend {
         IsolationBackend(
             family: .none,
             prepare: prepareUnavailable,
@@ -333,7 +348,7 @@ public enum IsolationBackends {
         )
     }
 
-    public static func platform() -> IsolationBackend {
+    static func platform() -> IsolationBackend {
         #if os(macOS)
         seatbelt()
         #elseif os(Linux)
@@ -343,11 +358,13 @@ public enum IsolationBackends {
         #endif
     }
 
-    /// Production door. Observed / mediated always establish family `.none`
-    /// without a sandbox helper. Contained uses `platform()` (Seatbelt on
-    /// macOS, Landlock on Linux) and fails closed when that backend cannot
-    /// establish it. `IsolationPlan.mode` is unchanged.
-    public static func apply(
+    /// Executor-internal door. Observed / mediated always establish family
+    /// `.none` without a sandbox helper. Contained uses `platform()`
+    /// (Seatbelt on macOS, Landlock on Linux) and fails closed when that
+    /// backend cannot establish it. `IsolationPlan.mode` is unchanged.
+    /// `LocalExecutor` and tests only; interactive commands go through the
+    /// workspace host.
+    static func apply(
         _ plan: IsolationPlan,
         command: IsolatedCommand,
         io: IsolatedIO = .discard,
@@ -398,7 +415,7 @@ public enum IsolationBackends {
     }
 
     /// Same door as `apply`, off the cooperative pool.
-    public static func applyOffPool(
+    static func applyOffPool(
         _ plan: IsolationPlan,
         command: IsolatedCommand,
         io: IsolatedIO = .discard,
@@ -461,7 +478,9 @@ func prepareSeatbelt(
         case .success(let compiled):
             var profile = compiled.allowingExecutable(command.executable)
                 .allowingLoopbackEgress()
-            if let agentBin = AgentBin.installedDirectory(),
+                .allowingLoopbackBind()
+            let agentBin = AgentBin.installedDirectory()
+            if let agentBin,
                 let home = ProcessInfo.processInfo.environment["HOME"]
             {
                 profile = profile.allowingAgentBin(AgentBin.resolve(binDirectory: agentBin, home: home))
@@ -469,6 +488,9 @@ func prepareSeatbelt(
             guard let workspace = plan.workspace else {
                 return .failure(.containedGuaranteesUnsupported)
             }
+            // Resolved once here for the profile grants; the spawn body
+            // reuses the carried facts instead of re-resolving.
+            let productive: ProductiveWorkspaceResolution
             switch existingResolvedWorkspacePath(workspace) {
             case .failure(let error):
                 return .failure(error)
@@ -482,12 +504,15 @@ func prepareSeatbelt(
                 case .success:
                     break
                 }
+                productive = resolveProductiveWorkspace(workspacePath: resolved, agentBin: agentBin)
+                profile = profile.allowingProductiveWorkspace(productive)
             }
             guard
                 let request = IsolatedLaunchRequest(
                     plan: plan,
                     command: command,
-                    launch: .seatbelt(profile)
+                    launch: .seatbelt(profile),
+                    productive: productive
                 )
             else {
                 return .failure(.containedGuaranteesUnsupported)

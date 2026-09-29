@@ -10,7 +10,7 @@ import RVDomain
 /// Spawn, publish, and unmount failures stay `IsolationApplyError` values.
 /// The other cases are workspace lifetime failures: the process was not
 /// started, or close refused to publish because a child was still alive.
-public enum WorkspaceSessionError: Error, Sendable, Equatable {
+enum WorkspaceSessionError: Error, Sendable, Equatable {
     case apply(IsolationApplyError)
     /// Close has been accepted, or the workspace is not active. No process was spawned.
     case notAcceptingRuntime(WorkspaceLifecycle)
@@ -51,11 +51,11 @@ enum WorkspaceSessionFailure {
 
 /// A runtime that has passed the Seatbelt handshake and is still the
 /// workspace's responsibility until it exits or the workspace closes.
-public struct RunningRuntime: Sendable {
-    public let session: RuntimeSession
+struct RunningRuntime: Sendable {
+    let session: RuntimeSession
     let capability: RuntimeCapability
 
-    public var id: RuntimeSessionID { session.id }
+    var id: RuntimeSessionID { session.id }
 }
 
 /// Identity of a descriptor RV still holds. A runtime must not have this
@@ -72,9 +72,13 @@ struct WorkspaceControlFile: Equatable, Sendable {
 /// single-runtime launch, so Swift task cancellation is visible, and on an
 /// owned thread for every additional runtime. Those threads are retained
 /// until the process group is dead. There is no process-wide workspace table.
+///
+/// Only the workspace host process opens a supervisor. Interactive commands
+/// in other processes attach through `WorkspaceClient`; they cannot name
+/// this type.
 // @unchecked: `boundary` (WorkspaceInodeBoundary) is a non-Sendable holder.
 // All supervisor-owned mutable state is in `Mutex<State>`.
-public final class WorkspaceSessionSupervisor: @unchecked Sendable {
+final class WorkspaceSessionSupervisor: @unchecked Sendable {
     #if os(macOS)
     private struct State: Sendable {
         var lifecycle: WorkspaceLifecycle
@@ -93,7 +97,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         case finished(Result<Void, WorkspaceSessionError>)
     }
 
-    public let id: WorkspaceSessionID
+    let id: WorkspaceSessionID
     private let original: WorkingDirectory
     private let protected: WorkingDirectory
     private let createdAt: Date
@@ -139,7 +143,8 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     /// Open a protected workspace at `workspace`.
     ///
     /// On failure the workspace is not active. Linux refuses before a mount.
-    public static func open(
+    /// The workspace host process is the only production caller.
+    static func open(
         _ workspace: WorkingDirectory
     ) -> Result<WorkspaceSessionSupervisor, WorkspaceSessionError> {
         #if os(macOS)
@@ -367,7 +372,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         ownerLock.release()
     }
 
-    public var snapshot: RVWorkspaceSession {
+    var snapshot: RVWorkspaceSession {
         state.withLock { state in
             RVWorkspaceSession(
                 id: id,
@@ -388,12 +393,13 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     ///
     /// Returns after the Seatbelt handshake. The process keeps running.
     /// A second call does not create another volume.
-    public func launch(
+    func launch(
         host: HookHost?,
         command: IsolatedCommand,
         plan: ContainedPlan,
         io: IsolatedIO = .discard,
-        admission: RuntimeAdmissionConfiguration = .failClosed
+        admission: RuntimeAdmissionConfiguration = .failClosed,
+        spawnFault: RuntimeSpawnFault? = nil
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         launch(
             host: host,
@@ -401,7 +407,8 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
             plan: plan,
             io: io,
             admission: admission,
-            sessionStore: .production
+            sessionStore: .production,
+            spawnFault: spawnFault
         )
     }
 
@@ -412,14 +419,19 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
         io: IsolatedIO,
         admission: RuntimeAdmissionConfiguration,
         sessionStore: RuntimeSessionStore,
-        runningLimit: Int? = nil
+        runningLimit: Int? = nil,
+        spawnFault: RuntimeSpawnFault? = nil
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         let request: IsolatedLaunchRequest
         switch prepareSeatbelt(plan.isolationPlan(), command) {
         case .failure(let error):
             return .failure(.apply(error))
         case .success(let prepared):
-            request = prepared.withIO(io)
+            if let spawnFault {
+                request = prepared.withIO(io).withSpawnFault(spawnFault)
+            } else {
+                request = prepared.withIO(io)
+            }
         }
         guard request.containedWorkspacePath == protected.rawValue else {
             return .failure(.apply(.workspacePathUnresolvable))
@@ -483,7 +495,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     }
 
     /// Stop one runtime. The workspace stays mounted and is not published.
-    public func cancel(
+    func cancel(
         _ runtime: RuntimeSessionID
     ) -> Result<Void, WorkspaceSessionError> {
         let child = state.withLock { state -> WorkspaceChild? in
@@ -500,7 +512,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     }
 
     /// Stop every runtime, publish once, and remove the private volume.
-    public func close() -> Result<Void, WorkspaceSessionError> {
+    func close() -> Result<Void, WorkspaceSessionError> {
         if state.withLock({ $0.abandoned }) {
             return .failure(.alreadyClosed)
         }
@@ -601,11 +613,7 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
             guard let child = slot.child else {
                 return .failure(.apply(.processSpawnFailed))
             }
-            if request.spawnFault == .register {
-                retireUnrecorded(child)
-                return .failure(.apply(.processSpawnFailed))
-            }
-            switch recordProcessGroup(child) {
+            switch recordProcessGroup(child, spawnFault: request.spawnFault) {
             case .failure(let error):
                 retireUnrecorded(child)
                 return .failure(error)
@@ -616,9 +624,12 @@ public final class WorkspaceSessionSupervisor: @unchecked Sendable {
     }
 
     private func recordProcessGroup(
-        _ child: WorkspaceChild
+        _ child: WorkspaceChild,
+        spawnFault: RuntimeSpawnFault?
     ) -> Result<Void, WorkspaceSessionError> {
-        if TerminalTestInjection.failRegistration.withLock({ $0 }) {
+        // Request-scoped: a global flag here would fail parallel sibling
+        // launches that share this process.
+        if spawnFault == .register {
             return .failure(.apply(.lifetimeBoundaryFailed))
         }
         guard let fact = ProcessGroupRecovery.capture(pid: child.live.pid) else {

@@ -199,9 +199,6 @@ enum WorkspaceCommandRun {
     }
 
     static func run(_ raw: String?, rows: Int?, columns: Int?, command: [String]) throws {
-        #if !os(macOS)
-        throw ValidationError("contained workspace host is unavailable")
-        #else
         guard let executable = command.first, executable.hasPrefix("/"), executable.contains("\0") == false else {
             throw ValidationError("executable must be an absolute path")
         }
@@ -209,7 +206,36 @@ enum WorkspaceCommandRun {
         guard arguments.contains(where: { $0.contains("\0") }) == false else {
             throw ValidationError("executable must be an absolute path")
         }
+        #if !os(macOS)
+        throw ValidationError("contained workspace host is unavailable")
+        #else
         let project = try requireProject(raw)
+        try runInteractive(
+            project: project,
+            executable: executable,
+            arguments: arguments,
+            hook: nil,
+            rows: rows,
+            columns: columns
+        )
+        #endif
+    }
+
+    /// One interactive launch path for every agent frontend. `workspace run`
+    /// and the `rv opencode` compatibility command both arrive here, so PTY
+    /// ownership, the terminal bridge, resize, and exit propagation cannot
+    /// drift between entrypoints.
+    static func runInteractive(
+        project: String,
+        executable: String,
+        arguments: [String],
+        hook: HookHost?,
+        rows: Int?,
+        columns: Int?
+    ) throws {
+        #if !os(macOS)
+        throw ValidationError("contained workspace host is unavailable")
+        #else
         let endpoint = try requireEndpoint(
             WorkspaceHosts.ensure(project: project, executable: try hostBinary())
         )
@@ -225,6 +251,7 @@ enum WorkspaceCommandRun {
         let launched = client.launchRuntime(
             executable: executable,
             arguments: arguments,
+            hookHost: hook,
             terminalRows: rows,
             terminalColumns: columns
         )
@@ -423,6 +450,8 @@ enum WorkspaceCommandRun {
         switch error {
         case .disconnected: "workspace host disconnected"
         case .malformed: "workspace host rejected the request"
+        case .requestTooLarge:
+            "command exceeds the workspace control limit (\(WorkspaceControlLimits.maxArguments) arguments, \(WorkspaceControlLimits.maxArgumentBytes) bytes each, \(WorkspaceControlLimits.maxBodyBytes) bytes total)"
         case .timedOut: "workspace host timed out"
         case .incompatibleProtocol: "incompatible workspace protocol"
         case .unauthorizedClient: "unauthorized workspace client"

@@ -2,7 +2,7 @@ import Foundation
 import RVDomain
 import Synchronization
 
-public enum LocalExecutorError: Error, Sendable, Equatable {
+enum LocalExecutorError: Error, Sendable, Equatable {
     case cancelled
     case alreadyExecuted(ActionFingerprint)
     case applyFailed(IsolationApplyError)
@@ -56,13 +56,17 @@ private final class ExecutorApplyGate: Sendable {
 ///
 /// Spawn is only `IsolationBackends.apply`. The contained plan is converted
 /// to `IsolationPlan` at that call.
-public actor LocalExecutor {
+///
+/// Executor-internal: admitted-command machinery and tests only. Interactive
+/// commands never touch this actor; they attach to the workspace host
+/// through `WorkspaceClient`.
+actor LocalExecutor {
     private var dispatched: Set<ActionFingerprint> = []
     private let applyGate = ExecutorApplyGate()
 
-    public init() {}
+    init() {}
 
-    public func run(_ executable: ExecutableAction) async throws -> IsolatedRunResult {
+    func run(_ executable: ExecutableAction) async throws -> IsolatedRunResult {
         guard Task.isCancelled == false else {
             throw LocalExecutorError.cancelled
         }
@@ -117,7 +121,7 @@ public actor LocalExecutor {
     /// Allowed compiles and runs. Denied returns without spawn. Pending
     /// without approval waits. Pending with approval goes through `step`,
     /// which maps the ledger click through `humanDecision` before `resolve`.
-    public func perform(
+    func perform(
         _ authorization: AgentAuthorization,
         plan: ContainedPlan,
         approval: Result<ApprovalDecision, AgentApprovalError>? = nil

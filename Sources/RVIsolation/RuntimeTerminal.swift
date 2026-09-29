@@ -1,22 +1,18 @@
 #if os(macOS)
 import Darwin
 import Foundation
-import Synchronization
 
+/// Test-only PTY-open failure stage. Request-scoped like
+/// `RuntimeSpawnFault`: a global flag would fail parallel sibling opens
+/// that share this process. Production leaves this nil.
 enum TerminalOpenFault: Equatable, Sendable {
     case master
     case grant
+    case unlock
     case slaveName
     case slaveOpen
     case configure
     case stopPipe
-}
-
-/// Test-only launch failures. Production leaves every flag clear.
-enum TerminalTestInjection {
-    static let openFault = Mutex<TerminalOpenFault?>(nil)
-    static let failSpawn = Mutex(false)
-    static let failRegistration = Mutex(false)
 }
 
 /// One notice the single PTY reader fans out. Bytes are unmodified master output.
@@ -101,7 +97,8 @@ final class RuntimeTerminal: @unchecked Sendable {
 
     /// Allocates a PTY, configures termios and the initial window, and keeps
     /// only the master. The slave path is opened again by the child.
-    static func open(rows: Int, columns: Int) -> RuntimeTerminal? {
+    static func open(rows: Int, columns: Int, openFault: TerminalOpenFault? = nil) -> RuntimeTerminal? {
+        func injected(_ fault: TerminalOpenFault) -> Bool { fault == openFault }
         guard TerminalStreamLimits.accepts(rows: rows, columns: columns) else { return nil }
         if injected(.master) { return nil }
         var master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC)
@@ -114,7 +111,15 @@ final class RuntimeTerminal: @unchecked Sendable {
             Darwin.close(master)
             return nil
         }
-        guard grantpt(master) == 0, unlockpt(master) == 0 else {
+        guard grantpt(master) == 0 else {
+            Darwin.close(master)
+            return nil
+        }
+        if injected(.unlock) {
+            Darwin.close(master)
+            return nil
+        }
+        guard unlockpt(master) == 0 else {
             Darwin.close(master)
             return nil
         }
@@ -782,10 +787,6 @@ final class RuntimeTerminal: @unchecked Sendable {
                 break
             }
         }
-    }
-
-    private static func injected(_ fault: TerminalOpenFault) -> Bool {
-        TerminalTestInjection.openFault.withLock { $0 == fault }
     }
 
     private static func setControlCharacter(_ term: inout termios, _ index: Int32, _ value: UInt8) {

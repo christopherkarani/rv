@@ -27,11 +27,12 @@ public struct EgressProxyDenial: Sendable, Equatable {
 ///
 /// Binds 127.0.0.1 on an ephemeral port; the cage reaches it through the
 /// seatbelt `localhost` rule and can dial nothing else directly. Each
-/// CONNECT is admitted by `EgressHostPolicy` (exact HTTPS hosts, or
-/// loopback targets on any port) and resolved here, host-side: clients
-/// never supply IPs. Denials are logged; allowed streams relay as opaque
-/// bytes. One proxy per workspace host; `stop` ends new accepts and lets
-/// in-flight relays drain.
+/// CONNECT is admitted by `EgressHostPolicy` (generic public web hosts
+/// in Standard mode, or loopback targets on any port) and resolved here,
+/// host-side: clients never supply IPs, and non-public addresses never
+/// relay. Denials are logged; allowed streams relay as opaque bytes. One
+/// proxy per workspace host; `stop` ends new accepts and lets in-flight
+/// relays drain.
 public final class EgressProxy: @unchecked Sendable {
     private let policy: EgressHostPolicy
     private let record: @Sendable (EgressProxyDenial) -> Void
@@ -44,7 +45,7 @@ public final class EgressProxy: @unchecked Sendable {
     )
 
     public init(
-        policy: EgressHostPolicy = .agentAPIs,
+        policy: EgressHostPolicy = .publicHTTPS,
         record: (@Sendable (EgressProxyDenial) -> Void)? = nil
     ) {
         self.policy = policy
@@ -216,15 +217,18 @@ public final class EgressProxy: @unchecked Sendable {
             deny(client: client, host: "", port: 0, reason: "malformed")
             return
         }
-        // Absolute-URI is the loopback-gateway shape (plaintext model
-        // gateways, MCP servers): the cage reaches loopback directly, so
-        // relaying grants no new capability. External plaintext stays
-        // refused: the allowlist is HTTPS-only by design.
-        guard policy.allowsLoopbackTarget(host: target.host, port: target.port) else {
+        // Absolute-URI is the plaintext shape: loopback gateways and
+        // servers (the cage reaches loopback directly, so relaying grants
+        // no new capability) plus public port-80 traffic under the same
+        // policy and public-unicast dial filter as CONNECT. Tunneling
+        // plaintext grants no capability that tunneling TLS does not.
+        let external = policy.allows(host: target.host, port: target.port)
+        let loopback = policy.allowsLoopbackTarget(host: target.host, port: target.port)
+        guard external || loopback else {
             deny(client: client, host: target.host, port: target.port, reason: "denied-policy")
             return
         }
-        guard let upstream = EgressProxy.dial(host: target.host, port: target.port, external: false) else {
+        guard let upstream = EgressProxy.dial(host: target.host, port: target.port, external: external) else {
             deny(client: client, host: target.host, port: target.port, reason: "dial-failed")
             return
         }

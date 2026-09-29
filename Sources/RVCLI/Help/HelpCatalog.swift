@@ -90,7 +90,7 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv opencode [--executable <absolute-path>] [--workspace <absolute-path>] [--] <agent-arguments>"),
+                HelpRow(name: "rv opencode [--executable <absolute-path>] [--workspace <path>] [--] <agent-arguments>"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--executable", description: "Absolute executable; default searches absolute PATH directories"),
@@ -99,7 +99,7 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Isolation", rows: [
                 HelpRow(name: "files", description: "Workspace read and write, plus the system locations needed to start programs. Children inherit those rules"),
-                HelpRow(name: "limits", description: "Network is denied. Signals outside the sandbox are denied. Linux refuses launch until it can enforce the same limits"),
+                HelpRow(name: "limits", description: "Public HTTPS through the RV proxy; loopback allowed. Direct public, LAN, and metadata connections denied, as are Unix-socket connections to host sockets. Signals outside the sandbox are denied. Linux refuses launch until it can enforce the same limits"),
                 HelpRow(name: "failure", description: "Sandbox initialization failure stops execution; no unrestricted fallback"),
             ]),
         ],
