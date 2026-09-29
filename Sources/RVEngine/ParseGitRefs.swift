@@ -15,7 +15,7 @@ func parsePush(_ argv: Argv, context: GitAnalysisContext) -> GitAction? {
     var force = GitPushForce.none
     var delete = false
     var positionals: [String] = []
-    for token in ShellPipeline.scanFlags(argv, values: pushFlagValues) {
+    for token in ShellPipeline.scanFlags(argv, valueSpec: pushFlagValues) {
         switch token {
         case .long("force", nil):
             force = .force
@@ -144,7 +144,7 @@ func parseTag(_ argv: Argv) -> GitAction? {
 /// Parses `git stash` argv into a stash-verb action (default `.push`).
 func parseStash(_ argv: Argv) -> GitAction? {
     var verb: GitStashVerb?
-    for token in ShellPipeline.scanFlags(argv, values: stashFlagValues) {
+    for token in ShellPipeline.scanFlags(argv, valueSpec: stashFlagValues) {
         switch token {
         case .long("message", _):
             break

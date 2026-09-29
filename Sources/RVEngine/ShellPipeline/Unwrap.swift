@@ -207,7 +207,7 @@ extension ShellPipeline {
     /// with per-token quoting provenance from `tokens`.
     static func peel(
         text: String,
-        tokens: [Token],
+        tokens: [ShellPipeline.Token],
         argv: Argv?,
         workingDirectory: WorkingDirectory?
     ) -> Peel {
@@ -223,7 +223,7 @@ extension ShellPipeline {
     /// only no-dispatch case; `unwrap` trims before tokenizing, so a leading
     /// newline never reaches dispatch through the recursion.
     static func peelAfterSink(
-        tokens: [Token],
+        tokens: [ShellPipeline.Token],
         argv: Argv?,
         workingDirectory: WorkingDirectory?
     ) -> Peel {
@@ -309,7 +309,7 @@ private func shellKind(_ head: String) -> WrapperKind? {
     }
 }
 
-private func peelSudo(_ tokens: [Token], workingDirectory: WorkingDirectory?) -> Peel {
+private func peelSudo(_ tokens: [ShellPipeline.Token], workingDirectory: WorkingDirectory?) -> Peel {
     var index = 1
     var cwd = workingDirectory
     while index < tokens.count {
@@ -371,7 +371,7 @@ private let sudoLongFlags: Set<String> = [
     "--stdin", "--help", "--version",
 ]
 
-private func peelEnv(_ tokens: [Token], workingDirectory: WorkingDirectory?) -> Peel {
+private func peelEnv(_ tokens: [ShellPipeline.Token], workingDirectory: WorkingDirectory?) -> Peel {
     var index = 1
     var cwd = workingDirectory
     while index < tokens.count {
@@ -419,7 +419,7 @@ private func peelEnv(_ tokens: [Token], workingDirectory: WorkingDirectory?) -> 
 }
 
 private func peelCommandWrapper(
-    _ tokens: [Token],
+    _ tokens: [ShellPipeline.Token],
     workingDirectory: WorkingDirectory?
 ) -> Peel {
     var index = 1
@@ -440,7 +440,7 @@ private func peelCommandWrapper(
 }
 
 private func peelShell(
-    _ tokens: [Token],
+    _ tokens: [ShellPipeline.Token],
     kind: WrapperKind,
     workingDirectory: WorkingDirectory?
 ) -> Peel {
@@ -456,7 +456,7 @@ private func peelShell(
         }
         if let value = attachedOptionValue(token, long: "--command") {
             return peelShellPayload(
-                Token(lexeme: value, wasQuoted: tokens[index].wasQuoted),
+                ShellPipeline.Token(lexeme: value, wasQuoted: tokens[index].wasQuoted),
                 kind: kind,
                 cwd: workingDirectory
             )
@@ -485,7 +485,7 @@ private func peelShell(
 
 /// Unquoted, `$`, and `$'…'` `-c` payloads are uncertain. Fail-closed.
 private func peelShellPayload(
-    _ token: Token,
+    _ token: ShellPipeline.Token,
     kind: WrapperKind,
     cwd: WorkingDirectory?
 ) -> Peel {
@@ -503,7 +503,7 @@ private let nodeEvalFlags: Set<String> = ["-e", "--eval", "-p", "--print"]
 private let rubyEvalFlags: Set<String> = ["-e"]
 
 private func peelInterpreter(
-    _ tokens: [Token],
+    _ tokens: [ShellPipeline.Token],
     kind: WrapperKind,
     flags: Set<String>,
     extract: (String) -> InterpreterExtract,
@@ -547,7 +547,7 @@ private func peelInterpreter(
 /// Quoted `-c`/`-e` with no `$` / backtick is a captured program. Unquoted
 /// or expanding payloads are an unknown inner program (never-slip).
 private func peelCapturedInterpreterPayload(
-    _ payload: Token,
+    _ payload: ShellPipeline.Token,
     kind: WrapperKind,
     extract: (String) -> InterpreterExtract,
     cwd: WorkingDirectory?
@@ -867,18 +867,18 @@ private func quoteIfNeeded(_ value: String) -> String {
     return value
 }
 
-private func renderCommand(_ tokens: [Token]) -> String {
+private func renderCommand(_ tokens: [ShellPipeline.Token]) -> String {
     tokens.map(renderToken).joined(separator: " ")
 }
 
-private func renderToken(_ token: Token) -> String {
+private func renderToken(_ token: ShellPipeline.Token) -> String {
     if token.wasQuoted || token.lexeme.contains(where: { $0.isWhitespace }) {
         return "'" + token.lexeme.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
     return token.lexeme
 }
 
-func peelTimeout(_ tokens: [Token], workingDirectory: WorkingDirectory?) -> Peel {
+func peelTimeout(_ tokens: [ShellPipeline.Token], workingDirectory: WorkingDirectory?) -> Peel {
     var index = 1
     while index < tokens.count {
         let token = tokens[index].lexeme
@@ -916,7 +916,7 @@ func peelTimeout(_ tokens: [Token], workingDirectory: WorkingDirectory?) -> Peel
     return .next(renderCommand(rest), .timeout, workingDirectory)
 }
 
-private func peelNice(_ tokens: [Token], workingDirectory: WorkingDirectory?) -> Peel {
+private func peelNice(_ tokens: [ShellPipeline.Token], workingDirectory: WorkingDirectory?) -> Peel {
     var index = 1
     var sawOption = false
     while index < tokens.count {
@@ -958,7 +958,7 @@ private func peelNice(_ tokens: [Token], workingDirectory: WorkingDirectory?) ->
     return .next(renderCommand(rest), .nice, workingDirectory)
 }
 
-private func peelMise(_ tokens: [Token], workingDirectory: WorkingDirectory?) -> Peel {
+private func peelMise(_ tokens: [ShellPipeline.Token], workingDirectory: WorkingDirectory?) -> Peel {
     guard tokens.count >= 2 else { return .notWrapper }
     let subcommand = tokens[1].lexeme.lowercased()
     guard subcommand == "exec" || subcommand == "x" else { return .notWrapper }
@@ -976,7 +976,7 @@ private func peelMise(_ tokens: [Token], workingDirectory: WorkingDirectory?) ->
         }
         if let value = attachedOptionValue(token, long: "--command") {
             return peelShellPayload(
-                Token(lexeme: value, wasQuoted: tokens[index].wasQuoted),
+                ShellPipeline.Token(lexeme: value, wasQuoted: tokens[index].wasQuoted),
                 kind: .mise,
                 cwd: workingDirectory
             )
@@ -1026,7 +1026,7 @@ private func looksLikeNiceAdjustment(_ token: String) -> Bool {
     return body.isEmpty == false && body.allSatisfy(\.isNumber)
 }
 
-private func peelSSH(_ tokens: [Token], workingDirectory: WorkingDirectory?) -> Peel {
+private func peelSSH(_ tokens: [ShellPipeline.Token], workingDirectory: WorkingDirectory?) -> Peel {
     var index = 1
     while index < tokens.count {
         let token = tokens[index].lexeme
@@ -1065,7 +1065,7 @@ private enum SSHOptionParse: Sendable {
     case missingArgument
 }
 
-private func consumeSSHOption(_ tokens: [Token], at index: Int) -> SSHOptionParse {
+private func consumeSSHOption(_ tokens: [ShellPipeline.Token], at index: Int) -> SSHOptionParse {
     let token = tokens[index].lexeme
     if token.hasPrefix("--") {
         if let equals = token.firstIndex(of: "=") {
@@ -1161,7 +1161,7 @@ private func peelPayloadWrapper(_ consumer: String, cwd: WorkingDirectory?) -> P
 }
 
 private func peelShellDashC(
-    _ tokens: [Token],
+    _ tokens: [ShellPipeline.Token],
     kind: WrapperKind,
     cwd: WorkingDirectory?
 ) -> Peel? {
@@ -1177,7 +1177,7 @@ private func peelShellDashC(
         }
         if let value = attachedOptionValue(token, long: "--command") {
             return peelShellPayload(
-                Token(lexeme: value, wasQuoted: tokens[index].wasQuoted),
+                ShellPipeline.Token(lexeme: value, wasQuoted: tokens[index].wasQuoted),
                 kind: kind,
                 cwd: cwd
             )
@@ -1204,7 +1204,7 @@ private func peelShellDashC(
     return nil
 }
 
-private func peelInterpreterProgramFlag(_ tokens: [Token], kind: WrapperKind) -> Peel? {
+private func peelInterpreterProgramFlag(_ tokens: [ShellPipeline.Token], kind: WrapperKind) -> Peel? {
     let flags: Set<String>
     switch kind {
     case .python:

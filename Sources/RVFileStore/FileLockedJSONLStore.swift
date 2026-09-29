@@ -48,6 +48,13 @@ public struct FileLockedJSONLStore<Record: Codable & Sendable>: Sendable {
         )
     }
 
+    /// Temp-file sibling for atomic `save()`: `<file>.tmp`.
+    /// Single derivation shared with uninstall coverage so crash residue
+    /// can never drift from what uninstall deletes.
+    public static func tempURL(for fileURL: URL) -> URL {
+        fileURL.appendingPathExtension("tmp")
+    }
+
     /// Non-throwing torn-line-tolerant load. Any read failure (missing
     /// file, permission denied, unreadable path) → `[]`; lines with invalid
     /// UTF-8 and undecodable, empty, or whitespace-only lines are skipped.
@@ -110,7 +117,7 @@ public struct FileLockedJSONLStore<Record: Codable & Sendable>: Sendable {
             lines.append(line)
         }
         let body = lines.joined(separator: "\n") + (lines.isEmpty ? "" : "\n")
-        let temp = fileURL.appendingPathExtension("tmp")
+        let temp = Self.tempURL(for: fileURL)
         // Created 0600 from the first byte (no default-permission window) and
         // truncated, never exclusive: a stale tmp from a crashed save must not
         // block the next one. Single write + single rename; Foundation's own

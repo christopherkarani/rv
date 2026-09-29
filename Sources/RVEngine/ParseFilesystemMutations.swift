@@ -19,7 +19,7 @@ func splitFlagTerminator(
     guard spec.isValueFree else {
         return scanFilesystemFlags(argv, values: spec)
     }
-    return splitScannedTerminator(ShellPipeline.scanFlags(argv, values: spec))
+    return splitScannedTerminator(ShellPipeline.scanFlags(argv, valueSpec: spec))
 }
 
 /// Splits scanned value-free flag events at the first `--` terminator.
@@ -55,11 +55,11 @@ func scanFilesystemFlags(
     guard let cut = terminatorIndex(in: argv.args, values: spec) else {
         // No `--` word, so no post-`--` recovery runs: the split is exact
         // for any spec here.
-        return splitScannedTerminator(ShellPipeline.scanFlags(argv, values: spec))
+        return splitScannedTerminator(ShellPipeline.scanFlags(argv, valueSpec: spec))
     }
     let head = Argv(program: argv.program, args: Array(argv.args[..<cut]))
     return (
-        ShellPipeline.scanFlags(head, values: spec),
+        ShellPipeline.scanFlags(head, valueSpec: spec),
         Array(argv.args[(cut + 1)...])
     )
 }
