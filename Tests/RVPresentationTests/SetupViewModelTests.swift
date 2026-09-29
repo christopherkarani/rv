@@ -24,12 +24,14 @@ import RVDomain
     #expect(HookHost.hermes.robotSkipLine.contains("hermes"))
     #expect(HookHost.codex.robotSkipLine.contains("codex"))
     #expect(HookHost.cursor.robotSkipLine.contains("cursor"))
+    #expect(HookHost.antigravity.robotSkipLine.contains("antigravity"))
+    #expect(HookHost.antigravity.displayName == "Antigravity")
 }
 
 @Test func setupSlotSnapshot_hostless_usesHostlessCloserLines() {
     let slots = SetupSlotSnapshot(grok: .skipped, pi: .skipped, openCode: .skipped, wrote: [])
     #expect(slots.closer == .hostless)
-    #expect(slots.slotViews.map(\.kind) == [.skipped, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped])
+    #expect(slots.slotViews.map(\.kind) == [.skipped, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped, .skipped])
     #expect(slots.closer.lines(kind: .setup) == [setupCeremonyHostlessTitle, setupCeremonyHostlessNext])
     #expect(setupCeremonyFrames(slots, kind: .setup)?.last?.closerLines == slots.closer.lines(kind: .setup))
 }

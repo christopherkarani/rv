@@ -341,6 +341,10 @@ private func denyOrTTYStdin(_ host: HookHost) -> String {
         return """
         {"hook_event_name":"beforeShellExecution","cwd":"/tmp/ws","conversation_id":"sess-cursor","command":"git reset --hard"}
         """
+    case .antigravity:
+        return """
+        {"conversationId":"sess-antigravity","toolCall":{"name":"run_command","args":{"CommandLine":"git reset --hard","Cwd":"/tmp/ws"}},"workspacePaths":["/tmp/ws"]}
+        """
     case .openclaw:
         return """
         {"toolName":"exec","cwd":"/tmp/ws","sessionId":"sess-oc","params":{"command":"git reset --hard","workdir":"/tmp/ws"},"toolKind":"exec"}

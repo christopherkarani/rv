@@ -197,7 +197,8 @@ static int is_valid_host(const char *s) {
         || strcmp(s, "openclaw") == 0
         || strcmp(s, "hermes") == 0
         || strcmp(s, "codex") == 0
-        || strcmp(s, "cursor") == 0;
+        || strcmp(s, "cursor") == 0
+        || strcmp(s, "antigravity") == 0;
 }
 
 /* 0 = pipe, 1 = exec rv-cli with the same argv. */

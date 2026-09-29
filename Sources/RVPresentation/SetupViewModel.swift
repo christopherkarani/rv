@@ -12,6 +12,7 @@ extension HookHost {
         case .hermes: "Hermes"
         case .codex: "Codex"
         case .cursor: "Cursor"
+        case .antigravity: "Antigravity"
         }
     }
 }
@@ -36,6 +37,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
     public var hermes: SetupSlotKind
     public var codex: SetupSlotKind
     public var cursor: SetupSlotKind
+    public var antigravity: SetupSlotKind
     public var wrote: Set<HookHost>
 
     public init(
@@ -47,6 +49,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
         hermes: SetupSlotKind = .skipped,
         codex: SetupSlotKind = .skipped,
         cursor: SetupSlotKind = .skipped,
+        antigravity: SetupSlotKind = .skipped,
         wrote: Set<HookHost>
     ) {
         self.grok = grok
@@ -57,6 +60,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
         self.hermes = hermes
         self.codex = codex
         self.cursor = cursor
+        self.antigravity = antigravity
         self.wrote = wrote
     }
 
@@ -70,6 +74,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
         case .hermes: hermes
         case .codex: codex
         case .cursor: cursor
+        case .antigravity: antigravity
         }
     }
 
@@ -86,7 +91,7 @@ public struct SetupSlotSnapshot: Equatable, Sendable {
     public var hasWiredSlot: Bool {
         grok == .wired || pi == .wired || openCode == .wired || claude == .wired
             || openClaw == .wired || hermes == .wired || codex == .wired
-            || cursor == .wired
+            || cursor == .wired || antigravity == .wired
     }
 
     /// Second matching run: hosts already present, this run wrote nothing, none occupied.
@@ -152,7 +157,7 @@ public enum SetupCloser: Equatable, Sendable {
     }
 }
 
-public let setupRobotHostlessLine = "Run rv setup after Pi, Grok, OpenCode, Claude, OpenClaw, Hermes, Codex, or Cursor exists."
+public let setupRobotHostlessLine = "Run rv setup after Pi, Grok, OpenCode, Claude, OpenClaw, Hermes, Codex, Cursor, or Antigravity exists."
 public let setupRobotCompleteLine = "Setup complete. Next  rv test 'git reset --hard'."
 
 extension HookHost {
@@ -167,6 +172,7 @@ extension HookHost {
         case .hermes: "Skipped occupied hermes hook."
         case .codex: "Skipped occupied codex hook."
         case .cursor: "Skipped occupied cursor hook."
+        case .antigravity: "Skipped occupied antigravity hook."
         }
     }
 }

@@ -32,7 +32,7 @@ struct HostNativeAskTests {
         switch host {
         case .pi, .opencode, .claude, .hermes, .openclaw:
             #expect(profile.pause == .spendFirst)
-        case .grok:
+        case .grok, .antigravity:
             #expect(profile.pause == .noPause)
         case .codex, .cursor:
             #expect(profile.pause == .leftoverAskForbidden)
