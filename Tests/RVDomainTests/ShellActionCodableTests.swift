@@ -67,6 +67,35 @@ struct ShellActionCodableTests {
         }
     }
 
+    @Test func analyzedShell_standaloneRoundTripsFlatWire() throws {
+        let analyzed = AnalyzedShell(
+            fingerprint: ActionFingerprint(rawValue: "fp-analyzed-standalone"),
+            scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws")),
+            supportingCommand: ShellCommand(rawValue: "git push --force origin main"),
+            analysis: .git(.push(remote: "origin", refspec: "main", force: .force))
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(analyzed)) as? [String: Any]
+        )
+        #expect(object.keys.contains("gitAction") == true)
+        #expect(object.keys.contains("filesystemAction") == false)
+        #expect(object.keys.contains("analysis") == false)
+        let decoded = try JSONDecoder().decode(
+            AnalyzedShell.self,
+            from: JSONEncoder().encode(analyzed)
+        )
+        #expect(decoded == analyzed)
+    }
+
+    @Test func analyzedShell_rejectsEffectOnlyWire() throws {
+        let effectOnly = ShellAction.effectOnly(
+            EffectShell(fingerprint: ActionFingerprint(rawValue: "fp-effect-only-reject"))
+        )
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(AnalyzedShell.self, from: JSONEncoder().encode(effectOnly))
+        }
+    }
+
     @Test func effectOnlyForcePushFixture_isEffectOnly() {
         guard case .shell(let shell) = ActionPolicyFixtures.forcePush() else {
             Issue.record("expected shell")
