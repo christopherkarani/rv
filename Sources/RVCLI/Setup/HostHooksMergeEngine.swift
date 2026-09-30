@@ -34,8 +34,7 @@ enum HooksLayout: Equatable, Sendable {
 
 /// Per-host wiring descriptor: shape data plus small predicates/builders.
 /// New hook entries are typed (`HookEntry`); parsed file content crosses the
-/// boundary as `JSONValue`. Raw dicts survive only in the `HostWiring`
-/// compat overloads, which bridge onto `JSONValue` at entry.
+/// boundary as `JSONValue`.
 struct HostWiringDescriptor: Sendable {
     var layout: HooksLayout
     /// Nested/grouped insert matchers, in append order (Claude 4, Codex 1, Antigravity 5). Unused for flat.
@@ -325,19 +324,6 @@ enum HostHooksMergeEngine {
             dict["statusMessage"] = .string(statusMessage)
         }
         return .object(dict)
-    }
-
-    /// `[String: Any]` bridge for the frozen `HostWiring` boundary: re-encode
-    /// and re-parse so every read stays typed. Host roots always come from
-    /// JSON bytes, so the round-trip is lossless; anything else yields nil.
-    static func typedRoot(from object: [String: Any]) -> [String: JSONValue]? {
-        guard let data = try? JSONSerialization.data(withJSONObject: object),
-              let value = try? JSONDecoder().decode(JSONValue.self, from: data),
-              let root = value.asObject
-        else {
-            return nil
-        }
-        return root
     }
 
     static func parseRoot(_ data: Data?) throws -> [String: JSONValue] {

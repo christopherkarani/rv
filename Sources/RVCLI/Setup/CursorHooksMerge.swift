@@ -111,14 +111,6 @@ enum CursorHooksMerge {
         HostHooksMergeEngine.locateFingerprintedHooks(in: root, descriptor: wiringDescriptor)
             .contains { $0.listKey == preToolUseKey }
     }
-
-    /// Frozen `HostWiring` boundary: bridges its untyped root onto `JSONValue`.
-    static func hasFileToolEntry(in root: [String: Any]) -> Bool {
-        guard let typed = HostHooksMergeEngine.typedRoot(from: root) else {
-            return false
-        }
-        return hasFileToolEntry(in: typed)
-    }
 }
 
 enum CursorHooksMergeError: Error, Equatable {

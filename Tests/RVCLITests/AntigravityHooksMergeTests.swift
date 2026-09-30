@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 import Testing
 @testable import RVCLI
 
@@ -241,7 +242,8 @@ private func antigravityGroup(_ root: [String: Any]) throws -> [String: Any] {
 
 @Test func antigravityMerge_mergedBytesHaveFileToolMatchers() throws {
     let merged = try antigravityMerged()
-    let root = try #require(JSONSerialization.jsonObject(with: merged) as? [String: Any])
+    let value = try JSONDecoder().decode(JSONValue.self, from: merged)
+    let root = try #require(value.asObject)
     #expect(AntigravityHooksMerge.hasFileToolMatchers(in: root))
     #expect(AntigravityHooksMerge.adapterPath(hooksPath: "/h/.gemini/config/hooks.json") == "/h/.gemini/config/hooks/rv-guard.py")
 }

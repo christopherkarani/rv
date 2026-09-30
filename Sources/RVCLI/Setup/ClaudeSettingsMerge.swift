@@ -132,14 +132,6 @@ enum ClaudeSettingsMerge {
         return Set(fileMatchers).isSubset(of: present)
     }
 
-    /// Frozen `HostWiring` boundary: bridges its untyped root onto `JSONValue`.
-    static func hasFileToolMatchers(in root: [String: Any]) -> Bool {
-        guard let typed = HostHooksMergeEngine.typedRoot(from: root) else {
-            return false
-        }
-        return hasFileToolMatchers(in: typed)
-    }
-
     /// Returns merged settings bytes and whether content changed.
     /// Setup writes through `HostWiring.applyClaude`.
     static func merge(
