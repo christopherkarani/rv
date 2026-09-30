@@ -94,7 +94,12 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
             return tokens.isEmpty ? nil : tokens.joined(separator: " ")
         }
         if let text = value?.string, text.isEmpty == false {
-            if let parsed = JSONParse.value(text) {
+            // Recurse only into containers: the old `JSONSerialization`
+            // funnel rejected top-level fragments, so scalar text never
+            // parsed and passed through verbatim. A parsed scalar must not
+            // drop the command (number/bool/null recurse to nil) or rewrite
+            // it (a quoted string would unquote).
+            if let parsed = JSONParse.value(text), parsed.asObject != nil || parsed.asArray != nil {
                 return commandText(in: parsed)
             }
             return text

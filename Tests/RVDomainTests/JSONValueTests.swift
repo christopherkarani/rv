@@ -74,6 +74,9 @@ struct JSONValueTests {
         #expect(decoded["exact"] == .number(9_007_199_254_740_992))
         #expect(decoded["fallback"] == .string("18446744073709551615"))
         #expect(decoded["negative"] == .number(-9_223_372_036_854_775_808))
+        // The fallback is re-encode-stable: text stays text, exact stays exact.
+        let roundTripped = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(decoded))
+        #expect(roundTripped == decoded)
     }
 
     @Test func codable_roundTripsEqual() throws {

@@ -103,6 +103,20 @@ import RVDomain
     #expect(events.map(\.command.rawValue) == ["git reset --hard", "git status"])
 }
 
+@Test func codexAdapter_bareScalarCommandTextPassesThroughVerbatim() throws {
+    // The old `JSONSerialization` funnel rejected top-level fragments, so a
+    // scalar command string never parsed as JSON and was kept verbatim.
+    // Recursing into a parsed scalar would drop the command (nil) or rewrite
+    // it (unquoted), so only parsed objects/arrays recurse.
+    let payload = """
+    {"session_id":"s","type":"function_call","name":"shell","arguments":"123"}
+    {"session_id":"s","type":"function_call","name":"shell","arguments":"true"}
+    """
+    let url = URL(fileURLWithPath: "/tmp/inline-codex-scalar.jsonl")
+    let events = try CodexStoreAdapter().extract(fileURL: url, data: Data(payload.utf8))
+    #expect(events.map(\.command.rawValue) == ["123", "true"])
+}
+
 @Test func codexAdapter_tempTreeOnly_notLiveHome() throws {
     try withTempHome { homeURL in
         let home = try #require(ScanHome(validating: homeURL.path))
