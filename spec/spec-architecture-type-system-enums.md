@@ -30,13 +30,13 @@ wire-format redesign.
 Audience: implement-spec subagents (fresh context, sparse pointers).
 
 Assumptions: Swift 6.4, `swiftLanguageModes: [.v6]`, macOS 15 floor per
-`Package.swift`, Linux aarch64/x86_64 CI. Base commit for all ticket branches:
-`origin/main` at `9c546c99`.
+`Package.swift`, Linux x86_64 CI (`ubuntu-24.04`) plus macOS runners. Base
+commit for all ticket branches: `origin/main` at `9c546c99`.
 
 ## 2. Definitions
 
 - **Effect-only shell**: a `ShellAction` carrying fingerprint/effects/
-  resources/scope/evidence with no analyzed subject (`analysis == nil`).
+  resources/scope/`supportingCommand` with no analyzed subject (`analysis == nil`).
 - **Analyzed shell**: a `ShellAction` whose subject is `.git` or
   `.filesystem`; effects/resources are projections of the subject.
 - **XOR labels**: the Codable keys `gitAction` / `filesystemAction`; at most
@@ -44,7 +44,8 @@ Assumptions: Swift 6.4, `swiftLanguageModes: [.v6]`, macOS 15 floor per
 - **Projection**: `SemanticAction.effects` / `.resources` derived from the
   subject. Today stored redundantly and equality-checked at decode.
 - **Refspec**: a git refspec string (e.g. `HEAD:main`). Not a branch name.
-- **JSONValue**: a lossless, `Sendable`+`Codable`+`Equatable` JSON enum.
+- **JSONValue**: a `Sendable`+`Codable`+`Equatable` JSON enum, lossless
+  except for integers beyond 2^53 (see §9 edge cases).
 - **DAG**: ticket dependency graph. Frontier = tickets whose `depends-on`
   are all merged.
 
@@ -176,7 +177,7 @@ returns `JSONValue?` (object-or-nil), `JSONParse.value` returns
   either effect-only (no subject) or analyzed (bags computed from subject);
   no value can carry disagreeing bags. `projectedBag` does not exist.
 - **AC-002**: Given the old wire JSON for analyzed/effect-only shells, When
-  decoded, Then decode succeeds and re-encode is byte-identical in keys.
+  decoded, Then decode succeeds and re-encode is key-identical (same key set).
 - **AC-003**: Given a `.push` action, When reading its resources, Then a
   refspec is never observable as `BranchName`.
 - **AC-004**: Given any adapter JSON payload, When parsed via `JSONParse`,
@@ -289,6 +290,8 @@ implement, do not redesign).
   - Zero `as?`-on-`Any` in the listed consumer files; AC-004 holds there.
   - `swift build` zero warnings; all affected suites green.
 - `review-hint`: `101–1499`.
+- Note: T1's mechanical fallout may touch the same `Tests/` files; if so,
+  rebase onto T1 at merge time (CON-005).
 
 ## 6. Test Automation Strategy
 
@@ -362,6 +365,7 @@ fallback documented in code. Empty/missing keys yield nil, never trap.
 ## 11. Related Specifications / Further Reading
 
 - Report: `/tmp/swift-type-system-review-rv-20260930-034141.html`
+  (pipeline-local artifact; may no longer exist — rationale summarized in §7)
 - Skill: `swift-type-system-architecture` (design rationale, lenses)
 - Pipeline: `swift-architecture-pipeline` (execution contract)
 - Prior work: HostWiring #251, typed RV slice #253, ApprovalRuntime #250
