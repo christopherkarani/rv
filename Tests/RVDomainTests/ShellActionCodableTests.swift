@@ -25,6 +25,49 @@ struct ShellActionCodableTests {
         #expect(decoded == analyzedForcePush())
     }
 
+    @Test func decode_bothXORKeysFails() throws {
+        var object = try jsonObject(analyzedForcePush())
+        let filesystemShell = ShellAction.analyzed(
+            AnalyzedShell(
+                fingerprint: ActionFingerprint(rawValue: "fp-analyzed-fs"),
+                analysis: .filesystem(
+                    .read(targets: [
+                        FilesystemTarget(
+                            apparent: "/tmp/ws/file.txt",
+                            canonical: "/tmp/ws/file.txt",
+                            scope: .insideRepository,
+                            kind: .sourceCode
+                        )
+                    ])
+                )
+            )
+        )
+        let filesystemObject = try jsonObject(filesystemShell)
+        object["filesystemAction"] = try #require(filesystemObject["filesystemAction"])
+        let data = try JSONSerialization.data(withJSONObject: object)
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(ShellAction.self, from: data)
+        }
+    }
+
+    @Test func decode_effectOnlyAbsentBagsDefaultToEmpty() throws {
+        var object = try jsonObject(
+            ShellAction.effectOnly(
+                EffectShell(fingerprint: ActionFingerprint(rawValue: "fp-effect-only-bare"))
+            )
+        )
+        object.removeValue(forKey: "effects")
+        object.removeValue(forKey: "resources")
+        let data = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(ShellAction.self, from: data)
+        guard case .effectOnly(let effect) = decoded else {
+            Issue.record("expected effect-only shell")
+            return
+        }
+        #expect(effect.effects == ActionEffects())
+        #expect(effect.resources == ActionResources())
+    }
+
     @Test func analyzedShell_roundTripsEqual() throws {
         let shell = analyzedForcePush()
         let decoded = try JSONDecoder().decode(
