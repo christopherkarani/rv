@@ -228,9 +228,9 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     let stub = try #require(EgressStubServer(reply: "PONG\n"))
     let collector = EgressDenialCollector()
     let proxy = EgressProxy(record: { collector.record($0) })
-    let port = try #require(proxy.start())
+    let port = try proxy.start().get()
     defer { proxy.stop() }
-    #expect(proxy.start() == port)
+    #expect(proxy.start() == .success(port))
     let client = try #require(egressConnect(port: port))
     defer { close(client) }
     #expect(egressSend(client, text: "CONNECT 127.0.0.1:\(stub.port) HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"))
@@ -245,11 +245,35 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     #expect(collector.all.isEmpty)
 }
 
+@Test func egressDial_reportsFilterRefusalAndConnectOutcomes() throws {
+    let stub = try #require(EgressStubServer(reply: "PONG\n"))
+    // Numeric loopback resolves without DNS; the external filter rejects it.
+    #expect(
+        EgressProxy.dial(host: "127.0.0.1", port: stub.port, external: true)
+            == .addressFiltered
+    )
+    // Loopback targets bypass the filter and connect.
+    switch EgressProxy.dial(host: "127.0.0.1", port: stub.port, external: false) {
+    case .connected(let fd):
+        close(fd)
+    case .dnsFailed, .addressFiltered, .connectFailed:
+        Issue.record("loopback dial to a live stub must connect")
+    }
+    // Nothing listens on discard; refusal is connectFailed, not dnsFailed.
+    #expect(
+        EgressProxy.dial(host: "127.0.0.1", port: 9, external: false) == .connectFailed
+    )
+    // .invalid never resolves.
+    #expect(
+        EgressProxy.dial(host: "no-such-host.invalid", port: 443, external: true) == .dnsFailed
+    )
+}
+
 @Test func egressProxyRelaysLoopbackAbsoluteHTTP() throws {
     let stub = try #require(EgressStubServer(reply: "PONG\n"))
     let collector = EgressDenialCollector()
     let proxy = EgressProxy(record: { collector.record($0) })
-    let port = try #require(proxy.start())
+    let port = try proxy.start().get()
     defer { proxy.stop() }
     let client = try #require(egressConnect(port: port))
     defer { close(client) }
@@ -274,7 +298,7 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     // port-80 traffic, so pin the allowlist policy for this denial shape.
     let collector = EgressDenialCollector()
     let proxy = EgressProxy(policy: .agentAPIs, record: { collector.record($0) })
-    let port = try #require(proxy.start())
+    let port = try proxy.start().get()
     defer { proxy.stop() }
     let client = try #require(egressConnect(port: port))
     defer { close(client) }
@@ -285,7 +309,7 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     #expect(collector.all.count == 1)
     #expect(collector.all.first?.host == "denied.example")
     #expect(collector.all.first?.port == 80)
-    #expect(collector.all.first?.reason == "denied-policy")
+    #expect(collector.all.first?.reason == .deniedPolicy)
 }
 
 @Test func egressProxyDeniesUnknownHosts() throws {
@@ -293,7 +317,7 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     // valid public DNS name, so pin the allowlist policy here.
     let collector = EgressDenialCollector()
     let proxy = EgressProxy(policy: .agentAPIs, record: { collector.record($0) })
-    let port = try #require(proxy.start())
+    let port = try proxy.start().get()
     defer { proxy.stop() }
     let client = try #require(egressConnect(port: port))
     defer { close(client) }
@@ -304,7 +328,7 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     #expect(collector.all.count == 1)
     #expect(collector.all.first?.host == "denied.example")
     #expect(collector.all.first?.port == 443)
-    #expect(collector.all.first?.reason == "denied-policy")
+    #expect(collector.all.first?.reason == .deniedPolicy)
 }
 
 @Test func egressProxyDeniesMalformedAndBypassShapes() throws {
@@ -312,7 +336,7 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     // denied here; publicHTTPS admits them subject to the dial filter.
     let collector = EgressDenialCollector()
     let proxy = EgressProxy(policy: .agentAPIs, record: { collector.record($0) })
-    let port = try #require(proxy.start())
+    let port = try proxy.start().get()
     defer { proxy.stop() }
     for request in [
         "GET http://api.anthropic.com/ HTTP/1.1\r\n\r\n",
@@ -329,8 +353,8 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     egressAwaitDenials(collector, count: 4)
     #expect(collector.all.count == 4)
     let reasons = Set(collector.all.map(\.reason))
-    #expect(reasons.contains("malformed"))
-    #expect(reasons.contains("denied-policy"))
+    #expect(reasons.contains(.malformed))
+    #expect(reasons.contains(.deniedPolicy))
 }
 
 @Test func egressProxyReportsDialFailures() throws {
@@ -359,7 +383,7 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     close(reserved)
     let collector = EgressDenialCollector()
     let proxy = EgressProxy(record: { collector.record($0) })
-    let port = try #require(proxy.start())
+    let port = try proxy.start().get()
     defer { proxy.stop() }
     let client = try #require(egressConnect(port: port))
     defer { close(client) }
@@ -368,13 +392,33 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     #expect(response.contains("HTTP/1.1 403"))
     egressAwaitDenials(collector, count: 1)
     #expect(collector.all.count == 1)
-    #expect(collector.all.first?.reason == "dial-failed")
+    #expect(collector.all.first?.reason == .dialFailed)
+}
+
+@Test func egressProxyRecordsDnsFailuresPrecisely() throws {
+    // Admitted by the public-HTTPS policy (valid syntax), then NXDOMAIN:
+    // records dns-failed, not the old catch-all dial-failed.
+    let collector = EgressDenialCollector()
+    let proxy = EgressProxy(policy: .publicHTTPS, record: { collector.record($0) })
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let client = try #require(egressConnect(port: port))
+    defer { close(client) }
+    #expect(
+        egressSend(client, text: "CONNECT no-such-host.invalid:443 HTTP/1.1\r\n\r\n")
+    )
+    let response = egressReadUntil403(client)
+    #expect(response.contains("HTTP/1.1 403"))
+    egressAwaitDenials(collector, count: 1)
+    #expect(collector.all.count == 1)
+    #expect(collector.all.first?.host == "no-such-host.invalid")
+    #expect(collector.all.first?.reason == .dnsFailed)
 }
 
 @Test func egressProxyRejectsOversizeHeaders() throws {
     let collector = EgressDenialCollector()
     let proxy = EgressProxy(record: { collector.record($0) })
-    let port = try #require(proxy.start())
+    let port = try proxy.start().get()
     defer { proxy.stop() }
     let client = try #require(egressConnect(port: port))
     defer { close(client) }
@@ -382,7 +426,7 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     let response = egressReadUntil403(client)
     #expect(response.contains("HTTP/1.1 403"))
     egressAwaitDenials(collector, count: 1)
-    #expect(collector.all.first?.reason == "header-too-large")
+    #expect(collector.all.first?.reason == .headerTooLarge)
 }
 
 private func egressIsPublicUnicast(family: Int32, _ text: String) -> Bool? {

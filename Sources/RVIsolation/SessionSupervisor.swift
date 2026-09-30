@@ -67,8 +67,8 @@ func superviseSeatbelt(
         return .failure(.cancelled)
     }
     // Hand-built profiles that are not the contained compiler output never
-    // mount or execute. Production profiles include this deny.
-    guard profile.source.contains("(deny file-link)") else {
+    // mount or execute. Provenance rides the profile value, not a text scan.
+    guard profile.isContainedCompilerOutput else {
         return .failure(.seatbeltNotEstablished)
     }
     let supervisor: WorkspaceSessionSupervisor

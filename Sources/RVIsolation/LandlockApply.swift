@@ -58,10 +58,12 @@ func runLandlock(
     guard let ruleset = request.landlockRuleset else {
         return .failure(.backendMismatch)
     }
-    guard let path = resolvedIsolationExecPath(
-        override: executable,
-        workspacePath: ruleset.workspacePath
-    ) else {
+    guard
+        case .success(let path) = resolvedIsolationExecPath(
+            override: executable,
+            workspacePath: ruleset.workspacePath
+        )
+    else {
         return .failure(.backendUnavailable)
     }
     return spawn(request, executablePath: path)
@@ -96,19 +98,59 @@ func refuseLandlockSpawn(
     guard let ruleset = request.landlockRuleset else {
         return .failure(.backendMismatch)
     }
-    guard usableIsolationExecPath(
-        executablePath ?? request.launchExecutable,
-        workspacePath: ruleset.workspacePath
-    ) != nil else {
+    guard
+        case .success = usableIsolationExecPath(
+            executablePath ?? request.launchExecutable,
+            workspacePath: ruleset.workspacePath
+        )
+    else {
         return .failure(.backendUnavailable)
     }
     return .failure(.containedGuaranteesUnsupported)
 }
 
+/// Why an `rv-isolation-exec` candidate was refused. Every old `nil` is
+/// one case; callers still fail closed with `.backendUnavailable`, but
+/// tests and future diagnostics see the reason. `.unresolvable` and
+/// `.doesNotExist` are teardown races (the path passed an earlier check
+/// and vanished); every other case is deterministically pinned by tests.
+enum IsolationExecRefusal: Error, Sendable, Equatable {
+    /// Candidate path is not absolute.
+    case notAbsolute
+    /// Basename is not `rv-isolation-exec`.
+    case wrongName
+    /// `access(X_OK)` failed (missing, unexecutable, or dangling).
+    case notExecutable
+    /// Realpath failed after the executable check (torn down mid-lookup).
+    case unresolvable
+    /// Resolved to filesystem root.
+    case resolvedIsRoot
+    /// Resolved basename is not `rv-isolation-exec` (symlink retarget).
+    case resolvedWrongName
+    /// Resolved path vanished between realpath and stat.
+    case doesNotExist
+    /// Resolved path is a directory.
+    case isDirectory
+    /// Workspace canonicalizes to filesystem root.
+    case workspaceIsRoot
+    /// The lookup path lives in the workspace (even a symlink to outside).
+    case lookupInsideWorkspace
+    /// The resolved path is at or under the workspace.
+    case resolvedInsideWorkspace
+    /// `/proc/self/exe` did not resolve (Linux self-locate).
+    case selfLookupFailed
+    /// No candidate location existed to check.
+    case notFound
+}
+
 /// Locate `rv-isolation-exec`. Never a relative argv0 guess, never an env
 /// override, never a helper at or under the workspace (including a
-/// workspace symlink whose target is outside).
-func resolvedIsolationExecPath(override: URL?, workspacePath: String) -> String? {
+/// workspace symlink whose target is outside). On failure returns the last
+/// refusal encountered across the candidate locations.
+func resolvedIsolationExecPath(
+    override: URL?,
+    workspacePath: String
+) -> Result<String, IsolationExecRefusal> {
     if let override {
         return usableIsolationExecPath(override.path, workspacePath: workspacePath)
     }
@@ -116,12 +158,15 @@ func resolvedIsolationExecPath(override: URL?, workspacePath: String) -> String?
     // argv[0] is caller-controlled and may be just `rv` when the installed
     // C front door execs rv-cli. Locate the sibling of the kernel's actual
     // executable, independent of PATH and the spelling of argv[0].
-    guard let executable = posixRealpath("/proc/self/exe") else { return nil }
+    guard let executable = posixRealpath("/proc/self/exe") else {
+        return .failure(.selfLookupFailed)
+    }
     let sibling = URL(fileURLWithPath: executable)
         .deletingLastPathComponent()
         .appendingPathComponent(IsolationBackends.isolationExecName).path
     return usableIsolationExecPath(sibling, workspacePath: workspacePath)
     #else
+    var refusal = IsolationExecRefusal.notFound
     if let argv0 = CommandLine.arguments.first,
         IsolatedCommand.isAbsoluteExecutable(argv0)
     {
@@ -129,8 +174,11 @@ func resolvedIsolationExecPath(override: URL?, workspacePath: String) -> String?
             .deletingLastPathComponent()
             .appendingPathComponent(IsolationBackends.isolationExecName)
             .path
-        if let path = usableIsolationExecPath(sibling, workspacePath: workspacePath) {
-            return path
+        switch usableIsolationExecPath(sibling, workspacePath: workspacePath) {
+        case .success(let path):
+            return .success(path)
+        case .failure(let error):
+            refusal = error
         }
     }
     for bundle in Bundle.allBundles {
@@ -138,47 +186,60 @@ func resolvedIsolationExecPath(override: URL?, workspacePath: String) -> String?
             .deletingLastPathComponent()
             .appendingPathComponent(IsolationBackends.isolationExecName)
             .path
-        if let path = usableIsolationExecPath(sibling, workspacePath: workspacePath) {
-            return path
+        switch usableIsolationExecPath(sibling, workspacePath: workspacePath) {
+        case .success(let path):
+            return .success(path)
+        case .failure(let error):
+            refusal = error
         }
     }
-    return nil
+    return .failure(refusal)
     #endif
 }
 
-func usableIsolationExecPath(_ path: String, workspacePath: String) -> String? {
+func usableIsolationExecPath(
+    _ path: String,
+    workspacePath: String
+) -> Result<String, IsolationExecRefusal> {
     guard IsolatedCommand.isAbsoluteExecutable(path) else {
-        return nil
+        return .failure(.notAbsolute)
     }
     let name = URL(fileURLWithPath: path).lastPathComponent
     guard name == IsolationBackends.isolationExecName else {
-        return nil
+        return .failure(.wrongName)
     }
     guard FileManager.default.isExecutableFile(atPath: path) else {
-        return nil
+        return .failure(.notExecutable)
     }
     guard let resolved = posixRealpath(path) else {
-        return nil
+        return .failure(.unresolvable)
     }
-    guard IsolatedCommand.isAbsoluteExecutable(resolved),
-        isFilesystemRoot(resolved) == false,
-        URL(fileURLWithPath: resolved).lastPathComponent == IsolationBackends.isolationExecName
-    else {
-        return nil
+    // No absolute check: realpath succeeds only with an absolute result.
+    guard isFilesystemRoot(resolved) == false else {
+        return .failure(.resolvedIsRoot)
+    }
+    guard URL(fileURLWithPath: resolved).lastPathComponent == IsolationBackends.isolationExecName else {
+        return .failure(.resolvedWrongName)
     }
     var isDirectory: ObjCBool = false
     let exists = FileManager.default.fileExists(atPath: resolved, isDirectory: &isDirectory)
-    guard exists, isDirectory.boolValue == false else {
-        return nil
+    guard exists else {
+        return .failure(.doesNotExist)
+    }
+    guard isDirectory.boolValue == false else {
+        return .failure(.isDirectory)
     }
     let canonicalWorkspace = posixRealpath(workspacePath) ?? workspacePath
-    if isFilesystemRoot(canonicalWorkspace)
-        || isLookupInsideWorkspace(path, workspace: canonicalWorkspace)
-        || isResolvedPath(resolved, atOrBeneath: canonicalWorkspace)
-    {
-        return nil
+    guard isFilesystemRoot(canonicalWorkspace) == false else {
+        return .failure(.workspaceIsRoot)
     }
-    return resolved
+    guard isLookupInsideWorkspace(path, workspace: canonicalWorkspace) == false else {
+        return .failure(.lookupInsideWorkspace)
+    }
+    guard isResolvedPath(resolved, atOrBeneath: canonicalWorkspace) == false else {
+        return .failure(.resolvedInsideWorkspace)
+    }
+    return .success(resolved)
 }
 
 /// True when the lookup lives in the workspace, even if the last component

@@ -8,19 +8,57 @@ import Foundation
 import RVDomain
 import Synchronization
 
+/// Why one CONNECT was denied. Raw values are the `egress-denials.jsonl`
+/// spellings: existing values are preserved, and the old catch-all
+/// `dial-failed` now covers only connect failures (DNS and filter
+/// refusals record precisely).
+public enum EgressDenialReason: String, Sendable, Equatable {
+    case headerTooLarge = "header-too-large"
+    case deniedPolicy = "denied-policy"
+    case malformed = "malformed"
+    case dnsFailed = "dns-failed"
+    case addressFiltered = "address-filtered"
+    case dialFailed = "dial-failed"
+}
+
 /// One denied CONNECT, recorded for the allowlist learning loop.
 public struct EgressProxyDenial: Sendable, Equatable {
     public var host: String
     public var port: Int
-    public var reason: String
+    public var reason: EgressDenialReason
     public var recordedAt: Date
 
-    public init(host: String, port: Int, reason: String, recordedAt: Date) {
+    public init(host: String, port: Int, reason: EgressDenialReason, recordedAt: Date) {
         self.host = host
         self.port = port
         self.reason = reason
         self.recordedAt = recordedAt
     }
+}
+
+/// Why the egress proxy could not bind. Carries the phase plus the errno
+/// (or EAI code) observed there. Callers fail closed; the value exists for
+/// diagnostics and tests.
+public enum EgressStartError: Error, Sendable, Equatable {
+    /// `getaddrinfo("127.0.0.1", "0")` failed; the code is the EAI result.
+    case resolveLoopbackFailed(code: Int32)
+    case socketFailed(errno: Int32)
+    case bindFailed(errno: Int32)
+    case listenFailed(errno: Int32)
+    case addressFailed(errno: Int32)
+}
+
+/// One dial attempt's outcome. The proxy denies the CONNECT either way;
+/// the cases exist so tests pin the filter and callers can tell DNS
+/// failure from policy filtering from refused connections.
+enum DialOutcome: Sendable, Equatable {
+    case connected(Int32)
+    /// No address resolved.
+    case dnsFailed
+    /// Every resolved address failed the public-unicast filter.
+    case addressFiltered
+    /// A usable address existed but socket or connect failed on all of them.
+    case connectFailed
 }
 
 /// HTTP CONNECT proxy for contained agent runtimes.
@@ -52,7 +90,7 @@ public final class EgressProxy: @unchecked Sendable {
         self.record = record ?? EgressProxy.productionDenialLog()
     }
 
-    /// Bound port after `start` returns non-nil.
+    /// Bound port after `start` succeeds.
     public var port: Int {
         lock.lock()
         defer { lock.unlock() }
@@ -62,14 +100,15 @@ public final class EgressProxy: @unchecked Sendable {
     private var boundPort: Int = 0
 
     /// Bind 127.0.0.1:0, listen, and serve until `stop`. Returns the bound
-    /// port, or nil when the socket cannot be established (fail closed:
-    /// without a proxy the cage has no route out at all).
-    public func start() -> Int? {
+    /// port, or the phase plus errno when the socket cannot be established
+    /// (fail closed: without a proxy the cage has no route out at all).
+    /// Starting a running proxy returns the bound port again.
+    public func start() -> Result<Int, EgressStartError> {
         lock.lock()
         if running {
             let port = boundPort
             lock.unlock()
-            return port
+            return .success(port)
         }
         lock.unlock()
         var hints = addrinfo()
@@ -82,31 +121,40 @@ public final class EgressProxy: @unchecked Sendable {
         #endif
         hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV
         var info: UnsafeMutablePointer<addrinfo>?
-        guard getaddrinfo("127.0.0.1", "0", &hints, &info) == 0, let first = info else {
-            return nil
+        let gai = getaddrinfo("127.0.0.1", "0", &hints, &info)
+        guard gai == 0, let first = info else {
+            return .failure(.resolveLoopbackFailed(code: gai))
         }
         defer { freeaddrinfo(first) }
         let fd = socket(first.pointee.ai_family, first.pointee.ai_socktype, first.pointee.ai_protocol)
-        guard fd >= 0 else { return nil }
+        guard fd >= 0 else { return .failure(.socketFailed(errno: errno)) }
         var reuse: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
-        guard bind(fd, first.pointee.ai_addr, first.pointee.ai_addrlen) == 0,
-            listen(fd, 16) == 0
-        else {
+        guard bind(fd, first.pointee.ai_addr, first.pointee.ai_addrlen) == 0 else {
+            let code = errno
             close(fd)
-            return nil
+            return .failure(.bindFailed(errno: code))
+        }
+        guard listen(fd, 16) == 0 else {
+            let code = errno
+            close(fd)
+            return .failure(.listenFailed(errno: code))
         }
         var name = sockaddr_storage()
         var nameLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
+        var savedErrno: Int32 = 0
         let bound: Int = withUnsafeMutablePointer(to: &name) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { address in
-                guard getsockname(fd, address, &nameLength) == 0 else { return 0 }
+                guard getsockname(fd, address, &nameLength) == 0 else {
+                    savedErrno = errno
+                    return 0
+                }
                 return Int(EgressProxy.port(of: address))
             }
         }
         guard bound > 0 else {
             close(fd)
-            return nil
+            return .failure(.addressFailed(errno: savedErrno))
         }
         lock.lock()
         listenFD = fd
@@ -114,7 +162,7 @@ public final class EgressProxy: @unchecked Sendable {
         running = true
         lock.unlock()
         acceptQueue.async { [weak self] in self?.acceptLoop() }
-        return bound
+        return .success(bound)
     }
 
     public func stop() {
@@ -181,7 +229,7 @@ public final class EgressProxy: @unchecked Sendable {
             close(client)
             return
         case .oversized:
-            deny(client: client, host: "", port: 0, reason: "header-too-large")
+            deny(client: client, host: "", port: 0, reason: .headerTooLarge)
             return
         case .success(let header, let leftover):
             serveRequest(client: client, header: header, leftover: leftover)
@@ -193,11 +241,17 @@ public final class EgressProxy: @unchecked Sendable {
             let external = policy.allows(host: target.host, port: target.port)
             let loopback = policy.allowsLoopbackTarget(host: target.host, port: target.port)
             guard external || loopback else {
-                deny(client: client, host: target.host, port: target.port, reason: "denied-policy")
+                deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
                 return
             }
-            guard let upstream = EgressProxy.dial(host: target.host, port: target.port, external: external) else {
-                deny(client: client, host: target.host, port: target.port, reason: "dial-failed")
+            guard
+                let upstream = dialUpstream(
+                    host: target.host,
+                    port: target.port,
+                    external: external,
+                    client: client
+                )
+            else {
                 return
             }
             EgressProxy.suppressSIGPIPE(upstream)
@@ -214,7 +268,7 @@ public final class EgressProxy: @unchecked Sendable {
             return
         }
         guard let target = EgressProxy.parseAbsoluteHTTP(header: header) else {
-            deny(client: client, host: "", port: 0, reason: "malformed")
+            deny(client: client, host: "", port: 0, reason: .malformed)
             return
         }
         // Absolute-URI is the plaintext shape: loopback gateways and
@@ -225,11 +279,17 @@ public final class EgressProxy: @unchecked Sendable {
         let external = policy.allows(host: target.host, port: target.port)
         let loopback = policy.allowsLoopbackTarget(host: target.host, port: target.port)
         guard external || loopback else {
-            deny(client: client, host: target.host, port: target.port, reason: "denied-policy")
+            deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
             return
         }
-        guard let upstream = EgressProxy.dial(host: target.host, port: target.port, external: external) else {
-            deny(client: client, host: target.host, port: target.port, reason: "dial-failed")
+        guard
+            let upstream = dialUpstream(
+                host: target.host,
+                port: target.port,
+                external: external,
+                client: client
+            )
+        else {
             return
         }
         EgressProxy.suppressSIGPIPE(upstream)
@@ -245,10 +305,29 @@ public final class EgressProxy: @unchecked Sendable {
         relay(client: client, upstream: upstream)
     }
 
-    private func deny(client: Int32, host: String, port: Int, reason: String) {
+    private func deny(client: Int32, host: String, port: Int, reason: EgressDenialReason) {
         _ = EgressProxy.writeAll(client, bytes: Array("HTTP/1.1 403 Forbidden\r\n\r\n".utf8))
         close(client)
         record(EgressProxyDenial(host: host, port: port, reason: reason, recordedAt: Date()))
+    }
+
+    /// Dials for a relay, denying with the precise reason on failure.
+    /// Returns nil after denying; shared by the CONNECT and absolute-URI
+    /// paths so the outcome mapping lives in one place.
+    private func dialUpstream(host: String, port: Int, external: Bool, client: Int32) -> Int32? {
+        switch EgressProxy.dial(host: host, port: port, external: external) {
+        case .connected(let fd):
+            return fd
+        case .dnsFailed:
+            deny(client: client, host: host, port: port, reason: .dnsFailed)
+            return nil
+        case .addressFiltered:
+            deny(client: client, host: host, port: port, reason: .addressFiltered)
+            return nil
+        case .connectFailed:
+            deny(client: client, host: host, port: port, reason: .dialFailed)
+            return nil
+        }
     }
 
     private func relay(client: Int32, upstream: Int32) {
@@ -388,7 +467,7 @@ public final class EgressProxy: @unchecked Sendable {
         return nil
     }
 
-    private static func dial(host: String, port: Int, external: Bool) -> Int32? {
+    static func dial(host: String, port: Int, external: Bool) -> DialOutcome {
         var hints = addrinfo()
         memset(&hints, 0, MemoryLayout<addrinfo>.size)
         hints.ai_family = AF_UNSPEC
@@ -399,9 +478,10 @@ public final class EgressProxy: @unchecked Sendable {
         #endif
         var info: UnsafeMutablePointer<addrinfo>?
         guard getaddrinfo(host, String(port), &hints, &info) == 0, let first = info else {
-            return nil
+            return .dnsFailed
         }
         defer { freeaddrinfo(first) }
+        var sawUsable = false
         var current: UnsafeMutablePointer<addrinfo>? = first
         while let node = current {
             // A compromised resolver must not rebind an allowlisted name
@@ -412,16 +492,17 @@ public final class EgressProxy: @unchecked Sendable {
                 current = node.pointee.ai_next
                 continue
             }
+            sawUsable = true
             let fd = socket(node.pointee.ai_family, node.pointee.ai_socktype, node.pointee.ai_protocol)
             if fd >= 0 {
                 if connectWithTimeout(fd, address: node.pointee.ai_addr, length: node.pointee.ai_addrlen, seconds: 10) {
-                    return fd
+                    return .connected(fd)
                 }
                 close(fd)
             }
             current = node.pointee.ai_next
         }
-        return nil
+        return sawUsable ? .connectFailed : .addressFiltered
     }
 
     /// True when `address` is a globally routable unicast destination.
@@ -623,7 +704,7 @@ public final class EgressProxy: @unchecked Sendable {
         let record = [
             "host": denial.host,
             "port": String(denial.port),
-            "reason": denial.reason,
+            "reason": denial.reason.rawValue,
             "recordedAt": String(denial.recordedAt.timeIntervalSince1970),
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: record),

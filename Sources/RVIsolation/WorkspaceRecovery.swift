@@ -208,6 +208,24 @@ extension WorkspaceRecovery {
     /// Abandon a blocked workspace: drop its volume without copying, restore
     /// the hidden saved tree, and close the journal so the path is usable.
     ///
+    /// Phase gate for `abandon`: only `.publicationConflict` and
+    /// `.missingVolume` leave the saved tree authoritative. Pure so the
+    /// allowlist is unit-testable without a workspace. Nil proceeds.
+    static func abandonPhaseRefusal(
+        _ phase: WorkspaceReconstruction.Phase
+    ) -> WorkspaceAbandonRefusal? {
+        switch phase {
+        case .blocked(.publicationConflict), .blocked(.missingVolume):
+            return nil
+        case .blocked(let reason):
+            return .unsafeReason(reason)
+        case .corrupt:
+            return .unsafeReason(.corrupt)
+        case .recoverable, .closed:
+            return .notBlocked
+        }
+    }
+
     /// Only `.publicationConflict` and `.missingVolume` are abandonable: both
     /// leave the saved tree authoritative. Every other state refuses without
     /// mutating anything. Unlike `recover`, this never copies the volume onto
@@ -236,15 +254,8 @@ extension WorkspaceRecovery {
         case .unreadable, .corrupt:
             return .refused(.unsafeReason(.corrupt))
         }
-        switch reconstruction.phase {
-        case .blocked(.publicationConflict), .blocked(.missingVolume):
-            break
-        case .blocked(let reason):
-            return .refused(.unsafeReason(reason))
-        case .corrupt:
-            return .refused(.unsafeReason(.corrupt))
-        case .recoverable, .closed:
-            return .refused(.notBlocked)
+        if let refusal = abandonPhaseRefusal(reconstruction.phase) {
+            return .refused(refusal)
         }
         guard let identity = reconstruction.identity,
             identityUsable(identity),
@@ -982,7 +993,7 @@ extension WorkspaceRecovery {
 }
 
 extension WorkspaceRecovery {
-    fileprivate struct WorkspaceReconstruction: Equatable {
+    struct WorkspaceReconstruction: Equatable {
         var id: UUID
         var originalPath: String
         var protectedPath: String
@@ -1000,7 +1011,7 @@ extension WorkspaceRecovery {
         }
     }
 
-    fileprivate static func reconstruct(
+    static func reconstruct(
         _ records: [WorkspaceLifecycleRecord]
     ) -> [WorkspaceReconstruction] {
         var order: [UUID] = []
@@ -1052,15 +1063,17 @@ extension WorkspaceRecovery {
                     let rawGroup = record.processGroup,
                     let seconds = record.processStartSeconds,
                     let microseconds = record.processStartMicroseconds,
-                    rawGroup > 1,
-                    rawGroup <= Int64(Int32.max)
+                    // Failable narrowing: the journal is untrusted input and
+                    // `Int32(_:)` would trap below `Int32.min`.
+                    let narrowed = Int32(exactly: rawGroup),
+                    let pgid = ValidatedPGID(narrowed)
                 else {
                     malformedGroup = true
                     continue
                 }
                 let group = RecordedProcessGroup(
                     runtime: runtime,
-                    pgid: Int32(rawGroup),
+                    pgid: pgid,
                     startSeconds: seconds,
                     startMicroseconds: microseconds
                 )

@@ -4,15 +4,34 @@ import Foundation
 
 /// Start time and process-group id captured from the kernel after spawn.
 struct ProcessGroupFact: Equatable, Sendable {
-    var pgid: Int32
+    var pgid: ValidatedPGID
     var startSeconds: Int64
     var startMicroseconds: Int64
 }
 
+/// A process-group id that is safe to signal. `kill(-pgid, …)` with
+/// `pgid <= 1` would hit init's group or the caller's own, so only ids
+/// above 1 become values of this type. Construction is the check: code
+/// holding a `ValidatedPGID` needs no further guard before `killpg`.
+struct ValidatedPGID: Sendable, Equatable, Hashable {
+    let rawValue: Int32
+
+    init?(_ rawValue: Int32) {
+        guard rawValue > 1 else { return nil }
+        self.rawValue = rawValue
+    }
+}
+
 /// Durable process-group identity. A bare PGID is not enough to signal.
 struct RecordedProcessGroup: Equatable, Sendable {
+    /// Owning runtime session. Provenance carried from the lifecycle log so
+    /// recovery can attribute the group; `prove` intentionally does not read
+    /// it. The signal decision rests on kernel identity (the pgid plus the
+    /// leader's start time), which a reused pgid cannot spoof: a record
+    /// naming a live group names that group no matter which runtime label
+    /// it carries.
     var runtime: UUID
-    var pgid: Int32
+    var pgid: ValidatedPGID
     var startSeconds: Int64
     var startMicroseconds: Int64
 }
@@ -29,12 +48,12 @@ enum ProcessGroupStop: Error, Equatable, Sendable {
 /// A reused PGID has a different start time. That process is left alone.
 enum ProcessGroupRecovery {
     static func capture(pid: pid_t) -> ProcessGroupFact? {
-        guard pid > 1 else { return nil }
+        guard let pgid = ValidatedPGID(pid) else { return nil }
         switch lookup(pid) {
         case .found(let info):
             guard info.pbi_pid == UInt32(pid), info.pbi_pgid == UInt32(pid) else { return nil }
             return ProcessGroupFact(
-                pgid: pid,
+                pgid: pgid,
                 startSeconds: Int64(info.pbi_start_tvsec),
                 startMicroseconds: Int64(info.pbi_start_tvusec)
             )
@@ -47,7 +66,7 @@ enum ProcessGroupRecovery {
     static func terminate(
         _ group: RecordedProcessGroup
     ) -> Result<Void, ProcessGroupStop> {
-        guard group.pgid > 1 else { return .failure(.refusedIdentity) }
+        // No pgid guard: `ValidatedPGID` admits only signallable ids.
         for _ in 0..<50 {
             switch prove(group) {
             case .absent:
@@ -57,7 +76,7 @@ enum ProcessGroupRecovery {
             case .refusedIdentity:
                 return .failure(.refusedIdentity)
             case .owned:
-                _ = kill(-group.pgid, SIGKILL)
+                _ = kill(-group.pgid.rawValue, SIGKILL)
             }
             usleep(10_000)
         }
@@ -79,20 +98,19 @@ enum ProcessGroupRecovery {
     }
 
     private static func prove(_ group: RecordedProcessGroup) -> Proof {
-        guard group.pgid > 1 else { return .refusedIdentity }
-        switch lookup(group.pgid) {
+        switch lookup(group.pgid.rawValue) {
         case .absent:
             return .absent
         case .unavailable:
             return .queryFailed
         case .found(let info):
-            guard info.pbi_pid == UInt32(group.pgid) else { return .queryFailed }
+            guard info.pbi_pid == UInt32(group.pgid.rawValue) else { return .queryFailed }
             let sameStart = Int64(info.pbi_start_tvsec) == group.startSeconds
                 && Int64(info.pbi_start_tvusec) == group.startMicroseconds
             if sameStart == false {
                 return .absent
             }
-            guard info.pbi_pgid == UInt32(group.pgid) else { return .refusedIdentity }
+            guard info.pbi_pgid == UInt32(group.pgid.rawValue) else { return .refusedIdentity }
             return .owned
         }
     }

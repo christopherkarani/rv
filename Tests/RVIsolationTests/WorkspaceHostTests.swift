@@ -597,6 +597,32 @@ struct WorkspaceHostTests {
         #expect(WorkspaceClient.negotiatedFeatures(from: legacyTimeout).isFailure)
     }
 
+    @Test func boundedCloseWaitTimesOutBeforeStopAndSucceedsAfter() throws {
+        let host = try TestHost()
+        defer { host.close() }
+        #expect(host.server.waitForClose(timeout: .now() + 0.1) == false)
+        host.server.stop()
+        #expect(host.server.waitForClose(timeout: .now() + 5) == true)
+    }
+
+    @Test func concurrentControlFileReadsDoNotRaceOrHang() throws {
+        let host = try TestHost()
+        defer { host.close() }
+        let supervisor = host.supervisor
+        let group = DispatchGroup()
+        for _ in 0..<8 {
+            group.enter()
+            DispatchQueue.global().async {
+                defer { group.leave() }
+                for _ in 0..<200 {
+                    _ = supervisor.controlFiles()
+                    _ = supervisor.snapshot
+                }
+            }
+        }
+        #expect(group.wait(timeout: .now() + 30) == .success)
+    }
+
     @Test func negotiatedFeaturesMapCapabilitiesReplyToFeatures() {
         let reply = WorkspaceControlMessage(
             version: 1,
