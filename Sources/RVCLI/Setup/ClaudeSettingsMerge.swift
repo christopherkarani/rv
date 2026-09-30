@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 
 /// Merge / inspect / uninstall for `$HOME/.claude/settings.json` (REQ-012..015).
 /// Command is `python3` on the exclusive adapter; baked rv stays in `RV_BINARY=`
@@ -73,29 +74,29 @@ enum ClaudeSettingsMerge {
         return path.hasPrefix("/") && path.isEmpty == false ? path : nil
     }
 
-    static func matchesCurrentHook(_ hook: [String: Any]) -> Bool {
-        guard let type = hook["type"] as? String, type == hookType,
-              let command = hook["command"] as? String,
+    static func matchesCurrentHook(_ hook: JSONValue) -> Bool {
+        guard let type = hook["type"]?.string, type == hookType,
+              let command = hook["command"]?.string,
               let path = bakedRvPath(in: command),
               path.hasPrefix("/"),
               let adapter = adapterPath(in: command),
               adapter.hasPrefix("/"),
               adapter.hasSuffix("/hooks/rv-guard.py"),
-              hook["timeout"] as? Int == timeout
+              hook["timeout"]?.int == timeout
         else {
             return false
         }
         return command == hookCommand(rvPath: path, adapterPath: adapter)
     }
 
-    static func isFingerprintedHook(_ hook: [String: Any]) -> Bool {
+    static func isFingerprintedHook(_ hook: JSONValue) -> Bool {
         HostHooksMergeEngine.isFingerprintedHook(hook, descriptor: wiringDescriptor)
     }
 
     /// v1 `…/rv hook --host claude` is our stale command, not a foreign guard.
-    static func isStaleLegacyHook(_ hook: [String: Any]) -> Bool {
-        guard let type = hook["type"] as? String, type == hookType,
-              let command = hook["command"] as? String
+    static func isStaleLegacyHook(_ hook: JSONValue) -> Bool {
+        guard let type = hook["type"]?.string, type == hookType,
+              let command = hook["command"]?.string
         else {
             return false
         }
@@ -112,23 +113,31 @@ enum ClaudeSettingsMerge {
         )
     }
 
-    static func rvEntry(rvPath: String, adapterPath: String, matcher: String) -> [String: Any] {
-        [
-            "matcher": matcher,
-            "hooks": [
-                HostHooksMergeEngine.hookDictionary(
+    static func rvEntry(rvPath: String, adapterPath: String, matcher: String) -> JSONValue {
+        .object([
+            "matcher": .string(matcher),
+            "hooks": .array([
+                HostHooksMergeEngine.hookValue(
                     hookEntry(rvPath: rvPath, adapterPath: adapterPath)
                 ),
-            ],
-        ]
+            ]),
+        ])
     }
 
-    static func hasFileToolMatchers(in root: [String: Any]) -> Bool {
+    static func hasFileToolMatchers(in root: [String: JSONValue]) -> Bool {
         let present = Set(
             HostHooksMergeEngine.locateFingerprintedHooks(in: root, descriptor: wiringDescriptor)
                 .compactMap { $0.matcher }
         )
         return Set(fileMatchers).isSubset(of: present)
+    }
+
+    /// Frozen `HostWiring` boundary: bridges its untyped root onto `JSONValue`.
+    static func hasFileToolMatchers(in root: [String: Any]) -> Bool {
+        guard let typed = HostHooksMergeEngine.typedRoot(from: root) else {
+            return false
+        }
+        return hasFileToolMatchers(in: typed)
     }
 
     /// Returns merged settings bytes and whether content changed.
@@ -183,7 +192,7 @@ enum ClaudeSettingsMerge {
         return inspectionState(of: root)
     }
 
-    static func inspectionState(of root: [String: Any]) -> InspectionState {
+    static func inspectionState(of root: [String: JSONValue]) -> InspectionState {
         let located = HostHooksMergeEngine.locateFingerprintedHooks(
             in: root,
             descriptor: wiringDescriptor
@@ -210,7 +219,7 @@ enum ClaudeSettingsMerge {
 
         if allCurrent {
             guard let bakedPath = located.compactMap({
-                bakedRvPath(in: ($0.hook["command"] as? String) ?? "")
+                bakedRvPath(in: $0.hook["command"]?.string ?? "")
             }).first
             else {
                 return .occupied

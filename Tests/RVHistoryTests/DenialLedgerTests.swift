@@ -120,6 +120,30 @@ struct DenialLedgerTests {
         #expect(DenialLedgerPreferences.isEnabled(inConfigDirectory: dir))
     }
 
+    @Test func preferences_explicitFlagIsHonored() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-ledger-pref-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("config.json", isDirectory: false)
+        try Data(#"{"blocks":{"enabled":false}}"#.utf8).write(to: file)
+        #expect(DenialLedgerPreferences.isEnabled(inConfigDirectory: dir) == false)
+        try Data(#"{"blocks":{"enabled":true}}"#.utf8).write(to: file)
+        #expect(DenialLedgerPreferences.isEnabled(inConfigDirectory: dir))
+    }
+
+    @Test func preferences_malformedIsEnabled() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-ledger-pref-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("config.json", isDirectory: false)
+        try Data("not-json".utf8).write(to: file)
+        #expect(DenialLedgerPreferences.isEnabled(inConfigDirectory: dir))
+        try Data(#"{"blocks":{"enabled":"yes"}}"#.utf8).write(to: file)
+        #expect(DenialLedgerPreferences.isEnabled(inConfigDirectory: dir))
+    }
+
     private func decode(_ line: String) throws -> DenialLedgerRecord {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

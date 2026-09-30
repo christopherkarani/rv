@@ -764,13 +764,13 @@ private func cursorFileToolsSnapshot(
 
 private func cursorCompanionWithoutFileToolEntry() throws -> Data {
     let adapterPath = "/tmp/rv-t1/.cursor/hooks/rv-guard.py"
-    let root: [String: Any] = [
-        CursorHooksMerge.versionKey: CursorHooksMerge.schemaVersion,
-        CursorHooksMerge.hooksRootKey: [
-            CursorHooksMerge.beforeShellKey: [CursorHooksMerge.rvEntry(adapterPath: adapterPath)],
-        ],
-    ]
-    return try JSONSerialization.data(withJSONObject: root)
+    let root = JSONValue.object([
+        CursorHooksMerge.versionKey: .number(Double(CursorHooksMerge.schemaVersion)),
+        CursorHooksMerge.hooksRootKey: .object([
+            CursorHooksMerge.beforeShellKey: .array([CursorHooksMerge.rvEntry(adapterPath: adapterPath)]),
+        ]),
+    ])
+    return try JSONEncoder().encode(root)
 }
 
 private func grokBodyWithMatcher(rvPath: String, matcher: String) throws -> String {

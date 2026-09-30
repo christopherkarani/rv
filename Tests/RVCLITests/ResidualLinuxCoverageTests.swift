@@ -161,19 +161,21 @@ struct ResidualLinuxCoverageTests {
         #expect(CursorHooksMerge.adapterPath(in: "python3 relative/rv-guard.py") == nil)
         #expect(
             CursorHooksMerge.matchesCurrentHook(
-                [
-                    "command": CursorHooksMerge.hookCommand(adapterPath: "/tmp/rv-guard.py"),
-                    "timeout": 5,
-                    "failClosed": true,
-                ],
+                .object([
+                    "command": .string(CursorHooksMerge.hookCommand(adapterPath: "/tmp/rv-guard.py")),
+                    "timeout": .number(5),
+                    "failClosed": .bool(true),
+                ]),
                 adapterPath: "/tmp/rv-guard.py"
             )
         )
         #expect(
-            CursorHooksMerge.matchesCurrentHook(["command": "other"], adapterPath: "/tmp/rv-guard.py")
-                == false
+            CursorHooksMerge.matchesCurrentHook(
+                .object(["command": .string("other")]),
+                adapterPath: "/tmp/rv-guard.py"
+            ) == false
         )
-        #expect(CursorHooksMerge.isFingerprintedHook([:]) == false)
+        #expect(CursorHooksMerge.isFingerprintedHook(.object([:])) == false)
         #expect(throws: CursorHooksMergeError.unreadable) {
             _ = try CursorHooksMerge.merge(existingData: Data("[]".utf8), adapterPath: "/tmp/rv-guard.py")
         }
@@ -181,26 +183,26 @@ struct ResidualLinuxCoverageTests {
         #expect(CodexHooksMerge.adapterPath(in: "python3 /tmp/rv-guard.py") == "/tmp/rv-guard.py")
         #expect(
             CodexHooksMerge.matchesCurrentHook(
-                [
-                    "type": CodexHooksMerge.hookType,
-                    "command": CodexHooksMerge.hookCommand(adapterPath: "/tmp/rv-guard.py"),
-                    "timeout": CodexHooksMerge.timeout,
-                    "statusMessage": CodexHooksMerge.statusMessage,
-                ],
+                .object([
+                    "type": .string(CodexHooksMerge.hookType),
+                    "command": .string(CodexHooksMerge.hookCommand(adapterPath: "/tmp/rv-guard.py")),
+                    "timeout": .number(Double(CodexHooksMerge.timeout)),
+                    "statusMessage": .string(CodexHooksMerge.statusMessage),
+                ]),
                 adapterPath: "/tmp/rv-guard.py"
             )
         )
         #expect(
             CodexHooksMerge.matchesCurrentHook(
-                [
-                    "type": CodexHooksMerge.hookType,
-                    "command": CodexHooksMerge.hookCommand(adapterPath: "/tmp/rv-guard.py"),
-                    "timeout": CodexHooksMerge.timeout,
-                ],
+                .object([
+                    "type": .string(CodexHooksMerge.hookType),
+                    "command": .string(CodexHooksMerge.hookCommand(adapterPath: "/tmp/rv-guard.py")),
+                    "timeout": .number(Double(CodexHooksMerge.timeout)),
+                ]),
                 adapterPath: "/tmp/rv-guard.py"
             ) == false
         )
-        #expect(CodexHooksMerge.matchesCurrentHook([:], adapterPath: "/tmp/x") == false)
+        #expect(CodexHooksMerge.matchesCurrentHook(.object([:]), adapterPath: "/tmp/x") == false)
         #expect(throws: CodexHooksMergeError.unreadable) {
             _ = try CodexHooksMerge.merge(existingData: Data("[]".utf8), adapterPath: "/tmp/rv-guard.py")
         }

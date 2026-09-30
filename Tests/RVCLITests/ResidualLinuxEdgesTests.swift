@@ -205,8 +205,8 @@ struct ResidualLinuxEdgesTests {
         #expect(ClaudeSettingsMerge.adapterPath(in: "echo rv-guard.py") == nil)
         #expect(ClaudeSettingsMerge.bakedRvPath(in: "/abs/rv hook --host claude") == "/abs/rv")
         #expect(ClaudeSettingsMerge.bakedRvPath(in: "python3 /x hook --host claude") == nil)
-        #expect(ClaudeSettingsMerge.isFingerprintedHook([:]) == false)
-        #expect(ClaudeSettingsMerge.isStaleLegacyHook([:]) == false)
+        #expect(ClaudeSettingsMerge.isFingerprintedHook(.object([:])) == false)
+        #expect(ClaudeSettingsMerge.isStaleLegacyHook(.object([:])) == false)
 
         let bashOnly = Data(
             """
@@ -275,7 +275,7 @@ struct ResidualLinuxEdgesTests {
         )
         #expect(try ClaudeSettingsMerge.uninstall(existingData: skipEntry) != nil)
 
-        #expect(CodexHooksMerge.isFingerprintedHook([:]) == false)
+        #expect(CodexHooksMerge.isFingerprintedHook(.object([:])) == false)
         let codexSkip = Data(
             """
             {
