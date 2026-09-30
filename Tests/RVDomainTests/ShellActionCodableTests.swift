@@ -65,7 +65,7 @@ struct ShellActionCodableTests {
             return
         }
         #expect(effect.effects == ActionEffects())
-        #expect(effect.resources == ActionResources())
+        #expect(effect.resources == ResourceScope.none)
     }
 
     @Test func analyzedShell_roundTripsEqual() throws {
@@ -90,7 +90,10 @@ struct ShellActionCodableTests {
             EffectShell(
                 fingerprint: ActionFingerprint(rawValue: "fp-effect-only"),
                 effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                resources: ActionResources(remoteName: "origin", branchName: "main"),
+                resources: .git(
+                    remote: RemoteName("origin"),
+                    ref: .branch(BranchName("main"))
+                ),
                 scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws")),
                 supportingCommand: ShellCommand(rawValue: "git push --force origin main")
             )

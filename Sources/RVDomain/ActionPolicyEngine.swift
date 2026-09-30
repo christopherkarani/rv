@@ -357,7 +357,7 @@ public enum ActionPolicyEngine: Sendable {
                     semanticallyCovered: true
                 )
             }
-            if case .unprobed = gitWorld, shell.resources.branchName == nil {
+            if case .unprobed = gitWorld, shell.resources.gitRef == nil {
                 // Implicit HEAD was not injected. Pack floor; do not treat as private.
                 return CoreHit(
                     decision: .reviewEligible(fallback: Builtin.uncovered),
@@ -480,7 +480,7 @@ public enum ActionPolicyEngine: Sendable {
     }
 
     private static func isSharedTarget(
-        resources: ActionResources,
+        resources: ResourceScope,
         context: ReviewContext,
         gitWorld: GitAnalysisWorld
     ) -> Bool {
@@ -490,13 +490,25 @@ public enum ActionPolicyEngine: Sendable {
         case .probed(let git):
             // Unprobed never consults implicit HEAD. Probed uses the name
             // against the shared set, not a stored bool on world or ReviewContext.
-            if GitSharedBranch.contains(git.currentBranch)
-                || GitSharedBranch.contains(context.repository.currentBranch)
+            if GitSharedBranch.contains(git.currentBranch.map(BranchName.init(rawValue:)))
+                || GitSharedBranch.contains(
+                    context.repository.currentBranch.map(BranchName.init(rawValue:))
+                )
             {
                 return true
             }
         }
-        return GitSharedBranch.contains(resources.branchName)
+        switch resources {
+        case .git(_, .some(.branch(let name))):
+            return GitSharedBranch.contains(name)
+        case .git(_, .some(.refspec(let spec))):
+            // Legacy exact-match: pre-T2 the refspec traveled in `branchName`
+            // and matched only by string equality, so `main` denies while
+            // `HEAD:main` falls through to ask. Preserved, not repaired.
+            return GitSharedBranch.names.contains(spec)
+        case .git(_, .some(.tag)), .git(_, nil), .filesystem, .none:
+            return false
+        }
     }
 
     private static func semanticAction(of shell: ShellAction) -> SemanticAction? {

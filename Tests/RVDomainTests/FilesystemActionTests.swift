@@ -171,7 +171,7 @@ struct FilesystemActionTests {
         var legacy = object
         legacy["protectedMatch"] = ["pattern": "home-ssh", "category": "ssh"]
         let decoded = try JSONDecoder().decode(
-            ActionResources.self,
+            ResourceScope.self,
             from: try JSONSerialization.data(withJSONObject: legacy)
         )
         #expect(decoded.filesystemScope?.protectedMatch == match)

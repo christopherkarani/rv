@@ -7,13 +7,17 @@ struct PolicyMatchTests {
 
     @Test func forceMain_matchesGitPushForceMain() {
         let git = forcePush(refspec: "main")
-        #expect(git.resources.branchName == "main")
+        #expect(
+            git.resources == .git(remote: RemoteName("origin"), ref: .refspec("main"))
+        )
         #expect(PolicyMatch.matches(forceMain, action: git))
     }
 
     @Test func forceMain_doesNotMatchFeatureBranch() {
         let git = forcePush(refspec: "feature")
-        #expect(git.resources.branchName == "feature")
+        #expect(
+            git.resources == .git(remote: RemoteName("origin"), ref: .refspec("feature"))
+        )
         #expect(PolicyMatch.matches(forceMain, action: git) == false)
     }
 
