@@ -41,6 +41,10 @@ final class AgentInstanceRegistry: Sendable {
         var validity: AgentInstanceValidity
         var generation: UInt64
         var finished: Bool
+        /// Teardown ownership. Claimed atomically under the lock by the one
+        /// revoke that runs teardown; concurrent revokes observe the claim
+        /// and run nothing. Set before teardown starts, never cleared.
+        var teardownClaimed: Bool
     }
 
     private struct State: Sendable {
@@ -83,7 +87,8 @@ final class AgentInstanceRegistry: Sendable {
                 instance: instance,
                 validity: .inactive,
                 generation: 0,
-                finished: false
+                finished: false,
+                teardownClaimed: false
             )
             state.byRuntime[instance.runtimeSessionID] = instance.id
             return true
@@ -101,6 +106,7 @@ final class AgentInstanceRegistry: Sendable {
         let current = state.withLock { $0.byInstance[established.agentInstanceID] }
         guard let current,
             current.finished == false,
+            current.teardownClaimed == false,
             current.instance.runtimeSessionID == established.session.id,
             current.instance.workspaceSessionID == established.session.workspaceSessionID
         else {
@@ -114,7 +120,8 @@ final class AgentInstanceRegistry: Sendable {
         guard case .success = journal.append(record) else { return nil }
         state.withLock { state in
             guard var live = state.byInstance[established.agentInstanceID],
-                live.finished == false, live.validity == .inactive
+                live.finished == false, live.teardownClaimed == false,
+                live.validity == .inactive
             else {
                 return
             }
@@ -194,21 +201,21 @@ final class AgentInstanceRegistry: Sendable {
     /// Ends an instance: revoking → teardown → inactive → journaled.
     ///
     /// `teardown` releases instance-held resources (process group, admission
-    /// work). It runs outside the registry lock, exactly once per revocation.
-    /// Its failure is recorded in the journal detail; authority stays dead
-    /// either way. Cleanup failure MUST NOT reactivate authority.
+    /// work). It runs outside the registry lock, exactly once per instance:
+    /// the one revoke that atomically claims teardown ownership under the
+    /// lock runs it, and every concurrent revoke observes the claim and runs
+    /// nothing. Its failure is recorded in the journal detail; authority
+    /// stays dead either way. Cleanup failure MUST NOT reactivate authority.
     func revoke(
         _ id: AgentInstanceID,
         reason: AgentRevokeReason,
         teardown: @Sendable () -> Bool
     ) -> AgentRevokeOutcome {
         let snapshot = state.withLock { state -> LiveRecord? in
-            guard var live = state.byInstance[id], live.finished == false else {
-                return nil
-            }
-            guard live.validity == .active || live.validity == .inactive else {
-                // Revocation already in flight. Authority is already dead:
-                // validity left `.active` before teardown started.
+            guard var live = state.byInstance[id], live.teardownClaimed == false else {
+                // Unknown instance, or teardown already claimed — in flight
+                // or finished. Authority is already dead: an active record
+                // leaves `.active` in the same critical section that claims.
                 return nil
             }
             if live.validity == .active {
@@ -217,8 +224,9 @@ final class AgentInstanceRegistry: Sendable {
                 }
                 live.validity = revoking
                 live.generation += 1
-                state.byInstance[id] = live
             }
+            live.teardownClaimed = true
+            state.byInstance[id] = live
             return live
         }
         guard let snapshot else {

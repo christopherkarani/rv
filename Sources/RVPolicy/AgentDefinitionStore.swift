@@ -88,10 +88,12 @@ public struct AdHocAgentSnapshot: Sendable, Equatable {
 ///
 /// Definitions come ONLY from this operator config file. They are never
 /// read from repo files, agent output, executable basenames, HookHost, or
-/// agent tags. The default location resolves via the real OS account root
-/// (`HomeDirectory.process()` + `RVPolicyPaths`); no API here accepts a
-/// request-provided HOME, so untrusted input cannot redirect the trusted
-/// root. Every failure mode fails closed (spec I14).
+/// agent tags. The default location resolves via the trusted host RV process
+/// configuration root (`HomeDirectory.process()` + `RVPolicyPaths`): the
+/// process environment's HOME under the owning-user threat model, not a
+/// kernel-derived account lookup. No API here accepts a request-provided
+/// HOME, so contained agent request data cannot redirect the store; it does
+/// not supply the trust root. Every failure mode fails closed (spec I14).
 public enum AgentDefinitionStore {
     public static let maximumBytes = 65_536
 
@@ -100,8 +102,8 @@ public enum AgentDefinitionStore {
     /// share an identity.
     public static let reservedSnapshotID = "adhoc"
 
-    /// Default trusted file, or nil when the OS HOME is unavailable.
-    /// Derived from `HomeDirectory.process()` only.
+    /// Default trusted file, or nil when the host process configuration
+    /// root is unavailable. Derived from `HomeDirectory.process()` only.
     public static func defaultConfigFile() -> URL? {
         guard let home = HomeDirectory.process() else { return nil }
         return RVPolicyPaths.agentDefinitionsFile(
@@ -109,8 +111,8 @@ public enum AgentDefinitionStore {
         )
     }
 
-    /// Loads from the default trusted location. Fails closed when no OS
-    /// HOME establishes a trusted root. `resourcePolicy` must be the
+    /// Loads from the default trusted location. Fails closed when no host
+    /// process HOME establishes a trusted root. `resourcePolicy` must be the
     /// already-loaded trusted resource policy; definition profile names
     /// resolve against it.
     public static func loadFromOperatorConfig(
