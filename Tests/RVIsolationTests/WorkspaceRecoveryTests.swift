@@ -86,15 +86,12 @@ struct WorkspaceRecoveryTests {
         )
         #expect(succeeded(ProcessGroupRecovery.terminate(wrong)))
         #expect(kill(pid, 0) == 0)
-        let initGroup = RecordedProcessGroup(runtime: UUID(), pgid: 1, startSeconds: 0, startMicroseconds: 0)
-        let stopped = ProcessGroupRecovery.terminate(initGroup)
-        if case .failure(.refusedIdentity) = stopped {
-        } else {
-            Issue.record("pid 1 must not be signalled, got \(stopped)")
-        }
-        if kill(1, 0) != 0 {
-            #expect(errno == EPERM)
-        }
+        // Init's group and non-positive ids are unrepresentable: construction
+        // is the check, so no terminate call can name them.
+        #expect(ValidatedPGID(1) == nil)
+        #expect(ValidatedPGID(0) == nil)
+        #expect(ValidatedPGID(-1) == nil)
+        #expect(ValidatedPGID(42)?.rawValue == 42)
     }
 
     @Test func provenProcessGroupIsKilled() throws {
@@ -592,12 +589,84 @@ struct WorkspaceRecoveryTests {
         #expect(workspacePathIdentity(tree.workspaceURL.path)?.device == device)
     }
 
+    @Test func corruptProcessGroupFailsClosedWithoutTrapping() {
+        // The journal is untrusted input: out-of-range and unrepresentable
+        // group ids must mark the group malformed, never trap. Passing at
+        // all proves the narrowing is failable.
+        let id = UUID()
+        let poisoned = [
+            Int64(Int32.min) - 1,
+            Int64(Int32.max) + 1,
+            1, 0, -1,
+        ].map { group in
+            WorkspaceLifecycleRecord(
+                kind: .runtimeStarted,
+                workspace: id,
+                originalPath: "/tmp/ws",
+                protectedPath: "/tmp/ws",
+                volumeDevice: 1,
+                disk: "/dev/disk9",
+                runtime: UUID(),
+                recordedAt: Date(timeIntervalSince1970: 10),
+                processGroup: group,
+                processStartSeconds: 1,
+                processStartMicroseconds: 1
+            )
+        }
+        let valid = WorkspaceLifecycleRecord(
+            kind: .runtimeStarted,
+            workspace: id,
+            originalPath: "/tmp/ws",
+            protectedPath: "/tmp/ws",
+            volumeDevice: 1,
+            disk: "/dev/disk9",
+            runtime: UUID(),
+            recordedAt: Date(timeIntervalSince1970: 11),
+            processGroup: 4242,
+            processStartSeconds: 1,
+            processStartMicroseconds: 1
+        )
+        let reconstructions = WorkspaceRecovery.reconstruct(poisoned + [valid])
+        #expect(reconstructions.count == 1)
+        #expect(reconstructions.first?.malformedGroup == true)
+        #expect(reconstructions.first?.groups.count == 1)
+        #expect(reconstructions.first?.groups.first?.pgid.rawValue == 4242)
+    }
+
     @Test func abandonWithoutAWorkspaceRefuses() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let logs = RecoveryLogs(tree: tree)
         let outcome = WorkspaceRecovery.abandon(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime)
         #expect(outcome == .refused(.notBlocked))
+    }
+
+    @Test func abandonPhaseGateAdmitsOnlyAuthoritativeSavedTrees() {
+        typealias Reason = WorkspaceRecoveryBlock.Reason
+        #expect(WorkspaceRecovery.abandonPhaseRefusal(.blocked(.publicationConflict)) == nil)
+        #expect(WorkspaceRecovery.abandonPhaseRefusal(.blocked(.missingVolume)) == nil)
+        #expect(
+            WorkspaceRecovery.abandonPhaseRefusal(.blocked(.ambiguousOwnership))
+                == .unsafeReason(.ambiguousOwnership)
+        )
+        #expect(
+            WorkspaceRecovery.abandonPhaseRefusal(.blocked(.tornLog))
+                == .unsafeReason(.tornLog)
+        )
+        #expect(
+            WorkspaceRecovery.abandonPhaseRefusal(.corrupt) == .unsafeReason(.corrupt)
+        )
+        #expect(WorkspaceRecovery.abandonPhaseRefusal(.recoverable) == .notBlocked)
+        #expect(WorkspaceRecovery.abandonPhaseRefusal(.closed) == .notBlocked)
+        // Every other block reason refuses as unsafe, not silent.
+        for reason: Reason in [
+            .ambiguousSavedTree, .unprovenProcess, .unrelatedMount, .corrupt,
+        ] {
+            #expect(
+                WorkspaceRecovery.abandonPhaseRefusal(.blocked(reason))
+                    == .unsafeReason(reason)
+            )
+        }
     }
 }
 

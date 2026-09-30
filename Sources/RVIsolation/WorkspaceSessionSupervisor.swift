@@ -76,9 +76,9 @@ struct WorkspaceControlFile: Equatable, Sendable {
 /// Only the workspace host process opens a supervisor. Interactive commands
 /// in other processes attach through `WorkspaceClient`; they cannot name
 /// this type.
-// @unchecked: `boundary` (WorkspaceInodeBoundary) is a non-Sendable holder.
-// All supervisor-owned mutable state is in `Mutex<State>`.
-final class WorkspaceSessionSupervisor: @unchecked Sendable {
+// All supervisor-owned mutable state is in `Mutex<State>`; the inode
+// boundary serializes its own fds and flags behind `BoundaryMutable`.
+final class WorkspaceSessionSupervisor: Sendable {
     #if os(macOS)
     private struct State: Sendable {
         var lifecycle: WorkspaceLifecycle
@@ -129,10 +129,15 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         // port nil and contained spawns omit proxy variables (fail closed:
         // without a proxy the cage has no route out at all).
         let proxy = EgressProxy()
-        if let port = proxy.start() {
+        switch proxy.start() {
+        case .success(let port):
             self.egressProxy = proxy
             self.egressPort = port
-        } else {
+        case .failure(let error):
+            // Fail closed (no proxy, no route out), but say so: without
+            // this line a bind failure is indistinguishable from any
+            // other "contained agent has no network" cause.
+            complain("rv: egress proxy unavailable: \(error)")
             self.egressProxy = nil
             self.egressPort = nil
         }
@@ -676,7 +681,7 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
                 disk: boundary.diskIdentifier,
                 runtime: child.live.session.id.rawValue,
                 recordedAt: Date(),
-                processGroup: Int64(fact.pgid),
+                processGroup: Int64(fact.pgid.rawValue),
                 processStartSeconds: fact.startSeconds,
                 processStartMicroseconds: fact.startMicroseconds
             )
@@ -1094,6 +1099,10 @@ private func removeSnapshot(_ path: String, device: UInt64, inode: UInt64) -> Bo
     guard path.withCString({ lstat($0, &status) == 0 }) else { return true }
     guard UInt64(status.st_dev) == device, UInt64(status.st_ino) == inode else { return false }
     return path.withCString { unlink($0) == 0 }
+}
+
+private func complain(_ text: String) {
+    FileHandle.standardError.write(Data((text + "\n").utf8))
 }
 
 /// Which finished runtimes to forget so a report still fits in `limit`.

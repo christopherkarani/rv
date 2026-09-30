@@ -31,9 +31,9 @@ public enum WorkspaceEvent: Sendable, Equatable {
     /// Forget a finished runtime so reports stay bounded.
     case runtimeForgotten(RuntimeSessionID)
     /// Stop every runtime, then publish or discard the workspace.
-    case closeRequested(publish: Bool)
+    case closeRequested(publish: WorkspaceClosePublish)
     /// Teardown finished and the workspace was restored.
-    case closeSucceeded(published: Bool)
+    case closeSucceeded(published: WorkspaceClosePublish)
     /// Teardown failed; see `WorkspaceCloseFailure`.
     case closeFailed(WorkspaceCloseFailure)
     /// `WorkspaceInodeBoundary.remainsEstablished()` turned false.

@@ -35,6 +35,11 @@ private final class CloseGate: Sendable {
     func wait() {
         group.wait()
     }
+
+    /// Bounded wait. Returns true when `signal` fired before the timeout.
+    func wait(timeout: DispatchTime) -> Bool {
+        group.wait(timeout: timeout) == .success
+    }
 }
 
 private final class WorkspaceControlConnection: Sendable {
@@ -247,6 +252,14 @@ final class WorkspaceHostServer: Sendable {
 
     func waitForClose() {
         gate.wait()
+    }
+
+    /// Bounded close wait for callers that must not block forever. The
+    /// daemon lifetime wait in `WorkspaceHostProcess.run` keeps the
+    /// unbounded variant deliberately; this one exists for tests and
+    /// shutdown paths with a kill budget. Returns false on timeout.
+    func waitForClose(timeout: DispatchTime) -> Bool {
+        gate.wait(timeout: timeout)
     }
 
     /// Drops the control endpoint. Does not close the workspace.

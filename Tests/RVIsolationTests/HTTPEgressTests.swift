@@ -192,7 +192,8 @@ struct HTTPAdmissionTests {
         #expect(configuration.alpn == ["http/1.1"])
         #expect(configuration.usesURLSession == false)
         #expect(configuration.sendsAmbientCredentials == false)
-        #expect(configuration.peer == "1.1.1.1")
+        #expect(configuration.peer == address)
+        #expect(configuration.peer.presentation == "1.1.1.1")
         #expect(configuration.serverName == "example.com")
         let parameters = DirectHTTPConnection.makeParameters(configuration)
         #expect(parameters.preferNoProxies)
@@ -342,6 +343,7 @@ private struct HTTPHarness: Sendable {
             launch: AdmittedLaunchContext(
                 plan: plan,
                 profileSource: "(deny file-link)",
+                profileIsContainedCompilerOutput: true,
                 workspacePath: workspace.rawValue
             ),
             requestRead: -1,
