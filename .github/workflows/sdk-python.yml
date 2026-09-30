@@ -1,0 +1,81 @@
+name: sdk-python
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-python-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Pure-Python gate: no Swift toolchain. Live rvd integration runs in pr.yml,
+  # appended to the jobs that already build rvd (Linux debug, macOS release).
+  unit:
+    name: python unit (3.${{ matrix.python-minor }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-minor: ["10", "11", "12", "13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.${{ matrix.python-minor }}
+
+      - name: Install SDK test deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "./sdk/python[test]"
+          python -m pip install "ruff==0.16.9"
+
+      - name: Unit tests
+        run: python -m pytest sdk/python/tests -m "not integration" -q
+
+      - name: Lint
+        run: |
+          ruff check sdk/python
+          ruff format --check sdk/python
+
+  wheel:
+    name: python wheel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build sdk/python --outdir sdk/python/dist
+
+      - name: Assert pure-Python wheel
+        run: |
+          set -euo pipefail
+          wheel="$(ls sdk/python/dist/*.whl)"
+          echo "wheel: $wheel"
+          # No binaries, dylibs, or native artifacts: the wheel must never
+          # contain, download, or vendor the RV runtime.
+          if unzip -l "$wheel" | grep -Eq '\.(so|dylib|dll|dSYM|a)( |$)|/rvd$|/rv-cli$|/rv$'; then
+            echo "wheel contains native artifacts" >&2
+            unzip -l "$wheel"
+            exit 1
+          fi
+          unzip -l "$wheel" | grep -q 'rv/__init__.py'
+          unzip -l "$wheel" | grep -q 'rv/py.typed'
+          twine check sdk/python/dist/*
+
+      - name: Install wheel in a clean venv
+        run: |
+          python -m venv /tmp/wheel-venv
+          /tmp/wheel-venv/bin/pip install sdk/python/dist/*.whl
+          /tmp/wheel-venv/bin/python -c "import rv; print(rv.__version__)"

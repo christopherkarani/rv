@@ -58,10 +58,13 @@ divergence (§4):
   change, or `via`/`ok` semantics change → new `protocol_name` (`rv.ipc.v2`) AND
   a service-major bump. An SDK pins one protocol per release; dual-protocol
   support is a non-goal for v1.
-- **Feature negotiation**: SDKs check `capabilities` before calling newer methods;
-  an absent token raises `UnsupportedByRuntime(method, min_runtime)` with upgrade
-  text. Never probe by calling and parsing `unknownMethod` as control flow in
-  normal paths (tests may assert the error exists).
+- **Feature negotiation**: when the runtime advertises `capabilities`, SDKs check
+  them before calling newer methods; an absent token raises a dedicated
+  unsupported-by-runtime error with upgrade text. (No v1 method needs a token,
+  and no v1 runtime sends the field, so v1 SDKs just ignore the unknown key.)
+  Never probe by calling and parsing
+  `unknownMethod` as control flow in normal paths (tests may assert the error
+  exists).
 
 ## 4. The one deliberate divergence: skew is a hard error
 

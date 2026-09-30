@@ -66,30 +66,39 @@ src/rv/
 ├── __init__.py    # public API re-exports + __version__ (single source)
 ├── client.py      # Client: connect, Hello, call dispatch, close
 ├── raw.py         # raw.call(method, params): untyped forward-compat hatch
-├── transport.py   # UnixSocketTransport (+ CliSubprocessTransport interim), budgets
+├── transports.py  # UnixSocketTransport: resolution, mode checks, budgets
 ├── protocol.py    # Hello/HelloAck/IPCRequest/IPCResponse/IPCError wire codec
 ├── frames.py      # FrameCodec port (4-byte big-endian, 1 MiB cap, ordered errors)
 ├── versions.py    # semver-major port, skew checks, MIN_* floors
 ├── errors.py      # exception hierarchy (mirrors IPCError 1:1)
-├── models.py      # frozen curated dataclasses
+├── models.py      # frozen curated dataclasses + outcome algebra
 └── approvals.py   # pending/ASK helpers (poll iterator, single-use resolve)
 tests/
 ├── test_frames.py       # FrameCodec vectors (shared bytes with Swift goldens)
+├── test_versions.py     # semver-major port, skew checks, product floors
 ├── test_protocol.py     # handshake/skew/unknown-key tolerance/strict-enum tests
-├── test_client.py       # public API, conversion, exceptions, timeouts, mocked transports
 ├── test_vectors.py      # shared golden bytes (same literals as SDKVectorTests)
+├── test_transports.py   # resolution, mode checks, scripted fake server
+├── test_client.py       # public API, conversion, exceptions, mocked transports
 ├── test_integration.py  # real rvd over a real socket (marked, CI-gated)
 └── test_security.py     # fail-closed regression tests
 ```
 
+Wire notes that shaped this layout: there are no `Date` values on `rv.ipc.v1`
+(so no date codec), UUIDs emit uppercase but parse any case, and `exitCode` is a
+plain int. The macOS SDK socket (`$HOME/.config/rv/evaluate.sock`, served by
+`rvd` alongside XPC) means both platforms share one transport — there is no
+subprocess fallback and no subprocess transport module.
+
 ## Development
 
 ```bash
+cd sdk/python
 python -m venv .venv && source .venv/bin/activate
-pip install -e "./sdk/python[test]" ruff
-pytest sdk/python/tests -m "not integration"
-ruff check sdk/python && ruff format --check sdk/python
-pytest sdk/python/tests -m integration  # needs built rvd on PATH
+pip install -e ".[test]" ruff
+pytest tests -m "not integration"
+ruff check src tests && ruff format --check src tests
+RV_RVD=/path/to/rvd pytest tests -m integration  # needs a built rvd
 ```
 
 Wire changes require a version decision: see `sdk/WIRE.md` §8 and
