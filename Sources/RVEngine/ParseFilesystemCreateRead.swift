@@ -1,7 +1,7 @@
 import RVDomain
 
 func parseChmod(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = splitFlagTerminator(argv)
+    let (flags, rest) = ShellPipeline.splitFlagTerminator(argv)
     var recursive = false
     var mode: String?
     var paths: [String] = []
@@ -62,7 +62,7 @@ func isChmodMode(_ token: String) -> Bool {
 }
 
 func parseTouch(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = scanFilesystemFlags(argv, values: touchFlagValues)
+    let (flags, rest) = ShellPipeline.splitFlagTerminator(argv, values: touchFlagValues)
     var paths: [String] = []
     for event in flags {
         switch event {
@@ -102,7 +102,7 @@ private let touchSkipLong: Set<String> = [
 private let touchShorts: Set<Character> = ["a", "c", "f", "h", "m", "t", "d"]
 
 func parseMkdir(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = scanFilesystemFlags(argv, values: mkdirFlagValues)
+    let (flags, rest) = ShellPipeline.splitFlagTerminator(argv, values: mkdirFlagValues)
     var paths: [String] = []
     for event in flags {
         switch event {
@@ -142,7 +142,7 @@ private let mkdirSkipLong: Set<String> = [
 private let mkdirShorts: Set<Character> = ["p", "v", "m"]
 
 func parseCat(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = splitFlagTerminator(argv)
+    let (flags, rest) = ShellPipeline.splitFlagTerminator(argv)
     var paths: [String] = []
     for event in flags {
         switch event {
