@@ -12,7 +12,7 @@ import Synchronization
 /// spellings: existing values are preserved, and the old catch-all
 /// `dial-failed` now covers only connect failures (DNS and filter
 /// refusals record precisely).
-public enum EgressDenialReason: String, Sendable, Equatable {
+public enum EgressDenialReason: String, Sendable, Equatable, CaseIterable {
     case headerTooLarge = "header-too-large"
     case deniedPolicy = "denied-policy"
     case malformed = "malformed"
@@ -467,6 +467,11 @@ public final class EgressProxy: @unchecked Sendable {
         return nil
     }
 
+    /// Dial one relay upstream. `external == false` skips the
+    /// public-unicast filter entirely, so it is only valid for hosts the
+    /// policy already admitted via `allowsLoopbackTarget`; passing an
+    /// unadmitted host here would let a DNS-rebinding attacker reach
+    /// loopback, LAN, or metadata endpoints.
     static func dial(host: String, port: Int, external: Bool) -> DialOutcome {
         var hints = addrinfo()
         memset(&hints, 0, MemoryLayout<addrinfo>.size)

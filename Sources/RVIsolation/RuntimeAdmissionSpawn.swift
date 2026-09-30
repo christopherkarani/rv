@@ -194,7 +194,7 @@ func runAdmittedSeatbeltCommand(
 ) -> Result<Int32, RuntimeAdmissionExecutorError> {
     #if os(macOS)
     if blockingWorkIsCancelled() { return .failure(.cancelled) }
-    guard launch.profileSource.contains("(deny file-link)") else {
+    guard launch.profileIsContainedCompilerOutput else {
         return .failure(.notEstablished)
     }
     guard FileManager.default.isExecutableFile(atPath: IsolationBackends.sandboxExecPath) else {

@@ -135,9 +135,14 @@ public enum WorkspaceLifecycleTransition {
                     next.closeState = .leading(publish: publish)
                     effects = next.runningRuntimeIDs.map { .stopRuntime($0) }
                     effects.append(.finishTeardown(publish: publish))
-                case .terminal, .finished:
-                    // Terminal replays above; `.finished` in `.closing` is
-                    // unreachable (success closes the phase), so it drains.
+                case .finished:
+                    // Unreachable through the transition (success closes the
+                    // phase), but constructible via the public init: the
+                    // close already completed, so answer instead of draining
+                    // the request to the caller's own timeout.
+                    effects = [.replyAlreadyClosed]
+                case .terminal:
+                    // Dead: terminal close states replay above.
                     break
                 }
             case .closed:

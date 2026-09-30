@@ -373,7 +373,9 @@ func spawnSeatbeltProcessBody(
     stagingAgent: String? = nil,
     keychain: [(name: String, value: String)] = []
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
-    guard profile.source.contains("(deny file-link)") else {
+    // Provenance rides the profile value, not a text scan (same gate as
+    // `superviseSeatbelt` above).
+    guard profile.isContainedCompilerOutput else {
         return .failure(.seatbeltNotEstablished)
     }
     guard boundary.remainsEstablished() else {
@@ -663,6 +665,7 @@ func spawnSeatbeltProcessBody(
                 repositoryRoot: request.plan.repositoryRoot
             ),
             profileSource: profile.source,
+            profileIsContainedCompilerOutput: profile.isContainedCompilerOutput,
             workspacePath: workspace,
             sessionLeader: pid,
             egressProxyPort: egressProxyPort,

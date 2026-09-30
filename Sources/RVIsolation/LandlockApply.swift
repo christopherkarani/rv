@@ -111,9 +111,12 @@ func refuseLandlockSpawn(
 
 /// Why an `rv-isolation-exec` candidate was refused. Every old `nil` is
 /// one case; callers still fail closed with `.backendUnavailable`, but
-/// tests and future diagnostics see the reason. `.unresolvable` and
-/// `.doesNotExist` are teardown races (the path passed an earlier check
-/// and vanished); every other case is deterministically pinned by tests.
+/// tests and future diagnostics see the reason. Four cases lack
+/// deterministic pins: `.unresolvable` and `.doesNotExist` are teardown
+/// races (the path passed an earlier check and vanished),
+/// `.selfLookupFailed` needs an unresolvable `/proc/self/exe`, and
+/// `.notFound` is the unreachable search-loop default (macOS always has
+/// at least the main bundle to check).
 enum IsolationExecRefusal: Error, Sendable, Equatable {
     /// Candidate path is not absolute.
     case notAbsolute
@@ -145,8 +148,10 @@ enum IsolationExecRefusal: Error, Sendable, Equatable {
 
 /// Locate `rv-isolation-exec`. Never a relative argv0 guess, never an env
 /// override, never a helper at or under the workspace (including a
-/// workspace symlink whose target is outside). On failure returns the last
-/// refusal encountered across the candidate locations.
+/// workspace symlink whose target is outside). On failure returns the
+/// first refusal encountered: the argv0 sibling is the primary candidate,
+/// so its reason is the most diagnostic; later bundle misses would only
+/// bury it.
 func resolvedIsolationExecPath(
     override: URL?,
     workspacePath: String
@@ -166,7 +171,7 @@ func resolvedIsolationExecPath(
         .appendingPathComponent(IsolationBackends.isolationExecName).path
     return usableIsolationExecPath(sibling, workspacePath: workspacePath)
     #else
-    var refusal = IsolationExecRefusal.notFound
+    var refusal: IsolationExecRefusal?
     if let argv0 = CommandLine.arguments.first,
         IsolatedCommand.isAbsoluteExecutable(argv0)
     {
@@ -190,10 +195,12 @@ func resolvedIsolationExecPath(
         case .success(let path):
             return .success(path)
         case .failure(let error):
-            refusal = error
+            if refusal == nil {
+                refusal = error
+            }
         }
     }
-    return .failure(refusal)
+    return .failure(refusal ?? .notFound)
     #endif
 }
 

@@ -486,6 +486,20 @@ func prepareSeatbelt(
         .flatMap { compileSeatbeltRequest(plan: plan, command: command, facts: $0) }
 }
 
+/// Canonical resource grants for one contained launch: the profile's
+/// executable links, read files, and read/write trees after
+/// `canonicalResourcePath` (effectful: realpath). Always derived from the
+/// same profile as the facts' `resources` in one place by
+/// `resolveSeatbeltFacts`; `compileSeatbeltRequest` trusts the pairing, so
+/// hand-built facts must keep `resources` and `canonical` consistent
+/// (empty `canonical` when `resources` is nil).
+struct CanonicalResources: Sendable, Equatable {
+    var targets: [String]
+    var readFiles: [String]
+    var readTrees: [String]
+    var writeTrees: [String]
+}
+
 /// Effectful facts for one contained Seatbelt launch. `resolveSeatbeltFacts`
 /// produces them (base profile, realpaths, probes, inode scan, ensures);
 /// pure `compileSeatbeltRequest` assembles the launch from them. The spawn
@@ -498,10 +512,7 @@ struct SeatbeltLaunchFacts: Sendable, Equatable {
     /// Resource manifest for staging at run, when a profile was selected.
     var resources: RuntimeResourceManifest?
     /// Canonical resource grants (parallel to `resources`, when set).
-    var canonicalTargets: [String]
-    var canonicalReadFiles: [String]
-    var canonicalReadTrees: [String]
-    var canonicalWriteTrees: [String]
+    var canonical: CanonicalResources
     /// Agent bin grants, when an install and a HOME are visible.
     var agentBin: AgentBinResolution?
     /// Strictly resolved workspace (exists, is a directory, is safe).
@@ -560,15 +571,18 @@ func resolveSeatbeltFacts(
     }
     let productive = resolveProductiveWorkspace(workspacePath: resolved, agentBin: agentBinDirectory)
     let profile = resources?.profile
+    let canonical = CanonicalResources(
+        targets: (profile?.executableLinks ?? []).map { canonicalResourcePath($0.target) },
+        readFiles: (profile?.readFiles ?? []).map(canonicalResourcePath),
+        readTrees: (profile?.readTrees ?? []).map(canonicalResourcePath),
+        writeTrees: (profile?.writeTrees ?? []).map(canonicalResourcePath)
+    )
     return .success(
         SeatbeltLaunchFacts(
             base: base,
             executableRealpath: executableRealpath,
             resources: resources,
-            canonicalTargets: (profile?.executableLinks ?? []).map { canonicalResourcePath($0.target) },
-            canonicalReadFiles: (profile?.readFiles ?? []).map(canonicalResourcePath),
-            canonicalReadTrees: (profile?.readTrees ?? []).map(canonicalResourcePath),
-            canonicalWriteTrees: (profile?.writeTrees ?? []).map(canonicalResourcePath),
+            canonical: canonical,
             agentBin: agentBin,
             resolvedWorkspace: resolved,
             productive: productive
@@ -591,10 +605,10 @@ func compileSeatbeltRequest(
     if let resources = facts.resources {
         profile = profile.allowingCanonicalResources(
             privateHome: resources.privateHome,
-            executableTargets: facts.canonicalTargets,
-            readFiles: facts.canonicalReadFiles,
-            readTrees: facts.canonicalReadTrees,
-            writeTrees: facts.canonicalWriteTrees
+            executableTargets: facts.canonical.targets,
+            readFiles: facts.canonical.readFiles,
+            readTrees: facts.canonical.readTrees,
+            writeTrees: facts.canonical.writeTrees
         )
     }
     if let agentBin = facts.agentBin {

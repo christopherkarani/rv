@@ -429,6 +429,24 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     #expect(collector.all.first?.reason == .headerTooLarge)
 }
 
+@Test func egressDenialReasonsPinLogSpellings() {
+    // `egress-denials.jsonl` readers (including out-of-repo ones) match on
+    // these spellings, so adding a reason is a log-format change. The full
+    // set is pinned here: `dial-failed` narrowed to connect-only failures,
+    // while DNS and filter refusals record as the newer `dns-failed` and
+    // `address-filtered` values.
+    #expect(
+        EgressDenialReason.allCases.map(\.rawValue).sorted() == [
+            "address-filtered",
+            "denied-policy",
+            "dial-failed",
+            "dns-failed",
+            "header-too-large",
+            "malformed",
+        ]
+    )
+}
+
 private func egressIsPublicUnicast(family: Int32, _ text: String) -> Bool? {
     var storage = sockaddr_storage()
     let parsed: Int32 = text.withCString { cString in

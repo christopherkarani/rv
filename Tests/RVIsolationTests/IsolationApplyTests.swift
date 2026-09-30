@@ -1055,10 +1055,7 @@ private func cannedFacts(workspacePath: String, resolvedWorkspace: String? = nil
         base: SeatbeltProfile(source: "(version 1)\n(deny default)", workspacePath: workspacePath),
         executableRealpath: nil,
         resources: nil,
-        canonicalTargets: [],
-        canonicalReadFiles: [],
-        canonicalReadTrees: [],
-        canonicalWriteTrees: [],
+        canonical: CanonicalResources(targets: [], readFiles: [], readTrees: [], writeTrees: []),
         agentBin: nil,
         resolvedWorkspace: resolvedWorkspace ?? workspacePath,
         productive: ProductiveWorkspaceResolution()

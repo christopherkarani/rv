@@ -390,6 +390,45 @@ struct WorkspaceLifecycleTests {
         #expect(out.state.phase == .creating)
     }
 
+    @Test func closeRequestedAlwaysAnswers() {
+        // A close request rides a request/reply protocol: every (phase,
+        // closeState) combination must emit an effect (a reply, promised
+        // work, or a join), never drain to the caller's own timeout.
+        // Includes states only reachable via the public init, which the
+        // future live-supervisor wiring must also be able to map.
+        let phases: [WorkspaceLifecycle] = [.creating, .active, .closing, .closed]
+        let closes: [WorkspaceCloseState] = [
+            .open,
+            .leading(publish: .publish),
+            .waiting,
+            .terminal(.teardownFailed),
+            .finished(published: .publish),
+        ]
+        for phase in phases {
+            for close in closes {
+                let state = WorkspaceSupervisorState(
+                    phase: phase,
+                    admissionPending: false,
+                    closeState: close
+                )
+                let out = step(state, .closeRequested(publish: .publish))
+                if close == .terminal(.teardownFailed) {
+                    #expect(out.effects == [.replyCloseFailed(.teardownFailed)], "(\(phase), \(close))")
+                } else {
+                    #expect(out.effects.isEmpty == false, "(\(phase), \(close)) drained")
+                }
+            }
+        }
+        // The close already completed: answer, even though the transition
+        // itself never leaves `.closing` behind a `.finished` state.
+        let finished = WorkspaceSupervisorState(
+            phase: .closing,
+            admissionPending: false,
+            closeState: .finished(published: .discard)
+        )
+        #expect(step(finished, .closeRequested(publish: .publish)).effects == [.replyAlreadyClosed])
+    }
+
     @Test func lateControlReplyDrains() {
         let running = RuntimeSessionID()
         let gone = RuntimeSessionID()

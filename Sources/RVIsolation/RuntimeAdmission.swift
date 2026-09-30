@@ -129,6 +129,11 @@ public struct RuntimeAdmissionConfiguration: Sendable {
 struct AdmittedLaunchContext: Sendable, Equatable {
     var plan: ContainedPlan
     var profileSource: String
+    /// Provenance of `profileSource`: true only when the text came from
+    /// `compileFirstSliceProfile`. The admitted-spawn gate refuses on this
+    /// flag instead of scanning the text; hand-built contexts stay false
+    /// and fail closed.
+    var profileIsContainedCompilerOutput: Bool = false
     var workspacePath: String
     /// Process that owns this runtime. `-1` when the caller is not a session.
     /// An admitted command stops if this process has exited.

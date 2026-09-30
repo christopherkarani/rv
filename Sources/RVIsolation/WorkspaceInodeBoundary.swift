@@ -91,6 +91,15 @@ func workspacePublishDecision(
 /// multiple client-connection threads, so every field lives behind one
 /// lock. Methods snapshot what they need under short locks and never call
 /// back into a locking method while holding the lock.
+///
+/// The lock serializes number assignment, not fd lifetime: a number read
+/// under the lock can be closed (and its value reused) by teardown before
+/// the reader's `fstat`/`dup`/`openat` runs. Readers must therefore be
+/// externally serialized against close/detach. Today that holds: launch
+/// reads under the supervisor state lock that close also takes, and
+/// `heldDescriptors`/`savedFileData` have no production callers outside
+/// that discipline. A future concurrent reader must pin lifetime (dup
+/// under the lock) instead of trusting a bare number.
 private struct BoundaryMutable: Sendable {
     var volumeFD: Int32
     var savedFD: Int32
