@@ -226,6 +226,8 @@ public struct PendingApprovalRequest: Sendable, Equatable {
     public static let defaultTTL: TimeInterval = 15 * 60
 
     public var id: ApprovalID
+    /// Nil for historical rows. A subject description is not live authority.
+    public var subject: ApprovalSubject?
     public var identity: ApprovalIdentity
     public var action: ProposedAction
     public var reason: ApprovalReason
@@ -240,9 +242,11 @@ public struct PendingApprovalRequest: Sendable, Equatable {
         reason: ApprovalReason,
         continuation: ApprovalContinuation,
         timeoutPolicy: ApprovalTimeoutPolicy,
-        ttl: TimeInterval = PendingApprovalRequest.defaultTTL
+        ttl: TimeInterval = PendingApprovalRequest.defaultTTL,
+        subject: ApprovalSubject? = nil
     ) {
         self.id = id
+        self.subject = subject
         self.identity = identity
         self.action = action
         self.reason = reason
@@ -255,6 +259,8 @@ public struct PendingApprovalRequest: Sendable, Equatable {
 /// Durable pending-approval record. Bound to identity + `action.fingerprint`.
 public struct PendingApproval: Sendable, Equatable, Codable {
     public var id: ApprovalID
+    /// Nil for historical rows. A subject description is not live authority.
+    public var subject: ApprovalSubject?
     public var identity: ApprovalIdentity
     public var action: ProposedAction
     public var reason: ApprovalReason
@@ -273,9 +279,11 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         timeoutPolicy: ApprovalTimeoutPolicy,
         createdAt: Date,
         expiresAt: Date,
-        state: PendingApprovalState
+        state: PendingApprovalState,
+        subject: ApprovalSubject? = nil
     ) {
         self.id = id
+        self.subject = subject
         self.identity = identity
         self.action = action
         self.reason = reason
@@ -296,9 +304,18 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         return at
     }
 
-    /// True only for an unconsumed authorizing resolution of this exact bind.
+    /// Historical name-only API. Cannot prove live principal validity and never authorizes.
     public func authorizes(_ fingerprint: ActionFingerprint, identity: ApprovalIdentity) -> Bool {
-        guard self.identity == identity, self.fingerprint == fingerprint else { return false }
+        // This legacy name-based API cannot prove live principal validity.
+        // Even a durable subject description cannot turn it into executable authority.
+        return false
+    }
+
+    /// Describes a resolved row; callers must separately prove live principal validity.
+    package func describesResolution(for subject: ApprovalSubject) -> Bool {
+        guard self.subject == subject, self.fingerprint == subject.fingerprint,
+            self.continuation == subject.continuation else { return false }
+        let fingerprint = subject.fingerprint
         if case .retry(let retryFingerprint) = continuation, retryFingerprint != fingerprint {
             return false
         }
@@ -308,6 +325,7 @@ public struct PendingApproval: Sendable, Equatable, Codable {
 
     private enum CodingKeys: String, CodingKey {
         case id
+        case subject
         case identity
         case action
         case reason
@@ -322,6 +340,7 @@ public struct PendingApproval: Sendable, Equatable, Codable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(subject, forKey: .subject)
         try container.encode(identity, forKey: .identity)
         try container.encode(action, forKey: .action)
         try container.encode(reason, forKey: .reason)
@@ -335,6 +354,7 @@ public struct PendingApproval: Sendable, Equatable, Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(ApprovalID.self, forKey: .id)
+        subject = try container.decodeIfPresent(ApprovalSubject.self, forKey: .subject)
         identity = try container.decode(ApprovalIdentity.self, forKey: .identity)
         action = try container.decode(ProposedAction.self, forKey: .action)
         reason = try container.decode(ApprovalReason.self, forKey: .reason)

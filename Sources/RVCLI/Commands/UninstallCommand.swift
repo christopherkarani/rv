@@ -21,6 +21,7 @@ struct Uninstall: ParsableCommand {
     var noColor = false
 
     func run() throws {
+        try LocalControlBoundary.requireOwnerAuthorization()
         let resolved = CeremonyCLI.appearance(
             json: json,
             robot: robot,

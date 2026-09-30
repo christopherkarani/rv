@@ -39,6 +39,7 @@ private final class CloseGate: Sendable {
 
 private final class WorkspaceControlConnection: Sendable {
     let id = UUID()
+    let peer: PlatformPeerEvidence
     private let flags: Mutex<ConnectionFlags>
     /// Serializes frames. `flags` is not held across the write, so a slow
     /// client cannot stall accept, but two writers cannot interleave bytes.
@@ -50,7 +51,8 @@ private final class WorkspaceControlConnection: Sendable {
         var closed = false
     }
 
-    init(fd: Int32) {
+    init(fd: Int32, peer: PlatformPeerEvidence) {
+        self.peer = peer
         self.flags = Mutex(ConnectionFlags(fd: fd))
     }
 
@@ -299,8 +301,9 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func adopt(_ fd: Int32) {
-        guard let uid = WorkspaceControlSocket.peerUID(fd),
-            WorkspacePeerPolicy.decide(peerUID: uid, ownerUID: getuid()) == nil
+        let trust = (try? ProtectedPeerTrustConfiguration.installed()) ?? .denyAll
+        guard let peer = try? WorkspacePeerAuthenticator.capture(fd: fd, trust: trust),
+            peer.effectiveUserID == getuid(), peer.componentRole != nil
         else {
             let refusal = WorkspaceControlResponse.failure(
                 id: nil,
@@ -313,7 +316,7 @@ final class WorkspaceHostServer: Sendable {
             Darwin.close(fd)
             return
         }
-        let connection = WorkspaceControlConnection(fd: fd)
+        let connection = WorkspaceControlConnection(fd: fd, peer: peer)
         let stored = registry.withLock { state -> Bool in
             guard state.retired == false,
                 state.connections.count < WorkspaceControlLimits.maxConnections
@@ -434,6 +437,9 @@ final class WorkspaceHostServer: Sendable {
     ) -> Reply {
         guard let op = message.operation else {
             return Reply(message: failure(message, .invalidRequest))
+        }
+        guard WorkspaceOperationAuthorization.permits(op, peer: connection.peer) else {
+            return Reply(message: failure(message, .unauthorizedClient))
         }
         switch op {
         case .hello:

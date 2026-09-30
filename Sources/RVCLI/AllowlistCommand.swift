@@ -99,6 +99,7 @@ struct AllowlistAdd: AsyncParsableCommand {
 
     func run() async throws {
         try layer.refuseUnsupported()
+        try LocalControlBoundary.requireOwnerAuthorization()
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
             FileHandle.standardError.write(Data("rv allowlist add: reason required\n".utf8))
@@ -159,6 +160,7 @@ struct AllowlistAddCommand: AsyncParsableCommand {
 
     func run() async throws {
         try layer.refuseUnsupported()
+        try LocalControlBoundary.requireOwnerAuthorization()
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
             FileHandle.standardError.write(Data("rv allowlist add-command: reason required\n".utf8))
@@ -217,6 +219,7 @@ struct AllowlistRemove: AsyncParsableCommand {
 
     func run() async throws {
         try layer.refuseUnsupported()
+        try LocalControlBoundary.requireOwnerAuthorization()
         let tty = AllowlistCLI.interactiveTTY(
             json: format.json,
             robot: format.robot,

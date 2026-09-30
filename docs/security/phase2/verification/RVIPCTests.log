@@ -1,0 +1,287 @@
+Building for debugging...
+[Computing dependencies]
+[Provisioning 1 / 96]
+[Using on-disk description]
+[1 / 4] RVIsolation
+[3 / 6] RVIsolation
+[6 / 9] RVIsolation
+[9 / 10] RVIsolation
+[13 / 76] RVWorkspaceTUI
+[18 / 56] rv-terminal-probe-product
+[32 / 64] RVIsolationTests-product
+[34 / 66] rv-terminal-probe-product
+[36 / 67] RVService
+[41 / 70] RVService-product
+[44 / 72] RVWorkspaceTUI
+[47 / 74] RVServiceTests-product
+[59 / 89] RVServiceTests-product
+macro expansion #expect:1:69: warning: '#require(_:_:)' is redundant because 'requirement' never equals 'nil' (from macro 'require')
+`- /Users/chriskarani/CodingProjects/rv/Tests/RVIsolationTests/WorkspacePeerAuthenticatorTests.swift:93:91: note: expanded code originates here
+ 91 |     var requirement: SecRequirement?
+ 92 |     #expect(SecRequirementCreateWithString("identifier \"rv.definitely.wrong\"" as CFString, [], &requirement) == errSecSuccess)
+ 93 |     #expect(SecCodeCheckValidity(running, [], try #require(requirement)) != errSecSuccess)
+    |     `- note: in expansion of macro 'expect' here
+    +--- macro expansion #expect ---------------------------------------
+    |1 | Testing.__checkValue(SecCodeCheckValidity(running, [], try #require(requirement)) != errSecSuccess,expression: .__fromSyntaxNode("SecCodeCheckValidity(running, [], try #require(requirement)) != errSecSuccess"),comments: [],isRequired: false,sourceLocation: Testing.SourceLocation.__here()).__expected()
+    |  |                                                                     `- warning: '#require(_:_:)' is redundant because 'requirement' never equals 'nil' (from macro 'require')
+    +-------------------------------------------------------------------
+ 94 | }
+ 95 | @Test func unixDifferentExecutableCannotAcquireRoleAndDeadPeerFails() throws {
+[60 / 89] RVServiceTests-product
+[63 / 89] RVWorkspaceTUI
+[66 / 91] RVWorkspaceTUI
+[69 / 91] RVWorkspaceTUI-product
+[69 / 91] RVServiceTests-product
+[69 / 91] RVCLI
+[71 / 92] RVWorkspaceTUI-product
+[75 / 92] RVServiceTests-product
+[77 / 92] RVServiceTests-product
+[81 / 95] RVCLI
+[87 / 103] RVCLI-product
+[87 / 103] rv-product
+[90 / 104] rv-product
+[92 / 104] RVCLITests-product
+[93 / 104] RVServiceTests-product
+[95 / 107] RVServiceTests-product
+[101 / 107] RVServiceTests-product
+[105 / 108] rv-terminal-probe-product
+[108 / 111] rv-product
+[108 / 111] RVCLITests-product
+[112 / 114] RVCLITests-product
+warning: missing creator for mutated node: ('/Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/SwiftTerm_SwiftTerm.bundle/Contents/MacOS')
+Build complete! (11.14 sec)
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite SkewReasonTests started.
+􀟈  Suite HookEvaluateRoundTripTests started.
+􀟈  Suite PendingAndRuleRoundTripTests started.
+􀟈  Suite EnvelopeRoundTripTests started.
+􀟈  Suite EvaluationRouteTests started.
+􀟈  Suite FrameCodecTests started.
+􀟈  Suite IPCErrorGoldenFrameTests started.
+􀟈  Test handshakeRequiredFailsHelloDecode() started.
+􀟈  Test helloSkewReasonsRoundTrip() started.
+􀟈  Test goldenFramesEncodeByteIdenticalToLegacyStringWire() started.
+􀟈  Test unknownReasonStringFailsDecodeInsteadOfYieldingNil() started.
+􀟈  Test hookEvaluateReply_viaMustBeXpc() started.
+􀟈  Test okTrueWithSkewReasonThrows(json:) started.
+􀟈  Test pendingWatchUnchangedPoll_sameGenerationEmptyItems() started.
+􀟈  Test rawValuesAreTheLegacyWireStrings() started.
+􀟈  Test pendingResolve_rejectsUnrepresentableIdentity(identity:reason:) started.
+􀟈  Test missingReasonThrows(json:) started.
+􀟈  Test oldEvaluateAndHookEvaluateEnvelopes_stillDecodeOnV1() started.
+􀟈  Test unknownMethod_stillErrors() started.
+􀟈  Test transportAbsentIsInProcess() started.
+􀟈  Test protocolNameStaysRvIpcV1() started.
+􀟈  Test explainReplyDecodeIgnoresLyingSiblingIdentity() started.
+􀟈  Test sharedVectorsMatchCImplementation() started.
+􀟈  Test unknownMethod_stillErrors() started.
+􀟈  Test rulePreviewReply_hardStopAllowedToSaveFalse_roundTrip() started.
+􀟈  Test explainStageUnknownNameThrows() started.
+􀟈  Test hookEvaluateReplyFrame_bytesMatchGolden() started.
+􀟈  Test pendingListRequestFrame_bytesMatchGolden() started.
+􀟈  Test explainStageNameEncodesKebabRawValue() started.
+􀟈  Test splitFrameRoundTripReturnsReceivedBody() started.
+􀟈  Test bodyCountRejectsEmptyHeader() started.
+􀟈  Test hookEvaluateReply_omitsEmptyStderrOnEncode() started.
+􀟈  Test hookEvaluateParams_unknownHostFailsDecodeWithDataCorrupted() started.
+􀟈  Test emptyAdvertisedServiceSemverIsInProcess() started.
+􀟈  Test hookEvaluateRequest_invalidUTF8OverlayThrows() started.
+􀟈  Test unparseableAdvertisedServiceSemverIsInProcess() started.
+􀟈  Test evaluateReplyServiceSemver_isAdditiveOptionalOnV1() started.
+􀟈  Test pendingListItem_omittedSessionSuffixStaysOffTheWire() started.
+􀟈  Test evaluateRequest_stdinOverlayIsIgnored() started.
+􀟈  Test ruleSaveRequestAndReply_roundTrip() started.
+􀟈  Test classifyRiskRoundTripsAllFiveWireStrings() started.
+􀟈  Test oversizedDeclaredLengthFails() started.
+􀟈  Test emptyBodyIsRejected() started.
+􀟈  Test differentMajorVersionsUseInProcess() started.
+􀟈  Test rulePolarity_rejectsUnknownStrings(_:) started.
+􀟈  Test bodyCountRejectsOversizedHeaderWithoutBody() started.
+􀟈  Test allowOnceConsumeResultKeyFailsDecode() started.
+􀟈  Test hookEvaluateParams_roundTripsHostStdinAndClientSemver() started.
+􀟈  Test hookEvaluateRequest_cAppleHeaderWithoutStdinFieldDecodes() started.
+􀟈  Test lengthPrefixRoundTrip() started.
+􀟈  Test pendingResolveRequestFrame_bytesMatchGolden() started.
+􀟈  Test emptyCwdOnHonorParamsIsNil() started.
+􀟈  Test allowOnceConsumeMethodKeyFailsDecode() started.
+􀟈  Test unparseableClientSemverIsInProcess() started.
+􀟈  Test splitFramePreservesValidationErrors() started.
+􀟈  Test missingAdvertisedServiceSemverIsInProcess() started.
+􀟈  Test pendingResolve_missingDecisionFailsDecode() started.
+􀟈  Test pendingResolveReplyFrame_omitsSupportingCommand() started.
+􀟈  Test explainReplyDerivesIdentityFromOutcome() started.
+􀟈  Test hookEvaluateReply_roundTripsStdoutExitViaAndServiceSemver() started.
+􀟈  Test namedEngineErrorsEncodeFrozenSentences(_:_:) started.
+􀟈  Test hookEvaluateParams_omittedStdinDecodesAsEmpty() started.
+􀟈  Test unknownProtocolSkewStringFailsDecode() started.
+􀟈  Test pendingWatchRequestFrame_bytesMatchGolden() started.
+􀟈  Test hookEvaluateReply_decodesNonemptyStderr() started.
+􀟈  Test existingUnitErrorsStayByteCompatible() started.
+􀟈  Test hookEvaluateRequest_applyingStdinOverlayReplacesJSONStdin() started.
+􀟈  Test denyDecisionKeepsRulePayload() started.
+􀟈  Test truncatedHeaderFails() started.
+􀟈  Test unknownEngineStringRemainsLeftoverEngine() started.
+􀟈  Test emptyClientSemverIsInProcess() started.
+􀟈  Test equalMajorVersionsUseXPC() started.
+􀟈  Test resultRoundTrips() started.
+􀟈  Test oldEvaluateEnvelopes_stillDecodeOnV1() started.
+􀟈  Test protocolSkewCasesEncodeLegacyWireStrings() started.
+􀟈  Test classifyReplySafeOnlyExposesPackWithoutRule() started.
+􀟈  Test pendingAndRuleUnitErrorsEncodeTrue(_:_:) started.
+􀟈  Test rulePreviewRequestAndReply_roundTrip() started.
+􀟈  Test pendingResolve_rejectsInvalidDecision(_:) started.
+􀟈  Test protocolSkewHandshakeRequiredEncodesLegacyWireString() started.
+􀟈  Test pendingListReplyFrame_bytesMatchGoldenAndOmitsCommand() started.
+􀟈  Test case passing 1 argument json → "{"ok":false,"protocol":"rv.ipc.v1","serviceSemver":"1.0.0"}" to missingReasonThrows(json:) started.
+􀟈  Test case passing 1 argument json → "{"ok":true,"protocol":"rv.ipc.v1","serviceSemver":"1.0.0","skewReason":"protocol"}" to okTrueWithSkewReasonThrows(json:) started.
+􀟈  Test methodRoundTrips() started.
+􀟈  Test case passing 2 arguments identity → ["agent": "not-a-host", "session": "sess"], reason → "unknown agent" to pendingResolve_rejectsUnrepresentableIdentity(identity:reason:) started.
+􀟈  Test case passing 1 argument json → "{"ok":false,"protocol":"rv.ipc.v1","serviceSemver":"1.0.0","skewReason":null}" to missingReasonThrows(json:) started.
+􀟈  Test hookEvaluateRequest_applyingStdinOverlayKeepsQuotesAndNewlines() started.
+􀟈  Test doctorCheckIDRoundTripsLegacyWireBytes() started.
+􀟈  Test classifyReplyDecodeIgnoresLyingSiblingIdentity() started.
+􀟈  Test hookEvaluateReply_serviceSemverIsAdditiveOptionalOnV1() started.
+􀟈  Test hookEvaluateReply_roundTripsNonemptyStderr() started.
+􀟈  Test case passing 2 arguments identity → ["session": "", "agent": "pi"], reason → "empty session" to pendingResolve_rejectsUnrepresentableIdentity(identity:reason:) started.
+􀟈  Test classifyReplyAllowDecodeRejectsDisagreeingRuleAndPack() started.
+􀟈  Test classifyRiskRejectsNonStringPayloadsWithDecodingError() started.
+􀟈  Test hookEvaluateRequestFrame_bytesMatchGolden() started.
+􀟈  Test hookEvaluateParams_omittedClientSemverIsNil() started.
+􀟈  Test case passing 1 argument json → "{"ok":true,"protocol":"rv.ipc.v1","serviceSemver":"1.0.0","skewReason":null}" to okTrueWithSkewReasonThrows(json:) started.
+􀟈  Test classifyReplyAllowDecodeKeepsPackWhenRuleIDIsAbsent() started.
+􀟈  Test hookEvaluateReply_missingOrNullStderrDecodesAsEmpty(_:) started.
+􀟈  Test classifyRiskRejectsUnknownStringsAsDataCorrupted() started.
+􀟈  Test classifyReplyAllowDecodeDerivesPackFromRuleID() started.
+􀟈  Test classifyReplyDerivesIdentityAndRiskFromOutcome() started.
+􀟈  Test classifyRiskDeriveMatchesTruthTable() started.
+􀟈  Test helloRoundTrips() started.
+􀟈  Test evaluateViaRoundTripsAsXpcAndRejectsOtherPaths() started.
+􀟈  Test indeterminateDoesNotBecomeAllow() started.
+􀟈  Test classifyReplyAllowDecodeAgreesWhenBothNameTheSamePack() started.
+􀟈  Test case passing 1 argument raw → "deny" to rulePolarity_rejectsUnknownStrings(_:) started.
+􀟈  Test evaluateParamsClientSemver_isAdditiveOptionalOnV1() started.
+􀟈  Test case passing 1 argument raw → "allowOnce" to rulePolarity_rejectsUnknownStrings(_:) started.
+􀟈  Test case passing 1 argument raw → "" to rulePolarity_rejectsUnknownStrings(_:) started.
+􀟈  Test case passing 1 argument raw → "Always" to rulePolarity_rejectsUnknownStrings(_:) started.
+􀟈  Test case passing 2 arguments error → .hookEvaluateFailed, sentence → "hook evaluate failed" to namedEngineErrorsEncodeFrozenSentences(_:_:) started.
+􀟈  Test case passing 2 arguments error → .rulePinRequiresMatchingView, sentence → "rule pin requires a matching view" to namedEngineErrorsEncodeFrozenSentences(_:_:) started.
+􀟈  Test case passing 2 arguments error → .packEnableFailed, sentence → "pack enable failed" to namedEngineErrorsEncodeFrozenSentences(_:_:) started.
+􀟈  Test case passing 2 arguments error → .pendingAllowOnceNotUnlockable, sentence → "pending allowOnce is not unlockable" to namedEngineErrorsEncodeFrozenSentences(_:_:) started.
+􀟈  Test case passing 2 arguments error → .pendingCoordinatorUnavailable, sentence → "pending coordinator unavailable" to namedEngineErrorsEncodeFrozenSentences(_:_:) started.
+􁁛  Test helloSkewReasonsRoundTrip() passed after 0.002 seconds.
+􁁛  Test rawValuesAreTheLegacyWireStrings() passed after 0.002 seconds.
+􁁛  Test transportAbsentIsInProcess() passed after 0.002 seconds.
+􁁛  Test goldenFramesEncodeByteIdenticalToLegacyStringWire() passed after 0.002 seconds.
+􀟈  Test case passing 2 arguments error → .pendingNotFound, key → "pendingNotFound" to pendingAndRuleUnitErrorsEncodeTrue(_:_:) started.
+􀟈  Test case passing 2 arguments error → .pendingAlreadyTerminal, key → "pendingAlreadyTerminal" to pendingAndRuleUnitErrorsEncodeTrue(_:_:) started.
+􀟈  Test case passing 1 argument decision → "createRule" to pendingResolve_rejectsInvalidDecision(_:) started.
+􀟈  Test case passing 2 arguments error → .pendingIdentityMismatch, key → "pendingIdentityMismatch" to pendingAndRuleUnitErrorsEncodeTrue(_:_:) started.
+􀟈  Test case passing 2 arguments error → .pendingFingerprintMismatch, key → "pendingFingerprintMismatch" to pendingAndRuleUnitErrorsEncodeTrue(_:_:) started.
+􀟈  Test case passing 1 argument decision → "" to pendingResolve_rejectsInvalidDecision(_:) started.
+􀟈  Test case passing 1 argument decision → "maybe" to pendingResolve_rejectsInvalidDecision(_:) started.
+􀟈  Test case passing 1 argument decision → "alwaysAllow" to pendingResolve_rejectsInvalidDecision(_:) started.
+􀟈  Test case passing 2 arguments error → .ruleHardStop, key → "ruleHardStop" to pendingAndRuleUnitErrorsEncodeTrue(_:_:) started.
+􁁛  Test protocolNameStaysRvIpcV1() passed after 0.002 seconds.
+􁁛  Test sharedVectorsMatchCImplementation() passed after 0.002 seconds.
+􁁛  Test rulePreviewReply_hardStopAllowedToSaveFalse_roundTrip() passed after 0.002 seconds.
+􀟈  Test case passing 2 arguments error → .ruleDraftMismatch, key → "ruleDraftMismatch" to pendingAndRuleUnitErrorsEncodeTrue(_:_:) started.
+􁁛  Test pendingWatchUnchangedPoll_sameGenerationEmptyItems() passed after 0.002 seconds.
+􁁛  Test missingReasonThrows(json:) with 2 test cases passed after 0.002 seconds.
+􁁛  Test unknownReasonStringFailsDecodeInsteadOfYieldingNil() passed after 0.002 seconds.
+􁁛  Test okTrueWithSkewReasonThrows(json:) with 2 test cases passed after 0.002 seconds.
+􀟈  Test case passing 1 argument json → "{"exitCode":1,"stderr":null,"stdout":"","via":"xpc"}" to hookEvaluateReply_missingOrNullStderrDecodesAsEmpty(_:) started.
+􁁛  Test unknownMethod_stillErrors() passed after 0.002 seconds.
+􁁛  Test hookEvaluateReplyFrame_bytesMatchGolden() passed after 0.002 seconds.
+􁁛  Test unknownMethod_stillErrors() passed after 0.002 seconds.
+􀟈  Test case passing 1 argument json → "{"exitCode":1,"stdout":"","via":"xpc"}" to hookEvaluateReply_missingOrNullStderrDecodesAsEmpty(_:) started.
+􁁛  Test splitFrameRoundTripReturnsReceivedBody() passed after 0.002 seconds.
+􁁛  Test hookEvaluateReply_viaMustBeXpc() passed after 0.002 seconds.
+􁁛  Test pendingListRequestFrame_bytesMatchGolden() passed after 0.002 seconds.
+􁁛  Test handshakeRequiredFailsHelloDecode() passed after 0.003 seconds.
+􁁛  Test emptyAdvertisedServiceSemverIsInProcess() passed after 0.002 seconds.
+􁁛  Test hookEvaluateReply_omitsEmptyStderrOnEncode() passed after 0.002 seconds.
+􁁛  Test hookEvaluateParams_unknownHostFailsDecodeWithDataCorrupted() passed after 0.002 seconds.
+􁁛  Test evaluateRequest_stdinOverlayIsIgnored() passed after 0.002 seconds.
+􁁛  Test unparseableAdvertisedServiceSemverIsInProcess() passed after 0.002 seconds.
+􁁛  Test classifyRiskRoundTripsAllFiveWireStrings() passed after 0.002 seconds.
+􁁛  Test bodyCountRejectsEmptyHeader() passed after 0.002 seconds.
+􁁛  Test hookEvaluateRequest_invalidUTF8OverlayThrows() passed after 0.002 seconds.
+􁁛  Test bodyCountRejectsOversizedHeaderWithoutBody() passed after 0.002 seconds.
+􁁛  Test emptyBodyIsRejected() passed after 0.002 seconds.
+􁁛  Test explainStageNameEncodesKebabRawValue() passed after 0.003 seconds.
+􁁛  Test oversizedDeclaredLengthFails() passed after 0.002 seconds.
+􁁛  Test lengthPrefixRoundTrip() passed after 0.002 seconds.
+􁁛  Test hookEvaluateRequest_cAppleHeaderWithoutStdinFieldDecodes() passed after 0.002 seconds.
+􁁛  Test differentMajorVersionsUseInProcess() passed after 0.002 seconds.
+􁁛  Test rulePolarity_rejectsUnknownStrings(_:) with 4 test cases passed after 0.002 seconds.
+􁁛  Test explainStageUnknownNameThrows() passed after 0.003 seconds.
+􁁛  Test unparseableClientSemverIsInProcess() passed after 0.002 seconds.
+􁁛  Test oldEvaluateAndHookEvaluateEnvelopes_stillDecodeOnV1() passed after 0.003 seconds.
+􁁛  Test evaluateReplyServiceSemver_isAdditiveOptionalOnV1() passed after 0.003 seconds.
+􁁛  Test hookEvaluateParams_roundTripsHostStdinAndClientSemver() passed after 0.002 seconds.
+􁁛  Test hookEvaluateParams_omittedStdinDecodesAsEmpty() passed after 0.002 seconds.
+􁁛  Test explainReplyDerivesIdentityFromOutcome() passed after 0.002 seconds.
+􁁛  Test splitFramePreservesValidationErrors() passed after 0.002 seconds.
+􁁛  Test missingAdvertisedServiceSemverIsInProcess() passed after 0.002 seconds.
+􁁛  Test emptyCwdOnHonorParamsIsNil() passed after 0.002 seconds.
+􁁛  Test pendingResolveReplyFrame_omitsSupportingCommand() passed after 0.002 seconds.
+􁁛  Test hookEvaluateReply_roundTripsStdoutExitViaAndServiceSemver() passed after 0.002 seconds.
+􁁛  Test allowOnceConsumeMethodKeyFailsDecode() passed after 0.002 seconds.
+􁁛  Test allowOnceConsumeResultKeyFailsDecode() passed after 0.003 seconds.
+􁁛  Test pendingWatchRequestFrame_bytesMatchGolden() passed after 0.002 seconds.
+􁁛  Test hookEvaluateReply_decodesNonemptyStderr() passed after 0.002 seconds.
+􁁛  Test hookEvaluateRequest_applyingStdinOverlayReplacesJSONStdin() passed after 0.002 seconds.
+􁁛  Test existingUnitErrorsStayByteCompatible() passed after 0.002 seconds.
+􁁛  Test truncatedHeaderFails() passed after 0.002 seconds.
+􁁛  Test namedEngineErrorsEncodeFrozenSentences(_:_:) with 5 test cases passed after 0.002 seconds.
+􁁛  Test emptyClientSemverIsInProcess() passed after 0.002 seconds.
+􁁛  Test equalMajorVersionsUseXPC() passed after 0.002 seconds.
+􁁛  Test classifyReplySafeOnlyExposesPackWithoutRule() passed after 0.002 seconds.
+􁁛  Test denyDecisionKeepsRulePayload() passed after 0.002 seconds.
+􁁛  Test protocolSkewCasesEncodeLegacyWireStrings() passed after 0.002 seconds.
+􁁛  Test explainReplyDecodeIgnoresLyingSiblingIdentity() passed after 0.003 seconds.
+􁁛  Test pendingResolve_missingDecisionFailsDecode() passed after 0.002 seconds.
+􁁛  Test pendingResolveRequestFrame_bytesMatchGolden() passed after 0.003 seconds.
+􁁛  Test ruleSaveRequestAndReply_roundTrip() passed after 0.003 seconds.
+􁁛  Test pendingListItem_omittedSessionSuffixStaysOffTheWire() passed after 0.003 seconds.
+􁁛  Test protocolSkewHandshakeRequiredEncodesLegacyWireString() passed after 0.002 seconds.
+􁁛  Test pendingResolve_rejectsInvalidDecision(_:) with 4 test cases passed after 0.002 seconds.
+􁁛  Test unknownEngineStringRemainsLeftoverEngine() passed after 0.002 seconds.
+􁁛  Test unknownProtocolSkewStringFailsDecode() passed after 0.002 seconds.
+􁁛  Test pendingResolve_rejectsUnrepresentableIdentity(identity:reason:) with 2 test cases passed after 0.003 seconds.
+􁁛  Test pendingAndRuleUnitErrorsEncodeTrue(_:_:) with 6 test cases passed after 0.002 seconds.
+􁁛  Test oldEvaluateEnvelopes_stillDecodeOnV1() passed after 0.002 seconds.
+􁁛  Test hookEvaluateRequest_applyingStdinOverlayKeepsQuotesAndNewlines() passed after 0.002 seconds.
+􁁛  Test rulePreviewRequestAndReply_roundTrip() passed after 0.002 seconds.
+􁁛  Test hookEvaluateReply_serviceSemverIsAdditiveOptionalOnV1() passed after 0.002 seconds.
+􁁛  Test hookEvaluateRequestFrame_bytesMatchGolden() passed after 0.002 seconds.
+􁁛  Test hookEvaluateParams_omittedClientSemverIsNil() passed after 0.002 seconds.
+􁁛  Test doctorCheckIDRoundTripsLegacyWireBytes() passed after 0.002 seconds.
+􁁛  Test pendingListReplyFrame_bytesMatchGoldenAndOmitsCommand() passed after 0.002 seconds.
+􁁛  Test classifyReplyDecodeIgnoresLyingSiblingIdentity() passed after 0.002 seconds.
+􁁛  Test classifyReplyAllowDecodeKeepsPackWhenRuleIDIsAbsent() passed after 0.001 seconds.
+􁁛  Test hookEvaluateReply_missingOrNullStderrDecodesAsEmpty(_:) with 2 test cases passed after 0.001 seconds.
+􁁛  Test classifyReplyAllowDecodeRejectsDisagreeingRuleAndPack() passed after 0.002 seconds.
+􁁛  Test classifyRiskRejectsUnknownStringsAsDataCorrupted() passed after 0.001 seconds.
+􁁛  Test classifyRiskDeriveMatchesTruthTable() passed after 0.001 seconds.
+􁁛  Test classifyReplyAllowDecodeDerivesPackFromRuleID() passed after 0.001 seconds.
+􁁛  Test hookEvaluateReply_roundTripsNonemptyStderr() passed after 0.002 seconds.
+􁁛  Test classifyReplyAllowDecodeAgreesWhenBothNameTheSamePack() passed after 0.001 seconds.
+􁁛  Test indeterminateDoesNotBecomeAllow() passed after 0.001 seconds.
+􁁛  Test classifyReplyDerivesIdentityAndRiskFromOutcome() passed after 0.001 seconds.
+􁁛  Test evaluateParamsClientSemver_isAdditiveOptionalOnV1() passed after 0.001 seconds.
+􁁛  Test helloRoundTrips() passed after 0.001 seconds.
+􁁛  Suite SkewReasonTests passed after 0.003 seconds.
+􁁛  Test methodRoundTrips() passed after 0.002 seconds.
+􁁛  Test evaluateViaRoundTripsAsXpcAndRejectsOtherPaths() passed after 0.001 seconds.
+􁁛  Suite FrameCodecTests passed after 0.003 seconds.
+􁁛  Suite EvaluationRouteTests passed after 0.003 seconds.
+􁁛  Suite IPCErrorGoldenFrameTests passed after 0.003 seconds.
+􁁛  Suite PendingAndRuleRoundTripTests passed after 0.003 seconds.
+􁁛  Test resultRoundTrips() passed after 0.002 seconds.
+􁁛  Suite HookEvaluateRoundTripTests passed after 0.003 seconds.
+􁁛  Test classifyRiskRejectsNonStringPayloadsWithDecodingError() passed after 0.002 seconds.
+􁁛  Suite EnvelopeRoundTripTests passed after 0.003 seconds.
+􁁛  Test run with 95 tests in 7 suites passed after 0.004 seconds.

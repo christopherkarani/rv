@@ -117,6 +117,7 @@ struct Policy: AsyncParsableCommand {
             }
             let text = PolicyDocumentTOML.render(document)
             if let output {
+                try LocalControlBoundary.requireOwnerAuthorization()
                 let url = URL(fileURLWithPath: output)
                 do {
                     try text.write(to: url, atomically: true, encoding: .utf8)
@@ -174,6 +175,7 @@ struct Policy: AsyncParsableCommand {
             let body = preview.isEmpty ? "  (none)" : preview
             FileHandle.standardOutput.write(Data(("apply\n\(body)\n").utf8))
             if save {
+                try LocalControlBoundary.requireOwnerAuthorization()
                 do {
                     _ = try session.mergeIncoming(incoming, layer: layer, save: true)
                 } catch {

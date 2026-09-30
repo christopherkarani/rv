@@ -196,6 +196,14 @@ public final class WorkspaceClient: Sendable {
             close(fd)
             return .failure(.staleEndpoint)
         }
+        // Authenticate the live host before disclosing the endpoint owner token.
+        guard let trust = try? ProtectedPeerTrustConfiguration.installed(),
+            let peer = try? WorkspacePeerAuthenticator.capture(fd: fd, trust: trust),
+            peer.effectiveUserID == getuid(), peer.componentRole == .workspaceHost
+        else {
+            close(fd)
+            return .failure(.unauthorizedClient)
+        }
         let client = WorkspaceClient(fd: fd, endpoint: endpoint)
         switch client.hello() {
         case .failure(let error):

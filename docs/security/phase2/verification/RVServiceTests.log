@@ -1,0 +1,456 @@
+Building for debugging...
+[Computing dependencies]
+[Provisioning 2 / 96]
+[Using on-disk description]
+[1 / 2] SwiftTerm
+warning: missing creator for mutated node: ('/Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/SwiftTerm_SwiftTerm.bundle/Contents/MacOS')
+Build complete! (1.66 sec)
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite LaunchdPlistTests started.
+􀟈  Suite RVDLaunchVersionTests started.
+􀟈  Suite ServiceRuntimeAnalyticsTests started.
+􀟈  Suite EvaluateDoorTests started.
+􀟈  Suite OnceResumeTests started.
+􀟈  Suite PendingDispatchTests started.
+􀟈  Suite UnixSocketPathTests started.
+􀟈  Test pendingList_emptyEffectsShell_staysShell() started.
+􀟈  Suite ServiceFramesTests started.
+􀟈  Suite IdleExitTests started.
+􀟈  Suite DenialLedgerRecordTests started.
+􀟈  Suite "GatedEvaluate rebase recovery" started.
+􀟈  Suite RVDLaunchParseTests started.
+􀟈  Suite LinuxResidualCoverageTests started.
+􀟈  Suite PeerSessionPingOnHandleTests started.
+􀟈  Suite XPCEndpointLifetimeTests started.
+􀟈  Suite "Exact owner authorization" started.
+􀟈  Suite ServiceRuntimeEvaluateTests started.
+􀟈  Suite ExplainDispatchTests started.
+􀟈  Suite OneShotEvaluateTests started.
+􀟈  Suite PacksFacadeTests started.
+􀟈  Suite "Protected host path probe" started.
+􀟈  Suite LiveEvaluateWorldTests started.
+􀟈  Suite "GitLiveProbe" started.
+􀟈  Suite "GatedEvaluate Git semantics" started.
+􀟈  Suite "GatedEvaluateTypedRuleLoad" started.
+􀟈  Suite DoctorSnapshotBuilderTests started.
+􀟈  Suite GatedEvaluateTests started.
+􀟈  Suite "PendingResolveGrant" started.
+􀟈  Suite "PendingHostAsk service door" started.
+􀟈  Suite "Authenticated dispatch boundary" started.
+􀟈  Suite HookEvaluateTests started.
+􀟈  Suite EvaluateSessionTests started.
+􀟈  Suite EvaluateWorldTests started.
+􀟈  Suite FakeXPCUnixSocketTests started.
+􀟈  Suite "GatedEvaluate wrapper semantics" started.
+􀟈  Suite EnabledCompileTests started.
+􀟈  Suite SystemdUnitTests started.
+􀟈  Test enableCompileGate_rejectsUncompilableCritical() started.
+􀟈  Suite "GatedEvaluate filesystem semantics" started.
+􀟈  Test pendingList_emptyEffectsFile_usesLedgerNameFile(kind:expected:) started.
+􀟈  Test anonymousXPCMessagesAndRepliesCarryLiveCodeEvidence() started.
+􀟈  Test fabricatedXPCDictionaryCannotEstablishPeer() started.
+􀟈  Test enableCompileGate_allowsMediumMissAndCompilableCritical() started.
+􀟈  Test enableCompileGate_bundledDatabaseSqliteBlockingPatternsCompile() started.
+􀟈  Test productionSourcesDoNotListenOnUnixSocket() started.
+􀟈  Test productionRejectsSocketFlag() started.
+􀟈  Test templateIsOnDemandNotKeepAlive() started.
+􀟈  Test hookEvaluateRecordsDecisionAnalyticsWithoutCommandText() started.
+􀟈  Test evaluateSnapshotsEnabledPackIDsBeforeAsyncWork() started.
+􀟈  Suite "Filesystem repository boundary probe" started.
+􀟈  Test runPeekDoesNotSpendGrantThenApplyDoes() started.
+􀟈  Test freshHomeRequestUsesDayOnePackIDs() started.
+􀟈  Test setPackEnabledRefreshesAnalyticsPackSnapshot() started.
+􀟈  Test alwaysAllowSaveAuthorizesFutureEvaluateWithoutExtraClick() started.
+􀟈  Test nilHomeRequestUsesDayOneWalk() started.
+􀟈  Test cancelBeforeInstallResumesOnce() started.
+􀟈  Test RVDLaunch_versionLine() started.
+􀟈  Test resolveMapsLedgerErrors() started.
+􀟈  Test automaticStoreListsCreatedWaits() started.
+􀟈  Test hookEvaluateAskWithoutSessionDoesNotPersist() started.
+􀟈  Test invalidateAndOpenedCountAreSafeConcurrently() started.
+􀟈  Test secondResumeIsIgnored() started.
+􀟈  Test cancelledPerformDoesNotWaitForXPC() started.
+􀟈  Test missingFolderUsesPlaceholder() started.
+􀟈  Test concurrentResumeDeliversExactlyOnce() started.
+􀟈  Test watchAcksUnchangedThenReturnsItemsAfterResolve() started.
+􀟈  Test alwaysBlockSaveDeniesThisWait() started.
+􀟈  Test extraAllowOnceStillWorksWithoutATypedRule() started.
+􀟈  Test pendingDispatchDoesNotLogCommandText() started.
+􀟈  Test hookEvaluateAskOnPiPersistsWaitWithoutCommandOnList() started.
+􀟈  Test ruleSaveDraftMismatchWritesNothing() started.
+􀟈  Test previewWithoutSaveLeavesWaitAwaitingHuman() started.
+􀟈  Test case passing 2 arguments kind → .edit, expected → "edit file" to pendingList_emptyEffectsFile_usesLedgerNameFile(kind:expected:) started.
+􀟈  Test case passing 2 arguments kind → .read, expected → "read file" to pendingList_emptyEffectsFile_usesLedgerNameFile(kind:expected:) started.
+􀟈  Test alwaysAllowHardStopPreviewForbidsSaveAndWritesNothing() started.
+􀟈  Test cancellationHandlerResumesWithoutProducer() started.
+􀟈  Test case passing 2 arguments kind → .write, expected → "write file" to pendingList_emptyEffectsFile_usesLedgerNameFile(kind:expected:) started.
+􀟈  Test fileToolAlwaysAllowFailsClosedWithoutMatchingView() started.
+􀟈  Test allowOnceOnPiLeavesOpenCodeAwaiting() started.
+􀟈  Test blocksDisabled_writesNothing() started.
+􀟈  Test sessionSuffixOnlyWhenAskLineCollides() started.
+􀟈  Test alwaysAllowSaveAuthorizesNormalizedWrapperRetry() started.
+􀟈  Test missingCoordinatorFailsClosedWithoutSpendingAGrant() started.
+􀟈  Test rebaseDirAllowsCheckoutDiscard() started.
+􀟈  Test listOmitsCommandAndOrdersOldestFirst() started.
+􀟈  Test allowOncePeekUsesCompileSetAfterPackEnable() started.
+􀟈  Test idleExitSeconds_rejectsMissingZeroAndNonInteger() started.
+􀟈  Test failedPlantConsumesWaitAndReportsNotUnlockable() started.
+􀟈  Test fileToolDeny_appendsRedactedRow() started.
+􀟈  Test peek_doesNotWrite() started.
+􀟈  Test injectedOneSecondIdleFiresWithoutKeepAlive() started.
+􀟈  Test idleExitSeconds_spaceAndEqualsForms() started.
+􀟈  Test shellDeny_appends() started.
+􀟈  Test versionFlag_setsPrintVersion() started.
+􀟈  Test spendHostAsk_appends() started.
+􀟈  Test rebaseDirAllowsRestoreWorktree() started.
+􀟈  Test decode_emptyHeader_isEmpty() started.
+􀟈  Test serviceIdentityAndIncomingReply() started.
+􀟈  Test encode_oversized_throws() started.
+􀟈  Test rebaseDirKeepsResetHardDenied() started.
+􀟈  Test decode_truncatedAndLengthMismatch() started.
+􀟈  Test hookEvaluateSpendDeny_recordsHookHost() started.
+􀟈  Test allow_doesNotWrite() started.
+􀟈  Test twoDictionaryHandlesPingTheSameWatchdog() started.
+􀟈  Test listenerSourceBeginsAndEndsXPCTransaction() started.
+􀟈  Test defaultArguments_keepIdleAndHideVersion() started.
+􀟈  Test encodeDecode_roundTripsBody() started.
+􀟈  Test injectedXDGResolvesUnderRuntimeDir() started.
+􀟈  Test disconnectInvalidatesReceipt() started.
+􀟈  Test missingRebaseDirKeepsCheckoutDenied() started.
+􀟈  Test worktreeGitdirFileAllowsCheckoutDiscard() started.
+􀟈  Test quotedBashCheckoutDiscardIsRecoveredDuringRebase() started.
+􀟈  Test stdinOverlayKeyRoundTripsMissingAndBytes() started.
+􀟈  Test rebaseDirDoesNotTreatRestoreStagedAsWorktreeDiscard() started.
+􀟈  Test evaluationWorld_matchingViewNormalizes() started.
+􀟈  Test dictionaryHandlePingsInjectedWatchdog() started.
+􀟈  Test dictionaryHandlePairsTransactionOnDecodeFailure() started.
+􀟈  Test checkoutTheirsDuringRebaseIsRecovered() started.
+􀟈  Test cancelledEndpointCannotRediscoverReplacementListener() started.
+􀟈  Test subjectRoundTripsWithoutBecomingAuthority() started.
+􀟈  Test coveredRequestedPacksStayOnWarmSession() started.
+􀟈  Test compoundCheckoutThenResetHardStaysDeniedDuringRebase() started.
+􀟈  Test nonDictionaryEventDoesNotPingOrBeginTransaction() started.
+􀟈  Test wallRollbackCannotExtendReceiptLifetime() started.
+􀟈  Test unixSocketPath_injectedEnvironmentAndPathTooLong() started.
+􀟈  Test exactOperationConsumesOnce() started.
+􀟈  Test dispatchEvaluate_grantHonorsOnceForCwd() started.
+􀟈  Test invalidLifetimeFailsClosed(lifetime:) started.
+􀟈  Test serviceRuntime_missingHomeCannotEnablePack() started.
+􀟈  Test explainPeeksGrantWithoutSpending() started.
+􀟈  Test ordinaryInRepoFile_isUnaffected() started.
+􀟈  Test coreWarmup_brokenSnapshotsAreNotReady() started.
+􀟈  Test gitRebaseProbe_missingCwdIsFalse() started.
+􀟈  Test legacyAllowCannotBeDeliveredToHost() started.
+􀟈  Test filesystemLiveProbe_unwrapCompleteAndLimited() started.
+􀟈  Test freshOwnerAuthenticationRequired() started.
+􀟈  Test matchingClientSemverAfterSuccessfulHello_stillEvaluates() started.
+􀟈  Test dispatchEvaluate_emptyEnabledPacksDoesNotRefillDayOne() started.
+􀟈  Test denyEmitsTTYStageNamesWithZeroElapsed() started.
+􀟈  Test filesystemLiveProbe_symlinkLoopHopLimitDanglingAndWalkUp() started.
+􀟈  Test draftSubstitutionCannotUseReceipt() started.
+􀟈  Test effectiveIDs_configTomlExtraPackIsIncluded() started.
+􀟈  Test spendPlantsThenReplayDenies() started.
+􀟈  Test legacyRowsCannotCreateOwnerOperation() started.
+􀟈  Test enableDatabaseThenDisableRedis() started.
+􀟈  Test nilCwdDoesNotAllowCheckoutEvenIfAnotherRepoIsRebasing() started.
+􀟈  Test implicitHelloOnEvaluate_oneShotDeniesResetHard() started.
+􀟈  Test unquotedBashCheckoutStaysDeniedDuringRebase() started.
+􀟈  Test skewedImplicitHello_doesNotEvaluate() started.
+􀟈  Test relativeGitdirFileAllowsCheckoutDiscard() started.
+􀟈  Test tokenRoundTrip_persistsOperatorStringsVerbatim() started.
+􀟈  Test serviceRuntime_dispatchResiduals() started.
+􀟈  Test classifyRiskFollowsDerivation() started.
+􀟈  Test dispatchProtocolNameMismatch_usesProtocolSkewCaseNotRequestName() started.
+􀟈  Test packsJSON_freshHomeHasDayOneEnabledOfNinetyFive() started.
+􀟈  Test uncoveredRequestedPacksRebuildWarmSessionCoverage() started.
+􀟈  Test enablePresetAndUnknownFailsWithoutWrite() started.
+􀟈  Test peekDoesNotSpendGrant() started.
+􀟈  Test doctorSnapshotReloadsCatalogAfterLocalEnable() started.
+􀟈  Test sharedGitdirHelper_servesHEADAndRebaseMarker() started.
+􀟈  Test disableAlreadyOffExtraIsNoOp() started.
+􀟈  Test stringVerbArgsAndTokenArgsAgree() started.
+􀟈  Test enablePreservesNonPacksTomlSections() started.
+􀟈  Test attachedFeature_isProbedNotShared() started.
+􀟈  Test peekOnAllowDoesNotInvokeAllowlistLoader() started.
+􀟈  Test runFileAllowsNonSecretPath() started.
+􀟈  Test oldHelloThenEvaluateWithoutClientSemver_stillWorks() started.
+􀟈  Test allowlistCannotWhitelistEchoRedirectToSSH() started.
+􀟈  Test classifyPeeksGrantWithoutSpending() started.
+􀟈  Test honorsAllowlistFromStoreDirectory() started.
+􀟈  Test effectiveIDs_missingConfigTomlIsDayOne() started.
+􀟈  Test secondEnableIsIdempotent() started.
+􀟈  Test allowlistCannotWhitelistProtectedSSH() started.
+􀟈  Test quickRejectAllowEmitsSkipWalkWithZeroElapsed() started.
+􀟈  Test subjectDiesBeforeConsumptionRejects() started.
+􀟈  Test missingHEAD_isProbedUnknown() started.
+􀟈  Test unixSocketPath_prepareRuntimeRemovesStaleSocket() started.
+􀟈  Test gitdirFile_readsHEADFromResolvedGitDir() started.
+􀟈  Test typedDeny_forceWithLeaseMain_grantCannotOverrideHardBind() started.
+􀟈  Test peekOnDenyInvokesAllowlistLoader() started.
+􀟈  Test savedTypedDeny_forceWithLeaseFeature_deniesWithSavedRuleID() started.
+􀟈  Test applySpendsGrantOnce() started.
+􀟈  Test siblingRepository_isOutsideAndNotWhitelisted() started.
+􀟈  Test inRepoSymlinkToSSH_isProtectedNotInRepo() started.
+􀟈  Test majorSemverImplicitHello_doesNotEvaluate() started.
+􀟈  Test missingRepo_isProbedUnknownNotUnprobed() started.
+􀟈  Test dispatchEvaluate_disabledCatalogPackStillDeniesResetHard() started.
+􀟈  Test checkoutDiscard_deniesWithPackRuleAndDiscardAnalysis() started.
+􀟈  Test monotonicExpiryDuringOwnerAuthenticationRejects() started.
+􀟈  Test detachedHEAD_isProbedUnknown() started.
+􀟈  Test darwinCompanionReportsKeepAliveTrue() started.
+􀟈  Test unwrappedCwd_beatsFallback() started.
+􀟈  Test typedAllow_cannotBeatSharedBranchHardDeny() started.
+􀟈  Test homeAliases_allDenyAsProtectedPath() started.
+􀟈  Test attachedSharedBranch_isProbedShared(name:) started.
+􀟈  Test pushVersusForcePush_differAndForceStaysDenied() started.
+􀟈  Test revokedDuringAuthenticationRejects() started.
+􀟈  Test forceWithLeaseNoRefspec_detachedHEAD_isRemoteBranchAsk() started.
+􀟈  Test forceWithLeaseNoRefspec_onMain_isRemoteSharedBranch() started.
+􀟈  Test forceWithLeaseNoRefspec_withoutGitDir_doesNotInventMainOrUnresolvedPath() started.
+􀟈  Test majorSemverEvaluateAfterSuccessfulHello_doesNotEvaluate() started.
+􀟈  Test rowMutationDuringAuthenticationRejects() started.
+􀟈  Test checkoutCreate_allowsAndNamesBranchCreation() started.
+􀟈  Test HostAskResolve_resumeAllowOnceIsDenyOrTTY() started.
+􀟈  Test peekShowsGrantWithoutSpendingThenApplyHonorsOnce() started.
+􀟈  Test nilHomeWalksDayOne() started.
+􀟈  Test limitedUnwrap_usesFallbackCwd() started.
+􀟈  Test evaluateWithoutClientSemverAndNoHello_isHandshakeRequired() started.
+􀟈  Test PendingResolveGrant_nonSpendFirstAllowOnceDoesNotPlant(_:) started.
+􀟈  Test missingCwd_isProbedUnknown() started.
+􀟈  Test omittedKeepAliveStaysFalse() started.
+􀟈  Test invalidTypedRulesFile_failClosedNotAllow() started.
+􀟈  Test relativeAliasFromNestedCwd_isProtected() started.
+􀟈  Test darwinWithoutCompanionReportsIdleExitSeconds() started.
+􀟈  Test spendHostAskPlantsThenReplayDenies() started.
+􀟈  Test PendingResolveGrant_missingCoordinatorFailsClosedWithoutGrant() started.
+􀟈  Test unsupportedGlobals_stillDenyResetHard() started.
+􀟈  Test forceWithLeaseNoRefspec_unwrappedCwdBeatsFallback() started.
+􀟈  Test typedDeny_forceWithLeaseMain_spendHostAskCannotOverrideHardBind() started.
+􀟈  Test nilHome_loadsRepoTypedDeny() started.
+􀟈  Test PendingResolveGrant_alreadyAllowResolvesWithoutSecondGrant() started.
+􀟈  Test injectedEmptyAllowlistIgnoresSiblingAllowlistFile() started.
+􀟈  Test failedImplicitHello_doesNotEvaluateAndKeepsHandshakeClosed() started.
+􀟈  Test PendingHostAsk_missingSessionEncodesAskWithEmptyList() started.
+􀟈  Test PendingHostAsk_askWithSessionWritesAwaitingRowThatSurvivesNewStore() started.
+􀟈  Test PendingHostAsk_secondAskSameIdentityKeepsOneAwaiting() started.
+􀟈  Test invalidPolicyTOML_failClosedNotAllow() started.
+􀟈  Test PendingResolveGrant_allowOncePlantsGrantAndNextApplyAllowsOnce() started.
+􀟈  Test PendingHostAsk_grokCreatesNoRows() started.
+􀟈  Test HostAskResolve_denyIsLedgerDeny(_:) started.
+􀟈  Test missingStdinOverlay_keepsJSONStdin() started.
+􀟈  Test PendingResolveGrant_plannerPlantsUnlockablePackDeny() started.
+􀟈  Test spendHostAskMissingCwdDoesNotAllow() started.
+􀟈  Test PendingResolveGrant_hardBindDoesNotPlantOrResolve() started.
+􀟈  Test PendingResolveGrant_secondAllowOnceIsAlreadyTerminalWithoutSecondGrant() started.
+􀟈  Test concurrentConsumptionHasOneWinner() started.
+􀟈  Test HostAskResolve_allowOnceUnlockablePeekFollowsPause(_:) started.
+􀟈  Test stdinOverlay_replacesJSONStdinOnImplicitHello() started.
+􀟈  Test mintUnlockCode_skipsPinnedDenies() started.
+􀟈  Test PendingResolveGrant_plannerRefusesHardBindAndIndeterminate() started.
+􀟈  Test missingCwdSkipsHonor() started.
+􀟈  Test PendingHostAsk_spendAllowEmptiesMatchingAwaiting() started.
+􀟈  Test mintUnlockCode_afterApplyDenyWritesPending() started.
+􀟈  Test unknownHost_failsDecodeAsDecodeFailedAndDoesNotEvaluate() started.
+􀟈  Test PendingHostAsk_spendDenyStillCancelsMatchingAwaiting() started.
+􀟈  Test oneShotEvaluateWithoutPriorHello_deniesResetHard() started.
+􀟈  Test HostAskResolve_createRuleIsLedgerDeny() started.
+􀟈  Test implicitHello_claudeResetHardReturnsAskWire() started.
+􀟈  Test HostAskResolve_spendFirstMissingPeekRefuses() started.
+􀟈  Test PendingResolveGrant_concurrentAllowOncePlantsAtMostOneGrant() started.
+􀟈  Test disabledDayOneStaysOffWalkAndOnCompile() started.
+􀟈  Test dayOneDeniesResetHard() started.
+􀟈  Test pythonOsSystem_isSurfacedOrDenied() started.
+􀟈  Test missingCoreIsIndeterminateNotAllow() started.
+􀟈  Test directConfigEditIsHealedByListPacksCoverageCheck() started.
+􀟈  Test emptyWalkListOnSessionInitDoesNotUnionButCoverageDoes() started.
+􀟈  Test missingCommand_failsClosedWithDenyJSONAndDenyExitCode() started.
+􀟈  Test indeterminateIsNotAllowAndDoesNotHonor() started.
+􀟈  Test publicProductDoor_isEvaluateWithSemantics() started.
+􀟈  Test emptySessionEnabledPacksCompilesNone() started.
+􀟈  Test PendingResolveGrant_denyResolvesWithoutGrant() started.
+􀟈  Test mintUnlockCode_skipsMissingHome() started.
+􀟈  Test authorizationFailureRoundTrips() started.
+􀟈  Test pythonPrintReset_isAllowed() started.
+􀟈  Test implicitHello_grokResetHardReturnsCanonicalDenyWire() started.
+􀟈  Test helloDoesNotGrantControlAuthority() started.
+􀟈  Test majorSemver_doesNotEvaluate() started.
+􀟈  Test mintUnlockCode_skipsMissingCwdAndPeek() started.
+􀟈  Test echoQuotedRm_isNotExecutedDelete() started.
+􀟈  Test freshHomeWalksDayOne() started.
+􀟈  Test coverageUnionsDayOneOntoEmptyWalk() started.
+􀟈  Test setPackEnabledGrowsAndShrinksCompiledPackIDs() started.
+􀟈  Test lazyDoorReusesSessionAfterCorePacksReady() started.
+􀟈  Test diagnosticsRemainUnprivileged() started.
+􀟈  Test payloadAndAsyncBoundaryCannotUpgradeCaller() started.
+􀟈  Test nilEnabledPacksCompilesDayOneWithoutProcessHome() started.
+􀟈  Test nilCatalogNilHomeIsDayOneWalkAndCompile() started.
+􀟈  Test pythonDollarPayload_isUnwrapLimited() started.
+􀟈  Test evaluateWithSemantics_missingCore_staysIndeterminateAndAnalyzes() started.
+􀟈  Test bashDashC_deniesRmRfWithFilesystemAnalysis() started.
+􀟈  Test pythonQuotedHeredocOsSystem_isDenied() started.
+􀟈  Test missingAndUncompilableCoreStayIndeterminate() started.
+􀟈  Test allowPathDoesNotInvokeAllowlistLoader() started.
+􀟈  Test uncompilableResetHardIsIndeterminateNotAllow() started.
+􀟈  Test extraCatalogPackCompilesThreeAndDeniesSqliteDrop() started.
+􀟈  Test userUnitIsOnDemandNotRestartAlways() started.
+􀟈  Test hookEvaluate_doesNotLogCommandText() started.
+􀟈  Test catalogDisableCannotUncompileDayOneRules() started.
+􀟈  Test capturedPythonAssignment_isAllowed() started.
+􀟈  Test allowPathDoesNotCreateAllowlistFile() started.
+􀟈  Test grokStashDrop_emptyStdout() started.
+􀟈  Test inRepoWrite_isAllowed() started.
+􀟈  Test hookEvaluate_resolvesPacksFromConfig_notDayOne() started.
+􀟈  Test parentTraversal_isOutsideRepository() started.
+􀟈  Test dayOneEnabledCompilesDayOnePackIDs() started.
+􀟈  Test injectedAllowlistSnapshotHonorsWithoutStoreDirectory() started.
+􀟈  Test xpcIPCFrame_roundTripsJSONData() started.
+􀟈  Test spendHostAsk_mandatoryHumanForcePushPrivateBranchAllowsOnce() started.
+􀟈  Test lazyDoorReusesSessionOnSecondRun() started.
+􀟈  Test directConfigEditIsPickedUpByWarmRuntimeEvaluate() started.
+􀟈  Test nilHomeWalksDayOne() started.
+􀟈  Test emptyEnabledPacksDoesNotRefillDayOne() started.
+􀟈  Test evaluateWithSemantics_unwrapLimited_failClosed() started.
+􀟈  Test unquotedAndDollarDashC_neverSilentAllow() started.
+􀟈  Test symlinkEscape_usesResolvedTarget() started.
+􀟈  Test emptyStdin_failsClosedWithDenyJSON() started.
+􀟈  Test mintUnlockCode_mandatoryHumanRemoteBranchAskWritesPending() started.
+􀟈  Test symlinkToProtected_isNonOverridableDeny() started.
+􀟈  Test bashDashC_matchesDirectGitReset() started.
+􀟈  Test evaluateWithSemantics_missingCore_emptyCommand_isIndeterminateNotAllow() started.
+􀟈  Test enabledExtrasWalkBeyondDayOne() started.
+􀟈  Test dayOneSessionDeniesResetHardAndAllowsStashDrop() started.
+􀟈  Test assembleRunsTheWorldOnFirstUse() started.
+􀟈  Test dayOneAllowsStashDropAsAllowPlusMatch() started.
+􀟈  Test sudoEnvSh_showsWrappersAndInnerAction() started.
+􀟈  Test generatedAndSourceDeletes_differ() started.
+􀟈  Test invalidUTF8StdinOverlay_isDecodeFailedAndDoesNotEvaluate() started.
+􀟈  Test emptyCatalogFallsBackToDayOneCompileSet() started.
+􀟈  Test deepWrapperChain_asksOrDenies() started.
+􀟈  Test emptyStdinOverlay_overridesJSONStdin() started.
+􁁛  Test enableCompileGate_rejectsUncompilableCritical() passed after 0.003 seconds.
+􀟈  Test lazyDoorDefersCompilationUntilFirstUse() started.
+􀟈  Test pythonPrintOsSystem_isSurfacedOrDenied() started.
+􀟈  Test hookDoor_replyCopiesWireStderr() started.
+􀢄  Test setPackEnabledRefreshesAnalyticsPackSnapshot() recorded an issue at ServiceRuntimeAnalyticsTests.swift:67:25: Issue recorded
+􀄵  expected evaluate reply
+􀢄  Test alwaysAllowSaveAuthorizesFutureEvaluateWithoutExtraClick() recorded an issue at PendingDispatchTests.swift:368:25: Issue recorded
+􀄵  pin-ok Always-allow must preview
+􀢄  Test alwaysBlockSaveDeniesThisWait() recorded an issue at PendingDispatchTests.swift:584:25: Issue recorded
+􀄵  Always-block must preview
+􀢄  Test hookEvaluateRecordsDecisionAnalyticsWithoutCommandText() recorded an issue at ServiceRuntimeAnalyticsTests.swift:123:25: Issue recorded
+􀄵  expected hookEvaluate reply
+􀢄  Test extraAllowOnceStillWorksWithoutATypedRule() recorded an issue at PendingDispatchTests.swift:629:25: Issue recorded
+􀄵  extra Allow once must still resolve
+􀢄  Test hookEvaluateAskWithoutSessionDoesNotPersist() recorded an issue at PendingDispatchTests.swift:766:25: Issue recorded
+􀄵  Pi reset-hard without session must still dispatch
+􀢄  Test evaluateSnapshotsEnabledPackIDsBeforeAsyncWork() recorded an issue at ServiceRuntimeAnalyticsTests.swift:27:25: Issue recorded
+􀄵  expected evaluate reply
+􀢄  Test watchAcksUnchangedThenReturnsItemsAfterResolve() recorded an issue at PendingDispatchTests.swift:841:25: Issue recorded
+􀄵  expected pendingList reply, got .error(RVIPC.IPCError.authorizationDenied)
+􀢄  Test missingFolderUsesPlaceholder() recorded an issue at PendingDispatchTests.swift:841:25: Issue recorded
+􀄵  expected pendingList reply, got .error(RVIPC.IPCError.authorizationDenied)
+􀢄  Test pendingDispatchDoesNotLogCommandText() recorded an issue at PendingDispatchTests.swift:841:25: Issue recorded
+􀄵  expected pendingList reply, got .error(RVIPC.IPCError.authorizationDenied)
+􀢄  Test automaticStoreListsCreatedWaits() recorded an issue at PendingDispatchTests.swift:841:25: Issue recorded
+􀄵  expected pendingList reply, got .error(RVIPC.IPCError.authorizationDenied)
+􀢄  Test resolveMapsLedgerErrors() recorded an issue at PendingDispatchTests.swift:220:9: Expectation failed: missing.result == .error(.pendingNotFound)
+􀄵  missing.result == .error(.pendingNotFound) → false
+􀄵    missing.result → .error(RVIPC.IPCError.authorizationDenied)
+􀄵      error → .authorizationDenied
+􀄵    .error(.pendingNotFound) → .error(RVIPC.IPCError.pendingNotFound)
+􀄵      error → .pendingNotFound
+􀢄  Test resolveMapsLedgerErrors() recorded an issue at PendingDispatchTests.swift:237:9: Expectation failed: identity.result == .error(.pendingIdentityMismatch)
+􀄵  identity.result == .error(.pendingIdentityMismatch) → false
+􀄵    identity.result → .error(RVIPC.IPCError.authorizationDenied)
+􀄵      error → .authorizationDenied
+􀄵    .error(.pendingIdentityMismatch) → .error(RVIPC.IPCError.pendingIdentityMismatch)
+􀄵      error → .pendingIdentityMismatch
+􀢄  Test watchAcksUnchangedThenReturnsItemsAfterResolve() recorded an issue at PendingDispatchTests.swift:111:6: Caught error: DispatchExpectation()
+􀢄  Test pendingDispatchDoesNotLogCommandText() recorded an issue at PendingDispatchTests.swift:262:6: Caught error: DispatchExpectation()
+􀢄  Test missingFolderUsesPlaceholder() recorded an issue at PendingDispatchTests.swift:183:6: Caught error: DispatchExpectation()
+􀢄  Test resolveMapsLedgerErrors() recorded an issue at PendingDispatchTests.swift:251:9: Expectation failed: fingerprint.result == .error(.pendingFingerprintMismatch)
+􀄵  fingerprint.result == .error(.pendingFingerprintMismatch) → false
+􀄵    fingerprint.result → .error(RVIPC.IPCError.authorizationDenied)
+􀄵      error → .authorizationDenied
+􀄵    .error(.pendingFingerprintMismatch) → .error(RVIPC.IPCError.pendingFingerprintMismatch)
+􀄵      error → .pendingFingerprintMismatch
+􀢄  Test resolveMapsLedgerErrors() recorded an issue at PendingDispatchTests.swift:259:9: Expectation failed: second.result == .error(.pendingAlreadyTerminal)
+􀄵  second.result == .error(.pendingAlreadyTerminal) → false
+􀄵    second.result → .error(RVIPC.IPCError.authorizationDenied)
+􀄵      error → .authorizationDenied
+􀄵    .error(.pendingAlreadyTerminal) → .error(RVIPC.IPCError.pendingAlreadyTerminal)
+􀄵      error → .pendingAlreadyTerminal
+􀟈  Test stdinOverlay_winsOverJSONAllowStdin() started.
+􁁛  Test pendingList_emptyEffectsShell_staysShell() passed after 0.045 seconds.
+􀟈  Test missingClientSemverAndNoHello_isHandshakeRequired() started.
+􁁛  Test pendingList_emptyEffectsFile_usesLedgerNameFile(kind:expected:) with 3 test cases passed after 0.045 seconds.
+􀢄  Test automaticStoreListsCreatedWaits() recorded an issue at PendingDispatchTests.swift:777:6: Caught error: DispatchExpectation()
+􀢄  Test ruleSaveDraftMismatchWritesNothing() recorded an issue at PendingDispatchTests.swift:559:9: Expectation failed: save.result == .error(.ruleDraftMismatch)
+􀄵  save.result == .error(.ruleDraftMismatch) → false
+􀄵    save.result → .error(RVIPC.IPCError.authorizationDenied)
+􀄵      error → .authorizationDenied
+􀄵    .error(.ruleDraftMismatch) → .error(RVIPC.IPCError.ruleDraftMismatch)
+􀄵      error → .ruleDraftMismatch
+􀢄  Test ruleSaveDraftMismatchWritesNothing() recorded an issue at PendingDispatchTests.swift:841:25: Issue recorded
+􀄵  expected pendingList reply, got .error(RVIPC.IPCError.authorizationDenied)
+􀢄  Test fileToolAlwaysAllowFailsClosedWithoutMatchingView() recorded an issue at PendingDispatchTests.swift:520:25: Issue recorded
+􀄵  file-tool Always-allow must preview
+􀢄  Test alwaysAllowSaveAuthorizesNormalizedWrapperRetry() recorded an issue at PendingDispatchTests.swift:430:25: Issue recorded
+􀄵  wrapper Always-allow must preview
+􀢄  Test ruleSaveDraftMismatchWritesNothing() recorded an issue at PendingDispatchTests.swift:540:6: Caught error: DispatchExpectation()
+􀢄  Test sessionSuffixOnlyWhenAskLineCollides() recorded an issue at PendingDispatchTests.swift:841:25: Issue recorded
+􀄵  expected pendingList reply, got .error(RVIPC.IPCError.authorizationDenied)
+􀢄  Test previewWithoutSaveLeavesWaitAwaitingHuman() recorded an issue at PendingDispatchTests.swift:340:25: Issue recorded
+􀄵  pin-ok Always-allow must preview
+􀢄  Test hookEvaluateAskOnPiPersistsWaitWithoutCommandOnList() recorded an issue at PendingDispatchTests.swift:740:25: Issue recorded
+􀄵  Pi reset-hard hookEvaluate must dispatch
+􀢄  Test sessionSuffixOnlyWhenAskLineCollides() recorded an issue at PendingDispatchTests.swift:152:6: Caught error: DispatchExpectation()
+􀟈  Test oldEvaluate_stillWorksAfterHookEvaluate() started.
+􀢄  Test alwaysAllowHardStopPreviewForbidsSaveAndWritesNothing() recorded an issue at PendingDispatchTests.swift:301:25: Issue recorded
+􀄵  hard-stop Always-allow must preview
+􀢄  Test allowOnceOnPiLeavesOpenCodeAwaiting() recorded an issue at PendingDispatchTests.swift:841:25: Issue recorded
+􀄵  expected pendingList reply, got .error(RVIPC.IPCError.authorizationDenied)
+􀢄  Test allowOnceOnPiLeavesOpenCodeAwaiting() recorded an issue at PendingDispatchTests.swift:45:6: Caught error: DispatchExpectation()
+􀢄  Test allowOncePeekUsesCompileSetAfterPackEnable() recorded an issue at PendingDispatchTests.swift:701:25: Issue recorded
+􀄵  day-one evaluate must run, got .error(RVIPC.IPCError.authorizationDenied)
+􀢄  Test missingCoordinatorFailsClosedWithoutSpendingAGrant() recorded an issue at PendingDispatchTests.swift:99:9: Expectation failed: resolve.result == .error(.pendingCoordinatorUnavailable)
+􀄵  resolve.result == .error(.pendingCoordinatorUnavailable) → false
+􀄵    resolve.result → .error(RVIPC.IPCError.authorizationDenied)
+􀄵      error → .authorizationDenied
+􀄵    .error(.pendingCoordinatorUnavailable) → .error(RVIPC.IPCError.pendingCoordinatorUnavailable)
+􀄵      error → .pendingCoordinatorUnavailable
+􀢄  Test missingCoordinatorFailsClosedWithoutSpendingAGrant() recorded an issue at PendingDispatchTests.swift:101:9: Expectation failed: listed.result == .error(.pendingCoordinatorUnavailable)
+􀄵  listed.result == .error(.pendingCoordinatorUnavailable) → false
+􀄵    listed.result → .error(RVIPC.IPCError.authorizationDenied)
+􀄵      error → .authorizationDenied
+􀄵    .error(.pendingCoordinatorUnavailable) → .error(RVIPC.IPCError.pendingCoordinatorUnavailable)
+􀄵      error → .pendingCoordinatorUnavailable
+􀢄  Test missingCoordinatorFailsClosedWithoutSpendingAGrant() recorded an issue at PendingDispatchTests.swift:105:9: Expectation failed: waerror: Process '/Users/chriskarani/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain/usr/libexec/swift/pm/swiftpm-testing-helper --test-bundle-path /Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/RVServiceTests.xctest/Contents/MacOS/RVServiceTests --filter RVServiceTests /Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/RVServiceTests.xctest/Contents/MacOS/RVServiceTests --testing-library swift-testing' exited with unexpected signal code 5
+tch.result == .error(.pendingCoordinatorUnavailable)
+􀄵  watch.result == .error(.pendingCoordinatorUnavailable) → false
+􀄵    watch.result → .error(RVIPC.IPCError.authorizationDenied)
+􀄵      error → .authorizationDenied
+􀄵    .error(.pendingCoordinatorUnavailable) → .error(RVIPC.IPCError.pendingCoordinatorUnavailable)
+􀄵      error → .pendingCoordinatorUnavailable
+􀢄  Test listOmitsCommandAndOrdersOldestFirst() recorded an issue at PendingDispatchTests.swift:841:25: Issue recorded
+􀄵  expected pendingList reply, got .error(RVIPC.IPCError.authorizationDenied)
+􀢄  Test listOmitsCommandAndOrdersOldestFirst() recorded an issue at PendingDispatchTests.swift:12:6: Caught error: DispatchExpectation()
+􀢄  Test failedPlantConsumesWaitAndReportsNotUnlockable() recorded an issue at PendingDispatchTests.swift:659:9: Expectation failed: resolved.result == .error(.pendingAllowOnceNotUnlockable)
+􀄵  resolved.result == .error(.pendingAllowOnceNotUnlockable) → false
+􀄵    resolved.result → .error(RVIPC.IPCError.authorizationDenied)
+􀄵      error → .authorizationDenied
+􀄵    .error(.pendingAllowOnceNotUnlockable) → .error(RVIPC.IPCError.pendingAllowOnceNotUnlockable)
+􀄵      error → .pendingAllowOnceNotUnlockable
+􀢄  Test failedPlantConsumesWaitAndReportsNotUnlockable() recorded an issue at PendingDispatchTests.swift:660:9: Expectation failed: await approvals.resolveCalls.map(\.decision) == [.allowOnce]
+􀄵  await approvals.resolveCalls.map(\.decision) == [.allowOnce] → <not evaluated>
+􀢄  Test failedPlantConsumesWaitAndReportsNotUnlockable() recorded an issue at PendingDispatchTests.swift:841:25: Issue recorded
+􀄵  expected pendingList reply, got .error(RVIPC.IPCError.authorizationDenied)
+􀢄  Test failedPlantConsumesWaitAndReportsNotUnlockable() recorded an issue at PendingDispatchTests.swift:638:6: Caught error: DispatchExpectation()
+􀢄  Test hookEvaluateSpendDeny_recordsHookHost() recorded an issue at DenialLedgerRecordTests.swift:174:9: Expectation failed: rows.count == 1
+􀄵  rows.count == 1 → false
+􀄵    rows.count → 0
+Swift/ContiguousArrayBuffer.swift:695: Fatal error: Index out of range
+Note: Some test targets reported failures:
+  - RVServiceTests (Swift Testing)

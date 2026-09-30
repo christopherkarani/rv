@@ -221,19 +221,7 @@ enum WorkspaceCommandRun {
     }
 
     static func abandon(_ raw: String?) throws {
-        #if !os(macOS)
-        throw ValidationError("contained workspace host is unavailable")
-        #else
-        let project = try requireProject(raw)
-        switch WorkspaceHosts.abandon(project: project) {
-        case .abandoned(let report):
-            emit(lines(report))
-        case .refused(let refusal):
-            throw ValidationError(text(refusal))
-        case .failed(let reason):
-            throw ValidationError(reason.map { "abandon stopped: \($0.rawValue)" } ?? "abandon failed")
-        }
-        #endif
+        try LocalControlBoundary.requireOwnerAuthorization()
     }
 
     static func run(

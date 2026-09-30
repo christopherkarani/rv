@@ -132,6 +132,7 @@ public struct IPCResponse: Sendable, Equatable, Codable {
 }
 
 public enum IPCError: Error, Sendable, Equatable, Codable {
+    case authorizationDenied
     case unknownMethod
     case decodeFailed
     case protocolSkew(SkewReason)
@@ -154,6 +155,7 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
     case ruleHardStop
 
     private enum CodingKeys: String, CodingKey {
+        case authorizationDenied
         case unknownMethod
         case decodeFailed
         case protocolSkew
@@ -181,6 +183,8 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
+        case .authorizationDenied:
+            try container.encode(true, forKey: .authorizationDenied)
         case .unknownMethod:
             try container.encode(true, forKey: .unknownMethod)
         case .decodeFailed:
@@ -224,7 +228,9 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        if container.contains(.unknownMethod) {
+        if container.contains(.authorizationDenied) {
+            self = .authorizationDenied
+        } else if container.contains(.unknownMethod) {
             self = .unknownMethod
         } else if container.contains(.decodeFailed) {
             self = .decodeFailed

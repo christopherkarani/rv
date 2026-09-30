@@ -22,6 +22,7 @@ enum HostLifecycle {
         layout: OwnedPaths,
         files: FileOps
     ) throws(SetupError) -> SetupReport {
+        try SetupRun.requireOwnerAuthorization()
         var slots = SetupSlotSnapshot(
             grok: .skipped,
             pi: .skipped,
@@ -96,6 +97,7 @@ enum HostLifecycle {
         layout: OwnedPaths,
         files: FileOps
     ) throws(SetupError) -> HostAttachOutcome {
+        try SetupRun.requireOwnerAuthorization()
         switch write.prelude {
         case .none:
             break
@@ -139,6 +141,7 @@ enum HostLifecycle {
         layout: OwnedPaths,
         files: FileOps
     ) throws(SetupError) -> UninstallHostResult {
+        try SetupRun.requireOwnerAuthorization()
         var removedHosts: Set<HookHost> = []
         var occupiedHosts: Set<HookHost> = []
         var removedPaths: [String] = []

@@ -52,7 +52,7 @@ enum AllowOnceCLI {
         store: AllowOnceStore,
         now: Date
     ) async throws -> AllowOnceListRow {
-        try await store.redeem(code: code, tty: tty, now: now, robot: robot)
+        throw ValidationError(LocalControlBoundary.reason)
     }
 
     static func mint(
@@ -63,15 +63,7 @@ enum AllowOnceCLI {
         store: AllowOnceStore,
         now: Date
     ) async throws -> AllowOnceUnlockCode {
-        let matchingView = EvaluationWorld.matchingView(of: command)
-        return try await store.mint(
-            matchingView: matchingView,
-            cwd: cwd,
-            ruleID: nil,
-            tty: tty,
-            now: now,
-            robot: robot
-        )
+        throw ValidationError(LocalControlBoundary.reason)
     }
 }
 
@@ -253,7 +245,7 @@ struct AllowOnceClear: AsyncParsableCommand {
             noColor: format.noColor
         )
         do {
-            try await AllowOnceCLI.store(home: try AllowOnceCLI.requireHome()).clear(tty: live.tty, now: Date())
+            try LocalControlBoundary.requireOwnerAuthorization()
             FileHandle.standardOutput.write(Data("cleared allow-once rows\n".utf8))
         } catch AllowOnceError.ttyRequired {
             FileHandle.standardError.write(

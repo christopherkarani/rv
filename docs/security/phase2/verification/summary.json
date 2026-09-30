@@ -1,0 +1,180 @@
+[
+  {
+    "name": "security",
+    "command": "Scripts/swift-6.4 test --filter AuthenticatedDispatch|unixPeer|unixDifferent|peerTrust|dynamicCodeInvalid|fabricatedXPC|anonymousXPC|ControlAuthorization|LocalControlBoundary|EndpointLifetime",
+    "exit": 0,
+    "timeout": false,
+    "summaries": [
+      "\udbc4\udc5b  Test run with 21 tests in 3 suites passed after 0.102 seconds.",
+      "\udbc4\udc5b  Test run with 6 tests in 0 suites passed after 0.016 seconds.",
+      "\udbc4\udc5b  Test run with 8 tests in 1 suite passed after 0.021 seconds."
+    ],
+    "issue_count": 0,
+    "log": "/tmp/rv-phase2-gates/security.log"
+  },
+  {
+    "name": "phase1",
+    "command": "Scripts/swift-6.4 test --filter AgentIdentity|AgentDefinition|AgentInstance|AgentDelegation",
+    "exit": 0,
+    "timeout": false,
+    "summaries": [
+      "\udbc4\udc5b  Test run with 16 tests in 1 suite passed after 0.004 seconds.",
+      "\udbc4\udc5b  Test run with 27 tests in 2 suites passed after 4.467 seconds.",
+      "\udbc4\udc5b  Test run with 24 tests in 0 suites passed after 0.011 seconds."
+    ],
+    "issue_count": 0,
+    "log": "/tmp/rv-phase2-gates/phase1.log"
+  },
+  {
+    "name": "RVDomainTests",
+    "command": "Scripts/swift-6.4 test --filter RVDomainTests",
+    "exit": 1,
+    "timeout": false,
+    "summaries": [
+      "\udbc2\udc84  Test consumeDeliversResolutionExactlyOnce() failed after 0.010 seconds with 1 issue.",
+      "\udbc2\udc84  Test replayedIdenticalActionCannotBeConsumedTwice() failed after 0.010 seconds with 1 issue.",
+      "\udbc2\udc84  Test consumeFoldsEachDecisionIntoConsumedState(decision:) with 3 test cases failed after 0.010 seconds with 2 issues.",
+      "\udbc2\udc84  Test consumedStateRoundTripsThroughCodable() failed after 0.010 seconds with 1 issue.",
+      "\udbc2\udc84  Test keepWaitingAllowsResolveAfterDeadline() recorded an issue at PendingApprovalLedgerTests.swift:362:9: Expectation failed: resolved.authorizes(Self.fingerprint, identity: Self.identity)",
+      "\udbc2\udc84  Test exactDeadlineIsStillAwaitingHuman() recorded an issue at PendingApprovalLedgerTests.swift:382:9: Expectation failed: resolved.authorizes(Self.fingerprint, identity: Self.identity)",
+      "\udbc2\udc84  Test resolvedWithoutParentConsumedAtStaysResolved() recorded an issue at PendingApprovalLedgerTests.swift:617:9: Expectation failed: decoded.authorizes(Self.fingerprint, identity: Self.identity)",
+      "\udbc2\udc84  Test exactDeadlineIsStillAwaitingHuman() failed after 0.019 seconds with 1 issue.",
+      "\udbc2\udc84  Test keepWaitingAllowsResolveAfterDeadline() failed after 0.019 seconds with 1 issue.",
+      "\udbc2\udc84  Test resolvedWithoutParentConsumedAtStaysResolved() failed after 0.019 seconds with 1 issue.",
+      "\udbc2\udc84  Suite \"PendingApproval ledger\" failed after 0.024 seconds with 8 issues.",
+      "\udbc2\udc84  Test run with 475 tests in 39 suites failed after 0.025 seconds with 8 issues."
+    ],
+    "issue_count": 8,
+    "log": "/tmp/rv-phase2-gates/RVDomainTests.log"
+  },
+  {
+    "name": "RVPolicyTests",
+    "command": "Scripts/swift-6.4 test --filter RVPolicyTests",
+    "exit": 1,
+    "timeout": false,
+    "summaries": [
+      "\udbc1\udfc8  Test failedStoreDoesNotAllow() started.",
+      "\udbc4\udc5b  Test failedStoreDoesNotAllow() passed after 0.101 seconds.",
+      "\udbc2\udc84  Test processRestartReloadsPendingAndResolvedRecords() failed after 0.104 seconds with 1 issue.",
+      "\udbc2\udc84  Test concurrentConsumeWinsOnce() recorded an issue at PendingApprovalStoreTests.swift:102:9: Expectation failed: results.filter(\\.isSuccess).count == 1",
+      "\udbc2\udc84  Test concurrentConsumeWinsOnce() recorded an issue at PendingApprovalStoreTests.swift:103:9: Expectation failed: results.filter { $0 == .alreadyConsumed }.count == 1",
+      "\udbc2\udc84  Test concurrentConsumeWinsOnce() failed after 0.104 seconds with 2 issues.",
+      "\udbc2\udc84  Test keepWaitingSurvivesRestartPastDeadline() recorded an issue at PendingApprovalStoreTests.swift:231:9: Expectation failed: resolved.authorizes(Self.fingerprint, identity: Self.identity)",
+      "\udbc2\udc84  Test keepWaitingSurvivesRestartPastDeadline() failed after 0.112 seconds with 1 issue.",
+      "\udbc2\udc84  Suite \"PendingApproval store\" failed after 0.115 seconds with 4 issues.",
+      "\udbc2\udc84  Test run with 317 tests in 33 suites failed after 0.160 seconds with 4 issues."
+    ],
+    "issue_count": 4,
+    "log": "/tmp/rv-phase2-gates/RVPolicyTests.log"
+  },
+  {
+    "name": "RVIsolationTests",
+    "command": "Scripts/swift-6.4 test --filter RVIsolationTests",
+    "exit": 124,
+    "timeout": true,
+    "summaries": [
+      "\udbc2\udc84  Test runtimeExitClosesTheTerminalAndLeavesTheWorkspace() failed after 2.164 seconds with 1 issue.",
+      "\udbc2\udc84  Test launchFaultsDoNotReportARunningRuntime() recorded an issue at RuntimeTerminalTests.swift:827:9: Expectation failed: writeFrame(raw, stolen)",
+      "\udbc2\udc84  Test launchFaultsDoNotReportARunningRuntime() failed after 2.939 seconds with 2 issues.",
+      "\udbc2\udc84  Test closingTheWorkspaceKillsEveryPTYRuntime() failed after 2.900 seconds with 1 issue.",
+      "\udbc2\udc84  Test aSlowSocketDoesNotStopTheOtherSubscriberOrClose() failed after 1.982 seconds with 1 issue.",
+      "\udbc2\udc84  Test repeatedAttachCyclesDoNotLeakPTYs() failed after 1.830 seconds with 1 issue.",
+      "\udbc2\udc84  Test provingClientRestoresTheLocalTerminal() recorded an issue at RuntimeTerminalTests.swift:1074:9: Expectation failed: waitUntil(seconds: 40) { FileManager.default.fileExists(atPath: ready.path) }",
+      "\udbc2\udc84  Test provingClientRestoresTheLocalTerminal() recorded an issue at RuntimeTerminalTests.swift:1075:9: Expectation failed: waitUntilRaw(pty.slave)",
+      "\udbc2\udc84  Test provingClientRestoresTheLocalTerminal() failed after 50.030 seconds with 3 issues.",
+      "\udbc2\udc84  Test workspaceStartLeavesALiveHostAfterTheClientExits() recorded an issue at WorkspaceHostTests.swift:412:9: Expectation failed: start.terminationStatus == 0",
+      "\udbc2\udc84  Test workspaceStartLeavesALiveHostAfterTheClientExits() failed after 91.379 seconds with 2 issues.",
+      "\udbc4\udc5b  Test failedLaunchesDoNotAccumulateDescriptors() passed after 87.547 seconds."
+    ],
+    "issue_count": 31,
+    "log": "/tmp/rv-phase2-gates/RVIsolationTests.log"
+  },
+  {
+    "name": "RVIPCTests",
+    "command": "Scripts/swift-6.4 test --filter RVIPCTests",
+    "exit": 0,
+    "timeout": false,
+    "summaries": [
+      "\udbc1\udfc8  Test case passing 2 arguments error \u2192 .hookEvaluateFailed, sentence \u2192 \"hook evaluate failed\" to namedEngineErrorsEncodeFrozenSentences(_:_:) started.",
+      "\udbc1\udfc8  Test case passing 2 arguments error \u2192 .packEnableFailed, sentence \u2192 \"pack enable failed\" to namedEngineErrorsEncodeFrozenSentences(_:_:) started.",
+      "\udbc4\udc5b  Test run with 95 tests in 7 suites passed after 0.004 seconds."
+    ],
+    "issue_count": 0,
+    "log": "/tmp/rv-phase2-gates/RVIPCTests.log"
+  },
+  {
+    "name": "RVServiceTests",
+    "command": "Scripts/swift-6.4 test --filter RVServiceTests",
+    "exit": 1,
+    "timeout": false,
+    "summaries": [
+      "\udbc2\udc84  Test resolveMapsLedgerErrors() recorded an issue at PendingDispatchTests.swift:237:9: Expectation failed: identity.result == .error(.pendingIdentityMismatch)",
+      "\udbc2\udc84  Test resolveMapsLedgerErrors() recorded an issue at PendingDispatchTests.swift:251:9: Expectation failed: fingerprint.result == .error(.pendingFingerprintMismatch)",
+      "\udbc2\udc84  Test resolveMapsLedgerErrors() recorded an issue at PendingDispatchTests.swift:259:9: Expectation failed: second.result == .error(.pendingAlreadyTerminal)",
+      "\udbc2\udc84  Test ruleSaveDraftMismatchWritesNothing() recorded an issue at PendingDispatchTests.swift:559:9: Expectation failed: save.result == .error(.ruleDraftMismatch)",
+      "\udbc2\udc84  Test missingCoordinatorFailsClosedWithoutSpendingAGrant() recorded an issue at PendingDispatchTests.swift:99:9: Expectation failed: resolve.result == .error(.pendingCoordinatorUnavailable)",
+      "\udbc2\udc84  Test missingCoordinatorFailsClosedWithoutSpendingAGrant() recorded an issue at PendingDispatchTests.swift:101:9: Expectation failed: listed.result == .error(.pendingCoordinatorUnavailable)",
+      "\udbc2\udc84  Test missingCoordinatorFailsClosedWithoutSpendingAGrant() recorded an issue at PendingDispatchTests.swift:105:9: Expectation failed: waerror: Process '/Users/chriskarani/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain/usr/libexec/swift/pm/swiftpm-testing-helper --test-bundle-path /Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/RVServiceTests.xctest/Contents/MacOS/RVServiceTests --filter RVServiceTests /Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/RVServiceTests.xctest/Contents/MacOS/RVServiceTests --testing-library swift-testing' exited with unexpected signal code 5",
+      "\udbc2\udc84  Test failedPlantConsumesWaitAndReportsNotUnlockable() recorded an issue at PendingDispatchTests.swift:659:9: Expectation failed: resolved.result == .error(.pendingAllowOnceNotUnlockable)",
+      "\udbc2\udc84  Test failedPlantConsumesWaitAndReportsNotUnlockable() recorded an issue at PendingDispatchTests.swift:660:9: Expectation failed: await approvals.resolveCalls.map(\\.decision) == [.allowOnce]",
+      "\udbc2\udc84  Test failedPlantConsumesWaitAndReportsNotUnlockable() recorded an issue at PendingDispatchTests.swift:841:25: Issue recorded",
+      "\udbc2\udc84  Test failedPlantConsumesWaitAndReportsNotUnlockable() recorded an issue at PendingDispatchTests.swift:638:6: Caught error: DispatchExpectation()",
+      "\udbc2\udc84  Test hookEvaluateSpendDeny_recordsHookHost() recorded an issue at DenialLedgerRecordTests.swift:174:9: Expectation failed: rows.count == 1"
+    ],
+    "issue_count": 42,
+    "log": "/tmp/rv-phase2-gates/RVServiceTests.log"
+  },
+  {
+    "name": "RVHooksTests",
+    "command": "Scripts/swift-6.4 test --filter RVHooksTests",
+    "exit": 0,
+    "timeout": false,
+    "summaries": [
+      "\udbc4\udc5b  Test run with 414 tests in 5 suites passed after 2.386 seconds."
+    ],
+    "issue_count": 0,
+    "log": "/tmp/rv-phase2-gates/RVHooksTests.log"
+  },
+  {
+    "name": "RVCLITests",
+    "command": "Scripts/swift-6.4 test --filter RVCLITests",
+    "exit": 1,
+    "timeout": false,
+    "summaries": [
+      "\udbc2\udc84  Test setup_pretty_occupiedGrokOnly_neverClaimsWired() recorded an issue at SetupShowTests.swift:105:9: Expectation failed: outcome.stdout.contains(setupCeremonyHostlessTitle)",
+      "\udbc2\udc84  Test setup_pretty_occupiedGrokOnly_neverClaimsWired() recorded an issue at SetupShowTests.swift:106:9: Expectation failed: outcome.stdout.contains(\"\u25e6  Grok  skipped occupied\")",
+      "\udbc2\udc84  Test setup_force_clearFailureInReadOnlyHooksDir_mapsToCannotCreateExit() recorded an issue at SetupTests.swift:1065:9: Expectation failed: outcome.stderr == \"rv setup failed: unable to clear occupied grok hook\\n\"",
+      "\udbc0\udd35  outcome.stderr == \"rv setup failed: unable to clear occupied grok hook\\n\" \u2192 false",
+      "\udbc0\udd35    outcome.stderr \u2192 \"rv setup failed: Authenticated RV service and operation-bound owner authorization required.",
+      "\udbc0\udd35    \"rv setup failed: unable to clear occupied grok hook\\n\" \u2192 \"rv setup failed: unable to clear occupied grok hook",
+      "\udbc2\udc84  Test setup_force_clearFailureInReadOnlyHooksDir_mapsToCannotCreateExit() recorded an issue at SetupTests.swift:1066:9: Expectation failed: outcome.exitCode == EX_CANTCREAT",
+      "wift:815:9: Expectation failed: outcome.exitCode == 0",
+      "\udbc2\udc84  Test hookCursorOrdinaryFile_allowsWithoutPackEvaluate() recorded an issue at HookCommandTests.swift:745:5: Expectation failed: wire.stdout == expected.stdout",
+      "\udbc2\udc84  Test setup_claudeForce_replacesFingerprintedHandlerOnly() recorded an issue at SetupTests.swift:1484:9: Expectation failed: outcome.exitCode == 0",
+      "\udbc2\udc84  Test setup_claudeForce_replacesFingerprintedHandlerOnly() recorded an issue at SetupTests.swift:1486:9: Expectation failed: entries.count == 5",
+      "\udbc2\udc84  Test setup_claudeForce_replacesFingerprintedHandlerOnly() recorded an issue at SetupTests.swift:1488:9: Expectation failed: shared.map { $0[\"command\"] as? String } == [\"other-guard evaluate\"]"
+    ],
+    "issue_count": 151,
+    "log": "/tmp/rv-phase2-gates/RVCLITests.log"
+  },
+  {
+    "name": "c",
+    "command": "Sources/rv-c/tests/run.sh",
+    "exit": 0,
+    "timeout": false,
+    "summaries": [],
+    "issue_count": 0,
+    "log": "/tmp/rv-phase2-gates/c.log"
+  },
+  {
+    "name": "preflight",
+    "command": "Scripts/preflight.sh",
+    "exit": 0,
+    "timeout": false,
+    "summaries": [
+      "\u001b[0;32m0 failed\u001b[0m, \u001b[0;33m2 warnings\u001b[0m"
+    ],
+    "issue_count": 0,
+    "log": "/tmp/rv-phase2-gates/preflight.log"
+  }
+]

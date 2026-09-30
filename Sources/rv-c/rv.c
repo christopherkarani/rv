@@ -143,10 +143,6 @@ static int buf_read_fd_limited(struct ByteBuf *b, int fd, size_t limit) {
     }
 }
 
-static int buf_read_fd(struct ByteBuf *b, int fd) {
-    return buf_read_fd_limited(b, fd, SIZE_MAX);
-}
-
 static int write_all(int fd, const void *p, size_t n) {
     const unsigned char *b = (const unsigned char *)p;
     while (n > 0) {
@@ -164,25 +160,6 @@ static int write_all(int fd, const void *p, size_t n) {
         n -= (size_t)w;
     }
     return 0;
-}
-
-static int copy_fd(int input_fd, int output_fd) {
-    unsigned char buffer[8192];
-    for (;;) {
-        ssize_t r = read(input_fd, buffer, sizeof buffer);
-        if (r < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return -1;
-        }
-        if (r == 0) {
-            return 0;
-        }
-        if (write_all(output_fd, buffer, (size_t)r) != 0) {
-            return -1;
-        }
-    }
 }
 
 static int is_help_flag(const char *s) {
@@ -267,11 +244,6 @@ static const char *find_rv_cli(void) {
     return NULL;
 }
 
-/* Grok: empty+0 is allow; exit 2 is deny. Any other exit fail-opens. */
-static void last_resort(void) {
-    _exit(2);
-}
-
 static void exec_same_argv(char **argv) {
     const char *cli = find_rv_cli();
     if (cli == NULL) {
@@ -279,7 +251,7 @@ static void exec_same_argv(char **argv) {
          * Operator argv (doctor, packs, status, help) must not die silently:
          * silence makes `rv doctor` unreachable in exactly the broken state
          * it exists to diagnose. Hook miss paths never come through here;
-         * they keep the silent last_resort deny.
+         * they emit an explicit host-compatible denial.
          */
         fprintf(stderr,
                 "rv: rv-cli not found next to the running executable (%s)\n",
@@ -291,101 +263,25 @@ static void exec_same_argv(char **argv) {
     _exit(2);
 }
 
-static void miss_replay_with_tail(
-    char **argv,
-    const char *host,
-    const unsigned char *stdin_bytes,
-    size_t stdin_len,
-    int tail_fd
-) {
-    const char *cli;
-    int in_pipe[2];
-    int out_pipe[2];
-    pid_t pid;
-    int wr;
-    struct ByteBuf out;
-    int st;
-
-    cli = find_rv_cli();
-    if (cli == NULL) {
-        last_resort();
+/* No CLI replay: neither a transport failure nor malformed input grants authority. */
+static void deny_hook(const char *host) {
+    const char *reason = "Authenticated RV service and operation-bound owner authorization required.";
+    int status = 0;
+    if (strcmp(host, "codex") == 0) {
+        printf("{\"decision\":\"block\",\"reason\":\"%s\"}\n", reason);
+        fprintf(stderr, "%s\n", reason);
+        status = 2;
+    } else if (strcmp(host, "claude") == 0) {
+        printf("{\"systemMessage\":\"%s\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}\n", reason, reason);
+    } else if (strcmp(host, "cursor") == 0) {
+        printf("{\"permission\":\"deny\",\"user_message\":\"%s\",\"agent_message\":\"RV blocked this command. Wait for the human.\"}\n", reason);
+    } else {
+        printf("{\"decision\":\"deny\",\"reason\":\"%s\"}\n", reason);
+        if (strcmp(host, "grok") != 0 && strcmp(host, "antigravity") != 0) status = 1;
     }
-    if (pipe(in_pipe) != 0 || pipe(out_pipe) != 0) {
-        last_resort();
-    }
-    pid = fork();
-    if (pid < 0) {
-        last_resort();
-    }
-    if (pid == 0) {
-        char *av[5];
-        close(in_pipe[1]);
-        close(out_pipe[0]);
-        if (dup2(in_pipe[0], STDIN_FILENO) < 0) {
-            last_resort();
-        }
-        if (dup2(out_pipe[1], STDOUT_FILENO) < 0) {
-            last_resort();
-        }
-        close(in_pipe[0]);
-        close(out_pipe[1]);
-        av[0] = (char *)cli;
-        av[1] = "hook";
-        av[2] = "--host";
-        av[3] = (char *)host;
-        av[4] = NULL;
-        execve(cli, av, environ);
-        last_resort();
-    }
-    close(in_pipe[0]);
-    close(out_pipe[1]);
-    /*
-     * rv-cli reads stdin to EOF before producing its reply. Keep this write
-     * serial with the existing child contract; a streaming child would need
-     * a full-duplex pump here to avoid a pipe cycle.
-     */
-    wr = write_all(in_pipe[1], stdin_bytes, stdin_len);
-    if (wr == 0 && tail_fd >= 0) {
-        wr = copy_fd(tail_fd, in_pipe[1]);
-    }
-    close(in_pipe[1]);
-    memset(&out, 0, sizeof out);
-    if (buf_read_fd(&out, out_pipe[0]) != 0) {
-        close(out_pipe[0]);
-        kill(pid, SIGKILL);
-        waitpid(pid, &st, 0);
-        buf_free(&out);
-        last_resort();
-    }
-    close(out_pipe[0]);
-    if (waitpid(pid, &st, 0) < 0) {
-        buf_free(&out);
-        last_resort();
-    }
-    if (wr != 0) {
-        buf_free(&out);
-        last_resort();
-    }
-    if (WIFEXITED(st)) {
-        int status = WEXITSTATUS(st);
-        if (write_all(STDOUT_FILENO, out.p, out.len) != 0) {
-            buf_free(&out);
-            last_resort();
-        }
-        buf_free(&out);
-        _exit(status);
-    }
-    buf_free(&out);
-    last_resort();
-}
-
-static void miss_replay(
-    char **argv,
-    const char *host,
-    const unsigned char *stdin_bytes,
-    size_t stdin_len
-) {
-    miss_replay_with_tail(argv, host, stdin_bytes, stdin_len, -1);
+    fflush(stdout);
+    fflush(stderr);
+    _exit(status);
 }
 
 /* RFC 4122 UUID v4 from /dev/urandom. Not Apple-only; not libuuid. */
@@ -593,7 +489,7 @@ static int xpc_hook_evaluate(
          * Intentional orphan on timeout: after xpc_connection_cancel the
          * reply block may still fire once and write wait->reply, so freeing
          * `wait` here would race that block. The struct and its semaphore
-         * live until process exit (miss_replay / _exit), bounded to one
+         * live until process exit (_exit), bounded to one
          * small allocation per timed-out invocation.
          */
         return -1;
@@ -782,38 +678,38 @@ int main(int argc, char **argv) {
     char request_id[37];
     struct RvHookReply reply;
 
-    /*
-     * A replay child that dies before consuming stdin must not kill this
-     * parent by signal 13: EPIPE then surfaces from write_all and routes to
-     * the deterministic last_resort deny instead.
-     */
+    /* Broken output pipes must not terminate RV before its denial path. */
     signal(SIGPIPE, SIG_IGN);
 
     if (parse_hook_argv(argc, argv, &host) != 0) {
         exec_same_argv(argv);
     }
 
+    /* C has no supported mutual daemon-authentication implementation yet.
+     * Do not send action bytes or trust successful replies without server proof. */
+    deny_hook(host);
+
     memset(&stdin_buf, 0, sizeof stdin_buf);
     int stdin_read = buf_read_fd_limited(&stdin_buf, STDIN_FILENO, RV_STDIN_XPC_MAX);
     if (stdin_read == BUF_READ_ERROR) {
         buf_free(&stdin_buf);
-        last_resort();
+        deny_hook(host);
     }
 
     if (stdin_read == BUF_READ_LIMIT) {
-        miss_replay_with_tail(argv, host, stdin_buf.p, stdin_buf.len, STDIN_FILENO);
+        deny_hook(host);
     }
 
     if (stdin_buf.has_nul
         || stdin_buf.len > RV_STDIN_XPC_MAX
         || !rv_utf8_is_valid(stdin_buf.p, stdin_buf.len))
     {
-        miss_replay(argv, host, stdin_buf.p, stdin_buf.len);
+        deny_hook(host);
     }
 
     request = build_request(host, stdin_buf.p, stdin_buf.len, &request_len, request_id);
     if (request == NULL) {
-        miss_replay(argv, host, stdin_buf.p, stdin_buf.len);
+        deny_hook(host);
     }
 
 #ifdef __APPLE__
@@ -825,12 +721,12 @@ int main(int argc, char **argv) {
             &reply_json,
             &reply_len) != 0) {
         free(request);
-        miss_replay(argv, host, stdin_buf.p, stdin_buf.len);
+        deny_hook(host);
     }
 #else
     if (unix_hook_evaluate(request, request_len, &reply_json, &reply_len) != 0) {
         free(request);
-        miss_replay(argv, host, stdin_buf.p, stdin_buf.len);
+        deny_hook(host);
     }
 #endif
     free(request);
@@ -838,13 +734,13 @@ int main(int argc, char **argv) {
     memset(&reply, 0, sizeof reply);
     if (rv_parse_hook_reply(reply_json, reply_len, &reply) != RV_HOOK_REPLY_OK) {
         free(reply_json);
-        miss_replay(argv, host, stdin_buf.p, stdin_buf.len);
+        deny_hook(host);
     }
     free(reply_json);
 
     if (!reply.has_id || strcasecmp(reply.id, request_id) != 0) {
         rv_hook_reply_free(&reply);
-        miss_replay(argv, host, stdin_buf.p, stdin_buf.len);
+        deny_hook(host);
     }
 
     if (rv_should_miss_replay(
@@ -852,13 +748,13 @@ int main(int argc, char **argv) {
             reply.has_service_semver ? reply.service_semver : NULL))
     {
         rv_hook_reply_free(&reply);
-        miss_replay(argv, host, stdin_buf.p, stdin_buf.len);
+        deny_hook(host);
     }
 
     if (write_all(STDOUT_FILENO, reply.stdout_bytes, reply.stdout_len) != 0) {
         rv_hook_reply_free(&reply);
         buf_free(&stdin_buf);
-        last_resort();
+        deny_hook(host);
     }
     {
         int32_t code = reply.exit_code;

@@ -115,7 +115,8 @@ public actor ServiceRuntime {
     public func handleIncoming(
         _ body: Data,
         handshakeOK: Bool,
-        stdinOverlay: Data? = nil
+        stdinOverlay: Data? = nil,
+        context: AuthenticatedRequestContext = .unauthenticated
     ) async -> IncomingReply {
         if let hello = try? IPCJSON.decode(Hello.self, from: body), hello.clientSemver.isEmpty == false {
             let ack = acknowledge(hello)
@@ -128,11 +129,11 @@ public actor ServiceRuntime {
             }
         }
         if handshakeOK == false {
-            return await handleUnreadyIncoming(body, stdinOverlay: stdinOverlay)
+            return await handleUnreadyIncoming(body, stdinOverlay: stdinOverlay, context: context)
         }
         do {
             let request = try decodeRequest(body, stdinOverlay: stdinOverlay)
-            let response = await dispatch(request)
+            let response = await dispatch(request, context: context)
             return IncomingReply(
                 frame: (try? IPCJSON.encode(response)) ?? Data(),
                 handshakeAccepted: true
@@ -147,7 +148,9 @@ public actor ServiceRuntime {
     }
 
     /// Implicit hello on first evaluate when `clientSemver` is set. Old clients Hello first.
-    private func handleUnreadyIncoming(_ body: Data, stdinOverlay: Data?) async -> IncomingReply {
+    private func handleUnreadyIncoming(
+        _ body: Data, stdinOverlay: Data?, context: AuthenticatedRequestContext
+    ) async -> IncomingReply {
         guard let request = try? IPCJSON.decode(IPCRequest.self, from: body) else {
             let response = IPCResponse(
                 id: UUID(),
@@ -173,7 +176,7 @@ public actor ServiceRuntime {
             let ack = acknowledge(hello)
             switch ack.status {
             case .ok:
-                let response = await dispatch(overlaid)
+                let response = await dispatch(overlaid, context: context)
                 return IncomingReply(
                     frame: (try? IPCJSON.encode(response)) ?? Data(),
                     handshakeAccepted: true
@@ -235,9 +238,15 @@ public actor ServiceRuntime {
         }
     }
 
-    public func dispatch(_ request: IPCRequest) async -> IPCResponse {
+    public func dispatch(
+        _ request: IPCRequest,
+        context: AuthenticatedRequestContext = .unauthenticated
+    ) async -> IPCResponse {
         if request.protocolName != ProtocolVersion.name {
             return IPCResponse(id: request.id, result: .error(.protocolSkew(.protocolSkew)))
+        }
+        guard ServiceMethodAuthorization.permits(request.method, context: context) else {
+            return IPCResponse(id: request.id, result: .error(.authorizationDenied))
         }
         let started = DispatchTime.now()
         let result: IPCResult

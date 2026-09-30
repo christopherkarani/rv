@@ -25,6 +25,7 @@ struct Setup: ParsableCommand {
     var force = false
 
     func run() throws {
+        try LocalControlBoundary.requireOwnerAuthorization()
         let resolved = CeremonyCLI.appearance(
             json: json,
             robot: robot,

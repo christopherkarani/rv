@@ -24,6 +24,7 @@ enum LaunchctlAction {
 /// 69 service unavailable (launchctl refused), 73 cannot create file,
 /// 70 internal software error (post-condition violated, state unreadable).
 enum SetupError: Error, Equatable, Sendable {
+    case ownerAuthorizationRequired
     /// Embedded Host adapter template missing or lacks its placeholder.
     case adapterTemplateMissing(HookHost)
     /// Embedded launchd plist template missing or lacks its placeholder.
@@ -69,6 +70,9 @@ func setupFailureOutput(
     let phrase: String
     let exitCode: Int32
     switch error {
+    case .ownerAuthorizationRequired:
+        phrase = LocalControlBoundary.reason
+        exitCode = EX_UNAVAILABLE
     case .adapterTemplateMissing(let host):
         phrase = "missing \(host.rawValue) adapter template"
         exitCode = EX_DATAERR

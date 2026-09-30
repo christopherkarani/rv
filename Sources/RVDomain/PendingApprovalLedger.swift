@@ -31,7 +31,8 @@ public enum PendingApprovalLedger: Sendable {
         }
         if let existing = swept.first(where: { record in
             guard case .awaitingHuman = record.state else { return false }
-            return record.identity == request.identity
+            return record.subject == request.subject
+                && record.identity == request.identity
                 && record.fingerprint == request.action.fingerprint
         }) {
             return (existing, swept)
@@ -45,7 +46,8 @@ public enum PendingApprovalLedger: Sendable {
             timeoutPolicy: request.timeoutPolicy,
             createdAt: now,
             expiresAt: now.addingTimeInterval(request.ttl),
-            state: .awaitingHuman
+            state: .awaitingHuman,
+            subject: request.subject
         )
         var next = swept
         next.append(record)
@@ -122,6 +124,9 @@ public enum PendingApprovalLedger: Sendable {
                 case .awaitingHuman:
                     throw .notResolved
                 case .resolved(let resolution):
+                    // This name-only API has no live principal or owner proof.
+                    // It can deliver a deny, never executable authority.
+                    if resolution.decision.authorizesExactAction { throw .invalidRequest }
                     var next = record
                     next.state = .consumed(resolution, at: now)
                     return next
@@ -181,6 +186,13 @@ public enum PendingApprovalLedger: Sendable {
 
     private static func validate(_ request: PendingApprovalRequest) throws(PendingApprovalError) {
         if request.id.rawValue.isEmpty || request.ttl <= 0 {
+            throw .invalidRequest
+        }
+        if let subject = request.subject,
+            subject.fingerprint != request.action.fingerprint
+                || subject.continuation != request.continuation
+                || subject.policyContext.isEmpty
+        {
             throw .invalidRequest
         }
         switch request.continuation {
