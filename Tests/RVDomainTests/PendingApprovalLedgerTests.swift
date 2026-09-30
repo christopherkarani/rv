@@ -699,11 +699,13 @@ private extension PendingApprovalLedgerTests {
 
     static func action(fingerprint: String = "shell:git.force-push:origin:main") -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: fingerprint),
-                effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                resources: ActionResources(remoteName: "origin", branchName: "main"),
-                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv"))
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: fingerprint),
+                    effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
+                    resources: ActionResources(remoteName: "origin", branchName: "main"),
+                    scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv"))
+                )
             )
         )
     }

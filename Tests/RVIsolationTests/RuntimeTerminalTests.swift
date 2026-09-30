@@ -1562,28 +1562,32 @@ private func ptyAdmissionNormalize(
             let inside = tokens[1].hasPrefix("/") == false
             return .success(
                 .shell(
-                    ShellAction(
-                        fingerprint: fingerprint,
-                        effects: ActionEffects(kinds: inside ? [.filesystemCreate] : [.outsideRepositoryMutation]),
-                        resources: ActionResources(
-                            path: tokens[1],
-                            filesystemScope: inside ? .insideRepository : .outsideRepository,
-                            resourceKind: .unknown
-                        ),
-                        scope: ActionScope(workingDirectory: subject.policyWorkspace),
-                        supportingCommand: command
+                    ShellAction.effectOnly(
+                        EffectShell(
+                            fingerprint: fingerprint,
+                            effects: ActionEffects(kinds: inside ? [.filesystemCreate] : [.outsideRepositoryMutation]),
+                            resources: ActionResources(
+                                path: tokens[1],
+                                filesystemScope: inside ? .insideRepository : .outsideRepository,
+                                resourceKind: .unknown
+                            ),
+                            scope: ActionScope(workingDirectory: subject.policyWorkspace),
+                            supportingCommand: command
+                        )
                     )
                 )
             )
         }
         return .success(
             .shell(
-                ShellAction(
-                    fingerprint: fingerprint,
-                    effects: ActionEffects(),
-                    resources: ActionResources(),
-                    scope: ActionScope(workingDirectory: subject.policyWorkspace),
-                    supportingCommand: command
+                ShellAction.effectOnly(
+                    EffectShell(
+                        fingerprint: fingerprint,
+                        effects: ActionEffects(),
+                        resources: ActionResources(),
+                        scope: ActionScope(workingDirectory: subject.policyWorkspace),
+                        supportingCommand: command
+                    )
                 )
             )
         )

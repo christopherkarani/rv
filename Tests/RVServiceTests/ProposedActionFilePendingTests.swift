@@ -50,11 +50,13 @@ func pendingList_emptyEffectsFile_usesLedgerNameFile(
             agent: .pi
         ),
         action: .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "pi:sess:/tmp/ws:git status"),
-                effects: ActionEffects(),
-                scope: ActionScope(workingDirectory: wd("/tmp/ws")),
-                supportingCommand: ShellCommand(rawValue: "git status")
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "pi:sess:/tmp/ws:git status"),
+                    effects: ActionEffects(),
+                    scope: ActionScope(workingDirectory: wd("/tmp/ws")),
+                    supportingCommand: ShellCommand(rawValue: "git status")
+                )
             )
         ),
         reason: .hostAsk,

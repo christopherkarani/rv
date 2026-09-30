@@ -103,12 +103,14 @@ private enum ActionPolicyEngineShadowFixtures {
 
     static func forcePush() -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:origin:main"),
-                effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                resources: ActionResources(remoteName: "origin", branchName: "main"),
-                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
-                supportingCommand: ShellCommand(rawValue: "git push --force origin main")
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:origin:main"),
+                    effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
+                    resources: ActionResources(remoteName: "origin", branchName: "main"),
+                    scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
+                    supportingCommand: ShellCommand(rawValue: "git push --force origin main")
+                )
             )
         )
     }
@@ -118,23 +120,27 @@ private enum ActionPolicyEngineShadowFixtures {
         supportingCommand: String
     ) -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:git.checkout"),
-                effects: ActionEffects(kinds: effects),
-                resources: ActionResources(branchName: "feature"),
-                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
-                supportingCommand: ShellCommand(rawValue: supportingCommand)
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "shell:git.checkout"),
+                    effects: ActionEffects(kinds: effects),
+                    resources: ActionResources(branchName: "feature"),
+                    scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
+                    supportingCommand: ShellCommand(rawValue: supportingCommand)
+                )
             )
         )
     }
 
     static func uncovered() -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:uncovered"),
-                effects: ActionEffects(),
-                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
-                supportingCommand: ShellCommand(rawValue: "echo hello")
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "shell:uncovered"),
+                    effects: ActionEffects(),
+                    scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
+                    supportingCommand: ShellCommand(rawValue: "echo hello")
+                )
             )
         )
     }

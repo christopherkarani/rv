@@ -397,27 +397,31 @@ private enum HostNativeAskFixtures {
 
     static func emptyEffects(command: String) -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:host-native-ask"),
-                scope: ActionScope(
-                    workingDirectory: WorkingDirectory(validating: "/tmp/rv")
-                ),
-                supportingCommand: ShellCommand(rawValue: command)
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "shell:host-native-ask"),
+                    scope: ActionScope(
+                        workingDirectory: WorkingDirectory(validating: "/tmp/rv")
+                    ),
+                    supportingCommand: ShellCommand(rawValue: command)
+                )
             )
         )
     }
 
     static func remoteMutation(branchName: String) -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:remote-mutation:\(branchName)"),
-                effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                resources: ActionResources(remoteName: "origin", branchName: branchName),
-                scope: ActionScope(
-                    workingDirectory: WorkingDirectory(validating: "/tmp/rv")
-                ),
-                supportingCommand: ShellCommand(
-                    rawValue: "git push --force origin \(branchName)"
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "shell:remote-mutation:\(branchName)"),
+                    effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
+                    resources: ActionResources(remoteName: "origin", branchName: branchName),
+                    scope: ActionScope(
+                        workingDirectory: WorkingDirectory(validating: "/tmp/rv")
+                    ),
+                    supportingCommand: ShellCommand(
+                        rawValue: "git push --force origin \(branchName)"
+                    )
                 )
             )
         )
@@ -425,13 +429,15 @@ private enum HostNativeAskFixtures {
 
     static func workingTreeDiscard(command: String) -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:working-tree-discard"),
-                effects: ActionEffects(kinds: [.workingTreeDiscard]),
-                scope: ActionScope(
-                    workingDirectory: WorkingDirectory(validating: "/tmp/rv")
-                ),
-                supportingCommand: ShellCommand(rawValue: command)
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "shell:working-tree-discard"),
+                    effects: ActionEffects(kinds: [.workingTreeDiscard]),
+                    scope: ActionScope(
+                        workingDirectory: WorkingDirectory(validating: "/tmp/rv")
+                    ),
+                    supportingCommand: ShellCommand(rawValue: command)
+                )
             )
         )
     }

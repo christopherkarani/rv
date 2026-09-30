@@ -242,9 +242,11 @@ private func lifecycleExecutable(
     arguments: [String]? = nil
 ) throws -> ExecutableAction {
     let action = ProposedAction.shell(
-        ShellAction(
-            fingerprint: ActionFingerprint(rawValue: UUID().uuidString),
-            scope: ActionScope(workingDirectory: plan.workspace)
+        ShellAction.effectOnly(
+            EffectShell(
+                fingerprint: ActionFingerprint(rawValue: UUID().uuidString),
+                scope: ActionScope(workingDirectory: plan.workspace)
+            )
         )
     )
     guard case .pending(let pending) = AgentAuthorization.decide(action: action) else {

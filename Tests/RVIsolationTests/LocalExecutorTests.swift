@@ -187,11 +187,13 @@ struct LocalExecutorTests {
 
     @Test func pendingAuthorization_hasNoExecuteInput() {
         let action = ProposedAction.shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:local-executor:pending"),
-                effects: ActionEffects(),
-                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
-                supportingCommand: ShellCommand(rawValue: "echo hello")
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "shell:local-executor:pending"),
+                    effects: ActionEffects(),
+                    scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
+                    supportingCommand: ShellCommand(rawValue: "echo hello")
+                )
             )
         )
         switch AgentAuthorization.decide(action: action) {
@@ -365,11 +367,13 @@ struct LocalExecutorTests {
         let inside = tree.workspaceURL.appendingPathComponent("ask-resolve.txt").path
         let touch = try requireTouchExecutable()
         let action = ProposedAction.shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:local-executor:ask-resolve"),
-                effects: ActionEffects(),
-                scope: ActionScope(workingDirectory: workspace),
-                supportingCommand: ShellCommand(rawValue: "\(touch) \(inside)")
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "shell:local-executor:ask-resolve"),
+                    effects: ActionEffects(),
+                    scope: ActionScope(workingDirectory: workspace),
+                    supportingCommand: ShellCommand(rawValue: "\(touch) \(inside)")
+                )
             )
         )
         let pending = try requirePendingReviewAsk(action)
@@ -465,16 +469,18 @@ private func inRepoWrite(
     fingerprint: String = "shell:local-executor:in-repo-write"
 ) -> ProposedAction {
     .shell(
-        ShellAction(
-            fingerprint: ActionFingerprint(rawValue: fingerprint),
-            effects: ActionEffects(kinds: [.filesystemCreate]),
-            resources: ActionResources(
-                path: path,
-                filesystemScope: .insideRepository,
-                resourceKind: .unknown
-            ),
-            scope: ActionScope(workingDirectory: workingDirectory),
-            supportingCommand: supportingCommand.map(ShellCommand.init(rawValue:))
+        ShellAction.effectOnly(
+            EffectShell(
+                fingerprint: ActionFingerprint(rawValue: fingerprint),
+                effects: ActionEffects(kinds: [.filesystemCreate]),
+                resources: ActionResources(
+                    path: path,
+                    filesystemScope: .insideRepository,
+                    resourceKind: .unknown
+                ),
+                scope: ActionScope(workingDirectory: workingDirectory),
+                supportingCommand: supportingCommand.map(ShellCommand.init(rawValue:))
+            )
         )
     )
 }
