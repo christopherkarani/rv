@@ -34,9 +34,8 @@ test = ["pytest>=8"]
 [tool.hatch.version]
 path = "src/rv/__init__.py"
 
-[tool.hatch.build.targets.sdist]
-packages = ["src/rv"]
-
+# No sdist section on purpose: the default (VCS-tracked files, original
+# layout) keeps src/ so wheels built from the sdist resolve packages too.
 [tool.hatch.build.targets.wheel]
 packages = ["src/rv"]
 

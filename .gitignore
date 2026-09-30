@@ -17,3 +17,11 @@ spec/
 docs/rv-agent/
 # swift-tui comes from the fork pin in Package.swift, never vendored
 Vendor/swift-tui/
+# Python SDK build/test byproducts (sdk/python only)
+sdk/python/.venv/
+sdk/python/.pytest_cache/
+sdk/python/*.egg-info/
+sdk/python/build/
+sdk/python/dist/
+**/__pycache__/
+**/*.pyc

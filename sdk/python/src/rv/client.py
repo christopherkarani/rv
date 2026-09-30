@@ -271,10 +271,20 @@ def _skew_error(ack: protocol.HelloAck) -> Exception:
     return CorePacksUnavailable("rv core packs unavailable")
 
 
+def _find_rvd(explicit: str | None = None) -> str | None:
+    """Locate the rvd binary: explicit path, then ``RV_RVD``, then ``PATH``."""
+    if explicit:
+        return explicit
+    override = os.environ.get("RV_RVD")
+    if override:
+        return override
+    return shutil.which("rvd")
+
+
 def _probe_product(rvd: str | None = None) -> str | None:
     """Best-effort product version via ``rvd --version`` (informational; the
-    binary on PATH may differ from the running daemon)."""
-    binary = rvd or shutil.which("rvd")
+    probed binary may differ from the running daemon)."""
+    binary = _find_rvd(rvd)
     if binary is None:
         return None
     try:
@@ -340,10 +350,15 @@ def runtime_status(socket_path: str | None = None) -> RvRuntimeStatus:
     )
 
 
-def ensure_runtime(socket_path: str | None = None) -> str:
+def ensure_runtime(socket_path: str | None = None, idle_exit_seconds: int | None = None) -> str:
     """Return a connectable socket path, explicitly spawning a supervised
     ``rvd`` when none answers. Never implicit: callers opt in (useful in
-    containers without user units). Spawned daemons idle-exit on their own.
+    containers without user units). Spawned daemons idle-exit on their own
+    (default 300s; ``idle_exit_seconds`` overrides).
+
+    Spawning targets the production path only: with an explicit override that
+    does not answer, this raises instead of starting a daemon that would bind
+    elsewhere.
     """
     path = transports.resolve_socket_path(socket_path)
     probe = UnixSocketTransport(path)
@@ -354,16 +369,26 @@ def ensure_runtime(socket_path: str | None = None) -> str:
     else:
         probe.close()
         return path
-    binary = shutil.which("rvd")
+    if socket_path is not None:
+        raise RuntimeNotFound(
+            f"explicit rvd socket does not answer: {path} (spawn targets the production path only)",
+            path=path,
+        )
+    binary = _find_rvd()
     if binary is None:
         raise RuntimeNotFound(
             "rvd not found on PATH; cannot start a runtime",
             remediation="install RV: curl -fsSL https://rykanv.com/install | sh",
         )
+    argv = [binary]
+    if idle_exit_seconds is not None:
+        if idle_exit_seconds <= 0:
+            raise ValueError("idle_exit_seconds must be positive")
+        argv += ["--idle-exit-seconds", str(idle_exit_seconds)]
     try:
         # Fixed argv, no shell.
         proc = subprocess.Popen(
-            [binary],
+            argv,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

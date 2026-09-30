@@ -773,9 +773,26 @@ def test_ensure_runtime_returns_existing_without_spawning(monkeypatch):
 
 def test_ensure_runtime_missing_binary_raises(monkeypatch):
     monkeypatch.setattr(client_module.shutil, "which", lambda name: None)
+    monkeypatch.delenv("RV_RVD", raising=False)
+    # Fake bases on both platforms so a live dev daemon can't satisfy the probe.
+    monkeypatch.setenv("HOME", f"/tmp/rv-eh-{os.getpid()}")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", f"/tmp/rv-ex-{os.getpid()}")
+    with pytest.raises(RuntimeNotFound) as info:
+        client_module.ensure_runtime()
+    assert "PATH" in str(info.value)
+
+
+def test_ensure_runtime_explicit_path_never_spawns(monkeypatch):
+    monkeypatch.setattr(client_module.shutil, "which", lambda name: "/bin/false")
     with pytest.raises(RuntimeNotFound) as info:
         client_module.ensure_runtime(socket_path=f"/tmp/rv-ensure-missing-{os.getpid()}/x.sock")
-    assert "PATH" in str(info.value)
+    assert "production path only" in str(info.value)
+
+
+def test_runtime_status_missing_is_typed():
+    status = client_module.runtime_status(socket_path=f"/tmp/rv-it-missing-{os.getpid()}/x.sock")
+    assert status.ok is False
+    assert status.error
 
 
 def test_approvals_validation():
