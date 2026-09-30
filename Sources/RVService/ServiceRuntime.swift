@@ -189,8 +189,10 @@ public actor ServiceRuntime {
                 )
             }
         }
+        // Echo the decoded id so clients can always correlate handshakeRequired
+        // with the call that triggered it (undecodable bodies keep a fresh id).
         let response = IPCResponse(
-            id: UUID(),
+            id: request.id,
             result: .error(.protocolSkew(.handshakeRequired))
         )
         let data = (try? IPCJSON.encode(response)) ?? Data()
