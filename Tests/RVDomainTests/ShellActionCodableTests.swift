@@ -4,13 +4,16 @@ import RVDomain
 
 @Suite("ShellAction")
 struct ShellActionCodableTests {
-    @Test func decode_rejectsEffectsThatDisagreeWithSubject() throws {
+    @Test func decode_disagreeingBagsYieldToSubjectProjection() throws {
         var object = try jsonObject(analyzedForcePush())
         object["effects"] = ["kinds": [ActionEffectKind.localBranchCreate.rawValue]]
+        object["resources"] = ["remoteName": "upstream", "branchName": "other"]
         let data = try JSONSerialization.data(withJSONObject: object)
-        #expect(throws: DecodingError.self) {
-            _ = try JSONDecoder().decode(ShellAction.self, from: data)
-        }
+        let decoded = try JSONDecoder().decode(ShellAction.self, from: data)
+        #expect(decoded == analyzedForcePush())
+        #expect(decoded.effects.kinds == [.remoteSharedBranchMutation])
+        #expect(decoded.resources.remoteName == "origin")
+        #expect(decoded.resources.branchName == "main")
     }
 
     @Test func decode_absentBagUsesSubjectProjection() throws {
@@ -32,26 +35,60 @@ struct ShellActionCodableTests {
         #expect(decoded.effects.kinds == [.remoteSharedBranchMutation])
         #expect(decoded.resources.remoteName == "origin")
         #expect(decoded.resources.branchName == "main")
-        #expect(decoded.analysis == .git(.push(remote: "origin", refspec: "main", force: .force)))
+        guard case .analyzed(let analyzed) = decoded else {
+            Issue.record("expected analyzed shell")
+            return
+        }
+        #expect(analyzed.analysis == .git(.push(remote: "origin", refspec: "main", force: .force)))
     }
 
-    @Test func effectOnlyForcePushFixture_keepsNilAnalysis() {
+    @Test func effectOnlyShell_roundTripsEqualWithoutXORKeys() throws {
+        let shell = ShellAction.effectOnly(
+            EffectShell(
+                fingerprint: ActionFingerprint(rawValue: "fp-effect-only"),
+                effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
+                resources: ActionResources(remoteName: "origin", branchName: "main"),
+                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws")),
+                supportingCommand: ShellCommand(rawValue: "git push --force origin main")
+            )
+        )
+        let object = try jsonObject(shell)
+        #expect(object.keys.contains("gitAction") == false)
+        #expect(object.keys.contains("filesystemAction") == false)
+        #expect(object.keys.contains("analysis") == false)
+        let decoded = try JSONDecoder().decode(
+            ShellAction.self,
+            from: JSONEncoder().encode(shell)
+        )
+        #expect(decoded == shell)
+        guard case .effectOnly = decoded else {
+            Issue.record("expected effect-only shell")
+            return
+        }
+    }
+
+    @Test func effectOnlyForcePushFixture_isEffectOnly() {
         guard case .shell(let shell) = ActionPolicyFixtures.forcePush() else {
             Issue.record("expected shell")
             return
         }
-        #expect(shell.analysis == nil)
+        guard case .effectOnly = shell else {
+            Issue.record("expected effect-only shell")
+            return
+        }
         #expect(shell.effects == ActionEffects(kinds: [.remoteSharedBranchMutation]))
         #expect(shell.resources.remoteName == "origin")
         #expect(shell.resources.branchName == "main")
     }
 
     private func analyzedForcePush() -> ShellAction {
-        ShellAction(
-            fingerprint: ActionFingerprint(rawValue: "fp-analyzed-push"),
-            scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws")),
-            supportingCommand: ShellCommand(rawValue: "git push --force origin main"),
-            analysis: .git(.push(remote: "origin", refspec: "main", force: .force))
+        ShellAction.analyzed(
+            AnalyzedShell(
+                fingerprint: ActionFingerprint(rawValue: "fp-analyzed-push"),
+                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws")),
+                supportingCommand: ShellCommand(rawValue: "git push --force origin main"),
+                analysis: .git(.push(remote: "origin", refspec: "main", force: .force))
+            )
         )
     }
 
@@ -90,7 +127,10 @@ struct AgentNormalizationShellTests {
             Issue.record("expected shell")
             return
         }
-        #expect(shell.analysis == nil)
+        guard case .effectOnly = shell else {
+            Issue.record("expected effect-only shell")
+            return
+        }
         #expect(shell.effects.kinds.isEmpty)
     }
 }
@@ -104,10 +144,12 @@ struct ReviewSanitizerShellTests {
             force: .force
         )
         let sanitized = ReviewSanitizer.sanitize(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "fp-sanitize"),
-                supportingCommand: ShellCommand(rawValue: "git push --force"),
-                analysis: .git(push)
+            ShellAction.analyzed(
+                AnalyzedShell(
+                    fingerprint: ActionFingerprint(rawValue: "fp-sanitize"),
+                    supportingCommand: ShellCommand(rawValue: "git push --force"),
+                    analysis: .git(push)
+                )
             )
         )
         #expect(sanitized.effects == sanitized.gitAction?.effects)

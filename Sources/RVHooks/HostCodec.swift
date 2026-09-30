@@ -143,15 +143,17 @@ extension HostCodec {
         case .shell(_, let command, let cwd, let session),
              .spend(_, let command, let cwd, let session):
             return .shell(
-                ShellAction(
-                    fingerprint: ActionFingerprint.make(
-                        host: host,
-                        session: session,
-                        cwd: cwd,
-                        command: command
-                    ),
-                    scope: ActionScope(workingDirectory: cwd),
-                    supportingCommand: command
+                ShellAction.effectOnly(
+                    EffectShell(
+                        fingerprint: ActionFingerprint.make(
+                            host: host,
+                            session: session,
+                            cwd: cwd,
+                            command: command
+                        ),
+                        scope: ActionScope(workingDirectory: cwd),
+                        supportingCommand: command
+                    )
                 )
             )
         case .file(_, let file, let cwd, let session):

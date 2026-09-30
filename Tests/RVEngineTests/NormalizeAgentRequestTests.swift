@@ -36,7 +36,10 @@ struct NormalizeAgentRequestTests {
         }
         #expect(shell.gitAction == nil, "do not invent git analysis the analyzer does not emit")
         #expect(shell.filesystemAction == nil)
-        #expect(shell.analysis == nil)
+        guard case .effectOnly = shell else {
+            Issue.record("expected effect-only shell for \(command)")
+            return
+        }
         #expect(shell.effects.kinds.isEmpty)
         #expect(shell.supportingCommand?.rawValue == command)
         #expect(

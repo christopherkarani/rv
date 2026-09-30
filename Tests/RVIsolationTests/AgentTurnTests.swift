@@ -268,12 +268,14 @@ private enum AgentTurnFixtureError: Error {
 
 private func forcePushMain() -> ProposedAction {
     .shell(
-        ShellAction(
-            fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:origin:main"),
-            effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-            resources: ActionResources(remoteName: "origin", branchName: "main"),
-            scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
-            supportingCommand: ShellCommand(rawValue: "git push --force origin main")
+        ShellAction.effectOnly(
+            EffectShell(
+                fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:origin:main"),
+                effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
+                resources: ActionResources(remoteName: "origin", branchName: "main"),
+                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
+                supportingCommand: ShellCommand(rawValue: "git push --force origin main")
+            )
         )
     )
 }
@@ -285,11 +287,13 @@ private func uncoveredTouch(
 ) throws -> ProposedAction {
     let touch = try requireTouchExecutable()
     return .shell(
-        ShellAction(
-            fingerprint: ActionFingerprint(rawValue: fingerprint),
-            effects: ActionEffects(),
-            scope: ActionScope(workingDirectory: workingDirectory),
-            supportingCommand: ShellCommand(rawValue: "\(touch) \(path)")
+        ShellAction.effectOnly(
+            EffectShell(
+                fingerprint: ActionFingerprint(rawValue: fingerprint),
+                effects: ActionEffects(),
+                scope: ActionScope(workingDirectory: workingDirectory),
+                supportingCommand: ShellCommand(rawValue: "\(touch) \(path)")
+            )
         )
     )
 }
@@ -302,16 +306,18 @@ private func decideAllowedInRepoTouch(
     let touch = try requireTouchExecutable()
     let authorization = AgentAuthorization.decide(
         action: .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: fingerprint),
-                effects: ActionEffects(kinds: [.filesystemCreate]),
-                resources: ActionResources(
-                    path: path,
-                    filesystemScope: .insideRepository,
-                    resourceKind: .unknown
-                ),
-                scope: ActionScope(workingDirectory: workingDirectory),
-                supportingCommand: ShellCommand(rawValue: "\(touch) \(path)")
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: fingerprint),
+                    effects: ActionEffects(kinds: [.filesystemCreate]),
+                    resources: ActionResources(
+                        path: path,
+                        filesystemScope: .insideRepository,
+                        resourceKind: .unknown
+                    ),
+                    scope: ActionScope(workingDirectory: workingDirectory),
+                    supportingCommand: ShellCommand(rawValue: "\(touch) \(path)")
+                )
             )
         )
     )

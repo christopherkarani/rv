@@ -105,34 +105,40 @@ private func normalizeRuntimeShell(
     case .git(let git):
         return .success(
             .shell(
-                ShellAction(
-                    fingerprint: fingerprint,
-                    scope: scope,
-                    supportingCommand: command,
-                    analysis: .git(git)
+                ShellAction.analyzed(
+                    AnalyzedShell(
+                        fingerprint: fingerprint,
+                        scope: scope,
+                        supportingCommand: command,
+                        analysis: .git(git)
+                    )
                 )
             )
         )
     case .filesystem(let filesystem):
         return .success(
             .shell(
-                ShellAction(
-                    fingerprint: fingerprint,
-                    scope: scope,
-                    supportingCommand: command,
-                    analysis: .filesystem(filesystem)
+                ShellAction.analyzed(
+                    AnalyzedShell(
+                        fingerprint: fingerprint,
+                        scope: scope,
+                        supportingCommand: command,
+                        analysis: .filesystem(filesystem)
+                    )
                 )
             )
         )
     case .wrapper, .unknown:
         return .success(
             .shell(
-                ShellAction(
-                    fingerprint: fingerprint,
-                    effects: ActionEffects(),
-                    resources: ActionResources(),
-                    scope: scope,
-                    supportingCommand: command
+                ShellAction.effectOnly(
+                    EffectShell(
+                        fingerprint: fingerprint,
+                        effects: ActionEffects(),
+                        resources: ActionResources(),
+                        scope: scope,
+                        supportingCommand: command
+                    )
                 )
             )
         )

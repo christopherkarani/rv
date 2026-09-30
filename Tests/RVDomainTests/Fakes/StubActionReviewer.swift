@@ -29,12 +29,14 @@ enum ActionReviewerFixtures {
         supportingCommand: String = "git push --force origin main"
     ) -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:origin:main"),
-                effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                resources: ActionResources(remoteName: "origin", branchName: "main"),
-                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
-                supportingCommand: ShellCommand(rawValue: supportingCommand)
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:origin:main"),
+                    effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
+                    resources: ActionResources(remoteName: "origin", branchName: "main"),
+                    scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
+                    supportingCommand: ShellCommand(rawValue: supportingCommand)
+                )
             )
         )
     }

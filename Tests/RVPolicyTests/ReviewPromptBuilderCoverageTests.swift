@@ -6,15 +6,17 @@ struct ReviewPromptBuilderCoverageTests {
     @Test func shellPayload_includesOptionalResourceAndScopeFields() {
         let request = ReviewRequest(
             action: .shell(
-                ShellAction(
-                    fingerprint: ActionFingerprint(rawValue: "shell:fs.delete:/tmp/a"),
-                    effects: ActionEffects(kinds: [.filesystemDelete]),
-                    resources: ActionResources(
-                        path: "/tmp/a",
-                        filesystemScope: .insideRepository,
-                        resourceKind: .sourceCode
-                    ),
-                    scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws"))
+                ShellAction.effectOnly(
+                    EffectShell(
+                        fingerprint: ActionFingerprint(rawValue: "shell:fs.delete:/tmp/a"),
+                        effects: ActionEffects(kinds: [.filesystemDelete]),
+                        resources: ActionResources(
+                            path: "/tmp/a",
+                            filesystemScope: .insideRepository,
+                            resourceKind: .sourceCode
+                        ),
+                        scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws"))
+                    )
                 )
             ),
             context: ReviewContext(

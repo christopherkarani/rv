@@ -59,17 +59,19 @@ struct ActionReviewerTests {
 
     @Test func reviewRequest_redactsSecretShapedValuesAndMidTokenPrefixes() {
         let dirty = ProposedAction.shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(
-                    rawValue: "shell:git.push https://ghp_exampletoken@github.com/org/repo.git"
-                ),
-                effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                resources: ActionResources(remoteName: "origin", branchName: "main"),
-                scope: ActionScope(
-                    workingDirectory: WorkingDirectory(validating: "/tmp/ghp_exampletoken")
-                ),
-                supportingCommand: ShellCommand(
-                    rawValue: "COUNT=2 FOO=ghp_exampletoken OPENAI_KEY=sk-proj-example git push https://ghp_exampletoken@github.com/org/repo.git"
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(
+                        rawValue: "shell:git.push https://ghp_exampletoken@github.com/org/repo.git"
+                    ),
+                    effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
+                    resources: ActionResources(remoteName: "origin", branchName: "main"),
+                    scope: ActionScope(
+                        workingDirectory: WorkingDirectory(validating: "/tmp/ghp_exampletoken")
+                    ),
+                    supportingCommand: ShellCommand(
+                        rawValue: "COUNT=2 FOO=ghp_exampletoken OPENAI_KEY=sk-proj-example git push https://ghp_exampletoken@github.com/org/repo.git"
+                    )
                 )
             )
         )
