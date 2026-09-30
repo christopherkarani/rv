@@ -81,19 +81,26 @@ public struct RuntimeChannelBinding: Sendable, Equatable {
     public var phase: RuntimeAdmissionPhase
     package var consumedRequestIDs: Set<RuntimeActionRequestID>
     public var consumedFingerprints: Set<ActionFingerprint>
+    /// Agent Instance this channel is bound to, set once at establishment.
+    /// Nil is a pre-establishment or legacy channel: capability, session, and
+    /// replay checks still apply, and no principal check runs. A set binding
+    /// requires the caller to present the matching live trusted context.
+    public var agentInstanceID: AgentInstanceID?
 
     public init(
         session: RuntimeSession,
         capability: RuntimeCapability,
         phase: RuntimeAdmissionPhase = .active,
         consumedRequestIDs: Set<RuntimeActionRequestID> = [],
-        consumedFingerprints: Set<ActionFingerprint> = []
+        consumedFingerprints: Set<ActionFingerprint> = [],
+        agentInstanceID: AgentInstanceID? = nil
     ) {
         self.session = session
         self.capability = capability
         self.phase = phase
         self.consumedRequestIDs = consumedRequestIDs
         self.consumedFingerprints = consumedFingerprints
+        self.agentInstanceID = agentInstanceID
     }
 
     public func finished() -> RuntimeChannelBinding {
@@ -110,10 +117,19 @@ public struct RuntimeChannelBinding: Sendable, Equatable {
 public struct RuntimeAdmissionSubject: Sendable, Equatable {
     public var session: RuntimeSession
     public var policyWorkspace: WorkingDirectory
+    /// Trusted principal context resolved by RV from live registry state.
+    /// Request payloads carry no principal fields, so nothing the agent sends
+    /// can replace this. Nil on pre-establishment and legacy channels.
+    public var agent: AuthenticatedAgentContext?
 
-    public init(session: RuntimeSession, policyWorkspace: WorkingDirectory) {
+    public init(
+        session: RuntimeSession,
+        policyWorkspace: WorkingDirectory,
+        agent: AuthenticatedAgentContext? = nil
+    ) {
         self.session = session
         self.policyWorkspace = policyWorkspace
+        self.agent = agent
     }
 }
 
@@ -221,6 +237,12 @@ public struct RuntimeAdmissionEvent: Sendable, Equatable, Codable {
     public var httpStatus: Int?
     /// Parent workspace RV recorded for this runtime. The agent does not supply it.
     public var workspace: String?
+    /// Agent Instance this attempt was attributed to: the trusted context's
+    /// instance when one was presented, else the RV-held channel binding.
+    /// Descriptive only; possessing it grants nothing.
+    public var agentInstance: String?
+    /// Agent Definition of the presented trusted context, when any.
+    public var agentDefinition: String?
 
     public init(
         session: String?,
@@ -234,7 +256,9 @@ public struct RuntimeAdmissionEvent: Sendable, Equatable, Codable {
         httpAddress: String? = nil,
         httpQueryPresent: Bool? = nil,
         httpStatus: Int? = nil,
-        workspace: String? = nil
+        workspace: String? = nil,
+        agentInstance: String? = nil,
+        agentDefinition: String? = nil
     ) {
         self.session = session
         self.requestID = requestID
@@ -248,6 +272,8 @@ public struct RuntimeAdmissionEvent: Sendable, Equatable, Codable {
         self.httpQueryPresent = httpQueryPresent
         self.httpStatus = httpStatus
         self.workspace = workspace
+        self.agentInstance = agentInstance
+        self.agentDefinition = agentDefinition
     }
 }
 
@@ -289,19 +315,23 @@ public enum RuntimeAdmissionGate {
         approvalFor: (PendingAuthorization) -> Result<ApprovalDecision, AgentApprovalError>? = { _ in
             nil
         },
+        agentContext: AuthenticatedAgentContext? = nil,
         propose: (RuntimeActionFrame) -> Result<ProposedAction, RuntimeAdmissionEvaluationError>
     ) -> RuntimeAdmissionDecision {
-        switch authenticate(binding: binding, frame: frame) {
+        switch authenticate(binding: binding, frame: frame, agentContext: agentContext) {
         case .reject(let decision):
             binding = decision.binding
-            return decision
+            return stamp(decision, agentContext: agentContext)
         case .accept(let accepted):
             guard var active = binding else {
-                return reject(
-                    binding: nil,
-                    requestID: accepted.requestID.rawValue.uuidString,
-                    reason: .unknownSession,
-                    authorization: .rejected
+                return stamp(
+                    reject(
+                        binding: nil,
+                        requestID: accepted.requestID.rawValue.uuidString,
+                        reason: .unknownSession,
+                        authorization: .rejected
+                    ),
+                    agentContext: agentContext
                 )
             }
             let decision = authorize(
@@ -312,13 +342,14 @@ public enum RuntimeAdmissionGate {
                 approvalFor: approvalFor
             )
             binding = decision.binding
-            return decision
+            return stamp(decision, agentContext: agentContext)
         }
     }
 
     static func authenticate(
         binding: RuntimeChannelBinding?,
-        frame: Result<RuntimeActionFrame, RuntimeAdmissionDecodeError>
+        frame: Result<RuntimeActionFrame, RuntimeAdmissionDecodeError>,
+        agentContext: AuthenticatedAgentContext? = nil
     ) -> RuntimeAdmissionAuthentication {
         guard let binding else {
             let requestID = frame.successValue?.requestID.rawValue.uuidString
@@ -386,6 +417,41 @@ public enum RuntimeAdmissionGate {
                     authorization: .rejected
                 )
             )
+        }
+        if let bound = binding.agentInstanceID {
+            guard let context = agentContext else {
+                return .reject(
+                    reject(
+                        binding: binding,
+                        requestID: requestID,
+                        reason: .unknownSession,
+                        authorization: .rejected
+                    )
+                )
+            }
+            guard context.validity == .active else {
+                return .reject(
+                    reject(
+                        binding: binding,
+                        requestID: requestID,
+                        reason: .inactiveSession,
+                        authorization: .rejected
+                    )
+                )
+            }
+            guard context.instance.id == bound,
+                context.instance.runtimeSessionID == binding.session.id,
+                context.instance.workspaceSessionID == binding.session.workspaceSessionID
+            else {
+                return .reject(
+                    reject(
+                        binding: binding,
+                        requestID: requestID,
+                        reason: .impersonation,
+                        authorization: .rejected
+                    )
+                )
+            }
         }
         if binding.consumedRequestIDs.contains(decoded.requestID) {
             return .reject(
@@ -497,6 +563,21 @@ public enum RuntimeAdmissionGate {
             address: http.destination.address?.presentation,
             queryPresent: http.destination.query != nil
         )
+    }
+
+    /// Attributes the attempt to the presented principal when one was
+    /// presented, else to the RV-held channel binding. Both sources are
+    /// RV-held: request bytes name no principal. Legacy channels stamp nils.
+    private static func stamp(
+        _ decision: RuntimeAdmissionDecision,
+        agentContext: AuthenticatedAgentContext?
+    ) -> RuntimeAdmissionDecision {
+        var stamped = decision
+        stamped.event.agentInstance =
+            agentContext?.instance.id.rawValue.uuidString
+            ?? decision.binding?.agentInstanceID?.rawValue.uuidString
+        stamped.event.agentDefinition = agentContext?.instance.definitionID.rawValue
+        return stamped
     }
 
     private static func reject(

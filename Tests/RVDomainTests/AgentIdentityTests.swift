@@ -428,3 +428,162 @@ private func typeName<T>(of value: T) -> String {
     #expect(ExecutableAssurance(rawValue: "digestVerified") == nil)
     #expect(ExecutableAssurance(rawValue: "signatureVerified") == nil)
 }
+
+private func makeBindingSession(
+    runtime: RuntimeSessionID,
+    workspace: WorkspaceSessionID
+) -> RuntimeSession {
+    RuntimeSession(
+        id: runtime,
+        workspaceSessionID: workspace,
+        host: .opencode,
+        workspace: WorkingDirectory(validating: "/tmp/rv-identity")!,
+        backend: .seatbelt,
+        startedAt: Date(timeIntervalSince1970: 0),
+        child: nil
+    )
+}
+
+private func makeBindingFrame(
+    session: RuntimeSession,
+    capability: RuntimeCapability
+) -> RuntimeActionFrame {
+    RuntimeActionFrame(
+        version: 1,
+        requestID: RuntimeActionRequestID(validating: UUID().uuidString)!,
+        capability: capability,
+        claimedSession: RuntimeSessionClaim(validating: session.id.rawValue.uuidString)!,
+        action: .shell(ShellCommand(rawValue: "touch marker"))
+    )
+}
+
+private func makeBindingInstance(
+    workspace: WorkspaceSessionID,
+    runtime: RuntimeSessionID
+) -> AgentInstance {
+    AgentInstance(
+        id: AgentInstanceID(),
+        owner: OwnerPrincipal(uid: 501),
+        definitionID: AgentDefinitionID(rawValue: "claude"),
+        definitionRevision: AgentDefinitionRevision.resolve(makeDefinition()),
+        workspaceSessionID: workspace,
+        runtimeSessionID: runtime,
+        executableEvidence: .none,
+        assurance: .launchObserved,
+        groupLeader: RuntimeChildIdentity(pid: 100),
+        workloadProcess: nil,
+        parent: nil,
+        effectiveAuthority: AgentAuthority(scopes: ["fs.read", "shell"]),
+        delegableAuthority: AgentAuthority(scopes: ["fs.read", "shell"]),
+        mintedAt: Date(timeIntervalSince1970: 0)
+    )
+}
+
+@Test func establishedSession_bindsMatchingPairOnly() {
+    let workspace = WorkspaceSessionID()
+    let runtime = RuntimeSessionID()
+    let instance = makeBindingInstance(workspace: workspace, runtime: runtime)
+    let session = makeBindingSession(runtime: runtime, workspace: workspace)
+    #expect(EstablishedRuntimeSession(session: session, instance: instance, establishedAt: Date()) != nil)
+    let otherRuntime = makeBindingSession(runtime: RuntimeSessionID(), workspace: workspace)
+    #expect(
+        EstablishedRuntimeSession(session: otherRuntime, instance: instance, establishedAt: Date())
+            == nil
+    )
+    let otherWorkspace = makeBindingSession(runtime: runtime, workspace: WorkspaceSessionID())
+    #expect(
+        EstablishedRuntimeSession(session: otherWorkspace, instance: instance, establishedAt: Date())
+            == nil
+    )
+    let otherInstance = makeBindingInstance(workspace: workspace, runtime: runtime)
+    #expect(EstablishedRuntimeSession(
+        session: session, instance: otherInstance, establishedAt: Date()
+    )?.agentInstanceID == otherInstance.id)
+}
+
+@Test func gate_boundChannelRequiresMatchingLiveContext() {
+    let workspace = WorkspaceSessionID()
+    let runtime = RuntimeSessionID()
+    let instance = makeBindingInstance(workspace: workspace, runtime: runtime)
+    let session = makeBindingSession(runtime: runtime, workspace: workspace)
+    let capability = RuntimeCapability()
+    let active = AuthenticatedAgentContext(instance: instance, validity: .active)
+
+    // Matching live context proceeds past the principal check: the failing
+    // proposal proves authentication accepted, and the event is attributed.
+    var bound: RuntimeChannelBinding? = RuntimeChannelBinding(
+        session: session, capability: capability, agentInstanceID: instance.id
+    )
+    let admitted = RuntimeAdmissionGate.submit(
+        binding: &bound,
+        frame: .success(makeBindingFrame(session: session, capability: capability)),
+        agentContext: active
+    ) { _ in .failure(.failed) }
+    #expect(admitted.response == .evaluationFailed)
+    #expect(admitted.event.agentInstance == instance.id.rawValue.uuidString)
+    #expect(admitted.event.agentDefinition == "claude")
+
+    // No trusted context: perfect payload, unknown principal.
+    var missing: RuntimeChannelBinding? = RuntimeChannelBinding(
+        session: session, capability: capability, agentInstanceID: instance.id
+    )
+    let unknown = RuntimeAdmissionGate.submit(
+        binding: &missing,
+        frame: .success(makeBindingFrame(session: session, capability: capability))
+    ) { _ in .failure(.failed) }
+    #expect(unknown.response == .rejected(.unknownSession))
+    #expect(unknown.event.agentInstance == instance.id.rawValue.uuidString)
+
+    // Stale or dead validity fails closed.
+    for validity in [AgentInstanceValidity.revoking, .inactive, .unknown] {
+        var dead: RuntimeChannelBinding? = RuntimeChannelBinding(
+            session: session, capability: capability, agentInstanceID: instance.id
+        )
+        let context = AuthenticatedAgentContext(instance: instance, validity: validity)
+        let decision = RuntimeAdmissionGate.submit(
+            binding: &dead,
+            frame: .success(makeBindingFrame(session: session, capability: capability)),
+            agentContext: context
+        ) { _ in .failure(.failed) }
+        #expect(decision.response == .rejected(.inactiveSession))
+    }
+
+    // A live context for a different instance is impersonation.
+    let other = makeBindingInstance(workspace: workspace, runtime: RuntimeSessionID())
+    var crossed: RuntimeChannelBinding? = RuntimeChannelBinding(
+        session: session, capability: capability, agentInstanceID: instance.id
+    )
+    let crossedDecision = RuntimeAdmissionGate.submit(
+        binding: &crossed,
+        frame: .success(makeBindingFrame(session: session, capability: capability)),
+        agentContext: AuthenticatedAgentContext(instance: other, validity: .active)
+    ) { _ in .failure(.failed) }
+    #expect(crossedDecision.response == .rejected(.impersonation))
+
+    // Legacy channels carry no principal and keep the old behavior.
+    var legacy: RuntimeChannelBinding? = RuntimeChannelBinding(
+        session: session, capability: capability
+    )
+    let legacyDecision = RuntimeAdmissionGate.submit(
+        binding: &legacy,
+        frame: .success(makeBindingFrame(session: session, capability: capability))
+    ) { _ in .failure(.failed) }
+    #expect(legacyDecision.response == .evaluationFailed)
+    #expect(legacyDecision.event.agentInstance == nil)
+    #expect(legacyDecision.event.agentDefinition == nil)
+}
+
+@Test func gate_subjectCarriesTrustedContextPayloadsCannotSet() {
+    let workspace = WorkspaceSessionID()
+    let runtime = RuntimeSessionID()
+    let instance = makeBindingInstance(workspace: workspace, runtime: runtime)
+    let session = makeBindingSession(runtime: runtime, workspace: workspace)
+    let trusted = AuthenticatedAgentContext(instance: instance, validity: .active)
+    let subject = RuntimeAdmissionSubject(
+        session: session,
+        policyWorkspace: session.workspace,
+        agent: trusted
+    )
+    #expect(subject.agent == trusted)
+    #expect(RuntimeAdmissionSubject(session: session, policyWorkspace: session.workspace).agent == nil)
+}
