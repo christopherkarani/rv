@@ -11,8 +11,13 @@ import RVPolicy
 
 struct LinuxResidualCoverageTests {
     @Test func unixSocketPath_injectedEnvironmentAndPathTooLong() throws {
+        #if os(Linux)
         let socket = try UnixSocketPath.production(environment: ["XDG_RUNTIME_DIR": "/run/user/1"])
         #expect(socket.path == "/run/user/1/rv/evaluate.sock")
+        #else
+        let socket = try UnixSocketPath.production(environment: ["HOME": "/Users/x"])
+        #expect(socket.path == "/Users/x/.config/rv/evaluate.sock")
+        #endif
         #expect(throws: UnixSocketPathError.pathTooLong) {
             _ = try UnixSocketPath.resolve(xdgRuntimeDir: "/" + String(repeating: "x", count: 120))
         }
