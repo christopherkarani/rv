@@ -126,7 +126,10 @@ enum HostWiring {
         )
     }
 
-    private static func jsonObject(_ data: Data) -> [String: Any]? {
-        (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    private static func jsonObject(_ data: Data) -> [String: JSONValue]? {
+        guard let value = try? JSONDecoder().decode(JSONValue.self, from: data) else {
+            return nil
+        }
+        return value.asObject
     }
 }

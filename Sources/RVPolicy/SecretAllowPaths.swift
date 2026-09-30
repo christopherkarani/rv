@@ -17,9 +17,11 @@ public enum SecretAllowPaths {
 
     public static func loadMachineConfig(from file: URL) -> [String] {
         let root = MachineConfigJSON.load(from: file)
-        guard let secret = root["secret"] as? [String: Any],
-              let paths = secret["allow_paths"] as? [String]
-        else {
+        guard let values = root["secret"]?["allow_paths"]?.asArray else {
+            return []
+        }
+        let paths = values.compactMap(\.string)
+        guard paths.count == values.count else {
             return []
         }
         return paths
@@ -27,9 +29,9 @@ public enum SecretAllowPaths {
 
     public static func saveMachineConfig(_ paths: [String], to file: URL) throws {
         try MachineConfigJSON.update(file: file) { root in
-            var secret = root["secret"] as? [String: Any] ?? [:]
-            secret["allow_paths"] = paths
-            root["secret"] = secret
+            var secret = root["secret"]?.asObject ?? [:]
+            secret["allow_paths"] = .array(paths.map(JSONValue.string))
+            root["secret"] = .object(secret)
         }
     }
 

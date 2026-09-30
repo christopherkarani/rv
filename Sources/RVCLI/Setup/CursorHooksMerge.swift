@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 
 /// Merge / inspect / uninstall for `$HOME/.cursor/hooks.json`.
 /// Occupancy of the setup slot is the exclusive `rv-guard.py`; this merge only
@@ -48,18 +49,18 @@ enum CursorHooksMerge {
         return path.hasPrefix("/") ? path : nil
     }
 
-    static func matchesCurrentHook(_ hook: [String: Any], adapterPath: String) -> Bool {
-        guard let command = hook["command"] as? String,
+    static func matchesCurrentHook(_ hook: JSONValue, adapterPath: String) -> Bool {
+        guard let command = hook["command"]?.string,
               command == hookCommand(adapterPath: adapterPath),
-              hook["timeout"] as? Int == timeout,
-              hook["failClosed"] as? Bool == true
+              hook["timeout"]?.int == timeout,
+              hook["failClosed"]?.bool == true
         else {
             return false
         }
         return true
     }
 
-    static func isFingerprintedHook(_ hook: [String: Any]) -> Bool {
+    static func isFingerprintedHook(_ hook: JSONValue) -> Bool {
         HostHooksMergeEngine.isFingerprintedHook(hook, descriptor: wiringDescriptor)
     }
 
@@ -73,8 +74,8 @@ enum CursorHooksMerge {
         )
     }
 
-    static func rvEntry(adapterPath: String) -> [String: Any] {
-        HostHooksMergeEngine.hookDictionary(hookEntry(adapterPath: adapterPath))
+    static func rvEntry(adapterPath: String) -> JSONValue {
+        HostHooksMergeEngine.hookValue(hookEntry(adapterPath: adapterPath))
     }
 
     /// Returns merged hooks bytes and whether content changed.
@@ -106,7 +107,7 @@ enum CursorHooksMerge {
         }
     }
 
-    static func hasFileToolEntry(in root: [String: Any]) -> Bool {
+    static func hasFileToolEntry(in root: [String: JSONValue]) -> Bool {
         HostHooksMergeEngine.locateFingerprintedHooks(in: root, descriptor: wiringDescriptor)
             .contains { $0.listKey == preToolUseKey }
     }

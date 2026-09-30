@@ -92,8 +92,8 @@ struct RuntimeResourceManifest: Sendable, Equatable {
             }
             let value: String
             if let field = item.field {
-                guard let json = try? JSONSerialization.jsonObject(with: secret) as? [String: Any],
-                    let raw = json[field] as? String
+                guard let json = try? JSONDecoder().decode(JSONValue.self, from: secret),
+                    let raw = json[field]?.string
                 else {
                     return .failure(.keychain(env: item.env))
                 }
