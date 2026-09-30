@@ -65,23 +65,24 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
         return extractCommand(from: object)
     }
 
-    private static func extractCommand(from object: [String: Any]) -> ExtractedShell? {
-        if let command = execCommand(in: object) {
+    private static func extractCommand(from value: JSONValue) -> ExtractedShell? {
+        if let command = execCommand(in: value) {
             return ExtractedShell(
                 command: command,
-                workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(object)
+                workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(value)
             )
         }
-        if let toolCall = object["toolCall"] as? [String: Any],
+        if let toolCall = value["toolCall"], toolCall.asObject != nil,
            let command = execCommand(in: toolCall) {
             return ExtractedShell(
                 command: command,
                 workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(toolCall)
-                    ?? ScanStoreWorkingDirectory.fromEnvelope(object)
+                    ?? ScanStoreWorkingDirectory.fromEnvelope(value)
             )
         }
-        if let message = object["message"] as? [String: Any],
-           let content = message["content"] as? [[String: Any]] {
+        if let message = value["message"], message.asObject != nil,
+           let content = message["content"]?.asArray,
+           content.allSatisfy({ $0.asObject != nil }) {
             for item in content {
                 if let extracted = extractCommand(from: item) {
                     return extracted
@@ -91,17 +92,17 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
         return nil
     }
 
-    private static func execCommand(in object: [String: Any]) -> String? {
-        let name = (object["name"] as? String) ?? (object["toolName"] as? String)
+    private static func execCommand(in value: JSONValue) -> String? {
+        let name = value["name"]?.string ?? value["toolName"]?.string
         guard name == "exec" else { return nil }
-        return commandText(in: object["arguments"])
-            ?? commandText(in: object["params"])
-            ?? commandText(in: object["input"])
+        return commandText(in: value["arguments"])
+            ?? commandText(in: value["params"])
+            ?? commandText(in: value["input"])
     }
 
-    private static func commandText(in value: Any?) -> String? {
-        guard let object = value as? [String: Any],
-              let command = object["command"] as? String,
+    private static func commandText(in value: JSONValue?) -> String? {
+        guard value?.asObject != nil,
+              let command = value?["command"]?.string,
               command.isEmpty == false
         else {
             return nil

@@ -45,23 +45,23 @@ enum ScanStoreWorkingDirectory {
     /// Hook-codec field names: `cwd`, `workdir`, `working_directory`.
     /// Nested command objects (`tool_input`, `params`, `args`, …) win over the
     /// envelope, matching Codex/Cursor/Hermes/OpenClaw `firstNonEmpty`.
-    static func fromEnvelope(_ object: [String: Any], depth: Int = 0) -> WorkingDirectory? {
+    static func fromEnvelope(_ value: JSONValue, depth: Int = 0) -> WorkingDirectory? {
         guard depth < 6 else { return nil }
         let nestedKeys = [
             "params", "args", "toolInput", "tool_input", "input",
             "arguments", "state", "payload", "function",
         ]
         for key in nestedKeys {
-            if let nested = object[key] as? [String: Any],
+            if let nested = value[key], nested.asObject != nil,
                let found = fromEnvelope(nested, depth: depth + 1)
             {
                 return found
             }
-            if let found = fromJSONString(object[key], depth: depth + 1) {
+            if let found = fromJSONString(value[key], depth: depth + 1) {
                 return found
             }
         }
-        return fromFields(object)
+        return fromFields(value)
     }
 
     /// `$HOME/.grok/sessions/<cwd>/<session-id>/chat_history.jsonl`.
@@ -80,17 +80,17 @@ enum ScanStoreWorkingDirectory {
         return parseableAbsolutePath(cwdParts)
     }
 
-    private static func fromFields(_ object: [String: Any]) -> WorkingDirectory? {
+    private static func fromFields(_ value: JSONValue) -> WorkingDirectory? {
         for key in ["cwd", "workdir", "workingDirectory", "working_directory"] {
-            if let raw = object[key] as? String, raw.isEmpty == false {
+            if let raw = value[key]?.string, raw.isEmpty == false {
                 return WorkingDirectory(validating: raw)
             }
         }
         return nil
     }
 
-    private static func fromJSONString(_ value: Any?, depth: Int) -> WorkingDirectory? {
-        guard let raw = value as? String, raw.isEmpty == false,
+    private static func fromJSONString(_ value: JSONValue?, depth: Int) -> WorkingDirectory? {
+        guard let raw = value?.string, raw.isEmpty == false,
               let object = JSONParse.object(raw)
         else {
             return nil

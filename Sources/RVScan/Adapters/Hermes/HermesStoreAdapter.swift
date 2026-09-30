@@ -56,55 +56,54 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
     }
 
     private static func extractCommands(from toolCallsJSON: String) -> [ExtractedShell] {
-        guard let object = JSONParse.value(toolCallsJSON) else {
+        guard let value = JSONParse.value(toolCallsJSON) else {
             return []
         }
-        if let list = object as? [[String: Any]] {
+        if let list = value.asArray, list.allSatisfy({ $0.asObject != nil }) {
             return list.compactMap(extractedShell(in:))
         }
-        if let object = object as? [String: Any],
-           let extracted = extractedShell(in: object) {
+        if let extracted = extractedShell(in: value) {
             return [extracted]
         }
         return []
     }
 
-    private static func extractedShell(in object: [String: Any]) -> ExtractedShell? {
-        guard let command = terminalCommand(in: object) else { return nil }
+    private static func extractedShell(in value: JSONValue) -> ExtractedShell? {
+        guard value.asObject != nil, let command = terminalCommand(in: value) else { return nil }
         return ExtractedShell(
             command: command,
-            workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(object)
+            workingDirectory: ScanStoreWorkingDirectory.fromEnvelope(value)
         )
     }
 
-    private static func terminalCommand(in object: [String: Any]) -> String? {
-        if isTerminal(object) {
-            return commandText(in: object["arguments"])
-                ?? commandText(in: object["params"])
-                ?? commandText(in: object["input"])
+    private static func terminalCommand(in value: JSONValue) -> String? {
+        if isTerminal(value) {
+            return commandText(in: value["arguments"])
+                ?? commandText(in: value["params"])
+                ?? commandText(in: value["input"])
         }
-        if let function = object["function"] as? [String: Any], isTerminal(function) {
+        if let function = value["function"], function.asObject != nil, isTerminal(function) {
             return commandText(in: function["arguments"])
                 ?? commandText(in: function["params"])
-                ?? commandText(in: object["arguments"])
+                ?? commandText(in: value["arguments"])
         }
         return nil
     }
 
-    private static func isTerminal(_ object: [String: Any]) -> Bool {
-        let name = (object["name"] as? String) ?? (object["toolName"] as? String)
+    private static func isTerminal(_ value: JSONValue) -> Bool {
+        let name = value["name"]?.string ?? value["toolName"]?.string
         return name == "terminal"
     }
 
-    private static func commandText(in value: Any?) -> String? {
-        if let object = value as? [String: Any],
-           let command = object["command"] as? String,
+    private static func commandText(in value: JSONValue?) -> String? {
+        if value?.asObject != nil,
+           let command = value?["command"]?.string,
            command.isEmpty == false {
             return command
         }
-        if let text = value as? String, text.isEmpty == false {
+        if let text = value?.string, text.isEmpty == false {
             guard let object = JSONParse.object(text),
-                  let command = object["command"] as? String,
+                  let command = object["command"]?.string,
                   command.isEmpty == false
             else {
                 return nil
