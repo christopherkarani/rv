@@ -33,11 +33,11 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
             let sessionID = ScanSQLiteEngine.textColumn(statement, index: 0)
             guard let dataText = ScanSQLiteEngine.textColumn(statement, index: 1),
                   let object = JSONParse.object(dataText),
-                  (object["type"] as? String) == "tool",
-                  (object["tool"] as? String) == "bash",
-                  let state = object["state"] as? [String: Any],
-                  let input = state["input"] as? [String: Any],
-                  let command = input["command"] as? String,
+                  object["type"]?.string == "tool",
+                  object["tool"]?.string == "bash",
+                  let state = object["state"], state.asObject != nil,
+                  let input = state["input"], input.asObject != nil,
+                  let command = input["command"]?.string,
                   command.isEmpty == false
             else {
                 return
@@ -57,17 +57,8 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
         return events
     }
 
-    private static func date(from value: Any?) -> Date? {
-        guard let time = value as? [String: Any] else { return nil }
-        let raw: Double?
-        if let number = time["start"] as? NSNumber {
-            raw = number.doubleValue
-        } else if let number = time["start"] as? Double {
-            raw = number
-        } else {
-            raw = nil
-        }
-        guard let raw else { return nil }
-        return ScanTimestamp.epoch(raw, requirePositive: false)
+    private static func date(from value: JSONValue?) -> Date? {
+        guard value?.asObject != nil else { return nil }
+        return ScanTimestamp.epochValue(value?["start"], requirePositive: false)
     }
 }

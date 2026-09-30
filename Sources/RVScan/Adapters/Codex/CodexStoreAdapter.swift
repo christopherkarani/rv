@@ -45,55 +45,55 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
         )
     }
 
-    private static func commands(in object: [String: Any]) -> [String] {
-        if let command = hookCommand(in: object) {
+    private static func commands(in value: JSONValue) -> [String] {
+        if let command = hookCommand(in: value) {
             return [command]
         }
-        if let payload = object["payload"] as? [String: Any] {
+        if let payload = value["payload"], payload.asObject != nil {
             return commands(in: payload)
         }
-        if let command = functionCallCommand(in: object) {
+        if let command = functionCallCommand(in: value) {
             return [command]
         }
         return []
     }
 
-    private static func hookCommand(in object: [String: Any]) -> String? {
-        let event = (object["hook_event_name"] as? String) ?? (object["hookEventName"] as? String)
+    private static func hookCommand(in value: JSONValue) -> String? {
+        let event = value["hook_event_name"]?.string ?? value["hookEventName"]?.string
         guard event == nil || event == "PreToolUse" else { return nil }
-        let name = (object["tool_name"] as? String) ?? (object["toolName"] as? String)
+        let name = value["tool_name"]?.string ?? value["toolName"]?.string
         guard let name, shellTools.contains(name) else { return nil }
-        return commandText(in: object["tool_input"] ?? object["toolInput"])
+        return commandText(in: value["tool_input"] ?? value["toolInput"])
     }
 
-    private static func functionCallCommand(in object: [String: Any]) -> String? {
-        let type = object["type"] as? String
+    private static func functionCallCommand(in value: JSONValue) -> String? {
+        let type = value["type"]?.string
         if type == "function_call" || type == "tool_use" {
-            let name = (object["name"] as? String) ?? (object["toolName"] as? String)
+            let name = value["name"]?.string ?? value["toolName"]?.string
             guard let name, shellTools.contains(name) else { return nil }
-            return commandText(in: object["arguments"] ?? object["input"] ?? object["tool_input"])
+            return commandText(in: value["arguments"] ?? value["input"] ?? value["tool_input"])
         }
         if type == "exec_command_begin" || type == "exec_command" {
-            return commandText(in: object["command"])
+            return commandText(in: value["command"])
         }
         return nil
     }
 
-    private static func commandText(in value: Any?) -> String? {
-        if let object = value as? [String: Any] {
-            if let command = object["command"] as? String, command.isEmpty == false {
+    private static func commandText(in value: JSONValue?) -> String? {
+        if value?.asObject != nil {
+            if let command = value?["command"]?.string, command.isEmpty == false {
                 return command
             }
-            if let parts = object["command"] as? [Any] {
-                return commandText(in: parts)
+            if let parts = value?["command"]?.asArray {
+                return commandText(in: .array(parts))
             }
             return nil
         }
-        if let parts = value as? [Any] {
-            let tokens = parts.compactMap { $0 as? String }.filter { $0.isEmpty == false }
+        if let parts = value?.asArray {
+            let tokens = parts.compactMap(\.string).filter { $0.isEmpty == false }
             return tokens.isEmpty ? nil : tokens.joined(separator: " ")
         }
-        if let text = value as? String, text.isEmpty == false {
+        if let text = value?.string, text.isEmpty == false {
             if let parsed = JSONParse.value(text) {
                 return commandText(in: parsed)
             }

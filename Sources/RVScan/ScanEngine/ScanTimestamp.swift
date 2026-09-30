@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 
 /// Timestamp coercions shared by the JSONL and SQLite extraction paths.
 ///
@@ -9,6 +10,8 @@ import Foundation
 ///   1000 (Codex, Pi, Hermes, OpenClaw, OpenCode).
 /// - Positivity guard (`raw > 0`) for Codex, Hermes, and OpenClaw only; Pi and
 ///   OpenCode date every number.
+/// - JSON booleans coerce as 1/0 (the old `as? NSNumber` bridge), so
+///   `true` dates to epoch+1s while `false` fails the positivity guard.
 enum ScanTimestamp {
     /// Parse an ISO-8601 datetime, fractional first, then plain.
     /// Empty and unparseable strings yield nil.
@@ -35,37 +38,25 @@ enum ScanTimestamp {
         return Date(timeIntervalSince1970: raw)
     }
 
-    /// Epoch coercion for a JSON number. Uses the adapters' historical
-    /// `as? NSNumber` bridge (Pi, OpenCode), so integers and JSON booleans
-    /// (true->1, false->0) convert while strings never do. Falls back to
-    /// native Swift scalars where the NSNumber bridge is unavailable.
-    static func epochValue(_ value: Any?, requirePositive: Bool = true) -> Date? {
-        if let number = value as? NSNumber {
-            return epoch(number.doubleValue, requirePositive: requirePositive)
-        }
-        if let raw = value as? Double {
+    /// Epoch coercion for a JSON value. Numbers convert (int-or-double both
+    /// arrive as `.number`); booleans map to 1/0 exactly as the old `NSNumber`
+    /// bridge did. Strings, nulls, objects, arrays, and nil never convert.
+    static func epochValue(_ value: JSONValue?, requirePositive: Bool = true) -> Date? {
+        switch value {
+        case .number(let raw):
             return epoch(raw, requirePositive: requirePositive)
+        case .bool(let flag):
+            return epoch(flag ? 1 : 0, requirePositive: requirePositive)
+        case .string, .object, .array, .null, nil:
+            return nil
         }
-        if let raw = value as? Bool {
-            return epoch(raw ? 1 : 0, requirePositive: requirePositive)
-        }
-        if let raw = value as? Int {
-            return epoch(Double(raw), requirePositive: requirePositive)
-        }
-        if let raw = value as? Int64 {
-            return epoch(Double(raw), requirePositive: requirePositive)
-        }
-        if let raw = value as? UInt64 {
-            return epoch(Double(raw), requirePositive: requirePositive)
-        }
-        return nil
     }
 
     /// Coerce one timestamp field: strings parse as ISO-8601, numbers as
     /// epoch when `allowEpoch`. A present-but-unparseable value yields nil and
     /// never falls through to another key.
-    static func coerce(_ value: Any?, allowEpoch: Bool, requirePositive: Bool = true) -> Date? {
-        if let raw = value as? String {
+    static func coerce(_ value: JSONValue?, allowEpoch: Bool, requirePositive: Bool = true) -> Date? {
+        if let raw = value?.string {
             return iso8601(raw)
         }
         guard allowEpoch else { return nil }
@@ -74,11 +65,11 @@ enum ScanTimestamp {
 
     /// First non-nil field value for `keys` in order. Matches the historical
     /// `object["timestamp"] ?? object["ts"]` selection: a present empty string
-    /// wins over a later key and then coerces to nil.
-    static func firstValue(keys: [String], in object: [String: Any]) -> Any? {
+    /// (or null) wins over a later key and then coerces to nil.
+    static func firstValue(keys: [String], in value: JSONValue) -> JSONValue? {
         for key in keys {
-            if let value = object[key] {
-                return value
+            if let found = value[key] {
+                return found
             }
         }
         return nil

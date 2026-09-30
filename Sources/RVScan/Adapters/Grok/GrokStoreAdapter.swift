@@ -32,13 +32,14 @@ public struct GrokStoreAdapter: SessionStoreAdapter {
         guard let lines = ScanJSONLEngine.textLines(in: data) else { return [] }
         for line in lines {
             guard let object = ScanJSONLEngine.parseObject(line),
-                  (object["type"] as? String) == "assistant",
-                  let toolCalls = object["tool_calls"] as? [[String: Any]]
+                  object["type"]?.string == "assistant",
+                  let toolCalls = object["tool_calls"]?.asArray,
+                  toolCalls.allSatisfy({ $0.asObject != nil })
             else {
                 continue
             }
             for call in toolCalls {
-                guard let name = call["name"] as? String,
+                guard let name = call["name"]?.string,
                       Self.shellTools.contains(name),
                       let command = Self.command(fromArguments: call["arguments"]),
                       command.isEmpty == false
@@ -60,15 +61,15 @@ public struct GrokStoreAdapter: SessionStoreAdapter {
         return events
     }
 
-    private static func command(fromArguments value: Any?) -> String? {
-        if let object = value as? [String: Any] {
-            return object["command"] as? String
+    private static func command(fromArguments value: JSONValue?) -> String? {
+        if value?.asObject != nil {
+            return value?["command"]?.string
         }
-        guard let raw = value as? String,
+        guard let raw = value?.string,
               let object = JSONParse.object(raw)
         else {
             return nil
         }
-        return object["command"] as? String
+        return object["command"]?.string
     }
 }
