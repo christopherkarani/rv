@@ -58,7 +58,11 @@ struct ProposedActionFileTests {
                 ),
                 file: file,
                 effects: ActionEffects(),
-                resources: ActionResources(path: secretPath),
+                resources: .filesystem(
+                    path: secretPath,
+                    scope: .unknown,
+                    kind: .unknown
+                ),
                 scope: ActionScope()
             )
         )
@@ -68,10 +72,21 @@ struct ProposedActionFileTests {
             return
         }
         #expect(cleaned.file.path.rawValue.contains("ghp_exampletoken") == false)
-        #expect(cleaned.resources.path?.contains("ghp_exampletoken") == false)
+        if case .filesystem(let path, _, _) = cleaned.resources {
+            #expect(path.contains("ghp_exampletoken") == false)
+        } else {
+            Issue.record("expected filesystem resources after sanitize")
+        }
         #expect(cleaned.fingerprint.rawValue.contains("ghp_exampletoken") == false)
         #expect(cleaned.file.path.rawValue.contains(ReviewSanitizer.redactedPlaceholder))
-        #expect(cleaned.resources.path == ReviewSanitizer.redactedPlaceholder)
+        #expect(
+            cleaned.resources
+                == .filesystem(
+                    path: ReviewSanitizer.redactedPlaceholder,
+                    scope: .unknown,
+                    kind: .unknown
+                )
+        )
         #expect(sanitized.supportingCommand == nil)
     }
 
@@ -84,7 +99,11 @@ struct ProposedActionFileTests {
                     path: FileToolPath(rawValue: "/tmp/notes.md")
                 ),
                 effects: ActionEffects(),
-                resources: ActionResources(path: "/tmp/notes.md"),
+                resources: .filesystem(
+                    path: "/tmp/notes.md",
+                    scope: .unknown,
+                    kind: .unknown
+                ),
                 scope: ActionScope()
             )
         )
@@ -117,7 +136,11 @@ struct ProposedActionFileTests {
                     path: FileToolPath(rawValue: "/tmp/a.md")
                 ),
                 effects: ActionEffects(),
-                resources: ActionResources(path: "/tmp/a.md"),
+                resources: .filesystem(
+                    path: "/tmp/a.md",
+                    scope: .unknown,
+                    kind: .unknown
+                ),
                 scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws"))
             )
         )
@@ -129,7 +152,10 @@ struct ProposedActionFileTests {
             return
         }
         #expect(fileAction.file.kind == .edit)
-        #expect(fileAction.resources.path == "/tmp/a.md")
+        #expect(
+            fileAction.resources
+                == .filesystem(path: "/tmp/a.md", scope: .unknown, kind: .unknown)
+        )
         #expect(decoded.supportingCommand == nil)
 
         let json = """

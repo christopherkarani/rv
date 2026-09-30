@@ -394,7 +394,13 @@ public enum ActionPolicyEngine: Sendable {
 
     private static func filesystemHit(_ shell: ShellAction) -> CoreHit {
         let kinds = shell.effects.kinds
-        let scope = shell.resources.filesystemScope
+        let scope: FilesystemScope?
+        switch shell.resources {
+        case .filesystem(_, let extracted, _):
+            scope = extracted
+        case .git, .none:
+            scope = nil
+        }
         if kinds.contains(.unresolvedFilesystem) || scope == .unknown || scope == nil {
             return CoreHit(
                 decision: .hardDeny(Builtin.unresolvedFilesystem),

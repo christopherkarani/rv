@@ -3,9 +3,9 @@
 /// Kept (not removed) because consumers outside the T2 write set construct
 /// and read the old 5-optional shape: `ReviewSanitizer`, `HTTPCanonical`,
 /// `AgentNormalization`, `RuntimeAdmissionNormalize`, `HostCodec`,
-/// `RulePinning`, `ReviewPromptBuilder`, and their tests. New code uses
-/// `ResourceScope` directly; the compatibility init and accessors below
-/// preserve the old call sites with identical behavior.
+/// `RulePinning`, `ReviewPromptBuilder`, `PendingIPC`, and their tests.
+/// New code uses `ResourceScope` directly; the compatibility init and
+/// accessors below preserve the old call sites with identical behavior.
 public typealias ActionResources = ResourceScope
 
 /// A git branch name. Distinct from a refspec or tag so the two cannot be
@@ -92,6 +92,10 @@ public enum ResourceScope: Sendable, Equatable, Codable {
         case resourceKind
     }
 
+    /// Decode precedence: `refspec` / `tagName` (emitted only by new
+    /// code, never co-emitted) win over legacy `branchName`, which wins
+    /// over filesystem keys, matching the compatibility init's
+    /// branch-wins rule for mixed legacy bags.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let remote = try container.decodeIfPresent(String.self, forKey: .remoteName)

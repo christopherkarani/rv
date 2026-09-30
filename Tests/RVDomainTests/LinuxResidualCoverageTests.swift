@@ -339,7 +339,14 @@ struct LinuxResidualCoverageTests {
         )
         #expect(action.gitAction == nil)
         #expect(action.effects.kinds.contains(.filesystemRead))
-        #expect(action.resources.filesystemScope == .insideRepository)
+        #expect(
+            action.resources
+                == .filesystem(
+                    path: "/repo/a",
+                    scope: .insideRepository,
+                    kind: .sourceCode
+                )
+        )
         guard case .shell(let shell) = action else {
             Issue.record("expected shell pending action")
             return
