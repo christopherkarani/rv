@@ -33,7 +33,10 @@ enum ActionReviewerFixtures {
                 EffectShell(
                     fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:origin:main"),
                     effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                    resources: ActionResources(remoteName: "origin", branchName: "main"),
+                    resources: .git(
+                        remote: RemoteName("origin"),
+                        ref: .branch(BranchName("main"))
+                    ),
                     scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
                     supportingCommand: ShellCommand(rawValue: supportingCommand)
                 )

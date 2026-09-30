@@ -88,18 +88,30 @@ public enum GitAction: Sendable, Equatable, Codable {
         ActionEffects(kinds: effectKinds)
     }
 
-    public var resources: ActionResources {
+    public var resources: ResourceScope {
         switch self {
         case .createBranch(let name, _, _), .switchBranch(let name, _):
-            return ActionResources(branchName: name)
+            return .git(remote: nil, ref: .branch(BranchName(name)))
         case .push(let remote, let refspec, _), .deleteRemoteRef(let remote, let refspec):
-            return ActionResources(remoteName: remote, branchName: refspec)
+            // A push payload is always a refspec, even when it spells a plain
+            // branch name — it is never observable as BranchName. A push with
+            // neither remote nor refspec is the empty scope, as before T2.
+            if remote == nil, refspec == nil {
+                return .none
+            }
+            return .git(
+                remote: remote.map(RemoteName.init(rawValue:)),
+                ref: refspec.map { .refspec($0) }
+            )
         case .deleteBranch(let name, _):
-            return ActionResources(branchName: name)
+            return .git(remote: nil, ref: .branch(BranchName(name)))
         case .deleteTag(let name, let remote):
-            return ActionResources(remoteName: remote, branchName: name)
+            return .git(
+                remote: remote.map(RemoteName.init(rawValue:)),
+                ref: .tag(TagName(name))
+            )
         case .discardWorktree, .restore, .reset, .clean, .stash, .rebase:
-            return ActionResources()
+            return .none
         }
     }
 
@@ -187,7 +199,7 @@ public enum GitAction: Sendable, Equatable, Codable {
     }
 
     public var explainRemote: String? {
-        resources.remoteName
+        resources.gitRemote?.rawValue
     }
 
     public var explainRef: String? {

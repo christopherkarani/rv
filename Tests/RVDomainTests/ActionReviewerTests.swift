@@ -16,8 +16,10 @@ struct ActionReviewerTests {
             return
         }
         #expect(shell.effects.kinds == [.remoteSharedBranchMutation])
-        #expect(shell.resources.remoteName == "origin")
-        #expect(shell.resources.branchName == "main")
+        #expect(
+            shell.resources
+                == .git(remote: RemoteName("origin"), ref: .branch(BranchName("main")))
+        )
         #expect(shell.scope.workingDirectory?.rawValue == "/tmp/rv")
         #expect(request.action.fingerprint.rawValue == "shell:git.force-push:origin:main")
         #expect(request.context.repository.isSharedBranch)
@@ -65,7 +67,10 @@ struct ActionReviewerTests {
                         rawValue: "shell:git.push https://ghp_exampletoken@github.com/org/repo.git"
                     ),
                     effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                    resources: ActionResources(remoteName: "origin", branchName: "main"),
+                    resources: .git(
+                        remote: RemoteName("origin"),
+                        ref: .branch(BranchName("main"))
+                    ),
                     scope: ActionScope(
                         workingDirectory: WorkingDirectory(validating: "/tmp/ghp_exampletoken")
                     ),
@@ -468,7 +473,11 @@ struct ActionReviewerTests {
                     path: FileToolPath(rawValue: "/tmp/ghp_exampletoken/.env")
                 ),
                 effects: ActionEffects(),
-                resources: ActionResources(path: "/tmp/ghp_exampletoken/.env"),
+                resources: .filesystem(
+                    path: "/tmp/ghp_exampletoken/.env",
+                    scope: .unknown,
+                    kind: .unknown
+                ),
                 scope: ActionScope(
                     workingDirectory: WorkingDirectory(validating: "/tmp/ghp_exampletoken")
                 )

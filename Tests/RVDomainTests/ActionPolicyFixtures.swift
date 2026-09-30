@@ -31,7 +31,10 @@ enum ActionPolicyFixtures {
                 EffectShell(
                     fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:origin:\(branchName)"),
                     effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                    resources: ActionResources(remoteName: "origin", branchName: branchName),
+                    resources: .git(
+                        remote: RemoteName("origin"),
+                        ref: .branch(BranchName(branchName))
+                    ),
                     scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
                     supportingCommand: ShellCommand(rawValue: "git push --force origin \(branchName)")
                 )
@@ -45,7 +48,7 @@ enum ActionPolicyFixtures {
                 EffectShell(
                     fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:implicit"),
                     effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                    resources: ActionResources(remoteName: "origin"),
+                    resources: .git(remote: RemoteName("origin"), ref: nil),
                     scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
                     supportingCommand: ShellCommand(rawValue: "git push --force-with-lease")
                 )
@@ -63,7 +66,9 @@ enum ActionPolicyFixtures {
                 EffectShell(
                     fingerprint: ActionFingerprint(rawValue: "shell:git.checkout"),
                     effects: ActionEffects(kinds: effects),
-                    resources: ActionResources(branchName: branchName),
+                    resources: branchName.map { name in
+                        ResourceScope.git(remote: nil, ref: .branch(BranchName(name)))
+                    } ?? .none,
                     scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
                     supportingCommand: ShellCommand(rawValue: supportingCommand)
                 )
@@ -81,11 +86,7 @@ enum ActionPolicyFixtures {
                 EffectShell(
                     fingerprint: ActionFingerprint(rawValue: "shell:fs.delete"),
                     effects: ActionEffects(kinds: effects),
-                    resources: ActionResources(
-                        path: path,
-                        filesystemScope: scope,
-                        resourceKind: .unknown
-                    ),
+                    resources: .filesystem(path: path, scope: scope, kind: .unknown),
                     scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
                     supportingCommand: ShellCommand(rawValue: "rm link")
                 )

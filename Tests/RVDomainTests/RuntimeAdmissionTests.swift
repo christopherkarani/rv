@@ -253,7 +253,7 @@ private struct AdmissionFixture {
                 EffectShell(
                     fingerprint: ActionFingerprint(rawValue: "runtime:uncovered"),
                     effects: ActionEffects(),
-                    resources: ActionResources(),
+                    resources: .none,
                     scope: ActionScope(workingDirectory: workspace),
                     supportingCommand: ShellCommand(rawValue: "echo hello")
                 )

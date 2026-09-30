@@ -75,7 +75,7 @@ extension SemanticAction {
         }
     }
 
-    public var resources: ActionResources {
+    public var resources: ResourceScope {
         switch self {
         case .git(let action):
             return action.resources
@@ -94,6 +94,12 @@ enum GitSharedBranch {
         guard let name else { return false }
         return names.contains(name)
     }
+
+    /// Shared-branch match over a branch name. A `.refspec` does not
+    /// typecheck here — callers switch on `GitRef` first.
+    static func contains(_ branch: BranchName?) -> Bool {
+        contains(branch?.rawValue)
+    }
 }
 
 /// Caller-supplied repository facts. Analyzers do not read disk.
@@ -106,7 +112,7 @@ public struct GitAnalysisContext: Sendable, Equatable {
 
     /// True iff `currentBranch` is `main` or `master`.
     public var isSharedBranch: Bool {
-        GitSharedBranch.contains(currentBranch)
+        GitSharedBranch.contains(currentBranch.map(BranchName.init(rawValue:)))
     }
 
     public init(
