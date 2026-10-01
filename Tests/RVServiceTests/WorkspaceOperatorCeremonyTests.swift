@@ -320,6 +320,36 @@ struct WorkspaceOperatorCeremonyTests {
         #expect(items.items[0].status == "awaitingAuthentication")
     }
 
+    @Test func rebindFromOwnerResumesSameChallenge() async throws {
+        let fixture = try await makeFixture()
+        let id = try await pendingOperation(fixture)
+        let ui = AuthenticatedOperatorUIConnectionID()
+        let (first, _) = try await fixture.ceremonies.bindReview(
+            operationID: id, uiConnection: ui)
+        let (second, item) = try await fixture.ceremonies.bindReview(
+            operationID: id, uiConnection: ui)
+        #expect(second.challengeID == first.challengeID)
+        #expect(item.operationID == id)
+        // The resumed challenge still completes.
+        let status = try await fixture.ceremonies.completeCeremony(
+            UIOperatorCompletion(
+                challengeID: second.challengeID, operationID: id,
+                outcome: .authenticated),
+            uiConnection: ui)
+        #expect(status == "authorized")
+    }
+
+    @Test func rebindFromForeignConnectionRefused() async throws {
+        let fixture = try await makeFixture()
+        let id = try await pendingOperation(fixture)
+        _ = try await fixture.ceremonies.bindReview(
+            operationID: id, uiConnection: AuthenticatedOperatorUIConnectionID())
+        await #expect(throws: WorkspaceOperatorCeremonyError.notReviewable) {
+            try await fixture.ceremonies.bindReview(
+                operationID: id, uiConnection: AuthenticatedOperatorUIConnectionID())
+        }
+    }
+
     @Test func bindUnknownOperationRejected() async throws {
         let fixture = try await makeFixture()
         await #expect(throws: WorkspaceOperatorCeremonyError.unknownOperation) {

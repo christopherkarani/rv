@@ -86,7 +86,7 @@ public final class OperatorReviewModel {
     /// Selects an operation and binds its review challenge. Binding is
     /// server-idempotent: re-selecting returns the same live challenge.
     public func select(_ id: UUID?) async {
-        guard id != selectedID else { return }
+        guard id != selectedID, !authenticating else { return }
         clearSelection()
         guard let id, connection == .connected else { return }
         selectedID = id

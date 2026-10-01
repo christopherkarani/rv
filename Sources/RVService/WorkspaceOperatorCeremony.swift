@@ -181,7 +181,8 @@ actor WorkspaceOperatorCeremonyService {
     func listReviewItems() async -> UIReviewListDTO {
         await prune()
         var items: [UIReviewItemDTO] = []
-        for (id, retained) in reviews {
+        // Snapshot: pruning below mutates the table during the walk.
+        for (id, retained) in Array(reviews) {
             guard let status = try? await authorizer.status(of: id) else {
                 reviews.removeValue(forKey: id)
                 continue
@@ -199,7 +200,14 @@ actor WorkspaceOperatorCeremonyService {
 
     /// Binds one review to one authenticated UI connection: issues the Step 3
     /// challenge and returns it with the review item. The issued challenge is
-    /// retained for completion validation.
+    /// retained for completion validation. Re-binding from the owning
+    /// connection resumes the live retained challenge instead of issuing:
+    /// Step 3 issues only from pending, so without resumption navigating away
+    /// from a bound review would brick it. Resumption is sound: the retained
+    /// challenge is Step 3's own issuance to this connection, Step 3 still
+    /// reports it live, and no Step 3 path re-issues over a live challenge —
+    /// while any expiry, revocation, or completion race still fails closed at
+    /// completion time.
     func bindReview(
         operationID: UUID,
         uiConnection: AuthenticatedOperatorUIConnectionID
@@ -208,10 +216,21 @@ actor WorkspaceOperatorCeremonyService {
         guard var retained = reviews[id] else {
             throw WorkspaceOperatorCeremonyError.unknownOperation
         }
+        if let live = retained.challenge,
+            live.uiConnection == uiConnection,
+            (try? await authorizer.status(of: id)) == .awaitingAuthentication {
+            emit(.reviewBound, operationID: operationID,
+                description: retained.description, outcome: "challenge resumed")
+            return (challengeDTO(live), reviewItem(
+                id: id, status: .awaitingAuthentication, retained: retained))
+        }
         let challenge: OperatorAuthorizationChallenge
         do {
             challenge = try await authorizer.issueChallenge(
                 operationID: id, uiConnection: uiConnection)
+        } catch WorkspaceOperatorAuthorizationError.unknownOperation {
+            reviews.removeValue(forKey: id)
+            throw WorkspaceOperatorCeremonyError.unknownOperation
         } catch {
             throw WorkspaceOperatorCeremonyError.notReviewable
         }
