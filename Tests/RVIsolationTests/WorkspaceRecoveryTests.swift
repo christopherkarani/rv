@@ -891,4 +891,131 @@ private func recoveryFrame(
         action: .shell(ShellCommand(rawValue: command))
     )
 }
+
+@Suite("Workspace lifecycle compaction", .serialized)
+struct WorkspaceLifecycleCompactionTests {
+    @Test func compactDropsClosedWorkspacesAndKeepsOpenBytes() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        let path = tree.workspaceURL.path
+        let closedID = UUID()
+        let openID = UUID()
+        for (index, kind) in [WorkspaceLifecycleRecord.Kind.created, .runtimeStarted, .runtimeEnded, .closed].enumerated() {
+            #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: kind, id: closedID, path: path, at: TimeInterval(index)), to: logs.life)))
+        }
+        for (index, kind) in [WorkspaceLifecycleRecord.Kind.created, .runtimeStarted].enumerated() {
+            #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: kind, id: openID, path: path, at: TimeInterval(10 + index)), to: logs.life)))
+        }
+        let before = try String(contentsOf: logs.life, encoding: .utf8)
+        let openLines = before.split(separator: "\n").filter { $0.contains(openID.uuidString) }
+        #expect(openLines.count == 2)
+        let outcome = WorkspaceLifecycleLog.compactIfNeeded(at: logs.life, thresholdBytes: 1)
+        #expect(outcome == .compacted(dropped: 4, kept: 2))
+        let after = try String(contentsOf: logs.life, encoding: .utf8)
+        #expect(after == openLines.joined(separator: "\n") + "\n")
+        let records = WorkspaceLifecycleLog.records(at: logs.life)
+        #expect(records.count == 2)
+        #expect(records.allSatisfy { $0.workspace == openID })
+        // Appends after the rename land on the compacted file.
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .closed, id: openID, path: path, at: 20), to: logs.life)))
+        #expect(WorkspaceLifecycleLog.records(at: logs.life).count == 3)
+    }
+
+    @Test func compactRefusesTornTail() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .created, id: UUID(), path: tree.workspaceURL.path, at: 10), to: logs.life)))
+        try appendRaw("{\"torn\"", to: logs.life)
+        let before = try Data(contentsOf: logs.life)
+        #expect(WorkspaceLifecycleLog.compactIfNeeded(at: logs.life, thresholdBytes: 1) == .refusedTorn)
+        #expect(try Data(contentsOf: logs.life) == before)
+    }
+
+    @Test func compactRefusesInteriorCorruption() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        try Data("not json\n".utf8).write(to: logs.life)
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .created, id: UUID(), path: tree.workspaceURL.path, at: 10), to: logs.life)))
+        let before = try Data(contentsOf: logs.life)
+        #expect(WorkspaceLifecycleLog.compactIfNeeded(at: logs.life, thresholdBytes: 1) == .refusedCorrupt)
+        #expect(try Data(contentsOf: logs.life) == before)
+    }
+
+    @Test func compactSkipsSmallFile() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        let id = UUID()
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .created, id: id, path: tree.workspaceURL.path, at: 10), to: logs.life)))
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .closed, id: id, path: tree.workspaceURL.path, at: 11), to: logs.life)))
+        let before = try Data(contentsOf: logs.life)
+        #expect(WorkspaceLifecycleLog.compactIfNeeded(at: logs.life) == .skippedSmall)
+        #expect(try Data(contentsOf: logs.life) == before)
+    }
+
+    @Test func compactSkipsWhenNothingDead() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .created, id: UUID(), path: tree.workspaceURL.path, at: 10), to: logs.life)))
+        let before = try Data(contentsOf: logs.life)
+        #expect(WorkspaceLifecycleLog.compactIfNeeded(at: logs.life, thresholdBytes: 1) == .skippedNothingDead)
+        #expect(try Data(contentsOf: logs.life) == before)
+    }
+
+    @Test func assessParityAcrossCompaction() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        let path = tree.workspaceURL.path
+        let other = tree.rootURL.appendingPathComponent("other").path
+        let closedID = UUID()
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .created, id: closedID, path: other, at: 10), to: logs.life)))
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .closed, id: closedID, path: other, at: 11), to: logs.life)))
+        let openID = UUID()
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .created, id: openID, path: path, at: 12), to: logs.life)))
+        let directory = try workspace(tree)
+        let beforeAssess = WorkspaceRecovery.assess(directory, lifecycleLog: logs.life, runtimeLog: logs.runtime)
+        #expect(beforeAssess != .clean)
+        let beforeCreated = WorkspaceLifecycleLog.records(at: logs.life).last {
+            $0.workspace == openID && $0.kind == .created
+        }
+        #expect(beforeCreated != nil)
+        #expect(WorkspaceLifecycleLog.compactIfNeeded(at: logs.life, thresholdBytes: 1) == .compacted(dropped: 2, kept: 1))
+        #expect(WorkspaceRecovery.assess(directory, lifecycleLog: logs.life, runtimeLog: logs.runtime) == beforeAssess)
+        #expect(
+            WorkspaceLifecycleLog.records(at: logs.life).last {
+                $0.workspace == openID && $0.kind == .created
+            } == beforeCreated
+        )
+    }
+
+    @Test func closeCompactsOverThresholdLog() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        let template = UUID()
+        let fuel = tree.rootURL.appendingPathComponent("fuel").path
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .created, id: template, path: fuel, at: 10), to: logs.life)))
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .closed, id: template, path: fuel, at: 11), to: logs.life)))
+        let templateLines = try String(contentsOf: logs.life, encoding: .utf8).split(separator: "\n")
+        #expect(templateLines.count == 2)
+        for _ in 0..<2500 {
+            let fresh = UUID().uuidString
+            for line in templateLines {
+                try appendRaw(line.replacingOccurrences(of: template.uuidString, with: fresh) + "\n", to: logs.life)
+            }
+        }
+        let beforeSize = try FileManager.default.attributesOfItem(atPath: logs.life.path)[.size] as? NSNumber
+        #expect((beforeSize?.intValue ?? 0) > WorkspaceLifecycleLog.compactThresholdBytes)
+        let opened = try openWorkspace(tree, logs: logs)
+        #expect(succeeded(opened.supervisor.close()))
+        let afterSize = try FileManager.default.attributesOfItem(atPath: logs.life.path)[.size] as? NSNumber
+        #expect((afterSize?.intValue ?? Int.max) < 100_000)
+        #expect(WorkspaceRecovery.assess(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime) == .clean)
+    }
+}
 #endif
