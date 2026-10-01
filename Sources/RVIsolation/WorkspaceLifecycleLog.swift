@@ -148,8 +148,8 @@ enum WorkspaceLifecycleCompactResult: Equatable, Sendable {
     case skippedSmall
     /// Above the threshold but no closed workspace to drop; untouched.
     case skippedNothingDead
-    /// Lock, read, or rewrite failed; file may be untouched or, on rewrite
-    /// failure, left as it was (rename never ran).
+    /// Lock, read, or rewrite failed; the file is untouched (on rewrite
+    /// failure the rename never ran).
     case refusedUnreadable
     /// Trailing partial line; untouched.
     case refusedTorn
@@ -246,12 +246,20 @@ enum WorkspaceLifecycleLog {
         return .decoded(decode(text))
     }
 
-    private static func decode(_ text: String) -> WorkspaceLogRead {
+    /// Splits a log body into lines, dropping the empty element a trailing
+    /// newline produces. Shared by `decode` and compaction so the
+    /// torn-vs-corrupt boundary cannot drift between readers and rewriters.
+    private static func splitLines(_ text: String) -> (lines: [String], endsWithNewline: Bool) {
         let endsWithNewline = text.hasSuffix("\n")
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         if endsWithNewline, lines.last?.isEmpty == true {
             lines.removeLast()
         }
+        return (lines, endsWithNewline)
+    }
+
+    private static func decode(_ text: String) -> WorkspaceLogRead {
+        let (lines, _) = splitLines(text)
         let decoder = JSONDecoder()
         var records: [WorkspaceLifecycleRecord] = []
         var tornTrailing = false
@@ -276,10 +284,11 @@ enum WorkspaceLifecycleLog {
         )
     }
 
-    /// Outcome of opportunistic lifecycle-log compaction.
+    /// Compaction runs only when the log exceeds this size.
     static let compactThresholdBytes = 1_048_576
 
-    /// Drops lines of closed workspaces when the log exceeds `thresholdBytes`.
+    /// Drops lines of workspaces recovery classifies as closed when the log
+    /// exceeds `thresholdBytes`.
     ///
     /// Recovery filters to open workspaces before every decision, so removing
     /// closed workspaces' lines changes no assessment. Kept lines are
@@ -307,6 +316,30 @@ enum WorkspaceLifecycleLog {
         return outcome
     }
 
+    /// Per-workspace accumulation for the compaction drop predicate.
+    /// Mirrors the inputs to `WorkspaceRecovery.reconstruction()`'s final
+    /// guard, which that function applies after its phase walk.
+    private struct DropTally {
+        var closed = false
+        var created = 0
+        var paths: Set<String> = []
+        var hasOriginal = false
+        var hasProtected = false
+
+        /// True only when recovery classifies this workspace as closed.
+        /// Recovery treats a `.closed`-bearing workspace as `.corrupt`
+        /// (open) when it has zero or two `.created` lines, split paths, or
+        /// empty paths, so dropping on `.closed` alone would flip blocked
+        /// assessments to clean. Workspaces carrying only
+        /// `.recoveryCompleted` also reconstruct as closed, but a later
+        /// `.closed` line for the same id is still possible, so keeping them
+        /// is the conservative direction. `reconstruction()` is macOS-only;
+        /// keep this predicate aligned with it.
+        var droppable: Bool {
+            closed && created == 1 && paths.count <= 1 && hasOriginal && hasProtected
+        }
+    }
+
     private static func compactLocked(at url: URL) -> WorkspaceLifecycleCompactResult {
         guard let data = try? Data(contentsOf: url) else {
             return .refusedUnreadable
@@ -317,11 +350,7 @@ enum WorkspaceLifecycleLog {
         guard let text = String(data: data, encoding: .utf8) else {
             return .refusedCorrupt
         }
-        let endsWithNewline = text.hasSuffix("\n")
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        if endsWithNewline, lines.last?.isEmpty == true {
-            lines.removeLast()
-        }
+        let (lines, endsWithNewline) = splitLines(text)
         let decoder = JSONDecoder()
         var records: [WorkspaceLifecycleRecord?] = []
         records.reserveCapacity(lines.count)
@@ -336,10 +365,25 @@ enum WorkspaceLifecycleLog {
             }
             records.append(record)
         }
-        var closedIDs = Set<UUID>()
-        for record in records.compactMap({ $0 }) where record.kind == .closed {
-            closedIDs.insert(record.workspace)
+        var tallies: [UUID: DropTally] = [:]
+        for record in records.compactMap({ $0 }) {
+            var tally = tallies[record.workspace, default: DropTally()]
+            if record.kind == .closed {
+                tally.closed = true
+            }
+            if record.kind == .created {
+                tally.created += 1
+            }
+            if record.originalPath.isEmpty == false {
+                tally.paths.insert(record.originalPath)
+                tally.hasOriginal = true
+            }
+            if record.protectedPath.isEmpty == false {
+                tally.hasProtected = true
+            }
+            tallies[record.workspace] = tally
         }
+        let closedIDs = Set(tallies.compactMap { id, tally in tally.droppable ? id : nil })
         if closedIDs.isEmpty {
             return .skippedNothingDead
         }
@@ -381,16 +425,26 @@ enum WorkspaceLifecycleLog {
         var offset = 0
         let bytes = [UInt8](data)
         var wrote = true
+        var interrupts = 0
         while offset < bytes.count {
+            var writeError: Int32 = 0
             let count = bytes.withUnsafeBytes { buffer -> Int in
                 guard let base = buffer.baseAddress else { return -1 }
-                return write(fd, base.advanced(by: offset), bytes.count - offset)
+                let written = write(fd, base.advanced(by: offset), bytes.count - offset)
+                if written < 0 {
+                    writeError = errno
+                }
+                return written
             }
             if count > 0 {
                 offset += count
+                interrupts = 0
                 continue
             }
-            if count < 0, errno == EINTR { continue }
+            if count < 0, writeError == EINTR, interrupts < 16 {
+                interrupts += 1
+                continue
+            }
             wrote = false
             break
         }
