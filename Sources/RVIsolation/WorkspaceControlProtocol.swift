@@ -62,6 +62,8 @@ public enum WorkspaceControlOp: String, Sendable, Equatable {
     case describeWorkspace
     case listRuntimes
     case launchRuntime
+    case launchAgentRuntime
+    case launchCustomRuntime
     case ensureTerminalRuntime
     case cancelRuntime
     case closeWorkspace
@@ -85,6 +87,7 @@ public enum WorkspaceControlOp: String, Sendable, Equatable {
 
 enum WorkspaceControlFeature {
     static let ensureTerminalRuntime = "ensureTerminalRuntime"
+    static let identityAgentLaunchV1 = "identityAgentLaunchV1"
     /// Resize requests are accepted only from the connection holding input.
     static let resizeLeaseAuthority = "resizeLeaseAuthority"
     static let runtimeResourceProfilesV1 = "runtimeResourceProfilesV1"
@@ -156,6 +159,8 @@ struct WorkspaceControlMessage: Sendable, Equatable {
     var executable: String?
     var arguments: [String]?
     var resourceProfileID: String?
+    var agentDefinitionID: String?
+    var customDefinitionDigest: String?
     var runtime: UUID?
     var hook: String?
     var ok: Bool?
@@ -245,7 +250,7 @@ func workspaceLaunchIO(
 enum WorkspaceControlCodec {
     private static let rootKeys: Set<String> = [
         "v", "id", "op", "token", "executable", "arguments", "runtime", "hook",
-        "resourceProfileID", "ok", "error", "detail", "workspace", "host", "phase", "project", "runtimes",
+        "resourceProfileID", "agentDefinitionID", "customDefinitionDigest", "ok", "error", "detail", "workspace", "host", "phase", "project", "runtimes",
         "attached", "running", "io", "rows", "cols", "sequence", "batch",
         "truncated", "replayLength", "bytes", "exit",
         "terminal", "input", "created", "features",
@@ -285,6 +290,8 @@ enum WorkspaceControlCodec {
         guard fits(envelope.op, WorkspaceControlLimits.maxOperationBytes),
             fits(envelope.executable, WorkspaceControlLimits.maxExecutableBytes),
             resourceProfileIDFits(envelope.resourceProfileID),
+            agentDefinitionIDFits(envelope.agentDefinitionID),
+            customDefinitionDigestFits(envelope.customDefinitionDigest),
             fits(envelope.hook, WorkspaceControlLimits.maxHookBytes),
             fits(envelope.error, WorkspaceControlLimits.maxErrorBytes),
             fits(envelope.detail, WorkspaceControlLimits.maxDetailBytes),
@@ -307,7 +314,9 @@ enum WorkspaceControlCodec {
 
     static func encode(_ message: WorkspaceControlMessage) -> Data? {
         guard argumentsFit(message.arguments),
-            resourceProfileIDFits(message.resourceProfileID)
+            resourceProfileIDFits(message.resourceProfileID),
+            agentDefinitionIDFits(message.agentDefinitionID),
+            customDefinitionDigestFits(message.customDefinitionDigest)
         else { return nil }
         let envelope = Envelope(message)
         let encoder = JSONEncoder()
@@ -349,6 +358,18 @@ enum WorkspaceControlCodec {
         guard values.count <= WorkspaceControlLimits.maxArguments else { return false }
         return values.allSatisfy {
             $0.utf8.count <= WorkspaceControlLimits.maxArgumentBytes && $0.contains("\0") == false
+        }
+    }
+
+    static func agentDefinitionIDFits(_ id: String?) -> Bool {
+        guard let id else { return true }
+        return AgentDefinitionID(validating: id) != nil
+    }
+
+    static func customDefinitionDigestFits(_ digest: String?) -> Bool {
+        guard let digest else { return true }
+        return digest.utf8.count == 64 && digest.utf8.allSatisfy {
+            (48...57).contains($0) || (97...102).contains($0)
         }
     }
 
@@ -433,6 +454,8 @@ private struct Envelope: Codable {
     var executable: String?
     var arguments: [String]?
     var resourceProfileID: String?
+    var agentDefinitionID: String?
+    var customDefinitionDigest: String?
     var runtime: UUID?
     var hook: String?
     var ok: Bool?
@@ -550,6 +573,8 @@ private struct Envelope: Codable {
         case executable
         case arguments
         case resourceProfileID
+        case agentDefinitionID
+        case customDefinitionDigest
         case runtime
         case hook
         case ok
@@ -581,7 +606,7 @@ private struct Envelope: Codable {
         let keys = try KeyScan(from: decoder)
         guard keys.keys.isSubset(of: [
             "v", "id", "op", "token", "executable", "arguments", "runtime", "hook",
-            "resourceProfileID", "ok", "error", "detail", "workspace", "host", "phase", "project", "runtimes",
+            "resourceProfileID", "agentDefinitionID", "customDefinitionDigest", "ok", "error", "detail", "workspace", "host", "phase", "project", "runtimes",
             "attached", "running", "io", "rows", "cols", "sequence", "batch",
             "truncated", "replayLength", "bytes", "exit",
             "terminal", "input", "created", "features",
@@ -598,6 +623,8 @@ private struct Envelope: Codable {
         executable = try container.decodeIfPresent(String.self, forKey: .executable)
         arguments = try container.decodeIfPresent([String].self, forKey: .arguments)
         resourceProfileID = try container.decodeIfPresent(String.self, forKey: .resourceProfileID)
+        agentDefinitionID = try container.decodeIfPresent(String.self, forKey: .agentDefinitionID)
+        customDefinitionDigest = try container.decodeIfPresent(String.self, forKey: .customDefinitionDigest)
         runtime = try container.decodeIfPresent(UUID.self, forKey: .runtime)
         hook = try container.decodeIfPresent(String.self, forKey: .hook)
         ok = try container.decodeIfPresent(Bool.self, forKey: .ok)
@@ -634,6 +661,8 @@ private struct Envelope: Codable {
         try container.encodeIfPresent(executable, forKey: .executable)
         try container.encodeIfPresent(arguments, forKey: .arguments)
         try container.encodeIfPresent(resourceProfileID, forKey: .resourceProfileID)
+        try container.encodeIfPresent(agentDefinitionID, forKey: .agentDefinitionID)
+        try container.encodeIfPresent(customDefinitionDigest, forKey: .customDefinitionDigest)
         try container.encodeIfPresent(runtime, forKey: .runtime)
         try container.encodeIfPresent(hook, forKey: .hook)
         try container.encodeIfPresent(ok, forKey: .ok)
@@ -669,6 +698,8 @@ private struct Envelope: Codable {
         executable = message.executable
         arguments = message.arguments
         resourceProfileID = message.resourceProfileID
+        agentDefinitionID = message.agentDefinitionID
+        customDefinitionDigest = message.customDefinitionDigest
         runtime = message.runtime
         hook = message.hook
         ok = message.ok
@@ -715,6 +746,8 @@ private struct Envelope: Codable {
             executable: executable,
             arguments: arguments,
             resourceProfileID: resourceProfileID,
+            agentDefinitionID: agentDefinitionID,
+            customDefinitionDigest: customDefinitionDigest,
             runtime: runtime,
             hook: hook,
             ok: ok,
@@ -762,7 +795,7 @@ func workspaceControlCode(_ error: WorkspaceSessionError) -> WorkspaceControlCod
         .workspaceClosed
     case .notAcceptingRuntime:
         .invalidRequest
-    case .unknownRuntime:
+    case .unknownRuntime, .unknownPreparedLaunch:
         .runtimeNotFound
     case .childTeardownFailed:
         .childTeardownFailed
@@ -772,7 +805,7 @@ func workspaceControlCode(_ error: WorkspaceSessionError) -> WorkspaceControlCod
         .recoveryRequired
     case .apply(.resourceStagingFailed):
         .resourceStagingFailed
-    case .apply, .cleanupFailed:
+    case .apply, .cleanupFailed, .preparationFailed:
         .invalidRequest
     }
 }
@@ -820,6 +853,8 @@ public struct WorkspaceControlRequest: Sendable, Equatable, Codable {
         executable: String? = nil,
         arguments: [String]? = nil,
         resourceProfileID: String? = nil,
+        agentDefinitionID: String? = nil,
+        customDefinitionDigest: String? = nil,
         runtime: UUID? = nil,
         hook: String? = nil,
         ok: Bool? = nil,
@@ -854,6 +889,8 @@ public struct WorkspaceControlRequest: Sendable, Equatable, Codable {
             executable: executable,
             arguments: arguments,
             resourceProfileID: resourceProfileID,
+            agentDefinitionID: agentDefinitionID,
+            customDefinitionDigest: customDefinitionDigest,
             runtime: runtime,
             hook: hook,
             ok: ok,
@@ -971,6 +1008,14 @@ public struct WorkspaceControlRequest: Sendable, Equatable, Codable {
     public var arguments: [String]? {
         get { message.arguments }
         set { message.arguments = newValue }
+    }
+    public var agentDefinitionID: String? {
+        get { message.agentDefinitionID }
+        set { message.agentDefinitionID = newValue }
+    }
+    public var customDefinitionDigest: String? {
+        get { message.customDefinitionDigest }
+        set { message.customDefinitionDigest = newValue }
     }
     public var resourceProfileID: String? {
         get { message.resourceProfileID }
@@ -1096,6 +1141,8 @@ public struct WorkspaceControlResponse: Sendable, Equatable, Codable {
         executable: String? = nil,
         arguments: [String]? = nil,
         resourceProfileID: String? = nil,
+        agentDefinitionID: String? = nil,
+        customDefinitionDigest: String? = nil,
         runtime: UUID? = nil,
         hook: String? = nil,
         ok: Bool? = nil,
@@ -1130,6 +1177,8 @@ public struct WorkspaceControlResponse: Sendable, Equatable, Codable {
             executable: executable,
             arguments: arguments,
             resourceProfileID: resourceProfileID,
+            agentDefinitionID: agentDefinitionID,
+            customDefinitionDigest: customDefinitionDigest,
             runtime: runtime,
             hook: hook,
             ok: ok,
@@ -1283,6 +1332,14 @@ public struct WorkspaceControlResponse: Sendable, Equatable, Codable {
     public var arguments: [String]? {
         get { message.arguments }
         set { message.arguments = newValue }
+    }
+    public var agentDefinitionID: String? {
+        get { message.agentDefinitionID }
+        set { message.agentDefinitionID = newValue }
+    }
+    public var customDefinitionDigest: String? {
+        get { message.customDefinitionDigest }
+        set { message.customDefinitionDigest = newValue }
     }
     public var resourceProfileID: String? {
         get { message.resourceProfileID }

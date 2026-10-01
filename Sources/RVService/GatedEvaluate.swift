@@ -386,6 +386,15 @@ public struct GatedEvaluate: Sendable {
     /// Policy-store I/O (safety, secret allow-paths, typed rules) around the
     /// Engine evaluation door. The door owns evaluate → unwrap → probe →
     /// analyze → apply; the Policy gate runs after, in `gated`.
+    /// Phase 2A has no principal-bound human grant transaction. Evaluate the
+    /// canonical packs and hard policy without reading or consuming owner grants.
+    /// A denied action stays denied until that separate authority flow exists.
+    func evaluateAgent(
+        _ request: EvaluationRequest, cwd: WorkingDirectory?, home: HomeDirectory?
+    ) -> EvaluationResult {
+        evaluateWithSemantics(request, cwd: cwd, home: home)
+    }
+
     private func evaluateWithSemantics(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,

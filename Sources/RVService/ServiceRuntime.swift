@@ -324,6 +324,20 @@ public actor ServiceRuntime {
         EvaluateReply(result: await runEvaluate(request, cwd: cwd))
     }
 
+    /// Service-local entry point: only a live host validation can construct the
+    /// context. The bridge revalidates after this operation before releasing it.
+    func evaluateAgent(
+        _ params: EvaluateParams, requestID: UUID, context: ServiceValidatedAgentContext
+    ) async -> EvaluateReply {
+        let started = DispatchTime.now()
+        rebuildWhenUncovered(wanted: WalkedPackIDs(ids: params.request.enabledPacks))
+        let reply = EvaluateReply(result: gated.evaluateAgent(params.request, cwd: params.cwd, home: configHome))
+        log?.record(ServiceLogEvent(method: "agentEvaluate", elapsedMs:
+            Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000,
+            requestID: requestID, principal: context.reference))
+        return reply
+    }
+
     private func makeHookEvaluateResult(
         _ params: HookEvaluateParams
     ) async -> Result<HookEvaluateReply, IPCError> {

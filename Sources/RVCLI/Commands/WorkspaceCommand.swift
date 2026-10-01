@@ -12,7 +12,8 @@ struct Workspace: AsyncParsableCommand {
         abstract: "Attach to the persistent workspace host.",
         subcommands: [
             WorkspaceStart.self, WorkspaceAttach.self, WorkspaceStatus.self, WorkspaceClose.self,
-            WorkspaceRun.self, WorkspaceTUI.self, WorkspaceAbandon.self,
+            WorkspaceRun.self, WorkspaceAgent.self, WorkspaceCustom.self,
+            WorkspaceTUI.self, WorkspaceAbandon.self,
         ]
     )
 }
@@ -89,6 +90,64 @@ struct WorkspaceRun: AsyncParsableCommand {
         try WorkspaceCommandRun.run(
             path.workspace, rows: rows, columns: columns, command: argv,
             resourceProfileID: resourceProfile, hook: hook
+        )
+    }
+}
+
+struct WorkspaceAgent: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "agent",
+        abstract: "Launch a trusted operator-configured Agent Definition on the workspace host."
+    )
+
+    @OptionGroup var path: WorkspacePath
+
+    @Option(name: .long, help: "Initial terminal rows.")
+    var rows: Int?
+
+    @Option(name: .long, help: "Initial terminal columns.")
+    var columns: Int?
+
+    @Argument(help: "Agent Definition ID from the operator's configuration.")
+    var definitionID: String
+
+    @Argument(parsing: .captureForPassthrough, help: "Arguments passed to the configured executable.")
+    var arguments: [String] = []
+
+    func run() throws {
+        let argv = arguments.first == "--" ? Array(arguments.dropFirst()) : arguments
+        try WorkspaceCommandRun.runAgent(
+            path.workspace, definitionID: definitionID, arguments: argv,
+            rows: rows, columns: columns
+        )
+    }
+}
+
+struct WorkspaceCustom: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "custom",
+        abstract: "Launch a custom executable with an ad-hoc Agent Definition."
+    )
+
+    @OptionGroup var path: WorkspacePath
+
+    @Option(name: .long, help: "Expected SHA-256 digest for the ad-hoc definition; launch does not verify the executable image.")
+    var expectedContentDigestSHA256: String
+
+    @Option(name: .long, help: "Initial terminal rows.")
+    var rows: Int?
+
+    @Option(name: .long, help: "Initial terminal columns.")
+    var columns: Int?
+
+    @Argument(parsing: .captureForPassthrough, help: "Absolute custom executable and arguments.")
+    var command: [String] = []
+
+    func run() throws {
+        let argv = command.first == "--" ? Array(command.dropFirst()) : command
+        try WorkspaceCommandRun.runCustom(
+            path.workspace, command: argv, expectedContentDigestSHA256: expectedContentDigestSHA256,
+            rows: rows, columns: columns
         )
     }
 }
@@ -255,6 +314,52 @@ enum WorkspaceCommandRun {
         #endif
     }
 
+    static func runAgent(
+        _ raw: String?, definitionID: String, arguments: [String], rows: Int?, columns: Int?
+    ) throws {
+        #if !os(macOS)
+        throw ValidationError("contained workspace host is unavailable")
+        #else
+        guard AgentDefinitionID(validating: definitionID) != nil else {
+            throw ValidationError("invalid Agent Definition ID")
+        }
+        try runInteractiveSelection(
+            project: requireProject(raw), selection: .named(definitionID: definitionID),
+            arguments: arguments, rows: rows, columns: columns
+        )
+        #endif
+    }
+
+    static func runCustom(
+        _ raw: String?, command: [String], expectedContentDigestSHA256: String,
+        rows: Int?, columns: Int?
+    ) throws {
+        #if !os(macOS)
+        throw ValidationError("contained workspace host is unavailable")
+        #else
+        guard let executable = command.first, executable.hasPrefix("/"),
+            executable.contains("\0") == false,
+            expectedContentDigestSHA256.utf8.count == 64,
+            expectedContentDigestSHA256.utf8.allSatisfy({
+                (48...57).contains($0) || (97...102).contains($0)
+            })
+        else {
+            throw ValidationError("custom launch requires an absolute executable and lowercase SHA-256 digest")
+        }
+        try runInteractiveSelection(
+            project: requireProject(raw),
+            selection: .custom(executable: executable, digest: expectedContentDigestSHA256),
+            arguments: Array(command.dropFirst()), rows: rows, columns: columns
+        )
+        #endif
+    }
+
+    private enum InteractiveSelection {
+        case legacy(executable: String, hook: HookHost?, stagingAgent: String?)
+        case named(definitionID: String)
+        case custom(executable: String, digest: String)
+    }
+
     /// One interactive launch path for every agent frontend. `workspace run`
     /// and the `rv opencode` compatibility command both arrive here, so PTY
     /// ownership, the terminal bridge, resize, and exit propagation cannot
@@ -268,6 +373,21 @@ enum WorkspaceCommandRun {
         columns: Int?,
         resourceProfileID: String? = nil,
         stagingAgent: String? = nil
+    ) throws {
+        try runInteractiveSelection(
+            project: project,
+            selection: .legacy(executable: executable, hook: hook, stagingAgent: stagingAgent),
+            arguments: arguments, rows: rows, columns: columns, resourceProfileID: resourceProfileID
+        )
+    }
+
+    private static func runInteractiveSelection(
+        project: String,
+        selection: InteractiveSelection,
+        arguments: [String],
+        rows: Int?,
+        columns: Int?,
+        resourceProfileID: String? = nil
     ) throws {
         #if !os(macOS)
         throw ValidationError("contained workspace host is unavailable")
@@ -284,15 +404,25 @@ enum WorkspaceCommandRun {
         guard TerminalStreamLimits.accepts(rows: rows, columns: columns) else {
             throw ValidationError("terminal size is out of range")
         }
-        let launched = client.launchRuntime(
-            executable: executable,
-            arguments: arguments,
-            hookHost: hook,
-            terminalRows: rows,
-            terminalColumns: columns,
-            resourceProfileID: resourceProfileID,
-            stagingAgent: stagingAgent ?? hook?.rawValue
-        )
+        let launched: Result<WorkspaceRuntimeReport, WorkspaceClientFailure>
+        switch selection {
+        case .legacy(let executable, let hook, let stagingAgent):
+            launched = client.launchRuntime(
+                executable: executable, arguments: arguments, hookHost: hook,
+                terminalRows: rows, terminalColumns: columns,
+                resourceProfileID: resourceProfileID, stagingAgent: stagingAgent ?? hook?.rawValue
+            )
+        case .named(let definitionID):
+            launched = client.launchAgentRuntime(
+                definitionID: definitionID, arguments: arguments,
+                terminalRows: rows, terminalColumns: columns
+            )
+        case .custom(let executable, let digest):
+            launched = client.launchCustomRuntime(
+                executable: executable, arguments: arguments, expectedContentDigestSHA256: digest,
+                terminalRows: rows, terminalColumns: columns
+            )
+        }
         let runtime: UUID
         switch launched {
         case .failure(let error):

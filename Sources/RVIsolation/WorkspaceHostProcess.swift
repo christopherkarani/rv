@@ -10,7 +10,8 @@ import RVPolicy
 public enum WorkspaceHostProcess {
     public static func run(
         workspace: String,
-        admission: RuntimeAdmissionConfiguration
+        admission: RuntimeAdmissionConfiguration,
+        principalBridge: @Sendable (WorkspacePrincipalAuthority) -> Void = { _ in }
     ) -> Int32 {
         guard workspace.contains("\0") == false,
             let directory = WorkingDirectory(validating: workspace),
@@ -34,6 +35,14 @@ public enum WorkspaceHostProcess {
         case .success(let loaded):
             resourcePolicy = loaded
         }
+        let agentDefinitions: AgentDefinitionSet
+        switch AgentDefinitionStore.load(from: resourceConfiguration, resourcePolicy: resourcePolicy) {
+        case .failure:
+            complain("agent definitions invalid or unsafe")
+            return WorkspaceHostExit.failed
+        case .success(let loaded):
+            agentDefinitions = loaded
+        }
         let supervisor: WorkspaceSessionSupervisor
         switch WorkspaceSessionSupervisor.open(directory) {
         case .failure(let error):
@@ -47,6 +56,7 @@ public enum WorkspaceHostProcess {
             configurationDirectory: configuration,
             sessionStore: .file(runtime),
             resourcePolicy: resourcePolicy,
+            agentDefinitions: agentDefinitions,
             admission: admission
         ) {
         case .failure:
@@ -54,6 +64,7 @@ public enum WorkspaceHostProcess {
             complain("workspace host failed")
             return WorkspaceHostExit.failed
         case .success(let server):
+            principalBridge(server.principalAuthority)
             server.waitForClose()
             return WorkspaceHostExit.closed
         }

@@ -248,11 +248,24 @@ extension HTTPAddressClass {
     }
 }
 
-enum HTTPDigest {
-    static func sha256Hex(_ bytes: [UInt8]) -> String {
+/// Project-approved SHA-256 over raw bytes, as lowercase hex.
+///
+/// Pure Swift, cross-platform, no new dependency. This is the same audited
+/// core (`SHA256Hash`) that `AgentDefinitionRevision` and
+/// `WorkspaceLaunchIntent` digest through; cross-module consumers (such as
+/// the host-prepared launch environment snapshot) use this entry point
+/// instead of inventing a hash scheme.
+public enum RVDigest {
+    public static func sha256Hex(_ bytes: [UInt8]) -> String {
         var hash = SHA256Hash()
         hash.update(bytes)
         return hash.digest().map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+enum HTTPDigest {
+    static func sha256Hex(_ bytes: [UInt8]) -> String {
+        RVDigest.sha256Hex(bytes)
     }
 }
 

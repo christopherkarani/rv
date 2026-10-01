@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import RVDomain
+import RVPolicy
 import Synchronization
 
 private struct Reply {
@@ -111,11 +112,13 @@ private final class WorkspaceControlConnection: Sendable {
 /// Control plane for one live workspace. It does not render a UI.
 final class WorkspaceHostServer: Sendable {
     let endpoint: WorkspaceEndpoint
+    let principalAuthority: WorkspacePrincipalAuthority
     private let supervisor: WorkspaceSessionSupervisor
     private let hostID: WorkspaceHostID
     private let credential: WorkspaceOwnerCredential
     private let sessionStore: RuntimeSessionStore
     private let resourcePolicy: RuntimeResourcePolicy
+    private let agentDefinitions: AgentDefinitionSet
     private let advertisedFeatures: [String]
     private let admission: RuntimeAdmissionConfiguration
     private let listenFD: Int32
@@ -140,6 +143,7 @@ final class WorkspaceHostServer: Sendable {
         endpoint: WorkspaceEndpoint,
         sessionStore: RuntimeSessionStore,
         resourcePolicy: RuntimeResourcePolicy,
+        agentDefinitions: AgentDefinitionSet,
         advertisedFeatures: [String],
         admission: RuntimeAdmissionConfiguration,
         listenFD: Int32,
@@ -149,10 +153,16 @@ final class WorkspaceHostServer: Sendable {
     ) {
         self.supervisor = supervisor
         self.hostID = hostID
+        self.principalAuthority = WorkspacePrincipalAuthority(
+            registry: supervisor.agentInstances,
+            workspace: supervisor.id,
+            host: hostID
+        )
         self.credential = credential
         self.endpoint = endpoint
         self.sessionStore = sessionStore
         self.resourcePolicy = resourcePolicy
+        self.agentDefinitions = agentDefinitions
         self.advertisedFeatures = advertisedFeatures
         self.admission = admission
         self.listenFD = listenFD
@@ -166,6 +176,7 @@ final class WorkspaceHostServer: Sendable {
         configurationDirectory: URL,
         sessionStore: RuntimeSessionStore,
         resourcePolicy: RuntimeResourcePolicy = .empty,
+        agentDefinitions: AgentDefinitionSet = .empty,
         advertisedFeatures: [String]? = nil,
         admission: RuntimeAdmissionConfiguration
     ) -> Result<WorkspaceHostServer, WorkspaceHostFailure> {
@@ -231,7 +242,9 @@ final class WorkspaceHostServer: Sendable {
             endpoint: record.endpoint(),
             sessionStore: sessionStore,
             resourcePolicy: resourcePolicy,
+            agentDefinitions: agentDefinitions,
             advertisedFeatures: advertisedFeatures ?? [
+                WorkspaceControlFeature.identityAgentLaunchV1,
                 WorkspaceControlFeature.ensureTerminalRuntime,
                 WorkspaceControlFeature.resizeLeaseAuthority,
                 WorkspaceControlFeature.runtimeResourceProfilesV1,
@@ -253,6 +266,7 @@ final class WorkspaceHostServer: Sendable {
 
     /// Drops the control endpoint. Does not close the workspace.
     func stop() {
+        principalAuthority.close()
         retire(excluding: nil, notify: false)
     }
 
@@ -468,6 +482,8 @@ final class WorkspaceHostServer: Sendable {
             return Reply(message: list(message))
         case .launchRuntime:
             return Reply(message: launch(message))
+        case .launchAgentRuntime, .launchCustomRuntime:
+            return Reply(message: launchIdentity(message))
         case .ensureTerminalRuntime:
             return Reply(message: ensureTerminalRuntime(message))
         case .cancelRuntime:
@@ -650,7 +666,7 @@ final class WorkspaceHostServer: Sendable {
             io = parsed
         }
         let plan = compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace)
-        switch supervisor.launch(
+        let result = supervisor.launchLegacy(
             host: hook,
             stagingAgent: stagingAgent,
             command: command,
@@ -660,7 +676,15 @@ final class WorkspaceHostServer: Sendable {
             admission: admission,
             sessionStore: sessionStore,
             runningLimit: WorkspaceControlLimits.maxRuntimes
-        ) {
+        )
+        return launchResponse(message, responseOp: responseOp, io: io, result: result)
+    }
+
+    private func launchResponse(
+        _ message: WorkspaceControlRequest, responseOp: WorkspaceControlOp, io: IsolatedIO,
+        result: Result<RunningRuntime, WorkspaceSessionError>
+    ) -> WorkspaceControlResponse {
+        switch result {
         case .failure(.apply(.resourceStagingFailed(let detail))):
             return failure(message, .resourceStagingFailed, detail: detail)
         case .failure(let error):
@@ -694,6 +718,50 @@ final class WorkspaceHostServer: Sendable {
                 created: responseOp == .ensureTerminalRuntime ? true : nil
             )
         }
+    }
+
+    private func launchIdentity(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
+        let phase = supervisor.snapshot.phase
+        guard phase.acceptsRuntime else {
+            return failure(message, workspaceControlCode(.notAcceptingRuntime(phase)))
+        }
+        guard message.hook == nil, message.resourceProfileID == nil else {
+            return failure(message, .invalidRequest)
+        }
+        guard let operation = message.operation else { return failure(message, .invalidRequest) }
+        let selected: Result<ResolvedAgentLaunch, AgentLaunchSelectionError>
+        switch operation {
+        case .launchAgentRuntime:
+            guard message.executable == nil, message.customDefinitionDigest == nil,
+                let raw = message.agentDefinitionID, let id = AgentDefinitionID(validating: raw)
+            else { return failure(message, .invalidRequest) }
+            selected = AgentLaunchSelection.resolveNamed(
+                id: id, definitions: agentDefinitions, project: supervisor.snapshot.originalPath.rawValue
+            )
+        case .launchCustomRuntime:
+            guard message.agentDefinitionID == nil, let executable = message.executable,
+                let digest = message.customDefinitionDigest
+            else { return failure(message, .invalidRequest) }
+            selected = AgentLaunchSelection.resolveCustom(
+                executable: executable, expectedContentDigestSHA256: digest
+            )
+        default:
+            return failure(message, .invalidRequest)
+        }
+        guard case .success(let selection) = selected else {
+            return failure(message, .resourceProfileUnavailable)
+        }
+        guard case .success(let io) = launchIO(message) else {
+            return failure(message, .invalidRequest)
+        }
+        let result = supervisor.launchAgent(
+            selection: selection, arguments: message.arguments ?? [], io: io,
+            admission: admission, sessionStore: sessionStore,
+            runningLimit: WorkspaceControlLimits.maxRuntimes,
+            host: hostID, generation: principalAuthority.generation,
+            requestID: message.id
+        )
+        return launchResponse(message, responseOp: operation, io: io, result: result)
     }
 
     private func launchIO(
@@ -933,6 +1001,7 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func retire(excluding: UUID?, notify: Bool) {
+        principalAuthority.close()
         let snapshot: (first: Bool, others: [WorkspaceControlConnection]) = registry.withLock { state in
             if state.retired { return (false, []) }
             state.retired = true

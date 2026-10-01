@@ -308,7 +308,8 @@ func spawnSeatbeltProcess(
     egressProxyPort: Int? = nil,
     host: HookHost? = nil,
     stagingAgent: String? = nil,
-    keychain: [(name: String, value: String)] = []
+    keychain: [(name: String, value: String)] = [],
+    preparedEnvironment: [String]? = nil
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
     let first = spawnSeatbeltProcessBody(
         request,
@@ -320,7 +321,8 @@ func spawnSeatbeltProcess(
         egressProxyPort: egressProxyPort,
         host: host,
         stagingAgent: stagingAgent,
-        keychain: keychain
+        keychain: keychain,
+        preparedEnvironment: preparedEnvironment
     )
     guard case .failure(.processSpawnFailed) = first else { return first }
     if blockingWorkIsCancelled() { return first }
@@ -340,7 +342,8 @@ func spawnSeatbeltProcess(
         egressProxyPort: egressProxyPort,
         host: host,
         stagingAgent: stagingAgent,
-        keychain: keychain
+        keychain: keychain,
+        preparedEnvironment: preparedEnvironment
     )
 }
 
@@ -371,7 +374,8 @@ func spawnSeatbeltProcessBody(
     egressProxyPort: Int? = nil,
     host: HookHost? = nil,
     stagingAgent: String? = nil,
-    keychain: [(name: String, value: String)] = []
+    keychain: [(name: String, value: String)] = [],
+    preparedEnvironment: [String]? = nil
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
     guard profile.source.contains("(deny file-link)") else {
         return .failure(.seatbeltNotEstablished)
@@ -555,27 +559,32 @@ func spawnSeatbeltProcessBody(
     }
     var resourceStageHandedOff = false
     defer { if !resourceStageHandedOff { request.resources?.remove() } }
-    let agentBin = AgentBin.installedDirectory()
+    let agentBin = request.legacyAgentIntegration ? AgentBin.installedDirectory() : nil
     let productive =
         request.productive
         ?? resolveProductiveWorkspace(
             workspacePath: workspace,
             agentBin: agentBin
         )
-    if case .pseudoTerminal = request.io {
+    if request.legacyAgentIntegration, case .pseudoTerminal = request.io {
         // Stage into the RV-managed home; the degraded workspace home
         // keeps staging working when no managed home exists.
         stageAgentHomes(cageHome: productive.developerHome?.home ?? workspace)
     }
-    let environment = containedRuntimeEnvironment(
-        workspace: workspace,
-        io: request.io,
-        agentBin: agentBin,
-        resources: request.resources,
-        egressProxyPort: egressProxyPort,
-        keychain: keychain,
-        productive: productive
-    )
+    // A retained prepared environment bypasses recomputation entirely:
+    // dispatch executes exactly what preparation froze, byte for byte. Nil
+    // preserves the legacy behavior of resolving live at spawn.
+    let environment =
+        preparedEnvironment
+        ?? containedRuntimeEnvironment(
+            workspace: workspace,
+            io: request.io,
+            agentBin: agentBin,
+            resources: request.resources,
+            egressProxyPort: egressProxyPort,
+            keychain: keychain,
+            productive: productive
+        )
     let argv = SpawnPointers(arguments)
     let envp = SpawnPointers(environment)
     defer {

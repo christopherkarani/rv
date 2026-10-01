@@ -123,6 +123,8 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
     let launch: Launch
     let io: IsolatedIO
     let resources: RuntimeResourceManifest?
+    /// Only explicit legacy launches may inherit ambient agent integration.
+    let legacyAgentIntegration: Bool
     /// Test-only. Production launches leave this nil. A fault fails the
     /// launch before the payload is reported running.
     let spawnFault: RuntimeSpawnFault?
@@ -168,7 +170,8 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         io: IsolatedIO = .discard,
         resources: RuntimeResourceManifest? = nil,
         spawnFault: RuntimeSpawnFault? = nil,
-        productive: ProductiveWorkspaceResolution? = nil
+        productive: ProductiveWorkspaceResolution? = nil,
+        legacyAgentIntegration: Bool = true
     ) {
         switch (launch, plan.mode) {
         case (.seatbelt, .contained):
@@ -189,6 +192,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         self.resources = resources
         self.spawnFault = spawnFault
         self.productive = productive
+        self.legacyAgentIntegration = legacyAgentIntegration
     }
 
     func withIO(_ io: IsolatedIO) -> IsolatedLaunchRequest {
@@ -212,6 +216,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         self.resources = request.resources
         self.spawnFault = spawnFault
         self.productive = request.productive
+        self.legacyAgentIntegration = request.legacyAgentIntegration
     }
 
     public static func == (lhs: IsolatedLaunchRequest, rhs: IsolatedLaunchRequest) -> Bool {
@@ -223,6 +228,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
             && lhs.resources == rhs.resources
             && lhs.spawnFault == rhs.spawnFault
             && lhs.productive == rhs.productive
+            && lhs.legacyAgentIntegration == rhs.legacyAgentIntegration
     }
 
     /// Executable `run` will start. Observed / mediated never use a helper.
@@ -476,7 +482,9 @@ extension IsolationBackend {
 func prepareSeatbelt(
     _ plan: IsolationPlan,
     _ command: IsolatedCommand,
-    resourceProfile: RuntimeResourceProfile? = nil
+    resourceProfile: RuntimeResourceProfile? = nil,
+    legacyAgentIntegration: Bool = true,
+    gitIdentity: (@Sendable (String) -> (name: String?, email: String?))? = nil
 ) -> Result<IsolatedLaunchRequest, IsolationApplyError> {
     switch plan.mode {
     case .observed, .mediated:
@@ -493,7 +501,7 @@ func prepareSeatbelt(
             if let resources {
                 profile = profile.allowingResources(resources)
             }
-            let agentBin = AgentBin.installedDirectory()
+            let agentBin = legacyAgentIntegration ? AgentBin.installedDirectory() : nil
             if let agentBin,
                 let home = ProcessInfo.processInfo.environment["HOME"]
             {
@@ -518,7 +526,11 @@ func prepareSeatbelt(
                 case .success:
                     break
                 }
-                productive = resolveProductiveWorkspace(workspacePath: resolved, agentBin: agentBin)
+                productive = resolveProductiveWorkspace(
+                    workspacePath: resolved,
+                    agentBin: agentBin,
+                    gitIdentity: gitIdentity
+                )
                 profile = profile.allowingProductiveWorkspace(productive)
             }
             guard
@@ -527,7 +539,8 @@ func prepareSeatbelt(
                     command: command,
                     launch: .seatbelt(profile),
                     resources: resources,
-                    productive: productive
+                    productive: productive,
+                    legacyAgentIntegration: legacyAgentIntegration
                 )
             else {
                 return .failure(.containedGuaranteesUnsupported)

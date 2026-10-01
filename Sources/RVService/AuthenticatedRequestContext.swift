@@ -13,9 +13,9 @@ public struct AuthenticatedRequestContext: Sendable {
     public let peer: AuthenticatedPeer?
     public let componentRole: TrustedRVComponentRole?
 
-    // No channel currently carries authoritative workspace-host registration.
-    // Names in IPC cannot populate this field. Until that channel is implemented,
-    // principal-derived authority is unavailable rather than guessed from names.
+    // Generic IPC never creates a principal from names. The dedicated host bridge
+    // uses its service-local validated context and live RPC checks instead.
+    // External hook/client principal dispatch remains unavailable in Phase 2A.
     public let agent: AuthenticatedAgentContext?
 
     public static var unauthenticated: Self {
@@ -71,9 +71,9 @@ public enum ServiceMethodAuthorization {
         case .diagnostic:
             return true
         case .agent:
-            // A cached AgentInstance description is never live validity proof.
-            // This remains unavailable until an authenticated authoritative-host
-            // channel can revalidate the channel binding at the point of use.
+            // Generic external IPC has no authenticated runtime channel binding.
+            // Instance-bound shell evaluation uses the dedicated authenticated
+            // host bridge, with live principal validation around evaluation.
             return false
         case .controlRead:
             switch context.componentRole {

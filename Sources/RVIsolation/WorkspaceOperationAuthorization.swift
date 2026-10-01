@@ -9,7 +9,7 @@ enum WorkspaceOperationAuthorization {
             return peer.componentRole != nil
         case .describeWorkspace, .listRuntimes:
             return peer.componentRole == .service || peer.componentRole == .workspaceHost
-        case .launchRuntime, .ensureTerminalRuntime, .cancelRuntime, .closeWorkspace,
+        case .launchRuntime, .launchAgentRuntime, .launchCustomRuntime, .ensureTerminalRuntime, .cancelRuntime, .closeWorkspace,
             .detach, .subscribeTerminal, .unsubscribeTerminal, .terminalInput,
             .acquireTerminalInput, .releaseTerminalInput, .resizeTerminal:
             return false

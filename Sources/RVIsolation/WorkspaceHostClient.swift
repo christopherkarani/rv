@@ -145,11 +145,16 @@ public final class WorkspaceClient: Sendable {
         io.withLock { $0.supportsResourceProfiles }
     }
 
+    var supportsIdentityAgentLaunch: Bool {
+        io.withLock { $0.supportsIdentityAgentLaunch }
+    }
+
     private struct ClientState {
         var fd: Int32
         var open: Bool
         var supportsEnsureTerminalRuntime: Bool
         var supportsResourceProfiles: Bool
+        var supportsIdentityAgentLaunch: Bool
     }
 
     private init(fd: Int32, endpoint: WorkspaceEndpoint) {
@@ -159,7 +164,8 @@ public final class WorkspaceClient: Sendable {
                 fd: fd,
                 open: true,
                 supportsEnsureTerminalRuntime: false,
-                supportsResourceProfiles: false
+                supportsResourceProfiles: false,
+                supportsIdentityAgentLaunch: false
             )
         )
     }
@@ -226,6 +232,9 @@ public final class WorkspaceClient: Sendable {
                     $0.supportsEnsureTerminalRuntime = features.contains(
                         WorkspaceControlFeature.ensureTerminalRuntime
                     )
+                    $0.supportsIdentityAgentLaunch = features.contains(
+                        WorkspaceControlFeature.identityAgentLaunchV1
+                    )
                     $0.supportsResourceProfiles = features.contains(
                         WorkspaceControlFeature.runtimeResourceProfilesV1
                     )
@@ -290,6 +299,96 @@ public final class WorkspaceClient: Sendable {
             hook: hookHost?.rawValue ?? stagingAgent
         )
         switch (terminalRows, terminalColumns) {
+        case (nil, nil):
+            break
+        case let (rows?, columns?) where TerminalStreamLimits.accepts(rows: rows, columns: columns):
+            message.io = "terminal"
+            message.rows = rows
+            message.columns = columns
+        default:
+            return .failure(.invalidRequest)
+        }
+        switch transact(message, timeout: WorkspaceControlLimits.launchTimeoutSeconds) {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let reply):
+            guard let runtime = reply.runtime, let running = reply.running else {
+                return .failure(.malformed)
+            }
+            return .success(
+                WorkspaceRuntimeReport(
+                    runtime: runtime,
+                    hook: reply.hook,
+                    running: running,
+                    terminal: reply.terminal ?? false,
+                    rows: reply.rows,
+                    columns: reply.columns,
+                    inputOwner: reply.inputOwner ?? false,
+                    created: reply.created ?? true
+                )
+            )
+        }
+    }
+
+    /// Selects a named definition in the authoritative host's operator configuration.
+    /// The client supplies no executable, hook, resource profile or principal.
+    public func launchAgentRuntime(
+        definitionID: String,
+        arguments: [String] = [],
+        terminalRows: Int? = nil,
+        terminalColumns: Int? = nil
+    ) -> Result<WorkspaceRuntimeReport, WorkspaceClientFailure> {
+        guard WorkspaceControlCodec.agentDefinitionIDFits(definitionID) else {
+            return .failure(.invalidRequest)
+        }
+        guard WorkspaceControlCodec.launchFits(executable: "", arguments: arguments) else {
+            return .failure(.requestTooLarge)
+        }
+        let message = WorkspaceControlRequest(
+            operation: .launchAgentRuntime,
+            id: UUID(),
+            arguments: arguments,
+            agentDefinitionID: definitionID
+        )
+        return launchIdentityRuntime(message, rows: terminalRows, columns: terminalColumns)
+    }
+
+    /// Explicit custom identity selection. The host creates an ad-hoc definition;
+    /// executable names cannot select named authority or credential bindings.
+    public func launchCustomRuntime(
+        executable: String,
+        arguments: [String] = [],
+        expectedContentDigestSHA256: String,
+        terminalRows: Int? = nil,
+        terminalColumns: Int? = nil
+    ) -> Result<WorkspaceRuntimeReport, WorkspaceClientFailure> {
+        guard executable.hasPrefix("/"),
+            IsolatedCommand(executable: executable, arguments: arguments) != nil,
+            WorkspaceControlCodec.customDefinitionDigestFits(expectedContentDigestSHA256)
+        else {
+            return .failure(.invalidRequest)
+        }
+        guard WorkspaceControlCodec.launchFits(executable: executable, arguments: arguments) else {
+            return .failure(.requestTooLarge)
+        }
+        let message = WorkspaceControlRequest(
+            operation: .launchCustomRuntime,
+            id: UUID(),
+            executable: executable,
+            arguments: arguments,
+            customDefinitionDigest: expectedContentDigestSHA256
+        )
+        return launchIdentityRuntime(message, rows: terminalRows, columns: terminalColumns)
+    }
+
+    private func launchIdentityRuntime(
+        _ request: WorkspaceControlRequest,
+        rows: Int?,
+        columns: Int?
+    ) -> Result<WorkspaceRuntimeReport, WorkspaceClientFailure> {
+        guard supportsIdentityAgentLaunch else { return .failure(.incompatibleProtocol) }
+        var message = request
+        switch (rows, columns) {
         case (nil, nil):
             break
         case let (rows?, columns?) where TerminalStreamLimits.accepts(rows: rows, columns: columns):

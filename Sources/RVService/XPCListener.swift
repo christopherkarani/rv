@@ -56,6 +56,7 @@ public final class XPCEvaluateListener: Sendable {
     private let serviceName: String
     private let listener = Mutex<xpc_connection_t?>(nil)
     private let actionListener = Mutex<xpc_connection_t?>(nil)
+    private let hostRegistry = LiveWorkspaceHostRegistry()
 
     public init(
         runtime: ServiceRuntime,
@@ -121,7 +122,7 @@ public final class XPCEvaluateListener: Sendable {
             listener.map { XPCHeld(xpc_endpoint_create($0)) }
         } : nil
         let session = XPCPeerSession(runtime: runtime, watchdog: watchdog,
-            discoveryOnly: discoveryOnly, actionEndpoint: endpoint)
+            discoveryOnly: discoveryOnly, actionEndpoint: endpoint, hostRegistry: hostRegistry)
         xpc_connection_set_event_handler(peer) { event in
             session.handle(event)
         }
@@ -136,6 +137,8 @@ final class XPCPeerSession: Sendable {
     private let discoveryOnly: Bool
     private let actionEndpoint: XPCHeld?
     private let connectionID = UUID()
+    private let hostRegistry: LiveWorkspaceHostRegistry
+    private let hostLiveness = HostBridgeLiveness()
     private let beginTransaction: @Sendable () -> Void
     private let endTransaction: @Sendable () -> Void
 
@@ -144,6 +147,7 @@ final class XPCPeerSession: Sendable {
         watchdog: IdleWatchdog,
         discoveryOnly: Bool = false,
         actionEndpoint: XPCHeld? = nil,
+        hostRegistry: LiveWorkspaceHostRegistry = LiveWorkspaceHostRegistry(),
         beginTransaction: @escaping @Sendable () -> Void = { xpc_transaction_begin() },
         endTransaction: @escaping @Sendable () -> Void = { xpc_transaction_end() }
     ) {
@@ -151,6 +155,7 @@ final class XPCPeerSession: Sendable {
         self.watchdog = watchdog
         self.discoveryOnly = discoveryOnly
         self.actionEndpoint = actionEndpoint
+        self.hostRegistry = hostRegistry
         self.beginTransaction = beginTransaction
         self.endTransaction = endTransaction
     }
@@ -159,7 +164,10 @@ final class XPCPeerSession: Sendable {
     func handle(_ event: xpc_object_t) -> Task<Void, Never>? {
         let type = xpc_get_type(event)
         if type == XPC_TYPE_ERROR {
-            return nil
+            hostLiveness.disconnect()
+            let registry = hostRegistry
+            let id = connectionID
+            return Task { await registry.disconnect(connectionID: id) }
         }
         guard type == XPC_TYPE_DICTIONARY else {
             return nil
@@ -184,6 +192,12 @@ final class XPCPeerSession: Sendable {
             let incoming = XPCIPCWire.body(from: message)
             let stdinOverlay = XPCIPCWire.stdin(from: message)
             let accepted = self.handshake.withLock { $0 }
+            if XPCWorkspaceHostBridge.handles(message) {
+                await XPCWorkspaceHostBridge.handle(message: held, context: context,
+                    handshakeOK: accepted, discoveryOnly: self.discoveryOnly,
+                    liveness: self.hostLiveness, registry: self.hostRegistry, runtime: self.runtime)
+                return
+            }
             let incomingReply: IncomingReply
             let isHello = incoming.flatMap { try? IPCJSON.decode(Hello.self, from: $0) } != nil
             if self.discoveryOnly && !isHello {

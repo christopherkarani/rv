@@ -117,6 +117,8 @@ enum HelpCatalog {
                 HelpRow(name: "rv workspace status [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace close [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace run [--rows N] [--columns N] [--resource-profile <id>] [--hook <tag>] -- <absolute-executable> [args...]"),
+                HelpRow(name: "rv workspace agent [--workspace <absolute-path>] [--rows N] [--columns N] <definition-id> -- [args...]", description: "Launch a trusted operator-configured Agent Definition"),
+                HelpRow(name: "rv workspace custom [--workspace <absolute-path>] [--rows N] [--columns N] --expected-content-digest-sha256 <digest> -- <absolute-executable> [args...]", description: "Launch an ad-hoc definition; executable image verification is deferred"),
                 HelpRow(name: "rv workspace tui [--workspace <project-path>]", description: "Interactive terminal workspace for contained runtimes"),
                 HelpRow(name: "rv workspace abandon [--workspace <absolute-path>]", description: "Discard a blocked workspace's unpublished volume and restore the saved tree"),
             ]),
@@ -124,6 +126,7 @@ enum HelpCatalog {
                 HelpRow(name: "--workspace", description: "Project path; default is the current directory"),
                 HelpRow(name: "--resource-profile", description: "Owner-authorized runtime resource profile ID"),
                 HelpRow(name: "--hook", description: "Launch agent tag for credential staging"),
+                HelpRow(name: "--expected-content-digest-sha256", description: "Lowercase SHA-256 digest for a custom Agent Definition"),
             ]),
         ],
         examples: ["rv workspace start", "rv workspace status"]
