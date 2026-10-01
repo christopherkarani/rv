@@ -100,6 +100,16 @@ struct OperatorWireRoundTripTests {
         }
     }
 
+    @Test func completionCarriesIDsOnlyNeverABearer() throws {
+        // The completion names a ceremony; it grants nothing by possession.
+        // Pin the exact key set so no token field can slip in silently.
+        let completion = UIOperatorCompletion(
+            challengeID: UUID(), operationID: UUID(), outcome: .authenticated)
+        let data = try IPCJSON.encode(completion)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        #expect(Set(json?.keys.map { $0 } ?? []) == ["challengeID", "operationID", "outcome"])
+    }
+
     @Test func outcomeStringsAreStable() {
         #expect(UIAuthenticationOutcome.authenticated.rawValue == "authenticated")
         #expect(UIAuthenticationOutcome.cancelled.rawValue == "cancelled")

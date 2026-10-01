@@ -266,8 +266,12 @@ actor WorkspaceOperatorCeremonyService {
         do {
             _ = try await authorizer.completeChallenge(
                 challenge, uiConnection: uiConnection, result: result)
+            // Terminal: the retained challenge and description (argv included)
+            // have no further use. Status stays readable via the authorizer.
+            reviews.removeValue(forKey: id)
             return Self.statusString(.authorized)
         } catch WorkspaceOperatorAuthorizationError.authenticationFailed {
+            reviews.removeValue(forKey: id)
             return Self.statusString(.failed)
         } catch {
             throw mapAuthorizerError(error)
@@ -296,6 +300,9 @@ actor WorkspaceOperatorCeremonyService {
         let status = (try? await authorizer.status(of: id)) ?? .cancelled
         emit(.ceremonyCancelled, operationID: operationID,
             description: reviews[id]?.description, outcome: Self.statusString(status))
+        // Terminal: drop retention (challenge + argv). Status stays readable
+        // via the authorizer; rebind of a cancelled op reports unknown.
+        reviews.removeValue(forKey: id)
         return Self.statusString(status)
     }
 
@@ -358,6 +365,8 @@ actor WorkspaceOperatorCeremonyService {
             isLowerHex64(description.environmentDigestHex),
             !description.executable.isEmpty,
             description.executable.hasPrefix("/"),
+            !description.workingDirectory.isEmpty,
+            description.workingDirectory.hasPrefix("/"),
             description.expiresAt > description.preparedAt,
             description.arguments.count <= WorkspaceControlLimits.maxArguments,
             description.arguments.allSatisfy({
@@ -496,9 +505,21 @@ actor WorkspaceOperatorCeremonyService {
         case .prepareUnsupported, .prepareRPCFailed:
             return .prepareFailed("unavailable")
         case .prepareRefused(let reason):
-            return .prepareFailed(reason)
+            // The host speaks a closed refusal vocabulary; anything else is
+            // not forwarded verbatim to API/CLI surfaces.
+            return .prepareFailed(
+                Self.knownRefusalReasons.contains(reason) ? reason : "refused")
         }
     }
+
+    /// Exact refusal codes emitted by `WorkspaceHostPrepareHandler` (plus the
+    /// bridge's own `invalidRequest`). Closed: unknown reasons collapse.
+    static let knownRefusalReasons: Set<String> = [
+        "notAccepting", "invalidRequest", "preparationFailed",
+        "unknownDefinition", "invalidDefinition", "projectNotEligible",
+        "executableUnavailable", "invalidExecutable", "unsupportedExecutable",
+        "credentialDeferred", "invalidDigest",
+    ]
 
     private func mapAuthorizerError(_ error: any Error) -> WorkspaceOperatorCeremonyError {
         guard let error = error as? WorkspaceOperatorAuthorizationError else {

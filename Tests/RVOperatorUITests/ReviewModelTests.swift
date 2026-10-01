@@ -16,6 +16,7 @@ final class FakeBridge: OperatorUIBridge, Sendable {
         var bindRefused = false
         var completeResult = "authorized"
         var connectCalls = 0
+        var bindCalls = 0
         var completions: [UIOperatorCompletion] = []
         var cancels: [UUID] = []
         var lastChallenge: [UUID: UUID] = [:]
@@ -48,6 +49,7 @@ final class FakeBridge: OperatorUIBridge, Sendable {
     }
 
     func bind(operationID: UUID) async throws -> UIChallengeBundleDTO {
+        state.withLock { $0.bindCalls += 1 }
         let current = state.withLock { $0 }
         guard !current.bindRefused,
             let item = current.items.first(where: { $0.operationID == operationID })
@@ -281,6 +283,20 @@ struct OperatorReviewModelTests {
         let first = try #require(model.bound).challenge.challengeID
         await model.select(id)
         #expect(try #require(model.bound).challenge.challengeID == first)
+        #expect(bridge.snapshot.bindCalls == 1)
+    }
+
+    @Test func selectDifferentOperationBindsAgain() async throws {
+        let bridge = FakeBridge()
+        let first = UUID()
+        let second = UUID()
+        bridge.setItems([reviewItem(operationID: first), reviewItem(operationID: second)])
+        let model = makeModel(bridge: bridge)
+        await model.connect()
+        await model.select(first)
+        await model.select(second)
+        #expect(bridge.snapshot.bindCalls == 2)
+        #expect(model.selectedID == second)
     }
 }
 

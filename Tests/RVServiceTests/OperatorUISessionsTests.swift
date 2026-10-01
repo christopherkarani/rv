@@ -21,8 +21,24 @@ struct OperatorUISessionsTests {
 
     @Test func registerMintsOneConnectionPerPeer() async throws {
         let sessions = LiveOperatorUISessionRegistry()
-        let id = try await sessions.register(peer: peer())
-        #expect(await sessions.session(connectionID: id.rawValue) == nil)
+        let connection = UUID()
+        let id = try await sessions.register(peer: peer(connectionID: connection))
+        let stored = await sessions.session(connectionID: connection)
+        #expect(stored?.uiConnection == id)
+        #expect(stored?.peer.connectionID == connection)
+    }
+
+    @Test func sameUIDDifferentConnectionsStayIsolated() async throws {
+        let sessions = LiveOperatorUISessionRegistry()
+        let firstConnection = UUID()
+        let secondConnection = UUID()
+        // Same UID, same code identity, two XPC connections: the registry
+        // binds sessions to connections, never to UIDs.
+        let first = try await sessions.register(peer: peer(connectionID: firstConnection))
+        let second = try await sessions.register(peer: peer(connectionID: secondConnection))
+        #expect(first != second)
+        #expect(await sessions.disconnect(connectionID: firstConnection) == first)
+        #expect(await sessions.session(connectionID: secondConnection)?.uiConnection == second)
     }
 
     @Test func registrationIsIdempotentPerConnection() async throws {

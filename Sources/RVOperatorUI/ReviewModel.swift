@@ -152,9 +152,11 @@ public final class OperatorReviewModel {
         }
     }
 
-    private func reason(for item: UIReviewItemDTO) -> String {
-        let what = item.definitionID ?? item.executable
-        return "Authenticate to authorize \(what)."
+    private func reason(for _: UIReviewItemDTO) -> String {
+        // Fixed wording: server-supplied display names must not shape the
+        // authentication prompt. The trusted review window already shows
+        // exactly what is under review; the prompt proves presence only.
+        "Authenticate to authorize the selected workspace launch."
     }
 
     private func describe(_ error: any Error) -> String {

@@ -517,8 +517,180 @@ struct WorkspaceOperatorCeremonyTests {
 
     @Test func strayDisconnectsAreSafeNoOps() async throws {
         let fixture = try await makeFixture()
+        let id = try await pendingOperation(fixture)
         await fixture.ceremonies.uiConnectionLost(AuthenticatedOperatorUIConnectionID())
         await fixture.ceremonies.hostConnectionLost(connectionID: UUID())
+        #expect(await fixture.ceremonies.ceremonyStatus(operationID: id) == "pendingReview")
+        #expect(await fixture.ceremonies.listReviewItems().items.count == 1)
+    }
+
+    // MARK: - Review findings
+
+    @Test func disconnectVsCompleteRaceAlwaysSettlesInvalidated() async throws {
+        let fixture = try await makeFixture()
+        let id = try await pendingOperation(fixture)
+        let ui = AuthenticatedOperatorUIConnectionID()
+        let (challenge, _) = try await fixture.ceremonies.bindReview(
+            operationID: id, uiConnection: ui)
+        let completion = UIOperatorCompletion(
+            challengeID: challenge.challengeID, operationID: id, outcome: .authenticated)
+        async let completed: String? = try? await fixture.ceremonies.completeCeremony(
+            completion, uiConnection: ui)
+        await fixture.ceremonies.uiConnectionLost(ui)
+        let observed = await completed
+        // Either order: the ceremony is dead and unusable. If complete
+        // landed first, its permit died with the ceremony per Step 3.
+        #expect(await fixture.ceremonies.ceremonyStatus(operationID: id) == "invalidated")
         #expect(await fixture.ceremonies.listReviewItems().items.isEmpty)
+        if let observed {
+            #expect(observed == "authorized")
+        }
+        do {
+            try await fixture.ceremonies.completeCeremony(completion, uiConnection: ui)
+            Issue.record("post-race completion must throw")
+        } catch {}
+    }
+
+    @Test func completeThenDisconnectInvalidatesIssuedPermit() async throws {
+        let fixture = try await makeFixture()
+        let id = try await pendingOperation(fixture)
+        let ui = AuthenticatedOperatorUIConnectionID()
+        let (challenge, _) = try await fixture.ceremonies.bindReview(
+            operationID: id, uiConnection: ui)
+        let completion = UIOperatorCompletion(
+            challengeID: challenge.challengeID, operationID: id, outcome: .authenticated)
+        #expect(
+            try await fixture.ceremonies.completeCeremony(completion, uiConnection: ui)
+                == "authorized")
+        await fixture.ceremonies.uiConnectionLost(ui)
+        #expect(await fixture.ceremonies.ceremonyStatus(operationID: id) == "invalidated")
+        #expect(await fixture.ceremonies.listReviewItems().items.isEmpty)
+    }
+
+    @Test func storeCapRefusesFurtherProposals() async throws {
+        let fixture = try await makeFixture()
+        for _ in 0..<WorkspaceOperatorAuthorizationLimits.maxOperations {
+            _ = try await pendingOperation(fixture)
+        }
+        await #expect(throws: WorkspaceOperatorCeremonyError.storeFull) {
+            try await fixture.ceremonies.propose(
+                customParams(fixture), requester: requester(), clientRequestID: nil)
+        }
+    }
+
+    @Test func restartInvalidatesPriorCeremonies() async throws {
+        let fixture = try await makeFixture()
+        let id = try await pendingOperation(fixture)
+        let ui = AuthenticatedOperatorUIConnectionID()
+        let (challenge, _) = try await fixture.ceremonies.bindReview(
+            operationID: id, uiConnection: ui)
+        // A restarted service holds neither retention nor the Step 3 epoch:
+        // the old challenge is unresolvable, not merely unbound.
+        let restarted = WorkspaceOperatorCeremonyService()
+        await #expect(throws: WorkspaceOperatorCeremonyError.unknownOperation) {
+            try await restarted.completeCeremony(
+                UIOperatorCompletion(
+                    challengeID: challenge.challengeID, operationID: id,
+                    outcome: .authenticated),
+                uiConnection: ui)
+        }
+        #expect(await restarted.ceremonyStatus(operationID: id) == "unknown")
+    }
+
+    @Test func fieldSwapAgainstValidDigestFailsClosed() async throws {
+        let fixture = try await makeFixture(prepare: { workspace, host, generation in
+            { request in
+                var tampered = self.description(
+                    workspace: workspace, host: host,
+                    generation: generation, requestID: request.requestID,
+                    intentHex: (try? self.customIntent(workspace: workspace))?
+                        .canonicalDigest.sha256Hex ?? Self.digest)
+                tampered = HostPreparedDescriptionDTO(
+                    workspaceSessionID: tampered.workspaceSessionID,
+                    hostID: tampered.hostID, generation: tampered.generation,
+                    preparedID: tampered.preparedID, requestID: tampered.requestID,
+                    target: tampered.target, definitionID: tampered.definitionID,
+                    revisionDigest: tampered.revisionDigest,
+                    executable: "/bin/evil",
+                    expectedDigest: tampered.expectedDigest,
+                    workingDirectory: tampered.workingDirectory,
+                    arguments: tampered.arguments, io: tampered.io,
+                    environmentPolicy: tampered.environmentPolicy,
+                    intentDigestHex: tampered.intentDigestHex,
+                    environmentDigestHex: tampered.environmentDigestHex,
+                    preparedAt: tampered.preparedAt, expiresAt: tampered.expiresAt)
+                return HostPrepareResponseDTO(description: tampered)
+            }
+        })
+        await #expect(throws: WorkspaceOperatorCeremonyError.descriptionMismatch) {
+            try await fixture.ceremonies.propose(
+                customParams(fixture), requester: requester(), clientRequestID: nil)
+        }
+    }
+
+    @Test func relativeWorkingDirectoryFailsClosed() async throws {
+        let fixture = try await makeFixture(prepare: { workspace, host, generation in
+            { request in
+                let base = self.description(
+                    workspace: workspace, host: host,
+                    generation: generation, requestID: request.requestID,
+                    intentHex: (try? self.customIntent(workspace: workspace))?
+                        .canonicalDigest.sha256Hex ?? Self.digest)
+                let tampered = HostPreparedDescriptionDTO(
+                    workspaceSessionID: base.workspaceSessionID,
+                    hostID: base.hostID, generation: base.generation,
+                    preparedID: base.preparedID, requestID: base.requestID,
+                    target: base.target, definitionID: base.definitionID,
+                    revisionDigest: base.revisionDigest,
+                    executable: base.executable,
+                    expectedDigest: base.expectedDigest,
+                    workingDirectory: "relative/path",
+                    arguments: base.arguments, io: base.io,
+                    environmentPolicy: base.environmentPolicy,
+                    intentDigestHex: base.intentDigestHex,
+                    environmentDigestHex: base.environmentDigestHex,
+                    preparedAt: base.preparedAt, expiresAt: base.expiresAt)
+                return HostPrepareResponseDTO(description: tampered)
+            }
+        })
+        await #expect(throws: WorkspaceOperatorCeremonyError.descriptionMismatch) {
+            try await fixture.ceremonies.propose(
+                customParams(fixture), requester: requester(), clientRequestID: nil)
+        }
+    }
+
+    @Test func unknownRefusalReasonCollapses() async throws {
+        let fixture = try await makeFixture(prepare: { _, _, _ in
+            { _ in HostPrepareResponseDTO(description: nil, error: "EVIL\nreason") }
+        })
+        await #expect(throws: WorkspaceOperatorCeremonyError.prepareFailed("refused")) {
+            try await fixture.ceremonies.propose(
+                customParams(fixture), requester: requester(), clientRequestID: nil)
+        }
+    }
+
+    @Test func rebindAfterTerminalReportsUnknown() async throws {
+        let fixture = try await makeFixture()
+        let ui = AuthenticatedOperatorUIConnectionID()
+        let cancelled = try await pendingOperation(fixture)
+        _ = try await fixture.ceremonies.bindReview(operationID: cancelled, uiConnection: ui)
+        _ = try await fixture.ceremonies.cancelReview(operationID: cancelled, uiConnection: ui)
+        await #expect(throws: WorkspaceOperatorCeremonyError.unknownOperation) {
+            try await fixture.ceremonies.bindReview(operationID: cancelled, uiConnection: ui)
+        }
+        let authorized = try await pendingOperation(fixture)
+        let (challenge, _) = try await fixture.ceremonies.bindReview(
+            operationID: authorized, uiConnection: ui)
+        _ = try await fixture.ceremonies.completeCeremony(
+            UIOperatorCompletion(
+                challengeID: challenge.challengeID, operationID: authorized,
+                outcome: .authenticated),
+            uiConnection: ui)
+        await #expect(throws: WorkspaceOperatorCeremonyError.unknownOperation) {
+            try await fixture.ceremonies.bindReview(operationID: authorized, uiConnection: ui)
+        }
+        // Terminal states stay readable via the authorizer, not retention.
+        #expect(await fixture.ceremonies.ceremonyStatus(operationID: cancelled) == "cancelled")
+        #expect(await fixture.ceremonies.ceremonyStatus(operationID: authorized) == "authorized")
     }
 }
