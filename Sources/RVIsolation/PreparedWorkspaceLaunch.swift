@@ -11,14 +11,14 @@ import Synchronization
 /// always mints. `init(rawValue:)` only names an identifier the host
 /// already minted. Naming one grants nothing: knowledge of an ID yields at
 /// most a safe description, never execution.
-struct PreparedLaunchID: Hashable, Sendable, Equatable {
-    let rawValue: UUID
+public struct PreparedLaunchID: Hashable, Sendable, Equatable {
+    public let rawValue: UUID
 
-    init() {
+    public init() {
         self.rawValue = UUID()
     }
 
-    init(rawValue: UUID) {
+    public init(rawValue: UUID) {
         self.rawValue = rawValue
     }
 }
