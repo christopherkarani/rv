@@ -19,6 +19,7 @@ _rv() {
     'doctor:Read-only health'
     'safety:Show or set normal or strict'
     'blocks:List recent denials'
+    'operator:Propose and poll identity launches'
   )
   _arguments '1: :->cmds' '*:: :->args'
   case $state in
@@ -59,6 +60,11 @@ _rv() {
           local -a sf
           sf=('normal:File-tool secrets plus shell evaluate' 'strict:Also deny ls / test / stat of a catalog path')
           _describe -t commands 'safety' sf
+          ;;
+        operator)
+          local -a op
+          op=('propose:Propose one identity launch' 'proposal-status:Poll one proposal status')
+          _describe -t commands 'operator' op
           ;;
       esac
       ;;
