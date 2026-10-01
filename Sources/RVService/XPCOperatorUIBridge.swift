@@ -48,22 +48,29 @@ enum XPCOperatorUIBridge {
         sessions: LiveOperatorUISessionRegistry,
         ceremonies: WorkspaceOperatorCeremonyService
     ) async -> xpc_object_t? {
+        // Reply-always: the only nil is a missing remote (nothing to send
+        // to). Every gate failure answers opaque denial so the requestor's
+        // reply handler fires instead of hanging.
+        guard let response = xpc_dictionary_create_reply(message) else {
+            return nil
+        }
         guard handshakeOK, !discoveryOnly,
             let peer = context.peer, peer.componentRole == .operatorUI,
             let data = body(message, key: UIBridgeWire.requestKey),
-            let request = try? IPCJSON.decode(UIBridgeRequest.self, from: data),
-            let response = xpc_dictionary_create_reply(message) else {
-            return nil
+            let request = try? IPCJSON.decode(UIBridgeRequest.self, from: data)
+        else {
+            return deny(response)
         }
         switch request {
         case .register:
-            let uiConnection = try? await sessions.register(peer: peer)
-            guard let uiConnection else { return nil }
+            guard let uiConnection = try? await sessions.register(peer: peer) else {
+                return deny(response)
+            }
             await ceremonies.uiSessionAuthenticated()
-            xpc_dictionary_set_string(
-                response, UIBridgeWire.uiConnectionKey, uiConnection.rawValue.uuidString)
-            xpc_dictionary_set_bool(response, UIBridgeWire.registeredKey, true)
-            return response
+            return answer(
+                response,
+                result: .uiRegistered(
+                    UIRegisteredDTO(uiConnection: uiConnection.rawValue)))
         case .list:
             guard await sessions.session(connectionID: peer.connectionID) != nil else {
                 return deny(response)

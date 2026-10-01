@@ -33,6 +33,7 @@ public enum IPCResult: Sendable, Equatable {
     case ruleSave(RuleSaveReply)
     case proposeWorkspaceLaunch(ProposeLaunchReply)
     case launchProposalStatus(ProposalStatusReply)
+    case uiRegistered(UIRegisteredDTO)
     case uiReviewList(UIReviewListDTO)
     case uiChallengeBundle(UIChallengeBundleDTO)
     case uiOperationStatus(UIOperationStatusDTO)
@@ -147,6 +148,7 @@ extension IPCResult: Codable {
         case ruleSave
         case proposeWorkspaceLaunch
         case launchProposalStatus
+        case uiRegistered
         case uiReviewList
         case uiChallengeBundle
         case uiOperationStatus
@@ -184,6 +186,8 @@ extension IPCResult: Codable {
             try container.encode(reply, forKey: .proposeWorkspaceLaunch)
         case .launchProposalStatus(let reply):
             try container.encode(reply, forKey: .launchProposalStatus)
+        case .uiRegistered(let reply):
+            try container.encode(reply, forKey: .uiRegistered)
         case .uiReviewList(let reply):
             try container.encode(reply, forKey: .uiReviewList)
         case .uiChallengeBundle(let reply):
@@ -227,6 +231,9 @@ extension IPCResult: Codable {
         } else if let reply = try container.decodeIfPresent(
             ProposalStatusReply.self, forKey: .launchProposalStatus) {
             self = .launchProposalStatus(reply)
+        } else if let reply = try container.decodeIfPresent(
+            UIRegisteredDTO.self, forKey: .uiRegistered) {
+            self = .uiRegistered(reply)
         } else if let reply = try container.decodeIfPresent(
             UIReviewListDTO.self, forKey: .uiReviewList) {
             self = .uiReviewList(reply)

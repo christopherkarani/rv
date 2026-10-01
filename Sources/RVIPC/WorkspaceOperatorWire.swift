@@ -11,8 +11,6 @@ import RVDomain
 /// `rv.ipc` IPCResponse envelope, mirroring the host bridge.
 public enum UIBridgeWire {
     public static let requestKey = "rv.ui-request"
-    public static let registeredKey = "rv.ui-registered"
-    public static let uiConnectionKey = "rv.ui-connection"
 
     public static let maxBodyBytes = 1_048_576
 }
@@ -231,6 +229,16 @@ public struct UIChallengeBundleDTO: Sendable, Equatable, Codable {
     public init(challenge: UIChallengeDTO, item: UIReviewItemDTO) {
         self.challenge = challenge
         self.item = item
+    }
+}
+
+/// Registration receipt. The UI connection UUID is a session handle, not a
+/// secret: it only names the connection the server already authenticated.
+public struct UIRegisteredDTO: Sendable, Equatable, Codable {
+    public let uiConnection: UUID
+
+    public init(uiConnection: UUID) {
+        self.uiConnection = uiConnection
     }
 }
 
