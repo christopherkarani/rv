@@ -837,6 +837,12 @@ final class WorkspaceSessionSupervisor: Sendable {
         if case .failure(let error) = logged {
             return .failure(.apply(error))
         }
+        // Best-effort maintenance: this close just turned one workspace's
+        // lines dead. Compaction is threshold-gated (a stat on small files),
+        // fail-closed, and never fails the close.
+        if let life = lifecycleLog.file {
+            _ = WorkspaceLifecycleLog.compactIfNeeded(at: life)
+        }
         WorkspaceOwnerRegistry.remove(path: original.rawValue, owner: id.rawValue)
         ownerLock.release()
         if let recordError = state.withLock({ $0.recordError }) {
