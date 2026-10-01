@@ -347,9 +347,7 @@ public actor ServiceRuntime {
             do {
                 let reply = try await ceremonies.propose(
                     params,
-                    requester: WorkspaceAuthorizationRequester(
-                        connectionID: context.connectionID,
-                        componentRole: context.componentRole),
+                    requester: WorkspaceAuthorizationRequester(context: context),
                     clientRequestID: request.id)
                 result = .proposeWorkspaceLaunch(reply)
             } catch let error as WorkspaceOperatorCeremonyError {

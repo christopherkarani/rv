@@ -13,7 +13,7 @@ public enum WorkspaceHostProcess {
         workspace: String,
         admission: RuntimeAdmissionConfiguration,
         principalBridge: @Sendable (WorkspacePrincipalAuthority) -> Void = { _ in },
-        prepareBridge: (@Sendable (HostPrepareHandler) -> Void)? = nil
+        prepareBridge: (@Sendable (@escaping HostPrepareHandler) -> Void)? = nil
     ) -> Int32 {
         guard workspace.contains("\0") == false,
             let directory = WorkingDirectory(validating: workspace),

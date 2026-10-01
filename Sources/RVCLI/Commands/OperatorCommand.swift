@@ -25,10 +25,10 @@ public struct OperatorPropose: AsyncParsableCommand {
     @Option(help: "Project path hint used to route to a registered host.")
     var workspace: String
 
-    @Option(help: "Host routing hint (UUID).")
+    @Option(name: .customLong("hostID"), help: "Host routing hint (UUID).")
     var hostID: String?
 
-    @Option(help: "Workspace-session routing hint (UUID).")
+    @Option(name: .customLong("sessionID"), help: "Workspace-session routing hint (UUID).")
     var sessionID: String?
 
     @Option(help: "Proposal kind: named or custom.")
