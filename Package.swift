@@ -194,14 +194,25 @@ let serviceLibraryAndDaemon: [Target] = [
         name: "rv-workspace-host",
         dependencies: ["RVIsolation", "RVEngine", "RVService"]
     ),
+    .target(
+        name: "RVOperatorUI",
+        dependencies: ["RVDomain", "RVIPC", "RVService"]
+    ),
+    .executableTarget(
+        name: "rv-operator-ui",
+        dependencies: ["RVOperatorUI"]
+    ),
 ]
 let serviceProducts: [Product] = [
     .library(name: "RVService", targets: ["RVService"]),
+    .library(name: "RVOperatorUI", targets: ["RVOperatorUI"]),
     .executable(name: "rvd", targets: ["rvd"]),
     .executable(name: "rv-workspace-host", targets: ["rv-workspace-host"]),
+    .executable(name: "rv-operator-ui", targets: ["rv-operator-ui"]),
 ]
 let serviceTestTargets: [Target] = [
     .testTarget(name: "RVServiceTests", dependencies: ["RVService", "RVAnalytics"]),
+    .testTarget(name: "RVOperatorUITests", dependencies: ["RVOperatorUI", "RVIPC"]),
 ]
 
 let cliTargets: [Target] = [

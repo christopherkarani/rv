@@ -208,6 +208,60 @@ public struct ServiceClient: Sendable {
         return reply
     }
 
+    public enum OperatorCommandError: Error, Sendable, Equatable {
+        case noTransport
+        case service(String)
+        case transport(String)
+    }
+
+    /// Untrusted launch proposal. Returns the correlation-only operation ID;
+    /// authority arrives only via the host bridge and operator review.
+    public func proposeLaunch(_ params: ProposeLaunchParams) async -> Result<
+        ProposeLaunchReply, OperatorCommandError
+    > {
+        guard let transport else {
+            return .failure(.noTransport)
+        }
+        do {
+            let reply = try await send(
+                ProposeLaunchCall(params: params), using: transport)
+            return .success(reply)
+        } catch let error as IPCCallError {
+            return .failure(mapCallError(error))
+        } catch {
+            return .failure(.transport(String(describing: error)))
+        }
+    }
+
+    public func proposalStatus(operationID: UUID) async -> Result<
+        ProposalStatusReply, OperatorCommandError
+    > {
+        guard let transport else {
+            return .failure(.noTransport)
+        }
+        do {
+            let reply = try await send(
+                ProposalStatusCall(params: ProposalStatusParams(operationID: operationID)),
+                using: transport)
+            return .success(reply)
+        } catch let error as IPCCallError {
+            return .failure(mapCallError(error))
+        } catch {
+            return .failure(.transport(String(describing: error)))
+        }
+    }
+
+    private func mapCallError(_ error: IPCCallError) -> OperatorCommandError {
+        switch error {
+        case .identityMismatch:
+            return .transport("identityMismatch")
+        case .unexpectedResult:
+            return .transport("unexpectedResult")
+        case .service(let ipcError):
+            return .service(String(describing: ipcError))
+        }
+    }
+
     /// Authority-bearing hooks never retry through the local evaluation door.
     public func hookEvaluate(host: HookHost, stdin: String) async -> HookWire {
         func unavailable() -> HookWire {

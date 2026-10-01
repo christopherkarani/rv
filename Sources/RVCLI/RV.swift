@@ -23,6 +23,7 @@ public struct RV: AsyncParsableCommand {
             AllowlistCommand.self,
             Safety.self,
             Blocks.self,
+            Operator.self,
         ]
     )
 

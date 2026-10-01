@@ -12,7 +12,7 @@ fail() { printf 'phase2a trust: %s\n' "$*" >&2; exit 1; }
 usage() {
     cat <<'EOF'
 Usage:
-  phase2a-development-trust.sh install --host PATH --service PATH [--cli PATH]
+  phase2a-development-trust.sh install --host PATH --service PATH [--cli PATH] [--ui PATH]
   phase2a-development-trust.sh uninstall
 
 Run explicitly as an administrator after building the binaries. Installation
@@ -52,12 +52,13 @@ if [[ "$operation" == uninstall ]]; then
     protected "$manifest"
     # Refuse cleanup if any installed bytes or the fixed trust manifest changed.
     (cd "$directory" && shasum -a 256 --check receipt.sha256) || fail 'installation changed; cleanup refused'
-    for name in rv-workspace-host rvd rv; do
+    for name in rv-workspace-host rvd rv rv-operator-ui; do
         [[ ! -e "$directory/$name" ]] || protected "$directory/$name"
     done
     # No recursive deletion and no discovery of arbitrary paths from a receipt.
     rm "$manifest" "$directory/receipt.sha256" "$directory/rv-workspace-host" "$directory/rvd"
     [[ ! -e "$directory/rv" ]] || rm "$directory/rv"
+    [[ ! -e "$directory/rv-operator-ui" ]] || rm "$directory/rv-operator-ui"
     rmdir "$directory"
     # Preserve the shared RV directory when any unrelated files remain.
     rmdir "$base" 2>/dev/null || true
@@ -66,19 +67,20 @@ if [[ "$operation" == uninstall ]]; then
 fi
 
 [[ "$operation" == install ]] || { usage; exit 2; }
-host_source='' service_source='' cli_source=''
+host_source='' service_source='' cli_source='' ui_source=''
 while [[ $# -gt 0 ]]; do
     [[ $# -ge 2 ]] || fail 'option requires a path'
     case "$1" in
         --host) [[ -z "$host_source" ]] || fail 'duplicate --host'; host_source=$2 ;;
         --service) [[ -z "$service_source" ]] || fail 'duplicate --service'; service_source=$2 ;;
         --cli) [[ -z "$cli_source" ]] || fail 'duplicate --cli'; cli_source=$2 ;;
+        --ui) [[ -z "$ui_source" ]] || fail 'duplicate --ui'; ui_source=$2 ;;
         *) fail "unknown option: $1" ;;
     esac
     shift 2
 done
 [[ -n "$host_source" && -n "$service_source" ]] || fail '--host and --service are required'
-for source in "$host_source" "$service_source" ${cli_source:+"$cli_source"}; do
+for source in "$host_source" "$service_source" ${cli_source:+"$cli_source"} ${ui_source:+"$ui_source"}; do
     [[ "$source" == /* && -f "$source" && -x "$source" ]] || fail "not an absolute executable file: $source"
 done
 protected '/Library/Application Support'
@@ -97,7 +99,7 @@ rollback() {
     if [[ "$complete" == 0 ]]; then
         [[ "$published" == 0 ]] || rm -f "$manifest"
         rm -f "$directory/rv-workspace-host" "$directory/rvd" "$directory/rv" \
-            "$directory/manifest.tmp" "$directory/receipt.sha256"
+            "$directory/rv-operator-ui" "$directory/manifest.tmp" "$directory/receipt.sha256"
         rmdir "$directory" 2>/dev/null || true
         rmdir "$base" 2>/dev/null || true
     fi
@@ -117,6 +119,7 @@ install_component() {
 install_component "$host_source" rv-workspace-host
 install_component "$service_source" rvd
 [[ -z "$cli_source" ]] || install_component "$cli_source" rv
+[[ -z "$ui_source" ]] || install_component "$ui_source" rv-operator-ui
 
 entry() {
     local role="$1" name="$2" hash
@@ -131,6 +134,7 @@ entry() {
     printf ','
     entry service rvd
     if [[ -n "$cli_source" ]]; then printf ','; entry cli rv; fi
+    if [[ -n "$ui_source" ]]; then printf ','; entry operatorUI rv-operator-ui; fi
     printf ']\n'
 } > "$directory/manifest.tmp"
 chmod 644 "$directory/manifest.tmp"
@@ -144,6 +148,7 @@ protected "$manifest"
     cd "$directory"
     shasum -a 256 ../peer-trust.json rv-workspace-host rvd
     [[ -z "$cli_source" ]] || shasum -a 256 rv
+    [[ -z "$ui_source" ]] || shasum -a 256 rv-operator-ui
 ) > "$directory/receipt.sha256"
 chmod 644 "$directory/receipt.sha256"
 protected "$directory/receipt.sha256"
