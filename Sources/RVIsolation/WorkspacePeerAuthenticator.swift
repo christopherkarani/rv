@@ -158,13 +158,25 @@ public struct ProtectedPeerTrustConfiguration: Sendable {
     // POSIX mode bits do not describe ACL authority. Conservatively reject every
     // allow entry (including read-only ones); platform deny-only ACLs are safe.
     static func hasNoAllowACL(path: String) -> Bool {
-        guard let acl = acl_get_file(path, ACL_TYPE_EXTENDED) else { return false }
+        // Existence first: a missing path and an ACL-less file both surface
+        // as NULL/ENOENT, but only the latter carries no allow entries.
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return false }
+        errno = 0
+        guard let acl = acl_get_file(path, ACL_TYPE_EXTENDED) else {
+            return errno == ENOENT
+        }
         defer { acl_free(UnsafeMutableRawPointer(acl)) }
         return hasNoAllowACL(acl)
     }
 
     static func hasNoAllowACL(fd: Int32) -> Bool {
-        guard let acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED) else { return false }
+        var info = stat()
+        guard fstat(fd, &info) == 0 else { return false }
+        errno = 0
+        guard let acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED) else {
+            return errno == ENOENT
+        }
         defer { acl_free(UnsafeMutableRawPointer(acl)) }
         return hasNoAllowACL(acl)
     }

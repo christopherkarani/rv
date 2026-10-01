@@ -52,6 +52,22 @@ import Testing
     #expect(ProtectedPeerTrustConfiguration.hasNoAllowACL(path: url.path))
 }
 
+@Test func aclLessExistingFileCarriesNoAllowEntries() throws {
+    // Regression: acl_get_file returns NULL/ENOENT for files without any
+    // extended ACL. That must read as "no allow entries", not failure —
+    // otherwise trust can never load on normally-protected paths.
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("rv-peer-noacl-\(UUID().uuidString)")
+    try Data("[]".utf8).write(to: url)
+    defer { try? FileManager.default.removeItem(at: url) }
+    #expect(ProtectedPeerTrustConfiguration.hasNoAllowACL(path: url.path))
+    let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    #expect(fd >= 0)
+    if fd >= 0 {
+        defer { close(fd) }
+        #expect(ProtectedPeerTrustConfiguration.hasNoAllowACL(fd: fd))
+    }
+}
+
 @Test func unixPeerEvidenceRejectsNonSocketDescriptor() {
     #expect(throws: PeerAuthenticationError.missingPeerEvidence) {
         try WorkspacePeerAuthenticator.capture(fd: -1)
