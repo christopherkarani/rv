@@ -26,6 +26,7 @@ enum HelpCatalog {
         case .blocks: blocks
         case .opencode: opencode
         case .workspace: workspace
+        case .`operator`: operatorHelp
         }
     }
 
@@ -59,6 +60,7 @@ enum HelpCatalog {
                 HelpRow(name: "allowlist", description: "Permanent user-layer exceptions"),
                 HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor / Antigravity)"),
                 HelpRow(name: "uninstall", description: "Remove rv-owned hooks, config, and LaunchAgent"),
+                HelpRow(name: "operator", description: "Propose and poll identity launches (review required)"),
             ]),
         ],
         examples: [
@@ -337,6 +339,27 @@ enum HelpCatalog {
         examples: [
             "rv blocks",
             "rv blocks --json",
+        ]
+    )
+
+    static let operatorHelp = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv operator propose --workspace <path> --kind named --definition <id>"),
+                HelpRow(name: "rv operator propose --workspace <path> --kind custom --executable <path> --digest <hex>"),
+                HelpRow(name: "rv operator proposal-status <operation-id>"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(
+                    name: "review",
+                    description: "Proposals are untrusted hints. Nothing launches until the host prepares a description and the device owner authorizes it in RVOperatorUI"
+                ),
+            ]),
+        ],
+        examples: [
+            "rv operator propose --workspace /tmp/p --kind named --definition test-agent",
         ]
     )
 

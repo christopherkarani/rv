@@ -199,3 +199,9 @@ import RVTheme
         #expect(text.contains(name), "root help missing \(name)")
     }
 }
+
+@Test func helpTopic_operator() {
+    #expect(HelpDispatch.topic(arguments: ["operator", "--help"]) == .`operator`)
+    #expect(HelpDispatch.topic(arguments: ["help", "operator"]) == .`operator`)
+    #expect(HelpDispatch.topic(arguments: ["operator", "propose", "--help"]) == .`operator`)
+}

@@ -29,6 +29,7 @@ public enum HelpTopic: Equatable, Sendable {
     case blocks
     case opencode
     case workspace
+    case `operator`
 }
 
 /// Intercepts help argv before ArgumentParser so passthrough commands still get help.
@@ -126,6 +127,8 @@ public enum HelpDispatch {
             return rest.allSatisfy(isSafetyToken) ? .safety : nil
         case "blocks":
             return rest.allSatisfy(isFormatFlag) ? .blocks : nil
+        case "operator":
+            return .`operator`
         case "help":
             return rest.isEmpty ? .help : nil
         default:

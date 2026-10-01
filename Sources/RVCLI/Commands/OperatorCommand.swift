@@ -54,8 +54,21 @@ public struct OperatorPropose: AsyncParsableCommand {
         switch await client.proposeLaunch(params) {
         case .success(let reply):
             print("operation \(reply.operationID.uuidString) status \(reply.status)")
-        case .failure:
+        case .failure(let error):
+            FileHandle.standardError.write(
+                Data("rv operator propose: \(describe(error))\n".utf8))
             throw ExitCode.failure
+        }
+    }
+
+    func describe(_ error: ServiceClient.OperatorCommandError) -> String {
+        switch error {
+        case .noTransport:
+            return "service unreachable"
+        case .service(let reason):
+            return reason
+        case .transport(let reason):
+            return reason
         }
     }
 
@@ -117,8 +130,21 @@ public struct OperatorProposalStatus: AsyncParsableCommand {
         switch await client.proposalStatus(operationID: id) {
         case .success(let reply):
             print("operation \(reply.operationID.uuidString) status \(reply.status)")
-        case .failure:
+        case .failure(let error):
+            FileHandle.standardError.write(
+                Data("rv operator proposal-status: \(describe(error))\n".utf8))
             throw ExitCode.failure
+        }
+    }
+
+    func describe(_ error: ServiceClient.OperatorCommandError) -> String {
+        switch error {
+        case .noTransport:
+            return "service unreachable"
+        case .service(let reason):
+            return reason
+        case .transport(let reason):
+            return reason
         }
     }
 }
