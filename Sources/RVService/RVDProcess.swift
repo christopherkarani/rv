@@ -8,16 +8,29 @@ import Synchronization
 public enum RVDProcess {
     public static func run(configuration: RVDConfiguration) throws {
         let analytics = AnalyticsBootstrap.makeLive(productVersion: ProtocolVersion.serviceSemver)
+        let hosts = LiveWorkspaceHostRegistry()
+        let ceremonies = WorkspaceOperatorCeremonyService(hosts: hosts)
+        let uiSessions = LiveOperatorUISessionRegistry()
         let runtime = ServiceRuntime(
+            snapshots: nil,
+            catalog: nil,
+            home: nil,
+            allowOnce: nil,
+            allowOnceDirectory: nil,
             idleExitSeconds: configuration.idleExitSeconds,
-            analytics: analytics
+            log: nil,
+            analytics: analytics,
+            clock: { Date() },
+            pendingApprovals: .automatic,
+            ceremonies: ceremonies
         )
         let slot = ListenerSlot()
         let watchdog = IdleWatchdog(seconds: configuration.idleExitSeconds) {
             slot.listener?.stop()
             Darwin.exit(0)
         }
-        let listener = XPCEvaluateListener(runtime: runtime, watchdog: watchdog)
+        let listener = XPCEvaluateListener(
+            runtime: runtime, watchdog: watchdog, hostRegistry: hosts, uiSessions: uiSessions)
         slot.listener = listener
         listener.start()
         Task { await watchdog.ping() }
@@ -43,9 +56,19 @@ public enum RVDProcess {
     public static func run(configuration: RVDConfiguration) throws {
         let socketURL = try UnixSocketPath.production()
         let analytics = AnalyticsBootstrap.makeLive(productVersion: ProtocolVersion.serviceSemver)
+        let ceremonies = WorkspaceOperatorCeremonyService()
         let runtime = ServiceRuntime(
+            snapshots: nil,
+            catalog: nil,
+            home: nil,
+            allowOnce: nil,
+            allowOnceDirectory: nil,
             idleExitSeconds: configuration.idleExitSeconds,
-            analytics: analytics
+            log: nil,
+            analytics: analytics,
+            clock: { Date() },
+            pendingApprovals: .automatic,
+            ceremonies: ceremonies
         )
         let slot = ListenerSlot()
         let watchdog = IdleWatchdog(seconds: configuration.idleExitSeconds) {

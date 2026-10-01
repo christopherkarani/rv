@@ -51,6 +51,10 @@ public enum ServiceMethodAuthorization {
         case agent
         case controlRead
         case ownerMutation
+        /// Untrusted launch proposals and proposal status. CLI-only; the
+        /// proposal creates nothing authoritative until an authenticated
+        /// host-prepared description arrives over the host bridge.
+        case launchProposal
     }
 
     public static func requirement(for method: IPCMethod) -> Requirement {
@@ -63,6 +67,8 @@ public enum ServiceMethodAuthorization {
             return .controlRead
         case .pendingResolve, .ruleSave, .setPackEnabled:
             return .ownerMutation
+        case .proposeWorkspaceLaunch, .launchProposalStatus:
+            return .launchProposal
         }
     }
 
@@ -79,13 +85,22 @@ public enum ServiceMethodAuthorization {
             switch context.componentRole {
             case .service, .workspaceHost:
                 return context.peer != nil
-            case .cli, nil:
+            case .cli, .operatorUI, nil:
                 return false
             }
         case .ownerMutation:
             // Fresh operation-bound owner authorization must be consumed in the
             // mutation path. A signed CLI cannot create that authorization.
             return false
+        case .launchProposal:
+            // Authenticated CLI may propose and poll status. The proposal is
+            // untrusted input; authority arrives only via the host bridge.
+            switch context.componentRole {
+            case .cli:
+                return context.peer != nil
+            case .service, .workspaceHost, .operatorUI, nil:
+                return false
+            }
         }
     }
 }

@@ -36,6 +36,9 @@ public actor ServiceRuntime {
     private let pendingApprovals: (any PendingApprovalCoordinating)?
     private let approvals: ApprovalRuntime
     private var analyticsEnabledPackIDs: [String] = []
+    /// Operator launch ceremonies (proposal → review → permit). Shared with
+    /// the XPC UI sessions so IPC dispatch and the UI bridge see one state.
+    let ceremonies: WorkspaceOperatorCeremonyService
 
     package private(set) var compiledPackIDs: [PackID]
     private var compiledPackIDSet: Set<PackID>
@@ -51,6 +54,33 @@ public actor ServiceRuntime {
         analytics: AnalyticsCoordinator? = nil,
         clock: @escaping @Sendable () -> Date = { Date() },
         pendingApprovals: PendingApprovalsBinding = .automatic
+    ) {
+        self.init(
+            snapshots: snapshots,
+            catalog: catalog,
+            home: home,
+            allowOnce: allowOnce,
+            allowOnceDirectory: allowOnceDirectory,
+            idleExitSeconds: idleExitSeconds,
+            log: log,
+            analytics: analytics,
+            clock: clock,
+            pendingApprovals: pendingApprovals,
+            ceremonies: WorkspaceOperatorCeremonyService())
+    }
+
+    init(
+        snapshots: [PackSnapshot]?,
+        catalog: PackCatalog?,
+        home: HomeDirectory?,
+        allowOnce: AllowOnceStore?,
+        allowOnceDirectory: URL?,
+        idleExitSeconds: Int,
+        log: (any ServiceLog)?,
+        analytics: AnalyticsCoordinator?,
+        clock: @escaping @Sendable () -> Date,
+        pendingApprovals: PendingApprovalsBinding,
+        ceremonies: WorkspaceOperatorCeremonyService
     ) {
         let resolvedHome = home ?? HomeDirectory.process()
         self.configHome = resolvedHome
@@ -94,6 +124,7 @@ public actor ServiceRuntime {
             pendingApprovals: self.pendingApprovals
         )
         self.analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: self.catalog)
+        self.ceremonies = ceremonies
     }
 
     public func acknowledge(_ hello: Hello) -> HelloAck {
@@ -233,7 +264,8 @@ public actor ServiceRuntime {
         case .hookEvaluate(let params):
             return params.clientSemver
         case .explain, .classify, .listPacks, .setPackEnabled, .doctorSnapshot,
-            .pendingList, .pendingWatch, .pendingResolve, .rulePreview, .ruleSave:
+            .pendingList, .pendingWatch, .pendingResolve, .rulePreview, .ruleSave,
+            .proposeWorkspaceLaunch, .launchProposalStatus:
             return nil
         }
     }
@@ -311,9 +343,44 @@ public actor ServiceRuntime {
             case .success(let reply): result = .ruleSave(reply)
             case .failure(let error): result = .error(error)
             }
+        case .proposeWorkspaceLaunch(let params):
+            do {
+                let reply = try await ceremonies.propose(
+                    params,
+                    requester: WorkspaceAuthorizationRequester(
+                        connectionID: context.connectionID,
+                        componentRole: context.componentRole),
+                    clientRequestID: request.id)
+                result = .proposeWorkspaceLaunch(reply)
+            } catch let error as WorkspaceOperatorCeremonyError {
+                result = .error(Self.ceremonyError(error))
+            } catch {
+                result = .error(.authorizationDenied)
+            }
+        case .launchProposalStatus(let params):
+            result = .launchProposalStatus(await ceremonies.proposalStatus(params))
         }
         logIfNeeded(request: request, result: result, started: started)
         return IPCResponse(id: request.id, result: result)
+    }
+
+    private static func ceremonyError(_ error: WorkspaceOperatorCeremonyError) -> IPCError {
+        switch error {
+        case .invalidProposal:
+            return .launchProposalFailed("invalidProposal")
+        case .unknownHost:
+            return .launchProposalFailed("unknownHost")
+        case .prepareFailed(let reason):
+            return .launchProposalFailed(reason)
+        case .storeFull:
+            return .launchProposalFailed("storeFull")
+        case .unknownOperation:
+            return .unknownMethod
+        case .notReviewable, .authorizationRejected:
+            return .authorizationDenied
+        case .descriptionMismatch:
+            return .launchProposalFailed("stale")
+        }
     }
 
     package func insertGranted(matchingView: MatchingView, cwd: WorkingDirectory, now: Date = Date()) async throws {
@@ -574,6 +641,10 @@ public actor ServiceRuntime {
             method = "rulePreview"
         case .ruleSave:
             method = "ruleSave"
+        case .proposeWorkspaceLaunch:
+            method = "proposeWorkspaceLaunch"
+        case .launchProposalStatus:
+            method = "launchProposalStatus"
         }
         if case .evaluate(let reply) = result {
             switch reply.result.decision {

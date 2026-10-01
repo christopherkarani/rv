@@ -153,6 +153,9 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
     case pendingFingerprintMismatch
     case ruleDraftMismatch
     case ruleHardStop
+    /// Coarse launch-proposal refusal (no host, preparation failed, invalid).
+    /// Never carries permit contents or authority.
+    case launchProposalFailed(String)
 
     private enum CodingKeys: String, CodingKey {
         case authorizationDenied
@@ -170,6 +173,7 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
         case pendingFingerprintMismatch
         case ruleDraftMismatch
         case ruleHardStop
+        case launchProposalFailed
     }
 
     private enum EngineSentence: String {
@@ -223,6 +227,8 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
             try container.encode(true, forKey: .ruleDraftMismatch)
         case .ruleHardStop:
             try container.encode(true, forKey: .ruleHardStop)
+        case .launchProposalFailed(let reason):
+            try container.encode(reason, forKey: .launchProposalFailed)
         }
     }
 
@@ -258,6 +264,9 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
             self = .ruleDraftMismatch
         } else if container.contains(.ruleHardStop) {
             self = .ruleHardStop
+        } else if let reason = try container.decodeIfPresent(
+            String.self, forKey: .launchProposalFailed) {
+            self = .launchProposalFailed(reason)
         } else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "unknown IPCError")

@@ -23,6 +23,8 @@ enum HostBridgeWire {
     static let registrationOKKey = "rv.host-registered"
     static let validityKey = "rv.host-validity"
     static let evaluationKey = "rv.host-evaluate"
+    static let prepareKey = "rv.host-prepare"
+    static let maxPrepareBytes = 1_048_576
 
     static func body(_ message: xpc_object_t, key: String) -> Data? {
         var size = 0
@@ -81,10 +83,15 @@ enum XPCWorkspaceHostBridge {
                     workspace: WorkspaceSessionID(rawValue: value.workspace),
                     host: WorkspaceHostID(rawValue: value.host),
                     generation: WorkspaceHostGeneration(rawValue: value.generation),
-                    isConnected: { liveness.isLive }) { reference in
+                    isConnected: { liveness.isLive },
+                    validate: { reference in
                         try await requestValidity(reference, connection: heldConnection,
                             peer: peer, liveness: liveness)
-                    }
+                    },
+                    prepare: { request in
+                        try await requestPrepare(request, connection: heldConnection,
+                            peer: peer, liveness: liveness)
+                    })
                 if liveness.isLive {
                     xpc_dictionary_set_bool(reply, HostBridgeWire.registrationOKKey, true)
                 } else {
@@ -141,6 +148,40 @@ enum XPCWorkspaceHostBridge {
             }
         }
     }
+
+    /// Reverse-RPC asking the registered host to prepare one launch. Mirrors
+    /// `requestValidity`: peer re-captured from the reply, bounded wait,
+    /// once-resume. Returns the host's refusal (nil description) as data;
+    /// transport/peer failures throw.
+    static func requestPrepare(
+        _ request: HostPrepareRequestDTO, connection: XPCHeld,
+        peer: AuthenticatedPeer, liveness: HostBridgeLiveness
+    ) async throws -> HostPrepareResponseDTO {
+        guard liveness.isLive else { throw LiveWorkspaceHostError.disconnected }
+        let bytes = try JSONEncoder().encode(request)
+        return try await withCheckedThrowingContinuation { continuation in
+            let pending = HostPreparePending(continuation)
+            let message = xpc_dictionary_create_empty()
+            HostBridgeWire.set(bytes, key: HostBridgeWire.prepareKey, on: message)
+            xpc_connection_send_message_with_reply(connection.object, message, nil) { reply in
+                let value = Result<HostPrepareResponseDTO, any Error> {
+                    guard liveness.isLive else { throw LiveWorkspaceHostError.disconnected }
+                    let trust = try ProtectedPeerTrustConfiguration.installed()
+                    let current = try MacOSPeerAuthenticator.capture(message: reply,
+                        connectionID: peer.connectionID, trust: trust)
+                    guard current == peer else { throw LiveWorkspaceHostError.peerMismatch }
+                    guard let data = HostBridgeWire.body(reply, key: HostBridgeWire.prepareKey) else {
+                        throw LiveWorkspaceHostError.prepareRPCFailed
+                    }
+                    return try JSONDecoder().decode(HostPrepareResponseDTO.self, from: data)
+                }
+                pending.finish(value)
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+                pending.finish(.failure(LiveWorkspaceHostError.prepareRPCFailed))
+            }
+        }
+    }
 }
 
 private final class HostValidityPending: Sendable {
@@ -149,6 +190,21 @@ private final class HostValidityPending: Sendable {
         continuation = Mutex(value)
     }
     func finish(_ result: Result<AgentPrincipalValidity?, any Error>) {
+        let pending = continuation.withLock { value in
+            let current = value
+            value = nil
+            return current
+        }
+        pending?.resume(with: result)
+    }
+}
+
+private final class HostPreparePending: Sendable {
+    private let continuation: Mutex<CheckedContinuation<HostPrepareResponseDTO, any Error>?>
+    init(_ value: CheckedContinuation<HostPrepareResponseDTO, any Error>) {
+        continuation = Mutex(value)
+    }
+    func finish(_ result: Result<HostPrepareResponseDTO, any Error>) {
         let pending = continuation.withLock { value in
             let current = value
             value = nil

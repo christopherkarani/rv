@@ -1,5 +1,4 @@
 import Foundation
-import RVIsolation
 
 /// Platform evidence remains distinct from agent binding and owner authorization.
 public struct AuthenticatedPeer: Sendable, Equatable {

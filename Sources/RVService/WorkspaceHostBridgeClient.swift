@@ -14,10 +14,17 @@ public final class WorkspaceHostBridgeClient: Sendable {
         var connection: XPCHeld?
     }
     private let state = Mutex(State())
+    private let prepareHandler = Mutex<HostPrepareHandler?>(nil)
     private let serviceName: String
 
     public init(serviceName: String = RVService.machServiceName) {
         self.serviceName = serviceName
+    }
+
+    /// Installs the host's prepare-only handler (resolve + prepare + describe).
+    /// Absent by default: prepare requests are refused, never dispatched.
+    public func setPrepareHandler(_ handler: HostPrepareHandler?) {
+        prepareHandler.withLock { $0 = handler }
     }
 
     public func connect(_ authority: WorkspacePrincipalAuthority) async throws {
@@ -44,10 +51,16 @@ public final class WorkspaceHostBridgeClient: Sendable {
                 return
             }
             guard xpc_get_type(event) == XPC_TYPE_DICTIONARY,
-                  Self.isService(event),
-                  let referenceBytes = Self.data(event, key: "rv.host-validity"),
-                  let reference = try? IPCJSON.decode(AgentPrincipalReference.self, from: referenceBytes),
                   let response = xpc_dictionary_create_reply(event) else { return }
+            if xpc_dictionary_get_value(event, HostBridgeWire.prepareKey) != nil {
+                Self.answerPrepare(
+                    event, response: response, connection: actions.object,
+                    handler: self.flatMap { $0.prepareHandler.withLock { $0 } })
+                return
+            }
+            guard Self.isService(event),
+                  let referenceBytes = Self.data(event, key: "rv.host-validity"),
+                  let reference = try? IPCJSON.decode(AgentPrincipalReference.self, from: referenceBytes) else { return }
             // Authentication happens before parsing or invoking host authority.
             let validity = authority.resolve(reference)
             if let validity, let bytes = try? IPCJSON.encode(validity) {
@@ -156,6 +169,35 @@ public final class WorkspaceHostBridgeClient: Sendable {
         var size = 0
         guard let bytes = xpc_dictionary_get_data(message, key, &size), size <= 65_536 else { return nil }
         return Data(bytes: bytes, count: size)
+    }
+
+    /// Answers one prepare reverse-RPC. Silence on authentication failure (no
+    /// oracle); an explicit refusal DTO on decode/handler failure. The service
+    /// side bounds the wait regardless.
+    private static func answerPrepare(
+        _ event: xpc_object_t, response: xpc_object_t, connection: xpc_object_t,
+        handler: HostPrepareHandler?
+    ) {
+        guard isService(event) else { return }
+        var size = 0
+        let refusal = HostPrepareResponseDTO(description: nil, error: "invalidRequest")
+        guard let bytes = xpc_dictionary_get_data(event, HostBridgeWire.prepareKey, &size),
+              size <= HostBridgeWire.maxPrepareBytes,
+              let request = try? JSONDecoder().decode(
+                  HostPrepareRequestDTO.self, from: Data(bytes: bytes, count: size)),
+              let handler else {
+            if let encoded = try? JSONEncoder().encode(refusal) {
+                set(encoded, key: HostBridgeWire.prepareKey, on: response)
+            }
+            xpc_connection_send_message(connection, response)
+            return
+        }
+        // Authentication happened before parsing or invoking host preparation.
+        let answered = handler(request)
+        if let encoded = try? JSONEncoder().encode(answered) {
+            set(encoded, key: HostBridgeWire.prepareKey, on: response)
+        }
+        xpc_connection_send_message(connection, response)
     }
 
     private static func set(_ data: Data, key: String, on message: xpc_object_t) {

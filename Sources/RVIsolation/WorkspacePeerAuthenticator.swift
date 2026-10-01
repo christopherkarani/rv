@@ -3,6 +3,10 @@ import Foundation
 /// A component identity does not confer human or Agent Principal authority.
 public enum TrustedRVComponentRole: String, Sendable, Codable, CaseIterable, Hashable {
     case cli, service, workspaceHost
+    /// Trusted native operator UI. Establishes that this is genuine RV operator
+    /// UI code — never that the human authorized anything. Least privilege:
+    /// review ceremonies only; no execution, policy, approval, or secret access.
+    case operatorUI
 }
 
 public struct PeerCodeIdentity: Sendable, Equatable {

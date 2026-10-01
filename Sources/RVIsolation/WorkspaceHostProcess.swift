@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import RVDomain
+import RVIPC
 import RVPolicy
 
 /// `rvd` is the user-wide hook and policy service. It idle-exits and does not
@@ -11,7 +12,8 @@ public enum WorkspaceHostProcess {
     public static func run(
         workspace: String,
         admission: RuntimeAdmissionConfiguration,
-        principalBridge: @Sendable (WorkspacePrincipalAuthority) -> Void = { _ in }
+        principalBridge: @Sendable (WorkspacePrincipalAuthority) -> Void = { _ in },
+        prepareBridge: (@Sendable (HostPrepareHandler) -> Void)? = nil
     ) -> Int32 {
         guard workspace.contains("\0") == false,
             let directory = WorkingDirectory(validating: workspace),
@@ -65,6 +67,7 @@ public enum WorkspaceHostProcess {
             return WorkspaceHostExit.failed
         case .success(let server):
             principalBridge(server.principalAuthority)
+            prepareBridge?(server.makePrepareHandler())
             server.waitForClose()
             return WorkspaceHostExit.closed
         }

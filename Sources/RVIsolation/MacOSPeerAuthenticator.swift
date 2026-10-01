@@ -1,6 +1,5 @@
 #if os(macOS)
 import Foundation
-import RVIsolation
 import Security
 @preconcurrency import XPC
 

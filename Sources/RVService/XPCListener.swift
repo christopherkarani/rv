@@ -56,16 +56,34 @@ public final class XPCEvaluateListener: Sendable {
     private let serviceName: String
     private let listener = Mutex<xpc_connection_t?>(nil)
     private let actionListener = Mutex<xpc_connection_t?>(nil)
-    private let hostRegistry = LiveWorkspaceHostRegistry()
+    private let hostRegistry: LiveWorkspaceHostRegistry
+    private let uiSessions: LiveOperatorUISessionRegistry
 
-    public init(
+    public convenience init(
         runtime: ServiceRuntime,
         watchdog: IdleWatchdog,
         machServiceName: String = RVService.machServiceName
     ) {
+        self.init(
+            runtime: runtime,
+            watchdog: watchdog,
+            machServiceName: machServiceName,
+            hostRegistry: LiveWorkspaceHostRegistry(),
+            uiSessions: LiveOperatorUISessionRegistry())
+    }
+
+    init(
+        runtime: ServiceRuntime,
+        watchdog: IdleWatchdog,
+        machServiceName: String = RVService.machServiceName,
+        hostRegistry: LiveWorkspaceHostRegistry,
+        uiSessions: LiveOperatorUISessionRegistry
+    ) {
         self.runtime = runtime
         self.watchdog = watchdog
         self.serviceName = machServiceName
+        self.hostRegistry = hostRegistry
+        self.uiSessions = uiSessions
     }
 
     public func start() {
@@ -122,7 +140,8 @@ public final class XPCEvaluateListener: Sendable {
             listener.map { XPCHeld(xpc_endpoint_create($0)) }
         } : nil
         let session = XPCPeerSession(runtime: runtime, watchdog: watchdog,
-            discoveryOnly: discoveryOnly, actionEndpoint: endpoint, hostRegistry: hostRegistry)
+            discoveryOnly: discoveryOnly, actionEndpoint: endpoint, hostRegistry: hostRegistry,
+            uiSessions: uiSessions)
         xpc_connection_set_event_handler(peer) { event in
             session.handle(event)
         }
@@ -138,6 +157,8 @@ final class XPCPeerSession: Sendable {
     private let actionEndpoint: XPCHeld?
     private let connectionID = UUID()
     private let hostRegistry: LiveWorkspaceHostRegistry
+    private let uiSessions: LiveOperatorUISessionRegistry
+    private let ceremonies: WorkspaceOperatorCeremonyService
     private let hostLiveness = HostBridgeLiveness()
     private let beginTransaction: @Sendable () -> Void
     private let endTransaction: @Sendable () -> Void
@@ -148,6 +169,8 @@ final class XPCPeerSession: Sendable {
         discoveryOnly: Bool = false,
         actionEndpoint: XPCHeld? = nil,
         hostRegistry: LiveWorkspaceHostRegistry = LiveWorkspaceHostRegistry(),
+        uiSessions: LiveOperatorUISessionRegistry = LiveOperatorUISessionRegistry(),
+        ceremonies: WorkspaceOperatorCeremonyService? = nil,
         beginTransaction: @escaping @Sendable () -> Void = { xpc_transaction_begin() },
         endTransaction: @escaping @Sendable () -> Void = { xpc_transaction_end() }
     ) {
@@ -156,6 +179,8 @@ final class XPCPeerSession: Sendable {
         self.discoveryOnly = discoveryOnly
         self.actionEndpoint = actionEndpoint
         self.hostRegistry = hostRegistry
+        self.uiSessions = uiSessions
+        self.ceremonies = ceremonies ?? runtime.ceremonies
         self.beginTransaction = beginTransaction
         self.endTransaction = endTransaction
     }
@@ -166,8 +191,16 @@ final class XPCPeerSession: Sendable {
         if type == XPC_TYPE_ERROR {
             hostLiveness.disconnect()
             let registry = hostRegistry
+            let sessions = uiSessions
+            let ceremonies = ceremonies
             let id = connectionID
-            return Task { await registry.disconnect(connectionID: id) }
+            return Task {
+                await registry.disconnect(connectionID: id)
+                await ceremonies.hostConnectionLost(connectionID: id)
+                if let uiConnection = await sessions.disconnect(connectionID: id) {
+                    await ceremonies.uiConnectionLost(uiConnection)
+                }
+            }
         }
         guard type == XPC_TYPE_DICTIONARY else {
             return nil
@@ -196,6 +229,12 @@ final class XPCPeerSession: Sendable {
                 await XPCWorkspaceHostBridge.handle(message: held, context: context,
                     handshakeOK: accepted, discoveryOnly: self.discoveryOnly,
                     liveness: self.hostLiveness, registry: self.hostRegistry, runtime: self.runtime)
+                return
+            }
+            if XPCOperatorUIBridge.handles(message) {
+                await XPCOperatorUIBridge.handle(message: held, context: context,
+                    handshakeOK: accepted, discoveryOnly: self.discoveryOnly,
+                    sessions: self.uiSessions, ceremonies: self.ceremonies)
                 return
             }
             let incomingReply: IncomingReply

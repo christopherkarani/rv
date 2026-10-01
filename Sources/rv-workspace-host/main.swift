@@ -62,6 +62,9 @@ enum WorkspaceHostMain {
                             FileHandle.standardError.write(Data("rv-workspace-host: principal bridge unavailable\n".utf8))
                         }
                     }
+                },
+                prepareBridge: { handler in
+                    principalBridge.setPrepareHandler(handler)
                 }
             )
         )

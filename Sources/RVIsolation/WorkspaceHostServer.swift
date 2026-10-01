@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import RVDomain
+import RVIPC
 import RVPolicy
 import Synchronization
 
@@ -717,6 +718,20 @@ final class WorkspaceHostServer: Sendable {
                 inputOwner: fact?.inputOwner ?? false,
                 created: responseOp == .ensureTerminalRuntime ? true : nil
             )
+        }
+    }
+
+    /// Builds the prepare-only RPC handler for the service bridge. The closure
+    /// resolves, prepares, and describes; it cannot dispatch or launch.
+    func makePrepareHandler() -> HostPrepareHandler {
+        { [supervisor, agentDefinitions, hostID, generation = principalAuthority.generation] request in
+            WorkspaceHostPrepareHandler.prepare(
+                request,
+                supervisor: supervisor,
+                definitions: agentDefinitions,
+                host: hostID,
+                generation: generation,
+                project: supervisor.snapshot.originalPath.rawValue)
         }
     }
 

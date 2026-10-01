@@ -70,7 +70,7 @@ let coreLibraryTargets: [Target] = [
     .target(name: "RVFileStore"),
     .target(
         name: "RVIsolation",
-        dependencies: ["RVDomain", "RVPolicy"],
+        dependencies: ["RVDomain", "RVPolicy", "RVIPC"],
         // SwiftPM rejects mixed-language targets. The C shim is compiled
         // only into Linux `rv-isolation-exec`.
         exclude: [
