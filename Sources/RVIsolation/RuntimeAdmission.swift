@@ -164,6 +164,30 @@ final class RuntimeAdmissionSession: Sendable {
         var responseWrite: Int32
         var httpToken: HTTPCancellation?
         var stop = false
+        /// Live registry that resolves the trusted principal context. Set
+        /// together with the channel's instance binding; nil on legacy
+        /// channels, which keep the pre-identity behavior.
+        var agentRegistry: AgentInstanceRegistry? = nil
+    }
+
+    /// Binds this channel to an announced Agent Instance.
+    ///
+    /// Called once by the workspace host after announcing the launch attempt,
+    /// while the child image is still stopped, so no request can arrive
+    /// before the binding exists. Refuses to rebind: an established binding
+    /// never moves to another instance. Every later submit resolves the
+    /// trusted context fresh from the registry; a cached context is never
+    /// reused, so revocation takes effect on the next request.
+    func bindAgentInstance(_ id: AgentInstanceID, registry: AgentInstanceRegistry) -> Bool {
+        state.withLock { channel in
+            guard var binding = channel.binding, binding.agentInstanceID == nil else {
+                return false
+            }
+            binding.agentInstanceID = id
+            channel.binding = binding
+            channel.agentRegistry = registry
+            return true
+        }
     }
 
     init(
@@ -225,13 +249,23 @@ final class RuntimeAdmissionSession: Sendable {
     func submit(
         _ frame: Result<RuntimeActionFrame, RuntimeAdmissionDecodeError>
     ) -> RuntimeAdmissionDecision {
-        var binding = state.withLock { $0.binding }
+        // Snapshot binding and registry together: two separate locks could
+        // pair a pre-bind channel with a post-bind registry or vice versa.
+        let snapshot = state.withLock { ($0.binding, $0.agentRegistry) }
+        var binding = snapshot.0
+        let registry = snapshot.1
+        // Fresh trusted context for every submit: resolving once and caching
+        // would let a revoked principal act on a stale snapshot.
+        let agentContext = binding.flatMap { registry?.context(forBinding: $0) }
+        var subject = subject
+        subject.agent = agentContext
         let leader = launch.sessionLeader
         let decision = RuntimeAdmissionGate.submit(
             binding: &binding,
             frame: frame,
             policy: configuration.policy(subject.session),
             approvalFor: configuration.approval,
+            agentContext: agentContext,
             propose: { [configuration, subject] accepted in
                 RuntimeAdmissionStop.$shouldStop.withValue({
                     #if os(macOS)
@@ -246,6 +280,13 @@ final class RuntimeAdmissionSession: Sendable {
         state.withLock { channel in
             if channel.stop {
                 binding?.phase = .finished
+            }
+            // Only auth state (consumed sets, phase) flows back. Identity
+            // fields never change via the gate, so a binding installed
+            // after this submit snapshotted must survive the write-back
+            // rather than be clobbered to the pre-bind snapshot.
+            if binding?.agentInstanceID == nil {
+                binding?.agentInstanceID = channel.binding?.agentInstanceID
             }
             channel.binding = binding
         }
@@ -418,7 +459,9 @@ final class RuntimeAdmissionSession: Sendable {
                 authorization: .rejected,
                 executionAttempted: false,
                 result: RuntimeAdmissionRejection.inactiveSession.rawValue,
-                workspace: event.workspace
+                workspace: event.workspace,
+                agentInstance: event.agentInstance,
+                agentDefinition: event.agentDefinition
             )
         )
     }

@@ -53,6 +53,10 @@ public enum RVPolicyPaths: Sendable {
         configDir.appendingPathComponent("runtime-resources.json", isDirectory: false)
     }
 
+    public static func agentDefinitionsFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("agent-definitions.json", isDirectory: false)
+    }
+
     /// Files T6 / `rv uninstall` must delete when present (policy artifacts + locks).
     public static func uninstallArtifacts(inConfigDir configDir: URL) -> [URL] {
         [
@@ -69,6 +73,7 @@ public enum RVPolicyPaths: Sendable {
             policyFile(inConfigDir: configDir),
             policyLockFile(inConfigDir: configDir),
             runtimeResourcesFile(inConfigDir: configDir),
+            agentDefinitionsFile(inConfigDir: configDir),
         ]
     }
 

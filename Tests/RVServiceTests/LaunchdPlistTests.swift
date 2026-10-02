@@ -45,22 +45,29 @@ struct LaunchdPlistTests {
         }
     }
 
-    @Test func productionSourcesDoNotListenOnUnixSocket() throws {
+    /// macOS production surface: the XPC Mach service (hook path) plus exactly
+    /// one AF_UNIX socket (SDK path) via `UnixSocketListener`. Nothing else
+    /// may open sockets, and TCP listeners stay banned.
+    @Test func productionSocketSurfaceIsExplicit() throws {
         let root = packageRoot().appendingPathComponent("Sources")
         let files = try swiftFiles(under: root.appendingPathComponent("RVService"))
             + swiftFiles(under: root.appendingPathComponent("rvd"))
         for url in files {
             if url.lastPathComponent == "UnixFrameTransport.swift" {
+                // Linux-gated; covered by linuxSocketSourcesHaveNoBSDFlags.
                 continue
             }
             let text = try String(contentsOf: url, encoding: .utf8)
-            #expect(text.contains("AF_UNIX") == false)
+            let mayListen = url.lastPathComponent == "UnixSocketListener.swift"
+            #expect(text.contains("AF_UNIX") == false || mayListen)
             #expect(text.contains("NWListener") == false)
-            let mayMentionSocket =
-                url.lastPathComponent == "RVDLaunch.swift" || url.lastPathComponent == "main.swift"
+            let mayMentionSocket = url.lastPathComponent == "RVDLaunch.swift"
+                || url.lastPathComponent == "main.swift"
+                || url.lastPathComponent == "RVDProcess.swift"
             #expect(text.contains("--socket") == false || mayMentionSocket)
         }
         let _: XPCEvaluateListener.Type = XPCEvaluateListener.self
+        let _: UnixSocketListener.Type = UnixSocketListener.self
     }
     #endif
 }

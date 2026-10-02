@@ -761,10 +761,8 @@ struct WorkspaceHostTests {
             resourceProfileID: "alpha"
         ).get()
         #expect(waitFor(tree.workspaceURL.appendingPathComponent("home-a")))
-        #expect(try String(contentsOf: tree.workspaceURL.appendingPathComponent("selected-a"), encoding: .utf8)
-            == "synthetic-a")
-        #expect(try String(contentsOf: tree.workspaceURL.appendingPathComponent("seen-a"), encoding: .utf8)
-            == "support-a")
+        #expect(waitForContent(tree.workspaceURL.appendingPathComponent("selected-a"), "synthetic-a"))
+        #expect(waitForContent(tree.workspaceURL.appendingPathComponent("seen-a"), "support-a"))
         #expect(FileManager.default.fileExists(atPath: tree.workspaceURL.appendingPathComponent("leak-b").path) == false)
 
         _ = try client.launchRuntime(
@@ -776,9 +774,7 @@ struct WorkspaceHostTests {
             ],
             resourceProfileID: "beta"
         ).get()
-        #expect(waitFor(tree.workspaceURL.appendingPathComponent("selected-b")))
-        #expect(try String(contentsOf: tree.workspaceURL.appendingPathComponent("selected-b"), encoding: .utf8)
-            == "synthetic-b")
+        #expect(waitForContent(tree.workspaceURL.appendingPathComponent("selected-b"), "synthetic-b"))
         #expect(FileManager.default.fileExists(atPath: tree.workspaceURL.appendingPathComponent("leak-a").path) == false)
         #expect(FileManager.default.fileExists(atPath: tree.workspaceURL.appendingPathComponent(".config/auth").path)
             == false)
@@ -932,6 +928,41 @@ struct WorkspaceHostTests {
         #expect(reused.runtime == created.runtime)
         #expect(reused.created == false)
         #expect(try client.listRuntimes().get().filter(\.terminal).count == 1)
+        #expect(client.cancelRuntime(created.runtime).isSuccess)
+    }
+
+    @Test func ensureTerminalRuntimeNeverRelabelsTheExistingPrincipal() throws {
+        // Spec section 10: reattachment may attach to the existing runtime,
+        // but it must not relabel it. A request naming a different hook
+        // gets the existing principal back explicitly, never mutated.
+        let opened = try TestHost()
+        defer { opened.close() }
+        let client = try WorkspaceClient.connect(opened.server.endpoint).get()
+        defer { _ = client.detach() }
+        let created = try client.ensureTerminalRuntime(
+            executable: "/bin/sh",
+            arguments: ["-c", "/bin/sleep 30"],
+            hookHost: .claude,
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        #expect(created.created)
+        #expect(created.hook == HookHost.claude.rawValue)
+        let reused = try client.ensureTerminalRuntime(
+            executable: "/bin/zsh",
+            hookHost: .codex,
+            terminalRows: 24,
+            terminalColumns: 80
+        ).get()
+        #expect(reused.runtime == created.runtime)
+        #expect(reused.created == false)
+        #expect(reused.hook == HookHost.claude.rawValue)
+        #expect(try client.listRuntimes().get().filter(\.terminal).count == 1)
+        let fact = try #require(opened.supervisor.runtimeFacts().first {
+            $0.id == created.runtime
+        })
+        #expect(fact.hookHost == HookHost.claude.rawValue)
+        #expect(fact.running)
         #expect(client.cancelRuntime(created.runtime).isSuccess)
     }
     @Test func malformedHookTagIsRefusedClientSideBeforeSpawn() throws {
@@ -1346,6 +1377,20 @@ private func waitLive(project: String, configuration: URL, seconds: TimeInterval
 
 private func waitFor(_ url: URL) -> Bool {
     waitUntil(seconds: 20) { FileManager.default.fileExists(atPath: url.path) }
+}
+
+/// Waits until the file reads back exactly `expected`, polling like
+/// `waitFor`. A bare existence check followed by a single read flakes
+/// under full-suite parallel load: the file can exist while its bytes
+/// are still landing, or a transient open failure (fd pressure from
+/// hundreds of parallel sandboxed launches) can throw between the stat
+/// and the read. Polling the content asserts the same end state —
+/// exact bytes within the same budget — without that race. A missing
+/// file or persistently wrong content still fails closed.
+private func waitForContent(_ url: URL, _ expected: String) -> Bool {
+    waitUntil(seconds: 20) {
+        (try? String(contentsOf: url, encoding: .utf8)) == expected
+    }
 }
 
 private func openedHookHost(_ supervisor: WorkspaceSessionSupervisor, _ id: UUID) -> String? {

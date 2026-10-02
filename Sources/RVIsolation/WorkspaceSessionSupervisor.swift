@@ -104,6 +104,9 @@ final class WorkspaceSessionSupervisor: Sendable {
     private let boundary: WorkspaceInodeBoundary
     private let lifecycleLog: WorkspaceLifecycleStore
     private let ownerLock: WorkspaceOwnerLock
+    /// Live Agent Instances this workspace host owns. Launches without an
+    /// Agent Definition mint no instance and keep the legacy behavior.
+    let agentInstances: AgentInstanceRegistry
     private let state: Mutex<State>
     private let egressProxy: EgressProxy?
     private let egressPort: Int?
@@ -115,7 +118,8 @@ final class WorkspaceSessionSupervisor: Sendable {
         createdAt: Date,
         boundary: WorkspaceInodeBoundary,
         lifecycleLog: WorkspaceLifecycleStore,
-        ownerLock: WorkspaceOwnerLock
+        ownerLock: WorkspaceOwnerLock,
+        instanceJournal: AgentInstanceJournalStore
     ) {
         self.id = id
         self.original = original
@@ -124,6 +128,7 @@ final class WorkspaceSessionSupervisor: Sendable {
         self.boundary = boundary
         self.lifecycleLog = lifecycleLog
         self.ownerLock = ownerLock
+        self.agentInstances = AgentInstanceRegistry(journal: instanceJournal)
         self.state = Mutex(State(lifecycle: .creating))
         // One CONNECT proxy per workspace host. A bind failure leaves the
         // port nil and contained spawns omit proxy variables (fail closed:
@@ -163,7 +168,8 @@ final class WorkspaceSessionSupervisor: Sendable {
     static func open(
         _ workspace: WorkingDirectory,
         lifecycleLog: WorkspaceLifecycleStore,
-        runtimeLog: URL? = nil
+        runtimeLog: URL? = nil,
+        instanceJournal: AgentInstanceJournalStore = .production
     ) -> Result<WorkspaceSessionSupervisor, WorkspaceSessionError> {
         let resolved: String
         switch existingResolvedWorkspacePath(workspace) {
@@ -301,7 +307,8 @@ final class WorkspaceSessionSupervisor: Sendable {
             createdAt: createdAt,
             boundary: boundary,
             lifecycleLog: lifecycleLog,
-            ownerLock: ownerLock
+            ownerLock: ownerLock,
+            instanceJournal: instanceJournal
         )
         let activated = supervisor.state.withLock { state -> Bool in
             guard let active = state.lifecycle.transition(.becameActive) else { return false }
@@ -406,7 +413,8 @@ final class WorkspaceSessionSupervisor: Sendable {
         io: IsolatedIO = .discard,
         resourceProfile: RuntimeResourceProfile? = nil,
         admission: RuntimeAdmissionConfiguration = .failClosed,
-        spawnFault: RuntimeSpawnFault? = nil
+        spawnFault: RuntimeSpawnFault? = nil,
+        agentDefinition: AgentDefinition? = nil
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         launch(
             host: host,
@@ -417,7 +425,8 @@ final class WorkspaceSessionSupervisor: Sendable {
             resourceProfile: resourceProfile,
             admission: admission,
             sessionStore: .production,
-            spawnFault: spawnFault
+            spawnFault: spawnFault,
+            agentDefinition: agentDefinition
         )
     }
 
@@ -432,7 +441,8 @@ final class WorkspaceSessionSupervisor: Sendable {
         sessionStore: RuntimeSessionStore,
         runningLimit: Int? = nil,
         keychainReader: KeychainReader = .live,
-        spawnFault: RuntimeSpawnFault? = nil
+        spawnFault: RuntimeSpawnFault? = nil,
+        agentDefinition: AgentDefinition? = nil
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         let request: IsolatedLaunchRequest
         switch prepareSeatbelt(plan.isolationPlan(), command, resourceProfile: resourceProfile) {
@@ -456,7 +466,8 @@ final class WorkspaceSessionSupervisor: Sendable {
             admission: admission,
             register: true,
             runningLimit: runningLimit,
-            keychainReader: keychainReader
+            keychainReader: keychainReader,
+            agentDefinition: agentDefinition
         )
         switch spawned {
         case .failure(let error):
@@ -468,7 +479,26 @@ final class WorkspaceSessionSupervisor: Sendable {
             } settled: {
                 self.pruneFinishedRuntimes(limit: WorkspaceControlLimits.maxRuntimes)
             }
-            return waitUntilEstablished(child)
+            switch waitUntilEstablished(child) {
+            case .failure(let error):
+                // The attempt was announced but never established. Finish
+                // the instance now — the exit watcher would only finish it
+                // as already-inactive — so the journal records the outcome
+                // promptly with the right reason even if the watcher never
+                // fires. Legacy launches without a definition are a no-op.
+                _ = agentInstances.finishRuntime(session.id, reason: .establishmentFailed)
+                return .failure(error)
+            case .success(let running):
+                guard agentDefinition == nil || activateRunningInstance(for: child) else {
+                    // The runtime established but identity did not. Authority
+                    // dies first, then the process is reaped; the launch
+                    // reports failure either way.
+                    _ = agentInstances.finishRuntime(session.id, reason: .establishmentFailed)
+                    _ = cancel(session.id)
+                    return .failure(.apply(.lifetimeBoundaryFailed))
+                }
+                return .success(running)
+            }
         }
     }
 
@@ -519,6 +549,9 @@ final class WorkspaceSessionSupervisor: Sendable {
         guard let child else { return .failure(.unknownRuntime(runtime)) }
         child.stop.request()
         _ = stopOwnedSession(leader: child.live.pid, reap: false)
+        // Authority dies on cancel, before the reap completes. A lingering
+        // process group keeps no usable principal.
+        _ = agentInstances.finishRuntime(runtime, reason: .cancelled)
         guard waitForChildren([child], seconds: 45) else {
             return .failure(.childTeardownFailed)
         }
@@ -566,7 +599,8 @@ final class WorkspaceSessionSupervisor: Sendable {
         admission: RuntimeAdmissionConfiguration,
         register: Bool,
         runningLimit: Int? = nil,
-        keychainReader: KeychainReader = .live
+        keychainReader: KeychainReader = .live,
+        agentDefinition: AgentDefinition? = nil
     ) -> Result<WorkspaceChild, WorkspaceSessionError> {
         guard let profile = request.seatbeltProfile,
             let workspace = request.containedWorkspacePath
@@ -641,12 +675,20 @@ final class WorkspaceSessionSupervisor: Sendable {
         switch result {
         case .failure(let error):
             if slot.child == nil, let session = slot.logged {
-                noteRuntimeEnded(session)
+                noteRuntimeEnded(session, reason: .spawnFailed)
             }
             return .failure(error)
         case .success:
             guard let child = slot.child else {
                 return .failure(.apply(.processSpawnFailed))
+            }
+            if let definition = agentDefinition {
+                // Announce before the resume below: the child image is still
+                // stopped, so no request can arrive on an unbound channel.
+                guard announceAgentInstance(definition, child: child) else {
+                    retireUnrecorded(child)
+                    return .failure(.apply(.sessionRecordFailed))
+                }
             }
             switch recordProcessGroup(child, spawnFault: request.spawnFault) {
             case .failure(let error):
@@ -656,6 +698,56 @@ final class WorkspaceSessionSupervisor: Sendable {
                 return .success(child)
             }
         }
+    }
+
+    /// Mints and announces the Agent Instance for a spawned child, and binds
+    /// the child's admission channel to it. False refuses the launch.
+    ///
+    /// The definition comes from the trusted caller, never the workload.
+    /// Executable evidence is the weak launch-observed level: RV spawned the
+    /// process group but verified neither content nor signing.
+    private func announceAgentInstance(
+        _ definition: AgentDefinition,
+        child: WorkspaceChild
+    ) -> Bool {
+        let session = child.live.session
+        let instance = AgentInstance(
+            id: AgentInstanceID(),
+            owner: OwnerPrincipal.current(),
+            definitionID: definition.id,
+            definitionRevision: AgentDefinitionRevision.resolve(definition),
+            workspaceSessionID: id,
+            runtimeSessionID: session.id,
+            executableEvidence: ExecutableEvidence(pid: child.live.pid),
+            assurance: .launchObserved,
+            groupLeader: RuntimeChildIdentity(pid: child.live.pid),
+            workloadProcess: nil,
+            parent: nil,
+            effectiveAuthority: definition.authorityCeiling,
+            delegableAuthority: definition.authorityCeiling,
+            mintedAt: Date()
+        )
+        guard agentInstances.announce(instance) else { return false }
+        guard child.live.admission.bindAgentInstance(instance.id, registry: agentInstances) else {
+            _ = agentInstances.finishRuntime(session.id, reason: .spawnFailed)
+            return false
+        }
+        return true
+    }
+
+    /// Activates the announced instance once the runtime established.
+    private func activateRunningInstance(for child: WorkspaceChild) -> Bool {
+        let session = child.live.session
+        guard let instance = agentInstances.instance(forRuntime: session.id),
+            let established = EstablishedRuntimeSession(
+                session: session,
+                instance: instance,
+                establishedAt: Date()
+            )
+        else {
+            return false
+        }
+        return agentInstances.activate(established) != nil
     }
 
     private func recordProcessGroup(
@@ -718,7 +810,7 @@ final class WorkspaceSessionSupervisor: Sendable {
         // removes it on the normal teardown, so the retire path must too.
         // `remove` is `try? rm -rf`: idempotent if a watcher also fires.
         child.live.resources?.remove()
-        noteRuntimeEnded(session)
+        noteRuntimeEnded(session, reason: .spawnFailed)
     }
 
     private func waitUntilEstablished(
@@ -884,7 +976,11 @@ final class WorkspaceSessionSupervisor: Sendable {
         return children.allSatisfy { $0.watchFinished && $0.isProcessGone }
     }
 
-    private func noteRuntimeEnded(_ session: RuntimeSession) {
+    private func noteRuntimeEnded(
+        _ session: RuntimeSession,
+        reason: AgentRevokeReason = .runtimeEnded
+    ) {
+        _ = agentInstances.finishRuntime(session.id, reason: reason)
         let recorded = lifecycleLog.append(
             WorkspaceLifecycleRecord(
                 kind: .runtimeEnded,

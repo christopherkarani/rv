@@ -7,6 +7,7 @@ import Synchronization
 
 public enum RVDProcess {
     public static func run(configuration: RVDConfiguration) throws {
+        let socketURL = try UnixSocketPath.production()
         let analytics = AnalyticsBootstrap.makeLive(productVersion: ProtocolVersion.serviceSemver)
         let runtime = ServiceRuntime(
             idleExitSeconds: configuration.idleExitSeconds,
@@ -14,21 +15,37 @@ public enum RVDProcess {
         )
         let slot = ListenerSlot()
         let watchdog = IdleWatchdog(seconds: configuration.idleExitSeconds) {
-            slot.listener?.stop()
+            slot.listeners?.stop()
             Darwin.exit(0)
         }
-        let listener = XPCEvaluateListener(runtime: runtime, watchdog: watchdog)
-        slot.listener = listener
-        listener.start()
+        let listeners = ListenerPair(
+            xpc: XPCEvaluateListener(runtime: runtime, watchdog: watchdog),
+            unix: UnixSocketListener(runtime: runtime, watchdog: watchdog, socketURL: socketURL)
+        )
+        slot.listeners = listeners
+        // Unix first: a bind failure exits before XPC registration, matching
+        // the Linux `--socket` fail-fast behavior.
+        try listeners.unix.start()
+        listeners.xpc.start()
         Task { await watchdog.ping() }
         RunLoop.main.run()
     }
 }
 
-private final class ListenerSlot: Sendable {
-    private let box = Mutex<XPCEvaluateListener?>(nil)
+private struct ListenerPair: Sendable {
+    let xpc: XPCEvaluateListener
+    let unix: UnixSocketListener
 
-    var listener: XPCEvaluateListener? {
+    func stop() {
+        xpc.stop()
+        unix.stop()
+    }
+}
+
+private final class ListenerSlot: Sendable {
+    private let box = Mutex<ListenerPair?>(nil)
+
+    var listeners: ListenerPair? {
         get { box.withLock { $0 } }
         set { box.withLock { $0 = newValue } }
     }

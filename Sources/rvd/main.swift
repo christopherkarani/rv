@@ -21,9 +21,12 @@ enum RVD {
             )
             Foundation.exit(2)
         } catch UnixSocketPathError.runtimeDirectoryMissing {
-            FileHandle.standardError.write(
-                Data("rvd: XDG_RUNTIME_DIR is required\n".utf8)
-            )
+            #if os(Linux)
+            let message = "rvd: XDG_RUNTIME_DIR is required\n"
+            #else
+            let message = "rvd: HOME is required\n"
+            #endif
+            FileHandle.standardError.write(Data(message.utf8))
             Foundation.exit(1)
         } catch {
             FileHandle.standardError.write(Data("rvd: launch failed\n".utf8))
