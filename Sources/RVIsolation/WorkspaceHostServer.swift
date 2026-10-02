@@ -735,6 +735,24 @@ final class WorkspaceHostServer: Sendable {
         }
     }
 
+    /// Builds the redemption RPC handler for the service bridge. The closure
+    /// verifies an authenticated permit-consumption commit against this
+    /// host's retained prepared operation and dispatches it at most once.
+    /// rvd sends a commit only after atomically consuming the server-held
+    /// permit; the supervisor's acceptance fence makes any duplicate commit
+    /// safe.
+    func makeRedeemHandler() -> HostRedeemHandler {
+        { [supervisor, sessionStore, admission, hostID, generation = principalAuthority.generation] request in
+            WorkspaceHostRedeemHandler.redeem(
+                request,
+                supervisor: supervisor,
+                sessionStore: sessionStore,
+                admission: admission,
+                host: hostID,
+                generation: generation)
+        }
+    }
+
     private func launchIdentity(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
         let phase = supervisor.snapshot.phase
         guard phase.acceptsRuntime else {

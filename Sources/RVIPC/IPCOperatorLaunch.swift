@@ -64,9 +64,23 @@ public struct ProposalStatusParams: Sendable, Equatable, Codable {
 public struct ProposalStatusReply: Sendable, Equatable, Codable {
     public let operationID: UUID
     public let status: String
+    /// Terminal launch outcome once the permit is consumed: "launched",
+    /// "failed", or "unknown" (transport lost after consume). Nil while the
+    /// operation has no redemption outcome. Advisory attribution only.
+    public let launchResult: String?
+    /// Fresh runtime/instance IDs for a launched operation. Identifiers for
+    /// audit attribution only; never capabilities.
+    public let runtimeSessionID: UUID?
+    public let agentInstanceID: UUID?
 
-    public init(operationID: UUID, status: String) {
+    public init(
+        operationID: UUID, status: String, launchResult: String? = nil,
+        runtimeSessionID: UUID? = nil, agentInstanceID: UUID? = nil
+    ) {
         self.operationID = operationID
         self.status = status
+        self.launchResult = launchResult
+        self.runtimeSessionID = runtimeSessionID
+        self.agentInstanceID = agentInstanceID
     }
 }

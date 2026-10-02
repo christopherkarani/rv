@@ -309,7 +309,8 @@ func spawnSeatbeltProcess(
     host: HookHost? = nil,
     stagingAgent: String? = nil,
     keychain: [(name: String, value: String)] = [],
-    preparedEnvironment: [String]? = nil
+    preparedEnvironment: [String]? = nil,
+    cwdVerification: CwdCommitVerification? = nil
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
     let first = spawnSeatbeltProcessBody(
         request,
@@ -322,7 +323,8 @@ func spawnSeatbeltProcess(
         host: host,
         stagingAgent: stagingAgent,
         keychain: keychain,
-        preparedEnvironment: preparedEnvironment
+        preparedEnvironment: preparedEnvironment,
+        cwdVerification: cwdVerification
     )
     guard case .failure(.processSpawnFailed) = first else { return first }
     if blockingWorkIsCancelled() { return first }
@@ -343,7 +345,8 @@ func spawnSeatbeltProcess(
         host: host,
         stagingAgent: stagingAgent,
         keychain: keychain,
-        preparedEnvironment: preparedEnvironment
+        preparedEnvironment: preparedEnvironment,
+        cwdVerification: cwdVerification
     )
 }
 
@@ -375,7 +378,8 @@ func spawnSeatbeltProcessBody(
     host: HookHost? = nil,
     stagingAgent: String? = nil,
     keychain: [(name: String, value: String)] = [],
-    preparedEnvironment: [String]? = nil
+    preparedEnvironment: [String]? = nil,
+    cwdVerification: CwdCommitVerification? = nil
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
     guard profile.source.contains("(deny file-link)") else {
         return .failure(.seatbeltNotEstablished)
@@ -598,6 +602,19 @@ func spawnSeatbeltProcessBody(
         return .failure(.processSpawnFailed)
     }
 
+    // Redemption cwd verification, immediately before `posix_spawn`: the
+    // live workspace must still be the retained identity. No observable
+    // side effect sits between this check and the spawn, so a swap here
+    // must win blind at microsecond precision — and must also win the
+    // post-spawn check below to survive.
+    if let cwdVerification,
+        verifyLiveCwdIdentity(
+            policyWorkspacePath: cwdVerification.policyWorkspacePath,
+            expected: cwdVerification.expected
+        ) == false {
+        return .failure(.workspaceInodeBoundaryFailed)
+    }
+
     var pid: pid_t = 0
     let spawnResult = argv.withPointers { argvPointer in
         envp.withPointers { envPointer in
@@ -632,6 +649,22 @@ func spawnSeatbeltProcessBody(
     // Optional-promoted ==.
     guard let spawnResult, let spawnStatus = spawnResult, spawnStatus == 0, pid > 1 else {
         return .failure(.processSpawnFailed)
+    }
+    // The child is START_SUSPENDED: it has chdir'd but never run. Re-verify
+    // the cwd before it resumes: a swap that landed between the pre-spawn
+    // check and the chdir and is still in place fails here, and the
+    // never-started child is reaped without effects. Only a swap-in and
+    // swap-back both landing inside this blind microsecond sandwich can
+    // pass — the residual this path-based chdir cannot close without an
+    // FD-pinned spawn, which remains future hardening work.
+    if let cwdVerification,
+        verifyLiveCwdIdentity(
+            policyWorkspacePath: cwdVerification.policyWorkspacePath,
+            expected: cwdVerification.expected
+        ) == false {
+        terminateSession(pgid: pid, also: [pid])
+        _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
+        return .failure(.workspaceInodeBoundaryFailed)
     }
     // The wait loop polls this fd. A blocking read would ignore cancellation
     // until the child writes or exits, so a failed flag change cannot continue.

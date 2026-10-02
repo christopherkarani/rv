@@ -24,7 +24,15 @@ enum HostBridgeWire {
     static let validityKey = "rv.host-validity"
     static let evaluationKey = "rv.host-evaluate"
     static let prepareKey = "rv.host-prepare"
+    static let redeemKey = "rv.host-redeem"
     static let maxPrepareBytes = 1_048_576
+    /// Single source of truth: the RVIPC wire contract owns the bound;
+    /// this alias keeps the rvd-side enforcement from drifting.
+    static let maxRedeemBytes = HostRedeemWire.maxBodyBytes
+    /// Redemption covers accept plus contained spawn plus the Seatbelt
+    /// handshake; the bound is generous so a slow spawn cannot look like a
+    /// lost reply. Firing it records an unknown outcome, never a retry.
+    static let redeemTimeoutSeconds = 60
 
     static func body(_ message: xpc_object_t, key: String) -> Data? {
         var size = 0
@@ -90,6 +98,10 @@ enum XPCWorkspaceHostBridge {
                     },
                     prepare: { request in
                         try await requestPrepare(request, connection: heldConnection,
+                            peer: peer, liveness: liveness)
+                    },
+                    redeem: { request in
+                        try await requestRedeem(request, connection: heldConnection,
                             peer: peer, liveness: liveness)
                     })
                 if liveness.isLive {
@@ -182,6 +194,45 @@ enum XPCWorkspaceHostBridge {
             }
         }
     }
+
+    /// Reverse-RPC committing one consumed permit's redemption to the
+    /// registered host. Mirrors `requestPrepare`: peer re-captured from the
+    /// reply, bounded wait, once-resume — with a longer bound covering the
+    /// contained spawn and Seatbelt handshake. Returns the host's outcome
+    /// (acceptance, refusal, or launch result) as data; transport/peer
+    /// failures throw. Sent at most once per permit; the caller never
+    /// retries.
+    static func requestRedeem(
+        _ request: HostRedeemCommitDTO, connection: XPCHeld,
+        peer: AuthenticatedPeer, liveness: HostBridgeLiveness
+    ) async throws -> HostRedeemResponseDTO {
+        guard liveness.isLive else { throw LiveWorkspaceHostError.disconnected }
+        let bytes = try JSONEncoder().encode(request)
+        return try await withCheckedThrowingContinuation { continuation in
+            let pending = HostRedeemPending(continuation)
+            let message = xpc_dictionary_create_empty()
+            HostBridgeWire.set(bytes, key: HostBridgeWire.redeemKey, on: message)
+            xpc_connection_send_message_with_reply(connection.object, message, nil) { reply in
+                let value = Result<HostRedeemResponseDTO, any Error> {
+                    guard liveness.isLive else { throw LiveWorkspaceHostError.disconnected }
+                    let trust = try ProtectedPeerTrustConfiguration.installed()
+                    let current = try MacOSPeerAuthenticator.capture(message: reply,
+                        connectionID: peer.connectionID, trust: trust)
+                    guard current == peer else { throw LiveWorkspaceHostError.peerMismatch }
+                    guard let data = HostBridgeWire.body(reply, key: HostBridgeWire.redeemKey) else {
+                        throw LiveWorkspaceHostError.redeemRPCFailed
+                    }
+                    return try JSONDecoder().decode(HostRedeemResponseDTO.self, from: data)
+                }
+                pending.finish(value)
+            }
+            DispatchQueue.global().asyncAfter(
+                deadline: .now() + Double(HostBridgeWire.redeemTimeoutSeconds)
+            ) {
+                pending.finish(.failure(LiveWorkspaceHostError.redeemRPCFailed))
+            }
+        }
+    }
 }
 
 private final class HostValidityPending: Sendable {
@@ -205,6 +256,24 @@ private final class HostPreparePending: Sendable {
         continuation = Mutex(value)
     }
     func finish(_ result: Result<HostPrepareResponseDTO, any Error>) {
+        let pending = continuation.withLock { value in
+            let current = value
+            value = nil
+            return current
+        }
+        pending?.resume(with: result)
+    }
+}
+
+/// Once-resume guard for the redeem reverse-RPC: whichever of the reply
+/// handler or the timeout fires first wins; the loser is dropped. Internal
+/// for the resume-once unit test.
+final class HostRedeemPending: Sendable {
+    private let continuation: Mutex<CheckedContinuation<HostRedeemResponseDTO, any Error>?>
+    init(_ value: CheckedContinuation<HostRedeemResponseDTO, any Error>) {
+        continuation = Mutex(value)
+    }
+    func finish(_ result: Result<HostRedeemResponseDTO, any Error>) {
         let pending = continuation.withLock { value in
             let current = value
             value = nil

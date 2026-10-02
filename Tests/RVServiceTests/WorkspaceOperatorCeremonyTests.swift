@@ -144,6 +144,47 @@ struct WorkspaceOperatorCeremonyTests {
         #expect(fixture.audit.all.map(\.kind) == [.proposalReceived])
     }
 
+    @Test func unboundedProposalFieldsRejectedBeforeHostContact() async throws {
+        let fixture = try await makeFixture()
+        let huge = String(repeating: "x", count: 4_096)
+        let proposals = [
+            // Named definition IDs are bounded and non-empty.
+            ProposeLaunchParams(
+                workspace: "/tmp/proj", hostID: fixture.host.rawValue,
+                workspaceSessionID: fixture.workspace.rawValue,
+                kind: "named", definitionID: ""),
+            ProposeLaunchParams(
+                workspace: "/tmp/proj", hostID: fixture.host.rawValue,
+                workspaceSessionID: fixture.workspace.rawValue,
+                kind: "named", definitionID: huge),
+            // Custom executables are bounded and non-empty.
+            ProposeLaunchParams(
+                workspace: "/tmp/proj", hostID: fixture.host.rawValue,
+                workspaceSessionID: fixture.workspace.rawValue,
+                kind: "custom", executable: "", expectedDigest: Self.digest),
+            ProposeLaunchParams(
+                workspace: "/tmp/proj", hostID: fixture.host.rawValue,
+                workspaceSessionID: fixture.workspace.rawValue,
+                kind: "custom", executable: huge, expectedDigest: Self.digest),
+            // Custom digests are fixed 64-hex.
+            ProposeLaunchParams(
+                workspace: "/tmp/proj", hostID: fixture.host.rawValue,
+                workspaceSessionID: fixture.workspace.rawValue,
+                kind: "custom", executable: "/bin/echo", expectedDigest: "short"),
+            ProposeLaunchParams(
+                workspace: "/tmp/proj", hostID: fixture.host.rawValue,
+                workspaceSessionID: fixture.workspace.rawValue,
+                kind: "custom", executable: "/bin/echo",
+                expectedDigest: String(repeating: "A", count: 64)),
+        ]
+        for bad in proposals {
+            await #expect(throws: WorkspaceOperatorCeremonyError.invalidProposal) {
+                try await fixture.ceremonies.propose(
+                    bad, requester: requester(), clientRequestID: nil)
+            }
+        }
+    }
+
     @Test func unknownHostWithoutRegistration() async throws {
         let ceremonies = WorkspaceOperatorCeremonyService()
         let params = ProposeLaunchParams(
@@ -330,13 +371,15 @@ struct WorkspaceOperatorCeremonyTests {
             operationID: id, uiConnection: ui)
         #expect(second.challengeID == first.challengeID)
         #expect(item.operationID == id)
-        // The resumed challenge still completes.
+        // The resumed challenge still completes. Step 5 auto-redeems: the
+        // fixture host offers no redeem entry point, so the permit consumes
+        // and the launch outcome is unknown.
         let status = try await fixture.ceremonies.completeCeremony(
             UIOperatorCompletion(
                 challengeID: second.challengeID, operationID: id,
                 outcome: .authenticated),
             uiConnection: ui)
-        #expect(status == "authorized")
+        #expect(status == "consumed")
     }
 
     @Test func rebindFromForeignConnectionRefused() async throws {
@@ -358,7 +401,7 @@ struct WorkspaceOperatorCeremonyTests {
         }
     }
 
-    @Test func authenticatedCompletionAuthorizes() async throws {
+    @Test func authenticatedCompletionAuthorizesAndRedeems() async throws {
         let fixture = try await makeFixture()
         let id = try await pendingOperation(fixture)
         let ui = AuthenticatedOperatorUIConnectionID()
@@ -368,9 +411,16 @@ struct WorkspaceOperatorCeremonyTests {
             UIOperatorCompletion(
                 challengeID: challenge.challengeID, operationID: id, outcome: .authenticated),
             uiConnection: ui)
-        #expect(status == "authorized")
-        #expect(await fixture.ceremonies.ceremonyStatus(operationID: id) == "authorized")
+        // Step 5: trusted completion consumes the permit and attempts the
+        // single redemption. This fixture host offers no redeem entry point,
+        // so the outcome is unknown — but the permit is spent exactly once.
+        #expect(status == "consumed")
+        #expect(await fixture.ceremonies.ceremonyStatus(operationID: id) == "consumed")
         #expect(await fixture.ceremonies.listReviewItems().items.isEmpty)
+        let polled = await fixture.ceremonies.proposalStatus(
+            ProposalStatusParams(operationID: id))
+        #expect(polled.status == "consumed")
+        #expect(polled.launchResult == "unknown")
     }
 
     @Test func cancelledAuthenticationFails() async throws {
@@ -450,7 +500,7 @@ struct WorkspaceOperatorCeremonyTests {
             try await fixture.ceremonies.completeCeremony(completion, uiConnection: ui)
             Issue.record("replay must throw")
         } catch {}
-        #expect(await fixture.ceremonies.ceremonyStatus(operationID: id) == "authorized")
+        #expect(await fixture.ceremonies.ceremonyStatus(operationID: id) == "consumed")
     }
 
     // MARK: - Cancel
@@ -526,7 +576,7 @@ struct WorkspaceOperatorCeremonyTests {
 
     // MARK: - Review findings
 
-    @Test func disconnectVsCompleteRaceAlwaysSettlesInvalidated() async throws {
+    @Test func disconnectVsCompleteRaceAlwaysSettlesTerminal() async throws {
         let fixture = try await makeFixture()
         let id = try await pendingOperation(fixture)
         let ui = AuthenticatedOperatorUIConnectionID()
@@ -538,12 +588,15 @@ struct WorkspaceOperatorCeremonyTests {
             completion, uiConnection: ui)
         await fixture.ceremonies.uiConnectionLost(ui)
         let observed = await completed
-        // Either order: the ceremony is dead and unusable. If complete
-        // landed first, its permit died with the ceremony per Step 3.
-        #expect(await fixture.ceremonies.ceremonyStatus(operationID: id) == "invalidated")
+        // Either order: the ceremony is dead and unusable. Disconnect-first
+        // invalidates the bound challenge; complete-first consumes the
+        // permit (Step 5 auto-redeem) and the later UI loss cannot revive
+        // or duplicate it — consumed is terminal.
+        let terminal = await fixture.ceremonies.ceremonyStatus(operationID: id)
+        #expect(terminal == "invalidated" || terminal == "consumed")
         #expect(await fixture.ceremonies.listReviewItems().items.isEmpty)
         if let observed {
-            #expect(observed == "authorized")
+            #expect(observed == "consumed")
         }
         do {
             try await fixture.ceremonies.completeCeremony(completion, uiConnection: ui)
@@ -551,7 +604,7 @@ struct WorkspaceOperatorCeremonyTests {
         } catch {}
     }
 
-    @Test func completeThenDisconnectInvalidatesIssuedPermit() async throws {
+    @Test func completeThenDisconnectLeavesConsumedTerminal() async throws {
         let fixture = try await makeFixture()
         let id = try await pendingOperation(fixture)
         let ui = AuthenticatedOperatorUIConnectionID()
@@ -559,11 +612,15 @@ struct WorkspaceOperatorCeremonyTests {
             operationID: id, uiConnection: ui)
         let completion = UIOperatorCompletion(
             challengeID: challenge.challengeID, operationID: id, outcome: .authenticated)
+        // Step 5: completion consumes the permit synchronously, so no
+        // issued-but-unconsumed window remains for the UI loss to kill.
+        // (The authorizer-level rule — UI loss invalidates an authorized
+        // permit — is still pinned by WorkspaceOperatorAuthorizerTests.)
         #expect(
             try await fixture.ceremonies.completeCeremony(completion, uiConnection: ui)
-                == "authorized")
+                == "consumed")
         await fixture.ceremonies.uiConnectionLost(ui)
-        #expect(await fixture.ceremonies.ceremonyStatus(operationID: id) == "invalidated")
+        #expect(await fixture.ceremonies.ceremonyStatus(operationID: id) == "consumed")
         #expect(await fixture.ceremonies.listReviewItems().items.isEmpty)
     }
 
@@ -678,19 +735,19 @@ struct WorkspaceOperatorCeremonyTests {
         await #expect(throws: WorkspaceOperatorCeremonyError.unknownOperation) {
             try await fixture.ceremonies.bindReview(operationID: cancelled, uiConnection: ui)
         }
-        let authorized = try await pendingOperation(fixture)
+        let consumed = try await pendingOperation(fixture)
         let (challenge, _) = try await fixture.ceremonies.bindReview(
-            operationID: authorized, uiConnection: ui)
+            operationID: consumed, uiConnection: ui)
         _ = try await fixture.ceremonies.completeCeremony(
             UIOperatorCompletion(
-                challengeID: challenge.challengeID, operationID: authorized,
+                challengeID: challenge.challengeID, operationID: consumed,
                 outcome: .authenticated),
             uiConnection: ui)
         await #expect(throws: WorkspaceOperatorCeremonyError.unknownOperation) {
-            try await fixture.ceremonies.bindReview(operationID: authorized, uiConnection: ui)
+            try await fixture.ceremonies.bindReview(operationID: consumed, uiConnection: ui)
         }
         // Terminal states stay readable via the authorizer, not retention.
         #expect(await fixture.ceremonies.ceremonyStatus(operationID: cancelled) == "cancelled")
-        #expect(await fixture.ceremonies.ceremonyStatus(operationID: authorized) == "authorized")
+        #expect(await fixture.ceremonies.ceremonyStatus(operationID: consumed) == "consumed")
     }
 }

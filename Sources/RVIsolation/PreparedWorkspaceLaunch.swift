@@ -37,6 +37,62 @@ struct PreparedLaunchBinding: Hashable, Sendable, Equatable {
     let preparedLaunchID: PreparedLaunchID
 }
 
+/// Filesystem identity of the prepared cwd, captured at preparation and
+/// re-verified live at redemption commit.
+///
+/// The resolved path string closes symlink-target swaps and renames that
+/// change resolution; the device/inode pair closes same-path recreation;
+/// the mount source closes volume replacement that recycles device
+/// numbers. All are captured from the live filesystem at prepare time;
+/// redemption compares a fresh live capture for equality. Preparation
+/// additionally anchors the device to the boundary volume, so a swap
+/// planted before preparation is refused rather than adopted as truth.
+/// No secret or authority value: host-local filesystem facts, never sent
+/// over the wire.
+struct CwdIdentityStamp: Hashable, Sendable, Equatable {
+    let resolvedPath: String
+    let device: UInt64
+    let inode: UInt64
+    let mountSource: String
+}
+
+#if os(macOS)
+/// Captures the live cwd identity for `policyWorkspace`: POSIX-realpath
+/// resolution (reusing the vetted preparation helper, including its
+/// existence and safety checks) plus the device/inode and mount source of
+/// the resolved directory. Nil on any failure: callers fail closed.
+func captureCwdIdentity(policyWorkspace: WorkingDirectory) -> CwdIdentityStamp? {
+    guard case .success(let resolved) = existingResolvedWorkspacePath(policyWorkspace),
+        let identity = workspacePathIdentity(resolved),
+        identity.isDirectory,
+        let mountSource = workspaceMountSource(resolved)
+    else {
+        return nil
+    }
+    return CwdIdentityStamp(
+        resolvedPath: resolved, device: identity.device, inode: identity.inode,
+        mountSource: mountSource)
+}
+
+/// Re-verifies the live cwd identity against a retained stamp: resolves
+/// the policy workspace fresh and requires the full stamp (resolved path,
+/// device, inode, mount source) to match. Pure filesystem observation;
+/// false on any error. Used at accept, at spawn commit, and inside the
+/// spawn body immediately around `posix_spawn`.
+func verifyLiveCwdIdentity(
+    policyWorkspacePath: String,
+    expected: CwdIdentityStamp
+) -> Bool {
+    guard let policy = WorkingDirectory(validating: policyWorkspacePath),
+        let live = captureCwdIdentity(policyWorkspace: policy),
+        live == expected
+    else {
+        return false
+    }
+    return true
+}
+#endif
+
 /// Frozen effective environment for one prepared launch, exactly as
 /// `execve` will receive it.
 ///
@@ -128,6 +184,10 @@ struct PreparedWorkspaceLaunch: Sendable, Equatable {
     let command: IsolatedCommand
     /// POSIX-realpath-resolved cwd, as the spawn will chdir to it.
     let resolvedWorkspacePath: String
+    /// Live filesystem identity of the cwd at preparation. Redemption
+    /// re-captures the live identity and requires equality before the
+    /// prepared→accepted transition and again at spawn commit.
+    let cwdIdentity: CwdIdentityStamp
     /// Initial stdio configuration (discard or PTY + window).
     let io: IsolatedIO
     /// Frozen effective environment, passed verbatim at dispatch.
@@ -192,6 +252,20 @@ enum PreparedLaunchLimits {
     /// real environment; prevents pathological memory use from an
     /// unexpected host state. No repository equivalent exists.
     static let maxFrozenEnvironmentBytes = 1_048_576
+    /// Maximum recorded redemption results per workspace host. Same order
+    /// as the prepared-operation bound; oldest entries are evicted first.
+    static let maxRedemptionResults = 64
+}
+
+/// Recorded outcome of one accepted redemption, keyed by authorization ID.
+///
+/// Monotonic history: once recorded, an entry never changes, so a replayed
+/// commit (lost reply, duplicate delivery) returns the original outcome
+/// instead of dispatching again. Carries identifiers for audit attribution
+/// only — never capabilities, secrets, or environment values.
+enum RecordedRedemptionResult: Sendable, Equatable {
+    case launched(runtime: RuntimeSessionID, instance: AgentInstanceID)
+    case failed
 }
 
 /// Typed preparation failure. Nothing is stored, spawned, or minted on
@@ -230,26 +304,35 @@ enum PreparedLaunchError: Error, Sendable, Equatable {
 /// Ephemeral host-owned prepared-operation state.
 ///
 /// In-memory only, keyed by `PreparedLaunchID`, bounded in count and
-/// lifetime. Dies with the process; never restored from journals. State
-/// machine is minimal by design: an entry that is present and unexpired
-/// is `prepared`; anything else (absent, expired, removed, invalidated)
-/// is unusable. There is deliberately no authorized/accepted state here:
-/// the future redemption PR adds its own acceptance fence rather than
-/// merging issuer state into this store.
+/// lifetime. Dies with the process; never restored from journals. The
+/// acceptance fence lives here: a prepared entry moves to `accepted`
+/// at most once, inside the supervisor's spawn-commit critical section,
+/// and never returns to `prepared` — not on spawn failure, not on
+/// invalidation, not on close. Recorded redemption results are monotonic
+/// history for replay-safe replies.
 ///
 /// Concurrency: all mutation serializes on one lock. The supervisor nests
 /// store operations inside its lifecycle lock (ordering: lifecycle, then
 /// store) so preparation racing workspace closure can neither resurrect
 /// entries nor dispatch after close.
 ///
-/// The store never returns retained execution state: lookups yield
-/// `PreparedLaunchDescription` or a boolean freshness probe. Knowing an
-/// ID therefore cannot launch anything.
+/// The store never returns retained execution state except through
+/// `accept`, which only the supervisor's redemption path calls after
+/// verifying an authenticated commit: every other lookup yields
+/// `PreparedLaunchDescription` or a boolean probe. Knowing an ID
+/// therefore cannot launch anything.
 final class PreparedLaunchStore: Sendable {
-    private let entries: Mutex<[UUID: PreparedWorkspaceLaunch]>
+    private struct State: Sendable {
+        var entries: [UUID: PreparedWorkspaceLaunch] = [:]
+        var accepted: Set<UUID> = []
+        var results: [UUID: RecordedRedemptionResult] = [:]
+        var resultOrder: [UUID] = []
+    }
+
+    private let state: Mutex<State>
 
     init() {
-        self.entries = Mutex([:])
+        self.state = Mutex(State())
     }
 
     /// Stores one preparation. Evicts expired entries first, then refuses
@@ -257,15 +340,15 @@ final class PreparedLaunchStore: Sendable {
     /// impossible from UUID minting; the check is defense in depth so an
     /// old ID can never identify a newly prepared operation).
     func insert(_ prepared: PreparedWorkspaceLaunch, now: Date) -> Bool {
-        entries.withLock { map in
-            map = map.filter { $0.value.expiresAt > now }
+        state.withLock { state in
+            state.entries = state.entries.filter { $0.value.expiresAt > now }
             let key = prepared.binding.preparedLaunchID.rawValue
-            guard map[key] == nil,
-                map.count < PreparedLaunchLimits.maxPendingPreparedLaunches
+            guard state.entries[key] == nil,
+                state.entries.count < PreparedLaunchLimits.maxPendingPreparedLaunches
             else {
                 return false
             }
-            map[key] = prepared
+            state.entries[key] = prepared
             return true
         }
     }
@@ -273,8 +356,8 @@ final class PreparedLaunchStore: Sendable {
     /// Safe description, or nil when absent or expired. Never returns
     /// retained execution state.
     func description(for id: PreparedLaunchID, now: Date) -> PreparedLaunchDescription? {
-        entries.withLock { map in
-            guard let prepared = map[id.rawValue], prepared.expiresAt > now else {
+        state.withLock { state in
+            guard let prepared = state.entries[id.rawValue], prepared.expiresAt > now else {
                 return nil
             }
             return prepared.description
@@ -282,45 +365,150 @@ final class PreparedLaunchStore: Sendable {
     }
 
     /// Freshness probe for dispatch: present and unexpired. Returns no
-    /// state, so it cannot become a dispatch-by-ID oracle.
+    /// state, so it cannot become a dispatch-by-ID oracle. Accepted entries
+    /// are no longer prepared and report unusable here.
     func isUsable(_ id: PreparedLaunchID, now: Date) -> Bool {
-        entries.withLock { map in
-            guard let prepared = map[id.rawValue] else {
+        state.withLock { state in
+            guard let prepared = state.entries[id.rawValue] else {
                 return false
             }
             return prepared.expiresAt > now
         }
     }
 
-    /// Removes one entry. Idempotent.
-    func remove(_ id: PreparedLaunchID) {
-        entries.withLock { map in
-            map[id.rawValue] = nil
+    /// Atomically moves one prepared entry to `accepted` and returns its
+    /// retained execution state — the single linearization point of host
+    /// redemption. Nil (without mutation, except dropping an expired entry)
+    /// when the entry is absent, expired, already accepted, the live cwd
+    /// identity differs from the retained stamp, or the predicate fails.
+    ///
+    /// The caller must hold the supervisor lifecycle lock: accept runs in a
+    /// lifecycle-serialized section, and the spawn-commit section later
+    /// re-checks acceptance adjacent to the close/lifecycle check and
+    /// `posix_spawn`. The predicate must be pure (no I/O): it receives the
+    /// retained entry and checks exact binding/digest/kind/definition
+    /// correspondence with the commit.
+    ///
+    /// Host-private: only the supervisor's redemption path calls this, and
+    /// only for a commit that arrived over the authenticated service
+    /// channel. There is no dispatch-by-ID.
+    func accept(
+        _ id: PreparedLaunchID,
+        now: Date,
+        liveCwd: CwdIdentityStamp,
+        verifying predicate: (PreparedWorkspaceLaunch) -> Bool
+    ) -> PreparedWorkspaceLaunch? {
+        state.withLock { state in
+            guard let prepared = state.entries[id.rawValue] else {
+                return nil
+            }
+            guard prepared.expiresAt > now else {
+                state.entries[id.rawValue] = nil
+                return nil
+            }
+            guard prepared.cwdIdentity == liveCwd, predicate(prepared) else {
+                return nil
+            }
+            state.entries[id.rawValue] = nil
+            state.accepted.insert(id.rawValue)
+            return prepared
         }
     }
 
-    /// Drops every entry. Called on workspace closure; entries never
-    /// reappear afterward because preparation re-checks lifecycle first.
+    /// True between `accept` and the recording of that acceptance's
+    /// outcome. Neither `remove` nor `invalidateAll` clears it, so an
+    /// acceptance can never be re-armed into a second dispatch; only
+    /// `recordResult` clears it, atomically with publishing the outcome
+    /// that supersedes it.
+    func isAccepted(_ id: PreparedLaunchID) -> Bool {
+        state.withLock { state in
+            state.accepted.contains(id.rawValue)
+        }
+    }
+
+    /// Records the terminal outcome of one accepted redemption and clears
+    /// its acceptance marker atomically. First write wins: replays return
+    /// the original outcome. Bounded FIFO: oldest entries are evicted
+    /// first (mirroring the service, which likewise forgets ancient
+    /// consumed operations: a replay older than the window reports
+    /// unknown rather than the evicted outcome).
+    ///
+    /// Clearing the marker at record time bounds markers to in-flight
+    /// acceptances: a duplicate always observes the marker (in flight) or
+    /// the recorded outcome (finished), never neither.
+    func recordResult(
+        authorization: UUID,
+        preparedID: PreparedLaunchID,
+        result: RecordedRedemptionResult
+    ) {
+        state.withLock { state in
+            guard state.results[authorization] == nil else { return }
+            state.results[authorization] = result
+            state.accepted.remove(preparedID.rawValue)
+            state.resultOrder.append(authorization)
+            while state.resultOrder.count > PreparedLaunchLimits.maxRedemptionResults {
+                let oldest = state.resultOrder.removeFirst()
+                state.results[oldest] = nil
+            }
+        }
+    }
+
+    /// Previously recorded outcome for one authorization, if any. A hit
+    /// means the authorization is spent: the caller must reply with the
+    /// recorded outcome, never dispatch.
+    func recordedResult(authorization: UUID) -> RecordedRedemptionResult? {
+        state.withLock { state in
+            state.results[authorization]
+        }
+    }
+
+    /// Removes one prepared entry. Idempotent. Never touches `accepted`:
+    /// invalidation cannot un-accept a committed redemption.
+    func remove(_ id: PreparedLaunchID) {
+        state.withLock { state in
+            state.entries[id.rawValue] = nil
+        }
+    }
+
+    /// Drops every prepared entry. Called on workspace closure; entries
+    /// never reappear afterward because preparation re-checks lifecycle
+    /// first. Accepted markers survive close (an in-flight acceptance
+    /// stays fenced) and recorded results survive as monotonic history;
+    /// neither is launchable state.
     func invalidateAll() {
-        entries.withLock { map in
-            map.removeAll()
+        state.withLock { state in
+            state.entries.removeAll()
         }
     }
 
     /// Drops expired entries. Returns the number removed.
     @discardableResult
     func pruneExpired(now: Date) -> Int {
-        entries.withLock { map in
-            let before = map.count
-            map = map.filter { $0.value.expiresAt > now }
-            return before - map.count
+        state.withLock { state in
+            let before = state.entries.count
+            state.entries = state.entries.filter { $0.value.expiresAt > now }
+            return before - state.entries.count
         }
     }
 
     /// Live (unexpired) entry count at `now`. For tests and debugging.
     func liveCount(now: Date) -> Int {
-        entries.withLock { map in
-            map.values.filter { $0.expiresAt > now }.count
+        state.withLock { state in
+            state.entries.values.filter { $0.expiresAt > now }.count
+        }
+    }
+
+    /// Accepted-marker count. For tests and debugging.
+    func acceptedCount() -> Int {
+        state.withLock { state in
+            state.accepted.count
+        }
+    }
+
+    /// Recorded-result count. For tests and debugging.
+    func resultCount() -> Int {
+        state.withLock { state in
+            state.results.count
         }
     }
 }

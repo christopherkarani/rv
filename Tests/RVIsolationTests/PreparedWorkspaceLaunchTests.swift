@@ -1036,7 +1036,8 @@ private func preparedClone(
     preparedAt: Date? = nil,
     expiresAt: Date? = nil,
     selection: ResolvedAgentLaunch? = nil,
-    launchRequest: IsolatedLaunchRequest? = nil
+    launchRequest: IsolatedLaunchRequest? = nil,
+    cwdIdentity: CwdIdentityStamp? = nil
 ) -> PreparedWorkspaceLaunch {
     PreparedWorkspaceLaunch(
         binding: PreparedLaunchBinding(
@@ -1053,6 +1054,7 @@ private func preparedClone(
         selection: selection ?? template.selection,
         command: template.command,
         resolvedWorkspacePath: template.resolvedWorkspacePath,
+        cwdIdentity: cwdIdentity ?? template.cwdIdentity,
         io: template.io,
         environment: template.environment,
         productive: template.productive,

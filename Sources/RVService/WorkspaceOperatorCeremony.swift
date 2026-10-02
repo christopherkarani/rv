@@ -4,17 +4,20 @@ import RVIPC
 import RVIsolation
 import RVPolicy
 
-// MARK: - Operator ceremony service (Step 4)
+// MARK: - Operator ceremony service (Step 5)
 //
-// Production orchestration from untrusted proposal to server-held permit:
+// Production orchestration from untrusted proposal to authorized dispatch:
 //
 // CLI proposal → registered-host prepare RPC → ONE authenticated description
 // → self-consistency verification → Step 3 pending → UI review → challenge →
-// trusted completion → server-held permit. No redemption, no dispatch.
+// trusted completion → server-held permit → atomic consume → exactly one
+// redemption commit to the live registered host → host accept → dispatch.
 //
 // Step 3 (WorkspaceOperatorAuthorizer) is frozen: this actor only calls its
 // public API and retains service-side review state (descriptions, issued
-// challenges) alongside it.
+// challenges, redemption outcomes) alongside it. Neither CLI nor UI can
+// redeem: redemption runs here, synchronously inside trusted completion,
+// exactly once per issued permit, and is never retried.
 
 /// Ceremony-level audit event. Server-side review/ingestion facts only —
 //    never credentials, capabilities, secrets, or argv.
@@ -28,6 +31,9 @@ struct WorkspaceOperatorCeremonyAuditEvent: Sendable, Equatable {
         case ceremonyCancelled
         case uiSessionAuthenticated
         case uiSessionInvalidated
+        case redemptionRequested
+        case redemptionCompleted
+        case redemptionFailed
     }
 
     let kind: Kind
@@ -38,8 +44,24 @@ struct WorkspaceOperatorCeremonyAuditEvent: Sendable, Equatable {
     let preparedID: UUID?
     let intentDigestHex: String?
     let operationKind: String?
+    /// Fresh runtime/instance IDs for a launched redemption. Identifiers for
+    /// audit attribution only.
+    let runtimeSessionID: UUID?
+    let agentInstanceID: UUID?
     let wall: Date
     let outcome: String
+}
+
+/// Terminal launch outcome recorded for one consumed permit.
+enum WorkspaceOperatorRedemptionOutcome: String, Sendable, Equatable {
+    /// The host accepted and the runtime established.
+    case launched
+    /// The permit is spent without a launch (host refusal, host-side
+    /// failure, stale registration, or mismatched bindings).
+    case failed
+    /// Transport lost after consume: the host may or may not have launched.
+    /// Recorded without retry; the permit stays consumed.
+    case unknown
 }
 
 enum WorkspaceOperatorCeremonyError: Error, Sendable, Equatable {
@@ -64,14 +86,29 @@ enum WorkspaceOperatorCeremonyError: Error, Sendable, Equatable {
 actor WorkspaceOperatorCeremonyService {
     private struct RetainedReview: Sendable {
         let description: HostPreparedDescriptionDTO
+        /// Propose-time live host channel. Redemption requires the current
+        /// live binding to still be this exact channel.
+        let hostConnectionID: UUID
         let createdWall: Date
         var challenge: OperatorAuthorizationChallenge?
     }
+
+    private struct RedemptionRecord: Sendable {
+        let outcome: WorkspaceOperatorRedemptionOutcome
+        let runtimeSessionID: UUID?
+        let agentInstanceID: UUID?
+        let recordedWall: Date
+    }
+
+    /// Bounded terminal outcomes for consumed permits. Same order as the
+    /// Step 3 operation bound; oldest entries are evicted first.
+    private static let maxRedemptionRecords = 64
 
     private let authorizer: WorkspaceOperatorAuthorizer
     private let hosts: LiveWorkspaceHostRegistry
     private let audit: (@Sendable (WorkspaceOperatorCeremonyAuditEvent) -> Void)?
     private var reviews: [WorkspaceOperationAuthorizationID: RetainedReview] = [:]
+    private var redemptions: [WorkspaceOperationAuthorizationID: RedemptionRecord] = [:]
 
     init(
         hosts: LiveWorkspaceHostRegistry = LiveWorkspaceHostRegistry(),
@@ -153,7 +190,9 @@ actor WorkspaceOperatorCeremonyService {
             throw mapAuthorizerError(error)
         }
         reviews[reference.authorizationID] = RetainedReview(
-            description: prepared.description, createdWall: Date(), challenge: nil)
+            description: prepared.description,
+            hostConnectionID: prepared.hostConnectionID,
+            createdWall: Date(), challenge: nil)
         emit(.pendingCreated, operationID: reference.authorizationID.rawValue,
             description: prepared.description, outcome: "pendingReview")
         await prune()
@@ -162,14 +201,23 @@ actor WorkspaceOperatorCeremonyService {
     }
 
     /// Pollable status for CLI. Safe strings only; never permit contents.
+    /// Consumed operations additionally report their terminal launch outcome
+    /// (and fresh runtime/instance IDs when launched) from the bounded
+    /// redemption record. Polling never recreates authority.
     func proposalStatus(_ params: ProposalStatusParams) async -> ProposalStatusReply {
         let id = WorkspaceOperationAuthorizationID(rawValue: params.operationID)
         do {
             let status = try await authorizer.status(of: id)
+            let record = redemptions[id]
             return ProposalStatusReply(
-                operationID: params.operationID, status: Self.statusString(status))
+                operationID: params.operationID,
+                status: Self.statusString(status),
+                launchResult: record?.outcome.rawValue,
+                runtimeSessionID: record?.runtimeSessionID,
+                agentInstanceID: record?.agentInstanceID)
         } catch {
             reviews.removeValue(forKey: id)
+            redemptions.removeValue(forKey: id)
             return ProposalStatusReply(operationID: params.operationID, status: "unknown")
         }
     }
@@ -245,6 +293,12 @@ actor WorkspaceOperatorCeremonyService {
     /// Applies one UI-reported outcome to the retained challenge. The presented
     /// IDs must name the retained ceremony; the retained challenge (service
     /// state, never wire bytes) enters Step 3. Returns the terminal status.
+    ///
+    /// On trusted authentication this synchronously redeems the issued
+    /// permit exactly once (consume, then one commit RPC to the live
+    /// registered host) before returning. The UI reply therefore reports
+    /// the post-redemption status — usually `consumed` with a launch
+    /// outcome readable via status polling — never a reusable authority.
     func completeCeremony(
         _ completion: UIOperatorCompletion,
         uiConnection: AuthenticatedOperatorUIConnectionID
@@ -264,12 +318,20 @@ actor WorkspaceOperatorCeremonyService {
         emit(.completionReceived, operationID: completion.operationID,
             description: retained.description, outcome: String(describing: completion.outcome))
         do {
-            _ = try await authorizer.completeChallenge(
+            let reference = try await authorizer.completeChallenge(
                 challenge, uiConnection: uiConnection, result: result)
             // Terminal: the retained challenge and description (argv included)
             // have no further use. Status stays readable via the authorizer.
             reviews.removeValue(forKey: id)
-            return Self.statusString(.authorized)
+            await redeem(
+                reference: reference,
+                description: retained.description,
+                hostConnectionID: retained.hostConnectionID)
+            await prune()
+            if let status = try? await authorizer.status(of: id) {
+                return Self.statusString(status)
+            }
+            return "unknown"
         } catch WorkspaceOperatorAuthorizationError.authenticationFailed {
             reviews.removeValue(forKey: id)
             return Self.statusString(.failed)
@@ -277,6 +339,199 @@ actor WorkspaceOperatorCeremonyService {
             throw mapAuthorizerError(error)
         }
     }
+
+    // MARK: - Redemption (consume once, commit once, never retry)
+
+    /// Consumes one issued permit and commits it to the exact live
+    /// registered host, at most once per operation.
+    ///
+    /// Ordering and failure directions:
+    ///
+    /// 1. The current live host binding must still be the exact propose-time
+    ///    incarnation and channel. Otherwise the permit is cancelled
+    ///    (burned unconsumed) and no commit is sent.
+    /// 2. The permit is atomically consumed for the exact expected bindings
+    ///    (workspace, host, generation, registration, prepared ID, intent
+    ///    digest, kind). Any mismatch burns the permit without a commit.
+    /// 3. Exactly one commit RPC goes to the current registration. A host
+    ///    refusal or failure is recorded as terminal. A transport failure
+    ///    after consume is recorded as unknown: the host may or may not
+    ///    have launched, and there is deliberately no retry and no second
+    ///    commit — at-most-once beats recovery.
+    private func redeem(
+        reference: WorkspaceOperationAuthorizationReference,
+        description: HostPreparedDescriptionDTO,
+        hostConnectionID: UUID
+    ) async {
+        let id = reference.authorizationID
+        let host = WorkspaceHostID(rawValue: description.hostID)
+        guard let current = await hosts.liveBinding(host: host),
+            current.workspace.rawValue == description.workspaceSessionID,
+            current.host.rawValue == description.hostID,
+            current.generation.rawValue == description.generation,
+            current.connectionID == hostConnectionID,
+            let kind = Self.operationKind(forTarget: description.target)
+        else {
+            // Stale registration or channel: burn the issued permit without
+            // consuming it. Best-effort; the operation may already be
+            // terminal (disconnect invalidation won the race).
+            try? await authorizer.cancel(operationID: id)
+            recordRedemption(id: id, outcome: .failed, runtime: nil, instance: nil)
+            emit(.redemptionFailed, operationID: id.rawValue,
+                description: description, outcome: "stale host registration")
+            return
+        }
+        guard let definition = Self.definitionBinding(
+            kind: kind,
+            definitionID: description.definitionID,
+            revisionDigest: description.revisionDigest)
+        else {
+            // The retained description passed verification at propose time,
+            // so this is unreachable without memory corruption; burn closed.
+            try? await authorizer.cancel(operationID: id)
+            recordRedemption(id: id, outcome: .failed, runtime: nil, instance: nil)
+            emit(.redemptionFailed, operationID: id.rawValue,
+                description: description, outcome: "definition binding malformed")
+            return
+        }
+        let expectation = WorkspaceOperationRedemptionExpectation(
+            workspace: current.workspace,
+            host: current.host,
+            generation: current.generation,
+            registration: WorkspaceHostRegistrationBinding(
+                host: current.host,
+                generation: current.generation,
+                connectionID: current.connectionID),
+            preparedLaunch: PreparedLaunchID(rawValue: description.preparedID),
+            intentDigest: WorkspaceLaunchIntentDigest(sha256Hex: description.intentDigestHex),
+            kind: kind,
+            definition: definition)
+        do {
+            _ = try await authorizer.consumePermit(reference, expectation: expectation)
+        } catch {
+            // Consume failed: burn any still-authorized permit so a stale
+            // authorization can never redeem later. Best-effort.
+            try? await authorizer.cancel(operationID: id)
+            recordRedemption(id: id, outcome: .failed, runtime: nil, instance: nil)
+            emit(.redemptionFailed, operationID: id.rawValue,
+                description: description, outcome: "permit not consumed")
+            return
+        }
+        let commit = HostRedeemCommitDTO(
+            authorizationID: id.rawValue,
+            workspaceSessionID: current.workspace.rawValue,
+            hostID: current.host.rawValue,
+            generation: current.generation.rawValue,
+            preparedID: description.preparedID,
+            intentDigestHex: description.intentDigestHex,
+            kind: kind == .launchAgent ? "launchAgent" : "launchCustom",
+            definitionID: description.definitionID,
+            revisionDigest: description.revisionDigest)
+        emit(.redemptionRequested, operationID: id.rawValue,
+            description: description, outcome: "commit sent")
+        do {
+            let response = try await hosts.redeemLaunch(
+                host: current.host,
+                expectedConnection: current.connectionID,
+                request: commit)
+            if response.accepted,
+                let runtime = response.runtimeSessionID,
+                let instance = response.agentInstanceID {
+                recordRedemption(
+                    id: id, outcome: .launched, runtime: runtime, instance: instance)
+                emit(.redemptionCompleted, operationID: id.rawValue,
+                    description: description, outcome: "launched",
+                    runtime: runtime, instance: instance)
+            } else if response.accepted {
+                // Spent without a launch (host-side failure or an
+                // in-flight duplicate's acceptance): terminal, no retry.
+                recordRedemption(id: id, outcome: .failed, runtime: nil, instance: nil)
+                emit(.redemptionFailed, operationID: id.rawValue,
+                    description: description,
+                    outcome: "host: \(Self.knownHostOutcome(response.error))")
+            } else {
+                recordRedemption(id: id, outcome: .failed, runtime: nil, instance: nil)
+                emit(.redemptionFailed, operationID: id.rawValue,
+                    description: description, outcome: "host refused")
+            }
+        } catch {
+            recordRedemption(id: id, outcome: .unknown, runtime: nil, instance: nil)
+            emit(.redemptionFailed, operationID: id.rawValue,
+                description: description, outcome: "transport lost after consume")
+        }
+    }
+
+    private func recordRedemption(
+        id: WorkspaceOperationAuthorizationID,
+        outcome: WorkspaceOperatorRedemptionOutcome,
+        runtime: UUID?,
+        instance: UUID?
+    ) {
+        redemptions[id] = RedemptionRecord(
+            outcome: outcome, runtimeSessionID: runtime,
+            agentInstanceID: instance, recordedWall: Date())
+        while redemptions.count > Self.maxRedemptionRecords {
+            guard let oldest = redemptions.min(by: {
+                $0.value.recordedWall < $1.value.recordedWall
+            })?.key else { return }
+            redemptions.removeValue(forKey: oldest)
+        }
+    }
+
+    /// Maps the host's closed target vocabulary to the Step 3 operation
+    /// kind. Nil rejects; anything outside the closed pair fails closed.
+    static func operationKind(forTarget target: String) -> WorkspaceOperationKind? {
+        switch target {
+        case "named": .launchAgent
+        case "custom": .launchCustom
+        default: nil
+        }
+    }
+
+    /// Rebuilds the definition binding for the consume expectation from the
+    /// verified retained description: required (valid id plus 64-hex
+    /// revision) for named launches, forbidden for custom. Nil fails
+    /// closed. The outer Optional is the validation outcome; the inner is
+    /// the kind-appropriate binding (nil for custom).
+    static func definitionBinding(
+        kind: WorkspaceOperationKind,
+        definitionID: String?,
+        revisionDigest: String?
+    ) -> WorkspaceOperationDefinitionBinding?? {
+        switch kind {
+        case .launchAgent:
+            guard let rawID = definitionID,
+                let id = AgentDefinitionID(validating: rawID),
+                let revisionHex = revisionDigest,
+                Self.isLowerHex64(revisionHex)
+            else {
+                return nil
+            }
+            return .some(WorkspaceOperationDefinitionBinding(
+                definitionID: id,
+                revision: AgentDefinitionRevision(digestHex: revisionHex)))
+        case .launchCustom:
+            guard definitionID == nil, revisionDigest == nil else {
+                return nil
+            }
+            return .some(nil)
+        }
+    }
+
+    /// Collapses the host outcome code to the closed vocabulary before it
+    /// reaches audit or API surfaces.
+    static func knownHostOutcome(_ error: String?) -> String {
+        guard let error, Self.knownRedeemOutcomes.contains(error) else {
+            return "unknown"
+        }
+        return error
+    }
+
+    /// Exact outcome codes emitted by `WorkspaceHostRedeemHandler`. Closed:
+    /// unknown codes collapse to "unknown".
+    static let knownRedeemOutcomes: Set<String> = [
+        "unknown", "alreadyAccepted", "launchFailed",
+    ]
 
     /// Cancels a review. Pending operations (no challenge yet) may be cancelled
     /// by any authenticated UI; bound ceremonies only by their owning connection.
@@ -457,6 +712,11 @@ actor WorkspaceOperatorCeremonyService {
                 reviews.removeValue(forKey: id)
             }
         }
+        for id in Array(redemptions.keys) {
+            if (try? await authorizer.status(of: id)) == nil {
+                redemptions.removeValue(forKey: id)
+            }
+        }
     }
 
     private func validProposalShape(_ params: ProposeLaunchParams) -> Bool {
@@ -483,13 +743,26 @@ actor WorkspaceOperatorCeremonyService {
         }
         switch params.kind {
         case "named":
-            return params.definitionID != nil
-                && params.executable == nil
-                && params.expectedDigest == nil
+            guard let definitionID = params.definitionID,
+                !definitionID.isEmpty,
+                definitionID.count <= WorkspaceControlLimits.maxProjectBytes,
+                params.executable == nil,
+                params.expectedDigest == nil
+            else {
+                return false
+            }
+            return true
         case "custom":
-            return params.definitionID == nil
-                && params.executable != nil
-                && params.expectedDigest != nil
+            guard params.definitionID == nil,
+                let executable = params.executable,
+                !executable.isEmpty,
+                executable.utf8.count <= WorkspaceControlLimits.maxExecutableBytes,
+                let expectedDigest = params.expectedDigest,
+                Self.isLowerHex64(expectedDigest)
+            else {
+                return false
+            }
+            return true
         default:
             return false
         }
@@ -503,6 +776,10 @@ actor WorkspaceOperatorCeremonyService {
         case .wrongComponentRole, .duplicateRegistration:
             return .unknownHost
         case .prepareUnsupported, .prepareRPCFailed:
+            return .prepareFailed("unavailable")
+        case .redeemUnsupported, .redeemRPCFailed, .staleRegistration:
+            // Unreachable: the redeem path handles transport failures
+            // directly (recording an unknown outcome, never an error).
             return .prepareFailed("unavailable")
         case .prepareRefused(let reason):
             // The host speaks a closed refusal vocabulary; anything else is
@@ -599,7 +876,9 @@ actor WorkspaceOperatorCeremonyService {
         _ kind: WorkspaceOperatorCeremonyAuditEvent.Kind,
         operationID: UUID?,
         description: HostPreparedDescriptionDTO?,
-        outcome: String
+        outcome: String,
+        runtime: UUID? = nil,
+        instance: UUID? = nil
     ) {
         guard let audit else { return }
         audit(WorkspaceOperatorCeremonyAuditEvent(
@@ -611,6 +890,8 @@ actor WorkspaceOperatorCeremonyService {
             preparedID: description?.preparedID,
             intentDigestHex: description?.intentDigestHex,
             operationKind: description?.target,
+            runtimeSessionID: runtime,
+            agentInstanceID: instance,
             wall: Date(),
             outcome: outcome))
     }

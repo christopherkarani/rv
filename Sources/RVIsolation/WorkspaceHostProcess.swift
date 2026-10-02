@@ -13,7 +13,8 @@ public enum WorkspaceHostProcess {
         workspace: String,
         admission: RuntimeAdmissionConfiguration,
         principalBridge: @Sendable (WorkspacePrincipalAuthority) -> Void = { _ in },
-        prepareBridge: (@Sendable (@escaping HostPrepareHandler) -> Void)? = nil
+        prepareBridge: (@Sendable (@escaping HostPrepareHandler) -> Void)? = nil,
+        redeemBridge: (@Sendable (@escaping HostRedeemHandler) -> Void)? = nil
     ) -> Int32 {
         guard workspace.contains("\0") == false,
             let directory = WorkingDirectory(validating: workspace),
@@ -68,6 +69,7 @@ public enum WorkspaceHostProcess {
         case .success(let server):
             principalBridge(server.principalAuthority)
             prepareBridge?(server.makePrepareHandler())
+            redeemBridge?(server.makeRedeemHandler())
             server.waitForClose()
             return WorkspaceHostExit.closed
         }

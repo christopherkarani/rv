@@ -129,7 +129,17 @@ public struct OperatorProposalStatus: AsyncParsableCommand {
         let client = ServiceClient()
         switch await client.proposalStatus(operationID: id) {
         case .success(let reply):
-            print("operation \(reply.operationID.uuidString) status \(reply.status)")
+            var line = "operation \(reply.operationID.uuidString) status \(reply.status)"
+            if let launchResult = reply.launchResult {
+                line += " launch \(launchResult)"
+            }
+            if let runtime = reply.runtimeSessionID {
+                line += " runtime \(runtime.uuidString)"
+            }
+            if let instance = reply.agentInstanceID {
+                line += " instance \(instance.uuidString)"
+            }
+            print(line)
         case .failure(let error):
             FileHandle.standardError.write(
                 Data("rv operator proposal-status: \(describe(error))\n".utf8))

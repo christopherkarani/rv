@@ -795,7 +795,7 @@ func workspaceControlCode(_ error: WorkspaceSessionError) -> WorkspaceControlCod
         .workspaceClosed
     case .notAcceptingRuntime:
         .invalidRequest
-    case .unknownRuntime, .unknownPreparedLaunch:
+    case .unknownRuntime, .unknownPreparedLaunch, .redemptionAlreadyAccepted:
         .runtimeNotFound
     case .childTeardownFailed:
         .childTeardownFailed

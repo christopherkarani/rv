@@ -129,8 +129,11 @@ struct WorkspaceOperationDefinitionBinding: Sendable, Equatable {
 // MARK: - Authentication result and actor
 
 /// Narrow trusted completion of one challenge. Constructed only by trusted
-/// service/UI integration (Step 4); there is deliberately no Codable
-/// conformance and no IPC payload that can assert `.authenticated`.
+/// service/UI integration (Step 4): a genuine RVOperatorUI (team-signed,
+/// hardened-runtime, injection-exception-free, admin-enrolled trust) reports
+/// a LocalAuthentication outcome, and the service maps it here. There is
+/// deliberately no Codable conformance; the wire outcome is trusted only
+/// from that authenticated UI identity, never from any other peer.
 enum OperatorAuthenticationResult: Sendable, Equatable {
     case authenticated
     case cancelled
@@ -238,16 +241,17 @@ struct WorkspaceOperationPermit: Sendable, Equatable {
 
 // MARK: - Opaque reference and redemption result
 
-/// Opaque handle for future host protocol use. Lookup/correlation only:
-/// knowing a reference is not authority. Redemption additionally requires the
-/// authenticated registered host, exact workspace/generation/prepared/digest
-/// bindings, and an unexpired, unconsumed permit. No redemption exists yet.
+/// Opaque handle for host redemption. Lookup/correlation only: knowing a
+/// reference is not authority. Redemption additionally requires the
+/// authenticated registered host, exact workspace/generation/prepared/
+/// digest/definition bindings, and an unexpired, unconsumed permit.
 struct WorkspaceOperationAuthorizationReference: Hashable, Sendable, Equatable {
     let authorizationID: WorkspaceOperationAuthorizationID
     let epoch: WorkspaceAuthorizationIssuerEpoch
 }
 
-/// Exact expected bindings a future consumer must present to redeem.
+/// Exact expected bindings a consumer must present to redeem. Every field
+/// is compared against the server-held permit; any mismatch fails closed.
 struct WorkspaceOperationRedemptionExpectation: Sendable, Equatable {
     let workspace: WorkspaceSessionID
     let host: WorkspaceHostID
@@ -256,6 +260,8 @@ struct WorkspaceOperationRedemptionExpectation: Sendable, Equatable {
     let preparedLaunch: PreparedLaunchID
     let intentDigest: WorkspaceLaunchIntentDigest
     let kind: WorkspaceOperationKind
+    /// Required for `.launchAgent`, forbidden for `.launchCustom`.
+    let definition: WorkspaceOperationDefinitionBinding?
 }
 
 /// Trusted service-internal result of one atomic consumption, shaped for future

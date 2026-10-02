@@ -48,6 +48,17 @@ enum LiveWorkspaceHostError: Error, Sendable, Equatable {
     case prepareRPCFailed
     /// The host refused preparation; the reason is a coarse machine-readable code.
     case prepareRefused(String)
+    /// The registered host never offered redemption (predates the RPC).
+    case redeemUnsupported
+    /// The redeem reverse-RPC failed (transport, timeout, or peer change).
+    /// The permit is already consumed and the host may or may not have
+    /// launched: callers must record an unknown outcome, never retry.
+    case redeemRPCFailed
+    /// The live registration is no longer the exact channel the caller
+    /// validated: a replacement landed between validation and commit.
+    /// The commit is not delivered. Callers must record a terminal outcome
+    /// (the permit stays consumed) and never retry.
+    case staleRegistration
 }
 
 /// Ephemeral connection state only. The transport must capture authentic peer
@@ -56,6 +67,7 @@ enum LiveWorkspaceHostError: Error, Sendable, Equatable {
 actor LiveWorkspaceHostRegistry {
     typealias Validate = @Sendable (AgentPrincipalReference) async throws -> AgentPrincipalValidity?
     typealias PrepareLaunch = @Sendable (HostPrepareRequestDTO) async throws -> HostPrepareResponseDTO
+    typealias RedeemLaunch = @Sendable (HostRedeemCommitDTO) async throws -> HostRedeemResponseDTO
 
     private struct Registration: Sendable {
         let workspace: WorkspaceSessionID
@@ -65,12 +77,20 @@ actor LiveWorkspaceHostRegistry {
         let epoch: UUID
         let validate: Validate
         let prepare: PrepareLaunch?
+        let redeem: RedeemLaunch?
         let isConnected: @Sendable () -> Bool
     }
 
     private var hosts: [WorkspaceHostID: Registration] = [:]
     private var usedGenerations: Set<WorkspaceHostGeneration> = []
     private var usedConnections: Set<UUID> = []
+    private var usedConnectionOrder: [UUID] = []
+    /// Retired-connection memory bound. Connection entries outlive their
+    /// usefulness once their session can no longer register (the race they
+    /// win spans milliseconds); generations stay poisoned forever because
+    /// incarnation identity must never recycle. The bound exceeds any
+    /// plausible in-flight connection count by orders of magnitude.
+    private static let maxRetiredConnections = 4_096
 
     /// Internal-only: a caller-supplied role, PID or owner token cannot enter.
     func register(
@@ -80,7 +100,8 @@ actor LiveWorkspaceHostRegistry {
         generation: WorkspaceHostGeneration,
         isConnected: @escaping @Sendable () -> Bool = { true },
         validate: @escaping Validate,
-        prepare: PrepareLaunch? = nil
+        prepare: PrepareLaunch? = nil,
+        redeem: RedeemLaunch? = nil
     ) throws {
         guard peer.componentRole == .workspaceHost else {
             throw LiveWorkspaceHostError.wrongComponentRole
@@ -95,10 +116,10 @@ actor LiveWorkspaceHostRegistry {
         }
         guard isConnected() else { throw LiveWorkspaceHostError.disconnected }
         usedGenerations.insert(generation)
-        usedConnections.insert(peer.connectionID)
+        retireConnection(peer.connectionID)
         hosts[host] = Registration(workspace: workspace, host: host,
             generation: generation, peer: peer, epoch: UUID(), validate: validate,
-            prepare: prepare, isConnected: isConnected)
+            prepare: prepare, redeem: redeem, isConnected: isConnected)
     }
 
     /// Transport teardown, keyed by its own connection identity, invalidates all
@@ -106,7 +127,22 @@ actor LiveWorkspaceHostRegistry {
     func disconnect(connectionID: UUID) {
         hosts = hosts.filter { $0.value.peer.connectionID != connectionID }
         // Even a disconnect arriving ahead of registration prevents resurrection.
-        usedConnections.insert(connectionID)
+        retireConnection(connectionID)
+    }
+
+    /// Retires one connection ID with FIFO eviction past the bound. Oldest
+    /// entries belong to long-dead sessions that can no longer register.
+    private func retireConnection(_ connectionID: UUID) {
+        guard usedConnections.insert(connectionID).inserted else { return }
+        usedConnectionOrder.append(connectionID)
+        while usedConnectionOrder.count > Self.maxRetiredConnections {
+            usedConnections.remove(usedConnectionOrder.removeFirst())
+        }
+    }
+
+    /// Retired-connection count. For tests.
+    var retiredConnectionCount: Int {
+        usedConnections.count
     }
 
     func resolve(_ reference: AgentPrincipalReference) async throws -> ServiceValidatedAgentContext {
@@ -201,5 +237,46 @@ actor LiveWorkspaceHostRegistry {
         return HostPreparedLaunch(
             description: description,
             hostConnectionID: registration.peer.connectionID)
+    }
+
+    /// Commits one consumed permit's redemption to the live registered host.
+    ///
+    /// The caller must have atomically consumed the server-held permit first:
+    /// this RPC carries the consumption assertion, not the authority to
+    /// consume. `expectedConnection` must be the exact channel the caller
+    /// validated: the resolved registration's channel is compared before
+    /// the closure runs, so a replacement that lands between the caller's
+    /// validation and this lookup fails instead of receiving a commit meant
+    /// for the prior incarnation. Mid-RPC replacement fails via the epoch
+    /// check, mirroring `prepareProposal`. Host refusals arrive as data;
+    /// transport/peer failures throw. Either way the caller must not retry:
+    /// the permit is spent and the host fence makes any duplicate safe, but
+    /// no duplicate is ever sent.
+    func redeemLaunch(
+        host: WorkspaceHostID,
+        expectedConnection: UUID,
+        request: HostRedeemCommitDTO
+    ) async throws -> HostRedeemResponseDTO {
+        guard let registration = hosts[host] else {
+            throw LiveWorkspaceHostError.unknownHost
+        }
+        guard registration.peer.connectionID == expectedConnection else {
+            throw LiveWorkspaceHostError.staleRegistration
+        }
+        guard registration.isConnected() else { throw LiveWorkspaceHostError.disconnected }
+        guard let redeem = registration.redeem else {
+            throw LiveWorkspaceHostError.redeemUnsupported
+        }
+        let response: HostRedeemResponseDTO
+        do {
+            response = try await redeem(request)
+        } catch {
+            throw LiveWorkspaceHostError.redeemRPCFailed
+        }
+        guard !Task.isCancelled, registration.isConnected(),
+              hosts[registration.host]?.epoch == registration.epoch else {
+            throw LiveWorkspaceHostError.disconnected
+        }
+        return response
     }
 }

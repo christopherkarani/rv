@@ -94,7 +94,10 @@ private struct ReviewDetailView: View {
                 }
                 row("Executable", bundle.item.executable)
                 if let digest = bundle.item.expectedContentDigest {
-                    row("Content digest", short(digest))
+                    // Claimed, not measured: no step hashes the file. Byte
+                    // enforcement is measured-launch scope; the label must
+                    // not imply the bytes were verified.
+                    row("Content digest (unverified)", short(digest))
                 }
                 row("Working directory", bundle.item.workingDirectory)
                 row("Arguments", bundle.item.arguments.joined(separator: " "))

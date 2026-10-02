@@ -107,7 +107,8 @@ struct WorkspaceOperatorAuthorizerTests {
                 registration: registration,
                 preparedLaunch: preparedLaunch,
                 intentDigest: intentDigest,
-                kind: kind)
+                kind: kind,
+                definition: definition)
         }
     }
 
@@ -511,38 +512,46 @@ struct WorkspaceOperatorAuthorizerTests {
             WorkspaceOperationRedemptionExpectation(
                 workspace: WorkspaceSessionID(), host: base.host, generation: base.generation,
                 registration: base.registration, preparedLaunch: base.preparedLaunch,
-                intentDigest: base.intentDigest, kind: base.kind),
+                intentDigest: base.intentDigest, kind: base.kind, definition: base.definition),
             WorkspaceOperationRedemptionExpectation(
                 workspace: base.workspace, host: WorkspaceHostID(),
                 generation: base.generation, registration: base.registration,
                 preparedLaunch: base.preparedLaunch, intentDigest: base.intentDigest,
-                kind: base.kind),
+                kind: base.kind, definition: base.definition),
             WorkspaceOperationRedemptionExpectation(
                 workspace: base.workspace, host: base.host,
                 generation: WorkspaceHostGeneration(), registration: base.registration,
                 preparedLaunch: base.preparedLaunch, intentDigest: base.intentDigest,
-                kind: base.kind),
+                kind: base.kind, definition: base.definition),
             WorkspaceOperationRedemptionExpectation(
                 workspace: base.workspace, host: base.host, generation: base.generation,
                 registration: WorkspaceHostRegistrationBinding(
                     host: base.host, generation: base.generation, connectionID: UUID()),
                 preparedLaunch: base.preparedLaunch, intentDigest: base.intentDigest,
-                kind: base.kind),
+                kind: base.kind, definition: base.definition),
             WorkspaceOperationRedemptionExpectation(
                 workspace: base.workspace, host: base.host, generation: base.generation,
                 registration: base.registration, preparedLaunch: PreparedLaunchID(),
-                intentDigest: base.intentDigest, kind: base.kind),
+                intentDigest: base.intentDigest, kind: base.kind, definition: base.definition),
             WorkspaceOperationRedemptionExpectation(
                 workspace: base.workspace, host: base.host, generation: base.generation,
                 registration: base.registration, preparedLaunch: base.preparedLaunch,
                 intentDigest: WorkspaceLaunchIntentDigest(sha256Hex: Fixture.otherDigest),
-                kind: base.kind),
+                kind: base.kind, definition: base.definition),
             WorkspaceOperationRedemptionExpectation(
                 workspace: base.workspace, host: base.host, generation: base.generation,
                 registration: base.registration, preparedLaunch: base.preparedLaunch,
-                intentDigest: base.intentDigest, kind: .launchCustom),
+                intentDigest: base.intentDigest, kind: .launchCustom, definition: nil),
+            WorkspaceOperationRedemptionExpectation(
+                workspace: base.workspace, host: base.host, generation: base.generation,
+                registration: base.registration, preparedLaunch: base.preparedLaunch,
+                intentDigest: base.intentDigest, kind: base.kind,
+                definition: WorkspaceOperationDefinitionBinding(
+                    definitionID: AgentDefinitionID(rawValue: "other-agent"),
+                    revision: AgentDefinitionRevision(
+                        digestHex: String(repeating: "d", count: 64)))),
         ]
-        #expect(probes.count == 7)
+        #expect(probes.count == 8)
         for probe in probes {
             await #expect(throws: WorkspaceOperatorAuthorizationError.bindingMismatch) {
                 try await auth.consumePermit(ref, expectation: probe)
@@ -584,9 +593,10 @@ struct WorkspaceOperatorAuthorizerTests {
         _ = try await auth.consumePermit(refB, expectation: fxB.expectation())
     }
 
-    @Test func definitionMetadataIsNotAuthoritative() async throws {
-        // Same prepared launch + digest under two definition spellings: consume
-        // still succeeds, because authority binds prepared+digest, not names.
+    @Test func definitionMismatchRejects() async throws {
+        // Step 5 M1: definition binding is authoritative at consume time.
+        // Same prepared launch + digest under a different definition spelling
+        // must reject, preventing R1-vs-R2 substitution after review.
         let clock = TestClock()
         let auth = authorizer(clock: clock)
         let fx = Fixture()
@@ -602,8 +612,9 @@ struct WorkspaceOperatorAuthorizerTests {
         let challenge = try await auth.issueChallenge(
             operationID: ref.authorizationID, uiConnection: ui)
         _ = try await auth.completeChallenge(challenge, uiConnection: ui, result: .authenticated)
-        let redemption = try await auth.consumePermit(ref, expectation: fx.expectation())
-        #expect(redemption.definition == altDefinition)
+        await #expect(throws: WorkspaceOperatorAuthorizationError.bindingMismatch) {
+            try await auth.consumePermit(ref, expectation: fx.expectation())
+        }
     }
 
     // MARK: - Concurrency (deterministic; no sleeps)
@@ -1025,7 +1036,8 @@ struct WorkspaceOperatorAuthorizerTests {
             workspace: fx.workspace, host: fx.host, generation: generation2,
             registration: WorkspaceHostRegistrationBinding(
                 host: fx.host, generation: generation2, connectionID: UUID()),
-            preparedLaunch: fx.preparedLaunch, intentDigest: fx.intentDigest, kind: fx.kind)
+            preparedLaunch: fx.preparedLaunch, intentDigest: fx.intentDigest, kind: fx.kind,
+            definition: fx.definition)
         await #expect(throws: WorkspaceOperatorAuthorizationError.bindingMismatch) {
             try await auth.consumePermit(ref, expectation: reconnected)
         }

@@ -283,7 +283,8 @@ actor WorkspaceOperatorAuthorizer {
             expectation.registration == permit.registration,
             expectation.preparedLaunch == permit.preparedLaunch,
             expectation.intentDigest == permit.intentDigest,
-            expectation.kind == permit.kind
+            expectation.kind == permit.kind,
+            expectation.definition == permit.definition
         else {
             throw WorkspaceOperatorAuthorizationError.bindingMismatch
         }

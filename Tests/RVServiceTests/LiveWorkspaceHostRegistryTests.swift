@@ -279,6 +279,76 @@ struct LiveWorkspaceHostRegistryTests {
         }
         #expect(await state.calls == 0)
     }
+
+    @Test func retiredConnectionsAreBoundedFIFO() async throws {
+        let registry = LiveWorkspaceHostRegistry()
+        var ids: [UUID] = []
+        for _ in 0..<5_000 {
+            let id = UUID()
+            ids.append(id)
+            await registry.disconnect(connectionID: id)
+        }
+        #expect(await registry.retiredConnectionCount == 4_096)
+        // The oldest entries evicted: registering on an evicted channel is
+        // treated as fresh (its session is long dead).
+        try await registry.register(peer: peer(connectionID: ids[0]),
+            workspace: WorkspaceSessionID(), host: WorkspaceHostID(),
+            generation: WorkspaceHostGeneration(), validate: { _ in nil })
+        // A retained recent entry still wins its race.
+        await #expect(throws: LiveWorkspaceHostError.retiredIncarnation) {
+            try await registry.register(peer: peer(connectionID: ids[4_999]),
+                workspace: WorkspaceSessionID(), host: WorkspaceHostID(),
+                generation: WorkspaceHostGeneration(), validate: { _ in nil })
+        }
+    }
+
+    @Test func redeemRequiresValidatedChannel() async throws {
+        let registry = LiveWorkspaceHostRegistry()
+        let ref = reference()
+        let first = peer()
+        let firstCalls = Mutex(0)
+        try await registry.register(peer: first, workspace: ref.workspaceSessionID,
+            host: ref.workspaceHostID, generation: ref.workspaceHostGeneration,
+            validate: { _ in nil },
+            redeem: { _ in
+                firstCalls.withLock { $0 += 1 }
+                return HostRedeemResponseDTO(accepted: false, error: "unknown")
+            })
+        let stale = try #require(await registry.liveBinding(host: ref.workspaceHostID))
+        func commit() -> HostRedeemCommitDTO {
+            HostRedeemCommitDTO(
+                authorizationID: UUID(),
+                workspaceSessionID: ref.workspaceSessionID.rawValue,
+                hostID: ref.workspaceHostID.rawValue,
+                generation: ref.workspaceHostGeneration.rawValue,
+                preparedID: UUID(),
+                intentDigestHex: String(repeating: "a", count: 64),
+                kind: "launchCustom", definitionID: nil, revisionDigest: nil)
+        }
+        // The validated channel commits normally.
+        _ = try await registry.redeemLaunch(
+            host: ref.workspaceHostID, expectedConnection: stale.connectionID,
+            request: commit())
+        #expect(firstCalls.withLock { $0 } == 1)
+        // A replacement incarnation lands. The old validated channel no
+        // longer matches: the commit is not delivered to either host.
+        await registry.disconnect(connectionID: first.connectionID)
+        let secondCalls = Mutex(0)
+        try await registry.register(peer: peer(), workspace: ref.workspaceSessionID,
+            host: ref.workspaceHostID, generation: WorkspaceHostGeneration(),
+            validate: { _ in nil },
+            redeem: { _ in
+                secondCalls.withLock { $0 += 1 }
+                return HostRedeemResponseDTO(accepted: false, error: "unknown")
+            })
+        await #expect(throws: LiveWorkspaceHostError.staleRegistration) {
+            try await registry.redeemLaunch(
+                host: ref.workspaceHostID, expectedConnection: stale.connectionID,
+                request: commit())
+        }
+        #expect(firstCalls.withLock { $0 } == 1)
+        #expect(secondCalls.withLock { $0 } == 0)
+    }
 }
 
 private enum ProbeError: Error { case failed }

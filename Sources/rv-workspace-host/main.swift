@@ -65,6 +65,9 @@ enum WorkspaceHostMain {
                 },
                 prepareBridge: { handler in
                     principalBridge.setPrepareHandler(handler)
+                },
+                redeemBridge: { handler in
+                    principalBridge.setRedeemHandler(handler)
                 }
             )
         )
