@@ -160,7 +160,7 @@ struct RuntimeAdmissionTests {
         let allowed = RuntimeAdmissionGate.submit(
             binding: &binding,
             frame: .success(fixture.frame(command: "echo hello")),
-            approvalFor: { _ in .success(.allowOnce) }
+            approvalFor: { _, _ in .success(.allowOnce) }
         ) { _ in
             .success(fixture.uncovered)
         }
@@ -170,7 +170,7 @@ struct RuntimeAdmissionTests {
         let refused = RuntimeAdmissionGate.submit(
             binding: &again,
             frame: .success(fixture.frame(command: "echo hello")),
-            approvalFor: { _ in .failure(.approvalUnavailable) }
+            approvalFor: { _, _ in .failure(.approvalUnavailable) }
         ) { _ in
             .success(fixture.uncovered)
         }
@@ -181,7 +181,7 @@ struct RuntimeAdmissionTests {
         let created = RuntimeAdmissionGate.submit(
             binding: &rule,
             frame: .success(fixture.frame(command: "echo hello")),
-            approvalFor: { _ in .success(.createRule) }
+            approvalFor: { _, _ in .success(.createRule) }
         ) { _ in
             .success(fixture.uncovered)
         }

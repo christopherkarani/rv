@@ -283,17 +283,24 @@ public struct RuntimeAdmissionDecision: Sendable, Equatable {
     public var event: RuntimeAdmissionEvent
     /// Set only when the shell must perform the side effect.
     public var execute: AllowedAction?
+    /// The host parked this ASK for a human decision: the answer arrives
+    /// later, asynchronously. Callers must NOT write `response` now — it is
+    /// the pre-park pending projection, already superseded. Set only by the
+    /// host session layer, never by the gate.
+    public var responseDeferred: Bool
 
     public init(
         binding: RuntimeChannelBinding?,
         response: RuntimeAdmissionResponse,
         event: RuntimeAdmissionEvent,
-        execute: AllowedAction? = nil
+        execute: AllowedAction? = nil,
+        responseDeferred: Bool = false
     ) {
         self.binding = binding
         self.response = response
         self.event = event
         self.execute = execute
+        self.responseDeferred = responseDeferred
     }
 }
 
@@ -312,7 +319,9 @@ public enum RuntimeAdmissionGate {
         binding: inout RuntimeChannelBinding?,
         frame: Result<RuntimeActionFrame, RuntimeAdmissionDecodeError>,
         policy: EffectiveActionPolicy = .empty,
-        approvalFor: (PendingAuthorization) -> Result<ApprovalDecision, AgentApprovalError>? = { _ in
+        approvalFor: (RuntimeActionRequestID, PendingAuthorization) -> Result<
+            ApprovalDecision, AgentApprovalError
+        >? = { _, _ in
             nil
         },
         agentContext: AuthenticatedAgentContext? = nil,
@@ -471,7 +480,9 @@ public enum RuntimeAdmissionGate {
         frame: RuntimeActionFrame,
         proposal: Result<ProposedAction, RuntimeAdmissionEvaluationError>,
         policy: EffectiveActionPolicy,
-        approvalFor: (PendingAuthorization) -> Result<ApprovalDecision, AgentApprovalError>?
+        approvalFor: (RuntimeActionRequestID, PendingAuthorization) -> Result<
+            ApprovalDecision, AgentApprovalError
+        >?
     ) -> RuntimeAdmissionDecision {
         let requestID = frame.requestID.rawValue.uuidString
         binding.consumedRequestIDs.insert(frame.requestID)
@@ -496,7 +507,7 @@ public enum RuntimeAdmissionGate {
         )
         let approval: Result<ApprovalDecision, AgentApprovalError>?
         if case .pending(let pending) = authorization {
-            approval = approvalFor(pending)
+            approval = approvalFor(frame.requestID, pending)
         } else {
             approval = nil
         }

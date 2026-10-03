@@ -14,7 +14,8 @@ import Synchronization
 enum XPCOperatorUIBridge {
     static func handles(_ message: xpc_object_t) -> Bool {
         xpc_get_type(message) == XPC_TYPE_DICTIONARY
-            && xpc_dictionary_get_value(message, UIBridgeWire.requestKey) != nil
+            && (xpc_dictionary_get_value(message, UIBridgeWire.requestKey) != nil
+                || xpc_dictionary_get_value(message, UIBridgeWire.actionRequestKey) != nil)
     }
 
     static func handle(
@@ -23,7 +24,8 @@ enum XPCOperatorUIBridge {
         handshakeOK: Bool,
         discoveryOnly: Bool,
         sessions: LiveOperatorUISessionRegistry,
-        ceremonies: WorkspaceOperatorCeremonyService
+        ceremonies: WorkspaceOperatorCeremonyService,
+        actionCeremonies: ActionApprovalCeremonyService
     ) async {
         guard let response = await reply(
             message: message.object,
@@ -31,7 +33,8 @@ enum XPCOperatorUIBridge {
             handshakeOK: handshakeOK,
             discoveryOnly: discoveryOnly,
             sessions: sessions,
-            ceremonies: ceremonies
+            ceremonies: ceremonies,
+            actionCeremonies: actionCeremonies
         ),
             let peer = xpc_dictionary_get_remote_connection(message.object)
         else {
@@ -46,13 +49,26 @@ enum XPCOperatorUIBridge {
         handshakeOK: Bool,
         discoveryOnly: Bool,
         sessions: LiveOperatorUISessionRegistry,
-        ceremonies: WorkspaceOperatorCeremonyService
+        ceremonies: WorkspaceOperatorCeremonyService,
+        actionCeremonies: ActionApprovalCeremonyService? = nil
     ) async -> xpc_object_t? {
         // Reply-always: the only nil is a missing remote (nothing to send
         // to). Every gate failure answers opaque denial so the requestor's
         // reply handler fires instead of hanging.
         guard let response = xpc_dictionary_create_reply(message) else {
             return nil
+        }
+        // Action review rides its own key and its own ceremony. The launch
+        // path below is untouched.
+        if xpc_dictionary_get_value(message, UIBridgeWire.actionRequestKey) != nil {
+            return await actionReply(
+                message: message,
+                response: response,
+                context: context,
+                handshakeOK: handshakeOK,
+                discoveryOnly: discoveryOnly,
+                sessions: sessions,
+                actionCeremonies: actionCeremonies)
         }
         guard handshakeOK, !discoveryOnly,
             let peer = context.peer, peer.componentRole == .operatorUI,
@@ -67,6 +83,7 @@ enum XPCOperatorUIBridge {
                 return deny(response)
             }
             await ceremonies.uiSessionAuthenticated()
+            await actionCeremonies?.uiSessionAuthenticated()
             return answer(
                 response,
                 result: .uiRegistered(
@@ -151,6 +168,103 @@ enum XPCOperatorUIBridge {
             return nil
         }
         return Data(bytes: bytes, count: size)
+    }
+
+    /// Action-review reply path. Same gating shape as launch (handshake,
+    /// non-discovery, authenticated `operatorUI` peer, registered session,
+    /// reply-always opaque denial), but a separate request vocabulary and
+    /// a separate ceremony: no launch challenge, completion, or status can
+    /// enter here, and no action completion can reach the launch ceremony.
+    static func actionReply(
+        message: xpc_object_t,
+        response: xpc_object_t,
+        context: AuthenticatedRequestContext,
+        handshakeOK: Bool,
+        discoveryOnly: Bool,
+        sessions: LiveOperatorUISessionRegistry,
+        actionCeremonies: ActionApprovalCeremonyService?
+    ) async -> xpc_object_t? {
+        guard handshakeOK, !discoveryOnly,
+            let peer = context.peer, peer.componentRole == .operatorUI,
+            let data = body(message, key: UIBridgeWire.actionRequestKey),
+            let request = try? IPCJSON.decode(UIActionBridgeRequest.self, from: data),
+            let actionCeremonies
+        else {
+            return deny(response)
+        }
+        switch request {
+        case .actionList:
+            guard await sessions.session(connectionID: peer.connectionID) != nil else {
+                return deny(response)
+            }
+            let list = await actionCeremonies.listActionReviews()
+            return answer(response, result: .uiActionReviewList(list))
+        case .actionBind(let approvalID):
+            guard let session = await sessions.session(connectionID: peer.connectionID) else {
+                return deny(response)
+            }
+            do {
+                let (challenge, item) = try await actionCeremonies.bindActionReview(
+                    approvalID: approvalID, uiConnection: session.uiConnection)
+                return answer(
+                    response,
+                    result: .uiActionChallengeBundle(
+                        UIActionChallengeBundleDTO(challenge: challenge, item: item)))
+            } catch {
+                return deny(response)
+            }
+        case .actionComplete(let completion):
+            guard let session = await sessions.session(connectionID: peer.connectionID) else {
+                return deny(response)
+            }
+            do {
+                let status = try await actionCeremonies.completeActionCeremony(
+                    completion, uiConnection: session.uiConnection)
+                return answer(
+                    response,
+                    result: .uiActionStatus(
+                        UIActionStatusDTO(approvalID: completion.approvalID, status: status)))
+            } catch {
+                return deny(response)
+            }
+        case .actionDeny(let denyRequest):
+            guard let session = await sessions.session(connectionID: peer.connectionID) else {
+                return deny(response)
+            }
+            do {
+                let status = try await actionCeremonies.denyActionCeremony(
+                    denyRequest, uiConnection: session.uiConnection)
+                return answer(
+                    response,
+                    result: .uiActionStatus(
+                        UIActionStatusDTO(approvalID: denyRequest.approvalID, status: status)))
+            } catch {
+                return deny(response)
+            }
+        case .actionCancel(let approvalID):
+            guard let session = await sessions.session(connectionID: peer.connectionID) else {
+                return deny(response)
+            }
+            do {
+                let status = try await actionCeremonies.cancelActionReview(
+                    approvalID: approvalID, uiConnection: session.uiConnection)
+                return answer(
+                    response,
+                    result: .uiActionStatus(
+                        UIActionStatusDTO(approvalID: approvalID, status: status)))
+            } catch {
+                return deny(response)
+            }
+        case .actionStatus(let approvalID):
+            guard await sessions.session(connectionID: peer.connectionID) != nil else {
+                return deny(response)
+            }
+            let status = await actionCeremonies.actionStatus(approvalID: approvalID)
+            return answer(
+                response,
+                result: .uiActionStatus(
+                    UIActionStatusDTO(approvalID: approvalID, status: status)))
+        }
     }
 }
 #endif

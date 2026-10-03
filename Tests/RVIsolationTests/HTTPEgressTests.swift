@@ -110,7 +110,7 @@ struct HTTPAdmissionTests {
         #expect(asked.response == .pending(.mandatoryHuman))
         let approved = try HTTPHarness(
             policy: .mandatoryHuman,
-            approval: { _ in .success(.allowOnce) }
+            approval: { _, _ in .success(.allowOnce) }
         )
         let ran = approved.session.submit(.success(approved.frame("https://example.com/")))
         #expect(approved.spy.calls == 1)
@@ -285,7 +285,7 @@ private struct HTTPHarness: Sendable {
 
     init(
         policy: HTTPHarnessPolicy = .empty,
-        approval: @escaping @Sendable (PendingAuthorization) -> Result<ApprovalDecision, AgentApprovalError>? = { _ in nil },
+        approval: @escaping @Sendable (RuntimeActionRequestID, PendingAuthorization) -> Result<ApprovalDecision, AgentApprovalError>? = { _, _ in nil },
         exchange: HTTPHarnessExchange = .empty
     ) throws {
         let workspace = try #require(WorkingDirectory(validating: "/tmp/rv-http-admission"))

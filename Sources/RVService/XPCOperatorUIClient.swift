@@ -84,12 +84,90 @@ public final class XPCOperatorUIClient: Sendable {
         return status
     }
 
+    // MARK: - Action approvals (Step 6)
+
+    /// Action-review calls ride the same persistent action connection (and
+    /// the same registered UI session) as launch review, on the action
+    /// request key with the action vocabulary. A dropped connection
+    /// invalidates bound action challenges server-side, mirroring launch:
+    /// the caller reconnects and re-binds; nothing completes across it.
+    public func actionList() async throws -> UIActionReviewListDTO {
+        let response = try await actionRoundTrip(.actionList)
+        guard case .uiActionReviewList(let list) = response.result else {
+            throw mapUnexpected(response.result)
+        }
+        return list
+    }
+
+    public func actionBind(approvalID: UUID) async throws -> UIActionChallengeBundleDTO {
+        let response = try await actionRoundTrip(.actionBind(approvalID: approvalID))
+        guard case .uiActionChallengeBundle(let bundle) = response.result else {
+            throw mapUnexpected(response.result)
+        }
+        return bundle
+    }
+
+    public func actionComplete(_ completion: UIActionCompletion) async throws -> UIActionStatusDTO {
+        let response = try await actionRoundTrip(.actionComplete(completion))
+        guard case .uiActionStatus(let status) = response.result else {
+            throw mapUnexpected(response.result)
+        }
+        return status
+    }
+
+    public func actionDeny(_ deny: UIActionDeny) async throws -> UIActionStatusDTO {
+        let response = try await actionRoundTrip(.actionDeny(deny))
+        guard case .uiActionStatus(let status) = response.result else {
+            throw mapUnexpected(response.result)
+        }
+        return status
+    }
+
+    public func actionCancel(approvalID: UUID) async throws -> UIActionStatusDTO {
+        let response = try await actionRoundTrip(.actionCancel(approvalID: approvalID))
+        guard case .uiActionStatus(let status) = response.result else {
+            throw mapUnexpected(response.result)
+        }
+        return status
+    }
+
+    public func actionStatus(approvalID: UUID) async throws -> UIActionStatusDTO {
+        let response = try await actionRoundTrip(.actionStatus(approvalID: approvalID))
+        guard case .uiActionStatus(let status) = response.result else {
+            throw mapUnexpected(response.result)
+        }
+        return status
+    }
+
     private func register() async throws -> UIRegisteredDTO {
         let response = try await roundTrip(.register)
         guard case .uiRegistered(let receipt) = response.result else {
             throw mapUnexpected(response.result)
         }
         return receipt
+    }
+
+    private func actionRoundTrip(_ request: UIActionBridgeRequest) async throws -> IPCResponse {
+        if Task.isCancelled {
+            throw XPCOperatorUIClientError.cancelled
+        }
+        let actions = try await liveActions()
+        let body = try IPCJSON.encode(request)
+        do {
+            let frame = try await exchangeAction(body, on: actions)
+            return try IPCJSON.decode(IPCResponse.self, from: frame)
+        } catch let error as XPCOperatorUIClientError {
+            // Transport failure. Decoded denials surface from the callers
+            // (mapUnexpected), outside this catch: a live server answering
+            // denial keeps the session.
+            forgetActions()
+            throw error
+        } catch {
+            // Undecodable frame from an authenticated peer: drop the
+            // connection, report a protocol violation.
+            forgetActions()
+            throw XPCOperatorUIClientError.protocolMismatch
+        }
     }
 
     private func mapUnexpected(_ result: IPCResult) -> XPCOperatorUIClientError {
@@ -226,6 +304,12 @@ public final class XPCOperatorUIClient: Sendable {
     /// an `IPCResponse` frame on the shared wire key.
     private func exchange(_ body: Data, on connection: xpc_connection_t) async throws -> Data {
         try await exchangeRaw(body: body, key: UIBridgeWire.requestKey, on: connection).body
+    }
+
+    /// Action-review round trip. Same connection and session as launch;
+    /// the request rides `rv.ui-action-request` with the action vocabulary.
+    private func exchangeAction(_ body: Data, on connection: xpc_connection_t) async throws -> Data {
+        try await exchangeRaw(body: body, key: UIBridgeWire.actionRequestKey, on: connection).body
     }
 
     private func exchangeHello(

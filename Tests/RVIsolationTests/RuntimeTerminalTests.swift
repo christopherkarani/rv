@@ -414,7 +414,7 @@ struct RuntimeTerminalTests {
             normalize: ptyAdmissionNormalize,
             executor: .containedCommand,
             http: .effect { action, _, _ in spy.run(action) },
-            approval: { _ in nil },
+            approval: { _, _ in nil },
             policy: { _ in .empty },
             evidence: RuntimeAdmissionEvidence()
         )

@@ -591,7 +591,7 @@ private func countingAdmission(_ counter: RunCounter) -> RuntimeAdmissionConfigu
     RuntimeAdmissionConfiguration(
         normalize: workspaceTouchNormalize,
         executor: .effect(counter.run),
-        approval: { _ in nil },
+        approval: { _, _ in nil },
         policy: { _ in .empty },
         evidence: RuntimeAdmissionEvidence()
     )

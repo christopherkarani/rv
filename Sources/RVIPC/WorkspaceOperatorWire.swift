@@ -9,8 +9,13 @@ import RVDomain
 
 /// XPC dictionary keys for the operator-UI channel. Results ride the standard
 /// `rv.ipc` IPCResponse envelope, mirroring the host bridge.
+///
+/// Launch review and action review ride separate request keys so the two
+/// modes can never be confused at the transport layer; both share the one
+/// authenticated UI session and connection.
 public enum UIBridgeWire {
     public static let requestKey = "rv.ui-request"
+    public static let actionRequestKey = "rv.ui-action-request"
 
     public static let maxBodyBytes = 1_048_576
 }

@@ -143,6 +143,153 @@ public final class WorkspaceHostBridgeClient: Sendable {
         return result
     }
 
+    // MARK: - Action approvals (Step 6)
+
+    /// Records one host-gate ASK as a principal-bound approval. The subject
+    /// must carry a usable agent context for the runtime the authority
+    /// names; references come from live host authority, never from the
+    /// caller. Fast RPC (no human wait): the service mints the approval and
+    /// returns correlation IDs. Any failure means no approval exists.
+    public func createActionApproval(
+        subject: RuntimeAdmissionSubject,
+        action: ProposedAction,
+        reason: RuntimeAskReason,
+        policyContext: String
+    ) async throws -> HostActionApprovalCreatedDTO {
+        let (authority, connection, reference) = try approvalReference(for: subject)
+        let agent = try approvalAgent(for: subject)
+        let reasonRaw: String = switch reason {
+        case .mandatoryHuman: "mandatoryHuman"
+        case .reviewAsk: "reviewAsk"
+        }
+        let dto = HostActionApprovalCreateDTO(
+            reference: reference,
+            action: action,
+            reason: reasonRaw,
+            policyContext: policyContext,
+            definitionID: agent.instance.definitionID,
+            definitionRevision: agent.instance.definitionRevision)
+        let message = xpc_dictionary_create_empty()
+        Self.set(
+            try IPCJSON.encode(dto), key: HostActionApprovalWire.createKey, on: message)
+        let reply = try await exchange(XPCHeld(message), on: connection)
+        guard state.withLock({ $0.connection?.object === connection.object }),
+              authority.resolve(reference) != nil,
+              let body = XPCIPCWire.body(from: reply.object) else {
+            throw XPCEvaluateClientError.authenticationFailed
+        }
+        let response = try IPCJSON.decode(IPCResponse.self, from: body)
+        guard case .hostActionApprovalCreated(let created) = response.result else {
+            throw XPCEvaluateClientError.authenticationFailed
+        }
+        return created
+    }
+
+    /// Safe status poll for one approval. Never consumes, never a grant.
+    /// Any transport failure throws; the caller keeps polling or gives up.
+    public func actionApprovalStatus(
+        approvalID: UUID,
+        subject: RuntimeAdmissionSubject
+    ) async throws -> String {
+        let (authority, connection, reference) = try approvalReference(for: subject)
+        let dto = HostActionApprovalStatusDTO(approvalID: approvalID, reference: reference)
+        let message = xpc_dictionary_create_empty()
+        Self.set(
+            try IPCJSON.encode(dto), key: HostActionApprovalWire.statusKey, on: message)
+        let reply = try await exchange(XPCHeld(message), on: connection)
+        guard state.withLock({ $0.connection?.object === connection.object }),
+              authority.resolve(reference) != nil,
+              let body = XPCIPCWire.body(from: reply.object) else {
+            throw XPCEvaluateClientError.authenticationFailed
+        }
+        let response = try IPCJSON.decode(IPCResponse.self, from: body)
+        guard case .hostActionApprovalStatus(let status) = response.result else {
+            throw XPCEvaluateClientError.authenticationFailed
+        }
+        return status.status
+    }
+
+    /// Consumes one grant for the host's exact parked continuation.
+    /// `mayExecute` is true if and only if this call atomically consumed
+    /// the grant; any other answer means do not run.
+    public func consumeActionApproval(
+        approvalID: UUID,
+        subject: RuntimeAdmissionSubject,
+        actionDigestHex: String,
+        continuationID: UUID
+    ) async throws -> HostActionApprovalDecisionDTO {
+        let (authority, connection, reference) = try approvalReference(for: subject)
+        let dto = HostActionApprovalConsumeDTO(
+            approvalID: approvalID,
+            reference: reference,
+            actionDigestHex: actionDigestHex,
+            continuationID: continuationID)
+        let message = xpc_dictionary_create_empty()
+        Self.set(
+            try IPCJSON.encode(dto), key: HostActionApprovalWire.consumeKey, on: message)
+        let reply = try await exchange(XPCHeld(message), on: connection)
+        guard state.withLock({ $0.connection?.object === connection.object }),
+              authority.resolve(reference) != nil,
+              let body = XPCIPCWire.body(from: reply.object) else {
+            throw XPCEvaluateClientError.authenticationFailed
+        }
+        let response = try IPCJSON.decode(IPCResponse.self, from: body)
+        guard case .hostActionApprovalDecision(let decision) = response.result else {
+            throw XPCEvaluateClientError.authenticationFailed
+        }
+        return decision
+    }
+
+    /// Cancels one approval (the parked continuation went away).
+    /// Idempotent; terminal approvals report their status.
+    public func cancelActionApproval(
+        approvalID: UUID,
+        subject: RuntimeAdmissionSubject
+    ) async throws -> String {
+        let (authority, connection, reference) = try approvalReference(for: subject)
+        let dto = HostActionApprovalCancelDTO(approvalID: approvalID, reference: reference)
+        let message = xpc_dictionary_create_empty()
+        Self.set(
+            try IPCJSON.encode(dto), key: HostActionApprovalWire.cancelKey, on: message)
+        let reply = try await exchange(XPCHeld(message), on: connection)
+        guard state.withLock({ $0.connection?.object === connection.object }),
+              authority.resolve(reference) != nil,
+              let body = XPCIPCWire.body(from: reply.object) else {
+            throw XPCEvaluateClientError.authenticationFailed
+        }
+        let response = try IPCJSON.decode(IPCResponse.self, from: body)
+        guard case .hostActionApprovalStatus(let status) = response.result else {
+            throw XPCEvaluateClientError.authenticationFailed
+        }
+        return status.status
+    }
+
+    /// Live reference for approval RPCs. Same binding checks as `evaluate`:
+    /// usable agent context, authority-owned reference for this runtime,
+    /// instance and workspace agreement. Nothing caller-supplied.
+    private func approvalReference(
+        for subject: RuntimeAdmissionSubject
+    ) throws -> (WorkspacePrincipalAuthority, XPCHeld, AgentPrincipalReference) {
+        let snapshot = state.withLock { $0 }
+        guard let authority = snapshot.authority, let connection = snapshot.connection,
+              let agent = subject.agent, agent.isUsable,
+              let reference = authority.reference(forRuntime: subject.session.id),
+              reference.agentInstanceID == agent.instance.id,
+              reference.workspaceSessionID == subject.session.workspaceSessionID else {
+            throw XPCEvaluateClientError.authenticationFailed
+        }
+        return (authority, connection, reference)
+    }
+
+    private func approvalAgent(
+        for subject: RuntimeAdmissionSubject
+    ) throws -> AuthenticatedAgentContext {
+        guard let agent = subject.agent, agent.isUsable else {
+            throw XPCEvaluateClientError.authenticationFailed
+        }
+        return agent
+    }
+
     private func exchange(_ message: XPCHeld, on connection: XPCHeld) async throws -> XPCHeld {
         let once = OnceResume<XPCHeld>()
         return try await withTaskCancellationHandler {

@@ -41,9 +41,10 @@ enum HostRuntimeAdmission {
             },
             executor: .containedCommand,
             http: .direct,
-            approval: { _ in nil },
+            approval: { _, _ in nil },
             policy: { _ in .empty },
-            evidence: RuntimeAdmissionEvidence(appendingTo: RuntimeAdmissionEvidence.productionFile())
+            evidence: RuntimeAdmissionEvidence(appendingTo: RuntimeAdmissionEvidence.productionFile()),
+            askBackend: HostActionApprovalBackend(bridge: bridge)
         )
     }
     /// The admission API is synchronous; the XPC callback runs independently.

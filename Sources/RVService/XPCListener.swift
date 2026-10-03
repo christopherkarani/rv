@@ -159,6 +159,7 @@ final class XPCPeerSession: Sendable {
     private let hostRegistry: LiveWorkspaceHostRegistry
     private let uiSessions: LiveOperatorUISessionRegistry
     private let ceremonies: WorkspaceOperatorCeremonyService
+    private let actionCeremonies: ActionApprovalCeremonyService
     private let hostLiveness = HostBridgeLiveness()
     private let beginTransaction: @Sendable () -> Void
     private let endTransaction: @Sendable () -> Void
@@ -171,6 +172,7 @@ final class XPCPeerSession: Sendable {
         hostRegistry: LiveWorkspaceHostRegistry = LiveWorkspaceHostRegistry(),
         uiSessions: LiveOperatorUISessionRegistry = LiveOperatorUISessionRegistry(),
         ceremonies: WorkspaceOperatorCeremonyService? = nil,
+        actionCeremonies: ActionApprovalCeremonyService? = nil,
         beginTransaction: @escaping @Sendable () -> Void = { xpc_transaction_begin() },
         endTransaction: @escaping @Sendable () -> Void = { xpc_transaction_end() }
     ) {
@@ -181,6 +183,7 @@ final class XPCPeerSession: Sendable {
         self.hostRegistry = hostRegistry
         self.uiSessions = uiSessions
         self.ceremonies = ceremonies ?? runtime.ceremonies
+        self.actionCeremonies = actionCeremonies ?? runtime.actionCeremonies
         self.beginTransaction = beginTransaction
         self.endTransaction = endTransaction
     }
@@ -193,12 +196,15 @@ final class XPCPeerSession: Sendable {
             let registry = hostRegistry
             let sessions = uiSessions
             let ceremonies = ceremonies
+            let actionCeremonies = actionCeremonies
             let id = connectionID
             return Task {
                 await registry.disconnect(connectionID: id)
                 await ceremonies.hostConnectionLost(connectionID: id)
+                await actionCeremonies.hostConnectionLost(connectionID: id)
                 if let uiConnection = await sessions.disconnect(connectionID: id) {
                     await ceremonies.uiConnectionLost(uiConnection)
+                    await actionCeremonies.uiConnectionLost(uiConnection)
                 }
             }
         }
@@ -231,10 +237,17 @@ final class XPCPeerSession: Sendable {
                     liveness: self.hostLiveness, registry: self.hostRegistry, runtime: self.runtime)
                 return
             }
+            if XPCActionApprovalBridge.handles(message) {
+                await XPCActionApprovalBridge.handle(message: held, context: context,
+                    handshakeOK: accepted, discoveryOnly: self.discoveryOnly,
+                    liveness: self.hostLiveness, ceremonies: self.actionCeremonies)
+                return
+            }
             if XPCOperatorUIBridge.handles(message) {
                 await XPCOperatorUIBridge.handle(message: held, context: context,
                     handshakeOK: accepted, discoveryOnly: self.discoveryOnly,
-                    sessions: self.uiSessions, ceremonies: self.ceremonies)
+                    sessions: self.uiSessions, ceremonies: self.ceremonies,
+                    actionCeremonies: self.actionCeremonies)
                 return
             }
             let incomingReply: IncomingReply

@@ -37,6 +37,12 @@ public enum IPCResult: Sendable, Equatable {
     case uiReviewList(UIReviewListDTO)
     case uiChallengeBundle(UIChallengeBundleDTO)
     case uiOperationStatus(UIOperationStatusDTO)
+    case uiActionReviewList(UIActionReviewListDTO)
+    case uiActionChallengeBundle(UIActionChallengeBundleDTO)
+    case uiActionStatus(UIActionStatusDTO)
+    case hostActionApprovalCreated(HostActionApprovalCreatedDTO)
+    case hostActionApprovalStatus(HostActionApprovalStatusReplyDTO)
+    case hostActionApprovalDecision(HostActionApprovalDecisionDTO)
     case error(IPCError)
 }
 
@@ -152,6 +158,12 @@ extension IPCResult: Codable {
         case uiReviewList
         case uiChallengeBundle
         case uiOperationStatus
+        case uiActionReviewList
+        case uiActionChallengeBundle
+        case uiActionStatus
+        case hostActionApprovalCreated
+        case hostActionApprovalStatus
+        case hostActionApprovalDecision
         case error
     }
 
@@ -194,6 +206,18 @@ extension IPCResult: Codable {
             try container.encode(reply, forKey: .uiChallengeBundle)
         case .uiOperationStatus(let reply):
             try container.encode(reply, forKey: .uiOperationStatus)
+        case .uiActionReviewList(let reply):
+            try container.encode(reply, forKey: .uiActionReviewList)
+        case .uiActionChallengeBundle(let reply):
+            try container.encode(reply, forKey: .uiActionChallengeBundle)
+        case .uiActionStatus(let reply):
+            try container.encode(reply, forKey: .uiActionStatus)
+        case .hostActionApprovalCreated(let reply):
+            try container.encode(reply, forKey: .hostActionApprovalCreated)
+        case .hostActionApprovalStatus(let reply):
+            try container.encode(reply, forKey: .hostActionApprovalStatus)
+        case .hostActionApprovalDecision(let reply):
+            try container.encode(reply, forKey: .hostActionApprovalDecision)
         case .error(let error):
             try container.encode(error, forKey: .error)
         }
@@ -243,6 +267,24 @@ extension IPCResult: Codable {
         } else if let reply = try container.decodeIfPresent(
             UIOperationStatusDTO.self, forKey: .uiOperationStatus) {
             self = .uiOperationStatus(reply)
+        } else if let reply = try container.decodeIfPresent(
+            UIActionReviewListDTO.self, forKey: .uiActionReviewList) {
+            self = .uiActionReviewList(reply)
+        } else if let reply = try container.decodeIfPresent(
+            UIActionChallengeBundleDTO.self, forKey: .uiActionChallengeBundle) {
+            self = .uiActionChallengeBundle(reply)
+        } else if let reply = try container.decodeIfPresent(
+            UIActionStatusDTO.self, forKey: .uiActionStatus) {
+            self = .uiActionStatus(reply)
+        } else if let reply = try container.decodeIfPresent(
+            HostActionApprovalCreatedDTO.self, forKey: .hostActionApprovalCreated) {
+            self = .hostActionApprovalCreated(reply)
+        } else if let reply = try container.decodeIfPresent(
+            HostActionApprovalStatusReplyDTO.self, forKey: .hostActionApprovalStatus) {
+            self = .hostActionApprovalStatus(reply)
+        } else if let reply = try container.decodeIfPresent(
+            HostActionApprovalDecisionDTO.self, forKey: .hostActionApprovalDecision) {
+            self = .hostActionApprovalDecision(reply)
         } else if let error = try container.decodeIfPresent(IPCError.self, forKey: .error) {
             self = .error(error)
         } else {

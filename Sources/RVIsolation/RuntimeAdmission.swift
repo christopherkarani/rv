@@ -89,9 +89,16 @@ public struct RuntimeAdmissionConfiguration: Sendable {
     public var executor: RuntimeAdmissionExecutor
     public var http: RuntimeHTTPExecutor
     public var approval:
-        @Sendable (PendingAuthorization) -> Result<ApprovalDecision, AgentApprovalError>?
+        @Sendable (RuntimeActionRequestID, PendingAuthorization) -> Result<
+            ApprovalDecision, AgentApprovalError
+        >?
     public var policy: @Sendable (RuntimeSession) -> EffectiveActionPolicy
     public var evidence: RuntimeAdmissionEvidence
+    /// Step 6 principal-bound approval driver. Nil (the default) keeps the
+    /// pre-Step-6 behavior: ASK outcomes pend without a human path. When
+    /// set, the session parks pending ASKs for a human decision and resumes
+    /// the exact parked continuation at most once.
+    public var askBackend: (any ActionApprovalAsking)?
 
     public init(
         normalize: @escaping @Sendable (RuntimeAdmissionSubject, RuntimeRequestedAction) -> Result<
@@ -99,11 +106,12 @@ public struct RuntimeAdmissionConfiguration: Sendable {
         >,
         executor: RuntimeAdmissionExecutor,
         http: RuntimeHTTPExecutor = .refuse,
-        approval: @escaping @Sendable (PendingAuthorization) -> Result<
+        approval: @escaping @Sendable (RuntimeActionRequestID, PendingAuthorization) -> Result<
             ApprovalDecision, AgentApprovalError
         >?,
         policy: @escaping @Sendable (RuntimeSession) -> EffectiveActionPolicy,
-        evidence: RuntimeAdmissionEvidence
+        evidence: RuntimeAdmissionEvidence,
+        askBackend: (any ActionApprovalAsking)? = nil
     ) {
         self.normalize = normalize
         self.executor = executor
@@ -111,6 +119,7 @@ public struct RuntimeAdmissionConfiguration: Sendable {
         self.approval = approval
         self.policy = policy
         self.evidence = evidence
+        self.askBackend = askBackend
     }
 
     public static var failClosed: RuntimeAdmissionConfiguration {
@@ -118,7 +127,7 @@ public struct RuntimeAdmissionConfiguration: Sendable {
             normalize: { _, _ in .failure(.failed) },
             executor: .refuse,
             http: .refuse,
-            approval: { _ in nil },
+            approval: { _, _ in nil },
             policy: { _ in .empty },
             evidence: RuntimeAdmissionEvidence()
         )
@@ -141,16 +150,66 @@ struct AdmittedLaunchContext: Sendable, Equatable {
     var productive: ProductiveWorkspaceResolution? = nil
 }
 
+/// One ASK parked for a human decision (Step 6). Host memory only.
+private struct ParkedApproval: Sendable {
+    /// Service-minted correlation. Grants nothing by possession.
+    var approval: CreatedActionApproval
+    /// The gate's exact pending for this request: action, reason, deny,
+    /// explanation. Bound at park time; resume and deny derive here.
+    var pending: PendingAuthorization
+    var requestID: RuntimeActionRequestID
+    var waiter: Task<Void, Never>?
+}
+
+/// A waiter's finished answer, queued for the watch thread to write.
+private struct ParkedCompletion: Sendable {
+    var response: RuntimeAdmissionResponse
+    var event: RuntimeAdmissionEvent
+}
+
+/// Request-keyed capture of gate pendings for exact parking.
+///
+/// The gate calls the wrapped approval closure with (requestID, pending);
+/// the submit wrapper takes exactly one pending per submit. Production
+/// submits are watch-thread serialized per channel, so capture→take is
+/// exact there; a take-miss (only under concurrent same-ID misuse) fails
+/// closed to legacy pending, and a fingerprint cross-check in the wrapper
+/// refuses to park a capture that does not belong to its decision.
+private final class PendingCaptureBox: @unchecked Sendable {
+    private let box = Mutex<[RuntimeActionRequestID: PendingAuthorization]>([:])
+
+    func capture(_ id: RuntimeActionRequestID, _ pending: PendingAuthorization) {
+        box.withLock { $0[id] = pending }
+    }
+
+    func take(_ id: RuntimeActionRequestID) -> PendingAuthorization? {
+        box.withLock { $0.removeValue(forKey: id) }
+    }
+}
+
 /// One runtime's admission state.
 ///
 /// The request pipe is the channel. `RuntimeSessionID` is only the name the
 /// claim must match. `close()` makes later bytes, including a copied
 /// capability, unable to execute.
 final class RuntimeAdmissionSession: Sendable {
+    /// Upper bound on simultaneously parked ASKs per channel. A runtime
+    /// awaiting more humans than this is pathological; beyond the cap ASKs
+    /// keep the legacy pending-forever behavior instead of piling waiters
+    /// (and status RPCs) onto the service.
+    private static let maxParkedPerChannel = 8
+
     private let state: Mutex<ChannelState>
     private let configuration: RuntimeAdmissionConfiguration
     private let subject: RuntimeAdmissionSubject
     private let launch: AdmittedLaunchContext
+    private let capture = PendingCaptureBox()
+    /// Waiter status-poll interval. Production default 1s; tests inject less.
+    private let parkPollInterval: TimeInterval
+    /// Waiter overall bound. Production default 20min (past the 15min
+    /// service TTL plus margin); tests inject less. The service TTL ends
+    /// honest waits first; this bounds transport-dead spins.
+    private let parkTimeout: TimeInterval
 
     private struct ChannelState: Sendable {
         var binding: RuntimeChannelBinding?
@@ -163,6 +222,14 @@ final class RuntimeAdmissionSession: Sendable {
         /// together with the channel's instance binding; nil on legacy
         /// channels, which keep the pre-identity behavior.
         var agentRegistry: AgentInstanceRegistry? = nil
+        /// Step 6 parked ASKs awaiting a human decision, by request ID.
+        /// Host memory only: the agent never sees approval or continuation
+        /// IDs, and no resume path exists except each record's waiter.
+        var parked: [RuntimeActionRequestID: ParkedApproval] = [:]
+        /// Finished waiter answers queued for the pre-existing writer paths.
+        /// Bytes are only ever written by `acceptBuffered`'s drain, so
+        /// parking introduces no new file-descriptor races.
+        var completions: [ParkedCompletion] = []
     }
 
     /// Binds this channel to an announced Agent Instance.
@@ -190,7 +257,9 @@ final class RuntimeAdmissionSession: Sendable {
         configuration: RuntimeAdmissionConfiguration,
         launch: AdmittedLaunchContext,
         requestRead: Int32,
-        responseWrite: Int32
+        responseWrite: Int32,
+        parkPollInterval: TimeInterval = 1,
+        parkTimeout: TimeInterval = 20 * 60
     ) {
         state = Mutex(
             ChannelState(
@@ -205,6 +274,8 @@ final class RuntimeAdmissionSession: Sendable {
             policyWorkspace: launch.plan.workspace
         )
         self.launch = launch
+        self.parkPollInterval = parkPollInterval
+        self.parkTimeout = parkTimeout
     }
 
     func sendGrant() {
@@ -255,11 +326,29 @@ final class RuntimeAdmissionSession: Sendable {
         var subject = subject
         subject.agent = agentContext
         let leader = launch.sessionLeader
+        // Capture the gate's exact pending per request when parking is
+        // armed, so the park binds precisely what the gate decided — no
+        // re-normalization, no TOCTOU between decision and approval. The
+        // configured closure still makes the synchronous decision; capture
+        // only retains it for the wrapper below.
+        let approvalFor: @Sendable (RuntimeActionRequestID, PendingAuthorization) -> Result<
+            ApprovalDecision, AgentApprovalError
+        >?
+        if configuration.askBackend != nil {
+            let configured = configuration.approval
+            let captureBox = capture
+            approvalFor = { requestID, pending in
+                captureBox.capture(requestID, pending)
+                return configured(requestID, pending)
+            }
+        } else {
+            approvalFor = configuration.approval
+        }
         let decision = RuntimeAdmissionGate.submit(
             binding: &binding,
             frame: frame,
             policy: configuration.policy(subject.session),
-            approvalFor: configuration.approval,
+            approvalFor: approvalFor,
             agentContext: agentContext,
             propose: { [configuration, subject] accepted in
                 RuntimeAdmissionStop.$shouldStop.withValue({
@@ -285,6 +374,15 @@ final class RuntimeAdmissionSession: Sendable {
             }
             channel.binding = binding
         }
+        if let parked = tryParkApproval(
+            frame: frame, decision: decision, agentContext: agentContext, binding: binding) {
+            // The pending event is recorded exactly as the legacy path
+            // records it; the waiter's eventual answer records a second,
+            // outcome event. Callers must not write the superseded
+            // pending projection: `responseDeferred` says so.
+            configuration.evidence.record(parked.event)
+            return parked
+        }
         guard let allowed = decision.execute, binding?.phase == .active else {
             if decision.execute != nil {
                 let inactive = inactiveDecision(binding: binding, event: decision.event)
@@ -306,6 +404,366 @@ final class RuntimeAdmissionSession: Sendable {
         )
     }
 
+    // MARK: - Step 6 parked approvals
+
+    /// Parks a pending ASK for a human decision. Returns the deferred
+    /// decision, or nil to keep the legacy path. Every doubt fails closed
+    /// to legacy pending (no approval, no park, callers answer as before).
+    private func tryParkApproval(
+        frame: Result<RuntimeActionFrame, RuntimeAdmissionDecodeError>,
+        decision: RuntimeAdmissionDecision,
+        agentContext: AuthenticatedAgentContext?,
+        binding: RuntimeChannelBinding?
+    ) -> RuntimeAdmissionDecision? {
+        guard let backend = configuration.askBackend,
+            decision.execute == nil,
+            case .pending(let ledgerReason) = decision.response,
+            ledgerReason != .hostAsk,
+            case .success(let accepted) = frame,
+            // Consume this request's capture exactly once, before any other
+            // check: a capture left behind by a refused park would leak one
+            // entry per unparked pending submit.
+            let pending = capture.take(accepted.requestID),
+            binding?.phase == .active,
+            let agentContext, agentContext.isUsable,
+            state.withLock({ $0.parked.count < Self.maxParkedPerChannel }),
+            state.withLock({ $0.parked[accepted.requestID] == nil }),
+            // The capture must belong to THIS decision: same pending
+            // reason the gate projected, same action fingerprint. Under
+            // concurrent same-ID misuse (already broken pre-Step-6: the
+            // gate would double-authorize), a mismatch refuses to park
+            // instead of binding the wrong action.
+            pending.reason.ledgerReason == ledgerReason,
+            decision.event.fingerprint == pending.action.fingerprint.rawValue
+        else {
+            return nil
+        }
+        var parkedSubject = subject
+        parkedSubject.agent = agentContext
+        guard let created = backend.createApproval(
+            subject: parkedSubject,
+            action: pending.action,
+            reason: pending.reason,
+            policyContext: "runtime:\(subject.policyWorkspace.rawValue)"
+        ) else {
+            // No approval exists: legacy pending, exactly as before Step 6.
+            return nil
+        }
+        let requestID = accepted.requestID
+        state.withLock {
+            $0.parked[requestID] = ParkedApproval(
+                approval: created, pending: pending, requestID: requestID, waiter: nil)
+        }
+        let waiter = Task<Void, Never> { [weak self] in
+            await self?.awaitParkedApproval(requestID: requestID)
+        }
+        state.withLock { $0.parked[requestID]?.waiter = waiter }
+        var deferred = decision
+        deferred.responseDeferred = true
+        return deferred
+    }
+
+    /// Waits for one parked approval's human decision, off the watch thread.
+    /// Polls safe status (never consuming) until the grant issues, then
+    /// consumes exactly once for the exact parked continuation. Every
+    /// terminal or doubtful outcome completes the park fail-closed; only a
+    /// verified consumption resumes execution.
+    private func awaitParkedApproval(requestID: RuntimeActionRequestID) async {
+        guard let backend = configuration.askBackend else { return }
+        let deadline = Date().addingTimeInterval(parkTimeout)
+        let pollNanoseconds = UInt64(max(parkPollInterval, 0.001) * 1_000_000_000)
+        while true {
+            if Task.isCancelled { return }
+            let park: ParkedApproval? = state.withLock { channel in
+                guard !channel.stop, channel.binding?.phase == .active else { return nil }
+                return channel.parked[requestID]
+            }
+            // Unparked (torn down) or channel gone: finish() owns teardown;
+            // nothing further to answer here.
+            guard let park else { return }
+            if Date() >= deadline {
+                backend.cancelApproval(park.approval)
+                failParked(requestID: requestID, park: park, cause: "approvalTimeout")
+                return
+            }
+            // Transport blip: sleep and retry. The deadline bounds the wait;
+            // service-side expiry turns honest waits terminal first.
+            guard let status = backend.approvalStatus(park.approval) else {
+                try? await Task.sleep(nanoseconds: pollNanoseconds)
+                continue
+            }
+            switch status {
+            case "pending", "awaitingAuthentication":
+                try? await Task.sleep(nanoseconds: pollNanoseconds)
+            case "authorized":
+                if backend.consumeApproval(
+                    park.approval,
+                    actionDigestHex: CanonicalActionDigest.sha256Hex(of: park.pending.action)
+                ) {
+                    await resumeParked(requestID: requestID)
+                } else {
+                    failParked(requestID: requestID, park: park, cause: "approvalUnavailable")
+                }
+                return
+            case "consumed":
+                // Already spent without this waiter consuming (service-side
+                // race or duplicate waiter, impossible by construction):
+                // never execute here.
+                failParked(requestID: requestID, park: park, cause: "approvalReplay")
+                return
+            case "denied":
+                denyParked(requestID: requestID, park: park)
+                return
+            case "cancelled":
+                failParked(requestID: requestID, park: park, cause: "approvalCancelled")
+                return
+            case "expired":
+                failParked(requestID: requestID, park: park, cause: "approvalExpired")
+                return
+            case "invalidated":
+                failParked(requestID: requestID, park: park, cause: "approvalInvalidated")
+                return
+            case "failed":
+                failParked(requestID: requestID, park: park, cause: "approvalFailed")
+                return
+            default:
+                // Closed vocabulary ("unknown" included): anything else
+                // fails closed without executing.
+                failParked(requestID: requestID, park: park, cause: "approvalUnknown")
+                return
+            }
+        }
+    }
+
+    /// Resumes one consumed park: re-validates the channel, burns the
+    /// fingerprint exactly like the gate, performs the exact parked action,
+    /// and queues the answer. The grant is already spent; if the channel
+    /// died in between, nothing runs and the burn is recorded. If the
+    /// fingerprint is already spent (the action ran under another
+    /// continuation), the resume answers the gate's replay rejection —
+    /// never a second execution.
+    private func resumeParked(requestID: RuntimeActionRequestID) async {
+        struct Plan: Sendable {
+            var park: ParkedApproval
+            var binding: RuntimeChannelBinding
+        }
+        enum Take: Sendable {
+            case plan(Plan)
+            case replay(park: ParkedApproval, binding: RuntimeChannelBinding)
+            case gone
+        }
+        let take: Take = state.withLock { channel in
+            guard !channel.stop,
+                var binding = channel.binding, binding.phase == .active,
+                let park = channel.parked.removeValue(forKey: requestID)
+            else { return .gone }
+            // At-most-once, mirroring the gate: the fingerprint must still
+            // be unconsumed. Burning before perform means a crash between
+            // burn and perform loses the action instead of duplicating it.
+            guard !binding.consumedFingerprints.contains(park.pending.action.fingerprint) else {
+                return .replay(park: park, binding: binding)
+            }
+            binding.consumedFingerprints.insert(park.pending.action.fingerprint)
+            channel.binding = binding
+            return .plan(Plan(park: park, binding: binding))
+        }
+        switch take {
+        case .gone:
+            configuration.evidence.record(RuntimeAdmissionEvent(
+                session: nil,
+                requestID: requestID.rawValue.uuidString,
+                fingerprint: nil,
+                authorization: .approvalUnavailable,
+                executionAttempted: false,
+                result: "resumedButChannelGone"))
+            return
+        case .replay(let park, let binding):
+            var event = baseEvent(
+                binding: binding, park: park,
+                authorization: .rejected, result: RuntimeAdmissionRejection.replay.rawValue)
+            stamp(&event, agent: park.approval.subject.agent, binding: binding)
+            configuration.evidence.record(event)
+            enqueueCompletion(ParkedCompletion(
+                response: .rejected(.replay), event: event))
+            return
+        case .plan(let plan):
+            let resolved = AgentAuthorization.resolve(
+                plan.park.pending, approval: .success(.allowOnce))
+            guard case .success(.allowed(let allowed)) = resolved else {
+                // Unreachable: allowOnce always lifts a pending. Fail closed
+                // with evidence if the impossible happens.
+                failParked(
+                    requestID: requestID, park: plan.park, cause: "approvalUnavailable",
+                    binding: plan.binding)
+                return
+            }
+            // Outside the lock: perform spawns and blocks like the submit
+            // path.
+            let performed = perform(allowed)
+            var event = baseEvent(
+                binding: plan.binding, park: plan.park,
+                authorization: .allowed, result: "authorized")
+            let response = admissionResponse(performed, event: &event)
+            stamp(&event, agent: plan.park.approval.subject.agent, binding: plan.binding)
+            configuration.evidence.record(event)
+            enqueueCompletion(ParkedCompletion(response: response, event: event))
+        }
+    }
+
+    /// Completes one park with the human's deny, carrying the gate's
+    /// original denial. No grant exists; the continuation fails.
+    private func denyParked(requestID: RuntimeActionRequestID, park: ParkedApproval) {
+        let removed: Bool = state.withLock { channel in
+            channel.parked.removeValue(forKey: requestID) != nil
+        }
+        guard removed else { return }
+        var event = baseEvent(
+            binding: state.withLock({ $0.binding }), park: park,
+            authorization: .denied, result: park.pending.deny.ruleID.rawValue)
+        stamp(&event, agent: park.approval.subject.agent, binding: state.withLock({ $0.binding }))
+        configuration.evidence.record(event)
+        enqueueCompletion(ParkedCompletion(
+            response: .denied(park.pending.deny), event: event))
+    }
+
+    /// Completes one park fail-closed without executing. Mirrors the gate's
+    /// `approvalFailed` shape; the cause distinguishes outcomes in evidence.
+    private func failParked(
+        requestID: RuntimeActionRequestID,
+        park: ParkedApproval,
+        cause: String,
+        binding: RuntimeChannelBinding? = nil
+    ) {
+        let removed: Bool = state.withLock { channel in
+            channel.parked.removeValue(forKey: requestID) != nil
+        }
+        guard removed else { return }
+        let liveBinding = binding ?? state.withLock({ $0.binding })
+        var event = baseEvent(
+            binding: liveBinding, park: park,
+            authorization: .approvalUnavailable, result: cause)
+        stamp(&event, agent: park.approval.subject.agent, binding: liveBinding)
+        configuration.evidence.record(event)
+        enqueueCompletion(ParkedCompletion(response: .approvalUnavailable, event: event))
+    }
+
+    /// Base outcome event for one park, mirroring the gate's `make` fields.
+    private func baseEvent(
+        binding: RuntimeChannelBinding?,
+        park: ParkedApproval,
+        authorization: RuntimeAdmissionAuthorization,
+        result: String
+    ) -> RuntimeAdmissionEvent {
+        let http = httpAudit(of: park.pending.action)
+        return RuntimeAdmissionEvent(
+            session: binding?.session.id.rawValue.uuidString,
+            requestID: park.requestID.rawValue.uuidString,
+            fingerprint: park.pending.action.fingerprint.rawValue,
+            authorization: authorization,
+            executionAttempted: false,
+            result: result,
+            httpMethod: http?.method,
+            httpDestination: http?.destination,
+            httpAddress: http?.address,
+            httpQueryPresent: http?.queryPresent,
+            workspace: binding?.session.workspaceSessionID.rawValue.uuidString)
+    }
+
+    /// Principal attribution for one park outcome, mirroring the gate's
+    /// `stamp`: the retained agent description when one was parked, else
+    /// the RV-held channel binding. Both sources are RV-held.
+    private func stamp(
+        _ event: inout RuntimeAdmissionEvent,
+        agent: AuthenticatedAgentContext?,
+        binding: RuntimeChannelBinding?
+    ) {
+        event.agentInstance =
+            agent?.instance.id.rawValue.uuidString
+            ?? binding?.agentInstanceID?.rawValue.uuidString
+        event.agentDefinition = agent?.instance.definitionID.rawValue
+    }
+
+    private struct ParkedHTTPAudit {
+        var method: String
+        var destination: String
+        var address: String?
+        var queryPresent: Bool
+    }
+
+    /// HTTP audit fields for one park outcome. Mirrors the gate's private
+    /// `httpAudit`: method, query-stripped resource, address, query flag.
+    private func httpAudit(of action: ProposedAction) -> ParkedHTTPAudit? {
+        guard case .http(let http) = action else { return nil }
+        return ParkedHTTPAudit(
+            method: http.method.rawValue,
+            destination: http.destination.auditedResource,
+            address: http.destination.address?.presentation,
+            queryPresent: http.destination.query != nil)
+    }
+
+    /// Queues one finished answer for the watch thread to write. Dropped
+    /// when stopping: the file descriptors are closing and nothing remains
+    /// to answer (evidence was already recorded).
+    private func enqueueCompletion(_ completion: ParkedCompletion) {
+        state.withLock { channel in
+            guard !channel.stop else { return }
+            channel.completions.append(completion)
+        }
+    }
+
+    /// Live park count. Test seam only.
+    var parkedApprovalCountForTesting: Int {
+        state.withLock { $0.parked.count }
+    }
+
+    /// Queued completion count. Test seam only.
+    var queuedCompletionCountForTesting: Int {
+        state.withLock { $0.completions.count }
+    }
+
+    /// Writes queued waiter answers. Runs only on the pre-existing writer
+    /// paths (`acceptBuffered`), so parking adds no file-descriptor races.
+    /// Completions for a stopped channel are dropped, never written.
+    /// Internal (not private) so tests can drive delivery deterministically.
+    func drainCompletions() {
+        while true {
+            let next: ParkedCompletion? = state.withLock { channel in
+                guard !channel.stop, !channel.completions.isEmpty else {
+                    channel.completions.removeAll()
+                    return nil
+                }
+                return channel.completions.removeFirst()
+            }
+            guard let next else { return }
+            writeResponse(RuntimeAdmissionDecision(
+                binding: state.withLock({ $0.binding }),
+                response: next.response,
+                event: next.event,
+                execute: nil))
+        }
+    }
+
+    /// Tears down every park: cancels waiters, best-effort cancels the
+    /// service-side approvals without blocking, and drops queued answers.
+    /// Called from `finish()` while stopping; nothing is answered.
+    private func teardownParks() {
+        let parks = state.withLock { channel -> [ParkedApproval] in
+            let parks = Array(channel.parked.values)
+            channel.parked.removeAll()
+            channel.completions.removeAll()
+            return parks
+        }
+        guard !parks.isEmpty else { return }
+        let backend = configuration.askBackend
+        for park in parks {
+            park.waiter?.cancel()
+            if let backend {
+                let approval = park.approval
+                Task { backend.cancelApproval(approval) }
+            }
+        }
+    }
+
     func finish() {
         let token = state.withLock { channel -> HTTPCancellation? in
             channel.stop = true
@@ -315,6 +773,10 @@ final class RuntimeAdmissionSession: Sendable {
             }
             return channel.httpToken
         }
+        // Parked ASKs die with the channel: waiters are cancelled and the
+        // service-side approvals are best-effort cancelled. Nothing is
+        // answered; the file descriptors close below.
+        teardownParks()
         token?.cancel()
         let deadline = Date().addingTimeInterval(
             TimeInterval(HTTPEgressLimits.requestTimeoutMilliseconds) / 1_000 + 2
@@ -360,8 +822,14 @@ final class RuntimeAdmissionSession: Sendable {
             }
             let decision = submit(frame)
             decisions.append(decision)
-            writeResponse(decision)
+            // A parked ASK defers its answer: the waiter queues the real
+            // response below. Writing the superseded pending projection
+            // would answer the runtime twice.
+            if !decision.responseDeferred {
+                writeResponse(decision)
+            }
         }
+        drainCompletions()
         if state.withLock({ $0.binding?.phase }) != .active {
             state.withLock { $0.buffer.removeAll() }
         }

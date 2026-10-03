@@ -57,21 +57,21 @@ struct RuntimeAdmissionIsolationTests {
         #expect(harness.effect.runs == 0)
         #expect(pending.response == .pending(.reviewAsk))
 
-        let approved = try AdmissionHarness(approval: { _ in .success(.allowOnce) })
+        let approved = try AdmissionHarness(approval: { _, _ in .success(.allowOnce) })
         defer { approved.cleanup() }
         let decision = approved.session.submit(.success(approved.frame("echo hello")))
         #expect(approved.effect.runs == 1)
         #expect(approved.effect.exists)
         #expect(decision.response == .executed(exitStatus: 0))
 
-        let unavailable = try AdmissionHarness(approval: { _ in .failure(.approvalUnavailable) })
+        let unavailable = try AdmissionHarness(approval: { _, _ in .failure(.approvalUnavailable) })
         defer { unavailable.cleanup() }
         let refused = unavailable.session.submit(.success(unavailable.frame("echo hello")))
         #expect(unavailable.effect.runs == 0)
         #expect(unavailable.effect.exists == false)
         #expect(refused.response == .approvalUnavailable)
 
-        let rule = try AdmissionHarness(approval: { _ in .success(.createRule) })
+        let rule = try AdmissionHarness(approval: { _, _ in .success(.createRule) })
         defer { rule.cleanup() }
         let created = rule.session.submit(.success(rule.frame("echo hello")))
         #expect(rule.effect.runs == 0)
@@ -201,7 +201,7 @@ struct RuntimeAdmissionIsolationTests {
                     )
                 )
             },
-            approval: { _ in nil },
+            approval: { _, _ in nil },
             policy: { _ in .empty },
             evidence: evidence
         )
@@ -261,7 +261,7 @@ struct RuntimeAdmissionIsolationTests {
                     )
                 )
             },
-            approval: { _ in nil },
+            approval: { _, _ in nil },
             policy: { _ in .empty },
             evidence: evidence
         )
@@ -312,7 +312,7 @@ struct RuntimeAdmissionIsolationTests {
         let configuration = RuntimeAdmissionConfiguration(
             normalize: allowAdmittedCommand,
             executor: .containedCommand,
-            approval: { _ in nil },
+            approval: { _, _ in nil },
             policy: { _ in .empty },
             evidence: RuntimeAdmissionEvidence()
         )
@@ -369,7 +369,7 @@ private struct AdmissionHarness {
     let session: RuntimeAdmissionSession
 
     init(
-        approval: @escaping @Sendable (PendingAuthorization) -> Result<ApprovalDecision, AgentApprovalError>? = { _ in nil },
+        approval: @escaping @Sendable (RuntimeActionRequestID, PendingAuthorization) -> Result<ApprovalDecision, AgentApprovalError>? = { _, _ in nil },
         evidenceFile: URL? = nil
     ) throws {
         let root = FileManager.default.temporaryDirectory

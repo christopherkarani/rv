@@ -155,7 +155,7 @@ private struct RegistryAdmissionHarness {
         let configuration = RuntimeAdmissionConfiguration(
             normalize: normalize,
             executor: .effect(effects.run),
-            approval: { _ in nil },
+            approval: { _, _ in nil },
             policy: { _ in .empty },
             evidence: RuntimeAdmissionEvidence()
         )
@@ -347,7 +347,7 @@ struct AgentInstanceRegistryTests {
             configuration: RuntimeAdmissionConfiguration(
                 normalize: allowTouchNormalize,
                 executor: .effect(harness.effects.run),
-                approval: { _ in nil },
+                approval: { _, _ in nil },
                 policy: { _ in .empty },
                 evidence: RuntimeAdmissionEvidence()
             ),
@@ -820,7 +820,7 @@ struct AgentInstanceRegistryTests {
                 return allowTouchNormalize(subject: subject, action: action)
             },
             executor: .effect(effects.run),
-            approval: { _ in nil },
+            approval: { _, _ in nil },
             policy: { _ in .empty },
             evidence: RuntimeAdmissionEvidence()
         )

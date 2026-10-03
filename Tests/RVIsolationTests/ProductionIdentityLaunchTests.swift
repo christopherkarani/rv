@@ -90,7 +90,7 @@ struct ProductionIdentityLaunchTests {
                 return .failure(.failed)
             },
             executor: .effect { _ in .failure(.spawnFailed) },
-            approval: { _ in nil }, policy: { _ in .empty }, evidence: evidence
+            approval: { _, _ in nil }, policy: { _ in .empty }, evidence: evidence
         )
         let trigger = tree.workspaceURL.appendingPathComponent("submit-request")
         let reply = tree.workspaceURL.appendingPathComponent("identity-reply")

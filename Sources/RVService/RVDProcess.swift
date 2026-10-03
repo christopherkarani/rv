@@ -10,6 +10,7 @@ public enum RVDProcess {
         let analytics = AnalyticsBootstrap.makeLive(productVersion: ProtocolVersion.serviceSemver)
         let hosts = LiveWorkspaceHostRegistry()
         let ceremonies = WorkspaceOperatorCeremonyService(hosts: hosts)
+        let actionCeremonies = ActionApprovalCeremonyService(hosts: hosts)
         let uiSessions = LiveOperatorUISessionRegistry()
         let runtime = ServiceRuntime(
             snapshots: nil,
@@ -22,7 +23,8 @@ public enum RVDProcess {
             analytics: analytics,
             clock: { Date() },
             pendingApprovals: .automatic,
-            ceremonies: ceremonies
+            ceremonies: ceremonies,
+            actionCeremonies: actionCeremonies
         )
         let slot = ListenerSlot()
         let watchdog = IdleWatchdog(seconds: configuration.idleExitSeconds) {
@@ -57,6 +59,7 @@ public enum RVDProcess {
         let socketURL = try UnixSocketPath.production()
         let analytics = AnalyticsBootstrap.makeLive(productVersion: ProtocolVersion.serviceSemver)
         let ceremonies = WorkspaceOperatorCeremonyService()
+        let actionCeremonies = ActionApprovalCeremonyService()
         let runtime = ServiceRuntime(
             snapshots: nil,
             catalog: nil,
@@ -68,7 +71,8 @@ public enum RVDProcess {
             analytics: analytics,
             clock: { Date() },
             pendingApprovals: .automatic,
-            ceremonies: ceremonies
+            ceremonies: ceremonies,
+            actionCeremonies: actionCeremonies
         )
         let slot = ListenerSlot()
         let watchdog = IdleWatchdog(seconds: configuration.idleExitSeconds) {

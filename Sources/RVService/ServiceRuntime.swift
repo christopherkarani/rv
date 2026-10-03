@@ -39,6 +39,10 @@ public actor ServiceRuntime {
     /// Operator launch ceremonies (proposal → review → permit). Shared with
     /// the XPC UI sessions so IPC dispatch and the UI bridge see one state.
     let ceremonies: WorkspaceOperatorCeremonyService
+    /// Principal-bound action-approval ceremonies (ASK → review → grant).
+    /// Shared with the XPC host/UI sessions so transport and bridges see
+    /// one state. Separate authority from `ceremonies`, always.
+    let actionCeremonies: ActionApprovalCeremonyService
 
     package private(set) var compiledPackIDs: [PackID]
     private var compiledPackIDSet: Set<PackID>
@@ -66,7 +70,8 @@ public actor ServiceRuntime {
             analytics: analytics,
             clock: clock,
             pendingApprovals: pendingApprovals,
-            ceremonies: WorkspaceOperatorCeremonyService())
+            ceremonies: WorkspaceOperatorCeremonyService(),
+            actionCeremonies: ActionApprovalCeremonyService())
     }
 
     init(
@@ -80,7 +85,8 @@ public actor ServiceRuntime {
         analytics: AnalyticsCoordinator?,
         clock: @escaping @Sendable () -> Date,
         pendingApprovals: PendingApprovalsBinding,
-        ceremonies: WorkspaceOperatorCeremonyService
+        ceremonies: WorkspaceOperatorCeremonyService,
+        actionCeremonies: ActionApprovalCeremonyService? = nil
     ) {
         let resolvedHome = home ?? HomeDirectory.process()
         self.configHome = resolvedHome
@@ -125,6 +131,7 @@ public actor ServiceRuntime {
         )
         self.analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: self.catalog)
         self.ceremonies = ceremonies
+        self.actionCeremonies = actionCeremonies ?? ActionApprovalCeremonyService()
     }
 
     public func acknowledge(_ hello: Hello) -> HelloAck {
