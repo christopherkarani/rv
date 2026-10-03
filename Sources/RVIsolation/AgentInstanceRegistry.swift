@@ -261,8 +261,9 @@ final class AgentInstanceRegistry: Sendable {
     }
 
     /// Ends whatever instance a runtime bound. Unknown runtimes are a no-op:
-    /// there is no authority to end. The supervisor owns process teardown and
-    /// calls this after the process is gone; nothing here resurrects it.
+    /// there is no authority to end. The supervisor calls this the moment it
+    /// observes definitive death — authority dies before the reap completes,
+    /// mirroring cancel(); nothing here resurrects the process.
     func finishRuntime(
         _ runtime: RuntimeSessionID,
         reason: AgentRevokeReason

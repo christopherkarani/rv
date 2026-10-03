@@ -1145,6 +1145,8 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
             let session = child.live.session
             child.start {
                 self.noteRuntimeEnded(session)
+            } deathObserved: {
+                self.noteDeathObserved(session)
             } settled: {
                 self.pruneFinishedRuntimes(limit: WorkspaceControlLimits.maxRuntimes)
             }
@@ -1609,6 +1611,10 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         for child in children {
             child.stop.request()
             _ = stopOwnedSession(leader: child.live.pid, reap: false)
+            // Authority dies on close before the reap completes, mirroring
+            // cancel(): already-dead runtimes observe their terminal state,
+            // and the watch still owns teardown and reports ended().
+            _ = agentInstances.finishRuntime(child.live.session.id, reason: .cancelled)
         }
         guard waitForChildren(children, seconds: 45) else {
             return .failure(.childTeardownFailed)
@@ -1683,6 +1689,18 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
             usleep(10_000)
         }
         return children.allSatisfy { $0.watchFinished && $0.isProcessGone }
+    }
+
+    /// Ends authority the moment the watch observes definitive leader
+    /// death — before the reap and group-drain tail. The leader's death is
+    /// session death: the watch kills the group next and has already
+    /// finished admission, so nothing legitimate can proceed after this
+    /// point. Registry-only on purpose: the lifecycle record stays
+    /// exactly-once in `noteRuntimeEnded`, and the registry's teardown
+    /// claim keeps concurrent revoke/cancel/ended callers to one teardown.
+    /// Runs on the watch thread; unknown runtimes are a no-op.
+    func noteDeathObserved(_ session: RuntimeSession) {
+        _ = agentInstances.finishRuntime(session.id, reason: .runtimeEnded)
     }
 
     private func noteRuntimeEnded(
@@ -1966,11 +1984,12 @@ private final class WorkspaceChild: Sendable {
 
     func start(
         _ ended: @escaping @Sendable () -> Void,
+        deathObserved: (@Sendable () -> Void)? = nil,
         settled: @escaping @Sendable () -> Void
     ) {
         let child = self
         let thread = Thread {
-            _ = watchSeatbeltProcess(child.live, stop: child.stop)
+            _ = watchSeatbeltProcess(child.live, stop: child.stop, onDeathObserved: deathObserved)
             ended()
             child.markFinished()
             settled()

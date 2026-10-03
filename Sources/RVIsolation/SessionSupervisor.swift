@@ -935,7 +935,8 @@ private func addingKeychainEnvironment(
 
 func watchSeatbeltProcess(
     _ live: LiveSeatbeltChild,
-    stop: RuntimeCancellation
+    stop: RuntimeCancellation,
+    onDeathObserved: (() -> Void)? = nil
 ) -> MountedSeatbeltOutcome {
     live.markWatchStarted()
     let outcome = waitForSeatbeltSession(
@@ -946,7 +947,8 @@ func watchSeatbeltProcess(
         admission: live.admission,
         stop: stop,
         onEstablished: { live.markEstablished() },
-        drain: { live.drainPending() }
+        drain: { live.drainPending() },
+        onDeathObserved: onDeathObserved
     )
     let dead = waitUntilSessionIsDead(
         pgid: live.pid,
@@ -1005,7 +1007,8 @@ private func waitForSeatbeltSession(
     admission: RuntimeAdmissionSession,
     stop: RuntimeCancellation,
     onEstablished: () -> Void,
-    drain: () -> Void
+    drain: () -> Void,
+    onDeathObserved: (() -> Void)? = nil
 ) -> SeatbeltWaitOutcome {
     var outcome = SeatbeltWaitOutcome()
     var handshake = preface
@@ -1033,6 +1036,15 @@ private func waitForSeatbeltSession(
         let rootGone = waited == root || (waited < 0 && errno == ECHILD && outcome.status != nil)
         if outcome.cancelled || rootGone {
             admission.finish()
+            // Definitive leader death is session death: this branch kills
+            // the group next, so authority ends here, before the reap and
+            // group-drain tail — mirroring cancel(), where authority dies
+            // before the reap completes. Fires at most once: this branch
+            // returns. No fire on bare cancel: the leader may still be
+            // alive, and cancel() already revoked synchronously.
+            if rootGone {
+                onDeathObserved?()
+            }
             recorded.formUnion(visibleSessionPIDs(root: root))
             terminateSession(pgid: root, also: recorded)
             if outcome.established == false {

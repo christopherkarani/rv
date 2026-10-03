@@ -59,6 +59,17 @@ public final class WorkspacePrincipalAuthority: Sendable {
         }
     }
 
+    /// Descriptive record lookup by runtime, regardless of validity and
+    /// of close: close() invalidation is enforced at resolve time, while
+    /// this lookup only names a record so a cancel can report it. For
+    /// building cancel references after death so the service can prove the
+    /// death via its own validity pull and invalidate eagerly. Names
+    /// nothing usable: every receiver must re-resolve live. Purpose-named
+    /// so no future caller mistakes it for authorization.
+    public func descriptiveInstanceForCancel(forRuntime runtime: RuntimeSessionID) -> AgentInstance? {
+        registry.instance(forRuntime: runtime)
+    }
+
     /// Irreversible invalidation for this host incarnation.
     public func close() {
         closed.withLock { $0 = true }

@@ -241,19 +241,27 @@ public final class WorkspaceHostBridgeClient: Sendable {
     }
 
     /// Cancels one approval (the parked continuation went away).
-    /// Idempotent; terminal approvals report their status.
+    /// Idempotent; terminal approvals report their status. Cancel transmits
+    /// even after the runtime died: it authorizes nothing, and the
+    /// descriptive reference lets the service prove the death via its own
+    /// validity pull and invalidate eagerly instead of lingering to TTL.
     public func cancelActionApproval(
         approvalID: UUID,
         subject: RuntimeAdmissionSubject
     ) async throws -> String {
-        let (authority, connection, reference) = try approvalReference(for: subject)
+        let snapshot = state.withLock { $0 }
+        guard let authority = snapshot.authority, let connection = snapshot.connection else {
+            throw XPCEvaluateClientError.authenticationFailed
+        }
+        let reference = try Self.descriptiveReference(authority: authority, subject: subject)
         let dto = HostActionApprovalCancelDTO(approvalID: approvalID, reference: reference)
         let message = xpc_dictionary_create_empty()
         Self.set(
             try IPCJSON.encode(dto), key: HostActionApprovalWire.cancelKey, on: message)
         let reply = try await exchange(XPCHeld(message), on: connection)
+        // No liveness re-check: the principal may have died mid-flight and
+        // the cancel still landed; the reply status is the answer.
         guard state.withLock({ $0.connection?.object === connection.object }),
-              authority.resolve(reference) != nil,
               let body = XPCIPCWire.body(from: reply.object) else {
             throw XPCEvaluateClientError.authenticationFailed
         }
@@ -262,6 +270,30 @@ public final class WorkspaceHostBridgeClient: Sendable {
             throw XPCEvaluateClientError.authenticationFailed
         }
         return status.status
+    }
+
+    /// Descriptive reference for cancel, built from authority-owned bytes
+    /// only (live record + authority identity): the record's existence, the
+    /// waiter's own instance, and workspace agreement. Usable whether the
+    /// runtime is live or dead — the service always re-resolves live before
+    /// acting, so a dead reference can only report death, never authorize.
+    static func descriptiveReference(
+        authority: WorkspacePrincipalAuthority,
+        subject: RuntimeAdmissionSubject
+    ) throws -> AgentPrincipalReference {
+        guard let agent = subject.agent, agent.isUsable,
+              let record = authority.descriptiveInstanceForCancel(forRuntime: subject.session.id),
+              record.id == agent.instance.id,
+              record.runtimeSessionID == subject.session.id,
+              record.workspaceSessionID == subject.session.workspaceSessionID else {
+            throw XPCEvaluateClientError.authenticationFailed
+        }
+        return AgentPrincipalReference(
+            agentInstanceID: record.id,
+            runtimeSessionID: subject.session.id,
+            workspaceSessionID: record.workspaceSessionID,
+            workspaceHostID: authority.host,
+            workspaceHostGeneration: authority.generation)
     }
 
     /// Live reference for approval RPCs. Same binding checks as `evaluate`:

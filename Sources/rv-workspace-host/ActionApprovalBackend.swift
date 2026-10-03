@@ -11,9 +11,12 @@ import Synchronization
 /// timeout or transport failure), matching the admission pipeline's shape;
 /// the human wait itself happens in the session's asynchronous waiter.
 ///
-/// Every RPC re-proves the live principal: the bridge client checks its live
-/// authority before and after each exchange, and the service re-validates
-/// via its own validity RPC before acting. No call blocks the human wait —
+/// Creation, status, and consume re-prove the live principal: the bridge
+/// client checks its live authority before and after each exchange, and the
+/// service re-validates via its own validity RPC before acting. Cancel
+/// instead transmits a descriptive reference (live or dead) with no
+/// liveness re-check: it authorizes nothing, and the service proves death
+/// via its own pull to invalidate eagerly. No call blocks the human wait —
 /// creation, status, consume, and cancel are all fast RPCs.
 struct HostActionApprovalBackend: ActionApprovalAsking, Sendable {
     private let bridge: WorkspaceHostBridgeClient
@@ -100,7 +103,10 @@ struct HostActionApprovalBackend: ActionApprovalAsking, Sendable {
             _ = try? await bridge.cancelActionApproval(
                 approvalID: approval.approvalID, subject: approval.subject)
         }
-        guard finished.wait(timeout: .now() + 5) == .success else {
+        // Aligned past the exchange's own 10s bound like the other RPCs:
+        // an earlier backend timeout would task-cancel into the shared
+        // connection and kill the bridge for subsequent calls.
+        guard finished.wait(timeout: .now() + timeoutSeconds) == .success else {
             task.cancel()
             return
         }

@@ -131,6 +131,30 @@ enum XPCWorkspaceHostBridge {
         xpc_connection_send_message(remote, reply)
     }
 
+    /// Interprets one host validity reply (an authenticated dictionary;
+    /// the peer gate rejects XPC error objects before this runs).
+    /// Absent validity key: the live host affirmatively reports this
+    /// well-formed reference unresolvable (dead, unknown, or retired
+    /// incarnation) — nil, which the registry maps to inactivePrincipal so
+    /// retained approvals invalidate eagerly. Present-but-unusable or
+    /// corrupt: wire anomaly, not affirmed death — validityRPCFailed.
+    /// Transport death surfaces as validityRPCFailed promptly via the
+    /// peer gate, and malformed requests and silence via the once-resume
+    /// deadline — never as death.
+    static func validityResult(from reply: xpc_object_t) throws -> AgentPrincipalValidity? {
+        guard xpc_dictionary_get_value(reply, HostBridgeWire.validityKey) != nil else {
+            return nil
+        }
+        guard let data = HostBridgeWire.body(reply, key: HostBridgeWire.validityKey) else {
+            throw LiveWorkspaceHostError.validityRPCFailed
+        }
+        do {
+            return try JSONDecoder().decode(AgentPrincipalValidity.self, from: data)
+        } catch {
+            throw LiveWorkspaceHostError.validityRPCFailed
+        }
+    }
+
     private static func requestValidity(
         _ reference: AgentPrincipalReference, connection: XPCHeld,
         peer: AuthenticatedPeer, liveness: HostBridgeLiveness
@@ -148,10 +172,7 @@ enum XPCWorkspaceHostBridge {
                     let current = try MacOSPeerAuthenticator.capture(message: reply,
                         connectionID: peer.connectionID, trust: trust)
                     guard current == peer else { throw LiveWorkspaceHostError.peerMismatch }
-                    guard let data = HostBridgeWire.body(reply, key: HostBridgeWire.validityKey) else {
-                        throw LiveWorkspaceHostError.validityRPCFailed
-                    }
-                    return try JSONDecoder().decode(AgentPrincipalValidity.self, from: data)
+                    return try Self.validityResult(from: reply)
                 }
                 pending.finish(value)
             }
