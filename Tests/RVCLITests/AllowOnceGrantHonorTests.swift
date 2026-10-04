@@ -137,7 +137,10 @@ struct AllowOnceGrantHonorTests {
         }
     }
 
-    @Test func grokHookEvaluateMintsPendingThenTTYRedeemWithoutDaemonSpendsNothing() async throws {
+    @Test func grokHookEvaluateWithoutDaemonDeniesStaticAndMintsNothing() async throws {
+        // Step 8B.1: no daemon means the static deny bytes. Nothing is
+        // evaluated and no pending mints. A file redeem afterwards still
+        // spends nothing through the local evaluate door.
         let directory = try isolatedAllowOnceDirectory()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let client = ServiceClient(
@@ -150,17 +153,19 @@ struct AllowOnceGrantHonorTests {
         {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
         """
         let wire = await client.hookEvaluate(host: .grok, stdin: stdin)
-        let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
-        #expect(json["decision"] as? String == "deny")
-        let reason = try #require(json["reason"] as? String)
-        let code = try #require(allowOnceUnlockCode(in: reason))
-        #expect(json["next"] as? String == unlockLine(for: code))
-        let store = AllowOnceStore(baseDirectory: directory)
-        #expect((await store.list(now: now)).contains { $0.kind == .pending })
+        #expect(wire == LocalControlBoundary.deniedHook(host: .grok))
+        #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
+        #expect((await AllowOnceStore(baseDirectory: directory).list(now: now)).isEmpty)
 
-        // No daemon: the file redeem flips projection only and spends
-        // nothing. The pending code path still fails closed.
+        let store = AllowOnceStore(baseDirectory: directory)
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let code = try await store.mint(
+            matchingView: "git reset --hard",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            tty: tty,
+            now: now
+        )
         _ = try await store.redeem(code: code.rawValue, tty: tty, now: now)
         let first = await client.evaluateResult(
             command: ShellCommand(rawValue: "git reset --hard"),
@@ -180,33 +185,9 @@ struct AllowOnceGrantHonorTests {
         }
     }
 
-    @Test func grokHookEvaluate_sameCommandReusesUnlockCode() async throws {
-        let directory = try isolatedAllowOnceDirectory()
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let client = ServiceClient(
-            transport: nil,
-            allowOnceDirectory: directory,
-            home: try isolatedHome(),
-            clock: { now }
-        )
-        let stdin = """
-        {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
-        """
-        let first = await client.hookEvaluate(host: .grok, stdin: stdin)
-        let firstJSON = try #require(JSONSerialization.jsonObject(with: Data(first.stdout.utf8)) as? [String: Any])
-        let firstReason = try #require(firstJSON["reason"] as? String)
-        let code = try #require(allowOnceUnlockCode(in: firstReason))
-        #expect(firstJSON["next"] as? String == unlockLine(for: code))
-
-        let second = await client.hookEvaluate(host: .grok, stdin: stdin)
-        let secondJSON = try #require(JSONSerialization.jsonObject(with: Data(second.stdout.utf8)) as? [String: Any])
-        let secondReason = try #require(secondJSON["reason"] as? String)
-        #expect(allowOnceUnlockCode(in: secondReason) == code)
-        #expect(secondJSON["next"] as? String == unlockLine(for: code))
-        #expect((await AllowOnceStore(baseDirectory: directory).list(now: now)).count == 1)
-    }
-
-    @Test func cursorHookEvaluate_agentMessageTellsAgentNotToRetry() async throws {
+    @Test func cursorHookEvaluateWithoutDaemonDeniesStaticWithoutCode() async throws {
+        // No daemon: static deny bytes (stop line, no unlock code). The
+        // ask/retry voice with a code arrives only through the daemon.
         let directory = try isolatedAllowOnceDirectory()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let client = ServiceClient(
@@ -219,13 +200,12 @@ struct AllowOnceGrantHonorTests {
         {"hook_event_name":"beforeShellExecution","cwd":"/tmp/ws","command":"git reset --hard"}
         """
         let wire = await client.hookEvaluate(host: .cursor, stdin: stdin)
+        #expect(wire == LocalControlBoundary.deniedHook(host: .cursor))
         let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
         #expect(json["permission"] as? String == "deny")
-        let user = try #require(json["user_message"] as? String)
-        #expect(allowOnceUnlockCode(in: user) != nil)
-        #expect(user.contains("This unlocks the reviewed command once, including its sudo, env, and path spellings."))
         #expect(json["agent_message"] as? String == cursorAgentStopLine)
-        #expect(allowOnceUnlockCode(in: json["agent_message"] as? String ?? "") == nil)
+        #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
+        #expect((await AllowOnceStore(baseDirectory: directory).list(now: now)).isEmpty)
     }
 
     @Test func grokHookEvaluateMissingCwdDoesNotMint() async throws {

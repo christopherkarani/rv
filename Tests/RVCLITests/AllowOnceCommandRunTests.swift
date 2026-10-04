@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import Testing
 import RVDomain
+import RVIPC
 import RVPolicy
 @testable import RVCLI
 
@@ -84,7 +85,10 @@ struct AllowOnceCommandRunTests {
         }
     }
 
-    @Test func redeem_happyPathThenAlreadySpent() async throws {
+    @Test func redeem_runWithoutDaemonFailsClosedAndKeepsPending() async throws {
+        // Step 8B.1: `rv allow-once <code>` without a reachable daemon
+        // fails closed at run() level. The pending row stays live for a
+        // later retry; nothing flips and nothing spends.
         let home = try isolatedHome()
         let store = AllowOnceCLI.store(home: home)
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
@@ -100,12 +104,74 @@ struct AllowOnceCommandRunTests {
             ownerAuthOutcome: .authenticated
         ) {
             var first = try AllowOnceRedeem.parse([code.rawValue])
-            try await first.run()
-            var spent = try AllowOnceRedeem.parse([code.rawValue])
             await #expect(throws: ExitCode(2)) {
-                try await spent.run()
+                try await first.run()
+            }
+            var second = try AllowOnceRedeem.parse([code.rawValue])
+            await #expect(throws: ExitCode(2)) {
+                try await second.run()
             }
         }
+        #expect(await store.list(now: Date()).contains { $0.kind == .pending })
+    }
+
+    @Test func redeem_scriptedAttestGrantsOnceThenAlreadySpent() async throws {
+        // CLI ceremony happy path against a scripted daemon: validate →
+        // LA → re-validate → attest (exact fingerprint + cwd + codeHash)
+        // → flip. The second redeem reports alreadySpent and attests
+        // nothing further.
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let code = try await store.mint(
+            matchingView: "git reset --hard",
+            cwd: wd("/tmp/a"),
+            ruleID: nil,
+            tty: tty,
+            now: now
+        )
+        let expected = try #require(await store.validatePending(code: code.rawValue, now: now))
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+            responseResult: .attestTTYRedemption(
+                AttestTTYRedemptionReply(planted: true, epoch: "test-epoch"))
+        )
+        let client = ServiceClient(transport: transport, allowOnceDirectory: store.baseDirectory)
+        let row = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+            try await AllowOnceCLI.redeem(
+                code: code.rawValue,
+                tty: tty,
+                robot: false,
+                store: store,
+                now: now,
+                client: client
+            )
+        }
+        #expect(row.kind == AllowOnceRecord.Kind.granted)
+        #expect(transport.sendCount == 1)
+        let sent = try #require(transport.sends.first)
+        let request = try IPCJSON.decode(IPCRequest.self, from: sent)
+        guard case .attestTTYRedemption(let params) = request.method else {
+            Issue.record("redeem must attest exactly once")
+            return
+        }
+        #expect(params.fingerprint == expected.fingerprint)
+        #expect(params.cwd == wd("/tmp/a"))
+        #expect(params.codeHash == sha256Hex(code.rawValue.lowercased()))
+
+        await #expect(throws: AllowOnceError.alreadySpent) {
+            try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+                try await AllowOnceCLI.redeem(
+                    code: code.rawValue,
+                    tty: tty,
+                    robot: false,
+                    store: store,
+                    now: now,
+                    client: client
+                )
+            }
+        }
+        #expect(transport.sendCount == 1)
     }
 
     @Test func redeem_whitespaceCodeIsNotRedeemable() async throws {

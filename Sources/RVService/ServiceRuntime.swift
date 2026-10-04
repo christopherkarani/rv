@@ -384,8 +384,6 @@ public actor ServiceRuntime {
             result = .launchProposalStatus(await ceremonies.proposalStatus(params))
         case .attestTTYRedemption(let params):
             result = await attestTTYRedemption(params)
-        case .attestTTYRedemption(let params):
-            result = await attestTTYRedemption(params)
         }
         logIfNeeded(request: request, result: result, started: started)
         return IPCResponse(id: request.id, result: result)

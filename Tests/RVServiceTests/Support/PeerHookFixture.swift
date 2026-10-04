@@ -32,10 +32,10 @@ func peerHookContext() -> AuthenticatedRequestContext {
 /// trust anchor the daemon's matrix requires for `attestTTYRedemption`.
 func peerCliContext() -> AuthenticatedRequestContext {
     let code = PeerCodeIdentity(
-        identifier: \"peer-cli-fixture\",
+        identifier: "peer-cli-fixture",
         teamIdentifier: nil,
         cdHash: Data([12]),
-        executablePath: \"/peer-cli-fixture\",
+        executablePath: "/peer-cli-fixture",
         isAdHoc: true,
         hardenedRuntime: true,
         injectionExceptions: []
@@ -56,10 +56,10 @@ func peerCliContext() -> AuthenticatedRequestContext {
 /// Operator-UI peer: even the trusted UI cannot mint TTY attestations.
 func peerOperatorUIContext() -> AuthenticatedRequestContext {
     let code = PeerCodeIdentity(
-        identifier: \"peer-ui-fixture\",
+        identifier: "peer-ui-fixture",
         teamIdentifier: nil,
         cdHash: Data([13]),
-        executablePath: \"/peer-ui-fixture\",
+        executablePath: "/peer-ui-fixture",
         isAdHoc: true,
         hardenedRuntime: true,
         injectionExceptions: []

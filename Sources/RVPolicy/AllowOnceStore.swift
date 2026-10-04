@@ -184,9 +184,9 @@ public actor AllowOnceStore {
 
     /// Single locked read of a live pending row: display row + action
     /// fingerprint, atomically. The redeem ceremony captures both BEFORE
-    /// LocalAuthentication and re-checks the fingerprint under the redeem
-    /// lock, so a swapped file between display and attest aborts instead
-    /// of attesting a row the human never reviewed.
+    /// LocalAuthentication and re-checks fingerprint + full row under
+    /// the redeem lock, so a swapped file between display and attest
+    /// aborts instead of attesting a row the human never reviewed.
     public func validatePending(
         code: String,
         now: Date

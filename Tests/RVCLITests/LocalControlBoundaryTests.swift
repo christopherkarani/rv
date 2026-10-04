@@ -85,7 +85,10 @@ struct LocalControlBoundaryTests {
                 _ = try await AllowOnceCLI.mint(command: ShellCommand(rawValue: "echo harmless"), cwd: wd("/tmp/ws"), tty: tty, robot: false, store: store, now: Date())
             }
         }
-        await #expect(throws: AllowOnceAuthError.required) {
+        // Unknown codes report unknownCode without prompting LA: no
+        // Touch ID for garbage (finding 8). The tripwire still guards
+        // minted codes (see redeemWithoutDaemonFailsClosedAndKeepsPending).
+        await #expect(throws: AllowOnceError.unknownCode) {
             try await withCLIProcess {
                 _ = try await AllowOnceCLI.redeem(code: "abcdef", tty: tty, robot: false, store: store, now: Date())
             }

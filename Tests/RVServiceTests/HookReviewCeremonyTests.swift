@@ -112,6 +112,62 @@ struct HookReviewCeremonyTests {
         #expect(try await env.grantedCount() == 1)
     }
 
+    @Test func completeAfterActionSwapFailsClosedWithoutGrant() async throws {
+        // 8B.1 review finding 2: the pending file is same-user writable
+        // and the stored fingerprint is attacker-controlled text. Swapping
+        // the action under an identical fingerprint between bind and
+        // complete must fail the exact-row bind and plant nothing.
+        let env = try HookCeremonyEnv(now: now)
+        defer { env.tearDown() }
+        _ = try await env.seed(command: "git status", id: "hook-swap")
+        let ui = AuthenticatedOperatorUIConnectionID()
+        let (challenge, _) = try await env.ceremonies.bindHookReview(
+            approvalID: "hook-swap", uiConnection: ui)
+        try env.swapPendingAction(
+            approvalID: "hook-swap",
+            command: "git push --force origin main",
+            cwd: "/tmp/evil"
+        )
+        await #expect(throws: HookReviewCeremonyError.notReviewable) {
+            try await env.ceremonies.completeHookCeremony(
+                UIHookCompletion(
+                    challengeID: challenge.challengeID,
+                    approvalID: "hook-swap",
+                    outcome: .authenticated
+                ),
+                uiConnection: ui
+            )
+        }
+        #expect(try await env.grantedCount() == 0)
+    }
+
+    @Test func completeAfterCwdOnlySwapFailsClosedWithoutGrant() async throws {
+        // Same bind, cwd-only redirect: the reviewed command matches but
+        // the working directory drifted. Must still fail closed.
+        let env = try HookCeremonyEnv(now: now)
+        defer { env.tearDown() }
+        _ = try await env.seed(command: "git status", id: "hook-swap-cwd")
+        let ui = AuthenticatedOperatorUIConnectionID()
+        let (challenge, _) = try await env.ceremonies.bindHookReview(
+            approvalID: "hook-swap-cwd", uiConnection: ui)
+        try env.swapPendingAction(
+            approvalID: "hook-swap-cwd",
+            command: "git status",
+            cwd: "/tmp/evil"
+        )
+        await #expect(throws: HookReviewCeremonyError.notReviewable) {
+            try await env.ceremonies.completeHookCeremony(
+                UIHookCompletion(
+                    challengeID: challenge.challengeID,
+                    approvalID: "hook-swap-cwd",
+                    outcome: .authenticated
+                ),
+                uiConnection: ui
+            )
+        }
+        #expect(try await env.grantedCount() == 0)
+    }
+
     @Test func completeFromOtherConnectionIsNotReviewable() async throws {
         let env = try HookCeremonyEnv(now: now)
         defer { env.tearDown() }
@@ -360,5 +416,54 @@ private final class HookCeremonyEnv {
 
     func grantedCount() async throws -> Int {
         await grants.list(now: frozen.now).filter { $0.kind == .granted }.count
+    }
+
+    struct SwapError: Error {}
+
+    /// Same-user file surgery: rewrites one pending row's action while
+    /// preserving its fingerprint string, simulating an attacker racing
+    /// the human review.
+    func swapPendingAction(approvalID: String, command: String, cwd: String) throws {
+        guard let home = HomeDirectory(validating: homeURL.path) else {
+            throw SwapError()
+        }
+        let file = RVPolicyPaths.pendingApprovalsFile(
+            inConfigDir: RVPolicyPaths.configDirectory(home: home))
+        let text = try String(contentsOf: file, encoding: .utf8)
+        var lines: [String] = []
+        var swapped = false
+        for raw in text.split(separator: "\n") {
+            guard var object = try JSONSerialization.jsonObject(with: Data(raw.utf8))
+                as? [String: Any]
+            else {
+                throw SwapError()
+            }
+            if var approval = object["approval"] as? [String: Any],
+                (approval["id"] as? String) == approvalID,
+                var action = approval["action"] as? [String: Any],
+                var shellCase = action["shell"] as? [String: Any],
+                var shell = shellCase["_0"] as? [String: Any],
+                var scope = shell["scope"] as? [String: Any]
+            {
+                shell["supportingCommand"] = command
+                scope["workingDirectory"] = cwd
+                shell["scope"] = scope
+                shellCase["_0"] = shell
+                action["shell"] = shellCase
+                approval["action"] = action
+                object["approval"] = approval
+                swapped = true
+            }
+            let data = try JSONSerialization.data(withJSONObject: object)
+            guard let line = String(data: data, encoding: .utf8) else {
+                throw SwapError()
+            }
+            lines.append(line)
+        }
+        guard swapped else {
+            throw SwapError()
+        }
+        try (lines.joined(separator: "\n") + "\n").write(
+            to: file, atomically: true, encoding: .utf8)
     }
 }

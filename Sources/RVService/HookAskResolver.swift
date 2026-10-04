@@ -22,6 +22,7 @@ import RVPolicy
 enum HookAskResolver {
     static func resolve(
         params: PendingResolveParams,
+        reviewedAction: (command: ShellCommand?, cwd: WorkingDirectory?)?,
         pending: (any PendingApprovalCoordinating)?,
         grants: EphemeralAllowOnceTable,
         projection: AllowOnceStore,
@@ -35,6 +36,7 @@ enum HookAskResolver {
         case .allowOnce:
             return await resolveAllowOnce(
                 params,
+                reviewedAction: reviewedAction,
                 store: pending,
                 grants: grants,
                 projection: projection,
@@ -53,6 +55,7 @@ enum HookAskResolver {
 
     private static func resolveAllowOnce(
         _ params: PendingResolveParams,
+        reviewedAction: (command: ShellCommand?, cwd: WorkingDirectory?)?,
         store: any PendingApprovalCoordinating,
         grants: EphemeralAllowOnceTable,
         projection: AllowOnceStore,
@@ -79,6 +82,19 @@ enum HookAskResolver {
                         : PendingApprovalError.fingerprintMismatch
                 )
             )
+        }
+        // Exact-row bind: the stored fingerprint string is file text the
+        // same-user attacker controls, so equality above cannot prove the
+        // re-loaded action is the one the human reviewed. Compare the
+        // re-loaded plant inputs against the ceremony's in-memory
+        // snapshot; any drift fails closed. The plant below derives from
+        // this same loaded record, so no window remains.
+        guard let reviewedAction,
+            record.action.supportingCommand == reviewedAction.command,
+            record.action.scope.workingDirectory == reviewedAction.cwd
+        else {
+            return .failure(
+                PendingListProjection.ipcError(from: PendingApprovalError.fingerprintMismatch))
         }
         let cwd = record.action.scope.workingDirectory
         guard let command = record.action.supportingCommand else {

@@ -236,26 +236,41 @@ struct OneShotEvaluateClientTests {
         #expect(transport.helloCount == 0)
     }
 
-    @Test func hookEvaluateNilTransport_codexDenyForwardsStderr() async throws {
-        let client = try isolatedClient(transport: nil)
+    @Test func hookEvaluateDaemonDeny_codexDenyForwardsStderr() async throws {
+        // Step 8B.1: the code-carrying codex deny arrives only through
+        // the daemon (nil transport is the static deny bytes). The CLI
+        // forwards the daemon's stdout/stderr/exit verbatim.
+        let code = try #require(AllowOnceUnlockCode(validating: "abc123"))
+        let why = try hookFixture("codex", "deny-git-reset-hard.err")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let whyRest = why.hasPrefix("RV · Blocked. ")
+            ? String(why.dropFirst("RV · Blocked. ".count))
+            : why
+        let daemon = CodexHostCodec().encodeDeny(
+            reason: "RV · Blocked. \(unlockLine(for: code)) \(whyRest)",
+            rule: nil,
+            next: .minted(code)
+        )
+        let transport = ScriptedTransport(
+            ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+            responseResult: .hookEvaluate(HookEvaluateReply(
+                stdout: daemon.stdout,
+                exitCode: daemon.exitCode,
+                stderr: daemon.stderr
+            ))
+        )
+        let client = try isolatedClient(transport: transport)
         var hook = Hook()
         hook.host = .codex
         let outcome = await hook.run(
             stdin: try hookFixture("codex", "deny-git-reset-hard.json"),
             client: client
         )
-        let why = try hookFixture("codex", "deny-git-reset-hard.err")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let stderr = outcome.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-        let code = try #require(allowOnceUnlockCode(in: stderr))
-        let whyRest = why.hasPrefix("RV · Blocked. ")
-            ? String(why.dropFirst("RV · Blocked. ".count))
-            : why
-        let expected = "RV · Blocked. \(unlockLine(for: code)) \(whyRest)"
         #expect(outcome.exitCode == 2)
         #expect(outcome.stdout.contains("\"decision\":\"block\""))
-        #expect(stderr == expected)
-        #expect(outcome.stdout.contains(expected))
+        #expect(outcome.stdout == daemon.stdout)
+        #expect(outcome.stderr == daemon.stderr)
+        #expect(allowOnceUnlockCode(in: outcome.stderr) == code)
         #expect(why.isEmpty == false)
     }
 

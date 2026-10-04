@@ -33,6 +33,13 @@ actor HookReviewCeremonyService {
         let approvalID: ApprovalID
         let fingerprint: ActionFingerprint
         let identity: ApprovalIdentity
+        /// Exact reviewed plant inputs, snapshotted at bind from the row
+        /// the human saw. The pending file is same-user writable and the
+        /// stored fingerprint string is attacker-controlled text, so the
+        /// resolver must compare these — never trust a re-loaded row that
+        /// merely repeats the fingerprint.
+        let reviewedCommand: ShellCommand?
+        let reviewedCwd: WorkingDirectory?
         let uiConnection: AuthenticatedOperatorUIConnectionID
         let issuedWall: Date
         let expiresWall: Date
@@ -115,6 +122,8 @@ actor HookReviewCeremonyService {
             approvalID: id,
             fingerprint: row.fingerprint,
             identity: row.identity,
+            reviewedCommand: row.action.supportingCommand,
+            reviewedCwd: row.action.scope.workingDirectory,
             uiConnection: uiConnection,
             issuedWall: now,
             expiresWall: min(
@@ -164,6 +173,10 @@ actor HookReviewCeremonyService {
                 fingerprint: challenge.fingerprint,
                 identity: challenge.identity
             ),
+            reviewedAction: (
+                command: challenge.reviewedCommand,
+                cwd: challenge.reviewedCwd
+            ),
             pending: pending,
             grants: grants,
             projection: allowOnce,
@@ -207,6 +220,7 @@ actor HookReviewCeremonyService {
                 fingerprint: challenge.fingerprint,
                 identity: challenge.identity
             ),
+            reviewedAction: nil,
             pending: pending,
             grants: grants,
             projection: allowOnce,

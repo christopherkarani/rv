@@ -3,6 +3,7 @@ import Synchronization
 import Testing
 import RVDomain
 import RVHooks
+import RVIPC
 import RVPolicy
 @testable import RVCLI
 
@@ -176,25 +177,47 @@ private func runHonorHook(
     #expect(text.components(separatedBy: "RV · Blocked").count == 2)
 }
 
-@Test func hookRun_grokDenyThroughClientMintsCode() async throws {
-    let directory = try isolatedAllowOnceDirectory()
-    let now = Date(timeIntervalSince1970: 1_700_000_000)
-    let client = ServiceClient(
-        transport: nil,
-        allowOnceDirectory: directory,
-        home: try isolatedHome(),
-        clock: { now }
+@Test func hookRun_grokDenyThroughDaemonForwardsCode() async throws {
+    // Step 8B.1: the code-carrying grok deny arrives only through the
+    // daemon (nil transport is the static deny bytes). The CLI forwards
+    // the daemon's decision/reason/next/exit verbatim.
+    let code = try #require(AllowOnceUnlockCode(validating: "abc123"))
+    let denied = EvaluationResult(
+        outcome: .deny(
+            Deny(
+                ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                reason: "git reset --hard destroys uncommitted changes"
+            ),
+            matched: nil
+        ),
+        matchingView: "git reset --hard"
     )
+    let daemon = GrokHostCodec().encodeEvaluatedDeny(
+        from: denied,
+        command: ShellCommand(rawValue: "git reset --hard"),
+        unlockCode: .code(code)
+    )
+    let transport = ScriptedTransport(
+        ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+        responseResult: .hookEvaluate(HookEvaluateReply(
+            stdout: daemon.stdout,
+            exitCode: daemon.exitCode,
+            stderr: daemon.stderr
+        ))
+    )
+    let client = try isolatedClient(transport: transport)
     var hook = Hook()
     hook.host = .grok
     let outcome = await hook.run(
         stdin: try grokFixture("deny-git-reset-hard.json"),
         client: client
     )
+    #expect(outcome.stdout == daemon.stdout)
+    #expect(outcome.exitCode == daemon.exitCode)
     let json = try denyJSON(outcome.stdout)
     #expect(json["decision"] as? String == "deny")
     let reason = try #require(json["reason"] as? String)
-    let code = try #require(allowOnceUnlockCode(in: reason))
+    #expect(allowOnceUnlockCode(in: reason) == code)
     #expect(json["next"] as? String == unlockLine(for: code))
     #expect(outcome.exitCode == 0)
 }

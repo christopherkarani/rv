@@ -65,17 +65,29 @@ enum AllowOnceCLI {
     /// 1. Gates cheapest-first (TTY, robot, code shape).
     /// 2. Atomically read display row + fingerprint (pre-LA review).
     /// 3. LocalAuthentication naming the reviewed grant (B-F6).
-    /// 4. Re-read + compare fingerprint (TOCTOU bind: a swapped file
-    ///    aborts with redemptionChanged instead of attesting a row the
-    ///    human never reviewed).
+    /// 4. Re-read + compare fingerprint AND full row (TOCTOU bind: a
+    ///    swapped file aborts with redemptionChanged instead of attesting
+    ///    a row the human never reviewed; the fingerprint covers the
+    ///    action, the row covers cwd/expiry/display).
     /// 5. Attest to the daemon (plants the memory grant; daemon re-checks
     ///    role + fields + per-epoch code single-use).
     /// 6. Flip the file row as a display projection (best-effort: a flip
     ///    failure after a planted attestation is a display gap, still
     ///    granted; an attest failure leaves pending intact for retry).
     ///
-    /// A missing pre-LA read falls back to the generic LA reason and the
-    /// redeem below still reports the precise failure, as before.
+    /// Post-LA equality gate: the re-read row must match the reviewed
+    /// row exactly. Fingerprint-only comparison would let a same-user
+    /// file swap redirect the attest (e.g. cwd) after the human
+    /// approved; whole-row equality fails closed on any drift.
+    static func redemptionUnchanged(
+        before: (row: AllowOnceListRow, fingerprint: String),
+        after: (row: AllowOnceListRow, fingerprint: String)
+    ) -> Bool {
+        before.fingerprint == after.fingerprint && before.row == after.row
+    }
+
+    /// A missing pre-LA read skips LA entirely and reports the precise
+    /// failure: unknown codes never prompt for authentication.
     static func redeem(
         code: String,
         tty: TTYCapability,
@@ -91,51 +103,50 @@ enum AllowOnceCLI {
             throw AllowOnceError.unknownCode
         }
         let peeked = await store.validatePending(code: code, now: now)
-        let reason = peeked.map {
-            "Allow once: \($0.row.commandRedacted) in \($0.row.cwd.rawValue)."
-        } ?? CLIOwnerAuth.reason
+        guard let peeked else {
+            // No live pending row: report the precise failure (unknown/
+            // expired/spent) WITHOUT prompting LA — garbage codes must not
+            // trigger Touch ID. This branch NEVER attests: a row appearing
+            // after this read would be unreviewed, so at most a projection
+            // flips (fail-closed).
+            return try await store.redeem(code: code, tty: tty, now: now, robot: robot)
+        }
+        let reason = "Allow once: \(peeked.row.commandRedacted) in \(peeked.row.cwd.rawValue)."
         try await CLIOwnerAuth.requireAuthenticated(reason: reason)
         let service = client ?? ServiceClient()
-        if let peeked {
-            guard let rechecked = await store.validatePending(code: code, now: now),
-                rechecked.fingerprint == peeked.fingerprint
-            else {
-                throw AllowOnceError.redemptionChanged
-            }
-            let attested = await service.attestTTYRedemption(AttestTTYRedemptionParams(
-                fingerprint: rechecked.fingerprint,
-                cwd: rechecked.row.cwd,
-                codeHash: sha256Hex(normalized),
-                clientSemver: ProtocolVersion.serviceSemver
-            ))
-            switch attested {
-            case .success(let reply):
-                guard reply.planted else { throw AllowOnceError.alreadySpent }
-            case .failure(let error):
-                switch error {
-                case .noTransport, .transport:
-                    throw AllowOnceAttestError.serviceUnavailable
-                case .service:
-                    throw AllowOnceAttestError.serviceDenied
-                }
-            }
-            do {
-                return try await store.redeem(
-                    code: code, tty: tty, now: now, robot: robot,
-                    expectedFingerprint: rechecked.fingerprint
-                )
-            } catch {
-                // Attestation planted: the flip is display-only. A failure
-                // here (file swap/lock race in the millisecond window) is a
-                // projection gap, not a grant failure.
-                return rechecked.row
+        guard let rechecked = await store.validatePending(code: code, now: now),
+            Self.redemptionUnchanged(before: peeked, after: rechecked)
+        else {
+            throw AllowOnceError.redemptionChanged
+        }
+        let attested = await service.attestTTYRedemption(AttestTTYRedemptionParams(
+            fingerprint: rechecked.fingerprint,
+            cwd: rechecked.row.cwd,
+            codeHash: sha256Hex(normalized),
+            clientSemver: ProtocolVersion.serviceSemver
+        ))
+        switch attested {
+        case .success(let reply):
+            guard reply.planted else { throw AllowOnceError.alreadySpent }
+        case .failure(let error):
+            switch error {
+            case .noTransport, .transport:
+                throw AllowOnceAttestError.serviceUnavailable
+            case .service:
+                throw AllowOnceAttestError.serviceDenied
             }
         }
-        // No live pending row: redeem reports the precise failure
-        // (unknown/expired/spent) and flips nothing grantable. This branch
-        // NEVER attests: a row appearing after the post-LA read would be
-        // unreviewed, so at most a projection flips (fail-closed).
-        return try await store.redeem(code: code, tty: tty, now: now, robot: robot)
+        do {
+            return try await store.redeem(
+                code: code, tty: tty, now: now, robot: robot,
+                expectedFingerprint: rechecked.fingerprint
+            )
+        } catch {
+            // Attestation planted: the flip is display-only. A failure
+            // here (file swap/lock race in the millisecond window) is a
+            // projection gap, not a grant failure.
+            return rechecked.row
+        }
     }
 
     /// Pre-arms one unlock code for a command. Minting alone grants

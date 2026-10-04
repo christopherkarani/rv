@@ -131,8 +131,8 @@ struct AllowOnceTTYTests {
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
         let code = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
             try await AllowOnceCLI.mint(
-                command: ShellCommand(rawValue: \"git reset --hard\"),
-                cwd: wd(\"/tmp/a\"),
+                command: ShellCommand(rawValue: "git reset --hard"),
+                cwd: wd("/tmp/a"),
                 tty: tty,
                 robot: false,
                 store: store,
@@ -168,6 +168,51 @@ struct AllowOnceTTYTests {
                 store: store,
                 now: now
             )
+        }
+    }
+
+    @Test func redemptionGateRejectsCwdSwapUnderIdenticalFingerprint() async throws {
+        // 8B.1 review H2: the post-LA recheck must compare the full row,
+        // not just the fingerprint. A same-user file swap that preserves
+        // the action hash but redirects cwd must read as changed.
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let code = try await store.mint(
+            matchingView: "git reset --hard",
+            cwd: wd("/tmp/a"),
+            ruleID: nil,
+            tty: tty,
+            now: now
+        )
+        let reviewed = try #require(await store.validatePending(code: code.rawValue, now: now))
+        #expect(AllowOnceCLI.redemptionUnchanged(before: reviewed, after: reviewed))
+
+        var cwdSwapped = reviewed
+        cwdSwapped.row.cwd = wd("/tmp/victim")
+        #expect(AllowOnceCLI.redemptionUnchanged(before: reviewed, after: cwdSwapped) == false)
+
+        let actionSwapped = (row: reviewed.row, fingerprint: String(repeating: "0", count: 64))
+        #expect(AllowOnceCLI.redemptionUnchanged(before: reviewed, after: actionSwapped) == false)
+    }
+
+    @Test func redeemUnknownCodeFailsWithoutAuthentication() async throws {
+        // 8B.1 review finding 8: no seamed auth outcome means any LA
+        // attempt throws .required. Unknown codes must report unknownCode
+        // instead, proving LA never fired for garbage.
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        await #expect(throws: AllowOnceError.unknownCode) {
+            try await withCLIProcess(stdinIsTTY: true, stdoutIsTTY: true) {
+                try await AllowOnceCLI.redeem(
+                    code: "abc123",
+                    tty: tty,
+                    robot: false,
+                    store: store,
+                    now: now
+                )
+            }
         }
     }
 }

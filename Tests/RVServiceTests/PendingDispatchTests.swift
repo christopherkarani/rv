@@ -115,6 +115,7 @@ struct PendingDispatchTests {
         let grants0 = AllowOnceStore(baseDirectory: allowOnceDirectory)
         let resolve = await HookAskResolver.resolve(
             params: resolveParams(wait, decision: .allowOnce),
+            reviewedAction: reviewedAction(wait),
             pending: nil,
             grants: EphemeralAllowOnceTable(),
             projection: grants0,
@@ -258,6 +259,7 @@ struct PendingDispatchTests {
         ) async -> Result<PendingResolveReply, IPCError> {
             await HookAskResolver.resolve(
                 params: params,
+                reviewedAction: nil,
                 pending: approvals,
                 grants: EphemeralAllowOnceTable(),
                 projection: store,
@@ -801,6 +803,7 @@ struct PendingDispatchTests {
         let world0 = freshPeekWorld()
         let earlyResolve = await HookAskResolver.resolve(
             params: resolveParams(early, decision: .allowOnce),
+            reviewedAction: reviewedAction(early),
             pending: approvals,
             grants: EphemeralAllowOnceTable(),
             projection: store,
@@ -826,6 +829,7 @@ struct PendingDispatchTests {
         let world1 = freshPeekWorld()
         let resolved = await HookAskResolver.resolve(
             params: resolveParams(wait, decision: .allowOnce),
+            reviewedAction: reviewedAction(wait),
             pending: approvals,
             grants: EphemeralAllowOnceTable(),
             projection: store,
@@ -976,6 +980,12 @@ struct PendingDispatchTests {
         )
     }
 
+    private func reviewedAction(
+        _ record: PendingApproval
+    ) -> (command: ShellCommand?, cwd: WorkingDirectory?) {
+        (record.action.supportingCommand, record.action.scope.workingDirectory)
+    }
+
     /// Owner-authorized resolve core over the test's stores. Generic IPC
     /// `pendingResolve` stays denied; the ceremony transports reach this
     /// same core after proving the human.
@@ -990,6 +1000,7 @@ struct PendingDispatchTests {
         let store = AllowOnceStore(baseDirectory: allowOnceDirectory)
         return await HookAskResolver.resolve(
             params: resolveParams(record, decision: decision),
+            reviewedAction: decision == .deny ? nil : reviewedAction(record),
             pending: approvals,
             grants: memory,
             projection: store,

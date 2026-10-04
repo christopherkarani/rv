@@ -84,24 +84,24 @@ struct AllowOnceAuthorityRegressionTests {
         // crashing, and the gate denies regardless of file content.
         let root = try isolatedAuthorityDirectory()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let view = MatchingView(\"git reset --hard\")
+        let view = MatchingView("git reset --hard")
         try plantHostileProjection(
             directory: root,
             fingerprint: commandFingerprint(view),
-            cwd: \"/tmp/ws\"
+            cwd: "/tmp/ws"
         )
         let store = AllowOnceStore(baseDirectory: root)
         _ = await store.list(now: now)
         let grants = EphemeralAllowOnceTable()
         let gated = await PolicyGate.consumingGrant(
             for: authorityResetHardDeny(),
-            cwd: wd(\"/tmp/ws\"),
+            cwd: wd("/tmp/ws"),
             grants: grants,
             now: now
         )
         #expect(gated.override == .none)
         guard case .deny = gated.result.decision else {
-            Issue.record(\"hostile projection must not spend\")
+            Issue.record("hostile projection must not spend")
             return
         }
     }
@@ -155,18 +155,18 @@ private func plantHostileProjection(
     fingerprint: String,
     cwd: String
 ) throws {
-    let granted = \"{\\\"schema_version\\\":1,\\\"kind\\\":\\\"granted\\\",\\\"code_hash\\\":\\\"FORGED\\\",\\\"command_fingerprint\\\":\\\"\\(fingerprint)\\\",\\\"command_redacted\\\":\\\"git …\\\",\\\"cwd\\\":\\\"\\(cwd)\\\",\\\"created_at\\\":\\\"2026-01-01T00:00:00Z\\\",\\\"expires_at\\\":\\\"2030-01-01T00:00:00Z\\\"}\"
-    let stale = \"{\\\"schema_version\\\":1,\\\"kind\\\":\\\"granted\\\",\\\"code_hash\\\":\\\"STALE\\\",\\\"command_fingerprint\\\":\\\"\\(fingerprint)\\\",\\\"command_redacted\\\":\\\"git …\\\",\\\"cwd\\\":\\\"\\(cwd)\\\",\\\"created_at\\\":\\\"2020-01-01T00:00:00Z\\\",\\\"expires_at\\\":\\\"2020-01-02T00:00:00Z\\\"}\"
+    let granted = "{\"schema_version\":1,\"kind\":\"granted\",\"code_hash\":\"FORGED\",\"command_fingerprint\":\"\(fingerprint)\",\"command_redacted\":\"git …\",\"cwd\":\"\(cwd)\",\"created_at\":\"2026-01-01T00:00:00Z\",\"expires_at\":\"2030-01-01T00:00:00Z\"}"
+    let stale = "{\"schema_version\":1,\"kind\":\"granted\",\"code_hash\":\"STALE\",\"command_fingerprint\":\"\(fingerprint)\",\"command_redacted\":\"git …\",\"cwd\":\"\(cwd)\",\"created_at\":\"2020-01-01T00:00:00Z\",\"expires_at\":\"2020-01-02T00:00:00Z\"}"
     let text = [
         granted,
         granted,
-        \"not-json{\",
+        "not-json{",
         String(granted.prefix(60)),
         stale,
-        \"{\\\"schema_version\\\":1,\\\"kind\\\":\\\"mystery\\\",\\\"code_hash\\\":\\\"X\\\"}\",
-        \"\",
-    ].joined(separator: \"\\n\")
-    try (text + \"\\n\").write(
+        "{\"schema_version\":1,\"kind\":\"mystery\",\"code_hash\":\"X\"}",
+        "",
+    ].joined(separator: "\n")
+    try (text + "\n").write(
         to: RVPolicyPaths.allowOnceFile(inConfigDir: directory),
         atomically: true,
         encoding: .utf8

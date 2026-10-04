@@ -179,6 +179,10 @@ struct PendingResolveGrantTests {
                 fingerprint: wait.fingerprint,
                 identity: wait.identity
             ),
+            reviewedAction: (
+                wait.action.supportingCommand,
+                wait.action.scope.workingDirectory
+            ),
             pending: nil,
             grants: EphemeralAllowOnceTable(),
             projection: grants,
@@ -448,6 +452,10 @@ private struct IsolatedPendingResolve {
     ) async -> Result<PendingResolveReply, IPCError> {
         await HookAskResolver.resolve(
             params: resolveParams(record, decision: decision),
+            reviewedAction: decision == .deny ? nil : (
+                record.action.supportingCommand,
+                record.action.scope.workingDirectory
+            ),
             pending: pending,
             grants: memory,
             projection: grants,
