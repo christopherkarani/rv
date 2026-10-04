@@ -47,9 +47,13 @@ struct ExplainGitSemanticsTests {
             probe: prettyProbe(),
             requested: .automatic
         )
-        #expect(normal.stdout.contains("Decision: ALLOW"))
+        // Step 8B: remote mutation asks (deny-with-guidance on the wire);
+        // the Next line proves it stays human-unlockable, unlike the
+        // forced shared-branch deny below.
+        #expect(normal.stdout.contains("Decision: DENY"))
         #expect(normal.stdout.contains("Action       push"))
         #expect(normal.stdout.contains("Scope        remote"))
+        #expect(normal.stdout.contains("rv allow-once"))
         #expect(forced.stdout.contains("Decision: DENY"))
         #expect(forced.stdout.contains("force-push"))
         #expect(forced.stdout.contains("remote shared-branch mutation"))

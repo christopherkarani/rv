@@ -22,6 +22,9 @@ final class FakeAskBackend: ActionApprovalAsking, Sendable {
         var consumableByDefault = false
         var consumeCalls: [UUID] = []
         var cancels: [UUID] = []
+        /// Runs inside `consumeApproval` before the verdict returns. Lets
+        /// a test revoke the principal between spend and resume.
+        var onConsume: (@Sendable (UUID) -> Void)?
     }
 
     private let state = Mutex(State())
@@ -42,6 +45,10 @@ final class FakeAskBackend: ActionApprovalAsking, Sendable {
 
     func setCreateDeclined(_ declined: Bool) {
         state.withLock { $0.createDeclined = declined }
+    }
+
+    func setOnConsume(_ hook: (@Sendable (UUID) -> Void)?) {
+        state.withLock { $0.onConsume = hook }
     }
 
     /// Authorize-all: every approval reports authorized and consumes.
@@ -90,10 +97,12 @@ final class FakeAskBackend: ActionApprovalAsking, Sendable {
         _ approval: CreatedActionApproval,
         actionDigestHex: String
     ) -> Bool {
-        state.withLock { state in
+        let (verdict, hook) = state.withLock { state in
             state.consumeCalls.append(approval.approvalID)
-            return state.consumable.contains(approval.approvalID)
+            return (state.consumable.contains(approval.approvalID), state.onConsume)
         }
+        hook?(approval.approvalID)
+        return verdict
     }
 
     func cancelApproval(_ approval: CreatedActionApproval) {
@@ -303,10 +312,59 @@ struct ActionApprovalParkTests {
         }
     }
 
+    @Test func revokedParkNeverResumesExecution() async throws {
+        // Step 8 (F3 re-review): a principal revoked while its ASK awaits
+        // the human must not execute when the approval lands — neither
+        // the poll waiter nor the resume path may run it.
+        let harness = try ParkHarness()
+        defer { harness.cleanup() }
+        let decision = harness.session.submitLegacy(.success(harness.frame("echo hello")))
+        #expect(decision.responseDeferred == true)
+        #expect(harness.session.parkedApprovalCountForTesting == 1)
+        #expect(
+            harness.registry.revoke(harness.instance.id, reason: .explicitRevoke) { true }
+                == .revoked
+        )
+        // The human approves anyway (stale UI): both the waiter fail-fast
+        // and the resume revalidation refuse with the same cause.
+        harness.backend.authorizeAll()
+        await waitFor("park completion") {
+            harness.session.queuedCompletionCountForTesting == 1
+        }
+        #expect(harness.effect.runs == 0)
+        #expect(harness.session.parkedApprovalCountForTesting == 0)
+        let events = harness.evidence.snapshot()
+        #expect(events.contains { $0.result == "principalRevoked" })
+        #expect(events.contains { $0.executionAttempted } == false)
+    }
+
+    @Test func revokeBetweenSpendAndResumeNeverExecutes() async throws {
+        // Step 8 (F3 re-review): the approval is spent, then the
+        // principal dies before resume runs. The resume revalidation —
+        // not the poll waiter — must refuse execution.
+        let backend = FakeAskBackend()
+        let harness = try ParkHarness(backend: backend)
+        defer { harness.cleanup() }
+        backend.setOnConsume { _ in
+            _ = harness.registry.revoke(harness.instance.id, reason: .explicitRevoke) { true }
+        }
+        backend.authorizeAll()
+        let decision = harness.session.submitLegacy(.success(harness.frame("echo hello")))
+        #expect(decision.responseDeferred == true)
+        await waitFor("park completion") {
+            harness.session.queuedCompletionCountForTesting == 1
+        }
+        #expect(harness.effect.runs == 0)
+        #expect(harness.session.parkedApprovalCountForTesting == 0)
+        let events = harness.evidence.snapshot()
+        #expect(events.contains { $0.result == "principalRevoked" })
+        #expect(events.contains { $0.executionAttempted } == false)
+    }
+
     @Test func askParksAndDefersResponse() throws {
         let harness = try ParkHarness()
         defer { harness.cleanup() }
-        let decision = harness.session.submit(.success(harness.frame("echo hello")))
+        let decision = harness.session.submitLegacy(.success(harness.frame("echo hello")))
         #expect(decision.responseDeferred == true)
         #expect(decision.response == .pending(.reviewAsk))
         #expect(harness.effect.runs == 0)
@@ -325,7 +383,7 @@ struct ActionApprovalParkTests {
         let harness = try ParkHarness()
         defer { harness.cleanup() }
         harness.backend.authorizeAll()
-        let decision = harness.session.submit(.success(harness.frame("echo hello")))
+        let decision = harness.session.submitLegacy(.success(harness.frame("echo hello")))
         #expect(decision.responseDeferred == true)
         await waitFor("execution") { harness.effect.runs == 1 }
         #expect(harness.effect.runs == 1)
@@ -350,7 +408,7 @@ struct ActionApprovalParkTests {
         let harness = try ParkHarness()
         defer { harness.cleanup() }
         harness.backend.setStatusDefault("denied")
-        let decision = harness.session.submit(.success(harness.frame("echo hello")))
+        let decision = harness.session.submitLegacy(.success(harness.frame("echo hello")))
         #expect(decision.responseDeferred == true)
         await waitFor("denial") { harness.session.queuedCompletionCountForTesting == 1 }
         #expect(harness.effect.runs == 0)
@@ -365,7 +423,7 @@ struct ActionApprovalParkTests {
         defer { harness.cleanup() }
         // Authorized but the grant is gone (expired/invalidated server-side).
         harness.backend.setStatusDefault("authorized")
-        let decision = harness.session.submit(.success(harness.frame("echo hello")))
+        let decision = harness.session.submitLegacy(.success(harness.frame("echo hello")))
         #expect(decision.responseDeferred == true)
         await waitFor("failure") { harness.session.queuedCompletionCountForTesting == 1 }
         #expect(harness.effect.runs == 0)
@@ -377,7 +435,7 @@ struct ActionApprovalParkTests {
         let harness = try ParkHarness()
         defer { harness.cleanup() }
         harness.backend.authorizeAll()
-        _ = harness.session.submit(.success(harness.frame("echo hello", id: UUID())))
+        _ = harness.session.submitLegacy(.success(harness.frame("echo hello", id: UUID())))
         await waitFor("first execution") { harness.effect.runs == 1 }
         await waitFor("first completion") { harness.session.queuedCompletionCountForTesting == 1 }
         harness.session.drainCompletions()
@@ -386,7 +444,7 @@ struct ActionApprovalParkTests {
         // spent), then the resume is rejected as fingerprint replay — the
         // gate's at-most-once survives Step 6.
         #expect(harness.backend.snapshot.creates.count == 1)
-        let second = harness.session.submit(.success(harness.frame("echo hello", id: UUID())))
+        let second = harness.session.submitLegacy(.success(harness.frame("echo hello", id: UUID())))
         #expect(second.responseDeferred == true)
         #expect(harness.backend.snapshot.creates.count == 2)
         await waitFor("replay rejection") { harness.session.queuedCompletionCountForTesting == 1 }
@@ -402,7 +460,7 @@ struct ActionApprovalParkTests {
         let harness = try ParkHarness(backend: backend)
         defer { harness.cleanup() }
         // Creation declined: legacy pending, answered immediately.
-        let declined = harness.session.submit(.success(harness.frame("echo hello")))
+        let declined = harness.session.submitLegacy(.success(harness.frame("echo hello")))
         #expect(declined.responseDeferred == false)
         #expect(declined.response == .pending(.reviewAsk))
         #expect(harness.session.parkedApprovalCountForTesting == 0)
@@ -413,7 +471,7 @@ struct ActionApprovalParkTests {
         defer { harness.cleanup() }
         harness.backend.authorizeAll()
         // Allowed action executes inline: no ASK, no park.
-        let allowed = harness.session.submit(.success(harness.frame("touch marker")))
+        let allowed = harness.session.submitLegacy(.success(harness.frame("touch marker")))
         #expect(allowed.responseDeferred == false)
         #expect(allowed.response == .executed(exitStatus: 0))
         #expect(harness.effect.runs == 1)
@@ -421,7 +479,7 @@ struct ActionApprovalParkTests {
         // Denied action: no ASK, no park.
         let outside = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-park-outside-\(UUID().uuidString)")
-        let denied = harness.session.submit(
+        let denied = harness.session.submitLegacy(
             .success(harness.frame("touch \(outside.path)")))
         #expect(denied.responseDeferred == false)
         #expect(harness.backend.snapshot.creates.isEmpty)
@@ -431,7 +489,7 @@ struct ActionApprovalParkTests {
         let harness = try ParkHarness(parkPollInterval: 0.005, parkTimeout: 0.05)
         defer { harness.cleanup() }
         // Backend never authorizes: the waiter gives up, cancels, and fails.
-        let decision = harness.session.submit(.success(harness.frame("echo hello")))
+        let decision = harness.session.submitLegacy(.success(harness.frame("echo hello")))
         #expect(decision.responseDeferred == true)
         await waitFor("timeout") { harness.session.queuedCompletionCountForTesting == 1 }
         #expect(harness.effect.runs == 0)
@@ -444,7 +502,7 @@ struct ActionApprovalParkTests {
         let harness = try ParkHarness()
         defer { harness.cleanup() }
         harness.backend.setStatusDefault("unknown")
-        _ = harness.session.submit(.success(harness.frame("echo hello")))
+        _ = harness.session.submitLegacy(.success(harness.frame("echo hello")))
         await waitFor("unknown") { harness.session.queuedCompletionCountForTesting == 1 }
         #expect(harness.effect.runs == 0)
     }
@@ -452,7 +510,7 @@ struct ActionApprovalParkTests {
     @Test func finishCancelsParksWithoutExecution() async throws {
         let harness = try ParkHarness()
         // Park (backend pending forever), then tear the channel down.
-        let decision = harness.session.submit(.success(harness.frame("echo hello")))
+        let decision = harness.session.submitLegacy(.success(harness.frame("echo hello")))
         #expect(decision.responseDeferred == true)
         #expect(harness.session.parkedApprovalCountForTesting == 1)
         harness.session.finish()
@@ -472,12 +530,12 @@ struct ActionApprovalParkTests {
         defer { harness.cleanup() }
         // Backend pending forever: parks accumulate to the cap.
         for i in 0..<8 {
-            let decision = harness.session.submit(
+            let decision = harness.session.submitLegacy(
                 .success(harness.frame("echo park-\(i)", id: UUID())))
             #expect(decision.responseDeferred == true)
         }
         #expect(harness.session.parkedApprovalCountForTesting == 8)
-        let ninth = harness.session.submit(.success(harness.frame("echo park-9", id: UUID())))
+        let ninth = harness.session.submitLegacy(.success(harness.frame("echo park-9", id: UUID())))
         #expect(ninth.responseDeferred == false)
         #expect(ninth.response == .pending(.reviewAsk))
         #expect(harness.backend.snapshot.creates.count == 8)
@@ -487,9 +545,9 @@ struct ActionApprovalParkTests {
         let harness = try ParkHarness()
         defer { harness.cleanup() }
         let id = UUID()
-        let first = harness.session.submit(.success(harness.frame("echo hello", id: id)))
+        let first = harness.session.submitLegacy(.success(harness.frame("echo hello", id: id)))
         #expect(first.responseDeferred == true)
-        let replay = harness.session.submit(.success(harness.frame("echo hello", id: id)))
+        let replay = harness.session.submitLegacy(.success(harness.frame("echo hello", id: id)))
         #expect(replay.response == .rejected(.replay))
         #expect(harness.backend.snapshot.creates.count == 1)
     }
@@ -502,7 +560,7 @@ struct ActionApprovalParkTests {
         let backend = FakeAskBackend()
         let harness = try ParkHarness(backend: backend, parkTimeout: 120)
         defer { harness.cleanup() }
-        _ = harness.session.submit(.success(harness.frame("echo hello")))
+        _ = harness.session.submitLegacy(.success(harness.frame("echo hello")))
         let approvalID = try #require(backend.snapshot.created.first?.approvalID)
         backend.setStatusScript(
             [nil, nil, "pending", "awaitingAuthentication", "authorized"], for: approvalID)

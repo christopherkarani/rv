@@ -1,8 +1,21 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVEngine
+import RVIPC
 import RVPolicy
 import RVService
+
+/// Step 8B.1 attestation outcome. Either case means NO grant was planted:
+/// the caller must fail closed and must never fall back to file state.
+enum AllowOnceAttestError: Error, Equatable {
+    /// Daemon unreachable (down, timeout, transport). Retry later; the
+    /// pending code stays live.
+    case serviceUnavailable
+    /// Daemon refused (no `.cli` role: unenrolled service/binary).
+    /// Approve in RVOperatorUI or enroll via `rv setup`.
+    case serviceDenied
+}
 
 enum AllowOnceCLI {
     static func interactiveTTY(
@@ -45,16 +58,90 @@ enum AllowOnceCLI {
         AllowOnceStore.makeLive(home: home)
     }
 
+    /// Redeems one unlock code into one exact-command grant. Ceremony order
+    /// is load-bearing (Step 8B.1 trust anchor — the pinned genuine CLI
+    /// enforces it; the daemon trusts nothing else about this process):
+    ///
+    /// 1. Gates cheapest-first (TTY, robot, code shape).
+    /// 2. Atomically read display row + fingerprint (pre-LA review).
+    /// 3. LocalAuthentication naming the reviewed grant (B-F6).
+    /// 4. Re-read + compare fingerprint (TOCTOU bind: a swapped file
+    ///    aborts with redemptionChanged instead of attesting a row the
+    ///    human never reviewed).
+    /// 5. Attest to the daemon (plants the memory grant; daemon re-checks
+    ///    role + fields + per-epoch code single-use).
+    /// 6. Flip the file row as a display projection (best-effort: a flip
+    ///    failure after a planted attestation is a display gap, still
+    ///    granted; an attest failure leaves pending intact for retry).
+    ///
+    /// A missing pre-LA read falls back to the generic LA reason and the
+    /// redeem below still reports the precise failure, as before.
     static func redeem(
         code: String,
         tty: TTYCapability,
         robot: Bool,
         store: AllowOnceStore,
-        now: Date
+        now: Date,
+        client: ServiceClient? = nil
     ) async throws -> AllowOnceListRow {
-        throw ValidationError(LocalControlBoundary.reason)
+        guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
+        guard robot == false else { throw AllowOnceError.robotRefused }
+        let normalized = code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard AllowOnceUnlockCode(validating: normalized) != nil else {
+            throw AllowOnceError.unknownCode
+        }
+        let peeked = await store.validatePending(code: code, now: now)
+        let reason = peeked.map {
+            "Allow once: \($0.row.commandRedacted) in \($0.row.cwd.rawValue)."
+        } ?? CLIOwnerAuth.reason
+        try await CLIOwnerAuth.requireAuthenticated(reason: reason)
+        let service = client ?? ServiceClient()
+        if let peeked {
+            guard let rechecked = await store.validatePending(code: code, now: now),
+                rechecked.fingerprint == peeked.fingerprint
+            else {
+                throw AllowOnceError.redemptionChanged
+            }
+            let attested = await service.attestTTYRedemption(AttestTTYRedemptionParams(
+                fingerprint: rechecked.fingerprint,
+                cwd: rechecked.row.cwd,
+                codeHash: sha256Hex(normalized),
+                clientSemver: ProtocolVersion.serviceSemver
+            ))
+            switch attested {
+            case .success(let reply):
+                guard reply.planted else { throw AllowOnceError.alreadySpent }
+            case .failure(let error):
+                switch error {
+                case .noTransport, .transport:
+                    throw AllowOnceAttestError.serviceUnavailable
+                case .service:
+                    throw AllowOnceAttestError.serviceDenied
+                }
+            }
+            do {
+                return try await store.redeem(
+                    code: code, tty: tty, now: now, robot: robot,
+                    expectedFingerprint: rechecked.fingerprint
+                )
+            } catch {
+                // Attestation planted: the flip is display-only. A failure
+                // here (file swap/lock race in the millisecond window) is a
+                // projection gap, not a grant failure.
+                return rechecked.row
+            }
+        }
+        // No live pending row: redeem reports the precise failure
+        // (unknown/expired/spent) and flips nothing grantable. This branch
+        // NEVER attests: a row appearing after the post-LA read would be
+        // unreviewed, so at most a projection flips (fail-closed).
+        return try await store.redeem(code: code, tty: tty, now: now, robot: robot)
     }
 
+    /// Pre-arms one unlock code for a command. Minting alone grants
+    /// nothing — the printed code must still clear the redeem tripwire —
+    /// but minting is LA-gated anyway so an agent cannot farm codes from a
+    /// pty to social-engineer a later redeem.
     static func mint(
         command: ShellCommand,
         cwd: WorkingDirectory,
@@ -63,7 +150,21 @@ enum AllowOnceCLI {
         store: AllowOnceStore,
         now: Date
     ) async throws -> AllowOnceUnlockCode {
-        throw ValidationError(LocalControlBoundary.reason)
+        guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
+        guard robot == false else { throw AllowOnceError.robotRefused }
+        let view = Normalize.matchingView(of: command)
+        guard view.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            throw AllowOnceError.emptyCommand
+        }
+        try await CLIOwnerAuth.requireAuthenticated()
+        return try await store.mint(
+            matchingView: view,
+            cwd: cwd,
+            ruleID: nil,
+            tty: tty,
+            now: now,
+            robot: robot
+        )
     }
 }
 
@@ -74,7 +175,19 @@ struct AllowOnceCommand: AsyncParsableCommand {
         discussion: """
             Redeem the six-character code printed on a hook deny. mint is optional pre-arm.
             """,
-        subcommands: [AllowOnceMint.self, AllowOnceList.self, AllowOnceClear.self]
+        subcommands: [AllowOnceRedeem.self, AllowOnceMint.self, AllowOnceList.self, AllowOnceClear.self],
+        defaultSubcommand: AllowOnceRedeem.self
+    )
+}
+
+/// Default `allow-once` subcommand: redeem holds the code positional here
+/// (not on the parent) so `list`/`clear`/`mint` route to their subcommands
+/// instead of parsing as a code (B-F6). Bare `rv allow-once <code>` keeps
+/// working through the default.
+struct AllowOnceRedeem: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "redeem",
+        abstract: "Redeem the six-character code from a hook deny."
     )
 
     @Argument(help: "Six-character allow-once code.")
@@ -128,8 +241,28 @@ struct AllowOnceCommand: AsyncParsableCommand {
         } catch AllowOnceError.unknownCode, AllowOnceError.expired, AllowOnceError.alreadySpent {
             FileHandle.standardError.write(Data("rv allow-once: code not redeemable\n".utf8))
             throw ExitCode(2)
+        } catch AllowOnceError.redemptionChanged {
+            FileHandle.standardError.write(
+                Data("rv allow-once: grant changed during review; retry with a fresh code\n".utf8)
+            )
+            throw ExitCode(2)
+        } catch AllowOnceAttestError.serviceUnavailable {
+            FileHandle.standardError.write(
+                Data("rv allow-once: RV service unavailable; approval not recorded (code stays live, retry later)\n".utf8)
+            )
+            throw ExitCode(2)
+        } catch AllowOnceAttestError.serviceDenied {
+            FileHandle.standardError.write(
+                Data("rv allow-once: service refused approval; enroll via `rv setup` or approve in RVOperatorUI\n".utf8)
+            )
+            throw ExitCode(2)
         } catch AllowOnceError.lockFailed, AllowOnceError.encodeFailed {
             FileHandle.standardError.write(Data("rv allow-once: store unavailable\n".utf8))
+            throw ExitCode(2)
+        } catch AllowOnceAuthError.required {
+            FileHandle.standardError.write(
+                Data("rv allow-once: device-owner authentication required\n".utf8)
+            )
             throw ExitCode(2)
         }
     }
@@ -196,6 +329,11 @@ struct AllowOnceMint: AsyncParsableCommand {
         } catch AllowOnceError.lockFailed, AllowOnceError.encodeFailed, AllowOnceError.collision {
             FileHandle.standardError.write(Data("rv allow-once mint: store unavailable\n".utf8))
             throw ExitCode(2)
+        } catch AllowOnceAuthError.required {
+            FileHandle.standardError.write(
+                Data("rv allow-once mint: device-owner authentication required\n".utf8)
+            )
+            throw ExitCode(2)
         }
     }
 }
@@ -245,7 +383,10 @@ struct AllowOnceClear: AsyncParsableCommand {
             noColor: format.noColor
         )
         do {
-            try LocalControlBoundary.requireOwnerAuthorization()
+            // Clearing destroys the operator's own rows and grants nothing,
+            // so the TTY gate suffices: no LA tripwire.
+            try await AllowOnceCLI.store(home: try AllowOnceCLI.requireHome())
+                .clear(tty: live.tty, now: Date())
             FileHandle.standardOutput.write(Data("cleared allow-once rows\n".utf8))
         } catch AllowOnceError.ttyRequired {
             FileHandle.standardError.write(

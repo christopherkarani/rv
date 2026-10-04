@@ -2,6 +2,13 @@ import Foundation
 import RVDomain
 import RVFileStore
 
+/// Step 8B.1: pending-code coordination + display projection ONLY. This file
+/// is same-user writable and MUST NEVER be an authority source: there is no
+/// `consume`, `hasGrant`, or `insertGranted` here by design. Spend/peek
+/// authority lives in `EphemeralAllowOnceTable` (service-held memory).
+/// `redeem` validates the typed code and flips the row as a projection +
+/// fast-path single-use hint; the daemon's table is the authoritative
+/// single-use enforcer.
 public actor AllowOnceStore {
     nonisolated public let baseDirectory: URL
     private let store: FileLockedJSONLStore<AllowOnceRecord>
@@ -85,12 +92,14 @@ public actor AllowOnceStore {
     /// Hook deny mint. Not TTY-gated. Returns a six-hex code, `earlierPending`, or nil.
     /// Writes `kind: .pending` only. Never plants a granted row. A live pending
     /// for the same command+cwd is reused instead of minting a new code.
+    /// TTL matches the pending-row TTL: the wire-delivered code is visible
+    /// to the gated agent, so its bearer window stays short.
     package func mintFromDeny(
         matchingView: MatchingView,
         cwd: WorkingDirectory,
         ruleID: RuleID?,
         now: Date,
-        ttl: TimeInterval = 24 * 60 * 60
+        ttl: TimeInterval = 15 * 60
     ) async -> AllowOnceUnlockMint? {
         let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
@@ -138,11 +147,16 @@ public actor AllowOnceStore {
         return nil
     }
 
+    /// Validates the typed code and flips the pending row as a projection +
+    /// fast-path single-use hint. Step 8B.1: the flip creates NO authority;
+    /// the CLI must attest to the daemon afterwards. `expectedFingerprint`
+    /// binds the flip to the pre-LA display (TOCTOU); mismatch aborts.
     public func redeem(
         code: String,
         tty: TTYCapability,
         now: Date,
-        robot: Bool = false
+        robot: Bool = false,
+        expectedFingerprint: String? = nil
     ) async throws -> AllowOnceListRow {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
@@ -152,7 +166,12 @@ public actor AllowOnceStore {
         }
         let hash = sha256Hex(normalized)
         return try withFileLock {
-            switch try AllowOnceLedger.redeem(records: loadRecords(), codeHash: hash, now: now) {
+            switch try AllowOnceLedger.redeem(
+                records: loadRecords(),
+                codeHash: hash,
+                now: now,
+                expectedFingerprint: expectedFingerprint
+            ) {
             case let .expired(records):
                 try writeRecords(records)
                 throw AllowOnceError.expired
@@ -163,18 +182,42 @@ public actor AllowOnceStore {
         }
     }
 
-    /// Test / service preload of a grant without minting a code.
-    /// Not a human unlock path — does not require a TTY. Keep `package` so CLI cannot plant grants.
-    package func insertGranted(
+    /// Single locked read of a live pending row: display row + action
+    /// fingerprint, atomically. The redeem ceremony captures both BEFORE
+    /// LocalAuthentication and re-checks the fingerprint under the redeem
+    /// lock, so a swapped file between display and attest aborts instead
+    /// of attesting a row the human never reviewed.
+    public func validatePending(
+        code: String,
+        now: Date
+    ) async -> (row: AllowOnceListRow, fingerprint: String)? {
+        let normalized = code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard AllowOnceUnlockCode(validating: normalized) != nil else { return nil }
+        let hash = sha256Hex(normalized)
+        return (try? withFileLock {
+            AllowOnceLedger.pendingRow(in: loadRecords(), codeHash: hash, now: now)
+        }).flatMap { record in
+            AllowOnceLedger.rows(records: [record], now: now).first.map {
+                (row: $0, fingerprint: record.commandFingerprint)
+            }
+        }
+    }
+
+    /// Daemon projection write: records a memory-table plant/consume as a
+    /// display row so `rv allow-once list` stays truthful. Best-effort,
+    /// display-only: nothing reads these rows for authority.
+    package func project(
+        lifecycle: AllowOnceLifecycle,
         matchingView: MatchingView,
         cwd: WorkingDirectory,
+        codeHash: String,
         now: Date,
         ttl: TimeInterval = 24 * 60 * 60
-    ) async throws {
+    ) async {
         let record = AllowOnceRecord(
             schemaVersion: 1,
-            lifecycle: .granted,
-            codeHash: sha256Hex(UUID().uuidString),
+            lifecycle: lifecycle,
+            codeHash: codeHash,
             commandFingerprint: commandFingerprint(matchingView),
             commandRedacted: redactCommand(matchingView),
             cwd: cwd,
@@ -182,103 +225,29 @@ public actor AllowOnceStore {
             createdAt: now,
             expiresAt: now.addingTimeInterval(ttl)
         )
-        try withFileLock {
+        try? withFileLock {
             var records = loadRecords()
             records.append(record)
             try writeRecords(records)
         }
     }
 
-    public func hasGrant(matchingView: MatchingView, cwd: WorkingDirectory, now: Date) async -> Bool {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            return false
-        }
-        let fingerprint = commandFingerprint(matchingView)
-        let records = loadRecords()
-        return records.contains { record in
-            guard case .granted = record.lifecycle else { return false }
-            return record.commandFingerprint == fingerprint
-                && record.cwd == cwd
-                && record.expiresAt >= now
-        }
-    }
-
-    /// Host Allow once: plant a granted row and spend it this turn. Not TTY-gated.
-    public func plantAndConsume(
-        matchingView: MatchingView,
-        cwd: WorkingDirectory,
-        now: Date,
-        ttl: TimeInterval = 24 * 60 * 60
-    ) async -> AllowOnceConsumeStatus {
-        let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty == false else {
-            return .notFound
-        }
-        let view = MatchingView(trimmed)
-        do {
-            return try withFileLock {
-                switch AllowOnceLedger.plantAndConsume(
-                    records: loadRecords(),
-                    fingerprint: commandFingerprint(view),
-                    redacted: redactCommand(view),
-                    cwd: cwd,
-                    now: now,
-                    ttl: ttl,
-                    codeHash: sha256Hex(UUID().uuidString)
-                ) {
-                case let .consumed(tokenID, records):
-                    try writeRecords(records)
-                    return .consumed(tokenID: tokenID)
-                case let .expired(records):
-                    try writeRecords(records)
-                    return .expired
-                case .alreadyConsumed:
-                    return .alreadyConsumed
-                case .notFound:
-                    return .notFound
-                }
-            }
-        } catch {
-            return .unavailable
-        }
-    }
-
-    public func consume(
-        matchingView: MatchingView,
-        cwd: WorkingDirectory,
-        now: Date
-    ) async -> AllowOnceConsumeStatus {
-        let fingerprint = commandFingerprint(matchingView)
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            return .notFound
-        }
-        do {
-            return try withFileLock {
-                switch AllowOnceLedger.consume(
-                    records: loadRecords(),
-                    fingerprint: fingerprint,
-                    cwd: cwd,
-                    now: now
-                ) {
-                case let .consumed(tokenID, records):
-                    try writeRecords(records)
-                    return .consumed(tokenID: tokenID)
-                case let .expired(records):
-                    try writeRecords(records)
-                    return .expired
-                case .alreadyConsumed:
-                    return .alreadyConsumed
-                case .notFound:
-                    return .notFound
-                }
-            }
-        } catch {
-            return .unavailable
-        }
-    }
-
     public func list(now: Date) async -> [AllowOnceListRow] {
         AllowOnceLedger.rows(records: loadRecords(), now: now)
+    }
+
+    /// Read-only peek at a live pending row for a typed code. Returns nil
+    /// for unknown, spent, or expired codes without mutating the ledger.
+    /// The redeem ceremony uses this to name the grant in the LA prompt
+    /// before authenticating (B-F6); the grant itself still goes through
+    /// `redeem`, which re-validates everything under the lock.
+    public func peekPending(code: String, now: Date) async -> AllowOnceListRow? {
+        let normalized = code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard AllowOnceUnlockCode(validating: normalized) != nil else { return nil }
+        let hash = sha256Hex(normalized)
+        return (try? withFileLock {
+            AllowOnceLedger.pendingRow(in: loadRecords(), codeHash: hash, now: now)
+        }).flatMap { AllowOnceLedger.rows(records: [$0], now: now).first }
     }
 
     public func clear(tty: TTYCapability, now: Date) async throws {

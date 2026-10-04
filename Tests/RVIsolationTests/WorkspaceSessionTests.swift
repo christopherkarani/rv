@@ -92,7 +92,7 @@ struct WorkspaceSessionTests {
         #expect(errno == EXDEV)
 
         let request = UUID()
-        let impersonated = supervisor.submit(
+        let impersonated = supervisor.submitLegacy(
             frame("touch marker", capability: a.capability, claim: b.id, runtime: a.id, id: request),
             to: a.id
         )
@@ -101,26 +101,26 @@ struct WorkspaceSessionTests {
         #expect(impersonated?.event.workspace == supervisor.id.rawValue.uuidString)
         #expect(aCounter.count == 0)
 
-        let wrongCapability = supervisor.submit(
+        let wrongCapability = supervisor.submitLegacy(
             frame("touch marker", capability: a.capability, claim: b.id, runtime: b.id, id: UUID()),
             to: b.id
         )
         #expect(wrongCapability?.response == .rejected(.invalidCapability))
         #expect(bCounter.count == 0)
 
-        let allowed = supervisor.submit(
+        let allowed = supervisor.submitLegacy(
             frame("touch marker", capability: a.capability, claim: a.id, runtime: a.id, id: request),
             to: a.id
         )
         #expect(allowed?.response == .executed(exitStatus: 0))
         #expect(aCounter.count == 1)
-        let replayed = supervisor.submit(
+        let replayed = supervisor.submitLegacy(
             frame("touch marker", capability: a.capability, claim: a.id, runtime: a.id, id: request),
             to: a.id
         )
         #expect(replayed?.response == .rejected(.replay))
         #expect(aCounter.count == 1)
-        let otherRuntime = supervisor.submit(
+        let otherRuntime = supervisor.submitLegacy(
             frame("touch marker", capability: b.capability, claim: b.id, runtime: b.id, id: request),
             to: b.id
         )
@@ -224,13 +224,13 @@ struct WorkspaceSessionTests {
         #expect(supervisor.volumeDevice == device)
         #expect(supervisor.publishCount == 0)
         #expect(supervisor.savedFile("original.txt") == nil)
-        let denied = supervisor.submit(
+        let denied = supervisor.submitLegacy(
             frame("touch marker", capability: doomed.capability, claim: doomed.id, runtime: doomed.id, id: UUID()),
             to: doomed.id
         )
         #expect(denied?.response == .rejected(.inactiveSession))
         #expect(denied?.execute == nil)
-        let allowed = supervisor.submit(
+        let allowed = supervisor.submitLegacy(
             frame("touch marker", capability: survivor.capability, claim: survivor.id, runtime: survivor.id, id: UUID()),
             to: survivor.id
         )
@@ -436,7 +436,7 @@ struct WorkspaceSessionTests {
         })
         let plan = compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace)
         _ = try supervisor.launch(
-            host: nil, stagingAgent: "muse",
+            host: nil, stagingAgent: stagingTag("muse"),
             command: shell("printf '%s' \"$RV_SYNTH_KEY\" > muse-key.txt"),
             plan: plan, io: .discard, resourceProfile: profile,
             admission: .failClosed, sessionStore: .file(opened.runtimeLog),
@@ -474,7 +474,7 @@ struct WorkspaceSessionTests {
         )
         let plan = compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace)
         let refused = supervisor.launch(
-            host: nil, stagingAgent: "muse",
+            host: nil, stagingAgent: stagingTag("muse"),
             command: try shell("printf no > must-not-spawn.txt"),
             plan: plan, io: .discard, resourceProfile: profile,
             admission: .failClosed, sessionStore: .file(opened.runtimeLog),
@@ -490,12 +490,159 @@ struct WorkspaceSessionTests {
         ) == false)
     }
 
+    /// Step 8 (F2): the legacy launch path takes no staging tag, so wire
+    /// tags and HookHost values cannot alter file-credential selection.
+    /// Filters naming agent-A, agent-B, and even a HookHost raw value
+    /// stage nothing on any host; the unfiltered entry stages identically.
+    @Test(arguments: [nil, .codex, .grok] as [HookHost?])
+    func legacyLaunchStagesNoFilteredFileCredentials(_ host: HookHost?) throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let opened = try openWorkspace(tree)
+        defer { _ = opened.supervisor.close() }
+        let supervisor = opened.supervisor
+        let filtered = tree.rootURL.appendingPathComponent("synthetic-filtered.auth")
+        try Data("synthetic-filtered-secret".utf8).write(to: filtered)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: filtered.path)
+        let shared = tree.rootURL.appendingPathComponent("synthetic-shared.auth")
+        try Data("synthetic-shared-secret".utf8).write(to: shared)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: shared.path)
+        let profile = RuntimeResourceProfile(
+            id: "step8", projects: [supervisor.snapshot.originalPath.rawValue],
+            credentials: [
+                .init(
+                    source: filtered.path, destination: ".config/filtered.auth",
+                    agents: ["agent-A", "agent-B", "codex"]
+                ),
+                .init(source: shared.path, destination: ".config/shared.auth"),
+            ]
+        )
+        let plan = compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace)
+        let tag = host?.rawValue ?? "none"
+        _ = try supervisor.launchLegacy(
+            host: host,
+            command: shell(
+                "if cat \"$HOME/.config/filtered.auth\" >/dev/null 2>&1; then echo leak > leak-\(tag).txt; fi; "
+                    + "cat \"$HOME/.config/shared.auth\" > proved-shared-\(tag).txt"
+            ),
+            plan: plan, io: .discard, resourceProfile: profile,
+            admission: .failClosed, sessionStore: .file(opened.runtimeLog)
+        ).get()
+        #expect(waitUntil(seconds: 20) {
+            (try? String(
+                contentsOf: tree.workspaceURL.appendingPathComponent("proved-shared-\(tag).txt"),
+                encoding: .utf8
+            )) == "synthetic-shared-secret"
+        })
+        #expect(FileManager.default.fileExists(
+            atPath: tree.workspaceURL.appendingPathComponent("leak-\(tag).txt").path
+        ) == false)
+    }
+
+    /// Step 8 (F2): with no definition-derived tag, keychain selection is
+    /// identical for every host — filtered entries never match, unfiltered
+    /// entries inject. Sentinel fake values; no real secrets.
+    @Test(arguments: [nil, .codex] as [HookHost?])
+    func nilTagKeychainSelectionIgnoresHost(_ host: HookHost?) throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let opened = try openWorkspace(tree)
+        defer { _ = opened.supervisor.close() }
+        let supervisor = opened.supervisor
+        let profile = RuntimeResourceProfile(
+            id: "step8", projects: [supervisor.snapshot.originalPath.rawValue],
+            keychain: [
+                .init(service: "synthetic.a", account: "a", env: "RV_SYNTH_A", agents: ["agent-A"]),
+                .init(service: "synthetic.b", account: "b", env: "RV_SYNTH_B", agents: ["agent-B"]),
+                .init(service: "synthetic.shared", account: "shared", env: "RV_SYNTH_SHARED"),
+            ]
+        )
+        let reader = KeychainReader(read: { _, _ in Data("synthetic-secret".utf8) })
+        let plan = compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace)
+        let tag = host?.rawValue ?? "none"
+        _ = try supervisor.launch(
+            host: host, stagingAgent: nil,
+            command: shell(
+                "printf '%s' \"${RV_SYNTH_A-unset}\" > key-a-\(tag).txt; "
+                    + "printf '%s' \"${RV_SYNTH_B-unset}\" > key-b-\(tag).txt; "
+                    + "printf '%s' \"${RV_SYNTH_SHARED-unset}\" > key-shared-\(tag).txt"
+            ),
+            plan: plan, io: .discard, resourceProfile: profile,
+            admission: .failClosed, sessionStore: .file(opened.runtimeLog),
+            keychainReader: reader
+        ).get()
+        #expect(waitFor(tree.workspaceURL.appendingPathComponent("key-shared-\(tag).txt")))
+        #expect(try String(
+            contentsOf: tree.workspaceURL.appendingPathComponent("key-a-\(tag).txt"), encoding: .utf8
+        ) == "unset")
+        #expect(try String(
+            contentsOf: tree.workspaceURL.appendingPathComponent("key-b-\(tag).txt"), encoding: .utf8
+        ) == "unset")
+        #expect(try String(
+            contentsOf: tree.workspaceURL.appendingPathComponent("key-shared-\(tag).txt"), encoding: .utf8
+        ) == "synthetic-secret")
+    }
+
+    /// Step 8 (F2): a definition-derived tag still selects its filtered
+    /// entries. Only the trusted identity path supplies this tag; the
+    /// wire-selected legacy path cannot.
+    @Test func definitionTagStillSelectsFilteredKeychain() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let opened = try openWorkspace(tree)
+        defer { _ = opened.supervisor.close() }
+        let supervisor = opened.supervisor
+        let profile = RuntimeResourceProfile(
+            id: "step8", projects: [supervisor.snapshot.originalPath.rawValue],
+            keychain: [
+                .init(service: "synthetic.a", account: "a", env: "RV_SYNTH_A", agents: ["agent-A"]),
+                .init(service: "synthetic.b", account: "b", env: "RV_SYNTH_B", agents: ["agent-B"]),
+            ]
+        )
+        let reader = KeychainReader(read: { _, _ in Data("synthetic-secret".utf8) })
+        let plan = compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace)
+        _ = try supervisor.launch(
+            host: nil, stagingAgent: stagingTag("agent-A"),
+            command: shell(
+                "printf '%s' \"${RV_SYNTH_A-unset}\" > key-a.txt; "
+                    + "printf '%s' \"${RV_SYNTH_B-unset}\" > key-b.txt"
+            ),
+            plan: plan, io: .discard, resourceProfile: profile,
+            admission: .failClosed, sessionStore: .file(opened.runtimeLog),
+            keychainReader: reader
+        ).get()
+        #expect(waitFor(tree.workspaceURL.appendingPathComponent("key-b.txt")))
+        #expect(try String(
+            contentsOf: tree.workspaceURL.appendingPathComponent("key-a.txt"), encoding: .utf8
+        ) == "synthetic-secret")
+        #expect(try String(
+            contentsOf: tree.workspaceURL.appendingPathComponent("key-b.txt"), encoding: .utf8
+        ) == "unset")
+    }
+
 }
 
 private func fileMode(_ path: String) -> mode_t? {
     var status = stat()
     guard path.withCString({ lstat($0, &status) == 0 }) else { return nil }
     return status.st_mode & 0o777
+}
+
+/// Builds the launch layer's selection input the only way production
+/// can: from a trusted definition. Raw strings are unrepresentable.
+private func stagingTag(_ tag: String) -> DefinitionStagingTag {
+    DefinitionStagingTag(AgentDefinition(
+        id: AgentDefinitionID(rawValue: "test"),
+        displayName: "Test",
+        blurb: "",
+        executableRequirement: ExecutableRequirement(allowsUnsigned: true),
+        hookHost: nil,
+        agentTag: tag,
+        resourceProfile: RuntimeResourceProfile(id: "test", projects: []),
+        credentialBindings: [],
+        requiredAssurance: .launchObserved,
+        authorityCeiling: AgentAuthority(scopes: [])
+    ))!
 }
 
 private struct OpenedWorkspace {

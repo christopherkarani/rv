@@ -166,90 +166,6 @@ struct AllowOnceLedgerTests {
         }
     }
 
-    @Test func consumeFreshGrantWinsAndPrunesExpiredGrants() {
-        let fresh = Self.record(kind: .granted, hash: "tok", expiresAt: Self.epoch.addingTimeInterval(60))
-        let expiredSibling = Self.record(kind: .granted, hash: "old", expiresAt: Self.epoch.addingTimeInterval(-1))
-        let consumedSibling = Self.record(
-            kind: .consumed,
-            hash: "done",
-            expiresAt: Self.epoch.addingTimeInterval(-10),
-            consumedAt: Self.epoch.addingTimeInterval(-20)
-        )
-        switch AllowOnceLedger.consume(
-            records: [expiredSibling, consumedSibling, fresh],
-            fingerprint: "fp",
-            cwd: wd("/tmp/ws"),
-            now: Self.epoch
-        ) {
-        case let .consumed(tokenID, records):
-            #expect(tokenID == "tok")
-            #expect(records.map(\.codeHash) == ["done", "tok"])
-            #expect(records.last?.kind == .consumed)
-            #expect(records.last?.consumedAt == Self.epoch)
-        case .expired, .alreadyConsumed, .notFound:
-            Issue.record("valid grant must consume")
-        }
-    }
-
-    @Test func consumeOnlyExpiredGrantReportsExpiredWithPrunedRecords() {
-        let staleA = Self.record(kind: .granted, hash: "a", expiresAt: Self.epoch.addingTimeInterval(-1))
-        let staleB = Self.record(kind: .granted, hash: "b", expiresAt: Self.epoch.addingTimeInterval(-2))
-        let otherView = Self.record(kind: .granted, hash: "c", fingerprint: "other-fp", expiresAt: Self.epoch.addingTimeInterval(60))
-        let outcome = AllowOnceLedger.consume(
-            records: [staleA, otherView, staleB],
-            fingerprint: "fp",
-            cwd: wd("/tmp/ws"),
-            now: Self.epoch
-        )
-        #expect(outcome == .expired([otherView]))
-    }
-
-    @Test func consumeExpiredGrantBeatsAlreadyConsumed() {
-        let expiredGrant = Self.record(kind: .granted, hash: "old", expiresAt: Self.epoch.addingTimeInterval(-1))
-        let spentBefore = Self.record(
-            kind: .consumed,
-            hash: "done",
-            expiresAt: Self.epoch.addingTimeInterval(60),
-            consumedAt: Self.epoch.addingTimeInterval(-30)
-        )
-        let outcome = AllowOnceLedger.consume(
-            records: [expiredGrant, spentBefore],
-            fingerprint: "fp",
-            cwd: wd("/tmp/ws"),
-            now: Self.epoch
-        )
-        guard case let .expired(records) = outcome else {
-            Issue.record("expired grant must take precedence over consumed history")
-            return
-        }
-        #expect(records.map(\.codeHash) == ["done"])
-    }
-
-    @Test func consumeRelatedConsumedIsAlreadyConsumed() {
-        let spent = Self.record(
-            kind: .consumed,
-            hash: "done",
-            expiresAt: Self.epoch.addingTimeInterval(60),
-            consumedAt: Self.epoch.addingTimeInterval(-5)
-        )
-        let outcome = AllowOnceLedger.consume(records: [spent], fingerprint: "fp", cwd: wd("/tmp/ws"), now: Self.epoch)
-        #expect(outcome == .alreadyConsumed)
-    }
-
-    @Test func consumeWrongCwdOrFingerprintIsNotFound() {
-        let grant = Self.record(kind: .granted, hash: "tok", expiresAt: Self.epoch.addingTimeInterval(60))
-        let wrongCwd = AllowOnceLedger.consume(records: [grant], fingerprint: "fp", cwd: wd("/tmp/other"), now: Self.epoch)
-        #expect(wrongCwd == .notFound)
-        let wrongFingerprint = AllowOnceLedger.consume(
-            records: [grant],
-            fingerprint: "other-fp",
-            cwd: wd("/tmp/ws"),
-            now: Self.epoch
-        )
-        #expect(wrongFingerprint == .notFound)
-        #expect(AllowOnceLedger.consume(records: [], fingerprint: "fp", cwd: wd("/tmp/ws"), now: Self.epoch) == .notFound)
-    }
-
     @Test func rowsKeepLiveAndConsumedPastExpiryDropOthers() {
         let livePending = Self.record(kind: .pending, hash: "p", expiresAt: Self.epoch.addingTimeInterval(60))
         let liveGranted = Self.record(kind: .granted, hash: "g", expiresAt: Self.epoch.addingTimeInterval(120))
@@ -317,19 +233,6 @@ struct AllowOnceLedgerTests {
         case .expired:
             Issue.record("expiresAt == now must redeem")
         }
-        let granted = Self.record(kind: .granted, hash: "g", expiresAt: Self.epoch)
-        switch AllowOnceLedger.consume(
-            records: [granted],
-            fingerprint: "fp",
-            cwd: wd("/tmp/ws"),
-            now: Self.epoch
-        ) {
-        case let .consumed(tokenID, records):
-            #expect(tokenID == "g")
-            #expect(records.map(\.kind) == [.consumed])
-        case .expired, .alreadyConsumed, .notFound:
-            Issue.record("expiresAt == now must consume")
-        }
         #expect(AllowOnceLedger.rows(records: [pending], now: Self.epoch).map(\.codeHash) == ["p"])
         let consumed = Self.record(
             kind: .consumed,
@@ -338,32 +241,6 @@ struct AllowOnceLedgerTests {
             consumedAt: Self.createdAt
         )
         #expect(AllowOnceLedger.keepConsumed(records: [consumed], now: Self.epoch).map(\.codeHash) == ["c"])
-    }
-
-    @Test func plantAndConsumeAppendsGrantedThenSpends() {
-        let existing = Self.record(kind: .pending, hash: "p", expiresAt: Self.epoch.addingTimeInterval(60))
-        switch AllowOnceLedger.plantAndConsume(
-            records: [existing],
-            fingerprint: "fp",
-            redacted: "git …",
-            cwd: wd("/tmp/ws"),
-            now: Self.epoch,
-            ttl: 3600,
-            codeHash: "planted"
-        ) {
-        case let .consumed(tokenID, records):
-            #expect(tokenID == "planted")
-            #expect(records.map(\.codeHash) == ["p", "planted"])
-            #expect(records.last?.kind == .consumed)
-            #expect(records.last?.consumedAt == Self.epoch)
-            guard case .consumed(let at)? = records.last?.lifecycle else {
-                Issue.record("plant must finish consumed")
-                return
-            }
-            #expect(at == Self.epoch)
-        case .expired, .alreadyConsumed, .notFound:
-            Issue.record("plantAndConsume must spend the planted grant")
-        }
     }
 
     @Test func keepConsumedRetainsOnlyFreshConsumedForClear() {

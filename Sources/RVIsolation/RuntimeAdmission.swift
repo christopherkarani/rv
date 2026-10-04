@@ -311,9 +311,33 @@ final class RuntimeAdmissionSession: Sendable {
         return acceptBuffered()
     }
 
+    /// Legacy capability-only mediation (Step 8 F3). Principal-less
+    /// channels authenticate on channel facts; bound channels still get
+    /// principal binding-match and liveness checks. Sensitive operations
+    /// must use `submitIdentityRequired`, never this door.
     @discardableResult
-    func submit(
+    func submitLegacy(
         _ frame: Result<RuntimeActionFrame, RuntimeAdmissionDecodeError>
+    ) -> RuntimeAdmissionDecision {
+        submitCore(frame, principalRequired: false)
+    }
+
+    /// Identity-required privileged mediation (Step 8 F3). Sensitive
+    /// operations enter here, never via `submitLegacy`: a legacy binding
+    /// that names no principal is rejected with `.principalRequired`
+    /// before any policy or execution work, and only a freshly resolved
+    /// usable trusted context reaches the gate. Future Secrets/MCP
+    /// mediation must use this door.
+    @discardableResult
+    func submitIdentityRequired(
+        _ frame: Result<RuntimeActionFrame, RuntimeAdmissionDecodeError>
+    ) -> RuntimeAdmissionDecision {
+        submitCore(frame, principalRequired: true)
+    }
+
+    private func submitCore(
+        _ frame: Result<RuntimeActionFrame, RuntimeAdmissionDecodeError>,
+        principalRequired: Bool
     ) -> RuntimeAdmissionDecision {
         // Snapshot binding and registry together: two separate locks could
         // pair a pre-bind channel with a post-bind registry or vice versa.
@@ -344,13 +368,16 @@ final class RuntimeAdmissionSession: Sendable {
         } else {
             approvalFor = configuration.approval
         }
-        let decision = RuntimeAdmissionGate.submit(
-            binding: &binding,
-            frame: frame,
-            policy: configuration.policy(subject.session),
-            approvalFor: approvalFor,
-            agentContext: agentContext,
-            propose: { [configuration, subject] accepted in
+        let gateEntry = principalRequired
+            ? RuntimeAdmissionGate.submitIdentityRequired
+            : RuntimeAdmissionGate.submitLegacy
+        let decision = gateEntry(
+            &binding,
+            frame,
+            configuration.policy(subject.session),
+            approvalFor,
+            agentContext,
+            { [configuration, subject] accepted in
                 RuntimeAdmissionStop.$shouldStop.withValue({
                     #if os(macOS)
                     if sessionLeaderHasExited(leader) { return true }
@@ -474,13 +501,30 @@ final class RuntimeAdmissionSession: Sendable {
         let pollNanoseconds = UInt64(max(parkPollInterval, 0.001) * 1_000_000_000)
         while true {
             if Task.isCancelled { return }
-            let park: ParkedApproval? = state.withLock { channel in
+            let take = state.withLock { channel -> (
+                park: ParkedApproval?, binding: RuntimeChannelBinding?,
+                registry: AgentInstanceRegistry?
+            )? in
                 guard !channel.stop, channel.binding?.phase == .active else { return nil }
-                return channel.parked[requestID]
+                return (channel.parked[requestID], channel.binding, channel.agentRegistry)
             }
             // Unparked (torn down) or channel gone: finish() owns teardown;
             // nothing further to answer here.
-            guard let park else { return }
+            guard let take, let park = take.park else { return }
+            // Step 8 (F3 re-review): fail a bound park as soon as its
+            // principal dies instead of spinning to the deadline. The
+            // approval can no longer be honestly consumed for this
+            // instance, and resume revalidates again before executing.
+            if let binding = take.binding, binding.agentInstanceID != nil {
+                let live = take.registry.flatMap { registry in
+                    registry.context(forBinding: binding)
+                }
+                guard let live, live.isUsable else {
+                    backend.cancelApproval(park.approval)
+                    failParked(requestID: requestID, park: park, cause: "principalRevoked")
+                    return
+                }
+            }
             if Date() >= deadline {
                 backend.cancelApproval(park.approval)
                 failParked(requestID: requestID, park: park, cause: "approvalTimeout")
@@ -587,14 +631,46 @@ final class RuntimeAdmissionSession: Sendable {
                 response: .rejected(.replay), event: event))
             return
         case .plan(let plan):
+            // Step 8 (F3 re-review): revalidate the principal at resume
+            // time. The park captures the request only; if the instance
+            // was revoked or died while awaiting the human, the approval
+            // must not execute. Legacy principal-less channels proceed
+            // as before. Residual: a revoke landing between this check
+            // and spawn (microseconds of pure code) still executes —
+            // inherent check-then-act, no attacker advantage (revoke is
+            // defender-controlled), accepted.
+            if plan.binding.agentInstanceID != nil {
+                let registry = state.withLock { $0.agentRegistry }
+                guard let registry,
+                    let fresh = registry.context(forBinding: plan.binding),
+                    fresh.isUsable
+                else {
+                    // The take above already removed the park, so complete
+                    // here: failParked would find nothing and drop the
+                    // answer. Evidence plus queued refusal, never execution.
+                    var event = baseEvent(
+                        binding: plan.binding, park: plan.park,
+                        authorization: .approvalUnavailable, result: "principalRevoked")
+                    stamp(&event, agent: plan.park.approval.subject.agent, binding: plan.binding)
+                    configuration.evidence.record(event)
+                    enqueueCompletion(ParkedCompletion(
+                        response: .approvalUnavailable, event: event))
+                    return
+                }
+            }
             let resolved = AgentAuthorization.resolve(
                 plan.park.pending, approval: .success(.allowOnce))
             guard case .success(.allowed(let allowed)) = resolved else {
                 // Unreachable: allowOnce always lifts a pending. Fail closed
-                // with evidence if the impossible happens.
-                failParked(
-                    requestID: requestID, park: plan.park, cause: "approvalUnavailable",
-                    binding: plan.binding)
+                // with evidence if the impossible happens. The take above
+                // already removed the park, so complete here directly.
+                var event = baseEvent(
+                    binding: plan.binding, park: plan.park,
+                    authorization: .approvalUnavailable, result: "approvalUnavailable")
+                stamp(&event, agent: plan.park.approval.subject.agent, binding: plan.binding)
+                configuration.evidence.record(event)
+                enqueueCompletion(ParkedCompletion(
+                    response: .approvalUnavailable, event: event))
                 return
             }
             // Outside the lock: perform spawns and blocks like the submit
@@ -808,7 +884,7 @@ final class RuntimeAdmissionSession: Sendable {
                 return had
             }
             guard hadBytes else { return [] }
-            return [submit(.failure(.malformed))]
+            return [submitLegacy(.failure(.malformed))]
         }
         var decisions: [RuntimeAdmissionDecision] = []
         while state.withLock({ $0.binding?.phase == .active }) {
@@ -820,7 +896,7 @@ final class RuntimeAdmissionSession: Sendable {
             case .success(let body):
                 frame = RuntimeAdmissionCodec.decodeRequest(body)
             }
-            let decision = submit(frame)
+            let decision = submitLegacy(frame)
             decisions.append(decision)
             // A parked ASK defers its answer: the waiter queues the real
             // response below. Writing the superseded pending projection

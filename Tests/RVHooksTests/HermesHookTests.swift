@@ -138,16 +138,17 @@ func hermesDecode_extractsTerminalCommand(_ file: String, expected: String) thro
     #expect(request.session == SessionID(validating: "task_main"))
 }
 
-@Test func hermesDecode_readsHostAskSpend() {
+@Test func hermesDecode_ignoresHostAskSpend() {
+    // Step 8B: legacy spend envelopes decode as ordinary shell requests.
     let stdin = """
     {"toolName":"terminal","cwd":"/tmp/ws","args":{"command":"git reset --hard"},"hostAsk":"spend"}
     """
     guard case .request(let request) = codec.decode(stdin) else {
-        Issue.record("expected .request for hostAsk spend")
+        Issue.record("expected .request for hostAsk spend envelope")
         return
     }
-    guard case .spend(_, let command, _, _) = request else {
-        Issue.record("expected .spend for hostAsk spend")
+    guard case .shell(_, let command, _, _) = request else {
+        Issue.record("expected .shell for hostAsk spend envelope")
         return
     }
     #expect(command.rawValue == "git reset --hard")

@@ -407,4 +407,7 @@ public enum PendingApprovalError: Error, Sendable, Equatable {
     case notResolved
     case encodeFailed
     case lockFailed
+    /// Too many rows are awaiting a human. The consult still answers;
+    /// only the review row is dropped (TTY code path is unaffected).
+    case storeFull
 }

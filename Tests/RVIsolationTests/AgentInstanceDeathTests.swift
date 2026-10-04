@@ -383,7 +383,7 @@ struct AgentInstanceDeathTests {
             capability: runtime.capability,
             claimedSession: RuntimeSessionClaim(validating: runtime.id.rawValue.uuidString)!,
             action: .shell(ShellCommand(rawValue: "touch should-never-run")))
-        if let decision = supervisor.submit(frame, to: runtime.id) {
+        if let decision = supervisor.submitLegacy(frame, to: runtime.id) {
             #expect(decision.response == .rejected(.inactiveSession))
         }
     }

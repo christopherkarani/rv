@@ -138,29 +138,35 @@ func openClawDecode_extractsExecCommand(_ file: String, expected: String) throws
     #expect(request.session == SessionID(validating: "agent:main"))
 }
 
-@Test func openClawDecode_readsHostAskSpend() {
+@Test func openClawDecode_ignoresHostAskSpend() {
+    // Step 8B: legacy spend envelopes decode as ordinary shell requests.
     let stdin = """
     {"toolName":"exec","cwd":"/tmp/ws","params":{"command":"git reset --hard"},"hostAsk":"spend"}
     """
     guard case .request(let request) = codec.decode(stdin) else {
-        Issue.record("expected .request for hostAsk spend")
+        Issue.record("expected .request for hostAsk spend envelope")
         return
     }
-    guard case .spend(_, let command, _, _) = request else {
-        Issue.record("expected .spend for hostAsk spend")
+    guard case .shell(_, let command, _, _) = request else {
+        Issue.record("expected .shell for hostAsk spend envelope")
         return
     }
     #expect(command.rawValue == "git reset --hard")
     #expect(request.cwd?.rawValue == "/tmp/ws")
 }
 
-@Test func openClawEncodeAsk_sameAsHermes() {
-    let reason =
-        "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
-    let openclaw = OpenClawHostCodec().encodeAsk(reason: reason)
-    let hermes = HermesHostCodec().encodeAsk(reason: reason)
+@Test func openClawEncodeAskDeny_sameAsHermes() {
+    let deny = Deny(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        reason: "git reset --hard destroys uncommitted changes"
+    )
+    let result = EvaluationResult(outcome: .deny(deny, matched: nil))
+    let command = ShellCommand(rawValue: "git reset --hard")
+    let openclaw = OpenClawHostCodec().encodeEvaluatedAskDeny(from: result, command: command)
+    let hermes = HermesHostCodec().encodeEvaluatedAskDeny(from: result, command: command)
     #expect(openclaw.stdout == hermes.stdout)
     #expect(openclaw.exitCode == 1)
-    #expect(openclaw.stdout.contains("\"decision\":\"ask\""))
-    #expect(openclaw.stdout.contains("\"continuation\":\"hostNative\""))
+    #expect(openclaw.stdout.contains("\"decision\":\"deny\""))
+    #expect(openclaw.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(openclaw.stdout.contains(approvalPendingLine))
 }

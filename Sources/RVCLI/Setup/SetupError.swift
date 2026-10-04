@@ -24,7 +24,8 @@ enum LaunchctlAction {
 /// 69 service unavailable (launchctl refused), 73 cannot create file,
 /// 70 internal software error (post-condition violated, state unreadable).
 enum SetupError: Error, Equatable, Sendable {
-    case ownerAuthorizationRequired
+    /// Uninstall without device-owner authentication.
+    case ownerAuthenticationRequired
     /// Embedded Host adapter template missing or lacks its placeholder.
     case adapterTemplateMissing(HookHost)
     /// Embedded launchd plist template missing or lacks its placeholder.
@@ -70,9 +71,9 @@ func setupFailureOutput(
     let phrase: String
     let exitCode: Int32
     switch error {
-    case .ownerAuthorizationRequired:
-        phrase = LocalControlBoundary.reason
-        exitCode = EX_UNAVAILABLE
+    case .ownerAuthenticationRequired:
+        phrase = "device-owner authentication required"
+        exitCode = EX_NOPERM
     case .adapterTemplateMissing(let host):
         phrase = "missing \(host.rawValue) adapter template"
         exitCode = EX_DATAERR

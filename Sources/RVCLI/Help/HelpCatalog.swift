@@ -127,7 +127,7 @@ enum HelpCatalog {
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--workspace", description: "Project path; default is the current directory"),
                 HelpRow(name: "--resource-profile", description: "Owner-authorized runtime resource profile ID"),
-                HelpRow(name: "--hook", description: "Launch agent tag for credential staging"),
+                HelpRow(name: "--hook", description: "Hook protocol host; tags never stage credentials"),
                 HelpRow(name: "--expected-content-digest-sha256", description: "Lowercase SHA-256 digest for a custom Agent Definition"),
             ]),
         ],

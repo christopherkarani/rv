@@ -269,22 +269,22 @@ public final class WorkspaceClient: Sendable {
         }
     }
 
+    /// Step 8 (F2): the wire carries hook protocol selection only.
+    /// Caller-provided staging tags are unrepresentable: there is no
+    /// parameter for them, and the server stages no filtered credentials
+    /// on this path. Credential selection is definition-derived only.
     public func launchRuntime(
         executable: String,
         arguments: [String] = [],
         hookHost: HookHost? = nil,
         terminalRows: Int? = nil,
         terminalColumns: Int? = nil,
-        resourceProfileID: String? = nil,
-        stagingAgent: String? = nil
+        resourceProfileID: String? = nil
     ) -> Result<WorkspaceRuntimeReport, WorkspaceClientFailure> {
         guard WorkspaceControlCodec.launchFits(executable: executable, arguments: arguments) else {
             return .failure(.requestTooLarge)
         }
         guard WorkspaceControlCodec.resourceProfileIDFits(resourceProfileID) else {
-            return .failure(.invalidRequest)
-        }
-        if let stagingAgent, AgentTagValidator.isValid(stagingAgent) == false {
             return .failure(.invalidRequest)
         }
         if resourceProfileID != nil, supportsResourceProfiles == false {
@@ -296,7 +296,7 @@ public final class WorkspaceClient: Sendable {
             executable: executable,
             arguments: arguments,
             resourceProfileID: resourceProfileID,
-            hook: hookHost?.rawValue ?? stagingAgent
+            hook: hookHost?.rawValue
         )
         switch (terminalRows, terminalColumns) {
         case (nil, nil):
@@ -434,16 +434,12 @@ public final class WorkspaceClient: Sendable {
         hookHost: HookHost? = nil,
         terminalRows: Int,
         terminalColumns: Int,
-        resourceProfileID: String? = nil,
-        stagingAgent: String? = nil
+        resourceProfileID: String? = nil
     ) -> Result<WorkspaceRuntimeReport, WorkspaceClientFailure> {
         guard executable.hasPrefix("/"),
             IsolatedCommand(executable: executable, arguments: arguments) != nil,
             TerminalStreamLimits.accepts(rows: terminalRows, columns: terminalColumns)
         else {
-            return .failure(.invalidRequest)
-        }
-        if let stagingAgent, AgentTagValidator.isValid(stagingAgent) == false {
             return .failure(.invalidRequest)
         }
         guard WorkspaceControlCodec.launchFits(executable: executable, arguments: arguments) else {
@@ -470,7 +466,7 @@ public final class WorkspaceClient: Sendable {
             executable: executable,
             arguments: arguments,
             resourceProfileID: resourceProfileID,
-            hook: hookHost?.rawValue ?? stagingAgent,
+            hook: hookHost?.rawValue,
             io: "terminal",
             rows: terminalRows,
             columns: terminalColumns

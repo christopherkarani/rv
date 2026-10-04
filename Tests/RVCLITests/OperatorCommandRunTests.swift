@@ -388,28 +388,31 @@ struct OperatorCommandRunTests {
         }
     }
 
-    @Test func setupAndUninstall_runIsolated() throws {
-        try withCLIProcess(environment: [:]) {
+    @Test func setupAndUninstall_runIsolated() async throws {
+        // Step 8B P9: `rv setup` needs no owner auth (adds oversight only);
+        // `rv uninstall` sheds oversight, so without device-owner
+        // authentication the LA tripwire refuses before touching HOME.
+        try await withCLIProcess(environment: [:]) {
             #expect(throws: ExitCode(1)) {
                 try Setup.parse(["--robot"]).run()
             }
-            #expect(throws: ExitCode(1)) {
-                try Uninstall.parse(["--robot"]).run()
+            await #expect(throws: ExitCode(EX_NOPERM)) {
+                try await Uninstall.parse(["--robot"]).run()
             }
         }
         let home = try isolatedHome()
-        try withCLIProcess(home: home, environment: ["PATH": "/usr/bin:/bin"]) {
+        try await withCLIProcess(home: home, environment: ["PATH": "/usr/bin:/bin"]) {
             #expect(throws: ExitCode.self) {
                 try Setup.parse(["--robot"]).run()
             }
-            #expect(throws: ExitCode.self) {
-                try Uninstall.parse(["--robot"]).run()
+            await #expect(throws: ExitCode.self) {
+                try await Uninstall.parse(["--robot"]).run()
             }
             #expect(throws: ExitCode.self) {
                 try Setup.parse(["--force", "--plain"]).run()
             }
         }
-        try withCLIProcess(
+        try await withCLIProcess(
             home: home,
             environment: ["PATH": "/usr/bin:/bin", "RV_FROM_INSTALL": "1"],
             stdinIsTTY: true,

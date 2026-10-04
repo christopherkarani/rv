@@ -79,7 +79,7 @@ struct WorkspaceRun: AsyncParsableCommand {
     @Option(name: .long, help: "Owner-authorized runtime resource profile ID. No profile is selected by executable name.")
     var resourceProfile: String?
 
-    @Option(name: .long, help: "Launch agent tag for credential staging (e.g. opencode). Hook protocol applies only when the tag names a hook host.")
+    @Option(name: .long, help: "Hook protocol host (e.g. opencode). Tags that name no host select nothing; tags never stage credentials.")
     var hook: String?
 
     @Argument(parsing: .captureForPassthrough, help: "Absolute executable and arguments.")
@@ -308,8 +308,7 @@ enum WorkspaceCommandRun {
             hook: hook.flatMap(HookHost.init(rawValue:)),
             rows: rows,
             columns: columns,
-            resourceProfileID: resourceProfileID,
-            stagingAgent: hook
+            resourceProfileID: resourceProfileID
         )
         #endif
     }
@@ -355,7 +354,7 @@ enum WorkspaceCommandRun {
     }
 
     private enum InteractiveSelection {
-        case legacy(executable: String, hook: HookHost?, stagingAgent: String?)
+        case legacy(executable: String, hook: HookHost?)
         case named(definitionID: String)
         case custom(executable: String, digest: String)
     }
@@ -371,12 +370,11 @@ enum WorkspaceCommandRun {
         hook: HookHost?,
         rows: Int?,
         columns: Int?,
-        resourceProfileID: String? = nil,
-        stagingAgent: String? = nil
+        resourceProfileID: String? = nil
     ) throws {
         try runInteractiveSelection(
             project: project,
-            selection: .legacy(executable: executable, hook: hook, stagingAgent: stagingAgent),
+            selection: .legacy(executable: executable, hook: hook),
             arguments: arguments, rows: rows, columns: columns, resourceProfileID: resourceProfileID
         )
     }
@@ -406,11 +404,11 @@ enum WorkspaceCommandRun {
         }
         let launched: Result<WorkspaceRuntimeReport, WorkspaceClientFailure>
         switch selection {
-        case .legacy(let executable, let hook, let stagingAgent):
+        case .legacy(let executable, let hook):
             launched = client.launchRuntime(
                 executable: executable, arguments: arguments, hookHost: hook,
                 terminalRows: rows, terminalColumns: columns,
-                resourceProfileID: resourceProfileID, stagingAgent: stagingAgent ?? hook?.rawValue
+                resourceProfileID: resourceProfileID
             )
         case .named(let definitionID):
             launched = client.launchAgentRuntime(

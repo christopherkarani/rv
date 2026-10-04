@@ -1,14 +1,15 @@
 import RVDomain
 
 func parseChmod(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = splitFlagTerminator(argv)
+    let (flags, rest) = splitFlagTerminator(argv, values: chmodFlagValues)
     var recursive = false
     var mode: String?
+    var modeExcused = false
     var paths: [String] = []
     for event in flags {
         switch event {
         case .positional(let word):
-            if mode == nil {
+            if mode == nil, modeExcused == false {
                 guard isChmodMode(word) else { return nil }
                 mode = word
             } else {
@@ -16,25 +17,35 @@ func parseChmod(_ argv: Argv) -> ParsedFilesystemCommand? {
             }
         case .long(let name, nil) where name == "recursive":
             recursive = true
+        case .long(let name, _) where name == "reference":
+            // `--reference` replaces the mode operand (the tool errors when
+            // both are given, which only false-positives here).
+            modeExcused = true
+        case .long(let name, _) where name == "from":
+            continue
         case .long(let name, nil) where chmodSkipLong.contains("--" + name):
             continue
         case .shorts(let letters, _) where letters.allSatisfy(chmodShorts.contains):
             if letters.contains("R") {
                 recursive = true
             }
+            if letters.contains("a") {
+                // `-a` replaces the mode operand with an ACE value.
+                modeExcused = true
+            }
         default:
             return nil
         }
     }
     for word in rest {
-        if mode == nil {
+        if mode == nil, modeExcused == false {
             guard isChmodMode(word) else { return nil }
             mode = word
         } else {
             paths.append(word)
         }
     }
-    guard let mode, paths.isEmpty == false else { return nil }
+    guard paths.isEmpty == false, mode != nil || modeExcused else { return nil }
     return ParsedFilesystemCommand(
         operation: .chmod,
         paths: paths,
@@ -50,9 +61,22 @@ func parseChmod(_ args: [String]) -> ParsedFilesystemCommand? {
 
 private let chmodSkipLong: Set<String> = [
     "--silent", "--quiet", "--verbose", "--changes", "--no-dereference",
+    "--dereference",
 ]
 
-private let chmodShorts: Set<Character> = ["R", "f", "v", "c", "h"]
+// `-H`/`-L`/`-P` are macOS-valid (symlink traversal with `-R`); `-a`
+// takes an ACE value on macOS. `-c` is GNU-only (accepted: the tool
+// errors elsewhere, so accepting it only false-positives).
+private let chmodShorts: Set<Character> = ["R", "f", "v", "c", "h", "H", "L", "P", "a"]
+
+private let chmodFlagValues = FlagValueSpec(
+    valueShorts: ["a"],
+    valueLongs: ["reference", "from"],
+    knownLongs: [
+        "recursive", "silent", "quiet", "verbose", "changes",
+        "no-dereference", "dereference",
+    ]
+)
 
 func isChmodMode(_ token: String) -> Bool {
     if token.allSatisfy({ $0 >= "0" && $0 <= "7" }), (3...4).contains(token.count) {
@@ -68,7 +92,7 @@ func parseTouch(_ argv: Argv) -> ParsedFilesystemCommand? {
         switch event {
         case .positional(let word):
             paths.append(word)
-        case .long(let name, _) where name == "date" || name == "time":
+        case .long(let name, _) where name == "date" || name == "time" || name == "reference":
             continue
         case .long(let name, nil) where touchSkipLong.contains("--" + name):
             continue
@@ -93,13 +117,20 @@ func parseTouch(_ args: [String]) -> ParsedFilesystemCommand? {
     parseTouch(Argv(program: "touch", args: args))
 }
 
-private let touchFlagValues = FlagValueSpec(valueShorts: ["t", "d"], valueLongs: ["date", "time"])
+// `-r` (reference file) and `-A` (adjustment) take values on macOS;
+// `-d` is GNU-only (accepted: the tool errors elsewhere, so accepting
+// it only false-positives).
+private let touchFlagValues = FlagValueSpec(
+    valueShorts: ["t", "d", "r", "A"],
+    valueLongs: ["date", "time", "reference"],
+    knownLongs: ["no-create", "no-dereference"]
+)
 
 private let touchSkipLong: Set<String> = [
     "--no-create", "--no-dereference", "--help", "--version",
 ]
 
-private let touchShorts: Set<Character> = ["a", "c", "f", "h", "m", "t", "d"]
+private let touchShorts: Set<Character> = ["a", "c", "f", "h", "m", "t", "d", "r", "A"]
 
 func parseMkdir(_ argv: Argv) -> ParsedFilesystemCommand? {
     let (flags, rest) = scanFilesystemFlags(argv, values: mkdirFlagValues)
@@ -108,7 +139,7 @@ func parseMkdir(_ argv: Argv) -> ParsedFilesystemCommand? {
         switch event {
         case .positional(let word):
             paths.append(word)
-        case .long(let name, _) where name == "mode":
+        case .long(let name, _) where name == "mode" || name == "context":
             continue
         case .long(let name, nil) where mkdirSkipLong.contains("--" + name):
             continue
@@ -133,13 +164,19 @@ func parseMkdir(_ args: [String]) -> ParsedFilesystemCommand? {
     parseMkdir(Argv(program: "mkdir", args: args))
 }
 
-private let mkdirFlagValues = FlagValueSpec(valueShorts: ["m"], valueLongs: ["mode"])
+private let mkdirFlagValues = FlagValueSpec(
+    valueShorts: ["m"],
+    valueLongs: ["mode"],
+    knownLongs: ["parents", "verbose", "context"]
+)
 
 private let mkdirSkipLong: Set<String> = [
-    "--parents", "--verbose", "--help", "--version",
+    "--parents", "--verbose", "--help", "--version", "--context",
 ]
 
-private let mkdirShorts: Set<Character> = ["p", "v", "m"]
+// `-Z`/`--context` are GNU-only (accepted: the tool errors on macOS,
+// so accepting them only false-positives).
+private let mkdirShorts: Set<Character> = ["p", "v", "m", "Z"]
 
 func parseCat(_ argv: Argv) -> ParsedFilesystemCommand? {
     let (flags, rest) = splitFlagTerminator(argv)
@@ -215,12 +252,10 @@ private func redirectTargets(_ tokens: [String]) -> [String]? {
             if dest.hasPrefix("&") {
                 continue
             }
-            if isDynamicToken(dest) { return nil }
             targets.append(dest)
             continue
         }
         if let attached = attachedRedirectTarget(token) {
-            if isDynamicToken(attached) { return nil }
             targets.append(attached)
         }
     }
@@ -232,8 +267,16 @@ func isFdDup(_ token: String) -> Bool {
 }
 
 func isRedirectOperator(_ token: String) -> Bool {
-    token == ">" || token == ">|" || token == ">>" || token == "&>" || token == "1>"
-        || token == "2>"
+    if token == "&>" || token == "&>>" || token == ">&" || token == "<>" {
+        return true
+    }
+    // Optional fd digits (`2>`, `10>>`) then the operator. `<&` is excluded:
+    // input-dups never name a destination.
+    var rest = token[...]
+    while let first = rest.first, first.isASCII, first.isNumber {
+        rest = rest.dropFirst()
+    }
+    return rest == ">" || rest == ">|" || rest == ">>" || rest == ">&" || rest == "<>"
 }
 
 private func attachedRedirectTarget(_ token: String) -> String? {
@@ -243,27 +286,66 @@ private func attachedRedirectTarget(_ token: String) -> String? {
     if token.hasPrefix(">|"), token.count > 2 {
         return String(token.dropFirst(2))
     }
+    // `&>>file` and `>&file` before `&>`: otherwise the rest misparses
+    // (`&>>/t` as `>/t`, `>&/t` as a dup).
+    if token.hasPrefix("&>>"), token.count > 3 {
+        return String(token.dropFirst(3))
+    }
+    // `>&file` duplicates to a file; `>&2` / `>&-` are dup/close, not files.
+    if token.hasPrefix(">&"), token.count > 2 {
+        let rest = String(token.dropFirst(2))
+        if rest == "-" || rest.allSatisfy({ $0.isNumber }) {
+            return nil
+        }
+        return rest.hasPrefix("&") ? nil : rest
+    }
     if token.hasPrefix("&>"), token.count > 2 {
         let rest = String(token.dropFirst(2))
         return rest.hasPrefix("&") ? nil : rest
     }
-    if token.hasPrefix("1>"), token.count > 2 {
-        let rest = String(token.dropFirst(2))
-        return rest.hasPrefix("&") ? nil : rest
-    }
-    if token.hasPrefix("2>"), token.count > 2 {
-        let rest = String(token.dropFirst(2))
-        return rest.hasPrefix("&") ? nil : rest
+    // `<>file` opens read-write: the target is writable.
+    if token.hasPrefix("<>"), token.count > 2 {
+        return String(token.dropFirst(2))
     }
     if token.hasPrefix(">"), token.count > 1, token.hasPrefix(">&") == false {
         return String(token.dropFirst())
     }
+    // `[n]>word` / `[n]>>word` / `[n]>|word` / `[n]>&word` / `[n]<>word`.
+    if let fdRest = stripRedirectFdDigits(token) {
+        if fdRest.hasPrefix(">>"), fdRest.count > 2 {
+            let rest = String(fdRest.dropFirst(2))
+            return rest.hasPrefix("&") ? nil : rest
+        }
+        if fdRest.hasPrefix(">|"), fdRest.count > 2 {
+            return String(fdRest.dropFirst(2))
+        }
+        if fdRest.hasPrefix(">&"), fdRest.count > 2 {
+            let rest = String(fdRest.dropFirst(2))
+            if rest == "-" || rest.allSatisfy({ $0.isASCII && $0.isNumber }) {
+                return nil
+            }
+            return rest.hasPrefix("&") ? nil : rest
+        }
+        if fdRest.hasPrefix("<>"), fdRest.count > 2 {
+            return String(fdRest.dropFirst(2))
+        }
+        if fdRest.hasPrefix(">"), fdRest.count > 1, fdRest.hasPrefix(">&") == false {
+            return String(fdRest.dropFirst())
+        }
+    }
     return nil
 }
 
-private func isDynamicToken(_ token: String) -> Bool {
-    // Home aliases contain `$` but are expanded lexically, not dynamically.
-    // Exempt them so `echo hi > $HOME/.ssh/config` is not treated as unknown.
-    if isHomeAliasPath(token) { return false }
-    return token.contains("$") || token.contains("`")
+/// The operator remainder after fd digits, or nil when the token is not
+/// digit-led (`>>x`, `>&x` keep their own arms above).
+private func stripRedirectFdDigits(_ token: String) -> Substring? {
+    var rest = token[...]
+    var stripped = false
+    while let first = rest.first, first.isASCII, first.isNumber {
+        rest = rest.dropFirst()
+        stripped = true
+    }
+    return stripped ? rest : nil
 }
+
+

@@ -32,7 +32,6 @@ extension SetupRun {
         layout: OwnedPaths,
         files: FileOps
     ) throws(SetupError) -> Bool {
-        try SetupRun.requireOwnerAuthorization()
         let wroteAdapter: Bool
         switch write.adapter {
         case .claudeSettingsMerge(let force):

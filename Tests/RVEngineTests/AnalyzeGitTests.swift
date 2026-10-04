@@ -69,7 +69,7 @@ struct AnalyzeGitTests {
                 force: .force
             )
         )
-        #expect(normalAction.effects.kinds.isEmpty)
+        #expect(normalAction.effects.kinds == [.remoteBranchMutation])
         #expect(forcedAction.effects.kinds == [.remoteSharedBranchMutation])
         #expect(normalAction.explainAction == "push")
         #expect(forcedAction.explainAction == "force-push")

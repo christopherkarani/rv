@@ -16,6 +16,7 @@ import RVDomain
 public enum UIBridgeWire {
     public static let requestKey = "rv.ui-request"
     public static let actionRequestKey = "rv.ui-action-request"
+    public static let hookRequestKey = "rv.ui-hook-request"
 
     public static let maxBodyBytes = 1_048_576
 }

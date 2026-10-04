@@ -6,41 +6,25 @@ public func hookWire(
     stdin: String,
     world: HookEvaluateWorld
 ) async -> HookWire {
-    switch productionHostCodec(host) {
-    case .ask(let codec):
-        return await hookBody(
-            stdin: stdin,
-            codec: codec,
-            world: world,
-            firstCall: { result, command, verdict, unlockCode in
-                hookWire(
-                    from: result,
-                    command: command,
-                    using: codec,
-                    intent: .firstCall(verdict: verdict, unlockCode: unlockCode)
-                )
-            }
-        )
-    case .denyOnly(let codec):
-        return await hookBody(
-            stdin: stdin,
-            codec: codec,
-            world: world,
-            firstCall: { result, command, verdict, unlockCode in
-                hookWire(
-                    from: result,
-                    command: command,
-                    using: codec,
-                    intent: .firstCall(verdict: verdict, unlockCode: unlockCode)
-                )
-            }
-        )
-    }
+    let codec = productionHostCodec(host)
+    return await hookBody(
+        stdin: stdin,
+        codec: codec,
+        world: world,
+        firstCall: { result, command, verdict, unlockCode in
+            hookWire(
+                from: result,
+                command: command,
+                using: codec,
+                intent: .firstCall(verdict: verdict, unlockCode: unlockCode)
+            )
+        }
+    )
 }
 
-private func hookBody<C: HostCodec>(
+private func hookBody(
     stdin: String,
-    codec: C,
+    codec: any HostCodec,
     world: HookEvaluateWorld,
     firstCall: (EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockMint?) -> HookWire
 ) async -> HookWire {
@@ -54,24 +38,9 @@ private func hookBody<C: HostCodec>(
                 codec: codec,
                 evaluateFile: world.evaluateFile
             )
-        case .spend(_, let command, let cwd, _):
-            let result = await world.spend(command, cwd)
-            let wire = hookWire(
-                from: result,
-                command: command,
-                using: codec,
-                intent: .afterSpend
-            )
-            await ignoreHostAskFailure {
-                try await world.clearHostAsk(
-                    request,
-                    pendingAction(from: result, request: request, command: command)
-                )
-            }
-            return wire
         case .shell(_, let command, let cwd, _):
             let result = await world.evaluate(command, cwd)
-            let auth = HookAuthorization.project(host: codec.host, result: result, cwd: cwd)
+            let auth = HookAuthorization.project(result: result, cwd: cwd)
             let unlockCode = await mintUnlockCodeIfNeeded(
                 result: result,
                 authorization: auth,
@@ -95,10 +64,10 @@ private func hookBody<C: HostCodec>(
     }
 }
 
-private func hookFileBody<C: HostCodec>(
+private func hookFileBody(
     request: HookRequest,
     file: FileToolAction,
-    codec: C,
+    codec: any HostCodec,
     evaluateFile: @Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult
 ) async -> HookWire {
     if file.path.isEmpty {
@@ -112,9 +81,9 @@ private func hookFileBody<C: HostCodec>(
     return hookFileWire(from: result, using: codec)
 }
 
-func hookFileWire<C: HostCodec>(
+func hookFileWire(
     from result: EvaluationResult,
-    using codec: C
+    using codec: any HostCodec
 ) -> HookWire {
     codec.encodeFileDeny(from: result)
 }

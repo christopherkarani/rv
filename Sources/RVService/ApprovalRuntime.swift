@@ -28,13 +28,13 @@ actor ApprovalRuntime {
     /// `setPackEnabled` rebuild is invisible to allow-once.
     nonisolated static func livePeek(
         home: HomeDirectory?,
-        store: AllowOnceStore,
+        grants: EphemeralAllowOnceTable,
         gated: @escaping @Sendable () async -> GatedEvaluate
     ) -> @Sendable (ShellCommand, WorkingDirectory?, Date) async -> EvaluationResult {
         { command, cwd, now in
             await LiveEvaluateWorld(
                 home: home,
-                store: store,
+                grants: grants,
                 gated: await gated(),
                 clock: { now }
             ).peek(command: command, cwd: cwd)

@@ -1,0 +1,18 @@
+{
+  "command": [
+    "Scripts/swift-6.4",
+    "test",
+    "--disable-sandbox",
+    "--skip-build",
+    "--filter",
+    "WorkspacePeerAuthenticatorTests"
+  ],
+  "environment": {
+    "CLANG_MODULE_CACHE_PATH": "/private/tmp/rv-phase2a-clang-cache",
+    "SWIFTPM_MODULECACHE_OVERRIDE": "/private/tmp/rv-phase2a-clang-cache"
+  },
+  "exit_code": 0,
+  "tests": 6,
+  "seconds": 0.011,
+  "claim": "Existing same-user peer evidence/role refusal and protected configuration rejection only; not launch-authorization or installed product success"
+}

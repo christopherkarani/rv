@@ -774,6 +774,7 @@ actor ActionApprovalCeremonyService {
     private static func effectLabel(_ kind: ActionEffectKind) -> String {
         switch kind {
         case .remoteSharedBranchMutation: return "shared branch mutation"
+        case .remoteBranchMutation: return "remote branch mutation"
         case .localBranchCreate: return "create local branch"
         case .workingTreeDiscard: return "discard working tree"
         case .filesystemDelete: return "delete file"

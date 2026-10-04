@@ -79,6 +79,31 @@ public struct CursorHostCodec: HostCodec {
             exitCode: host.denyExitCode
         )
     }
+
+    /// Ask-denial: the agent retries after human approval, so the
+    /// `agent_message` differs from the deny stop line.
+    public func encodeEvaluatedAskDeny(
+        from result: EvaluationResult,
+        command: ShellCommand,
+        unlockCode: AllowOnceUnlockMint? = nil
+    ) -> HookWire {
+        switch result.decision {
+        case .allow, .indeterminate:
+            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
+        case .deny(let deny):
+            let userMessage = [
+                hostDenyLine(command: command, reason: deny.reason, unlock: unlockCode),
+                approvalPendingLine,
+            ].joined(separator: " ")
+            return HookWire(
+                stdout: hookPermissionDenyJSON(
+                    userMessage: userMessage,
+                    agentMessage: cursorAgentAskLine
+                ),
+                exitCode: host.denyExitCode
+            )
+        }
+    }
 }
 
 private enum CursorEventClass {

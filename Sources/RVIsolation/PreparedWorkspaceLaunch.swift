@@ -202,8 +202,11 @@ struct PreparedWorkspaceLaunch: Sendable, Equatable {
     let egressProxyPort: Int?
     /// Integration metadata from the trusted definition (named) or nil
     /// (custom). Never taken from the wire for identity launches.
+    /// Step 8 (F2): `stagingAgent` is definition-derived only — the sole
+    /// trusted credential-selection input, typed so wire tags, HookHost
+    /// values, and CLI/caller-provided names are unrepresentable here.
     let hook: HookHost?
-    let stagingAgent: String?
+    let stagingAgent: DefinitionStagingTag?
     // No keychain field exists: identity launches stage no credentials,
     // so there is nothing to retain and no reader to consult.
 

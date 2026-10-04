@@ -14,7 +14,6 @@ extension SetupRun {
         animate: Bool,
         write: ((String) -> Void)?
     ) throws(SetupError) -> (text: String, emitted: Bool) {
-        try SetupRun.requireOwnerAuthorization()
         let files = FileOps(fileManager: env.fileManager)
         let layout = OwnedPaths(home: env.home)
         let installations = try inspectInstallations(layout: layout, env: env)

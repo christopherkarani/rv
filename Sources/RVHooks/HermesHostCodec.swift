@@ -2,7 +2,7 @@ import Foundation
 import RVDomain
 
 /// Adapter wire for Hermes, not a host protocol.
-public struct HermesHostCodec: HostAskCodec {
+public struct HermesHostCodec: HostCodec {
     /// The Hermes adapter host.
     public var host: HookHost { .hermes }
 
@@ -23,22 +23,16 @@ public struct HermesHostCodec: HostAskCodec {
         let cwd = cwdText.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId, envelope.taskId)
             .flatMap { SessionID(validating: $0) }
-        let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
         return HookRequest.decoded(
             host: .hermes,
             command: envelope.args?.command,
             cwd: cwd,
-            session: session,
-            hostAsk: hostAsk
+            session: session
         )
     }
 
     public func encodeDeny(reason: String, rule: RuleID? = nil, next: HookVoiceNext = .none) -> HookWire {
         encodeLeftoverDecisionDeny(reason: reason, rule: rule, next: next)
-    }
-
-    public func encodeAsk(reason: String, rule: RuleID? = nil, next: HookVoiceNext = .none) -> HookWire {
-        encodeLeftoverDecisionAsk(reason: reason, rule: rule, next: next)
     }
 }
 
@@ -48,7 +42,6 @@ private struct HermesEnvelope: Decodable {
     var cwd: String?
     var sessionId: String?
     var taskId: String?
-    var hostAsk: String?
 }
 
 private struct HermesArgs: Decodable {

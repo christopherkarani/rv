@@ -2,7 +2,7 @@ import ArgumentParser
 import Foundation
 import RVTheme
 
-struct Uninstall: ParsableCommand {
+struct Uninstall: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "uninstall",
         abstract: "Remove rv-owned hook files, config, and the rvd LaunchAgent."
@@ -20,8 +20,17 @@ struct Uninstall: ParsableCommand {
     @Flag(name: .customLong("no-color"), help: "Disable color.")
     var noColor = false
 
-    func run() throws {
-        try LocalControlBoundary.requireOwnerAuthorization()
+    func run() async throws {
+        // Uninstall sheds oversight (hooks, config, LaunchAgent): a
+        // same-user agent must not run it unattended. One fresh
+        // device-owner authentication, then the existing ceremony.
+        do {
+            try await CLIOwnerAuth.requireAuthenticated()
+        } catch {
+            let output = setupFailureOutput(.ownerAuthenticationRequired, command: .uninstall)
+            try CeremonyCLI.emit(SetupOutcome(
+                stdout: "", stderr: output.stderr, exitCode: output.exitCode))
+        }
         let resolved = CeremonyCLI.appearance(
             json: json,
             robot: robot,

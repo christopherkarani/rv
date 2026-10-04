@@ -30,6 +30,9 @@ public actor ServiceRuntime {
     private let sessionSnapshots: [PackSnapshot]
     private let configHome: HomeDirectory?
     private let allowOnce: AllowOnceStore
+    /// Step 8B.1 sole grant authority: service-held memory, one instance per
+    /// daemon lifetime. A restart drops the table and invalidates every grant.
+    private let grants: EphemeralAllowOnceTable
     private let log: (any ServiceLog)?
     private let analytics: AnalyticsCoordinator?
     private let clock: @Sendable () -> Date
@@ -43,6 +46,10 @@ public actor ServiceRuntime {
     /// Shared with the XPC host/UI sessions so transport and bridges see
     /// one state. Separate authority from `ceremonies`, always.
     let actionCeremonies: ActionApprovalCeremonyService
+    /// Hook-ask review ceremonies (pending wait → review → allow-once).
+    /// Shared with the XPC UI sessions. Resolves through `HookAskResolver`
+    /// only: never an `AgentInstance` grant (F3).
+    let hookCeremonies: HookReviewCeremonyService
 
     package private(set) var compiledPackIDs: [PackID]
     private var compiledPackIDSet: Set<PackID>
@@ -53,6 +60,7 @@ public actor ServiceRuntime {
         home: HomeDirectory? = nil,
         allowOnce: AllowOnceStore? = nil,
         allowOnceDirectory: URL? = nil,
+        grants: EphemeralAllowOnceTable? = nil,
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
         log: (any ServiceLog)? = nil,
         analytics: AnalyticsCoordinator? = nil,
@@ -65,6 +73,7 @@ public actor ServiceRuntime {
             home: home,
             allowOnce: allowOnce,
             allowOnceDirectory: allowOnceDirectory,
+            grants: grants,
             idleExitSeconds: idleExitSeconds,
             log: log,
             analytics: analytics,
@@ -80,13 +89,15 @@ public actor ServiceRuntime {
         home: HomeDirectory?,
         allowOnce: AllowOnceStore?,
         allowOnceDirectory: URL?,
+        grants: EphemeralAllowOnceTable? = nil,
         idleExitSeconds: Int,
         log: (any ServiceLog)?,
         analytics: AnalyticsCoordinator?,
         clock: @escaping @Sendable () -> Date,
         pendingApprovals: PendingApprovalsBinding,
         ceremonies: WorkspaceOperatorCeremonyService,
-        actionCeremonies: ActionApprovalCeremonyService? = nil
+        actionCeremonies: ActionApprovalCeremonyService? = nil,
+        hookCeremonies: HookReviewCeremonyService? = nil
     ) {
         let resolvedHome = home ?? HomeDirectory.process()
         self.configHome = resolvedHome
@@ -116,6 +127,7 @@ public actor ServiceRuntime {
         } else {
             self.allowOnce = AllowOnceStore(baseDirectory: uniqueEphemeralAllowOnceDirectory())
         }
+        self.grants = grants ?? EphemeralAllowOnceTable()
         self.idleExitSeconds = idleExitSeconds
         self.log = log
         self.analytics = analytics
@@ -132,6 +144,13 @@ public actor ServiceRuntime {
         self.analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: self.catalog)
         self.ceremonies = ceremonies
         self.actionCeremonies = actionCeremonies ?? ActionApprovalCeremonyService()
+        self.hookCeremonies = hookCeremonies ?? HookReviewCeremonyService(
+            pending: self.pendingApprovals,
+            allowOnce: self.allowOnce,
+            grants: self.grants,
+            home: resolvedHome,
+            clock: clock
+        )
     }
 
     public func acknowledge(_ hello: Hello) -> HelloAck {
@@ -274,6 +293,8 @@ public actor ServiceRuntime {
             .pendingList, .pendingWatch, .pendingResolve, .rulePreview, .ruleSave,
             .proposeWorkspaceLaunch, .launchProposalStatus:
             return nil
+        case .attestTTYRedemption(let params):
+            return params.clientSemver
         }
     }
 
@@ -284,6 +305,11 @@ public actor ServiceRuntime {
         if request.protocolName != ProtocolVersion.name {
             return IPCResponse(id: request.id, result: .error(.protocolSkew(.protocolSkew)))
         }
+        // Protocol hygiene before authorization: a skewed client learns to
+        // upgrade instead of a misleading denial. Still never evaluates.
+        if Self.isMajorSkewed(implicitHelloSemver(request.method)) {
+            return IPCResponse(id: request.id, result: .error(.protocolSkew(.majorVersion)))
+        }
         guard ServiceMethodAuthorization.permits(request.method, context: context) else {
             return IPCResponse(id: request.id, result: .error(.authorizationDenied))
         }
@@ -291,19 +317,11 @@ public actor ServiceRuntime {
         let result: IPCResult
         switch request.method {
         case .evaluate(let params):
-            if Self.isMajorSkewed(params.clientSemver) {
-                result = .error(.protocolSkew(.majorVersion))
-            } else {
-                result = .evaluate(await evaluate(params.request, cwd: params.cwd))
-            }
+            result = .evaluate(await evaluate(params.request, cwd: params.cwd))
         case .hookEvaluate(let params):
-            if Self.isMajorSkewed(params.clientSemver) {
-                result = .error(.protocolSkew(.majorVersion))
-            } else {
-                switch await makeHookEvaluateResult(params) {
-                case .success(let reply): result = .hookEvaluate(reply)
-                case .failure(let error): result = .error(error)
-                }
+            switch await makeHookEvaluateResult(params) {
+            case .success(let reply): result = .hookEvaluate(reply)
+            case .failure(let error): result = .error(error)
             }
         case .explain(let params):
             result = .explain(await explain(params))
@@ -333,7 +351,7 @@ public actor ServiceRuntime {
                 params,
                 peek: ApprovalRuntime.livePeek(
                     home: configHome,
-                    store: allowOnce,
+                    grants: grants,
                     gated: { await self.currentGated() }
                 )
             ) {
@@ -364,6 +382,10 @@ public actor ServiceRuntime {
             }
         case .launchProposalStatus(let params):
             result = .launchProposalStatus(await ceremonies.proposalStatus(params))
+        case .attestTTYRedemption(let params):
+            result = await attestTTYRedemption(params)
+        case .attestTTYRedemption(let params):
+            result = await attestTTYRedemption(params)
         }
         logIfNeeded(request: request, result: result, started: started)
         return IPCResponse(id: request.id, result: result)
@@ -388,8 +410,60 @@ public actor ServiceRuntime {
         }
     }
 
-    package func insertGranted(matchingView: MatchingView, cwd: WorkingDirectory, now: Date = Date()) async throws {
-        try await allowOnce.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
+    /// Step 8B.1 test seam: plants directly into the owned memory table.
+    /// Production plants arrive only via ceremony completions.
+    package func insertGranted(
+        matchingView: MatchingView,
+        cwd: WorkingDirectory,
+        codeHash: String = UUID().uuidString,
+        now: Date = Date()
+    ) async -> EphemeralAllowOnceTable.PlantResult {
+        await grants.plant(matchingView: matchingView, cwd: cwd, codeHash: codeHash, now: now)
+    }
+
+    /// Genuine-CLI TTY attestation handler. The matrix already restricted
+    /// this method to the pinned `.cli` role; re-validate every field
+    /// anyway (a buggy caller must plant nothing), then plant one memory
+    /// grant. The daemon writes no projection (the attesting CLI flips its
+    /// own). Double-attests report planted:false and create no second grant.
+    private func attestTTYRedemption(_ params: AttestTTYRedemptionParams) async -> IPCResult {
+        func denied() -> IPCResult { .error(.authorizationDenied) }
+        guard params.fingerprint.count == 64,
+            params.fingerprint.allSatisfy(\.isHexDigit),
+            params.fingerprint == params.fingerprint.lowercased()
+        else {
+            return denied()
+        }
+        // params.cwd decoded through WorkingDirectory.init(from:), which
+        // already applies the validating initializer; undecodable paths
+        // never reach dispatch.
+        guard params.codeHash.count == 64,
+            params.codeHash.allSatisfy(\.isHexDigit),
+            params.codeHash == params.codeHash.lowercased()
+        else {
+            return denied()
+        }
+        let now = clock()
+        switch await grants.plant(
+            fingerprint: params.fingerprint,
+            cwd: params.cwd,
+            codeHash: "tty:\(params.codeHash)",
+            now: now
+        ) {
+        case .planted:
+            // Memory only. The attesting CLI flips its own display
+            // projection after planted:true; the daemon never writes the
+            // shared projection file (no cross-process append race).
+            return .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: true, epoch: grants.epoch.uuidString
+            ))
+        case .alreadyRedeemed:
+            return .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: false, epoch: grants.epoch.uuidString
+            ))
+        case .refused:
+            return denied()
+        }
     }
 
     public func evaluate(_ request: EvaluationRequest, cwd: WorkingDirectory? = nil) async -> EvaluateReply {
@@ -438,6 +512,7 @@ public actor ServiceRuntime {
         LiveEvaluateWorld(
             home: configHome,
             store: allowOnce,
+            grants: grants,
             gated: gated,
             clock: clock
         )
@@ -650,6 +725,8 @@ public actor ServiceRuntime {
             method = "proposeWorkspaceLaunch"
         case .launchProposalStatus:
             method = "launchProposalStatus"
+        case .attestTTYRedemption:
+            method = "attestTTYRedemption"
         }
         if case .evaluate(let reply) = result {
             switch reply.result.decision {

@@ -20,7 +20,8 @@ struct HookEvaluateTests {
         let stdin = try grokFixture("deny-git-reset-hard.json")
         let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(host: .grok, stdin: stdin, clientSemver: ProtocolVersion.serviceSemver),
-            handshakeOK: false
+            handshakeOK: false,
+            context: peerHookContext()
         )
         let data = incoming.frame
         let ok = incoming.handshakeAccepted
@@ -37,12 +38,13 @@ struct HookEvaluateTests {
         try assertGrokMintedResetHard(json)
     }
 
-    @Test func implicitHello_claudeResetHardReturnsAskWire() async throws {
+    @Test func implicitHello_claudeResetHardReturnsAskDenyWire() async throws {
         let runtime = try isolatedRuntime()
         let stdin = try claudeFixture("deny-git-reset-hard.json")
         let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(host: .claude, stdin: stdin, clientSemver: ProtocolVersion.serviceSemver),
-            handshakeOK: false
+            handshakeOK: false,
+            context: peerHookContext()
         )
         let data = incoming.frame
         let ok = incoming.handshakeAccepted
@@ -53,17 +55,35 @@ struct HookEvaluateTests {
             return
         }
         #expect(reply.via == .service)
-        #expect(reply.exitCode == 2)
+        #expect(reply.exitCode == 0)
         let json = try #require(
             JSONSerialization.jsonObject(with: Data(reply.stdout.utf8)) as? [String: Any]
         )
-        #expect(json["decision"] as? String == "ask")
-        #expect(json["continuation"] as? String == "hostNative")
-        #expect(json["rule"] as? String == "core.git/reset-hard")
+        let specific = json["hookSpecificOutput"] as? [String: Any]
+        #expect(specific?["permissionDecision"] as? String == "deny")
+        #expect((json["systemMessage"] as? String)?.contains(approvalPendingLine) == true)
         #expect(reply.stdout.contains("\"permissionDecision\":\"ask\"") == false)
-        #expect(reply.stdout.contains("\"permissionDecision\":\"deny\"") == false)
+        #expect(reply.stdout.contains("\"decision\":\"ask\"") == false)
         #expect(reply.stdout.contains("\"decision\":\"allow\"") == false)
-        #expect(reply.stdout.contains("allowOnceCode") == false)
+        #expect(reply.stdout.contains("\"continuation\":\"hostNative\"") == false)
+    }
+
+    @Test func hookEvaluate_unauthenticatedPeerDenied() async throws {
+        let runtime = try isolatedRuntime()
+        let stdin = try grokFixture("deny-git-reset-hard.json")
+        let incoming = await runtime.handleIncoming(
+            try hookEvaluateBody(host: .grok, stdin: stdin, clientSemver: ProtocolVersion.serviceSemver),
+            handshakeOK: true,
+            context: .unauthenticated
+        )
+        let response = try IPCJSON.decode(IPCResponse.self, from: incoming.frame)
+        guard case .error(.authorizationDenied) = response.result else {
+            Issue.record("peerless hookEvaluate must deny, got \(response.result)")
+            return
+        }
+        if case .hookEvaluate = response.result {
+            Issue.record("denied consult must not return a wire")
+        }
     }
 
     /// Warm-rvd hook evaluation must resolve packs through the same door as
@@ -81,7 +101,8 @@ struct HookEvaluateTests {
         let stdin = try grokFixture("deny-git-reset-hard.json")
         let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(host: .grok, stdin: stdin, clientSemver: ProtocolVersion.serviceSemver),
-            handshakeOK: false
+            handshakeOK: false,
+            context: peerHookContext()
         )
         let data = incoming.frame
         let ok = incoming.handshakeAccepted
@@ -102,7 +123,8 @@ struct HookEvaluateTests {
         let stdin = try grokFixture("deny-git-reset-hard.json")
         let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(host: .grok, stdin: stdin, clientSemver: "2.0.0"),
-            handshakeOK: false
+            handshakeOK: false,
+            context: peerHookContext()
         )
         let data = incoming.frame
         let ok = incoming.handshakeAccepted
@@ -124,7 +146,8 @@ struct HookEvaluateTests {
         let stdin = try grokFixture("deny-git-reset-hard.json")
         let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(host: .grok, stdin: stdin),
-            handshakeOK: false
+            handshakeOK: false,
+            context: peerHookContext()
         )
         let data = incoming.frame
         let ok = incoming.handshakeAccepted
@@ -147,7 +170,8 @@ struct HookEvaluateTests {
         let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(host: .grok, stdin: "", clientSemver: ProtocolVersion.serviceSemver),
             handshakeOK: false,
-            stdinOverlay: overlay
+            stdinOverlay: overlay,
+            context: peerHookContext()
         )
         let data = incoming.frame
         let ok = incoming.handshakeAccepted
@@ -171,7 +195,8 @@ struct HookEvaluateTests {
                 clientSemver: ProtocolVersion.serviceSemver
             ),
             handshakeOK: false,
-            stdinOverlay: Data()
+            stdinOverlay: Data(),
+            context: peerHookContext()
         )
         let data = incoming.frame
         let ok = incoming.handshakeAccepted
@@ -196,7 +221,8 @@ struct HookEvaluateTests {
                 clientSemver: ProtocolVersion.serviceSemver
             ),
             handshakeOK: false,
-            stdinOverlay: overlay
+            stdinOverlay: overlay,
+            context: peerHookContext()
         )
         let data = incoming.frame
         let ok = incoming.handshakeAccepted
@@ -243,7 +269,8 @@ struct HookEvaluateTests {
                 clientSemver: ProtocolVersion.serviceSemver
             ),
             handshakeOK: false,
-            stdinOverlay: nil
+            stdinOverlay: nil,
+            context: peerHookContext()
         )
         let data = incoming.frame
         let ok = incoming.handshakeAccepted
@@ -262,7 +289,8 @@ struct HookEvaluateTests {
         let stdin = try grokFixture("allow-medium-stash-drop.json")
         let incoming = await runtime.handleIncoming(
             try hookEvaluateBody(host: .grok, stdin: stdin, clientSemver: ProtocolVersion.serviceSemver),
-            handshakeOK: false
+            handshakeOK: false,
+            context: peerHookContext()
         )
         let data = incoming.frame
         let ok = incoming.handshakeAccepted
@@ -296,7 +324,7 @@ struct HookEvaluateTests {
         let hostile = try #require(frame.map {
             $0.replacingOccurrences(of: "\"host\":\"grok\"", with: "\"host\":\"nope\"")
         })
-        let incoming = await runtime.handleIncoming(Data(hostile.utf8), handshakeOK: true)
+        let incoming = await runtime.handleIncoming(Data(hostile.utf8), handshakeOK: true, context: peerHookContext())
         let data = incoming.frame
         let ok = incoming.handshakeAccepted
         #expect(ok == true)
@@ -310,7 +338,7 @@ struct HookEvaluateTests {
         }
     }
 
-    @Test func oldEvaluate_stillWorksAfterHookEvaluate() async throws {
+    @Test func oldEvaluate_staysDeniedAfterHookEvaluate() async throws {
         let runtime = try isolatedRuntime()
         let hook = await runtime.handleIncoming(
             try hookEvaluateBody(
@@ -318,28 +346,30 @@ struct HookEvaluateTests {
                 stdin: try grokFixture("allow-medium-stash-drop.json"),
                 clientSemver: ProtocolVersion.serviceSemver
             ),
-            handshakeOK: false
+            handshakeOK: false,
+            context: peerHookContext()
         )
         #expect(hook.handshakeAccepted == true)
 
+        // Step 8: generic `.evaluate` (grant-spending, no host envelope)
+        // stays denied for all IPC callers; hooks are the one spending
+        // door. Diagnostics degrade to in-process peek client-side.
         let incoming = await runtime.handleIncoming(
             try evaluateBody(command: "git reset --hard", clientSemver: ProtocolVersion.serviceSemver),
-            handshakeOK: hook.handshakeAccepted
+            handshakeOK: hook.handshakeAccepted,
+            context: peerHookContext()
         )
         let data = incoming.frame
         let ok = incoming.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
-        guard case .evaluate(let reply) = response.result else {
-            Issue.record("old evaluate must still dispatch (additive)")
+        guard case .error(.authorizationDenied) = response.result else {
+            Issue.record("old evaluate must stay denied, got \(response.result)")
             return
         }
-        guard case .deny(let deny) = reply.result.decision else {
-            Issue.record("old evaluate must still deny git reset --hard")
-            return
+        if case .evaluate = response.result {
+            Issue.record("denied evaluate must not return a result")
         }
-        #expect(deny.ruleID.rawValue == "core.git:reset-hard")
-        #expect(reply.via == .service)
     }
 
     @Test func hookEvaluate_doesNotLogCommandText() async throws {
@@ -351,7 +381,8 @@ struct HookEvaluateTests {
                 stdin: try grokFixture("deny-git-reset-hard.json"),
                 clientSemver: ProtocolVersion.serviceSemver
             ),
-            handshakeOK: false
+            handshakeOK: false,
+            context: peerHookContext()
         )
         let blob = log.snapshot.map { "\($0.method)|\($0.decision ?? "")|\($0.ruleID ?? "")" }.joined()
         #expect(blob.contains("hookEvaluate"))
@@ -466,7 +497,10 @@ private func assertGrokMintedResetHard(_ json: [String: Any]) throws {
     let reason = try #require(json["reason"] as? String)
     let code = try #require(allowOnceUnlockCode(in: reason))
     let unlock = unlockLine(for: code)
-    #expect(reason == "RV · Blocked. \(unlock) Destroys uncommitted changes. Use 'git stash' first.")
+    #expect(
+        reason
+            == "RV · Blocked. \(unlock) Destroys uncommitted changes. Use 'git stash' first. \(approvalPendingLine)"
+    )
     #expect(json["next"] as? String == unlock)
     #expect(reason.hasPrefix("RV · Blocked. Paste in Terminal to allow once:"))
     #expect(json["rule"] as? String == "core.git/reset-hard")

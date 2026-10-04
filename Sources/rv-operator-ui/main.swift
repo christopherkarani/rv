@@ -9,12 +9,13 @@ import RVService
 
 @main
 struct RVOperatorUIApplication: App {
-    // One shared client: launch review and action review ride the same
-    // persistent action connection and registered UI session. The two
+    // One shared client: launch, action, and hook review ride the same
+    // persistent action connection and registered UI session. The three
     // models hold fully separate state and vocabularies.
     @State private var sharedClient = OperatorReviewModel.makeBridge()
     @State private var launchModel: OperatorReviewModel?
     @State private var actionModel: OperatorActionReviewModel?
+    @State private var hookModel: OperatorHookReviewModel?
 
     var body: some Scene {
         WindowGroup("RV Operator Review") {
@@ -27,6 +28,10 @@ struct RVOperatorUIApplication: App {
                     OperatorActionReviewView(model: actionModel)
                         .tabItem { Label("Action approvals", systemImage: "checkmark.shield") }
                 }
+                if let hookModel {
+                    OperatorHookReviewView(model: hookModel)
+                        .tabItem { Label("Coding-agent requests", systemImage: "terminal") }
+                }
             }
             .task {
                 if launchModel == nil {
@@ -34,6 +39,9 @@ struct RVOperatorUIApplication: App {
                 }
                 if actionModel == nil {
                     actionModel = OperatorActionReviewModel(bridge: sharedClient)
+                }
+                if hookModel == nil {
+                    hookModel = OperatorHookReviewModel(bridge: sharedClient)
                 }
             }
         }
@@ -43,7 +51,7 @@ struct RVOperatorUIApplication: App {
 
 extension OperatorReviewModel {
     @MainActor
-    static func makeBridge() -> any OperatorUIBridge & OperatorActionUIBridge {
+    static func makeBridge() -> any OperatorUIBridge & OperatorActionUIBridge & OperatorHookUIBridge {
         #if canImport(XPC)
         XPCOperatorUIClient()
         #else
@@ -54,7 +62,7 @@ extension OperatorReviewModel {
 
 #if !canImport(XPC)
 /// Non-XPC platforms: the UI cannot reach rvd. Present, never crash.
-struct UnavailableBridge: OperatorUIBridge, OperatorActionUIBridge {
+struct UnavailableBridge: OperatorUIBridge, OperatorActionUIBridge, OperatorHookUIBridge {
     func connect() async throws { throw BridgeUnavailable() }
     func list() async throws -> UIReviewListDTO { throw BridgeUnavailable() }
     func bind(operationID _: UUID) async throws -> UIChallengeBundleDTO { throw BridgeUnavailable() }
@@ -67,6 +75,12 @@ struct UnavailableBridge: OperatorUIBridge, OperatorActionUIBridge {
     func actionDeny(_: UIActionDeny) async throws -> UIActionStatusDTO { throw BridgeUnavailable() }
     func actionCancel(approvalID _: UUID) async throws -> UIActionStatusDTO { throw BridgeUnavailable() }
     func actionStatus(approvalID _: UUID) async throws -> UIActionStatusDTO { throw BridgeUnavailable() }
+    func hookList() async throws -> UIHookReviewListDTO { throw BridgeUnavailable() }
+    func hookBind(approvalID _: String) async throws -> UIHookChallengeBundleDTO { throw BridgeUnavailable() }
+    func hookComplete(_: UIHookCompletion) async throws -> UIHookStatusDTO { throw BridgeUnavailable() }
+    func hookDeny(_: UIHookDeny) async throws -> UIHookStatusDTO { throw BridgeUnavailable() }
+    func hookCancel(approvalID _: String) async throws -> UIHookStatusDTO { throw BridgeUnavailable() }
+    func hookStatus(approvalID _: String) async throws -> UIHookStatusDTO { throw BridgeUnavailable() }
 }
 
 struct BridgeUnavailable: Error {}

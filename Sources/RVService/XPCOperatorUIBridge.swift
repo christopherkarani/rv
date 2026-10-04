@@ -15,7 +15,8 @@ enum XPCOperatorUIBridge {
     static func handles(_ message: xpc_object_t) -> Bool {
         xpc_get_type(message) == XPC_TYPE_DICTIONARY
             && (xpc_dictionary_get_value(message, UIBridgeWire.requestKey) != nil
-                || xpc_dictionary_get_value(message, UIBridgeWire.actionRequestKey) != nil)
+                || xpc_dictionary_get_value(message, UIBridgeWire.actionRequestKey) != nil
+                || xpc_dictionary_get_value(message, UIBridgeWire.hookRequestKey) != nil)
     }
 
     static func handle(
@@ -25,7 +26,8 @@ enum XPCOperatorUIBridge {
         discoveryOnly: Bool,
         sessions: LiveOperatorUISessionRegistry,
         ceremonies: WorkspaceOperatorCeremonyService,
-        actionCeremonies: ActionApprovalCeremonyService
+        actionCeremonies: ActionApprovalCeremonyService,
+        hookCeremonies: HookReviewCeremonyService
     ) async {
         guard let response = await reply(
             message: message.object,
@@ -34,7 +36,8 @@ enum XPCOperatorUIBridge {
             discoveryOnly: discoveryOnly,
             sessions: sessions,
             ceremonies: ceremonies,
-            actionCeremonies: actionCeremonies
+            actionCeremonies: actionCeremonies,
+            hookCeremonies: hookCeremonies
         ),
             let peer = xpc_dictionary_get_remote_connection(message.object)
         else {
@@ -50,7 +53,8 @@ enum XPCOperatorUIBridge {
         discoveryOnly: Bool,
         sessions: LiveOperatorUISessionRegistry,
         ceremonies: WorkspaceOperatorCeremonyService,
-        actionCeremonies: ActionApprovalCeremonyService? = nil
+        actionCeremonies: ActionApprovalCeremonyService? = nil,
+        hookCeremonies: HookReviewCeremonyService? = nil
     ) async -> xpc_object_t? {
         // Reply-always: the only nil is a missing remote (nothing to send
         // to). Every gate failure answers opaque denial so the requestor's
@@ -70,6 +74,18 @@ enum XPCOperatorUIBridge {
                 sessions: sessions,
                 actionCeremonies: actionCeremonies)
         }
+        // Hook review rides its own key and its own ceremony. The launch
+        // and action paths are untouched.
+        if xpc_dictionary_get_value(message, UIBridgeWire.hookRequestKey) != nil {
+            return await hookReply(
+                message: message,
+                response: response,
+                context: context,
+                handshakeOK: handshakeOK,
+                discoveryOnly: discoveryOnly,
+                sessions: sessions,
+                hookCeremonies: hookCeremonies)
+        }
         guard handshakeOK, !discoveryOnly,
             let peer = context.peer, peer.componentRole == .operatorUI,
             let data = body(message, key: UIBridgeWire.requestKey),
@@ -84,6 +100,7 @@ enum XPCOperatorUIBridge {
             }
             await ceremonies.uiSessionAuthenticated()
             await actionCeremonies?.uiSessionAuthenticated()
+            await hookCeremonies?.uiSessionAuthenticated()
             return answer(
                 response,
                 result: .uiRegistered(
@@ -264,6 +281,104 @@ enum XPCOperatorUIBridge {
                 response,
                 result: .uiActionStatus(
                     UIActionStatusDTO(approvalID: approvalID, status: status)))
+        }
+    }
+
+    /// Hook-review reply path. Same gating shape as action (handshake,
+    /// non-discovery, authenticated `operatorUI` peer, registered session,
+    /// reply-always opaque denial), but a separate request vocabulary and
+    /// a separate ceremony: no launch or action challenge, completion, or
+    /// status can enter here, and no hook completion can reach those
+    /// ceremonies.
+    static func hookReply(
+        message: xpc_object_t,
+        response: xpc_object_t,
+        context: AuthenticatedRequestContext,
+        handshakeOK: Bool,
+        discoveryOnly: Bool,
+        sessions: LiveOperatorUISessionRegistry,
+        hookCeremonies: HookReviewCeremonyService?
+    ) async -> xpc_object_t? {
+        guard handshakeOK, !discoveryOnly,
+            let peer = context.peer, peer.componentRole == .operatorUI,
+            let data = body(message, key: UIBridgeWire.hookRequestKey),
+            let request = try? IPCJSON.decode(UIHookBridgeRequest.self, from: data),
+            let hookCeremonies
+        else {
+            return deny(response)
+        }
+        switch request {
+        case .hookList:
+            guard await sessions.session(connectionID: peer.connectionID) != nil else {
+                return deny(response)
+            }
+            let list = await hookCeremonies.listHookReviews()
+            return answer(response, result: .uiHookReviewList(list))
+        case .hookBind(let approvalID):
+            guard let session = await sessions.session(connectionID: peer.connectionID) else {
+                return deny(response)
+            }
+            do {
+                let (challenge, item) = try await hookCeremonies.bindHookReview(
+                    approvalID: approvalID, uiConnection: session.uiConnection)
+                return answer(
+                    response,
+                    result: .uiHookChallengeBundle(
+                        UIHookChallengeBundleDTO(challenge: challenge, item: item)))
+            } catch {
+                return deny(response)
+            }
+        case .hookComplete(let completion):
+            guard let session = await sessions.session(connectionID: peer.connectionID) else {
+                return deny(response)
+            }
+            do {
+                let status = try await hookCeremonies.completeHookCeremony(
+                    completion, uiConnection: session.uiConnection)
+                return answer(
+                    response,
+                    result: .uiHookStatus(
+                        UIHookStatusDTO(approvalID: completion.approvalID, status: status)))
+            } catch {
+                return deny(response)
+            }
+        case .hookDeny(let denyRequest):
+            guard let session = await sessions.session(connectionID: peer.connectionID) else {
+                return deny(response)
+            }
+            do {
+                let status = try await hookCeremonies.denyHookCeremony(
+                    denyRequest, uiConnection: session.uiConnection)
+                return answer(
+                    response,
+                    result: .uiHookStatus(
+                        UIHookStatusDTO(approvalID: denyRequest.approvalID, status: status)))
+            } catch {
+                return deny(response)
+            }
+        case .hookCancel(let approvalID):
+            guard let session = await sessions.session(connectionID: peer.connectionID) else {
+                return deny(response)
+            }
+            do {
+                let status = try await hookCeremonies.cancelHookReview(
+                    approvalID: approvalID, uiConnection: session.uiConnection)
+                return answer(
+                    response,
+                    result: .uiHookStatus(
+                        UIHookStatusDTO(approvalID: approvalID, status: status)))
+            } catch {
+                return deny(response)
+            }
+        case .hookStatus(let approvalID):
+            guard await sessions.session(connectionID: peer.connectionID) != nil else {
+                return deny(response)
+            }
+            let status = await hookCeremonies.hookStatus(approvalID: approvalID)
+            return answer(
+                response,
+                result: .uiHookStatus(
+                    UIHookStatusDTO(approvalID: approvalID, status: status)))
         }
     }
 }

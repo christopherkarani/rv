@@ -3,10 +3,16 @@ import RVDomain
 import RVHistory
 import RVPolicy
 
-/// Owns Policy-gate inputs for a live evaluate: session door, allow-once
-/// store, home, clock, and the T13 lazy allowlist.
+/// Owns Policy-gate inputs for a live evaluate: session door, grant table,
+/// allow-once file store (mint coordination + allowlist dir only), home,
+/// clock, and the T13 lazy allowlist.
+///
+/// Step 8B.1: `grants` (service-held memory) is the sole spend/peek
+/// authority. `store` (file) coordinates pending codes and projections;
+/// it is never consulted for authority.
 package struct LiveEvaluateWorld: Sendable {
     package let store: AllowOnceStore
+    package let grants: EphemeralAllowOnceTable
     package let home: HomeDirectory?
 
     private let gated: GatedEvaluate
@@ -15,6 +21,8 @@ package struct LiveEvaluateWorld: Sendable {
 
     /// Creates a live world. Nil home is day-one walk. Missing store uses
     /// `$HOME/.config/rv` when home is present, else a unique ephemeral directory.
+    /// Missing grants mints a fresh empty table (grant-blind): the daemon
+    /// MUST pass its owned table so grants persist across evaluations.
     ///
     /// `allowlist` is a test seam (counting loader). Production constructs
     /// `AllowlistStore(baseDirectory: store.baseDirectory)` here; T13 skip stays
@@ -22,6 +30,7 @@ package struct LiveEvaluateWorld: Sendable {
     package init(
         home: HomeDirectory?,
         store: AllowOnceStore? = nil,
+        grants: EphemeralAllowOnceTable? = nil,
         gated: GatedEvaluate? = nil,
         clock: @escaping @Sendable () -> Date = { Date() },
         allowlist: (@Sendable (WorkingDirectory?, Date) -> AllowlistSnapshot)? = nil
@@ -30,6 +39,7 @@ package struct LiveEvaluateWorld: Sendable {
         let baseDirectory = resolvedStore.baseDirectory
         self.home = home
         self.store = resolvedStore
+        self.grants = grants ?? EphemeralAllowOnceTable()
         self.gated = gated ?? EvaluationWorld.assemble(
             home: home,
             snapshots: nil,
@@ -60,25 +70,6 @@ package struct LiveEvaluateWorld: Sendable {
         await run(.apply, command: command, cwd: cwd, host: host)
     }
 
-    /// Host Ask plant+spend this turn.
-    package func spend(
-        command: ShellCommand,
-        cwd: WorkingDirectory?,
-        host: LedgerHost = .tty
-    ) async -> EvaluationResult {
-        let now = clock()
-        let load = allowlist
-        return await gated.spendHostAsk(
-            command: command,
-            cwd: cwd,
-            home: home,
-            store: store,
-            now: now,
-            allowlist: { load(cwd, now) },
-            host: host
-        )
-    }
-
     /// Catalog-only file-tool door. Packs and Policy gate never see the path.
     package func runFile(
         action: FileToolAction,
@@ -106,7 +97,7 @@ package struct LiveEvaluateWorld: Sendable {
             request,
             cwd: cwd,
             home: home,
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { load(cwd, now) },
             host: host
@@ -125,7 +116,7 @@ package struct LiveEvaluateWorld: Sendable {
             request,
             cwd: cwd,
             home: home,
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { load(cwd, now) },
             host: host
@@ -158,7 +149,7 @@ package struct LiveEvaluateWorld: Sendable {
             command: command,
             cwd: cwd,
             home: home,
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { load(cwd, now) },
             host: host

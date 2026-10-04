@@ -14,12 +14,20 @@ extension ShellPipeline {
         /// The tokenizer keeps the `$` marker in `lexeme` so ANSI-C payloads
         /// stay visible to later stages; decoding happens downstream.
         public var wasAnsiC: Bool
+        /// True when the token carries shell redirect-out structure: either
+        /// the raw word holds an unquoted `>` (glued `hi>"/tmp/eve"`,
+        /// `2>"/tmp/eve"`) or it is the target word after a bare redirect-out
+        /// operator (`> "/tmp/eve"`). Computed from raw quote positions at
+        /// tokenize time, so quoted `>` data (`"a>b"`) stays unmarked. Masking
+        /// must never hide these: the writers pass needs the exact target.
+        public var isRedirectStructural: Bool
 
         /// Creates a token; `wasAnsiC` implies `wasQuoted`, which is normalized here.
-        public init(lexeme: String, wasQuoted: Bool, wasAnsiC: Bool = false) {
+        public init(lexeme: String, wasQuoted: Bool, wasAnsiC: Bool = false, isRedirectStructural: Bool = false) {
             self.lexeme = lexeme
             self.wasQuoted = wasQuoted || wasAnsiC
             self.wasAnsiC = wasAnsiC
+            self.isRedirectStructural = isRedirectStructural
         }
 
         /// True for structural newline separators, which the tokenizer emits as

@@ -613,7 +613,9 @@ final class WorkspaceHostServer: Sendable {
         return launch(message, responseOp: .ensureTerminalRuntime)
     }
 
-    private func launch(
+    /// Internal for the Step 8 direct-handler test: exercises the
+    /// wire-to-supervisor wiring without socket peer authentication.
+    func launch(
         _ message: WorkspaceControlRequest,
         responseOp: WorkspaceControlOp = .launchRuntime
     ) -> WorkspaceControlResponse {
@@ -638,20 +640,17 @@ final class WorkspaceHostServer: Sendable {
         } else {
             resourceProfile = nil
         }
-        // The hook wire carries the launch's agent tag. A tag that names
-        // a HookHost also selects hook protocol participation; any other
-        // well-formed tag is staging-only credential selection.
+        // The hook wire carries hook protocol participation only (Step 8
+        // F2): a tag that names a HookHost selects protocol handling; any
+        // other well-formed tag is accepted but selects nothing. Wire tags
+        // never select credentials — selection is definition-derived only,
+        // and the legacy launch path stages no filtered credentials.
         let hook: HookHost?
-        let stagingAgent: String?
-        if let raw = message.hook {
-            guard AgentTagValidator.isValid(raw) else {
-                return failure(message, .invalidRequest)
-            }
-            hook = HookHost(rawValue: raw)
-            stagingAgent = raw
-        } else {
-            hook = nil
-            stagingAgent = nil
+        switch legacyLaunchHookSelection(message.hook) {
+        case .failure(let code):
+            return failure(message, code)
+        case .success(let selected):
+            hook = selected
         }
         guard let command = IsolatedCommand(
             executable: executable,
@@ -669,7 +668,6 @@ final class WorkspaceHostServer: Sendable {
         let plan = compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace)
         let result = supervisor.launchLegacy(
             host: hook,
-            stagingAgent: stagingAgent,
             command: command,
             plan: plan,
             io: io,
@@ -1078,6 +1076,19 @@ final class WorkspaceHostServer: Sendable {
         guard connections.isEmpty == false else { return false }
         return connections.contains { $0.send(message) }
     }
+}
+
+/// Maps the legacy launch wire's hook field to protocol participation.
+///
+/// Step 8 (F2): a well-formed tag that names a `HookHost` selects hook
+/// protocol handling; any other well-formed tag is accepted but selects
+/// nothing. Malformed tags are refused. The result feeds hook protocol
+/// only — staging selection is definition-derived (`launchLegacy` takes
+/// no tag), so no wire value can select credentials.
+func legacyLaunchHookSelection(_ raw: String?) -> Result<HookHost?, WorkspaceControlCode> {
+    guard let raw else { return .success(nil) }
+    guard AgentTagValidator.isValid(raw) else { return .failure(.invalidRequest) }
+    return .success(HookHost(rawValue: raw))
 }
 
 private func workspaceTerminalMessage(

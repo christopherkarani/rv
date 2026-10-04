@@ -1,0 +1,16 @@
+{
+  "command": [
+    "sudo",
+    "-n",
+    "true"
+  ],
+  "exit_code": 1,
+  "stderr": "sudo: a password is required",
+  "writes_performed": false,
+  "protected_manifest": "/Library/Application Support/RV/peer-trust.json",
+  "manifest_exists": false,
+  "platform": "macOS 27.0 arm64",
+  "trust_roles": "cli, service, workspaceHost only; no installed role configuration present",
+  "product_oracle": "BLOCKED; no authenticated three-process tuple",
+  "operator_launch_issuer": "No production issuer found; existing ControlAuthorizationBroker is approval-specific with LAContext default authenticator"
+}

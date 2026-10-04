@@ -74,9 +74,11 @@ struct LinuxResidualCoverageTests {
             analysis: .unknown,
             boundReview: .mandatoryHuman(deny)
         )
-        #expect(HostNativeAsk.recordsPending(result: allowedBind, cwd: cwd) == false)
-        #expect(HostNativeAsk.recordsPending(result: denied, cwd: cwd))
-        #expect(HostNativeAsk.recordsPending(result: human, cwd: cwd))
+        #expect(
+            HookAuthorization.project(result: allowedBind, cwd: cwd).shouldRecordPending == false
+        )
+        #expect(HookAuthorization.project(result: denied, cwd: cwd).shouldRecordPending)
+        #expect(HookAuthorization.project(result: human, cwd: cwd).shouldRecordPending)
         let indeterminate = EvaluationResult(
             outcome: .indeterminate(.commandTooLarge),
             matchingView: MatchingView("huge"),
@@ -84,11 +86,7 @@ struct LinuxResidualCoverageTests {
             boundReview: .mandatoryHuman(deny)
         )
         #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .pi,
-                result: indeterminate,
-                cwd: cwd
-            ) == .deny
+            HookAuthorization.project(result: indeterminate, cwd: cwd).verdict == .deny
         )
     }
 

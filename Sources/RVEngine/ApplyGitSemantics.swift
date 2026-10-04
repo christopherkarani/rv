@@ -38,11 +38,73 @@ public func applyGitSemantics(
     var result = pack
     result.analysis = analysis
 
+    // Step 8B §24: on a chain, evaluate the shared analysis action
+    // first (it may carry an unwrapped wrapper verdict), then every
+    // parsed git segment; the first deny wins, so a benign prefix cannot
+    // hide a risky later segment. The attached analysis stays the
+    // whole-command analysis.
+    let view = Normalize.matchingView(of: command.rawValue).rawValue
+    let gitContext = gitAnalysisContext(context)
+    if splitSegments(view).count > 1 {
+        if let action = analysis.gitAction,
+            let denied = gitSegmentResult(
+                action: action,
+                pack: pack,
+                analysis: analysis,
+                command: command,
+                gitContext: gitContext,
+                world: context,
+                enabledPacks: enabledPacks,
+                policy: policy
+            )
+        {
+            return denied
+        }
+        for action in parseGitSegments(view, context: gitContext) {
+            if let denied = gitSegmentResult(
+                action: action,
+                pack: pack,
+                analysis: analysis,
+                command: command,
+                gitContext: gitContext,
+                world: context,
+                enabledPacks: enabledPacks,
+                policy: policy
+            ) {
+                return denied
+            }
+        }
+        return result
+    }
+
     guard let action = analysis.gitAction else {
         return result
     }
 
-    let gitContext = gitAnalysisContext(context)
+    return gitSegmentResult(
+        action: action,
+        pack: pack,
+        analysis: analysis,
+        command: command,
+        gitContext: gitContext,
+        world: context,
+        enabledPacks: enabledPacks,
+        policy: policy
+    ) ?? result
+}
+
+/// Evaluates one git action exactly as the single-command path. Nil means
+/// the pack verdict stands; non-nil is a deny to return.
+private func gitSegmentResult(
+    action: GitAction,
+    pack: EvaluationResult,
+    analysis: SemanticAnalysis,
+    command: ShellCommand,
+    gitContext: GitAnalysisContext,
+    world: GitAnalysisWorld,
+    enabledPacks: [PackID],
+    policy: EffectiveActionPolicy
+) -> EvaluationResult? {
     let verdict: ActionPolicyVerdict
     if enabledPacks.contains(.coreGit) {
         verdict = ActionPolicyEngine.evaluate(
@@ -52,7 +114,7 @@ public func applyGitSemantics(
             ),
             context: gitContext.reviewContext,
             policy: policy,
-            gitWorld: context
+            gitWorld: world
         )
     } else if let typed = ActionPolicyEngine.typedRestriction(
         .git(action),
@@ -60,12 +122,12 @@ public func applyGitSemantics(
     ) {
         verdict = typed
     } else {
-        return result
+        return nil
     }
     let bound = HostNativeAsk.hookBound(verdict.decision)
     switch bound {
     case .allow:
-        return result
+        return nil
     case .deny(let deny), .mandatoryHuman(let deny):
         return EvaluationResult(
             outcome: .deny(deny, matched: nil),

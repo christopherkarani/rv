@@ -218,6 +218,11 @@ public struct AgentInstance: Hashable, Sendable, Equatable {
 /// PR3 wires this shape into `RuntimeAdmissionSubject`; here it pairs the
 /// established instance with its evaluated validity. Only `active`
 /// validity is usable; every other state fails closed.
+///
+/// Step 8 (F3): this context proves AGENT PRINCIPAL authority. A
+/// `RuntimeCapability` proves channel authority only. Sensitive mediated
+/// operations require this context (via `submitIdentityRequired`) plus
+/// the channel capability where applicable — never the capability alone.
 public struct AuthenticatedAgentContext: Hashable, Sendable, Equatable {
     public let instance: AgentInstance
     public let validity: AgentInstanceValidity

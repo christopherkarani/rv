@@ -131,11 +131,23 @@ struct ParseFilesystemMutationsTests {
             paths: ["a"]
         )
         expectParsed(
-            parseTruncate(["--size=0", "-cor", "x"]),
+            parseTruncate(["--size=0", "-co", "x"]),
             "overwrite",
             paths: ["x"]
         )
-        #expect(parseTruncate(["-s0", "y"]) == nil)
+        // `-r` takes the reference value: `-cor x` consumes `x`, leaving no
+        // operand (the tool errors), while attached `-s0` reads size `0`.
+        #expect(parseTruncate(["--size=0", "-cor", "x"]) == nil)
+        expectParsed(
+            parseTruncate(["-r", "ref", "y"]),
+            "overwrite",
+            paths: ["y"]
+        )
+        expectParsed(
+            parseTruncate(["-s0", "y"]),
+            "overwrite",
+            paths: ["y"]
+        )
         expectParsed(
             parseTruncate(["--", "-s"]),
             "overwrite",
@@ -233,7 +245,12 @@ struct ParseFilesystemMutationsTests {
             "delete",
             paths: ["y"]
         )
-        #expect(parseShred(["-n2", "z"]) == nil)
+        // Attached `-n2` reads iterations `2`, exactly like the tool.
+        expectParsed(
+            parseShred(["-n2", "z"]),
+            "delete",
+            paths: ["z"]
+        )
         expectParsed(
             parseShred(["--", "-n"]),
             "delete",
@@ -248,6 +265,94 @@ struct ParseFilesystemMutationsTests {
         #expect(parseShred(["-w", "file"]) == nil)
         #expect(parseShred(["--weird", "file"]) == nil)
         #expect(parseShred([]) == nil)
+    }
+
+    @Test func rm_newShortsAndAbbreviations() {
+        expectParsed(parseRm(["-W", "a"]), "delete", paths: ["a"])
+        expectParsed(parseRm(["-x", "a"]), "delete", paths: ["a"])
+        expectParsed(parseRm(["-P", "a"]), "delete", paths: ["a"])
+        expectParsed(
+            parseRm(["--rec", "a"]),
+            "delete",
+            paths: ["a"],
+            recursive: true
+        )
+        expectParsed(
+            parseRm(["--r", "a"]),
+            "delete",
+            paths: ["a"],
+            recursive: true
+        )
+        expectParsed(parseRm(["--inter=never", "a"]), "delete", paths: ["a"])
+        expectParsed(parseRm(["--one", "a"]), "delete", paths: ["a"])
+        expectParsed(parseRm(["--no-", "a"]), "delete", paths: ["a"])
+        // Post-`--` words recover verbatim, never resolved.
+        expectParsed(parseRm(["--", "--rec"]), "delete", paths: ["--rec"])
+        // Ambiguous abbreviations stay unknown (the tool errors).
+        #expect(parseRm(["--d", "a"]) == nil)
+    }
+
+    @Test func mv_suffixAndTargetDirectory() {
+        expectParsed(parseMv(["-S", "suf", "a", "b"]), "move", paths: ["a", "b"])
+        expectParsed(parseMv(["-Ssuf", "a", "b"]), "move", paths: ["a", "b"])
+        // `-S` blocks the pre-scan `-t`: suffix reads `tDIR`.
+        expectParsed(parseMv(["-StDIR", "a", "b"]), "move", paths: ["a", "b"])
+        expectParsed(parseMv(["-h", "a", "b"]), "move", paths: ["a", "b"])
+        expectParsed(parseMv(["-b", "-T", "-Z", "a", "b"]), "move", paths: ["a", "b"])
+        expectParsed(
+            parseMv(["--targ", "/tmp/t", "a", "b"]),
+            "move",
+            paths: ["/tmp/t", "a", "b"]
+        )
+        expectParsed(
+            parseMv(["-t", "/tmp/a", "--targ", "/tmp/b", "x"]),
+            "move",
+            paths: ["/tmp/b", "x", "/tmp/a"]
+        )
+        expectParsed(parseMv(["--suf", "x", "a", "b"]), "move", paths: ["a", "b"])
+        expectParsed(
+            parseMv(["--strip-trailing-slashes", "a", "b"]),
+            "move",
+            paths: ["a", "b"]
+        )
+        expectParsed(parseMv(["--backup", "a", "b"]), "move", paths: ["a", "b"])
+        expectParsed(parseMv(["--backup=x", "a", "b"]), "move", paths: ["a", "b"])
+        expectParsed(parseMv(["--context=x", "a", "b"]), "move", paths: ["a", "b"])
+        expectParsed(
+            parseMv(["--no-target-directory", "a", "b"]),
+            "move",
+            paths: ["a", "b"]
+        )
+        #expect(parseMv(["-S"]) == nil)
+    }
+
+    @Test func rmdir_abbreviations() {
+        expectParsed(parseRmdir(["--par", "a"]), "delete", paths: ["a"])
+        expectParsed(parseRmdir(["--i", "a"]), "delete", paths: ["a"])
+        #expect(parseRmdir(["--x", "a"]) == nil)
+    }
+
+    @Test func truncate_referenceFlags() {
+        expectParsed(parseTruncate(["-r", "ref", "f"]), "overwrite", paths: ["f"])
+        expectParsed(
+            parseTruncate(["--reference=ref", "f"]),
+            "overwrite",
+            paths: ["f"]
+        )
+        expectParsed(parseTruncate(["--ref", "ref", "f"]), "overwrite", paths: ["f"])
+        expectParsed(parseTruncate(["--no-c", "f"]), "overwrite", paths: ["f"])
+    }
+
+    @Test func shred_randomSource() {
+        expectParsed(
+            parseShred(["--random-source=/dev/urandom", "f"]),
+            "delete",
+            paths: ["f"]
+        )
+        expectParsed(parseShred(["--ra", "r", "f"]), "delete", paths: ["f"])
+        expectParsed(parseShred(["--re", "f"]), "delete", paths: ["f"])
+        // `--r` is ambiguous (`remove`/`random-source`): the tool errors.
+        #expect(parseShred(["--r", "f"]) == nil)
     }
 }
 

@@ -6,6 +6,8 @@ public enum PolicyOverride: Equatable, Sendable {
     case allowlist
     case allowOnce
     case rebaseRecovery
+    /// Balanced profile only: contained generated-output delete.
+    case containedReversible
 }
 
 public struct PolicyDecision: Equatable, Sendable {
@@ -21,13 +23,19 @@ public struct PolicyDecision: Equatable, Sendable {
 /// Chooses allowlist, allow-once, or rebase-recovery overrides for an evaluation result.
 public enum PolicyGate {
     /// Total override order. No store, clock, or filesystem.
+    ///
+    /// `safety` selects the coding profile: `.normal` is
+    /// CodingAgentBalanced (contained generated-output deletes auto-allow);
+    /// `.strict` disables the profile override. Default is strict so
+    /// callers opt into the balanced allowance explicitly.
     public static func decision(
         for result: EvaluationResult,
         cwd: WorkingDirectory?,
         allowlist: AllowlistSnapshot,
         grant: GrantPresence,
         now: Date,
-        rebaseInProgress: Bool = false
+        rebaseInProgress: Bool = false,
+        safety: SafetyLevel = .strict
     ) -> PolicyDecision {
         switch result.decision {
         case .allow:
@@ -56,19 +64,25 @@ public enum PolicyGate {
             case .pending:
                 return allowDecision(result, override: .allowOnce)
             case .none:
+                if safety == .normal, ContainedReversibleDelete.permits(result) {
+                    return allowDecision(result, override: .containedReversible)
+                }
                 return PolicyDecision(result: result, override: .none)
             }
         }
     }
 
     /// Spends a matching grant. Hook / `rvd` / in-process fallback.
+    /// Step 8B.1: spends ONLY service-held memory grants. The allow-once
+    /// file is a projection and is never consulted here (B-F1/B-F3).
     public static func consumingGrant(
         for result: EvaluationResult,
         cwd: WorkingDirectory?,
         allowlist: AllowlistSnapshot = .empty,
-        store: AllowOnceStore,
+        grants: EphemeralAllowOnceTable,
         now: Date,
-        rebaseInProgress: Bool = false
+        rebaseInProgress: Bool = false,
+        safety: SafetyLevel = .strict
     ) async -> PolicyDecision {
         let withoutGrant = decision(
             for: result,
@@ -76,88 +90,40 @@ public enum PolicyGate {
             allowlist: allowlist,
             grant: .none,
             now: now,
-            rebaseInProgress: rebaseInProgress
+            rebaseInProgress: rebaseInProgress,
+            safety: safety
         )
         guard let cwd = honorCwd(result, cwd: cwd, withoutGrant: withoutGrant) else {
             return withoutGrant
         }
-        switch await store.consume(
+        guard await grants.consume(
             matchingView: result.matchingView,
             cwd: cwd,
             now: now
-        ) {
-        case .consumed:
-            return decision(
-                for: result,
-                cwd: cwd,
-                allowlist: allowlist,
-                grant: .pending,
-                now: now,
-                rebaseInProgress: rebaseInProgress
-            )
-        case .notFound, .alreadyConsumed, .expired, .unavailable:
+        ) else {
             return withoutGrant
         }
-    }
-
-    /// Host Allow once: plant and spend this turn. Fail-closed. Indeterminate never spends.
-    public static func spendHostAllowOnce(
-        _ result: EvaluationResult,
-        cwd: WorkingDirectory?,
-        allowlist: AllowlistSnapshot = .empty,
-        store: AllowOnceStore,
-        now: Date,
-        rebaseInProgress: Bool = false
-    ) async -> PolicyDecision {
-        switch result.decision {
-        case .allow:
-            return PolicyDecision(result: result, override: .none)
-        case .indeterminate:
-            return PolicyDecision(result: result, override: .none)
-        case .deny:
-            let withoutGrant = decision(
-                for: result,
-                cwd: cwd,
-                allowlist: allowlist,
-                grant: .none,
-                now: now,
-                rebaseInProgress: rebaseInProgress
-            )
-            if withoutGrant.override == .allowlist || withoutGrant.override == .rebaseRecovery {
-                return withoutGrant
-            }
-            guard HookAuthorization.isUnlockable(result: result, cwd: cwd) else {
-                return withoutGrant
-            }
-            switch await HostGrantWriter.plantAndSpend(
-                matchingView: result.matchingView,
-                cwd: cwd,
-                store: store,
-                now: now
-            ) {
-            case .spent:
-                return decision(
-                    for: result,
-                    cwd: cwd,
-                    allowlist: allowlist,
-                    grant: .pending,
-                    now: now,
-                    rebaseInProgress: rebaseInProgress
-                )
-            case .rejected:
-                return withoutGrant
-            }
-        }
+        return decision(
+            for: result,
+            cwd: cwd,
+            allowlist: allowlist,
+            grant: .pending,
+            now: now,
+            rebaseInProgress: rebaseInProgress,
+            safety: safety
+        )
     }
 
     /// Shows a matching grant / allowlist without spending it. TTY `test` / `explain`.
+    /// Step 8B.1: consults ONLY service-held memory grants, never the file.
     public static func preview(
         for result: EvaluationResult,
         cwd: WorkingDirectory?,
         allowlist: AllowlistSnapshot = .empty,
-        store: AllowOnceStore,
+        grants: EphemeralAllowOnceTable,
         now: Date,
-        rebaseInProgress: Bool = false
+        rebaseInProgress: Bool = false,
+        safety: SafetyLevel = .strict
     ) async -> PolicyDecision {
         let withoutGrant = decision(
             for: result,
@@ -165,12 +131,13 @@ public enum PolicyGate {
             allowlist: allowlist,
             grant: .none,
             now: now,
-            rebaseInProgress: rebaseInProgress
+            rebaseInProgress: rebaseInProgress,
+            safety: safety
         )
         guard let cwd = honorCwd(result, cwd: cwd, withoutGrant: withoutGrant) else {
             return withoutGrant
         }
-        let grant: GrantPresence = await store.hasGrant(
+        let grant: GrantPresence = await grants.hasGrant(
             matchingView: result.matchingView,
             cwd: cwd,
             now: now
@@ -181,7 +148,8 @@ public enum PolicyGate {
             allowlist: allowlist,
             grant: grant,
             now: now,
-            rebaseInProgress: rebaseInProgress
+            rebaseInProgress: rebaseInProgress,
+            safety: safety
         )
     }
 

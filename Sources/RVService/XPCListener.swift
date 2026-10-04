@@ -160,6 +160,7 @@ final class XPCPeerSession: Sendable {
     private let uiSessions: LiveOperatorUISessionRegistry
     private let ceremonies: WorkspaceOperatorCeremonyService
     private let actionCeremonies: ActionApprovalCeremonyService
+    private let hookCeremonies: HookReviewCeremonyService
     private let hostLiveness = HostBridgeLiveness()
     private let beginTransaction: @Sendable () -> Void
     private let endTransaction: @Sendable () -> Void
@@ -173,6 +174,7 @@ final class XPCPeerSession: Sendable {
         uiSessions: LiveOperatorUISessionRegistry = LiveOperatorUISessionRegistry(),
         ceremonies: WorkspaceOperatorCeremonyService? = nil,
         actionCeremonies: ActionApprovalCeremonyService? = nil,
+        hookCeremonies: HookReviewCeremonyService? = nil,
         beginTransaction: @escaping @Sendable () -> Void = { xpc_transaction_begin() },
         endTransaction: @escaping @Sendable () -> Void = { xpc_transaction_end() }
     ) {
@@ -184,6 +186,7 @@ final class XPCPeerSession: Sendable {
         self.uiSessions = uiSessions
         self.ceremonies = ceremonies ?? runtime.ceremonies
         self.actionCeremonies = actionCeremonies ?? runtime.actionCeremonies
+        self.hookCeremonies = hookCeremonies ?? runtime.hookCeremonies
         self.beginTransaction = beginTransaction
         self.endTransaction = endTransaction
     }
@@ -197,6 +200,7 @@ final class XPCPeerSession: Sendable {
             let sessions = uiSessions
             let ceremonies = ceremonies
             let actionCeremonies = actionCeremonies
+            let hookCeremonies = hookCeremonies
             let id = connectionID
             return Task {
                 await registry.disconnect(connectionID: id)
@@ -205,6 +209,7 @@ final class XPCPeerSession: Sendable {
                 if let uiConnection = await sessions.disconnect(connectionID: id) {
                     await ceremonies.uiConnectionLost(uiConnection)
                     await actionCeremonies.uiConnectionLost(uiConnection)
+                    await hookCeremonies.uiConnectionLost(uiConnection)
                 }
             }
         }
@@ -247,7 +252,8 @@ final class XPCPeerSession: Sendable {
                 await XPCOperatorUIBridge.handle(message: held, context: context,
                     handshakeOK: accepted, discoveryOnly: self.discoveryOnly,
                     sessions: self.uiSessions, ceremonies: self.ceremonies,
-                    actionCeremonies: self.actionCeremonies)
+                    actionCeremonies: self.actionCeremonies,
+                    hookCeremonies: self.hookCeremonies)
                 return
             }
             let incomingReply: IncomingReply

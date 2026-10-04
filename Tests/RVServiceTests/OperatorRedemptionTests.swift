@@ -542,7 +542,10 @@ struct OperatorRedemptionTests {
         case .evaluate, .hookEvaluate, .explain, .classify, .listPacks,
             .setPackEnabled, .doctorSnapshot, .pendingList, .pendingWatch,
             .pendingResolve, .rulePreview, .ruleSave,
-            .proposeWorkspaceLaunch, .launchProposalStatus:
+            .proposeWorkspaceLaunch, .launchProposalStatus,
+            // Step 8B.1: plants a memory grant (genuine-CLI attestation),
+            // never consumes a permit.
+            .attestTTYRedemption:
             return false
         }
     }

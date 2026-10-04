@@ -19,6 +19,10 @@ public enum PendingApprovalLedger: Sendable {
         }
     }
 
+    /// Maximum rows awaiting a human. Retry storms collapse by
+    /// dedupe; beyond this an agent is spamming and new rows drop.
+    public static let maxAwaitingRows = 256
+
     public static func create(
         records: [PendingApproval],
         request: PendingApprovalRequest,
@@ -36,6 +40,13 @@ public enum PendingApprovalLedger: Sendable {
                 && record.fingerprint == request.action.fingerprint
         }) {
             return (existing, swept)
+        }
+        let awaiting = swept.filter {
+            if case .awaitingHuman = $0.state { return true }
+            return false
+        }
+        if awaiting.count >= maxAwaitingRows {
+            throw .storeFull
         }
         let record = PendingApproval(
             id: request.id,

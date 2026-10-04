@@ -16,6 +16,9 @@ public struct HookDoor: Sendable {
     }
 
     /// Create one awaiting row for a product Ask. Missing session is a no-op.
+    /// A full store drops the row (spam protection): the consult still
+    /// answers ask-denial and the TTY code path is unaffected, so the
+    /// human can still approve the exact action out of band.
     package static func recordPending(
         request: HookRequest,
         action: ProposedAction,
@@ -31,35 +34,13 @@ public struct HookDoor: Sendable {
             ),
             action: action,
             reason: .hostAsk,
-            continuation: .hostNative,
-            timeoutPolicy: .keepWaiting
+            continuation: .retry(action.fingerprint),
+            timeoutPolicy: .autoDeny
         )
-        _ = try await store.create(pending, now: now)
-    }
-
-    /// Cancel every awaiting row with this identity + fingerprint after spend.
-    package static func clearPending(
-        request: HookRequest,
-        action: ProposedAction,
-        store: (any PendingApprovalCoordinating)?,
-        now: Date
-    ) async throws {
-        guard let store, let session = request.session else { return }
-        let identity = ApprovalIdentity(
-            session: session,
-            agent: request.host
-        )
-        let fingerprint = action.fingerprint
-        let awaiting = try await store.list(now: now)
-        for record in awaiting {
-            guard record.identity == identity, record.fingerprint == fingerprint else {
-                continue
-            }
-            do {
-                _ = try await store.cancel(id: record.id, now: now)
-            } catch {
-                continue
-            }
+        do {
+            _ = try await store.create(pending, now: now)
+        } catch PendingApprovalError.storeFull {
+            return
         }
     }
 
@@ -87,24 +68,11 @@ extension HookEvaluateWorld {
             evaluateFile: { action, cwd in
                 world.runFile(action: action, cwd: cwd, host: ledger)
             },
-            spend: { command, cwd in
-                let result = await world.spend(command: command, cwd: cwd, host: ledger)
-                recordDecision?(result)
-                return result
-            },
             mintOnDeny: { result, cwd in
                 await world.mintUnlockCode(for: result, cwd: cwd)
             },
             recordHostAsk: { request, action in
                 try await HookDoor.recordPending(
-                    request: request,
-                    action: action,
-                    store: pending,
-                    now: clock()
-                )
-            },
-            clearHostAsk: { request, action in
-                try await HookDoor.clearPending(
                     request: request,
                     action: action,
                     store: pending,

@@ -137,12 +137,11 @@ private enum RebaseMarker {
 }
 
 private func apply(_ command: String, cwd: String?) async throws -> EvaluationResult {
-    let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
     let working = cwd.flatMap(WorkingDirectory.init(validating:))
     return await GatedEvaluate().apply(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
         cwd: working,
-        store: store,
+        grants: EphemeralAllowOnceTable(),
         now: Date(timeIntervalSince1970: 1_700_000_000),
         allowlist: { .empty }
     )

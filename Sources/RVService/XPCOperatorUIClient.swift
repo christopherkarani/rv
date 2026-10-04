@@ -139,6 +139,61 @@ public final class XPCOperatorUIClient: Sendable {
         return status
     }
 
+    // MARK: - Hook reviews (Step 8B)
+
+    /// Hook-review calls ride the same persistent action connection (and
+    /// the same registered UI session) as launch/action review, on the
+    /// hook request key with the hook vocabulary. A dropped connection
+    /// invalidates bound hook challenges server-side: the caller
+    /// reconnects and re-binds; nothing completes across it.
+    public func hookList() async throws -> UIHookReviewListDTO {
+        let response = try await hookRoundTrip(.hookList)
+        guard case .uiHookReviewList(let list) = response.result else {
+            throw mapUnexpected(response.result)
+        }
+        return list
+    }
+
+    public func hookBind(approvalID: String) async throws -> UIHookChallengeBundleDTO {
+        let response = try await hookRoundTrip(.hookBind(approvalID: approvalID))
+        guard case .uiHookChallengeBundle(let bundle) = response.result else {
+            throw mapUnexpected(response.result)
+        }
+        return bundle
+    }
+
+    public func hookComplete(_ completion: UIHookCompletion) async throws -> UIHookStatusDTO {
+        let response = try await hookRoundTrip(.hookComplete(completion))
+        guard case .uiHookStatus(let status) = response.result else {
+            throw mapUnexpected(response.result)
+        }
+        return status
+    }
+
+    public func hookDeny(_ deny: UIHookDeny) async throws -> UIHookStatusDTO {
+        let response = try await hookRoundTrip(.hookDeny(deny))
+        guard case .uiHookStatus(let status) = response.result else {
+            throw mapUnexpected(response.result)
+        }
+        return status
+    }
+
+    public func hookCancel(approvalID: String) async throws -> UIHookStatusDTO {
+        let response = try await hookRoundTrip(.hookCancel(approvalID: approvalID))
+        guard case .uiHookStatus(let status) = response.result else {
+            throw mapUnexpected(response.result)
+        }
+        return status
+    }
+
+    public func hookStatus(approvalID: String) async throws -> UIHookStatusDTO {
+        let response = try await hookRoundTrip(.hookStatus(approvalID: approvalID))
+        guard case .uiHookStatus(let status) = response.result else {
+            throw mapUnexpected(response.result)
+        }
+        return status
+    }
+
     private func register() async throws -> UIRegisteredDTO {
         let response = try await roundTrip(.register)
         guard case .uiRegistered(let receipt) = response.result else {
@@ -155,6 +210,29 @@ public final class XPCOperatorUIClient: Sendable {
         let body = try IPCJSON.encode(request)
         do {
             let frame = try await exchangeAction(body, on: actions)
+            return try IPCJSON.decode(IPCResponse.self, from: frame)
+        } catch let error as XPCOperatorUIClientError {
+            // Transport failure. Decoded denials surface from the callers
+            // (mapUnexpected), outside this catch: a live server answering
+            // denial keeps the session.
+            forgetActions()
+            throw error
+        } catch {
+            // Undecodable frame from an authenticated peer: drop the
+            // connection, report a protocol violation.
+            forgetActions()
+            throw XPCOperatorUIClientError.protocolMismatch
+        }
+    }
+
+    private func hookRoundTrip(_ request: UIHookBridgeRequest) async throws -> IPCResponse {
+        if Task.isCancelled {
+            throw XPCOperatorUIClientError.cancelled
+        }
+        let actions = try await liveActions()
+        let body = try IPCJSON.encode(request)
+        do {
+            let frame = try await exchangeHook(body, on: actions)
             return try IPCJSON.decode(IPCResponse.self, from: frame)
         } catch let error as XPCOperatorUIClientError {
             // Transport failure. Decoded denials surface from the callers
@@ -310,6 +388,13 @@ public final class XPCOperatorUIClient: Sendable {
     /// the request rides `rv.ui-action-request` with the action vocabulary.
     private func exchangeAction(_ body: Data, on connection: xpc_connection_t) async throws -> Data {
         try await exchangeRaw(body: body, key: UIBridgeWire.actionRequestKey, on: connection).body
+    }
+
+    /// Hook-review round trip. Same connection and session as launch and
+    /// action; the request rides `rv.ui-hook-request` with the hook
+    /// vocabulary.
+    private func exchangeHook(_ body: Data, on connection: xpc_connection_t) async throws -> Data {
+        try await exchangeRaw(body: body, key: UIBridgeWire.hookRequestKey, on: connection).body
     }
 
     private func exchangeHello(

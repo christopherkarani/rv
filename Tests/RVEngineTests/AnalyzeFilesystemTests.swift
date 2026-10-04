@@ -284,13 +284,102 @@ struct AnalyzeFilesystemTests {
     @Test func unsupportedSyntax_isUnknown() {
         #expect(analyzeFilesystem(ShellCommand(rawValue: "echo hello")) == .unknown)
         #expect(analyzeFilesystem(ShellCommand(rawValue: "rm --weird-flag file")) == .unknown)
-        #expect(analyzeFilesystem(ShellCommand(rawValue: "rm $FILE")) == .unknown)
         #expect(
             analyzeFilesystem(ShellCommand(rawValue: "bash -c 'rm -rf Sources'")) == .unknown
         )
         #expect(
             analyzeFilesystem(ShellCommand(rawValue: "rm file && echo done")) == .unknown
         )
+    }
+
+    // MARK: - P10e7 (A-F4/C-F4): dynamic mutation paths fail closed as outside
+
+    @Test func dynamicMutationPath_classifiesOutside() {
+        guard case .filesystem(.delete(let targets, _, _)) =
+            analyzeFilesystem(ShellCommand(rawValue: "rm $FILE"), context: repo)
+        else {
+            Issue.record("expected delete for dynamic rm")
+            return
+        }
+        #expect(targets.count == 1)
+        #expect(targets[0].apparent == "$FILE")
+        #expect(targets[0].scope == .outsideRepository)
+    }
+
+    @Test func staticOutside_survivesDynamicOperands() {
+        guard case .filesystem(.overwrite(let targets)) =
+            analyzeFilesystem(ShellCommand(rawValue: "cp $f /tmp/eve"), context: repo)
+        else {
+            Issue.record("expected overwrite for cp with dynamic source")
+            return
+        }
+        #expect(targets.contains(where: { $0.scope == .outsideRepository }))
+        guard case .filesystem(.overwrite(let redirectTargets)) =
+            analyzeFilesystem(ShellCommand(rawValue: "echo hi > $f > /tmp/eve"), context: repo)
+        else {
+            Issue.record("expected overwrite for mixed redirect")
+            return
+        }
+        #expect(redirectTargets.contains(where: { $0.apparent == "/tmp/eve" }))
+    }
+
+    @Test func dynamicReadsAndData_stayUnclaimed() {
+        #expect(analyzeFilesystem(ShellCommand(rawValue: "cat $f")) == .unknown)
+        #expect(analyzeFilesystem(ShellCommand(rawValue: "echo $x")) == .unknown)
+    }
+
+    @Test func homeAlias_isNotDynamic() {
+        // `$HOME` expands lexically: still a classified (non-blind) target.
+        guard case .filesystem(.delete(let targets, _, _)) =
+            analyzeFilesystem(ShellCommand(rawValue: "rm $HOME/.ssh/config"), context: repo)
+        else {
+            Issue.record("expected delete for home-alias rm")
+            return
+        }
+        #expect(targets[0].apparent == "$HOME/.ssh/config")
+    }
+
+    // MARK: - P10e11 (C-F7): dynamic argv0 fails closed as outside overwrite
+
+    private func segmentActions(_ raw: String) -> [FilesystemAction] {
+        parseFilesystemSegments(Normalize.matchingView(of: raw).rawValue, context: repo)
+    }
+
+    @Test func dynamicArgv0_failsClosedAsOutsideOverwrite() {
+        for raw in ["$(echo git) push", "`echo git` push", "$CMD push"] {
+            let actions = segmentActions(raw)
+            guard case .overwrite(let targets) = actions.first else {
+                Issue.record("expected overwrite for dynamic argv0: \(raw)")
+                continue
+            }
+            #expect(targets.count == 1)
+            #expect(targets[0].scope == .outsideRepository)
+        }
+    }
+
+    @Test func dynamicArgv0_variableCarryoverFailsClosed() {
+        // `X=git; $($X) push`: the assignment segment stays inert, every
+        // dynamic-argv0 segment fails closed (inner emission may yield
+        // more than one fail-closed action; all must be outside).
+        let actions = segmentActions("X=git; $($X) push")
+        #expect(actions.isEmpty == false)
+        for action in actions {
+            guard case .overwrite(let targets) = action else {
+                Issue.record("expected overwrite for carried dynamic argv0")
+                continue
+            }
+            #expect(targets.allSatisfy { $0.scope == .outsideRepository })
+        }
+    }
+
+    @Test func staticUnknownVerb_staysUnclaimed() {
+        #expect(segmentActions("echo hi").isEmpty)
+        #expect(segmentActions("frobnicate a b").isEmpty)
+    }
+
+    @Test func homeAliasHead_staysUnclaimed() {
+        // `$HOME/bin/tool` expands lexically: not a hidden verb.
+        #expect(segmentActions("$HOME/bin/tool args").isEmpty)
     }
 
     @Test func highValueOperations_parse() {

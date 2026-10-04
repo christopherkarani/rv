@@ -489,6 +489,69 @@ struct ApplyFilesystemSemanticsTests {
         )
         #expect(composed.analysis == pack.analysis)
     }
+
+    @Test func gitClaim_redirectOutsideRepoDenies() {
+        let command = ShellCommand(rawValue: "git stash list > ../outside-file")
+        let pack = EvaluationResult(
+            outcome: .plain,
+            matchingView: Normalize.matchingView(of: command),
+            analysis: .git(.stash(verb: .list))
+        )
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: command,
+            filesystemWorld: repo
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("redirect outside the repo must deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+    }
+
+    @Test func gitClaim_redirectInsideRepoLeavesPackUntouched() {
+        for raw in ["git stash list > Sources/log.txt", "git stash list"] {
+            let command = ShellCommand(rawValue: raw)
+            let pack = EvaluationResult(
+                outcome: .plain,
+                matchingView: Normalize.matchingView(of: command),
+                analysis: .git(.stash(verb: .list))
+            )
+            let composed = applyFilesystemSemantics(
+                pack: pack,
+                command: command,
+                filesystemWorld: repo
+            )
+            #expect(composed.decision == .allow)
+            #expect(composed.analysis == pack.analysis)
+        }
+    }
+
+    @Test func gitClaim_packFloorStillWinsFirst() {
+        let command = ShellCommand(rawValue: "git stash list > ../outside-file")
+        let packDeny = EvaluationResult(
+            outcome: .deny(
+                Deny(
+                    ruleID: RuleID(pack: .coreFilesystem, pattern: "pack-rule"),
+                    reason: "pack denied first"
+                ),
+                matched: nil
+            ),
+            matchingView: Normalize.matchingView(of: command),
+            analysis: .git(.stash(verb: .list))
+        )
+        let composed = applyFilesystemSemantics(
+            pack: packDeny,
+            command: command,
+            filesystemWorld: repo
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("pack deny must stand, got \(composed.decision)")
+            return
+        }
+        // The floor wins: the pack's own reason survives, not the redirect's.
+        #expect(deny.reason == "pack denied first")
+    }
 }
 
 private struct FilesystemSampleWorld {

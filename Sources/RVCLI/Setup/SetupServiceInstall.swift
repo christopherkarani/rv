@@ -7,7 +7,6 @@ extension SetupRun {
         files: FileOps,
         keepAlive: Bool
     ) throws(SetupError) {
-        try SetupRun.requireOwnerAuthorization()
         let body = try LaunchAgentTemplate.rendered(rvdPath: env.rvdPath, keepAlive: keepAlive)
         do {
             try files.write(body, to: layout.launchAgent)
@@ -53,7 +52,6 @@ extension SetupRun {
         layout: OwnedPaths,
         files: FileOps
     ) throws(SetupError) {
-        try SetupRun.requireOwnerAuthorization()
         let body = try SystemdUserTemplate.rendered(rvdPath: env.rvdPath)
         do {
             try files.write(body, to: layout.systemdUserUnit)

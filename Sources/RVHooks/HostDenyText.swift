@@ -21,17 +21,30 @@ public enum HookVoiceNext: Sendable, Equatable {
 
 /// Returns the minted allow-once paste line for `code`.
 /// Code goes first so truncated host cards still show the paste.
+/// The grant binds the normalized command (sudo/env/path spellings share
+/// one grant, B-F2), so the copy must not promise exact-spelling binding.
 public func unlockLine(for code: AllowOnceUnlockCode) -> String {
-    "Paste in Terminal to allow once: rv allow-once \(code.rawValue). This unlocks only this exact command."
+    "Paste in Terminal to allow once: rv allow-once \(code.rawValue). This unlocks the reviewed command once, including its sudo, env, and path spellings."
 }
 
 /// Repeat deny of the same command+cwd. Do not mint a second code.
 public let earlierPendingUnlockLine =
-    "A one-shot unlock is already pending for this exact command. Paste the earlier rv allow-once code in Terminal."
+    "A one-shot unlock is already pending for this command. Paste the earlier rv allow-once code in Terminal."
 
 /// Cursor `agent_message` on deny. User paste stays in `user_message`.
 public let cursorAgentStopLine =
     "RV blocked this command. Do not retry. Do not rewrite the command. Wait for the human."
+
+/// Ask-denial suffix on every host. The policy verdict stays ASK; the wire
+/// renders deny-with-guidance because no host can pause for a human.
+/// One sentence: `hostDenyWhy` keeps sentence 1 + sentence 2 only.
+public let approvalPendingLine =
+    "This action requires human approval: open RV to approve it, then retry the exact command."
+
+/// Cursor `agent_message` on ask. Unlike a deny, the agent retries the
+/// exact command after the human approves it in RV.
+public let cursorAgentAskLine =
+    "RV blocked this command because it requires approval. Wait for the human to approve it in RV, then retry the exact command."
 
 func hookVoiceNextSentence(_ next: HookVoiceNext) -> String? {
     switch next {
@@ -115,11 +128,6 @@ public func hookDenyCommandPreview(_ command: ShellCommand) -> String {
         return clipped + "…"
     }
     return clipped
-}
-
-/// Ask JSON reason. Deny hook payload must not use this line.
-public func hostAskLine(command: ShellCommand, ruleID: RuleID) -> String {
-    "Blocked \(hookDenyCommandPreview(command)) (\(ruleID.slashDisplay)). \(ttyUnlockHint)"
 }
 
 /// Sentence 1 of `reason`, plus sentence 2 when it is a safe one-line tip.

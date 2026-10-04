@@ -85,7 +85,8 @@ struct WorkspaceLaunchIntentCouplingTests {
         // every component role, including fully trusted ones.
         let digest = try custom(arguments: ["hello"]).get().canonicalDigest
         #expect(digest.sha256Hex.utf8.count == 64)
-        let roles: [TrustedRVComponentRole?] = [nil, .cli, .service, .workspaceHost]
+        // Step 8: exhaustive over every representable role.
+        let roles: [TrustedRVComponentRole?] = [nil, .cli, .service, .workspaceHost, .operatorUI]
         let operations: [WorkspaceControlOp] = [
             .launchRuntime, .launchAgentRuntime, .launchCustomRuntime, .ensureTerminalRuntime,
         ]

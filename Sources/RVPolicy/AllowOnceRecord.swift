@@ -22,14 +22,6 @@ public func allowsInteractiveAllowOnce(_ tty: TTYCapability) -> Bool {
     tty.stdinIsTTY && tty.stdoutIsTTY && !tty.ci
 }
 
-public enum AllowOnceConsumeStatus: Sendable, Equatable {
-    case consumed(tokenID: String)
-    case notFound
-    case alreadyConsumed
-    case expired
-    case unavailable
-}
-
 public enum AllowOnceError: Error, Sendable, Equatable {
     case ttyRequired
     case robotRefused
@@ -41,6 +33,9 @@ public enum AllowOnceError: Error, Sendable, Equatable {
     case encodeFailed
     case lockFailed
     case emptyCommand
+    /// Step 8B.1: the pending row changed between pre-LA display and the
+    /// redeem re-read (TOCTOU bind). Never attest a swapped row.
+    case redemptionChanged
 }
 
 public enum AllowOnceLifecycle: Sendable, Equatable {
@@ -192,7 +187,7 @@ public func commandFingerprint(_ matchingView: MatchingView) -> String {
     sha256Hex(matchingView.rawValue)
 }
 
-func sha256Hex(_ text: String) -> String {
+public func sha256Hex(_ text: String) -> String {
     let digest = SHA256.hash(data: Data(text.utf8))
     return digest.map { String(format: "%02x", $0) }.joined()
 }

@@ -228,21 +228,24 @@ struct LiveWorkspaceHostRegistryTests {
         let home = try #require(HomeDirectory(validating: root.path))
         let cwd = try #require(WorkingDirectory(validating: root.path))
         let store = AllowOnceStore(baseDirectory: root.appendingPathComponent("store"))
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: cwd, now: now)
+        #expect(
+            await grants.plant(
+                matchingView: "git reset --hard", cwd: cwd, codeHash: "owner-grant", now: now
+            ) == .planted
+        )
         let registry = LiveWorkspaceHostRegistry()
         let ref = reference()
         let host = peer()
         try await register(registry, ref, host)
         let context = try await registry.resolve(ref, hostPeer: host)
-        let runtime = ServiceRuntime(home: home, allowOnce: store, clock: { now })
+        let runtime = ServiceRuntime(home: home, allowOnce: store, grants: grants, clock: { now })
         let reply = await runtime.evaluateAgent(EvaluateParams(request:
             .makeDayOne(command: ShellCommand(rawValue: "git reset --hard")), cwd: cwd),
             requestID: UUID(), context: context)
         if case .deny = reply.result.decision {} else { Issue.record("Agent must not use an owner grant") }
-        let rows = await store.list(now: now)
-        #expect(rows.count == 1)
-        #expect(rows.first?.kind == .granted)
+        #expect(await grants.hasGrant(matchingView: "git reset --hard", cwd: cwd, now: now))
     }
 
     @Test func serviceEvaluationReceivesVerifiedPrincipal() async throws {

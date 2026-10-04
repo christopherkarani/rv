@@ -30,15 +30,10 @@ struct PendingApprovalStoreTests {
             return
         }
 
+        // Step 8: a reloaded authorizing resolution still cannot be
+        // consumed by name — restart persistence never mints authority.
         let third = PendingApprovalStore(baseDirectory: root)
-        let consumption = try await third.consume(
-            id: created.id,
-            fingerprint: Self.fingerprint,
-            identity: Self.identity,
-            now: Self.now
-        )
-        #expect(consumption.decision == .allowOnce)
-        await #expect(throws: PendingApprovalError.alreadyConsumed) {
+        await #expect(throws: PendingApprovalError.invalidRequest) {
             _ = try await third.consume(
                 id: created.id,
                 fingerprint: Self.fingerprint,
@@ -46,6 +41,12 @@ struct PendingApprovalStoreTests {
                 now: Self.now
             )
         }
+        let reread = try await third.load(id: created.id, now: Self.now)
+        guard case .resolved = reread.state else {
+            Issue.record("refused consume must leave .resolved")
+            return
+        }
+        #expect(reread.authorizes(Self.fingerprint, identity: Self.identity) == false)
     }
 
     @Test func concurrentResolveWinsOnce() async throws {
@@ -83,13 +84,37 @@ struct PendingApprovalStoreTests {
         #expect(resolution.decision == .allowOnce || resolution.decision == .deny)
     }
 
-    @Test func concurrentConsumeWinsOnce() async throws {
+    @Test func concurrentConsumeOfAuthorizingResolutionFailsClosed() async throws {
+        // Step 8: concurrent name-only consumes of an authorizing
+        // resolution both fail — no race can mint authority.
         let root = try isolatedDirectory()
         let writer = PendingApprovalStore(baseDirectory: root)
         let created = try await writer.create(Self.request(id: "race-consume"), now: Self.now)
         _ = try await writer.resolve(
             id: created.id,
             decision: .allowOnce,
+            fingerprint: Self.fingerprint,
+            identity: Self.identity,
+            now: Self.now
+        )
+        let a = PendingApprovalStore(baseDirectory: root)
+        let b = PendingApprovalStore(baseDirectory: root)
+        async let first = consumeResult(a, id: created.id)
+        async let second = consumeResult(b, id: created.id)
+        let results = await [first, second]
+        #expect(results.filter(\.isSuccess).isEmpty)
+        #expect(results.filter { $0 == .refused }.count == 2)
+    }
+
+    @Test func concurrentDenyConsumeWinsOnce() async throws {
+        // Deny delivery keeps its exactly-once race: one winner, one
+        // already-consumed loser.
+        let root = try isolatedDirectory()
+        let writer = PendingApprovalStore(baseDirectory: root)
+        let created = try await writer.create(Self.request(id: "race-deny"), now: Self.now)
+        _ = try await writer.resolve(
+            id: created.id,
+            decision: .deny,
             fingerprint: Self.fingerprint,
             identity: Self.identity,
             now: Self.now
@@ -228,7 +253,9 @@ struct PendingApprovalStoreTests {
             Issue.record("keepWaiting must resolve after restart past deadline")
             return
         }
-        #expect(resolved.authorizes(Self.fingerprint, identity: Self.identity))
+        // Step 8: resolving records the decision; name-only state never
+        // authorizes — live principal validity is proven elsewhere.
+        #expect(resolved.authorizes(Self.fingerprint, identity: Self.identity) == false)
     }
 
     @Test func staleFingerprintIsRejectedAfterRestart() async throws {
@@ -341,6 +368,7 @@ private enum StoreOp: Equatable {
     case success
     case alreadyResolved
     case alreadyConsumed
+    case refused
     case other
 
     var isSuccess: Bool {
@@ -374,6 +402,8 @@ private func consumeResult(
         return .success
     } catch PendingApprovalError.alreadyConsumed {
         return .alreadyConsumed
+    } catch PendingApprovalError.invalidRequest {
+        return .refused
     } catch {
         return .other
     }

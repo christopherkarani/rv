@@ -20,14 +20,29 @@ struct CommandToken {
     var wasAnsiC: Bool = false
 }
 
-/// Legacy tokenizer shape kept for `DocumentationQuery`, `Analyze*`, and the
-/// `peelTimeout` compatibility overload. The byte loop lives in
-/// `ShellPipeline.tokenize`; this maps its output 1:1.
+/// Legacy tokenizer shape kept for `DocumentationQuery` and `Analyze*`.
+/// The byte loop lives in `ShellPipeline.tokenize`; this maps its output
+/// 1:1. Assignment prefixes are handled as text, not here: stream-leading
+/// prefixes in `classifyStage` (pre-masking, where quoting boundaries
+/// survive) and per-segment prefixes in `singleEffectiveSegment` and the
+/// `parse*Segments` loops (with a resplit). A token-level strip cannot
+/// distinguish `NAME="v"` (assignment) from `"N=v"` (command name) — the
+/// lexeme lost the quote positions — and keeping substitution-carrying
+/// prefixes hid the tail (`X=$(:) git push` concealed a push).
 func tokenizeCommand(_ text: String) -> [CommandToken] {
     ShellPipeline.tokenize(text).map {
         CommandToken(decoded: $0.lexeme, wasQuoted: $0.wasQuoted, wasAnsiC: $0.wasAnsiC)
     }
 }
+
+/// True when `word` contains an executing substitution.
+func carriesSubstitution(_ word: String) -> Bool {
+    word.contains("$(") || word.contains("`")
+}
+
+let assignmentNameStart = Set("_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+let assignmentNameChars = Set("_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+
 
 func applyRoleAwareQuotes(_ text: String) -> String {
     let tokens = ShellPipeline.tokenize(text)
@@ -49,6 +64,9 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
     var pendingGitConfigArg = false
     var wrapperSeek = WrapperSeek.none
     var pendingInterpreterPayload = false
+    // P10e9: sed's positional script (first operand unless `-e`/`-f` gave it)
+    // masks like a grep pattern; file operands stay visible for the parser.
+    var sedScriptPending = false
     let unquotedDataMaskSafe = tokens.contains { tokenHasShellMeta($0.lexeme) } == false
 
     for index in tokens.indices {
@@ -86,6 +104,7 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
             gitConfigValuePending = false
             pendingGitConfigArg = false
             wrapperSeek = .none
+            sedScriptPending = false
             continue
         }
 
@@ -93,10 +112,12 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
             if let next = consumeWrapper(decoded: decoded, seek: &wrapperSeek) {
                 if let command = next {
                     commandBase = command
+                    sedScriptPending = (command == "sed")
                 }
                 continue
             }
             commandBase = basename(decoded)
+            sedScriptPending = (commandBase == "sed")
             continue
         }
 
@@ -135,6 +156,9 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
 
         if token.containsInlineCode {
             pendingDataFlag = false
+            if commandBase == "sed" {
+                sedScriptPending = false
+            }
             continue
         }
 
@@ -145,6 +169,9 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
         ) {
             tokens[index].lexeme = masked
             pendingDataFlag = false
+            if commandBase == "sed" {
+                sedScriptPending = false
+            }
             continue
         }
 
@@ -165,6 +192,9 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
                 pendingDataFlag = true
                 if gitSubcommand == "grep" {
                     gitGrepPatternPending = false
+                }
+                if commandBase == "sed" {
+                    sedScriptPending = false
                 }
             }
             continue
@@ -195,7 +225,8 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
 
         if unquotedDataMaskSafe,
            isAllArgsData(commandBase),
-           token.containsInlineCode == false
+           token.containsInlineCode == false,
+           token.isRedirectStructural == false
         {
             tokens[index].lexeme = String(repeating: " ", count: max(decoded.count, 1))
             pendingDataFlag = false
@@ -204,21 +235,40 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
         }
 
         if token.wasQuoted,
+           token.isRedirectStructural == false,
            shouldMaskQuotedData(
                command: commandBase,
                gitSubcommand: gitSubcommand,
                pendingDataFlag: pendingDataFlag,
-               gitGrepPatternPending: gitGrepPatternPending
+               gitGrepPatternPending: gitGrepPatternPending,
+               sedScriptPending: sedScriptPending
            )
         {
-            tokens[index].lexeme = String(repeating: " ", count: max(decoded.count, 1))
+            // Only sed scripts and `-e`/`-f` values mask under sed (files
+            // never do): they survive as `""` placeholders so the parser
+            // still sees the script position. Spaces would collapse and
+            // shift `sed -i "script" file` into `sed -i file` (no files).
+            if commandBase == "sed" {
+                tokens[index].lexeme = "\"\""
+            } else {
+                tokens[index].lexeme = String(repeating: " ", count: max(decoded.count, 1))
+            }
             pendingDataFlag = false
             gitGrepPatternPending = false
+            // An empty first operand is BSD `-i ""` (backup slot), not the
+            // script: keep pending so the real script still masks.
+            if commandBase == "sed", decoded.isEmpty == false {
+                sedScriptPending = false
+            }
             continue
         }
 
         pendingDataFlag = false
         gitGrepPatternPending = false
+        // Redirect operators are shell structure, not the sed script.
+        if commandBase == "sed", isRedirectOperator(decoded) == false {
+            sedScriptPending = false
+        }
     }
     return joinTokenLexemes(tokens)
 }

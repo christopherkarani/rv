@@ -17,6 +17,13 @@ extension ShellPipeline {
     /// pending/expect flag before the terminator/flag tests. Only a
     /// `rejectsDashValues` spec turns a dash-led value word into
     /// `.dangling` (today's `checkout -b` / `switch -c` behavior).
+    ///
+    /// Value shorts consume the rest of their own cluster first
+    /// (`touch -tSTAMP` reads `STAMP`, exactly like getopt); only a bare
+    /// taker (`-t` alone) consumes the next word. Longs resolve unique
+    /// prefixes against the spec's universe before the takes-value test,
+    /// matching getopt_long abbreviation (`tar --extr` reads `--extract`);
+    /// the resolved name is what parsers match.
     public static func scanFlags(
         _ argv: Argv,
         valueSpec spec: FlagValueSpec = .none
@@ -28,29 +35,38 @@ extension ShellPipeline {
             let word = argv.args[index]
             let token = FlagToken.classify(word)
             switch token {
-            case .long(let name, _):
-                if spec.takesValue(token) {
+            case .long(let name, let attached):
+                let resolved = spec.resolveLong(name)
+                let event: FlagToken = .long(name: resolved, value: attached)
+                if spec.takesValue(event) {
                     index = consumeValue(
                         into: &out, words: argv.args, at: index,
                         spec: spec, flag: word,
-                        make: { .long(name: name, value: $0) }
+                        make: { .long(name: resolved, value: $0) }
                     )
                 } else {
-                    out.append(token)
+                    out.append(event)
                     index += 1
                 }
             case .shorts(let letters, _):
-                if spec.takesValue(token) {
-                    index = consumeValue(
+                if let split = spec.splitShortValue(letters) {
+                    index = consumeShortValue(
+                        split,
                         into: &out, words: argv.args, at: index,
-                        spec: spec, flag: word,
-                        make: { .shorts(letters: letters, value: $0) }
+                        spec: spec, flag: word
                     )
                 } else {
                     out.append(token)
                     index += 1
                 }
-            case .positional, .terminator, .loneDash, .shortEquals, .dangling:
+            case .shortEquals(let name, let value):
+                if let taken = spec.shortEqualsValue(name: name, value: value) {
+                    out.append(taken)
+                } else {
+                    out.append(token)
+                }
+                index += 1
+            case .positional, .terminator, .loneDash, .dangling:
                 out.append(token)
                 index += 1
             }
@@ -82,17 +98,44 @@ extension ShellPipeline {
         out.append(make(candidate))
         return index + 2
     }
+
+    /// Appends one short-cluster value event: attached rest wins (getopt
+    /// reads `-tSTAMP` as `STAMP` without touching the next word); only a
+    /// bare taker consumes the next word. The emitted letters stop at the
+    /// taker — the consumed rest is a value, never flags — so parsers keep
+    /// matching letters against their short sets.
+    private static func consumeShortValue(
+        _ split: FlagValueSpec.ShortSplit,
+        into out: inout [FlagToken],
+        words: [String],
+        at index: Int,
+        spec: FlagValueSpec,
+        flag: String
+    ) -> Int {
+        if split.attached.isEmpty == false {
+            out.append(.shorts(letters: split.kept, value: split.attached))
+            return index + 1
+        }
+        return consumeValue(
+            into: &out, words: words, at: index,
+            spec: spec, flag: flag,
+            make: { .shorts(letters: split.kept, value: $0) }
+        )
+    }
 }
 
 /// Which flags consume the following argv word as their value.
 public struct FlagValueSpec: Sendable, Hashable {
     /// Cluster letters that take a value (`touch -t`, `mkdir -m`).
-    /// One word is consumed per cluster containing any of these, matching
-    /// the legacy expect-flag loops.
+    /// The first taker in a cluster consumes the rest of that cluster when
+    /// non-empty, else the next word — exactly like getopt.
     public var valueShorts: Set<Character>
     /// Bare long names (without `--`) that take a value (`--mode`, `--date`).
     /// The `=attached` form never consumes.
     public var valueLongs: Set<String>
+    /// Bare long names the verb accepts without a value, for unique-prefix
+    /// resolution only (`rm --rec` reads `--recursive`). Never consumed.
+    public var knownLongs: Set<String>
     /// When true, a dash-led value word is rejected (`.dangling`) instead
     /// of consumed. Only the branch-name takers behave this way today:
     /// `checkout` (`-b`/`-B`/`--branch`/`--orphan`) and `switch`
@@ -102,10 +145,12 @@ public struct FlagValueSpec: Sendable, Hashable {
     public init(
         valueShorts: Set<Character> = [],
         valueLongs: Set<String> = [],
+        knownLongs: Set<String> = [],
         rejectsDashValues: Bool = false
     ) {
         self.valueShorts = valueShorts
         self.valueLongs = valueLongs
+        self.knownLongs = knownLongs
         self.rejectsDashValues = rejectsDashValues
     }
 
@@ -121,15 +166,19 @@ public struct FlagValueSpec: Sendable, Hashable {
 
     /// Whether a structurally classified token takes the next argv word as
     /// its value. Attached longs (`--mode=x`) never consume; bare
-    /// value-longs and any cluster containing a value-short do. Shared by
-    /// `scanFlags` and the filesystem `--` pre-split so the two readings
-    /// cannot desync when consumption rules change.
+    /// value-longs do, resolved first. For clusters use `splitShortValue`:
+    /// a taker with attached rest is self-contained and consumes nothing.
+    /// Shared by `scanFlags` and the filesystem `--` pre-split so the two
+    /// readings cannot desync when consumption rules change.
     public func takesValue(_ token: FlagToken) -> Bool {
         switch token {
-        case .long(let name, nil) where valueLongs.contains(name):
+        case .long(let name, nil) where valueLongs.contains(resolveLong(name)):
             return true
-        case .shorts(let letters, _) where letters.contains(where: valueShorts.contains):
-            return true
+        case .shorts(let letters, _):
+            guard let split = splitShortValue(letters) else {
+                return false
+            }
+            return split.attached.isEmpty
         default:
             return false
         }
@@ -139,5 +188,60 @@ public struct FlagValueSpec: Sendable, Hashable {
     /// rejects dash-led values (`.dangling` instead).
     public func consumesValueWord(_ word: String) -> Bool {
         rejectsDashValues == false || word.hasPrefix("-") == false
+    }
+
+    /// A cluster's value split: the letters to keep (through the first
+    /// taker) plus the attached rest the taker consumes. Nil when no
+    /// letter takes a value.
+    public struct ShortSplit: Sendable, Hashable {
+        public var kept: [Character]
+        public var attached: String
+    }
+
+    /// Splits `letters` at the first value-taking short, mirroring getopt's
+    /// left-to-right walk: the first taker consumes everything after it.
+    public func splitShortValue(_ letters: [Character]) -> ShortSplit? {
+        guard let taker = letters.firstIndex(where: valueShorts.contains) else {
+            return nil
+        }
+        let after = letters.index(after: taker)
+        return ShortSplit(
+            kept: Array(letters[...taker]),
+            attached: String(letters[after...])
+        )
+    }
+
+    /// Reads a `-name=value` word: the first value-taking short in `name`
+    /// consumes the rest of the name plus `=value` (getopt reads `-t=x` as
+    /// value `=x`). Nil when no letter takes a value — the tool errors on
+    /// the `=`, so callers keep the word flag-like and parsers reject it.
+    public func shortEqualsValue(name: String, value: String) -> FlagToken? {
+        let letters = Array(name)
+        guard let taker = letters.firstIndex(where: valueShorts.contains) else {
+            return nil
+        }
+        let after = letters.index(after: taker)
+        return .shorts(
+            letters: Array(letters[...taker]),
+            value: String(letters[after...]) + "=" + value
+        )
+    }
+
+    /// Resolves `name` against the spec's long universe (exact first, then
+    /// the unique prefix), matching getopt_long abbreviation. Zero or
+    /// several matches return `name` unchanged: the tool errors on unknown
+    /// and ambiguous spellings, so parsers keep rejecting them.
+    /// `help`/`version` stay unresolved by design (see `scanFlags`).
+    public func resolveLong(_ name: String) -> String {
+        if valueLongs.contains(name) || knownLongs.contains(name) {
+            return name
+        }
+        var match: String?
+        for candidate in valueLongs.union(knownLongs) {
+            guard candidate.hasPrefix(name) else { continue }
+            guard match == nil else { return name }
+            match = candidate
+        }
+        return match ?? name
     }
 }

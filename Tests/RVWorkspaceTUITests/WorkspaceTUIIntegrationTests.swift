@@ -208,8 +208,9 @@ struct WorkspaceTUIIntegrationTests {
     defer { host.close() }
     let session = try LiveWorkspaceTUISession.connect(host.server.endpoint).get()
     defer { session.close() }
-    // "muse" names no HookHost: the tag still travels for credential
-    // staging, but the host records no hook protocol participation.
+    // Step 8 (F2): "muse" names no HookHost, so nothing travels and
+    // nothing stages — the host records no hook protocol participation
+    // and no filtered credentials.
     let launched = try session.launch(
         executable: "/bin/sh", arguments: ["-c", "/bin/sleep 30"],
         hook: "muse", rows: 12, columns: 40

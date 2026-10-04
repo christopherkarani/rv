@@ -25,7 +25,11 @@ struct Setup: ParsableCommand {
     var force = false
 
     func run() throws {
-        try LocalControlBoundary.requireOwnerAuthorization()
+        // Step 8B P9: one-click install. `rv setup` only writes rv-owned
+        // hooks, the LaunchAgent, and config — it adds oversight and cannot
+        // manufacture ALLOW — so it runs without device-owner
+        // authentication. The dangerous direction is `rv uninstall` (sheds
+        // oversight), which is LA-gated in UninstallCommand.
         let resolved = CeremonyCLI.appearance(
             json: json,
             robot: robot,

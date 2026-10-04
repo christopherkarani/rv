@@ -14,11 +14,6 @@ import RVPresentation
 enum SetupRun {
     static let launchAgentLabel = "dev.rv.evaluate"
 
-    /// Setup mutations remain unavailable until an authenticated owner path exists.
-    static func requireOwnerAuthorization() throws(SetupError) {
-        throw .ownerAuthorizationRequired
-    }
-
     static func setup(
         _ env: SetupEnvironment,
         appearance: CLIAppearance = .robot,

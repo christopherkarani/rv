@@ -70,3 +70,17 @@ public struct ProposalStatusCall: IPCCall {
         return nil
     }
 }
+
+public struct AttestTTYRedemptionCall: IPCCall {
+    public var params: AttestTTYRedemptionParams
+    public var method: IPCMethod { .attestTTYRedemption(params) }
+
+    public init(params: AttestTTYRedemptionParams) {
+        self.params = params
+    }
+
+    public static func extract(_ result: IPCResult) -> AttestTTYRedemptionReply? {
+        if case .attestTTYRedemption(let reply) = result { return reply }
+        return nil
+    }
+}

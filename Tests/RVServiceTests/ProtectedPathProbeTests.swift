@@ -109,7 +109,7 @@ struct ProtectedPathProbeTests {
                 addedAt: now
             ),
         ])
-        let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+        let grants = EphemeralAllowOnceTable()
         let lifted = await GatedEvaluate().peek(
             EvaluationRequest(
                 command: ShellCommand(rawValue: command),
@@ -117,7 +117,7 @@ struct ProtectedPathProbeTests {
             ),
             cwd: WorkingDirectory(validating: repo.path),
             home: HomeDirectory(validating: home.path),
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { allowlist }
         )
@@ -149,7 +149,7 @@ struct ProtectedPathProbeTests {
                 addedAt: now
             ),
         ])
-        let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+        let grants = EphemeralAllowOnceTable()
         let result = await GatedEvaluate().peek(
             EvaluationRequest(
                 command: ShellCommand(rawValue: "rm ssh-link"),
@@ -157,7 +157,7 @@ struct ProtectedPathProbeTests {
             ),
             cwd: WorkingDirectory(validating: repo.path),
             home: HomeDirectory(validating: home.path),
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { allowlist }
         )
@@ -206,14 +206,14 @@ struct ProtectedPathProbeTests {
                 addedAt: now
             ),
         ])
-        let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+        let grants = EphemeralAllowOnceTable()
         let lifted = await GatedEvaluate().peek(
             EvaluationRequest(
                 command: ShellCommand(rawValue: "echo leaked > \(relative)"),
                 enabledPacks: dayOnePackIDs
             ),
             cwd: WorkingDirectory(validating: repo.path),
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { allowlist }
         )
@@ -238,12 +238,12 @@ private func peek(
     cwd: URL,
     home: HomeDirectory? = nil
 ) async throws -> EvaluationResult {
-    let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+    let grants = EphemeralAllowOnceTable()
     return await GatedEvaluate().peek(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
         cwd: WorkingDirectory(validating: cwd.path),
         home: home,
-        store: store,
+        grants: grants,
         now: Date(timeIntervalSince1970: 1_700_000_000),
         allowlist: { .empty }
     )

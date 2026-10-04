@@ -514,7 +514,7 @@ private func makeBindingInstance(
     var bound: RuntimeChannelBinding? = RuntimeChannelBinding(
         session: session, capability: capability, agentInstanceID: instance.id
     )
-    let admitted = RuntimeAdmissionGate.submit(
+    let admitted = RuntimeAdmissionGate.submitLegacy(
         binding: &bound,
         frame: .success(makeBindingFrame(session: session, capability: capability)),
         agentContext: active
@@ -527,7 +527,7 @@ private func makeBindingInstance(
     var missing: RuntimeChannelBinding? = RuntimeChannelBinding(
         session: session, capability: capability, agentInstanceID: instance.id
     )
-    let unknown = RuntimeAdmissionGate.submit(
+    let unknown = RuntimeAdmissionGate.submitLegacy(
         binding: &missing,
         frame: .success(makeBindingFrame(session: session, capability: capability))
     ) { _ in .failure(.failed) }
@@ -540,7 +540,7 @@ private func makeBindingInstance(
             session: session, capability: capability, agentInstanceID: instance.id
         )
         let context = AuthenticatedAgentContext(instance: instance, validity: validity)
-        let decision = RuntimeAdmissionGate.submit(
+        let decision = RuntimeAdmissionGate.submitLegacy(
             binding: &dead,
             frame: .success(makeBindingFrame(session: session, capability: capability)),
             agentContext: context
@@ -553,7 +553,7 @@ private func makeBindingInstance(
     var crossed: RuntimeChannelBinding? = RuntimeChannelBinding(
         session: session, capability: capability, agentInstanceID: instance.id
     )
-    let crossedDecision = RuntimeAdmissionGate.submit(
+    let crossedDecision = RuntimeAdmissionGate.submitLegacy(
         binding: &crossed,
         frame: .success(makeBindingFrame(session: session, capability: capability)),
         agentContext: AuthenticatedAgentContext(instance: other, validity: .active)
@@ -564,7 +564,7 @@ private func makeBindingInstance(
     var legacy: RuntimeChannelBinding? = RuntimeChannelBinding(
         session: session, capability: capability
     )
-    let legacyDecision = RuntimeAdmissionGate.submit(
+    let legacyDecision = RuntimeAdmissionGate.submitLegacy(
         binding: &legacy,
         frame: .success(makeBindingFrame(session: session, capability: capability))
     ) { _ in .failure(.failed) }

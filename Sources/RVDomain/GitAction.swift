@@ -53,6 +53,11 @@ public enum GitAction: Sendable, Equatable, Codable {
     case reset(mode: GitResetMode, target: String?)
     case clean(force: Bool, dryRun: Bool, directories: Bool)
     case push(remote: String?, refspec: String?, force: GitPushForce)
+    /// Push verb recognized but argv unparsed (unknown flags, extra
+    /// positionals, dynamic tokens, trailing words). Fails closed as a
+    /// remote mutation: there is no allow arm for an unproven push.
+    /// Dry-run is never unparsed (preview sends nothing).
+    case pushUnparsed(args: [String])
     case deleteRemoteRef(remote: String?, refspec: String?)
     case deleteBranch(name: String, force: Bool)
     case deleteTag(name: String, remote: String?)
@@ -79,7 +84,7 @@ public enum GitAction: Sendable, Equatable, Codable {
             case .keep, .mixed, .soft:
                 return .localIndex
             }
-        case .push, .deleteRemoteRef, .deleteTag:
+        case .push, .pushUnparsed, .deleteRemoteRef, .deleteTag:
             return .remote
         }
     }
@@ -94,6 +99,8 @@ public enum GitAction: Sendable, Equatable, Codable {
             return ActionResources(branchName: name)
         case .push(let remote, let refspec, _), .deleteRemoteRef(let remote, let refspec):
             return ActionResources(remoteName: remote, branchName: refspec)
+        case .pushUnparsed:
+            return ActionResources()
         case .deleteBranch(let name, _):
             return ActionResources(branchName: name)
         case .deleteTag(let name, let remote):
@@ -135,7 +142,7 @@ public enum GitAction: Sendable, Equatable, Codable {
             return "force-push"
         case .push(_, _, .forceWithLease):
             return "force-push with lease"
-        case .push:
+        case .push, .pushUnparsed:
             return "push"
         case .deleteRemoteRef:
             return "remote ref delete"
@@ -201,7 +208,7 @@ public enum GitAction: Sendable, Equatable, Codable {
             return target
         case .rebase(_, let onto):
             return onto
-        case .discardWorktree, .restore, .clean, .stash:
+        case .discardWorktree, .restore, .clean, .stash, .pushUnparsed:
             return nil
         }
     }
@@ -249,7 +256,12 @@ public enum GitAction: Sendable, Equatable, Codable {
         case .clean(let force, let dryRun, _):
             return force && dryRun == false ? [.workingTreeDiscard] : []
         case .push(_, _, let force):
-            return force != .none ? [.remoteSharedBranchMutation] : []
+            return force != .none ? [.remoteSharedBranchMutation] : [.remoteBranchMutation]
+        case .pushUnparsed:
+            // Unknown force-ness, unknown target: unconditional human
+            // review, never the shared-branch probe (no resources) and
+            // never an allow arm.
+            return [.remoteBranchMutation]
         case .deleteRemoteRef:
             return [.remoteSharedBranchMutation]
         case .switchBranch(_, true):
@@ -275,6 +287,8 @@ public enum GitAction: Sendable, Equatable, Codable {
             return "shell:git.clean:\(force):\(dryRun):\(directories)"
         case .push(let remote, let refspec, let force):
             return "shell:git.push:\(force.rawValue):\(remote ?? ""):\(refspec ?? "")"
+        case .pushUnparsed(let args):
+            return "shell:git.push:unparsed:\(args.joined(separator: " "))"
         case .deleteRemoteRef(let remote, let refspec):
             return "shell:git.delete-remote-ref:\(remote ?? ""):\(refspec ?? "")"
         case .deleteBranch(let name, let force):

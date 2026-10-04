@@ -5,6 +5,11 @@ import Foundation
 /// `RuntimeSessionID` names the launch. This value proves the caller received
 /// the channel RV granted to that launch. A 32-byte token is not a session id
 /// and is not accepted from a short or non-hex string.
+///
+/// Step 8 (F3): a capability proves CHANNEL authority only. It never proves
+/// agent principal authority — that is `AuthenticatedAgentContext`. Sensitive
+/// operations require both where applicable; a capability alone must never
+/// become Secrets/MCP authority.
 public struct RuntimeCapability: Hashable, Sendable, Equatable {
     public let rawValue: String
 
@@ -183,6 +188,10 @@ public enum RuntimeAdmissionRejection: String, Sendable, Equatable, Codable {
     case malformed
     case replay
     case channelClosed
+    /// Step 8 (F3): an identity-required operation arrived without a live
+    /// authenticated principal — the binding names no instance, or no
+    /// trusted context was presented. Never downgrades to capability-only.
+    case principalRequired
 }
 
 public enum RuntimeAdmissionEvaluationError: Error, Sendable, Equatable {
@@ -314,8 +323,84 @@ enum RuntimeAdmissionAuthentication: Sendable, Equatable {
 /// Calls `AgentAuthorization.decide` and `AgentAuthorization.step`. It does
 /// not call `HookAuthorization` or `PolicyGate`, and it does not treat a
 /// session id as a credential.
+///
+/// Step 8 (F3): `submitLegacy` is the LEGACY capability-only door. A binding
+/// with `agentInstanceID == nil` authenticates on channel facts alone and
+/// must never mediate sensitive operations — future Secrets/MCP layers
+/// must call `submitIdentityRequired`, which refuses principal-less
+/// channels instead of silently downgrading to capability-only.
 public enum RuntimeAdmissionGate {
-    public static func submit(
+    /// Identity-required privileged admission (Step 8 F3).
+    ///
+    /// Sensitive mediated operations enter here, never via `submitLegacy`. The
+    /// channel must name an instance (`binding.agentInstanceID != nil`)
+    /// and the caller must present the freshly resolved trusted context
+    /// for it; otherwise the request is rejected with `.principalRequired`
+    /// before any proposal, policy evaluation, or action execution. No
+    /// downgrade to capability-only ever happens.
+    ///
+    /// Liveness, binding match (exact instance, runtime/session, workspace),
+    /// capability match, and replay protection are enforced by the shared
+    /// authentication below, fed by the existing Step 7 principal
+    /// resolution (`AgentInstanceRegistry.context(forBinding:)`). Nothing
+    /// here performs its own principal lookup.
+    public static func submitIdentityRequired(
+        binding: inout RuntimeChannelBinding?,
+        frame: Result<RuntimeActionFrame, RuntimeAdmissionDecodeError>,
+        policy: EffectiveActionPolicy = .empty,
+        approvalFor: (RuntimeActionRequestID, PendingAuthorization) -> Result<
+            ApprovalDecision, AgentApprovalError
+        >? = { _, _ in
+            nil
+        },
+        agentContext: AuthenticatedAgentContext? = nil,
+        propose: (RuntimeActionFrame) -> Result<ProposedAction, RuntimeAdmissionEvaluationError>
+    ) -> RuntimeAdmissionDecision {
+        // No channel at all keeps the existing unknown-session rejection.
+        // A channel that names no principal — or a named principal with
+        // no presented context — is the principal-less case: reject here,
+        // before any proposal or policy work, never downgrading.
+        // Liveness/validity of a PRESENTED context is enforced downstream
+        // by the shared authentication (inactive → .inactiveSession),
+        // keeping the precise rejection reason; the pre-guard only needs
+        // presence because absence is the downgrade case.
+        guard binding != nil else {
+            return submitLegacy(
+                binding: &binding,
+                frame: frame,
+                policy: policy,
+                approvalFor: approvalFor,
+                agentContext: agentContext,
+                propose: propose
+            )
+        }
+        if binding?.agentInstanceID == nil || agentContext == nil {
+            let requestID = frame.successValue?.requestID.rawValue.uuidString
+            // Step 8 (F3 re-review): attribute to the channel/binding only.
+            // A presented context the binding does not name is smuggled, not
+            // trusted — stamping it into audit fields would misattribute the
+            // rejection to a principal that never authenticated.
+            return stamp(
+                reject(
+                    binding: binding,
+                    requestID: requestID,
+                    reason: .principalRequired,
+                    authorization: .rejected
+                ),
+                agentContext: nil
+            )
+        }
+        return submitLegacy(
+            binding: &binding,
+            frame: frame,
+            policy: policy,
+            approvalFor: approvalFor,
+            agentContext: agentContext,
+            propose: propose
+        )
+    }
+
+    public static func submitLegacy(
         binding: inout RuntimeChannelBinding?,
         frame: Result<RuntimeActionFrame, RuntimeAdmissionDecodeError>,
         policy: EffectiveActionPolicy = .empty,

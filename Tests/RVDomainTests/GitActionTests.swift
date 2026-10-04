@@ -23,7 +23,7 @@ struct GitActionTests {
             refspec: "main",
             force: .force
         )
-        #expect(normal.effects.kinds.isEmpty)
+        #expect(normal.effects.kinds == [.remoteBranchMutation])
         #expect(forced.effects.kinds == [.remoteSharedBranchMutation])
         #expect(normal.effectScope == .remote)
         #expect(forced.effectScope == .remote)

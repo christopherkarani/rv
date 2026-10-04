@@ -19,13 +19,6 @@ enum AllowOnceLedger {
         case expired(records: [AllowOnceRecord])
     }
 
-    enum ConsumeOutcome: Equatable, Sendable {
-        case consumed(tokenID: String, records: [AllowOnceRecord])
-        case expired([AllowOnceRecord])
-        case alreadyConsumed
-        case notFound
-    }
-
     static func mint(
         records: [AllowOnceRecord],
         codeHash: String,
@@ -85,10 +78,26 @@ enum AllowOnceLedger {
         }
     }
 
+    /// Read-only lookup of a live pending row by code hash. Nil for unknown,
+    /// spent, or expired codes. Used to pre-display the grant in the redeem
+    /// ceremony (B-F6); granting still goes through `redeem`.
+    static func pendingRow(
+        in records: [AllowOnceRecord],
+        codeHash: String,
+        now: Date
+    ) -> AllowOnceRecord? {
+        records.first { record in
+            guard case .pending = record.lifecycle else { return false }
+            guard record.codeHash == codeHash else { return false }
+            return record.expiresAt >= now
+        }
+    }
+
     static func redeem(
         records: [AllowOnceRecord],
         codeHash: String,
-        now: Date
+        now: Date,
+        expectedFingerprint: String? = nil
     ) throws(AllowOnceError) -> RedeemOutcome {
         guard let index = records.firstIndex(where: { record in
             guard case .pending = record.lifecycle else { return false }
@@ -112,6 +121,9 @@ enum AllowOnceLedger {
             updated.remove(at: index)
             return .expired(records: updated)
         }
+        if let expectedFingerprint, pending.commandFingerprint != expectedFingerprint {
+            throw AllowOnceError.redemptionChanged
+        }
         pending.lifecycle = .granted
         var updated = records
         updated[index] = pending
@@ -124,77 +136,6 @@ enum AllowOnceLedger {
             }
         }
         return .granted(records: updated, row: row(pending))
-    }
-
-    static func consume(
-        records: [AllowOnceRecord],
-        fingerprint: String,
-        cwd: WorkingDirectory,
-        now: Date
-    ) -> ConsumeOutcome {
-        let related = records.indices.filter {
-            records[$0].commandFingerprint == fingerprint && records[$0].cwd == cwd
-        }
-        if let index = related.first(where: { i in
-            guard case .granted = records[i].lifecycle else { return false }
-            return records[i].expiresAt >= now
-        }) {
-            var granted = records[index]
-            granted.lifecycle = .consumed(at: now)
-            var updated = records
-            updated[index] = granted
-            updated.removeAll { record in
-                guard case .granted = record.lifecycle else { return false }
-                return record.expiresAt < now
-            }
-            return .consumed(tokenID: granted.codeHash, records: updated)
-        }
-        let hadExpiredGrant = related.contains { i in
-            guard case .granted = records[i].lifecycle else { return false }
-            return records[i].expiresAt < now
-        }
-        if hadExpiredGrant {
-            var updated = records
-            updated.removeAll { record in
-                guard case .granted = record.lifecycle else { return false }
-                return record.expiresAt < now
-            }
-            return .expired(updated)
-        }
-        if related.contains(where: { i in
-            if case .consumed = records[i].lifecycle { return true }
-            return false
-        }) {
-            return .alreadyConsumed
-        }
-        return .notFound
-    }
-
-    /// Plant a granted row and consume it in one pass. Same-turn host Allow once.
-    static func plantAndConsume(
-        records: [AllowOnceRecord],
-        fingerprint: String,
-        redacted: String,
-        cwd: WorkingDirectory,
-        now: Date,
-        ttl: TimeInterval,
-        codeHash: String
-    ) -> ConsumeOutcome {
-        var updated = records
-        updated.append(
-            AllowOnceRecord(
-                schemaVersion: 1,
-                lifecycle: .granted,
-                codeHash: codeHash,
-                commandFingerprint: fingerprint,
-                commandRedacted: redacted,
-                cwd: cwd,
-                ruleID: nil,
-                createdAt: now,
-                expiresAt: now.addingTimeInterval(ttl)
-            )
-        )
-        return consume(records: updated, fingerprint: fingerprint, cwd: cwd, now: now)
     }
 
     static func rows(records: [AllowOnceRecord], now: Date) -> [AllowOnceListRow] {

@@ -288,13 +288,13 @@ struct AgentInstanceRegistryTests {
         // No fake active instance before establishment: the channel is
         // bound, the capability and session are right, and the request
         // still fails because the principal is not active.
-        let early = harness.admission.submit(.success(harness.frame("touch early")))
+        let early = harness.admission.submitLegacy(.success(harness.frame("touch early")))
         #expect(early.response == .rejected(.inactiveSession))
         #expect(harness.effects.count == 0)
         let context = try #require(harness.activate(instance))
         #expect(context.validity == .active)
         #expect(harness.registry.validity(of: instance.id) == .active)
-        let admitted = harness.admission.submit(.success(harness.frame("touch marker")))
+        let admitted = harness.admission.submitLegacy(.success(harness.frame("touch marker")))
         #expect(admitted.response == .executed(exitStatus: 0))
         #expect(harness.effects.count == 1)
         #expect(admitted.event.agentInstance == instance.id.rawValue.uuidString)
@@ -360,7 +360,7 @@ struct AgentInstanceRegistryTests {
             responseWrite: -1
         )
         defer { phantom.finish() }
-        let rejected = phantom.submit(.success(harness.frame("touch phantom")))
+        let rejected = phantom.submitLegacy(.success(harness.frame("touch phantom")))
         #expect(rejected.response == .rejected(.unknownSession))
         #expect(harness.effects.count == 0)
         // Request bytes name no principal at all: the wire frame carries
@@ -387,7 +387,7 @@ struct AgentInstanceRegistryTests {
         defer { harness.cleanup() }
         let instance = try #require(harness.announceAndBind())
         _ = try #require(harness.activate(instance))
-        let decision = harness.admission.submit(.success(harness.frame("touch marker")))
+        let decision = harness.admission.submitLegacy(.success(harness.frame("touch marker")))
         #expect(decision.response == .executed(exitStatus: 0))
         let subject = try #require(seen.current)
         #expect(subject.agent?.instance.id == instance.id)
@@ -420,7 +420,7 @@ struct AgentInstanceRegistryTests {
             )!,
             action: .shell(ShellCommand(rawValue: "touch foreign"))
         )
-        let foreign = RuntimeAdmissionGate.submit(
+        let foreign = RuntimeAdmissionGate.submitLegacy(
             binding: &foreignBinding,
             frame: .success(foreignFrame),
             agentContext: foreignContext
@@ -443,7 +443,7 @@ struct AgentInstanceRegistryTests {
             )!,
             action: .shell(ShellCommand(rawValue: "touch stray"))
         )
-        let stray = RuntimeAdmissionGate.submit(
+        let stray = RuntimeAdmissionGate.submitLegacy(
             binding: &strayBinding,
             frame: .success(strayFrame),
             agentContext: foreignContext
@@ -456,11 +456,11 @@ struct AgentInstanceRegistryTests {
         defer { harness.cleanup() }
         let instance = try #require(harness.announceAndBind())
         _ = try #require(harness.activate(instance))
-        let before = harness.admission.submit(.success(harness.frame("touch before")))
+        let before = harness.admission.submitLegacy(.success(harness.frame("touch before")))
         #expect(before.response == .executed(exitStatus: 0))
         #expect(harness.registry.finishRuntime(harness.session.id, reason: .runtimeEnded) == .revoked)
         #expect(harness.registry.validity(of: instance.id) == .inactive)
-        let after = harness.admission.submit(.success(harness.frame("touch after")))
+        let after = harness.admission.submitLegacy(.success(harness.frame("touch after")))
         #expect(after.response == .rejected(.inactiveSession))
         #expect(after.event.agentInstance == instance.id.rawValue.uuidString)
         #expect(harness.effects.count == 1)
@@ -483,7 +483,7 @@ struct AgentInstanceRegistryTests {
         #expect(harness.registry.context(for: instance.id)?.isUsable == false)
         // The session re-resolves on every submit, so the stale snapshot
         // it once saw cannot authorize anything now.
-        let denied = harness.admission.submit(.success(harness.frame("touch stale")))
+        let denied = harness.admission.submitLegacy(.success(harness.frame("touch stale")))
         #expect(denied.response == .rejected(.inactiveSession))
     }
 
@@ -499,7 +499,7 @@ struct AgentInstanceRegistryTests {
         )
         #expect(harness.registry.announce(other))
         #expect(harness.admission.bindAgentInstance(other.id, registry: harness.registry) == false)
-        let decision = harness.admission.submit(.success(harness.frame("touch marker")))
+        let decision = harness.admission.submitLegacy(.success(harness.frame("touch marker")))
         #expect(decision.response == .executed(exitStatus: 0))
         #expect(decision.event.agentInstance == instance.id.rawValue.uuidString)
     }
@@ -738,7 +738,7 @@ struct AgentInstanceRegistryTests {
         #expect(latch.entered)
         #expect(harness.registry.validity(of: instance.id) == .revoking)
         #expect(harness.registry.context(for: instance.id)?.isUsable == false)
-        let mid = harness.admission.submit(.success(harness.frame("touch mid")))
+        let mid = harness.admission.submitLegacy(.success(harness.frame("touch mid")))
         #expect(mid.response == .rejected(.inactiveSession))
         #expect(harness.effects.count == 0)
         latch.open()
@@ -856,7 +856,7 @@ struct AgentInstanceRegistryTests {
             claimedSession: RuntimeSessionClaim(validating: session.id.rawValue.uuidString)!,
             action: .shell(ShellCommand(rawValue: "touch marker"))
         )
-        let decision = admission.submit(.success(frame))
+        let decision = admission.submitLegacy(.success(frame))
         #expect(decision.response == .rejected(.inactiveSession))
         #expect(effects.count == 0)
         #expect(decision.event.agentInstance == instance.id.rawValue.uuidString)

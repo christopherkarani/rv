@@ -246,8 +246,9 @@ final class LiveSeatbeltChild: Sendable {
     }
 
     /// Ask the watch thread to run one frame. Returns nil if a frame is
-    /// already waiting or the watch does not answer.
-    func submit(_ frame: RuntimeActionFrame) -> RuntimeAdmissionDecision? {
+    /// already waiting or the watch does not answer. Frame routing into
+    /// the session's legacy door; sensitive mediation needs its own door.
+    func submitLegacy(_ frame: RuntimeActionFrame) -> RuntimeAdmissionDecision? {
         let reply = AdmissionReply()
         let posted = pending.withLock { current -> Bool in
             guard current == nil else { return false }
@@ -270,7 +271,7 @@ final class LiveSeatbeltChild: Sendable {
             return current
         }
         guard let job else { return }
-        job.reply.store(admission.submit(.success(job.frame)))
+        job.reply.store(admission.submitLegacy(.success(job.frame)))
     }
 
     deinit {
@@ -307,7 +308,7 @@ func spawnSeatbeltProcess(
     admission: RuntimeAdmissionConfiguration,
     egressProxyPort: Int? = nil,
     host: HookHost? = nil,
-    stagingAgent: String? = nil,
+    stagingAgent: DefinitionStagingTag? = nil,
     keychain: [(name: String, value: String)] = [],
     preparedEnvironment: [String]? = nil,
     cwdVerification: CwdCommitVerification? = nil
@@ -376,7 +377,7 @@ func spawnSeatbeltProcessBody(
     admission: RuntimeAdmissionConfiguration,
     egressProxyPort: Int? = nil,
     host: HookHost? = nil,
-    stagingAgent: String? = nil,
+    stagingAgent: DefinitionStagingTag? = nil,
     keychain: [(name: String, value: String)] = [],
     preparedEnvironment: [String]? = nil,
     cwdVerification: CwdCommitVerification? = nil
@@ -544,7 +545,10 @@ func spawnSeatbeltProcessBody(
         request.command.executable,
     ])
     arguments.append(contentsOf: request.command.arguments)
-    let agentName = stagingAgent ?? host?.rawValue
+    // Step 8 (F2): only the definition-derived staging tag selects
+    // credentials. `host` is routing/metadata and never falls back into
+    // selection — a nil tag stages unfiltered entries only.
+    let agentName = stagingAgent?.rawValue
     if let resources = request.resources {
         switch resources.stage(forAgent: agentName) {
         case .success:

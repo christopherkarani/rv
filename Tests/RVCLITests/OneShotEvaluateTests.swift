@@ -31,7 +31,7 @@ struct OneShotEvaluateClientTests {
         #expect(transport.lastSendTimeoutMs == 700)
     }
 
-    @Test func hookEvaluateNilTransport_resetHardDeniesAndStashDropAllows() async throws {
+    @Test func hookEvaluateNilTransport_bothDenyWithoutLocalFallback() async throws {
         let client = try isolatedClient(transport: nil)
         var hook = Hook()
         hook.host = .grok
@@ -42,13 +42,17 @@ struct OneShotEvaluateClientTests {
         #expect(denyJSON["decision"] as? String == "deny")
         #expect(denyOutcome.exitCode == 0)
 
+        // Step 8: authority-bearing hooks never retry through the local
+        // evaluation door. No daemon means deny, even for benign commands.
         let allowOutcome = await hook.run(
             stdin: try grokHookFixture("allow-medium-stash-drop.json"),
             client: client
         )
-        #expect(allowOutcome.stdout.isEmpty)
+        let allowJSON = try #require(
+            JSONSerialization.jsonObject(with: Data(allowOutcome.stdout.utf8)) as? [String: Any]
+        )
+        #expect(allowJSON["decision"] as? String == "deny")
         #expect(allowOutcome.exitCode == 0)
-        #expect(allowOutcome.stdout.contains("deny") == false)
     }
 
     @Test func hookEvaluateReplyAskJSON_isForwardedNotSilentAllow() async throws {
@@ -182,7 +186,7 @@ struct OneShotEvaluateClientTests {
         #expect(transport.helloCount == 0)
     }
 
-    @Test func hookEvaluateSendFailure_resetHardDeniesAndStashDropAllows() async throws {
+    @Test func hookEvaluateSendFailure_bothDenyWithoutLocalFallback() async throws {
         let transport = ScriptedTransport(
             ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
             sendError: .interrupted
@@ -205,9 +209,11 @@ struct OneShotEvaluateClientTests {
             stdin: try grokHookFixture("allow-medium-stash-drop.json"),
             client: client
         )
-        #expect(allowOutcome.stdout.isEmpty)
+        let allowJSON = try #require(
+            JSONSerialization.jsonObject(with: Data(allowOutcome.stdout.utf8)) as? [String: Any]
+        )
+        #expect(allowJSON["decision"] as? String == "deny")
         #expect(allowOutcome.exitCode == 0)
-        #expect(allowOutcome.stdout.contains("deny") == false)
         #expect(transport.sendCount == 2)
         #expect(transport.helloCount == 0)
     }

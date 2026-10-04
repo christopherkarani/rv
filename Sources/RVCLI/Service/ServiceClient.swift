@@ -122,15 +122,23 @@ public struct ServiceClient: Sendable {
         )
     }
 
-    package func insertGranted(matchingView: MatchingView, cwd: WorkingDirectory, now: Date = Date()) async throws {
-        try await store.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
-    }
-
     /// Diagnostic fallback uses an empty, isolated grant view and cannot spend authority.
     private func diagnosticPeek(command: ShellCommand, cwd: WorkingDirectory?) async -> EvaluationResult {
+        // Grants stay isolated: a diagnostic fallback must neither honor
+        // nor consume an existing grant. The allowlist loads from the
+        // client's own store directory so saved rules still apply.
         let diagnosticStore = AllowOnceStore(baseDirectory: Self.isolatedFactoryDirectory())
-        return await LiveEvaluateWorld(home: home, store: diagnosticStore, gated: door, clock: clock)
-            .peek(command: command, cwd: cwd)
+        let allowlistDirectory = store.baseDirectory
+        return await LiveEvaluateWorld(
+            home: home,
+            store: diagnosticStore,
+            gated: door,
+            clock: clock,
+            allowlist: { cwd, now in
+                AllowlistStore(baseDirectory: allowlistDirectory)
+                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
+            }
+        ).peek(command: command, cwd: cwd)
     }
 
     /// Diagnostic evaluation: an inProcess result is never execution authorization.
@@ -251,6 +259,31 @@ public struct ServiceClient: Sendable {
         }
     }
 
+    /// Step 8B.1 TTY attestation: plants the reviewed grant in daemon memory.
+    /// Only the pinned genuine CLI passes the daemon's `.cli` role check;
+    /// every other caller fails closed there. No transport (or a refused
+    /// attestation) means NO grant: the caller must fail closed, never
+    /// fall back to file state.
+    public func attestTTYRedemption(_ params: AttestTTYRedemptionParams) async -> Result<
+        AttestTTYRedemptionReply, OperatorCommandError
+    > {
+        guard let transport else {
+            return .failure(.noTransport)
+        }
+        do {
+            let reply = try await send(
+                AttestTTYRedemptionCall(params: params),
+                using: transport,
+                timeoutMs: transport.oneShotEvaluateTimeoutMs
+            )
+            return .success(reply)
+        } catch let error as IPCCallError {
+            return .failure(mapCallError(error))
+        } catch {
+            return .failure(.transport(String(describing: error)))
+        }
+    }
+
     private func mapCallError(_ error: IPCCallError) -> OperatorCommandError {
         switch error {
         case .identityMismatch:
@@ -298,18 +331,6 @@ public struct ServiceClient: Sendable {
         } catch {
             return unavailable()
         }
-    }
-
-    /// Unavailable until the service supplies operation-bound owner authorization.
-    public func spendHostAsk(
-        command: ShellCommand,
-        cwd: WorkingDirectory? = nil,
-        host: LedgerHost = .tty
-    ) async -> EvaluationResult {
-        EvaluationResult(outcome: .deny(Deny(
-            ruleID: RuleID(pack: .coreGit, pattern: "owner-authorization-required"),
-            reason: LocalControlBoundary.reason
-        ), matched: nil), matchingView: MatchingView(command.rawValue))
     }
 
     public func status() async -> ServiceStatusReport {

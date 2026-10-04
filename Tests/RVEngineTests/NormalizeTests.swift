@@ -10,6 +10,32 @@ import RVDomain
     #expect(Normalize.matchingView(of: "/usr/bin/git reset --hard") == "git reset --hard")
 }
 
+// MARK: - P10e10 (B-F2): grant key is a normalization class
+
+@Test func normalize_grantClassAndSudoUserNuance() {
+    // The allow-once grant binds the normalized view: these spellings all
+    // share one grant (the user-facing copy says so since B-F2).
+    let klass = [
+        "git reset --hard",
+        "sudo git reset --hard",
+        "env FOO=1 git reset --hard",
+        "/usr/bin/git reset --hard",
+        "\\git reset --hard",
+        "FOO=1 git reset --hard",
+        "command git reset --hard",
+    ]
+    for spelling in klass {
+        #expect(Normalize.matchingView(of: spelling) == "git reset --hard")
+    }
+    // Nuance (fail-closed by accident, pinned deliberately): value-taking
+    // sudo flags stop the strip, so `sudo -u root …` never joins the
+    // `git reset --hard` grant class.
+    #expect(
+        Normalize.matchingView(of: "sudo -u root git reset --hard")
+            == "root git reset --hard"
+    )
+}
+
 @Test func matchingView_shellCommand_matchesStringOverload() {
     let command = ShellCommand(rawValue: "sudo git reset --hard")
     #expect(Normalize.matchingView(of: command) == Normalize.matchingView(of: command.rawValue))
@@ -419,3 +445,85 @@ private func evaluateNormalized(_ command: String) throws -> EvaluationResult {
         compiled: compiled
     )
 }
+
+// MARK: - P10e6 (C-F2): redirect-out structure survives data masking
+
+@Test func tokenize_redirectStructural_spacedTarget() {
+    let tokens = ShellPipeline.tokenize(#"echo hi > "/tmp/eve""#)
+    #expect(tokens.map(\.lexeme) == ["echo", "hi", ">", "/tmp/eve"])
+    #expect(tokens[2].isRedirectStructural)
+    #expect(tokens[3].isRedirectStructural)
+    #expect(tokens[1].isRedirectStructural == false)
+}
+
+@Test func tokenize_redirectStructural_gluedTarget() {
+    let glued = ShellPipeline.tokenize(#"echo hi>"/tmp/eve""#)
+    #expect(glued.count == 2)
+    #expect(glued[1].isRedirectStructural)
+    let fdGlued = ShellPipeline.tokenize(#"echo hi 2>"/tmp/eve""#)
+    #expect(fdGlued[2].isRedirectStructural)
+    let appendGlued = ShellPipeline.tokenize(#"echo hi>>"/tmp/eve""#)
+    #expect(appendGlued[1].isRedirectStructural)
+}
+
+@Test func tokenize_redirectStructural_quotedDataUnmarked() {
+    #expect(ShellPipeline.tokenize(#"echo "a>b""#)[1].isRedirectStructural == false)
+    #expect(ShellPipeline.tokenize("echo 'a>b'")[1].isRedirectStructural == false)
+    #expect(ShellPipeline.tokenize("echo $'a>b'")[1].isRedirectStructural == false)
+    #expect(ShellPipeline.tokenize(#"echo a\>b"#)[1].isRedirectStructural == false)
+    #expect(ShellPipeline.tokenize(#"echo "a>/tmp/eve""#)[1].isRedirectStructural == false)
+    #expect(ShellPipeline.tokenize("test a -gt b")[2].isRedirectStructural == false)
+}
+
+@Test func tokenize_redirectStructural_dupCloseAndInput() {
+    // `>&2` / `2>&1` name no file: the next word is not a target.
+    let dup = ShellPipeline.tokenize(#"echo hi 2>&1 "done""#)
+    #expect(dup[3].isRedirectStructural == false)
+    // Bare `>&` duplicates or opens a file: the next word is a target.
+    let dupOrFile = ShellPipeline.tokenize(#"echo hi >& "/tmp/eve""#)
+    #expect(dupOrFile[3].isRedirectStructural)
+    // Input-only words name no write target.
+    let input = ShellPipeline.tokenize(#"cat < "/tmp/eve""#)
+    #expect(input[2].isRedirectStructural == false)
+    // A newline ends the command: no target follows a dangling operator.
+    let dangling = ShellPipeline.tokenize("echo a >\n/tmp/eve")
+    #expect(dangling.last?.isRedirectStructural == false)
+}
+
+@Test func normalize_redirectTargetSurvivesEchoMasking() {
+    let spaced = applyRoleAwareQuotes(#"echo hi > "/tmp/eve""#)
+    #expect(spaced.contains("/tmp/eve"))
+    let glued = applyRoleAwareQuotes(#"echo hi>"/tmp/eve""#)
+    #expect(glued.contains("/tmp/eve"))
+    #expect(glued.contains(">"))
+}
+
+@Test func normalize_quotedRedirectDataStaysMasked() {
+    #expect(applyRoleAwareQuotes(#"echo "a>b""#).contains("a>b") == false)
+    #expect(applyRoleAwareQuotes(#"echo "a>/tmp/eve""#).contains("/tmp/eve") == false)
+    #expect(applyRoleAwareQuotes("echo $'a>b'").contains("a>b") == false)
+}
+
+// MARK: - P10e9: sed script masks, files stay visible
+
+@Test func normalize_sedScriptMasksFilesStayVisible() {
+    let view = applyRoleAwareQuotes(#"sed -i "s/a/b/" /tmp/x"#)
+    #expect(view.contains("s/a/b/") == false)
+    #expect(view.contains("/tmp/x"))
+    #expect(view.contains("\"\""))
+    let bsd = applyRoleAwareQuotes(#"sed -i "" "s/a/b/" /tmp/x"#)
+    #expect(bsd.contains("s/a/b/") == false)
+    #expect(bsd.contains("/tmp/x"))
+    let dashE = applyRoleAwareQuotes(#"sed -i -e "s/a/b/" /tmp/x"#)
+    #expect(dashE.contains("s/a/b/") == false)
+    #expect(dashE.contains("/tmp/x"))
+    let attached = applyRoleAwareQuotes(#"sed --expression=s/a/b/ /tmp/x"#)
+    #expect(attached.contains("s/a/b/") == false)
+    #expect(attached.contains("/tmp/x"))
+    let quotedFile = applyRoleAwareQuotes(#"sed -i "s/a/b/" "/tmp/x""#)
+    #expect(quotedFile.contains("/tmp/x"))
+    let unquoted = applyRoleAwareQuotes("sed -i s/a/b/ /tmp/x")
+    #expect(unquoted.contains("s/a/b/"))
+    #expect(unquoted.contains("/tmp/x"))
+}
+

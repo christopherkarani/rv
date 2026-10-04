@@ -70,8 +70,6 @@ struct FalsePositiveStressTests {
         "git stash drop",
         "git restore . --staged",
         "git push --force-with-lease",
-        "git push origin feature--force",
-        "git push origin feature-f",
         "ls -la",
     ]
 
@@ -152,6 +150,20 @@ struct FalsePositiveStressTests {
             if result.decision != .allow {
                 Issue.record("door over-block \(describe(result)) on \(command)")
             }
+        }
+    }
+
+    @Test func door_pushBranchNamedLikeForce_isPlainPushAskNotForceDeny() throws {
+        // Near-miss branches must not misfire as force pushes: they ask as
+        // plain remote mutations instead of denying as shared-branch force.
+        for command in ["git push origin feature--force", "git push origin feature-f"] {
+            let result = try evaluateDoor(command)
+            let ask = ActionPolicyEngine.Builtin.remoteBranchAsk
+            #expect(
+                result.decision == .deny(ask),
+                "expected plain-push ask on \(command), got \(describe(result))"
+            )
+            #expect(result.boundReview == .mandatoryHuman(ask))
         }
     }
 

@@ -127,16 +127,17 @@ func claudeDecode_fileToolsExtractPath(_ file: String, kind: FileToolKind, path:
     #expect(request.session == nil)
 }
 
-@Test func claudeDecode_readsHostAskSpend() {
+@Test func claudeDecode_ignoresHostAskSpend() {
+    // Step 8B: legacy spend envelopes decode as ordinary shell requests.
     let stdin = """
     {"hook_event_name":"PreToolUse","cwd":"/tmp/ws","tool_name":"Bash","tool_input":{"command":"git reset --hard"},"hostAsk":"spend"}
     """
     guard case .request(let request) = codec.decode(stdin) else {
-        Issue.record("expected .request for hostAsk spend")
+        Issue.record("expected .request for hostAsk spend envelope")
         return
     }
-    guard case .spend(_, let command, _, _) = request else {
-        Issue.record("expected .spend for hostAsk spend")
+    guard case .shell(_, let command, _, _) = request else {
+        Issue.record("expected .shell for hostAsk spend envelope")
         return
     }
     #expect(command.rawValue == "git reset --hard")

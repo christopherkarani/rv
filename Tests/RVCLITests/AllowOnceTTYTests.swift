@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import Testing
 import RVDomain
+import RVIPC
 import RVPolicy
 @testable import RVCLI
 
@@ -50,27 +51,35 @@ struct AllowOnceTTYTests {
         }
     }
 
-    @Test func happyPathMintRedeemAgainstTempDir() async throws {
+    @Test func redeemWithoutDaemonFailsClosedAndKeepsPending() async throws {
+        // Step 8B.1: no daemon reachable means no attestation, no flip,
+        // no grant. The pending row stays live so the human can retry
+        // once rvd is up; the gate denies throughout.
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
-        let code = try await AllowOnceCLI.mint(
-            command: ShellCommand(rawValue: "git reset --hard"),
-            cwd: wd("/tmp/a"),
-            tty: tty,
-            robot: false,
-            store: store,
-            now: now
-        )
-        let row = try await AllowOnceCLI.redeem(
-            code: code.rawValue,
-            tty: tty,
-            robot: false,
-            store: store,
-            now: now
-        )
-        #expect(row.kind == .granted)
-        #expect(row.cwd == wd("/tmp/a"))
+        let code = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+            try await AllowOnceCLI.mint(
+                command: ShellCommand(rawValue: "git reset --hard"),
+                cwd: wd("/tmp/a"),
+                tty: tty,
+                robot: false,
+                store: store,
+                now: now
+            )
+        }
+        await #expect(throws: AllowOnceAttestError.serviceUnavailable) {
+            try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+                try await AllowOnceCLI.redeem(
+                    code: code.rawValue,
+                    tty: tty,
+                    robot: false,
+                    store: store,
+                    now: now
+                )
+            }
+        }
+        #expect((await store.list(now: now)).contains { $0.kind == .pending })
         let denied = EvaluationResult(
             outcome: .deny(
                 Deny(
@@ -81,13 +90,69 @@ struct AllowOnceTTYTests {
             ),
             matchingView: "git reset --hard"
         )
-        let first = await PolicyGate.consumingGrant(for: denied, cwd: wd("/tmp/a"), store: store, now: now)
-        #expect(first.override == .allowOnce)
-        let second = await PolicyGate.consumingGrant(for: denied, cwd: wd("/tmp/a"), store: store, now: now)
-        guard case .deny = second.result.decision else {
-            Issue.record("second must deny")
+        let gated = await PolicyGate.consumingGrant(
+            for: denied,
+            cwd: wd("/tmp/a"),
+            grants: EphemeralAllowOnceTable(),
+            now: now
+        )
+        #expect(gated.override == .none)
+        guard case .deny = gated.result.decision else {
+            Issue.record("gate must deny with no daemon attestation")
             return
         }
+    }
+
+    @Test func mintWithoutAuthenticationRefuses() async throws {
+        // No seamed outcome: the tripwire fails closed before the store.
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        await #expect(throws: AllowOnceAuthError.required) {
+            try await withCLIProcess {
+                try await AllowOnceCLI.mint(
+                    command: ShellCommand(rawValue: "git reset --hard"),
+                    cwd: wd("/tmp/a"),
+                    tty: tty,
+                    robot: false,
+                    store: store,
+                    now: now
+                )
+            }
+        }
+        #expect(await store.list(now: now).isEmpty)
+    }
+
+    @Test func redeemDeniedAuthenticationThrowsBeforeAttest() async throws {
+        // Failed/cancelled LA throws at the tripwire: no attestation is
+        // attempted, no flip happens, the pending row stays live.
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let code = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+            try await AllowOnceCLI.mint(
+                command: ShellCommand(rawValue: \"git reset --hard\"),
+                cwd: wd(\"/tmp/a\"),
+                tty: tty,
+                robot: false,
+                store: store,
+                now: now
+            )
+        }
+        for outcome in [UIAuthenticationOutcome.failed, .cancelled, .timedOut] {
+            await #expect(throws: AllowOnceAuthError.required) {
+                try await withCLIProcess(ownerAuthOutcome: outcome) {
+                    try await AllowOnceCLI.redeem(
+                        code: code.rawValue,
+                        tty: tty,
+                        robot: false,
+                        store: store,
+                        now: now
+                    )
+                }
+            }
+        }
+        #expect((await store.list(now: now)).contains { $0.kind == .pending })
     }
 
     @Test func robotMintRefused() async throws {

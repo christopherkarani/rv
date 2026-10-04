@@ -618,7 +618,7 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
             launchRequest: compiled,
             egressProxyPort: egressPort,
             hook: selection.resolved.definition.hookHost,
-            stagingAgent: selection.resolved.definition.agentTag
+            stagingAgent: DefinitionStagingTag(selection.resolved.definition)
         )
         enum InsertOutcome { case inserted, inactive, full }
         let outcome = state.withLock { state -> InsertOutcome in
@@ -1011,13 +1011,18 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
     }
 
     /// Legacy launches do not mint an AgentInstance, regardless of integration name.
+    ///
+    /// Step 8 (F2): this entry takes no staging tag, so wire-selected
+    /// credential staging is unrepresentable here. Filtered credentials
+    /// never stage on this path; only unfiltered operator-policy entries
+    /// apply. Definition-derived selection exists only on the identity path.
     func launchLegacy(
-        host: HookHost?, stagingAgent: String? = nil, command: IsolatedCommand,
+        host: HookHost?, command: IsolatedCommand,
         plan: ContainedPlan, io: IsolatedIO, resourceProfile: RuntimeResourceProfile? = nil,
         admission: RuntimeAdmissionConfiguration, sessionStore: RuntimeSessionStore,
         runningLimit: Int? = nil
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
-        launch(host: host, stagingAgent: stagingAgent, command: command, plan: plan,
+        launch(host: host, stagingAgent: nil, command: command, plan: plan,
                io: io, resourceProfile: resourceProfile, admission: admission,
                sessionStore: sessionStore, runningLimit: runningLimit, agentDefinition: nil)
     }
@@ -1028,7 +1033,7 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
     /// A second call does not create another volume.
     func launch(
         host: HookHost?,
-        stagingAgent: String? = nil,
+        stagingAgent: DefinitionStagingTag? = nil,
         command: IsolatedCommand,
         plan: ContainedPlan,
         io: IsolatedIO = .discard,
@@ -1053,7 +1058,7 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
 
     func launch(
         host: HookHost?,
-        stagingAgent: String? = nil,
+        stagingAgent: DefinitionStagingTag? = nil,
         command: IsolatedCommand,
         plan: ContainedPlan,
         io: IsolatedIO,
@@ -1108,7 +1113,7 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         expectedWorkspacePath: String,
         preparedEnvironment: [String]?,
         host: HookHost?,
-        stagingAgent: String?,
+        stagingAgent: DefinitionStagingTag?,
         sessionStore: RuntimeSessionStore,
         admission: RuntimeAdmissionConfiguration,
         runningLimit: Int?,
@@ -1250,22 +1255,24 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         return descriptors.compactMap(controlFile(of:))
     }
 
-    func submit(
+    /// Routes one frame to a runtime's session legacy door. Frame
+    /// routing only; sensitive mediation needs the identity door.
+    func submitLegacy(
         _ frame: RuntimeActionFrame,
         to runtime: RuntimeSessionID
     ) -> RuntimeAdmissionDecision? {
         let child = state.withLock { $0.children[runtime] }
         guard let child else { return nil }
         if child.watchFinished {
-            return child.live.admission.submit(.success(frame))
+            return child.live.admission.submitLegacy(.success(frame))
         }
-        return child.live.submit(frame)
+        return child.live.submitLegacy(frame)
     }
 
     private func spawn(
         _ request: IsolatedLaunchRequest,
         host: HookHost?,
-        stagingAgent: String? = nil,
+        stagingAgent: DefinitionStagingTag? = nil,
         sessionStore: RuntimeSessionStore,
         admission: RuntimeAdmissionConfiguration,
         register: Bool,
@@ -1287,7 +1294,10 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         // present an unbounded host prompt, and holding the supervisor
         // lock across it would stall cancel/close/launch. Values are
         // reused by the spawn retry, so a launch prompts at most once.
-        let agentName = stagingAgent ?? host?.rawValue
+        // Step 8 (F2): only the definition-derived staging tag selects
+        // credentials. `host` is routing/metadata and never falls back
+        // into selection — a nil tag stages unfiltered entries only.
+        let agentName = stagingAgent?.rawValue
         let keychain: [(name: String, value: String)]
         if let resources = request.resources {
             switch resources.keychainEnvironment(forAgent: agentName, reader: keychainReader) {
