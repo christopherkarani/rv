@@ -15,7 +15,7 @@ public func analyzeFilesystem(
     guard let action = filesystemAction(parsed: parsed, context: context) else {
         return .unknown
     }
-    return .filesystem(action)
+    return .filesystem(claimDynamicVerb(action, tokens: tokens, context: context))
 }
 
 /// Parses every chain segment as a filesystem command, in order.
@@ -27,7 +27,8 @@ public func analyzeFilesystem(
 /// (Step 8B §24).
 func parseFilesystemSegments(
     _ view: String,
-    context: FilesystemAnalysisContext
+    context: FilesystemAnalysisContext,
+    assignmentValues: [String] = []
 ) -> [FilesystemAction] {
     // Straight-line `cd`/`pushd`/`popd` tracking: each segment parses
     // against the pre-segment cwd, then updates the tracker for later
@@ -37,17 +38,41 @@ func parseFilesystemSegments(
         home: context.homeDirectory?.rawValue
     )
     var actions: [FilesystemAction] = []
-    let segments = splitSegments(view).flatMap {
-        splitSegments(ShellPipeline.stripLeadingAssignmentPrefixes($0))
+    let segments = splitSegments(view).flatMap { piece -> [String] in
+        // Inner/grouping prefixes never passed through matching, so their
+        // provenance is intact: a substitution-carrying VALUE is not a
+        // command and only its inners evaluate (M-24).
+        let (values, tail) = ShellPipeline.splitAssignmentPrefixValues(piece)
+        var out: [String] = []
+        for value in values {
+            out.append(contentsOf: splitSegments(value).dropFirst())
+        }
+        out.append(contentsOf: splitSegments(tail))
+        return out
     }
-    for segment in segments {
+    // Top-level values were already rewritten to `VALUE ; TAIL` by matching,
+    // so a bare `$(...)` segment is textually identical whether it was a
+    // VALUE or a typed standalone (whose output re-executes — genuinely
+    // C-F7). The threaded budget tells them apart: each collected value
+    // excuses at most one bare segment, inners already being siblings.
+    var budget = assignmentValues
+    let claimed = segments.filter { segment in
+        guard isBareSubstitution(segment),
+            let match = budget.firstIndex(where: { assignmentValueMatches($0, segment) })
+        else {
+            return true
+        }
+        budget.remove(at: match)
+        return false
+    }
+    for segment in claimed {
         let tokens = tokenizeFilesystemWords(segment)
         var segmentContext = context
         segmentContext.workingDirectory = tracker.working.flatMap(WorkingDirectory.init(validating:))
         if let parsed = parseFilesystemCommand(tokens),
             let action = filesystemAction(parsed: parsed, context: segmentContext)
         {
-            actions.append(action)
+            actions.append(claimDynamicVerb(action, tokens: tokens, context: segmentContext))
         } else if let head = tokens.first, isDynamicToken(head),
             let outside = dynamicOutsideTarget(head, context: segmentContext)
         {
@@ -119,6 +144,86 @@ private func isDynamicToken(_ token: String) -> Bool {
     // Exempt them so `echo hi > $HOME/.ssh/config` is not treated as unknown.
     if isHomeAliasPath(token) { return false }
     return token.contains("$") || token.contains("`")
+}
+
+/// True when `segment` is exactly one substitution span: `$(...)` with the
+/// opener closing at the very end, or a single backtick pair. Affixed
+/// spans (`pre$(a)post`) and concatenations (`$(a)$(b)`) are not bare.
+private func isBareSubstitution(_ segment: String) -> Bool {
+    let text = segment.trimmingCharacters(in: .whitespaces)
+    if text.hasPrefix("$("), text.hasSuffix(")"), text.count >= 4 {
+        var depth = 0
+        var quote: Character?
+        var index = text.index(text.startIndex, offsetBy: 1)
+        while index < text.endIndex {
+            let char = text[index]
+            if let current = quote {
+                if char == current { quote = nil }
+            } else if char == "'" || char == "\"" {
+                quote = char
+            } else if char == "(" {
+                depth += 1
+            } else if char == ")" {
+                depth -= 1
+                if depth == 0 {
+                    return text.index(after: index) == text.endIndex
+                }
+            }
+            text.formIndex(after: &index)
+        }
+        return false
+    }
+    if text.hasPrefix("`"), text.hasSuffix("`"), text.count >= 2 {
+        return text.dropFirst().dropLast().contains("`") == false
+    }
+    return false
+}
+
+/// True when budget value `value` excuses bare segment `segment`. Values are
+/// collected pre-masking while segments come from the matched view, where a
+/// whole-token outer quote layer is stripped (`X="$(a)"` budgets `"$(a)"`
+/// for segment `$(a)`); that one layer is tolerated.
+private func assignmentValueMatches(_ value: String, _ segment: String) -> Bool {
+    if value == segment { return true }
+    guard value.count >= 2,
+        let first = value.first,
+        first == "\"" || first == "'",
+        value.last == first
+    else {
+        return false
+    }
+    return String(value.dropFirst().dropLast()) == segment
+}
+
+/// M-04: a redirect-only parse claims the redirect but says nothing about a
+/// dynamic verb (`$CMD > ./inside` parsed as an inside overwrite while the
+/// verb itself could be anything). Union the C-F7 outside target into the
+/// parsed action so the unknown verb fails closed instead of riding the
+/// redirect's verdict. Static heads return the action unchanged.
+private func claimDynamicVerb(
+    _ action: FilesystemAction,
+    tokens: [String],
+    context: FilesystemAnalysisContext
+) -> FilesystemAction {
+    guard let head = tokens.first, isDynamicToken(head),
+        let outside = dynamicOutsideTarget(head, context: context)
+    else {
+        return action
+    }
+    switch action {
+    case .delete(let targets, let recursive, let force):
+        return .delete(targets: targets + [outside], recursive: recursive, force: force)
+    case .move(let sources, let destination):
+        return .move(sources: sources + [outside], destination: destination)
+    case .overwrite(let targets):
+        return .overwrite(targets: targets + [outside])
+    case .chmod(let targets, let mode, let recursive):
+        return .chmod(targets: targets + [outside], mode: mode, recursive: recursive)
+    case .create(let targets):
+        return .create(targets: targets + [outside])
+    case .read(let targets):
+        return .read(targets: targets + [outside])
+    }
 }
 
 /// A dynamic path in a mutation position may expand to anywhere, so it

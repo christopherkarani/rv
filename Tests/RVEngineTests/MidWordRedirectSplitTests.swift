@@ -24,12 +24,32 @@ struct MidWordRedirectSplitTests {
         #expect(words("a>&1b") == ["a", ">&", "1b"])
     }
 
-    @Test func split_quotedDynamicUntouched() {
+    @Test func split_quotedSubstitutionUntouched() {
         #expect(tokenizeFilesystemWords("\"a>b\"") == ["a>b"])
         #expect(tokenizeFilesystemWords("\"a>/tmp/x\"") == ["a>/tmp/x"])
-        #expect(tokenizeFilesystemWords("a$X>b") == ["a$X>b"])
+        // Substitution spans may hide the operator inside the expansion.
+        #expect(tokenizeFilesystemWords("a$(x>b)") == ["a$(x>b)"])
+        #expect(tokenizeFilesystemWords("a>${x:-b}c") == ["a>${x:-b}c"])
         // Backslash-escaped metachars never split.
         #expect(tokenizeFilesystemWords(#"a\>b"#) == [#"a\>b"#])
+    }
+
+    @Test func split_plainDynamicTargetSplitsLikeSpacedForm() {
+        // M-03: `echo hi>$F` must read exactly like `echo hi > $F` — a
+        // variable name can never contain the operator.
+        #expect(tokenizeFilesystemWords("a$X>b") == ["a$X", ">", "b"])
+        #expect(tokenizeFilesystemWords("echo hi>$F") == ["echo", "hi", ">", "$F"])
+        #expect(tokenizeFilesystemWords("a2>$F") == ["a", "2>", "$F"])
+        expectSplitParsed(
+            parseFilesystemCommand(tokenizeFilesystemWords("echo hi>$F")),
+            "overwrite",
+            paths: ["$F"]
+        )
+        expectSplitParsed(
+            parseFilesystemCommand(tokenizeFilesystemWords("echo hi>$HOME/x")),
+            "overwrite",
+            paths: ["$HOME/x"]
+        )
     }
 
     @Test func split_endToEndMidWordRedirect() {

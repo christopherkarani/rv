@@ -46,7 +46,6 @@ struct PendingApprovalStoreTests {
             Issue.record("refused consume must leave .resolved")
             return
         }
-        #expect(reread.authorizes(Self.fingerprint, identity: Self.identity) == false)
     }
 
     @Test func concurrentResolveWinsOnce() async throws {
@@ -255,7 +254,6 @@ struct PendingApprovalStoreTests {
         }
         // Step 8: resolving records the decision; name-only state never
         // authorizes — live principal validity is proven elsewhere.
-        #expect(resolved.authorizes(Self.fingerprint, identity: Self.identity) == false)
     }
 
     @Test func staleFingerprintIsRejectedAfterRestart() async throws {

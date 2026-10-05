@@ -96,4 +96,52 @@ struct TopLevelStripTests {
                 == "./run.sh && make test"
         )
     }
+
+    @Test func strip_arrayAndSubscriptPrefixes() {
+        // M-01: array/subscript prefixes execute the tail, so dispatch must
+        // see past them (`A=(1) git push` allowed while policy saw `A=(1)`).
+        #expect(ShellPipeline.stripLeadingAssignmentPrefixes("A=(1) git push") == "git push")
+        #expect(ShellPipeline.stripLeadingAssignmentPrefixes("A=(1 2 3) git push") == "git push")
+        #expect(ShellPipeline.stripLeadingAssignmentPrefixes("A=() git push") == "git push")
+        #expect(ShellPipeline.stripLeadingAssignmentPrefixes("A+=(4) git push") == "git push")
+        #expect(ShellPipeline.stripLeadingAssignmentPrefixes("A[0]=x git push") == "git push")
+        #expect(ShellPipeline.stripLeadingAssignmentPrefixes("A[$i]=x git push") == "git push")
+        #expect(ShellPipeline.stripLeadingAssignmentPrefixes("A[0]+=x git push") == "git push")
+        #expect(
+            ShellPipeline.stripLeadingAssignmentPrefixes("A=('a)b' \"c(d\") git push")
+                == "git push"
+        )
+        #expect(
+            ShellPipeline.stripAssignmentPrefixesAllSegments("true && A=(1) git push")
+                == "true && git push"
+        )
+        // Unterminated compounds are a shell syntax error: nothing executes,
+        // so declining the strip is sound.
+        #expect(
+            ShellPipeline.stripLeadingAssignmentPrefixes("A=(1 git push")
+                == "A=(1 git push"
+        )
+        #expect(
+            ShellPipeline.stripLeadingAssignmentPrefixes("A[0=x git push")
+                == "A[0=x git push"
+        )
+        // Looks-like-assignment but is not: no `=`, no strip.
+        #expect(ShellPipeline.stripLeadingAssignmentPrefixes("A[0] git push") == "A[0] git push")
+        #expect(ShellPipeline.stripLeadingAssignmentPrefixes("[ -f x ]") == "[ -f x ]")
+    }
+
+    @Test func strip_arraySubstitutionValueRewrites() {
+        // A substitution inside the compound still executes alongside the
+        // tail, so it rewrites like a scalar substitution value.
+        #expect(
+            ShellPipeline.stripLeadingAssignmentPrefixes("A=($(a)) git push")
+                == "($(a)) ; git push"
+        )
+        let (values, tail) = ShellPipeline.splitAssignmentPrefixValues("A=$(a) B=1 C=(x) git push")
+        #expect(values == ["$(a)"])
+        #expect(tail == "git push")
+        let (plainValues, plainTail) = ShellPipeline.splitAssignmentPrefixValues("A=1 B=(x) git push")
+        #expect(plainValues == [])
+        #expect(plainTail == "git push")
+    }
 }

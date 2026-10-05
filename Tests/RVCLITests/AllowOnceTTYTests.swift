@@ -3,10 +3,29 @@ import Foundation
 import Testing
 import RVDomain
 import RVIPC
-import RVPolicy
+@testable import RVPolicy
 @testable import RVCLI
 
 struct AllowOnceTTYTests {
+    @Test func redeemReasonNamesDenyRuleWhenPresent() {
+        func row(ruleID: RuleID?) -> AllowOnceListRow {
+            AllowOnceListRow(
+                kind: .pending,
+                codeHash: "hash",
+                commandRedacted: "git …",
+                cwd: wd("/tmp/ws"),
+                createdAt: Date(timeIntervalSince1970: 1),
+                expiresAt: Date(timeIntervalSince1970: 2),
+                ruleID: ruleID
+            )
+        }
+        #expect(AllowOnceCLI.redeemReason(row: row(ruleID: nil))
+            == "Allow once: git … in /tmp/ws.")
+        let rule = RuleID(pack: PackID(rawValue: "core.git"), pattern: "reset-hard")
+        #expect(AllowOnceCLI.redeemReason(row: row(ruleID: rule))
+            == "Allow once: git … in /tmp/ws (rule core.git:reset-hard).")
+    }
+
     @Test func nonTTYMintRefuses() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -169,6 +188,88 @@ struct AllowOnceTTYTests {
                 now: now
             )
         }
+    }
+
+    @Test func mintRefusesPinnedCommandBeforeAuthentication() async throws {
+        // M-33 manual-mint gate: a pinned deny refuses BEFORE the LA
+        // tripwire and writes nothing. No seamed auth outcome: any LA
+        // attempt throws .required, so .notUnlockable proves the gate
+        // runs first.
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let pinned = EvaluationResult(
+            outcome: .deny(
+                Deny(
+                    ruleID: RuleID(pack: .coreSecrets, pattern: "secret-path"),
+                    reason: "reads a secret path"
+                ),
+                matched: nil
+            ),
+            matchingView: "cat ~/.ssh/id_rsa"
+        )
+        await #expect(throws: AllowOnceError.notUnlockable) {
+            try await withCLIProcess {
+                _ = try await AllowOnceCLI.mint(
+                    command: ShellCommand(rawValue: "cat ~/.ssh/id_rsa"),
+                    cwd: wd("/tmp/a"),
+                    tty: tty,
+                    robot: false,
+                    store: store,
+                    now: now,
+                    peek: { _, _ in pinned }
+                )
+            }
+        }
+        #expect(await store.list(now: now).isEmpty)
+    }
+
+    @Test func mintProceedsWhenPeekIsUncertain() async throws {
+        // M-33: only a definite pinned deny refuses. Indeterminate
+        // (evaluation uncertainty) proceeds to the ceremony.
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let uncertain = EvaluationResult(
+            outcome: .indeterminate(.commandTooLarge),
+            matchingView: "git reset --hard"
+        )
+        let code = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+            try await AllowOnceCLI.mint(
+                command: ShellCommand(rawValue: "git reset --hard"),
+                cwd: wd("/tmp/a"),
+                tty: tty,
+                robot: false,
+                store: store,
+                now: now,
+                peek: { _, _ in uncertain }
+            )
+        }
+        #expect((await store.list(now: now)).contains { $0.kind == .pending })
+        #expect(code.rawValue.count == 6)
+    }
+
+    @Test func mintRefusesLivePinnedCommand() async throws {
+        // M-33: the default (nil-seam) live peek flags a real pinned
+        // command — core.secrets denies no grant can unlock — so manual
+        // mint refuses without reaching LA (no seamed auth outcome) and
+        // writes nothing. Day-one door, no HOME: hermetic.
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        await #expect(throws: AllowOnceError.notUnlockable) {
+            try await withCLIProcess {
+                _ = try await AllowOnceCLI.mint(
+                    command: ShellCommand(rawValue: "cat ~/.ssh/id_rsa"),
+                    cwd: wd("/tmp/a"),
+                    tty: tty,
+                    robot: false,
+                    store: store,
+                    now: now
+                )
+            }
+        }
+        #expect(await store.list(now: now).isEmpty)
     }
 
     @Test func redemptionGateRejectsCwdSwapUnderIdenticalFingerprint() async throws {

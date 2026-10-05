@@ -19,6 +19,10 @@ public final class XPCOperatorUIClient: Sendable {
     private struct ClientState {
         var discovery: xpc_connection_t?
         var actions: xpc_connection_t?
+        /// In-flight first-connect. Concurrent callers join it instead of
+        /// building a second connection, so nobody ever observes (or sends
+        /// on) a session the server has not registered yet.
+        var connecting: Task<xpc_connection_t, Error>?
     }
 
     public init(serviceName: String = RVService.machServiceName) {
@@ -279,9 +283,48 @@ public final class XPCOperatorUIClient: Sendable {
     }
 
     private func liveActions() async throws -> xpc_connection_t {
-        if let existing = state.withLock({ $0.actions }) {
-            return existing
+        enum Next {
+            case use(xpc_connection_t)
+            case join(Task<xpc_connection_t, Error>)
+            case establish(Task<xpc_connection_t, Error>)
         }
+        // Check-and-join-or-start under ONE lock: two concurrent
+        // first-connects must not both build a connection, or the loser
+        // would send on the winner's session before registration lands
+        // (spurious Denied until refresh on cold start).
+        let next: Next = state.withLock { state in
+            if let existing = state.actions {
+                return .use(existing)
+            }
+            if let flight = state.connecting {
+                return .join(flight)
+            }
+            let flight = Task<xpc_connection_t, Error> { try await self.establishActions() }
+            state.connecting = flight
+            return .establish(flight)
+        }
+        switch next {
+        case .use(let existing):
+            return existing
+        case .join(let flight):
+            // Joins observe only the registered session: the flight
+            // completes after `register()` inside `establishActions`.
+            return try await flight.value
+        case .establish(let flight):
+            do {
+                let actions = try await flight.value
+                state.withLock { $0.connecting = nil }
+                return actions
+            } catch {
+                state.withLock { $0.connecting = nil }
+                throw error
+            }
+        }
+    }
+
+    /// Builds, authenticates, stores, and registers one action connection.
+    /// Runs at most once at a time (see `liveActions`).
+    private func establishActions() async throws -> xpc_connection_t {
         let discovery = try liveDiscovery()
         let hello = try IPCJSON.encode(Hello())
         // This reply is authenticated before its endpoint field is inspected.

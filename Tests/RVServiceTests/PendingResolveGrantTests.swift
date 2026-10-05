@@ -26,7 +26,6 @@ struct PendingResolveGrantTests {
         let listed = try await env.pending.list(now: now)
         #expect(listed.isEmpty)
         let loaded = try await env.pending.load(id: created.id, now: now)
-        #expect(loaded.authorizes(created.fingerprint, identity: created.identity) == false)
         guard case .resolved(let resolution) = loaded.state,
             resolution.decision == .allowOnce
         else {

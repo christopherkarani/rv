@@ -33,6 +33,10 @@ public enum AllowOnceError: Error, Sendable, Equatable {
     case encodeFailed
     case lockFailed
     case emptyCommand
+    /// M-33: manual mint refused — the command evaluates to a pinned deny
+    /// no allow-once grant can unlock. Pre-arming it would waste the LA
+    /// ceremony plus attestation; spend time would deny anyway.
+    case notUnlockable
     /// Step 8B.1: the pending row changed between pre-LA display and the
     /// redeem re-read (TOCTOU bind). Never attest a swapped row.
     case redemptionChanged
@@ -181,6 +185,10 @@ public struct AllowOnceListRow: Sendable, Equatable {
     public var cwd: WorkingDirectory
     public var createdAt: Date
     public var expiresAt: Date
+    /// Deny rule this row unlocks, when minted from a deny. Names the
+    /// grant in the TTY redeem authentication prompt; nil for pre-armed
+    /// mints. Part of the redeem TOCTOU row equality.
+    public var ruleID: RuleID? = nil
 }
 
 public func commandFingerprint(_ matchingView: MatchingView) -> String {

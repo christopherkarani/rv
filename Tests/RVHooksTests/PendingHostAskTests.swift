@@ -132,9 +132,61 @@ struct PendingHostAskHookTests {
                 }
             )
         )
-        _ = try askDenyJSON(wire)
+        // M-25: no row was recorded, so the wire must not promise RV
+        // approval — it renders the unrecorded guidance instead.
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
+        )
+        #expect(json["decision"] as? String == "deny")
+        #expect(wire.stdout.contains(approvalUnrecordedLine))
+        #expect(wire.stdout.contains(approvalPendingLine) == false)
+        #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
         #expect(wire.exitCode == 1)
         #expect(await probe.records.isEmpty)
+    }
+
+    @Test func PendingHostAsk_recordThrowUsesUnrecordedGuidanceOnEveryHost() async throws {
+        // M-25: the record outcome threads into every host's ask-denial.
+        for host in HookHost.allCases {
+            let probe = PendingHostAskProbe()
+            await probe.failRecord(with: .encodeFailed)
+            let wire = await hookWire(
+                host: host,
+                stdin: askStdin(host),
+                world: hookWorld(
+                    evaluate: { _, _ in resetHardDeny },
+                    recordHostAsk: { request, action in
+                        try await probe.record(request, action)
+                    }
+                )
+            )
+            #expect(wire.stdout.contains(approvalUnrecordedLine), "\(host)")
+            #expect(wire.stdout.contains(approvalPendingLine) == false, "\(host)")
+            if host == .cursor {
+                #expect(wire.stdout.contains(cursorAgentAskUnrecordedLine), "\(host)")
+                #expect(wire.stdout.contains(cursorAgentAskLine) == false, "\(host)")
+            }
+        }
+    }
+
+    @Test func PendingHostAsk_recordedAskKeepsPendingGuidance() async throws {
+        // The success path is unchanged: a recorded row still promises RV
+        // approval on every host.
+        for host in HookHost.allCases {
+            let probe = PendingHostAskProbe()
+            let wire = await hookWire(
+                host: host,
+                stdin: askStdin(host),
+                world: hookWorld(
+                    evaluate: { _, _ in resetHardDeny },
+                    recordHostAsk: { request, action in
+                        try await probe.record(request, action)
+                    }
+                )
+            )
+            #expect(wire.stdout.contains(approvalPendingLine), "\(host)")
+            #expect(wire.stdout.contains(approvalUnrecordedLine) == false, "\(host)")
+        }
     }
 
     @Test(

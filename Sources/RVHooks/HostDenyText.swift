@@ -41,10 +41,32 @@ public let cursorAgentStopLine =
 public let approvalPendingLine =
     "This action requires human approval: open RV to approve it, then retry the exact command."
 
+/// Ask-denial suffix when the pending row could not be recorded (M-25).
+/// Promising RV approval then would be a lie — there is no row to approve —
+/// so the guidance routes to Terminal instead, where TTY redeem applies.
+public let approvalUnrecordedLine =
+    "This action requires human approval, but RV could not stage it for review. Run it in Terminal instead."
+
 /// Cursor `agent_message` on ask. Unlike a deny, the agent retries the
 /// exact command after the human approves it in RV.
 public let cursorAgentAskLine =
     "RV blocked this command because it requires approval. Wait for the human to approve it in RV, then retry the exact command."
+
+/// Cursor `agent_message` when the pending row could not be recorded: no
+/// retry can succeed, so the agent waits instead of looping.
+public let cursorAgentAskUnrecordedLine =
+    "RV blocked this command because it requires approval, but RV could not stage it for review. Do not retry. Wait for the human."
+
+/// Ask-denial guidance for the record outcome: the approval-pending line
+/// when a row exists, the unrecorded line when recording failed.
+public func askPendingLine(recorded: Bool) -> String {
+    recorded ? approvalPendingLine : approvalUnrecordedLine
+}
+
+/// Cursor ask `agent_message` for the record outcome.
+public func cursorAgentAskMessage(recorded: Bool) -> String {
+    recorded ? cursorAgentAskLine : cursorAgentAskUnrecordedLine
+}
 
 func hookVoiceNextSentence(_ next: HookVoiceNext) -> String? {
     switch next {

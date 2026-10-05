@@ -281,6 +281,26 @@ enum WorkspaceCommandRun {
 
     static func abandon(_ raw: String?) throws {
         try LocalControlBoundary.requireOwnerAuthorization()
+        try abandonBlockedWorkspace(raw)
+    }
+
+    /// Abandon behind the owner gate. The gate throws until
+    /// authenticated service mutation routes exist; without this body an
+    /// implemented gate would report success while abandoning nothing.
+    static func abandonBlockedWorkspace(_ raw: String?) throws {
+        #if !os(macOS)
+        throw ValidationError("contained workspace host is unavailable")
+        #else
+        let project = try requireProject(raw)
+        switch WorkspaceHosts.abandon(project: project) {
+        case .abandoned(let report):
+            emit(lines(report))
+        case .refused(let refusal):
+            throw ValidationError(text(refusal))
+        case .failed(let reason):
+            throw ValidationError(reason.map { "abandon stopped: \($0.rawValue)" } ?? "abandon failed")
+        }
+        #endif
     }
 
     static func run(
@@ -322,6 +342,9 @@ enum WorkspaceCommandRun {
         guard AgentDefinitionID(validating: definitionID) != nil else {
             throw ValidationError("invalid Agent Definition ID")
         }
+        guard arguments.contains(where: { $0.contains("\0") }) == false else {
+            throw ValidationError("arguments must not contain NUL bytes")
+        }
         try runInteractiveSelection(
             project: requireProject(raw), selection: .named(definitionID: definitionID),
             arguments: arguments, rows: rows, columns: columns
@@ -344,6 +367,9 @@ enum WorkspaceCommandRun {
             })
         else {
             throw ValidationError("custom launch requires an absolute executable and lowercase SHA-256 digest")
+        }
+        guard command.dropFirst().contains(where: { $0.contains("\0") }) == false else {
+            throw ValidationError("arguments must not contain NUL bytes")
         }
         try runInteractiveSelection(
             project: requireProject(raw),

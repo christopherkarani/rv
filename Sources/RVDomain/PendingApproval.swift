@@ -304,13 +304,6 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         return at
     }
 
-    /// Historical name-only API. Cannot prove live principal validity and never authorizes.
-    public func authorizes(_ fingerprint: ActionFingerprint, identity: ApprovalIdentity) -> Bool {
-        // This legacy name-based API cannot prove live principal validity.
-        // Even a durable subject description cannot turn it into executable authority.
-        return false
-    }
-
     /// Describes a resolved row; callers must separately prove live principal validity.
     package func describesResolution(for subject: ApprovalSubject) -> Bool {
         guard self.subject == subject, self.fingerprint == subject.fingerprint,

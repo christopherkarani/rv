@@ -52,6 +52,12 @@ import RVTheme
     #expect(HelpDispatch.topic(arguments: ["help", "workspace", "abandon"]) == .workspace)
     #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--hook", "opencode", "--help"]) == .workspace)
     #expect(HelpDispatch.topic(arguments: ["workspace", "run", "--resource-profile=x", "--help"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["workspace", "agent", "--help"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["workspace", "custom", "--help"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["help", "workspace", "agent"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["help", "workspace", "custom"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["workspace", "custom", "--expected-content-digest-sha256", String(repeating: "a", count: 64), "--help"]) == .workspace)
+    #expect(HelpDispatch.topic(arguments: ["workspace", "custom", "--expected-content-digest-sha256=x", "--help"]) == .workspace)
     #expect(HelpDispatch.topic(arguments: ["opencode", "--resource-profile", "x", "--help"]) == .opencode)
     // A bare `--` is a passthrough boundary: `--help` past it belongs to
     // the executable, never to help dispatch.

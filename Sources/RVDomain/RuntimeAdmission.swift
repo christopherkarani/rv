@@ -518,7 +518,7 @@ public enum RuntimeAdmissionGate {
                     reject(
                         binding: binding,
                         requestID: requestID,
-                        reason: .unknownSession,
+                        reason: .principalRequired,
                         authorization: .rejected
                     )
                 )
@@ -661,18 +661,25 @@ public enum RuntimeAdmissionGate {
         )
     }
 
-    /// Attributes the attempt to the presented principal when one was
-    /// presented, else to the RV-held channel binding. Both sources are
-    /// RV-held: request bytes name no principal. Legacy channels stamp nils.
+    /// Attributes the attempt to the presented principal only when the
+    /// RV-held binding names that same instance (verified identity: the
+    /// context matched the channel). A presented context the binding does
+    /// not name is smuggled, not trusted — stamping it would misattribute
+    /// an impersonation rejection to a principal that never authenticated.
+    /// Unverified attempts stamp the binding's instance with no definition.
+    /// Request bytes name no principal either way. Legacy channels stamp nils.
     private static func stamp(
         _ decision: RuntimeAdmissionDecision,
         agentContext: AuthenticatedAgentContext?
     ) -> RuntimeAdmissionDecision {
         var stamped = decision
+        let verified = agentContext.flatMap { context in
+            decision.binding?.agentInstanceID == context.instance.id ? context : nil
+        }
         stamped.event.agentInstance =
-            agentContext?.instance.id.rawValue.uuidString
+            verified?.instance.id.rawValue.uuidString
             ?? decision.binding?.agentInstanceID?.rawValue.uuidString
-        stamped.event.agentDefinition = agentContext?.instance.definitionID.rawValue
+        stamped.event.agentDefinition = verified?.instance.definitionID.rawValue
         return stamped
     }
 

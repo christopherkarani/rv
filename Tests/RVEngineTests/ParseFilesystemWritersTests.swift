@@ -698,8 +698,28 @@ struct ParseNewWriterVerbsTests {
             "overwrite",
             paths: ["/tmp/x"]
         )
+        // `-d` consumes its attached value: query letters in the directory
+        // (`/tmp`, `/var`, `/home`) must not misread as list-mode flags.
+        expectWriterParsed(
+            parseUnzip(["-od/var/x", "a.zip"]),
+            "overwrite",
+            paths: ["/var/x"]
+        )
         #expect(parseUnzip(["-l", "a.zip"]) == nil)
-        #expect(parseUnzip(["a.zip"]) == nil)
+        // M-05: default extraction claims the cwd root (like `tar -x`), so
+        // `cd`-tracked outside cwds fail closed.
+        expectWriterParsed(parseUnzip(["a.zip"]), "overwrite", paths: ["."])
+    }
+
+    @Test func unzip_queryModesAndBareClaimNothing() {
+        // List/test/pipe modes never touch the disk; bare `unzip` prints
+        // usage. None of these may claim the cwd root.
+        for flag in ["-l", "-Z", "-t", "-p", "-c", "-v", "-h", "-Zl"] {
+            #expect(parseUnzip([flag, "a.zip"]) == nil, "flag \(flag)")
+        }
+        #expect(parseUnzip([]) == nil)
+        #expect(parseUnzip(["-o"]) == nil)
+        #expect(parseUnzip(["-l", "-d", "/tmp/x", "a.zip"]) == nil)
     }
 
     @Test func split_prefixOperand() {
@@ -713,7 +733,9 @@ struct ParseNewWriterVerbsTests {
             "overwrite",
             paths: ["/tmp/p"]
         )
-        #expect(parseSplit(["a"]) == nil)
+        // M-05: default `x*` output claims the cwd root (like `tar -x`).
+        expectWriterParsed(parseSplit(["a"]), "overwrite", paths: ["."])
+        expectWriterParsed(parseSplit([]), "overwrite", paths: ["."])
         #expect(parseSplit(["--help"]) == nil)
     }
 

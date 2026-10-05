@@ -6,7 +6,11 @@ import RVDomain
 /// an `.ask` verdict records a pending row (in `hookBody`) and encodes
 /// deny-with-guidance on every host.
 public enum HookWireIntent: Sendable, Equatable {
-    case firstCall(verdict: HostAskVerdict, unlockCode: AllowOnceUnlockMint?)
+    case firstCall(
+        verdict: HostAskVerdict,
+        unlockCode: AllowOnceUnlockMint?,
+        askRecorded: Bool = true
+    )
 }
 
 /// Returns the host wire for `intent`.
@@ -17,13 +21,14 @@ public func hookWire(
     intent: HookWireIntent
 ) -> HookWire {
     switch intent {
-    case .firstCall(let verdict, let unlockCode):
+    case .firstCall(let verdict, let unlockCode, let askRecorded):
         return encodeFirstCall(
             from: result,
             command: command,
             using: codec,
             verdict: verdict,
-            unlockCode: unlockCode
+            unlockCode: unlockCode,
+            askRecorded: askRecorded
         )
     }
 }
@@ -56,7 +61,8 @@ private func encodeFirstCall(
     command: ShellCommand,
     using codec: any HostCodec,
     verdict: HostAskVerdict,
-    unlockCode: AllowOnceUnlockMint?
+    unlockCode: AllowOnceUnlockMint?,
+    askRecorded: Bool
 ) -> HookWire {
     switch verdict {
     case .allow:
@@ -65,7 +71,8 @@ private func encodeFirstCall(
         return codec.encodeEvaluatedAskDeny(
             from: result,
             command: command,
-            unlockCode: unlockCode
+            unlockCode: unlockCode,
+            askRecorded: askRecorded
         )
     case .deny:
         return encodeLiveDeny(

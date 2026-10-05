@@ -6,18 +6,18 @@ import RVIPC
 /// and poll its status. Proposals are untrusted routing hints; nothing
 /// launches until the workspace host prepares a description and the device
 /// owner authorizes it in RVOperatorUI.
-public struct Operator: AsyncParsableCommand {
-    public static let configuration = CommandConfiguration(
+struct Operator: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
         commandName: "operator",
         abstract: "Propose and poll identity launches (review required).",
         subcommands: [OperatorPropose.self, OperatorProposalStatus.self]
     )
 
-    public init() {}
+    init() {}
 }
 
-public struct OperatorPropose: AsyncParsableCommand {
-    public static let configuration = CommandConfiguration(
+struct OperatorPropose: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
         commandName: "propose",
         abstract: "Propose one identity launch for operator review."
     )
@@ -46,9 +46,9 @@ public struct OperatorPropose: AsyncParsableCommand {
     @Argument(help: "Arguments recorded for review (never trusted).")
     var arguments: [String] = []
 
-    public init() {}
+    init() {}
 
-    public func run() async throws {
+    func run() async throws {
         let params = try buildParams()
         let client = ServiceClient()
         switch await client.proposeLaunch(params) {
@@ -61,7 +61,7 @@ public struct OperatorPropose: AsyncParsableCommand {
         }
     }
 
-    func describe(_ error: ServiceClient.OperatorCommandError) -> String {
+    func describe(_ error: ServiceClient.ServiceCommandError) -> String {
         switch error {
         case .noTransport:
             return "service unreachable"
@@ -111,8 +111,8 @@ public struct OperatorPropose: AsyncParsableCommand {
     }
 }
 
-public struct OperatorProposalStatus: AsyncParsableCommand {
-    public static let configuration = CommandConfiguration(
+struct OperatorProposalStatus: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
         commandName: "proposal-status",
         abstract: "Poll one proposal's review status."
     )
@@ -120,9 +120,9 @@ public struct OperatorProposalStatus: AsyncParsableCommand {
     @Argument(help: "Operation ID from propose.")
     var operationID: String
 
-    public init() {}
+    init() {}
 
-    public func run() async throws {
+    func run() async throws {
         guard let id = UUID(uuidString: operationID) else {
             throw ValidationError("operation ID must be a UUID")
         }
@@ -147,7 +147,7 @@ public struct OperatorProposalStatus: AsyncParsableCommand {
         }
     }
 
-    func describe(_ error: ServiceClient.OperatorCommandError) -> String {
+    func describe(_ error: ServiceClient.ServiceCommandError) -> String {
         switch error {
         case .noTransport:
             return "service unreachable"

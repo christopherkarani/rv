@@ -75,6 +75,9 @@ public enum PolicyGate {
     /// Spends a matching grant. Hook / `rvd` / in-process fallback.
     /// Step 8B.1: spends ONLY service-held memory grants. The allow-once
     /// file is a projection and is never consulted here (B-F1/B-F3).
+    /// Pinned rules deny regardless of grants, so a pinned result returns
+    /// before consuming: spending a grant the final decision ignores
+    /// would burn single-use authority for nothing.
     public static func consumingGrant(
         for result: EvaluationResult,
         cwd: WorkingDirectory?,
@@ -93,6 +96,9 @@ public enum PolicyGate {
             rebaseInProgress: rebaseInProgress,
             safety: safety
         )
+        if RulePinning.blocksAllowOverride(result) {
+            return withoutGrant
+        }
         guard let cwd = honorCwd(result, cwd: cwd, withoutGrant: withoutGrant) else {
             return withoutGrant
         }

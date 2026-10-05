@@ -111,11 +111,19 @@ public final class OperatorHookReviewModel {
     /// Explicit Allow-once tap: one fresh device-owner authentication, then
     /// completion echoes the EXACT retained challenge and approval IDs.
     /// Anything else (mismatch, tamper, replay) fails closed in rvd.
+    /// A non-authenticated outcome (cancel, failure, unavailable) sends
+    /// nothing: the server destroys the challenge for an unauthenticated
+    /// completion, so reporting the outcome would burn the bound review
+    /// the human can still retry. The selection stays bound.
     public func allowOnce() async {
         guard let bound, !authenticating else { return }
         authenticating = true
         defer { authenticating = false }
         let outcome = await authenticator.authenticate(reason: Self.allowReason)
+        guard outcome == .authenticated else {
+            notice = Self.notAuthenticatedNotice(outcome)
+            return
+        }
         do {
             let status = try await bridge.hookComplete(UIHookCompletion(
                 challengeID: bound.challenge.challengeID,
@@ -162,6 +170,23 @@ public final class OperatorHookReviewModel {
     private func clearSelection() {
         selectedID = nil
         bound = nil
+    }
+
+    private static func notAuthenticatedNotice(_ outcome: UIAuthenticationOutcome) -> String {
+        switch outcome {
+        case .authenticated:
+            return "Request failed."
+        case .cancelled:
+            return "Authentication cancelled. The review is still open."
+        case .unavailable:
+            return "Device-owner authentication is unavailable."
+        case .timedOut:
+            return "Authentication timed out. The review is still open."
+        case .invalidated:
+            return "Authentication was invalidated. The review is still open."
+        case .failed:
+            return "Authentication failed. The review is still open."
+        }
     }
 
     private static func isTerminal(_ status: String) -> Bool {

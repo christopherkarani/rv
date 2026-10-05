@@ -288,7 +288,11 @@ public enum GitAction: Sendable, Equatable, Codable {
         case .push(let remote, let refspec, let force):
             return "shell:git.push:\(force.rawValue):\(remote ?? ""):\(refspec ?? "")"
         case .pushUnparsed(let args):
-            return "shell:git.push:unparsed:\(args.joined(separator: " "))"
+            // The fingerprint must not embed raw argv: unparsed args can
+            // carry secrets (credential-bearing URLs), and space-joining
+            // collides (["a b"] vs ["a", "b"]). Hash NUL-joined args
+            // instead; exec argv cannot contain NUL, so the join is exact.
+            return "shell:git.push:unparsed:\(RVDigest.sha256Hex(Array(args.joined(separator: "\u{0}").utf8)))"
         case .deleteRemoteRef(let remote, let refspec):
             return "shell:git.delete-remote-ref:\(remote ?? ""):\(refspec ?? "")"
         case .deleteBranch(let name, let force):

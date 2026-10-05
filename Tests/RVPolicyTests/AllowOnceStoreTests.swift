@@ -231,6 +231,31 @@ struct AllowOnceStoreTests {
         )
     }
 
+    @Test func projectSkipsWriteWhileLockHeld() async throws {
+        // M-35: the daemon projection write is non-blocking best-effort.
+        // A held lock skips the row instead of stalling the ceremony.
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.createDirectory(
+            at: store.baseDirectory,
+            withIntermediateDirectories: true
+        )
+        let lockURL = RVPolicyPaths.allowOnceLockFile(inConfigDir: store.baseDirectory)
+        let fd = lockURL.path.withCString { open($0, O_RDWR | O_CREAT, 0o600) }
+        #expect(fd >= 0)
+        defer { close(fd) }
+        #expect(flock(fd, LOCK_EX | LOCK_NB) == 0)
+        defer { _ = flock(fd, LOCK_UN) }
+        await store.project(
+            lifecycle: .granted,
+            matchingView: "git reset --hard",
+            cwd: wd("/tmp/ws"),
+            codeHash: "held-lock",
+            now: now
+        )
+        #expect((await store.list(now: now)).isEmpty)
+    }
+
     @Test func expiredMemoryGrantDoesNotConsume() async throws {
         let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -523,6 +548,52 @@ struct AllowOnceStoreTests {
                 == false
         )
     }
+
+    @Test func liveCodeCachePrunedOnRedeem() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let first: AllowOnceUnlockCode = try await store.mint(
+            matchingView: "cmd-one", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: now
+        )
+        let second: AllowOnceUnlockCode = try await store.mint(
+            matchingView: "cmd-two", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: now
+        )
+        #expect(await store.liveUnlockCodeCountForTesting() == 2)
+        _ = try await store.redeem(code: first.rawValue, tty: tty, now: now)
+        #expect(await store.liveUnlockCodeCountForTesting() == 1)
+        _ = try await store.redeem(code: second.rawValue, tty: tty, now: now)
+        #expect(await store.liveUnlockCodeCountForTesting() == 0)
+    }
+
+    @Test func liveCodeCachePrunedOnExpiry() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        _ = try await store.mint(
+            matchingView: "cmd-stale", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: now, ttl: 60
+        )
+        #expect(await store.liveUnlockCodeCountForTesting() == 1)
+        let late = now.addingTimeInterval(61)
+        _ = try await store.mint(
+            matchingView: "cmd-fresh", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: late
+        )
+        #expect(await store.liveUnlockCodeCountForTesting() == 1)
+        #expect((await store.list(now: late)).map(\.commandRedacted) == ["cmd-fresh"])
+    }
+
+    @Test func storedRowsNeverExceedCap() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        try seedRows(store: store, count: AllowOnceStore.maxStoredRows + 50, now: now)
+        _ = try await store.mint(
+            matchingView: "cmd-newest", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: now
+        )
+        let rows = await store.list(now: now)
+        #expect(rows.count == AllowOnceStore.maxStoredRows)
+        #expect(rows.contains { $0.commandRedacted == "cmd-newest" })
+    }
 }
 
 private func isolatedStore() throws -> AllowOnceStore {
@@ -534,6 +605,31 @@ private func isolatedStore() throws -> AllowOnceStore {
 
 private func jsonl(_ store: AllowOnceStore) -> URL {
     RVPolicyPaths.allowOnceFile(inConfigDir: store.baseDirectory)
+}
+
+private func seedRows(store: AllowOnceStore, count: Int, now: Date) throws {
+    let records = (0..<count).map { index in
+        AllowOnceRecord(
+            schemaVersion: 1,
+            lifecycle: .pending,
+            codeHash: "seed-hash-\(index)",
+            commandFingerprint: "seed-fp-\(index)",
+            commandRedacted: "seed-\(index)",
+            cwd: wd("/tmp/a"),
+            ruleID: nil,
+            createdAt: now.addingTimeInterval(-Double(count - index)),
+            expiresAt: now.addingTimeInterval(3600)
+        )
+    }
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    encoder.outputFormatting = [.sortedKeys]
+    let lines = try records.map { record -> String in
+        let data = try encoder.encode(record)
+        return try #require(String(data: data, encoding: .utf8))
+    }
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: jsonl(store), atomically: true, encoding: .utf8)
 }
 
 private func sabotageLock(in directory: URL) throws {

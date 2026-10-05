@@ -541,6 +541,28 @@ struct ActionApprovalParkTests {
         #expect(harness.backend.snapshot.creates.count == 8)
     }
 
+    @Test func declinedCreatesReleaseTheParkSlot() throws {
+        let backend = FakeAskBackend()
+        backend.setCreateDeclined(true)
+        let harness = try ParkHarness(backend: backend)
+        defer { harness.cleanup() }
+        // Declined creates must release their reservation: eight declines
+        // leave the full cap available for later parks.
+        for i in 0..<8 {
+            let declined = harness.session.submitLegacy(
+                .success(harness.frame("echo declined-\(i)", id: UUID())))
+            #expect(declined.responseDeferred == false)
+        }
+        #expect(harness.session.parkedApprovalCountForTesting == 0)
+        backend.setCreateDeclined(false)
+        for i in 0..<8 {
+            let decision = harness.session.submitLegacy(
+                .success(harness.frame("echo park-\(i)", id: UUID())))
+            #expect(decision.responseDeferred == true)
+        }
+        #expect(harness.session.parkedApprovalCountForTesting == 8)
+    }
+
     @Test func sameRequestIDRejectedAsReplay() throws {
         let harness = try ParkHarness()
         defer { harness.cleanup() }

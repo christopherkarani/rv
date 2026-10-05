@@ -71,18 +71,20 @@ public struct ClaudeHostCodec: HostCodec {
 
     /// Ask-denial keeps the rich shape (nested `permissionDecision` plus
     /// match fields). Guidance joins after the deny line so truncation
-    /// cannot drop it.
+    /// cannot drop it. When the pending row failed to record, the guidance
+    /// says so instead of promising RV approval (M-25).
     public func encodeEvaluatedAskDeny(
         from result: EvaluationResult,
         command: ShellCommand,
-        unlockCode: AllowOnceUnlockMint? = nil
+        unlockCode: AllowOnceUnlockMint? = nil,
+        askRecorded: Bool = true
     ) -> HookWire {
         switch result.decision {
         case .allow, .indeterminate:
             return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
         case .deny(let deny):
             let hostDenyText =
-                "\(hostDenyLine(command: command, reason: deny.reason, unlock: unlockCode)) \(approvalPendingLine)"
+                "\(hostDenyLine(command: command, reason: deny.reason, unlock: unlockCode)) \(askPendingLine(recorded: askRecorded))"
             guard case .deny(_, let matched?) = result.outcome else {
                 return encodeDeny(
                     reason: hostDenyText,

@@ -157,6 +157,26 @@ enum AllowOnceLedger {
         }
     }
 
+    /// Hard row cap for the projection file. Under the cap the list passes
+    /// through untouched; over it the newest rows by creation survive and
+    /// the oldest are dropped. Newest-first keeps live ceremonies (just
+    /// minted) while shedding stale history: a dropped pending row fails
+    /// closed at redeem (`unknownCode`), and a same-user attacker flooding
+    /// rows can already delete the file outright. Callers apply this on
+    /// every write so the file can never grow past `maxRows`.
+    static func capped(
+        records: [AllowOnceRecord],
+        maxRows: Int
+    ) -> [AllowOnceRecord] {
+        guard records.count > maxRows else { return records }
+        return Array(
+            records
+                .sorted { $0.createdAt > $1.createdAt }
+                .prefix(maxRows)
+                .reversed()
+        )
+    }
+
     private static func row(_ record: AllowOnceRecord) -> AllowOnceListRow {
         AllowOnceListRow(
             kind: record.kind,
@@ -164,7 +184,8 @@ enum AllowOnceLedger {
             commandRedacted: record.commandRedacted,
             cwd: record.cwd,
             createdAt: record.createdAt,
-            expiresAt: record.expiresAt
+            expiresAt: record.expiresAt,
+            ruleID: record.ruleID
         )
     }
 }

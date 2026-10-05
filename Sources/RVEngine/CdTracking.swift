@@ -35,7 +35,8 @@ struct DirectoryTracker {
     mutating func apply(tokens: [String]) {
         guard tokens.isEmpty == false else { return }
         // `command`/`builtin` prefixes still cd the current shell, but a
-        // `command -v`/`-V`/`-p` query never changes directory. `sudo`/`env`
+        // `command -v`/`-V` query never changes directory (`-p` is not a
+        // query: it executes with the default PATH). `sudo`/`env`
         // run `cd` in a child: the parent cwd is unchanged, so they stay
         // untracked (head is not cd/pushd/popd).
         let head = basename(tokens[0]).lowercased()
@@ -48,7 +49,10 @@ struct DirectoryTracker {
                     rest.removeFirst()
                     break
                 }
-                if first == "-v" || first == "-V" || first == "-p" {
+                // Only `-v`/`-V` are non-executing queries. `-p` (default
+                // PATH) still runs the command — `command -p cd /tmp` cds —
+                // so it falls through to the skip below (M-23).
+                if first == "-v" || first == "-V" {
                     return
                 }
                 rest.removeFirst()

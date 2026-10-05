@@ -48,7 +48,8 @@ public actor EphemeralAllowOnceTable {
         /// This ceremony code already planted this epoch: a double-attest
         /// (or a replayed attestation) creates no second grant.
         case alreadyRedeemed
-        /// Invalid input (empty view or code hash). Never a grant.
+        /// Invalid input (empty view or code hash), or a full table.
+        /// Never a grant.
         case refused
     }
 
@@ -60,8 +61,16 @@ public actor EphemeralAllowOnceTable {
     /// remediation changes the trust root, not the product TTL.
     public static let maxTTL: TimeInterval = 24 * 60 * 60
 
+    /// Maximum live grants. Plants past a full table are refused (fail
+    /// closed; the human retries). The cap also bounds the linear spend
+    /// scan in `consume`/`hasGrant`.
+    public static let maxGrants = 1024
+
     private var grants: [UUID: Grant] = [:]
-    private var redeemedCodes: Set<String> = []
+    /// Ceremony codes that already planted, with the expiry of the grant
+    /// they planted. Pruned with the grants: without expiry the set grows
+    /// forever on a same-user approval loop.
+    private var redeemedCodes: [String: Date] = [:]
 
     public init(epoch: UUID = UUID()) {
         self.epoch = epoch
@@ -92,6 +101,8 @@ public actor EphemeralAllowOnceTable {
     /// Fingerprint-plant for the TTY attestation path: the CLI knows the
     /// reviewed row's digest (bound pre-LA), never the full view. Same
     /// enforcement as the view entry; the daemon validates shape first.
+    /// Refuses past `maxGrants` live grants (fail closed; the human
+    /// retries against a pruned table).
     public func plant(
         fingerprint: String,
         cwd: WorkingDirectory,
@@ -102,8 +113,9 @@ public actor EphemeralAllowOnceTable {
     ) -> PlantResult {
         guard fingerprint.isEmpty == false else { return .refused }
         guard codeHash.isEmpty == false else { return .refused }
-        guard redeemedCodes.contains(codeHash) == false else { return .alreadyRedeemed }
-        redeemedCodes.insert(codeHash)
+        prune(now: now)
+        guard redeemedCodes[codeHash] == nil else { return .alreadyRedeemed }
+        guard grants.count < Self.maxGrants else { return .refused }
         let clampedTTL = min(max(ttl, 1), Self.maxTTL)
         let grant = Grant(
             fingerprint: fingerprint,
@@ -113,6 +125,7 @@ public actor EphemeralAllowOnceTable {
             createdAt: now,
             expiresAt: now.addingTimeInterval(clampedTTL)
         )
+        redeemedCodes[codeHash] = grant.expiresAt
         grants[UUID()] = grant
         return .planted
     }
@@ -150,5 +163,6 @@ public actor EphemeralAllowOnceTable {
 
     private func prune(now: Date) {
         grants = grants.filter { _, grant in grant.expiresAt >= now }
+        redeemedCodes = redeemedCodes.filter { _, expiresAt in expiresAt >= now }
     }
 }

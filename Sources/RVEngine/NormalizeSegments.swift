@@ -31,10 +31,14 @@ func splitSegments(_ text: String) -> [String] {
 /// operators quoting-aware: `b>/tmp/x` → `["b", ">", "/tmp/x"]`, `a2>>b` →
 /// `["a", "2>>", "b"]`. Without this, attached redirects hide their target in an
 /// operand (`echo hi>/tmp/x` evaluated as no-action). Only unquoted,
-/// non-ANSI-C, non-dynamic tokens split: quoted metachars are literal
-/// (`"a>b"` stays one word), and dynamic words belong to the analyze-layer
-/// guards. Git call sites do not use this: an attached redirect in git
-/// position already fails closed via `.pushUnparsed` / unknown subcommands.
+/// non-ANSI-C tokens without a substitution span split: quoted metachars
+/// are literal (`"a>b"` stays one word), while `$(...)`/backtick/`${...}`
+/// spans may hide a `>` inside the expansion, so those words stay glued
+/// for the analyze-layer guards. Plain `$VAR` words DO split — a variable
+/// name can never contain the operator, so `echo hi>$F` must read exactly
+/// like the spaced form (M-03). Git call sites do not use this: an
+/// attached redirect in git position already fails closed via
+/// `.pushUnparsed` / unknown subcommands.
 func tokenizeFilesystemWords(_ text: String) -> [String] {
     splitMidWordRedirects(tokenizeCommand(text)).map(\.decoded)
 }
@@ -48,7 +52,7 @@ func splitMidWordRedirects(_ tokens: [CommandToken]) -> [CommandToken] {
     tokens.flatMap { token -> [CommandToken] in
         guard token.wasQuoted == false, token.wasAnsiC == false,
             carriesSubstitution(token.decoded) == false,
-            token.decoded.contains("$") == false
+            token.decoded.contains("${") == false
         else {
             return [token]
         }

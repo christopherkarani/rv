@@ -83,7 +83,11 @@ public func applyFilesystemSemantics(
         case .probed(let probed):
             segmentContext = probed
         }
-        for action in parseFilesystemSegments(view, context: segmentContext) {
+        // M-24: values the matcher rewrote excuse their own bare segments.
+        let assignmentValues = ShellPipeline.collectTopLevelAssignmentValues(
+            ShellPipeline.peelStage(command.rawValue)
+        )
+        for action in parseFilesystemSegments(view, context: segmentContext, assignmentValues: assignmentValues) {
             if let denied = filesystemSegmentResult(
                 action: action,
                 pack: pack,
@@ -141,7 +145,11 @@ private func gitClaimRedirectResult(
     case .probed(let probed):
         segmentContext = probed
     }
-    for action in parseFilesystemSegments(view, context: segmentContext) {
+    // M-24: values the matcher rewrote excuse their own bare segments.
+    let assignmentValues = ShellPipeline.collectTopLevelAssignmentValues(
+        ShellPipeline.peelStage(command.rawValue)
+    )
+    for action in parseFilesystemSegments(view, context: segmentContext, assignmentValues: assignmentValues) {
         if let denied = filesystemSegmentResult(
             action: action,
             pack: pack,

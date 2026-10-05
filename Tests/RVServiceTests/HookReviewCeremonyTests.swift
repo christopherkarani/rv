@@ -343,6 +343,114 @@ struct HookReviewCeremonyTests {
             try await env.ceremonies.bindHookReview(approvalID: "hook-14", uiConnection: ui)
         }
     }
+
+    @Test func bindUnknownApprovalIsUnknown() async throws {
+        let env = try HookCeremonyEnv(now: now)
+        defer { env.tearDown() }
+        await #expect(throws: HookReviewCeremonyError.unknownApproval) {
+            try await env.ceremonies.bindHookReview(
+                approvalID: "hook-never-seeded",
+                uiConnection: AuthenticatedOperatorUIConnectionID())
+        }
+    }
+
+    @Test func cancelFromOtherConnectionIsNotReviewable() async throws {
+        let env = try HookCeremonyEnv(now: now)
+        defer { env.tearDown() }
+        _ = try await env.seed(command: "git reset --hard", id: "hook-15")
+        let owner = AuthenticatedOperatorUIConnectionID()
+        let (challenge, _) = try await env.ceremonies.bindHookReview(
+            approvalID: "hook-15", uiConnection: owner)
+
+        await #expect(throws: HookReviewCeremonyError.notReviewable) {
+            try await env.ceremonies.cancelHookReview(
+                approvalID: "hook-15",
+                uiConnection: AuthenticatedOperatorUIConnectionID())
+        }
+        // The owner's challenge survives the foreign cancel: re-bind
+        // resumes the same live challenge.
+        let (resumed, _) = try await env.ceremonies.bindHookReview(
+            approvalID: "hook-15", uiConnection: owner)
+        #expect(resumed.challengeID == challenge.challengeID)
+    }
+
+    @Test func cancelUnknownApprovalIsUnknown() async throws {
+        let env = try HookCeremonyEnv(now: now)
+        defer { env.tearDown() }
+        await #expect(throws: HookReviewCeremonyError.unknownApproval) {
+            try await env.ceremonies.cancelHookReview(
+                approvalID: "hook-never-seeded",
+                uiConnection: AuthenticatedOperatorUIConnectionID())
+        }
+    }
+
+    @Test func completeWithMismatchedChallengeFailsClosedWithoutGrant() async throws {
+        let env = try HookCeremonyEnv(now: now)
+        defer { env.tearDown() }
+        _ = try await env.seed(command: "git reset --hard", id: "hook-16")
+        _ = try await env.seed(command: "git status", id: "hook-17")
+        let ui = AuthenticatedOperatorUIConnectionID()
+        let (first, _) = try await env.ceremonies.bindHookReview(
+            approvalID: "hook-16", uiConnection: ui)
+        let (second, _) = try await env.ceremonies.bindHookReview(
+            approvalID: "hook-17", uiConnection: ui)
+
+        // Row 16's review presented with row 17's challenge: unknown
+        // ceremony, nothing planted, both reviews intact.
+        await #expect(throws: HookReviewCeremonyError.unknownApproval) {
+            try await env.ceremonies.completeHookCeremony(
+                UIHookCompletion(
+                    challengeID: second.challengeID,
+                    approvalID: "hook-16",
+                    outcome: .authenticated
+                ),
+                uiConnection: ui
+            )
+        }
+        #expect(try await env.grantedCount() == 0)
+        let (resumedFirst, _) = try await env.ceremonies.bindHookReview(
+            approvalID: "hook-16", uiConnection: ui)
+        #expect(resumedFirst.challengeID == first.challengeID)
+        let (resumedSecond, _) = try await env.ceremonies.bindHookReview(
+            approvalID: "hook-17", uiConnection: ui)
+        #expect(resumedSecond.challengeID == second.challengeID)
+    }
+
+    @Test func everyNonAuthenticatedOutcomeDropsChallengeWithoutGrant() async throws {
+        let env = try HookCeremonyEnv(now: now)
+        defer { env.tearDown() }
+        let ui = AuthenticatedOperatorUIConnectionID()
+        var index = 0
+        for outcome: UIAuthenticationOutcome in [
+            .cancelled, .unavailable, .timedOut, .invalidated, .failed,
+        ] {
+            let id = "hook-nonauth-\(index)"
+            index += 1
+            // Distinct commands: identical fingerprints dedupe to one row.
+            _ = try await env.seed(command: "echo nonauth-\(id)", id: id)
+            let (challenge, _) = try await env.ceremonies.bindHookReview(
+                approvalID: id, uiConnection: ui)
+            await #expect(throws: HookReviewCeremonyError.authenticationFailed) {
+                try await env.ceremonies.completeHookCeremony(
+                    UIHookCompletion(
+                        challengeID: challenge.challengeID,
+                        approvalID: id,
+                        outcome: outcome
+                    ),
+                    uiConnection: ui
+                )
+            }
+            #expect(try await env.grantedCount() == 0, "outcome \(outcome) must plant nothing")
+            #expect(
+                await env.ceremonies.hookStatus(approvalID: id) == "awaitingHuman",
+                "outcome \(outcome) must leave the row awaiting")
+            let (fresh, _) = try await env.ceremonies.bindHookReview(
+                approvalID: id, uiConnection: ui)
+            #expect(
+                fresh.challengeID != challenge.challengeID,
+                "outcome \(outcome) must drop the challenge for a fresh bind")
+        }
+    }
 }
 
 private final class FrozenClock: @unchecked Sendable {

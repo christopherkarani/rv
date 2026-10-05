@@ -11,12 +11,16 @@ public func hookWire(
         stdin: stdin,
         codec: codec,
         world: world,
-        firstCall: { result, command, verdict, unlockCode in
+        firstCall: { result, command, verdict, unlockCode, askRecorded in
             hookWire(
                 from: result,
                 command: command,
                 using: codec,
-                intent: .firstCall(verdict: verdict, unlockCode: unlockCode)
+                intent: .firstCall(
+                    verdict: verdict,
+                    unlockCode: unlockCode,
+                    askRecorded: askRecorded
+                )
             )
         }
     )
@@ -26,7 +30,9 @@ private func hookBody(
     stdin: String,
     codec: any HostCodec,
     world: HookEvaluateWorld,
-    firstCall: (EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockMint?) -> HookWire
+    firstCall: (
+        EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockMint?, Bool
+    ) -> HookWire
 ) async -> HookWire {
     switch codec.decode(stdin) {
     case .request(let request):
@@ -47,15 +53,19 @@ private func hookBody(
                 cwd: cwd,
                 mintOnDeny: world.mintOnDeny
             )
+            // M-25: the ask guidance promises a pending row, so the record
+            // outcome rides into the wire; a failed record renders the
+            // unrecorded guidance instead of a promise no row can keep.
+            var askRecorded = true
             if auth.shouldRecordPending {
-                await ignoreHostAskFailure {
+                askRecorded = await recordHostAskIgnoringFailure {
                     try await world.recordHostAsk(
                         request,
                         pendingAction(from: result, request: request, command: command)
                     )
                 }
             }
-            return firstCall(result, command, auth.verdict, unlockCode)
+            return firstCall(result, command, auth.verdict, unlockCode, askRecorded)
         }
     case .foreign:
         return codec.encodeAllow()
@@ -101,11 +111,12 @@ private func pendingAction(
     )
 }
 
-private func ignoreHostAskFailure(_ body: () async throws -> Void) async {
+private func recordHostAskIgnoringFailure(_ body: () async throws -> Void) async -> Bool {
     do {
         try await body()
+        return true
     } catch {
-        return
+        return false
     }
 }
 

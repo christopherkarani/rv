@@ -361,7 +361,7 @@ struct AgentInstanceRegistryTests {
         )
         defer { phantom.finish() }
         let rejected = phantom.submitLegacy(.success(harness.frame("touch phantom")))
-        #expect(rejected.response == .rejected(.unknownSession))
+        #expect(rejected.response == .rejected(.principalRequired))
         #expect(harness.effects.count == 0)
         // Request bytes name no principal at all: the wire frame carries
         // version, request id, capability, session claim, and action only,

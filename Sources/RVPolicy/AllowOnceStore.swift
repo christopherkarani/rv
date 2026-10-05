@@ -10,6 +10,11 @@ import RVFileStore
 /// fast-path single-use hint; the daemon's table is the authoritative
 /// single-use enforcer.
 public actor AllowOnceStore {
+    /// Hard cap on projection-file rows, enforced on every write.
+    static let maxStoredRows = 2048
+    /// Hard cap on cached live unlock codes, enforced on every prune.
+    static let maxLiveUnlockCodes = 1024
+
     nonisolated public let baseDirectory: URL
     private let store: FileLockedJSONLStore<AllowOnceRecord>
     private var liveUnlockCodes: [UnlockCacheKey: AllowOnceUnlockCode] = [:]
@@ -70,14 +75,16 @@ public actor AllowOnceStore {
                         ttl: ttl
                     ) {
                     case let .reused(records):
-                        try writeRecords(records)
+                        let written = try writeRecords(records)
+                        pruneLiveUnlockCodes(against: written, now: now)
                         if let cached = liveUnlockCodes[cacheKey] {
                             return cached
                         }
                         throw AllowOnceError.alreadyPending
                     case let .appended(records):
-                        try writeRecords(records)
+                        let written = try writeRecords(records)
                         liveUnlockCodes[cacheKey] = code
+                        pruneLiveUnlockCodes(against: written, now: now)
                         return code
                     }
                 }
@@ -127,14 +134,16 @@ public actor AllowOnceStore {
                         ttl: ttl
                     ) {
                     case let .reused(records):
-                        try writeRecords(records)
+                        let written = try writeRecords(records)
+                        pruneLiveUnlockCodes(against: written, now: now)
                         if let cached = liveUnlockCodes[cacheKey] {
                             return .code(cached)
                         }
                         return .earlierPending
                     case let .appended(records):
-                        try writeRecords(records)
+                        let written = try writeRecords(records)
                         liveUnlockCodes[cacheKey] = code
+                        pruneLiveUnlockCodes(against: written, now: now)
                         return .code(code)
                     }
                 }
@@ -173,10 +182,12 @@ public actor AllowOnceStore {
                 expectedFingerprint: expectedFingerprint
             ) {
             case let .expired(records):
-                try writeRecords(records)
+                let written = try writeRecords(records)
+                pruneLiveUnlockCodes(against: written, now: now)
                 throw AllowOnceError.expired
             case let .granted(records, row):
-                try writeRecords(records)
+                let written = try writeRecords(records)
+                pruneLiveUnlockCodes(against: written, now: now)
                 return row
             }
         }
@@ -205,7 +216,9 @@ public actor AllowOnceStore {
 
     /// Daemon projection write: records a memory-table plant/consume as a
     /// display row so `rv allow-once list` stays truthful. Best-effort,
-    /// display-only: nothing reads these rows for authority.
+    /// display-only: nothing reads these rows for authority. Non-blocking:
+    /// a display-only write must never stall the daemon ceremony path on a
+    /// held lock; a missed projection just leaves `list` one row stale.
     package func project(
         lifecycle: AllowOnceLifecycle,
         matchingView: MatchingView,
@@ -225,10 +238,11 @@ public actor AllowOnceStore {
             createdAt: now,
             expiresAt: now.addingTimeInterval(ttl)
         )
-        try? withFileLock {
+        try? withFileLock(nonBlocking: true) {
             var records = loadRecords()
             records.append(record)
-            try writeRecords(records)
+            let written = try writeRecords(records)
+            pruneLiveUnlockCodes(against: written, now: now)
         }
     }
 
@@ -271,9 +285,12 @@ public actor AllowOnceStore {
         store.load().filter { $0.schemaVersion == 1 }
     }
 
-    private func writeRecords(_ records: [AllowOnceRecord]) throws {
+    /// Saves through the row cap; returns exactly what was written so
+    /// callers prune the live-code cache against on-disk truth.
+    private func writeRecords(_ records: [AllowOnceRecord]) throws -> [AllowOnceRecord] {
+        let written = AllowOnceLedger.capped(records: records, maxRows: Self.maxStoredRows)
         do {
-            try store.save(records)
+            try store.save(written)
         } catch is FileLockedJSONLStoreError {
             // RVFileStore boundary: every save failure (encode or IO) becomes
             // the domain persistence error, so withFileLock only ever sees
@@ -281,6 +298,37 @@ public actor AllowOnceStore {
             // never untranslated save failures.
             throw AllowOnceError.encodeFailed
         }
+        return written
+    }
+
+    /// Drops cached codes with no live pending row in the just-written
+    /// records (redeemed, expired, or cap-shed), then enforces the cache
+    /// cap with deterministic sorted-key eviction. A same-user loop of
+    /// distinct denies otherwise grows this map forever on the daemon.
+    /// An evicted-but-live row still redeems from disk; only the mint
+    /// fast-path answer degrades (to `alreadyPending`/`earlierPending`).
+    private func pruneLiveUnlockCodes(against written: [AllowOnceRecord], now: Date) {
+        var liveKeys = Set<UnlockCacheKey>()
+        for record in written {
+            guard case .pending = record.lifecycle, record.expiresAt >= now else { continue }
+            liveKeys.insert(UnlockCacheKey(
+                fingerprint: record.commandFingerprint,
+                cwd: record.cwd.rawValue
+            ))
+        }
+        liveUnlockCodes = liveUnlockCodes.filter { liveKeys.contains($0.key) }
+        guard liveUnlockCodes.count > Self.maxLiveUnlockCodes else { return }
+        let victims = liveUnlockCodes.keys
+            .sorted { ($0.fingerprint, $0.cwd) < ($1.fingerprint, $1.cwd) }
+            .dropFirst(Self.maxLiveUnlockCodes)
+        for key in victims {
+            liveUnlockCodes.removeValue(forKey: key)
+        }
+    }
+
+    /// Live-code cache size. Test seam only.
+    package func liveUnlockCodeCountForTesting() -> Int {
+        liveUnlockCodes.count
     }
 
     private func withFileLock<T>(nonBlocking: Bool = false, _ body: () throws -> T) throws -> T {

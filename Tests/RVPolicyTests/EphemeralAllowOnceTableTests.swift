@@ -100,6 +100,45 @@ struct EphemeralAllowOnceTableTests {
         }
     }
 
+    @Test func redeemedCodesArePrunedWithExpiry() async {
+        let table = EphemeralAllowOnceTable()
+        #expect(await table.plant(
+            matchingView: "git reset --hard", cwd: wd("/tmp/ws"),
+            codeHash: "ceremony-1", now: now, ttl: 60
+        ) == .planted)
+        #expect(await table.plant(
+            matchingView: "git reset --hard", cwd: wd("/tmp/ws"),
+            codeHash: "ceremony-1", now: now, ttl: 60
+        ) == .alreadyRedeemed)
+        // Past expiry the code is pruned: the set cannot grow forever on
+        // a same-user approval loop.
+        let late = now.addingTimeInterval(61)
+        #expect(await table.plant(
+            matchingView: "git reset --hard", cwd: wd("/tmp/ws"),
+            codeHash: "ceremony-1", now: late, ttl: 60
+        ) == .planted)
+    }
+
+    @Test func fullTableRefusesPlants() async {
+        let table = EphemeralAllowOnceTable()
+        for index in 0..<EphemeralAllowOnceTable.maxGrants {
+            #expect(await table.plant(
+                matchingView: MatchingView("command-\(index)"), cwd: wd("/tmp/ws"),
+                codeHash: "ceremony-\(index)", now: now
+            ) == .planted)
+        }
+        #expect(await table.plant(
+            matchingView: "one-too-many", cwd: wd("/tmp/ws"),
+            codeHash: "ceremony-overflow", now: now
+        ) == .refused)
+        // Expiry frees a slot: the human retries against a pruned table.
+        let late = now.addingTimeInterval(EphemeralAllowOnceTable.maxTTL + 1)
+        #expect(await table.plant(
+            matchingView: "one-too-many", cwd: wd("/tmp/ws"),
+            codeHash: "ceremony-overflow", now: late
+        ) == .planted)
+    }
+
     @Test func invalidInputIsRefused() async {
         let table = EphemeralAllowOnceTable()
         #expect(await table.plant(

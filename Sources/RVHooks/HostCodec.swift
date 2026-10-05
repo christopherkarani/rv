@@ -99,7 +99,8 @@ public protocol HostCodec: Sendable {
     func encodeEvaluatedAskDeny(
         from result: EvaluationResult,
         command: ShellCommand,
-        unlockCode: AllowOnceUnlockMint?
+        unlockCode: AllowOnceUnlockMint?,
+        askRecorded: Bool
     ) -> HookWire
     func encodeFileDeny(from result: EvaluationResult) -> HookWire
 }
@@ -210,17 +211,20 @@ extension HostCodec {
     /// minted code and the RVOperatorUI row are offered together. The
     /// guidance joins AFTER `hostDenyLine`: annotating the reason would
     /// lose it to the two-sentence truncation on multi-sentence reasons.
+    /// When the pending row failed to record, the guidance says so instead
+    /// of promising an approval that cannot exist (M-25).
     public func encodeEvaluatedAskDeny(
         from result: EvaluationResult,
         command: ShellCommand,
-        unlockCode: AllowOnceUnlockMint? = nil
+        unlockCode: AllowOnceUnlockMint? = nil,
+        askRecorded: Bool = true
     ) -> HookWire {
         switch result.decision {
         case .allow, .indeterminate:
             return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
         case .deny(let deny):
             let line =
-                "\(hostDenyLine(command: command, reason: deny.reason, unlock: unlockCode)) \(approvalPendingLine)"
+                "\(hostDenyLine(command: command, reason: deny.reason, unlock: unlockCode)) \(askPendingLine(recorded: askRecorded))"
             return encodeDeny(
                 reason: line,
                 rule: deny.ruleID,

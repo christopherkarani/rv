@@ -20,7 +20,6 @@ struct PendingApprovalLedgerTests {
         #expect(record.state == .awaitingHuman)
         #expect(record.consumedAt == nil)
         #expect(record.expiresAt == Self.now.addingTimeInterval(60))
-        #expect(record.authorizes(Self.fingerprint, identity: Self.identity) == false)
     }
 
     @Test func duplicateResolveIsRejected() throws {
@@ -66,7 +65,6 @@ struct PendingApprovalLedgerTests {
             Issue.record("resolve must still record the decision")
             return
         }
-        #expect(resolved.authorizes(Self.fingerprint, identity: Self.identity) == false)
         #expect(throws: PendingApprovalError.invalidRequest) {
             _ = try PendingApprovalLedger.consume(
                 records: afterResolve,
@@ -86,7 +84,6 @@ struct PendingApprovalLedgerTests {
             return
         }
         #expect(resolution.decision == .allowOnce)
-        #expect(record.authorizes(Self.fingerprint, identity: Self.identity) == false)
     }
 
     @Test func denyIsDeliveredOnceAndNeverAuthorizes() throws {
@@ -99,7 +96,6 @@ struct PendingApprovalLedgerTests {
             identity: Self.identity,
             now: Self.now
         )
-        #expect(created.record.authorizes(Self.fingerprint, identity: Self.identity) == false)
         let (consumption, after) = try PendingApprovalLedger.consume(
             records: resolved,
             id: created.record.id,
@@ -114,7 +110,6 @@ struct PendingApprovalLedgerTests {
             return
         }
         #expect(resolution.decision == .deny)
-        #expect(consumption.approval.authorizes(Self.fingerprint, identity: Self.identity) == false)
         #expect(throws: PendingApprovalError.alreadyConsumed) {
             _ = try PendingApprovalLedger.consume(
                 records: after,
@@ -156,7 +151,6 @@ struct PendingApprovalLedgerTests {
                 now: Self.now
             )
         }
-        #expect(resolved[0].authorizes(other, identity: Self.identity) == false)
     }
 
     @Test func approvalForOneFingerprintCannotAuthorizeASiblingAction() throws {
@@ -261,7 +255,6 @@ struct PendingApprovalLedgerTests {
                 now: Self.now
             )
         }
-        #expect(canceled.authorizes(Self.fingerprint, identity: Self.identity) == false)
     }
 
     @Test func explicitExpireBlocksLaterAuthorization() throws {
@@ -327,7 +320,6 @@ struct PendingApprovalLedgerTests {
             return
         }
         #expect(ending.policy == .failTask)
-        #expect(swept[0].authorizes(Self.fingerprint, identity: Self.identity) == false)
         #expect(throws: PendingApprovalError.timedOut) {
             _ = try PendingApprovalLedger.consume(
                 records: created.records,
@@ -358,7 +350,6 @@ struct PendingApprovalLedgerTests {
         }
         // Step 8: resolving records the decision; name-only state never
         // authorizes — live principal validity is proven elsewhere.
-        #expect(resolved.authorizes(Self.fingerprint, identity: Self.identity) == false)
     }
 
     @Test func exactDeadlineIsStillAwaitingHuman() throws {
@@ -380,7 +371,6 @@ struct PendingApprovalLedgerTests {
         }
         // Step 8: resolving records the decision; name-only state never
         // authorizes — live principal validity is proven elsewhere.
-        #expect(resolved.authorizes(Self.fingerprint, identity: Self.identity) == false)
     }
 
     @Test func identityMismatchCannotResolveOrConsume() throws {
@@ -460,7 +450,6 @@ struct PendingApprovalLedgerTests {
         let created = try Self.created()
         #expect(created.record.state == .awaitingHuman)
         #expect(created.record.consumedAt == nil)
-        #expect(created.record.authorizes(Self.fingerprint, identity: Self.identity) == false)
         #expect(throws: PendingApprovalError.notResolved) {
             _ = try PendingApprovalLedger.consume(
                 records: created.records,
@@ -501,7 +490,6 @@ struct PendingApprovalLedgerTests {
         #expect(resolution.decision == .deny)
         #expect(at == Self.now)
         #expect(consumption.approval.consumedAt == at)
-        #expect(consumption.approval.authorizes(Self.fingerprint, identity: Self.identity) == false)
         #expect(throws: PendingApprovalError.alreadyConsumed) {
             _ = try PendingApprovalLedger.consume(
                 records: afterConsume,
@@ -549,7 +537,6 @@ struct PendingApprovalLedgerTests {
                 now: Self.now
             )
         }
-        #expect(resolved.authorizes(Self.fingerprint, identity: Self.identity) == false)
     }
 
     @Test func consumedStateRoundTripsThroughCodable() throws {
@@ -622,7 +609,6 @@ struct PendingApprovalLedgerTests {
         #expect(migrated == resolution)
         #expect(at == Self.now)
         #expect(decoded.consumedAt == at)
-        #expect(decoded.authorizes(Self.fingerprint, identity: Self.identity) == false)
     }
 
     @Test func resolvedWithoutParentConsumedAtStaysResolved() throws {
@@ -647,7 +633,6 @@ struct PendingApprovalLedgerTests {
         #expect(decoded.consumedAt == nil)
         // Step 8: a resolved name-only row describes a decision; it never
         // authorizes execution.
-        #expect(decoded.authorizes(Self.fingerprint, identity: Self.identity) == false)
         #expect(decoded == resolved)
     }
 
@@ -775,6 +760,34 @@ private extension PendingApprovalLedgerTests {
             ),
             now: now
         )
+    }
+
+    @Test func subject_roundTripsLivePrincipalIDsAsUUIDStrings() throws {
+        // The subject names the live principal with the same typed IDs
+        // the principal reference carries, and encodes every ID field as
+        // one UUID string (no dual struct-vs-UUID encodings).
+        let subject = ApprovalSubject(
+            agentInstanceID: AgentInstanceID(),
+            runtimeSessionID: RuntimeSessionID(),
+            workspaceSessionID: WorkspaceSessionID(),
+            workspaceHostID: WorkspaceHostID(),
+            hostGeneration: WorkspaceHostGeneration(),
+            fingerprint: Self.fingerprint,
+            continuation: .hostNative,
+            policyContext: "trusted-policy-revision"
+        )
+        let body = try JSONEncoder().encode(subject)
+        let decoded = try JSONDecoder().decode(ApprovalSubject.self, from: body)
+        #expect(decoded == subject)
+        let json = try #require(
+            JSONSerialization.jsonObject(with: body) as? [String: Any])
+        for key in [
+            "agentInstanceID", "runtimeSessionID", "workspaceSessionID",
+            "workspaceHostID", "hostGeneration",
+        ] {
+            let value = try #require(json[key] as? String)
+            #expect(UUID(uuidString: value) != nil)
+        }
     }
 }
 

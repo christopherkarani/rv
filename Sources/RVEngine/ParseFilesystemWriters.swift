@@ -1393,17 +1393,79 @@ func parseIconv(_ args: [String]) -> ParsedFilesystemCommand? {
     parseIconv(Argv(program: "iconv", args: args))
 }
 
-/// `unzip` extracts under the cwd or `-d dir`; only the explicit `-d` value
-/// is claimed (cwd extraction is inside by construction). Residual:
+/// `unzip` extracts under the cwd or `-d dir`. Like `tar -x`, a default
+/// extraction claims `"."` so `cd`-tracked outside cwds fail closed (M-05);
+/// `.` resolves against the tracked cwd, so inside extraction stays quiet.
+/// List/test/pipe modes never touch the disk and claim nothing. Residual:
 /// archive-slip (`../../`) depends on member names, unknowable statically.
 func parseUnzip(_ argv: Argv) -> ParsedFilesystemCommand? {
-    var dests = extractOutputValues(
-        stripWriterRedirectWords(argv.args),
-        shorts: ["d"],
-        longs: []
-    )
-    dests += writerRedirectDests(argv)
+    let args = stripWriterRedirectWords(argv.args)
+    let redirectDests = writerRedirectDests(argv)
+    if unzipListsOnly(args) || unzipArchiveOperands(args).isEmpty {
+        return writerParsed(operation: .overwrite, paths: redirectDests)
+    }
+    var dests = extractOutputValues(args, shorts: ["d"], longs: [])
+    if dests.isEmpty {
+        dests.append(".")
+    }
+    dests += redirectDests
     return writerParsed(operation: .overwrite, paths: dests)
+}
+
+/// True when `unzip` only lists, tests, or pipes members (`-l`, `-Z`, `-t`,
+/// `-p`, `-c`, `-v`, `-h`): nothing is written, so no extraction root is
+/// claimed. Scans clusters (`-Zl`) since unzip takes getopt-style shorts;
+/// `-d` consumes its value (attached or next word), so a directory like
+/// `/tmp/x` never misreads as flags.
+private func unzipListsOnly(_ args: [String]) -> Bool {
+    let query: Set<Character> = ["l", "Z", "t", "p", "c", "v", "h"]
+    var index = args.startIndex
+    while index < args.endIndex {
+        let word = args[index]
+        if word == "--" { return false }
+        guard word.hasPrefix("-"), word.count > 1, word != "-",
+            word.hasPrefix("--") == false
+        else {
+            args.formIndex(after: &index)
+            continue
+        }
+        var consumesNext = false
+        let letters = word.dropFirst()
+        var letterIndex = letters.startIndex
+        while letterIndex < letters.endIndex {
+            if letters[letterIndex] == "d" {
+                consumesNext = letters.index(after: letterIndex) == letters.endIndex
+                break
+            }
+            if query.contains(letters[letterIndex]) { return true }
+            letters.formIndex(after: &letterIndex)
+        }
+        args.formIndex(after: &index)
+        if consumesNext, index < args.endIndex {
+            args.formIndex(after: &index)
+        }
+    }
+    return false
+}
+
+/// Non-flag operands (the archive plus optional member filters). A bare
+/// `unzip` with no operands prints usage and extracts nothing.
+private func unzipArchiveOperands(_ args: [String]) -> [String] {
+    var operands: [String] = []
+    var endOfFlags = false
+    for word in args {
+        if endOfFlags {
+            operands.append(word)
+            continue
+        }
+        if word == "--" {
+            endOfFlags = true
+            continue
+        }
+        if word.hasPrefix("-"), word.count > 1, word != "-" { continue }
+        operands.append(word)
+    }
+    return operands
 }
 
 func parseUnzip(_ args: [String]) -> ParsedFilesystemCommand? {
@@ -1425,10 +1487,12 @@ private let splitBareLongs: Set<String> = [
     "numeric-suffixes", "hex-suffixes", "verbose", "elide-empty-files",
 ]
 
-/// `split [input [prefix]]` writes `prefix*` files (default `x*` under the
-/// cwd, inside and unclaimed); only an explicit second operand is claimed.
-/// Residual: `--filter=cmd` pipes chunks to shell code, which writes
-/// wherever the command writes (opaque-exec, same as `python -c`).
+/// `split [input [prefix]]` writes `prefix*` files, defaulting to `x*`
+/// under the cwd. An explicit prefix is claimed; otherwise `.` is claimed
+/// (same as `tar -x`) so `cd`-tracked outside cwds fail closed while inside
+/// extraction stays quiet (M-05). Residual: `--filter=cmd` pipes chunks to
+/// shell code, which writes wherever the command writes (opaque-exec, same
+/// as `python -c`).
 func parseSplit(_ argv: Argv) -> ParsedFilesystemCommand? {
     let scan = scanWriterArgs(
         stripWriterRedirectWords(argv.args),
@@ -1438,9 +1502,13 @@ func parseSplit(_ argv: Argv) -> ParsedFilesystemCommand? {
         bareLongs: splitBareLongs
     )
     var dests: [String] = []
-    if scan.failed == false, scan.sawHelp == false, scan.operands.count >= 2 {
-        dests.append(scan.operands[1])
-        dests += scan.candidates
+    if scan.failed == false, scan.sawHelp == false {
+        if scan.operands.count >= 2 {
+            dests.append(scan.operands[1])
+            dests += scan.candidates
+        } else {
+            dests.append(".")
+        }
     }
     dests += writerRedirectDests(argv)
     return writerParsed(operation: .overwrite, paths: dests)

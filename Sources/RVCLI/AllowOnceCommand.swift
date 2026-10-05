@@ -86,6 +86,17 @@ enum AllowOnceCLI {
         before.fingerprint == after.fingerprint && before.row == after.row
     }
 
+    /// Device-owner authentication prompt naming the reviewed grant.
+    /// The redacted command plus cwd alone under-specifies the grant (many
+    /// rows share a head token), so a deny-minted row also names its rule.
+    static func redeemReason(row: AllowOnceListRow) -> String {
+        let base = "Allow once: \(row.commandRedacted) in \(row.cwd.rawValue)"
+        if let ruleID = row.ruleID {
+            return "\(base) (rule \(ruleID.rawValue))."
+        }
+        return "\(base)."
+    }
+
     /// A missing pre-LA read skips LA entirely and reports the precise
     /// failure: unknown codes never prompt for authentication.
     static func redeem(
@@ -111,8 +122,7 @@ enum AllowOnceCLI {
             // flips (fail-closed).
             return try await store.redeem(code: code, tty: tty, now: now, robot: robot)
         }
-        let reason = "Allow once: \(peeked.row.commandRedacted) in \(peeked.row.cwd.rawValue)."
-        try await CLIOwnerAuth.requireAuthenticated(reason: reason)
+        try await CLIOwnerAuth.requireAuthenticated(reason: redeemReason(row: peeked.row))
         let service = client ?? ServiceClient()
         guard let rechecked = await store.validatePending(code: code, now: now),
             Self.redemptionUnchanged(before: peeked, after: rechecked)
@@ -159,13 +169,42 @@ enum AllowOnceCLI {
         tty: TTYCapability,
         robot: Bool,
         store: AllowOnceStore,
-        now: Date
+        now: Date,
+        peek: (@Sendable (ShellCommand, WorkingDirectory) async -> EvaluationResult)? = nil
     ) async throws -> AllowOnceUnlockCode {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
         let view = Normalize.matchingView(of: command)
         guard view.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
             throw AllowOnceError.emptyCommand
+        }
+        // M-33 manual-mint gate: refuse to pre-arm a command no grant can
+        // unlock. Pinned denies fail closed at spend time (consumingGrant
+        // denies without burning), so minting one wastes the LA ceremony
+        // plus attestation. Only a definite pinned deny refuses — allow,
+        // unlockable deny, and indeterminate (evaluation uncertainty)
+        // all proceed to the ceremony.
+        //
+        // Spend-free by construction: a fresh empty grant table on the
+        // preview path never honors or consumes authority, records no
+        // denial, and contacts no daemon. Never route this through the
+        // service evaluate call: the service applies, which would spend
+        // a live grant for the same command.
+        let evaluated: EvaluationResult
+        if let peek {
+            evaluated = await peek(command, cwd)
+        } else {
+            evaluated = await GatedEvaluate().peek(
+                command: command,
+                cwd: cwd,
+                home: nil,
+                grants: EphemeralAllowOnceTable(),
+                now: now,
+                allowlist: { .empty }
+            )
+        }
+        guard RulePinning.blocksAllowOverride(evaluated) == false else {
+            throw AllowOnceError.notUnlockable
         }
         try await CLIOwnerAuth.requireAuthenticated()
         return try await store.mint(
@@ -331,6 +370,11 @@ struct AllowOnceMint: AsyncParsableCommand {
             throw ExitCode(2)
         } catch AllowOnceError.emptyCommand {
             FileHandle.standardError.write(Data("rv allow-once mint: missing command\n".utf8))
+            throw ExitCode(2)
+        } catch AllowOnceError.notUnlockable {
+            FileHandle.standardError.write(
+                Data("rv allow-once mint: no one-shot unlock is possible for this command\n".utf8)
+            )
             throw ExitCode(2)
         } catch AllowOnceError.alreadyPending {
             FileHandle.standardError.write(

@@ -12,15 +12,15 @@
 /// to RVOperatorUI (or TTY allow-once) plus agent retry.
 public struct HostApprovalCapability: Sendable, Equatable {
     /// Where a human approves an ASK for this host.
-    public var route: HostApprovalRoute
+    public let route: HostApprovalRoute
 
     /// Whether the host's own Ask UI is authoritative. Always false:
     /// host attestations are unauthenticated same-user bytes.
-    public var nativeAskAuthoritative: Bool
+    public let nativeAskAuthoritative: Bool
 
     /// Whether the hook invocation can stay blocked until a human
     /// decides. Always false: hook budgets are seconds.
-    public var canBlockForHuman: Bool
+    public let canBlockForHuman: Bool
 
     public static func capability(for host: HookHost) -> HostApprovalCapability {
         switch host {

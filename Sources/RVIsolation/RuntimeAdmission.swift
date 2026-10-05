@@ -226,6 +226,10 @@ final class RuntimeAdmissionSession: Sendable {
         /// Host memory only: the agent never sees approval or continuation
         /// IDs, and no resume path exists except each record's waiter.
         var parked: [RuntimeActionRequestID: ParkedApproval] = [:]
+        /// Park slots reserved while the service-side approval is created.
+        /// Lets the cap check, the duplicate check, and the insert stay
+        /// atomic under one lock instead of spanning three.
+        var parking: Set<RuntimeActionRequestID> = []
         /// Finished waiter answers queued for the pre-existing writer paths.
         /// Bytes are only ever written by `acceptBuffered`'s drain, so
         /// parking introduces no new file-descriptor races.
@@ -453,15 +457,19 @@ final class RuntimeAdmissionSession: Sendable {
             let pending = capture.take(accepted.requestID),
             binding?.phase == .active,
             let agentContext, agentContext.isUsable,
-            state.withLock({ $0.parked.count < Self.maxParkedPerChannel }),
-            state.withLock({ $0.parked[accepted.requestID] == nil }),
             // The capture must belong to THIS decision: same pending
             // reason the gate projected, same action fingerprint. Under
             // concurrent same-ID misuse (already broken pre-Step-6: the
             // gate would double-authorize), a mismatch refuses to park
             // instead of binding the wrong action.
             pending.reason.ledgerReason == ledgerReason,
-            decision.event.fingerprint == pending.action.fingerprint.rawValue
+            decision.event.fingerprint == pending.action.fingerprint.rawValue,
+            // Reserve the slot under ONE lock: the cap check and the
+            // duplicate check are atomic with the reservation, so two
+            // concurrent submits can never both pass the checks and
+            // over-park. Last in the chain: nothing after it can fail
+            // and leak the reservation.
+            reserveParkSlot(for: accepted.requestID)
         else {
             return nil
         }
@@ -474,12 +482,28 @@ final class RuntimeAdmissionSession: Sendable {
             policyContext: "runtime:\(subject.policyWorkspace.rawValue)"
         ) else {
             // No approval exists: legacy pending, exactly as before Step 6.
+            releaseParkSlot(for: accepted.requestID)
             return nil
         }
         let requestID = accepted.requestID
-        state.withLock {
-            $0.parked[requestID] = ParkedApproval(
+        let admitted = state.withLock { channel -> Bool in
+            channel.parking.remove(requestID)
+            guard !channel.stop,
+                channel.binding?.phase == .active,
+                channel.parked[requestID] == nil,
+                channel.parked.count < Self.maxParkedPerChannel
+            else {
+                return false
+            }
+            channel.parked[requestID] = ParkedApproval(
                 approval: created, pending: pending, requestID: requestID, waiter: nil)
+            return true
+        }
+        guard admitted else {
+            // Lost a race, or the channel finished mid-approval: cancel
+            // the orphaned service-side approval instead of parking it.
+            backend.cancelApproval(created)
+            return nil
         }
         let waiter = Task<Void, Never> { [weak self] in
             await self?.awaitParkedApproval(requestID: requestID)
@@ -488,6 +512,28 @@ final class RuntimeAdmissionSession: Sendable {
         var deferred = decision
         deferred.responseDeferred = true
         return deferred
+    }
+
+    /// Reserves one park slot under a single lock: the cap check, the
+    /// duplicate check, and the reservation insert are atomic. The
+    /// reservation converts to a park (or releases) in `tryParkApproval`
+    /// once the service-side approval exists; `teardownParks` drops
+    /// reservations that outlive the channel.
+    private func reserveParkSlot(for requestID: RuntimeActionRequestID) -> Bool {
+        state.withLock { channel in
+            guard channel.parked.count + channel.parking.count < Self.maxParkedPerChannel,
+                channel.parked[requestID] == nil,
+                channel.parking.contains(requestID) == false
+            else {
+                return false
+            }
+            channel.parking.insert(requestID)
+            return true
+        }
+    }
+
+    private func releaseParkSlot(for requestID: RuntimeActionRequestID) {
+        state.withLock { $0.parking.remove(requestID) }
     }
 
     /// Waits for one parked approval's human decision, off the watch thread.
@@ -826,6 +872,7 @@ final class RuntimeAdmissionSession: Sendable {
         let parks = state.withLock { channel -> [ParkedApproval] in
             let parks = Array(channel.parked.values)
             channel.parked.removeAll()
+            channel.parking.removeAll()
             channel.completions.removeAll()
             return parks
         }

@@ -271,6 +271,29 @@ struct PolicyGateTests {
         #expect(gated.result.decision == .allow)
     }
 
+    @Test func pinnedDenyDoesNotSpendGrant() async throws {
+        let grants = EphemeralAllowOnceTable()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let pinned = pinnedSecretDeny()
+        #expect(RulePinning.blocksAllowOverride(pinned))
+        #expect(
+            await grants.plant(
+                matchingView: pinned.matchingView, cwd: wd("/tmp/ws"), codeHash: "pg-pinned",
+                now: now
+            ) == .planted
+        )
+        let gated = await PolicyGate.consumingGrant(for: pinned, cwd: wd("/tmp/ws"), grants: grants, now: now)
+        #expect(gated.override == .none)
+        guard case .deny = gated.result.decision else {
+            Issue.record("pinned deny must stay deny")
+            return
+        }
+        #expect(
+            await grants.consume(matchingView: pinned.matchingView, cwd: wd("/tmp/ws"), now: now),
+            "pinned deny must not spend the grant"
+        )
+    }
+
     @Test func emptyCwdDoesNotHonor() async throws {
         let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -292,6 +315,19 @@ struct PolicyGateTests {
             "empty cwd must not spend the grant"
         )
     }
+}
+
+private func pinnedSecretDeny() -> EvaluationResult {
+    EvaluationResult(
+        outcome: .deny(
+            Deny(
+                ruleID: RuleID(pack: .coreSecrets, pattern: "secret-path"),
+                reason: "reads a secret path"
+            ),
+            matched: nil
+        ),
+        matchingView: "cat ~/.ssh/id_rsa"
+    )
 }
 
 private func mandatoryHumanRemoteBranchAsk() -> EvaluationResult {

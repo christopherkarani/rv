@@ -35,7 +35,7 @@ public enum HookAuthorization: Sendable, Equatable {
         if case .deny = result.boundReview { return true }
         guard case .deny(let deny) = result.decision else { return false }
         if deny.ruleID.pack == .coreSecrets { return true }
-        if deny.ruleID.pack.rawValue == "builtin.action" {
+        if deny.ruleID.pack == ActionPolicyEngine.Builtin.pack {
             // A carried mandatory-human bind is an explicit human-review
             // request: human transports may oblige. Any other builtin
             // deny (shared branch, outside repo, discard, leftover) pins.

@@ -394,9 +394,11 @@ public final class WorkspaceHostBridgeClient: Sendable {
 
     /// Answers one redemption reverse-RPC. Silence on authentication failure
     /// (no oracle); an explicit refusal DTO on decode/handler failure. The
-    /// service side bounds the wait regardless. The handler runs
-    /// synchronously here, mirroring prepare; its acceptance fence makes any
-    /// duplicate commit safe.
+    /// service side bounds the wait regardless. The handler runs off the
+    /// XPC event queue: redemption spawns (up to the service-side 60s
+    /// bound), and running it here would head-of-line-block every other
+    /// message on the connection; its acceptance fence makes any duplicate
+    /// commit safe.
     private static func answerRedeem(
         _ event: xpc_object_t, response: xpc_object_t, connection: xpc_object_t,
         handler: HostRedeemHandler?
@@ -416,11 +418,17 @@ public final class WorkspaceHostBridgeClient: Sendable {
             return
         }
         // Authentication happened before parsing or invoking host redemption.
-        let answered = handler(request)
-        if let encoded = try? JSONEncoder().encode(answered) {
-            set(encoded, key: HostBridgeWire.redeemKey, on: response)
+        // The reply rides the retained response/connection from a worker
+        // queue; XPC objects are thread-safe and the closure retains both.
+        let heldResponse = XPCHeld(response)
+        let heldConnection = XPCHeld(connection)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let answered = handler(request)
+            if let encoded = try? JSONEncoder().encode(answered) {
+                set(encoded, key: HostBridgeWire.redeemKey, on: heldResponse.object)
+            }
+            xpc_connection_send_message(heldConnection.object, heldResponse.object)
         }
-        xpc_connection_send_message(connection, response)
     }
 
     private static func set(_ data: Data, key: String, on message: xpc_object_t) {

@@ -6,6 +6,10 @@ import RVIPC
 /// bundle the server issued to this connection; the Authorize button is the
 /// only path to device-owner authentication, and Deny cancels without
 /// authenticating.
+///
+/// All server strings render through `ReviewDisplayEscape` as
+/// `Text(verbatim:)` — literal by construction, full values, no silent
+/// truncation of security-relevant parameters.
 public struct OperatorReviewView: View {
     @Bindable var model: OperatorReviewModel
 
@@ -17,10 +21,10 @@ public struct OperatorReviewView: View {
         NavigationSplitView {
             List(model.items, id: \.operationID, selection: selection) { item in
                 VStack(alignment: .leading) {
-                    Text(item.definitionID ?? item.executable)
+                    Text(verbatim: ReviewDisplayEscape.escape(item.definitionID ?? item.executable))
                         .font(.headline)
                         .lineLimit(1)
-                    Text(item.status)
+                    Text(verbatim: ReviewDisplayEscape.escape(item.status))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -136,7 +140,7 @@ private struct ReviewDetailView: View {
             Text(label)
                 .foregroundStyle(.secondary)
                 .frame(width: 130, alignment: .leading)
-            Text(value.isEmpty ? "—" : value)
+            Text(verbatim: ReviewDisplayEscape.escape(value.isEmpty ? "—" : value))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }

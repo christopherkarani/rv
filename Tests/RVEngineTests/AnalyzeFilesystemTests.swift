@@ -342,7 +342,13 @@ struct AnalyzeFilesystemTests {
     // MARK: - P10e11 (C-F7): dynamic argv0 fails closed as outside overwrite
 
     private func segmentActions(_ raw: String) -> [FilesystemAction] {
-        parseFilesystemSegments(Normalize.matchingView(of: raw).rawValue, context: repo)
+        parseFilesystemSegments(
+            Normalize.matchingView(of: raw).rawValue,
+            context: repo,
+            assignmentValues: ShellPipeline.collectTopLevelAssignmentValues(
+                ShellPipeline.peelStage(raw)
+            )
+        )
     }
 
     @Test func dynamicArgv0_failsClosedAsOutsideOverwrite() {
@@ -380,6 +386,68 @@ struct AnalyzeFilesystemTests {
     @Test func homeAliasHead_staysUnclaimed() {
         // `$HOME/bin/tool` expands lexically: not a hidden verb.
         #expect(segmentActions("$HOME/bin/tool args").isEmpty)
+    }
+
+    @Test func dynamicVerbWithParseableRedirect_claimsOutside() {
+        // M-04: the redirect parse must not launder a dynamic verb.
+        guard case .filesystem(.overwrite(let targets)) =
+            analyzeFilesystem(ShellCommand(rawValue: "$CMD > Sources/inner.txt"), context: repo)
+        else {
+            Issue.record("expected overwrite for dynamic verb plus redirect")
+            return
+        }
+        #expect(targets.contains(where: { $0.apparent == "Sources/inner.txt" }))
+        #expect(targets.contains(where: {
+            $0.apparent == "$CMD" && $0.scope == .outsideRepository
+        }))
+        let actions = segmentActions("$CMD > Sources/inner.txt")
+        #expect(actions.contains(where: {
+            $0.targets.contains(where: { $0.scope == .outsideRepository })
+        }))
+        // Static verbs are untouched: no unioned dynamic target.
+        guard case .filesystem(.overwrite(let staticTargets)) =
+            analyzeFilesystem(ShellCommand(rawValue: "echo hi > Sources/inner.txt"), context: repo)
+        else {
+            Issue.record("expected overwrite for static redirect")
+            return
+        }
+        #expect(staticTargets.count == 1)
+    }
+
+    @Test func unboundedWriteSentinel_isOutsideWithoutRoot() {
+        // M-02: the sentinel is an unbounded write, not the fs root — it
+        // must deny even when no repository root is known (unprobed worlds
+        // skip the unresolved tighten, so `.unknown` silently allowed).
+        let target = classifyFilesystemTarget("/", context: .empty)
+        #expect(target.scope == .outsideRepository)
+        guard case .filesystem(.overwrite(let targets)) =
+            analyzeFilesystem(ShellCommand(rawValue: "tar -x -P -f a.tar"))
+        else {
+            Issue.record("expected overwrite for absolute-name tar extract")
+            return
+        }
+        #expect(targets.contains(where: { $0.scope == .outsideRepository }))
+    }
+
+    @Test func substitutionValueSegment_doesNotFailClosed() {
+        // M-24: `X=$(date) cmd` assigns; the VALUE segment is not a command
+        // and must not trip C-F7. Its inners still evaluate.
+        #expect(segmentActions("X=$(date) echo hi").isEmpty)
+        #expect(segmentActions("X=`date` echo hi").isEmpty)
+        #expect(segmentActions("X=\"$(date)\" echo hi").isEmpty)
+        #expect(segmentActions("A=1 X=$(date) B=2 echo hi").isEmpty)
+        let risky = segmentActions("X=$(touch /tmp/evil) echo hi")
+        #expect(risky.contains(where: {
+            $0.targets.contains(where: {
+                $0.apparent == "/tmp/evil" && $0.scope == .outsideRepository
+            })
+        }))
+        // A TYPED standalone substitution still fails closed: its output
+        // re-executes as a command.
+        let typed = segmentActions("$(echo git) push")
+        #expect(typed.contains(where: {
+            $0.targets.contains(where: { $0.scope == .outsideRepository })
+        }))
     }
 
     @Test func highValueOperations_parse() {

@@ -127,7 +127,9 @@ public struct ServiceClient: Sendable {
         // Grants stay isolated: a diagnostic fallback must neither honor
         // nor consume an existing grant. The allowlist loads from the
         // client's own store directory so saved rules still apply.
-        let diagnosticStore = AllowOnceStore(baseDirectory: Self.isolatedFactoryDirectory())
+        let diagnosticDirectory = Self.isolatedFactoryDirectory()
+        defer { try? FileManager.default.removeItem(at: diagnosticDirectory) }
+        let diagnosticStore = AllowOnceStore(baseDirectory: diagnosticDirectory)
         let allowlistDirectory = store.baseDirectory
         return await LiveEvaluateWorld(
             home: home,
@@ -216,16 +218,19 @@ public struct ServiceClient: Sendable {
         return reply
     }
 
-    public enum OperatorCommandError: Error, Sendable, Equatable {
+    public enum ServiceCommandError: Error, Sendable, Equatable {
         case noTransport
         case service(String)
         case transport(String)
     }
 
+    @available(*, deprecated, renamed: "ServiceCommandError")
+    public typealias OperatorCommandError = ServiceCommandError
+
     /// Untrusted launch proposal. Returns the correlation-only operation ID;
     /// authority arrives only via the host bridge and operator review.
     public func proposeLaunch(_ params: ProposeLaunchParams) async -> Result<
-        ProposeLaunchReply, OperatorCommandError
+        ProposeLaunchReply, ServiceCommandError
     > {
         guard let transport else {
             return .failure(.noTransport)
@@ -242,7 +247,7 @@ public struct ServiceClient: Sendable {
     }
 
     public func proposalStatus(operationID: UUID) async -> Result<
-        ProposalStatusReply, OperatorCommandError
+        ProposalStatusReply, ServiceCommandError
     > {
         guard let transport else {
             return .failure(.noTransport)
@@ -265,7 +270,7 @@ public struct ServiceClient: Sendable {
     /// attestation) means NO grant: the caller must fail closed, never
     /// fall back to file state.
     public func attestTTYRedemption(_ params: AttestTTYRedemptionParams) async -> Result<
-        AttestTTYRedemptionReply, OperatorCommandError
+        AttestTTYRedemptionReply, ServiceCommandError
     > {
         guard let transport else {
             return .failure(.noTransport)
@@ -284,7 +289,7 @@ public struct ServiceClient: Sendable {
         }
     }
 
-    private func mapCallError(_ error: IPCCallError) -> OperatorCommandError {
+    private func mapCallError(_ error: IPCCallError) -> ServiceCommandError {
         switch error {
         case .identityMismatch:
             return .transport("identityMismatch")
@@ -485,13 +490,6 @@ public struct ServiceClient: Sendable {
             return AllowOnceStore.makeLive(home: home)
         }
         return AllowOnceStore(baseDirectory: Self.isolatedFactoryDirectory())
-    }
-
-    private static func resolvePending(home: HomeDirectory?) -> (any PendingApprovalCoordinating)? {
-        if let home {
-            return PendingApprovalStore.makeLive(home: home)
-        }
-        return PendingApprovalStore(baseDirectory: Self.isolatedFactoryDirectory())
     }
 
     private static func isolatedFactoryDirectory() -> URL {

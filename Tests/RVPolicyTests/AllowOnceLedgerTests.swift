@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import RVDomain
 @testable import RVPolicy
 
 struct AllowOnceLedgerTests {
@@ -192,6 +193,14 @@ struct AllowOnceLedgerTests {
         #expect(rows.map(\.codeHash) == ["p", "g", "oc"])
     }
 
+    @Test func rowsProjectDenyRuleID() throws {
+        var denied = Self.record(
+            kind: .pending, hash: "p", expiresAt: Self.epoch.addingTimeInterval(60))
+        denied.ruleID = RuleID(pack: PackID(rawValue: "core.git"), pattern: "reset-hard")
+        let rows = AllowOnceLedger.rows(records: [denied], now: Self.epoch)
+        #expect(rows.map(\.ruleID) == [denied.ruleID])
+    }
+
     @Test func exactNowIsStillLive() throws {
         let pending = Self.record(kind: .pending, hash: "p", expiresAt: Self.epoch)
         let other = Self.record(
@@ -253,9 +262,34 @@ struct AllowOnceLedgerTests {
         )
         #expect(out.map(\.codeHash) == ["keep"])
     }
+
+    @Test func cappedPassesThroughUnderTheCap() {
+        let rows = (0..<4).map { Self.stampedRecord(hash: "h\($0)", createdAt: Self.epoch.addingTimeInterval(Double($0))) }
+        let out = AllowOnceLedger.capped(records: rows, maxRows: 4)
+        #expect(out.map(\.codeHash) == ["h0", "h1", "h2", "h3"])
+    }
+
+    @Test func cappedKeepsNewestRowsInOrder() {
+        let rows = (0..<6).map { Self.stampedRecord(hash: "h\($0)", createdAt: Self.epoch.addingTimeInterval(Double($0))) }
+        let out = AllowOnceLedger.capped(records: rows, maxRows: 4)
+        #expect(out.map(\.codeHash) == ["h2", "h3", "h4", "h5"])
+    }
 }
 
 private extension AllowOnceLedgerTests {
+    static func stampedRecord(hash: String, createdAt: Date) -> AllowOnceRecord {
+        AllowOnceRecord(
+            schemaVersion: 1,
+            lifecycle: .pending,
+            codeHash: hash,
+            commandFingerprint: "fp-\(hash)",
+            commandRedacted: "git …",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            createdAt: createdAt,
+            expiresAt: createdAt.addingTimeInterval(3600)
+        )
+    }
     static func record(
         kind: AllowOnceRecord.Kind,
         hash: String,

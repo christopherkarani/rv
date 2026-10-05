@@ -58,6 +58,10 @@ struct CdTrackingTests {
         #expect(tracked(["builtin cd /tmp"]) == "/tmp")
         #expect(tracked(["command -v cd"]) == "/repo")
         #expect(tracked(["command -V cd"]) == "/repo")
+        // M-23: `-p` executes with the default PATH — it is not a query.
+        #expect(tracked(["command -p cd /tmp"]) == "/tmp")
+        #expect(tracked(["command -p -- cd /tmp"]) == "/tmp")
+        #expect(tracked(["command -p -v cd"]) == "/repo")
         #expect(tracked(["command echo hi"]) == "/repo")
     }
 

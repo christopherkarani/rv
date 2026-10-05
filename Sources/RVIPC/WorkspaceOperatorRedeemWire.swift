@@ -90,7 +90,8 @@ public struct HostRedeemResponseDTO: Sendable, Equatable, Codable {
     }
 }
 
-/// Verify + accept + dispatch exactly one prepared launch. Sync: runs on the
-/// host bridge's XPC event handler. Refusals and failures are data, never
-/// throws. At most one call per prepared operation can accept.
+/// Verify + accept + dispatch exactly one prepared launch. Sync handler,
+/// invoked off the host bridge's XPC event queue (redemption spawns must
+/// not head-of-line-block the connection). Refusals and failures are data,
+/// never throws. At most one call per prepared operation can accept.
 public typealias HostRedeemHandler = @Sendable (HostRedeemCommitDTO) -> HostRedeemResponseDTO

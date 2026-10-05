@@ -97,6 +97,17 @@ struct LocalControlBoundaryTests {
         #expect(rows.isEmpty)
         #expect(throws: ValidationError.self) { try WorkspaceCommandRun.abandon("/tmp/ws") }
     }
+    @Test func abandonBodyBehindGateRefusesUnknownProject() throws {
+        // The gate throws first (pinned above); the restored body behind
+        // it refuses a project with no blocked workspace instead of
+        // silently succeeding. A random path can never be blocked, so this
+        // only exercises the refused/failed error path — never a mutation.
+        #expect(throws: ValidationError.self) {
+            try WorkspaceCommandRun.abandonBlockedWorkspace(
+                "/tmp/ws-definitely-not-a-workspace-\(UUID().uuidString)")
+        }
+    }
+
     @Test func permanentAllowlistMutationsRequireOwnerAuthorization() async throws {
         var add = try AllowlistAdd.parse(["core.git:reset-hard", "--reason", "operator exception"])
         var exact = try AllowlistAddCommand.parse(["echo harmless", "--reason", "operator exception"])

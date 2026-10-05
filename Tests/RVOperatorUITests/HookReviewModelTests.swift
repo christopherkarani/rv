@@ -190,21 +190,40 @@ struct OperatorHookReviewModelTests {
         #expect(model.selectedID == nil)
     }
 
-    @Test func cancelledAuthenticationStillCompletes() async {
-        // A cancelled LA ceremony completes with the honest outcome (the
-        // service fails the ceremony); the model reports it.
+    @Test func cancelledAuthenticationSkipsCompleteAndKeepsReview() async throws {
+        // A cancelled LA ceremony sends nothing: the server destroys the
+        // challenge for an unauthenticated completion, so the model keeps
+        // the bound review for a retry instead of burning it.
         let bridge = FakeHookBridge()
-        bridge.setCompleteResultForTesting("failed")
         bridge.setItems([hookReviewItem()])
         let counter = AuthCounter()
         let model = makeModel(bridge: bridge, counter: counter, outcome: .cancelled)
         await model.connect()
         await model.select("hook-1")
+        let retained = try #require(model.bound)
         await model.allowOnce()
         #expect(counter.calls == 1)
-        #expect(bridge.snapshot.completions.count == 1)
-        #expect(bridge.snapshot.completions[0].outcome == .cancelled)
-        #expect(model.lastStatus == "failed")
+        #expect(bridge.snapshot.completions.isEmpty)
+        #expect(model.bound?.challenge.challengeID == retained.challenge.challengeID)
+        #expect(model.selectedID == "hook-1")
+        #expect(model.lastStatus == nil)
+        #expect(model.notice != nil)
+    }
+
+    @Test func everyNonAuthenticatedOutcomeSkipsComplete() async {
+        for outcome: UIAuthenticationOutcome in [
+            .cancelled, .unavailable, .timedOut, .invalidated, .failed,
+        ] {
+            let bridge = FakeHookBridge()
+            bridge.setItems([hookReviewItem()])
+            let model = makeModel(bridge: bridge, outcome: outcome)
+            await model.connect()
+            await model.select("hook-1")
+            await model.allowOnce()
+            #expect(bridge.snapshot.completions.isEmpty, "outcome \(outcome) must not complete")
+            #expect(model.bound != nil, "outcome \(outcome) must keep the bound review")
+            #expect(model.notice != nil, "outcome \(outcome) must surface a notice")
+        }
     }
 
     @Test func bindFailureSurfacesNotice() async {

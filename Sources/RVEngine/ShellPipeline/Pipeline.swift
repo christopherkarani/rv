@@ -168,7 +168,8 @@ extension ShellPipeline {
         return .success(segments)
     }
 
-    /// Drops stream-leading `NAME=value` prefixes from raw text before masking.
+    /// Drops stream-leading `NAME=value` prefixes (plus `NAME[sub]=`,
+    /// `NAME+=(...)`, and array compounds) from raw text before masking.
     /// Post-masking text has lost the quoting boundary (`NAME="a b"` becomes
     /// separate words) and the lexer's `wasQuoted` is whole-token, so only a
     /// raw scan can tell `NAME="v"` (assignment) from `"N=v"` (command name).
@@ -204,6 +205,28 @@ extension ShellPipeline {
     /// executing substitution. Returns nil when `text` does not start with
     /// one. The tail recurses so `A=$(a) B=$(b) cmd` rewrites fully.
     static func dropOneAssignmentPrefix(_ text: Substring) -> Substring? {
+        guard let parsed = parseAssignmentPrefix(text) else {
+            return nil
+        }
+        if carriesSubstitution(parsed.value) {
+            // The substitution executes AND the tail executes: rewrite to
+            // `VALUE ; TAIL` so the segmenter evaluates both. Keeping the
+            // prefix would hide the tail (`X=$(:) git push` concealed a
+            // push); stripping it would hide the substitution. Quoting
+            // re-derives downstream: single-quoted inners stay literal.
+            return parsed.value + " ; " + stripLeadingAssignmentPrefixes(String(parsed.rest))
+        }
+        return parsed.rest
+    }
+
+    /// One parsed leading assignment prefix: the raw value plus the text
+    /// after the prefix and its trailing blanks. Array/subscript forms count:
+    /// `A=(1) git push` and `A[0]=x git push` both execute the tail, so both
+    /// must strip (M-01); leaving them glued hid the verb from dispatch.
+    /// Shared by the string rewriter (`dropOneAssignmentPrefix`) and the
+    /// provenance split (`splitAssignmentPrefixValues`) so both agree on
+    /// what a prefix is.
+    static func parseAssignmentPrefix(_ text: Substring) -> (value: String, rest: Substring)? {
         var index = text.startIndex
         guard index < text.endIndex, assignmentNameStart.contains(text[index]) else {
             return nil
@@ -211,6 +234,12 @@ extension ShellPipeline {
         repeat {
             text.formIndex(after: &index)
         } while index < text.endIndex && assignmentNameChars.contains(text[index])
+        if index < text.endIndex, text[index] == "[" {
+            guard let after = scanBalanced(text, from: index, open: "[", close: "]") else {
+                return nil
+            }
+            index = after
+        }
         if index < text.endIndex, text[index] == "+" {
             text.formIndex(after: &index)
         }
@@ -225,31 +254,58 @@ extension ShellPipeline {
         while let first = rest.first, first == " " || first == "\t" {
             rest = rest.dropFirst()
         }
-        let value = String(text[index..<valueEnd])
-        if carriesSubstitution(value) {
-            // The substitution executes AND the tail executes: rewrite to
-            // `VALUE ; TAIL` so the segmenter evaluates both. Keeping the
-            // prefix would hide the tail (`X=$(:) git push` concealed a
-            // push); stripping it would hide the substitution. Quoting
-            // re-derives downstream: single-quoted inners stay literal.
-            return value + " ; " + stripLeadingAssignmentPrefixes(String(rest))
+        return (String(text[index..<valueEnd]), rest)
+    }
+
+    /// Splits leading assignment prefixes into their substitution-carrying
+    /// values plus the executing tail. `A=$(a) B=1 cmd` yields values
+    /// [`$(a)`] and tail `cmd`: rejoining as `values ; tail` equals
+    /// `stripLeadingAssignmentPrefixes`, but the analyze layer needs the
+    /// provenance — a VALUE is not a command, so its own segment must not
+    /// fail closed as a dynamic verb (M-24); only its inners evaluate.
+    static func splitAssignmentPrefixValues(_ piece: String) -> (values: [String], tail: String) {
+        var values: [String] = []
+        var rest = piece[...]
+        while let parsed = parseAssignmentPrefix(rest) {
+            if carriesSubstitution(parsed.value) {
+                values.append(parsed.value)
+            }
+            rest = parsed.rest
         }
-        return rest
+        return (values, String(rest))
+    }
+
+    /// Substitution-carrying assignment values across every top-level piece
+    /// of peeled text, in order. The analyze layer threads these alongside
+    /// the matched view as an exemption budget: matching rewrites values to
+    /// `VALUE ; TAIL`, so a bare `$(...)` segment is textually identical
+    /// whether it was a VALUE or a typed standalone — only the budget tells
+    /// them apart. Must run on the same peeled text the matcher strips.
+    static func collectTopLevelAssignmentValues(_ peeled: String) -> [String] {
+        var values: [String] = []
+        _ = mapTopLevelPieces(peeled) { piece in
+            values.append(contentsOf: splitAssignmentPrefixValues(piece).values)
+            return piece
+        }
+        return values
     }
 
     /// End index of an assignment value starting at `from`: quoted values run
     /// to their close quote, bare values to blank/operator/end. Balanced
     /// `$(...)`/backtick/`${...}` spans are part of the value (they also trip
-    /// the substitution guard). Nil on unterminated quote or `(`-led value.
+    /// the substitution guard). `(`-led array compounds scan balanced, so
+    /// `A=(1 2) cmd` strips (M-01). Nil on unterminated quote/compound.
     static func scanAssignmentValue(_ text: Substring, from: Substring.Index) -> Substring.Index? {
         var index = from
         guard index < text.endIndex else {
             return index
         }
         if text[index] == "(" {
-            return nil
-        }
-        if text[index] == "$",
+            guard let after = scanBalanced(text, from: index, open: "(", close: ")") else {
+                return nil
+            }
+            index = after
+        } else if text[index] == "$",
             text.index(after: index) < text.endIndex,
             text[text.index(after: index)] == "'"
         {
@@ -361,6 +417,56 @@ extension ShellPipeline {
             return text.endIndex
         }
         return text.index(after: index)
+    }
+
+    /// End index past a balanced `open...close` span starting at `from`
+    /// (array compounds, assignment subscripts), or nil when `from` does not
+    /// start one or it never closes. Quote- and backslash-aware; spans nest.
+    /// An unterminated span is a shell syntax error (nothing executes), so
+    /// nil — declining the strip — is the sound answer there.
+    static func scanBalanced(
+        _ text: Substring,
+        from: Substring.Index,
+        open: Character,
+        close: Character
+    ) -> Substring.Index? {
+        var index = from
+        guard index < text.endIndex, text[index] == open else {
+            return nil
+        }
+        var depth = 0
+        var quote: Character?
+        while index < text.endIndex {
+            let char = text[index]
+            if let current = quote {
+                if char == current {
+                    quote = nil
+                } else if current == "\"", char == "\\" {
+                    text.formIndex(after: &index)
+                    if index < text.endIndex {
+                        text.formIndex(after: &index)
+                    }
+                    continue
+                }
+            } else if char == "'" || char == "\"" {
+                quote = char
+            } else if char == "\\" {
+                text.formIndex(after: &index)
+                if index < text.endIndex {
+                    text.formIndex(after: &index)
+                }
+                continue
+            } else if char == open {
+                depth += 1
+            } else if char == close {
+                depth -= 1
+                if depth == 0 {
+                    return text.index(after: index)
+                }
+            }
+            text.formIndex(after: &index)
+        }
+        return nil
     }
 
     /// Stage 5: role-aware masking, then the outer-wrapper strip loop, then
