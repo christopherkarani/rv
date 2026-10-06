@@ -86,15 +86,12 @@ struct WorkspaceRecoveryTests {
         )
         #expect(succeeded(ProcessGroupRecovery.terminate(wrong)))
         #expect(kill(pid, 0) == 0)
-        let initGroup = RecordedProcessGroup(runtime: UUID(), pgid: 1, startSeconds: 0, startMicroseconds: 0)
-        let stopped = ProcessGroupRecovery.terminate(initGroup)
-        if case .failure(.refusedIdentity) = stopped {
-        } else {
-            Issue.record("pid 1 must not be signalled, got \(stopped)")
-        }
-        if kill(1, 0) != 0 {
-            #expect(errno == EPERM)
-        }
+        // Init's group and non-positive ids are unrepresentable: construction
+        // is the check, so no terminate call can name them.
+        #expect(ValidatedPGID(1) == nil)
+        #expect(ValidatedPGID(0) == nil)
+        #expect(ValidatedPGID(-1) == nil)
+        #expect(ValidatedPGID(42)?.rawValue == 42)
     }
 
     @Test func provenProcessGroupIsKilled() throws {
@@ -592,12 +589,84 @@ struct WorkspaceRecoveryTests {
         #expect(workspacePathIdentity(tree.workspaceURL.path)?.device == device)
     }
 
+    @Test func corruptProcessGroupFailsClosedWithoutTrapping() {
+        // The journal is untrusted input: out-of-range and unrepresentable
+        // group ids must mark the group malformed, never trap. Passing at
+        // all proves the narrowing is failable.
+        let id = UUID()
+        let poisoned = [
+            Int64(Int32.min) - 1,
+            Int64(Int32.max) + 1,
+            1, 0, -1,
+        ].map { group in
+            WorkspaceLifecycleRecord(
+                kind: .runtimeStarted,
+                workspace: id,
+                originalPath: "/tmp/ws",
+                protectedPath: "/tmp/ws",
+                volumeDevice: 1,
+                disk: "/dev/disk9",
+                runtime: UUID(),
+                recordedAt: Date(timeIntervalSince1970: 10),
+                processGroup: group,
+                processStartSeconds: 1,
+                processStartMicroseconds: 1
+            )
+        }
+        let valid = WorkspaceLifecycleRecord(
+            kind: .runtimeStarted,
+            workspace: id,
+            originalPath: "/tmp/ws",
+            protectedPath: "/tmp/ws",
+            volumeDevice: 1,
+            disk: "/dev/disk9",
+            runtime: UUID(),
+            recordedAt: Date(timeIntervalSince1970: 11),
+            processGroup: 4242,
+            processStartSeconds: 1,
+            processStartMicroseconds: 1
+        )
+        let reconstructions = WorkspaceRecovery.reconstruct(poisoned + [valid])
+        #expect(reconstructions.count == 1)
+        #expect(reconstructions.first?.malformedGroup == true)
+        #expect(reconstructions.first?.groups.count == 1)
+        #expect(reconstructions.first?.groups.first?.pgid.rawValue == 4242)
+    }
+
     @Test func abandonWithoutAWorkspaceRefuses() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let logs = RecoveryLogs(tree: tree)
         let outcome = WorkspaceRecovery.abandon(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime)
         #expect(outcome == .refused(.notBlocked))
+    }
+
+    @Test func abandonPhaseGateAdmitsOnlyAuthoritativeSavedTrees() {
+        typealias Reason = WorkspaceRecoveryBlock.Reason
+        #expect(WorkspaceRecovery.abandonPhaseRefusal(.blocked(.publicationConflict)) == nil)
+        #expect(WorkspaceRecovery.abandonPhaseRefusal(.blocked(.missingVolume)) == nil)
+        #expect(
+            WorkspaceRecovery.abandonPhaseRefusal(.blocked(.ambiguousOwnership))
+                == .unsafeReason(.ambiguousOwnership)
+        )
+        #expect(
+            WorkspaceRecovery.abandonPhaseRefusal(.blocked(.tornLog))
+                == .unsafeReason(.tornLog)
+        )
+        #expect(
+            WorkspaceRecovery.abandonPhaseRefusal(.corrupt) == .unsafeReason(.corrupt)
+        )
+        #expect(WorkspaceRecovery.abandonPhaseRefusal(.recoverable) == .notBlocked)
+        #expect(WorkspaceRecovery.abandonPhaseRefusal(.closed) == .notBlocked)
+        // Every other block reason refuses as unsafe, not silent.
+        for reason: Reason in [
+            .ambiguousSavedTree, .unprovenProcess, .unrelatedMount, .corrupt,
+        ] {
+            #expect(
+                WorkspaceRecovery.abandonPhaseRefusal(.blocked(reason))
+                    == .unsafeReason(reason)
+            )
+        }
     }
 }
 
@@ -691,6 +760,10 @@ private func appendRaw(_ text: String, to url: URL) throws {
     defer { try? handle.close() }
     try handle.seekToEnd()
     try handle.write(contentsOf: Data(text.utf8))
+}
+
+private func logSize(_ url: URL) throws -> Int {
+    try (FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
 }
 
 private extension String {
@@ -821,5 +894,177 @@ private func recoveryFrame(
         claimedSession: RuntimeSessionClaim(validating: claim.rawValue.uuidString)!,
         action: .shell(ShellCommand(rawValue: command))
     )
+}
+
+@Suite("Workspace lifecycle compaction", .serialized)
+struct WorkspaceLifecycleCompactionTests {
+    @Test func compactDropsClosedWorkspacesAndKeepsOpenBytes() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        let path = tree.workspaceURL.path
+        let closedID = UUID()
+        let openID = UUID()
+        for (index, kind) in [WorkspaceLifecycleRecord.Kind.created, .runtimeStarted, .runtimeEnded, .closed].enumerated() {
+            #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: kind, id: closedID, path: path, at: TimeInterval(index)), to: logs.life)))
+        }
+        for (index, kind) in [WorkspaceLifecycleRecord.Kind.created, .runtimeStarted].enumerated() {
+            #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: kind, id: openID, path: path, at: TimeInterval(10 + index)), to: logs.life)))
+        }
+        let before = try String(contentsOf: logs.life, encoding: .utf8)
+        let openLines = before.split(separator: "\n").filter { $0.contains(openID.uuidString) }
+        #expect(openLines.count == 2)
+        let outcome = WorkspaceLifecycleLog.compactIfNeeded(at: logs.life, thresholdBytes: 1)
+        #expect(outcome == .compacted(dropped: 4, kept: 2))
+        let after = try String(contentsOf: logs.life, encoding: .utf8)
+        #expect(after == openLines.joined(separator: "\n") + "\n")
+        let records = WorkspaceLifecycleLog.records(at: logs.life)
+        #expect(records.count == 2)
+        #expect(records.allSatisfy { $0.workspace == openID })
+        // Appends after the rename land on the compacted file.
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .closed, id: openID, path: path, at: 20), to: logs.life)))
+        #expect(WorkspaceLifecycleLog.records(at: logs.life).count == 3)
+    }
+
+    @Test func compactRefusesTornTail() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .created, id: UUID(), path: tree.workspaceURL.path, at: 10), to: logs.life)))
+        try appendRaw("{\"torn\"", to: logs.life)
+        let before = try Data(contentsOf: logs.life)
+        #expect(WorkspaceLifecycleLog.compactIfNeeded(at: logs.life, thresholdBytes: 1) == .refusedTorn)
+        #expect(try Data(contentsOf: logs.life) == before)
+    }
+
+    @Test func compactRefusesInteriorCorruption() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        try Data("not json\n".utf8).write(to: logs.life)
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .created, id: UUID(), path: tree.workspaceURL.path, at: 10), to: logs.life)))
+        let before = try Data(contentsOf: logs.life)
+        #expect(WorkspaceLifecycleLog.compactIfNeeded(at: logs.life, thresholdBytes: 1) == .refusedCorrupt)
+        #expect(try Data(contentsOf: logs.life) == before)
+    }
+
+    @Test func compactSkipsSmallFile() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        let id = UUID()
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .created, id: id, path: tree.workspaceURL.path, at: 10), to: logs.life)))
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .closed, id: id, path: tree.workspaceURL.path, at: 11), to: logs.life)))
+        let before = try Data(contentsOf: logs.life)
+        #expect(WorkspaceLifecycleLog.compactIfNeeded(at: logs.life) == .skippedSmall)
+        #expect(try Data(contentsOf: logs.life) == before)
+    }
+
+    @Test func compactSkipsWhenNothingDead() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .created, id: UUID(), path: tree.workspaceURL.path, at: 10), to: logs.life)))
+        let before = try Data(contentsOf: logs.life)
+        #expect(WorkspaceLifecycleLog.compactIfNeeded(at: logs.life, thresholdBytes: 1) == .skippedNothingDead)
+        #expect(try Data(contentsOf: logs.life) == before)
+    }
+
+    @Test func compactKeepsClosedWorkspaceWithoutCreated() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        // Closed with no created: recovery reconstructs this as corrupt, not
+        // closed, so compaction must not erase it.
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .closed, id: UUID(), path: tree.workspaceURL.path, at: 10), to: logs.life)))
+        let before = try Data(contentsOf: logs.life)
+        #expect(WorkspaceLifecycleLog.compactIfNeeded(at: logs.life, thresholdBytes: 1) == .skippedNothingDead)
+        #expect(try Data(contentsOf: logs.life) == before)
+        let assessment = WorkspaceRecovery.assess(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime)
+        guard case .blocked(let block) = assessment else {
+            Issue.record("closed-without-created must stay visible, got \(assessment)")
+            return
+        }
+        #expect(block.reason == .corrupt)
+    }
+
+    @Test func compactKeepsClosedWorkspaceWithSplitPaths() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        let id = UUID()
+        let other = tree.rootURL.appendingPathComponent("other").path
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .created, id: id, path: tree.workspaceURL.path, at: 10), to: logs.life)))
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .closed, id: id, path: other, at: 11), to: logs.life)))
+        let before = try Data(contentsOf: logs.life)
+        #expect(WorkspaceLifecycleLog.compactIfNeeded(at: logs.life, thresholdBytes: 1) == .skippedNothingDead)
+        #expect(try Data(contentsOf: logs.life) == before)
+    }
+
+    @Test func compactKeepsClosedWorkspaceWithEmptyPaths() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        let id = UUID()
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .created, id: id, path: "", at: 10), to: logs.life)))
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .closed, id: id, path: "", at: 11), to: logs.life)))
+        let before = try Data(contentsOf: logs.life)
+        #expect(WorkspaceLifecycleLog.compactIfNeeded(at: logs.life, thresholdBytes: 1) == .skippedNothingDead)
+        #expect(try Data(contentsOf: logs.life) == before)
+    }
+
+    @Test func assessParityAcrossCompaction() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        let path = tree.workspaceURL.path
+        let other = tree.rootURL.appendingPathComponent("other").path
+        let closedID = UUID()
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .created, id: closedID, path: other, at: 10), to: logs.life)))
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .closed, id: closedID, path: other, at: 11), to: logs.life)))
+        let openID = UUID()
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .created, id: openID, path: path, at: 12), to: logs.life)))
+        let directory = try workspace(tree)
+        let beforeAssess = WorkspaceRecovery.assess(directory, lifecycleLog: logs.life, runtimeLog: logs.runtime)
+        #expect(beforeAssess != .clean)
+        let beforeCreated = WorkspaceLifecycleLog.records(at: logs.life).last {
+            $0.workspace == openID && $0.kind == .created
+        }
+        #expect(beforeCreated != nil)
+        #expect(WorkspaceLifecycleLog.compactIfNeeded(at: logs.life, thresholdBytes: 1) == .compacted(dropped: 2, kept: 1))
+        #expect(WorkspaceRecovery.assess(directory, lifecycleLog: logs.life, runtimeLog: logs.runtime) == beforeAssess)
+        #expect(
+            WorkspaceLifecycleLog.records(at: logs.life).last {
+                $0.workspace == openID && $0.kind == .created
+            } == beforeCreated
+        )
+    }
+
+    @Test func closeCompactsOverThresholdLog() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let logs = RecoveryLogs(tree: tree)
+        let template = UUID()
+        let fuel = tree.rootURL.appendingPathComponent("fuel").path
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .created, id: template, path: fuel, at: 10), to: logs.life)))
+        #expect(succeeded(WorkspaceLifecycleLog.append(sampleRecord(kind: .closed, id: template, path: fuel, at: 11), to: logs.life)))
+        let templateLines = try String(contentsOf: logs.life, encoding: .utf8).split(separator: "\n")
+        #expect(templateLines.count == 2)
+        // Fuel until the log is over the threshold: line length depends on
+        // tree paths, so a fixed round count could flake on short TMPDIRs.
+        var rounds = 0
+        while try logSize(logs.life) <= WorkspaceLifecycleLog.compactThresholdBytes, rounds < 20_000 {
+            let fresh = UUID().uuidString
+            for line in templateLines {
+                try appendRaw(line.replacingOccurrences(of: template.uuidString, with: fresh) + "\n", to: logs.life)
+            }
+            rounds += 1
+        }
+        #expect(try logSize(logs.life) > WorkspaceLifecycleLog.compactThresholdBytes)
+        let opened = try openWorkspace(tree, logs: logs)
+        #expect(succeeded(opened.supervisor.close()))
+        #expect(try logSize(logs.life) < 100_000)
+        #expect(WorkspaceRecovery.assess(try workspace(tree), lifecycleLog: logs.life, runtimeLog: logs.runtime) == .clean)
+    }
 }
 #endif

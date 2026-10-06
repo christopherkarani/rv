@@ -3,15 +3,6 @@ import Darwin
 import Foundation
 import Synchronization
 
-/// Upgrade cleanup only. New launches never stage credentials in a workspace.
-private enum LegacyAgentHomeLinks {
-    static let paths = [
-        ".codex/auth.json", ".codex/config.toml", ".config/muse/auth.json",
-        ".claude/.credentials.json", ".claude/settings.json", ".claude/settings.local.json",
-        ".local/share/opencode/auth.json",
-    ]
-}
-
 /// Identity of one workspace name, captured before the contained process runs.
 struct WorkspaceInodeStamp: Equatable, Sendable {
     var device: UInt64
@@ -96,6 +87,26 @@ func workspacePublishDecision(
     }
 }
 
+/// Mutable boundary state. The supervisor calls into the boundary from
+/// multiple client-connection threads, so every field lives behind one
+/// lock. Methods snapshot what they need under short locks and never call
+/// back into a locking method while holding the lock.
+///
+/// The lock serializes number assignment, not fd lifetime: a number read
+/// under the lock can be closed (and its value reused) by teardown before
+/// the reader's `fstat`/`dup`/`openat` runs. Readers must therefore be
+/// externally serialized against close/detach. Today that holds: launch
+/// reads under the supervisor state lock that close also takes, and
+/// `heldDescriptors`/`savedFileData` have no production callers outside
+/// that discipline. A future concurrent reader must pin lifetime (dup
+/// under the lock) instead of trusting a bare number.
+private struct BoundaryMutable: Sendable {
+    var volumeFD: Int32
+    var savedFD: Int32
+    var released = false
+    var didDetach = false
+}
+
 /// Mounts the workspace path on a fresh volume before a contained process runs.
 ///
 /// Seatbelt allows a write whose path is inside the workspace even when that
@@ -109,7 +120,7 @@ func workspacePublishDecision(
 /// A same-user `diskutil unmount force` can tear this mount down. Polite
 /// unmount is blocked by a directory descriptor held until the process group
 /// is dead. Force-unmount is not claimed as closed.
-final class WorkspaceInodeBoundary {
+final class WorkspaceInodeBoundary: Sendable {
     let workspacePath: String
     private let savedPath: String
     private let quarantinePath: String
@@ -121,11 +132,8 @@ final class WorkspaceInodeBoundary {
     private let mountSource: String
     private let imageDevice: UInt64?
     private let imageInode: UInt64?
-    private var volumeFD: Int32
-    private var savedFD: Int32
+    private let mutable: Mutex<BoundaryMutable>
     private let snapshot: [String: WorkspaceInodeStamp]
-    private var released = false
-    private var didDetach = false
 
     init(
         workspacePath: String,
@@ -154,44 +162,49 @@ final class WorkspaceInodeBoundary {
         self.mountSource = mountSource
         self.imageDevice = imageDevice
         self.imageInode = imageInode
-        self.volumeFD = volumeFD
-        self.savedFD = savedFD
+        self.mutable = Mutex(BoundaryMutable(volumeFD: volumeFD, savedFD: savedFD))
         self.snapshot = snapshot
     }
 
     deinit {
-        if volumeFD >= 0 { close(volumeFD) }
-        if savedFD >= 0 { close(savedFD) }
+        let fds = mutable.withLock { ($0.volumeFD, $0.savedFD) }
+        if fds.0 >= 0 { close(fds.0) }
+        if fds.1 >= 0 { close(fds.1) }
     }
 
     func remainsEstablished() -> Bool {
-        guard volumeFD >= 0 else { return false }
+        let fd = mutable.withLock { $0.volumeFD }
+        guard fd >= 0 else { return false }
         var status = stat()
-        guard fstat(volumeFD, &status) == 0 else { return false }
+        guard fstat(fd, &status) == 0 else { return false }
         return device(of: status) == volumeDevice
     }
 
     var volumeDeviceIdentifier: UInt64 { volumeDevice }
     var diskIdentifier: String { disk }
-    var isReleased: Bool { released }
+    var isReleased: Bool { mutable.withLock { $0.released } }
 
     /// Directory descriptors RV holds for the mount and the hidden original.
     /// Callers compare these identities with a child's open files.
     func heldDescriptors() -> [Int32] {
-        [volumeFD, savedFD].filter { $0 >= 0 }
+        mutable.withLock { [$0.volumeFD, $0.savedFD] }.filter { $0 >= 0 }
     }
 
     /// Move the mount and saved directory descriptors above the granted
     /// stdio and admission slots so a later `dup2` onto 0...5 cannot publish
     /// them into a runtime.
     func relocateHeldDescriptors(atLeast floor: Int32) -> Bool {
-        moveDescriptor(&volumeFD, floor) && moveDescriptor(&savedFD, floor)
+        mutable.withLock { state in
+            moveDescriptor(&state.volumeFD, floor) && moveDescriptor(&state.savedFD, floor)
+        }
     }
 
     /// Bytes of one file in the hidden original tree. Nil when that name is
     /// not there. This does not read the mounted volume.
     func savedFileData(_ relative: String) -> Data? {
-        guard released == false, let fd = openSaved(relative, directory: false), fd >= 0 else {
+        guard mutable.withLock({ $0.released }) == false,
+            let fd = openSaved(relative, directory: false), fd >= 0
+        else {
             return nil
         }
         defer { close(fd) }
@@ -229,15 +242,18 @@ final class WorkspaceInodeBoundary {
     /// at an auth path is project state and publishes through the normal
     /// decision.
     func scrubHostStagedAgentHomes() {
+        // Upgrade cleanup only: new launches never stage credentials in a
+        // workspace. The link list is the shared staging catalog, so staged
+        // and scrubbed paths cannot drift apart.
         let manager = FileManager.default
-        for relative in LegacyAgentHomeLinks.paths {
+        for relative in AgentHomeStaging.credentialLinks.map(\.relative) {
             guard snapshot[relative] == nil else { continue }
             let path = "\(workspacePath)/\(relative)"
             guard (try? manager.destinationOfSymbolicLink(atPath: path)) != nil else { continue }
             try? manager.removeItem(atPath: path)
         }
-        guard snapshot[".rv-cage"] == nil else { return }
-        try? manager.removeItem(atPath: "\(workspacePath)/.rv-cage")
+        guard snapshot[AgentHomeStaging.cageDirectoryName] == nil else { return }
+        try? manager.removeItem(atPath: "\(workspacePath)/\(AgentHomeStaging.cageDirectoryName)")
     }
 
     /// Copy volume contents onto the original inodes, then put that directory
@@ -306,17 +322,20 @@ final class WorkspaceInodeBoundary {
 
     /// Detach this volume only when the mount source and device still match.
     func detachOwnedMount() -> Result<Void, IsolationApplyError> {
-        if released || didDetach { return .success(()) }
+        if mutable.withLock({ $0.released || $0.didDetach }) { return .success(()) }
         guard mountedIdentityMatches() else { return .failure(.workspaceInodeBoundaryFailed) }
-        if volumeFD >= 0 {
-            close(volumeFD)
-            volumeFD = -1
+        let volume = mutable.withLock { state -> Int32 in
+            defer { state.volumeFD = -1 }
+            return state.volumeFD
+        }
+        if volume >= 0 {
+            close(volume)
         }
         detachVolume()
         if currentDevice(workspacePath) == volumeDevice {
             return .failure(.workspaceInodeBoundaryFailed)
         }
-        didDetach = true
+        mutable.withLock { $0.didDetach = true }
         return .success(())
     }
 
@@ -334,10 +353,14 @@ final class WorkspaceInodeBoundary {
     }
 
     private func publishIntoSaved(writing: Bool) -> Result<Void, IsolationApplyError> {
-        guard remainsEstablished(), savedFD >= 0 else {
+        guard remainsEstablished() else {
             return .failure(.workspaceInodeBoundaryFailed)
         }
-        guard let volumeEntries = collectTree(root: volumeFD, checkDevice: volumeDevice) else {
+        let fds = mutable.withLock { ($0.volumeFD, $0.savedFD) }
+        guard fds.1 >= 0 else {
+            return .failure(.workspaceInodeBoundaryFailed)
+        }
+        guard let volumeEntries = collectTree(root: fds.0, checkDevice: volumeDevice) else {
             return .failure(.workspaceInodeBoundaryFailed)
         }
         var rejected = false
@@ -388,10 +411,13 @@ final class WorkspaceInodeBoundary {
     }
 
     private func restoreOriginalDirectory() -> Result<Void, IsolationApplyError> {
-        if released { return .success(()) }
-        if volumeFD >= 0 {
-            close(volumeFD)
-            volumeFD = -1
+        if mutable.withLock({ $0.released }) { return .success(()) }
+        let volume = mutable.withLock { state -> Int32 in
+            defer { state.volumeFD = -1 }
+            return state.volumeFD
+        }
+        if volume >= 0 {
+            close(volume)
         }
         detachVolume()
         let workspaceDevice = currentDevice(workspacePath)
@@ -412,11 +438,14 @@ final class WorkspaceInodeBoundary {
         guard renamePath(savedPath, workspacePath) else {
             return .failure(.workspaceInodeBoundaryFailed)
         }
-        if savedFD >= 0 {
-            close(savedFD)
-            savedFD = -1
+        let saved = mutable.withLock { state -> Int32 in
+            defer { state.savedFD = -1 }
+            return state.savedFD
         }
-        released = true
+        if saved >= 0 {
+            close(saved)
+        }
+        mutable.withLock { $0.released = true }
         _ = inodeCheckedDelete(quarantinePath)
         if let imagePath {
             unlink(imagePath)
@@ -635,7 +664,7 @@ final class WorkspaceInodeBoundary {
     private func savedParent(_ relative: String) -> (fd: Int32, name: String)? {
         let parts = relative.split(separator: "/").map(String.init)
         guard let name = parts.last else { return nil }
-        var current = dup(savedFD)
+        var current = dup(mutable.withLock { $0.savedFD })
         guard current >= 0 else { return nil }
         var walked = ""
         for part in parts.dropLast() {
@@ -686,7 +715,7 @@ final class WorkspaceInodeBoundary {
     private func volumeParent(_ relative: String) -> (fd: Int32, name: String)? {
         let parts = relative.split(separator: "/").map(String.init)
         guard let name = parts.last else { return nil }
-        var current = dup(volumeFD)
+        var current = dup(mutable.withLock { $0.volumeFD })
         guard current >= 0 else { return nil }
         for part in parts.dropLast() {
             let next = part.withCString { name in

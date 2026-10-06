@@ -4,11 +4,11 @@
 /// (bare or `=attached`), clustered shorts with per-letter meaning, and
 /// next-word value consumption (`-m <msg>`, `--mode <mode>`).
 ///
-/// The scan is deliberately shallow about `--`: it yields `.terminator` as
-/// a first-class event and keeps classifying afterwards, because today's
-/// consumers disagree — most split positionals there, `clean` skips it and
-/// keeps parsing flags, and `push`/`stash`-family reject it as an unknown
-/// flag. Each consumer interprets the event its own way (T3b).
+/// `--` handling splits two ways: `scanFlags` yields `.terminator` as a
+/// first-class event and keeps classifying afterwards (git push/branch/tag/
+/// stash reject it as an unknown flag), while `splitFlagTerminator` stops
+/// at the pending-aware terminator for the filesystem parsers. Both read
+/// through one loop, so the stopping cut cannot desync from the scan.
 extension ShellPipeline {
     /// Scans `argv.args` left to right, consuming value words per `spec`.
     ///
@@ -28,12 +28,41 @@ extension ShellPipeline {
         _ argv: Argv,
         valueSpec spec: FlagValueSpec = .none
     ) -> [FlagToken] {
+        scan(argv, valueSpec: spec, stopAtTerminator: false).flags
+    }
+
+    /// Scans head flags per `spec` and splits at the pending-aware `--`
+    /// terminator: the first `--` not itself consumed as a pending flag
+    /// value. Pre-terminator events keep their grammar reading;
+    /// post-terminator words return verbatim, matching the legacy loops
+    /// where `--` made every later word a positional.
+    static func splitFlagTerminator(
+        _ argv: Argv,
+        values spec: FlagValueSpec = .none
+    ) -> (flags: [FlagToken], rest: [String]) {
+        scan(argv, valueSpec: spec, stopAtTerminator: true)
+    }
+
+    /// Shared scan behind `scanFlags` and `splitFlagTerminator`.
+    ///
+    /// With `stopAtTerminator`, the scan stops at the first `--` reached
+    /// with no pending value — pending-value consumption wins over the
+    /// terminator test, exactly as the legacy loops ordered the checks —
+    /// and the remaining words return verbatim.
+    private static func scan(
+        _ argv: Argv,
+        valueSpec spec: FlagValueSpec,
+        stopAtTerminator: Bool
+    ) -> (flags: [FlagToken], rest: [String]) {
         var out: [FlagToken] = []
         out.reserveCapacity(argv.args.count)
         var index = 0
         while index < argv.args.count {
             let word = argv.args[index]
             let token = FlagToken.classify(word)
+            if stopAtTerminator, token == .terminator {
+                return (out, Array(argv.args[(index + 1)...]))
+            }
             switch token {
             case .long(let name, let attached):
                 let resolved = spec.resolveLong(name)
@@ -71,7 +100,7 @@ extension ShellPipeline {
                 index += 1
             }
         }
-        return out
+        return (out, [])
     }
 
     /// Appends the value-taking `flag` event and returns the next index:
@@ -157,19 +186,12 @@ public struct FlagValueSpec: Sendable, Hashable {
     /// No flag takes a value; every word classifies structurally.
     public static let none = FlagValueSpec()
 
-    /// Whether no flag takes a value: the scan classifies purely
-    /// structurally and consumes nothing, so post-`--` events can be
-    /// recovered verbatim. (`rejectsDashValues` is inert without takers.)
-    public var isValueFree: Bool {
-        valueShorts.isEmpty && valueLongs.isEmpty
-    }
-
     /// Whether a structurally classified token takes the next argv word as
     /// its value. Attached longs (`--mode=x`) never consume; bare
     /// value-longs do, resolved first. For clusters use `splitShortValue`:
     /// a taker with attached rest is self-contained and consumes nothing.
-    /// Shared by `scanFlags` and the filesystem `--` pre-split so the two
-    /// readings cannot desync when consumption rules change.
+    /// Shared by `scanFlags` and `splitFlagTerminator` so the two readings
+    /// cannot desync when consumption rules change.
     public func takesValue(_ token: FlagToken) -> Bool {
         switch token {
         case .long(let name, nil) where valueLongs.contains(resolveLong(name)):

@@ -35,6 +35,10 @@ import Darwin
 /// 19. `seatbelt().prepare(observed)` is `profileNotApplicable`
 /// 20. newline workspace compile is `workspacePathUnsafe`
 /// 21. Seatbelt `launchArguments` are `-p` + profile + inner argv
+/// 22. `compileSeatbeltRequest` over canned facts assembles deterministically
+/// 23. `compileSeatbeltRequest` retarget refusal is `workspacePathUnresolvable`;
+///     mode/launch mismatch is `backendMismatch` (not the lossy guarantee error)
+/// 24. `resolveSeatbeltFacts` + `compileSeatbeltRequest` matches `prepareSeatbelt`
 @Suite("IsolationApply")
 struct IsolationApplyTests {
     @Test func workspaceFilesystemMetadata_skipsRootBookkeepingWhenRootOwnedOrOwnersIgnored() {
@@ -219,6 +223,8 @@ struct IsolationApplyTests {
             #expect(profile.source.contains("(subpath \"/private/var/db/timezone\")"))
             let again = try #require(try? compileSeatbeltProfile(plan).get())
             #expect(profile.source == again.source)
+            #expect(profile.isContainedCompilerOutput)
+            #expect(again.isContainedCompilerOutput)
         case .failure(let error):
             recordUnexpectedApplyError(error, expected: "compiled first-slice Seatbelt profile")
         }
@@ -360,6 +366,95 @@ struct IsolationApplyTests {
         )
         expectProfileNotApplicable(compileSeatbeltProfile(observed))
         expectProfileNotApplicable(compileSeatbeltProfile(mediated))
+    }
+
+    @Test func compileSeatbeltRequest_assemblesFromCannedFacts() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let facts = cannedFacts(workspacePath: tree.workspaceURL.path)
+        let first = try compileSeatbeltRequest(
+            plan: tree.contained, command: trueCommand, facts: facts
+        ).get()
+        let second = try compileSeatbeltRequest(
+            plan: tree.contained, command: trueCommand, facts: facts
+        ).get()
+        #expect(first == second)
+        let profile = try #require(first.seatbeltProfile)
+        #expect(profile.source.contains("(version 1)"))
+        #expect(profile.source.contains("(literal \"/usr/bin/true\")"))
+        #expect(profile.source.contains("(remote tcp \"localhost:*\")"))
+        #expect(profile.workspacePath == tree.workspaceURL.path)
+        #expect(first.productive == facts.productive)
+        #expect(first.resources == nil)
+        // Canned profiles are hand-built, not compiler output, even after
+        // the full builder chain runs over them.
+        #expect(first.seatbeltProfile?.isContainedCompilerOutput == false)
+    }
+
+    @Test func compileSeatbeltRequest_retargetedWorkspaceRefuses() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let facts = cannedFacts(
+            workspacePath: tree.workspaceURL.path,
+            resolvedWorkspace: "/elsewhere"
+        )
+        let result = compileSeatbeltRequest(
+            plan: tree.contained, command: trueCommand, facts: facts
+        )
+        guard case .failure(let error) = result else {
+            Issue.record("retargeted workspace must refuse")
+            return
+        }
+        #expect(error == .workspacePathUnresolvable)
+    }
+
+    @Test func compileSeatbeltRequest_observedPlanIsBackendMismatch() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let facts = cannedFacts(workspacePath: tree.workspaceURL.path)
+        let result = compileSeatbeltRequest(
+            plan: tree.observed, command: trueCommand, facts: facts
+        )
+        guard case .failure(let error) = result else {
+            Issue.record("seatbelt launch for an observed plan must refuse")
+            return
+        }
+        #expect(error == .backendMismatch)
+    }
+
+    @Test func compileSeatbeltRequest_carriesAgentBinGrants() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        var facts = cannedFacts(workspacePath: tree.workspaceURL.path)
+        facts.agentBin = AgentBinResolution(
+            directory: "/opt/rv/agent-bin",
+            executables: ["/opt/rv/agent-bin/agent"],
+            trees: ["/opt/rv/agent-support"],
+            credentials: ["/Users/test/.codex/auth.json"]
+        )
+        let request = try compileSeatbeltRequest(
+            plan: tree.contained, command: trueCommand, facts: facts
+        ).get()
+        let profile = try #require(request.seatbeltProfile)
+        #expect(profile.source.contains("(literal \"/opt/rv/agent-bin/agent\")"))
+        #expect(profile.source.contains("(subpath \"/opt/rv/agent-support\")"))
+        #expect(profile.source.contains("(literal \"/Users/test/.codex/auth.json\")"))
+    }
+
+    @Test func resolveThenCompile_matchesPrepareSeatbelt() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let facts = try resolveSeatbeltFacts(tree.contained, trueCommand).get()
+        // Strict POSIX realpath (`/tmp` → `/private/tmp`), not the URL form.
+        let resolved = posixRealpath(tree.workspaceURL.path) ?? tree.workspaceURL.path
+        #expect(facts.resolvedWorkspace == resolved)
+        let compiled = try compileSeatbeltRequest(
+            plan: tree.contained, command: trueCommand, facts: facts
+        ).get()
+        let prepared = try prepareSeatbelt(tree.contained, trueCommand).get()
+        #expect(compiled.family == .seatbelt)
+        #expect(compiled.seatbeltProfile?.workspacePath == resolved)
+        #expect(compiled.seatbeltProfile?.source == prepared.seatbeltProfile?.source)
     }
 
     @Test func unavailable_prepare_contained_returnsBackendUnavailable() throws {
@@ -783,7 +878,10 @@ struct IsolationApplyTests {
     }
 
     @Test func rejectWorkspaceInodeAlias_unreadableUserFilesystemMetadataDirectoryRefuses() throws {
-        guard getuid() != 0 else { return }
+        guard getuid() != 0 else {
+            Issue.record("unreadable-dir refusal is unverifiable as root; rerun unprivileged")
+            return
+        }
         let tree = try ContainmentTree()
         let metadata = tree.workspaceURL.appendingPathComponent(".fseventsd", isDirectory: true)
         defer {
@@ -900,10 +998,69 @@ struct IsolationApplyTests {
         print(probeLine(requested: .contained, result: fixture.containedChildOutside))
         print(probeLine(requested: .observed, result: fixture.observedOutside))
         print(probeLine(requested: .contained, result: fixture.containedUnavailable))
+
+        // The probe lines above are for operators; these assertions pin the
+        // established-mode contract the test is named for. Whether the
+        // outside writes land is NOT asserted: the probe root lives under
+        // the system temp dir, which the profile deliberately grants for
+        // tooling scratch, so outside writes succeed by design.
+        #expect(fixture.containedUnavailable == .failure(.backendUnavailable))
+        switch fixture.observedOutside {
+        case .success(let run):
+            #expect(run.established == .observed)
+            #expect(run.exitStatus == 0)
+        case .failure(let error):
+            Issue.record("observed write must succeed, got \(error)")
+        }
+        #expect(FileManager.default.fileExists(atPath: fixture.observedOutsidePath))
+        #if os(macOS)
+        for (label, result) in [
+            ("inside", fixture.containedInside),
+            ("outside", fixture.containedOutside),
+            ("child-outside", fixture.containedChildOutside),
+        ] {
+            switch result {
+            case .success(let run):
+                switch run.established {
+                case .seatbelt:
+                    break
+                case .observed, .mediated:
+                    Issue.record("contained \(label) must establish seatbelt")
+                }
+            case .failure(let error):
+                Issue.record("contained \(label) must run, got \(error)")
+            }
+        }
+        #expect(FileManager.default.fileExists(atPath: fixture.insidePath))
+        #else
+        for (label, result) in [
+            ("inside", fixture.containedInside),
+            ("outside", fixture.containedOutside),
+            ("child-outside", fixture.containedChildOutside),
+        ] {
+            guard case .failure = result else {
+                Issue.record("Linux has no contained backend; \(label) prepare must fail")
+                continue
+            }
+        }
+        #expect(FileManager.default.fileExists(atPath: fixture.insidePath) == false)
+        #endif
     }
 }
 
 private let trueCommand = IsolatedCommand(executable: "/usr/bin/true")!
+
+private func cannedFacts(workspacePath: String, resolvedWorkspace: String? = nil) -> SeatbeltLaunchFacts {
+    SeatbeltLaunchFacts(
+        base: SeatbeltProfile(source: "(version 1)\n(deny default)", workspacePath: workspacePath),
+        executableRealpath: nil,
+        resources: nil,
+        canonical: CanonicalResources(targets: [], readFiles: [], readTrees: [], writeTrees: []),
+        agentBin: nil,
+        resolvedWorkspace: resolvedWorkspace ?? workspacePath,
+        productive: ProductiveWorkspaceResolution()
+    )
+}
 
 private func requireWorkspace(_ path: String) throws -> WorkingDirectory {
     try #require(WorkingDirectory(validating: path))
@@ -1019,6 +1176,8 @@ private struct ProbeFixture {
     let containedChildOutside: Result<IsolatedRunResult, IsolationApplyError>
     let observedOutside: Result<IsolatedRunResult, IsolationApplyError>
     let containedUnavailable: Result<IsolatedRunResult, IsolationApplyError>
+    let insidePath: String
+    let observedOutsidePath: String
     private let root: URL
 
     init() async throws {
@@ -1038,6 +1197,8 @@ private struct ProbeFixture {
         let inside = resolvedWorkspace.appendingPathComponent("inside").path
         let outside = root.resolvingSymlinksInPath().appendingPathComponent("outside").path
         let childOutside = root.resolvingSymlinksInPath().appendingPathComponent("child-outside").path
+        insidePath = inside
+        observedOutsidePath = outside + "-observed"
         containedInside = await IsolationBackends.applyOffPool(contained, command: touchCommand(inside))
         containedOutside = await IsolationBackends.applyOffPool(contained, command: touchCommand(outside))
         containedChildOutside = await IsolationBackends.applyOffPool(
@@ -1049,7 +1210,7 @@ private struct ProbeFixture {
         )
         observedOutside = await IsolationBackends.applyOffPool(
             observed,
-            command: touchCommand(outside + "-observed")
+            command: touchCommand(observedOutsidePath)
         )
         containedUnavailable = await IsolationBackends.unavailable().applyOffPool(
             contained,

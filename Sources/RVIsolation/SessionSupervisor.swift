@@ -67,8 +67,8 @@ func superviseSeatbelt(
         return .failure(.cancelled)
     }
     // Hand-built profiles that are not the contained compiler output never
-    // mount or execute. Production profiles include this deny.
-    guard profile.source.contains("(deny file-link)") else {
+    // mount or execute. Provenance rides the profile value, not a text scan.
+    guard profile.isContainedCompilerOutput else {
         return .failure(.seatbeltNotEstablished)
     }
     let supervisor: WorkspaceSessionSupervisor
@@ -382,7 +382,9 @@ func spawnSeatbeltProcessBody(
     preparedEnvironment: [String]? = nil,
     cwdVerification: CwdCommitVerification? = nil
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
-    guard profile.source.contains("(deny file-link)") else {
+    // Provenance rides the profile value, not a text scan (same gate as
+    // `superviseSeatbelt` above).
+    guard profile.isContainedCompilerOutput else {
         return .failure(.seatbeltNotEstablished)
     }
     guard boundary.remainsEstablished() else {
@@ -709,6 +711,7 @@ func spawnSeatbeltProcessBody(
                 repositoryRoot: request.plan.repositoryRoot
             ),
             profileSource: profile.source,
+            profileIsContainedCompilerOutput: profile.isContainedCompilerOutput,
             workspacePath: workspace,
             sessionLeader: pid,
             egressProxyPort: egressProxyPort,

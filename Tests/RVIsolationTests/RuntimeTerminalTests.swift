@@ -80,11 +80,7 @@ struct RuntimeTerminalTests {
         ] {
             #expect(RuntimeTerminal.open(rows: 24, columns: 80, openFault: fault) == nil)
         }
-        // One-sided: sibling suites run in parallel in this process and
-        // hold PTY masters transiently, so the set may legitimately shrink
-        // (their masters closing) or flutter. A master leaked by the fault
-        // loop above is new and never drains, which still fails.
-        #expect(waitUntil(seconds: 30) { ttyPaths().subtracting(before).isEmpty })
+        expectNoNewPTYs(since: before)
     }
 
     @Test func subscribersShareOneOrderedBinaryStream() throws {
@@ -888,7 +884,7 @@ struct RuntimeTerminalTests {
         #expect(FileManager.default.fileExists(atPath: marker.path) == false)
         #expect(opened.supervisor.runtimeFacts().contains { $0.running } == false)
         #expect(opened.supervisor.snapshot.phase == .active)
-        #expect(ttyPaths().subtracting(before).isEmpty)
+        expectNoNewPTYs(since: before)
     }
 
     @Test func registerFaultRetiresTheStagedPrivateHome() throws {
@@ -1041,7 +1037,7 @@ struct RuntimeTerminalTests {
             ))
             #expect(processIsGone(pid))
         }
-        #expect(ttyPaths().subtracting(before).isEmpty)
+        expectNoNewPTYs(since: before)
         #expect(opened.supervisor.snapshot.phase == .active)
     }
 
@@ -1238,6 +1234,17 @@ private func ttyPaths() -> Set<String> {
         }
     }
     return paths
+}
+
+/// Global PTY-leak assertion. Sibling suites run in parallel in this
+/// process and hold PTY masters transiently, so the set may legitimately
+/// flutter; drain until it settles instead of asserting immediately.
+/// One-sided: a master we leaked never drains and still fails. A
+/// concurrent suite holding one terminal for the whole window would
+/// false-fail; no such test holds one beyond seconds today.
+private func expectNoNewPTYs(since before: Set<String>) {
+    let drained = waitUntil(seconds: 30) { ttyPaths().subtracting(before).isEmpty }
+    #expect(drained, "leaked PTYs: \(ttyPaths().subtracting(before).sorted())")
 }
 
 private func openSlave(_ path: String) throws -> Int32 {

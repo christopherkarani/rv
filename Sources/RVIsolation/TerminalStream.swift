@@ -180,7 +180,21 @@ enum TerminalBytesCodec {
     }
 
     static func decode(_ text: String, maximum: Int) -> Data? {
-        guard text.utf8.count <= TerminalStreamLimits.maximumEncodedBytes else { return nil }
+        // Cheap pre-filter sized from `maximum`: base64 of a within-maximum
+        // payload never exceeds this bound while `maximum` is within the
+        // supported input size, so it rejects only inputs the decoded
+        // check below would reject anyway. Inputs beyond
+        // `maximumInputBytes` were never supported (the old fixed 5464
+        // guard rejected them too); the cap keeps that limit instead of
+        // overflowing the multiplication. The decoded-length check below
+        // is authoritative.
+        let encodedBound: Int
+        if maximum >= TerminalStreamLimits.maximumInputBytes {
+            encodedBound = TerminalStreamLimits.maximumEncodedBytes
+        } else {
+            encodedBound = ((maximum + 2) / 3) * 4
+        }
+        guard text.utf8.count <= encodedBound else { return nil }
         guard text.isEmpty || text.utf8.allSatisfy(isBase64Character) else { return nil }
         guard let data = Data(base64Encoded: text), data.count <= maximum else { return nil }
         return data

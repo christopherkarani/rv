@@ -186,17 +186,27 @@ public struct ContainedPATHProbe: Sendable {
     public let isDirectory: @Sendable (String) -> Bool
     public let isExecutable: @Sendable (String) -> Bool
     public let listDirectory: @Sendable (String) -> [String]?
+    public let isReadable: @Sendable (String) -> Bool
+    public let readlink: @Sendable (String) -> String?
 
     public init(
         realpath: @escaping @Sendable (String) -> String?,
         isDirectory: @escaping @Sendable (String) -> Bool,
         isExecutable: @escaping @Sendable (String) -> Bool,
-        listDirectory: @escaping @Sendable (String) -> [String]?
+        listDirectory: @escaping @Sendable (String) -> [String]?,
+        isReadable: @escaping @Sendable (String) -> Bool = {
+            FileManager.default.isReadableFile(atPath: $0)
+        },
+        readlink: @escaping @Sendable (String) -> String? = {
+            try? FileManager.default.destinationOfSymbolicLink(atPath: $0)
+        }
     ) {
         self.realpath = realpath
         self.isDirectory = isDirectory
         self.isExecutable = isExecutable
         self.listDirectory = listDirectory
+        self.isReadable = isReadable
+        self.readlink = readlink
     }
 
     public static var live: ContainedPATHProbe {
@@ -210,7 +220,9 @@ public struct ContainedPATHProbe: Sendable {
             isExecutable: { FileManager.default.isExecutableFile(atPath: $0) },
             listDirectory: { path in
                 (try? FileManager.default.contentsOfDirectory(atPath: path))?.sorted()
-            }
+            },
+            isReadable: { FileManager.default.isReadableFile(atPath: $0) },
+            readlink: { try? FileManager.default.destinationOfSymbolicLink(atPath: $0) }
         )
     }
 }
@@ -458,7 +470,10 @@ public enum ContainedToolchainRoots {
         probe: ContainedPATHProbe = .live
     ) -> String? {
         #if os(macOS)
-        let candidates = [hostEnvironment["DEVELOPER_DIR"], selectLinkTarget(selectLinkPath)]
+        let candidates = [
+            hostEnvironment["DEVELOPER_DIR"],
+            selectLinkTarget(selectLinkPath, readlink: probe.readlink),
+        ]
         for candidate in candidates {
             guard let candidate, isUsableAbsolutePath(candidate) else { continue }
             guard let canonical = probe.realpath(candidate), isUsableAbsolutePath(canonical) else {
@@ -479,8 +494,11 @@ public enum ContainedToolchainRoots {
         #endif
     }
 
-    private static func selectLinkTarget(_ linkPath: String) -> String? {
-        guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: linkPath) else {
+    private static func selectLinkTarget(
+        _ linkPath: String,
+        readlink: @Sendable (String) -> String?
+    ) -> String? {
+        guard let target = readlink(linkPath) else {
             return nil
         }
         if target.hasPrefix("/") { return target }

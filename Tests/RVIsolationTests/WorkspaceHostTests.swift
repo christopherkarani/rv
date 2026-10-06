@@ -597,6 +597,54 @@ struct WorkspaceHostTests {
         #expect(WorkspaceClient.negotiatedFeatures(from: legacyTimeout).isFailure)
     }
 
+    @Test func boundedCloseWaitTimesOutBeforeStopAndSucceedsAfter() throws {
+        let host = try TestHost()
+        defer { host.close() }
+        #expect(host.server.waitForClose(timeout: .now() + 0.1) == false)
+        host.server.stop()
+        #expect(host.server.waitForClose(timeout: .now() + 5) == true)
+    }
+
+    @Test func concurrentControlFileReadsDoNotRaceOrHang() throws {
+        let host = try TestHost()
+        defer { host.close() }
+        let supervisor = host.supervisor
+        // No writers run during this test (no launches, no close), so every
+        // read must observe the same identities and phase. A mismatch is a
+        // torn read, not scheduling noise.
+        let expectedFiles = supervisor.controlFiles()
+        let expectedPhase = supervisor.snapshot.phase
+        #expect(expectedFiles.isEmpty == false)
+        let lanes = 4
+        let iterations = 100
+        let completed = Mutex(0)
+        let mismatched = Mutex(0)
+        let group = DispatchGroup()
+        for _ in 0..<lanes {
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                defer { group.leave() }
+                var local = 0
+                var unstable = 0
+                for _ in 0..<iterations {
+                    if supervisor.controlFiles() != expectedFiles { unstable += 1 }
+                    if supervisor.snapshot.phase != expectedPhase { unstable += 1 }
+                    local += 1
+                }
+                completed.withLock { $0 += local }
+                mismatched.withLock { $0 += unstable }
+            }
+        }
+        // A lock-order bug hangs forever, so any bound catches it; the bound
+        // is generous because parallel mount/sandbox suites saturate CI
+        // runners and a bare boolean timeout carries no diagnostics.
+        let finished = group.wait(timeout: .now() + 60) == .success
+        let done = completed.withLock { $0 }
+        let bad = mismatched.withLock { $0 }
+        #expect(finished, "control-file readers stalled: \(done)/\(lanes * iterations) iterations in 60s")
+        #expect(bad == 0, "\(bad) unstable reads across \(done) iterations")
+    }
+
     @Test func negotiatedFeaturesMapCapabilitiesReplyToFeatures() {
         let reply = WorkspaceControlMessage(
             version: 1,

@@ -1,124 +1,7 @@
 import RVDomain
 
-/// Scans `argv` per `spec` and splits at the first `--` terminator.
-///
-/// Pre-terminator events keep their T3a grammar reading; post-terminator
-/// words are recovered verbatim, matching the legacy loops where `--` made
-/// every later word a positional.
-///
-/// Split-after-scan is only exact for value-free specs: with a value-taking
-/// spec the scan must stop at `--` instead (see `scanFilesystemFlags`),
-/// because consumption past `--` cannot be recovered verbatim. That routing
-/// is enforced here by construction — value-taking specs dispatch to the
-/// pending-aware pre-split — instead of a doc-only precondition on the
-/// events split.
-func splitFlagTerminator(
-    _ argv: Argv,
-    values spec: FlagValueSpec = .none
-) -> (flags: [FlagToken], rest: [String]) {
-    // Long resolution rewrites words (`--rec` reads `--recursive`), so
-    // specs with a long universe pre-split like value-taking specs: a
-    // post-`--` word must recover verbatim, never resolved.
-    guard spec.isValueFree, spec.knownLongs.isEmpty else {
-        return scanFilesystemFlags(argv, values: spec)
-    }
-    return splitScannedTerminator(ShellPipeline.scanFlags(argv, valueSpec: spec))
-}
-
-/// Splits scanned value-free flag events at the first `--` terminator.
-///
-/// Private: only scans that perform no value consumption may split after
-/// the fact. A consumed value shares its case with the attached form, so
-/// `verbatimWords` would re-emit it merged (`--name=value`) instead of as
-/// the two original words.
-private func splitScannedTerminator(_ events: [FlagToken]) -> (flags: [FlagToken], rest: [String]) {
-    guard let cut = events.firstIndex(of: .terminator) else {
-        return (events, [])
-    }
-    return (
-        Array(events[..<cut]),
-        events[(cut + 1)...].flatMap(verbatimWords(of:))
-    )
-}
-
-/// Scans `argv` with a value-taking `spec` and splits at the true `--`
-/// terminator: the first `--` not itself consumed as a pending flag value.
-///
-/// `ShellPipeline.scanFlags` keeps consuming values past `--`, but the
-/// legacy loops stop flag parsing there (pending-value check first,
-/// terminator check second). Scanning the whole argv then splitting would
-/// merge a post-`--` bare value-long with its neighbor
-/// (`-- --size 10 f` -> `--size=10`), which `FlagToken` cannot unmerge:
-/// attached and consumed values share one case. Pre-splitting at the
-/// pending-aware terminator keeps both readings exact.
-func scanFilesystemFlags(
-    _ argv: Argv,
-    values spec: FlagValueSpec
-) -> (flags: [FlagToken], rest: [String]) {
-    guard let cut = terminatorIndex(in: argv.args, values: spec) else {
-        // No `--` word, so no post-`--` recovery runs: the split is exact
-        // for any spec here.
-        return splitScannedTerminator(ShellPipeline.scanFlags(argv, valueSpec: spec))
-    }
-    let head = Argv(program: argv.program, args: Array(argv.args[..<cut]))
-    return (
-        ShellPipeline.scanFlags(head, valueSpec: spec),
-        Array(argv.args[(cut + 1)...])
-    )
-}
-
-/// Index of the first `--` the legacy loops would treat as a terminator:
-/// pending-value consumption wins over the terminator test. The cut shares
-/// `FlagValueSpec`'s consumption predicate with `ShellPipeline.scanFlags`,
-/// so the pre-split cannot desync from the scan it precedes.
-private func terminatorIndex(in words: [String], values spec: FlagValueSpec) -> Int? {
-    var pending = false
-    for (index, word) in words.enumerated() {
-        if pending {
-            pending = false
-            if spec.consumesValueWord(word) { continue }
-        }
-        if word == "--" {
-            return index
-        }
-        if spec.takesValue(FlagToken.classify(word)) {
-            pending = true
-        }
-    }
-    return nil
-}
-
-/// Recovers the raw argv words behind one structurally classified event:
-/// the exact inverse of `FlagToken.classify` for post-`--` recovery.
-///
-/// Only `scanFlags` output without value consumption (`.none` spec) may
-/// reach here: a consumed value shares its case with the attached form
-/// and cannot be unmerged. Value-taking parsers must pre-split with
-/// `scanFilesystemFlags` instead.
-func verbatimWords(of event: FlagToken) -> [String] {
-    switch event {
-    case .positional(let word):
-        return [word]
-    case .terminator:
-        return ["--"]
-    case .loneDash:
-        return ["-"]
-    case .long(let name, let value):
-        guard let value else { return ["--" + name] }
-        return ["--" + name + "=" + value]
-    case .shorts(let letters, let value):
-        let word = "-" + String(letters)
-        guard let value else { return [word] }
-        return [word, value]
-    case .shortEquals(let name, let value):
-        return ["-" + name + "=" + value]
-    case .dangling(let flag):
-        return [flag]
-    }
-}
-
 func parseRm(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = splitFlagTerminator(argv, values: rmFlagValues)
+    let (flags, rest) = ShellPipeline.splitFlagTerminator(argv, values: rmFlagValues)
     var recursive = false
     var force = false
     var paths: [String] = []
@@ -179,7 +62,7 @@ private let rmFlagValues = FlagValueSpec(knownLongs: [
 ])
 
 func parseUnlink(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = splitFlagTerminator(argv)
+    let (flags, rest) = ShellPipeline.splitFlagTerminator(argv)
     var paths: [String] = []
     for event in flags {
         switch event {
@@ -205,7 +88,7 @@ func parseUnlink(_ args: [String]) -> ParsedFilesystemCommand? {
 }
 
 func parseRmdir(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let (flags, rest) = splitFlagTerminator(argv, values: rmdirFlagValues)
+    let (flags, rest) = ShellPipeline.splitFlagTerminator(argv, values: rmdirFlagValues)
     var paths: [String] = []
     for event in flags {
         switch event {
@@ -253,7 +136,7 @@ func parseMv(_ argv: Argv) -> ParsedFilesystemCommand? {
     // `mv` keeps every operand, so an ambiguous `-t` needs no extra work:
     // both the override and the last operand already evaluate.
     let (targetDirs, reduced, _) = extractTargetDirectory(argv.args, valueShorts: ["S"])
-    let (flags, rest) = splitFlagTerminator(
+    let (flags, rest) = ShellPipeline.splitFlagTerminator(
         Argv(program: argv.program, args: reduced),
         values: mvFlagValues
     )
@@ -322,7 +205,7 @@ func parseTruncate(_ argv: Argv) -> ParsedFilesystemCommand? {
         valueLongs: ["size", "reference"],
         knownLongs: ["no-create", "io-blocks", "verbose"]
     )
-    let (flags, rest) = scanFilesystemFlags(argv, values: spec)
+    let (flags, rest) = ShellPipeline.splitFlagTerminator(argv, values: spec)
     var paths: [String] = []
     for event in flags {
         switch event {
@@ -365,7 +248,7 @@ func parseShred(_ argv: Argv) -> ParsedFilesystemCommand? {
         valueLongs: ["iterations", "size", "random-source"],
         knownLongs: ["force", "remove", "zero", "verbose", "exact"]
     )
-    let (flags, rest) = scanFilesystemFlags(argv, values: spec)
+    let (flags, rest) = ShellPipeline.splitFlagTerminator(argv, values: spec)
     var paths: [String] = []
     for event in flags {
         switch event {

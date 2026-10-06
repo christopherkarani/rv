@@ -407,6 +407,7 @@ private struct AdmissionHarness {
             launch: AdmittedLaunchContext(
                 plan: plan,
                 profileSource: "(deny file-link)",
+                profileIsContainedCompilerOutput: true,
                 workspacePath: workspace.rawValue
             ),
             requestRead: -1,

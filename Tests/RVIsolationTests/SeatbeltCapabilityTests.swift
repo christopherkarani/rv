@@ -38,7 +38,7 @@ struct SeatbeltCapabilityTests {
         #expect(unsandboxed.output.contains("public ok"))
         #expect(unsandboxed.output.contains("unix ok"))
         #expect(unsandboxed.output.contains("dns ok"))
-        #expect(tcp4.received == "c-tcp")
+        #expect(tcp4.waitForPayload("c-tcp"))
         tcp4.reset()
         udp4.reset()
         tcp6.reset()
@@ -64,8 +64,8 @@ struct SeatbeltCapabilityTests {
         #expect(captured.contains("unix errno=1"))
         #expect(captured.contains("dns rc="))
         #expect(captured.contains("dns ok") == false)
-        #expect(tcp4.received == "c-tcp")
-        #expect(tcp6.received == "c-tcp6")
+        #expect(tcp4.waitForPayload("c-tcp"))
+        #expect(tcp6.waitForPayload("c-tcp6"))
         #expect(udp4.received == nil)
         #expect(unix.received == nil)
         tcp4.reset()
@@ -86,7 +86,7 @@ struct SeatbeltCapabilityTests {
             encoding: .utf8
         )
         #expect(childOut.contains("tcp4 ok"))
-        #expect(tcp4.received == "c-tcp")
+        #expect(tcp4.waitForPayload("c-tcp"))
     }
 
     @Test func containedProcessCannotReadSiblingFile() async throws {
@@ -173,6 +173,18 @@ private final class BoundSocket: Sendable {
 
     func reset() {
         state.withLock { $0.payload = nil }
+    }
+
+    /// Polls until `expected` arrives or the deadline passes. The accept
+    /// thread stores the payload asynchronously, so asserting `received`
+    /// immediately after the child exits can race the storing thread.
+    func waitForPayload(_ expected: String, timeoutSeconds: Double = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            if received == expected { return true }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        return received == expected
     }
 
     func close() {
@@ -400,6 +412,10 @@ int main(int argc, char **argv) {
     report("unix", rc);
     close(fd);
     struct addrinfo *info = 0;
+    // External DNS blocking needs an external name: `localhost` resolves
+    // sandboxed via the deliberately granted /etc/hosts, so it cannot pin
+    // the deny. The unsandboxed run validates the harness against the real
+    // resolver, which requires network access.
     int dns = getaddrinfo("example.com", "80", 0, &info);
     if (dns == 0) { printf("dns ok\n"); freeaddrinfo(info); }
     else printf("dns rc=%d\n", dns);

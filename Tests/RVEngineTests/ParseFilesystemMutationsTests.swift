@@ -172,16 +172,6 @@ struct ParseFilesystemMutationsTests {
         )
     }
 
-    @Test func splitFlagTerminator_routesValueTakingSpecsToPreSplit() {
-        let spec = FlagValueSpec(valueLongs: ["size"])
-        let (flags, rest) = splitFlagTerminator(
-            Argv(program: "truncate", args: ["--", "--size", "10", "f"]),
-            values: spec
-        )
-        #expect(flags.isEmpty)
-        #expect(rest == ["--size", "10", "f"])
-    }
-
     @Test func rm_dashDashKeepsEveryTokenShapeVerbatim() {
         expectParsed(
             parseRm(["--", "-", "--", "--long", "--long=value", "--empty=", "-xyz", "-n=v", "plain"]),

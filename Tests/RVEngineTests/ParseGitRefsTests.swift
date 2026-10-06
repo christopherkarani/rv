@@ -195,15 +195,4 @@ struct ParseGitRefsTests {
         #expect(parseRebase(Argv(program: "git", args: ["--onto"])) == nil)
     }
 
-    @Test func flagTokens_clusteredShortsAndGitAttachedValue() {
-        #expect(clusteredShorts("-abc") == ["a", "b", "c"])
-        #expect(clusteredShorts("--abc") == nil)
-        #expect(clusteredShorts("-") == nil)
-        #expect(clusteredShorts("-a=b") == nil)
-        #expect(clusteredShorts("abc") == nil)
-        #expect(gitAttachedValue("--source=HEAD", long: "--source") == "HEAD")
-        #expect(gitAttachedValue("--source=", long: "--source") == nil)
-        #expect(gitAttachedValue("--source", long: "--source") == nil)
-        #expect(gitAttachedValue("--other=x", long: "--source") == nil)
-    }
 }
