@@ -157,7 +157,19 @@ enum AllowOnceCLI {
         ))
         switch attested {
         case .success(let reply):
-            guard reply.planted else { throw AllowOnceError.alreadySpent }
+            guard reply.planted else {
+                // m1: double-attest — this code already planted this epoch
+                // (a concurrent genuine redeem, or a retry after the success
+                // path's flip failed). The daemon holds the grant; reconcile
+                // the projection instead of erroring, so the human's retry
+                // reports the approval that exists. Spend-time expiry and
+                // single-use are still enforced authoritatively in memory.
+                return (try? await store.redeem(
+                    code: code, tty: tty, now: now, robot: robot,
+                    expectedFingerprint: rechecked.fingerprint,
+                    expectedPayloadDigest: rechecked.payloadDigest
+                )) ?? rechecked.row
+            }
         case .failure(let error):
             switch error {
             case .noTransport, .transport:
