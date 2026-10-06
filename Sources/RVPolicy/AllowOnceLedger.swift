@@ -32,7 +32,7 @@ enum AllowOnceLedger {
         invocationDisplay: String? = nil
     ) throws(AllowOnceError) -> MintResult {
         let updated = prepare(records, now: now)
-        if existingPending(in: updated, fingerprint: fingerprint, cwd: cwd) != nil {
+        if existingPending(in: updated, fingerprint: fingerprint, cwd: cwd, payloadDigest: payloadDigest) != nil {
             return .reused(updated)
         }
         if updated.contains(where: { record in
@@ -74,11 +74,20 @@ enum AllowOnceLedger {
     static func existingPending(
         in records: [AllowOnceRecord],
         fingerprint: String,
-        cwd: WorkingDirectory
+        cwd: WorkingDirectory,
+        payloadDigest: String? = nil
     ) -> AllowOnceRecord? {
         records.first { record in
             guard case .pending = record.lifecycle else { return false }
-            return record.commandFingerprint == fingerprint && record.cwd == cwd
+            // M1: the dedupe key covers the hidden payload. Same-view
+            // commands with different payloads mint separate rows and
+            // codes; otherwise the first writer's payload would win the
+            // shared row and steal the human's approval for an
+            // identical-looking victim row. Nil (legacy/no-text) rows
+            // reuse only with nil.
+            return record.commandFingerprint == fingerprint
+                && record.cwd == cwd
+                && record.payloadDigest == payloadDigest
         }
     }
 

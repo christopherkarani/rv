@@ -56,6 +56,91 @@ struct AllowOnceLedgerTests {
         #expect(records.last?.expiresAt == Self.epoch.addingTimeInterval(3600))
     }
 
+    @Test func mintSameViewDifferentPayloadAppends() throws {
+        // M1: same-view commands with different hidden payloads must
+        // mint separate rows; the first writer must not win a shared row.
+        let live = Self.record(
+            kind: .pending, hash: "live", expiresAt: Self.epoch.addingTimeInterval(60),
+            payloadDigest: "digest-a"
+        )
+        let out = try AllowOnceLedger.mint(
+            records: [live],
+            codeHash: "fresh",
+            fingerprint: "fp",
+            redacted: "git …",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: Self.epoch,
+            ttl: 3600,
+            payloadDigest: "digest-b"
+        )
+        guard case .appended(let records) = out else {
+            Issue.record("a different payload must mint a new pending")
+            return
+        }
+        #expect(records.map(\.codeHash) == ["live", "fresh"])
+        #expect(records.last?.payloadDigest == "digest-b")
+    }
+
+    @Test func mintSameViewSamePayloadReuses() throws {
+        let live = Self.record(
+            kind: .pending, hash: "live", expiresAt: Self.epoch.addingTimeInterval(60),
+            payloadDigest: "digest-a"
+        )
+        let out = try AllowOnceLedger.mint(
+            records: [live],
+            codeHash: "fresh",
+            fingerprint: "fp",
+            redacted: "git …",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: Self.epoch,
+            ttl: 3600,
+            payloadDigest: "digest-a"
+        )
+        guard case .reused(let records) = out else {
+            Issue.record("an identical retry must reuse the live pending")
+            return
+        }
+        #expect(records.map(\.codeHash) == ["live"])
+    }
+
+    @Test func mintLegacyNilDigestReusesOnlyNil() throws {
+        let legacy = Self.record(
+            kind: .pending, hash: "live", expiresAt: Self.epoch.addingTimeInterval(60)
+        )
+        #expect(legacy.payloadDigest == nil)
+        let bound = try AllowOnceLedger.mint(
+            records: [legacy],
+            codeHash: "fresh",
+            fingerprint: "fp",
+            redacted: "git …",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: Self.epoch,
+            ttl: 3600,
+            payloadDigest: "digest-a"
+        )
+        guard case .appended = bound else {
+            Issue.record("a bound mint must not reuse a legacy row")
+            return
+        }
+        let again = try AllowOnceLedger.mint(
+            records: [legacy],
+            codeHash: "fresh",
+            fingerprint: "fp",
+            redacted: "git …",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: Self.epoch,
+            ttl: 3600
+        )
+        guard case .reused = again else {
+            Issue.record("a legacy retry must reuse the legacy row")
+            return
+        }
+    }
+
     @Test func mintCollidesWithLivePendingSameHash() {
         let twin = Self.record(
             kind: .pending,
@@ -295,7 +380,8 @@ private extension AllowOnceLedgerTests {
         hash: String,
         fingerprint: String = "fp",
         expiresAt: Date,
-        consumedAt: Date? = nil
+        consumedAt: Date? = nil,
+        payloadDigest: String? = nil
     ) -> AllowOnceRecord {
         let lifecycle: AllowOnceLifecycle
         switch kind {
@@ -315,7 +401,8 @@ private extension AllowOnceLedgerTests {
             cwd: wd("/tmp/ws"),
             ruleID: nil,
             createdAt: createdAt,
-            expiresAt: expiresAt
+            expiresAt: expiresAt,
+            payloadDigest: payloadDigest
         )
     }
 }

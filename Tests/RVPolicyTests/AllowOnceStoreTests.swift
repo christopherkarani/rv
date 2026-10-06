@@ -434,6 +434,42 @@ struct AllowOnceStoreTests {
         #expect(disk.contains(first.rawValue) == false)
     }
 
+    @Test func mintFromDeny_sameViewDifferentPayloadMintsDistinctCodes() async throws {
+        // M1: the first writer's payload must not win a shared row.
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = try #require(
+            await store.mintFromDeny(
+                matchingView: "git reset --hard",
+                cwd: wd("/tmp/ws"),
+                ruleID: nil,
+                now: now,
+                maskedSegments: ["aaa"]
+            )?.code
+        )
+        let second = try #require(
+            await store.mintFromDeny(
+                matchingView: "git reset --hard",
+                cwd: wd("/tmp/ws"),
+                ruleID: nil,
+                now: now,
+                maskedSegments: ["bbb"]
+            )?.code
+        )
+        #expect(first != second)
+        #expect((await store.list(now: now)).count == 2)
+        // An identical retry still reuses its own row's code.
+        let retry = await store.mintFromDeny(
+            matchingView: "git reset --hard",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: now,
+            maskedSegments: ["aaa"]
+        )
+        #expect(retry == .code(first))
+        #expect((await store.list(now: now)).count == 2)
+    }
+
     @Test func mintFromDeny_sameCommandNewStoreDoesNotMintAnotherPending() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)

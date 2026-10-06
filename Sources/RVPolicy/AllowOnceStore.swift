@@ -61,7 +61,9 @@ public actor AllowOnceStore {
         let view = MatchingView(trimmed)
         let fingerprint = grantFingerprint(view, invocationPrefix: invocationPrefix)
         let payloadDigest = maskedSegments.map(maskedPayloadContentDigest)
-        let cacheKey = UnlockCacheKey(fingerprint: fingerprint, cwd: cwd.rawValue)
+        let cacheKey = UnlockCacheKey(
+            fingerprint: fingerprint, cwd: cwd.rawValue, payloadDigest: payloadDigest
+        )
         var lastError: AllowOnceError = .collision
         for _ in 0..<8 {
             let code = try generateAllowOnceCode()
@@ -104,7 +106,7 @@ public actor AllowOnceStore {
 
     /// Hook deny mint. Not TTY-gated. Returns a six-hex code, `earlierPending`, or nil.
     /// Writes `kind: .pending` only. Never plants a granted row. A live pending
-    /// for the same command+cwd is reused instead of minting a new code.
+    /// for the same command+cwd+payload is reused instead of minting a new code.
     /// TTL matches the pending-row TTL: the wire-delivered code is visible
     /// to the gated agent, so its bearer window stays short.
     package func mintFromDeny(
@@ -122,7 +124,9 @@ public actor AllowOnceStore {
         let view = MatchingView(trimmed)
         let fingerprint = grantFingerprint(view, invocationPrefix: invocationPrefix)
         let payloadDigest = maskedSegments.map(maskedPayloadContentDigest)
-        let cacheKey = UnlockCacheKey(fingerprint: fingerprint, cwd: cwd.rawValue)
+        let cacheKey = UnlockCacheKey(
+            fingerprint: fingerprint, cwd: cwd.rawValue, payloadDigest: payloadDigest
+        )
         for _ in 0..<8 {
             let code: AllowOnceUnlockCode
             do {
@@ -298,6 +302,8 @@ public actor AllowOnceStore {
     private struct UnlockCacheKey: Hashable, Sendable {
         var fingerprint: String
         var cwd: String
+        // M1: same-view different-payload mints must not share a code.
+        var payloadDigest: String?
     }
 
     private func loadRecords() -> [AllowOnceRecord] {
@@ -332,13 +338,17 @@ public actor AllowOnceStore {
             guard case .pending = record.lifecycle, record.expiresAt >= now else { continue }
             liveKeys.insert(UnlockCacheKey(
                 fingerprint: record.commandFingerprint,
-                cwd: record.cwd.rawValue
+                cwd: record.cwd.rawValue,
+                payloadDigest: record.payloadDigest
             ))
         }
         liveUnlockCodes = liveUnlockCodes.filter { liveKeys.contains($0.key) }
         guard liveUnlockCodes.count > Self.maxLiveUnlockCodes else { return }
         let victims = liveUnlockCodes.keys
-            .sorted { ($0.fingerprint, $0.cwd) < ($1.fingerprint, $1.cwd) }
+            .sorted {
+                ($0.fingerprint, $0.cwd, $0.payloadDigest ?? "")
+                    < ($1.fingerprint, $1.cwd, $1.payloadDigest ?? "")
+            }
             .dropFirst(Self.maxLiveUnlockCodes)
         for key in victims {
             liveUnlockCodes.removeValue(forKey: key)
