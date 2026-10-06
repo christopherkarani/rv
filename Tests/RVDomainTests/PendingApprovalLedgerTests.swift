@@ -706,6 +706,52 @@ struct PendingApprovalLedgerTests {
         #expect(second.id == first.record.id)
         #expect(second.state == .awaitingHuman)
     }
+
+    @Test func sameViewDifferentPayloadMintsSeparateWaits() throws {
+        // M6: the first payload must not win a shared wait.
+        let (_, firstRecords) = try PendingApprovalLedger.create(
+            records: [],
+            request: Self.request(id: "ask-1", payloadDigest: "digest-a"),
+            now: Self.now
+        )
+        let (second, records) = try PendingApprovalLedger.create(
+            records: firstRecords,
+            request: Self.request(id: "ask-2", payloadDigest: "digest-b"),
+            now: Self.now
+        )
+        #expect(records.count == 2)
+        #expect(second.id.rawValue == "ask-2")
+        #expect(second.payloadDigest == "digest-b")
+    }
+
+    @Test func sameViewSamePayloadReusesWait() throws {
+        let (firstRecord, firstRecords) = try PendingApprovalLedger.create(
+            records: [],
+            request: Self.request(id: "ask-1", payloadDigest: "digest-a"),
+            now: Self.now
+        )
+        let (second, records) = try PendingApprovalLedger.create(
+            records: firstRecords,
+            request: Self.request(id: "ask-2", payloadDigest: "digest-a"),
+            now: Self.now
+        )
+        #expect(records.map(\.id) == [firstRecord.id])
+        #expect(second.id == firstRecord.id)
+    }
+
+    @Test func payloadDigestRoundTripsThroughCodable() throws {
+        let (record, _) = try PendingApprovalLedger.create(
+            records: [],
+            request: Self.request(id: "ask-1", payloadDigest: "digest-a"),
+            now: Self.now
+        )
+        let decoded = try JSONDecoder().decode(
+            PendingApproval.self,
+            from: JSONEncoder().encode(record)
+        )
+        #expect(decoded == record)
+        #expect(decoded.payloadDigest == "digest-a")
+    }
 }
 
 private extension PendingApprovalLedgerTests {
@@ -731,7 +777,8 @@ private extension PendingApprovalLedgerTests {
         fingerprint: String = "shell:git.force-push:origin:main",
         continuation: ApprovalContinuation = .hostNative,
         timeoutPolicy: ApprovalTimeoutPolicy = .autoDeny,
-        ttl: TimeInterval = 60
+        ttl: TimeInterval = 60,
+        payloadDigest: String? = nil
     ) -> PendingApprovalRequest {
         PendingApprovalRequest(
             id: ApprovalID(rawValue: id),
@@ -740,7 +787,8 @@ private extension PendingApprovalLedgerTests {
             reason: .mandatoryHuman,
             continuation: continuation,
             timeoutPolicy: timeoutPolicy,
-            ttl: ttl
+            ttl: ttl,
+            payloadDigest: payloadDigest
         )
     }
 

@@ -27,6 +27,16 @@ public struct HookDoor: Sendable {
         now: Date
     ) async throws {
         guard let store, let session = request.session else { return }
+        // M6: shell asks bind the hidden payload in the dedupe key so
+        // same-view different-payload asks mint separate waits. File
+        // asks carry no shell payload; their fingerprint already covers
+        // the action exactly.
+        let payloadDigest: String?
+        if case .shell(_, let command, _, _) = request {
+            payloadDigest = maskedPayloadContentDigest(Normalize.maskedSegments(of: command))
+        } else {
+            payloadDigest = nil
+        }
         let pending = PendingApprovalRequest(
             id: PendingApprovalStore.makeID(),
             identity: ApprovalIdentity(
@@ -36,7 +46,8 @@ public struct HookDoor: Sendable {
             action: action,
             reason: .hostAsk,
             continuation: .retry(action.fingerprint),
-            timeoutPolicy: .autoDeny
+            timeoutPolicy: .autoDeny,
+            payloadDigest: payloadDigest
         )
         do {
             _ = try await store.create(pending, now: now)

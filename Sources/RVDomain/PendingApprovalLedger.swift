@@ -35,9 +35,14 @@ public enum PendingApprovalLedger: Sendable {
         }
         if let existing = swept.first(where: { record in
             guard case .awaitingHuman = record.state else { return false }
+            // M6: the dedupe key covers the hidden payload. Same-view
+            // different-payload asks mint separate waits; otherwise the
+            // first payload would win the shared wait and steal the
+            // approval. Nil (file asks, legacy) reuses only with nil.
             return record.subject == request.subject
                 && record.identity == request.identity
                 && record.fingerprint == request.action.fingerprint
+                && record.payloadDigest == request.payloadDigest
         }) {
             return (existing, swept)
         }
@@ -58,7 +63,8 @@ public enum PendingApprovalLedger: Sendable {
             createdAt: now,
             expiresAt: now.addingTimeInterval(request.ttl),
             state: .awaitingHuman,
-            subject: request.subject
+            subject: request.subject,
+            payloadDigest: request.payloadDigest
         )
         var next = swept
         next.append(record)

@@ -234,6 +234,10 @@ public struct PendingApprovalRequest: Sendable, Equatable {
     public var continuation: ApprovalContinuation
     public var timeoutPolicy: ApprovalTimeoutPolicy
     public var ttl: TimeInterval
+    /// M-07 content digest of the masked shell payload for shell asks, or
+    /// nil for file asks and legacy callers. Part of the create dedupe
+    /// key: same-view different-payload asks must not share a wait.
+    public var payloadDigest: String?
 
     public init(
         id: ApprovalID,
@@ -243,7 +247,8 @@ public struct PendingApprovalRequest: Sendable, Equatable {
         continuation: ApprovalContinuation,
         timeoutPolicy: ApprovalTimeoutPolicy,
         ttl: TimeInterval = PendingApprovalRequest.defaultTTL,
-        subject: ApprovalSubject? = nil
+        subject: ApprovalSubject? = nil,
+        payloadDigest: String? = nil
     ) {
         self.id = id
         self.subject = subject
@@ -253,6 +258,7 @@ public struct PendingApprovalRequest: Sendable, Equatable {
         self.continuation = continuation
         self.timeoutPolicy = timeoutPolicy
         self.ttl = ttl
+        self.payloadDigest = payloadDigest
     }
 }
 
@@ -269,6 +275,9 @@ public struct PendingApproval: Sendable, Equatable, Codable {
     public var createdAt: Date
     public var expiresAt: Date
     public var state: PendingApprovalState
+    /// M-07 content digest of the masked shell payload, or nil for file
+    /// asks and historical rows. Part of the create dedupe key.
+    public var payloadDigest: String?
 
     package init(
         id: ApprovalID,
@@ -280,7 +289,8 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         createdAt: Date,
         expiresAt: Date,
         state: PendingApprovalState,
-        subject: ApprovalSubject? = nil
+        subject: ApprovalSubject? = nil,
+        payloadDigest: String? = nil
     ) {
         self.id = id
         self.subject = subject
@@ -292,6 +302,7 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         self.createdAt = createdAt
         self.expiresAt = expiresAt
         self.state = state
+        self.payloadDigest = payloadDigest
     }
 
     public var fingerprint: ActionFingerprint {
@@ -328,6 +339,7 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         case expiresAt
         case state
         case consumedAt
+        case payloadDigest
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -342,6 +354,7 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(expiresAt, forKey: .expiresAt)
         try container.encode(state, forKey: .state)
+        try container.encodeIfPresent(payloadDigest, forKey: .payloadDigest)
     }
 
     public init(from decoder: Decoder) throws {
@@ -356,6 +369,7 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         expiresAt = try container.decode(Date.self, forKey: .expiresAt)
         var state = try container.decode(PendingApprovalState.self, forKey: .state)
+        payloadDigest = try container.decodeIfPresent(String.self, forKey: .payloadDigest)
         let legacyConsumedAt = try container.decodeIfPresent(Date.self, forKey: .consumedAt)
         if case .resolved(let resolution) = state, let consumedAt = legacyConsumedAt {
             state = .consumed(resolution, at: consumedAt)
