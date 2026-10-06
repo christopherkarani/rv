@@ -112,6 +112,11 @@ enum AllowOnceCLI {
 
     /// A missing pre-LA read skips LA entirely and reports the precise
     /// failure: unknown codes never prompt for authentication.
+    ///
+    /// Returns the flipped row plus whether the attested daemon epoch
+    /// differs from the previously recorded one (m2): true means the
+    /// daemon restarted since the last attest and earlier memory
+    /// approvals died with the old table.
     static func redeem(
         code: String,
         tty: TTYCapability,
@@ -119,7 +124,7 @@ enum AllowOnceCLI {
         store: AllowOnceStore,
         now: Date,
         client: ServiceClient? = nil
-    ) async throws -> AllowOnceListRow {
+    ) async throws -> (row: AllowOnceListRow, epochChanged: Bool) {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
         let normalized = code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -133,7 +138,8 @@ enum AllowOnceCLI {
             // trigger Touch ID. This branch NEVER attests: a row appearing
             // after this read would be unreviewed, so at most a projection
             // flips (fail-closed).
-            return try await store.redeem(code: code, tty: tty, now: now, robot: robot)
+            let row = try await store.redeem(code: code, tty: tty, now: now, robot: robot)
+            return (row, false)
         }
         guard await store.reserveLAPrompt(now: now) else {
             throw AllowOnceAuthError.throttled
@@ -155,20 +161,24 @@ enum AllowOnceCLI {
             // segments never cross IPC). Nil rows plant unbound.
             payloadDigest: rechecked.payloadDigest
         ))
+        let reply: AttestTTYRedemptionReply
         switch attested {
-        case .success(let reply):
-            guard reply.planted else {
+        case .success(let response):
+            reply = response
+            guard response.planted else {
                 // m1: double-attest — this code already planted this epoch
                 // (a concurrent genuine redeem, or a retry after the success
                 // path's flip failed). The daemon holds the grant; reconcile
                 // the projection instead of erroring, so the human's retry
                 // reports the approval that exists. Spend-time expiry and
                 // single-use are still enforced authoritatively in memory.
-                return (try? await store.redeem(
+                let changed = await store.noteAttestedEpoch(response.epoch)
+                let row = (try? await store.redeem(
                     code: code, tty: tty, now: now, robot: robot,
                     expectedFingerprint: rechecked.fingerprint,
                     expectedPayloadDigest: rechecked.payloadDigest
                 )) ?? rechecked.row
+                return (row, changed)
             }
         case .failure(let error):
             switch error {
@@ -178,17 +188,19 @@ enum AllowOnceCLI {
                 throw AllowOnceAttestError.serviceDenied
             }
         }
+        let changed = await store.noteAttestedEpoch(reply.epoch)
         do {
-            return try await store.redeem(
+            let row = try await store.redeem(
                 code: code, tty: tty, now: now, robot: robot,
                 expectedFingerprint: rechecked.fingerprint,
                 expectedPayloadDigest: rechecked.payloadDigest
             )
+            return (row, changed)
         } catch {
             // Attestation planted: the flip is display-only. A failure
             // here (file swap/lock race in the millisecond window) is a
             // projection gap, not a grant failure.
-            return rechecked.row
+            return (rechecked.row, changed)
         }
     }
 
@@ -307,15 +319,20 @@ struct AllowOnceRedeem: AsyncParsableCommand {
             noColor: format.noColor
         )
         do {
-            let row = try await AllowOnceCLI.redeem(
+            let redeemed = try await AllowOnceCLI.redeem(
                 code: code,
                 tty: live.tty,
                 robot: live.robot,
                 store: AllowOnceCLI.store(home: try AllowOnceCLI.requireHome()),
                 now: Date()
             )
+            if redeemed.epochChanged {
+                FileHandle.standardError.write(
+                    Data("rv allow-once: note: RV service restarted; approvals from before the restart were invalidated\n".utf8)
+                )
+            }
             FileHandle.standardOutput.write(
-                Data("granted \(row.commandRedacted) (cwd \(row.cwd.rawValue))\n".utf8)
+                Data("granted \(redeemed.row.commandRedacted) (cwd \(redeemed.row.cwd.rawValue))\n".utf8)
             )
         } catch AllowOnceError.ttyRequired {
             FileHandle.standardError.write(

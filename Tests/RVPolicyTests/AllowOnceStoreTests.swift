@@ -653,6 +653,23 @@ struct AllowOnceStoreTests {
         #expect(await store.reserveLAPrompt(now: now))
     }
 
+    @Test func attestedEpochTracksDaemonRestarts() async throws {
+        // m2: first sighting records silently; a changed epoch reports.
+        let store = try isolatedStore()
+        #expect(await store.noteAttestedEpoch("epoch-a") == false)
+        #expect(await store.noteAttestedEpoch("epoch-a") == false)
+        #expect(await store.noteAttestedEpoch("epoch-b") == true)
+        #expect(await store.noteAttestedEpoch("epoch-b") == false)
+    }
+
+    @Test func attestedEpochSelfHealsCorruptFile() async throws {
+        let store = try isolatedStore()
+        let url = RVPolicyPaths.attestedEpochFile(inConfigDir: store.baseDirectory)
+        try Data("not-json".utf8).write(to: url)
+        #expect(await store.noteAttestedEpoch("epoch-a") == false)
+        #expect(await store.noteAttestedEpoch("epoch-b") == true)
+    }
+
     @Test func laPromptBudgetIsPerDirectory() async throws {
         let first = try isolatedStore()
         let second = try isolatedStore()

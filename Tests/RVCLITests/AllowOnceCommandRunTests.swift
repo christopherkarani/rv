@@ -137,7 +137,7 @@ struct AllowOnceCommandRunTests {
                 AttestTTYRedemptionReply(planted: true, epoch: "test-epoch"))
         )
         let client = ServiceClient(transport: transport, allowOnceDirectory: store.baseDirectory)
-        let row = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+        let redeemed = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
             try await AllowOnceCLI.redeem(
                 code: code.rawValue,
                 tty: tty,
@@ -147,7 +147,7 @@ struct AllowOnceCommandRunTests {
                 client: client
             )
         }
-        #expect(row.kind == AllowOnceRecord.Kind.granted)
+        #expect(redeemed.row.kind == AllowOnceRecord.Kind.granted)
         #expect(transport.sendCount == 1)
         let sent = try #require(transport.sends.first)
         let request = try IPCJSON.decode(IPCRequest.self, from: sent)
@@ -174,6 +174,44 @@ struct AllowOnceCommandRunTests {
         #expect(transport.sendCount == 1)
     }
 
+    @Test func redeem_reportsDaemonRestartAcrossEpochs() async throws {
+        // m2: the second redeem attests a new daemon epoch and reports
+        // the restart; earlier memory approvals died with the old table.
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        func client(epoch: String, planted: Bool) -> ServiceClient {
+            let transport = ScriptedTransport(
+                ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+                responseResult: .attestTTYRedemption(
+                    AttestTTYRedemptionReply(planted: planted, epoch: epoch))
+            )
+            return ServiceClient(transport: transport, allowOnceDirectory: store.baseDirectory)
+        }
+        let first = try await store.mint(
+            matchingView: "git reset --hard", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: now
+        )
+        let one = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+            try await AllowOnceCLI.redeem(
+                code: first.rawValue, tty: tty, robot: false, store: store, now: now,
+                client: client(epoch: "epoch-a", planted: true)
+            )
+        }
+        #expect(one.row.kind == AllowOnceRecord.Kind.granted)
+        #expect(one.epochChanged == false)
+        let second = try await store.mint(
+            matchingView: "git status", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: now
+        )
+        let two = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+            try await AllowOnceCLI.redeem(
+                code: second.rawValue, tty: tty, robot: false, store: store, now: now,
+                client: client(epoch: "epoch-b", planted: true)
+            )
+        }
+        #expect(two.row.kind == AllowOnceRecord.Kind.granted)
+        #expect(two.epochChanged == true)
+    }
+
     @Test func redeem_doubleAttestReconcilesProjection() async throws {
         // m1: planted:false means the code already planted this epoch
         // (concurrent genuine redeem). The CLI reconciles the pending
@@ -194,7 +232,7 @@ struct AllowOnceCommandRunTests {
                 AttestTTYRedemptionReply(planted: false, epoch: "test-epoch"))
         )
         let client = ServiceClient(transport: transport, allowOnceDirectory: store.baseDirectory)
-        let row = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+        let redeemed = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
             try await AllowOnceCLI.redeem(
                 code: code.rawValue,
                 tty: tty,
@@ -204,7 +242,7 @@ struct AllowOnceCommandRunTests {
                 client: client
             )
         }
-        #expect(row.kind == AllowOnceRecord.Kind.granted)
+        #expect(redeemed.row.kind == AllowOnceRecord.Kind.granted)
         #expect(transport.sendCount == 1)
         #expect((await store.list(now: now)).contains { $0.kind == .granted })
     }

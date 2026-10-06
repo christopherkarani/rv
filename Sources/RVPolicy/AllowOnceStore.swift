@@ -375,6 +375,31 @@ public actor AllowOnceStore {
     public static let maxLAPromptsPerWindow = 10
     public static let laPromptWindow: TimeInterval = 300
 
+    /// m2: records the daemon epoch of a successful attestation. Returns
+    /// true when a different epoch was previously recorded — the daemon
+    /// restarted since the last attest, so every earlier memory approval
+    /// died with the old table. First sighting (or an unreadable file)
+    /// records and returns false. Display-only; never authority.
+    public func noteAttestedEpoch(_ epoch: String) -> Bool {
+        let url = RVPolicyPaths.attestedEpochFile(inConfigDir: baseDirectory)
+        do {
+            return try withFileLock {
+                var previous: String?
+                if let data = try? Data(contentsOf: url) {
+                    previous = try? JSONDecoder().decode(String.self, from: data)
+                }
+                try? FileManager.default.createDirectory(
+                    at: baseDirectory, withIntermediateDirectories: true
+                )
+                try? JSONEncoder().encode(epoch).write(to: url, options: .atomic)
+                guard let previous, previous.isEmpty == false else { return false }
+                return previous != epoch
+            }
+        } catch {
+            return false
+        }
+    }
+
     public func reserveLAPrompt(now: Date) -> Bool {
         let url = RVPolicyPaths.laPromptBudgetFile(inConfigDir: baseDirectory)
         let cutoff = now.addingTimeInterval(-Self.laPromptWindow).timeIntervalSince1970
