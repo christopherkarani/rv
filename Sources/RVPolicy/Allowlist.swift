@@ -11,17 +11,22 @@ public struct AllowlistEntry: Equatable, Sendable {
     public var reason: String
     public var addedAt: Date
     public var expiresAt: Date?
+    /// M-07 content digest of the masked payload for `.exactCommand`
+    /// entries. Nil for rule entries and legacy rows; see `matches`.
+    public var maskedPayloadDigest: String?
 
     public init(
         selector: AllowlistSelector,
         reason: String,
         addedAt: Date,
-        expiresAt: Date? = nil
+        expiresAt: Date? = nil,
+        maskedPayloadDigest: String? = nil
     ) {
         self.selector = selector
         self.reason = reason
         self.addedAt = addedAt
         self.expiresAt = expiresAt
+        self.maskedPayloadDigest = maskedPayloadDigest
     }
 
     public func isActive(at now: Date) -> Bool {
@@ -44,7 +49,8 @@ public struct AllowlistSnapshot: Equatable, Sendable {
     public func matches(
         ruleID: RuleID?,
         matchingView: MatchingView,
-        now: Date
+        now: Date,
+        maskedSegments: [String]? = nil
     ) -> Bool {
         if blocked.matches(matchingView) {
             return false
@@ -55,9 +61,23 @@ public struct AllowlistSnapshot: Equatable, Sendable {
             case .rule(let allowed):
                 return ruleID == allowed
             case .exactCommand(let allowed):
-                return matchingView == allowed
+                guard matchingView == allowed else { return false }
+                return payloadMatches(entry: entry, spend: maskedSegments)
             }
         }
+    }
+
+    /// M-07 exact-command binding. Bound entries require an equal content
+    /// digest; legacy (nil-digest) entries keep legacy behavior for
+    /// unknown/unmasked spends and fail closed on masked spends, so an
+    /// ambiguous stored view can never authorize a hidden payload.
+    private func payloadMatches(entry: AllowlistEntry, spend: [String]?) -> Bool {
+        guard let digest = entry.maskedPayloadDigest else {
+            guard let spend else { return true }
+            return spend.isEmpty
+        }
+        guard let spend else { return false }
+        return maskedPayloadContentDigest(spend) == digest
     }
 }
 
@@ -107,6 +127,9 @@ public enum AllowlistTOML {
             case .exactCommand(let command):
                 lines.append("exact_command = \"\(escapeTOMLString(command.rawValue))\"")
             }
+            if let digest = entry.maskedPayloadDigest {
+                lines.append("payload_digest = \"\(escapeTOMLString(digest))\"")
+            }
             lines.append("reason = \"\(escapeTOMLString(entry.reason))\"")
             lines.append("added_at = \"\(formatter.string(from: entry.addedAt))\"")
             if let expiresAt = entry.expiresAt {
@@ -149,6 +172,7 @@ public enum AllowlistTOML {
         var reason: String?
         var addedAtRaw: String?
         var expiresAtRaw: String?
+        var payloadDigest: String?
         for rawLine in block.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             if line.isEmpty || line.hasPrefix("#") || line == "[[allow]]" { continue }
@@ -161,6 +185,7 @@ public enum AllowlistTOML {
             case "reason": reason = value
             case "added_at": addedAtRaw = value
             case "expires_at": expiresAtRaw = value
+            case "payload_digest": payloadDigest = value
             default:
                 throw AllowlistParseError.invalidTOML
             }
@@ -204,7 +229,8 @@ public enum AllowlistTOML {
             selector: selector,
             reason: trimmedReason,
             addedAt: addedAt,
-            expiresAt: expiresAt
+            expiresAt: expiresAt,
+            maskedPayloadDigest: payloadDigest
         )
     }
 }

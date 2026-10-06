@@ -12,6 +12,17 @@ public enum Normalize {
     public static func matchingView(of command: ShellCommand) -> MatchingView {
         matchingView(of: command.rawValue)
     }
+
+    /// Exact lexemes masking replaced while producing the matching view.
+    /// M-07: mint and spend digest these (never store or transmit them).
+    public static func maskedSegments(of command: String) -> [String] {
+        ShellPipeline.maskedSegments(of: command)
+    }
+
+    /// Returns the masked segments of `command`.
+    public static func maskedSegments(of command: ShellCommand) -> [String] {
+        maskedSegments(of: command.rawValue)
+    }
 }
 
 struct CommandToken {
@@ -53,8 +64,18 @@ func applyRoleAwareQuotes(_ text: String) -> String {
 /// Role-aware masking over pipeline tokens. Both overloads run over
 /// `ShellPipeline.tokenize` output.
 func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
+    applyRoleAwareQuotesDetailed(tokens: tokens).view
+}
+
+/// Masking plus the exact lexemes masking replaced, in token order.
+/// M-07: grants bind a digest of these segments so same-view commands with
+/// different hidden payloads do not share authority. Every site that
+/// overwrites a lexeme with a mask MUST append the pre-mask lexeme here;
+/// ANSI-C surfacing is revealing, not masking, and records nothing.
+func applyRoleAwareQuotesDetailed(tokens: [ShellPipeline.Token]) -> (view: String, masked: [String]) {
     var tokens = tokens
-    guard !tokens.isEmpty else { return "" }
+    guard !tokens.isEmpty else { return ("", []) }
+    var masked: [String] = []
     var commandBase: String?
     var gitSubcommand: String?
     var pendingGitGlobalArg = false
@@ -88,6 +109,7 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
 
         if pendingInterpreterPayload {
             if token.wasQuoted, token.containsInlineCode == false {
+                masked.append(decoded)
                 tokens[index].lexeme = " "
             }
             pendingInterpreterPayload = false
@@ -146,10 +168,11 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
                 pendingInterpreterPayload = true
                 continue
             }
-            if let masked = maskAttachedInterpreterProgram(command: commandBase, decoded: decoded),
+            if let attached = maskAttachedInterpreterProgram(command: commandBase, decoded: decoded),
                token.containsInlineCode == false
             {
-                tokens[index].lexeme = masked
+                masked.append(decoded)
+                tokens[index].lexeme = attached
                 continue
             }
         }
@@ -162,12 +185,13 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
             continue
         }
 
-        if let masked = maskAttachedDataValue(
+        if let attachedValue = maskAttachedDataValue(
             command: commandBase,
             gitSubcommand: gitSubcommand,
             decoded: decoded
         ) {
-            tokens[index].lexeme = masked
+            masked.append(decoded)
+            tokens[index].lexeme = attachedValue
             pendingDataFlag = false
             if commandBase == "sed" {
                 sedScriptPending = false
@@ -206,13 +230,15 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
         }
 
         if gitSubcommand == "config" {
-            if token.containsInlineCode == false, let masked = maskGitConfigAssignment(decoded) {
-                tokens[index].lexeme = masked
+            if token.containsInlineCode == false, let assignment = maskGitConfigAssignment(decoded) {
+                masked.append(decoded)
+                tokens[index].lexeme = assignment
                 gitConfigValuePending = false
                 pendingDataFlag = false
                 continue
             }
             if gitConfigValuePending, token.containsInlineCode == false {
+                masked.append(decoded)
                 tokens[index].lexeme = String(repeating: " ", count: max(decoded.count, 1))
                 gitConfigValuePending = false
                 pendingDataFlag = false
@@ -228,6 +254,7 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
            token.containsInlineCode == false,
            token.isRedirectStructural == false
         {
+            masked.append(decoded)
             tokens[index].lexeme = String(repeating: " ", count: max(decoded.count, 1))
             pendingDataFlag = false
             gitGrepPatternPending = false
@@ -248,6 +275,7 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
             // never do): they survive as `""` placeholders so the parser
             // still sees the script position. Spaces would collapse and
             // shift `sed -i "script" file` into `sed -i file` (no files).
+            masked.append(decoded)
             if commandBase == "sed" {
                 tokens[index].lexeme = "\"\""
             } else {
@@ -270,7 +298,7 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
             sedScriptPending = false
         }
     }
-    return joinTokenLexemes(tokens)
+    return (joinTokenLexemes(tokens), masked)
 }
 
 private enum WrapperSeek {

@@ -27,7 +27,8 @@ enum AllowOnceLedger {
         cwd: WorkingDirectory,
         ruleID: RuleID?,
         now: Date,
-        ttl: TimeInterval
+        ttl: TimeInterval,
+        payloadDigest: String? = nil
     ) throws(AllowOnceError) -> MintResult {
         let updated = prepare(records, now: now)
         if existingPending(in: updated, fingerprint: fingerprint, cwd: cwd) != nil {
@@ -50,7 +51,8 @@ enum AllowOnceLedger {
                 cwd: cwd,
                 ruleID: ruleID,
                 createdAt: now,
-                expiresAt: now.addingTimeInterval(ttl)
+                expiresAt: now.addingTimeInterval(ttl),
+                payloadDigest: payloadDigest
             )
         )
         return .appended(appended)
@@ -97,7 +99,8 @@ enum AllowOnceLedger {
         records: [AllowOnceRecord],
         codeHash: String,
         now: Date,
-        expectedFingerprint: String? = nil
+        expectedFingerprint: String? = nil,
+        expectedPayloadDigest: String? = nil
     ) throws(AllowOnceError) -> RedeemOutcome {
         guard let index = records.firstIndex(where: { record in
             guard case .pending = record.lifecycle else { return false }
@@ -122,6 +125,9 @@ enum AllowOnceLedger {
             return .expired(records: updated)
         }
         if let expectedFingerprint, pending.commandFingerprint != expectedFingerprint {
+            throw AllowOnceError.redemptionChanged
+        }
+        if let expectedPayloadDigest, pending.payloadDigest != expectedPayloadDigest {
             throw AllowOnceError.redemptionChanged
         }
         pending.lifecycle = .granted

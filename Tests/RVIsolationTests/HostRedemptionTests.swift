@@ -1047,7 +1047,11 @@ struct HostRedemptionTests {
         }
         // A launch permit authorizes only the initial IO mode. Terminal
         // input, resize, attach, and the direct identity-launch door stay
-        // denied for every peer — before and after the launch alike.
+        // denied for every peer — before and after the launch alike. The
+        // identity-launch ops exist as reserved cases, require a permit,
+        // and never launch directly (see identityLaunchDoor below).
+        #expect(WorkspaceControlOp(rawValue: "launchAgentRuntime") == .launchAgentRuntime)
+        #expect(WorkspaceControlOp(rawValue: "launchCustomRuntime") == .launchCustomRuntime)
         for role in [nil] + TrustedRVComponentRole.allCases.map({ $0 as TrustedRVComponentRole? }) {
             let peer = PlatformPeerEvidence(
                 processID: 1, effectiveUserID: 501, auditToken: nil,
@@ -1068,6 +1072,47 @@ struct HostRedemptionTests {
             }
         }
         try supervisor.cancel(runtime).get()
+    }
+
+    @Test func identityLaunchDoorRequiresOperatorPermitAndNeverSpawns() throws {
+        // The reserved identity-launch ops answer with the machine-readable
+        // requiresOperatorPermit code instead of launching, even for a
+        // fully valid request: no validation success can unlock a spawn.
+        // Only the prepare→permit→redeem ceremony launches.
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let supervisor = try redeemSupervisor(tree)
+        defer { _ = supervisor.close() }
+        let config = tree.rootURL.appendingPathComponent("config", isDirectory: true)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        let server = try WorkspaceHostServer.start(
+            supervisor: supervisor,
+            configurationDirectory: config,
+            sessionStore: .file(tree.rootURL.appendingPathComponent("identity-door.jsonl")),
+            admission: .failClosed
+        ).get()
+        defer { server.stop() }
+        let definition = redeemDefinition(projects: [tree.workspaceURL.path])
+        let requests = [
+            WorkspaceControlRequest(
+                operation: .launchAgentRuntime,
+                id: UUID(),
+                agentDefinitionID: definition.id.rawValue
+            ),
+            WorkspaceControlRequest(
+                operation: .launchCustomRuntime,
+                id: UUID(),
+                executable: "/bin/sleep",
+                customDefinitionDigest: String(repeating: "a", count: 64)
+            ),
+        ]
+        for request in requests {
+            let response = server.launchIdentity(request)
+            #expect(response.ok == false)
+            #expect(response.code == .requiresOperatorPermit)
+            #expect(response.operation == request.operation)
+        }
+        #expect(supervisor.runtimeFacts().isEmpty)
     }
 
     @Test func redeemHandlerRefusesForeignIncarnation() throws {

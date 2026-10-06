@@ -414,9 +414,13 @@ public actor ServiceRuntime {
         matchingView: MatchingView,
         cwd: WorkingDirectory,
         codeHash: String = UUID().uuidString,
-        now: Date = Date()
+        now: Date = Date(),
+        maskedSegments: [String]? = nil
     ) async -> EphemeralAllowOnceTable.PlantResult {
-        await grants.plant(matchingView: matchingView, cwd: cwd, codeHash: codeHash, now: now)
+        await grants.plant(
+            matchingView: matchingView, cwd: cwd, codeHash: codeHash, now: now,
+            maskedSegments: maskedSegments
+        )
     }
 
     /// Genuine-CLI TTY attestation handler. The matrix already restricted
@@ -441,12 +445,24 @@ public actor ServiceRuntime {
         else {
             return denied()
         }
+        // M-07: the attested payload digest binds the planted grant. Shape
+        // only — the daemon never sees exact text, so the genuine-CLI
+        // ceremony (same trust as the fingerprint) vouches the value.
+        if let digest = params.payloadDigest {
+            guard digest.count == 64,
+                digest.allSatisfy(\.isHexDigit),
+                digest == digest.lowercased()
+            else {
+                return denied()
+            }
+        }
         let now = clock()
         switch await grants.plant(
             fingerprint: params.fingerprint,
             cwd: params.cwd,
             codeHash: "tty:\(params.codeHash)",
-            now: now
+            now: now,
+            payloadContentDigest: params.payloadDigest
         ) {
         case .planted:
             // Memory only. The attesting CLI flips its own display

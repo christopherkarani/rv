@@ -49,7 +49,8 @@ public actor AllowOnceStore {
         tty: TTYCapability,
         now: Date,
         robot: Bool = false,
-        ttl: TimeInterval = 24 * 60 * 60
+        ttl: TimeInterval = 24 * 60 * 60,
+        maskedSegments: [String]? = nil
     ) async throws -> AllowOnceUnlockCode {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
@@ -57,6 +58,7 @@ public actor AllowOnceStore {
         guard trimmed.isEmpty == false else { throw AllowOnceError.emptyCommand }
         let view = MatchingView(trimmed)
         let fingerprint = commandFingerprint(view)
+        let payloadDigest = maskedSegments.map(maskedPayloadContentDigest)
         let cacheKey = UnlockCacheKey(fingerprint: fingerprint, cwd: cwd.rawValue)
         var lastError: AllowOnceError = .collision
         for _ in 0..<8 {
@@ -72,7 +74,8 @@ public actor AllowOnceStore {
                         cwd: cwd,
                         ruleID: ruleID,
                         now: now,
-                        ttl: ttl
+                        ttl: ttl,
+                        payloadDigest: payloadDigest
                     ) {
                     case let .reused(records):
                         let written = try writeRecords(records)
@@ -106,12 +109,14 @@ public actor AllowOnceStore {
         cwd: WorkingDirectory,
         ruleID: RuleID?,
         now: Date,
-        ttl: TimeInterval = 15 * 60
+        ttl: TimeInterval = 15 * 60,
+        maskedSegments: [String]? = nil
     ) async -> AllowOnceUnlockMint? {
         let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
         let view = MatchingView(trimmed)
         let fingerprint = commandFingerprint(view)
+        let payloadDigest = maskedSegments.map(maskedPayloadContentDigest)
         let cacheKey = UnlockCacheKey(fingerprint: fingerprint, cwd: cwd.rawValue)
         for _ in 0..<8 {
             let code: AllowOnceUnlockCode
@@ -131,7 +136,8 @@ public actor AllowOnceStore {
                         cwd: cwd,
                         ruleID: ruleID,
                         now: now,
-                        ttl: ttl
+                        ttl: ttl,
+                        payloadDigest: payloadDigest
                     ) {
                     case let .reused(records):
                         let written = try writeRecords(records)
@@ -165,7 +171,8 @@ public actor AllowOnceStore {
         tty: TTYCapability,
         now: Date,
         robot: Bool = false,
-        expectedFingerprint: String? = nil
+        expectedFingerprint: String? = nil,
+        expectedPayloadDigest: String? = nil
     ) async throws -> AllowOnceListRow {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
@@ -179,7 +186,8 @@ public actor AllowOnceStore {
                 records: loadRecords(),
                 codeHash: hash,
                 now: now,
-                expectedFingerprint: expectedFingerprint
+                expectedFingerprint: expectedFingerprint,
+                expectedPayloadDigest: expectedPayloadDigest
             ) {
             case let .expired(records):
                 let written = try writeRecords(records)
@@ -201,7 +209,7 @@ public actor AllowOnceStore {
     public func validatePending(
         code: String,
         now: Date
-    ) async -> (row: AllowOnceListRow, fingerprint: String)? {
+    ) async -> (row: AllowOnceListRow, fingerprint: String, payloadDigest: String?)? {
         let normalized = code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard AllowOnceUnlockCode(validating: normalized) != nil else { return nil }
         let hash = sha256Hex(normalized)
@@ -209,7 +217,7 @@ public actor AllowOnceStore {
             AllowOnceLedger.pendingRow(in: loadRecords(), codeHash: hash, now: now)
         }).flatMap { record in
             AllowOnceLedger.rows(records: [record], now: now).first.map {
-                (row: $0, fingerprint: record.commandFingerprint)
+                (row: $0, fingerprint: record.commandFingerprint, payloadDigest: record.payloadDigest)
             }
         }
     }
@@ -225,7 +233,8 @@ public actor AllowOnceStore {
         cwd: WorkingDirectory,
         codeHash: String,
         now: Date,
-        ttl: TimeInterval = 24 * 60 * 60
+        ttl: TimeInterval = 24 * 60 * 60,
+        maskedSegments: [String]? = nil
     ) async {
         let record = AllowOnceRecord(
             schemaVersion: 1,
@@ -236,7 +245,8 @@ public actor AllowOnceStore {
             cwd: cwd,
             ruleID: nil,
             createdAt: now,
-            expiresAt: now.addingTimeInterval(ttl)
+            expiresAt: now.addingTimeInterval(ttl),
+            payloadDigest: maskedSegments.map(maskedPayloadContentDigest)
         )
         try? withFileLock(nonBlocking: true) {
             var records = loadRecords()

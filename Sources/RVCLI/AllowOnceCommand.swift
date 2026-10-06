@@ -65,10 +65,11 @@ enum AllowOnceCLI {
     /// 1. Gates cheapest-first (TTY, robot, code shape).
     /// 2. Atomically read display row + fingerprint (pre-LA review).
     /// 3. LocalAuthentication naming the reviewed grant (B-F6).
-    /// 4. Re-read + compare fingerprint AND full row (TOCTOU bind: a
-    ///    swapped file aborts with redemptionChanged instead of attesting
-    ///    a row the human never reviewed; the fingerprint covers the
-    ///    action, the row covers cwd/expiry/display).
+    /// 4. Re-read + compare fingerprint AND full row AND payload digest
+    ///    (TOCTOU bind: a swapped file aborts with redemptionChanged
+    ///    instead of attesting a row the human never reviewed; the
+    ///    fingerprint covers the action, the row covers cwd/expiry/
+    ///    display, the digest covers the hidden payload).
     /// 5. Attest to the daemon (plants the memory grant; daemon re-checks
     ///    role + fields + per-epoch code single-use).
     /// 6. Flip the file row as a display projection (best-effort: a flip
@@ -78,12 +79,15 @@ enum AllowOnceCLI {
     /// Post-LA equality gate: the re-read row must match the reviewed
     /// row exactly. Fingerprint-only comparison would let a same-user
     /// file swap redirect the attest (e.g. cwd) after the human
-    /// approved; whole-row equality fails closed on any drift.
+    /// approved; whole-row equality fails closed on any drift. M-07: the
+    /// payload digest joins the comparison so a swapped hidden payload
+    /// aborts instead of attesting.
     static func redemptionUnchanged(
-        before: (row: AllowOnceListRow, fingerprint: String),
-        after: (row: AllowOnceListRow, fingerprint: String)
+        before: (row: AllowOnceListRow, fingerprint: String, payloadDigest: String?),
+        after: (row: AllowOnceListRow, fingerprint: String, payloadDigest: String?)
     ) -> Bool {
         before.fingerprint == after.fingerprint && before.row == after.row
+            && before.payloadDigest == after.payloadDigest
     }
 
     /// Device-owner authentication prompt naming the reviewed grant.
@@ -133,7 +137,11 @@ enum AllowOnceCLI {
             fingerprint: rechecked.fingerprint,
             cwd: rechecked.row.cwd,
             codeHash: sha256Hex(normalized),
-            clientSemver: ProtocolVersion.serviceSemver
+            clientSemver: ProtocolVersion.serviceSemver,
+            // M-07: the rechecked row's payload digest binds the planted
+            // grant to the reviewed hidden payload (digest only — exact
+            // segments never cross IPC). Nil rows plant unbound.
+            payloadDigest: rechecked.payloadDigest
         ))
         switch attested {
         case .success(let reply):
@@ -149,7 +157,8 @@ enum AllowOnceCLI {
         do {
             return try await store.redeem(
                 code: code, tty: tty, now: now, robot: robot,
-                expectedFingerprint: rechecked.fingerprint
+                expectedFingerprint: rechecked.fingerprint,
+                expectedPayloadDigest: rechecked.payloadDigest
             )
         } catch {
             // Attestation planted: the flip is display-only. A failure
@@ -213,7 +222,8 @@ enum AllowOnceCLI {
             ruleID: nil,
             tty: tty,
             now: now,
-            robot: robot
+            robot: robot,
+            maskedSegments: Normalize.maskedSegments(of: command)
         )
     }
 }

@@ -64,6 +64,11 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
     public var ruleID: RuleID?
     public var createdAt: Date
     public var expiresAt: Date
+    /// M-07 content digest of the masked payload. Nil for legacy rows and
+    /// mints without exact text. The redeem TOCTOU binds it, and TTY
+    /// attestation carries it so the daemon plants a bound grant.
+    /// Never exact segments.
+    public var payloadDigest: String?
 
     /// List/TTY/robot projection of `lifecycle`. Not stored beside it.
     public var kind: Kind {
@@ -92,7 +97,8 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         cwd: WorkingDirectory,
         ruleID: RuleID?,
         createdAt: Date,
-        expiresAt: Date
+        expiresAt: Date,
+        payloadDigest: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.lifecycle = lifecycle
@@ -103,6 +109,7 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         self.ruleID = ruleID
         self.createdAt = createdAt
         self.expiresAt = expiresAt
+        self.payloadDigest = payloadDigest
     }
 
     enum CodingKeys: String, CodingKey {
@@ -116,6 +123,7 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         case createdAt = "created_at"
         case expiresAt = "expires_at"
         case consumedAt = "consumed_at"
+        case payloadDigest = "payload_digest"
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -129,6 +137,7 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         try container.encodeIfPresent(ruleID, forKey: .ruleID)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(expiresAt, forKey: .expiresAt)
+        try container.encodeIfPresent(payloadDigest, forKey: .payloadDigest)
         if case .consumed(let at) = lifecycle {
             try container.encode(at, forKey: .consumedAt)
         }
@@ -145,6 +154,7 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         ruleID = try container.decodeIfPresent(RuleID.self, forKey: .ruleID)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         expiresAt = try container.decode(Date.self, forKey: .expiresAt)
+        payloadDigest = try container.decodeIfPresent(String.self, forKey: .payloadDigest)
         let stamp = try container.decodeIfPresent(Date.self, forKey: .consumedAt)
         switch kind {
         case .pending:

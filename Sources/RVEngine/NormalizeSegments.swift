@@ -3,18 +3,27 @@ import Foundation
 /// File-write / print heredocs are data. Executing sinks keep the body so
 /// `cat <<EOF | bash` stays a pin true-positive.
 func maskNonExecutingHeredocBodies(_ text: String) -> String {
+    maskNonExecutingHeredocBodiesDetailed(text).view
+}
+
+/// Heredoc masking plus the masked body for M-07 payload binding.
+/// The body is one segment when masking fires, empty otherwise.
+func maskNonExecutingHeredocBodiesDetailed(_ text: String) -> (view: String, masked: [String]) {
     guard let heredoc = extractHeredoc(text), heredoc.body.isEmpty == false else {
-        return text
+        return (text, [])
     }
     if peelExecutingSink(text, workingDirectory: nil) != nil {
-        return text
+        return (text, [])
     }
     guard let range = text.range(of: heredoc.body) else {
-        return text
+        return (text, [])
     }
-    return text.replacingCharacters(
-        in: range,
-        with: String(repeating: " ", count: heredoc.body.count)
+    return (
+        text.replacingCharacters(
+            in: range,
+            with: String(repeating: " ", count: heredoc.body.count)
+        ),
+        [heredoc.body]
     )
 }
 

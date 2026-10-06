@@ -122,6 +122,22 @@ extension ShellPipeline {
         classifyStage(peelStage(input))
     }
 
+    /// Exact lexemes masking replaced while producing `matchingView(of:)`,
+    /// in pipeline order (heredoc body first, then token order). M-07:
+    /// mint and spend both digest these so a grant for one hidden payload
+    /// cannot authorize another. Mirrors `classifyStage`'s inputs exactly:
+    /// heredoc-masked peel, assignment-stripped tokens, role-aware masking.
+    /// Wrapper strips and the argv0 path strip normalize but never mask, so
+    /// they contribute no segments. In-process only: segments may carry
+    /// secrets and must never be stored or transmitted, only digested.
+    static func maskedSegments(of input: String) -> [String] {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return [] }
+        let (peeled, heredoc) = maskNonExecutingHeredocBodiesDetailed(trimmed)
+        let tokens = tokenize(stripAssignmentPrefixesAllSegments(peeled))
+        return heredoc + applyRoleAwareQuotesDetailed(tokens: tokens).masked
+    }
+
     /// Stage 2: trim, then mask non-executing heredoc bodies. Total: without
     /// a heredoc the text passes through unchanged.
     static func peelStage(_ input: String) -> String {

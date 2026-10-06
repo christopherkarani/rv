@@ -35,7 +35,8 @@ public enum PolicyGate {
         grant: GrantPresence,
         now: Date,
         rebaseInProgress: Bool = false,
-        safety: SafetyLevel = .strict
+        safety: SafetyLevel = .strict,
+        maskedSegments: [String]? = nil
     ) -> PolicyDecision {
         switch result.decision {
         case .allow:
@@ -53,7 +54,8 @@ public enum PolicyGate {
             if allowlist.matches(
                 ruleID: deny.ruleID,
                 matchingView: result.matchingView,
-                now: now
+                now: now,
+                maskedSegments: maskedSegments
             ) {
                 return allowDecision(result, override: .allowlist)
             }
@@ -85,7 +87,8 @@ public enum PolicyGate {
         grants: EphemeralAllowOnceTable,
         now: Date,
         rebaseInProgress: Bool = false,
-        safety: SafetyLevel = .strict
+        safety: SafetyLevel = .strict,
+        maskedSegments: [String]? = nil
     ) async -> PolicyDecision {
         let withoutGrant = decision(
             for: result,
@@ -94,7 +97,8 @@ public enum PolicyGate {
             grant: .none,
             now: now,
             rebaseInProgress: rebaseInProgress,
-            safety: safety
+            safety: safety,
+            maskedSegments: maskedSegments
         )
         if RulePinning.blocksAllowOverride(result) {
             return withoutGrant
@@ -105,7 +109,8 @@ public enum PolicyGate {
         guard await grants.consume(
             matchingView: result.matchingView,
             cwd: cwd,
-            now: now
+            now: now,
+            maskedSegments: maskedSegments
         ) else {
             return withoutGrant
         }
@@ -116,7 +121,8 @@ public enum PolicyGate {
             grant: .pending,
             now: now,
             rebaseInProgress: rebaseInProgress,
-            safety: safety
+            safety: safety,
+            maskedSegments: maskedSegments
         )
     }
 
@@ -129,7 +135,8 @@ public enum PolicyGate {
         grants: EphemeralAllowOnceTable,
         now: Date,
         rebaseInProgress: Bool = false,
-        safety: SafetyLevel = .strict
+        safety: SafetyLevel = .strict,
+        maskedSegments: [String]? = nil
     ) async -> PolicyDecision {
         let withoutGrant = decision(
             for: result,
@@ -138,7 +145,8 @@ public enum PolicyGate {
             grant: .none,
             now: now,
             rebaseInProgress: rebaseInProgress,
-            safety: safety
+            safety: safety,
+            maskedSegments: maskedSegments
         )
         guard let cwd = honorCwd(result, cwd: cwd, withoutGrant: withoutGrant) else {
             return withoutGrant
@@ -146,7 +154,8 @@ public enum PolicyGate {
         let grant: GrantPresence = await grants.hasGrant(
             matchingView: result.matchingView,
             cwd: cwd,
-            now: now
+            now: now,
+            maskedSegments: maskedSegments
         ) ? .pending : .none
         return decision(
             for: result,
@@ -155,7 +164,8 @@ public enum PolicyGate {
             grant: grant,
             now: now,
             rebaseInProgress: rebaseInProgress,
-            safety: safety
+            safety: safety,
+            maskedSegments: maskedSegments
         )
     }
 

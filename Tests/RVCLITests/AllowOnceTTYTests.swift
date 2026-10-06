@@ -293,7 +293,10 @@ struct AllowOnceTTYTests {
         cwdSwapped.row.cwd = wd("/tmp/victim")
         #expect(AllowOnceCLI.redemptionUnchanged(before: reviewed, after: cwdSwapped) == false)
 
-        let actionSwapped = (row: reviewed.row, fingerprint: String(repeating: "0", count: 64))
+        let actionSwapped = (
+            row: reviewed.row, fingerprint: String(repeating: "0", count: 64),
+            payloadDigest: reviewed.payloadDigest
+        )
         #expect(AllowOnceCLI.redemptionUnchanged(before: reviewed, after: actionSwapped) == false)
     }
 

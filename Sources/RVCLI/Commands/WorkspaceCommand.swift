@@ -413,6 +413,15 @@ enum WorkspaceCommandRun {
         columns: Int?,
         resourceProfileID: String? = nil
     ) throws {
+        // Identity launch requires a scoped operator permit, which the
+        // ceremony cannot issue yet. Fail before spawning or contacting a
+        // host so the reserved ops never reach the wire from here.
+        switch selection {
+        case .named, .custom:
+            throw ValidationError("operator permits not yet available")
+        case .legacy:
+            break
+        }
         #if !os(macOS)
         throw ValidationError("contained workspace host is unavailable")
         #else
@@ -710,6 +719,7 @@ enum WorkspaceCommandRun {
         case .workspaceClosed: "workspace is closed"
         case .runtimeNotFound: "runtime not found"
         case .invalidRequest: "invalid workspace request"
+        case .requiresOperatorPermit: "operator permits not yet available"
         case .resourceProfileUnavailable: "runtime resource profile is unavailable"
         case .resourceStagingFailed(let detail): "runtime resource staging failed: \(detail) is unusable"
         case .recoveryRequired: "workspace recovery is required"

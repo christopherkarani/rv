@@ -10,16 +10,27 @@ public struct HookEvaluateWorld: Sendable {
     public var evaluateFile: @Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult
     public var mintOnDeny: @Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockMint?
     public var recordHostAsk: @Sendable (HookRequest, ProposedAction) async throws -> Void
+    /// M-07 command-carrying mint port. Preferred over `mintOnDeny` when
+    /// set: the exact command lets the daemon bind the minted row's
+    /// payload digest. Nil keeps the legacy port (existing worlds
+    /// unchanged). The command never leaves the daemon in-process: only
+    /// its payload digest is stored in the row.
+    public var mintOnDenyWithCommand:
+        (@Sendable (EvaluationResult, WorkingDirectory?, ShellCommand) async -> AllowOnceUnlockMint?)?
 
     public init(
         evaluate: @escaping @Sendable (ShellCommand, WorkingDirectory?) async -> EvaluationResult,
         evaluateFile: @escaping @Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult,
         mintOnDeny: @escaping @Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockMint?,
-        recordHostAsk: @escaping @Sendable (HookRequest, ProposedAction) async throws -> Void
+        recordHostAsk: @escaping @Sendable (HookRequest, ProposedAction) async throws -> Void,
+        mintOnDenyWithCommand: (
+            @Sendable (EvaluationResult, WorkingDirectory?, ShellCommand) async -> AllowOnceUnlockMint?
+        )? = nil
     ) {
         self.evaluate = evaluate
         self.evaluateFile = evaluateFile
         self.mintOnDeny = mintOnDeny
         self.recordHostAsk = recordHostAsk
+        self.mintOnDenyWithCommand = mintOnDenyWithCommand
     }
 }

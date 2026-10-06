@@ -751,48 +751,14 @@ final class WorkspaceHostServer: Sendable {
         }
     }
 
-    private func launchIdentity(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
-        let phase = supervisor.snapshot.phase
-        guard phase.acceptsRuntime else {
-            return failure(message, workspaceControlCode(.notAcceptingRuntime(phase)))
-        }
-        guard message.hook == nil, message.resourceProfileID == nil else {
-            return failure(message, .invalidRequest)
-        }
-        guard let operation = message.operation else { return failure(message, .invalidRequest) }
-        let selected: Result<ResolvedAgentLaunch, AgentLaunchSelectionError>
-        switch operation {
-        case .launchAgentRuntime:
-            guard message.executable == nil, message.customDefinitionDigest == nil,
-                let raw = message.agentDefinitionID, let id = AgentDefinitionID(validating: raw)
-            else { return failure(message, .invalidRequest) }
-            selected = AgentLaunchSelection.resolveNamed(
-                id: id, definitions: agentDefinitions, project: supervisor.snapshot.originalPath.rawValue
-            )
-        case .launchCustomRuntime:
-            guard message.agentDefinitionID == nil, let executable = message.executable,
-                let digest = message.customDefinitionDigest
-            else { return failure(message, .invalidRequest) }
-            selected = AgentLaunchSelection.resolveCustom(
-                executable: executable, expectedContentDigestSHA256: digest
-            )
-        default:
-            return failure(message, .invalidRequest)
-        }
-        guard case .success(let selection) = selected else {
-            return failure(message, .resourceProfileUnavailable)
-        }
-        guard case .success(let io) = launchIO(message) else {
-            return failure(message, .invalidRequest)
-        }
-        let result = supervisor.launchAgent(
-            selection: selection, arguments: message.arguments ?? [], io: io,
-            admission: admission, sessionStore: sessionStore,
-            runningLimit: WorkspaceControlLimits.maxRuntimes,
-            host: hostID, generation: principalAuthority.generation,
-            requestID: message.id
-        )
-        return launchResponse(message, responseOp: operation, io: io, result: result)
+    /// Identity-launch operations are reserved protocol cases that never
+    /// launch directly: every launch flows through the prepare→permit→redeem
+    /// ceremony. This door answers with the machine-readable
+    /// `requiresOperatorPermit` code instead of spawning. The
+    /// authorization fence above denies these ops first, so this denial
+    /// is defense in depth. Internal so tests pin the invariant.
+    func launchIdentity(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
+        failure(message, .requiresOperatorPermit)
     }
 
     private func launchIO(

@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVEngine
 import RVHistory
 import RVHooks
 import RVIPC
@@ -77,6 +78,15 @@ extension HookEvaluateWorld {
                     action: action,
                     store: pending,
                     now: clock()
+                )
+            },
+            // M-07: the hook holds exact text, so its mint binds the
+            // hidden payload; the row stores the digest only.
+            mintOnDenyWithCommand: { result, cwd, command in
+                await world.mintUnlockCode(
+                    for: result,
+                    cwd: cwd,
+                    maskedSegments: Normalize.maskedSegments(of: command)
                 )
             }
         )

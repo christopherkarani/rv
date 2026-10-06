@@ -125,14 +125,16 @@ package struct LiveEvaluateWorld: Sendable {
 
     package func mintUnlockCode(
         for result: EvaluationResult,
-        cwd: WorkingDirectory?
+        cwd: WorkingDirectory?,
+        maskedSegments: [String]? = nil
     ) async -> AllowOnceUnlockMint? {
         await GatedEvaluate.mintUnlockCode(
             for: result,
             cwd: cwd,
             store: store,
             now: clock(),
-            home: home
+            home: home,
+            maskedSegments: maskedSegments
         )
     }
 

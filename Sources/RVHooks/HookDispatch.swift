@@ -51,7 +51,9 @@ private func hookBody(
                 result: result,
                 authorization: auth,
                 cwd: cwd,
-                mintOnDeny: world.mintOnDeny
+                command: command,
+                mintOnDeny: world.mintOnDeny,
+                mintOnDenyWithCommand: world.mintOnDenyWithCommand
             )
             // M-25: the ask guidance promises a pending row, so the record
             // outcome rides into the wire; a failed record renders the
@@ -124,8 +126,17 @@ private func mintUnlockCodeIfNeeded(
     result: EvaluationResult,
     authorization: HookAuthorization,
     cwd: WorkingDirectory?,
-    mintOnDeny: @Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockMint?
+    command: ShellCommand,
+    mintOnDeny: @Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockMint?,
+    mintOnDenyWithCommand: (
+        @Sendable (EvaluationResult, WorkingDirectory?, ShellCommand) async -> AllowOnceUnlockMint?
+    )?
 ) async -> AllowOnceUnlockMint? {
     guard authorization.shouldMintUnlock else { return nil }
+    // M-07: prefer the command-carrying port so the daemon binds the
+    // minted row's payload digest; the legacy port mints unbound rows.
+    if let mintOnDenyWithCommand {
+        return await mintOnDenyWithCommand(result, cwd, command)
+    }
     return await mintOnDeny(result, cwd)
 }

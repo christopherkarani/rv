@@ -740,7 +740,10 @@ struct PendingDispatchTests {
         #expect(await grants.list(now: now).filter { $0.kind == .granted }.isEmpty)
         #expect(
             await memory.hasGrant(
-                matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now
+                matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now,
+                // M-07: the resolver binds the (empty) masked segments of
+                // the retained `git reset --hard`; presence needs them.
+                maskedSegments: []
             )
         )
     }

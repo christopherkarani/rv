@@ -42,6 +42,10 @@ public enum WorkspaceControlCode: String, Error, Sendable, Equatable, Codable {
     case workspaceClosed
     case runtimeNotFound
     case invalidRequest
+    /// The operation is reserved for the prepare→permit→redeem ceremony
+    /// and never executes directly. Scoped operator permits are not
+    /// issued yet, so this denial is currently unconditional.
+    case requiresOperatorPermit
     case resourceProfileUnavailable
     case resourceStagingFailed
     case incompatibleProtocol

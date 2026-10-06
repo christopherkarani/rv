@@ -23,17 +23,25 @@ public struct AttestTTYRedemptionParams: Sendable, Equatable, Codable {
     /// itself never crosses IPC.
     public var codeHash: String
     public var clientSemver: String
+    /// M-07 content digest of the reviewed row's masked payload, when the
+    /// row carried one. A digest only — exact segments never cross IPC.
+    /// Nil (legacy rows and old clients) plants unbound, which fails
+    /// closed on masked spends. Optional for wire compatibility: older
+    /// clients omit the key and decode to nil.
+    public var payloadDigest: String?
 
     public init(
         fingerprint: String,
         cwd: WorkingDirectory,
         codeHash: String,
-        clientSemver: String
+        clientSemver: String,
+        payloadDigest: String? = nil
     ) {
         self.fingerprint = fingerprint
         self.cwd = cwd
         self.codeHash = codeHash
         self.clientSemver = clientSemver
+        self.payloadDigest = payloadDigest
     }
 }
 

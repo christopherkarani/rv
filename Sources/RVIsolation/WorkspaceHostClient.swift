@@ -67,6 +67,9 @@ public enum WorkspaceClientFailure: Error, Sendable, Equatable {
     case workspaceClosed
     case runtimeNotFound
     case invalidRequest
+    /// The host reserves the operation for the prepare→permit→redeem
+    /// ceremony and refused to execute it directly.
+    case requiresOperatorPermit
     case resourceProfileUnavailable
     case resourceStagingFailed(String)
     case recoveryRequired
@@ -997,6 +1000,7 @@ private func clientFailure(_ code: WorkspaceControlCode, detail: String?) -> Wor
     case .workspaceClosed: .workspaceClosed
     case .runtimeNotFound: .runtimeNotFound
     case .invalidRequest: .invalidRequest
+    case .requiresOperatorPermit: .requiresOperatorPermit
     case .resourceProfileUnavailable: .resourceProfileUnavailable
     case .resourceStagingFailed: .resourceStagingFailed(detail ?? "unknown grant")
     case .incompatibleProtocol: .incompatibleProtocol

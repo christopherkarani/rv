@@ -279,7 +279,8 @@ public struct GatedEvaluate: Sendable {
                     grants: grants,
                     now: now,
                     rebaseInProgress: rebasing,
-                    safety: safety
+                    safety: safety,
+                    maskedSegments: Normalize.maskedSegments(of: request.command)
                 )
             }
         }
@@ -297,7 +298,8 @@ public struct GatedEvaluate: Sendable {
         grants: EphemeralAllowOnceTable,
         now: Date,
         rebaseInProgress: Bool,
-        safety: SafetyLevel
+        safety: SafetyLevel,
+        maskedSegments: [String]?
     ) async -> EvaluationResult {
         switch verb {
         case .peek:
@@ -308,7 +310,8 @@ public struct GatedEvaluate: Sendable {
                 grants: grants,
                 now: now,
                 rebaseInProgress: rebaseInProgress,
-                safety: safety
+                safety: safety,
+                maskedSegments: maskedSegments
             ).result
         case .apply:
             return await PolicyGate.consumingGrant(
@@ -318,7 +321,8 @@ public struct GatedEvaluate: Sendable {
                 grants: grants,
                 now: now,
                 rebaseInProgress: rebaseInProgress,
-                safety: safety
+                safety: safety,
+                maskedSegments: maskedSegments
             ).result
         }
     }
@@ -397,7 +401,8 @@ public struct GatedEvaluate: Sendable {
         cwd: WorkingDirectory?,
         store: AllowOnceStore,
         now: Date,
-        home: HomeDirectory?
+        home: HomeDirectory?,
+        maskedSegments: [String]? = nil
     ) async -> AllowOnceUnlockMint? {
         guard home != nil else { return nil }
         guard let cwd, HookAuthorization.shouldMintUnlock(result: result, cwd: cwd) else {
@@ -408,7 +413,8 @@ public struct GatedEvaluate: Sendable {
             matchingView: result.matchingView,
             cwd: cwd,
             ruleID: deny.ruleID,
-            now: now
+            now: now,
+            maskedSegments: maskedSegments
         )
     }
 

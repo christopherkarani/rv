@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import RVDomain
+import RVEngine
 import RVIPC
 import RVPolicy
 @testable import RVService
@@ -348,6 +349,34 @@ struct PendingResolveGrantTests {
             Issue.record("plant path must resolve the wait for \(host), got \(loaded.state)")
             return
         }
+    }
+
+    @Test func PendingResolveGrant_hookPlantBindsMaskedPayload() async throws {
+        // M-07: the hook ceremony holds exact text, so its plant binds the
+        // hidden payload: the identical re-issue spends, a same-view
+        // command with another payload does not.
+        let env = try IsolatedPendingResolve()
+        defer { env.tearDown() }
+        let command = #"echo "aaa" ; git reset --hard"#
+        let created = try await env.seed(command: command, cwd: wd("/tmp/ws"))
+        let resolved = await env.resolve(created, decision: .allowOnce)
+        guard case .success = resolved else {
+            Issue.record("masked deny must resolve, got \(resolved)")
+            return
+        }
+        let view = Normalize.matchingView(of: command)
+        let bound = Normalize.maskedSegments(of: command)
+        #expect(bound.isEmpty == false)
+        #expect(
+            await env.memory.consume(
+                matchingView: view, cwd: wd("/tmp/ws"), now: now, maskedSegments: ["other-payload"]
+            ) == false
+        )
+        #expect(
+            await env.memory.consume(
+                matchingView: view, cwd: wd("/tmp/ws"), now: now, maskedSegments: bound
+            )
+        )
     }
 }
 

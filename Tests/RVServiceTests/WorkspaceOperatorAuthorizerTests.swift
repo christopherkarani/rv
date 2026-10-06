@@ -1129,6 +1129,11 @@ struct WorkspaceOperatorAuthorizerTests {
     @Test func issuedPermitChangesNoLaunchAuthorization() async throws {
         // Even with a live issued permit in hand, every launch operation stays
         // denied for every component role: Step 3 wires to no allow path.
+        // The identity-launch ops exist as reserved cases and require a
+        // permit; the direct door answers requiresOperatorPermit and never
+        // spawns (see HostRedemptionTests).
+        #expect(WorkspaceControlOp(rawValue: "launchAgentRuntime") == .launchAgentRuntime)
+        #expect(WorkspaceControlOp(rawValue: "launchCustomRuntime") == .launchCustomRuntime)
         let clock = TestClock()
         let auth = authorizer(clock: clock)
         let fx = Fixture()

@@ -10,12 +10,16 @@ public struct RulePinStore: Sendable {
 
     /// Exact-command pins require a T1 `matchingView` (Policy does not peel).
     /// Typed git-push pins ignore it; their identity is the predicate.
+    /// M-07: callers holding exact text pass `maskedSegments` so the pinned
+    /// entry binds the hidden payload; nil pins legacy (fail closed on
+    /// masked spends, like any ambiguous stored view).
     public func save(
         record: PendingApproval,
         polarity: PinnedRulePolarity,
         draft: String,
         now: Date,
-        matchingView: MatchingView? = nil
+        matchingView: MatchingView? = nil,
+        maskedSegments: [String]? = nil
     ) throws -> RuleSaveOutcome {
         let expected = RulePinning.draft(record: record, polarity: polarity)
         if draft != expected {
@@ -46,7 +50,8 @@ public struct RulePinStore: Sendable {
                 AllowlistEntry(
                     selector: .exactCommand(view),
                     reason: "Always-allow pin",
-                    addedAt: now
+                    addedAt: now,
+                    maskedPayloadDigest: maskedSegments.map(maskedPayloadContentDigest)
                 )
             )
         case .block:

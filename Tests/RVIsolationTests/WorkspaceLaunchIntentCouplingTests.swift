@@ -78,11 +78,22 @@ struct WorkspaceLaunchIntentCouplingTests {
         }
     }
 
+    @Test func identityLaunchOperationsStayReserved() {
+        // The ops exist as reserved protocol cases with a dedicated
+        // machine-readable denial: removing the direct launch must not
+        // delete the wire vocabulary the permit ceremony will use.
+        #expect(WorkspaceControlOp(rawValue: "launchAgentRuntime") == .launchAgentRuntime)
+        #expect(WorkspaceControlOp(rawValue: "launchCustomRuntime") == .launchCustomRuntime)
+        #expect(WorkspaceControlCode(rawValue: "requiresOperatorPermit") == .requiresOperatorPermit)
+    }
+
     #if os(macOS)
     @Test func intentAloneCannotAuthorizeLaunchOperations() throws {
         // The semantic object exists and digests, yet no launch operation
         // becomes reachable: authorization still denies every launch op for
-        // every component role, including fully trusted ones.
+        // every component role, including fully trusted ones. The
+        // identity-launch door behind the fence answers
+        // requiresOperatorPermit and never spawns (see HostRedemptionTests).
         let digest = try custom(arguments: ["hello"]).get().canonicalDigest
         #expect(digest.sha256Hex.utf8.count == 64)
         // Step 8: exhaustive over every representable role.

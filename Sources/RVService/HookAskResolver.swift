@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVEngine
 import RVIPC
 import RVPolicy
 
@@ -129,12 +130,16 @@ enum HookAskResolver {
             // with a best-effort display projection to the file. The plant
             // is keyed by ceremony: one pending row plants at most once per
             // epoch (the CAS above already guarantees one resolve winner).
+            // M-07: the exact retained command binds the hidden payload, so
+            // the grant authorizes this payload only.
+            let segments = Normalize.maskedSegments(of: command)
             switch await grants.plant(
                 matchingView: matchingView,
                 cwd: grantCwd,
                 codeHash: "pending:\(params.id.rawValue)",
                 pendingID: params.id.rawValue,
-                now: now
+                now: now,
+                maskedSegments: segments
             ) {
             case .planted:
                 await projection.project(
@@ -142,7 +147,8 @@ enum HookAskResolver {
                     matchingView: matchingView,
                     cwd: grantCwd,
                     codeHash: "pending:\(params.id.rawValue)",
-                    now: now
+                    now: now,
+                    maskedSegments: segments
                 )
                 return resolved
             case .alreadyRedeemed, .refused:
