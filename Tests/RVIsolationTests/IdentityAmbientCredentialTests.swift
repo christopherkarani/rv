@@ -21,8 +21,11 @@ struct IdentityAmbientCredentialTests {
         let fixture = try AmbientCodexFixture(root: tree.rootURL)
         defer { fixture.restore() }
         try #require(ProcessInfo.processInfo.environment["HOME"] == fixture.home.path)
+        // M4: custom preparation measures the executable against the
+        // authorized digest; the fixture authorizes the real bytes.
+        let shDigest = try #require(RVDigest.sha256HexOfFile(atPath: "/bin/sh"))
         let selection = try AgentLaunchSelection.resolveCustom(
-            executable: "/bin/sh", expectedContentDigestSHA256: String(repeating: "a", count: 64)
+            executable: "/bin/sh", expectedContentDigestSHA256: shDigest
         ).get()
         let supervisor = try WorkspaceSessionSupervisor.open(
             try #require(WorkingDirectory(validating: tree.workspaceURL.path)),
@@ -31,8 +34,8 @@ struct IdentityAmbientCredentialTests {
             instanceJournal: .file(tree.rootURL.appendingPathComponent("instances.jsonl"))
         ).get()
         defer { _ = supervisor.close() }
-        // Fixture paths contain no quotes. The digest expresses operator
-        // snapshot intent; this weak launch makes no content-measurement claim.
+        // Fixture paths contain no quotes. The digest authorizes the
+        // measured fixture bytes; preparation and spawn commit verify it.
         let script = "if /bin/cat '\(fixture.authentication.path)' >/dev/null 2>&1; then "
             + "printf readable > ambient-read-result; else printf denied > ambient-read-result; fi; /bin/sleep 10"
         let runtime = try supervisor.launchAgent(

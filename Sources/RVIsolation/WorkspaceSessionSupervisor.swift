@@ -461,10 +461,11 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
     /// filesystem reads plus idempotent RV-managed directory creation.
     ///
     /// Validation order is fixed: selection consistency, credential gate,
-    /// profile correspondence, command, IO mapping, cwd resolution, volume
-    /// anchor, intent construction, containment preparation, environment
-    /// freeze, anchored cwd identity capture (same resolution), then
-    /// lifecycle check with atomic store insert.
+    /// profile correspondence, command, custom executable measurement,
+    /// IO mapping, cwd resolution, volume anchor, intent construction,
+    /// containment preparation, environment freeze, anchored cwd identity
+    /// capture (same resolution), then lifecycle check with atomic store
+    /// insert.
     func prepareIdentityLaunch(
         selection: ResolvedAgentLaunch,
         arguments: [String],
@@ -495,6 +496,16 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         }
         guard let command = IsolatedCommand(executable: selection.executable, arguments: arguments) else {
             return .failure(.invalidCommand)
+        }
+        // M4: measure the custom executable now. The intent below records
+        // the expected digest; the spawn commit re-measures adjacent to
+        // posix_spawn, so a swap between prepare and spawn still refuses.
+        if case .custom(let digest) = kind {
+            guard verifyExecutableContentDigest(
+                path: selection.executable, expectedSHA256: digest
+            ) else {
+                return .failure(.executableDigestMismatch)
+            }
         }
         guard let intentIO = preparedLaunchIO(from: io) else {
             return .failure(.unsupportedIO)
@@ -706,6 +717,7 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
             keychainReader: .denied,
             agentDefinition: prepared.selection.resolved.definition,
             preparedID: prepared.binding.preparedLaunchID,
+            executableVerification: Self.executableVerification(for: prepared),
             now: now
         )
         preparedLaunches.remove(prepared.binding.preparedLaunchID)
@@ -857,6 +869,7 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
             cwdVerification: CwdCommitVerification(
                 policyWorkspacePath: policyWorkspace.rawValue,
                 expected: prepared.cwdIdentity),
+            executableVerification: Self.executableVerification(for: prepared),
             now: now
         )
         switch dispatched {
@@ -962,6 +975,28 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         state.withLock { _ in
             preparedLaunches.remove(id)
         }
+    }
+
+    /// Derives spawn-commit executable verification from the retained
+    /// prepared record. Custom selections re-measure the exact retained
+    /// executable path against the authorized digest; named selections
+    /// carry no pinned digest (weak-only) and verify nothing. A selection
+    /// that no longer verifies yields a verification that can never
+    /// match, failing closed at spawn commit.
+    static func executableVerification(
+        for prepared: PreparedWorkspaceLaunch
+    ) -> ExecutableCommitVerification? {
+        guard case .success(let kind) = verifyPreparedSelection(prepared.selection) else {
+            return ExecutableCommitVerification(
+                executablePath: prepared.command.executable,
+                expectedSHA256: "unverifiable-selection"
+            )
+        }
+        guard case .custom(let digest) = kind else { return nil }
+        return ExecutableCommitVerification(
+            executablePath: prepared.command.executable,
+            expectedSHA256: digest
+        )
     }
 
     /// Re-derives the intent from retained parts and requires the identical
@@ -1122,6 +1157,7 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         preparedID: PreparedLaunchID? = nil,
         acceptedID: PreparedLaunchID? = nil,
         cwdVerification: CwdCommitVerification? = nil,
+        executableVerification: ExecutableCommitVerification? = nil,
         now: Date = Date()
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         guard request.containedWorkspacePath == expectedWorkspacePath else {
@@ -1141,6 +1177,7 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
             preparedID: preparedID,
             acceptedID: acceptedID,
             cwdVerification: cwdVerification,
+            executableVerification: executableVerification,
             now: now
         )
         switch spawned {
@@ -1283,6 +1320,7 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         preparedID: PreparedLaunchID? = nil,
         acceptedID: PreparedLaunchID? = nil,
         cwdVerification: CwdCommitVerification? = nil,
+        executableVerification: ExecutableCommitVerification? = nil,
         now: Date = Date()
     ) -> Result<WorkspaceChild, WorkspaceSessionError> {
         guard let profile = request.seatbeltProfile,
@@ -1365,6 +1403,18 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
                 guard verifyLiveCwdIdentity(
                     policyWorkspacePath: cwdVerification.policyWorkspacePath,
                     expected: cwdVerification.expected
+                ) else {
+                    return .failure(.unknownPreparedLaunch)
+                }
+            }
+            if let executableVerification {
+                // M4: final executable re-measurement, adjacent to the
+                // spawn call inside the same critical section: a custom
+                // binary swapped after preparation still refuses here.
+                // Deliberately undifferentiated like the cwd check.
+                guard verifyExecutableContentDigest(
+                    path: executableVerification.executablePath,
+                    expectedSHA256: executableVerification.expectedSHA256
                 ) else {
                     return .failure(.unknownPreparedLaunch)
                 }

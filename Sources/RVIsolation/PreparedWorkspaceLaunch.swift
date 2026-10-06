@@ -291,6 +291,11 @@ enum PreparedLaunchError: Error, Sendable, Equatable {
     case credentialStagingNotSupported
     /// Executable/argv failed `IsolatedCommand` validation.
     case invalidCommand
+    /// Custom selection content does not hash to the authorized digest
+    /// (or cannot be read). No process was spawned and nothing was
+    /// stored. M4: path strings alone never satisfy an executable
+    /// requirement.
+    case executableDigestMismatch
     /// `.inherit` stdio can never be prepared (in-process door only).
     case unsupportedIO
     /// Profile compilation, workspace resolution, inode scan, or manifest

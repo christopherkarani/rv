@@ -68,7 +68,9 @@ public enum AgentLaunchSelection {
         executable: String, expectedContentDigestSHA256: String
     ) -> Result<ResolvedAgentLaunch, AgentLaunchSelectionError> {
         guard validExecutable(executable) else { return .failure(.invalidExecutable) }
-        // This is expected snapshot intent, not evidence of measured execution.
+        // Snapshot intent: the host measures the bytes against this digest
+        // at prepare and again at spawn commit (M4); selection alone never
+        // executes.
         guard let snapshot = AdHocAgentSnapshot.make(
             expectedContentDigestSHA256: expectedContentDigestSHA256
         ) else { return .failure(.invalidCustomDigest) }

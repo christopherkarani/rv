@@ -261,6 +261,28 @@ public enum RVDigest {
         hash.update(bytes)
         return hash.digest().map { String(format: "%02x", $0) }.joined()
     }
+
+    /// Chunked SHA-256 over file bytes, as lowercase hex. Nil when the
+    /// file cannot be opened or read to end (missing, directory,
+    /// permission, mid-read IO failure). Follows symlinks exactly like
+    /// the exec path that consumes the measurement, so a swapped link
+    /// measures its new target. M4: custom-launch executable binding.
+    public static func sha256HexOfFile(atPath path: String) -> String? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        var hash = SHA256Hash()
+        while true {
+            let chunk: Data?
+            do {
+                chunk = try handle.read(upToCount: 64 * 1024)
+            } catch {
+                return nil
+            }
+            guard let chunk, chunk.isEmpty == false else { break }
+            hash.update([UInt8](chunk))
+        }
+        return hash.digest().map { String(format: "%02x", $0) }.joined()
+    }
 }
 
 enum HTTPDigest {

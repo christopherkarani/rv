@@ -149,7 +149,9 @@ struct PreparedWorkspaceLaunchTests {
         let tree = try ContainmentTree()
         let supervisor = try preparedSupervisor(tree)
         defer { _ = supervisor.close() }
-        let digest = String(repeating: "ab", count: 32)
+        // M4: custom preparation measures the executable against the
+        // authorized digest; the fixture authorizes the real bytes.
+        let digest = try #require(RVDigest.sha256HexOfFile(atPath: "/bin/sleep"))
         let selection = try preparedCustomSelection(executable: "/bin/sleep", digest: digest)
         let (host, generation) = preparedHost()
         let prepared = try supervisor.prepareIdentityLaunch(
@@ -170,6 +172,40 @@ struct PreparedWorkspaceLaunchTests {
         let snapshot = try #require(AdHocAgentSnapshot.make(expectedContentDigestSHA256: digest))
         #expect(prepared.selection.resolved.definition == snapshot.definition)
         #expect(prepared.selection.resolved.revision == snapshot.revision)
+    }
+
+    @Test func customPrepareRefusesDigestMismatch() throws {
+        // M4: path strings alone never satisfy an executable requirement.
+        let tree = try ContainmentTree()
+        let supervisor = try preparedSupervisor(tree)
+        defer { _ = supervisor.close() }
+        let selection = try preparedCustomSelection(
+            executable: "/bin/sleep", digest: String(repeating: "0", count: 64)
+        )
+        let (host, generation) = preparedHost()
+        #expect(
+            supervisor.prepareIdentityLaunch(
+                selection: selection, arguments: ["30"], io: .discard,
+                host: host, generation: generation
+            ) == .failure(.executableDigestMismatch)
+        )
+    }
+
+    @Test func customPrepareRefusesUnreadableExecutable() throws {
+        let tree = try ContainmentTree()
+        let supervisor = try preparedSupervisor(tree)
+        defer { _ = supervisor.close() }
+        let selection = try preparedCustomSelection(
+            executable: "/nonexistent-rv-dir-\(UUID().uuidString)/nope",
+            digest: String(repeating: "0", count: 64)
+        )
+        let (host, generation) = preparedHost()
+        #expect(
+            supervisor.prepareIdentityLaunch(
+                selection: selection, arguments: [], io: .discard,
+                host: host, generation: generation
+            ) == .failure(.executableDigestMismatch)
+        )
     }
 
     @Test func argvRetainedByteForByte() throws {

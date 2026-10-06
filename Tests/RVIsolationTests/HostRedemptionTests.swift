@@ -139,9 +139,12 @@ struct HostRedemptionTests {
         defer { tree.tearDown() }
         let supervisor = try redeemSupervisor(tree)
         defer { _ = supervisor.close() }
+        // M4: custom preparation measures the executable against the
+        // authorized digest; the fixture authorizes the real bytes.
+        let sleepDigest = try #require(RVDigest.sha256HexOfFile(atPath: "/bin/sleep"))
         let selection = try AgentLaunchSelection.resolveCustom(
             executable: "/bin/sleep",
-            expectedContentDigestSHA256: String(repeating: "c", count: 64)).get()
+            expectedContentDigestSHA256: sleepDigest).get()
         let prepared = try supervisor.prepareIdentityLaunch(
             selection: selection, arguments: ["30"], io: .discard,
             host: WorkspaceHostID(), generation: WorkspaceHostGeneration()
@@ -160,6 +163,37 @@ struct HostRedemptionTests {
         #expect(live.effectiveAuthority == .none)
         #expect(live.assurance == .launchObserved)
         try supervisor.cancel(runtime).get()
+    }
+
+    @Test func redemptionRefusesSwappedExecutableBytes() throws {
+        // M4: the spawn commit re-measures the custom executable adjacent
+        // to spawn, so bytes swapped after preparation still refuse and
+        // no process runs.
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let supervisor = try redeemSupervisor(tree)
+        defer { _ = supervisor.close() }
+        let script = tree.rootURL.appendingPathComponent("swap-target.sh")
+        try Data("#!/bin/sh\nexec /bin/sleep 30\n".utf8).write(to: script)
+        let digest = try #require(RVDigest.sha256HexOfFile(atPath: script.path))
+        let selection = try AgentLaunchSelection.resolveCustom(
+            executable: script.path,
+            expectedContentDigestSHA256: digest).get()
+        let prepared = try supervisor.prepareIdentityLaunch(
+            selection: selection, arguments: [], io: .discard,
+            host: WorkspaceHostID(), generation: WorkspaceHostGeneration()
+        ).get()
+        try Data("#!/bin/sh\necho pwned\n".utf8).write(to: script)
+        let outcome = supervisor.redeemPreparedLaunch(
+            commit: redeemCommit(prepared: prepared),
+            sessionStore: .file(tree.rootURL.appendingPathComponent("redeem-swap.jsonl")),
+            admission: .failClosed)
+        guard case .failed(let accepted, let error) = outcome else {
+            Issue.record("swapped bytes must refuse, got \(outcome)")
+            return
+        }
+        #expect(accepted == true)
+        #expect(error == .unknownPreparedLaunch)
     }
 
     @Test func bindingMatrixRejectsSingleFieldMutations() throws {
@@ -227,9 +261,12 @@ struct HostRedemptionTests {
         defer { tree.tearDown() }
         let supervisor = try redeemSupervisor(tree)
         defer { _ = supervisor.close() }
+        // M4: custom preparation measures the executable against the
+        // authorized digest; the fixture authorizes the real bytes.
+        let sleepDigest = try #require(RVDigest.sha256HexOfFile(atPath: "/bin/sleep"))
         let selection = try AgentLaunchSelection.resolveCustom(
             executable: "/bin/sleep",
-            expectedContentDigestSHA256: String(repeating: "c", count: 64)).get()
+            expectedContentDigestSHA256: sleepDigest).get()
         let prepared = try supervisor.prepareIdentityLaunch(
             selection: selection, arguments: ["30"], io: .discard,
             host: WorkspaceHostID(), generation: WorkspaceHostGeneration()
@@ -869,9 +906,10 @@ struct HostRedemptionTests {
         defer { tree.tearDown() }
         let supervisor = try redeemSupervisor(tree)
         defer { _ = supervisor.close() }
+        let shDigest = try #require(RVDigest.sha256HexOfFile(atPath: "/bin/sh"))
         let selection = try AgentLaunchSelection.resolveCustom(
             executable: "/bin/sh",
-            expectedContentDigestSHA256: String(repeating: "c", count: 64)).get()
+            expectedContentDigestSHA256: shDigest).get()
         let prepared = try supervisor.prepareIdentityLaunch(
             selection: selection,
             arguments: [

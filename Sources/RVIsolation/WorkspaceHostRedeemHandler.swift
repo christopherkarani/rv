@@ -117,6 +117,25 @@ struct CwdCommitVerification: Sendable, Equatable {
     let expected: CwdIdentityStamp
 }
 
+/// Executable re-verification for the spawn-commit critical section:
+/// the custom executable's live bytes must still hash to the digest
+/// the operator authorized. Nil for named selections (weak-only, no
+/// pinned digest to verify).
+struct ExecutableCommitVerification: Sendable, Equatable {
+    let executablePath: String
+    let expectedSHA256: String
+}
+
+/// Measures a custom executable's content against the authorized digest.
+/// Anything unreadable or unequal refuses: missing files, directories,
+/// permission failures, and swapped bytes all fail closed. The expected
+/// value compares case-insensitively (hex); a malformed expectation can
+/// never match a measurement.
+func verifyExecutableContentDigest(path: String, expectedSHA256: String) -> Bool {
+    guard let measured = RVDigest.sha256HexOfFile(atPath: path) else { return false }
+    return measured == expectedSHA256.lowercased()
+}
+
 /// Host-side redemption RPC implementation (verify + accept + dispatch).
 ///
 /// Pure function over the supervisor: answers `rv.host-redeem` commits from
