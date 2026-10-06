@@ -97,7 +97,7 @@ struct ActionApprovalCeremonyTests {
         let host = peer()
         try await register(hosts, ref, host)
         let created = try await requested(ceremonies, dto: createDTO(reference: ref), peer: host)
-        #expect(created.status == "pending")
+        #expect(created.status == .pending)
         let list = await ceremonies.listActionReviews()
         #expect(list.items.count == 1)
         let item = try #require(list.items.first)
@@ -109,7 +109,7 @@ struct ActionApprovalCeremonyTests {
         #expect(item.hostID == ref.workspaceHostID.rawValue)
         #expect(item.actionKind == "shell")
         #expect(item.policyReason == "reviewAsk")
-        #expect(item.status == "pending")
+        #expect(item.status == .pending)
     }
 
     @Test func ownerDerivesFromAuthenticatedPeer() async throws {
@@ -204,7 +204,7 @@ struct ActionApprovalCeremonyTests {
                 approvalID: setup.created.approvalID,
                 outcome: .authenticated),
             uiConnection: setup.ui)
-        #expect(status == "authorized")
+        #expect(status == .authorized)
         let decision = await setup.ceremonies.consumeApproval(
             HostActionApprovalConsumeDTO(
                 approvalID: setup.created.approvalID,
@@ -212,7 +212,7 @@ struct ActionApprovalCeremonyTests {
                 actionDigestHex: setup.digest,
                 continuationID: setup.created.continuationID),
             hostPeer: setup.peer)
-        #expect(decision.status == "consumed")
+        #expect(decision.status == .consumed)
         #expect(decision.mayExecute == true)
         // Replay: the ceremony forgot the terminal approval; unknown and
         // must not execute.
@@ -223,7 +223,7 @@ struct ActionApprovalCeremonyTests {
                 actionDigestHex: setup.digest,
                 continuationID: setup.created.continuationID),
             hostPeer: setup.peer)
-        #expect(replay.status == "unknown")
+        #expect(replay.status == .unknown)
         #expect(replay.mayExecute == false)
     }
 
@@ -338,7 +338,7 @@ struct ActionApprovalCeremonyTests {
             ceremonies, dto: createDTO(reference: ref, action: act), peer: host)
         #expect(second.approvalID != first.approvalID)
         #expect(second.continuationID != first.continuationID)
-        #expect(second.status == "pending")
+        #expect(second.status == .pending)
         let stale = await ceremonies.consumeApproval(
             HostActionApprovalConsumeDTO(
                 approvalID: first.approvalID, reference: ref,
@@ -356,7 +356,7 @@ struct ActionApprovalCeremonyTests {
                 challengeID: setup.challenge.challengeID,
                 approvalID: setup.created.approvalID),
             uiConnection: setup.ui)
-        #expect(status == "denied")
+        #expect(status == .denied)
         let decision = await setup.ceremonies.consumeApproval(
             HostActionApprovalConsumeDTO(
                 approvalID: setup.created.approvalID,
@@ -365,7 +365,7 @@ struct ActionApprovalCeremonyTests {
                 continuationID: setup.created.continuationID),
             hostPeer: setup.peer)
         #expect(decision.mayExecute == false)
-        #expect(await setup.ceremonies.actionStatus(approvalID: setup.created.approvalID) == "denied")
+        #expect(await setup.ceremonies.actionStatus(approvalID: setup.created.approvalID) == .denied)
     }
 
     @Test func denyBindsLiveChallengeAndConnection() async throws {
@@ -458,7 +458,7 @@ struct ActionApprovalCeremonyTests {
             // Cancelled/unavailable surface as failed status; all are
             // terminal without a grant.
             if let status {
-                #expect(status == "failed")
+                #expect(status == .failed)
             }
             let decision = await setup.ceremonies.consumeApproval(
                 HostActionApprovalConsumeDTO(
@@ -500,7 +500,7 @@ struct ActionApprovalCeremonyTests {
                     outcome: .authenticated),
                 uiConnection: ui)
         }
-        #expect(await ceremonies.actionStatus(approvalID: created.approvalID) == "invalidated")
+        #expect(await ceremonies.actionStatus(approvalID: created.approvalID) == .invalidated)
     }
 
     @Test func revokeAfterGrantRejectsConsume() async throws {
@@ -528,7 +528,7 @@ struct ActionApprovalCeremonyTests {
                 continuationID: created.continuationID),
             hostPeer: host)
         #expect(decision.mayExecute == false)
-        #expect(await ceremonies.actionStatus(approvalID: created.approvalID) == "invalidated")
+        #expect(await ceremonies.actionStatus(approvalID: created.approvalID) == .invalidated)
     }
 
     @Test func revokeBetweenConsumeAndTrailingCheckBurnsGrant() async throws {
@@ -618,7 +618,7 @@ struct ActionApprovalCeremonyTests {
                 uiConnection: ui)
         }
         #expect(calls.withLock { $0 } == 4)
-        #expect(await ceremonies.actionStatus(approvalID: created.approvalID) == "invalidated")
+        #expect(await ceremonies.actionStatus(approvalID: created.approvalID) == .invalidated)
         let decision = await ceremonies.consumeApproval(
             HostActionApprovalConsumeDTO(
                 approvalID: created.approvalID, reference: ref,
@@ -649,7 +649,7 @@ struct ActionApprovalCeremonyTests {
         try await register(hosts, ref2, replacement)
         // Old approval bound to G1: invalid, and the old reference no
         // longer resolves.
-        #expect(await ceremonies.actionStatus(approvalID: created.approvalID) == "invalidated")
+        #expect(await ceremonies.actionStatus(approvalID: created.approvalID) == .invalidated)
         let decision = await ceremonies.consumeApproval(
             HostActionApprovalConsumeDTO(
                 approvalID: created.approvalID, reference: ref,
@@ -666,7 +666,7 @@ struct ActionApprovalCeremonyTests {
         await setup.ceremonies.uiConnectionLost(setup.ui)
         #expect(
             await setup.ceremonies.actionStatus(approvalID: setup.created.approvalID)
-                == "invalidated")
+                == .invalidated)
         await #expect(throws: ActionApprovalCeremonyError.self) {
             try await setup.ceremonies.completeActionCeremony(
                 UIActionCompletion(
@@ -714,7 +714,7 @@ struct ActionApprovalCeremonyTests {
         await setup.ceremonies.uiConnectionLost(setup.ui)
         #expect(
             await setup.ceremonies.actionStatus(approvalID: setup.created.approvalID)
-                == "invalidated")
+                == .invalidated)
         let decision = await setup.ceremonies.consumeApproval(
             HostActionApprovalConsumeDTO(
                 approvalID: setup.created.approvalID,
@@ -731,7 +731,7 @@ struct ActionApprovalCeremonyTests {
             HostActionApprovalCancelDTO(
                 approvalID: setup.created.approvalID, reference: setup.reference),
             hostPeer: setup.peer)
-        #expect(reply.status == "cancelled")
+        #expect(reply.status == .cancelled)
         let decision = await setup.ceremonies.consumeApproval(
             HostActionApprovalConsumeDTO(
                 approvalID: setup.created.approvalID,
@@ -751,7 +751,7 @@ struct ActionApprovalCeremonyTests {
         }
         let status = try await setup.ceremonies.cancelActionReview(
             approvalID: setup.created.approvalID, uiConnection: setup.ui)
-        #expect(status == "cancelled")
+        #expect(status == .cancelled)
     }
 
     // MARK: - Status
@@ -762,7 +762,7 @@ struct ActionApprovalCeremonyTests {
             HostActionApprovalStatusDTO(
                 approvalID: setup.created.approvalID, reference: setup.reference),
             hostPeer: setup.peer)
-        #expect(pending.status == "awaitingAuthentication")
+        #expect(pending.status == .awaitingAuthentication)
         _ = try await setup.ceremonies.completeActionCeremony(
             UIActionCompletion(
                 challengeID: setup.challenge.challengeID,
@@ -773,7 +773,7 @@ struct ActionApprovalCeremonyTests {
             HostActionApprovalStatusDTO(
                 approvalID: setup.created.approvalID, reference: setup.reference),
             hostPeer: setup.peer)
-        #expect(authorized.status == "authorized")
+        #expect(authorized.status == .authorized)
         // Status polls never consume: exact consume still wins after.
         let decision = await setup.ceremonies.consumeApproval(
             HostActionApprovalConsumeDTO(
@@ -791,7 +791,7 @@ struct ActionApprovalCeremonyTests {
             HostActionApprovalStatusDTO(
                 approvalID: UUID(), reference: setup.reference),
             hostPeer: setup.peer)
-        #expect(missing.status == "unknown")
+        #expect(missing.status == .unknown)
         var other = setup.reference
         other = AgentPrincipalReference(
             agentInstanceID: AgentInstanceID(),
@@ -803,7 +803,7 @@ struct ActionApprovalCeremonyTests {
             HostActionApprovalStatusDTO(
                 approvalID: setup.created.approvalID, reference: other),
             hostPeer: setup.peer)
-        #expect(mismatched.status == "unknown")
+        #expect(mismatched.status == .unknown)
     }
 
     @Test func denySurfacesDeniedThroughHostStatusRPC() async throws {
@@ -817,12 +817,12 @@ struct ActionApprovalCeremonyTests {
                 challengeID: setup.challenge.challengeID,
                 approvalID: setup.created.approvalID),
             uiConnection: setup.ui)
-        #expect(outcome == "denied")
+        #expect(outcome == .denied)
         let status = await setup.ceremonies.approvalStatus(
             HostActionApprovalStatusDTO(
                 approvalID: setup.created.approvalID, reference: setup.reference),
             hostPeer: setup.peer)
-        #expect(status.status == "denied")
+        #expect(status.status == .denied)
         // ... and a denied approval still consumes nothing.
         let decision = await setup.ceremonies.consumeApproval(
             HostActionApprovalConsumeDTO(
@@ -840,12 +840,12 @@ struct ActionApprovalCeremonyTests {
             HostActionApprovalCancelDTO(
                 approvalID: setup.created.approvalID, reference: setup.reference),
             hostPeer: setup.peer)
-        #expect(cancel.status == "cancelled")
+        #expect(cancel.status == .cancelled)
         let status = await setup.ceremonies.approvalStatus(
             HostActionApprovalStatusDTO(
                 approvalID: setup.created.approvalID, reference: setup.reference),
             hostPeer: setup.peer)
-        #expect(status.status == "cancelled")
+        #expect(status.status == .cancelled)
     }
 
     @Test func consumedSurfacesConsumedThroughHostStatusRPC() async throws {
@@ -868,7 +868,7 @@ struct ActionApprovalCeremonyTests {
             HostActionApprovalStatusDTO(
                 approvalID: setup.created.approvalID, reference: setup.reference),
             hostPeer: setup.peer)
-        #expect(status.status == "consumed")
+        #expect(status.status == .consumed)
     }
 
     @Test func reviewListShowsOnlyActionable() async throws {

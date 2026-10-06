@@ -178,6 +178,22 @@ extension UIIODTO: Codable {
     }
 }
 
+/// Closed workspace-operation status vocabulary (operator UI review and
+/// CLI proposal polling share it). Raw values are the wire strings
+/// (Codable synthesizes identical bytes); unknown strings fail decode.
+/// `unknown` means the ceremony has forgotten the operation.
+public enum WorkspaceOperationStatus: String, Sendable, Equatable, Codable, CaseIterable {
+    case pendingReview
+    case awaitingAuthentication
+    case authorized
+    case consumed
+    case cancelled
+    case expired
+    case invalidated
+    case failed
+    case unknown
+}
+
 /// One reviewable pending operation, projected for trusted display.
 public struct UIReviewItemDTO: Sendable, Equatable, Codable {
     public let operationID: UUID
@@ -192,14 +208,14 @@ public struct UIReviewItemDTO: Sendable, Equatable, Codable {
     public let io: UIIODTO
     public let environmentPolicy: String
     public let intentDigestHex: String
-    public let status: String
+    public let status: WorkspaceOperationStatus
     public let advisoryExpiresWall: Date?
 
     public init(
         operationID: UUID, kind: String, definitionID: String?,
         definitionRevisionDigest: String?, executable: String, expectedContentDigest: String?,
         workspaceSessionID: UUID, workingDirectory: String, arguments: [String], io: UIIODTO,
-        environmentPolicy: String, intentDigestHex: String, status: String,
+        environmentPolicy: String, intentDigestHex: String, status: WorkspaceOperationStatus,
         advisoryExpiresWall: Date?
     ) {
         self.operationID = operationID
@@ -251,9 +267,9 @@ public struct UIRegisteredDTO: Sendable, Equatable, Codable {
 /// Safe status projection. Never permit contents, never a reference.
 public struct UIOperationStatusDTO: Sendable, Equatable, Codable {
     public let operationID: UUID
-    public let status: String
+    public let status: WorkspaceOperationStatus
 
-    public init(operationID: UUID, status: String) {
+    public init(operationID: UUID, status: WorkspaceOperationStatus) {
         self.operationID = operationID
         self.status = status
     }

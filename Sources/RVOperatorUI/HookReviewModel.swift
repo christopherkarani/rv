@@ -48,7 +48,7 @@ public final class OperatorHookReviewModel {
     public private(set) var items: [UIHookReviewItemDTO] = []
     public private(set) var selectedID: String?
     public private(set) var bound: UIHookChallengeBundleDTO?
-    public private(set) var lastStatus: String?
+    public private(set) var lastStatus: HookReviewStatus?
     public private(set) var notice: String?
     public private(set) var authenticating = false
 
@@ -189,11 +189,12 @@ public final class OperatorHookReviewModel {
         }
     }
 
-    private static func isTerminal(_ status: String) -> Bool {
+    private static func isTerminal(_ status: HookReviewStatus) -> Bool {
+        // Exhaustive: a new status breaks this switch until classified.
         switch status {
-        case "allowedOnce", "ruleCreated", "denied", "consumed", "expired", "canceled", "timedOut":
+        case .allowedOnce, .ruleCreated, .denied, .consumed, .expired, .canceled, .timedOut:
             return true
-        default:
+        case .awaitingHuman, .awaitingAuthentication, .unknown:
             return false
         }
     }

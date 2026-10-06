@@ -2,6 +2,7 @@ import Foundation
 import Synchronization
 import Testing
 import RVDomain
+import RVIPC
 @testable import RVIsolation
 
 /// Scripted `ActionApprovalAsking`. No service, no XPC: drives the session
@@ -13,8 +14,8 @@ final class FakeAskBackend: ActionApprovalAsking, Sendable {
         var createDeclined = false
         /// Per-approval status scripts (FIFO; falls back to `statusDefault`).
         /// A nil entry is one transport blip (the waiter keeps polling).
-        var statusScripts: [UUID: [String?]] = [:]
-        var statusDefault = "pending"
+        var statusScripts: [UUID: [HostActionApprovalStatus?]] = [:]
+        var statusDefault: HostActionApprovalStatus = .pending
         var statusCalls = 0
         /// Approvals whose consume succeeds.
         var consumable: Set<UUID> = []
@@ -31,11 +32,11 @@ final class FakeAskBackend: ActionApprovalAsking, Sendable {
 
     var snapshot: State { state.withLock { $0 } }
 
-    func setStatusScript(_ script: [String?], for approvalID: UUID) {
+    func setStatusScript(_ script: [HostActionApprovalStatus?], for approvalID: UUID) {
         state.withLock { $0.statusScripts[approvalID] = script }
     }
 
-    func setStatusDefault(_ status: String) {
+    func setStatusDefault(_ status: HostActionApprovalStatus) {
         state.withLock { $0.statusDefault = status }
     }
 
@@ -54,7 +55,7 @@ final class FakeAskBackend: ActionApprovalAsking, Sendable {
     /// Authorize-all: every approval reports authorized and consumes.
     func authorizeAll() {
         state.withLock {
-            $0.statusDefault = "authorized"
+            $0.statusDefault = .authorized
             $0.consumableByDefault = true
             for approval in $0.created {
                 $0.consumable.insert(approval.approvalID)
@@ -81,7 +82,7 @@ final class FakeAskBackend: ActionApprovalAsking, Sendable {
         }
     }
 
-    func approvalStatus(_ approval: CreatedActionApproval) -> String? {
+    func approvalStatus(_ approval: CreatedActionApproval) -> HostActionApprovalStatus? {
         state.withLock { state in
             state.statusCalls += 1
             if var script = state.statusScripts[approval.approvalID], !script.isEmpty {
@@ -407,7 +408,7 @@ struct ActionApprovalParkTests {
     @Test func denyExecutesZeroWithOriginalDeny() async throws {
         let harness = try ParkHarness()
         defer { harness.cleanup() }
-        harness.backend.setStatusDefault("denied")
+        harness.backend.setStatusDefault(.denied)
         let decision = harness.session.submitLegacy(.success(harness.frame("echo hello")))
         #expect(decision.responseDeferred == true)
         await waitFor("denial") { harness.session.queuedCompletionCountForTesting == 1 }
@@ -422,7 +423,7 @@ struct ActionApprovalParkTests {
         let harness = try ParkHarness()
         defer { harness.cleanup() }
         // Authorized but the grant is gone (expired/invalidated server-side).
-        harness.backend.setStatusDefault("authorized")
+        harness.backend.setStatusDefault(.authorized)
         let decision = harness.session.submitLegacy(.success(harness.frame("echo hello")))
         #expect(decision.responseDeferred == true)
         await waitFor("failure") { harness.session.queuedCompletionCountForTesting == 1 }
@@ -501,7 +502,7 @@ struct ActionApprovalParkTests {
     @Test func unknownStatusFailsClosed() async throws {
         let harness = try ParkHarness()
         defer { harness.cleanup() }
-        harness.backend.setStatusDefault("unknown")
+        harness.backend.setStatusDefault(.unknown)
         _ = harness.session.submitLegacy(.success(harness.frame("echo hello")))
         await waitFor("unknown") { harness.session.queuedCompletionCountForTesting == 1 }
         #expect(harness.effect.runs == 0)
@@ -585,7 +586,7 @@ struct ActionApprovalParkTests {
         _ = harness.session.submitLegacy(.success(harness.frame("echo hello")))
         let approvalID = try #require(backend.snapshot.created.first?.approvalID)
         backend.setStatusScript(
-            [nil, nil, "pending", "awaitingAuthentication", "authorized"], for: approvalID)
+            [nil, nil, .pending, .awaitingAuthentication, .authorized,], for: approvalID)
         backend.setConsumable(approvalID)
         await waitFor("execution after blips") { harness.effect.runs == 1 }
         #expect(harness.effect.runs == 1)

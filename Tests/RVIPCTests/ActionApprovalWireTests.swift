@@ -32,7 +32,7 @@ struct ActionApprovalWireRoundTripTests {
             runtimeSessionID: UUID(), workspaceSessionID: UUID(), hostID: UUID(),
             actionKind: "shell", exactTarget: "/work", exactArguments: "echo hello",
             policyReason: "reviewAsk", scopeSummary: "Allow once: this exact action, single use.",
-            actionDigestHex: String(repeating: "d", count: 64), status: "pending",
+            actionDigestHex: String(repeating: "d", count: 64), status: .pending,
             advisoryExpiresWall: Date(timeIntervalSince1970: 1_800_000_000))
     }
 
@@ -72,13 +72,13 @@ struct ActionApprovalWireRoundTripTests {
         #expect(try IPCJSON.decode(
             HostActionApprovalCreateDTO.self, from: IPCJSON.encode(create)) == create)
         let created = HostActionApprovalCreatedDTO(
-            approvalID: UUID(), continuationID: UUID(), status: "pending")
+            approvalID: UUID(), continuationID: UUID(), status: .pending)
         #expect(try IPCJSON.decode(
             HostActionApprovalCreatedDTO.self, from: IPCJSON.encode(created)) == created)
         let status = HostActionApprovalStatusDTO(approvalID: UUID(), reference: reference())
         #expect(try IPCJSON.decode(
             HostActionApprovalStatusDTO.self, from: IPCJSON.encode(status)) == status)
-        let statusReply = HostActionApprovalStatusReplyDTO(status: "authorized")
+        let statusReply = HostActionApprovalStatusReplyDTO(status: .authorized)
         #expect(try IPCJSON.decode(
             HostActionApprovalStatusReplyDTO.self, from: IPCJSON.encode(statusReply)) == statusReply)
         let consume = HostActionApprovalConsumeDTO(
@@ -86,7 +86,7 @@ struct ActionApprovalWireRoundTripTests {
             actionDigestHex: String(repeating: "d", count: 64), continuationID: UUID())
         #expect(try IPCJSON.decode(
             HostActionApprovalConsumeDTO.self, from: IPCJSON.encode(consume)) == consume)
-        let decision = HostActionApprovalDecisionDTO(status: "consumed", mayExecute: true)
+        let decision = HostActionApprovalDecisionDTO(status: .consumed, mayExecute: true)
         #expect(try IPCJSON.decode(
             HostActionApprovalDecisionDTO.self, from: IPCJSON.encode(decision)) == decision)
         let cancel = HostActionApprovalCancelDTO(approvalID: UUID(), reference: reference())
@@ -104,7 +104,7 @@ struct ActionApprovalWireRoundTripTests {
         let bundle = UIActionChallengeBundleDTO(challenge: challenge(), item: item)
         #expect(try IPCJSON.decode(
             UIActionChallengeBundleDTO.self, from: IPCJSON.encode(bundle)) == bundle)
-        let status = UIActionStatusDTO(approvalID: UUID(), status: "authorized")
+        let status = UIActionStatusDTO(approvalID: UUID(), status: .authorized)
         #expect(try IPCJSON.decode(
             UIActionStatusDTO.self, from: IPCJSON.encode(status)) == status)
         let deny = UIActionDeny(challengeID: UUID(), approvalID: UUID())
@@ -117,12 +117,12 @@ struct ActionApprovalWireRoundTripTests {
             .uiActionReviewList(UIActionReviewListDTO(items: [reviewItem()])),
             .uiActionChallengeBundle(UIActionChallengeBundleDTO(
                 challenge: challenge(), item: reviewItem())),
-            .uiActionStatus(UIActionStatusDTO(approvalID: UUID(), status: "denied")),
+            .uiActionStatus(UIActionStatusDTO(approvalID: UUID(), status: .denied)),
             .hostActionApprovalCreated(HostActionApprovalCreatedDTO(
-                approvalID: UUID(), continuationID: UUID(), status: "pending")),
-            .hostActionApprovalStatus(HostActionApprovalStatusReplyDTO(status: "authorized")),
+                approvalID: UUID(), continuationID: UUID(), status: .pending)),
+            .hostActionApprovalStatus(HostActionApprovalStatusReplyDTO(status: .authorized)),
             .hostActionApprovalDecision(HostActionApprovalDecisionDTO(
-                status: "unknown", mayExecute: false)),
+                status: .unknown, mayExecute: false)),
         ]
         for result in results {
             let response = IPCResponse(id: UUID(), result: result)

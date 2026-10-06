@@ -64,13 +64,32 @@ public struct HostActionApprovalCreateDTO: Sendable, Equatable, Codable {
     }
 }
 
+/// Closed action-approval status vocabulary, defined by the host bridge
+/// (the RuntimeAdmission poll consumes it; the operator UI projects it).
+/// Raw values are the wire strings (Codable synthesizes identical bytes);
+/// unknown strings fail decode. `unknown` means the ceremony has forgotten
+/// the terminal approval. Named for the host side because RVService already
+/// uses `ActionApprovalStatus` for its internal authorizer state.
+public enum HostActionApprovalStatus: String, Sendable, Equatable, Codable, CaseIterable {
+    case pending
+    case awaitingAuthentication
+    case authorized
+    case consumed
+    case denied
+    case cancelled
+    case expired
+    case invalidated
+    case failed
+    case unknown
+}
+
 /// Service answer to a create request. IDs are correlation only.
 public struct HostActionApprovalCreatedDTO: Sendable, Equatable, Codable {
     public let approvalID: UUID
     public let continuationID: UUID
-    public let status: String
+    public let status: HostActionApprovalStatus
 
-    public init(approvalID: UUID, continuationID: UUID, status: String) {
+    public init(approvalID: UUID, continuationID: UUID, status: HostActionApprovalStatus) {
         self.approvalID = approvalID
         self.continuationID = continuationID
         self.status = status
@@ -90,9 +109,9 @@ public struct HostActionApprovalStatusDTO: Sendable, Equatable, Codable {
 
 /// Safe status projection. Never a grant, never authority.
 public struct HostActionApprovalStatusReplyDTO: Sendable, Equatable, Codable {
-    public let status: String
+    public let status: HostActionApprovalStatus
 
-    public init(status: String) {
+    public init(status: HostActionApprovalStatus) {
         self.status = status
     }
 }
@@ -126,13 +145,13 @@ public struct HostActionApprovalConsumeDTO: Sendable, Equatable, Codable {
 /// `mayExecute` is true if and only if THIS call atomically consumed the
 /// grant for the exact presented bindings. Any other answer means do not
 /// run — including `mayExecute == false` on replay, on mismatch, or once
-/// the ceremony has forgotten the terminal approval (`status == "unknown"`).
+/// the ceremony has forgotten the terminal approval (`status == .unknown`).
 /// The status string is informational; the bit is the decision.
 public struct HostActionApprovalDecisionDTO: Sendable, Equatable, Codable {
-    public let status: String
+    public let status: HostActionApprovalStatus
     public let mayExecute: Bool
 
-    public init(status: String, mayExecute: Bool) {
+    public init(status: HostActionApprovalStatus, mayExecute: Bool) {
         self.status = status
         self.mayExecute = mayExecute
     }
@@ -286,7 +305,7 @@ public struct UIActionReviewItemDTO: Sendable, Equatable, Codable {
     public let policyReason: String
     public let scopeSummary: String
     public let actionDigestHex: String
-    public let status: String
+    public let status: HostActionApprovalStatus
     public let advisoryExpiresWall: Date?
 
     public init(
@@ -294,7 +313,7 @@ public struct UIActionReviewItemDTO: Sendable, Equatable, Codable {
         definitionRevisionDigest: String, runtimeSessionID: UUID, workspaceSessionID: UUID,
         hostID: UUID, actionKind: String, exactTarget: String, exactArguments: String,
         policyReason: String, scopeSummary: String, actionDigestHex: String,
-        status: String, advisoryExpiresWall: Date?
+        status: HostActionApprovalStatus, advisoryExpiresWall: Date?
     ) {
         self.approvalID = approvalID
         self.instanceID = instanceID
@@ -337,9 +356,9 @@ public struct UIActionChallengeBundleDTO: Sendable, Equatable, Codable {
 /// reference.
 public struct UIActionStatusDTO: Sendable, Equatable, Codable {
     public let approvalID: UUID
-    public let status: String
+    public let status: HostActionApprovalStatus
 
-    public init(approvalID: UUID, status: String) {
+    public init(approvalID: UUID, status: HostActionApprovalStatus) {
         self.approvalID = approvalID
         self.status = status
     }

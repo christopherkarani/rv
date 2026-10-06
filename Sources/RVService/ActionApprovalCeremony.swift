@@ -181,7 +181,7 @@ actor ActionApprovalCeremonyService {
         return HostActionApprovalCreatedDTO(
             approvalID: created.reference.approvalID.rawValue,
             continuationID: created.continuationID.rawValue,
-            status: "pending")
+            status: .pending)
     }
 
     // MARK: - Host status/consume/cancel
@@ -203,21 +203,21 @@ actor ActionApprovalCeremonyService {
             // retention plus live bindings, so this projection cannot
             // authorize anything.
             if let status = try? await authorizer.status(of: id) {
-                return HostActionApprovalStatusReplyDTO(status: Self.statusString(status))
+                return HostActionApprovalStatusReplyDTO(status: Self.status(status))
             }
-            return HostActionApprovalStatusReplyDTO(status: "unknown")
+            return HostActionApprovalStatusReplyDTO(status: .unknown)
         }
         guard (try? await resolveAndMatch(retained, reference: dto.reference, hostPeer: hostPeer)) != nil
         else {
-            return HostActionApprovalStatusReplyDTO(status: "unknown")
+            return HostActionApprovalStatusReplyDTO(status: .unknown)
         }
         do {
             let status = try await authorizer.status(of: id)
             await pruneIfTerminal(id: id, status: status)
-            return HostActionApprovalStatusReplyDTO(status: Self.statusString(status))
+            return HostActionApprovalStatusReplyDTO(status: Self.status(status))
         } catch {
             reviews.removeValue(forKey: id)
-            return HostActionApprovalStatusReplyDTO(status: "unknown")
+            return HostActionApprovalStatusReplyDTO(status: .unknown)
         }
     }
 
@@ -238,7 +238,7 @@ actor ActionApprovalCeremonyService {
         guard let retained = reviews[id] else {
             emit(.consumeRejected, approvalID: id.rawValue, principal: nil,
                 digest: nil, continuation: nil, outcome: "unknown approval")
-            return HostActionApprovalDecisionDTO(status: "unknown", mayExecute: false)
+            return HostActionApprovalDecisionDTO(status: .unknown, mayExecute: false)
         }
         // Pre-consume liveness: the principal must be live right now.
         guard (try? await resolveAndMatch(retained, reference: dto.reference, hostPeer: hostPeer)) != nil
@@ -246,7 +246,7 @@ actor ActionApprovalCeremonyService {
             emit(.consumeRejected, approvalID: id.rawValue, principal: retained.principal,
                 digest: retained.actionDigestHex,
                 continuation: retained.continuationID.rawValue, outcome: "principal not live")
-            return HostActionApprovalDecisionDTO(status: "unknown", mayExecute: false)
+            return HostActionApprovalDecisionDTO(status: .unknown, mayExecute: false)
         }
         // Presented-vs-retained binding check. The reference IDs were just
         // proved live AND equal to the retained principal; the digest and
@@ -258,7 +258,7 @@ actor ActionApprovalCeremonyService {
             emit(.consumeRejected, approvalID: id.rawValue, principal: retained.principal,
                 digest: retained.actionDigestHex,
                 continuation: retained.continuationID.rawValue, outcome: "binding mismatch")
-            return HostActionApprovalDecisionDTO(status: "unknown", mayExecute: false)
+            return HostActionApprovalDecisionDTO(status: .unknown, mayExecute: false)
         }
         let reference = ActionApprovalReference(
             approvalID: id, epoch: authorizer.epoch)
@@ -270,11 +270,11 @@ actor ActionApprovalCeremonyService {
             _ = try await authorizer.consumeGrant(reference, expectation: expectation)
         } catch {
             let liveStatus = try? await authorizer.status(of: id)
-            let status = liveStatus.map(Self.statusString) ?? "unknown"
+            let status = liveStatus.map(Self.status) ?? .unknown
             await pruneIfTerminal(id: id, status: liveStatus)
             emit(.consumeRejected, approvalID: id.rawValue, principal: retained.principal,
                 digest: retained.actionDigestHex,
-                continuation: retained.continuationID.rawValue, outcome: status)
+                continuation: retained.continuationID.rawValue, outcome: status.rawValue)
             return HostActionApprovalDecisionDTO(status: status, mayExecute: false)
         }
         // Post-consume liveness: revocation racing the atomic gate is
@@ -286,13 +286,13 @@ actor ActionApprovalCeremonyService {
                 digest: retained.actionDigestHex,
                 continuation: retained.continuationID.rawValue,
                 outcome: "principal died after consume; grant spent, no execution")
-            return HostActionApprovalDecisionDTO(status: "unknown", mayExecute: false)
+            return HostActionApprovalDecisionDTO(status: .unknown, mayExecute: false)
         }
         reviews.removeValue(forKey: id)
         emit(.consumeCompleted, approvalID: id.rawValue, principal: retained.principal,
             digest: retained.actionDigestHex,
             continuation: retained.continuationID.rawValue, outcome: "consumed")
-        return HostActionApprovalDecisionDTO(status: "consumed", mayExecute: true)
+        return HostActionApprovalDecisionDTO(status: .consumed, mayExecute: true)
     }
 
     /// Host-driven cancel: its parked continuation went away. Idempotent;
@@ -307,13 +307,13 @@ actor ActionApprovalCeremonyService {
             // park asks about an already-terminal approval; answer with
             // the authorizer's truth instead of unknown.
             if let status = try? await authorizer.status(of: id) {
-                return HostActionApprovalStatusReplyDTO(status: Self.statusString(status))
+                return HostActionApprovalStatusReplyDTO(status: Self.status(status))
             }
-            return HostActionApprovalStatusReplyDTO(status: "unknown")
+            return HostActionApprovalStatusReplyDTO(status: .unknown)
         }
         guard (try? await resolveAndMatch(retained, reference: dto.reference, hostPeer: hostPeer)) != nil
         else {
-            return HostActionApprovalStatusReplyDTO(status: "unknown")
+            return HostActionApprovalStatusReplyDTO(status: .unknown)
         }
         do {
             try await authorizer.cancel(approvalID: id)
@@ -325,11 +325,11 @@ actor ActionApprovalCeremonyService {
             await pruneIfTerminal(id: id, status: status)
             emit(.ceremonyCancelled, approvalID: id.rawValue, principal: retained.principal,
                 digest: retained.actionDigestHex,
-                continuation: retained.continuationID.rawValue, outcome: Self.statusString(status))
-            return HostActionApprovalStatusReplyDTO(status: Self.statusString(status))
+                continuation: retained.continuationID.rawValue, outcome: Self.status(status).rawValue)
+            return HostActionApprovalStatusReplyDTO(status: Self.status(status))
         } catch {
             reviews.removeValue(forKey: id)
-            return HostActionApprovalStatusReplyDTO(status: "unknown")
+            return HostActionApprovalStatusReplyDTO(status: .unknown)
         }
     }
 
@@ -416,7 +416,7 @@ actor ActionApprovalCeremonyService {
     func completeActionCeremony(
         _ completion: UIActionCompletion,
         uiConnection: AuthenticatedOperatorUIConnectionID
-    ) async throws -> String {
+    ) async throws -> HostActionApprovalStatus {
         let id = ActionApprovalID(rawValue: completion.approvalID)
         guard let retained = reviews[id],
             let challenge = retained.challenge,
@@ -443,7 +443,7 @@ actor ActionApprovalCeremonyService {
                 challenge, uiConnection: uiConnection, result: result)
         } catch ActionApprovalError.authenticationFailed {
             reviews.removeValue(forKey: id)
-            return Self.statusString(.failed)
+            return Self.status(.failed)
         } catch {
             throw mapAuthorizerError(error)
         }
@@ -463,9 +463,9 @@ actor ActionApprovalCeremonyService {
         await prune()
         if let status = try? await authorizer.status(of: id) {
             await pruneIfTerminal(id: id, status: status)
-            return Self.statusString(status)
+            return Self.status(status)
         }
-        return "unknown"
+        return .unknown
     }
 
     /// Records an explicit human deny for the exact bound review. Terminal:
@@ -474,7 +474,7 @@ actor ActionApprovalCeremonyService {
     func denyActionCeremony(
         _ deny: UIActionDeny,
         uiConnection: AuthenticatedOperatorUIConnectionID
-    ) async throws -> String {
+    ) async throws -> HostActionApprovalStatus {
         let id = ActionApprovalID(rawValue: deny.approvalID)
         guard let retained = reviews[id],
             let challenge = retained.challenge,
@@ -492,7 +492,7 @@ actor ActionApprovalCeremonyService {
         do {
             try await authorizer.deny(challenge, uiConnection: uiConnection)
             reviews.removeValue(forKey: id)
-            return Self.statusString(.denied)
+            return Self.status(.denied)
         } catch {
             throw mapAuthorizerError(error)
         }
@@ -504,7 +504,7 @@ actor ActionApprovalCeremonyService {
     func cancelActionReview(
         approvalID: UUID,
         uiConnection: AuthenticatedOperatorUIConnectionID
-    ) async throws -> String {
+    ) async throws -> HostActionApprovalStatus {
         let id = ActionApprovalID(rawValue: approvalID)
         guard let retained = reviews[id] else {
             throw ActionApprovalCeremonyError.unknownApproval
@@ -531,19 +531,19 @@ actor ActionApprovalCeremonyService {
         emit(.ceremonyCancelled, approvalID: approvalID, principal: retained.principal,
             digest: retained.actionDigestHex,
             continuation: retained.continuationID.rawValue, outcome: "cancelled by UI")
-        return Self.statusString(.cancelled)
+        return Self.status(.cancelled)
     }
 
     /// UI-facing status with retention pruning.
-    func actionStatus(approvalID: UUID) async -> String {
+    func actionStatus(approvalID: UUID) async -> HostActionApprovalStatus {
         let id = ActionApprovalID(rawValue: approvalID)
         do {
             let status = try await authorizer.status(of: id)
             await pruneIfTerminal(id: id, status: status)
-            return Self.statusString(status)
+            return Self.status(status)
         } catch {
             reviews.removeValue(forKey: id)
-            return "unknown"
+            return .unknown
         }
     }
 
@@ -648,17 +648,17 @@ actor ActionApprovalCeremonyService {
         }
     }
 
-    private static func statusString(_ status: ActionApprovalStatus) -> String {
+    private static func status(_ status: ActionApprovalStatus) -> HostActionApprovalStatus {
         switch status {
-        case .pending: return "pending"
-        case .awaitingAuthentication: return "awaitingAuthentication"
-        case .authorized: return "authorized"
-        case .consumed: return "consumed"
-        case .denied: return "denied"
-        case .cancelled: return "cancelled"
-        case .expired: return "expired"
-        case .invalidated: return "invalidated"
-        case .failed: return "failed"
+        case .pending: return .pending
+        case .awaitingAuthentication: return .awaitingAuthentication
+        case .authorized: return .authorized
+        case .consumed: return .consumed
+        case .denied: return .denied
+        case .cancelled: return .cancelled
+        case .expired: return .expired
+        case .invalidated: return .invalidated
+        case .failed: return .failed
         }
     }
 
@@ -739,7 +739,7 @@ actor ActionApprovalCeremonyService {
             policyReason: reason,
             scopeSummary: "Allow once: this exact action, single use.",
             actionDigestHex: retained.actionDigestHex,
-            status: statusString(status),
+            status: Self.status(status),
             advisoryExpiresWall: retained.createdWall.addingTimeInterval(
                 ActionApprovalLimits.approvalLifetime))
     }

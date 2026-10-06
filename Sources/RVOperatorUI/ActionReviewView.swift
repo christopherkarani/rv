@@ -26,7 +26,7 @@ public struct OperatorActionReviewView: View {
                     Text(verbatim: ReviewDisplayEscape.escape(item.actionKind))
                         .font(.headline)
                         .lineLimit(1)
-                    Text(verbatim: ReviewDisplayEscape.escape(item.status))
+                    Text(verbatim: ReviewDisplayEscape.escape(item.status.rawValue))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -104,7 +104,7 @@ private struct ActionReviewDetailView: View {
                 row("Policy reason", bundle.item.policyReason)
                 row("Scope", bundle.item.scopeSummary)
                 row("Action digest", bundle.item.actionDigestHex)
-                row("Status", bundle.item.status)
+                row("Status", bundle.item.status.rawValue)
             }
             Section {
                 HStack {
@@ -123,7 +123,7 @@ private struct ActionReviewDetailView: View {
                 if model.authenticating {
                     Text("Waiting for device-owner authentication…")
                 } else if let status = model.lastStatus {
-                    Text("Last result: \(status)")
+                    Text("Last result: \(status.rawValue)")
                 }
             }
         }

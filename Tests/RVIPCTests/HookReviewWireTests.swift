@@ -10,7 +10,7 @@ struct HookReviewWireTests {
             actionKind: "shell", exactCommand: "git reset --hard",
             workingDirectory: "/tmp/ws", policyReason: "hostAsk",
             actionFingerprint: "pi:sess-pi:/tmp/ws:git reset --hard",
-            status: "awaitingHuman",
+            status: .awaitingHuman,
             advisoryExpiresWall: Date(timeIntervalSince1970: 1_800_000_000))
     }
 
@@ -50,7 +50,7 @@ struct HookReviewWireTests {
         let bundle = UIHookChallengeBundleDTO(challenge: challenge(), item: item)
         #expect(try IPCJSON.decode(
             UIHookChallengeBundleDTO.self, from: IPCJSON.encode(bundle)) == bundle)
-        let status = UIHookStatusDTO(approvalID: "hook-1", status: "allowedOnce")
+        let status = UIHookStatusDTO(approvalID: "hook-1", status: .allowedOnce)
         #expect(try IPCJSON.decode(
             UIHookStatusDTO.self, from: IPCJSON.encode(status)) == status)
         let deny = UIHookDeny(challengeID: UUID(), approvalID: "hook-1")
@@ -67,7 +67,7 @@ struct HookReviewWireTests {
             .uiHookReviewList(UIHookReviewListDTO(items: [reviewItem()])),
             .uiHookChallengeBundle(UIHookChallengeBundleDTO(
                 challenge: challenge(), item: reviewItem())),
-            .uiHookStatus(UIHookStatusDTO(approvalID: "hook-1", status: "denied")),
+            .uiHookStatus(UIHookStatusDTO(approvalID: "hook-1", status: .denied)),
         ]
         for result in results {
             let response = IPCResponse(id: UUID(), result: result)

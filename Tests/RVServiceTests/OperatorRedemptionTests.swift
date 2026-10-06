@@ -183,7 +183,7 @@ struct OperatorRedemptionTests {
     private func completeAuthenticated(
         _ fixture: Fixture, operationID: UUID, challengeID: UUID,
         ui: AuthenticatedOperatorUIConnectionID
-    ) async throws -> String {
+    ) async throws -> WorkspaceOperationStatus {
         try await fixture.ceremonies.completeCeremony(
             UIOperatorCompletion(
                 challengeID: challengeID, operationID: operationID,
@@ -203,7 +203,7 @@ struct OperatorRedemptionTests {
         let challenge = try await boundChallenge(fixture, operationID: id, ui: ui)
         let status = try await completeAuthenticated(
             fixture, operationID: id, challengeID: challenge.challengeID, ui: ui)
-        #expect(status == "consumed")
+        #expect(status == .consumed)
         #expect(fixture.authorizerAudit.consumedCount == 1)
         #expect(fixture.redeemProbe.count == 1)
         let commit = try #require(fixture.redeemProbe.requests.first)
@@ -218,8 +218,8 @@ struct OperatorRedemptionTests {
         #expect(commit.revisionDigest == nil)
         let polled = await fixture.ceremonies.proposalStatus(
             ProposalStatusParams(operationID: id))
-        #expect(polled.status == "consumed")
-        #expect(polled.launchResult == "launched")
+        #expect(polled.status == .consumed)
+        #expect(polled.launchResult == .launched)
         #expect(polled.runtimeSessionID == runtimeID)
         #expect(polled.agentInstanceID == instanceID)
         let kinds = fixture.audit.all.map(\.kind)
@@ -243,14 +243,14 @@ struct OperatorRedemptionTests {
         let ui = AuthenticatedOperatorUIConnectionID()
         let challenge = try await boundChallenge(fixture, operationID: id, ui: ui)
         #expect(try await completeAuthenticated(
-            fixture, operationID: id, challengeID: challenge.challengeID, ui: ui) == "consumed")
+            fixture, operationID: id, challengeID: challenge.challengeID, ui: ui) == .consumed)
         #expect(fixture.authorizerAudit.consumedCount == 1)
         #expect(fixture.redeemProbe.count == 1)
         for _ in 0..<3 {
             let polled = await fixture.ceremonies.proposalStatus(
                 ProposalStatusParams(operationID: id))
-            #expect(polled.status == "consumed")
-            #expect(polled.launchResult == "failed")
+            #expect(polled.status == .consumed)
+            #expect(polled.launchResult == .failed)
             #expect(polled.runtimeSessionID == nil)
         }
         // Polling never re-commits.
@@ -266,10 +266,10 @@ struct OperatorRedemptionTests {
         let ui = AuthenticatedOperatorUIConnectionID()
         let challenge = try await boundChallenge(fixture, operationID: id, ui: ui)
         #expect(try await completeAuthenticated(
-            fixture, operationID: id, challengeID: challenge.challengeID, ui: ui) == "consumed")
+            fixture, operationID: id, challengeID: challenge.challengeID, ui: ui) == .consumed)
         let polled = await fixture.ceremonies.proposalStatus(
             ProposalStatusParams(operationID: id))
-        #expect(polled.launchResult == "failed")
+        #expect(polled.launchResult == .failed)
         #expect(fixture.redeemProbe.count == 1)
     }
 
@@ -281,16 +281,16 @@ struct OperatorRedemptionTests {
         let ui = AuthenticatedOperatorUIConnectionID()
         let challenge = try await boundChallenge(fixture, operationID: id, ui: ui)
         #expect(try await completeAuthenticated(
-            fixture, operationID: id, challengeID: challenge.challengeID, ui: ui) == "consumed")
+            fixture, operationID: id, challengeID: challenge.challengeID, ui: ui) == .consumed)
         #expect(fixture.authorizerAudit.consumedCount == 1)
         #expect(fixture.redeemProbe.count == 1)
         let polled = await fixture.ceremonies.proposalStatus(
             ProposalStatusParams(operationID: id))
-        #expect(polled.launchResult == "unknown")
+        #expect(polled.launchResult == .unknown)
         // A later host loss cannot revive or duplicate the spent permit.
         await fixture.ceremonies.hostConnectionLost(
             connectionID: fixture.peer.connectionID)
-        #expect(await fixture.ceremonies.ceremonyStatus(operationID: id) == "consumed")
+        #expect(await fixture.ceremonies.ceremonyStatus(operationID: id) == .consumed)
         #expect(fixture.redeemProbe.count == 1)
     }
 
@@ -300,10 +300,10 @@ struct OperatorRedemptionTests {
         let ui = AuthenticatedOperatorUIConnectionID()
         let challenge = try await boundChallenge(fixture, operationID: id, ui: ui)
         #expect(try await completeAuthenticated(
-            fixture, operationID: id, challengeID: challenge.challengeID, ui: ui) == "consumed")
+            fixture, operationID: id, challengeID: challenge.challengeID, ui: ui) == .consumed)
         let polled = await fixture.ceremonies.proposalStatus(
             ProposalStatusParams(operationID: id))
-        #expect(polled.launchResult == "unknown")
+        #expect(polled.launchResult == .unknown)
     }
 
     @Test func staleChannelBurnsPermitWithoutConsume() async throws {
@@ -323,12 +323,12 @@ struct OperatorRedemptionTests {
         connected.withLock { $0 = false }
         let status = try await completeAuthenticated(
             fixture, operationID: id, challengeID: challenge.challengeID, ui: ui)
-        #expect(status == "invalidated")
+        #expect(status == .invalidated)
         #expect(fixture.authorizerAudit.consumedCount == 0)
         #expect(fixture.redeemProbe.count == 0)
         let polled = await fixture.ceremonies.proposalStatus(
             ProposalStatusParams(operationID: id))
-        #expect(polled.launchResult == "failed")
+        #expect(polled.launchResult == .failed)
     }
 
     @Test func replacedRegistrationCannotRedeemOldAuthority() async throws {
@@ -353,7 +353,7 @@ struct OperatorRedemptionTests {
             redeem: fixture.redeemProbe.handler())
         let status = try await completeAuthenticated(
             fixture, operationID: id, challengeID: challenge.challengeID, ui: ui)
-        #expect(status == "invalidated")
+        #expect(status == .invalidated)
         #expect(fixture.authorizerAudit.consumedCount == 0)
         #expect(fixture.redeemProbe.count == 0)
     }
@@ -380,12 +380,12 @@ struct OperatorRedemptionTests {
         let ui = AuthenticatedOperatorUIConnectionID()
         let challenge = try await boundChallenge(fixture, operationID: id, ui: ui)
         #expect(try await completeAuthenticated(
-            fixture, operationID: id, challengeID: challenge.challengeID, ui: ui) == "consumed")
+            fixture, operationID: id, challengeID: challenge.challengeID, ui: ui) == .consumed)
         #expect(fixture.authorizerAudit.consumedCount == 1)
         #expect(fixture.redeemProbe.count == 1)
         let polled = await fixture.ceremonies.proposalStatus(
             ProposalStatusParams(operationID: id))
-        #expect(polled.launchResult == "unknown")
+        #expect(polled.launchResult == .unknown)
         #expect(polled.runtimeSessionID == nil)
     }
 
@@ -400,14 +400,14 @@ struct OperatorRedemptionTests {
         let completion = UIOperatorCompletion(
             challengeID: challenge.challengeID, operationID: id,
             outcome: .authenticated)
-        async let first: String? = try? await fixture.ceremonies.completeCeremony(
+        async let first: WorkspaceOperationStatus? = try? await fixture.ceremonies.completeCeremony(
             completion, uiConnection: ui)
-        async let second: String? = try? await fixture.ceremonies.completeCeremony(
+        async let second: WorkspaceOperationStatus? = try? await fixture.ceremonies.completeCeremony(
             completion, uiConnection: ui)
         let outcomes = await [first, second].compactMap { $0 }
         // Exactly one winner; the loser throws before any redemption.
         #expect(outcomes.count == 1)
-        #expect(outcomes.first == "consumed")
+        #expect(outcomes.first == .consumed)
         #expect(fixture.authorizerAudit.consumedCount == 1)
         #expect(fixture.redeemProbe.count == 1)
     }
@@ -501,7 +501,7 @@ struct OperatorRedemptionTests {
                     operationID: reply.operationID, outcome: .authenticated),
                 uiConnection: ui)
         }
-        #expect(await ceremonies.ceremonyStatus(operationID: reply.operationID) == "expired")
+        #expect(await ceremonies.ceremonyStatus(operationID: reply.operationID) == .expired)
     }
 
     @Test func fullStoreRetainsEveryOutcome() async throws {
@@ -516,15 +516,15 @@ struct OperatorRedemptionTests {
             let challenge = try await boundChallenge(fixture, operationID: id, ui: ui)
             #expect(try await completeAuthenticated(
                 fixture, operationID: id, challengeID: challenge.challengeID,
-                ui: ui) == "consumed")
+                ui: ui) == .consumed)
             ids.append(id)
         }
         #expect(fixture.redeemProbe.count == WorkspaceOperatorAuthorizationLimits.maxOperations)
         for id in ids {
             let polled = await fixture.ceremonies.proposalStatus(
                 ProposalStatusParams(operationID: id))
-            #expect(polled.status == "consumed")
-            #expect(polled.launchResult == "launched")
+            #expect(polled.status == .consumed)
+            #expect(polled.launchResult == .launched)
         }
     }
 

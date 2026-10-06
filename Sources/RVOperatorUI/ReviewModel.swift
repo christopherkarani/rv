@@ -39,7 +39,7 @@ public final class OperatorReviewModel {
     public private(set) var items: [UIReviewItemDTO] = []
     public private(set) var selectedID: UUID?
     public private(set) var bound: UIChallengeBundleDTO?
-    public private(set) var lastStatus: String?
+    public private(set) var lastStatus: WorkspaceOperationStatus?
     public private(set) var notice: String?
     public private(set) var authenticating = false
 
@@ -143,11 +143,12 @@ public final class OperatorReviewModel {
         bound = nil
     }
 
-    private static func isTerminal(_ status: String) -> Bool {
+    private static func isTerminal(_ status: WorkspaceOperationStatus) -> Bool {
+        // Exhaustive: a new status breaks this switch until classified.
         switch status {
-        case "authorized", "consumed", "cancelled", "expired", "invalidated", "failed":
+        case .authorized, .consumed, .cancelled, .expired, .invalidated, .failed:
             return true
-        default:
+        case .pendingReview, .awaitingAuthentication, .unknown:
             return false
         }
     }

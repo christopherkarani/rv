@@ -10,8 +10,8 @@ final class FakeActionBridge: OperatorActionUIBridge, Sendable {
     struct State: Sendable {
         var items: [UIActionReviewItemDTO] = []
         var bindRefused = false
-        var completeResult = "authorized"
-        var denyResult = "denied"
+        var completeResult: HostActionApprovalStatus = .authorized
+        var denyResult: HostActionApprovalStatus = .denied
         var connectCalls = 0
         var bindCalls = 0
         var completions: [UIActionCompletion] = []
@@ -79,15 +79,15 @@ final class FakeActionBridge: OperatorActionUIBridge, Sendable {
 
     func actionCancel(approvalID: UUID) async throws -> UIActionStatusDTO {
         state.withLock { $0.cancels.append(approvalID) }
-        return UIActionStatusDTO(approvalID: approvalID, status: "cancelled")
+        return UIActionStatusDTO(approvalID: approvalID, status: .cancelled)
     }
 
     func actionStatus(approvalID: UUID) async throws -> UIActionStatusDTO {
-        UIActionStatusDTO(approvalID: approvalID, status: "pending")
+        UIActionStatusDTO(approvalID: approvalID, status: .pending)
     }
 }
 
-func actionReviewItem(approvalID: UUID = UUID(), status: String = "pending") -> UIActionReviewItemDTO {
+func actionReviewItem(approvalID: UUID = UUID(), status: HostActionApprovalStatus = .pending) -> UIActionReviewItemDTO {
     UIActionReviewItemDTO(
         approvalID: approvalID, instanceID: UUID(), definitionID: "test-agent",
         definitionRevisionDigest: String(repeating: "c", count: 64),
@@ -154,7 +154,7 @@ struct OperatorActionReviewModelTests {
         #expect(completions[0].challengeID == retained.challenge.challengeID)
         #expect(completions[0].approvalID == id)
         #expect(completions[0].outcome == .authenticated)
-        #expect(model.lastStatus == "authorized")
+        #expect(model.lastStatus == .authorized)
         #expect(model.selectedID == nil)
         #expect(model.bound == nil)
     }
@@ -192,7 +192,7 @@ struct OperatorActionReviewModelTests {
         #expect(denies.count == 1)
         #expect(denies[0].challengeID == retained.challenge.challengeID)
         #expect(denies[0].approvalID == id)
-        #expect(model.lastStatus == "denied")
+        #expect(model.lastStatus == .denied)
         #expect(model.selectedID == nil)
     }
 
@@ -200,7 +200,7 @@ struct OperatorActionReviewModelTests {
         // A cancelled LA ceremony completes with the honest outcome (the
         // service terminally fails the approval); the model reports it.
         let bridge = FakeActionBridge()
-        bridge.setCompleteResultForTesting("failed")
+        bridge.setCompleteResultForTesting(.failed)
         let id = UUID()
         bridge.setItems([actionReviewItem(approvalID: id)])
         let counter = AuthCounter()
@@ -211,7 +211,7 @@ struct OperatorActionReviewModelTests {
         #expect(counter.calls == 1)
         #expect(bridge.snapshot.completions.count == 1)
         #expect(bridge.snapshot.completions[0].outcome == .cancelled)
-        #expect(model.lastStatus == "failed")
+        #expect(model.lastStatus == .failed)
     }
 
     @Test func bindFailureSurfacesNotice() async {
@@ -228,7 +228,7 @@ struct OperatorActionReviewModelTests {
 }
 
 extension FakeActionBridge {
-    func setCompleteResultForTesting(_ status: String) {
+    func setCompleteResultForTesting(_ status: HostActionApprovalStatus) {
         state.withLock { $0.completeResult = status }
     }
 }

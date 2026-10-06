@@ -24,7 +24,7 @@ struct HookReviewCeremonyTests {
         #expect(item.workingDirectory == "/tmp/ws")
         #expect(item.policyReason == "hostAsk")
         #expect(item.actionFingerprint == created.fingerprint.rawValue)
-        #expect(item.status == "awaitingHuman")
+        #expect(item.status == .awaitingHuman)
         #expect(item.advisoryExpiresWall == created.expiresAt)
     }
 
@@ -50,7 +50,7 @@ struct HookReviewCeremonyTests {
         #expect(challenge.approvalID == "hook-2")
         #expect(challenge.actionFingerprint == created.fingerprint.rawValue)
         #expect(challenge.uiConnectionID == ui.rawValue)
-        #expect(item.status == "awaitingAuthentication")
+        #expect(item.status == .awaitingAuthentication)
 
         let (resumed, _) = try await env.ceremonies.bindHookReview(
             approvalID: "hook-2", uiConnection: ui)
@@ -86,9 +86,9 @@ struct HookReviewCeremonyTests {
             ),
             uiConnection: ui
         )
-        #expect(status == "allowedOnce")
+        #expect(status == .allowedOnce)
         #expect(try await env.grantedCount() == 1)
-        #expect(await env.ceremonies.hookStatus(approvalID: "hook-4") == "allowedOnce")
+        #expect(await env.ceremonies.hookStatus(approvalID: "hook-4") == .allowedOnce)
     }
 
     @Test func completeIsSingleUseReplayFailsClosed() async throws {
@@ -187,7 +187,7 @@ struct HookReviewCeremonyTests {
             )
         }
         #expect(try await env.grantedCount() == 0)
-        #expect(await env.ceremonies.hookStatus(approvalID: "hook-6") == "awaitingHuman")
+        #expect(await env.ceremonies.hookStatus(approvalID: "hook-6") == .awaitingHuman)
     }
 
     @Test func completeWithoutAuthenticationFailsAndDropsChallenge() async throws {
@@ -210,7 +210,7 @@ struct HookReviewCeremonyTests {
         }
         #expect(try await env.grantedCount() == 0)
         // The row stays awaiting; the human can bind again and retry.
-        #expect(await env.ceremonies.hookStatus(approvalID: "hook-7") == "awaitingHuman")
+        #expect(await env.ceremonies.hookStatus(approvalID: "hook-7") == .awaitingHuman)
         let (fresh, _) = try await env.ceremonies.bindHookReview(
             approvalID: "hook-7", uiConnection: ui)
         #expect(fresh.challengeID != challenge.challengeID)
@@ -228,7 +228,7 @@ struct HookReviewCeremonyTests {
             UIHookDeny(challengeID: challenge.challengeID, approvalID: "hook-8"),
             uiConnection: ui
         )
-        #expect(status == "denied")
+        #expect(status == .denied)
         #expect(try await env.grantedCount() == 0)
     }
 
@@ -245,7 +245,7 @@ struct HookReviewCeremonyTests {
                 uiConnection: AuthenticatedOperatorUIConnectionID()
             )
         }
-        #expect(await env.ceremonies.hookStatus(approvalID: "hook-9") == "awaitingHuman")
+        #expect(await env.ceremonies.hookStatus(approvalID: "hook-9") == .awaitingHuman)
     }
 
     @Test func cancelReleasesReviewButLeavesWaitAwaiting() async throws {
@@ -257,11 +257,11 @@ struct HookReviewCeremonyTests {
 
         let status = try await env.ceremonies.cancelHookReview(
             approvalID: "hook-10", uiConnection: ui)
-        #expect(status == "awaitingHuman")
+        #expect(status == .awaitingHuman)
         // Re-bind works: cancel never resolved the row.
         let (_, item) = try await env.ceremonies.bindHookReview(
             approvalID: "hook-10", uiConnection: ui)
-        #expect(item.status == "awaitingAuthentication")
+        #expect(item.status == .awaitingAuthentication)
     }
 
     @Test func expiredChallengeFailsClosed() async throws {
@@ -315,8 +315,8 @@ struct HookReviewCeremonyTests {
         let env = try HookCeremonyEnv(now: now)
         defer { env.tearDown() }
         _ = try await env.seed(command: "git reset --hard", id: "hook-13")
-        #expect(await env.ceremonies.hookStatus(approvalID: "hook-13") == "awaitingHuman")
-        #expect(await env.ceremonies.hookStatus(approvalID: "hook-missing") == "unknown")
+        #expect(await env.ceremonies.hookStatus(approvalID: "hook-13") == .awaitingHuman)
+        #expect(await env.ceremonies.hookStatus(approvalID: "hook-missing") == .unknown)
 
         let ui = AuthenticatedOperatorUIConnectionID()
         let (challenge, _) = try await env.ceremonies.bindHookReview(
@@ -325,7 +325,7 @@ struct HookReviewCeremonyTests {
             UIHookDeny(challengeID: challenge.challengeID, approvalID: "hook-13"),
             uiConnection: ui
         )
-        #expect(await env.ceremonies.hookStatus(approvalID: "hook-13") == "denied")
+        #expect(await env.ceremonies.hookStatus(approvalID: "hook-13") == .denied)
     }
 
     @Test func bindTerminalRowIsNotReviewable() async throws {
@@ -442,7 +442,7 @@ struct HookReviewCeremonyTests {
             }
             #expect(try await env.grantedCount() == 0, "outcome \(outcome) must plant nothing")
             #expect(
-                await env.ceremonies.hookStatus(approvalID: id) == "awaitingHuman",
+                await env.ceremonies.hookStatus(approvalID: id) == .awaitingHuman,
                 "outcome \(outcome) must leave the row awaiting")
             let (fresh, _) = try await env.ceremonies.bindHookReview(
                 approvalID: id, uiConnection: ui)

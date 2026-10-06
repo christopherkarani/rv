@@ -180,7 +180,7 @@ struct Step8BAdversarialTests {
             ),
             uiConnection: ui
         )
-        #expect(status == "allowedOnce")
+        #expect(status == .allowedOnce)
         // The substituted action still denies: the grant binds the exact
         // approved command.
         guard case .deny = await world().apply(command: forced, cwd: cwd).decision else {
@@ -275,7 +275,7 @@ struct Step8BAdversarialTests {
         await #expect(throws: HookReviewCeremonyError.notReviewable) {
             try await ceremonies.bindHookReview(approvalID: "dead-1", uiConnection: ui)
         }
-        #expect(await ceremonies.hookStatus(approvalID: "dead-1") == "timedOut")
+        #expect(await ceremonies.hookStatus(approvalID: "dead-1") == .timedOut)
         // The ledger refuses to resolve a timed-out row even if addressed
         // directly: the timeout sweep runs inside the mutation.
         await #expect(throws: PendingApprovalError.self) {

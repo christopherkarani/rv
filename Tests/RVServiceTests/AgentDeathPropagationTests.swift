@@ -163,14 +163,14 @@ struct AgentDeathPropagationTests {
         defer { cleanup(world) }
         let created = try await world.ceremonies.requestApproval(
             createDTO(reference: world.reference), hostPeer: world.host)
-        #expect(created.status == "pending")
+        #expect(created.status == .pending)
         #expect(world.registry.finishRuntime(world.instance.runtimeSessionID, reason: .runtimeEnded) == .revoked)
         // The host's next status poll for the dead principal invalidates.
         let status = await world.ceremonies.approvalStatus(
             HostActionApprovalStatusDTO(approvalID: created.approvalID, reference: world.reference),
             hostPeer: world.host)
-        #expect(status.status == "unknown")
-        #expect(await world.ceremonies.actionStatus(approvalID: created.approvalID) == "invalidated")
+        #expect(status.status == .unknown)
+        #expect(await world.ceremonies.actionStatus(approvalID: created.approvalID) == .invalidated)
         #expect(await world.ceremonies.listActionReviews().items.isEmpty)
     }
 
@@ -196,7 +196,7 @@ struct AgentDeathPropagationTests {
                 continuationID: created.continuationID),
             hostPeer: world.host)
         #expect(decision.mayExecute == false)
-        #expect(await world.ceremonies.actionStatus(approvalID: created.approvalID) == "invalidated")
+        #expect(await world.ceremonies.actionStatus(approvalID: created.approvalID) == .invalidated)
     }
 
     @Test func reviewBindingRefusedAfterDeath() async throws {
@@ -270,7 +270,7 @@ struct AgentDeathPropagationTests {
         // trailing check failed, so the status honestly reports consumed —
         // but mayExecute false refused the resume, and a retry finds the
         // retention already dropped.
-        #expect(await ceremonies.actionStatus(approvalID: created.approvalID) == "consumed")
+        #expect(await ceremonies.actionStatus(approvalID: created.approvalID) == .consumed)
         let retry = await ceremonies.consumeApproval(
             HostActionApprovalConsumeDTO(
                 approvalID: created.approvalID, reference: reference,
@@ -327,7 +327,7 @@ struct AgentDeathPropagationTests {
                 uiConnection: ui)
         }
         #expect(calls.withLock { $0 } == 4)
-        #expect(await ceremonies.actionStatus(approvalID: created.approvalID) == "invalidated")
+        #expect(await ceremonies.actionStatus(approvalID: created.approvalID) == .invalidated)
     }
 
     @Test func replacementInstanceCannotUseOldApproval() async throws {
@@ -354,7 +354,7 @@ struct AgentDeathPropagationTests {
             HostActionApprovalStatusDTO(
                 approvalID: created.approvalID, reference: replacementReference),
             hostPeer: world.host)
-        #expect(foreign.status == "unknown")
+        #expect(foreign.status == .unknown)
         let steal = await world.ceremonies.consumeApproval(
             HostActionApprovalConsumeDTO(
                 approvalID: created.approvalID, reference: replacementReference,
@@ -366,8 +366,8 @@ struct AgentDeathPropagationTests {
         let status = await world.ceremonies.approvalStatus(
             HostActionApprovalStatusDTO(approvalID: created.approvalID, reference: world.reference),
             hostPeer: world.host)
-        #expect(status.status == "unknown")
-        #expect(await world.ceremonies.actionStatus(approvalID: created.approvalID) == "invalidated")
+        #expect(status.status == .unknown)
+        #expect(await world.ceremonies.actionStatus(approvalID: created.approvalID) == .invalidated)
         #expect(await world.ceremonies.listActionReviews().items.isEmpty)
     }
 
@@ -519,8 +519,8 @@ extension AgentDeathPropagationTests {
             hostPeer: world.host)
         // The resolve fails (dead principal) so the reply is unknown — but
         // the failed resolve invalidated the record as its side effect.
-        #expect(status.status == "unknown")
-        #expect(await world.ceremonies.actionStatus(approvalID: created.approvalID) == "invalidated")
+        #expect(status.status == .unknown)
+        #expect(await world.ceremonies.actionStatus(approvalID: created.approvalID) == .invalidated)
         #expect(await world.ceremonies.listActionReviews().items.isEmpty)
     }
 
@@ -545,8 +545,8 @@ extension AgentDeathPropagationTests {
             HostActionApprovalCancelDTO(
                 approvalID: created.approvalID, reference: reference),
             hostPeer: world.host)
-        #expect(status.status == "unknown")
-        #expect(await world.ceremonies.actionStatus(approvalID: created.approvalID) == "invalidated")
+        #expect(status.status == .unknown)
+        #expect(await world.ceremonies.actionStatus(approvalID: created.approvalID) == .invalidated)
         #expect(await world.ceremonies.listActionReviews().items.isEmpty)
     }
 }

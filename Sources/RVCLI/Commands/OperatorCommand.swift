@@ -129,9 +129,9 @@ struct OperatorProposalStatus: AsyncParsableCommand {
         let client = ServiceClient()
         switch await client.proposalStatus(operationID: id) {
         case .success(let reply):
-            var line = "operation \(reply.operationID.uuidString) status \(reply.status)"
+            var line = "operation \(reply.operationID.uuidString) status \(reply.status.rawValue)"
             if let launchResult = reply.launchResult {
-                line += " launch \(launchResult)"
+                line += " launch \(launchResult.rawValue)"
             }
             if let runtime = reply.runtimeSessionID {
                 line += " runtime \(runtime.uuidString)"

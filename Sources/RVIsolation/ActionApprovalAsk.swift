@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVIPC
 
 /// Service-minted correlation for one parked ASK. The IDs name the approval
 /// and its continuation; they grant nothing. Every call re-proves the live
@@ -41,11 +42,11 @@ public protocol ActionApprovalAsking: Sendable {
     ) -> CreatedActionApproval?
 
     /// Safe status poll. Never consumes, never a grant. Returns nil on
-    /// transport failure (the waiter keeps polling); terminal strings end
-    /// the wait. Status vocabulary: pending, awaitingAuthentication,
-    /// authorized, consumed, denied, cancelled, expired, invalidated,
-    /// failed, unknown.
-    func approvalStatus(_ approval: CreatedActionApproval) -> String?
+    /// transport failure (the waiter keeps polling); terminal statuses end
+    /// the wait. The closed `HostActionApprovalStatus` vocabulary is
+    /// exhaustive at the waiter, so a new status breaks the switch until
+    /// classified instead of slipping into a string default.
+    func approvalStatus(_ approval: CreatedActionApproval) -> HostActionApprovalStatus?
 
     /// Atomically consume for the exact parked continuation. Returns true
     /// if and only if THIS call consumed the grant (mayExecute). False —

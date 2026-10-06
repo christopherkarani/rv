@@ -46,7 +46,7 @@ public final class OperatorActionReviewModel {
     public private(set) var items: [UIActionReviewItemDTO] = []
     public private(set) var selectedID: UUID?
     public private(set) var bound: UIActionChallengeBundleDTO?
-    public private(set) var lastStatus: String?
+    public private(set) var lastStatus: HostActionApprovalStatus?
     public private(set) var notice: String?
     public private(set) var authenticating = false
 
@@ -162,11 +162,12 @@ public final class OperatorActionReviewModel {
         bound = nil
     }
 
-    private static func isTerminal(_ status: String) -> Bool {
+    private static func isTerminal(_ status: HostActionApprovalStatus) -> Bool {
+        // Exhaustive: a new status breaks this switch until classified.
         switch status {
-        case "authorized", "consumed", "denied", "cancelled", "expired", "invalidated", "failed":
+        case .authorized, .consumed, .denied, .cancelled, .expired, .invalidated, .failed:
             return true
-        default:
+        case .pending, .awaitingAuthentication, .unknown:
             return false
         }
     }

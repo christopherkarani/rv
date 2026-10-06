@@ -10,8 +10,8 @@ final class FakeHookBridge: OperatorHookUIBridge, Sendable {
     struct State: Sendable {
         var items: [UIHookReviewItemDTO] = []
         var bindRefused = false
-        var completeResult = "allowedOnce"
-        var denyResult = "denied"
+        var completeResult: HookReviewStatus = .allowedOnce
+        var denyResult: HookReviewStatus = .denied
         var connectCalls = 0
         var bindCalls = 0
         var completions: [UIHookCompletion] = []
@@ -79,15 +79,15 @@ final class FakeHookBridge: OperatorHookUIBridge, Sendable {
 
     func hookCancel(approvalID: String) async throws -> UIHookStatusDTO {
         state.withLock { $0.cancels.append(approvalID) }
-        return UIHookStatusDTO(approvalID: approvalID, status: "awaitingHuman")
+        return UIHookStatusDTO(approvalID: approvalID, status: .awaitingHuman)
     }
 
     func hookStatus(approvalID: String) async throws -> UIHookStatusDTO {
-        UIHookStatusDTO(approvalID: approvalID, status: "awaitingHuman")
+        UIHookStatusDTO(approvalID: approvalID, status: .awaitingHuman)
     }
 }
 
-func hookReviewItem(approvalID: String = "hook-1", status: String = "awaitingHuman") -> UIHookReviewItemDTO {
+func hookReviewItem(approvalID: String = "hook-1", status: HookReviewStatus = .awaitingHuman) -> UIHookReviewItemDTO {
     UIHookReviewItemDTO(
         approvalID: approvalID, host: "pi", session: "sess-pi",
         actionKind: "shell", exactCommand: "git reset --hard",
@@ -149,7 +149,7 @@ struct OperatorHookReviewModelTests {
         #expect(completions[0].challengeID == retained.challenge.challengeID)
         #expect(completions[0].approvalID == "hook-1")
         #expect(completions[0].outcome == .authenticated)
-        #expect(model.lastStatus == "allowedOnce")
+        #expect(model.lastStatus == .allowedOnce)
         #expect(model.selectedID == nil)
         #expect(model.bound == nil)
     }
@@ -186,7 +186,7 @@ struct OperatorHookReviewModelTests {
         #expect(denies.count == 1)
         #expect(denies[0].challengeID == retained.challenge.challengeID)
         #expect(denies[0].approvalID == "hook-1")
-        #expect(model.lastStatus == "denied")
+        #expect(model.lastStatus == .denied)
         #expect(model.selectedID == nil)
     }
 
@@ -239,7 +239,7 @@ struct OperatorHookReviewModelTests {
 }
 
 extension FakeHookBridge {
-    func setCompleteResultForTesting(_ status: String) {
+    func setCompleteResultForTesting(_ status: HookReviewStatus) {
         state.withLock { $0.completeResult = status }
     }
 }

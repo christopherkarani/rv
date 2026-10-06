@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVIPC
 import Synchronization
 
 /// In-memory admission evidence. A failed record is not represented: appending
@@ -582,10 +583,14 @@ final class RuntimeAdmissionSession: Sendable {
                 try? await Task.sleep(nanoseconds: pollNanoseconds)
                 continue
             }
+            // Exhaustive over the closed vocabulary: no default, so a new
+            // status breaks this switch until classified. Undecodable wire
+            // bytes never reach here (decode fails to nil above, which
+            // polls on as a transport blip).
             switch status {
-            case "pending", "awaitingAuthentication":
+            case .pending, .awaitingAuthentication:
                 try? await Task.sleep(nanoseconds: pollNanoseconds)
-            case "authorized":
+            case .authorized:
                 if backend.consumeApproval(
                     park.approval,
                     actionDigestHex: CanonicalActionDigest.sha256Hex(of: park.pending.action)
@@ -595,30 +600,30 @@ final class RuntimeAdmissionSession: Sendable {
                     failParked(requestID: requestID, park: park, cause: "approvalUnavailable")
                 }
                 return
-            case "consumed":
+            case .consumed:
                 // Already spent without this waiter consuming (service-side
                 // race or duplicate waiter, impossible by construction):
                 // never execute here.
                 failParked(requestID: requestID, park: park, cause: "approvalReplay")
                 return
-            case "denied":
+            case .denied:
                 denyParked(requestID: requestID, park: park)
                 return
-            case "cancelled":
+            case .cancelled:
                 failParked(requestID: requestID, park: park, cause: "approvalCancelled")
                 return
-            case "expired":
+            case .expired:
                 failParked(requestID: requestID, park: park, cause: "approvalExpired")
                 return
-            case "invalidated":
+            case .invalidated:
                 failParked(requestID: requestID, park: park, cause: "approvalInvalidated")
                 return
-            case "failed":
+            case .failed:
                 failParked(requestID: requestID, park: park, cause: "approvalFailed")
                 return
-            default:
-                // Closed vocabulary ("unknown" included): anything else
-                // fails closed without executing.
+            case .unknown:
+                // The ceremony forgot the terminal approval: fail closed
+                // without executing.
                 failParked(requestID: requestID, park: park, cause: "approvalUnknown")
                 return
             }

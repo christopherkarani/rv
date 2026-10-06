@@ -54,8 +54,8 @@ struct HostActionApprovalBackend: ActionApprovalAsking, Sendable {
             subject: subject)
     }
 
-    func approvalStatus(_ approval: CreatedActionApproval) -> String? {
-        let result = Mutex<String?>(nil)
+    func approvalStatus(_ approval: CreatedActionApproval) -> HostActionApprovalStatus? {
+        let result = Mutex<HostActionApprovalStatus?>(nil)
         let finished = DispatchSemaphore(value: 0)
         let task = Task {
             defer { finished.signal() }

@@ -143,7 +143,7 @@ actor HookReviewCeremonyService {
     func completeHookCeremony(
         _ completion: UIHookCompletion,
         uiConnection: AuthenticatedOperatorUIConnectionID
-    ) async throws -> String {
+    ) async throws -> HookReviewStatus {
         prune()
         guard let pending else {
             throw HookReviewCeremonyError.unknownApproval
@@ -198,7 +198,7 @@ actor HookReviewCeremonyService {
     func denyHookCeremony(
         _ deny: UIHookDeny,
         uiConnection: AuthenticatedOperatorUIConnectionID
-    ) async throws -> String {
+    ) async throws -> HookReviewStatus {
         prune()
         guard let pending else {
             throw HookReviewCeremonyError.unknownApproval
@@ -244,7 +244,7 @@ actor HookReviewCeremonyService {
     func cancelHookReview(
         approvalID: String,
         uiConnection: AuthenticatedOperatorUIConnectionID
-    ) async throws -> String {
+    ) async throws -> HookReviewStatus {
         prune()
         let id = ApprovalID(rawValue: approvalID)
         guard let challenge = challenges[id] else {
@@ -258,18 +258,18 @@ actor HookReviewCeremonyService {
     }
 
     /// UI-facing status with challenge pruning.
-    func hookStatus(approvalID: String) async -> String {
+    func hookStatus(approvalID: String) async -> HookReviewStatus {
         prune()
         guard let pending else {
-            return "unknown"
+            return .unknown
         }
         let id = ApprovalID(rawValue: approvalID)
         do {
             let row = try await pending.load(id: id, now: clock())
-            return Self.statusString(row.state)
+            return Self.status(row.state)
         } catch {
             challenges.removeValue(forKey: id)
-            return "unknown"
+            return .unknown
         }
     }
 
@@ -304,27 +304,27 @@ actor HookReviewCeremonyService {
         }
     }
 
-    private static func statusString(_ state: PendingApprovalState) -> String {
+    private static func status(_ state: PendingApprovalState) -> HookReviewStatus {
         switch state {
         case .awaitingHuman:
-            return "awaitingHuman"
+            return .awaitingHuman
         case .resolved(let resolution):
             switch resolution.decision {
             case .allowOnce:
-                return "allowedOnce"
+                return .allowedOnce
             case .createRule:
-                return "ruleCreated"
+                return .ruleCreated
             case .deny:
-                return "denied"
+                return .denied
             }
         case .consumed:
-            return "consumed"
+            return .consumed
         case .expired:
-            return "expired"
+            return .expired
         case .canceled:
-            return "canceled"
+            return .canceled
         case .timedOut:
-            return "timedOut"
+            return .timedOut
         }
     }
 
@@ -350,7 +350,7 @@ actor HookReviewCeremonyService {
             workingDirectory: cwd,
             policyReason: row.reason.rawValue,
             actionFingerprint: ReviewSanitizer.redactCredentials(in: row.fingerprint.rawValue),
-            status: bound ? "awaitingAuthentication" : statusString(row.state),
+            status: bound ? .awaitingAuthentication : status(row.state),
             advisoryExpiresWall: row.expiresAt
         )
     }

@@ -76,7 +76,7 @@ struct OperatorCeremonyDispatchTests {
             IPCRequest(method: .launchProposalStatus(ProposalStatusParams(operationID: id))),
             context: context(role: .cli))
         #expect(response.result == .launchProposalStatus(
-            ProposalStatusReply(operationID: id, status: "unknown")))
+            ProposalStatusReply(operationID: id, status: .unknown)))
     }
 
     @Test func unauthenticatedStatusDenied() async {

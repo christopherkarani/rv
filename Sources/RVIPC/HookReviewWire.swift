@@ -130,6 +130,22 @@ public struct UIHookChallengeDTO: Sendable, Equatable, Codable {
     }
 }
 
+/// Closed hook-review status vocabulary. Raw values are the wire strings
+/// (Codable synthesizes identical bytes); unknown strings fail decode.
+/// `unknown` means the ceremony has forgotten the approval.
+public enum HookReviewStatus: String, Sendable, Equatable, Codable, CaseIterable {
+    case awaitingHuman
+    case awaitingAuthentication
+    case allowedOnce
+    case ruleCreated
+    case denied
+    case consumed
+    case expired
+    case canceled
+    case timedOut
+    case unknown
+}
+
 /// One reviewable pending hook wait, projected for trusted display.
 ///
 /// All fields derive from the service's retained row. The exact command is
@@ -147,13 +163,13 @@ public struct UIHookReviewItemDTO: Sendable, Equatable, Codable {
     public let workingDirectory: String
     public let policyReason: String
     public let actionFingerprint: String
-    public let status: String
+    public let status: HookReviewStatus
     public let advisoryExpiresWall: Date?
 
     public init(
         approvalID: String, host: String, session: String, actionKind: String,
         exactCommand: String, workingDirectory: String, policyReason: String,
-        actionFingerprint: String, status: String, advisoryExpiresWall: Date?
+        actionFingerprint: String, status: HookReviewStatus, advisoryExpiresWall: Date?
     ) {
         self.approvalID = approvalID
         self.host = host
@@ -190,9 +206,9 @@ public struct UIHookChallengeBundleDTO: Sendable, Equatable, Codable {
 /// Safe hook-review status projection. Never grant contents, never authority.
 public struct UIHookStatusDTO: Sendable, Equatable, Codable {
     public let approvalID: String
-    public let status: String
+    public let status: HookReviewStatus
 
-    public init(approvalID: String, status: String) {
+    public init(approvalID: String, status: HookReviewStatus) {
         self.approvalID = approvalID
         self.status = status
     }

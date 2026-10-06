@@ -190,7 +190,7 @@ public final class WorkspaceHostBridgeClient: Sendable {
     public func actionApprovalStatus(
         approvalID: UUID,
         subject: RuntimeAdmissionSubject
-    ) async throws -> String {
+    ) async throws -> HostActionApprovalStatus {
         let (authority, connection, reference) = try approvalReference(for: subject)
         let dto = HostActionApprovalStatusDTO(approvalID: approvalID, reference: reference)
         let message = xpc_dictionary_create_empty()
@@ -248,7 +248,7 @@ public final class WorkspaceHostBridgeClient: Sendable {
     public func cancelActionApproval(
         approvalID: UUID,
         subject: RuntimeAdmissionSubject
-    ) async throws -> String {
+    ) async throws -> HostActionApprovalStatus {
         let snapshot = state.withLock { $0 }
         guard let authority = snapshot.authority, let connection = snapshot.connection else {
             throw XPCEvaluateClientError.authenticationFailed

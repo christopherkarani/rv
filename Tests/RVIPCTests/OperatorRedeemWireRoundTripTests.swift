@@ -81,12 +81,12 @@ struct OperatorRedeemWireRoundTripTests {
             """
         let decoded = try JSONDecoder().decode(
             ProposalStatusReply.self, from: Data(legacy.utf8))
-        #expect(decoded.status == "consumed")
+        #expect(decoded.status == .consumed)
         #expect(decoded.launchResult == nil)
         #expect(decoded.runtimeSessionID == nil)
         #expect(decoded.agentInstanceID == nil)
         let full = ProposalStatusReply(
-            operationID: UUID(), status: "consumed", launchResult: "launched",
+            operationID: UUID(), status: .consumed, launchResult: .launched,
             runtimeSessionID: UUID(), agentInstanceID: UUID())
         let data = try JSONEncoder().encode(full)
         #expect(try JSONDecoder().decode(ProposalStatusReply.self, from: data) == full)

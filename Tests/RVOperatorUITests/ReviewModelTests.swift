@@ -14,7 +14,7 @@ final class FakeBridge: OperatorUIBridge, Sendable {
     struct State: Sendable {
         var items: [UIReviewItemDTO] = []
         var bindRefused = false
-        var completeResult = "authorized"
+        var completeResult: WorkspaceOperationStatus = .authorized
         var connectCalls = 0
         var bindCalls = 0
         var completions: [UIOperatorCompletion] = []
@@ -32,7 +32,7 @@ final class FakeBridge: OperatorUIBridge, Sendable {
         state.withLock { $0.bindRefused = refused }
     }
 
-    func setCompleteResult(_ status: String) {
+    func setCompleteResult(_ status: WorkspaceOperationStatus) {
         state.withLock { $0.completeResult = status }
     }
 
@@ -72,7 +72,7 @@ final class FakeBridge: OperatorUIBridge, Sendable {
     }
 
     func complete(_ completion: UIOperatorCompletion) async throws -> UIOperationStatusDTO {
-        let result = state.withLock { state -> String in
+        let result = state.withLock { state -> WorkspaceOperationStatus in
             state.completions.append(completion)
             return state.completeResult
         }
@@ -81,11 +81,11 @@ final class FakeBridge: OperatorUIBridge, Sendable {
 
     func cancel(operationID: UUID) async throws -> UIOperationStatusDTO {
         state.withLock { $0.cancels.append(operationID) }
-        return UIOperationStatusDTO(operationID: operationID, status: "cancelled")
+        return UIOperationStatusDTO(operationID: operationID, status: .cancelled)
     }
 
     func status(operationID: UUID) async throws -> UIOperationStatusDTO {
-        UIOperationStatusDTO(operationID: operationID, status: "pendingReview")
+        UIOperationStatusDTO(operationID: operationID, status: .pendingReview)
     }
 }
 
@@ -104,7 +104,7 @@ final class AuthCounter: Sendable {
     }
 }
 
-func reviewItem(operationID: UUID = UUID(), status: String = "pendingReview") -> UIReviewItemDTO {
+func reviewItem(operationID: UUID = UUID(), status: WorkspaceOperationStatus = .pendingReview) -> UIReviewItemDTO {
     UIReviewItemDTO(
         operationID: operationID, kind: "launchCustom", definitionID: nil,
         definitionRevisionDigest: nil, executable: "/bin/echo",
@@ -173,14 +173,14 @@ struct OperatorReviewModelTests {
         #expect(completions[0].challengeID == retained.challenge.challengeID)
         #expect(completions[0].operationID == id)
         #expect(completions[0].outcome == .authenticated)
-        #expect(model.lastStatus == "authorized")
+        #expect(model.lastStatus == .authorized)
         #expect(model.selectedID == nil)
         #expect(model.bound == nil)
     }
 
     @Test func cancelledOutcomeIsReportedNotUpgraded() async {
         let bridge = FakeBridge()
-        bridge.setCompleteResult("failed")
+        bridge.setCompleteResult(.failed)
         let id = UUID()
         bridge.setItems([reviewItem(operationID: id)])
         let counter = AuthCounter()
@@ -190,13 +190,13 @@ struct OperatorReviewModelTests {
         await model.authorize()
         #expect(bridge.snapshot.completions.count == 1)
         #expect(bridge.snapshot.completions[0].outcome == .cancelled)
-        #expect(model.lastStatus == "failed")
+        #expect(model.lastStatus == .failed)
         #expect(model.selectedID == nil)
     }
 
     @Test func unavailableOutcomeIsReported() async {
         let bridge = FakeBridge()
-        bridge.setCompleteResult("failed")
+        bridge.setCompleteResult(.failed)
         let id = UUID()
         bridge.setItems([reviewItem(operationID: id)])
         let counter = AuthCounter()
@@ -218,7 +218,7 @@ struct OperatorReviewModelTests {
         await model.deny()
         #expect(counter.calls == 0)
         #expect(bridge.snapshot.cancels == [id])
-        #expect(model.lastStatus == "cancelled")
+        #expect(model.lastStatus == .cancelled)
         #expect(model.selectedID == nil)
     }
 
@@ -248,7 +248,7 @@ struct OperatorReviewModelTests {
 
     @Test func nonTerminalCompletionKeepsSelection() async {
         let bridge = FakeBridge()
-        bridge.setCompleteResult("awaitingAuthentication")
+        bridge.setCompleteResult(.awaitingAuthentication)
         let id = UUID()
         bridge.setItems([reviewItem(operationID: id)])
         let model = makeModel(bridge: bridge)

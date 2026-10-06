@@ -52,18 +52,6 @@ struct WorkspaceOperatorCeremonyAuditEvent: Sendable, Equatable {
     let outcome: String
 }
 
-/// Terminal launch outcome recorded for one consumed permit.
-enum WorkspaceOperatorRedemptionOutcome: String, Sendable, Equatable {
-    /// The host accepted and the runtime established.
-    case launched
-    /// The permit is spent without a launch (host refusal, host-side
-    /// failure, stale registration, or mismatched bindings).
-    case failed
-    /// Transport lost after consume: the host may or may not have launched.
-    /// Recorded without retry; the permit stays consumed.
-    case unknown
-}
-
 enum WorkspaceOperatorCeremonyError: Error, Sendable, Equatable {
     /// No live registered host matches the proposal routing hints.
     case unknownHost
@@ -94,7 +82,7 @@ actor WorkspaceOperatorCeremonyService {
     }
 
     private struct RedemptionRecord: Sendable {
-        let outcome: WorkspaceOperatorRedemptionOutcome
+        let outcome: LaunchResult
         let runtimeSessionID: UUID?
         let agentInstanceID: UUID?
         let recordedWall: Date
@@ -197,7 +185,7 @@ actor WorkspaceOperatorCeremonyService {
             description: prepared.description, outcome: "pendingReview")
         await prune()
         return ProposeLaunchReply(
-            operationID: reference.authorizationID.rawValue, status: Self.statusString(.pending))
+            operationID: reference.authorizationID.rawValue, status: Self.status(.pending))
     }
 
     /// Pollable status for CLI. Safe strings only; never permit contents.
@@ -211,14 +199,14 @@ actor WorkspaceOperatorCeremonyService {
             let record = redemptions[id]
             return ProposalStatusReply(
                 operationID: params.operationID,
-                status: Self.statusString(status),
-                launchResult: record?.outcome.rawValue,
+                status: Self.status(status),
+                launchResult: record?.outcome,
                 runtimeSessionID: record?.runtimeSessionID,
                 agentInstanceID: record?.agentInstanceID)
         } catch {
             reviews.removeValue(forKey: id)
             redemptions.removeValue(forKey: id)
-            return ProposalStatusReply(operationID: params.operationID, status: "unknown")
+            return ProposalStatusReply(operationID: params.operationID, status: .unknown)
         }
     }
 
@@ -302,7 +290,7 @@ actor WorkspaceOperatorCeremonyService {
     func completeCeremony(
         _ completion: UIOperatorCompletion,
         uiConnection: AuthenticatedOperatorUIConnectionID
-    ) async throws -> String {
+    ) async throws -> WorkspaceOperationStatus {
         let id = WorkspaceOperationAuthorizationID(rawValue: completion.operationID)
         guard let retained = reviews[id],
             let challenge = retained.challenge,
@@ -329,12 +317,12 @@ actor WorkspaceOperatorCeremonyService {
                 hostConnectionID: retained.hostConnectionID)
             await prune()
             if let status = try? await authorizer.status(of: id) {
-                return Self.statusString(status)
+                return Self.status(status)
             }
-            return "unknown"
+            return .unknown
         } catch WorkspaceOperatorAuthorizationError.authenticationFailed {
             reviews.removeValue(forKey: id)
-            return Self.statusString(.failed)
+            return Self.status(.failed)
         } catch {
             throw mapAuthorizerError(error)
         }
@@ -463,7 +451,7 @@ actor WorkspaceOperatorCeremonyService {
 
     private func recordRedemption(
         id: WorkspaceOperationAuthorizationID,
-        outcome: WorkspaceOperatorRedemptionOutcome,
+        outcome: LaunchResult,
         runtime: UUID?,
         instance: UUID?
     ) {
@@ -538,7 +526,7 @@ actor WorkspaceOperatorCeremonyService {
     func cancelReview(
         operationID: UUID,
         uiConnection: AuthenticatedOperatorUIConnectionID
-    ) async throws -> String {
+    ) async throws -> WorkspaceOperationStatus {
         let id = WorkspaceOperationAuthorizationID(rawValue: operationID)
         guard reviews[id] != nil else {
             throw WorkspaceOperatorCeremonyError.unknownOperation
@@ -554,21 +542,21 @@ actor WorkspaceOperatorCeremonyService {
         }
         let status = (try? await authorizer.status(of: id)) ?? .cancelled
         emit(.ceremonyCancelled, operationID: operationID,
-            description: reviews[id]?.description, outcome: Self.statusString(status))
+            description: reviews[id]?.description, outcome: Self.status(status).rawValue)
         // Terminal: drop retention (challenge + argv). Status stays readable
         // via the authorizer; rebind of a cancelled op reports unknown.
         reviews.removeValue(forKey: id)
-        return Self.statusString(status)
+        return Self.status(status)
     }
 
     /// UI-facing status with retention pruning.
-    func ceremonyStatus(operationID: UUID) async -> String {
+    func ceremonyStatus(operationID: UUID) async -> WorkspaceOperationStatus {
         let id = WorkspaceOperationAuthorizationID(rawValue: operationID)
         do {
-            return Self.statusString(try await authorizer.status(of: id))
+            return Self.status(try await authorizer.status(of: id))
         } catch {
             reviews.removeValue(forKey: id)
-            return "unknown"
+            return .unknown
         }
     }
 
@@ -824,16 +812,16 @@ actor WorkspaceOperatorCeremonyService {
         }
     }
 
-    static func statusString(_ status: WorkspaceOperationAuthorizationStatus) -> String {
+    static func status(_ status: WorkspaceOperationAuthorizationStatus) -> WorkspaceOperationStatus {
         switch status {
-        case .pending: return "pendingReview"
-        case .awaitingAuthentication: return "awaitingAuthentication"
-        case .authorized: return "authorized"
-        case .consumed: return "consumed"
-        case .cancelled: return "cancelled"
-        case .expired: return "expired"
-        case .invalidated: return "invalidated"
-        case .failed: return "failed"
+        case .pending: return .pendingReview
+        case .awaitingAuthentication: return .awaitingAuthentication
+        case .authorized: return .authorized
+        case .consumed: return .consumed
+        case .cancelled: return .cancelled
+        case .expired: return .expired
+        case .invalidated: return .invalidated
+        case .failed: return .failed
         }
     }
 
@@ -856,7 +844,7 @@ actor WorkspaceOperatorCeremonyService {
             io: description.io,
             environmentPolicy: description.environmentPolicy,
             intentDigestHex: description.intentDigestHex,
-            status: Self.statusString(status),
+            status: Self.status(status),
             advisoryExpiresWall: retained.createdWall
                 .addingTimeInterval(WorkspaceOperatorAuthorizationLimits.operationLifetime))
     }

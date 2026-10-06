@@ -13,7 +13,7 @@ struct OperatorWireRoundTripTests {
             expectedContentDigest: String(repeating: "a", count: 64),
             workspaceSessionID: UUID(), workingDirectory: "/tmp", arguments: ["hi"],
             io: .pseudoTerminal(rows: 24, columns: 80), environmentPolicy: "sealed",
-            intentDigestHex: String(repeating: "c", count: 64), status: "pendingReview",
+            intentDigestHex: String(repeating: "c", count: 64), status: .pendingReview,
             advisoryExpiresWall: Date(timeIntervalSince1970: 1_800_000_000))
     }
 
@@ -65,7 +65,7 @@ struct OperatorWireRoundTripTests {
         #expect(
             try IPCJSON.decode(UIRegisteredDTO.self, from: IPCJSON.encode(registered))
                 == registered)
-        let status = UIOperationStatusDTO(operationID: UUID(), status: "authorized")
+        let status = UIOperationStatusDTO(operationID: UUID(), status: .authorized)
         #expect(
             try IPCJSON.decode(UIOperationStatusDTO.self, from: IPCJSON.encode(status)) == status)
     }
@@ -89,9 +89,9 @@ struct OperatorWireRoundTripTests {
             .uiReviewList(UIReviewListDTO(items: [item(operationID: id)])),
             .uiChallengeBundle(UIChallengeBundleDTO(
                 challenge: challenge(operationID: id), item: item(operationID: id))),
-            .uiOperationStatus(UIOperationStatusDTO(operationID: id, status: "failed")),
-            .proposeWorkspaceLaunch(ProposeLaunchReply(operationID: id, status: "pendingReview")),
-            .launchProposalStatus(ProposalStatusReply(operationID: id, status: "unknown")),
+            .uiOperationStatus(UIOperationStatusDTO(operationID: id, status: .failed)),
+            .proposeWorkspaceLaunch(ProposeLaunchReply(operationID: id, status: .pendingReview)),
+            .launchProposalStatus(ProposalStatusReply(operationID: id, status: .unknown)),
         ]
         for result in cases {
             let response = IPCResponse(id: id, result: result)

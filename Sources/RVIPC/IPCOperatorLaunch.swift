@@ -42,12 +42,25 @@ public struct ProposeLaunchParams: Sendable, Equatable, Codable {
     }
 }
 
+/// Terminal launch outcome for a consumed operation. Raw values are the
+/// wire strings (Codable synthesizes identical bytes).
+public enum LaunchResult: String, Sendable, Equatable, Codable, CaseIterable {
+    /// The host accepted and the runtime established.
+    case launched
+    /// The permit is spent without a launch (host refusal, host-side
+    /// failure, stale registration, or mismatched bindings).
+    case failed
+    /// Transport lost after consume: the host may or may not have launched.
+    /// Recorded without retry; the permit stays consumed.
+    case unknown
+}
+
 public struct ProposeLaunchReply: Sendable, Equatable, Codable {
     /// Correlation-only operation ID for status polling. Grants nothing.
     public let operationID: UUID
-    public let status: String
+    public let status: WorkspaceOperationStatus
 
-    public init(operationID: UUID, status: String) {
+    public init(operationID: UUID, status: WorkspaceOperationStatus) {
         self.operationID = operationID
         self.status = status
     }
@@ -63,18 +76,17 @@ public struct ProposalStatusParams: Sendable, Equatable, Codable {
 
 public struct ProposalStatusReply: Sendable, Equatable, Codable {
     public let operationID: UUID
-    public let status: String
-    /// Terminal launch outcome once the permit is consumed: "launched",
-    /// "failed", or "unknown" (transport lost after consume). Nil while the
+    public let status: WorkspaceOperationStatus
+    /// Terminal launch outcome once the permit is consumed. Nil while the
     /// operation has no redemption outcome. Advisory attribution only.
-    public let launchResult: String?
+    public let launchResult: LaunchResult?
     /// Fresh runtime/instance IDs for a launched operation. Identifiers for
     /// audit attribution only; never capabilities.
     public let runtimeSessionID: UUID?
     public let agentInstanceID: UUID?
 
     public init(
-        operationID: UUID, status: String, launchResult: String? = nil,
+        operationID: UUID, status: WorkspaceOperationStatus, launchResult: LaunchResult? = nil,
         runtimeSessionID: UUID? = nil, agentInstanceID: UUID? = nil
     ) {
         self.operationID = operationID

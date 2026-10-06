@@ -24,7 +24,7 @@ public struct OperatorReviewView: View {
                     Text(verbatim: ReviewDisplayEscape.escape(item.definitionID ?? item.executable))
                         .font(.headline)
                         .lineLimit(1)
-                    Text(verbatim: ReviewDisplayEscape.escape(item.status))
+                    Text(verbatim: ReviewDisplayEscape.escape(item.status.rawValue))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -108,7 +108,7 @@ private struct ReviewDetailView: View {
                 row("IO", ioText(bundle.item.io))
                 row("Environment", bundle.item.environmentPolicy)
                 row("Intent digest", short(bundle.item.intentDigestHex))
-                row("Status", bundle.item.status)
+                row("Status", bundle.item.status.rawValue)
             }
             Section {
                 HStack {
@@ -127,7 +127,7 @@ private struct ReviewDetailView: View {
                 if model.authenticating {
                     Text("Waiting for device-owner authentication…")
                 } else if let status = model.lastStatus {
-                    Text("Last result: \(status)")
+                    Text("Last result: \(status.rawValue)")
                 }
             }
         }

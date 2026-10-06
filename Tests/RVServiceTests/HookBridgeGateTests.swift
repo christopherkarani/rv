@@ -116,7 +116,7 @@ struct HookBridgeGateTests {
             Issue.record("deny must reply a status, got \(denied.result)")
             return
         }
-        #expect(status.status == "denied")
+        #expect(status.status == .denied)
     }
 }
 
