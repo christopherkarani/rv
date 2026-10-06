@@ -250,7 +250,8 @@ public actor EphemeralAllowOnceTable {
     }
 
     private func prune(now: Date) {
-        grants = grants.filter { _, grant in grant.expiresAt >= now }
+        // Fail-closed boundary, harmonized: a grant live ⟺ expiresAt > now.
+        grants = grants.filter { _, grant in grant.expiresAt > now }
     }
 
     /// FIFO eviction past `maxRedeemedCodes`. Codes are only ever

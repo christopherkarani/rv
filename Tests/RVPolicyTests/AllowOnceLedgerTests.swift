@@ -286,7 +286,7 @@ struct AllowOnceLedgerTests {
         #expect(rows.map(\.ruleID) == [denied.ruleID])
     }
 
-    @Test func exactNowIsStillLive() throws {
+    @Test func exactNowIsExpired() throws {
         let pending = Self.record(kind: .pending, hash: "p", expiresAt: Self.epoch)
         let other = Self.record(
             kind: .pending,
@@ -294,19 +294,25 @@ struct AllowOnceLedgerTests {
             fingerprint: "other-fp",
             expiresAt: Self.epoch
         )
-        #expect(throws: AllowOnceError.collision) {
-            _ = try AllowOnceLedger.mint(
-                records: [other],
-                codeHash: "p",
-                fingerprint: "fp",
-                redacted: "git …",
-                cwd: wd("/tmp/ws"),
-                ruleID: nil,
-                now: Self.epoch,
-                ttl: 3600
-            )
+        // No collision: the same-code row is already expired, so the mint
+        // appends a fresh row instead of throwing.
+        let minted = try AllowOnceLedger.mint(
+            records: [other],
+            codeHash: "p",
+            fingerprint: "fp",
+            redacted: "git …",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: Self.epoch,
+            ttl: 3600
+        )
+        guard case .appended(let fresh) = minted else {
+            Issue.record("exact-now mint over an expired row must append")
+            return
         }
-        let reused = try AllowOnceLedger.mint(
+        #expect(fresh.map(\.codeHash) == ["p"])
+        // No reuse: the same-command row is expired, so a fresh row mints.
+        let second = try AllowOnceLedger.mint(
             records: [pending],
             codeHash: "fresh",
             fingerprint: "fp",
@@ -316,25 +322,25 @@ struct AllowOnceLedgerTests {
             now: Self.epoch,
             ttl: 3600
         )
-        guard case .reused(let records) = reused else {
-            Issue.record("exact-now pending for the same command must be reused")
+        guard case .appended(let records) = second else {
+            Issue.record("exact-now pending for the same command must not be reused")
             return
         }
-        #expect(records.map(\.codeHash) == ["p"])
+        #expect(records.map(\.codeHash) == ["fresh"])
         switch try AllowOnceLedger.redeem(records: [pending], codeHash: "p", now: Self.epoch) {
-        case let .granted(records, _):
-            #expect(records.map(\.kind) == [.granted])
-        case .expired:
-            Issue.record("expiresAt == now must redeem")
+        case .expired(let expired):
+            #expect(expired.isEmpty)
+        case .granted:
+            Issue.record("expiresAt == now must expire")
         }
-        #expect(AllowOnceLedger.rows(records: [pending], now: Self.epoch).map(\.codeHash) == ["p"])
+        #expect(AllowOnceLedger.rows(records: [pending], now: Self.epoch).isEmpty)
         let consumed = Self.record(
             kind: .consumed,
             hash: "c",
             expiresAt: Self.epoch,
             consumedAt: Self.createdAt
         )
-        #expect(AllowOnceLedger.keepConsumed(records: [consumed], now: Self.epoch).map(\.codeHash) == ["c"])
+        #expect(AllowOnceLedger.keepConsumed(records: [consumed], now: Self.epoch).isEmpty)
     }
 
     @Test func keepConsumedRetainsOnlyFreshConsumedForClear() {

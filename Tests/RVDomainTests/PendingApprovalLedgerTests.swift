@@ -352,25 +352,23 @@ struct PendingApprovalLedgerTests {
         // authorizes — live principal validity is proven elsewhere.
     }
 
-    @Test func exactDeadlineIsStillAwaitingHuman() throws {
+    @Test func exactDeadlineIsTimedOut() throws {
         let created = try Self.created(timeoutPolicy: .autoDeny, ttl: 10)
         let atDeadline = created.record.expiresAt
         let awaiting = PendingApprovalLedger.awaitingHuman(created.records, now: atDeadline)
-        #expect(awaiting.count == 1)
-        let (resolved, _) = try PendingApprovalLedger.resolve(
-            records: created.records,
-            id: created.record.id,
-            decision: .allowOnce,
-            fingerprint: Self.fingerprint,
-            identity: Self.identity,
-            now: atDeadline
-        )
-        guard case .resolved = resolved.state else {
-            Issue.record("expiresAt == now must still resolve")
-            return
+        #expect(awaiting.isEmpty)
+        // The sweep times the row out before resolve runs, so the
+        // deadline-instant resolve fails instead of recording a decision.
+        #expect(throws: PendingApprovalError.timedOut) {
+            try PendingApprovalLedger.resolve(
+                records: created.records,
+                id: created.record.id,
+                decision: .allowOnce,
+                fingerprint: Self.fingerprint,
+                identity: Self.identity,
+                now: atDeadline
+            )
         }
-        // Step 8: resolving records the decision; name-only state never
-        // authorizes — live principal validity is proven elsewhere.
     }
 
     @Test func identityMismatchCannotResolveOrConsume() throws {

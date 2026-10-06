@@ -37,7 +37,8 @@ public struct AllowlistEntry: Equatable, Sendable {
 
     public func isActive(at now: Date) -> Bool {
         guard let expiresAt else { return true }
-        return expiresAt >= now
+        // Fail-closed boundary, harmonized: live ⟺ expiresAt > now.
+        return expiresAt > now
     }
 }
 

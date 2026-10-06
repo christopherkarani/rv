@@ -64,6 +64,20 @@ struct EphemeralAllowOnceTableTests {
         #expect(await table.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: late) == false)
     }
 
+    @Test func expiryBoundaryIsDead() async {
+        // m5: the harmonized fail-closed boundary — live ⟺ expiresAt > now.
+        let table = EphemeralAllowOnceTable()
+        #expect(await table.plant(
+            matchingView: "git reset --hard", cwd: wd("/tmp/ws"),
+            codeHash: "ceremony-1", now: now, ttl: 60
+        ) == .planted)
+        let justBefore = now.addingTimeInterval(59)
+        #expect(await table.hasGrant(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: justBefore))
+        let atDeadline = now.addingTimeInterval(60)
+        #expect(await table.hasGrant(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: atDeadline) == false)
+        #expect(await table.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: atDeadline) == false)
+    }
+
     @Test func freshTableInvalidatesOutstandingGrants() async {
         let before = EphemeralAllowOnceTable()
         #expect(await before.plant(

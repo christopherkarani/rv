@@ -2,10 +2,13 @@ import Foundation
 
 /// Pure pending-approval transitions. No clock, filesystem, or process state.
 public enum PendingApprovalLedger: Sendable {
-    /// Apply timeout policy. `expiresAt == now` is still awaiting a human.
+    /// Apply timeout policy. Expiry is fail-closed and harmonized
+    /// codebase-wide: `expiresAt == now` is already expired (live ⟺
+    /// `expiresAt > now`), matching the authorizers, the allow-once
+    /// table, prepared launches, and challenge pruning.
     public static func sweep(_ records: [PendingApproval], now: Date) -> [PendingApproval] {
         records.map { record in
-            guard case .awaitingHuman = record.state, now > record.expiresAt else {
+            guard case .awaitingHuman = record.state, now >= record.expiresAt else {
                 return record
             }
             switch record.timeoutPolicy {

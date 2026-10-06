@@ -335,7 +335,7 @@ public actor AllowOnceStore {
     private func pruneLiveUnlockCodes(against written: [AllowOnceRecord], now: Date) {
         var liveKeys = Set<UnlockCacheKey>()
         for record in written {
-            guard case .pending = record.lifecycle, record.expiresAt >= now else { continue }
+            guard case .pending = record.lifecycle, record.expiresAt > now else { continue }
             liveKeys.insert(UnlockCacheKey(
                 fingerprint: record.commandFingerprint,
                 cwd: record.cwd.rawValue,

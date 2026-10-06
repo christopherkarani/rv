@@ -1,6 +1,9 @@
 import Foundation
 import RVDomain
 
+/// Projection-ledger transitions. Expiry is fail-closed and harmonized
+/// codebase-wide: a record is live ⟺ `expiresAt > now`; `expiresAt == now`
+/// is already expired (no mint-reuse, no redeem, no display row).
 enum AllowOnceLedger {
     enum MintResult: Equatable, Sendable {
         case appended([AllowOnceRecord])
@@ -37,7 +40,7 @@ enum AllowOnceLedger {
         }
         if updated.contains(where: { record in
             guard case .pending = record.lifecycle else { return false }
-            return record.codeHash == codeHash && record.expiresAt >= now
+            return record.codeHash == codeHash && record.expiresAt > now
         }) {
             throw AllowOnceError.collision
         }
@@ -66,7 +69,7 @@ enum AllowOnceLedger {
             case .consumed:
                 return true
             case .pending, .granted:
-                return record.expiresAt >= now
+                return record.expiresAt > now
             }
         }
     }
@@ -102,7 +105,7 @@ enum AllowOnceLedger {
         records.first { record in
             guard case .pending = record.lifecycle else { return false }
             guard record.codeHash == codeHash else { return false }
-            return record.expiresAt >= now
+            return record.expiresAt > now
         }
     }
 
@@ -130,7 +133,7 @@ enum AllowOnceLedger {
             throw AllowOnceError.unknownCode
         }
         var pending = records[index]
-        guard pending.expiresAt >= now else {
+        guard pending.expiresAt > now else {
             var updated = records
             updated.remove(at: index)
             return .expired(records: updated)
@@ -147,7 +150,7 @@ enum AllowOnceLedger {
         updated.removeAll { record in
             switch record.lifecycle {
             case .pending, .granted:
-                return record.expiresAt < now
+                return record.expiresAt <= now
             case .consumed:
                 return false
             }
@@ -161,7 +164,7 @@ enum AllowOnceLedger {
             case .consumed:
                 break
             case .pending, .granted:
-                guard record.expiresAt >= now else { return nil }
+                guard record.expiresAt > now else { return nil }
             }
             return row(record)
         }
@@ -170,7 +173,7 @@ enum AllowOnceLedger {
     static func keepConsumed(records: [AllowOnceRecord], now: Date) -> [AllowOnceRecord] {
         records.filter { record in
             guard case .consumed = record.lifecycle else { return false }
-            return record.expiresAt >= now
+            return record.expiresAt > now
         }
     }
 
