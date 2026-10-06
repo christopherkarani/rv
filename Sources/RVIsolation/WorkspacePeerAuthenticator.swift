@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 
 /// A component identity does not confer human or Agent Principal authority.
@@ -43,6 +48,36 @@ public enum PeerAuthenticationError: Error, Sendable, Equatable {
     case codeLookup(Int32)
     case invalidCode(Int32)
     case invalidTrustConfiguration
+}
+
+extension PeerCodeIdentity {
+    /// Placeholder for socket peers (Linux SO_PEERCRED). Kernel-attested
+    /// pid/uid, but no code identity: `false` means "not verified", not
+    /// "verified absent". Socket peers are never role-bearing.
+    public static let unattributedSocket = PeerCodeIdentity(
+        identifier: "unattributed-socket-peer",
+        teamIdentifier: nil,
+        cdHash: Data(),
+        executablePath: "",
+        isAdHoc: false,
+        hardenedRuntime: false,
+        injectionExceptions: []
+    )
+}
+
+extension PlatformPeerEvidence {
+    /// Role-less evidence for a kernel-attested same-user socket peer.
+    /// Satisfies `hookConsult` (which needs a peer, not a role); every
+    /// role-gated method keeps failing closed for socket peers.
+    public static func socketPeer(processID: Int32, effectiveUserID: UInt32) -> PlatformPeerEvidence {
+        PlatformPeerEvidence(
+            processID: processID,
+            effectiveUserID: effectiveUserID,
+            auditToken: nil,
+            codeIdentity: .unattributedSocket,
+            componentRole: nil
+        )
+    }
 }
 
 #if os(macOS)
@@ -305,6 +340,26 @@ public enum MacOSPeerCodeVerifier {
         guard bound == errSecSuccess else { throw PeerAuthenticationError.invalidCode(bound) }
         return PlatformPeerEvidence(processID: processID, effectiveUserID: effectiveUserID,
             auditToken: auditToken, codeIdentity: identity, componentRole: trust.role(code: code, identity: identity))
+    }
+}
+#endif
+
+#if os(Linux)
+/// Linux AF_UNIX peer credentials. `SO_PEERCRED` is kernel-attested at
+/// `connect` time and cannot be spoofed by the peer; the only check left
+/// to us is same-user (the socket file mode is advisory once bound).
+public enum LinuxSocketPeerCapture {
+    public static func capture(fd: Int32) throws -> (processID: Int32, effectiveUserID: UInt32) {
+        var cred = ucred()
+        var length = socklen_t(MemoryLayout<ucred>.size)
+        let result = withUnsafeMutablePointer(to: &cred) { ptr in
+            getsockopt(fd, SOL_SOCKET, SO_PEERCRED, ptr, &length)
+        }
+        guard result == 0, length == socklen_t(MemoryLayout<ucred>.size),
+              cred.pid > 0, cred.uid == getuid() else {
+            throw PeerAuthenticationError.missingPeerEvidence
+        }
+        return (processID: cred.pid, effectiveUserID: cred.uid)
     }
 }
 #endif

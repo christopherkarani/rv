@@ -103,7 +103,8 @@ public enum ServiceMethodAuthorization {
             // host bridge, with live principal validation around evaluation.
             return false
         case .hookConsult:
-            // Kernel-attested local peer (XPC audit token). No component
+            // Kernel-attested local peer (XPC audit token on macOS,
+            // SO_PEERCRED same-user socket peer on Linux). No component
             // role is required: consult confers no authority, and one-click
             // installs have no admin trust manifest, so role-gating would
             // brick them. Capture failure stays fail-closed (peer nil).
@@ -134,7 +135,10 @@ public enum ServiceMethodAuthorization {
             // WHICH code attests; the in-binary ceremony (display → LA →
             // attest) proves a human reviewed and authenticated. Every
             // other role — including unauthenticated same-user peers —
-            // fails closed here.
+            // fails closed here. Linux SO_PEERCRED peers carry no code
+            // identity and never receive .cli, so TTY attestation stays a
+            // macOS-only ceremony; launch proposals are likewise denied
+            // for socket peers until Linux gains an equivalent pinning.
             switch context.componentRole {
             case .cli:
                 return context.peer != nil
