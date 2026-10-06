@@ -88,16 +88,19 @@ actor ActionApprovalCeremonyService {
     private let authorizer: ActionApprovalAuthorizer
     private let hosts: LiveWorkspaceHostRegistry
     private let audit: (@Sendable (ActionApprovalCeremonyAuditEvent) -> Void)?
+    private let clock: @Sendable () -> Date
     private var reviews: [ActionApprovalID: RetainedReview] = [:]
 
     init(
         hosts: LiveWorkspaceHostRegistry = LiveWorkspaceHostRegistry(),
         authorizer: ActionApprovalAuthorizer = ActionApprovalAuthorizer(),
-        audit: (@Sendable (ActionApprovalCeremonyAuditEvent) -> Void)? = nil
+        audit: (@Sendable (ActionApprovalCeremonyAuditEvent) -> Void)? = nil,
+        clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.hosts = hosts
         self.authorizer = authorizer
         self.audit = audit
+        self.clock = clock
     }
 
     // MARK: - ASK ingestion (host → approval)
@@ -172,7 +175,7 @@ actor ActionApprovalCeremonyService {
             continuationID: created.continuationID,
             reason: reason,
             policyContext: Self.validatedPolicyContext(dto.policyContext) ?? "",
-            createdWall: Date(),
+            createdWall: clock(),
             challenge: nil)
         emit(.approvalCreated, approvalID: created.reference.approvalID.rawValue,
             principal: principal, digest: digest,
@@ -804,7 +807,7 @@ actor ActionApprovalCeremonyService {
             principal: principal,
             actionDigestHex: digest,
             continuationID: continuation,
-            wall: Date(),
+            wall: clock(),
             outcome: outcome))
     }
 }

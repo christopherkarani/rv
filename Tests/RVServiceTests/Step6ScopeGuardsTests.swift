@@ -33,13 +33,13 @@ struct Step6ScopeGuardsTests {
         .ruleSave(RuleSaveParams(id: ApprovalID(rawValue: UUID().uuidString), polarity: .allow, draft: "draft"))
     }
 
-    private func pendingResolveMethod() -> IPCMethod {
+    private func pendingResolveMethod() throws -> IPCMethod {
         .pendingResolve(PendingResolveParams(
             id: ApprovalID(rawValue: UUID().uuidString),
             decision: .allowOnce,
             fingerprint: ActionFingerprint(rawValue: "scope"),
             identity: ApprovalIdentity(
-                session: SessionID(validating: "s")!, agent: .opencode)))
+                session: try #require(SessionID(validating: "s")), agent: .opencode)))
     }
 
     @Test func ruleSaveDeniedForEveryRole() {
@@ -54,8 +54,8 @@ struct Step6ScopeGuardsTests {
                 method, context: .unauthenticated) == false)
     }
 
-    @Test func legacyPendingResolveDeniedForEveryRole() {
-        let method = pendingResolveMethod()
+    @Test func legacyPendingResolveDeniedForEveryRole() throws {
+        let method = try pendingResolveMethod()
         for role: TrustedRVComponentRole? in [.service, .workspaceHost, .cli, .operatorUI, nil] {
             #expect(
                 ServiceMethodAuthorization.permits(method, context: context(role: role)) == false,

@@ -150,14 +150,14 @@ struct CanonicalActionDigestTests {
                 != CanonicalActionDigest.sha256Hex(of: .shell(forced)))
     }
 
-    @Test func domainSeparatedFromBareHash() {
+    @Test func domainSeparatedFromBareHash() throws {
         // The digest must differ from a bare SHA-256 of the JSON bytes, so
         // these digests can never collide with another project's hashes of
         // the same encoding.
         let action = shell("echo hello")
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        let bare = RVDigest.sha256Hex(Array((try! encoder.encode(action))))
+        let bare = RVDigest.sha256Hex(Array(try encoder.encode(action)))
         #expect(CanonicalActionDigest.sha256Hex(of: action) != bare)
     }
 }

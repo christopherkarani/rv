@@ -95,17 +95,20 @@ actor WorkspaceOperatorCeremonyService {
     private let authorizer: WorkspaceOperatorAuthorizer
     private let hosts: LiveWorkspaceHostRegistry
     private let audit: (@Sendable (WorkspaceOperatorCeremonyAuditEvent) -> Void)?
+    private let clock: @Sendable () -> Date
     private var reviews: [WorkspaceOperationAuthorizationID: RetainedReview] = [:]
     private var redemptions: [WorkspaceOperationAuthorizationID: RedemptionRecord] = [:]
 
     init(
         hosts: LiveWorkspaceHostRegistry = LiveWorkspaceHostRegistry(),
         authorizer: WorkspaceOperatorAuthorizer = WorkspaceOperatorAuthorizer(),
-        audit: (@Sendable (WorkspaceOperatorCeremonyAuditEvent) -> Void)? = nil
+        audit: (@Sendable (WorkspaceOperatorCeremonyAuditEvent) -> Void)? = nil,
+        clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.hosts = hosts
         self.authorizer = authorizer
         self.audit = audit
+        self.clock = clock
     }
 
     // MARK: - Proposal ingestion (CLI → host → Step 3)
@@ -180,7 +183,7 @@ actor WorkspaceOperatorCeremonyService {
         reviews[reference.authorizationID] = RetainedReview(
             description: prepared.description,
             hostConnectionID: prepared.hostConnectionID,
-            createdWall: Date(), challenge: nil)
+            createdWall: clock(), challenge: nil)
         emit(.pendingCreated, operationID: reference.authorizationID.rawValue,
             description: prepared.description, outcome: "pendingReview")
         await prune()
@@ -188,7 +191,7 @@ actor WorkspaceOperatorCeremonyService {
             operationID: reference.authorizationID.rawValue, status: Self.status(.pending))
     }
 
-    /// Pollable status for CLI. Safe strings only; never permit contents.
+    /// Pollable status for CLI. Safe status projection; never permit contents.
     /// Consumed operations additionally report their terminal launch outcome
     /// (and fresh runtime/instance IDs when launched) from the bounded
     /// redemption record. Polling never recreates authority.
@@ -457,7 +460,7 @@ actor WorkspaceOperatorCeremonyService {
     ) {
         redemptions[id] = RedemptionRecord(
             outcome: outcome, runtimeSessionID: runtime,
-            agentInstanceID: instance, recordedWall: Date())
+            agentInstanceID: instance, recordedWall: clock())
         while redemptions.count > Self.maxRedemptionRecords {
             guard let oldest = redemptions.min(by: {
                 $0.value.recordedWall < $1.value.recordedWall
@@ -880,7 +883,7 @@ actor WorkspaceOperatorCeremonyService {
             operationKind: description?.target,
             runtimeSessionID: runtime,
             agentInstanceID: instance,
-            wall: Date(),
+            wall: clock(),
             outcome: outcome))
     }
 }

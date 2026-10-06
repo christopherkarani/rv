@@ -41,10 +41,9 @@ struct OperatorWireRoundTripTests {
 
     @Test func unknownBridgeRequestFailsClosed() {
         let data = Data("\"nope\"".utf8)
-        do {
+        #expect(throws: DecodingError.self) {
             _ = try IPCJSON.decode(UIBridgeRequest.self, from: data)
-            Issue.record("unknown request must fail decode")
-        } catch {}
+        }
     }
 
     @Test func reviewListRoundTrips() throws {
@@ -76,10 +75,9 @@ struct OperatorWireRoundTripTests {
     }
 
     @Test func unknownIORawValueFailsClosed() {
-        do {
+        #expect(throws: DecodingError.self) {
             _ = try IPCJSON.decode(UIIODTO.self, from: Data("{\"mystery\":{}}".utf8))
-            Issue.record("unknown IO must fail decode")
-        } catch {}
+        }
     }
 
     @Test func resultCasesRoundTrip() throws {

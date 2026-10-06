@@ -496,10 +496,9 @@ struct WorkspaceOperatorCeremonyTests {
         let completion = UIOperatorCompletion(
             challengeID: challenge.challengeID, operationID: id, outcome: .authenticated)
         _ = try await fixture.ceremonies.completeCeremony(completion, uiConnection: ui)
-        do {
+        await #expect(throws: WorkspaceOperatorCeremonyError.self) {
             try await fixture.ceremonies.completeCeremony(completion, uiConnection: ui)
-            Issue.record("replay must throw")
-        } catch {}
+        }
         #expect(await fixture.ceremonies.ceremonyStatus(operationID: id) == .consumed)
     }
 
@@ -546,14 +545,13 @@ struct WorkspaceOperatorCeremonyTests {
             operationID: id, uiConnection: ui)
         await fixture.ceremonies.uiConnectionLost(ui)
         #expect(await fixture.ceremonies.ceremonyStatus(operationID: id) == .invalidated)
-        do {
+        await #expect(throws: WorkspaceOperatorCeremonyError.self) {
             try await fixture.ceremonies.completeCeremony(
                 UIOperatorCompletion(
                     challengeID: challenge.challengeID, operationID: id,
                     outcome: .authenticated),
                 uiConnection: ui)
-            Issue.record("completion after invalidation must throw")
-        } catch {}
+        }
         #expect(await fixture.ceremonies.listReviewItems().items.isEmpty)
     }
 
@@ -598,10 +596,9 @@ struct WorkspaceOperatorCeremonyTests {
         if let observed {
             #expect(observed == .consumed)
         }
-        do {
+        await #expect(throws: WorkspaceOperatorCeremonyError.self) {
             try await fixture.ceremonies.completeCeremony(completion, uiConnection: ui)
-            Issue.record("post-race completion must throw")
-        } catch {}
+        }
     }
 
     @Test func completeThenDisconnectLeavesConsumedTerminal() async throws {

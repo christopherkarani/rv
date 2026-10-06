@@ -16,8 +16,8 @@ import RVPolicy
 struct HookBridgeGateTests {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
-    @Test func handlesRoutesHookKeyOnly() {
-        #expect(XPCOperatorUIBridge.handles(hookMessage(.hookList)) == true)
+    @Test func handlesRoutesHookKeyOnly() throws {
+        #expect(XPCOperatorUIBridge.handles(try hookMessage(.hookList)) == true)
         #expect(XPCOperatorUIBridge.handles(xpc_dictionary_create_empty()) == false)
         // Garbage under the hook key still routes here (deny), never to
         // generic dispatch.
@@ -120,9 +120,9 @@ struct HookBridgeGateTests {
     }
 }
 
-private func hookMessage(_ request: UIHookBridgeRequest) -> xpc_object_t {
+private func hookMessage(_ request: UIHookBridgeRequest) throws -> xpc_object_t {
     let message = xpc_dictionary_create_empty()
-    let body = try! IPCJSON.encode(request)
+    let body = try IPCJSON.encode(request)
     body.withUnsafeBytes { buffer in
         xpc_dictionary_set_data(
             message, UIBridgeWire.hookRequestKey, buffer.baseAddress, buffer.count)
@@ -193,7 +193,7 @@ private final class HookBridgeEnv {
     ) async throws -> IPCResponse {
         let service: HookReviewCeremonyService? = hasCeremonies ? ceremonies : nil
         let response = await XPCOperatorUIBridge.hookReply(
-            message: hookMessage(request),
+            message: try hookMessage(request),
             response: xpc_dictionary_create_empty(),
             context: context ?? self.context,
             handshakeOK: handshakeOK,
