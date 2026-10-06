@@ -32,19 +32,19 @@ import RVDomain
 /// spends. The salt and the segments never leave this actor.
 public actor EphemeralAllowOnceTable {
     public struct Grant: Sendable, Equatable {
-        public var fingerprint: String
-        public var cwd: WorkingDirectory
-        public var codeHash: String
-        public var pendingID: String?
-        public var createdAt: Date
-        public var expiresAt: Date
+        public let fingerprint: String
+        public let cwd: WorkingDirectory
+        public let codeHash: String
+        public let pendingID: String?
+        public let createdAt: Date
+        public let expiresAt: Date
         /// Salted masked-payload digest, or nil for unbound (legacy) plants.
-        public var payloadBinding: String?
+        public let payloadBinding: String?
         /// Unsalted content digest from TTY attestation, when the reviewed
         /// row carried one. Mutually exclusive with `payloadBinding` in
         /// practice: hook plants set the salted form, attest plants the
         /// content form, legacy plants neither.
-        public var payloadContentBinding: String?
+        public let payloadContentBinding: String?
 
         public init(
             fingerprint: String,
