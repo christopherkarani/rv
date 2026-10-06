@@ -87,7 +87,10 @@ struct GatedEvaluatePayloadBindingTests {
         let gated = GatedEvaluate()
         #expect(
             await grants.plant(
-                fingerprint: commandFingerprint(Normalize.matchingView(of: Self.payloadA)),
+                fingerprint: grantFingerprint(
+                    Normalize.matchingView(of: Self.payloadA),
+                    invocationPrefix: Normalize.invocationPrefix(of: Self.payloadA)
+                ),
                 cwd: wd("/tmp/ws"),
                 codeHash: "m7-e2e-tty",
                 now: Self.now

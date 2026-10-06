@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import RVDomain
+import RVEngine
 import RVIPC
 import RVPolicy
 @testable import RVService
@@ -304,7 +305,10 @@ struct TTYAttestationTests {
         codeHash: String? = nil
     ) -> AttestTTYRedemptionParams {
         AttestTTYRedemptionParams(
-            fingerprint: fingerprint ?? commandFingerprint(MatchingView(command)),
+            fingerprint: fingerprint ?? grantFingerprint(
+                Normalize.matchingView(of: command),
+                invocationPrefix: Normalize.invocationPrefix(of: command)
+            ),
             cwd: wd("/tmp/ws"),
             codeHash: codeHash ?? sha256Hex(code),
             clientSemver: ProtocolVersion.serviceSemver

@@ -131,15 +131,19 @@ enum HookAskResolver {
             // is keyed by ceremony: one pending row plants at most once per
             // epoch (the CAS above already guarantees one resolve winner).
             // M-07: the exact retained command binds the hidden payload, so
-            // the grant authorizes this payload only.
+            // the grant authorizes this payload only. B1: it also binds the
+            // erased invocation prefix, so the grant authorizes this exact
+            // wrapper/assignment/argv0 spelling only.
             let segments = Normalize.maskedSegments(of: command)
+            let prefix = Normalize.invocationPrefix(of: command)
             switch await grants.plant(
                 matchingView: matchingView,
                 cwd: grantCwd,
                 codeHash: "pending:\(params.id.rawValue)",
                 pendingID: params.id.rawValue,
                 now: now,
-                maskedSegments: segments
+                maskedSegments: segments,
+                invocationPrefix: prefix
             ) {
             case .planted:
                 await projection.project(
@@ -148,7 +152,9 @@ enum HookAskResolver {
                     cwd: grantCwd,
                     codeHash: "pending:\(params.id.rawValue)",
                     now: now,
-                    maskedSegments: segments
+                    maskedSegments: segments,
+                    invocationPrefix: prefix,
+                    invocationDisplay: Normalize.invocationDisplay(of: command)
                 )
                 return resolved
             case .alreadyRedeemed, .refused:

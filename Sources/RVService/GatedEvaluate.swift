@@ -280,7 +280,8 @@ public struct GatedEvaluate: Sendable {
                     now: now,
                     rebaseInProgress: rebasing,
                     safety: safety,
-                    maskedSegments: Normalize.maskedSegments(of: request.command)
+                    maskedSegments: Normalize.maskedSegments(of: request.command),
+                    invocationPrefix: Normalize.invocationPrefix(of: request.command)
                 )
             }
         }
@@ -299,7 +300,8 @@ public struct GatedEvaluate: Sendable {
         now: Date,
         rebaseInProgress: Bool,
         safety: SafetyLevel,
-        maskedSegments: [String]?
+        maskedSegments: [String]?,
+        invocationPrefix: [String]
     ) async -> EvaluationResult {
         switch verb {
         case .peek:
@@ -311,7 +313,8 @@ public struct GatedEvaluate: Sendable {
                 now: now,
                 rebaseInProgress: rebaseInProgress,
                 safety: safety,
-                maskedSegments: maskedSegments
+                maskedSegments: maskedSegments,
+                invocationPrefix: invocationPrefix
             ).result
         case .apply:
             return await PolicyGate.consumingGrant(
@@ -322,7 +325,8 @@ public struct GatedEvaluate: Sendable {
                 now: now,
                 rebaseInProgress: rebaseInProgress,
                 safety: safety,
-                maskedSegments: maskedSegments
+                maskedSegments: maskedSegments,
+                invocationPrefix: invocationPrefix
             ).result
         }
     }
@@ -402,7 +406,9 @@ public struct GatedEvaluate: Sendable {
         store: AllowOnceStore,
         now: Date,
         home: HomeDirectory?,
-        maskedSegments: [String]? = nil
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = [],
+        invocationDisplay: String? = nil
     ) async -> AllowOnceUnlockMint? {
         guard home != nil else { return nil }
         guard let cwd, HookAuthorization.shouldMintUnlock(result: result, cwd: cwd) else {
@@ -414,7 +420,9 @@ public struct GatedEvaluate: Sendable {
             cwd: cwd,
             ruleID: deny.ruleID,
             now: now,
-            maskedSegments: maskedSegments
+            maskedSegments: maskedSegments,
+            invocationPrefix: invocationPrefix,
+            invocationDisplay: invocationDisplay
         )
     }
 

@@ -69,6 +69,11 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
     /// attestation carries it so the daemon plants a bound grant.
     /// Never exact segments.
     public var payloadDigest: String?
+    /// Display-safe invocation-prefix tag (`"sudo"`, `"FOO=… sudo"`), or
+    /// nil for bare commands and legacy rows. Names and basenames only —
+    /// never secret values. Shown in `list` and the LA prompt so the
+    /// human sees the wrappers the normalized view erases.
+    public var invocationDisplay: String?
 
     /// List/TTY/robot projection of `lifecycle`. Not stored beside it.
     public var kind: Kind {
@@ -98,7 +103,8 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         ruleID: RuleID?,
         createdAt: Date,
         expiresAt: Date,
-        payloadDigest: String? = nil
+        payloadDigest: String? = nil,
+        invocationDisplay: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.lifecycle = lifecycle
@@ -110,6 +116,7 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         self.createdAt = createdAt
         self.expiresAt = expiresAt
         self.payloadDigest = payloadDigest
+        self.invocationDisplay = invocationDisplay
     }
 
     enum CodingKeys: String, CodingKey {
@@ -124,6 +131,7 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         case expiresAt = "expires_at"
         case consumedAt = "consumed_at"
         case payloadDigest = "payload_digest"
+        case invocationDisplay = "invocation_display"
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -138,6 +146,7 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(expiresAt, forKey: .expiresAt)
         try container.encodeIfPresent(payloadDigest, forKey: .payloadDigest)
+        try container.encodeIfPresent(invocationDisplay, forKey: .invocationDisplay)
         if case .consumed(let at) = lifecycle {
             try container.encode(at, forKey: .consumedAt)
         }
@@ -155,6 +164,7 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         expiresAt = try container.decode(Date.self, forKey: .expiresAt)
         payloadDigest = try container.decodeIfPresent(String.self, forKey: .payloadDigest)
+        invocationDisplay = try container.decodeIfPresent(String.self, forKey: .invocationDisplay)
         let stamp = try container.decodeIfPresent(Date.self, forKey: .consumedAt)
         switch kind {
         case .pending:
@@ -199,10 +209,27 @@ public struct AllowOnceListRow: Sendable, Equatable {
     /// grant in the TTY redeem authentication prompt; nil for pre-armed
     /// mints. Part of the redeem TOCTOU row equality.
     public var ruleID: RuleID? = nil
+    /// Display-safe invocation-prefix tag, or nil for bare commands.
+    /// Part of the redeem TOCTOU row equality.
+    public var invocationDisplay: String? = nil
 }
 
 public func commandFingerprint(_ matchingView: MatchingView) -> String {
     sha256Hex(matchingView.rawValue)
+}
+
+/// Grant fingerprint: the view digest folded with the invocation-prefix
+/// digest. The normalized view erases wrappers, assignments, and the argv0
+/// path, so binding the view alone lets one approval cover an unreviewed
+/// `sudo`/`env`/path/assignment variant (B1). Folding the prefix digest
+/// keeps the same opaque 64-hex shape — rows, attestation, and the memory
+/// table carry it unchanged — while separating every erased variant.
+///
+/// `[]` binds the bare invocation. Callers without exact text (legacy
+/// mint ports) bind `[]`: a wrapped spend then mismatches and fails
+/// closed, exactly like an unbound M-07 payload.
+public func grantFingerprint(_ matchingView: MatchingView, invocationPrefix: [String]) -> String {
+    sha256Hex(commandFingerprint(matchingView) + ":" + maskedPayloadContentDigest(invocationPrefix))
 }
 
 public func sha256Hex(_ text: String) -> String {

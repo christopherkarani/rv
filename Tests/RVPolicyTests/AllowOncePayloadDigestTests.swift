@@ -104,7 +104,7 @@ struct AllowOncePayloadDigestTests {
             maskedSegments: ["aaa"]
         )
         let peeked = try #require(await store.validatePending(code: code.rawValue, now: Self.now))
-        #expect(peeked.fingerprint == commandFingerprint("git reset --hard"))
+        #expect(peeked.fingerprint == grantFingerprint("git reset --hard", invocationPrefix: []))
         #expect(peeked.payloadDigest == maskedPayloadContentDigest(["aaa"]))
         await #expect(throws: AllowOnceError.redemptionChanged) {
             _ = try await store.redeem(

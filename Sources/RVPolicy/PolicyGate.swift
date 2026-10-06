@@ -36,7 +36,8 @@ public enum PolicyGate {
         now: Date,
         rebaseInProgress: Bool = false,
         safety: SafetyLevel = .strict,
-        maskedSegments: [String]? = nil
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String]? = nil
     ) -> PolicyDecision {
         switch result.decision {
         case .allow:
@@ -55,7 +56,8 @@ public enum PolicyGate {
                 ruleID: deny.ruleID,
                 matchingView: result.matchingView,
                 now: now,
-                maskedSegments: maskedSegments
+                maskedSegments: maskedSegments,
+                invocationPrefix: invocationPrefix
             ) {
                 return allowDecision(result, override: .allowlist)
             }
@@ -88,7 +90,8 @@ public enum PolicyGate {
         now: Date,
         rebaseInProgress: Bool = false,
         safety: SafetyLevel = .strict,
-        maskedSegments: [String]? = nil
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = []
     ) async -> PolicyDecision {
         let withoutGrant = decision(
             for: result,
@@ -98,7 +101,8 @@ public enum PolicyGate {
             now: now,
             rebaseInProgress: rebaseInProgress,
             safety: safety,
-            maskedSegments: maskedSegments
+            maskedSegments: maskedSegments,
+            invocationPrefix: invocationPrefix
         )
         if RulePinning.blocksAllowOverride(result) {
             return withoutGrant
@@ -110,7 +114,8 @@ public enum PolicyGate {
             matchingView: result.matchingView,
             cwd: cwd,
             now: now,
-            maskedSegments: maskedSegments
+            maskedSegments: maskedSegments,
+            invocationPrefix: invocationPrefix
         ) else {
             return withoutGrant
         }
@@ -122,7 +127,8 @@ public enum PolicyGate {
             now: now,
             rebaseInProgress: rebaseInProgress,
             safety: safety,
-            maskedSegments: maskedSegments
+            maskedSegments: maskedSegments,
+            invocationPrefix: invocationPrefix
         )
     }
 
@@ -136,7 +142,8 @@ public enum PolicyGate {
         now: Date,
         rebaseInProgress: Bool = false,
         safety: SafetyLevel = .strict,
-        maskedSegments: [String]? = nil
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = []
     ) async -> PolicyDecision {
         let withoutGrant = decision(
             for: result,
@@ -146,7 +153,8 @@ public enum PolicyGate {
             now: now,
             rebaseInProgress: rebaseInProgress,
             safety: safety,
-            maskedSegments: maskedSegments
+            maskedSegments: maskedSegments,
+            invocationPrefix: invocationPrefix
         )
         guard let cwd = honorCwd(result, cwd: cwd, withoutGrant: withoutGrant) else {
             return withoutGrant
@@ -155,7 +163,8 @@ public enum PolicyGate {
             matchingView: result.matchingView,
             cwd: cwd,
             now: now,
-            maskedSegments: maskedSegments
+            maskedSegments: maskedSegments,
+            invocationPrefix: invocationPrefix
         ) ? .pending : .none
         return decision(
             for: result,
@@ -165,7 +174,8 @@ public enum PolicyGate {
             now: now,
             rebaseInProgress: rebaseInProgress,
             safety: safety,
-            maskedSegments: maskedSegments
+            maskedSegments: maskedSegments,
+            invocationPrefix: invocationPrefix
         )
     }
 

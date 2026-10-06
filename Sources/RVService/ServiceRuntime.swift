@@ -415,11 +415,12 @@ public actor ServiceRuntime {
         cwd: WorkingDirectory,
         codeHash: String = UUID().uuidString,
         now: Date = Date(),
-        maskedSegments: [String]? = nil
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = []
     ) async -> EphemeralAllowOnceTable.PlantResult {
         await grants.plant(
             matchingView: matchingView, cwd: cwd, codeHash: codeHash, now: now,
-            maskedSegments: maskedSegments
+            maskedSegments: maskedSegments, invocationPrefix: invocationPrefix
         )
     }
 

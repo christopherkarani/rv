@@ -93,8 +93,17 @@ enum AllowOnceCLI {
     /// Device-owner authentication prompt naming the reviewed grant.
     /// The redacted command plus cwd alone under-specifies the grant (many
     /// rows share a head token), so a deny-minted row also names its rule.
+    /// B1: the invocation tag names erased wrappers (`sudo`, `FOO=…`) the
+    /// normalized redaction hides, so the prompt describes the approved
+    /// spelling, not just its view.
     static func redeemReason(row: AllowOnceListRow) -> String {
-        let base = "Allow once: \(row.commandRedacted) in \(row.cwd.rawValue)"
+        let invoked: String
+        if let tag = row.invocationDisplay {
+            invoked = "\(tag) \(row.commandRedacted)"
+        } else {
+            invoked = row.commandRedacted
+        }
+        let base = "Allow once: \(invoked) in \(row.cwd.rawValue)"
         if let ruleID = row.ruleID {
             return "\(base) (rule \(ruleID.rawValue))."
         }
@@ -223,7 +232,9 @@ enum AllowOnceCLI {
             tty: tty,
             now: now,
             robot: robot,
-            maskedSegments: Normalize.maskedSegments(of: command)
+            maskedSegments: Normalize.maskedSegments(of: command),
+            invocationPrefix: Normalize.invocationPrefix(of: command),
+            invocationDisplay: Normalize.invocationDisplay(of: command)
         )
     }
 }
@@ -424,8 +435,14 @@ struct AllowOnceList: AsyncParsableCommand {
             return
         }
         for row in rows {
+            let invoked: String
+            if let tag = row.invocationDisplay {
+                invoked = "\(tag) \(row.commandRedacted)"
+            } else {
+                invoked = row.commandRedacted
+            }
             FileHandle.standardOutput.write(
-                Data("\(row.kind.rawValue) \(row.commandRedacted) cwd=\(row.cwd.rawValue)\n".utf8)
+                Data("\(row.kind.rawValue) \(invoked) cwd=\(row.cwd.rawValue)\n".utf8)
             )
         }
     }

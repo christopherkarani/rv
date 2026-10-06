@@ -12,11 +12,13 @@ import RVDomain
 /// modifying, deleting, or re-appending it never creates, restores, or
 /// replays authority (B-F1/B-F3).
 ///
-/// Binding per grant: exact canonical-action fingerprint + canonical cwd +
-/// issuing epoch + strict expiry + atomic single-use. The issuing pending-approval
-/// ID and ceremony code hash are recorded for audit and double-attest defense.
-/// No continuation token is claimed: host protocols cannot establish one, so a
-/// grant authorizes one re-issue of the exact action, nothing else.
+/// Binding per grant: exact canonical-action fingerprint (view folded with
+/// the erased invocation prefix: wrappers, assignments, argv0 path) +
+/// canonical cwd + issuing epoch + strict expiry + atomic single-use. The
+/// issuing pending-approval ID and ceremony code hash are recorded for audit
+/// and double-attest defense. No continuation token is claimed: host
+/// protocols cannot establish one, so a grant authorizes one re-issue of
+/// the exact action, nothing else.
 ///
 /// M-07: the fingerprint covers the masked view only, so same-view commands
 /// with different hidden payloads would share authority. Bound grants also
@@ -112,6 +114,10 @@ public actor EphemeralAllowOnceTable {
     /// commands. Callers holding exact text must pass it (`[]` when
     /// nothing was masked). The TTY path binds via `payloadContentDigest`
     /// on the fingerprint entry instead.
+    ///
+    /// B1: `invocationPrefix` binds the erased invocation prefix (wrappers,
+    /// assignments, argv0 path) by folding it into the fingerprint. Callers
+    /// holding exact text must pass it (`[]` for a bare command).
     public func plant(
         matchingView: MatchingView,
         cwd: WorkingDirectory,
@@ -119,11 +125,12 @@ public actor EphemeralAllowOnceTable {
         pendingID: String? = nil,
         now: Date,
         ttl: TimeInterval = EphemeralAllowOnceTable.maxTTL,
-        maskedSegments: [String]? = nil
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = []
     ) -> PlantResult {
         guard matchingView.rawValue.isEmpty == false else { return .refused }
         return plant(
-            fingerprint: commandFingerprint(matchingView),
+            fingerprint: grantFingerprint(matchingView, invocationPrefix: invocationPrefix),
             cwd: cwd,
             codeHash: codeHash,
             pendingID: pendingID,
@@ -174,16 +181,18 @@ public actor EphemeralAllowOnceTable {
         return .planted
     }
 
-    /// Atomically spends one live grant for the exact (view, cwd, payload).
-    /// Actor isolation makes concurrent consumers have exactly one winner.
+    /// Atomically spends one live grant for the exact (view, cwd,
+    /// payload, invocation). Actor isolation makes concurrent consumers
+    /// have exactly one winner.
     public func consume(
         matchingView: MatchingView,
         cwd: WorkingDirectory,
         now: Date,
-        maskedSegments: [String]? = nil
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = []
     ) -> Bool {
         prune(now: now)
-        let fingerprint = commandFingerprint(matchingView)
+        let fingerprint = grantFingerprint(matchingView, invocationPrefix: invocationPrefix)
         guard let id = grants.first(where: { _, grant in
             grant.fingerprint == fingerprint && grant.cwd == cwd
                 && payloadMatches(grant: grant, spend: maskedSegments)
@@ -199,10 +208,11 @@ public actor EphemeralAllowOnceTable {
         matchingView: MatchingView,
         cwd: WorkingDirectory,
         now: Date,
-        maskedSegments: [String]? = nil
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = []
     ) -> Bool {
         prune(now: now)
-        let fingerprint = commandFingerprint(matchingView)
+        let fingerprint = grantFingerprint(matchingView, invocationPrefix: invocationPrefix)
         return grants.values.contains {
             $0.fingerprint == fingerprint && $0.cwd == cwd
                 && payloadMatches(grant: $0, spend: maskedSegments)

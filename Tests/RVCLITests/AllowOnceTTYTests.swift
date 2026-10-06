@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import Testing
 import RVDomain
+import RVEngine
 import RVIPC
 @testable import RVPolicy
 @testable import RVCLI
@@ -318,6 +319,53 @@ struct AllowOnceTTYTests {
                 )
             }
         }
+    }
+
+    @Test func mintWrappedCommandBindsInvocation() async throws {
+        // B1: the minted row binds the erased invocation prefix in its
+        // fingerprint and names it in the display tag.
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let command = ShellCommand(rawValue: "sudo git reset --hard")
+        let code = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+            try await AllowOnceCLI.mint(
+                command: command,
+                cwd: wd("/tmp/a"),
+                tty: tty,
+                robot: false,
+                store: store,
+                now: now
+            )
+        }
+        let peeked = try #require(await store.validatePending(code: code.rawValue, now: now))
+        #expect(peeked.row.invocationDisplay == "sudo")
+        #expect(
+            peeked.fingerprint
+                == grantFingerprint(
+                    Normalize.matchingView(of: command),
+                    invocationPrefix: Normalize.invocationPrefix(of: command)
+                )
+        )
+        #expect(
+            peeked.fingerprint
+                != grantFingerprint(Normalize.matchingView(of: command), invocationPrefix: [])
+        )
+    }
+
+    @Test func redeemReasonNamesInvocationTag() {
+        let row = AllowOnceListRow(
+            kind: .pending,
+            codeHash: "hash",
+            commandRedacted: "git …",
+            cwd: wd("/tmp/ws"),
+            createdAt: Date(timeIntervalSince1970: 1),
+            expiresAt: Date(timeIntervalSince1970: 2),
+            ruleID: nil,
+            invocationDisplay: "sudo"
+        )
+        #expect(AllowOnceCLI.redeemReason(row: row)
+            == "Allow once: sudo git … in /tmp/ws.")
     }
 }
 

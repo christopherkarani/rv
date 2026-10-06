@@ -179,7 +179,8 @@ struct AllowlistAddCommand: AsyncParsableCommand {
             selector: .exactCommand(matchingView),
             reason: trimmed,
             addedAt: Date(),
-            maskedPayloadDigest: maskedPayloadContentDigest(Normalize.maskedSegments(of: shell))
+            maskedPayloadDigest: maskedPayloadContentDigest(Normalize.maskedSegments(of: shell)),
+            invocationDigest: maskedPayloadContentDigest(Normalize.invocationPrefix(of: shell))
         )
         do {
             try AllowlistCLI.store(home: try AllowlistCLI.requireHome()).add(entry, tty: tty)

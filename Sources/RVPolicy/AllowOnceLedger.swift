@@ -28,7 +28,8 @@ enum AllowOnceLedger {
         ruleID: RuleID?,
         now: Date,
         ttl: TimeInterval,
-        payloadDigest: String? = nil
+        payloadDigest: String? = nil,
+        invocationDisplay: String? = nil
     ) throws(AllowOnceError) -> MintResult {
         let updated = prepare(records, now: now)
         if existingPending(in: updated, fingerprint: fingerprint, cwd: cwd) != nil {
@@ -52,7 +53,8 @@ enum AllowOnceLedger {
                 ruleID: ruleID,
                 createdAt: now,
                 expiresAt: now.addingTimeInterval(ttl),
-                payloadDigest: payloadDigest
+                payloadDigest: payloadDigest,
+                invocationDisplay: invocationDisplay
             )
         )
         return .appended(appended)
@@ -191,7 +193,8 @@ enum AllowOnceLedger {
             cwd: record.cwd,
             createdAt: record.createdAt,
             expiresAt: record.expiresAt,
-            ruleID: record.ruleID
+            ruleID: record.ruleID,
+            invocationDisplay: record.invocationDisplay
         )
     }
 }

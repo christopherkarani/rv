@@ -50,14 +50,16 @@ public actor AllowOnceStore {
         now: Date,
         robot: Bool = false,
         ttl: TimeInterval = 24 * 60 * 60,
-        maskedSegments: [String]? = nil
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = [],
+        invocationDisplay: String? = nil
     ) async throws -> AllowOnceUnlockCode {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
         let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { throw AllowOnceError.emptyCommand }
         let view = MatchingView(trimmed)
-        let fingerprint = commandFingerprint(view)
+        let fingerprint = grantFingerprint(view, invocationPrefix: invocationPrefix)
         let payloadDigest = maskedSegments.map(maskedPayloadContentDigest)
         let cacheKey = UnlockCacheKey(fingerprint: fingerprint, cwd: cwd.rawValue)
         var lastError: AllowOnceError = .collision
@@ -75,7 +77,8 @@ public actor AllowOnceStore {
                         ruleID: ruleID,
                         now: now,
                         ttl: ttl,
-                        payloadDigest: payloadDigest
+                        payloadDigest: payloadDigest,
+                        invocationDisplay: invocationDisplay
                     ) {
                     case let .reused(records):
                         let written = try writeRecords(records)
@@ -110,12 +113,14 @@ public actor AllowOnceStore {
         ruleID: RuleID?,
         now: Date,
         ttl: TimeInterval = 15 * 60,
-        maskedSegments: [String]? = nil
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = [],
+        invocationDisplay: String? = nil
     ) async -> AllowOnceUnlockMint? {
         let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
         let view = MatchingView(trimmed)
-        let fingerprint = commandFingerprint(view)
+        let fingerprint = grantFingerprint(view, invocationPrefix: invocationPrefix)
         let payloadDigest = maskedSegments.map(maskedPayloadContentDigest)
         let cacheKey = UnlockCacheKey(fingerprint: fingerprint, cwd: cwd.rawValue)
         for _ in 0..<8 {
@@ -137,7 +142,8 @@ public actor AllowOnceStore {
                         ruleID: ruleID,
                         now: now,
                         ttl: ttl,
-                        payloadDigest: payloadDigest
+                        payloadDigest: payloadDigest,
+                        invocationDisplay: invocationDisplay
                     ) {
                     case let .reused(records):
                         let written = try writeRecords(records)
@@ -234,19 +240,22 @@ public actor AllowOnceStore {
         codeHash: String,
         now: Date,
         ttl: TimeInterval = 24 * 60 * 60,
-        maskedSegments: [String]? = nil
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = [],
+        invocationDisplay: String? = nil
     ) async {
         let record = AllowOnceRecord(
             schemaVersion: 1,
             lifecycle: lifecycle,
             codeHash: codeHash,
-            commandFingerprint: commandFingerprint(matchingView),
+            commandFingerprint: grantFingerprint(matchingView, invocationPrefix: invocationPrefix),
             commandRedacted: redactCommand(matchingView),
             cwd: cwd,
             ruleID: nil,
             createdAt: now,
             expiresAt: now.addingTimeInterval(ttl),
-            payloadDigest: maskedSegments.map(maskedPayloadContentDigest)
+            payloadDigest: maskedSegments.map(maskedPayloadContentDigest),
+            invocationDisplay: invocationDisplay
         )
         try? withFileLock(nonBlocking: true) {
             var records = loadRecords()
