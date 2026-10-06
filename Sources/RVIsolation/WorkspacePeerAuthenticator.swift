@@ -345,17 +345,27 @@ public enum MacOSPeerCodeVerifier {
 #endif
 
 #if os(Linux)
+/// Mirror of the C `struct ucred` (pid/uid/gid 32-bit triple). Swift's
+/// Glibc overlay does not export `ucred`, so this stands in; three
+/// 4-byte ints admit no padding, and the getsockopt length check below
+/// pins the 12-byte ABI at every call.
+private struct LinuxSocketCredentials {
+    var pid: pid_t
+    var uid: uid_t
+    var gid: gid_t
+}
+
 /// Linux AF_UNIX peer credentials. `SO_PEERCRED` is kernel-attested at
 /// `connect` time and cannot be spoofed by the peer; the only check left
 /// to us is same-user (the socket file mode is advisory once bound).
 public enum LinuxSocketPeerCapture {
     public static func capture(fd: Int32) throws -> (processID: Int32, effectiveUserID: UInt32) {
-        var cred = ucred()
-        var length = socklen_t(MemoryLayout<ucred>.size)
+        var cred = LinuxSocketCredentials(pid: 0, uid: 0, gid: 0)
+        var length = socklen_t(MemoryLayout<LinuxSocketCredentials>.size)
         let result = withUnsafeMutablePointer(to: &cred) { ptr in
             getsockopt(fd, SOL_SOCKET, SO_PEERCRED, ptr, &length)
         }
-        guard result == 0, length == socklen_t(MemoryLayout<ucred>.size),
+        guard result == 0, length == socklen_t(MemoryLayout<LinuxSocketCredentials>.size),
               cred.pid > 0, cred.uid == getuid() else {
             throw PeerAuthenticationError.missingPeerEvidence
         }
