@@ -100,7 +100,10 @@ struct EphemeralAllowOnceTableTests {
         }
     }
 
-    @Test func redeemedCodesArePrunedWithExpiry() async {
+    @Test func redeemedCodeStaysRedeemedPastGrantExpiry() async {
+        // M2: a replayed attestation after grant expiry must not plant a
+        // fresh grant without a human. Codes are single-use per table
+        // lifetime (evicted FIFO only past the retention cap).
         let table = EphemeralAllowOnceTable()
         #expect(await table.plant(
             matchingView: "git reset --hard", cwd: wd("/tmp/ws"),
@@ -110,12 +113,39 @@ struct EphemeralAllowOnceTableTests {
             matchingView: "git reset --hard", cwd: wd("/tmp/ws"),
             codeHash: "ceremony-1", now: now, ttl: 60
         ) == .alreadyRedeemed)
-        // Past expiry the code is pruned: the set cannot grow forever on
-        // a same-user approval loop.
         let late = now.addingTimeInterval(61)
         #expect(await table.plant(
             matchingView: "git reset --hard", cwd: wd("/tmp/ws"),
             codeHash: "ceremony-1", now: late, ttl: 60
+        ) == .alreadyRedeemed)
+        // The expired grant itself still spends nothing.
+        #expect(await table.consume(
+            matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: late
+        ) == false)
+    }
+
+    @Test func redeemedCodesEvictFIFOPastCap() async {
+        let table = EphemeralAllowOnceTable()
+        let cap = EphemeralAllowOnceTable.maxRedeemedCodes
+        // Advancing clock: old grants expire (freeing grant slots) while
+        // their code markers accumulate to the retention cap.
+        for index in 0...cap {
+            let at = now.addingTimeInterval(TimeInterval(index * 2))
+            #expect(await table.plant(
+                fingerprint: "fp-\(index)", cwd: wd("/tmp/ws"),
+                codeHash: "code-\(index)", now: at, ttl: 1
+            ) == .planted)
+        }
+        let end = now.addingTimeInterval(TimeInterval((cap + 1) * 2))
+        // A retained code still refuses to re-plant ...
+        #expect(await table.plant(
+            fingerprint: "fp-1", cwd: wd("/tmp/ws"),
+            codeHash: "code-1", now: end, ttl: 1
+        ) == .alreadyRedeemed)
+        // ... while the single evicted oldest marker re-plants.
+        #expect(await table.plant(
+            fingerprint: "fp-0", cwd: wd("/tmp/ws"),
+            codeHash: "code-0", now: end, ttl: 1
         ) == .planted)
     }
 

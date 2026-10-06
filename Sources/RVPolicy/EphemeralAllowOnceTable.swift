@@ -89,12 +89,22 @@ public actor EphemeralAllowOnceTable {
     /// closed; the human retries). The cap also bounds the linear spend
     /// scan in `consume`/`hasGrant`.
     public static let maxGrants = 1024
+    /// M2: redeemed-code retention cap. Codes stay single-use for the
+    /// table lifetime (a replayed attestation after grant expiry must
+    /// not plant a fresh grant without a human); past the cap the
+    /// oldest markers evict FIFO, which is the documented residual:
+    /// only an ancient (evicted) code can ever re-plant.
+    public static let maxRedeemedCodes = 4096
 
     private var grants: [UUID: Grant] = [:]
-    /// Ceremony codes that already planted, with the expiry of the grant
-    /// they planted. Pruned with the grants: without expiry the set grows
-    /// forever on a same-user approval loop.
+    /// Ceremony codes that already planted, with the date they planted
+    /// (audit only — never an expiry). Retained for the table lifetime
+    /// and evicted FIFO past `maxRedeemedCodes`, never pruned by grant
+    /// expiry: expiry-pruning let a replayed attestation re-plant.
     private var redeemedCodes: [String: Date] = [:]
+    /// Record order for FIFO eviction. Entries for already-removed codes
+    /// are skipped lazily; compacted whenever it outgrows the map.
+    private var redeemedOrder: [String] = []
     /// M-07 per-table random salt for payload bindings. Fresh per init, so
     /// per daemon boot in production; bindings never verify across tables.
     private let payloadSalt: [UInt8]
@@ -176,7 +186,9 @@ public actor EphemeralAllowOnceTable {
             payloadBinding: maskedSegments.map { maskedPayloadSaltedDigest($0, salt: payloadSalt) },
             payloadContentBinding: payloadContentDigest
         )
-        redeemedCodes[codeHash] = grant.expiresAt
+        redeemedCodes[codeHash] = now
+        redeemedOrder.append(codeHash)
+        evictRedeemedCodesIfNeeded()
         grants[UUID()] = grant
         return .planted
     }
@@ -239,6 +251,14 @@ public actor EphemeralAllowOnceTable {
 
     private func prune(now: Date) {
         grants = grants.filter { _, grant in grant.expiresAt >= now }
-        redeemedCodes = redeemedCodes.filter { _, expiresAt in expiresAt >= now }
+    }
+
+    /// FIFO eviction past `maxRedeemedCodes`. Codes are only ever
+    /// removed here, so the order array always mirrors the map.
+    private func evictRedeemedCodesIfNeeded() {
+        while redeemedCodes.count > Self.maxRedeemedCodes, redeemedOrder.isEmpty == false {
+            let oldest = redeemedOrder.removeFirst()
+            redeemedCodes.removeValue(forKey: oldest)
+        }
     }
 }
