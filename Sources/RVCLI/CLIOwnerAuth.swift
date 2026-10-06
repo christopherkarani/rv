@@ -8,6 +8,9 @@ import LocalAuthentication
 /// Device-owner authentication failed or was unavailable.
 enum AllowOnceAuthError: Error, Equatable {
     case required
+    /// M5: the LA-prompt budget is exhausted (too many authentication
+    /// prompts in the sliding window). Fail closed without prompting.
+    case throttled
 }
 
 /// LA tripwire for `rv allow-once` mint/redeem. Step 8B P5c.

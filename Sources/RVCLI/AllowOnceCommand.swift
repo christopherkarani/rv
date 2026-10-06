@@ -135,6 +135,9 @@ enum AllowOnceCLI {
             // flips (fail-closed).
             return try await store.redeem(code: code, tty: tty, now: now, robot: robot)
         }
+        guard await store.reserveLAPrompt(now: now) else {
+            throw AllowOnceAuthError.throttled
+        }
         try await CLIOwnerAuth.requireAuthenticated(reason: redeemReason(row: peeked.row))
         let service = client ?? ServiceClient()
         guard let rechecked = await store.validatePending(code: code, now: now),
@@ -223,6 +226,9 @@ enum AllowOnceCLI {
         }
         guard RulePinning.blocksAllowOverride(evaluated) == false else {
             throw AllowOnceError.notUnlockable
+        }
+        guard await store.reserveLAPrompt(now: now) else {
+            throw AllowOnceAuthError.throttled
         }
         try await CLIOwnerAuth.requireAuthenticated()
         return try await store.mint(
@@ -335,6 +341,11 @@ struct AllowOnceRedeem: AsyncParsableCommand {
                 Data("rv allow-once: device-owner authentication required\n".utf8)
             )
             throw ExitCode(2)
+        } catch AllowOnceAuthError.throttled {
+            FileHandle.standardError.write(
+                Data("rv allow-once: too many authentication prompts; wait and retry\n".utf8)
+            )
+            throw ExitCode(2)
         }
     }
 }
@@ -408,6 +419,11 @@ struct AllowOnceMint: AsyncParsableCommand {
         } catch AllowOnceAuthError.required {
             FileHandle.standardError.write(
                 Data("rv allow-once mint: device-owner authentication required\n".utf8)
+            )
+            throw ExitCode(2)
+        } catch AllowOnceAuthError.throttled {
+            FileHandle.standardError.write(
+                Data("rv allow-once mint: too many authentication prompts; wait and retry\n".utf8)
             )
             throw ExitCode(2)
         }

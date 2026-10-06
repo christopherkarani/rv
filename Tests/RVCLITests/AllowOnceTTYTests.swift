@@ -353,6 +353,62 @@ struct AllowOnceTTYTests {
         )
     }
 
+    @Test func mintThrottlesPastLAPromptBudget() async throws {
+        // M5: an exhausted budget fails closed before LA fires (the
+        // authenticated seam would succeed, so throttled proves the
+        // budget — not LA — refused).
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        for _ in 0..<AllowOnceStore.maxLAPromptsPerWindow {
+            #expect(await store.reserveLAPrompt(now: now))
+        }
+        await #expect(throws: AllowOnceAuthError.throttled) {
+            try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+                try await AllowOnceCLI.mint(
+                    command: ShellCommand(rawValue: "git reset --hard"),
+                    cwd: wd("/tmp/a"),
+                    tty: tty,
+                    robot: false,
+                    store: store,
+                    now: now
+                )
+            }
+        }
+    }
+
+    @Test func redeemThrottlesPastLAPromptBudget() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let code = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+            try await AllowOnceCLI.mint(
+                command: ShellCommand(rawValue: "git reset --hard"),
+                cwd: wd("/tmp/a"),
+                tty: tty,
+                robot: false,
+                store: store,
+                now: now
+            )
+        }
+        for _ in 1..<AllowOnceStore.maxLAPromptsPerWindow {
+            #expect(await store.reserveLAPrompt(now: now))
+        }
+        await #expect(throws: AllowOnceAuthError.throttled) {
+            try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+                try await AllowOnceCLI.redeem(
+                    code: code.rawValue,
+                    tty: tty,
+                    robot: false,
+                    store: store,
+                    now: now
+                )
+            }
+        }
+        // The throttled redeem prompted nothing and flipped nothing.
+        #expect((await store.list(now: now)).contains { $0.kind == .pending })
+    }
+
     @Test func redeemReasonNamesInvocationTag() {
         let row = AllowOnceListRow(
             kind: .pending,

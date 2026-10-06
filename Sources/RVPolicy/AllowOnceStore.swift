@@ -360,6 +360,47 @@ public actor AllowOnceStore {
         liveUnlockCodes.count
     }
 
+    /// M5: LA-prompt budget — at most `maxLAPromptsPerWindow` device-owner
+    /// prompts per sliding `laPromptWindow`. An agent with pty access can
+    /// loop the genuine `rv allow-once` binary and fatigue the human into
+    /// approving an attacker-chosen pending command (MFA fatigue); the
+    /// budget caps that loop. The CLI reserves before every LA prompt in
+    /// mint and redeem; false means "do not prompt, fail closed".
+    ///
+    /// Same-user writable like the projection file, so this is an
+    /// anti-fatigue speed bump, not a security boundary against the file
+    /// owner (who could delete the budget file). A corrupt or missing
+    /// file self-heals to a fresh window rather than bricking approvals;
+    /// a failed write fails closed.
+    public static let maxLAPromptsPerWindow = 10
+    public static let laPromptWindow: TimeInterval = 300
+
+    public func reserveLAPrompt(now: Date) -> Bool {
+        let url = RVPolicyPaths.laPromptBudgetFile(inConfigDir: baseDirectory)
+        let cutoff = now.addingTimeInterval(-Self.laPromptWindow).timeIntervalSince1970
+        do {
+            return try withFileLock {
+                var stamps: [TimeInterval] = []
+                if let data = try? Data(contentsOf: url),
+                    let decoded = try? JSONDecoder().decode([TimeInterval].self, from: data)
+                {
+                    stamps = decoded
+                }
+                stamps = stamps.filter { $0 >= cutoff }
+                guard stamps.count < Self.maxLAPromptsPerWindow else { return false }
+                stamps.append(now.timeIntervalSince1970)
+                try? FileManager.default.createDirectory(
+                    at: baseDirectory, withIntermediateDirectories: true
+                )
+                guard (try? JSONEncoder().encode(stamps).write(to: url, options: .atomic)) != nil
+                else { return false }
+                return true
+            }
+        } catch {
+            return false
+        }
+    }
+
     private func withFileLock<T>(nonBlocking: Bool = false, _ body: () throws -> T) throws -> T {
         do {
             return try store.withLock(nonBlocking: nonBlocking, body)

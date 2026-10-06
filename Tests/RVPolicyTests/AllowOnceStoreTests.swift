@@ -630,6 +630,39 @@ struct AllowOnceStoreTests {
         #expect(rows.count == AllowOnceStore.maxStoredRows)
         #expect(rows.contains { $0.commandRedacted == "cmd-newest" })
     }
+
+    @Test func laPromptBudgetAllowsThenThrottles() async throws {
+        // M5: at most maxLAPromptsPerWindow prompts per sliding window.
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        for _ in 0..<AllowOnceStore.maxLAPromptsPerWindow {
+            #expect(await store.reserveLAPrompt(now: now))
+        }
+        #expect(await store.reserveLAPrompt(now: now) == false)
+        // The window slides: past-window stamps stop counting.
+        let later = now.addingTimeInterval(AllowOnceStore.laPromptWindow + 1)
+        #expect(await store.reserveLAPrompt(now: later))
+    }
+
+    @Test func laPromptBudgetSelfHealsCorruptFile() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let url = RVPolicyPaths.laPromptBudgetFile(inConfigDir: store.baseDirectory)
+        try Data("not-json".utf8).write(to: url)
+        #expect(await store.reserveLAPrompt(now: now))
+        #expect(await store.reserveLAPrompt(now: now))
+    }
+
+    @Test func laPromptBudgetIsPerDirectory() async throws {
+        let first = try isolatedStore()
+        let second = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        for _ in 0..<AllowOnceStore.maxLAPromptsPerWindow {
+            #expect(await first.reserveLAPrompt(now: now))
+        }
+        #expect(await first.reserveLAPrompt(now: now) == false)
+        #expect(await second.reserveLAPrompt(now: now))
+    }
 }
 
 private func isolatedStore() throws -> AllowOnceStore {
