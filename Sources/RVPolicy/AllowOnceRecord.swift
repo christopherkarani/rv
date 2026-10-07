@@ -58,6 +58,9 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
     public var schemaVersion: Int
     public var lifecycle: AllowOnceLifecycle
     public var codeHash: String
+    /// Grant fingerprint (`grantFingerprint`, B1): the view digest folded
+    /// with the invocation-prefix digest. The name and wire key predate
+    /// the folding and are kept for row compatibility.
     public var commandFingerprint: String
     public var commandRedacted: String
     public var cwd: WorkingDirectory

@@ -2,6 +2,26 @@ import Testing
 import RVDomain
 @testable import RVEngine
 
+@Test func globBraceHead_matchesExpansionSpellings() {
+    #expect(isGlobBraceHead("[c]url"))
+    #expect(isGlobBraceHead("{curl,}"))
+    #expect(isGlobBraceHead("a*b"))
+    #expect(isGlobBraceHead("a?b"))
+    #expect(isGlobBraceHead("[") == false)
+    #expect(isGlobBraceHead("[[") == false)
+    #expect(isGlobBraceHead("{") == false)
+    #expect(isGlobBraceHead("{cd}") == false)
+    #expect(isGlobBraceHead("curl") == false)
+}
+
+@Test func unescapeBackslashPairs_isPairwise() {
+    #expect(unescapeBackslashPairs("c\\url") == "curl")
+    #expect(unescapeBackslashPairs("\\\\curl") == "\\curl")
+    #expect(unescapeBackslashPairs("curl\\") == "curl\\")
+    #expect(unescapeBackslashPairs("curl") == "curl")
+    #expect(unescapeBackslashPairs("") == "")
+}
+
 @Test func normalize_stripsWrappersAndPath() {
     #expect(Normalize.matchingView(of: "  sudo git reset --hard  ") == "git reset --hard")
     #expect(Normalize.matchingView(of: "env GIT_DIR=.git git reset --hard") == "git reset --hard")

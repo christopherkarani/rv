@@ -18,7 +18,7 @@ enum FilesystemOperation {
 }
 
 func parseFilesystemCommand(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let head = basename(argv.program).lowercased()
+    let head = unescapeBackslashPairs(basename(argv.program)).lowercased()
     switch head {
     // Redirects are shell-side: when the verb parse fails (unknown flags,
     // help, dangling values) the shell still truncated the redirect target,

@@ -4,14 +4,15 @@ import RVDomain
 import RVIPC
 
 struct HookReviewWireTests {
-    private func reviewItem() -> UIHookReviewItemDTO {
+    private func reviewItem(allowOnceAvailable: Bool? = nil) -> UIHookReviewItemDTO {
         UIHookReviewItemDTO(
             approvalID: "hook-1", host: "pi", session: "sess-pi",
             actionKind: "shell", exactCommand: "git reset --hard",
             workingDirectory: "/tmp/ws", policyReason: "hostAsk",
             actionFingerprint: "pi:sess-pi:/tmp/ws:git reset --hard",
             status: .awaitingHuman,
-            advisoryExpiresWall: Date(timeIntervalSince1970: 1_800_000_000))
+            advisoryExpiresWall: Date(timeIntervalSince1970: 1_800_000_000),
+            allowOnceAvailable: allowOnceAvailable)
     }
 
     private func challenge() -> UIHookChallengeDTO {
@@ -108,6 +109,17 @@ struct HookReviewWireTests {
         let garbage = Data(#"{"nope":1}"#.utf8)
         #expect(throws: (any Error).self) {
             try IPCJSON.decode(UIHookBridgeRequest.self, from: garbage)
+        }
+    }
+
+    @Test func reviewItemAvailabilityFlagRoundTrips() throws {
+        // Nil encodes without the key — the older-server shape — and
+        // decodes back to nil, so new UIs tolerate stale daemons.
+        for flag in [true, false, nil] {
+            let item = reviewItem(allowOnceAvailable: flag)
+            #expect(
+                try IPCJSON.decode(
+                    UIHookReviewItemDTO.self, from: IPCJSON.encode(item)) == item)
         }
     }
 }

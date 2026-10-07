@@ -291,13 +291,17 @@ public final class XPCOperatorUIClient: Sendable {
         // Check-and-join-or-start under ONE lock: two concurrent
         // first-connects must not both build a connection, or the loser
         // would send on the winner's session before registration lands
-        // (spurious Denied until refresh on cold start).
+        // (spurious Denied until refresh on cold start). The flight
+        // check comes first: `establishActions` stores `actions` a full
+        // RTT before `register()` completes, so an in-flight caller that
+        // used the stored connection would send on an unregistered
+        // session. Joining observes only the registered session.
         let next: Next = state.withLock { state in
-            if let existing = state.actions {
-                return .use(existing)
-            }
             if let flight = state.connecting {
                 return .join(flight)
+            }
+            if let existing = state.actions {
+                return .use(existing)
             }
             let flight = Task<xpc_connection_t, Error> { try await self.establishActions() }
             state.connecting = flight

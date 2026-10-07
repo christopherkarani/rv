@@ -76,14 +76,9 @@ actor ActionApprovalCeremonyService {
         let actionDigestHex: String
         let continuationID: ActionApprovalContinuationID
         let reason: RuntimeAskReason
-        let policyContext: String
         let createdWall: Date
         var challenge: ActionApprovalChallenge?
     }
-
-    /// Descriptive policy-context bound. The context is display-only; this
-    /// caps retained memory, not authority.
-    private static let maxPolicyContextChars = 512
 
     private let authorizer: ActionApprovalAuthorizer
     private let hosts: LiveWorkspaceHostRegistry
@@ -122,9 +117,7 @@ actor ActionApprovalCeremonyService {
     ) async throws -> HostActionApprovalCreatedDTO {
         emit(.askReceived, approvalID: nil, principal: nil,
             digest: nil, continuation: nil, outcome: "received")
-        guard let reason = Self.askReason(dto.reason),
-            Self.validatedPolicyContext(dto.policyContext) != nil
-        else {
+        guard let reason = Self.askReason(dto.reason) else {
             throw ActionApprovalCeremonyError.invalidAsk
         }
         let definitionID = dto.definitionID
@@ -174,7 +167,6 @@ actor ActionApprovalCeremonyService {
             actionDigestHex: digest,
             continuationID: created.continuationID,
             reason: reason,
-            policyContext: Self.validatedPolicyContext(dto.policyContext) ?? "",
             createdWall: clock(),
             challenge: nil)
         emit(.approvalCreated, approvalID: created.reference.approvalID.rawValue,
@@ -633,11 +625,6 @@ actor ActionApprovalCeremonyService {
         case "reviewAsk": return .reviewAsk
         default: return nil
         }
-    }
-
-    private static func validatedPolicyContext(_ raw: String) -> String? {
-        guard raw.count <= maxPolicyContextChars else { return nil }
-        return raw
     }
 
     private static func trustedResult(

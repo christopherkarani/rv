@@ -507,7 +507,9 @@ final class WorkspaceSessionSupervisor: Sendable {
         // posix_spawn, so a swap between prepare and spawn still refuses.
         if case .custom(let digest) = kind {
             guard verifyExecutableContentDigest(
-                path: selection.executable, expectedSHA256: digest
+                path: selection.executable,
+                expectedSHA256: digest,
+                expectedByteCount: measureExecutableSize(atPath: selection.executable)
             ) else {
                 return .failure(.executableDigestMismatch)
             }
@@ -987,20 +989,24 @@ final class WorkspaceSessionSupervisor: Sendable {
     /// executable path against the authorized digest; named selections
     /// carry no pinned digest (weak-only) and verify nothing. A selection
     /// that no longer verifies yields a verification that can never
-    /// match, failing closed at spawn commit.
+    /// match, failing closed at spawn commit. The dispatch-captured size
+    /// bounds the commit hash; dispatch runs outside the state lock, so
+    /// the stat here never stalls other operations.
     static func executableVerification(
         for prepared: PreparedWorkspaceLaunch
     ) -> ExecutableCommitVerification? {
         guard case .success(let kind) = verifyPreparedSelection(prepared.selection) else {
             return ExecutableCommitVerification(
                 executablePath: prepared.command.executable,
-                expectedSHA256: "unverifiable-selection"
+                expectedSHA256: "unverifiable-selection",
+                expectedByteCount: nil
             )
         }
         guard case .custom(let digest) = kind else { return nil }
         return ExecutableCommitVerification(
             executablePath: prepared.command.executable,
-            expectedSHA256: digest
+            expectedSHA256: digest,
+            expectedByteCount: measureExecutableSize(atPath: prepared.command.executable)
         )
     }
 
@@ -1419,7 +1425,8 @@ final class WorkspaceSessionSupervisor: Sendable {
                 // Deliberately undifferentiated like the cwd check.
                 guard verifyExecutableContentDigest(
                     path: executableVerification.executablePath,
-                    expectedSHA256: executableVerification.expectedSHA256
+                    expectedSHA256: executableVerification.expectedSHA256,
+                    expectedByteCount: executableVerification.expectedByteCount
                 ) else {
                     return .failure(.unknownPreparedLaunch)
                 }

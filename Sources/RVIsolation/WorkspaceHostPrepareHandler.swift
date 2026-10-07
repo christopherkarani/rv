@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import RVDomain
 import RVIPC
@@ -138,3 +139,4 @@ enum WorkspaceHostPrepareHandler {
             expiresAt: description.expiresAt)
     }
 }
+#endif

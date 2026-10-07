@@ -278,6 +278,30 @@ struct ParseFilesystemCreateReadTests {
         #expect(parseFilesystemCommand(["echo", "hello"]) == nil)
     }
 
+    @Test func redirectOnly_skipsSeparateFdDupDest() {
+        // Separate `>& 2` / `>& -` duplicate/close a descriptor (mirrors
+        // the attached arm); only `>&file` names a destination. `&>` and
+        // `>` always name files, even when numeric.
+        #expect(parseRedirectOnly(["echo", "hi", ">&", "2"]) == nil)
+        #expect(parseRedirectOnly(["echo", "hi", ">&", "-"]) == nil)
+        #expect(parseRedirectOnly(["echo", "hi", "2>&", "1"]) == nil)
+        expectParsed(
+            parseRedirectOnly(["echo", "hi", ">&", "file"]),
+            "overwrite",
+            paths: ["file"]
+        )
+        expectParsed(
+            parseRedirectOnly(["echo", "hi", "&>", "2"]),
+            "overwrite",
+            paths: ["2"]
+        )
+        expectParsed(
+            parseRedirectOnly(["echo", "hi", ">", "2"]),
+            "overwrite",
+            paths: ["2"]
+        )
+    }
+
     // P10e7: redirect targets are collected verbatim, dynamic included;
     // the analyze layer fails dynamic mutation paths closed as outside.
     @Test func redirectOnly_collectsDynamicTargets() {

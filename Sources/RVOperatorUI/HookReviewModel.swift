@@ -115,8 +115,19 @@ public final class OperatorHookReviewModel {
     /// nothing: the server destroys the challenge for an unauthenticated
     /// completion, so reporting the outcome would burn the bound review
     /// the human can still retry. The selection stays bound.
+    /// False when the bound wait can never allow-once (file/http
+    /// actions carry no exact command). Nil from older servers means
+    /// available, matching previous behavior.
+    public var allowOnceAvailable: Bool {
+        bound?.item.allowOnceAvailable ?? true
+    }
+
     public func allowOnce() async {
         guard let bound, !authenticating else { return }
+        guard allowOnceAvailable else {
+            notice = "Allow once is unavailable for this request."
+            return
+        }
         authenticating = true
         defer { authenticating = false }
         let outcome = await authenticator.authenticate(reason: Self.allowReason)

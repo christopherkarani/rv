@@ -348,20 +348,6 @@ actor WorkspaceOperatorAuthorizer {
         }
     }
 
-    /// Requester channel loss invalidates the attempt: authority never outlives
-    /// the client that will present it for redemption.
-    func requesterDisconnected(connectionID: UUID) {
-        sweep()
-        for id in Array(operations.keys) {
-            guard var record = operations[id], isLive(record.state) else { continue }
-            guard record.requester.connectionID == connectionID else { continue }
-            let hadPermit = isAuthorized(record.state)
-            record.state = .invalidated
-            operations[id] = record
-            emitInvalidation(record: record, hadPermit: hadPermit, reason: "requester disconnected")
-        }
-    }
-
     // MARK: - Status and hygiene
 
     /// Read-only status. Grants nothing. Lazily materializes expiry so the

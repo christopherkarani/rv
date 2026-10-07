@@ -16,7 +16,8 @@ import RVDomain
 /// fingerprints (views would leak secret-bearing commands into a
 /// same-user-readable file). Spend matches the same digest.
 public struct AttestTTYRedemptionParams: Sendable, Equatable, Codable {
-    /// `commandFingerprint` of the reviewed pending row.
+    /// Grant fingerprint (`commandFingerprint` row field, B1-folded) of
+    /// the reviewed pending row.
     public var fingerprint: String
     public var cwd: WorkingDirectory
     /// sha256 hex of the redeemed unlock code. Dedupe key only; the code

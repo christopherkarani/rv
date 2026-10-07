@@ -53,6 +53,66 @@ struct CdTrackingTests {
         #expect(tracked(["env A=1 cd /tmp"]) == "/repo")
     }
 
+    @Test func escapedHeadPoisonsInsteadOfMissing() {
+        // `c\d` executes the `cd` builtin; ignoring it would keep a
+        // stale inside cwd while the runtime moved outside (fail-open).
+        // The decoded token lost the quote positions needed to decide,
+        // so poison (nil) fails closed instead.
+        #expect(tracked(["c\\d /tmp"]) == nil)
+        #expect(tracked(["\\cd /tmp"]) == nil)
+        #expect(tracked(["push\\d /tmp"]) == nil)
+        // Poison is recoverable: absolute operands do not need the cwd.
+        #expect(tracked(["c\\d /tmp", "cd /repo"]) == "/repo")
+        #expect(tracked(["c\\d /tmp", "cd sub"]) == nil)
+    }
+
+    @Test func caseAndPathHeadsDoNotTrack() {
+        // Builtin lookup is case-sensitive (`CD` never cds) and a slash
+        // means external execution in a child (parent cwd unchanged).
+        #expect(tracked(["CD /tmp"]) == "/repo")
+        #expect(tracked(["/bin/cd /tmp"]) == "/repo")
+        #expect(tracked(["./cd /tmp"]) == "/repo")
+        #expect(tracked(["command /bin/cd /tmp"]) == "/repo")
+        #expect(tracked(["command CD /tmp"]) == "/repo")
+    }
+
+    @Test func opaqueHeadsPoison() {
+        // Substitution, ANSI-C, eval, and source heads can change the
+        // parent cwd opaquely; ignoring them would miss the move.
+        #expect(tracked(["$(echo cd) /tmp"]) == nil)
+        #expect(tracked(["`echo cd` /tmp"]) == nil)
+        #expect(tracked(["$'cd' /tmp"]) == nil)
+        #expect(tracked(["eval 'cd /tmp'"]) == nil)
+        #expect(tracked(["source setup.sh"]) == nil)
+        #expect(tracked([". setup.sh"]) == nil)
+        #expect(tracked(["command eval 'cd /tmp'"]) == nil)
+    }
+
+    @Test func timeAndNegationPrefixesTrack() {
+        // `time`/`!` run the verb in the current shell. `time -p` only
+        // formats; `!` takes no options. Nested prefixes are bizarre:
+        // poison instead of proving arity.
+        #expect(tracked(["time cd /tmp"]) == "/tmp")
+        #expect(tracked(["time -p cd /tmp"]) == "/tmp")
+        #expect(tracked(["! cd /tmp"]) == "/tmp")
+        #expect(tracked(["! ! cd /tmp"]) == nil)
+        #expect(tracked(["command command cd /tmp"]) == nil)
+        #expect(tracked(["time -v cd /tmp"]) == "/repo")
+    }
+
+    @Test func globBraceHeadsPoison() {
+        // Glob heads can expand to a directory builtin (`[c]d` with
+        // ./cd present); comma-braces can too (`{dirs,-c}` clears the
+        // stack). Exact `[`/`[[` are the static test builtins, and lone
+        // `{x}` is literal (no expansion without a comma): all stay
+        // untracked.
+        #expect(tracked(["[c]d /tmp"]) == nil)
+        #expect(tracked(["pushd /tmp", "{dirs,-c}", "popd"]) == nil)
+        #expect(tracked(["{cd} /tmp"]) == "/repo")
+        #expect(tracked(["[ -f x ]"]) == "/repo")
+        #expect(tracked(["[[ -f x ]]"]) == "/repo")
+    }
+
     @Test func commandBuiltinPrefixes() {
         #expect(tracked(["command cd /tmp"]) == "/tmp")
         #expect(tracked(["builtin cd /tmp"]) == "/tmp")

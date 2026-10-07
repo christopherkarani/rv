@@ -34,47 +34,131 @@ struct DirectoryTracker {
     /// `cd /tmp > f` truncates `f` before changing directory.
     mutating func apply(tokens: [String]) {
         guard tokens.isEmpty == false else { return }
-        // `command`/`builtin` prefixes still cd the current shell, but a
-        // `command -v`/`-V` query never changes directory (`-p` is not a
-        // query: it executes with the default PATH). `sudo`/`env`
-        // run `cd` in a child: the parent cwd is unchanged, so they stay
-        // untracked (head is not cd/pushd/popd).
-        let head = basename(tokens[0]).lowercased()
-        let words: [String]
-        let verb: String
-        if head == "command" || head == "builtin" {
-            var rest = Array(tokens.dropFirst())
-            while let first = rest.first, first.hasPrefix("-"), first != "-" {
-                if first == "--" {
-                    rest.removeFirst()
-                    break
-                }
-                // Only `-v`/`-V` are non-executing queries. `-p` (default
-                // PATH) still runs the command — `command -p cd /tmp` cds —
-                // so it falls through to the skip below (M-23).
-                if first == "-v" || first == "-V" {
-                    return
-                }
-                rest.removeFirst()
+        guard let head = builtinHead(tokens[0]) else {
+            // Not a recognized builtin spelling. A slashless head carrying
+            // shell metacharacters (backslash escapes, substitutions,
+            // ANSI-C, globs, braces) can still resolve to a directory
+            // builtin at runtime (`c\d`, `$'cd'`, `$(echo cd)`, `[c]d` all
+            // execute `cd`); the decoded token lost the quote positions
+            // needed to decide, so poison the tracked state (fail closed)
+            // instead of ignoring the move. A literal slash survives every
+            // expansion, so slash heads always execute externally (parent
+            // cwd unchanged) and stay untracked (`$HOME/bin/x`).
+            if isOpaqueHead(tokens[0]) {
+                working = nil
+                stack = []
             }
-            guard let next = rest.first else { return }
-            verb = basename(next).lowercased()
-            guard verb == "cd" || verb == "pushd" || verb == "popd" else { return }
-            words = Array(rest.dropFirst())
-        } else if head == "cd" || head == "pushd" || head == "popd" {
-            verb = head
-            words = Array(tokens.dropFirst())
-        } else if head == "dirs" {
+            return
+        }
+        // `command`/`builtin`/`time` prefixes and `!` negation still run
+        // the verb in the current shell, but a `command -v`/`-V` query
+        // never changes directory (`-p` is not a query: it executes with
+        // the default PATH). `sudo`/`env` run the verb in a child: the
+        // parent cwd is unchanged, so they stay untracked (no head).
+        if head == "command" || head == "builtin" {
+            applyCommandPrefix(rest: Array(tokens.dropFirst()))
+            return
+        }
+        if head == "time" {
+            // `time [-p] verb...`: -p only formats output; anything else
+            // is the verb.
+            var rest = Array(tokens.dropFirst())
+            while rest.first == "-p" { rest.removeFirst() }
+            applyPrefixVerb(rest: rest)
+            return
+        }
+        if head == "!" {
+            // Negation takes no options: the verb follows immediately.
+            applyPrefixVerb(rest: Array(tokens.dropFirst()))
+            return
+        }
+        if head == "eval" || head == "source" || head == "." {
+            // Script execution in the current shell: operands are opaque
+            // (a sourced file or eval string can cd arbitrarily).
+            working = nil
+            stack = []
+            return
+        }
+        if head == "dirs" {
             // `dirs` only displays, except `-c`, which clears the stack
             // (later `popd` becomes a no-op instead of restoring the cwd).
             if tokens.dropFirst().contains("-c") {
                 stack = []
             }
             return
-        } else {
+        }
+        applyVerb(head: head, words: stripWriterRedirectWords(Array(tokens.dropFirst())))
+    }
+
+    /// Exact builtin name for a decoded head word, or nil. Matching is
+    /// case-sensitive with no path separator: `CD` is not `cd`, and
+    /// `/bin/cd` executes an external command in a child (parent cwd
+    /// unchanged). Backslash- or substitution-carrying heads never match
+    /// here; the caller poisons on those instead of ignoring them.
+    private func builtinHead(_ word: String) -> String? {
+        guard word.contains("/") == false else { return nil }
+        switch word {
+        case "cd", "pushd", "popd", "command", "builtin", "dirs",
+            "eval", "source", ".", "time", "!":
+            return word
+        default:
+            return nil
+        }
+    }
+
+    /// True when a non-builtin head could still reach a directory builtin
+    /// at runtime: backslash escapes (`c\d`), command substitutions
+    /// (`$(...)`, backticks), ANSI-C quotes (`$'...'`), and glob/brace
+    /// expansion (`[c]d`, `{curl,}`). Slash heads always execute
+    /// externally (a literal slash survives every expansion), so they
+    /// are excluded: the parent cwd cannot change beneath them.
+    private func isOpaqueHead(_ word: String) -> Bool {
+        if word.contains("/") { return false }
+        return word.contains("\\") || word.contains("$") || word.contains("`")
+            || isGlobBraceHead(word)
+    }
+
+    private mutating func applyCommandPrefix(rest: [String]) {
+        var rest = rest
+        while let first = rest.first, first.hasPrefix("-"), first != "-" {
+            if first == "--" {
+                rest.removeFirst()
+                break
+            }
+            // Only `-v`/`-V` are non-executing queries. `-p` (default
+            // PATH) still runs the command — `command -p cd /tmp` cds —
+            // so it falls through to the skip below (M-23).
+            if first == "-v" || first == "-V" {
+                return
+            }
+            rest.removeFirst()
+        }
+        applyPrefixVerb(rest: rest)
+    }
+
+    private mutating func applyPrefixVerb(rest: [String]) {
+        guard let next = rest.first else { return }
+        guard let verb = builtinHead(next) else {
+            if isOpaqueHead(next) {
+                working = nil
+                stack = []
+            }
             return
         }
-        applyVerb(head: verb, words: stripWriterRedirectWords(words))
+        if verb == "command" || verb == "builtin" || verb == "time" || verb == "!" {
+            // Nested prefixes (`command command cd`) are bizarre; the
+            // decoded stream cannot cheaply prove the arity, so poison.
+            working = nil
+            stack = []
+            return
+        }
+        if verb == "eval" || verb == "source" || verb == "." {
+            working = nil
+            stack = []
+            return
+        }
+        guard verb == "cd" || verb == "pushd" || verb == "popd" else { return }
+        applyVerb(head: verb, words: stripWriterRedirectWords(Array(rest.dropFirst())))
     }
 
     private mutating func applyVerb(head: String, words: [String]) {

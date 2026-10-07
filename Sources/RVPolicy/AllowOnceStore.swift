@@ -273,20 +273,6 @@ public actor AllowOnceStore {
         AllowOnceLedger.rows(records: loadRecords(), now: now)
     }
 
-    /// Read-only peek at a live pending row for a typed code. Returns nil
-    /// for unknown, spent, or expired codes without mutating the ledger.
-    /// The redeem ceremony uses this to name the grant in the LA prompt
-    /// before authenticating (B-F6); the grant itself still goes through
-    /// `redeem`, which re-validates everything under the lock.
-    public func peekPending(code: String, now: Date) async -> AllowOnceListRow? {
-        let normalized = code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard AllowOnceUnlockCode(validating: normalized) != nil else { return nil }
-        let hash = sha256Hex(normalized)
-        return (try? withFileLock {
-            AllowOnceLedger.pendingRow(in: loadRecords(), codeHash: hash, now: now)
-        }).flatMap { AllowOnceLedger.rows(records: [$0], now: now).first }
-    }
-
     public func clear(tty: TTYCapability, now: Date) async throws {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         try withFileLock {

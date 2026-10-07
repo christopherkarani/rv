@@ -114,7 +114,7 @@ private struct HookReviewDetailView: View {
                         Task { await model.allowOnce() }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(model.authenticating)
+                    .disabled(model.authenticating || !model.allowOnceAvailable)
                 }
             } footer: {
                 if model.authenticating {

@@ -165,11 +165,18 @@ public struct UIHookReviewItemDTO: Sendable, Equatable, Codable {
     public let actionFingerprint: String
     public let status: HookReviewStatus
     public let advisoryExpiresWall: Date?
+    /// False when allow-once can never succeed for this wait (file/http
+    /// actions carry no exact command to plant). The UI hides the
+    /// Allow-once path instead of spending device-owner authentication
+    /// on a completion the server must refuse. Nil for older servers;
+    /// treat nil as available (previous behavior).
+    public let allowOnceAvailable: Bool?
 
     public init(
         approvalID: String, host: String, session: String, actionKind: String,
         exactCommand: String, workingDirectory: String, policyReason: String,
-        actionFingerprint: String, status: HookReviewStatus, advisoryExpiresWall: Date?
+        actionFingerprint: String, status: HookReviewStatus, advisoryExpiresWall: Date?,
+        allowOnceAvailable: Bool? = nil
     ) {
         self.approvalID = approvalID
         self.host = host
@@ -181,6 +188,7 @@ public struct UIHookReviewItemDTO: Sendable, Equatable, Codable {
         self.actionFingerprint = actionFingerprint
         self.status = status
         self.advisoryExpiresWall = advisoryExpiresWall
+        self.allowOnceAvailable = allowOnceAvailable
     }
 }
 

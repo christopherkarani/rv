@@ -252,6 +252,15 @@ private func redirectTargets(_ tokens: [String]) -> [String]? {
             if dest.hasPrefix("&") {
                 continue
             }
+            // `>& 2` / `>& -` (and `N>&` forms) duplicate/close a
+            // descriptor; only `>&file` names a destination (mirrors
+            // attachedRedirectTarget). `&>` and `>` always name files,
+            // even numeric ones, so the skip applies to `>&` only.
+            if token.hasSuffix(">&"),
+                dest == "-" || (dest.isEmpty == false && dest.allSatisfy(\.isNumber))
+            {
+                continue
+            }
             targets.append(dest)
             continue
         }

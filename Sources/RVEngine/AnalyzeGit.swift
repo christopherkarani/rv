@@ -41,7 +41,9 @@ private func parseGitInvocation(
     _ tokens: [String],
     context: GitAnalysisContext
 ) -> GitAction? {
-    guard let first = tokens.first, basename(first).lowercased() == "git" else {
+    guard let first = tokens.first,
+        unescapeBackslashPairs(basename(first)).lowercased() == "git"
+    else {
         return nil
     }
 

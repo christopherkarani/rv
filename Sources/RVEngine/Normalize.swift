@@ -499,6 +499,41 @@ func basename(_ token: String) -> String {
     return token
 }
 
+/// Pairwise backslash unescape for tool-head dispatch (`\X` → `X`, left
+/// to right; a trailing lone backslash stays). The tokenizer preserves
+/// backslashes in decoded words, so `c\url` would otherwise miss the
+/// `curl` parse while the runtime executes curl (fail-open). Mapping a
+/// quoted literal (`'c\url'`, runtime: not-found) onto the tool
+/// over-claims (fail-closed), so unescape-then-match is sound for tool
+/// recognition. Do NOT use for cwd tracking: a phantom track diverges
+/// the model (see CdTracking builtinHead), where opaque heads poison.
+func unescapeBackslashPairs(_ word: String) -> String {
+    var out = ""
+    out.reserveCapacity(word.count)
+    var iterator = word.makeIterator()
+    while let char = iterator.next() {
+        if char == "\\", let next = iterator.next() {
+            out.append(next)
+        } else {
+            out.append(char)
+        }
+    }
+    return out
+}
+
+/// True when a command head carries glob or brace metacharacters that
+/// could expand it into a different verb (`[c]url`, `{curl,}`). Exact
+/// `[`/`[[` are the static test builtins and excluded. Braces need a
+/// comma: lone `{` is group syntax and `{x}` is literal — neither
+/// expands (`..` sequences yield only numbers/letters, never a verb).
+/// Callers fail closed (analysis claims outside; the tracker also
+/// poisons slashless backslash/substitution heads via its own rule).
+func isGlobBraceHead(_ word: String) -> Bool {
+    if word == "[" || word == "[[" { return false }
+    if word.contains("*") || word.contains("?") || word.contains("[") { return true }
+    return word.contains("{") && word.contains(",")
+}
+
 private func joinTokenLexemes(_ tokens: [ShellPipeline.Token]) -> String {
     var out = ""
     var lastWasNewline = true

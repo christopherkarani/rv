@@ -102,8 +102,9 @@ public actor EphemeralAllowOnceTable {
     /// and evicted FIFO past `maxRedeemedCodes`, never pruned by grant
     /// expiry: expiry-pruning let a replayed attestation re-plant.
     private var redeemedCodes: [String: Date] = [:]
-    /// Record order for FIFO eviction. Entries for already-removed codes
-    /// are skipped lazily; compacted whenever it outgrows the map.
+    /// Record order for FIFO eviction. Codes leave the map only in
+    /// `evictRedeemedCodesIfNeeded`, which pops this array in step, so
+    /// the order always mirrors the map exactly.
     private var redeemedOrder: [String] = []
     /// M-07 per-table random salt for payload bindings. Fresh per init, so
     /// per daemon boot in production; bindings never verify across tables.

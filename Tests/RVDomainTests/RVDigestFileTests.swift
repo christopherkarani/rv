@@ -40,6 +40,32 @@ struct RVDigestFileTests {
         #expect(RVDigest.sha256HexOfFile(atPath: dir.path) == nil)
     }
 
+    @Test func maxBytesAllowsExactSize() throws {
+        let bytes = Array("capped executable".utf8)
+        let url = try writeTemp(bytes: bytes)
+        #expect(
+            RVDigest.sha256HexOfFile(atPath: url.path, maxBytes: UInt64(bytes.count))
+                == RVDigest.sha256Hex(bytes)
+        )
+    }
+
+    @Test func maxBytesRefusesOverflow() throws {
+        let bytes = Array("capped executable".utf8)
+        let url = try writeTemp(bytes: bytes)
+        #expect(
+            RVDigest.sha256HexOfFile(atPath: url.path, maxBytes: UInt64(bytes.count) - 1) == nil
+        )
+    }
+
+    @Test func maxBytesZeroBoundary() throws {
+        let empty = try writeTemp(bytes: [])
+        #expect(
+            RVDigest.sha256HexOfFile(atPath: empty.path, maxBytes: 0) == RVDigest.sha256Hex([])
+        )
+        let one = try writeTemp(bytes: [0x41])
+        #expect(RVDigest.sha256HexOfFile(atPath: one.path, maxBytes: 0) == nil)
+    }
+
     private func writeTemp(bytes: [UInt8]) throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-digest-\(UUID().uuidString)")

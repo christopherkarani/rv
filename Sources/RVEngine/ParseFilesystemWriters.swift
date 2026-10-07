@@ -1096,7 +1096,7 @@ private func tarDecide(_ scan: TarScan, argv: Argv) -> ParsedFilesystemCommand? 
 /// extracted. A `-` value means stdout.
 func parseCurl(_ argv: Argv) -> ParsedFilesystemCommand? {
     var dests: [String] = []
-    var outputDir: String?
+    var outputDirs: [String] = []
     var remoteName = false
     var index = argv.args.startIndex
     while index < argv.args.endIndex {
@@ -1124,7 +1124,7 @@ func parseCurl(_ argv: Argv) -> ParsedFilesystemCommand? {
                 }
             case "output-dir":
                 if let value = attached ?? curlNextWord(argv.args, &index) {
-                    outputDir = value
+                    outputDirs.append(value)
                 }
             case "remote-name", "remote-name-all":
                 remoteName = true
@@ -1175,12 +1175,46 @@ func parseCurl(_ argv: Argv) -> ParsedFilesystemCommand? {
         }
         argv.args.formIndex(after: &index)
     }
+    if outputDirs.isEmpty == false {
+        // --output-dir prepends to relative -o names (man) as well as
+        // remote names; claiming the raw relative path would resolve
+        // inside while curl writes outside. Claim the joined form too.
+        // Superset over order and --next transfers: every dir seen
+        // anywhere joins every relative curl dest, so no transfer can
+        // under-claim. Shell-redirect dests (appended below) are
+        // unaffected by curl's output-dir and never join.
+        let curlDests = dests
+        for dir in outputDirs {
+            for dest in curlDests {
+                if let joined = joinCurlOutputDir(dir, dest) {
+                    dests.append(joined)
+                }
+            }
+        }
+    }
     if remoteName {
-        dests.append(outputDir ?? ".")
+        if outputDirs.isEmpty {
+            dests.append(".")
+        } else {
+            dests += outputDirs
+        }
     }
     dests += writerRedirectDests(argv)
     dests.removeAll { $0 == "-" }
     return writerParsed(operation: .overwrite, paths: dests)
+}
+
+/// Joins a curl `-o`-family dest onto one --output-dir. Absolute dests
+/// win over the dir (man); stdout ("-") and empty dirs never join. The
+/// unbounded sentinel ("/") is absolute by shape and passes through.
+private func joinCurlOutputDir(_ dir: String, _ dest: String) -> String? {
+    guard dir.isEmpty == false, dest != "-", dest.hasPrefix("/") == false else {
+        return nil
+    }
+    if dir.hasSuffix("/") {
+        return dir + dest
+    }
+    return dir + "/" + dest
 }
 
 /// Resolves a curl long against the write-flag universe (exact first, then
@@ -1552,9 +1586,12 @@ func parseSed(_ argv: Argv) -> ParsedFilesystemCommand? {
     let inPlaceLong = stripped.contains { word in
         guard word.hasPrefix("--") else { return false }
         let rest = String(word.dropFirst(2))
-        let name = rest.contains("=")
-            ? String(rest[..<(rest.firstIndex(of: "=")!)])
-            : rest
+        let name: String
+        if let equals = rest.firstIndex(of: "=") {
+            name = String(rest[..<equals])
+        } else {
+            name = rest
+        }
         return resolveWriterLong(name, valueLongs: [], bareLongs: ["in-place"])
             == "in-place"
     }
@@ -1832,10 +1869,20 @@ func parseZip(_ argv: Argv) -> ParsedFilesystemCommand? {
         bareLongs: zipBareLongs
     )
     var dests: [String] = []
+    // Pure `-T`/`--test` with no file operands reads the archive;
+    // there is nothing to update, so no archive claim (mirrors the
+    // gzip `-t` no-write gate, but conditional: `zip -T archive files`
+    // updates before testing and still claims). -m stays conservative.
+    let testOnly = (scan.bareShortHits.contains("T") || scan.bareLongHits.contains("test"))
+        && scan.operands.count == 1
+        && scan.bareShortHits.contains("m") == false
+        && scan.bareLongHits.contains("move") == false
     if scan.failed == false, scan.sawHelp == false,
         let archive = scan.operands.first, archive != "-"
     {
-        dests.append(archive)
+        if testOnly == false {
+            dests.append(archive)
+        }
         dests += scan.flagValues["O"] ?? []
         dests += scan.flagValues["output-file"] ?? []
         dests += scan.flagValues["out"] ?? []

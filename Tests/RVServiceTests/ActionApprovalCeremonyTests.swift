@@ -157,16 +157,17 @@ struct ActionApprovalCeremonyTests {
         #expect(await ceremonies.listActionReviews().items.isEmpty)
     }
 
-    @Test func oversizedPolicyContextFailsClosed() async throws {
+    @Test func policyContextDoesNotGateIngestion() async throws {
+        // Policy context is host metadata the service neither retains
+        // nor gates on; oversized values are ignored, not fatal.
         let (hosts, ceremonies) = world()
         let ref = reference()
         let host = peer()
         try await register(hosts, ref, host)
-        await #expect(throws: ActionApprovalCeremonyError.invalidAsk) {
-            try await ceremonies.requestApproval(
-                createDTO(reference: ref, policyContext: String(repeating: "x", count: 513)),
-                hostPeer: host)
-        }
+        let created = try await ceremonies.requestApproval(
+            createDTO(reference: ref, policyContext: String(repeating: "x", count: 513)),
+            hostPeer: host)
+        #expect(created.status == .pending)
     }
 
     // MARK: - Allow-once flow

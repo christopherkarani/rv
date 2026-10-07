@@ -135,9 +135,14 @@ enum AllowOnceCLI {
         guard let peeked else {
             // No live pending row: report the precise failure (unknown/
             // expired/spent) WITHOUT prompting LA — garbage codes must not
-            // trigger Touch ID. This branch NEVER attests: a row appearing
-            // after this read would be unreviewed, so at most a projection
-            // flips (fail-closed).
+            // trigger Touch ID. This branch NEVER attests. A row appearing
+            // after the first read is unreviewed: flipping it here would
+            // print "granted" with no LA and no attestation, so recheck
+            // and fail closed with redemptionChanged instead — the code
+            // stays live-pending for a genuine retry.
+            if await store.validatePending(code: code, now: now) != nil {
+                throw AllowOnceError.redemptionChanged
+            }
             let row = try await store.redeem(code: code, tty: tty, now: now, robot: robot)
             return (row, false)
         }

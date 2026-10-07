@@ -798,17 +798,6 @@ struct WorkspaceOperatorAuthorizerTests {
         }
     }
 
-    @Test func requesterDisconnectInvalidatesAttempt() async throws {
-        let clock = TestClock()
-        let auth = authorizer(clock: clock)
-        let fx = Fixture()
-        let (ref, _) = try await driveToPermit(auth, fx)
-        await auth.requesterDisconnected(connectionID: fx.requester.connectionID)
-        #expect(try await auth.status(of: ref.authorizationID) == .invalidated)
-        await auth.requesterDisconnected(connectionID: fx.requester.connectionID)
-        #expect(try await auth.status(of: ref.authorizationID) == .invalidated)
-    }
-
     // MARK: - Expiry boundaries (now == expiry fails closed)
 
     @Test func expiryVersusSuccessAtExactBoundary() async throws {
@@ -1233,34 +1222,6 @@ struct WorkspaceOperatorAuthorizerTests {
             #expect(try await auth.status(of: ref.authorizationID) == .invalidated)
             await #expect(throws: WorkspaceOperatorAuthorizationError.self) {
                 try await auth.consumePermit(ref, expectation: fx.expectation())
-            }
-        }
-    }
-
-    @Test func requesterDisconnectVersusConsumeIsCoherent() async throws {
-        for _ in 0..<25 {
-            let clock = TestClock()
-            let auth = authorizer(clock: clock)
-            let fx = Fixture()
-            let (ref, _) = try await driveToPermit(auth, fx)
-            let expectation = fx.expectation()
-            let consumed = await withTaskGroup(of: Bool.self) { group in
-                group.addTask {
-                    (try? await auth.consumePermit(ref, expectation: expectation)) != nil
-                }
-                group.addTask {
-                    await auth.requesterDisconnected(connectionID: fx.requester.connectionID)
-                    return false
-                }
-                var won = false
-                for await outcome in group { won = won || outcome }
-                return won
-            }
-            let status = try await auth.status(of: ref.authorizationID)
-            if consumed {
-                #expect(status == .consumed)
-            } else {
-                #expect(status == .invalidated)
             }
         }
     }

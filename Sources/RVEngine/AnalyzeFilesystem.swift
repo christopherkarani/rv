@@ -10,6 +10,16 @@ public func analyzeFilesystem(
     guard let single = singleEffectiveSegment(view) else { return .unknown }
     let tokens = tokenizeFilesystemWords(single)
     guard let parsed = parseFilesystemCommand(tokens) else {
+        // C-F7 (single): an unnameable verb fails closed, mirroring the
+        // chain path, instead of returning unknown → allow. This also
+        // closes the pre-existing gap for dynamic-head singles (`$CMD -o
+        // /outside` parsed nothing and allowed).
+        if let head = tokens.first,
+            isDynamicToken(head) || isGlobBraceHead(head),
+            let outside = dynamicOutsideTarget(head, context: context, head: true)
+        {
+            return .filesystem(.overwrite(targets: [outside]))
+        }
         return .unknown
     }
     guard let action = filesystemAction(parsed: parsed, context: context) else {
@@ -73,15 +83,18 @@ func parseFilesystemSegments(
             let action = filesystemAction(parsed: parsed, context: segmentContext)
         {
             actions.append(claimDynamicVerb(action, tokens: tokens, context: segmentContext))
-        } else if let head = tokens.first, isDynamicToken(head),
-            let outside = dynamicOutsideTarget(head, context: segmentContext)
+        } else if let head = tokens.first,
+            isDynamicToken(head) || isGlobBraceHead(head),
+            let outside = dynamicOutsideTarget(head, context: segmentContext, head: true)
         {
             // C-F7: a dynamic argv0 (`$(...)`, backticks, `$VAR`) hides the
-            // verb itself, so no parser can claim the segment. The operation
-            // cannot be established — fail closed as an outside overwrite
-            // (Step 8B §10) rather than skipping into unknown → allow.
-            // Home-alias heads (`$HOME/bin/tool`) expand lexically and stay
-            // unclaimed via isDynamicToken.
+            // verb itself, so no parser can claim the segment. Glob/brace
+            // heads (`[c]url`, `{curl,}`) hide it the same way. The
+            // operation cannot be established — fail closed as an outside
+            // overwrite (Step 8B §10) rather than skipping into unknown →
+            // allow. Home-alias heads (`$HOME/bin/tool`) expand lexically
+            // and stay unclaimed via isDynamicToken. Backslash-only heads
+            // never reach here unrecognized: dispatch unescapes pairs first.
             actions.append(.overwrite(targets: [outside]))
         }
         tracker.apply(tokens: tokens)
@@ -205,8 +218,9 @@ private func claimDynamicVerb(
     tokens: [String],
     context: FilesystemAnalysisContext
 ) -> FilesystemAction {
-    guard let head = tokens.first, isDynamicToken(head),
-        let outside = dynamicOutsideTarget(head, context: context)
+    guard let head = tokens.first,
+        isDynamicToken(head) || isGlobBraceHead(head),
+        let outside = dynamicOutsideTarget(head, context: context, head: true)
     else {
         return action
     }
@@ -230,12 +244,15 @@ private func claimDynamicVerb(
 /// classifies outside the repository and the existing outside-mutation
 /// rules fail closed in every world. Static paths return nil and classify
 /// normally, so static-outside evidence survives beside dynamic operands
-/// (`cp $f /tmp/eve`). Reads never reach here (skipped above).
+/// (`cp $f /tmp/eve`). Reads never reach here (skipped above). Heads
+/// additionally treat glob/brace spellings as dynamic (a verb the parser
+/// cannot name); operands never do (`touch *.txt` classifies normally).
 private func dynamicOutsideTarget(
     _ apparent: String,
-    context: FilesystemAnalysisContext
+    context: FilesystemAnalysisContext,
+    head: Bool = false
 ) -> FilesystemTarget? {
-    guard isDynamicToken(apparent) else { return nil }
+    guard isDynamicToken(apparent) || (head && isGlobBraceHead(apparent)) else { return nil }
     return FilesystemTarget(
         apparent: apparent,
         canonical: lexicalFilesystemPath(

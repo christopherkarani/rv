@@ -87,13 +87,18 @@ final class FakeHookBridge: OperatorHookUIBridge, Sendable {
     }
 }
 
-func hookReviewItem(approvalID: String = "hook-1", status: HookReviewStatus = .awaitingHuman) -> UIHookReviewItemDTO {
+func hookReviewItem(
+    approvalID: String = "hook-1",
+    status: HookReviewStatus = .awaitingHuman,
+    allowOnceAvailable: Bool? = nil
+) -> UIHookReviewItemDTO {
     UIHookReviewItemDTO(
         approvalID: approvalID, host: "pi", session: "sess-pi",
         actionKind: "shell", exactCommand: "git reset --hard",
         workingDirectory: "/tmp/ws", policyReason: "hostAsk",
         actionFingerprint: "pi:sess-pi:/tmp/ws:git reset --hard",
-        status: status, advisoryExpiresWall: nil)
+        status: status, advisoryExpiresWall: nil,
+        allowOnceAvailable: allowOnceAvailable)
 }
 
 @Suite("Operator hook review model")
@@ -170,6 +175,40 @@ struct OperatorHookReviewModelTests {
         #expect(reasons[0].contains("coding-agent command"))
         #expect(!reasons[0].contains("Launch"))
         #expect(!reasons[0].contains("agent action"))
+    }
+
+    @Test func unavailableAllowOnceSkipsAuthentication() async throws {
+        // File/http waits carry no exact command, so the server marks
+        // them unavailable: the model must not spend a device-owner
+        // authentication on a completion the server must refuse, and
+        // must send nothing. Deny still works (separate test).
+        let bridge = FakeHookBridge()
+        bridge.setItems([hookReviewItem(allowOnceAvailable: false)])
+        let counter = AuthCounter()
+        let model = makeModel(bridge: bridge, counter: counter)
+        await model.connect()
+        await model.select("hook-1")
+        _ = try #require(model.bound)
+        #expect(model.allowOnceAvailable == false)
+        await model.allowOnce()
+        #expect(counter.calls == 0)
+        #expect(bridge.snapshot.completions.isEmpty)
+        #expect(model.notice != nil)
+        #expect(model.bound != nil)
+    }
+
+    @Test func legacyNilAvailabilityStillAllows() async throws {
+        // Older servers omit the flag: nil keeps previous behavior.
+        let bridge = FakeHookBridge()
+        bridge.setItems([hookReviewItem(allowOnceAvailable: nil)])
+        let counter = AuthCounter()
+        let model = makeModel(bridge: bridge, counter: counter)
+        await model.connect()
+        await model.select("hook-1")
+        #expect(model.allowOnceAvailable == true)
+        await model.allowOnce()
+        #expect(counter.calls == 1)
+        #expect(bridge.snapshot.completions.count == 1)
     }
 
     @Test func denyNeedsNoAuthentication() async throws {

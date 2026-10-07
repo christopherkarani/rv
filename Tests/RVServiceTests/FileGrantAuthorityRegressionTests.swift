@@ -33,6 +33,30 @@ struct FileGrantAuthorityRegressionTests {
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
     }
 
+    @Test func wellFormedForgedFileGrant_applyDenies() async throws {
+        let directory = try isolatedFileGrantDirectory()
+        let view = MatchingView("git reset --hard")
+        try plantForgedGrantedRow(
+            directory: directory,
+            fingerprint: grantFingerprint(view, invocationPrefix: []),
+            cwd: "/tmp/ws"
+        )
+        let world = LiveEvaluateWorld(
+            home: try isolatedFileGrantHome(),
+            store: AllowOnceStore(baseDirectory: directory),
+            clock: { Date(timeIntervalSince1970: 1_700_000_000) }
+        )
+        let result = await world.apply(
+            command: ShellCommand(rawValue: "git reset --hard"),
+            cwd: wd("/tmp/ws")
+        )
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("well-formed forged file grant must not spend on the daemon path")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+    }
+
     @Test func replayedConsumedRow_applyDenies() async throws {
         let store = AllowOnceStore(baseDirectory: try isolatedFileGrantDirectory())
         let grants = EphemeralAllowOnceTable()

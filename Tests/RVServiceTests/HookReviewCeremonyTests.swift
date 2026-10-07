@@ -451,6 +451,19 @@ struct HookReviewCeremonyTests {
                 "outcome \(outcome) must drop the challenge for a fresh bind")
         }
     }
+
+    @Test func listMarksAllowOnceAvailabilityByAction() async throws {
+        let env = try HookCeremonyEnv(now: now)
+        defer { env.tearDown() }
+        _ = try await env.seed(command: "git reset --hard", id: "hook-shell")
+        _ = try await env.seedFile(id: "hook-file")
+
+        let list = await env.ceremonies.listHookReviews()
+        let shell = try #require(list.items.first(where: { $0.approvalID == "hook-shell" }))
+        #expect(shell.allowOnceAvailable == true)
+        let file = try #require(list.items.first(where: { $0.approvalID == "hook-file" }))
+        #expect(file.allowOnceAvailable == false)
+    }
 }
 
 private final class FrozenClock: @unchecked Sendable {
@@ -512,6 +525,36 @@ private final class HookCeremonyEnv {
                         ),
                         scope: ActionScope(workingDirectory: cwd),
                         supportingCommand: shell
+                    )
+                ),
+                reason: .hostAsk,
+                continuation: .hostNative,
+                timeoutPolicy: .keepWaiting
+            ),
+            now: frozen.now
+        )
+    }
+
+    func seedFile(id: String) async throws -> PendingApproval {
+        let cwd = wd("/tmp/ws")
+        let tool = FileToolAction(kind: .read, path: FileToolPath(rawValue: "/tmp/ws/notes.txt"))
+        return try await pending.create(
+            PendingApprovalRequest(
+                id: ApprovalID(rawValue: id),
+                identity: ApprovalIdentity(
+                    session: SessionID(validating: "sess-pi")!,
+                    agent: .pi
+                ),
+                action: .file(
+                    FileAction(
+                        fingerprint: ActionFingerprint.make(
+                            host: .pi,
+                            session: SessionID(validating: "sess-pi"),
+                            cwd: cwd,
+                            file: tool
+                        ),
+                        file: tool,
+                        scope: ActionScope(workingDirectory: cwd)
                     )
                 ),
                 reason: .hostAsk,

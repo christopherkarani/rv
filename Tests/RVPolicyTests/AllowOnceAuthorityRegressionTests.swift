@@ -40,6 +40,37 @@ struct AllowOnceAuthorityRegressionTests {
         }
     }
 
+    @Test func wellFormedForgedFileGrant_doesNotSpend() async throws {
+        // B-F1 with the CURRENT row shape: a well-formed granted row
+        // (valid schema, current grant fingerprint, matching cwd,
+        // unexpired) still spends nothing. The stale-shape test above
+        // proves the historical bug; this one proves file-ignorance
+        // against a forgery that would spend under any file-consulting
+        // implementation.
+        let root = try isolatedAuthorityDirectory()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let view = MatchingView("git reset --hard")
+        try plantForgedGrantedRow(
+            directory: root,
+            fingerprint: grantFingerprint(view, invocationPrefix: []),
+            cwd: "/tmp/ws"
+        )
+        let store = AllowOnceStore(baseDirectory: root)
+        #expect((await store.list(now: now)).isEmpty == false)
+        let grants = EphemeralAllowOnceTable()
+        let gated = await PolicyGate.consumingGrant(
+            for: authorityResetHardDeny(),
+            cwd: wd("/tmp/ws"),
+            grants: grants,
+            now: now
+        )
+        #expect(gated.override == .none)
+        guard case .deny = gated.result.decision else {
+            Issue.record("well-formed forged file grant must not spend")
+            return
+        }
+    }
+
     @Test func replayedConsumedRow_doesNotSpend() async throws {
         // B-F3: legit mint → redeem → ceremony plant → consume, then the
         // attacker re-appends the consumed row's granted bytes.

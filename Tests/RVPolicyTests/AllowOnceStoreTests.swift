@@ -83,7 +83,7 @@ struct AllowOnceStoreTests {
         }
     }
 
-    @Test func peekPending_showsLiveRowOnly() async throws {
+    @Test func validatePending_showsLiveRowOnly() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
@@ -94,15 +94,16 @@ struct AllowOnceStoreTests {
             tty: tty,
             now: now
         )
-        let peeked = await store.peekPending(code: code.rawValue, now: now)
-        let row = try #require(peeked)
-        #expect(row.kind == .pending)
-        #expect(row.commandRedacted == "git …")
-        #expect(row.cwd == wd("/tmp/a"))
-        #expect(await store.peekPending(code: "ffffff", now: now) == nil)
-        #expect(await store.peekPending(code: "not hex!", now: now) == nil)
+        let peeked = await store.validatePending(code: code.rawValue, now: now)
+        let checked = try #require(peeked)
+        #expect(checked.row.kind == .pending)
+        #expect(checked.row.commandRedacted == "git …")
+        #expect(checked.row.cwd == wd("/tmp/a"))
+        #expect(checked.fingerprint.isEmpty == false)
+        #expect(await store.validatePending(code: "ffffff", now: now) == nil)
+        #expect(await store.validatePending(code: "not hex!", now: now) == nil)
         _ = try await store.redeem(code: code.rawValue, tty: tty, now: now)
-        #expect(await store.peekPending(code: code.rawValue, now: now) == nil)
+        #expect(await store.validatePending(code: code.rawValue, now: now) == nil)
     }
 
     @Test func memoryGrantConsumesOnce() async throws {

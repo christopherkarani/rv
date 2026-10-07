@@ -1,3 +1,9 @@
+#if os(macOS)
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVDomain
 import RVIPC
@@ -124,15 +130,51 @@ struct CwdCommitVerification: Sendable, Equatable {
 struct ExecutableCommitVerification: Sendable, Equatable {
     let executablePath: String
     let expectedSHA256: String
+    /// Dispatch-captured regular-file size. Nil when dispatch could not
+    /// measure one (missing or non-regular executable): verification
+    /// then always refuses. Bounds the commit hash so a swapped-in huge
+    /// file refuses after a stat instead of stalling the supervisor
+    /// state lock hashing to EOF.
+    let expectedByteCount: UInt64?
+}
+
+/// Regular-file size of a launch executable, or nil when the path is
+/// missing, unstatted, or not a regular file (directory, fifo, socket,
+/// device). Follows symlinks exactly like the exec path and the content
+/// hash, so link swaps measure their new target. Any stat(2) failure
+/// fails closed.
+func measureExecutableSize(atPath path: String) -> UInt64? {
+    var info = stat()
+    guard stat(path, &info) == 0,
+        (info.st_mode & S_IFMT) == S_IFREG,
+        info.st_size >= 0
+    else {
+        return nil
+    }
+    return UInt64(info.st_size)
 }
 
 /// Measures a custom executable's content against the authorized digest.
 /// Anything unreadable or unequal refuses: missing files, directories,
-/// permission failures, and swapped bytes all fail closed. The expected
-/// value compares case-insensitively (hex); a malformed expectation can
-/// never match a measurement.
-func verifyExecutableContentDigest(path: String, expectedSHA256: String) -> Bool {
-    guard let measured = RVDigest.sha256HexOfFile(atPath: path) else { return false }
+/// fifos, permission failures, size drift, and swapped bytes all fail
+/// closed. The expected value compares case-insensitively (hex); a
+/// malformed expectation can never match a measurement.
+///
+/// The size gate runs before the hash: the commit re-stats the path and
+/// refuses on any non-regular shape or size drift, then hashes at most
+/// `expectedByteCount` bytes, so the in-lock read is bounded by the
+/// dispatch-captured size. Residual: bytes are verified at T and
+/// executed by path at T+ε; a same-user swap inside that microsecond
+/// window is undetected (closing it needs fd-based exec, future work).
+func verifyExecutableContentDigest(
+    path: String, expectedSHA256: String, expectedByteCount: UInt64?
+) -> Bool {
+    guard let expectedByteCount,
+        measureExecutableSize(atPath: path) == expectedByteCount,
+        let measured = RVDigest.sha256HexOfFile(atPath: path, maxBytes: expectedByteCount)
+    else {
+        return false
+    }
     return measured == expectedSHA256.lowercased()
 }
 
@@ -278,3 +320,4 @@ struct WorkspaceHostRedemptionAuditEvent: Sendable, Equatable {
     let wall: Date
     let outcome: String
 }
+#endif

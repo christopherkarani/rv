@@ -23,7 +23,6 @@ enum HookReviewLimits {
 enum HookReviewCeremonyError: Error, Sendable, Equatable {
     case unknownApproval
     case notReviewable
-    case expired
     case authenticationFailed
 }
 
@@ -351,7 +350,8 @@ actor HookReviewCeremonyService {
             policyReason: row.reason.rawValue,
             actionFingerprint: ReviewSanitizer.redactCredentials(in: row.fingerprint.rawValue),
             status: bound ? .awaitingAuthentication : status(row.state),
-            advisoryExpiresWall: row.expiresAt
+            advisoryExpiresWall: row.expiresAt,
+            allowOnceAvailable: row.action.supportingCommand != nil
         )
     }
 

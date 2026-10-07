@@ -248,6 +248,66 @@ struct ParseFilesystemWritersTests {
         #expect(parseCurl(["--help"]) == nil)
     }
 
+    @Test func curlOutputDirPrependsToRelativeDashO() {
+        // curl man: --output-dir prepends to relative -o names too.
+        // Claiming the raw relative path would resolve inside while curl
+        // writes outside (fail-open); claim both (superset, fail-closed).
+        expectWriterParsed(
+            parseCurl(["-o", "rel", "--output-dir", "/outside", "http://h"]),
+            "overwrite",
+            paths: ["rel", "/outside/rel"]
+        )
+        // Order-insensitive superset: a dir seen anywhere applies to
+        // every relative dest (curl evaluates at transfer time).
+        expectWriterParsed(
+            parseCurl(["--output-dir", "/outside", "-o", "rel", "http://h"]),
+            "overwrite",
+            paths: ["rel", "/outside/rel"]
+        )
+        // Absolute -o wins over --output-dir (man).
+        expectWriterParsed(
+            parseCurl(["-o", "/abs", "--output-dir", "/outside", "http://h"]),
+            "overwrite",
+            paths: ["/abs"]
+        )
+        // The unbounded sentinel never joins (it is absolute by shape).
+        expectWriterParsed(
+            parseCurl(["-K", "evil.conf", "--output-dir", "/outside", "http://h"]),
+            "overwrite",
+            paths: ["/"]
+        )
+    }
+
+    @Test func escapedVerbStillDispatches() throws {
+        // Backslash-escaped spellings execute the tool (`c\url` runs
+        // curl); the tokenizer preserves backslashes, so dispatch must
+        // unescape pairs before matching or the destinations are missed
+        // (fail-open). A quoted literal (`'c\url'`, runtime: not-found)
+        // mapping onto the tool over-claims (fail-closed).
+        let curl = parseFilesystemCommand(["c\\url", "-o", "/outside/x", "http://h"])
+        let curlClaim = try #require(curl)
+        #expect(curlClaim.operation == .overwrite)
+        #expect(curlClaim.paths == ["/outside/x"])
+        let rm = parseFilesystemCommand(["\\rm", "f"])
+        let rmClaim = try #require(rm)
+        #expect(rmClaim.operation == .delete)
+        #expect(rmClaim.paths == ["f"])
+    }
+
+    @Test func curlOutputDirStickyAcrossNext() {
+        // --next transfer boundaries do not shrink the claim: every dir
+        // seen joins every relative dest, so a multi-transfer command
+        // can never under-claim an earlier dir.
+        expectWriterParsed(
+            parseCurl([
+                "--output-dir", "/a", "-O", "--next",
+                "--output-dir", "/b", "-o", "rel", "http://h",
+            ]),
+            "overwrite",
+            paths: ["rel", "/a/rel", "/b/rel", "/a", "/b"]
+        )
+    }
+
     @Test func dd_ofOperandIsDestination() {
         expectWriterParsed(parseDd(["if=a", "of=/tmp/x"]), "overwrite", paths: ["/tmp/x"])
         expectWriterParsed(parseDd(["if=a", "of=b"]), "overwrite", paths: ["b"])
@@ -843,5 +903,23 @@ struct ParseNewWriterVerbsTests {
             paths: ["old.zip", "/tmp/new.zip"]
         )
         #expect(parseZip(["-", "a"]) == nil)
+    }
+
+    @Test func zip_testOnlySkipsArchiveClaim() {
+        // Pure `-T`/`--test` reads the archive; with no file operands
+        // there is nothing to update. Update+test still claims, and -m
+        // stays conservative (destructive flavor, bizarre combo).
+        #expect(parseZip(["-T", "/outside/x.zip"]) == nil)
+        #expect(parseZip(["--test", "/outside/x.zip"]) == nil)
+        expectWriterParsed(
+            parseZip(["-T", "a.zip", "f"]),
+            "overwrite",
+            paths: ["a.zip"]
+        )
+        expectWriterParsed(
+            parseZip(["-T", "-m", "a.zip"]),
+            "overwrite",
+            paths: ["a.zip"]
+        )
     }
 }
