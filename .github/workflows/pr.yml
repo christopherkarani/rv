@@ -105,14 +105,16 @@ jobs:
       - name: Isolated-HOME host attach
         run: Scripts/host-attach-proof.sh
 
-  # Darwin isolation only. Parallel with hook grade so a silent suite hang
-  # dies at 15 minutes. Compile this test target before anything else; do not
-  # stage release binaries or run the CLI suite in this job.
-  macos-isolation:
-    name: macos isolation
+  # Darwin isolation only, sharded A-M / N-Z by suite/test initial.
+  # 598 tests in one process collapse shared-runner throughput (blocking
+  # waits saturate the small pool and queueing spirals); halves restore
+  # headroom and halve the suspect set if a shard still wedges. Filters
+  # cover every test ID (279 + 319, verified via `swift test list`).
+  # Compile this test target before anything else; do not stage release
+  # binaries or run the CLI suite in these jobs.
+  macos-isolation-a-m:
+    name: macos isolation (A-M)
     runs-on: macos-26
-    # 598 tests with real process-spawning suites; builds take ~5 min and
-    # shared-runner spawn latency inflates the rest well past 15.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -146,14 +148,59 @@ jobs:
         run: Scripts/swift-6.4 build --target RVIsolationTests
 
       # Debug products the suite execs. After the isolation compile, so a
-      # hang in that compile still dies at 15 minutes. Not release.sh, and
+      # hang in that compile still dies at the timeout. Not release.sh, and
       # not the CLI test suite. Single full build: SPM honors only one
       # --product per invocation, so separate calls re-plan each time.
       - name: Build debug workspace products
         run: Scripts/swift-6.4 build
 
-      - name: Run RVIsolationTests
-        run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter RVIsolationTests
+      - name: Run RVIsolationTests (A-M)
+        run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter 'RVIsolationTests\.[A-Ma-m]'
+
+  macos-isolation-n-z:
+    name: macos isolation (N-Z)
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Swift toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Toolchains/swift-6.4-RELEASE.xctoolchain
+            ~/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain
+          key: swift-6.4-RELEASE-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Swift 6.4
+        run: Scripts/install-official-swift-macos.sh
+
+      # Packages only, not compiled artifacts: a restored build plan embeds
+      # the Metal toolchain cryptex path, which is random per runner, so an
+      # incremental rebuild fails spawning `metal` (SwiftTerm shaders).
+      - name: Cache SwiftPM packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-pkgs-isol-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            swiftpm-pkgs-isol-${{ runner.os }}-${{ runner.arch }}-
+            swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Compile RVIsolationTests
+        run: Scripts/swift-6.4 build --target RVIsolationTests
+
+      # Debug products the suite execs. After the isolation compile, so a
+      # hang in that compile still dies at the timeout. Not release.sh, and
+      # not the CLI test suite. Single full build: SPM honors only one
+      # --product per invocation, so separate calls re-plan each time.
+      - name: Build debug workspace products
+        run: Scripts/swift-6.4 build
+
+      - name: Run RVIsolationTests (N-Z)
+        run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter 'RVIsolationTests\.[N-Zn-z]'
 
   # Compiler host is macos-26. Advertised Darwin floor is macOS 15.
   # sequoia-smoke executes the staged binaries; it does not compile Swift.
