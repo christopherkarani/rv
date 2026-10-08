@@ -19,10 +19,10 @@ struct ActionApprovalWireRoundTripTests {
     }
 
     private func action() -> ProposedAction {
-        .shell(ShellAction(
+        .shell(ShellAction.effectOnly(EffectShell(
             fingerprint: ActionFingerprint(rawValue: "wire:echo"),
             scope: ActionScope(workingDirectory: WorkingDirectory(rawValue: "/work")),
-            supportingCommand: ShellCommand(rawValue: "echo hello")))
+            supportingCommand: ShellCommand(rawValue: "echo hello"))))
     }
 
     private func reviewItem(approvalID: UUID = UUID()) -> UIActionReviewItemDTO {

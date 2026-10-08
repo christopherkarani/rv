@@ -106,7 +106,7 @@ private func allowTouchNormalize(
     }
     return .success(
         .shell(
-            ShellAction(
+            ShellAction.effectOnly(EffectShell(
                 fingerprint: ActionFingerprint(
                     rawValue: "registry:\(subject.session.id.rawValue.uuidString):\(raw)"
                 ),
@@ -118,7 +118,7 @@ private func allowTouchNormalize(
                 ),
                 scope: ActionScope(workingDirectory: subject.policyWorkspace),
                 supportingCommand: command
-            )
+            ))
         )
     )
 }

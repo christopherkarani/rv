@@ -86,11 +86,11 @@ struct Step8BAdversarialTests {
                     agent: .pi
                 ),
                 action: .shell(
-                    ShellAction(
+                    ShellAction.effectOnly(EffectShell(
                         fingerprint: ActionFingerprint(rawValue: "shell:self-1"),
                         scope: ActionScope(workingDirectory: wd("/tmp/ws")),
                         supportingCommand: ShellCommand(rawValue: "git reset --hard")
-                    )
+                    ))
                 ),
                 reason: .hostAsk,
                 continuation: .hostNative,
@@ -143,7 +143,7 @@ struct Step8BAdversarialTests {
                     agent: .pi
                 ),
                 action: .shell(
-                    ShellAction(
+                    ShellAction.effectOnly(EffectShell(
                         fingerprint: ActionFingerprint.make(
                             host: .pi,
                             session: SessionID(validating: "sess-pi"),
@@ -152,7 +152,7 @@ struct Step8BAdversarialTests {
                         ),
                         scope: ActionScope(workingDirectory: cwd),
                         supportingCommand: feature
-                    )
+                    ))
                 ),
                 reason: .hostAsk,
                 continuation: .hostNative,
@@ -252,7 +252,7 @@ struct Step8BAdversarialTests {
                     agent: .pi
                 ),
                 action: .shell(
-                    ShellAction(
+                    ShellAction.effectOnly(EffectShell(
                         fingerprint: ActionFingerprint.make(
                             host: .pi,
                             session: SessionID(validating: "sess-pi"),
@@ -261,7 +261,7 @@ struct Step8BAdversarialTests {
                         ),
                         scope: ActionScope(workingDirectory: cwd),
                         supportingCommand: shell
-                    )
+                    ))
                 ),
                 reason: .hostAsk,
                 continuation: .hostNative,

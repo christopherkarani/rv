@@ -24,10 +24,10 @@ struct ActionApprovalAuthorizerTests {
     }
 
     private func action(_ command: String = "echo hello") -> ProposedAction {
-        .shell(ShellAction(
+        .shell(ShellAction.effectOnly(EffectShell(
             fingerprint: ActionFingerprint(rawValue: "test:\(command)"),
             scope: ActionScope(workingDirectory: WorkingDirectory(rawValue: "/work")),
-            supportingCommand: ShellCommand(rawValue: command)))
+            supportingCommand: ShellCommand(rawValue: command))))
     }
 
     /// Controllable monotonic clock. `advance` moves time forward only.

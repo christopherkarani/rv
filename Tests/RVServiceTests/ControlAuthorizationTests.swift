@@ -42,7 +42,7 @@ struct ControlAuthorizationTests {
         return try PendingApprovalLedger.create(records: [], request: PendingApprovalRequest(
             id: ApprovalID(rawValue: "approval"),
             identity: ApprovalIdentity(session: try #require(SessionID(rawValue: "display")), agent: .claude),
-            action: .shell(ShellAction(fingerprint: fingerprint)), reason: .mandatoryHuman,
+            action: .shell(ShellAction.effectOnly(EffectShell(fingerprint: fingerprint))), reason: .mandatoryHuman,
             continuation: .hostNative, timeoutPolicy: .autoDeny, subject: binding
         ), now: Date()).0
     }
