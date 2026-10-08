@@ -52,26 +52,20 @@ public struct ClaudeSessionStoreAdapter: SessionStoreAdapter {
             return []
         }
 
-        let occurredAt = (root["timestamp"] as? String).flatMap(ScanTimestamp.iso8601)
+        let occurredAt = root["timestamp"]?.string.flatMap(ScanTimestamp.iso8601)
         let envelopeCwd = ScanStoreWorkingDirectory.fromEnvelope(root)
         let sessionID = ScanJSONLEngine.sessionID(keys: ["sessionId"], in: root) ?? fallbackSessionID
 
-        guard let message = root["message"] as? [String: Any] else { return [] }
-        let blocks: [[String: Any]]
-        if let array = message["content"] as? [[String: Any]] {
-            blocks = array
-        } else if let array = message["content"] as? [Any] {
-            blocks = array.compactMap { $0 as? [String: Any] }
-        } else {
-            return []
-        }
+        guard let message = root["message"], message.asObject != nil else { return [] }
+        guard let content = message["content"]?.asArray else { return [] }
+        let blocks = content.filter { $0.asObject != nil }
 
         var out: [ExtractedEvent] = []
         for block in blocks {
-            guard let type = block["type"] as? String, type == "tool_use" else { continue }
-            guard let name = block["name"] as? String, shellToolNames.contains(name) else { continue }
-            guard let input = block["input"] as? [String: Any] else { continue }
-            guard let command = input["command"] as? String, command.isEmpty == false else { continue }
+            guard let type = block["type"]?.string, type == "tool_use" else { continue }
+            guard let name = block["name"]?.string, shellToolNames.contains(name) else { continue }
+            guard let input = block["input"], input.asObject != nil else { continue }
+            guard let command = input["command"]?.string, command.isEmpty == false else { continue }
             out.append(
                 ExtractedEvent(
                     host: host,

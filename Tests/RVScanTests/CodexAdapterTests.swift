@@ -39,21 +39,21 @@ import RVDomain
 }
 
 @Test func scanStoreWorkingDirectory_nestedWorkdirBeatsEnvelopeCwd() {
-    let object: [String: Any] = [
-        "cwd": "/tmp/.ssh",
-        "tool_input": [
-            "command": "rm config",
-            "workdir": "/tmp",
-        ],
-    ]
+    let object = JSONValue.object([
+        "cwd": .string("/tmp/.ssh"),
+        "tool_input": .object([
+            "command": .string("rm config"),
+            "workdir": .string("/tmp"),
+        ]),
+    ])
     #expect(ScanStoreWorkingDirectory.fromEnvelope(object)?.rawValue == "/tmp")
 }
 
 @Test func scanStoreWorkingDirectory_envelopeCwdWhenNestedHasNone() {
-    let object: [String: Any] = [
-        "cwd": "/tmp/ws",
-        "tool_input": ["command": "git status"],
-    ]
+    let object = JSONValue.object([
+        "cwd": .string("/tmp/ws"),
+        "tool_input": .object(["command": .string("git status")]),
+    ])
     #expect(ScanStoreWorkingDirectory.fromEnvelope(object)?.rawValue == "/tmp/ws")
 }
 
@@ -101,6 +101,20 @@ import RVDomain
     let url = URL(fileURLWithPath: "/tmp/inline-codex.jsonl")
     let events = try CodexStoreAdapter().extract(fileURL: url, data: Data(payload.utf8))
     #expect(events.map(\.command.rawValue) == ["git reset --hard", "git status"])
+}
+
+@Test func codexAdapter_bareScalarCommandTextPassesThroughVerbatim() throws {
+    // The old `JSONSerialization` funnel rejected top-level fragments, so a
+    // scalar command string never parsed as JSON and was kept verbatim.
+    // Recursing into a parsed scalar would drop the command (nil) or rewrite
+    // it (unquoted), so only parsed objects/arrays recurse.
+    let payload = """
+    {"session_id":"s","type":"function_call","name":"shell","arguments":"123"}
+    {"session_id":"s","type":"function_call","name":"shell","arguments":"true"}
+    """
+    let url = URL(fileURLWithPath: "/tmp/inline-codex-scalar.jsonl")
+    let events = try CodexStoreAdapter().extract(fileURL: url, data: Data(payload.utf8))
+    #expect(events.map(\.command.rawValue) == ["123", "true"])
 }
 
 @Test func codexAdapter_tempTreeOnly_notLiveHome() throws {
