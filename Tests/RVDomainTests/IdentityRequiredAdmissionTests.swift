@@ -237,13 +237,15 @@ private struct IdentityFixture {
             apparent: path, canonical: path, scope: .insideRepository, kind: .unknown
         )
         inside = .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(
-                    rawValue: "runtime:\(session.id.rawValue.uuidString):\(workspace.rawValue):touch marker"
-                ),
-                scope: ActionScope(workingDirectory: workspace),
-                supportingCommand: ShellCommand(rawValue: "touch marker"),
-                filesystemAction: .create(targets: [target])
+            ShellAction.analyzed(
+                AnalyzedShell(
+                    fingerprint: ActionFingerprint(
+                        rawValue: "runtime:\(session.id.rawValue.uuidString):\(workspace.rawValue):touch marker"
+                    ),
+                    scope: ActionScope(workingDirectory: workspace),
+                    supportingCommand: ShellCommand(rawValue: "touch marker"),
+                    analysis: .filesystem(.create(targets: [target]))
+                )
             )
         )
     }

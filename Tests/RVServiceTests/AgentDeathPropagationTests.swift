@@ -125,10 +125,10 @@ struct AgentDeathPropagationTests {
     }
 
     private func action(_ command: String = "echo death-probe") -> ProposedAction {
-        .shell(ShellAction(
+        .shell(ShellAction.effectOnly(EffectShell(
             fingerprint: ActionFingerprint(rawValue: "death:\(command)"),
             scope: ActionScope(workingDirectory: WorkingDirectory(rawValue: "/work")),
-            supportingCommand: ShellCommand(rawValue: command)))
+            supportingCommand: ShellCommand(rawValue: command))))
     }
 
     private func createDTO(
