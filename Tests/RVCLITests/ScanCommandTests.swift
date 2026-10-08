@@ -200,6 +200,24 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     }
 }
 
+@Test func scanRun_unreadableStore_mapsUnreadableStore() throws {
+    try withTempScanHome { home, homeURL in
+        let tree = homeURL.appendingPathComponent("explicit-tree", isDirectory: true)
+        try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
+        let db = tree.appendingPathComponent("opencode.db")
+        try Data().write(to: db, options: .atomic)
+        let expected = db.standardizedFileURL.path
+        do {
+            _ = try ScanRun.run(
+                .fixture(rootPath: tree.path, home: home)
+            )
+            Issue.record("expected unreadableStore")
+        } catch ScanRun.Error.unreadableStore(let path) {
+            #expect(path == expected)
+        }
+    }
+}
+
 @Test func scanRun_executeDoesNotContainPipelineLoops() throws {
     let url = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
