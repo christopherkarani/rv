@@ -415,43 +415,29 @@ struct XpcWait {
     xpc_object_t reply;
 };
 
-static int xpc_hook_evaluate(
+/* One XPC request/reply round trip. Returns a retained reply dictionary,
+ * or NULL on timeout, error reply, or non-dictionary reply. */
+static xpc_object_t xpc_exchange(
+    xpc_connection_t conn,
     const void *json,
     size_t json_len,
     const void *stdin_bytes,
-    size_t stdin_len,
-    char **reply_json,
-    size_t *reply_len
+    size_t stdin_len
 ) {
-    xpc_connection_t conn;
     xpc_object_t msg;
     struct XpcWait *wait;
     long timed_out;
-    xpc_type_t type;
-    const void *data;
-    size_t n = 0;
-    char *copy;
+    xpc_object_t reply;
 
-    conn = xpc_connection_create_mach_service(RV_MACH_SERVICE, NULL, 0);
-    if (conn == NULL) {
-        return -1;
-    }
     wait = (struct XpcWait *)calloc(1, sizeof *wait);
     if (wait == NULL) {
-        xpc_release(conn);
-        return -1;
+        return NULL;
     }
     wait->sem = dispatch_semaphore_create(0);
     if (wait->sem == NULL) {
         free(wait);
-        xpc_release(conn);
-        return -1;
+        return NULL;
     }
-
-    xpc_connection_set_event_handler(conn, ^(xpc_object_t event) {
-        (void)event;
-    });
-    xpc_connection_resume(conn);
 
     msg = xpc_dictionary_create(NULL, NULL, 0);
     xpc_dictionary_set_data(msg, RV_IPC_KEY, json, json_len);
@@ -481,53 +467,188 @@ static int xpc_hook_evaluate(
             (int64_t)RV_XPC_TIMEOUT_MS * (int64_t)NSEC_PER_MSEC
         )
     );
-    xpc_connection_cancel(conn);
-    xpc_release(conn);
-
     if (timed_out != 0) {
         /*
-         * Intentional orphan on timeout: after xpc_connection_cancel the
-         * reply block may still fire once and write wait->reply, so freeing
-         * `wait` here would race that block. The struct and its semaphore
-         * live until process exit (_exit), bounded to one
-         * small allocation per timed-out invocation.
+         * Intentional orphan on timeout: the reply block may still fire
+         * once and write wait->reply, so freeing `wait` here would race
+         * that block. The struct and its semaphore live until process
+         * exit (_exit), bounded to one small allocation per timed-out
+         * invocation.
          */
+        return NULL;
+    }
+    reply = wait->reply;
+    dispatch_release(wait->sem);
+    free(wait);
+    if (reply == NULL) {
+        return NULL;
+    }
+    if (xpc_get_type(reply) == XPC_TYPE_ERROR
+        || xpc_get_type(reply) != XPC_TYPE_DICTIONARY)
+    {
+        xpc_release(reply);
+        return NULL;
+    }
+    return reply;
+}
+
+/* Strict HelloAck-ok scan: `"ok":true` outside strings, and no
+ * `"skewReason"` outside strings. Anything else fails closed. */
+static int hello_ack_ok(const char *p, size_t n) {
+    size_t i = 0;
+    int saw_ok_true = 0;
+    while (i < n) {
+        char c = p[i];
+        if (c == '"') {
+            size_t start = i + 1;
+            size_t j = start;
+            while (j < n && p[j] != '"') {
+                if (p[j] == '\\' && j + 1 < n) {
+                    j += 2;
+                } else {
+                    j++;
+                }
+            }
+            if (j >= n) {
+                return 0;
+            }
+            if (j - start == 10 && memcmp(p + start, "skewReason", 10) == 0) {
+                return 0;
+            }
+            if (j - start == 2 && memcmp(p + start, "ok", 2) == 0) {
+                size_t k = j + 1;
+                while (k < n && (p[k] == ' ' || p[k] == '\t'
+                                 || p[k] == '\n' || p[k] == '\r'))
+                {
+                    k++;
+                }
+                if (k < n && p[k] == ':') {
+                    k++;
+                    while (k < n && (p[k] == ' ' || p[k] == '\t'
+                                     || p[k] == '\n' || p[k] == '\r'))
+                    {
+                        k++;
+                    }
+                    if (k + 4 <= n && memcmp(p + k, "true", 4) == 0) {
+                        saw_ok_true = 1;
+                    }
+                }
+            }
+            i = j + 1;
+        } else {
+            i++;
+        }
+    }
+    return saw_ok_true;
+}
+
+#define RV_ACTION_ENDPOINT_KEY "rv.action-endpoint"
+static const char kHelloJson[] =
+    "{\"protocol\":\"rv.ipc.v1\",\"clientSemver\":\"1.0.0\"}";
+
+/* Mach-service discovery, then action-endpoint evaluation. Mirrors
+ * XPCEvaluateClient.perform: Hello on the Mach service, Hello again on
+ * the pinned endpoint, then the hook request. The Mach service answers
+ * discovery only; anything else there is authorizationDenied.
+ *
+ * No daemon-identity verification yet (mutual auth follow-up): this path
+ * is reachable only in TRANSITIONAL-PROOF-DAEMON builds, which dial a
+ * proof-launched daemon over an isolated transport. */
+static int xpc_hook_evaluate(
+    const void *json,
+    size_t json_len,
+    const void *stdin_bytes,
+    size_t stdin_len,
+    char **reply_json,
+    size_t *reply_len
+) {
+    xpc_connection_t discovery = NULL;
+    xpc_connection_t actions = NULL;
+    xpc_object_t reply = NULL;
+    xpc_object_t endpoint_obj = NULL;
+    const void *data;
+    size_t n = 0;
+    char *copy;
+    int rc = -1;
+
+    discovery = xpc_connection_create_mach_service(RV_MACH_SERVICE, NULL, 0);
+    if (discovery == NULL) {
         return -1;
     }
-    if (wait->reply == NULL) {
-        dispatch_release(wait->sem);
-        free(wait);
-        return -1;
+    xpc_connection_set_event_handler(discovery, ^(xpc_object_t event) {
+        (void)event;
+    });
+    xpc_connection_resume(discovery);
+
+    reply = xpc_exchange(
+        discovery, kHelloJson, sizeof kHelloJson - 1, NULL, 0);
+    if (reply == NULL) {
+        goto out;
     }
-    type = xpc_get_type(wait->reply);
-    if (type == XPC_TYPE_ERROR || type != XPC_TYPE_DICTIONARY) {
-        xpc_release(wait->reply);
-        dispatch_release(wait->sem);
-        free(wait);
-        return -1;
+    data = xpc_dictionary_get_data(reply, RV_IPC_KEY, &n);
+    if (data == NULL || n == 0 || !hello_ack_ok((const char *)data, n)) {
+        goto out;
     }
-    data = xpc_dictionary_get_data(wait->reply, RV_IPC_KEY, &n);
+    endpoint_obj = xpc_dictionary_get_value(reply, RV_ACTION_ENDPOINT_KEY);
+    if (endpoint_obj == NULL
+        || xpc_get_type(endpoint_obj) != XPC_TYPE_ENDPOINT)
+    {
+        goto out;
+    }
+    actions = xpc_connection_create_from_endpoint(endpoint_obj);
+    xpc_release(reply);
+    reply = NULL;
+    if (actions == NULL) {
+        goto out;
+    }
+    xpc_connection_set_event_handler(actions, ^(xpc_object_t event) {
+        (void)event;
+    });
+    xpc_connection_resume(actions);
+
+    reply = xpc_exchange(
+        actions, kHelloJson, sizeof kHelloJson - 1, NULL, 0);
+    if (reply == NULL) {
+        goto out;
+    }
+    data = xpc_dictionary_get_data(reply, RV_IPC_KEY, &n);
+    if (data == NULL || n == 0 || !hello_ack_ok((const char *)data, n)) {
+        goto out;
+    }
+    xpc_release(reply);
+    reply = NULL;
+
+    reply = xpc_exchange(actions, json, json_len, stdin_bytes, stdin_len);
+    if (reply == NULL) {
+        goto out;
+    }
+    data = xpc_dictionary_get_data(reply, RV_IPC_KEY, &n);
     if (data == NULL || n == 0) {
-        xpc_release(wait->reply);
-        dispatch_release(wait->sem);
-        free(wait);
-        return -1;
+        goto out;
     }
     copy = (char *)malloc(n + 1);
     if (copy == NULL) {
-        xpc_release(wait->reply);
-        dispatch_release(wait->sem);
-        free(wait);
-        return -1;
+        goto out;
     }
     memcpy(copy, data, n);
     copy[n] = '\0';
     *reply_json = copy;
     *reply_len = n;
-    xpc_release(wait->reply);
-    dispatch_release(wait->sem);
-    free(wait);
-    return 0;
+    rc = 0;
+
+out:
+    if (reply != NULL) {
+        xpc_release(reply);
+    }
+    if (actions != NULL) {
+        xpc_connection_cancel(actions);
+        xpc_release(actions);
+    }
+    if (discovery != NULL) {
+        xpc_connection_cancel(discovery);
+        xpc_release(discovery);
+    }
+    return rc;
 }
 #else
 
@@ -686,8 +807,17 @@ int main(int argc, char **argv) {
     }
 
     /* C has no supported mutual daemon-authentication implementation yet.
-     * Do not send action bytes or trust successful replies without server proof. */
+     * Do not send action bytes or trust successful replies without server proof.
+     *
+     * TRANSITIONAL-PROOF-DAEMON: RV_HOOK_PROOF_UNAUTHENTICATED_DAEMON is
+     * defined ONLY for proof binaries compiled by the Scripts proof shells, which
+     * dial a proof-launched daemon over an isolated transport. Production
+     * builds (Scripts/release.sh) never define it: shipped hooks stay
+     * fail-closed until mutual daemon auth lands. Delete this bypass with
+     * the follow-up; do not thread it into any shipped artifact. */
+#ifndef RV_HOOK_PROOF_UNAUTHENTICATED_DAEMON
     deny_hook(host);
+#endif
 
     memset(&stdin_buf, 0, sizeof stdin_buf);
     int stdin_read = buf_read_fd_limited(&stdin_buf, STDIN_FILENO, RV_STDIN_XPC_MAX);

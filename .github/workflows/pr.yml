@@ -111,7 +111,9 @@ jobs:
   macos-isolation:
     name: macos isolation
     runs-on: macos-26
-    timeout-minutes: 15
+    # 598 tests with real process-spawning suites; builds take ~5 min and
+    # shared-runner spawn latency inflates the rest well past 15.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
