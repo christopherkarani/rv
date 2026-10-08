@@ -701,7 +701,12 @@ struct AgentInstanceRegistryTests {
         #expect(registry.instance(forRuntime: instance.runtimeSessionID) == nil)
     }
 
-    @Test func revokingIsObservableWhileTeardownRuns() async throws {
+    @Test func revokingIsObservableWhileTeardownRuns() throws {
+        // Synchronous by design: every pool wakeup here is a flake vector.
+        // Under parallel load an async observer can sleep past teardown's
+        // hang-guard deadline, so the revoke completes before validity is
+        // observed. A sync observer holds its thread and cannot miss the
+        // revoking window it is rendezvousing with.
         let harness = try RegistryAdmissionHarness()
         defer { harness.cleanup() }
         let instance = try #require(harness.announceAndBind())
@@ -739,7 +744,7 @@ struct AgentInstanceRegistryTests {
         // refused before teardown completes, not after.
         let deadline = Date().addingTimeInterval(10)
         while latch.entered == false, Date() < deadline {
-            try await Task.sleep(for: .milliseconds(1))
+            usleep(1_000)
         }
         #expect(latch.entered)
         #expect(harness.registry.validity(of: instance.id) == .revoking)
@@ -750,7 +755,7 @@ struct AgentInstanceRegistryTests {
         latch.open()
         let finishDeadline = Date().addingTimeInterval(10)
         while outcome.withLock({ $0 == nil }), Date() < finishDeadline {
-            try await Task.sleep(for: .milliseconds(1))
+            usleep(1_000)
         }
         #expect(outcome.withLock { $0 } == .revoked)
         #expect(harness.registry.validity(of: instance.id) == .inactive)
