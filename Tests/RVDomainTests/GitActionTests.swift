@@ -36,7 +36,9 @@ struct GitActionTests {
         #expect(deleted.effects.kinds == [.remoteSharedBranchMutation])
         #expect(deleted.effectScope == .remote)
         #expect(deleted.explainAction == "remote ref delete")
-        #expect(deleted.resources.branchName == "topic")
+        #expect(
+            deleted.resources == .git(remote: RemoteName("origin"), ref: .refspec("topic"))
+        )
         let proposed = deleted.proposedAction(
             command: ShellCommand(rawValue: "git push origin :topic"),
             workingDirectory: WorkingDirectory(validating: "/tmp/rv")
@@ -51,7 +53,9 @@ struct GitActionTests {
             workingDirectory: WorkingDirectory(validating: "/tmp/rv")
         )
         #expect(proposed.effects.kinds == [.localBranchCreate])
-        #expect(proposed.resources.branchName == "feature")
+        #expect(
+            proposed.resources == .git(remote: nil, ref: .branch(BranchName("feature")))
+        )
         #expect(proposed.supportingCommand?.rawValue == "git checkout -- file.swift")
     }
 
@@ -99,12 +103,21 @@ struct GitActionTests {
         #expect(fingerprint(["a", "b"]) == fingerprint(["a", "b"]))
     }
 
+    @Test func pushUnparsed_hasNoScopeButRemoteMutationEffects() {
+        let action = GitAction.pushUnparsed(args: ["origin", "main"])
+        #expect(action.resources == .none)
+        #expect(action.effects.kinds == [.remoteBranchMutation])
+        #expect(action.effectScope == .remote)
+    }
+
     @Test func deleteBranch_isLocalRefWithoutRemoteFlag() {
         let deleted = GitAction.deleteBranch(name: "stale", force: true)
         #expect(deleted.effectScope == .localRef)
         #expect(deleted.explainAction == "force branch delete")
         #expect(deleted.effects.kinds.isEmpty)
-        #expect(deleted.resources.branchName == "stale")
+        #expect(
+            deleted.resources == .git(remote: nil, ref: .branch(BranchName("stale")))
+        )
         let soft = GitAction.deleteBranch(name: "topic", force: false)
         #expect(soft.explainAction == "branch delete")
         #expect(soft.effectScope == .localRef)

@@ -119,8 +119,9 @@ struct LinuxResidualCoverageTests {
 
         let tag = GitAction.deleteTag(name: "v1", remote: "origin")
         #expect(tag.explainAction == "tag delete")
-        #expect(tag.resources.remoteName == "origin")
-        #expect(tag.resources.branchName == "v1")
+        #expect(
+            tag.resources == .git(remote: RemoteName("origin"), ref: .tag(TagName("v1")))
+        )
 
         let stash = GitAction.stash(verb: .drop)
         #expect(stash.explainAction == "stash drop")
@@ -336,7 +337,14 @@ struct LinuxResidualCoverageTests {
         )
         #expect(action.gitAction == nil)
         #expect(action.effects.kinds.contains(.filesystemRead))
-        #expect(action.resources.filesystemScope == .insideRepository)
+        #expect(
+            action.resources
+                == .filesystem(
+                    path: "/repo/a",
+                    scope: .insideRepository,
+                    kind: .sourceCode
+                )
+        )
         guard case .shell(let shell) = action else {
             Issue.record("expected shell pending action")
             return
@@ -383,10 +391,20 @@ struct LinuxResidualCoverageTests {
     }
 
     @Test func actionPolicyEngine_filesystemHitResiduals() {
-        let inside = ActionResources(filesystemScope: .insideRepository)
-        let outside = ActionResources(filesystemScope: .outsideRepository)
-        let protected = ActionResources(
-            filesystemScope: .protectedPath(SecretPathMatch(pattern: "id_ed25519", category: .ssh))
+        let inside = ResourceScope.filesystem(
+            path: "",
+            scope: .insideRepository,
+            kind: .unknown
+        )
+        let outside = ResourceScope.filesystem(
+            path: "",
+            scope: .outsideRepository,
+            kind: .unknown
+        )
+        let protected = ResourceScope.filesystem(
+            path: "",
+            scope: .protectedPath(SecretPathMatch(pattern: "id_ed25519", category: .ssh)),
+            kind: .unknown
         )
         let writeInside = ProposedAction.shell(
             ShellAction.effectOnly(

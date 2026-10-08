@@ -12,8 +12,9 @@ struct ShellActionCodableTests {
         let decoded = try JSONDecoder().decode(ShellAction.self, from: data)
         #expect(decoded == analyzedForcePush())
         #expect(decoded.effects.kinds == [.remoteSharedBranchMutation])
-        #expect(decoded.resources.remoteName == "origin")
-        #expect(decoded.resources.branchName == "main")
+        #expect(
+            decoded.resources == .git(remote: RemoteName("origin"), ref: .refspec("main"))
+        )
     }
 
     @Test func decode_absentBagUsesSubjectProjection() throws {
@@ -65,7 +66,7 @@ struct ShellActionCodableTests {
             return
         }
         #expect(effect.effects == ActionEffects())
-        #expect(effect.resources == ActionResources())
+        #expect(effect.resources == ResourceScope.none)
     }
 
     @Test func analyzedShell_roundTripsEqual() throws {
@@ -76,8 +77,9 @@ struct ShellActionCodableTests {
         )
         #expect(decoded == shell)
         #expect(decoded.effects.kinds == [.remoteSharedBranchMutation])
-        #expect(decoded.resources.remoteName == "origin")
-        #expect(decoded.resources.branchName == "main")
+        #expect(
+            decoded.resources == .git(remote: RemoteName("origin"), ref: .refspec("main"))
+        )
         guard case .analyzed(let analyzed) = decoded else {
             Issue.record("expected analyzed shell")
             return
@@ -90,7 +92,10 @@ struct ShellActionCodableTests {
             EffectShell(
                 fingerprint: ActionFingerprint(rawValue: "fp-effect-only"),
                 effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                resources: ActionResources(remoteName: "origin", branchName: "main"),
+                resources: .git(
+                    remote: RemoteName("origin"),
+                    ref: .branch(BranchName("main"))
+                ),
                 scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws")),
                 supportingCommand: ShellCommand(rawValue: "git push --force origin main")
             )
@@ -149,8 +154,10 @@ struct ShellActionCodableTests {
             return
         }
         #expect(shell.effects == ActionEffects(kinds: [.remoteSharedBranchMutation]))
-        #expect(shell.resources.remoteName == "origin")
-        #expect(shell.resources.branchName == "main")
+        #expect(
+            shell.resources
+                == .git(remote: RemoteName("origin"), ref: .branch(BranchName("main")))
+        )
     }
 
     private func analyzedForcePush() -> ShellAction {
@@ -227,6 +234,6 @@ struct ReviewSanitizerShellTests {
         #expect(sanitized.effects == sanitized.gitAction?.effects)
         #expect(sanitized.resources == sanitized.gitAction?.resources)
         #expect(sanitized.effects.kinds == [.remoteSharedBranchMutation])
-        #expect(sanitized.resources.remoteName?.contains("ghp_") == false)
+        #expect(sanitized.resources.gitRemote?.rawValue.contains("ghp_") == false)
     }
 }

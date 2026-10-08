@@ -77,28 +77,6 @@ public struct ActionEffects: Sendable, Equatable, Codable {
     }
 }
 
-public struct ActionResources: Sendable, Equatable, Codable {
-    public var remoteName: String?
-    public var branchName: String?
-    public var path: String?
-    public var filesystemScope: FilesystemScope?
-    public var resourceKind: FilesystemResourceKind?
-
-    public init(
-        remoteName: String? = nil,
-        branchName: String? = nil,
-        path: String? = nil,
-        filesystemScope: FilesystemScope? = nil,
-        resourceKind: FilesystemResourceKind? = nil
-    ) {
-        self.remoteName = remoteName
-        self.branchName = branchName
-        self.path = path
-        self.filesystemScope = filesystemScope
-        self.resourceKind = resourceKind
-    }
-}
-
 public struct ActionScope: Sendable, Equatable, Codable {
     public var workingDirectory: WorkingDirectory?
 
@@ -111,7 +89,7 @@ public struct ActionScope: Sendable, Equatable, Codable {
 public struct EffectShell: Sendable, Equatable, Codable {
     public var fingerprint: ActionFingerprint
     public var effects: ActionEffects
-    public var resources: ActionResources
+    public var resources: ResourceScope
     public var scope: ActionScope
     /// Supporting evidence only. Never the primary review input.
     public var supportingCommand: ShellCommand?
@@ -119,7 +97,7 @@ public struct EffectShell: Sendable, Equatable, Codable {
     public init(
         fingerprint: ActionFingerprint,
         effects: ActionEffects = ActionEffects(),
-        resources: ActionResources = ActionResources(),
+        resources: ResourceScope = ResourceScope.none,
         scope: ActionScope = ActionScope(),
         supportingCommand: ShellCommand? = nil
     ) {
@@ -140,7 +118,7 @@ public struct AnalyzedShell: Sendable, Equatable, Codable {
     public var analysis: SemanticAction
 
     public var effects: ActionEffects { analysis.effects }
-    public var resources: ActionResources { analysis.resources }
+    public var resources: ResourceScope { analysis.resources }
 
     public init(
         fingerprint: ActionFingerprint,
@@ -209,7 +187,7 @@ public enum ShellAction: Sendable, Equatable, Codable {
         }
     }
 
-    public var resources: ActionResources {
+    public var resources: ResourceScope {
         switch self {
         case .effectOnly(let shell):
             return shell.resources
@@ -317,8 +295,8 @@ public enum ShellAction: Sendable, Equatable, Codable {
                     fingerprint: fingerprint,
                     effects: try container.decodeIfPresent(ActionEffects.self, forKey: .effects)
                         ?? ActionEffects(),
-                    resources: try container.decodeIfPresent(ActionResources.self, forKey: .resources)
-                        ?? ActionResources(),
+                    resources: try container.decodeIfPresent(ResourceScope.self, forKey: .resources)
+                        ?? ResourceScope.none,
                     scope: scope,
                     supportingCommand: supportingCommand
                 )
@@ -352,14 +330,14 @@ public struct FileAction: Sendable, Equatable, Codable {
     public var fingerprint: ActionFingerprint
     public var file: FileToolAction
     public var effects: ActionEffects
-    public var resources: ActionResources
+    public var resources: ResourceScope
     public var scope: ActionScope
 
     public init(
         fingerprint: ActionFingerprint,
         file: FileToolAction,
         effects: ActionEffects = ActionEffects(),
-        resources: ActionResources = ActionResources(),
+        resources: ResourceScope = ResourceScope.none,
         scope: ActionScope = ActionScope()
     ) {
         self.fingerprint = fingerprint
@@ -409,7 +387,7 @@ public enum ProposedAction: Sendable, Equatable, Codable {
         }
     }
 
-    public var resources: ActionResources {
+    public var resources: ResourceScope {
         switch self {
         case .shell(let action):
             return action.resources

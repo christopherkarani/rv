@@ -358,7 +358,10 @@ private enum HostNativeAskFixtures {
                 EffectShell(
                     fingerprint: ActionFingerprint(rawValue: "shell:remote-mutation:\(branchName)"),
                     effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                    resources: ActionResources(remoteName: "origin", branchName: branchName),
+                    resources: .git(
+                        remote: RemoteName("origin"),
+                        ref: .branch(BranchName(branchName))
+                    ),
                     scope: ActionScope(
                         workingDirectory: WorkingDirectory(validating: "/tmp/rv")
                     ),

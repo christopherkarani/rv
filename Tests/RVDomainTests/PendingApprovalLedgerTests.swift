@@ -765,7 +765,10 @@ private extension PendingApprovalLedgerTests {
                 EffectShell(
                     fingerprint: ActionFingerprint(rawValue: fingerprint),
                     effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                    resources: ActionResources(remoteName: "origin", branchName: "main"),
+                    resources: .git(
+                        remote: RemoteName("origin"),
+                        ref: .branch(BranchName("main"))
+                    ),
                     scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv"))
                 )
             )
