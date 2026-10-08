@@ -1,5 +1,8 @@
 import Foundation
 import Testing
+#if os(macOS)
+import RVDomain
+#endif
 @testable import RVIsolation
 
 @Suite("Terminal stream")
@@ -218,6 +221,109 @@ struct TerminalStreamTests {
         #expect(text.contains("\u{07}") == false)
         #expect(text.utf8.count <= WorkspaceControlLimits.maxDetailBytes)
     }
+
+    #if os(macOS)
+    @Test func terminalErrorChainIsDefinedOnceAtTheWireSeam() {
+        let chain: [(TerminalControlError, WorkspaceControlCode, WorkspaceClientFailure)] = [
+            (.unavailable, .terminalUnavailable, .terminalUnavailable),
+            (.busy, .terminalBusy, .terminalBusy),
+            (.limit, .terminalLimit, .terminalLimit),
+            (.invalid, .invalidRequest, .invalidRequest),
+            (.prefixCommitted, .terminalPrefixCommitted, .terminalPrefixCommitted),
+        ]
+        for (terminal, code, failure) in chain {
+            #expect(WorkspaceControlCode(terminalError: terminal) == code)
+            #expect(WorkspaceClientFailure(controlCode: code, detail: nil) == failure)
+        }
+        let passthrough: [(WorkspaceControlCode, WorkspaceClientFailure)] = [
+            (.workspaceClosing, .workspaceClosing),
+            (.workspaceClosed, .workspaceClosed),
+            (.runtimeNotFound, .runtimeNotFound),
+            (.requiresOperatorPermit, .requiresOperatorPermit),
+            (.resourceProfileUnavailable, .resourceProfileUnavailable),
+            (.incompatibleProtocol, .incompatibleProtocol),
+            (.unauthorizedClient, .unauthorizedClient),
+            (.recoveryRequired, .recoveryRequired),
+            (.childTeardownFailed, .childTeardownFailed),
+            (.runtimeLimit, .runtimeLimit),
+        ]
+        for (code, failure) in passthrough {
+            #expect(WorkspaceClientFailure(controlCode: code, detail: nil) == failure)
+        }
+        #expect(
+            WorkspaceClientFailure(controlCode: .resourceStagingFailed, detail: nil)
+                == .resourceStagingFailed("unknown grant")
+        )
+        #expect(
+            WorkspaceClientFailure(controlCode: .resourceStagingFailed, detail: "link 'grok'")
+                == .resourceStagingFailed("link 'grok'")
+        )
+    }
+
+    @Test func terminalCodecRoundTripsEveryNotice() {
+        let runtime = UUID()
+        let batch = UUID()
+        let bytes = Data([0x00, 0x1b, 0x5b, 0x33, 0x31, 0x6d, 0xff])
+        let cases: [(TerminalNotice, WorkspaceTerminalEvent.Body, WorkspaceControlOp)] = [
+            (
+                .replayBegin(batch: batch, truncated: true, byteCount: 7),
+                .replayBegin(batch: batch, truncated: true, byteCount: 7), .terminalReplayBegin
+            ),
+            (.replay(sequence: 9, bytes: bytes), .replay(sequence: 9, bytes: bytes), .terminalReplay),
+            (.replayEnd(batch: batch), .replayEnd(batch: batch), .terminalReplayEnd),
+            (.output(sequence: 10, bytes: bytes), .output(sequence: 10, bytes: bytes), .terminalOutput),
+            (.inputOwner(true), .inputOwner(true), .terminalInputOwner),
+            (.window(rows: 17, columns: 53), .window(rows: 17, columns: 53), .terminalWindow),
+            (.exited(3), .exited(3), .runtimeExited),
+            (.overflow, .overflow, .terminalOverflow),
+        ]
+        for (notice, body, op) in cases {
+            let frame = TerminalStreamCodec.encode(notice, runtime: runtime)
+            #expect(frame.operation == op)
+            #expect(frame.runtime == runtime)
+            #expect(TerminalStreamCodec.decode(frame) == WorkspaceTerminalEvent(runtime: runtime, body: body))
+        }
+        let ping = WorkspaceControlResponse(operation: .ping, id: UUID(), ok: true)
+        #expect(TerminalStreamCodec.decode(ping) == nil)
+        let bare = WorkspaceControlResponse(operation: .terminalOutput, runtime: runtime, ok: true)
+        #expect(TerminalStreamCodec.decode(bare) == nil)
+    }
+
+    @Test func terminalDispatchFailsClosedOnUnknownRuntime() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-t2-dispatch-\(UUID().uuidString)", isDirectory: true)
+        let workspace = root.appendingPathComponent("ws", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let config = root.appendingPathComponent("config", isDirectory: true)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        let supervisor = try WorkspaceSessionSupervisor.open(
+            try #require(WorkingDirectory(validating: workspace.path)),
+            lifecycleLog: .file(config.appendingPathComponent("life.jsonl")),
+            runtimeLog: config.appendingPathComponent("runtime.jsonl")
+        ).get()
+        defer {
+            _ = supervisor.close()
+            try? FileManager.default.removeItem(at: root)
+        }
+        let runtime = UUID()
+        let client = UUID()
+        let commands: [TerminalControlCommand] = [
+            .subscribe(emit: { _ in true }, windowNotices: true, replayBatches: true),
+            .activate,
+            .unsubscribe,
+            .acquire,
+            .release,
+            .write(bytes: Data([0x61])),
+            .resize(rows: 24, columns: 80),
+        ]
+        for command in commands {
+            #expect(
+                supervisor.dispatchTerminal(runtime: runtime, client: client, command: command)
+                    == .failure(.runtimeNotFound)
+            )
+        }
+    }
+    #endif
 
     #if os(Linux)
     @Test func linuxContainedTerminalLaunchStaysRefused() async throws {

@@ -517,18 +517,9 @@ final class WorkspaceHostServer: Sendable {
             .terminalOutput, .terminalInputOwner, .terminalWindow,
             .runtimeExited, .terminalOverflow:
             return Reply(message: failure(message, .invalidRequest))
-        case .subscribeTerminal:
-            return subscribe(message, connection: connection)
-        case .unsubscribeTerminal:
-            return unsubscribe(message, connection: connection)
-        case .terminalInput:
-            return input(message, connection: connection)
-        case .acquireTerminalInput:
-            return acquire(message, connection: connection)
-        case .releaseTerminalInput:
-            return release(message, connection: connection)
-        case .resizeTerminal:
-            return resize(message, connection: connection)
+        case .subscribeTerminal, .unsubscribeTerminal, .terminalInput,
+            .acquireTerminalInput, .releaseTerminalInput, .resizeTerminal:
+            return terminalControl(message, connection: connection)
         }
     }
 
@@ -780,158 +771,119 @@ final class WorkspaceHostServer: Sendable {
         workspaceLaunchIO(io: message.io, rows: message.rows, columns: message.columns)
     }
 
-    private func subscribe(
+    /// Single terminal wire-op handler. Translates the request into one
+    /// `TerminalControlCommand`, dispatches it once against the supervisor,
+    /// and builds the reply. Every terminal op's wire→command→reply path
+    /// lives in this one function; per-op shapes differ only in the two
+    /// small switches here and in `terminalSuccess`.
+    private func terminalControl(
         _ message: WorkspaceControlRequest,
         connection: WorkspaceControlConnection
     ) -> Reply {
-        guard let runtime = message.runtime else {
+        guard let runtime = message.runtime, let op = message.operation else {
             return Reply(message: failure(message, .invalidRequest))
         }
-        let client = connection.id
-        let windowNotices = message.features?.contains(WorkspaceControlFeature.terminalWindowNoticesV1) == true
-        let replayBatches = message.features?.contains(WorkspaceControlFeature.terminalReplayBatchesV1) == true
-        switch supervisor.subscribeTerminal(
-            runtime: runtime, client: client,
-            emit: { notice in
-                connection.send(workspaceTerminalMessage(notice, runtime: runtime))
-            },
-            windowNotices: windowNotices,
-            replayBatches: replayBatches
-        ) {
+        let command: TerminalControlCommand
+        switch op {
+        case .subscribeTerminal:
+            let windowNotices = message.features?.contains(WorkspaceControlFeature.terminalWindowNoticesV1) == true
+            let replayBatches = message.features?.contains(WorkspaceControlFeature.terminalReplayBatchesV1) == true
+            command = .subscribe(
+                emit: { notice in
+                    connection.send(TerminalStreamCodec.encode(notice, runtime: runtime))
+                },
+                windowNotices: windowNotices,
+                replayBatches: replayBatches
+            )
+        case .unsubscribeTerminal:
+            command = .unsubscribe
+        case .terminalInput:
+            guard let encoded = message.bytes,
+                let data = TerminalBytesCodec.decode(encoded, maximum: TerminalStreamLimits.maximumInputBytes),
+                data.isEmpty == false
+            else {
+                return Reply(message: failure(message, .invalidRequest))
+            }
+            command = .write(bytes: data)
+        case .acquireTerminalInput:
+            command = .acquire
+        case .releaseTerminalInput:
+            command = .release
+        case .resizeTerminal:
+            guard let rows = message.rows, let columns = message.columns else {
+                return Reply(message: failure(message, .invalidRequest))
+            }
+            command = .resize(rows: rows, columns: columns)
+        default:
+            return Reply(message: failure(message, .invalidRequest))
+        }
+        switch supervisor.dispatchTerminal(runtime: runtime, client: connection.id, command: command) {
         case .failure(let code):
             return Reply(message: failure(message, code))
-        case .success:
-            let window = supervisor.terminalWindow(runtime: runtime)
-            return Reply(
-                message: WorkspaceControlResponse(
-                    operation: .subscribeTerminal,
-                    id: message.id,
-                    runtime: runtime,
-                    ok: true,
-                    rows: window?.rows,
-                    columns: window?.columns,
-                    terminal: true
-                ),
-                afterSend: { [supervisor] in
-                    supervisor.activateTerminal(runtime: runtime, client: client)
+        case .success(let result):
+            let activate: (() -> Void)? = op == .subscribeTerminal
+                ? { [supervisor] in
+                    _ = supervisor.dispatchTerminal(runtime: runtime, client: connection.id, command: .activate)
                 }
+                : nil
+            return Reply(
+                message: terminalSuccess(op: op, request: message, runtime: runtime, result: result),
+                afterSend: activate
             )
         }
     }
 
-    private func unsubscribe(
-        _ message: WorkspaceControlRequest,
-        connection: WorkspaceControlConnection
-    ) -> Reply {
-        guard let runtime = message.runtime else {
-            return Reply(message: failure(message, .invalidRequest))
-        }
-        switch supervisor.unsubscribeTerminal(runtime: runtime, client: connection.id) {
-        case .failure(let code):
-            return Reply(message: failure(message, code))
-        case .success:
-            return Reply(
-                message: WorkspaceControlResponse(
-                    operation: .unsubscribeTerminal,
-                    id: message.id,
-                    runtime: runtime,
-                    ok: true
-                )
+    /// Success reply for one terminal op. Shapes match the previous
+    /// per-op handlers exactly.
+    private func terminalSuccess(
+        op: WorkspaceControlOp,
+        request: WorkspaceControlRequest,
+        runtime: UUID,
+        result: TerminalControlResult
+    ) -> WorkspaceControlResponse {
+        switch op {
+        case .subscribeTerminal:
+            let window = result.window
+            return WorkspaceControlResponse(
+                operation: op,
+                id: request.id,
+                runtime: runtime,
+                ok: true,
+                rows: window.rows,
+                columns: window.columns,
+                terminal: true
             )
-        }
-    }
-
-    private func input(
-        _ message: WorkspaceControlRequest,
-        connection: WorkspaceControlConnection
-    ) -> Reply {
-        guard let runtime = message.runtime, let encoded = message.bytes,
-            let data = TerminalBytesCodec.decode(encoded, maximum: TerminalStreamLimits.maximumInputBytes),
-            data.isEmpty == false
-        else {
-            return Reply(message: failure(message, .invalidRequest))
-        }
-        switch supervisor.writeTerminal(runtime: runtime, client: connection.id, bytes: data) {
-        case .failure(let code):
-            return Reply(message: failure(message, code))
-        case .success:
-            return Reply(
-                message: WorkspaceControlResponse(
-                    operation: .terminalInput,
-                    id: message.id,
-                    runtime: runtime,
-                    ok: true
-                )
+        case .acquireTerminalInput:
+            return WorkspaceControlResponse(
+                operation: op,
+                id: request.id,
+                runtime: runtime,
+                ok: true,
+                inputOwner: true
             )
-        }
-    }
-
-    private func acquire(
-        _ message: WorkspaceControlRequest,
-        connection: WorkspaceControlConnection
-    ) -> Reply {
-        guard let runtime = message.runtime else {
-            return Reply(message: failure(message, .invalidRequest))
-        }
-        switch supervisor.acquireTerminalInput(runtime: runtime, client: connection.id) {
-        case .failure(let code):
-            return Reply(message: failure(message, code))
-        case .success:
-            return Reply(
-                message: WorkspaceControlResponse(
-                    operation: .acquireTerminalInput,
-                    id: message.id,
-                    runtime: runtime,
-                    ok: true,
-                    inputOwner: true
-                )
+        case .releaseTerminalInput:
+            return WorkspaceControlResponse(
+                operation: op,
+                id: request.id,
+                runtime: runtime,
+                ok: true,
+                inputOwner: false
             )
-        }
-    }
-
-    private func release(
-        _ message: WorkspaceControlRequest,
-        connection: WorkspaceControlConnection
-    ) -> Reply {
-        guard let runtime = message.runtime else {
-            return Reply(message: failure(message, .invalidRequest))
-        }
-        switch supervisor.releaseTerminalInput(runtime: runtime, client: connection.id) {
-        case .failure(let code):
-            return Reply(message: failure(message, code))
-        case .success:
-            return Reply(
-                message: WorkspaceControlResponse(
-                    operation: .releaseTerminalInput,
-                    id: message.id,
-                    runtime: runtime,
-                    ok: true,
-                    inputOwner: false
-                )
+        case .resizeTerminal:
+            return WorkspaceControlResponse(
+                operation: op,
+                id: request.id,
+                runtime: runtime,
+                ok: true,
+                rows: request.rows,
+                columns: request.columns
             )
-        }
-    }
-
-    private func resize(
-        _ message: WorkspaceControlRequest,
-        connection: WorkspaceControlConnection
-    ) -> Reply {
-        guard let runtime = message.runtime, let rows = message.rows, let columns = message.columns else {
-            return Reply(message: failure(message, .invalidRequest))
-        }
-        switch supervisor.resizeTerminal(runtime: runtime, client: connection.id, rows: rows, columns: columns) {
-        case .failure(let code):
-            return Reply(message: failure(message, code))
-        case .success:
-            return Reply(
-                message: WorkspaceControlResponse(
-                    operation: .resizeTerminal,
-                    id: message.id,
-                    runtime: runtime,
-                    ok: true,
-                    rows: rows,
-                    columns: columns
-                )
+        default:
+            return WorkspaceControlResponse(
+                operation: op,
+                id: request.id,
+                runtime: runtime,
+                ok: true
             )
         }
     }
@@ -1068,74 +1020,5 @@ func legacyLaunchHookSelection(_ raw: String?) -> Result<HookHost?, WorkspaceCon
     guard let raw else { return .success(nil) }
     guard AgentTagValidator.isValid(raw) else { return .failure(.invalidRequest) }
     return .success(HookHost(rawValue: raw))
-}
-
-private func workspaceTerminalMessage(
-    _ notice: TerminalNotice,
-    runtime: UUID
-) -> WorkspaceControlResponse {
-    switch notice {
-    case .replayBegin(let batch, let truncated, let byteCount):
-        WorkspaceControlResponse(
-            operation: .terminalReplayBegin,
-            runtime: runtime,
-            ok: true,
-            batch: batch,
-            truncated: truncated,
-            replayLength: byteCount
-        )
-    case .replay(let sequence, let bytes):
-        WorkspaceControlResponse(
-            operation: .terminalReplay,
-            runtime: runtime,
-            ok: true,
-            sequence: sequence,
-            bytes: TerminalBytesCodec.encode(bytes)
-        )
-    case .replayEnd(let batch):
-        WorkspaceControlResponse(
-            operation: .terminalReplayEnd,
-            runtime: runtime,
-            ok: true,
-            batch: batch
-        )
-    case .output(let sequence, let bytes):
-        WorkspaceControlResponse(
-            operation: .terminalOutput,
-            runtime: runtime,
-            ok: true,
-            sequence: sequence,
-            bytes: TerminalBytesCodec.encode(bytes)
-        )
-    case .inputOwner(let owned):
-        WorkspaceControlResponse(
-            operation: .terminalInputOwner,
-            runtime: runtime,
-            ok: true,
-            inputOwner: owned
-        )
-    case .window(let rows, let columns):
-        WorkspaceControlResponse(
-            operation: .terminalWindow,
-            runtime: runtime,
-            ok: true,
-            rows: rows,
-            columns: columns
-        )
-    case .exited(let status):
-        WorkspaceControlResponse(
-            operation: .runtimeExited,
-            runtime: runtime,
-            ok: true,
-            running: false,
-            exitStatus: status
-        )
-    case .overflow:
-        WorkspaceControlResponse(
-            operation: .terminalOverflow,
-            runtime: runtime,
-            ok: true
-        )
-    }
 }
 #endif

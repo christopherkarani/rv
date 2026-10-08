@@ -1877,22 +1877,56 @@ final class WorkspaceSessionSupervisor: Sendable {
         .sorted { $0.id.uuidString < $1.id.uuidString }
     }
 
-    func subscribeTerminal(
+    /// Single terminal control-plane dispatch. The server translates each
+    /// terminal wire op into one `TerminalControlCommand`; this interprets
+    /// it against the deep `RuntimeTerminal` implementation. The runtime
+    /// lookup, the missing-terminal mapping, and the `TerminalControlError`
+    /// map (owned by the wire seam) each happen once, here.
+    func dispatchTerminal(
         runtime: UUID,
         client: UUID,
-        emit: @escaping @Sendable (TerminalNotice) -> Bool,
-        windowNotices: Bool = false,
-        replayBatches: Bool = true
-    ) -> Result<Void, WorkspaceControlCode> {
+        command: TerminalControlCommand
+    ) -> Result<TerminalControlResult, WorkspaceControlCode> {
         guard let terminal = terminal(runtime) else {
             return .failure(terminalMissing(runtime))
         }
-        return terminal.subscribe(client: client, emit: emit, windowNotices: windowNotices, replayBatches: replayBatches)
-            .mapError { self.controlCode($0) }
-    }
-
-    func activateTerminal(runtime: UUID, client: UUID) {
-        terminal(runtime)?.activate(client: client)
+        switch command {
+        case .subscribe(let emit, let windowNotices, let replayBatches):
+            switch terminal.subscribe(
+                client: client,
+                emit: emit,
+                windowNotices: windowNotices,
+                replayBatches: replayBatches
+            ) {
+            case .failure(let error):
+                return .failure(WorkspaceControlCode(terminalError: error))
+            case .success:
+                let window = self.terminal(runtime)?.window()
+                return .success(.subscribed(rows: window?.rows, columns: window?.columns))
+            }
+        case .activate:
+            terminal.activate(client: client)
+            return .success(.done)
+        case .unsubscribe:
+            terminal.detach(client: client)
+            return .success(.done)
+        case .acquire:
+            return terminal.acquireInput(client: client)
+                .map { .done }
+                .mapError { WorkspaceControlCode(terminalError: $0) }
+        case .release:
+            return terminal.releaseInput(client: client)
+                .map { .done }
+                .mapError { WorkspaceControlCode(terminalError: $0) }
+        case .write(let bytes):
+            return terminal.writeInput(client: client, bytes: bytes)
+                .map { .done }
+                .mapError { WorkspaceControlCode(terminalError: $0) }
+        case .resize(let rows, let columns):
+            return terminal.resize(client: client, rows: rows, columns: columns)
+                .map { .done }
+                .mapError { WorkspaceControlCode(terminalError: $0) }
+        }
     }
 
     func detachTerminalClient(_ client: UUID) {
@@ -1900,57 +1934,6 @@ final class WorkspaceSessionSupervisor: Sendable {
         for child in children {
             child.live.pty?.detach(client: client)
         }
-    }
-
-    func unsubscribeTerminal(runtime: UUID, client: UUID) -> Result<Void, WorkspaceControlCode> {
-        guard let terminal = terminal(runtime) else {
-            return .failure(terminalMissing(runtime))
-        }
-        terminal.detach(client: client)
-        return .success(())
-    }
-
-    func acquireTerminalInput(runtime: UUID, client: UUID) -> Result<Void, WorkspaceControlCode> {
-        guard let terminal = terminal(runtime) else {
-            return .failure(terminalMissing(runtime))
-        }
-        return terminal.acquireInput(client: client).mapError { self.controlCode($0) }
-    }
-
-    func releaseTerminalInput(runtime: UUID, client: UUID) -> Result<Void, WorkspaceControlCode> {
-        guard let terminal = terminal(runtime) else {
-            return .failure(terminalMissing(runtime))
-        }
-        return terminal.releaseInput(client: client).mapError { self.controlCode($0) }
-    }
-
-    func writeTerminal(runtime: UUID, client: UUID, bytes: Data) -> Result<Void, WorkspaceControlCode> {
-        guard let terminal = terminal(runtime) else {
-            return .failure(terminalMissing(runtime))
-        }
-        return terminal.writeInput(client: client, bytes: bytes).mapError { self.controlCode($0) }
-    }
-
-    func resizeTerminal(
-        runtime: UUID,
-        client: UUID,
-        rows: Int,
-        columns: Int
-    ) -> Result<Void, WorkspaceControlCode> {
-        guard let terminal = terminal(runtime) else {
-            return .failure(terminalMissing(runtime))
-        }
-        return terminal.resize(client: client, rows: rows, columns: columns)
-            .mapError { self.controlCode($0) }
-    }
-
-    func terminalWindow(runtime: UUID) -> (rows: Int, columns: Int)? {
-        terminal(runtime)?.window()
-    }
-
-    func terminalMasterOpen(_ runtime: UUID) -> Bool {
-        guard let fd = terminal(runtime)?.masterFD else { return false }
-        return fd >= 0
     }
 
     private func terminal(_ runtime: UUID) -> RuntimeTerminal? {
@@ -1962,16 +1945,6 @@ final class WorkspaceSessionSupervisor: Sendable {
         let named = RuntimeSessionID(rawValue: runtime)
         let known = state.withLock { $0.children[named] != nil }
         return known ? .terminalUnavailable : .runtimeNotFound
-    }
-
-    private func controlCode(_ error: TerminalControlError) -> WorkspaceControlCode {
-        switch error {
-        case .unavailable: .terminalUnavailable
-        case .busy: .terminalBusy
-        case .limit: .terminalLimit
-        case .invalid: .invalidRequest
-        case .prefixCommitted: .terminalPrefixCommitted
-        }
     }
 
     func cancel(runtime rawValue: UUID) -> Result<Void, WorkspaceSessionError> {

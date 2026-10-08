@@ -814,6 +814,55 @@ func workspaceControlCode(_ error: WorkspaceSessionError) -> WorkspaceControlCod
     }
 }
 
+#if os(macOS)
+// MARK: - Terminal wire error map (T2 seam)
+
+/// The terminal error chain is defined once, here at the wire seam:
+/// `TerminalControlError -> WorkspaceControlCode -> WorkspaceClientFailure`.
+/// The supervisor dispatches through `init(terminalError:)`; the client
+/// interprets replies through `init(controlCode:detail:)`. Neither layer
+/// re-specifies the mapping.
+extension WorkspaceControlCode {
+    init(terminalError: TerminalControlError) {
+        switch terminalError {
+        case .unavailable:
+            self = .terminalUnavailable
+        case .busy:
+            self = .terminalBusy
+        case .limit:
+            self = .terminalLimit
+        case .invalid:
+            self = .invalidRequest
+        case .prefixCommitted:
+            self = .terminalPrefixCommitted
+        }
+    }
+}
+
+extension WorkspaceClientFailure {
+    init(controlCode code: WorkspaceControlCode, detail: String?) {
+        switch code {
+        case .workspaceClosing: self = .workspaceClosing
+        case .workspaceClosed: self = .workspaceClosed
+        case .runtimeNotFound: self = .runtimeNotFound
+        case .invalidRequest: self = .invalidRequest
+        case .requiresOperatorPermit: self = .requiresOperatorPermit
+        case .resourceProfileUnavailable: self = .resourceProfileUnavailable
+        case .resourceStagingFailed: self = .resourceStagingFailed(detail ?? "unknown grant")
+        case .incompatibleProtocol: self = .incompatibleProtocol
+        case .unauthorizedClient: self = .unauthorizedClient
+        case .recoveryRequired: self = .recoveryRequired
+        case .childTeardownFailed: self = .childTeardownFailed
+        case .runtimeLimit: self = .runtimeLimit
+        case .terminalUnavailable: self = .terminalUnavailable
+        case .terminalBusy: self = .terminalBusy
+        case .terminalLimit: self = .terminalLimit
+        case .terminalPrefixCommitted: self = .terminalPrefixCommitted
+        }
+    }
+}
+#endif
+
 // MARK: - Typed control RPC (T6)
 
 // Drift guard: `WorkspaceControlRequest` and `WorkspaceControlResponse`
