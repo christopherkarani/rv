@@ -7,11 +7,11 @@ import RVTheme
 /// Mirrors `SetupIntent`: commands pass what they parsed (failure name plus
 /// format flags) and the context owns the rest.
 struct CommandIntent: Sendable {
-    var command: String
-    var json: Bool = false
-    var robot: Bool = false
-    var plain: Bool = false
-    var noColor: Bool = false
+    let command: String
+    let json: Bool
+    let robot: Bool
+    let plain: Bool
+    let noColor: Bool
 
     init(command: String, json: Bool = false, robot: Bool = false, plain: Bool = false, noColor: Bool = false) {
         self.command = command
@@ -45,15 +45,15 @@ struct CommandIntent: Sendable {
 /// `format.json || format.robot` checks did.
 struct CommandContext: Sendable {
     /// Failure prefix after `rv `, e.g. `policy show`.
-    var commandName: String
-    var probe: ThemeProbe
-    var requested: RequestedMode
+    let commandName: String
+    let probe: ThemeProbe
+    let requested: RequestedMode
     /// CI-aware resolved appearance. Prefer this for rendered output.
-    var appearance: CLIAppearance
+    let appearance: CLIAppearance
     /// The operator passed `--json`/`--robot`. CI/TTY-independent.
-    var explicitRobot: Bool
-    var home: HomeDirectory?
-    var tty: TTYCapability
+    let explicitRobot: Bool
+    let home: HomeDirectory?
+    let tty: TTYCapability
 
     /// Production door; builds the full prologue once per invocation.
     static func current(_ intent: CommandIntent) -> CommandContext {
