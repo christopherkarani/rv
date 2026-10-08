@@ -721,19 +721,25 @@ struct AgentInstanceRegistryTests {
         }
         let latch = Latch()
         let registry = harness.registry
-        let task = Task.detached {
-            registry.revoke(instance.id, reason: .explicitRevoke) {
+        // The revoke runs on a dedicated thread, not the cooperative pool:
+        // teardown block-holds the revoking window open, and under parallel
+        // load every pool thread can be parked in another blocking wait,
+        // starving a Task.detached revoke past the observation deadline.
+        let outcome = Mutex<AgentRevokeOutcome?>(nil)
+        Thread.detachNewThread {
+            let result = registry.revoke(instance.id, reason: .explicitRevoke) {
                 latch.enter()
                 latch.waitForRelease()
                 return true
             }
+            outcome.withLock { $0 = result }
         }
         // Teardown runs outside the registry lock. Once it starts, the live
         // validity must already read revoking: new privileged use is
         // refused before teardown completes, not after.
         let deadline = Date().addingTimeInterval(10)
         while latch.entered == false, Date() < deadline {
-            usleep(1_000)
+            try await Task.sleep(for: .milliseconds(1))
         }
         #expect(latch.entered)
         #expect(harness.registry.validity(of: instance.id) == .revoking)
@@ -742,7 +748,11 @@ struct AgentInstanceRegistryTests {
         #expect(mid.response == .rejected(.inactiveSession))
         #expect(harness.effects.count == 0)
         latch.open()
-        #expect(await task.value == .revoked)
+        let finishDeadline = Date().addingTimeInterval(10)
+        while outcome.withLock({ $0 == nil }), Date() < finishDeadline {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        #expect(outcome.withLock { $0 } == .revoked)
         #expect(harness.registry.validity(of: instance.id) == .inactive)
     }
 
