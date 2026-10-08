@@ -294,7 +294,7 @@ func applyRoleAwareQuotesDetailed(tokens: [ShellPipeline.Token]) -> (view: Strin
         pendingDataFlag = false
         gitGrepPatternPending = false
         // Redirect operators are shell structure, not the sed script.
-        if commandBase == "sed", isRedirectOperator(decoded) == false {
+        if commandBase == "sed", RedirectOperator.isRedirectOperatorWord(decoded) == false {
             sedScriptPending = false
         }
     }
@@ -550,4 +550,215 @@ private func joinTokenLexemes(_ tokens: [ShellPipeline.Token]) -> String {
         lastWasNewline = false
     }
     return out
+}
+
+/// Single owner of the shell redirect-operator grammar (T4, REQ-004).
+///
+/// Module: one grammar (interface) over the operator tables and scans
+/// (implementation). Depth: five narrow per-view queries replace four
+/// independent raw-text scans; each callsite picks the view matching
+/// its seam instead of re-deriving "what is a redirect operator".
+/// Locality: operator-set changes land here, pinned by
+/// RedirectOperatorTests. Leverage: callers delete scanning code.
+///
+/// The views legitimately differ (preserved exactly, CON-001); each
+/// query documents its inclusions. The two bare-word views share one
+/// core — their operator grammar is identical, never silently unified
+/// nor diverged — and differ only in that the raw-word view also
+/// rejects quoting/dynamic sigils (raw provenance, not grammar).
+///
+/// Out of scope (CON-003 leaves those files untouched):
+/// `isRedirectOperator`, `attachedRedirectTarget`, `isFdDup`
+/// (ParseFilesystemCreateRead.swift), `stripWriterAttachedWord`
+/// (ParseFilesystemWriters.swift), and the separator-adjacency scans
+/// (`isBackgroundAmpersand`, `pipeIsRedirectBar`) still carry their own
+/// copies; a follow-up with write access should re-home the operator
+/// copies on these queries. `isRedirectOperatorWord` is already
+/// grammar-identical to legacy `isRedirectOperator` (differential test).
+enum RedirectOperator {
+    /// Tokenizer view: true when the raw word holds an unquoted `>`
+    /// outside any single-, double-, or ANSI-C-quoted span, with
+    /// backslash escapes skipped. Every such `>` becomes a claimed
+    /// write-redirect in the segment view below (`>`, `>>`, `>|`, `>&`,
+    /// `<>`, `&>`, fd-prefixed), so the word is redirect structure even
+    /// when quoting elsewhere in the word sets `wasQuoted`
+    /// (`hi>"/tmp/eve"`). Fully quoted `>` data (`"a>b"`, `$'a>b'`,
+    /// `a\>b`) returns false and stays maskable.
+    static func rawWordCarriesUnquotedRedirectOut(_ raw: Substring) -> Bool {
+        let chars = Array(raw)
+        var index = 0
+        var singleQuoted = false
+        var doubleQuoted = false
+        while index < chars.count {
+            let current = chars[index]
+            if singleQuoted {
+                if current == "'" { singleQuoted = false }
+                index += 1
+                continue
+            }
+            if doubleQuoted {
+                if current == "\\" { index += 2; continue }
+                if current == "\"" { doubleQuoted = false }
+                index += 1
+                continue
+            }
+            if current == "'" { singleQuoted = true; index += 1; continue }
+            if current == "\"" { doubleQuoted = true; index += 1; continue }
+            if current == "\\" { index += 2; continue }
+            if current == "$", index + 1 < chars.count, chars[index + 1] == "'" {
+                index += 2
+                while index < chars.count, chars[index] != "'" {
+                    index += chars[index] == "\\" ? 2 : 1
+                }
+                index += 1
+                continue
+            }
+            if current == ">" { return true }
+            index += 1
+        }
+        return false
+    }
+
+    /// Tokenizer view: true when the raw word is exactly one unquoted
+    /// redirect-out operator whose file target is the next word: `>`,
+    /// `>>`, `>|`, `>&`, `<>`, `&>`, `&>>`, each with optional fd digits
+    /// (`2>`, `10>>`, `2>&`). Dup/close gluings (`>&2`, `2>&1`), quoted
+    /// words, dynamic words, and input-only words (`<`, `<<`, `<&`)
+    /// never match: no file target follows. Shares its operator grammar
+    /// with the decoded-word view below; the quoting/dynamic guard is
+    /// the only view difference (raw provenance, not grammar).
+    static func isBareRedirectOutWord(_ raw: Substring) -> Bool {
+        if raw.contains("'") || raw.contains("\"") || raw.contains("\\")
+            || raw.contains("$") || raw.contains("`")
+        {
+            return false
+        }
+        return bareOutputCore(String(raw))
+    }
+
+    /// Decoded-word view: true when `word` is exactly one bare output
+    /// operator with optional fd digits: `>`, `>>`, `>|`, `>&`, `<>`,
+    /// `&>`, `&>>` (`2>`, `10>>`, `2>&`). Grammar-identical to legacy
+    /// `isRedirectOperator` (ParseFilesystemCreateRead.swift, kept for
+    /// its own files): no quoting guard, since the lexeme is already
+    /// decoded. Dup/close gluings (`>&2`, `2>&1`, `>&-`) and input-only
+    /// words (`<`, `<<`, `<&`) never match.
+    static func isRedirectOperatorWord(_ word: String) -> Bool {
+        bareOutputCore(word)
+    }
+
+    /// One core for both bare-word views. `&`-led words match only
+    /// `&>`/`&>>`; otherwise optional fd digits strip and the remainder
+    /// must be exactly `>`, `>>`, `>|`, `>&`, or `<>`. Note `>&` starts
+    /// with `>`, so it matches here — not in the `&` arm.
+    private static func bareOutputCore(_ word: String) -> Bool {
+        if word.hasPrefix("&") {
+            return word == "&>" || word == "&>>"
+        }
+        var rest = word[...]
+        while let first = rest.first, first.isASCII, first.isNumber {
+            rest = rest.dropFirst()
+        }
+        return rest == ">" || rest == ">>" || rest == ">|" || rest == ">&" || rest == "<>"
+    }
+
+    /// Segment view: splits a decoded word at redirect-operator
+    /// boundaries into alternating word/operator pieces: `b>/tmp/x` →
+    /// `["b", ">", "/tmp/x"]`, `a2>>b` → `["a", "2>>", "b"]`. Operator
+    /// pieces carry their fd digits so they read exactly like the
+    /// separate form; dup/close targets stay glued to their operator
+    /// (`2>&1` never splits, so the `1` cannot pollute operands).
+    static func splitRedirectPieces(_ word: String) -> [String] {
+        let chars = Array(word)
+        var pieces: [String] = []
+        var index = 0
+        var wordStart = 0
+        while index < chars.count {
+            if chars[index] == "\\" {
+                index += 2
+                continue
+            }
+            if chars[index] == ">" || chars[index] == "<" {
+                let runEnd = redirectRunEnd(chars, from: index)
+                // A digit run immediately before the operator is its fd (`a2>b`
+                // redirects fd 2, word `a`), maximal like the shell's own read.
+                var fdStart = index
+                while fdStart > wordStart, chars[fdStart - 1].isASCII, chars[fdStart - 1].isNumber {
+                    fdStart -= 1
+                }
+                if wordStart < fdStart {
+                    pieces.append(String(chars[wordStart..<fdStart]))
+                }
+                pieces.append(String(chars[fdStart..<runEnd]))
+                index = runEnd
+                wordStart = runEnd
+                continue
+            }
+            index += 1
+        }
+        if wordStart < chars.count {
+            pieces.append(String(chars[wordStart...]))
+        }
+        return pieces.isEmpty ? [word] : pieces
+    }
+
+    /// End index of the redirect operator run starting at `from`: `>>`,
+    /// `>|`, `>&`, `<<`, `<<<`, `<<-`, `<>`, `<&`, each with its fd
+    /// glued on the left by the caller and dup/close targets (`>&1`,
+    /// `<&-`) glued on the right.
+    private static func redirectRunEnd(_ chars: [Character], from: Int) -> Int {
+        var runEnd = from + 1
+        guard runEnd < chars.count else {
+            return runEnd
+        }
+        let next = chars[runEnd]
+        if chars[from] == ">", next == ">" || next == "|" || next == "&" {
+            runEnd += 1
+        } else if chars[from] == "<", next == "<" || next == ">" || next == "&" {
+            runEnd += 1
+            if next == "<", runEnd < chars.count {
+                if chars[runEnd] == "<" || chars[runEnd] == "-" {
+                    runEnd += 1
+                }
+            }
+        }
+        if runEnd - from == 2,
+            (chars[from] == ">" || chars[from] == "<"), chars[from + 1] == "&"
+        {
+            // Dup/close targets glue only to end of token: `>&1` is a dup, but
+            // `>&1b` duplicates to the FILE `1b`, so the `1b` must split off.
+            var digitsEnd = runEnd
+            while digitsEnd < chars.count, chars[digitsEnd].isASCII, chars[digitsEnd].isNumber {
+                digitsEnd += 1
+            }
+            if digitsEnd == chars.count {
+                return digitsEnd
+            }
+            if digitsEnd == runEnd, digitsEnd < chars.count, chars[digitsEnd] == "-",
+                digitsEnd + 1 == chars.count
+            {
+                return digitsEnd + 1
+            }
+        }
+        return runEnd
+    }
+
+    /// Argv view: true when `word` opens with redirect syntax, so the
+    /// argv0-strip guard leaves it alone. Prefix `>`, `<`, `&>`, `>&`,
+    /// `:>`, or leading digits then `>` (`2>`, attached or bare). Broader
+    /// than the bare-word views on purpose: any redirect-led word is
+    /// ineligible as an executable path, while `2<` (digits then `<`)
+    /// never matches.
+    static func isRedirectToken(_ word: String) -> Bool {
+        if word.hasPrefix(">") || word.hasPrefix("<") || word.hasPrefix("&>") || word.hasPrefix(">&")
+            || word.hasPrefix(":>")
+        {
+            return true
+        }
+        var index = word.startIndex
+        while index < word.endIndex, word[index].isNumber {
+            index = word.index(after: index)
+        }
+        return index > word.startIndex && index < word.endIndex && word[index] == ">"
+    }
 }
