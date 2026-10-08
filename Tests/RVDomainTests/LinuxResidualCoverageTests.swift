@@ -389,20 +389,24 @@ struct LinuxResidualCoverageTests {
             filesystemScope: .protectedPath(SecretPathMatch(pattern: "id_ed25519", category: .ssh))
         )
         let writeInside = ProposedAction.shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "fs-inside"),
-                effects: ActionEffects(kinds: [.filesystemOverwrite]),
-                resources: inside
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "fs-inside"),
+                    effects: ActionEffects(kinds: [.filesystemOverwrite]),
+                    resources: inside
+                )
             )
         )
         #expect(
             ActionPolicyEngine.evaluate(action: writeInside).decision == .hardAllow
         )
         let writeOutside = ProposedAction.shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "fs-out"),
-                effects: ActionEffects(kinds: [.filesystemCreate]),
-                resources: outside
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "fs-out"),
+                    effects: ActionEffects(kinds: [.filesystemCreate]),
+                    resources: outside
+                )
             )
         )
         #expect(
@@ -410,10 +414,12 @@ struct LinuxResidualCoverageTests {
                 == .hardDeny(ActionPolicyEngine.Builtin.outsideRepository)
         )
         let writeProtected = ProposedAction.shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "fs-prot"),
-                effects: ActionEffects(kinds: [.filesystemDelete]),
-                resources: protected
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "fs-prot"),
+                    effects: ActionEffects(kinds: [.filesystemDelete]),
+                    resources: protected
+                )
             )
         )
         #expect(

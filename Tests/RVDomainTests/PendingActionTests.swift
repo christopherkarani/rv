@@ -214,10 +214,12 @@ struct PendingActionTests {
 
     @Test func sanitize_keepsGitPushAnalysis() {
         let push = GitAction.push(remote: "origin", refspec: "feature", force: .force)
-        let shell = ShellAction(
-            fingerprint: ActionFingerprint(rawValue: "host:sess:/tmp:git push --force origin feature"),
-            supportingCommand: ShellCommand(rawValue: "git push --force origin feature"),
-            gitAction: push
+        let shell = ShellAction.analyzed(
+            AnalyzedShell(
+                fingerprint: ActionFingerprint(rawValue: "host:sess:/tmp:git push --force origin feature"),
+                supportingCommand: ShellCommand(rawValue: "git push --force origin feature"),
+                analysis: .git(push)
+            )
         )
         let sanitized = ReviewSanitizer.sanitize(shell)
         #expect(sanitized.gitAction == push)
@@ -239,10 +241,12 @@ struct PendingActionTests {
             recursive: false,
             force: false
         )
-        let shell = ShellAction(
-            fingerprint: ActionFingerprint(rawValue: "host::/repo:rm Sources/Foo.swift"),
-            supportingCommand: ShellCommand(rawValue: "rm Sources/Foo.swift"),
-            filesystemAction: filesystem
+        let shell = ShellAction.analyzed(
+            AnalyzedShell(
+                fingerprint: ActionFingerprint(rawValue: "host::/repo:rm Sources/Foo.swift"),
+                supportingCommand: ShellCommand(rawValue: "rm Sources/Foo.swift"),
+                analysis: .filesystem(filesystem)
+            )
         )
         let sanitized = ReviewSanitizer.sanitize(shell)
         #expect(sanitized.filesystemAction == filesystem)
@@ -257,10 +261,12 @@ struct PendingActionTests {
             refspec: "main",
             force: .force
         )
-        let shell = ShellAction(
-            fingerprint: ActionFingerprint(rawValue: "host:sess:/tmp:git push --force"),
-            supportingCommand: ShellCommand(rawValue: "git push --force origin main"),
-            gitAction: push
+        let shell = ShellAction.analyzed(
+            AnalyzedShell(
+                fingerprint: ActionFingerprint(rawValue: "host:sess:/tmp:git push --force"),
+                supportingCommand: ShellCommand(rawValue: "git push --force origin main"),
+                analysis: .git(push)
+            )
         )
 
         let sanitized = ReviewSanitizer.sanitize(shell)
@@ -316,10 +322,12 @@ struct PendingActionTests {
             recursive: false,
             force: true
         )
-        let shell = ShellAction(
-            fingerprint: ActionFingerprint(rawValue: "host::/tmp:rm ghp_exampletoken"),
-            supportingCommand: ShellCommand(rawValue: "rm ghp_exampletoken"),
-            filesystemAction: filesystem
+        let shell = ShellAction.analyzed(
+            AnalyzedShell(
+                fingerprint: ActionFingerprint(rawValue: "host::/tmp:rm ghp_exampletoken"),
+                supportingCommand: ShellCommand(rawValue: "rm ghp_exampletoken"),
+                analysis: .filesystem(filesystem)
+            )
         )
 
         let sanitized = ReviewSanitizer.sanitize(shell)
@@ -367,9 +375,11 @@ struct PendingActionTests {
     }
 
     @Test func shellAction_gitOnlyEncodeOmitsFilesystemAndAnalysisKeys() throws {
-        let shell = ShellAction(
-            fingerprint: ActionFingerprint(rawValue: "fp-git-only"),
-            gitAction: .push(remote: "origin", refspec: "main", force: .none)
+        let shell = ShellAction.analyzed(
+            AnalyzedShell(
+                fingerprint: ActionFingerprint(rawValue: "fp-git-only"),
+                analysis: .git(.push(remote: "origin", refspec: "main", force: .none))
+            )
         )
         let object = try #require(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(shell)) as? [String: Any]
@@ -394,13 +404,17 @@ struct PendingActionTests {
             recursive: false,
             force: false
         )
-        let gitShell = ShellAction(
-            fingerprint: ActionFingerprint(rawValue: "fp-git"),
-            gitAction: git
+        let gitShell = ShellAction.analyzed(
+            AnalyzedShell(
+                fingerprint: ActionFingerprint(rawValue: "fp-git"),
+                analysis: .git(git)
+            )
         )
-        let filesystemShell = ShellAction(
-            fingerprint: ActionFingerprint(rawValue: "fp-fs"),
-            filesystemAction: filesystem
+        let filesystemShell = ShellAction.analyzed(
+            AnalyzedShell(
+                fingerprint: ActionFingerprint(rawValue: "fp-fs"),
+                analysis: .filesystem(filesystem)
+            )
         )
         var object = try #require(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(gitShell)) as? [String: Any]

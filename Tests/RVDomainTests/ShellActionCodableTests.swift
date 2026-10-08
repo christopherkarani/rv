@@ -4,13 +4,16 @@ import RVDomain
 
 @Suite("ShellAction")
 struct ShellActionCodableTests {
-    @Test func decode_rejectsEffectsThatDisagreeWithSubject() throws {
+    @Test func decode_disagreeingBagsYieldToSubjectProjection() throws {
         var object = try jsonObject(analyzedForcePush())
         object["effects"] = ["kinds": [ActionEffectKind.localBranchCreate.rawValue]]
+        object["resources"] = ["remoteName": "upstream", "branchName": "other"]
         let data = try JSONSerialization.data(withJSONObject: object)
-        #expect(throws: DecodingError.self) {
-            _ = try JSONDecoder().decode(ShellAction.self, from: data)
-        }
+        let decoded = try JSONDecoder().decode(ShellAction.self, from: data)
+        #expect(decoded == analyzedForcePush())
+        #expect(decoded.effects.kinds == [.remoteSharedBranchMutation])
+        #expect(decoded.resources.remoteName == "origin")
+        #expect(decoded.resources.branchName == "main")
     }
 
     @Test func decode_absentBagUsesSubjectProjection() throws {
@@ -20,6 +23,49 @@ struct ShellActionCodableTests {
         let data = try JSONSerialization.data(withJSONObject: object)
         let decoded = try JSONDecoder().decode(ShellAction.self, from: data)
         #expect(decoded == analyzedForcePush())
+    }
+
+    @Test func decode_bothXORKeysFails() throws {
+        var object = try jsonObject(analyzedForcePush())
+        let filesystemShell = ShellAction.analyzed(
+            AnalyzedShell(
+                fingerprint: ActionFingerprint(rawValue: "fp-analyzed-fs"),
+                analysis: .filesystem(
+                    .read(targets: [
+                        FilesystemTarget(
+                            apparent: "/tmp/ws/file.txt",
+                            canonical: "/tmp/ws/file.txt",
+                            scope: .insideRepository,
+                            kind: .sourceCode
+                        )
+                    ])
+                )
+            )
+        )
+        let filesystemObject = try jsonObject(filesystemShell)
+        object["filesystemAction"] = try #require(filesystemObject["filesystemAction"])
+        let data = try JSONSerialization.data(withJSONObject: object)
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(ShellAction.self, from: data)
+        }
+    }
+
+    @Test func decode_effectOnlyAbsentBagsDefaultToEmpty() throws {
+        var object = try jsonObject(
+            ShellAction.effectOnly(
+                EffectShell(fingerprint: ActionFingerprint(rawValue: "fp-effect-only-bare"))
+            )
+        )
+        object.removeValue(forKey: "effects")
+        object.removeValue(forKey: "resources")
+        let data = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(ShellAction.self, from: data)
+        guard case .effectOnly(let effect) = decoded else {
+            Issue.record("expected effect-only shell")
+            return
+        }
+        #expect(effect.effects == ActionEffects())
+        #expect(effect.resources == ActionResources())
     }
 
     @Test func analyzedShell_roundTripsEqual() throws {
@@ -32,26 +78,89 @@ struct ShellActionCodableTests {
         #expect(decoded.effects.kinds == [.remoteSharedBranchMutation])
         #expect(decoded.resources.remoteName == "origin")
         #expect(decoded.resources.branchName == "main")
-        #expect(decoded.analysis == .git(.push(remote: "origin", refspec: "main", force: .force)))
+        guard case .analyzed(let analyzed) = decoded else {
+            Issue.record("expected analyzed shell")
+            return
+        }
+        #expect(analyzed.analysis == .git(.push(remote: "origin", refspec: "main", force: .force)))
     }
 
-    @Test func effectOnlyForcePushFixture_keepsNilAnalysis() {
+    @Test func effectOnlyShell_roundTripsEqualWithoutXORKeys() throws {
+        let shell = ShellAction.effectOnly(
+            EffectShell(
+                fingerprint: ActionFingerprint(rawValue: "fp-effect-only"),
+                effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
+                resources: ActionResources(remoteName: "origin", branchName: "main"),
+                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws")),
+                supportingCommand: ShellCommand(rawValue: "git push --force origin main")
+            )
+        )
+        let object = try jsonObject(shell)
+        #expect(object.keys.contains("gitAction") == false)
+        #expect(object.keys.contains("filesystemAction") == false)
+        #expect(object.keys.contains("analysis") == false)
+        let decoded = try JSONDecoder().decode(
+            ShellAction.self,
+            from: JSONEncoder().encode(shell)
+        )
+        #expect(decoded == shell)
+        guard case .effectOnly = decoded else {
+            Issue.record("expected effect-only shell")
+            return
+        }
+    }
+
+    @Test func analyzedShell_standaloneRoundTripsFlatWire() throws {
+        let analyzed = AnalyzedShell(
+            fingerprint: ActionFingerprint(rawValue: "fp-analyzed-standalone"),
+            scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws")),
+            supportingCommand: ShellCommand(rawValue: "git push --force origin main"),
+            analysis: .git(.push(remote: "origin", refspec: "main", force: .force))
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(analyzed)) as? [String: Any]
+        )
+        #expect(object.keys.contains("gitAction") == true)
+        #expect(object.keys.contains("filesystemAction") == false)
+        #expect(object.keys.contains("analysis") == false)
+        let decoded = try JSONDecoder().decode(
+            AnalyzedShell.self,
+            from: JSONEncoder().encode(analyzed)
+        )
+        #expect(decoded == analyzed)
+    }
+
+    @Test func analyzedShell_rejectsEffectOnlyWire() throws {
+        let effectOnly = ShellAction.effectOnly(
+            EffectShell(fingerprint: ActionFingerprint(rawValue: "fp-effect-only-reject"))
+        )
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(AnalyzedShell.self, from: JSONEncoder().encode(effectOnly))
+        }
+    }
+
+    @Test func effectOnlyForcePushFixture_isEffectOnly() {
         guard case .shell(let shell) = ActionPolicyFixtures.forcePush() else {
             Issue.record("expected shell")
             return
         }
-        #expect(shell.analysis == nil)
+        guard case .effectOnly = shell else {
+            Issue.record("expected effect-only shell")
+            return
+        }
         #expect(shell.effects == ActionEffects(kinds: [.remoteSharedBranchMutation]))
         #expect(shell.resources.remoteName == "origin")
         #expect(shell.resources.branchName == "main")
     }
 
     private func analyzedForcePush() -> ShellAction {
-        ShellAction(
-            fingerprint: ActionFingerprint(rawValue: "fp-analyzed-push"),
-            scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws")),
-            supportingCommand: ShellCommand(rawValue: "git push --force origin main"),
-            analysis: .git(.push(remote: "origin", refspec: "main", force: .force))
+        ShellAction.analyzed(
+            AnalyzedShell(
+                fingerprint: ActionFingerprint(rawValue: "fp-analyzed-push"),
+                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws")),
+                supportingCommand: ShellCommand(rawValue: "git push --force origin main"),
+                analysis: .git(.push(remote: "origin", refspec: "main", force: .force))
+            )
         )
     }
 
@@ -90,7 +199,10 @@ struct AgentNormalizationShellTests {
             Issue.record("expected shell")
             return
         }
-        #expect(shell.analysis == nil)
+        guard case .effectOnly = shell else {
+            Issue.record("expected effect-only shell")
+            return
+        }
         #expect(shell.effects.kinds.isEmpty)
     }
 }
@@ -104,10 +216,12 @@ struct ReviewSanitizerShellTests {
             force: .force
         )
         let sanitized = ReviewSanitizer.sanitize(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "fp-sanitize"),
-                supportingCommand: ShellCommand(rawValue: "git push --force"),
-                analysis: .git(push)
+            ShellAction.analyzed(
+                AnalyzedShell(
+                    fingerprint: ActionFingerprint(rawValue: "fp-sanitize"),
+                    supportingCommand: ShellCommand(rawValue: "git push --force"),
+                    analysis: .git(push)
+                )
             )
         )
         #expect(sanitized.effects == sanitized.gitAction?.effects)

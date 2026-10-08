@@ -227,11 +227,13 @@ public enum GitAction: Sendable, Equatable, Codable {
         workingDirectory: WorkingDirectory?
     ) -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: fingerprint),
-                scope: ActionScope(workingDirectory: workingDirectory),
-                supportingCommand: command,
-                gitAction: self
+            ShellAction.analyzed(
+                AnalyzedShell(
+                    fingerprint: ActionFingerprint(rawValue: fingerprint),
+                    scope: ActionScope(workingDirectory: workingDirectory),
+                    supportingCommand: command,
+                    analysis: .git(self)
+                )
             )
         )
     }

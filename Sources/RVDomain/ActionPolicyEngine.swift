@@ -511,7 +511,12 @@ public enum ActionPolicyEngine: Sendable {
     }
 
     private static func semanticAction(of shell: ShellAction) -> SemanticAction? {
-        shell.analysis
+        switch shell {
+        case .effectOnly:
+            return nil
+        case .analyzed(let analyzed):
+            return analyzed.analysis
+        }
     }
 
     /// Restrict-only. Rank is deny > ask > allow, independent of list order.

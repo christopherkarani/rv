@@ -249,12 +249,14 @@ private struct AdmissionFixture {
             scope: .outsideRepository
         )
         uncovered = ProposedAction.shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "runtime:uncovered"),
-                effects: ActionEffects(),
-                resources: ActionResources(),
-                scope: ActionScope(workingDirectory: workspace),
-                supportingCommand: ShellCommand(rawValue: "echo hello")
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "runtime:uncovered"),
+                    effects: ActionEffects(),
+                    resources: ActionResources(),
+                    scope: ActionScope(workingDirectory: workspace),
+                    supportingCommand: ShellCommand(rawValue: "echo hello")
+                )
             )
         )
     }
@@ -288,13 +290,15 @@ private struct AdmissionFixture {
             kind: .unknown
         )
         return .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(
-                    rawValue: "runtime:\(session.id.rawValue.uuidString):\(workspace.rawValue):\(command)"
-                ),
-                scope: ActionScope(workingDirectory: workspace),
-                supportingCommand: ShellCommand(rawValue: command),
-                filesystemAction: .create(targets: [target])
+            ShellAction.analyzed(
+                AnalyzedShell(
+                    fingerprint: ActionFingerprint(
+                        rawValue: "runtime:\(session.id.rawValue.uuidString):\(workspace.rawValue):\(command)"
+                    ),
+                    scope: ActionScope(workingDirectory: workspace),
+                    supportingCommand: ShellCommand(rawValue: command),
+                    analysis: .filesystem(.create(targets: [target]))
+                )
             )
         )
     }

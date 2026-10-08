@@ -54,26 +54,32 @@ extension ProposedAction {
         let scope = ActionScope(workingDirectory: cwd)
         switch analysis.innermost {
         case .git(let git):
-            return ShellAction(
-                fingerprint: fingerprint,
-                scope: scope,
-                supportingCommand: command,
-                analysis: .git(git)
+            return ShellAction.analyzed(
+                AnalyzedShell(
+                    fingerprint: fingerprint,
+                    scope: scope,
+                    supportingCommand: command,
+                    analysis: .git(git)
+                )
             )
         case .filesystem(let filesystem):
-            return ShellAction(
-                fingerprint: fingerprint,
-                scope: scope,
-                supportingCommand: command,
-                analysis: .filesystem(filesystem)
+            return ShellAction.analyzed(
+                AnalyzedShell(
+                    fingerprint: fingerprint,
+                    scope: scope,
+                    supportingCommand: command,
+                    analysis: .filesystem(filesystem)
+                )
             )
         case .wrapper, .unwrapLimited, .unknown:
-            return ShellAction(
-                fingerprint: fingerprint,
-                effects: ActionEffects(),
-                resources: ActionResources(),
-                scope: scope,
-                supportingCommand: command
+            return ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: fingerprint,
+                    effects: ActionEffects(),
+                    resources: ActionResources(),
+                    scope: scope,
+                    supportingCommand: command
+                )
             )
         }
     }

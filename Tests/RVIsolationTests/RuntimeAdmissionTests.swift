@@ -468,28 +468,32 @@ private func isolationAdmissionNormalize(
             : [.filesystemOverwrite, .outsideRepositoryMutation]
         return .success(
             .shell(
-                ShellAction(
-                    fingerprint: fingerprint,
-                    effects: ActionEffects(kinds: kinds),
-                    resources: ActionResources(
-                        path: tokens[1],
-                        filesystemScope: scope,
-                        resourceKind: .unknown
-                    ),
-                    scope: ActionScope(workingDirectory: subject.policyWorkspace),
-                    supportingCommand: command
+                ShellAction.effectOnly(
+                    EffectShell(
+                        fingerprint: fingerprint,
+                        effects: ActionEffects(kinds: kinds),
+                        resources: ActionResources(
+                            path: tokens[1],
+                            filesystemScope: scope,
+                            resourceKind: .unknown
+                        ),
+                        scope: ActionScope(workingDirectory: subject.policyWorkspace),
+                        supportingCommand: command
+                    )
                 )
             )
         )
     }
     return .success(
         .shell(
-            ShellAction(
-                fingerprint: fingerprint,
-                effects: ActionEffects(),
-                resources: ActionResources(),
-                scope: ActionScope(workingDirectory: subject.policyWorkspace),
-                supportingCommand: command
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: fingerprint,
+                    effects: ActionEffects(),
+                    resources: ActionResources(),
+                    scope: ActionScope(workingDirectory: subject.policyWorkspace),
+                    supportingCommand: command
+                )
             )
         )
     )
@@ -526,16 +530,18 @@ private func allowAdmittedCommand(
     }
     return .success(
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "runtime:lifetime:\(command.rawValue)"),
-                effects: ActionEffects(kinds: [.filesystemCreate]),
-                resources: ActionResources(
-                    path: "command-started",
-                    filesystemScope: .insideRepository,
-                    resourceKind: .unknown
-                ),
-                scope: ActionScope(workingDirectory: subject.policyWorkspace),
-                supportingCommand: command
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "runtime:lifetime:\(command.rawValue)"),
+                    effects: ActionEffects(kinds: [.filesystemCreate]),
+                    resources: ActionResources(
+                        path: "command-started",
+                        filesystemScope: .insideRepository,
+                        resourceKind: .unknown
+                    ),
+                    scope: ActionScope(workingDirectory: subject.policyWorkspace),
+                    supportingCommand: command
+                )
             )
         )
     )

@@ -756,18 +756,20 @@ private func workspaceTouchNormalize(
     }
     return .success(
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(
-                    rawValue: "workspace:\(subject.session.id.rawValue.uuidString):\(raw)"
-                ),
-                effects: ActionEffects(kinds: [.filesystemCreate]),
-                resources: ActionResources(
-                    path: tokens[1],
-                    filesystemScope: .insideRepository,
-                    resourceKind: .unknown
-                ),
-                scope: ActionScope(workingDirectory: subject.policyWorkspace),
-                supportingCommand: command
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(
+                        rawValue: "workspace:\(subject.session.id.rawValue.uuidString):\(raw)"
+                    ),
+                    effects: ActionEffects(kinds: [.filesystemCreate]),
+                    resources: ActionResources(
+                        path: tokens[1],
+                        filesystemScope: .insideRepository,
+                        resourceKind: .unknown
+                    ),
+                    scope: ActionScope(workingDirectory: subject.policyWorkspace),
+                    supportingCommand: command
+                )
             )
         )
     )

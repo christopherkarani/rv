@@ -424,11 +424,13 @@ private extension PendingApprovalStoreTests {
             id: ApprovalID(rawValue: id),
             identity: identity,
             action: .shell(
-                ShellAction(
-                    fingerprint: fingerprint,
-                    effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                    resources: ActionResources(remoteName: "origin", branchName: "main"),
-                    scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv"))
+                ShellAction.effectOnly(
+                    EffectShell(
+                        fingerprint: fingerprint,
+                        effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
+                        resources: ActionResources(remoteName: "origin", branchName: "main"),
+                        scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv"))
+                    )
                 )
             ),
             reason: .hostAsk,

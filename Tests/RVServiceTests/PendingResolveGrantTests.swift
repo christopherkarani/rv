@@ -158,10 +158,12 @@ struct PendingResolveGrantTests {
                 agent: .pi
             ),
             action: .shell(
-                ShellAction(
-                    fingerprint: ActionFingerprint(rawValue: "shell:down-1"),
-                    scope: ActionScope(workingDirectory: wd("/tmp/ws")),
-                    supportingCommand: ShellCommand(rawValue: command)
+                ShellAction.effectOnly(
+                    EffectShell(
+                        fingerprint: ActionFingerprint(rawValue: "shell:down-1"),
+                        scope: ActionScope(workingDirectory: wd("/tmp/ws")),
+                        supportingCommand: ShellCommand(rawValue: command)
+                    )
                 )
             ),
             reason: .hostAsk,
@@ -439,15 +441,17 @@ private struct IsolatedPendingResolve {
                     agent: host
                 ),
                 action: .shell(
-                    ShellAction(
-                        fingerprint: ActionFingerprint.make(
-                            host: host,
-                            session: SessionID(validating: "sess-pi"),
-                            cwd: cwd,
-                            command: shell
-                        ),
-                        scope: ActionScope(workingDirectory: cwd),
-                        supportingCommand: shell
+                    ShellAction.effectOnly(
+                        EffectShell(
+                            fingerprint: ActionFingerprint.make(
+                                host: host,
+                                session: SessionID(validating: "sess-pi"),
+                                cwd: cwd,
+                                command: shell
+                            ),
+                            scope: ActionScope(workingDirectory: cwd),
+                            supportingCommand: shell
+                        )
                     )
                 ),
                 reason: .hostAsk,

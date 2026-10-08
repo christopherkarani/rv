@@ -916,11 +916,13 @@ struct PendingDispatchTests {
                     agent: .pi
                 ),
                 action: .shell(
-                    ShellAction(
-                        fingerprint: ActionFingerprint(rawValue: "shell:live-1"),
-                        effects: ActionEffects(kinds: [.workingTreeDiscard]),
-                        scope: ActionScope(workingDirectory: wd("/tmp/ws")),
-                        supportingCommand: ShellCommand(rawValue: secretCommand)
+                    ShellAction.effectOnly(
+                        EffectShell(
+                            fingerprint: ActionFingerprint(rawValue: "shell:live-1"),
+                            effects: ActionEffects(kinds: [.workingTreeDiscard]),
+                            scope: ActionScope(workingDirectory: wd("/tmp/ws")),
+                            supportingCommand: ShellCommand(rawValue: secretCommand)
+                        )
                     )
                 ),
                 reason: .hostAsk,
@@ -1049,12 +1051,14 @@ struct PendingDispatchTests {
                 agent: host
             ),
             action: .shell(
-                ShellAction(
-                    fingerprint: ActionFingerprint(rawValue: "shell:\(id)"),
-                    effects: ActionEffects(kinds: effects),
-                    resources: ActionResources(remoteName: "origin", branchName: branchName),
-                    scope: ActionScope(workingDirectory: folder.map { wd("/tmp/\($0)") }),
-                    supportingCommand: ShellCommand(rawValue: command ?? secretCommand)
+                ShellAction.effectOnly(
+                    EffectShell(
+                        fingerprint: ActionFingerprint(rawValue: "shell:\(id)"),
+                        effects: ActionEffects(kinds: effects),
+                        resources: ActionResources(remoteName: "origin", branchName: branchName),
+                        scope: ActionScope(workingDirectory: folder.map { wd("/tmp/\($0)") }),
+                        supportingCommand: ShellCommand(rawValue: command ?? secretCommand)
+                    )
                 )
             ),
             reason: .hostAsk,
