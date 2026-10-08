@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import RVDomain
 @testable import RVPolicy
 
 struct AllowOnceLedgerTests {
@@ -53,6 +54,91 @@ struct AllowOnceLedgerTests {
         #expect(records.last?.commandFingerprint == "other-fp")
         #expect(records.last?.createdAt == Self.epoch)
         #expect(records.last?.expiresAt == Self.epoch.addingTimeInterval(3600))
+    }
+
+    @Test func mintSameViewDifferentPayloadAppends() throws {
+        // M1: same-view commands with different hidden payloads must
+        // mint separate rows; the first writer must not win a shared row.
+        let live = Self.record(
+            kind: .pending, hash: "live", expiresAt: Self.epoch.addingTimeInterval(60),
+            payloadDigest: "digest-a"
+        )
+        let out = try AllowOnceLedger.mint(
+            records: [live],
+            codeHash: "fresh",
+            fingerprint: "fp",
+            redacted: "git …",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: Self.epoch,
+            ttl: 3600,
+            payloadDigest: "digest-b"
+        )
+        guard case .appended(let records) = out else {
+            Issue.record("a different payload must mint a new pending")
+            return
+        }
+        #expect(records.map(\.codeHash) == ["live", "fresh"])
+        #expect(records.last?.payloadDigest == "digest-b")
+    }
+
+    @Test func mintSameViewSamePayloadReuses() throws {
+        let live = Self.record(
+            kind: .pending, hash: "live", expiresAt: Self.epoch.addingTimeInterval(60),
+            payloadDigest: "digest-a"
+        )
+        let out = try AllowOnceLedger.mint(
+            records: [live],
+            codeHash: "fresh",
+            fingerprint: "fp",
+            redacted: "git …",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: Self.epoch,
+            ttl: 3600,
+            payloadDigest: "digest-a"
+        )
+        guard case .reused(let records) = out else {
+            Issue.record("an identical retry must reuse the live pending")
+            return
+        }
+        #expect(records.map(\.codeHash) == ["live"])
+    }
+
+    @Test func mintLegacyNilDigestReusesOnlyNil() throws {
+        let legacy = Self.record(
+            kind: .pending, hash: "live", expiresAt: Self.epoch.addingTimeInterval(60)
+        )
+        #expect(legacy.payloadDigest == nil)
+        let bound = try AllowOnceLedger.mint(
+            records: [legacy],
+            codeHash: "fresh",
+            fingerprint: "fp",
+            redacted: "git …",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: Self.epoch,
+            ttl: 3600,
+            payloadDigest: "digest-a"
+        )
+        guard case .appended = bound else {
+            Issue.record("a bound mint must not reuse a legacy row")
+            return
+        }
+        let again = try AllowOnceLedger.mint(
+            records: [legacy],
+            codeHash: "fresh",
+            fingerprint: "fp",
+            redacted: "git …",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: Self.epoch,
+            ttl: 3600
+        )
+        guard case .reused = again else {
+            Issue.record("a legacy retry must reuse the legacy row")
+            return
+        }
     }
 
     @Test func mintCollidesWithLivePendingSameHash() {
@@ -166,90 +252,6 @@ struct AllowOnceLedgerTests {
         }
     }
 
-    @Test func consumeFreshGrantWinsAndPrunesExpiredGrants() {
-        let fresh = Self.record(kind: .granted, hash: "tok", expiresAt: Self.epoch.addingTimeInterval(60))
-        let expiredSibling = Self.record(kind: .granted, hash: "old", expiresAt: Self.epoch.addingTimeInterval(-1))
-        let consumedSibling = Self.record(
-            kind: .consumed,
-            hash: "done",
-            expiresAt: Self.epoch.addingTimeInterval(-10),
-            consumedAt: Self.epoch.addingTimeInterval(-20)
-        )
-        switch AllowOnceLedger.consume(
-            records: [expiredSibling, consumedSibling, fresh],
-            fingerprint: "fp",
-            cwd: wd("/tmp/ws"),
-            now: Self.epoch
-        ) {
-        case let .consumed(tokenID, records):
-            #expect(tokenID == "tok")
-            #expect(records.map(\.codeHash) == ["done", "tok"])
-            #expect(records.last?.kind == .consumed)
-            #expect(records.last?.consumedAt == Self.epoch)
-        case .expired, .alreadyConsumed, .notFound:
-            Issue.record("valid grant must consume")
-        }
-    }
-
-    @Test func consumeOnlyExpiredGrantReportsExpiredWithPrunedRecords() {
-        let staleA = Self.record(kind: .granted, hash: "a", expiresAt: Self.epoch.addingTimeInterval(-1))
-        let staleB = Self.record(kind: .granted, hash: "b", expiresAt: Self.epoch.addingTimeInterval(-2))
-        let otherView = Self.record(kind: .granted, hash: "c", fingerprint: "other-fp", expiresAt: Self.epoch.addingTimeInterval(60))
-        let outcome = AllowOnceLedger.consume(
-            records: [staleA, otherView, staleB],
-            fingerprint: "fp",
-            cwd: wd("/tmp/ws"),
-            now: Self.epoch
-        )
-        #expect(outcome == .expired([otherView]))
-    }
-
-    @Test func consumeExpiredGrantBeatsAlreadyConsumed() {
-        let expiredGrant = Self.record(kind: .granted, hash: "old", expiresAt: Self.epoch.addingTimeInterval(-1))
-        let spentBefore = Self.record(
-            kind: .consumed,
-            hash: "done",
-            expiresAt: Self.epoch.addingTimeInterval(60),
-            consumedAt: Self.epoch.addingTimeInterval(-30)
-        )
-        let outcome = AllowOnceLedger.consume(
-            records: [expiredGrant, spentBefore],
-            fingerprint: "fp",
-            cwd: wd("/tmp/ws"),
-            now: Self.epoch
-        )
-        guard case let .expired(records) = outcome else {
-            Issue.record("expired grant must take precedence over consumed history")
-            return
-        }
-        #expect(records.map(\.codeHash) == ["done"])
-    }
-
-    @Test func consumeRelatedConsumedIsAlreadyConsumed() {
-        let spent = Self.record(
-            kind: .consumed,
-            hash: "done",
-            expiresAt: Self.epoch.addingTimeInterval(60),
-            consumedAt: Self.epoch.addingTimeInterval(-5)
-        )
-        let outcome = AllowOnceLedger.consume(records: [spent], fingerprint: "fp", cwd: wd("/tmp/ws"), now: Self.epoch)
-        #expect(outcome == .alreadyConsumed)
-    }
-
-    @Test func consumeWrongCwdOrFingerprintIsNotFound() {
-        let grant = Self.record(kind: .granted, hash: "tok", expiresAt: Self.epoch.addingTimeInterval(60))
-        let wrongCwd = AllowOnceLedger.consume(records: [grant], fingerprint: "fp", cwd: wd("/tmp/other"), now: Self.epoch)
-        #expect(wrongCwd == .notFound)
-        let wrongFingerprint = AllowOnceLedger.consume(
-            records: [grant],
-            fingerprint: "other-fp",
-            cwd: wd("/tmp/ws"),
-            now: Self.epoch
-        )
-        #expect(wrongFingerprint == .notFound)
-        #expect(AllowOnceLedger.consume(records: [], fingerprint: "fp", cwd: wd("/tmp/ws"), now: Self.epoch) == .notFound)
-    }
-
     @Test func rowsKeepLiveAndConsumedPastExpiryDropOthers() {
         let livePending = Self.record(kind: .pending, hash: "p", expiresAt: Self.epoch.addingTimeInterval(60))
         let liveGranted = Self.record(kind: .granted, hash: "g", expiresAt: Self.epoch.addingTimeInterval(120))
@@ -276,7 +278,15 @@ struct AllowOnceLedgerTests {
         #expect(rows.map(\.codeHash) == ["p", "g", "oc"])
     }
 
-    @Test func exactNowIsStillLive() throws {
+    @Test func rowsProjectDenyRuleID() throws {
+        var denied = Self.record(
+            kind: .pending, hash: "p", expiresAt: Self.epoch.addingTimeInterval(60))
+        denied.ruleID = RuleID(pack: PackID(rawValue: "core.git"), pattern: "reset-hard")
+        let rows = AllowOnceLedger.rows(records: [denied], now: Self.epoch)
+        #expect(rows.map(\.ruleID) == [denied.ruleID])
+    }
+
+    @Test func exactNowIsExpired() throws {
         let pending = Self.record(kind: .pending, hash: "p", expiresAt: Self.epoch)
         let other = Self.record(
             kind: .pending,
@@ -284,19 +294,25 @@ struct AllowOnceLedgerTests {
             fingerprint: "other-fp",
             expiresAt: Self.epoch
         )
-        #expect(throws: AllowOnceError.collision) {
-            _ = try AllowOnceLedger.mint(
-                records: [other],
-                codeHash: "p",
-                fingerprint: "fp",
-                redacted: "git …",
-                cwd: wd("/tmp/ws"),
-                ruleID: nil,
-                now: Self.epoch,
-                ttl: 3600
-            )
+        // No collision: the same-code row is already expired, so the mint
+        // appends a fresh row instead of throwing.
+        let minted = try AllowOnceLedger.mint(
+            records: [other],
+            codeHash: "p",
+            fingerprint: "fp",
+            redacted: "git …",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: Self.epoch,
+            ttl: 3600
+        )
+        guard case .appended(let fresh) = minted else {
+            Issue.record("exact-now mint over an expired row must append")
+            return
         }
-        let reused = try AllowOnceLedger.mint(
+        #expect(fresh.map(\.codeHash) == ["p"])
+        // No reuse: the same-command row is expired, so a fresh row mints.
+        let second = try AllowOnceLedger.mint(
             records: [pending],
             codeHash: "fresh",
             fingerprint: "fp",
@@ -306,64 +322,25 @@ struct AllowOnceLedgerTests {
             now: Self.epoch,
             ttl: 3600
         )
-        guard case .reused(let records) = reused else {
-            Issue.record("exact-now pending for the same command must be reused")
+        guard case .appended(let records) = second else {
+            Issue.record("exact-now pending for the same command must not be reused")
             return
         }
-        #expect(records.map(\.codeHash) == ["p"])
+        #expect(records.map(\.codeHash) == ["fresh"])
         switch try AllowOnceLedger.redeem(records: [pending], codeHash: "p", now: Self.epoch) {
-        case let .granted(records, _):
-            #expect(records.map(\.kind) == [.granted])
-        case .expired:
-            Issue.record("expiresAt == now must redeem")
+        case .expired(let expired):
+            #expect(expired.isEmpty)
+        case .granted:
+            Issue.record("expiresAt == now must expire")
         }
-        let granted = Self.record(kind: .granted, hash: "g", expiresAt: Self.epoch)
-        switch AllowOnceLedger.consume(
-            records: [granted],
-            fingerprint: "fp",
-            cwd: wd("/tmp/ws"),
-            now: Self.epoch
-        ) {
-        case let .consumed(tokenID, records):
-            #expect(tokenID == "g")
-            #expect(records.map(\.kind) == [.consumed])
-        case .expired, .alreadyConsumed, .notFound:
-            Issue.record("expiresAt == now must consume")
-        }
-        #expect(AllowOnceLedger.rows(records: [pending], now: Self.epoch).map(\.codeHash) == ["p"])
+        #expect(AllowOnceLedger.rows(records: [pending], now: Self.epoch).isEmpty)
         let consumed = Self.record(
             kind: .consumed,
             hash: "c",
             expiresAt: Self.epoch,
             consumedAt: Self.createdAt
         )
-        #expect(AllowOnceLedger.keepConsumed(records: [consumed], now: Self.epoch).map(\.codeHash) == ["c"])
-    }
-
-    @Test func plantAndConsumeAppendsGrantedThenSpends() {
-        let existing = Self.record(kind: .pending, hash: "p", expiresAt: Self.epoch.addingTimeInterval(60))
-        switch AllowOnceLedger.plantAndConsume(
-            records: [existing],
-            fingerprint: "fp",
-            redacted: "git …",
-            cwd: wd("/tmp/ws"),
-            now: Self.epoch,
-            ttl: 3600,
-            codeHash: "planted"
-        ) {
-        case let .consumed(tokenID, records):
-            #expect(tokenID == "planted")
-            #expect(records.map(\.codeHash) == ["p", "planted"])
-            #expect(records.last?.kind == .consumed)
-            #expect(records.last?.consumedAt == Self.epoch)
-            guard case .consumed(let at)? = records.last?.lifecycle else {
-                Issue.record("plant must finish consumed")
-                return
-            }
-            #expect(at == Self.epoch)
-        case .expired, .alreadyConsumed, .notFound:
-            Issue.record("plantAndConsume must spend the planted grant")
-        }
+        #expect(AllowOnceLedger.keepConsumed(records: [consumed], now: Self.epoch).isEmpty)
     }
 
     @Test func keepConsumedRetainsOnlyFreshConsumedForClear() {
@@ -376,15 +353,41 @@ struct AllowOnceLedgerTests {
         )
         #expect(out.map(\.codeHash) == ["keep"])
     }
+
+    @Test func cappedPassesThroughUnderTheCap() {
+        let rows = (0..<4).map { Self.stampedRecord(hash: "h\($0)", createdAt: Self.epoch.addingTimeInterval(Double($0))) }
+        let out = AllowOnceLedger.capped(records: rows, maxRows: 4)
+        #expect(out.map(\.codeHash) == ["h0", "h1", "h2", "h3"])
+    }
+
+    @Test func cappedKeepsNewestRowsInOrder() {
+        let rows = (0..<6).map { Self.stampedRecord(hash: "h\($0)", createdAt: Self.epoch.addingTimeInterval(Double($0))) }
+        let out = AllowOnceLedger.capped(records: rows, maxRows: 4)
+        #expect(out.map(\.codeHash) == ["h2", "h3", "h4", "h5"])
+    }
 }
 
 private extension AllowOnceLedgerTests {
+    static func stampedRecord(hash: String, createdAt: Date) -> AllowOnceRecord {
+        AllowOnceRecord(
+            schemaVersion: 1,
+            lifecycle: .pending,
+            codeHash: hash,
+            commandFingerprint: "fp-\(hash)",
+            commandRedacted: "git …",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            createdAt: createdAt,
+            expiresAt: createdAt.addingTimeInterval(3600)
+        )
+    }
     static func record(
         kind: AllowOnceRecord.Kind,
         hash: String,
         fingerprint: String = "fp",
         expiresAt: Date,
-        consumedAt: Date? = nil
+        consumedAt: Date? = nil,
+        payloadDigest: String? = nil
     ) -> AllowOnceRecord {
         let lifecycle: AllowOnceLifecycle
         switch kind {
@@ -404,7 +407,8 @@ private extension AllowOnceLedgerTests {
             cwd: wd("/tmp/ws"),
             ruleID: nil,
             createdAt: createdAt,
-            expiresAt: expiresAt
+            expiresAt: expiresAt,
+            payloadDigest: payloadDigest
         )
     }
 }

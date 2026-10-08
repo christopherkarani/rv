@@ -295,13 +295,24 @@ struct SeatbeltLoopbackTests {
         let pid4 = try loopbackPID(tree, name: "pid4.txt")
         let pid6 = try loopbackPID(tree, name: "pid6.txt")
         #expect(succeededLoopback(opened.supervisor.close()))
-        #expect(loopbackWaitUntil(seconds: 10) {
+        // Reaping stalls under parallel load; single-shot post-close
+        // checks flake when the 10s window expires mid-reap. Poll every
+        // post-close property so a slow reap delays, not fails, the test.
+        #expect(loopbackWaitUntil(seconds: 30) {
             loopbackProcessGone(pid4) && loopbackProcessGone(pid6)
         })
-        #expect(loopbackHostFetch(host: "127.0.0.1", port: port4, message: "ping") == nil)
-        #expect(loopbackHostFetch(host: "::1", port: port6, message: "ping") == nil)
-        #expect(loopbackHostCanBind(host: "127.0.0.1", port: port4))
-        #expect(loopbackHostCanBind(host: "::1", port: port6))
+        #expect(loopbackWaitUntil(seconds: 10) {
+            loopbackHostFetch(host: "127.0.0.1", port: port4, message: "ping") == nil
+        })
+        #expect(loopbackWaitUntil(seconds: 10) {
+            loopbackHostFetch(host: "::1", port: port6, message: "ping") == nil
+        })
+        #expect(loopbackWaitUntil(seconds: 10) {
+            loopbackHostCanBind(host: "127.0.0.1", port: port4)
+        })
+        #expect(loopbackWaitUntil(seconds: 10) {
+            loopbackHostCanBind(host: "::1", port: port6)
+        })
     }
 
     /// K (explicit). After a server exits on its own, its port rebinds.

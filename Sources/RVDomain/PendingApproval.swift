@@ -226,12 +226,18 @@ public struct PendingApprovalRequest: Sendable, Equatable {
     public static let defaultTTL: TimeInterval = 15 * 60
 
     public var id: ApprovalID
+    /// Nil for historical rows. A subject description is not live authority.
+    public var subject: ApprovalSubject?
     public var identity: ApprovalIdentity
     public var action: ProposedAction
     public var reason: ApprovalReason
     public var continuation: ApprovalContinuation
     public var timeoutPolicy: ApprovalTimeoutPolicy
     public var ttl: TimeInterval
+    /// M-07 content digest of the masked shell payload for shell asks, or
+    /// nil for file asks and legacy callers. Part of the create dedupe
+    /// key: same-view different-payload asks must not share a wait.
+    public var payloadDigest: String?
 
     public init(
         id: ApprovalID,
@@ -240,21 +246,27 @@ public struct PendingApprovalRequest: Sendable, Equatable {
         reason: ApprovalReason,
         continuation: ApprovalContinuation,
         timeoutPolicy: ApprovalTimeoutPolicy,
-        ttl: TimeInterval = PendingApprovalRequest.defaultTTL
+        ttl: TimeInterval = PendingApprovalRequest.defaultTTL,
+        subject: ApprovalSubject? = nil,
+        payloadDigest: String? = nil
     ) {
         self.id = id
+        self.subject = subject
         self.identity = identity
         self.action = action
         self.reason = reason
         self.continuation = continuation
         self.timeoutPolicy = timeoutPolicy
         self.ttl = ttl
+        self.payloadDigest = payloadDigest
     }
 }
 
 /// Durable pending-approval record. Bound to identity + `action.fingerprint`.
 public struct PendingApproval: Sendable, Equatable, Codable {
     public var id: ApprovalID
+    /// Nil for historical rows. A subject description is not live authority.
+    public var subject: ApprovalSubject?
     public var identity: ApprovalIdentity
     public var action: ProposedAction
     public var reason: ApprovalReason
@@ -263,6 +275,9 @@ public struct PendingApproval: Sendable, Equatable, Codable {
     public var createdAt: Date
     public var expiresAt: Date
     public var state: PendingApprovalState
+    /// M-07 content digest of the masked shell payload, or nil for file
+    /// asks and historical rows. Part of the create dedupe key.
+    public var payloadDigest: String?
 
     package init(
         id: ApprovalID,
@@ -273,9 +288,12 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         timeoutPolicy: ApprovalTimeoutPolicy,
         createdAt: Date,
         expiresAt: Date,
-        state: PendingApprovalState
+        state: PendingApprovalState,
+        subject: ApprovalSubject? = nil,
+        payloadDigest: String? = nil
     ) {
         self.id = id
+        self.subject = subject
         self.identity = identity
         self.action = action
         self.reason = reason
@@ -284,6 +302,7 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         self.createdAt = createdAt
         self.expiresAt = expiresAt
         self.state = state
+        self.payloadDigest = payloadDigest
     }
 
     public var fingerprint: ActionFingerprint {
@@ -296,9 +315,11 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         return at
     }
 
-    /// True only for an unconsumed authorizing resolution of this exact bind.
-    public func authorizes(_ fingerprint: ActionFingerprint, identity: ApprovalIdentity) -> Bool {
-        guard self.identity == identity, self.fingerprint == fingerprint else { return false }
+    /// Describes a resolved row; callers must separately prove live principal validity.
+    package func describesResolution(for subject: ApprovalSubject) -> Bool {
+        guard self.subject == subject, self.fingerprint == subject.fingerprint,
+            self.continuation == subject.continuation else { return false }
+        let fingerprint = subject.fingerprint
         if case .retry(let retryFingerprint) = continuation, retryFingerprint != fingerprint {
             return false
         }
@@ -308,6 +329,7 @@ public struct PendingApproval: Sendable, Equatable, Codable {
 
     private enum CodingKeys: String, CodingKey {
         case id
+        case subject
         case identity
         case action
         case reason
@@ -317,11 +339,13 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         case expiresAt
         case state
         case consumedAt
+        case payloadDigest
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(subject, forKey: .subject)
         try container.encode(identity, forKey: .identity)
         try container.encode(action, forKey: .action)
         try container.encode(reason, forKey: .reason)
@@ -330,11 +354,13 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(expiresAt, forKey: .expiresAt)
         try container.encode(state, forKey: .state)
+        try container.encodeIfPresent(payloadDigest, forKey: .payloadDigest)
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(ApprovalID.self, forKey: .id)
+        subject = try container.decodeIfPresent(ApprovalSubject.self, forKey: .subject)
         identity = try container.decode(ApprovalIdentity.self, forKey: .identity)
         action = try container.decode(ProposedAction.self, forKey: .action)
         reason = try container.decode(ApprovalReason.self, forKey: .reason)
@@ -343,6 +369,7 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         expiresAt = try container.decode(Date.self, forKey: .expiresAt)
         var state = try container.decode(PendingApprovalState.self, forKey: .state)
+        payloadDigest = try container.decodeIfPresent(String.self, forKey: .payloadDigest)
         let legacyConsumedAt = try container.decodeIfPresent(Date.self, forKey: .consumedAt)
         if case .resolved(let resolution) = state, let consumedAt = legacyConsumedAt {
             state = .consumed(resolution, at: consumedAt)
@@ -387,4 +414,7 @@ public enum PendingApprovalError: Error, Sendable, Equatable {
     case notResolved
     case encodeFailed
     case lockFailed
+    /// Too many rows are awaiting a human. The consult still answers;
+    /// only the review row is dropped (TTY code path is unaffected).
+    case storeFull
 }

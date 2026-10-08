@@ -51,6 +51,11 @@ public struct ActionFingerprint: RawRepresentable, Hashable, Sendable, Equatable
 /// Typed effects the semantic policy engine matches. Further IR growth is OPE-156.
 public enum ActionEffectKind: String, Sendable, Equatable, Codable {
     case remoteSharedBranchMutation
+    /// Non-force remote branch mutation (plain `git push`). Always
+    /// mandatory-human: remote history changes are authority-expanding and
+    /// hard to reverse, but a fast-forward push is not destructive, so it
+    /// asks even on shared branches instead of denying.
+    case remoteBranchMutation
     case localBranchCreate
     case workingTreeDiscard
     case filesystemDelete

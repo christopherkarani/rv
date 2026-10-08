@@ -220,6 +220,14 @@ enum PacksListFilter {
 }
 
 private func mutate(ids: [String], enabling: Bool) throws {
+    try LocalControlBoundary.requireOwnerAuthorization()
+    try applyPackMutation(ids: ids, enabling: enabling)
+}
+
+/// Pack enable/disable behind the owner gate. The gate throws until
+/// authenticated service mutation routes exist; without this body an
+/// implemented gate would report success while changing nothing.
+func applyPackMutation(ids: [String], enabling: Bool) throws {
     guard !ids.isEmpty else {
         throw ValidationError("missing pack id")
     }

@@ -9,7 +9,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STAGE="${RV_RELEASE_STAGE:-$ROOT/.build/release-stage}"
 FIXTURES="$ROOT/Tests/RVHooksTests/Fixtures/grok"
-CANONICAL='RV · Blocked. Destroys uncommitted changes. Use '\''git stash'\'' first.'
 # Mint-on-deny leads with a paste so truncated host cards still show the code.
 LABEL="dev.rv.evaluate"
 UID_NUM="$(id -u)"
@@ -26,7 +25,7 @@ fail() {
 }
 
 clang_c_hook() {
-  local dest="$1"
+  local dest="$1" proof="${2:-}"
   local os arch
   local flags=()
   os="$(uname -s)"
@@ -45,6 +44,9 @@ clang_c_hook() {
       fail "macOS 15 Apple Silicon, or Linux aarch64/x86_64"
       ;;
   esac
+  if [[ "$proof" == "proof" ]]; then
+    flags+=(-DRV_HOOK_PROOF_UNAUTHENTICATED_DAEMON)
+  fi
   clang -Os "${flags[@]}" -std=c11 -Wall \
     -I "$ROOT/Sources/rv-c" \
     -o "$dest" \
@@ -55,7 +57,11 @@ clang_c_hook() {
 }
 
 linux_c_hook_proof() {
-  local out home bin fixture st
+  # Kill-switch contract (C mutual daemon auth pending — see the deny_hook
+  # call at the top of rv.c main): every hook call denies with the boundary
+  # reason and never execs rv-cli. REVERT to the last_resort/miss_replay
+  # legs when the switch is removed (git log -S killswitch this file).
+  local out home bin st
   out="${TMPDIR:-/tmp}/rv-c-hook-linux-$$"
   mkdir -p "$out/home/.local/bin"
   home="$out/home"
@@ -67,18 +73,28 @@ linux_c_hook_proof() {
   set +e
   HOME="$home" PATH="/usr/bin:/bin" "$out/rv" hook --host grok \
     <"$FIXTURES/deny-git-reset-hard.json" \
-    >"$out/last-resort.out" 2>"$out/last-resort.err"
+    >"$out/deny.out" 2>"$out/deny.err"
   st=$?
   set -e
-  if [[ "$st" -ne 2 ]]; then
-    fail "last_resort without rv-cli must _exit(2), got $st"
+  if [[ "$st" -ne 0 ]]; then
+    fail "kill-switch deny must exit 0, got $st"
   fi
-  printf 'linux-last_resort ok exit=%s\n' "$st"
+  if ! grep -q '"decision":"deny"' "$out/deny.out"; then
+    fail "kill-switch deny missing decision JSON"
+  fi
+  if ! grep -q 'operation-bound owner authorization' "$out/deny.out"; then
+    fail "kill-switch deny missing boundary reason"
+  fi
+  if grep -q 'git reset --hard' "$out/deny.out"; then
+    fail "kill-switch deny echoes the command"
+  fi
+  printf 'linux-killswitch-deny ok exit=%s\n' "$st"
 
   cp "$out/rv" "$bin/rv"
   chmod 755 "$bin/rv"
-  cat >"$bin/rv-cli" <<'EOF'
+  cat >"$bin/rv-cli" <<EOF
 #!/bin/sh
+printf 'invoked\n' > "$out/rv-cli-marker"
 cat
 exit 2
 EOF
@@ -87,17 +103,16 @@ EOF
   set +e
   HOME="$home" PATH="/usr/bin:/bin" "$bin/rv" hook --host grok \
     <"$FIXTURES/deny-git-reset-hard.json" \
-    >"$out/miss.out" 2>"$out/miss.err"
+    >"$out/noreplay.out" 2>"$out/noreplay.err"
   st=$?
   set -e
-  if [[ "$st" -ne 2 ]]; then
-    fail "miss_replay must call rv-cli (exit 2), got $st"
+  if [[ "$st" -ne 0 ]]; then
+    fail "kill-switch deny with rv-cli present must exit 0, got $st"
   fi
-  fixture="$(tr -d '\n' <"$FIXTURES/deny-git-reset-hard.json")"
-  if ! grep -q 'git reset --hard' "$out/miss.out"; then
-    fail "miss_replay did not replay the deny fixture to rv-cli"
+  if [[ -f "$out/rv-cli-marker" ]]; then
+    fail "kill-switch deny must not exec rv-cli"
   fi
-  printf 'linux-miss_replay ok exit=%s\n' "$st"
+  printf 'linux-no-replay ok exit=%s\n' "$st"
   printf 'linux-c-hook-proof ok\n'
   rm -rf "$out"
 }
@@ -235,7 +250,30 @@ PROOF_HOME="$PROOF_ROOT/home"
 # Login HOME is only for LaunchAgent restore. Fixture processes use this HOME.
 export HOME="$PROOF_HOME"
 BIN="$PROOF_HOME/.local/bin"
-cp "$STAGE/rv" "$BIN/rv"
+
+# Staged (shipped-posture) rv stays kill-switched: deny with the boundary
+# reason, no evaluation, no rv-cli exec. The daemonized legs below use a
+# proof-built rv instead; this leg pins what production ships.
+set +e
+"$STAGE/rv" hook --host grok \
+  <"$FIXTURES/deny-git-reset-hard.json" \
+  >"$PROOF_ROOT/staged-deny.out" 2>"$PROOF_ROOT/staged-deny.err"
+st=$?
+set -e
+[[ "$st" -eq 0 ]] || fail "staged rv deny must exit 0, got $st"
+grep -q '"decision":"deny"' "$PROOF_ROOT/staged-deny.out" \
+  || fail "staged rv deny missing decision JSON"
+grep -q 'operation-bound owner authorization' "$PROOF_ROOT/staged-deny.out" \
+  || fail "staged rv deny missing boundary reason"
+if grep -q 'git reset --hard' "$PROOF_ROOT/staged-deny.out"; then
+  fail "staged rv deny echoes the command"
+fi
+printf 'staged-killswitch-deny ok\n'
+
+# Proof rv: identical C sources with daemon dialing enabled
+# (TRANSITIONAL-PROOF-DAEMON in rv.c) so the legs below exercise the
+# bootstrapped rvd end to end. Never staged, never shipped.
+clang_c_hook "$BIN/rv" proof
 chmod 755 "$BIN/rv"
 cat > "$BIN/rv-cli" <<EOF
 #!/bin/sh
@@ -322,35 +360,67 @@ run_argv() {
 }
 
 minted_reset_hard_deny_ok() {
-  python3 - "$1" "$CANONICAL" <<'PY'
+  # Property pins, not full-copy pins: exact wording lives in
+  # HostDenyTextTests. What matters end to end is mint-first shape
+  # (truncated host cards still show the paste), the reviewed-command
+  # unlock line (B-F2: grants bind the normalized command), the pack
+  # why, no command echo, and no extra host keys.
+  python3 - "$1" <<'PY'
 import json
 import re
 import sys
 
-path, canonical = sys.argv[1], sys.argv[2]
+path = sys.argv[1]
 text = open(path, encoding="utf-8").read().strip()
 if not text:
     raise SystemExit(2)
 obj = json.loads(text)
 if obj.get("decision") != "deny":
     raise SystemExit("decision=%r" % (obj.get("decision"),))
-reason = obj.get("reason")
-why = canonical[len("RV · Blocked. "):] if canonical.startswith("RV · Blocked. ") else canonical
-minted = re.compile(
-    r"^RV · Blocked\. Paste in Terminal to allow once: rv allow-once [0-9a-f]{6}\. "
-    r"This unlocks only this exact command\. "
-    + re.escape(why)
-    + r"$"
+reason = obj.get("reason") or ""
+minted_lead = re.compile(
+    "^RV · Blocked\\. Paste in Terminal to allow once: "
+    "rv allow-once [0-9a-f]{6}\\. "
 )
-earlier = re.compile(
-    r"^RV · Blocked\. A one-shot unlock is already pending for this exact command\. "
-    r"Paste the earlier rv allow-once code in Terminal\. "
-    + re.escape(why)
-    + r"$"
+earlier_lead = (
+    "RV · Blocked. A one-shot unlock is already pending for this "
+    "command. Paste the earlier rv allow-once code in Terminal."
 )
-if minted.match(reason or "") is None and earlier.match(reason or "") is None:
+if minted_lead.match(reason):
+    if "This unlocks the reviewed command once, including its sudo, env, and path spellings." not in reason:
+        raise SystemExit("minted reason missing unlock line: %r" % (reason,))
+elif reason.startswith(earlier_lead):
+    pass
+else:
     raise SystemExit("reason=%r" % (reason,))
-if "git reset --hard" in (reason or ""):
+if "Destroys uncommitted changes." not in reason:
+    raise SystemExit("reason missing pack why: %r" % (reason,))
+if "git reset --hard" in reason:
+    raise SystemExit("reason echoes command")
+if "hookSpecificOutput" in obj or "updatedInput" in obj or "block" in obj:
+    raise SystemExit("extra host keys present")
+PY
+}
+
+failclosed_deny_ok() {
+  # Post-8B no-replay contract: transport failure, malformed input, and
+  # untrusted daemon answers deny with the boundary reason and never
+  # exec rv-cli. Callers assert the quiet side separately.
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read().strip()
+if not text:
+    raise SystemExit(2)
+obj = json.loads(text)
+if obj.get("decision") != "deny":
+    raise SystemExit("decision=%r" % (obj.get("decision"),))
+reason = obj.get("reason") or ""
+if "operation-bound owner authorization" not in reason:
+    raise SystemExit("reason=%r" % (reason,))
+if "git reset --hard" in reason:
     raise SystemExit("reason echoes command")
 if "hookSpecificOutput" in obj or "updatedInput" in obj or "block" in obj:
     raise SystemExit("extra host keys present")
@@ -603,7 +673,7 @@ if cli_invoked; then
 fi
 printf 'AC-011 ok\n'
 
-# AC-012: NUL and oversize take miss; do not send truncated hookEvaluate.
+# AC-012: NUL and oversize fail closed in C; never evaluated, never replayed.
 python3 - "$FIXTURES/deny-git-reset-hard.json" "$PROOF_ROOT/nul.bin" <<'PY'
 import sys
 body = open(sys.argv[1], "rb").read()
@@ -614,7 +684,11 @@ set +e
 run_hook "$PROOF_ROOT/nul.bin" >"$PROOF_ROOT/ac012-nul.out" 2>"$PROOF_ROOT/ac012-nul.err"
 ac012n=$?
 set -e
-cli_invoked || fail "AC-012 NUL did not take miss (rv-cli quiet)"
+[[ "$ac012n" -eq 0 ]] || fail "AC-012 NUL exit $ac012n"
+failclosed_deny_ok "$PROOF_ROOT/ac012-nul.out" || fail "AC-012 NUL was not boundary deny"
+if cli_invoked; then
+  fail "AC-012 NUL replayed to rv-cli: $(cat "$CLI_LOG")"
+fi
 python3 - "$FIXTURES/deny-git-reset-hard.json" "$PROOF_ROOT/oversize.bin" <<'PY'
 import sys
 body = open(sys.argv[1], "rb").read().rstrip() + b"\n"
@@ -626,10 +700,14 @@ set +e
 run_hook "$PROOF_ROOT/oversize.bin" >"$PROOF_ROOT/ac012-over.out" 2>"$PROOF_ROOT/ac012-over.err"
 ac012o=$?
 set -e
-cli_invoked || fail "AC-012 oversize did not take miss (rv-cli quiet)"
+[[ "$ac012o" -eq 0 ]] || fail "AC-012 oversize exit $ac012o"
+failclosed_deny_ok "$PROOF_ROOT/ac012-over.out" || fail "AC-012 oversize was not boundary deny"
+if cli_invoked; then
+  fail "AC-012 oversize replayed to rv-cli: $(cat "$CLI_LOG")"
+fi
 printf 'AC-012 ok\n'
 
-# AC-003 / AC-004: rvd down → miss, still deny / empty allow.
+# AC-003 / AC-004: rvd down → boundary deny, never replayed, never allowed.
 bootout_label
 sleep 0.2
 clear_cli
@@ -638,11 +716,13 @@ run_hook "$FIXTURES/deny-git-reset-hard.json" >"$PROOF_ROOT/ac003.out" 2>"$PROOF
 ac003=$?
 set -e
 [[ "$ac003" -eq 0 ]] || fail "AC-003 down exit $ac003"
-expect_json "$PROOF_ROOT/ac003.out" "deny" || fail "AC-003 down was not deny"
-cli_invoked || fail "AC-003 down did not take miss"
+failclosed_deny_ok "$PROOF_ROOT/ac003.out" || fail "AC-003 down was not boundary deny"
+if cli_invoked; then
+  fail "AC-003 down replayed to rv-cli: $(cat "$CLI_LOG" 2>/dev/null || true)"
+fi
 printf 'AC-003-down ok\n'
 
-# AC-011 miss: rv-cli hook must still deny under skip-shaped envs.
+# AC-011 miss: skip-shaped envs change nothing; still boundary deny.
 clear_cli
 set +e
 RV_BYPASS=1 RV_ALLOW=1 RV_SKIP=1 RV_DISABLE=1 RV_NO_EVAL=1 \
@@ -651,8 +731,10 @@ RV_BYPASS=1 RV_ALLOW=1 RV_SKIP=1 RV_DISABLE=1 RV_NO_EVAL=1 \
 ac011m=$?
 set -e
 [[ "$ac011m" -eq 0 ]] || fail "AC-011 miss exit $ac011m"
-expect_json "$PROOF_ROOT/ac011-miss.out" "deny" || fail "AC-011 miss honored a skip env"
-cli_invoked || fail "AC-011 miss did not take rv-cli: $(cat "$CLI_LOG" 2>/dev/null || true)"
+failclosed_deny_ok "$PROOF_ROOT/ac011-miss.out" || fail "AC-011 miss honored a skip env"
+if cli_invoked; then
+  fail "AC-011 miss replayed to rv-cli: $(cat "$CLI_LOG" 2>/dev/null || true)"
+fi
 printf 'AC-011-miss ok\n'
 
 clear_cli
@@ -661,19 +743,10 @@ run_hook "$FIXTURES/deny-empty-command.json" >"$PROOF_ROOT/ac004.out" 2>"$PROOF_
 ac004=$?
 set -e
 [[ "$ac004" -eq 0 ]] || fail "AC-004 empty-command exit $ac004"
-python3 - "$PROOF_ROOT/ac004.out" <<'PY' || fail "AC-004 empty-command was not missingCommand deny JSON"
-import json, sys
-obj = json.loads(open(sys.argv[1], encoding="utf-8").read())
-if obj.get("decision") != "deny":
-    raise SystemExit("decision=%r" % (obj.get("decision"),))
-if obj.get("reason") != "rv received a shell hook with no command text and blocked the command. Run it in Terminal.":
-    raise SystemExit("reason=%r" % (obj.get("reason"),))
-if obj.get("rule") or obj.get("next"):
-    raise SystemExit("unexpected rule/next")
-if "hookSpecificOutput" in obj or "updatedInput" in obj or "block" in obj:
-    raise SystemExit("extra host keys present")
-PY
-cli_invoked || fail "AC-004 empty-command did not take miss"
+failclosed_deny_ok "$PROOF_ROOT/ac004.out" || fail "AC-004 empty-command was not boundary deny"
+if cli_invoked; then
+  fail "AC-004 empty-command replayed to rv-cli: $(cat "$CLI_LOG" 2>/dev/null || true)"
+fi
 
 clear_cli
 set +e
@@ -681,11 +754,13 @@ run_hook "$FIXTURES/allow-non-shell-read.json" >"$PROOF_ROOT/ac004b.out" 2>"$PRO
 ac004b=$?
 set -e
 [[ "$ac004b" -eq 0 ]] || fail "AC-004 non-shell exit $ac004b"
-[[ ! -s "$PROOF_ROOT/ac004b.out" ]] || fail "AC-004 non-shell stdout not empty"
-cli_invoked || fail "AC-004 non-shell did not take miss"
+failclosed_deny_ok "$PROOF_ROOT/ac004b.out" || fail "AC-004 non-shell allowed while down"
+if cli_invoked; then
+  fail "AC-004 non-shell replayed to rv-cli: $(cat "$CLI_LOG" 2>/dev/null || true)"
+fi
 printf 'AC-004 ok\n'
 
-# AC-003 skew: major-semver listener returns empty allow; C must miss and deny.
+# AC-003 skew: major-semver listener returns empty allow; C must fail closed.
 cat > "$PROOF_ROOT/skew-rvd.c" <<'EOF'
 #include <dispatch/dispatch.h>
 #include <string.h>
@@ -750,8 +825,8 @@ for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
   ac003s=$?
   set -e
   if [[ "$ac003s" -eq 0 ]]; then
-    if minted_reset_hard_deny_ok "$PROOF_ROOT/ac003-skew.out"; then
-      if cli_invoked; then
+    if failclosed_deny_ok "$PROOF_ROOT/ac003-skew.out"; then
+      if ! cli_invoked; then
         skew_warm=1
         break
       fi
@@ -759,14 +834,15 @@ for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
   fi
   sleep 0.25
 done
-[[ "$skew_warm" -eq 1 ]] || fail "AC-003 skew did not miss-and-deny (exit $ac003s out=$(cat "$PROOF_ROOT/ac003-skew.out" 2>/dev/null || true))"
+[[ "$skew_warm" -eq 1 ]] || fail "AC-003 skew did not fail closed (exit $ac003s out=$(cat "$PROOF_ROOT/ac003-skew.out" 2>/dev/null || true))"
 printf 'AC-003-skew ok\n'
 printf 'AC-003 ok\n'
 
 bootout_label
 
-# AC-003 unparseable: echo the request id so miss is from advertised
-# serviceSemver, not id mismatch. Empty allow must still deny.
+# AC-003 unparseable: fake daemon answers with a bad semver. The C
+# handshake rejects it (no HelloAck) and fails closed; empty allow
+# must still deny.
 cat > "$PROOF_ROOT/unparseable-rvd.c" <<'EOF'
 #include <dispatch/dispatch.h>
 #include <stdio.h>
@@ -861,8 +937,8 @@ for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
   ac003u=$?
   set -e
   if [[ "$ac003u" -eq 0 ]]; then
-    if minted_reset_hard_deny_ok "$PROOF_ROOT/ac003-unparseable.out"; then
-      if cli_invoked; then
+    if failclosed_deny_ok "$PROOF_ROOT/ac003-unparseable.out"; then
+      if ! cli_invoked; then
         unparseable_warm=1
         break
       fi
@@ -870,7 +946,7 @@ for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
   fi
   sleep 0.25
 done
-[[ "$unparseable_warm" -eq 1 ]] || fail "AC-003 unparseable did not miss-and-deny (exit $ac003u out=$(cat "$PROOF_ROOT/ac003-unparseable.out" 2>/dev/null || true))"
+[[ "$unparseable_warm" -eq 1 ]] || fail "AC-003 unparseable did not fail closed (exit $ac003u out=$(cat "$PROOF_ROOT/ac003-unparseable.out" 2>/dev/null || true))"
 printf 'AC-003-unparseable ok\n'
 bootout_label
 

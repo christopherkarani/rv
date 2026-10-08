@@ -97,25 +97,42 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
     }
 
     @Test func scan_clusterConsumesOneWordPerCluster() {
-        // touch -td: both letters arm the expect-flag, one word consumed.
+        // getopt reads left to right: the first taker consumes the rest of
+        // its own cluster (`-td` reads value `d`), and only a bare taker
+        // consumes the next word (`-t` alone reads `2024-01-01`).
         let spec = FlagValueSpec(valueShorts: ["t", "d"])
         let argv = Argv(program: "touch", args: ["-td", "2024-01-01", "file"])
         #expect(
             ShellPipeline.scanFlags(argv, valueSpec: spec) == [
-                .shorts(letters: ["t", "d"], value: "2024-01-01"),
+                .shorts(letters: ["t"], value: "d"),
+                .positional("2024-01-01"),
+                .positional("file"),
+            ]
+        )
+        let bare = Argv(program: "touch", args: ["-t", "2024-01-01", "file"])
+        #expect(
+            ShellPipeline.scanFlags(bare, valueSpec: spec) == [
+                .shorts(letters: ["t"], value: "2024-01-01"),
                 .positional("file"),
             ]
         )
     }
 
     @Test func scan_shortEqualsNeverConsumes() {
-        // Classify-first passthrough: `-t=x` is already `.shortEquals`,
-        // so it never consumes even when `t` takes a value.
+        // getopt reads `-t=x` as value `=x` when `t` takes a value; without
+        // a taker the word stays `.shortEquals` (the tool errors on `=`).
         let spec = FlagValueSpec(valueShorts: ["t"])
         let argv = Argv(program: "touch", args: ["-t=x", "file"])
         #expect(
             ShellPipeline.scanFlags(argv, valueSpec: spec) == [
-                .shortEquals(name: "t", value: "x"),
+                .shorts(letters: ["t"], value: "=x"),
+                .positional("file"),
+            ]
+        )
+        let bare = Argv(program: "touch", args: ["-v=x", "file"])
+        #expect(
+            ShellPipeline.scanFlags(bare, valueSpec: spec) == [
+                .shortEquals(name: "v", value: "x"),
                 .positional("file"),
             ]
         )
@@ -219,6 +236,55 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
                 .loneDash,
                 .shortEquals(name: "x", value: "y"),
                 .positional("f"),
+            ]
+        )
+    }
+
+    @Test func scan_longResolvesUniquePrefix() {
+        let spec = FlagValueSpec(
+            valueLongs: ["target-directory"],
+            knownLongs: ["force", "no-clobber"]
+        )
+        // Unique prefixes resolve (and consume when value-taking).
+        let argv = Argv(
+            program: "mv",
+            args: ["--targ", "dir", "--forc", "--no-c", "a"]
+        )
+        #expect(
+            ShellPipeline.scanFlags(argv, valueSpec: spec) == [
+                .long(name: "target-directory", value: "dir"),
+                .long(name: "force", value: nil),
+                .long(name: "no-clobber", value: nil),
+                .positional("a"),
+            ]
+        )
+        // Ambiguous and unknown spellings stay unresolved (the tool errors).
+        #expect(spec.resolveLong("no-") == "no-clobber")
+        #expect(spec.resolveLong("t") == "target-directory")
+        #expect(spec.resolveLong("x") == "x")
+        let both = FlagValueSpec(knownLongs: ["dir", "directory"])
+        #expect(both.resolveLong("d") == "d")
+        #expect(both.resolveLong("di") == "di")
+        #expect(both.resolveLong("dir") == "dir")
+    }
+
+    @Test func scan_attachedShortValueIsSelfContained() {
+        // `-tSTAMP` reads `STAMP` without touching `--` or the next word.
+        let spec = FlagValueSpec(valueShorts: ["t"])
+        let argv = Argv(program: "touch", args: ["-tSTAMP", "--", "file"])
+        #expect(
+            ShellPipeline.scanFlags(argv, valueSpec: spec) == [
+                .shorts(letters: ["t"], value: "STAMP"),
+                .terminator,
+                .positional("file"),
+            ]
+        )
+        // Bare letters before the taker are kept as flags.
+        let clustered = Argv(program: "touch", args: ["-vtSTAMP", "file"])
+        #expect(
+            ShellPipeline.scanFlags(clustered, valueSpec: spec) == [
+                .shorts(letters: ["v", "t"], value: "STAMP"),
+                .positional("file"),
             ]
         )
     }

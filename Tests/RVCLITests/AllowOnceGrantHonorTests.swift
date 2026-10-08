@@ -7,35 +7,43 @@ import RVPolicy
 @testable import RVCLI
 
 struct AllowOnceGrantHonorTests {
-    @Test func peekDoesNotSpendGrantAndHookMissConsumesOnce() async throws {
+    @Test func peekAndHookMissDenyDespiteFileGrant() async throws {
+        // Step 8B.1: a granted projection row on disk is not authority.
+        // CLI peeks and diagnostic evaluates deny throughout.
         let directory = try isolatedAllowOnceDirectory()
         let client = try isolatedClient(transport: nil, allowOnceDirectory: directory)
-        try await client.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
+        try await plantGrantedProjection(directory: directory)
 
         let peeked = try await cliEvaluate("git reset --hard", allowOnceDirectory: directory)
-        #expect(peeked.decision == .allow)
+        guard case .deny = peeked.decision else {
+            Issue.record("CLI peek must deny despite the file row")
+            return
+        }
         let first = await client.evaluateResult(
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: wd("/tmp/ws")
         )
-        #expect(first.decision == .allow)
+        guard case .deny(let deny) = first.decision else {
+            Issue.record("hook-miss evaluate must deny despite the file row")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.git:reset-hard")
 
         let second = await client.evaluateResult(
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: wd("/tmp/ws")
         )
-        guard case .deny(let deny) = second.decision else {
-            Issue.record("second hook-miss evaluate must deny after the grant is spent")
+        guard case .deny = second.decision else {
+            Issue.record("repeat evaluate must deny")
             return
         }
-        #expect(deny.ruleID.rawValue == "core.git:reset-hard")
     }
 
-    @Test func hookMissingCwdDoesNotHonorProcessDirectoryGrant() async throws {
+    @Test func hookMissingCwdDeniesAndProcessDirectoryGrantNeverHonors() async throws {
         let directory = try isolatedAllowOnceDirectory()
         let processCwd = FileManager.default.currentDirectoryPath
         let client = try isolatedClient(transport: nil, allowOnceDirectory: directory)
-        try await client.insertGranted(matchingView: "git reset --hard", cwd: wd(processCwd))
+        try await plantGrantedProjection(directory: directory, cwd: processCwd)
 
         let stdin = """
         {"hookEventName":"pre_tool_use","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
@@ -56,13 +64,16 @@ struct AllowOnceGrantHonorTests {
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: wd(processCwd)
         )
-        #expect(honored.decision == .allow)
+        guard case .deny = honored.decision else {
+            Issue.record("process-cwd file row must never honor")
+            return
+        }
     }
 
-    @Test func hookPresentCwdHonorsGrantOnce() async throws {
+    @Test func hookPresentCwdDeniesWithoutDaemonGrant() async throws {
         let directory = try isolatedAllowOnceDirectory()
         let client = try isolatedClient(transport: nil, allowOnceDirectory: directory)
-        try await client.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
+        try await plantGrantedProjection(directory: directory)
 
         let stdin = """
         {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
@@ -74,16 +85,15 @@ struct AllowOnceGrantHonorTests {
                 await client.evaluateResult(command: command, cwd: cwd)
             }
         )
-        #expect(wire.stdout.isEmpty)
-        #expect(wire.exitCode == 0)
-        #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
+        #expect(wire.stdout.isEmpty == false)
+        #expect(wire.stdout.contains("\"decision\":\"deny\""))
 
         let second = await client.evaluateResult(
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: wd("/tmp/ws")
         )
         guard case .deny(let deny) = second.decision else {
-            Issue.record("second evaluate must deny after the grant is spent")
+            Issue.record("second evaluate must deny")
             return
         }
         #expect(deny.ruleID.rawValue == "core.git:reset-hard")
@@ -92,7 +102,7 @@ struct AllowOnceGrantHonorTests {
     @Test func xpcEvaluateSuccessDoesNotApplyLocalGrant() async throws {
         let directory = try isolatedAllowOnceDirectory()
         let storeClient = try isolatedClient(transport: nil, allowOnceDirectory: directory)
-        try await storeClient.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
+        try await plantGrantedProjection(directory: directory)
 
         let denied = EvaluationResult(
             outcome: .deny(
@@ -121,10 +131,16 @@ struct AllowOnceGrantHonorTests {
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: wd("/tmp/ws")
         )
-        #expect(honored.decision == .allow)
+        guard case .deny = honored.decision else {
+            Issue.record("local file row must not honor after service deny")
+            return
+        }
     }
 
-    @Test func grokHookEvaluateMintsPendingThenTTYRedeemSpendsOnce() async throws {
+    @Test func grokHookEvaluateWithoutDaemonDeniesStaticAndMintsNothing() async throws {
+        // Step 8B.1: no daemon means the static deny bytes. Nothing is
+        // evaluated and no pending mints. A file redeem afterwards still
+        // spends nothing through the local evaluate door.
         let directory = try isolatedAllowOnceDirectory()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let client = ServiceClient(
@@ -137,21 +153,28 @@ struct AllowOnceGrantHonorTests {
         {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
         """
         let wire = await client.hookEvaluate(host: .grok, stdin: stdin)
-        let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
-        #expect(json["decision"] as? String == "deny")
-        let reason = try #require(json["reason"] as? String)
-        let code = try #require(allowOnceUnlockCode(in: reason))
-        #expect(json["next"] as? String == unlockLine(for: code))
-        let store = AllowOnceStore(baseDirectory: directory)
-        #expect((await store.list(now: now)).contains { $0.kind == .pending })
+        #expect(wire == LocalControlBoundary.deniedHook(host: .grok))
+        #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
+        #expect((await AllowOnceStore(baseDirectory: directory).list(now: now)).isEmpty)
 
+        let store = AllowOnceStore(baseDirectory: directory)
         let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let code = try await store.mint(
+            matchingView: "git reset --hard",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            tty: tty,
+            now: now
+        )
         _ = try await store.redeem(code: code.rawValue, tty: tty, now: now)
         let first = await client.evaluateResult(
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: wd("/tmp/ws")
         )
-        #expect(first.decision == .allow)
+        guard case .deny = first.decision else {
+            Issue.record("file redeem without daemon must not spend")
+            return
+        }
         let second = await client.evaluateResult(
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: wd("/tmp/ws")
@@ -162,33 +185,9 @@ struct AllowOnceGrantHonorTests {
         }
     }
 
-    @Test func grokHookEvaluate_sameCommandReusesUnlockCode() async throws {
-        let directory = try isolatedAllowOnceDirectory()
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let client = ServiceClient(
-            transport: nil,
-            allowOnceDirectory: directory,
-            home: try isolatedHome(),
-            clock: { now }
-        )
-        let stdin = """
-        {"hookEventName":"pre_tool_use","cwd":"/tmp/ws","toolName":"run_terminal_command","toolInput":{"command":"git reset --hard"}}
-        """
-        let first = await client.hookEvaluate(host: .grok, stdin: stdin)
-        let firstJSON = try #require(JSONSerialization.jsonObject(with: Data(first.stdout.utf8)) as? [String: Any])
-        let firstReason = try #require(firstJSON["reason"] as? String)
-        let code = try #require(allowOnceUnlockCode(in: firstReason))
-        #expect(firstJSON["next"] as? String == unlockLine(for: code))
-
-        let second = await client.hookEvaluate(host: .grok, stdin: stdin)
-        let secondJSON = try #require(JSONSerialization.jsonObject(with: Data(second.stdout.utf8)) as? [String: Any])
-        let secondReason = try #require(secondJSON["reason"] as? String)
-        #expect(allowOnceUnlockCode(in: secondReason) == code)
-        #expect(secondJSON["next"] as? String == unlockLine(for: code))
-        #expect((await AllowOnceStore(baseDirectory: directory).list(now: now)).count == 1)
-    }
-
-    @Test func cursorHookEvaluate_agentMessageTellsAgentNotToRetry() async throws {
+    @Test func cursorHookEvaluateWithoutDaemonDeniesStaticWithoutCode() async throws {
+        // No daemon: static deny bytes (stop line, no unlock code). The
+        // ask/retry voice with a code arrives only through the daemon.
         let directory = try isolatedAllowOnceDirectory()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let client = ServiceClient(
@@ -201,13 +200,12 @@ struct AllowOnceGrantHonorTests {
         {"hook_event_name":"beforeShellExecution","cwd":"/tmp/ws","command":"git reset --hard"}
         """
         let wire = await client.hookEvaluate(host: .cursor, stdin: stdin)
+        #expect(wire == LocalControlBoundary.deniedHook(host: .cursor))
         let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
         #expect(json["permission"] as? String == "deny")
-        let user = try #require(json["user_message"] as? String)
-        #expect(allowOnceUnlockCode(in: user) != nil)
-        #expect(user.contains("This unlocks only this exact command."))
         #expect(json["agent_message"] as? String == cursorAgentStopLine)
-        #expect(allowOnceUnlockCode(in: json["agent_message"] as? String ?? "") == nil)
+        #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
+        #expect((await AllowOnceStore(baseDirectory: directory).list(now: now)).isEmpty)
     }
 
     @Test func grokHookEvaluateMissingCwdDoesNotMint() async throws {
@@ -259,4 +257,20 @@ struct AllowOnceGrantHonorTests {
         }
         #expect((await AllowOnceStore(baseDirectory: directory).list(now: Date())).isEmpty)
     }
+}
+
+/// Step 8B.1: writes a granted *projection* row (mint + file redeem).
+/// Display-only: no ceremony ran, so no memory grant exists and nothing
+/// may spend.
+private func plantGrantedProjection(directory: URL, cwd: String = "/tmp/ws") async throws {
+    let store = AllowOnceStore(baseDirectory: directory)
+    let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+    let code = try await store.mint(
+        matchingView: "git reset --hard",
+        cwd: wd(cwd),
+        ruleID: nil,
+        tty: tty,
+        now: Date()
+    )
+    _ = try await store.redeem(code: code.rawValue, tty: tty, now: Date())
 }

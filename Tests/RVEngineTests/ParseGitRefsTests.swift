@@ -23,9 +23,11 @@ struct ParseGitRefsTests {
                 == .push(remote: "origin", refspec: "main", force: .force)
         )
         #expect(
-            parsePush(["-fuqvn", "origin", "main"], context: .empty)
+            parsePush(["-fuqv", "origin", "main"], context: .empty)
                 == .push(remote: "origin", refspec: "main", force: .force)
         )
+        // -n is dry-run: no mutation, unparsed.
+        #expect(parsePush(["-fuqvn", "origin", "main"], context: .empty) == nil)
         #expect(
             parsePush(["-ud", "origin", "topic"], context: .empty)
                 == .deleteRemoteRef(remote: "origin", refspec: "topic")
@@ -55,9 +57,12 @@ struct ParseGitRefsTests {
                 == .push(remote: nil, refspec: "topic", force: .none)
         )
         #expect(
-            parsePush(["--repo=origin", "--follow-tags", "--dry-run", "--prune", "--no-verify", "--verify"], context: .empty)
+            parsePush(["--repo=origin", "--follow-tags", "--prune", "--no-verify", "--verify"], context: .empty)
                 == .push(remote: nil, refspec: nil, force: .none)
         )
+        // Dry-run previews send nothing: unparsed, so the pack floor governs.
+        #expect(parsePush(["--dry-run", "origin", "topic"], context: .empty) == nil)
+        #expect(parsePush(["-n", "origin", "topic"], context: .empty) == nil)
         #expect(
             parsePush(["--atomic", "--no-atomic", "--progress", "--no-progress", "--ipv4", "--ipv6"], context: .empty)
                 == .push(remote: nil, refspec: nil, force: .none)

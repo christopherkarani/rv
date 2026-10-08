@@ -30,19 +30,21 @@ import RVDomain
     case .file(_, let file, _, _):
         #expect(file.kind == .read)
         #expect(file.path.rawValue == "/tmp/rv-hook-fixture/README.md")
-    case .shell, .spend:
-        Issue.record("expected .file, not a shell or spend request")
+    case .shell:
+        Issue.record("expected .file, not a shell request")
     }
 }
 
-@Test func piDecode_hostAskSpendIsSpendCase() {
+@Test func piDecode_hostAskSpendIsIgnoredShellCase() {
+    // Step 8B: the host spend attestation is ignored; legacy spend
+    // envelopes decode as ordinary shell requests.
     let stdin = """
     {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git reset --hard"},"hostAsk":"spend"}
     """
     let outcome = PiHostCodec().decode(stdin)
     #expect(
         outcome == .request(
-            .spend(
+            .shell(
                 host: .pi,
                 command: ShellCommand(rawValue: "git reset --hard"),
                 cwd: wd("/tmp/ws"),
@@ -51,19 +53,19 @@ import RVDomain
         )
     )
     guard case .request(let request) = outcome else {
-        Issue.record("expected .request for Pi spend")
+        Issue.record("expected .request for Pi spend envelope")
         return
     }
     switch request {
-    case .spend(_, let command, let cwd, _):
+    case .shell(_, let command, let cwd, _):
         #expect(command.rawValue == "git reset --hard")
         #expect(cwd == wd("/tmp/ws"))
-    case .shell, .file:
-        Issue.record("expected .spend, not a shell or file request")
+    case .file:
+        Issue.record("expected .shell, not a file request")
     }
 }
 
-@Test func claudeDecode_fileWinsOverSpendFlag() {
+@Test func claudeDecode_fileIgnoresSpendFlag() {
     let stdin = """
     {"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/tmp/rv-oracle/.env"},"hostAsk":"spend"}
     """
@@ -83,7 +85,7 @@ import RVDomain
     )
 }
 
-@Test func piDecode_spendWithoutCommandIsMissingCommand() {
+@Test func piDecode_spendFlagWithoutCommandIsMissingCommand() {
     #expect(
         PiHostCodec().decode(#"{"toolName":"bash","hostAsk":"spend","input":{}}"#)
             == .malformed(.missingCommand)
@@ -107,17 +109,11 @@ import RVDomain
     )
 }
 
-@Test func proposedAction_shellAndSpendKeepFingerprint() {
+@Test func proposedAction_shellKeepsFingerprint() {
     let command = ShellCommand(rawValue: "git reset --hard")
     let cwd = wd("/tmp/ws")
     let session = SessionID(validating: "sess_1")
     let shell = HookRequest.shell(
-        host: .pi,
-        command: command,
-        cwd: cwd,
-        session: session
-    )
-    let spend = HookRequest.spend(
         host: .pi,
         command: command,
         cwd: cwd,
@@ -131,9 +127,7 @@ import RVDomain
         command: command
     )
     #expect(codec.proposedAction(from: shell).fingerprint == expected)
-    #expect(codec.proposedAction(from: spend).fingerprint == expected)
     #expect(codec.proposedAction(from: shell).supportingCommand == command)
-    #expect(codec.proposedAction(from: spend).supportingCommand == command)
 }
 
 @Test func proposedAction_fileIsNotEmptyCommandShell() {
@@ -178,7 +172,7 @@ import RVDomain
     #expect(fileAction.effects.kinds.isEmpty)
 }
 
-@Test func hookDispatch_fileWinsOverSpendCallback() async {
+@Test func hookDispatch_fileIgnoresSpendFlag() async {
     let probe = DoorProbe()
     let stdin = """
     {"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/tmp/rv-oracle/.env"},"hostAsk":"spend"}
@@ -188,12 +182,10 @@ import RVDomain
         stdin: stdin,
         world: hookWorld(
             evaluate: { command, cwd in probe.evaluate(command, cwd) },
-            evaluateFile: { action, cwd in probe.evaluateFile(action, cwd) },
-            spend: { command, cwd in probe.spend(command, cwd) }
+            evaluateFile: { action, cwd in probe.evaluateFile(action, cwd) }
         )
     )
     #expect(probe.commands.isEmpty)
-    #expect(probe.spends.isEmpty)
     #expect(probe.files == ["/tmp/rv-oracle/.env"])
     #expect(wire.stdout.contains("permissionDecision\":\"deny\""))
 }
@@ -204,20 +196,13 @@ private final class DoorProbe: Sendable {
     private struct State: Sendable {
         var commands: [String] = []
         var files: [String] = []
-        var spends: [String] = []
     }
 
     var commands: [String] { state.withLock { $0.commands } }
     var files: [String] { state.withLock { $0.files } }
-    var spends: [String] { state.withLock { $0.spends } }
 
     func evaluate(_ command: ShellCommand, _: WorkingDirectory?) -> EvaluationResult {
         state.withLock { $0.commands.append(command.rawValue) }
-        return EvaluationResult(outcome: .plain)
-    }
-
-    func spend(_ command: ShellCommand, _: WorkingDirectory?) -> EvaluationResult {
-        state.withLock { $0.spends.append(command.rawValue) }
         return EvaluationResult(outcome: .plain)
     }
 

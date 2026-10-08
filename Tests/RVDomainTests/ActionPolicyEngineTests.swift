@@ -51,6 +51,39 @@ struct ActionPolicyEngineTests {
         #expect(bound.decision == .deny(ActionPolicyEngine.Builtin.remoteBranchAsk))
     }
 
+    @Test func plainPush_isMandatoryHumanOnPrivateBranch() {
+        let verdict = ActionPolicyEngine.evaluate(
+            action: ActionPolicyFixtures.plainPush(branchName: "topic"),
+            context: privateBranch
+        )
+        #expect(verdict.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk))
+        #expect(verdict.explanation.zone == .mandatoryHuman)
+    }
+
+    @Test func plainPush_isMandatoryHumanEvenOnSharedBranch() {
+        // Fast-forward push is not destructive: ask, never deny, on main.
+        let verdict = ActionPolicyEngine.evaluate(
+            action: ActionPolicyFixtures.plainPush(branchName: "main"),
+            context: shared
+        )
+        #expect(verdict.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk))
+    }
+
+    @Test func plainPush_unknownRef_isMandatoryHumanNotReviewEligible() {
+        // No allow arm for remote mutation: unknown refs fail toward Ask.
+        for world in [
+            GitAnalysisWorld.unprobed,
+            .probed(GitAnalysisContext(currentBranch: "main")),
+        ] {
+            let verdict = ActionPolicyEngine.evaluate(
+                action: ActionPolicyFixtures.plainPush(branchName: nil),
+                context: shared,
+                gitWorld: world
+            )
+            #expect(verdict.decision == .mandatoryHuman(ActionPolicyEngine.Builtin.remoteBranchAsk))
+        }
+    }
+
     @Test func overlayAllow_cannotWeakenBuiltInHardZones() {
         let action = ActionPolicyFixtures.forcePush()
         let overlay = EffectiveActionPolicy(overlay: .allow)

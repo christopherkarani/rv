@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import RVDomain
+import RVEngine
 import RVIPC
 import RVPolicy
 @testable import RVService
@@ -15,11 +16,9 @@ struct PendingResolveGrantTests {
         defer { env.tearDown() }
         let created = try await env.seedResetHard()
 
-        let resolved = await env.runtime.dispatch(
-            IPCRequest(method: .pendingResolve(env.resolveParams(created, decision: .allowOnce)))
-        )
-        guard case .pendingResolve(let reply) = resolved.result else {
-            Issue.record("allowOnce must resolve, got \(resolved.result)")
+        let resolved = await env.resolve(created, decision: .allowOnce)
+        guard case .success(let reply) = resolved else {
+            Issue.record("allowOnce must resolve, got \(resolved)")
             return
         }
         #expect(reply.terminal)
@@ -28,24 +27,32 @@ struct PendingResolveGrantTests {
         let listed = try await env.pending.list(now: now)
         #expect(listed.isEmpty)
         let loaded = try await env.pending.load(id: created.id, now: now)
-        #expect(loaded.authorizes(created.fingerprint, identity: created.identity) == false)
-        guard case .consumed = loaded.state else {
-            Issue.record("plant path must consume the wait")
+        guard case .resolved(let resolution) = loaded.state,
+            resolution.decision == .allowOnce
+        else {
+            Issue.record("plant path must resolve the wait, got \(loaded.state)")
             return
         }
         #expect(try await env.grantedCount() == 1)
 
         let first = await env.applyResetHard()
-        guard case .evaluate(let allowed) = first.result, case .allow = allowed.result.decision else {
-            Issue.record("next apply must allow once, got \(first.result)")
+        guard case .allow = first.result.decision else {
+            Issue.record("next apply must allow once, got \(first.result.decision)")
             return
         }
         let second = await env.applyResetHard()
-        guard case .evaluate(let denied) = second.result, case .deny = denied.result.decision else {
-            Issue.record("replay must deny, got \(second.result)")
+        guard case .deny = second.result.decision else {
+            Issue.record("replay must deny, got \(second.result.decision)")
             return
         }
-        #expect(try await env.grantedCount() == 0)
+        // Step 8B.1: the projection row persists as audit (spend is
+        // memory-only); the replay-deny above proves the consume.
+        #expect(try await env.grantedCount() == 1)
+        #expect(
+            await env.memory.hasGrant(
+                matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now
+            ) == false
+        )
     }
 
     @Test func PendingResolveGrant_denyResolvesWithoutGrant() async throws {
@@ -53,11 +60,9 @@ struct PendingResolveGrantTests {
         defer { env.tearDown() }
         let created = try await env.seedResetHard()
 
-        let resolved = await env.runtime.dispatch(
-            IPCRequest(method: .pendingResolve(env.resolveParams(created, decision: .deny)))
-        )
-        guard case .pendingResolve(let reply) = resolved.result else {
-            Issue.record("deny must resolve, got \(resolved.result)")
+        let resolved = await env.resolve(created, decision: .deny)
+        guard case .success(let reply) = resolved else {
+            Issue.record("deny must resolve, got \(resolved)")
             return
         }
         #expect(reply.terminal)
@@ -76,15 +81,14 @@ struct PendingResolveGrantTests {
         let env = try IsolatedPendingResolve()
         defer { env.tearDown() }
         let created = try await env.seedResetHard()
-        let request = IPCRequest(method: .pendingResolve(env.resolveParams(created, decision: .allowOnce)))
-        async let first = env.runtime.dispatch(request)
-        async let second = env.runtime.dispatch(request)
+        async let first = env.resolve(created, decision: .allowOnce)
+        async let second = env.resolve(created, decision: .allowOnce)
         let results = await [first, second]
         let planted = results.filter {
-            if case .pendingResolve = $0.result { return true }
+            if case .success = $0 { return true }
             return false
         }
-        let rejected = results.filter { $0.result == .error(.pendingAlreadyTerminal) }
+        let rejected = results.filter { $0 == .failure(.pendingAlreadyTerminal) }
         #expect(planted.count == 1)
         #expect(rejected.count == 1)
         #expect(try await env.grantedCount() == 1)
@@ -94,16 +98,12 @@ struct PendingResolveGrantTests {
         let env = try IsolatedPendingResolve()
         defer { env.tearDown() }
         let created = try await env.seedResetHard()
-        _ = await env.runtime.dispatch(
-            IPCRequest(method: .pendingResolve(env.resolveParams(created, decision: .allowOnce)))
-        )
+        _ = await env.resolve(created, decision: .allowOnce)
         let grants = try await env.grantedCount()
         #expect(grants == 1)
 
-        let again = await env.runtime.dispatch(
-            IPCRequest(method: .pendingResolve(env.resolveParams(created, decision: .allowOnce)))
-        )
-        #expect(again.result == .error(.pendingAlreadyTerminal))
+        let again = await env.resolve(created, decision: .allowOnce)
+        #expect(again == .failure(.pendingAlreadyTerminal))
         #expect(try await env.grantedCount() == grants)
         try env.assertNoCommandText(again)
     }
@@ -129,10 +129,8 @@ struct PendingResolveGrantTests {
             cwd: cwd
         )
 
-        let resolved = await env.runtime.dispatch(
-            IPCRequest(method: .pendingResolve(env.resolveParams(created, decision: .allowOnce)))
-        )
-        #expect(resolved.result == .error(.pendingAllowOnceNotUnlockable))
+        let resolved = await env.resolve(created, decision: .allowOnce)
+        #expect(resolved == .failure(.pendingAllowOnceNotUnlockable))
         #expect(try await env.pending.list(now: now).map(\.id) == [created.id])
         #expect(try await env.grantedCount() == 0)
         let loaded = try await env.pending.load(id: created.id, now: now)
@@ -173,21 +171,30 @@ struct PendingResolveGrantTests {
             expiresAt: now.addingTimeInterval(3600),
             state: .awaitingHuman
         )
-        let resolve = await runtime.dispatch(
-            IPCRequest(
-                method: .pendingResolve(
-                    PendingResolveParams(
-                        id: wait.id,
-                        decision: .allowOnce,
-                        fingerprint: wait.fingerprint,
-                        identity: wait.identity
-                    )
-                )
-            )
-        )
-        #expect(resolve.result == .error(.pendingCoordinatorUnavailable))
         let grants = AllowOnceStore(baseDirectory: allowOnceDirectory)
+        let resolve = await HookAskResolver.resolve(
+            params: PendingResolveParams(
+                id: wait.id,
+                decision: .allowOnce,
+                fingerprint: wait.fingerprint,
+                identity: wait.identity
+            ),
+            reviewedAction: (
+                wait.action.supportingCommand,
+                wait.action.scope.workingDirectory
+            ),
+            pending: nil,
+            grants: EphemeralAllowOnceTable(),
+            projection: grants,
+            peek: { _, _, _ in
+                Issue.record("missing coordinator must not peek")
+                return EvaluationResult(outcome: .plain, matchingView: MatchingView(""))
+            },
+            now: now
+        )
+        #expect(resolve == .failure(.pendingCoordinatorUnavailable))
         #expect(await grants.list(now: now).isEmpty)
+        _ = runtime
     }
 
     @Test func PendingResolveGrant_alreadyAllowResolvesWithoutSecondGrant() async throws {
@@ -195,11 +202,9 @@ struct PendingResolveGrantTests {
         defer { env.tearDown() }
         let created = try await env.seed(command: "git status", cwd: wd("/tmp/ws"))
 
-        let resolved = await env.runtime.dispatch(
-            IPCRequest(method: .pendingResolve(env.resolveParams(created, decision: .allowOnce)))
-        )
-        guard case .pendingResolve(let reply) = resolved.result else {
-            Issue.record("already-allow must resolve, got \(resolved.result)")
+        let resolved = await env.resolve(created, decision: .allowOnce)
+        guard case .success(let reply) = resolved else {
+            Issue.record("already-allow must resolve, got \(resolved)")
             return
         }
         #expect(reply.terminal)
@@ -240,90 +245,138 @@ struct PendingResolveGrantTests {
         #expect(PendingAllowOncePlanner.plan(peek: allowed, cwd: wd("/tmp/ws")) == .resolveWithoutGrant)
     }
 
-    @Test(arguments: HookHost.allCases)
-    func HostAskResolve_allowOnceUnlockablePeekFollowsPause(_ host: HookHost) {
-        let plan = HostAskResolve.plan(
-            host: host,
-            continuation: .hostNative,
-            decision: .allowOnce,
-            peek: resetHardPackDeny,
-            cwd: wd("/tmp/ws")
-        )
-        switch HostNativeAsk.profile(for: host).pause {
-        case .spendFirst:
-            #expect(
-                plan == .spend(
-                    .plant(matchingView: MatchingView("git reset --hard"), cwd: wd("/tmp/ws"))
-                )
+    @Test func PendingResolveGrant_bareDispatchStaysDenied() async throws {
+        let env = try IsolatedPendingResolve()
+        defer { env.tearDown() }
+        let created = try await env.seedResetHard()
+
+        // Step 8: row-ID knowledge is not authority. The authorized core
+        // above resolves; generic IPC never does, with or without a peer.
+        for context in [AuthenticatedRequestContext.unauthenticated, peerHookContext()] {
+            let denied = await env.runtime.dispatch(
+                IPCRequest(method: .pendingResolve(env.resolveParams(created, decision: .allowOnce))),
+                context: context
             )
-        case .noPause, .leftoverAskForbidden:
-            #expect(plan == .denyOrTTY)
+            #expect(denied.result == .error(.authorizationDenied))
         }
+        #expect(try await env.grantedCount() == 0)
+        let loaded = try await env.pending.load(id: created.id, now: now)
+        #expect(loaded.state == .awaitingHuman)
     }
 
-    @Test(arguments: HookHost.allCases)
-    func HostAskResolve_denyIsLedgerDeny(_ host: HookHost) {
+    @Test func PendingResolveGrant_plannerRefusesMissingCwd() {
         #expect(
-            HostAskResolve.plan(
-                host: host,
-                continuation: .hostNative,
-                decision: .deny,
-                peek: resetHardPackDeny,
-                cwd: wd("/tmp/ws")
-            ) == .ledgerDeny
+            PendingAllowOncePlanner.plan(peek: resetHardPackDeny, cwd: nil) == .refuse
         )
     }
 
-    @Test func HostAskResolve_createRuleIsLedgerDeny() {
+    @Test func PendingResolveGrant_plannerRefusesHardBind() {
+        let deny = ActionPolicyEngine.Builtin.remoteSharedBranch
+        let hard = EvaluationResult(
+            outcome: .deny(deny, matched: nil),
+            matchingView: MatchingView("git push --force origin main"),
+            analysis: .unknown,
+            boundReview: .deny(deny)
+        )
         #expect(
-            HostAskResolve.plan(
-                host: .pi,
-                continuation: .hostNative,
-                decision: .createRule,
-                peek: resetHardPackDeny,
-                cwd: wd("/tmp/ws")
-            ) == .ledgerDeny
+            PendingAllowOncePlanner.plan(peek: hard, cwd: wd("/tmp/ws")) == .refuse
         )
     }
 
-    @Test func HostAskResolve_spendFirstMissingPeekRefuses() {
+    @Test func PendingResolveGrant_plannerRefusesPinnedSecret() {
+        let secret = EvaluationResult(
+            outcome: .deny(
+                Deny(
+                    ruleID: RuleID(pack: .coreSecrets, pattern: "env"),
+                    reason: "secret"
+                ),
+                matched: nil
+            ),
+            matchingView: MatchingView("cat .env")
+        )
         #expect(
-            HostAskResolve.plan(
-                host: .pi,
-                continuation: .hostNative,
-                decision: .allowOnce,
-                peek: nil,
-                cwd: wd("/tmp/ws")
-            ) == .spend(.refuse)
+            PendingAllowOncePlanner.plan(peek: secret, cwd: wd("/tmp/ws")) == .refuse
         )
     }
 
-    @Test func HostAskResolve_resumeAllowOnceIsDenyOrTTY() {
+    @Test func PendingResolveGrant_plannerRefusesIndeterminate() {
+        let incomplete = EvaluationResult(
+            outcome: .indeterminate(.commandTooLarge),
+            matchingView: MatchingView("git reset --hard")
+        )
         #expect(
-            HostAskResolve.plan(
-                host: .pi,
-                continuation: .resume(ApprovalResumeToken(rawValue: "tok")),
-                decision: .allowOnce,
-                peek: resetHardPackDeny,
-                cwd: wd("/tmp/ws")
-            ) == .denyOrTTY
+            PendingAllowOncePlanner.plan(peek: incomplete, cwd: wd("/tmp/ws")) == .refuse
         )
     }
 
-    @Test(arguments: [HookHost.grok, .codex, .cursor])
-    func PendingResolveGrant_nonSpendFirstAllowOnceDoesNotPlant(_ host: HookHost) async throws {
+    @Test func PendingResolveGrant_plannerPlantsMandatoryHumanCarry() {
+        let ask = ActionPolicyEngine.Builtin.remoteBranchAsk
+        let carried = EvaluationResult(
+            outcome: .deny(ask, matched: nil),
+            matchingView: MatchingView("git push origin feature"),
+            analysis: .unknown,
+            boundReview: .mandatoryHuman(ask)
+        )
+        #expect(
+            PendingAllowOncePlanner.plan(peek: carried, cwd: wd("/tmp/ws"))
+                == .plant(
+                    matchingView: MatchingView("git push origin feature"),
+                    cwd: wd("/tmp/ws")
+                )
+        )
+    }
+
+    @Test(arguments: [HookHost.grok, .codex, .cursor, .pi, .claude])
+    func PendingResolveGrant_universalAllowOncePlantsForEveryHost(_ host: HookHost) async throws {
         let env = try IsolatedPendingResolve()
         defer { env.tearDown() }
         let created = try await env.seed(command: "git reset --hard", cwd: wd("/tmp/ws"), host: host)
 
-        let resolved = await env.runtime.dispatch(
-            IPCRequest(method: .pendingResolve(env.resolveParams(created, decision: .allowOnce)))
-        )
-        #expect(resolved.result == .error(.pendingAllowOnceNotUnlockable))
-        #expect(try await env.grantedCount() == 0)
-        #expect(try await env.pending.list(now: now).map(\.id) == [created.id])
+        // Step 8B: no host tiers. A human allow-once resolves every host
+        // through the same peek → plan → plant → consume sequence.
+        let resolved = await env.resolve(created, decision: .allowOnce)
+        guard case .success(let reply) = resolved else {
+            Issue.record("universal resolve must succeed for \(host), got \(resolved)")
+            return
+        }
+        #expect(reply.terminal)
+        #expect(try await env.grantedCount() == 1)
+        #expect(try await env.pending.list(now: now).isEmpty)
         let loaded = try await env.pending.load(id: created.id, now: now)
-        #expect(loaded.state == .awaitingHuman)
+        guard case .resolved(let resolution) = loaded.state,
+            resolution.decision == .allowOnce
+        else {
+            Issue.record("plant path must resolve the wait for \(host), got \(loaded.state)")
+            return
+        }
+    }
+
+    @Test func PendingResolveGrant_hookPlantBindsMaskedPayload() async throws {
+        // M-07: the hook ceremony holds exact text, so its plant binds the
+        // hidden payload: the identical re-issue spends, a same-view
+        // command with another payload does not.
+        let env = try IsolatedPendingResolve()
+        defer { env.tearDown() }
+        let command = #"echo "aaa" ; git reset --hard"#
+        let created = try await env.seed(command: command, cwd: wd("/tmp/ws"))
+        let resolved = await env.resolve(created, decision: .allowOnce)
+        guard case .success = resolved else {
+            Issue.record("masked deny must resolve, got \(resolved)")
+            return
+        }
+        let view = Normalize.matchingView(of: command)
+        let bound = Normalize.maskedSegments(of: command)
+        #expect(bound.isEmpty == false)
+        #expect(
+            await env.memory.consume(
+                matchingView: view, cwd: wd("/tmp/ws"), now: now, maskedSegments: ["other-payload"]
+            ) == false
+        )
+        #expect(
+            await env.memory.consume(
+                matchingView: view, cwd: wd("/tmp/ws"), now: now, maskedSegments: bound
+            )
+        )
     }
 }
 
@@ -346,14 +399,20 @@ private struct IsolatedPendingResolve {
     let runtime: ServiceRuntime
     let pending: PendingApprovalStore
     let grants: AllowOnceStore
+    /// Step 8B.1: sole spend authority, shared by the resolve core, the
+    /// peek world, and the runtime (one daemon epoch).
+    let memory: EphemeralAllowOnceTable
 
     init() throws {
         homeURL = try isolatedHomeDirectory()
         allowOnceDirectory = try isolatedAllowOnceDirectory()
         home = try #require(HomeDirectory(validating: homeURL.path))
+        let table = EphemeralAllowOnceTable()
+        memory = table
         runtime = ServiceRuntime(
             home: home,
             allowOnceDirectory: allowOnceDirectory,
+            grants: table,
             clock: { Date(timeIntervalSince1970: 1_700_000_000) },
             pendingApprovals: .automatic
         )
@@ -411,19 +470,38 @@ private struct IsolatedPendingResolve {
         )
     }
 
-    func applyResetHard() async -> IPCResponse {
-        await runtime.dispatch(
-            IPCRequest(
-                method: .evaluate(
-                    EvaluateParams(
-                        request: EvaluationRequest(
-                            command: ShellCommand(rawValue: "git reset --hard"),
-                            enabledPacks: dayOnePackIDs
-                        ),
-                        cwd: wd("/tmp/ws")
-                    )
-                )
-            )
+    /// Owner-authorized resolve core. Generic IPC `pendingResolve` stays
+    /// denied (row-ID knowledge is not authority); the ceremony transports
+    /// (operator UI, unlock code) reach this same core after proving the
+    /// human.
+    func resolve(
+        _ record: PendingApproval,
+        decision: PendingResolveDecision
+    ) async -> Result<PendingResolveReply, IPCError> {
+        await HookAskResolver.resolve(
+            params: resolveParams(record, decision: decision),
+            reviewedAction: decision == .deny ? nil : (
+                record.action.supportingCommand,
+                record.action.scope.workingDirectory
+            ),
+            pending: pending,
+            grants: memory,
+            projection: grants,
+            peek: { command, cwd, now in
+                await LiveEvaluateWorld(home: home, store: grants, grants: memory, clock: { now })
+                    .peek(command: command, cwd: cwd)
+            },
+            now: now
+        )
+    }
+
+    func applyResetHard() async -> EvaluateReply {
+        await runtime.evaluate(
+            EvaluationRequest(
+                command: ShellCommand(rawValue: "git reset --hard"),
+                enabledPacks: dayOnePackIDs
+            ),
+            cwd: wd("/tmp/ws")
         )
     }
 
@@ -437,6 +515,17 @@ private struct IsolatedPendingResolve {
         #expect(text.contains("supportingCommand") == false)
         let object = try JSONSerialization.jsonObject(with: data)
         assertNoCommandKeys(object)
+    }
+
+    func assertNoCommandText(_ result: Result<PendingResolveReply, IPCError>) throws {
+        let ipc: IPCResult
+        switch result {
+        case .success(let reply):
+            ipc = .pendingResolve(reply)
+        case .failure(let error):
+            ipc = .error(error)
+        }
+        try assertNoCommandText(IPCResponse(id: UUID(), result: ipc))
     }
 
     func assertNoCommandKeys(_ object: Any) {

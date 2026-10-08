@@ -34,7 +34,17 @@ struct GatedEvaluateGitSemanticsTests {
         let normal = try await peek("git push origin feature")
         let forced = try await peek("git push --force origin main")
         #expect(normal.analysis != forced.analysis)
-        #expect(normal.decision == .allow)
+        // Step 8B P1: plain push is remote mutation (ASK-carrying deny),
+        // not an auto-allow. The human approves once; the retry consumes.
+        guard case .deny(let ask) = normal.decision else {
+            Issue.record("plain push must carry the remote-branch ASK")
+            return
+        }
+        #expect(ask.ruleID.rawValue == "builtin.action:remote-branch-mutation")
+        guard case .mandatoryHuman = normal.boundReview else {
+            Issue.record("plain push must bind mandatoryHuman review")
+            return
+        }
         guard case .deny(let deny) = forced.decision else {
             Issue.record("force-push must deny")
             return
@@ -155,11 +165,10 @@ private enum GitSemanticsHEAD {
 }
 
 private func peek(_ command: String, cwd: String = "/tmp/ws") async throws -> EvaluationResult {
-    let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
     return await GatedEvaluate().peek(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
         cwd: WorkingDirectory(validating: cwd),
-        store: store,
+        grants: EphemeralAllowOnceTable(),
         now: Date(timeIntervalSince1970: 1_700_000_000),
         allowlist: { .empty }
     )

@@ -28,13 +28,13 @@ actor ApprovalRuntime {
     /// `setPackEnabled` rebuild is invisible to allow-once.
     nonisolated static func livePeek(
         home: HomeDirectory?,
-        store: AllowOnceStore,
+        grants: EphemeralAllowOnceTable,
         gated: @escaping @Sendable () async -> GatedEvaluate
     ) -> @Sendable (ShellCommand, WorkingDirectory?, Date) async -> EvaluationResult {
         { command, cwd, now in
             await LiveEvaluateWorld(
                 home: home,
-                store: store,
+                grants: grants,
                 gated: await gated(),
                 clock: { now }
             ).peek(command: command, cwd: cwd)
@@ -84,209 +84,19 @@ actor ApprovalRuntime {
     }
 
     func ruleSaveResult(_ params: RuleSaveParams) async -> Result<RuleSaveReply, IPCError> {
-        guard let pendingApprovals else {
-            return .failure(PendingListProjection.coordinatorUnavailable)
-        }
-        let polarity = pinnedPolarity(params.polarity)
-        do {
-            let now = clock()
-            let record = try await pendingApprovals.load(id: params.id, now: now)
-            let outcome = try RulePinStore(baseDirectory: allowOnce.baseDirectory).save(
-                record: record,
-                polarity: polarity,
-                draft: params.draft,
-                now: now,
-                matchingView: record.action.supportingCommand.map(EvaluationWorld.matchingView(of:))
-            )
-            let decision: ApprovalDecision = polarity == .allow ? .createRule : .deny
-            do {
-                let resolved = try await pendingApprovals.resolve(
-                    id: record.id,
-                    decision: decision,
-                    fingerprint: record.fingerprint,
-                    identity: record.identity,
-                    now: now
-                )
-                let terminal: Bool
-                switch resolved.state {
-                case .awaitingHuman:
-                    terminal = false
-                case .resolved, .consumed, .expired, .canceled, .timedOut:
-                    terminal = true
-                }
-                return .success(RuleSaveReply(ruleID: outcome.ruleID, waitResolved: terminal))
-            } catch let error as PendingApprovalError {
-                switch error {
-                case .alreadyResolved, .alreadyConsumed, .expired, .canceled, .timedOut:
-                    return .success(RuleSaveReply(ruleID: outcome.ruleID, waitResolved: true))
-                case .notFound, .invalidRequest, .duplicateID, .fingerprintMismatch, .identityMismatch,
-                    .continuationMismatch, .notResolved, .encodeFailed, .lockFailed:
-                    return .failure(PendingListProjection.ipcError(from: error))
-                }
-            }
-        } catch let error as RulePinError {
-            switch error {
-            case .draftMismatch:
-                return .failure(.ruleDraftMismatch)
-            case .hardStop:
-                return .failure(.ruleHardStop)
-            case .missingMatchingView:
-                return .failure(.rulePinRequiresMatchingView)
-            }
-        } catch {
-            return .failure(PendingListProjection.ipcError(from: error))
-        }
+        // No authenticated authoritative-host channel or principal-bound grant
+        // store is installed yet. Saving first would leave persistent authority
+        // even if later authentication or live validation failed.
+        .failure(.authorizationDenied)
     }
 
     func pendingResolveResult(
         _ params: PendingResolveParams,
         peek: @escaping @Sendable (ShellCommand, WorkingDirectory?, Date) async -> EvaluationResult
     ) async -> Result<PendingResolveReply, IPCError> {
-        guard let pendingApprovals else {
-            return .failure(PendingListProjection.coordinatorUnavailable)
-        }
-        switch params.decision {
-        case .allowOnce:
-            return await resolveAllowOnce(params, store: pendingApprovals, peek: peek)
-        case .deny:
-            return await resolvePendingDecision(
-                params,
-                decision: .deny,
-                store: pendingApprovals
-            )
-        }
-    }
-
-    private func resolveAllowOnce(
-        _ params: PendingResolveParams,
-        store: any PendingApprovalCoordinating,
-        peek: @escaping @Sendable (ShellCommand, WorkingDirectory?, Date) async -> EvaluationResult
-    ) async -> Result<PendingResolveReply, IPCError> {
-        let now = clock()
-        let record: PendingApproval
-        do {
-            record = try await store.load(id: params.id, now: now)
-        } catch {
-            return .failure(PendingListProjection.ipcError(from: error))
-        }
-        switch record.state {
-        case .awaitingHuman:
-            break
-        case .resolved, .consumed, .expired, .canceled, .timedOut:
-            return .failure(.pendingAlreadyTerminal)
-        }
-        guard record.fingerprint == params.fingerprint, record.identity == params.identity else {
-            return .failure(
-                PendingListProjection.ipcError(
-                    from: record.fingerprint == params.fingerprint
-                        ? PendingApprovalError.identityMismatch
-                        : PendingApprovalError.fingerprintMismatch
-                )
-            )
-        }
-        let cwd = record.action.scope.workingDirectory
-        guard let command = record.action.supportingCommand else {
-            return .failure(.pendingAllowOnceNotUnlockable)
-        }
-        let pause = HostNativeAsk.resolve(
-            host: record.identity.agent,
-            continuation: record.continuation,
-            decision: .allowOnce
-        )
-        let peeked: EvaluationResult?
-        switch pause {
-        case .spendThenAllow:
-            peeked = await peekPendingCommand(command, cwd: cwd, now: now, peek: peek)
-        case .deny, .denyOrTTY:
-            peeked = nil
-        }
-        switch HostAskResolve.plan(
-            host: record.identity.agent,
-            continuation: record.continuation,
-            decision: .allowOnce,
-            peek: peeked,
-            cwd: cwd
-        ) {
-        case .denyOrTTY, .ledgerDeny, .spend(.refuse):
-            return .failure(.pendingAllowOnceNotUnlockable)
-        case .spend(.resolveWithoutGrant):
-            return await resolvePendingDecision(
-                params,
-                decision: .allowOnce,
-                store: store,
-                now: now
-            )
-        case .spend(.plant(let matchingView, let grantCwd)):
-            let reply: PendingResolveReply
-            switch await resolvePendingDecision(
-                params,
-                decision: .allowOnce,
-                store: store,
-                now: now
-            ) {
-            case .success(let resolved):
-                reply = resolved
-            case .failure(let error):
-                return .failure(error)
-            }
-            do {
-                try await allowOnce.insertGranted(
-                    matchingView: matchingView,
-                    cwd: grantCwd,
-                    now: now
-                )
-            } catch {
-                _ = try? await store.consume(
-                    id: params.id,
-                    fingerprint: params.fingerprint,
-                    identity: params.identity,
-                    now: now
-                )
-                return .failure(.pendingAllowOnceNotUnlockable)
-            }
-            do {
-                _ = try await store.consume(
-                    id: params.id,
-                    fingerprint: params.fingerprint,
-                    identity: params.identity,
-                    now: now
-                )
-            } catch {
-                return .failure(PendingListProjection.ipcError(from: error))
-            }
-            return .success(reply)
-        }
-    }
-
-    private func resolvePendingDecision(
-        _ params: PendingResolveParams,
-        decision: ApprovalDecision,
-        store: any PendingApprovalCoordinating,
-        now: Date? = nil
-    ) async -> Result<PendingResolveReply, IPCError> {
-        do {
-            let resolved = try await store.resolve(
-                id: params.id,
-                decision: decision,
-                fingerprint: params.fingerprint,
-                identity: params.identity,
-                now: now ?? clock()
-            )
-            return .success(
-                PendingResolveReply(id: resolved.id, terminal: isTerminal(resolved.state))
-            )
-        } catch {
-            return .failure(PendingListProjection.ipcError(from: error))
-        }
-    }
-
-    private func peekPendingCommand(
-        _ command: ShellCommand,
-        cwd: WorkingDirectory?,
-        now: Date,
-        peek: @escaping @Sendable (ShellCommand, WorkingDirectory?, Date) async -> EvaluationResult
-    ) async -> EvaluationResult {
-        await peek(command, cwd, now)
+        // The old name-bound resolver planted a command/cwd grant. Neither
+        // knowing a row ID nor authenticating a CLI can authorize that grant.
+        .failure(.authorizationDenied)
     }
 
     private func pinnedPolarity(_ wire: RulePolarity) -> PinnedRulePolarity {
@@ -295,15 +105,6 @@ actor ApprovalRuntime {
             return .allow
         case .block:
             return .block
-        }
-    }
-
-    private func isTerminal(_ state: PendingApprovalState) -> Bool {
-        switch state {
-        case .awaitingHuman:
-            return false
-        case .resolved, .consumed, .expired, .canceled, .timedOut:
-            return true
         }
     }
 

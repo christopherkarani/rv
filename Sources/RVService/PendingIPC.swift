@@ -38,7 +38,7 @@ enum PendingListProjection {
         case .fingerprintMismatch:
             return .pendingFingerprintMismatch
         case .invalidRequest, .duplicateID, .continuationMismatch, .notResolved, .encodeFailed,
-            .lockFailed:
+            .lockFailed, .storeFull:
             return coordinatorUnavailable
         }
     }
@@ -77,6 +77,8 @@ enum PendingListProjection {
             switch kind {
             case .remoteSharedBranchMutation:
                 return "shared branch mutation"
+            case .remoteBranchMutation:
+                return "remote branch mutation"
             case .localBranchCreate:
                 return "create local branch"
             case .workingTreeDiscard:

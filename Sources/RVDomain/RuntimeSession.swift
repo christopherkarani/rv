@@ -62,3 +62,27 @@ public struct RuntimeSession: Sendable, Equatable {
         )
     }
 }
+
+/// A launch attempt that completed establishment, bound to exactly one Agent Instance.
+///
+/// A bare `RuntimeSession` is the pre-establishment record: it names a launch
+/// attempt and carries no principal. This type proves the pairing the other
+/// way: it exists only when the instance names this session and this
+/// workspace. The failable init refuses a mismatched pairing instead of
+/// relabeling either side.
+public struct EstablishedRuntimeSession: Sendable, Equatable {
+    public let session: RuntimeSession
+    public let agentInstanceID: AgentInstanceID
+    public let establishedAt: Date
+
+    public init?(session: RuntimeSession, instance: AgentInstance, establishedAt: Date) {
+        guard instance.runtimeSessionID == session.id,
+            instance.workspaceSessionID == session.workspaceSessionID
+        else {
+            return nil
+        }
+        self.session = session
+        self.agentInstanceID = instance.id
+        self.establishedAt = establishedAt
+    }
+}

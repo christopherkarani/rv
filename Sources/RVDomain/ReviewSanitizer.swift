@@ -159,6 +159,8 @@ public enum ReviewSanitizer: Sendable {
                 refspec: refspec.map(sanitizeText),
                 force: force
             )
+        case .pushUnparsed(let args):
+            return .pushUnparsed(args: args.map(sanitizeText))
         case .deleteRemoteRef(let remote, let refspec):
             return .deleteRemoteRef(
                 remote: remote.map(sanitizeText),

@@ -2,6 +2,8 @@
 import Darwin
 import Foundation
 import RVDomain
+import RVIPC
+import RVPolicy
 import Synchronization
 
 private struct Reply {
@@ -44,6 +46,7 @@ private final class CloseGate: Sendable {
 
 private final class WorkspaceControlConnection: Sendable {
     let id = UUID()
+    let peer: PlatformPeerEvidence
     private let flags: Mutex<ConnectionFlags>
     /// Serializes frames. `flags` is not held across the write, so a slow
     /// client cannot stall accept, but two writers cannot interleave bytes.
@@ -55,7 +58,8 @@ private final class WorkspaceControlConnection: Sendable {
         var closed = false
     }
 
-    init(fd: Int32) {
+    init(fd: Int32, peer: PlatformPeerEvidence) {
+        self.peer = peer
         self.flags = Mutex(ConnectionFlags(fd: fd))
     }
 
@@ -114,11 +118,13 @@ private final class WorkspaceControlConnection: Sendable {
 /// Control plane for one live workspace. It does not render a UI.
 final class WorkspaceHostServer: Sendable {
     let endpoint: WorkspaceEndpoint
+    let principalAuthority: WorkspacePrincipalAuthority
     private let supervisor: WorkspaceSessionSupervisor
     private let hostID: WorkspaceHostID
     private let credential: WorkspaceOwnerCredential
     private let sessionStore: RuntimeSessionStore
     private let resourcePolicy: RuntimeResourcePolicy
+    private let agentDefinitions: AgentDefinitionSet
     private let advertisedFeatures: [String]
     private let admission: RuntimeAdmissionConfiguration
     private let listenFD: Int32
@@ -143,6 +149,7 @@ final class WorkspaceHostServer: Sendable {
         endpoint: WorkspaceEndpoint,
         sessionStore: RuntimeSessionStore,
         resourcePolicy: RuntimeResourcePolicy,
+        agentDefinitions: AgentDefinitionSet,
         advertisedFeatures: [String],
         admission: RuntimeAdmissionConfiguration,
         listenFD: Int32,
@@ -152,10 +159,16 @@ final class WorkspaceHostServer: Sendable {
     ) {
         self.supervisor = supervisor
         self.hostID = hostID
+        self.principalAuthority = WorkspacePrincipalAuthority(
+            registry: supervisor.agentInstances,
+            workspace: supervisor.id,
+            host: hostID
+        )
         self.credential = credential
         self.endpoint = endpoint
         self.sessionStore = sessionStore
         self.resourcePolicy = resourcePolicy
+        self.agentDefinitions = agentDefinitions
         self.advertisedFeatures = advertisedFeatures
         self.admission = admission
         self.listenFD = listenFD
@@ -169,6 +182,7 @@ final class WorkspaceHostServer: Sendable {
         configurationDirectory: URL,
         sessionStore: RuntimeSessionStore,
         resourcePolicy: RuntimeResourcePolicy = .empty,
+        agentDefinitions: AgentDefinitionSet = .empty,
         advertisedFeatures: [String]? = nil,
         admission: RuntimeAdmissionConfiguration
     ) -> Result<WorkspaceHostServer, WorkspaceHostFailure> {
@@ -234,7 +248,9 @@ final class WorkspaceHostServer: Sendable {
             endpoint: record.endpoint(),
             sessionStore: sessionStore,
             resourcePolicy: resourcePolicy,
+            agentDefinitions: agentDefinitions,
             advertisedFeatures: advertisedFeatures ?? [
+                WorkspaceControlFeature.identityAgentLaunchV1,
                 WorkspaceControlFeature.ensureTerminalRuntime,
                 WorkspaceControlFeature.resizeLeaseAuthority,
                 WorkspaceControlFeature.runtimeResourceProfilesV1,
@@ -264,6 +280,7 @@ final class WorkspaceHostServer: Sendable {
 
     /// Drops the control endpoint. Does not close the workspace.
     func stop() {
+        principalAuthority.close()
         retire(excluding: nil, notify: false)
     }
 
@@ -312,8 +329,9 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func adopt(_ fd: Int32) {
-        guard let uid = WorkspaceControlSocket.peerUID(fd),
-            WorkspacePeerPolicy.decide(peerUID: uid, ownerUID: getuid()) == nil
+        let trust = (try? ProtectedPeerTrustConfiguration.installed()) ?? .denyAll
+        guard let peer = try? WorkspacePeerAuthenticator.capture(fd: fd, trust: trust),
+            peer.effectiveUserID == getuid(), peer.componentRole != nil
         else {
             let refusal = WorkspaceControlResponse.failure(
                 id: nil,
@@ -326,7 +344,7 @@ final class WorkspaceHostServer: Sendable {
             Darwin.close(fd)
             return
         }
-        let connection = WorkspaceControlConnection(fd: fd)
+        let connection = WorkspaceControlConnection(fd: fd, peer: peer)
         let stored = registry.withLock { state -> Bool in
             guard state.retired == false,
                 state.connections.count < WorkspaceControlLimits.maxConnections
@@ -448,6 +466,9 @@ final class WorkspaceHostServer: Sendable {
         guard let op = message.operation else {
             return Reply(message: failure(message, .invalidRequest))
         }
+        guard WorkspaceOperationAuthorization.permits(op, peer: connection.peer) else {
+            return Reply(message: failure(message, .unauthorizedClient))
+        }
         switch op {
         case .hello:
             return Reply(message: failure(message, .invalidRequest))
@@ -475,6 +496,8 @@ final class WorkspaceHostServer: Sendable {
             return Reply(message: list(message))
         case .launchRuntime:
             return Reply(message: launch(message))
+        case .launchAgentRuntime, .launchCustomRuntime:
+            return Reply(message: launchIdentity(message))
         case .ensureTerminalRuntime:
             return Reply(message: ensureTerminalRuntime(message))
         case .cancelRuntime:
@@ -603,7 +626,9 @@ final class WorkspaceHostServer: Sendable {
         return launch(message, responseOp: .ensureTerminalRuntime)
     }
 
-    private func launch(
+    /// Internal for the Step 8 direct-handler test: exercises the
+    /// wire-to-supervisor wiring without socket peer authentication.
+    func launch(
         _ message: WorkspaceControlRequest,
         responseOp: WorkspaceControlOp = .launchRuntime
     ) -> WorkspaceControlResponse {
@@ -628,20 +653,17 @@ final class WorkspaceHostServer: Sendable {
         } else {
             resourceProfile = nil
         }
-        // The hook wire carries the launch's agent tag. A tag that names
-        // a HookHost also selects hook protocol participation; any other
-        // well-formed tag is staging-only credential selection.
+        // The hook wire carries hook protocol participation only (Step 8
+        // F2): a tag that names a HookHost selects protocol handling; any
+        // other well-formed tag is accepted but selects nothing. Wire tags
+        // never select credentials — selection is definition-derived only,
+        // and the legacy launch path stages no filtered credentials.
         let hook: HookHost?
-        let stagingAgent: String?
-        if let raw = message.hook {
-            guard AgentTagValidator.isValid(raw) else {
-                return failure(message, .invalidRequest)
-            }
-            hook = HookHost(rawValue: raw)
-            stagingAgent = raw
-        } else {
-            hook = nil
-            stagingAgent = nil
+        switch legacyLaunchHookSelection(message.hook) {
+        case .failure(let code):
+            return failure(message, code)
+        case .success(let selected):
+            hook = selected
         }
         guard let command = IsolatedCommand(
             executable: executable,
@@ -657,9 +679,8 @@ final class WorkspaceHostServer: Sendable {
             io = parsed
         }
         let plan = compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace)
-        switch supervisor.launch(
+        let result = supervisor.launchLegacy(
             host: hook,
-            stagingAgent: stagingAgent,
             command: command,
             plan: plan,
             io: io,
@@ -667,7 +688,15 @@ final class WorkspaceHostServer: Sendable {
             admission: admission,
             sessionStore: sessionStore,
             runningLimit: WorkspaceControlLimits.maxRuntimes
-        ) {
+        )
+        return launchResponse(message, responseOp: responseOp, io: io, result: result)
+    }
+
+    private func launchResponse(
+        _ message: WorkspaceControlRequest, responseOp: WorkspaceControlOp, io: IsolatedIO,
+        result: Result<RunningRuntime, WorkspaceSessionError>
+    ) -> WorkspaceControlResponse {
+        switch result {
         case .failure(.apply(.resourceStagingFailed(let detail))):
             return failure(message, .resourceStagingFailed, detail: detail)
         case .failure(let error):
@@ -701,6 +730,48 @@ final class WorkspaceHostServer: Sendable {
                 created: responseOp == .ensureTerminalRuntime ? true : nil
             )
         }
+    }
+
+    /// Builds the prepare-only RPC handler for the service bridge. The closure
+    /// resolves, prepares, and describes; it cannot dispatch or launch.
+    func makePrepareHandler() -> HostPrepareHandler {
+        { [supervisor, agentDefinitions, hostID, generation = principalAuthority.generation] request in
+            WorkspaceHostPrepareHandler.prepare(
+                request,
+                supervisor: supervisor,
+                definitions: agentDefinitions,
+                host: hostID,
+                generation: generation,
+                project: supervisor.snapshot.originalPath.rawValue)
+        }
+    }
+
+    /// Builds the redemption RPC handler for the service bridge. The closure
+    /// verifies an authenticated permit-consumption commit against this
+    /// host's retained prepared operation and dispatches it at most once.
+    /// rvd sends a commit only after atomically consuming the server-held
+    /// permit; the supervisor's acceptance fence makes any duplicate commit
+    /// safe.
+    func makeRedeemHandler() -> HostRedeemHandler {
+        { [supervisor, sessionStore, admission, hostID, generation = principalAuthority.generation] request in
+            WorkspaceHostRedeemHandler.redeem(
+                request,
+                supervisor: supervisor,
+                sessionStore: sessionStore,
+                admission: admission,
+                host: hostID,
+                generation: generation)
+        }
+    }
+
+    /// Identity-launch operations are reserved protocol cases that never
+    /// launch directly: every launch flows through the prepare→permit→redeem
+    /// ceremony. This door answers with the machine-readable
+    /// `requiresOperatorPermit` code instead of spawning. The
+    /// authorization fence above denies these ops first, so this denial
+    /// is defense in depth. Internal so tests pin the invariant.
+    func launchIdentity(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
+        failure(message, .requiresOperatorPermit)
     }
 
     private func launchIO(
@@ -940,6 +1011,7 @@ final class WorkspaceHostServer: Sendable {
     }
 
     private func retire(excluding: UUID?, notify: Bool) {
+        principalAuthority.close()
         let snapshot: (first: Bool, others: [WorkspaceControlConnection]) = registry.withLock { state in
             if state.retired { return (false, []) }
             state.retired = true
@@ -983,6 +1055,19 @@ final class WorkspaceHostServer: Sendable {
         guard connections.isEmpty == false else { return false }
         return connections.contains { $0.send(message) }
     }
+}
+
+/// Maps the legacy launch wire's hook field to protocol participation.
+///
+/// Step 8 (F2): a well-formed tag that names a `HookHost` selects hook
+/// protocol handling; any other well-formed tag is accepted but selects
+/// nothing. Malformed tags are refused. The result feeds hook protocol
+/// only — staging selection is definition-derived (`launchLegacy` takes
+/// no tag), so no wire value can select credentials.
+func legacyLaunchHookSelection(_ raw: String?) -> Result<HookHost?, WorkspaceControlCode> {
+    guard let raw else { return .success(nil) }
+    guard AgentTagValidator.isValid(raw) else { return .failure(.invalidRequest) }
+    return .success(HookHost(rawValue: raw))
 }
 
 private func workspaceTerminalMessage(

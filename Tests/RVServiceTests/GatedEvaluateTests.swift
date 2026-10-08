@@ -6,11 +6,16 @@ import RVPolicy
 
 struct GatedEvaluateTests {
     @Test func peekShowsGrantWithoutSpendingThenApplyHonorsOnce() async throws {
-        let store = try isolatedStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let session = EvaluateSession()
         let request = resetHardRequest()
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+        #expect(
+            await grants.plant(
+                matchingView: "git reset --hard", cwd: wd("/tmp/ws"), codeHash: "ge-peek",
+                now: now
+            ) == .planted
+        )
 
         let engine = session.evaluate(request)
         guard case .deny = engine.decision else {
@@ -19,12 +24,12 @@ struct GatedEvaluateTests {
         }
 
         let gated = GatedEvaluate(session)
-        let peeked = await gated.peek(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
+        let peeked = await gated.peek(request, cwd: wd("/tmp/ws"), grants: grants, now: now, allowlist: { .empty })
         #expect(peeked.decision == .allow)
 
-        let first = await gated.apply(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
+        let first = await gated.apply(request, cwd: wd("/tmp/ws"), grants: grants, now: now, allowlist: { .empty })
         #expect(first.decision == .allow)
-        let second = await gated.apply(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
+        let second = await gated.apply(request, cwd: wd("/tmp/ws"), grants: grants, now: now, allowlist: { .empty })
         guard case .deny(let deny) = second.decision else {
             Issue.record("second apply must deny after the grant is spent")
             return
@@ -33,28 +38,34 @@ struct GatedEvaluateTests {
     }
 
     @Test func missingCwdSkipsHonor() async throws {
-        let store = try isolatedStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let gated = GatedEvaluate()
         let request = resetHardRequest()
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+        #expect(
+            await grants.plant(
+                matchingView: "git reset --hard", cwd: wd("/tmp/ws"), codeHash: "ge-cwd",
+                now: now
+            ) == .planted
+        )
 
-        let peeked = await gated.peek(request, cwd: nil, store: store, now: now, allowlist: { .empty })
+        let peeked = await gated.peek(request, cwd: nil, grants: grants, now: now, allowlist: { .empty })
         guard case .deny = peeked.decision else {
             Issue.record("missing cwd must skip honor")
             return
         }
-        let appliedEmpty = await gated.apply(request, cwd: nil, store: store, now: now, allowlist: { .empty })
+        let appliedEmpty = await gated.apply(request, cwd: nil, grants: grants, now: now, allowlist: { .empty })
         guard case .deny = appliedEmpty.decision else {
             Issue.record("empty cwd must skip honor")
             return
         }
-        let applied = await gated.apply(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
+        let applied = await gated.apply(request, cwd: wd("/tmp/ws"), grants: grants, now: now, allowlist: { .empty })
         #expect(applied.decision == .allow)
     }
 
     @Test func injectedEmptyAllowlistIgnoresSiblingAllowlistFile() async throws {
         let store = try isolatedStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let ruleID = try #require(RuleID(rawValue: "core.git:reset-hard"))
         try AllowlistStore(baseDirectory: store.baseDirectory).add(
@@ -65,7 +76,7 @@ struct GatedEvaluateTests {
         let applied = await gated.apply(
             resetHardRequest(),
             cwd: wd("/tmp/ws"),
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { .empty }
         )
@@ -76,7 +87,7 @@ struct GatedEvaluateTests {
     }
 
     @Test func injectedAllowlistSnapshotHonorsWithoutStoreDirectory() async throws {
-        let store = try isolatedStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let ruleID = try #require(RuleID(rawValue: "core.git:reset-hard"))
         let allowlist = AllowlistSnapshot(entries: [
@@ -86,7 +97,7 @@ struct GatedEvaluateTests {
         let applied = await gated.apply(
             resetHardRequest(),
             cwd: wd("/tmp/ws"),
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { allowlist }
         )
@@ -95,13 +106,14 @@ struct GatedEvaluateTests {
 
     @Test func allowPathDoesNotCreateAllowlistFile() async throws {
         let store = try isolatedStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let gated = GatedEvaluate()
         let request = stashDropRequest()
 
-        let peeked = await gated.peek(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
+        let peeked = await gated.peek(request, cwd: wd("/tmp/ws"), grants: grants, now: now, allowlist: { .empty })
         #expect(peeked.decision == .allow)
-        let applied = await gated.apply(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
+        let applied = await gated.apply(request, cwd: wd("/tmp/ws"), grants: grants, now: now, allowlist: { .empty })
         #expect(applied.decision == .allow)
 
         let allowlist = AllowlistStore(baseDirectory: store.baseDirectory).fileURL
@@ -109,14 +121,14 @@ struct GatedEvaluateTests {
     }
 
     @Test func allowPathDoesNotInvokeAllowlistLoader() async throws {
-        let store = try isolatedStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let calls = UnfairLock(0)
         let gated = GatedEvaluate()
         let applied = await gated.apply(
             stashDropRequest(),
             cwd: wd("/tmp/ws"),
-            store: store,
+            grants: grants,
             now: now,
             allowlist: {
                 calls.withLock { $0 += 1 }
@@ -128,36 +140,50 @@ struct GatedEvaluateTests {
     }
 
     @Test func indeterminateIsNotAllowAndDoesNotHonor() async throws {
-        let store = try isolatedStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+        #expect(
+            await grants.plant(
+                matchingView: "git reset --hard", cwd: wd("/tmp/ws"), codeHash: "ge-indet",
+                now: now
+            ) == .planted
+        )
         let gated = GatedEvaluate(.missingCore)
         let request = resetHardRequest()
 
-        let peeked = await gated.peek(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
+        let peeked = await gated.peek(request, cwd: wd("/tmp/ws"), grants: grants, now: now, allowlist: { .empty })
         #expect(peeked.decision == .indeterminate(.corePacksUnavailable))
         #expect(peeked.analysis.gitAction == .reset(mode: .hard, target: nil))
-        let applied = await gated.apply(request, cwd: wd("/tmp/ws"), store: store, now: now, allowlist: { .empty })
+        let applied = await gated.apply(request, cwd: wd("/tmp/ws"), grants: grants, now: now, allowlist: { .empty })
         #expect(applied.decision == .indeterminate(.corePacksUnavailable))
-        let still = await store.consume(
-            matchingView: "git reset --hard",
-            cwd: wd("/tmp/ws"),
-            now: now
+        #expect(
+            await grants.consume(
+                matchingView: "git reset --hard",
+                cwd: wd("/tmp/ws"),
+                now: now
+            ),
+            "indeterminate must not spend the grant"
         )
-        guard case .consumed = still else {
-            Issue.record("indeterminate must not spend the grant")
-            return
-        }
     }
 
-    @Test func spendHostAskPlantsThenReplayDenies() async throws {
-        let store = try isolatedStore()
+    @Test func applyHonorsPlantedGrantOnceThenReplayDenies() async throws {
+        // Step 8B: the RVOperatorUI ceremony plants the grant; the agent
+        // retry consumes it through the ordinary apply path, exactly once.
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let gated = GatedEvaluate()
-        let first = await gated.spendHostAsk(
+        #expect(
+            await grants.plant(
+                matchingView: MatchingView("git reset --hard"),
+                cwd: wd("/tmp/ws"),
+                codeHash: "ge-planted",
+                now: now
+            ) == .planted
+        )
+        let first = await gated.apply(
             resetHardRequest(),
             cwd: wd("/tmp/ws"),
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { .empty }
         )
@@ -165,41 +191,25 @@ struct GatedEvaluateTests {
         let second = await gated.apply(
             resetHardRequest(),
             cwd: wd("/tmp/ws"),
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { .empty }
         )
         guard case .deny = second.decision else {
-            Issue.record("replay after host spend must deny")
-            return
-        }
-    }
-
-    @Test func spendHostAskMissingCwdDoesNotAllow() async throws {
-        let store = try isolatedStore()
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let gated = GatedEvaluate()
-        let spent = await gated.spendHostAsk(
-            resetHardRequest(),
-            cwd: nil,
-            store: store,
-            now: now,
-            allowlist: { .empty }
-        )
-        guard case .deny = spent.decision else {
-            Issue.record("missing cwd spend must deny")
+            Issue.record("replay after grant consume must deny")
             return
         }
     }
 
     @Test func mintUnlockCode_afterApplyDenyWritesPending() async throws {
         let store = try isolatedStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let gated = GatedEvaluate()
         let applied = await gated.apply(
             resetHardRequest(),
             cwd: wd("/tmp/ws"),
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { .empty }
         )
@@ -225,12 +235,13 @@ struct GatedEvaluateTests {
 
     @Test func mintUnlockCode_skipsMissingCwdAndPeek() async throws {
         let store = try isolatedStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let gated = GatedEvaluate()
         let peeked = await gated.peek(
             resetHardRequest(),
             cwd: wd("/tmp/ws"),
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { .empty }
         )
@@ -242,7 +253,7 @@ struct GatedEvaluateTests {
         let applied = await gated.apply(
             resetHardRequest(),
             cwd: nil,
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { .empty }
         )
@@ -259,12 +270,13 @@ struct GatedEvaluateTests {
 
     @Test func mintUnlockCode_skipsMissingHome() async throws {
         let store = try isolatedStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let gated = GatedEvaluate()
         let applied = await gated.apply(
             resetHardRequest(),
             cwd: wd("/tmp/ws"),
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { .empty }
         )
@@ -360,18 +372,27 @@ struct GatedEvaluateTests {
         #expect((await store.list(now: now)).isEmpty == false)
     }
 
-    @Test func spendHostAsk_mandatoryHumanForcePushPrivateBranchAllowsOnce() async throws {
-        let store = try isolatedStore()
+    @Test func apply_mandatoryHumanPushHonorsPlantedGrantOnce() async throws {
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let gated = GatedEvaluate()
+        let command = "git push --force-with-lease origin feature"
         let request = EvaluationRequest(
-            command: ShellCommand(rawValue: "git push --force-with-lease origin feature"),
+            command: ShellCommand(rawValue: command),
             enabledPacks: dayOnePackIDs
         )
-        let first = await gated.spendHostAsk(
+        #expect(
+            await grants.plant(
+                matchingView: MatchingView(command),
+                cwd: wd("/tmp/ws"),
+                codeHash: "ge-push",
+                now: now
+            ) == .planted
+        )
+        let first = await gated.apply(
             request,
             cwd: wd("/tmp/ws"),
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { .empty }
         )
@@ -379,12 +400,12 @@ struct GatedEvaluateTests {
         let second = await gated.apply(
             request,
             cwd: wd("/tmp/ws"),
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { .empty }
         )
         guard case .deny = second.decision else {
-            Issue.record("replay after mandatoryHuman host spend must deny")
+            Issue.record("replay after mandatoryHuman grant consume must deny")
             return
         }
     }

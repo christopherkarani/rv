@@ -36,7 +36,7 @@ public enum RuntimeAskReason: Sendable, Equatable {
     case reviewAsk
 
     /// Ledger spelling for the admission wire. `hostAsk` is not representable.
-    var ledgerReason: ApprovalReason {
+    public var ledgerReason: ApprovalReason {
         switch self {
         case .mandatoryHuman:
             .mandatoryHuman

@@ -402,14 +402,14 @@ struct WorkspaceRecoveryTests {
         ).get()
         defer { _ = reopened.close() }
         #expect(reopened.id != opened.supervisor.id)
-        let stale = reopened.submit(recoveryFrame("sleep 1", capability: oldCapability, claim: oldRuntime), to: oldRuntime)
+        let stale = reopened.submitLegacy(recoveryFrame("sleep 1", capability: oldCapability, claim: oldRuntime), to: oldRuntime)
         #expect(stale == nil)
         let fresh = try launch(
             RecoveryOpen(supervisor: reopened, runtimeLog: logs.runtime, lifeLog: logs.life),
             script: "/bin/sleep 30"
         )
         #expect(fresh.id != oldRuntime)
-        let rejected = reopened.submit(
+        let rejected = reopened.submitLegacy(
             recoveryFrame("sleep 1", capability: oldCapability, claim: fresh.id),
             to: fresh.id
         )

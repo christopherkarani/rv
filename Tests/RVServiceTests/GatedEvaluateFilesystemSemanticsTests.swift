@@ -125,12 +125,11 @@ private func peek(
     cwd: URL,
     home: HomeDirectory? = nil
 ) async throws -> EvaluationResult {
-    let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
     return await GatedEvaluate().peek(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
         cwd: WorkingDirectory(validating: cwd.path),
         home: home,
-        store: store,
+        grants: EphemeralAllowOnceTable(),
         now: Date(timeIntervalSince1970: 1_700_000_000),
         allowlist: { .empty }
     )

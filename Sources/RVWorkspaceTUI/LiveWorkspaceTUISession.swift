@@ -197,8 +197,8 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession, @unchecked Send
 
     /// A malformed hook tag is rejected. Silently dropping it to `nil`
     /// would ensure an untagged runtime the launcher cannot title or match.
-    /// A well-formed tag that names no HookHost still travels: the host
-    /// treats it as staging-only credential selection.
+    /// Step 8 (F2): only the HookHost part travels; a tag that names no
+    /// host selects nothing, and tags never stage credentials.
     public func ensureTerminal(
         executable: String,
         arguments: [String],
@@ -216,8 +216,7 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession, @unchecked Send
             hookHost: hook.flatMap(HookHost.init(rawValue:)),
             terminalRows: rows,
             terminalColumns: columns,
-            resourceProfileID: resourceProfileID,
-            stagingAgent: hook
+            resourceProfileID: resourceProfileID
         ).map(Self.listed).mapError(Self.failure)
     }
 
@@ -251,8 +250,7 @@ public final class LiveWorkspaceTUISession: WorkspaceTUISession, @unchecked Send
             hookHost: hook.flatMap(HookHost.init(rawValue:)),
             terminalRows: rows,
             terminalColumns: columns,
-            resourceProfileID: resourceProfileID,
-            stagingAgent: hook
+            resourceProfileID: resourceProfileID
         ).map(Self.listed).mapError(Self.failure)
     }
 

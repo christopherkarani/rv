@@ -66,9 +66,10 @@ struct PacksCommandRunTests {
     }
 
     @Test func enable_missingHomeEmptyAndUnknown() async throws {
+        // The owner gate throws before any mutation path runs.
         try await withCLIProcess(environment: [:]) {
             let home = try Packs.Enable.parse(["core.git"])
-            await #expect(throws: ExitCode(1)) {
+            await #expect(throws: ValidationError.self) {
                 try await home.run()
             }
         }
@@ -76,38 +77,62 @@ struct PacksCommandRunTests {
         try await withCLIProcess(home: isolated) {
             var empty = Packs.Enable()
             empty.ids = []
-            await #expect(throws: (any Error).self) {
+            await #expect(throws: ValidationError.self) {
                 try await empty.run()
             }
             let unknown = try Packs.Enable.parse(["not-a-pack"])
-            await #expect(throws: ExitCode(1)) {
+            await #expect(throws: ValidationError.self) {
                 try await unknown.run()
             }
-            let ok = try Packs.Enable.parse(["core.git"])
-            try await ok.run()
-            let category = try Packs.Enable.parse(["core"])
-            try await category.run()
         }
     }
 
-    @Test func disable_succeedsAndUnwritableConfig() async throws {
-        let home = try isolatedHome()
-        try await withCLIProcess(home: home) {
-            let disable = try Packs.Disable.parse(["core.git"])
-            try await disable.run()
-        }
-        try replacePathWithDirectory(PacksConfigStore.configURL(home: home))
-        try await withCLIProcess(home: home) {
-            let again = try Packs.Disable.parse(["core.filesystem"])
+    @Test func enableBody_missingHomeEmptyUnknownAndSuccess() async throws {
+        // Body behind the gate: exercised directly until authenticated
+        // service mutation routes land and the gate opens.
+        try await withCLIProcess(environment: [:]) {
             await #expect(throws: ExitCode(1)) {
-                try await again.run()
+                try applyPackMutation(ids: ["core.git"], enabling: true)
             }
         }
         let isolated = try isolatedHome()
         try await withCLIProcess(home: isolated) {
-            let unknown = try Packs.Disable.parse(["not-a-pack"])
+            await #expect(throws: (any Error).self) {
+                try applyPackMutation(ids: [], enabling: true)
+            }
             await #expect(throws: ExitCode(1)) {
-                try await unknown.run()
+                try applyPackMutation(ids: ["not-a-pack"], enabling: true)
+            }
+            try applyPackMutation(ids: ["core.git"], enabling: true)
+            try applyPackMutation(ids: ["core"], enabling: true)
+        }
+    }
+
+    @Test func disable_requiresOwnerAuthorization() async throws {
+        let home = try isolatedHome()
+        try await withCLIProcess(home: home) {
+            let disable = try Packs.Disable.parse(["core.git"])
+            await #expect(throws: ValidationError.self) {
+                try await disable.run()
+            }
+        }
+    }
+
+    @Test func disableBody_succeedsAndUnwritableConfig() async throws {
+        let home = try isolatedHome()
+        try await withCLIProcess(home: home) {
+            try applyPackMutation(ids: ["core.git"], enabling: false)
+        }
+        try replacePathWithDirectory(PacksConfigStore.configURL(home: home))
+        try await withCLIProcess(home: home) {
+            await #expect(throws: ExitCode(1)) {
+                try applyPackMutation(ids: ["core.filesystem"], enabling: false)
+            }
+        }
+        let isolated = try isolatedHome()
+        try await withCLIProcess(home: isolated) {
+            await #expect(throws: ExitCode(1)) {
+                try applyPackMutation(ids: ["not-a-pack"], enabling: false)
             }
         }
     }

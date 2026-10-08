@@ -1,0 +1,3 @@
+Error: Authenticated RV service and operation-bound owner authorization required.
+Usage: rv <subcommand>
+  See 'rv --help' for more information.

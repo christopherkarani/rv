@@ -36,8 +36,8 @@ struct LinuxCHookTests {
         let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         #expect(process.terminationStatus == 0, "linux c-hook-proof failed:\n\(err)\n\(out)")
         #expect(out.contains("linux-clang ok"))
-        #expect(out.contains("linux-last_resort ok"))
-        #expect(out.contains("linux-miss_replay ok"))
+        #expect(out.contains("linux-killswitch-deny ok"))
+        #expect(out.contains("linux-no-replay ok"))
         #expect(out.contains("linux-c-hook-proof ok"))
     }
 
@@ -82,10 +82,13 @@ struct LinuxCHookTests {
         try process.run()
         process.waitUntilExit()
         let out = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        // No daemon in this probe: the Swift CLI answers the miss replay
+        // with the fail-closed boundary deny. Mint-on-deny needs a live
+        // service (pinned by HookReviewCeremonyTests + c-hook-proof AC-001),
+        // so no unlock code and no per-rule reason appear here.
         #expect(out.contains("\"decision\":\"deny\""))
-        let code = try #require(allowOnceUnlockCode(in: out))
-        #expect(out.contains(unlockLine(for: code)))
-        #expect(out.contains("Destroys uncommitted changes. Use 'git stash' first."))
+        #expect(out.contains("operation-bound owner authorization"))
+        #expect(allowOnceUnlockCode(in: out) == nil)
         #expect(out.contains("git reset --hard") == false)
         #expect(out.contains("\"decision\":\"allow\"") == false)
         #expect(out.contains("RV_" + "BYPASS") == false)

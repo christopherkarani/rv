@@ -67,6 +67,159 @@ struct ApplyFilesystemSemanticsTests {
         #expect(action.primaryTarget?.canonical == "/outside-file")
     }
 
+    @Test func curlOutputDirOutside_isDeniedByBoundary() throws {
+        // --output-dir prepends to relative -o names; the write lands
+        // outside while the raw claim would resolve inside.
+        let command = "curl -o rel --output-dir /outside http://h"
+        let pack = try runFilesystemPack(command)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            filesystemWorld: repo
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("output-dir escape must deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+    }
+
+    @Test func escapedVerbOutside_isDeniedByBoundary() throws {
+        // Backslash-escaped spellings execute the tool; dispatch
+        // unescapes pairs before matching or destinations are missed.
+        let command = "c\\url -o /outside/x http://h"
+        let pack = try runFilesystemPack(command)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            filesystemWorld: repo
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("escaped-verb escape must deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+    }
+
+    @Test func escapedCdChain_isDeniedByBoundary() throws {
+        // `c\d` moves the runtime outside while a naive tracker keeps
+        // the stale inside cwd; poisoning fails the chain closed.
+        let command = "c\\d /tmp && touch evil"
+        let pack = try runFilesystemPack(command)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            filesystemWorld: repo
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("escaped-cd chain must deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+    }
+
+    @Test func globVerbOutside_isDeniedByBoundary() throws {
+        // A glob head can expand to the tool (`[c]url` with ./curl
+        // present); dispatch misses it, so the dynamic-verb rule must
+        // fail the segment closed instead of skipping it.
+        let command = "[c]url -o /outside/x http://h"
+        let pack = try runFilesystemPack(command)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            filesystemWorld: repo
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("glob-verb escape must deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+    }
+
+    @Test func dynamicVerbSingle_isDeniedByBoundary() throws {
+        // Pre-existing gap, same shape: an unparseable dynamic-head
+        // single returned unknown → allow. Now fails closed like chains.
+        let command = "$CMD -o /outside/x http://h"
+        let pack = try runFilesystemPack(command)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            filesystemWorld: repo
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("dynamic-verb single must deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+    }
+
+    @Test func globCdChain_isDeniedByBoundary() throws {
+        let command = "[c]d /tmp && touch evil"
+        let pack = try runFilesystemPack(command)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            filesystemWorld: repo
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("glob-cd chain must deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+    }
+
+    @Test(.disabled("FORK-SEMANTICS FOLLOW-UP: verified allow; needs fork-aware cwd threading")) func forkPipeCwd_isDeniedByBoundary() throws {
+        // FORK-SEMANTICS FOLLOW-UP (verified allow on 2026-10-07): `cd`
+        // in a pipeline forks, so the runtime stays in /tmp while the
+        // tracker models /repo. Correct verdict is deny; observed allow.
+        let command = "cd /tmp && cd /repo | touch evil"
+        let pack = try runFilesystemPack(command)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            filesystemWorld: repo
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("fork-pipe chain must deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+    }
+
+    @Test(.disabled("FORK-SEMANTICS FOLLOW-UP: verified allow; needs fork-aware cwd threading")) func forkBackgroundCwd_isDeniedByBoundary() throws {
+        // FORK-SEMANTICS FOLLOW-UP (verified allow on 2026-10-07):
+        // backgrounded `cd` forks; same divergence as pipes.
+        let command = "cd /tmp && cd /repo & touch evil"
+        let pack = try runFilesystemPack(command)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            filesystemWorld: repo
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("fork-background chain must deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+    }
+
+    @Test(.disabled("FORK-SEMANTICS FOLLOW-UP: verified allow; needs fork-aware cwd threading")) func forkSubshellCwd_isDeniedByBoundary() throws {
+        // FORK-SEMANTICS FOLLOW-UP (verified allow on 2026-10-07):
+        // subshell `cd` never escapes; same divergence as pipes.
+        let command = "cd /tmp && (cd /repo) && touch evil"
+        let pack = try runFilesystemPack(command)
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: ShellCommand(rawValue: command),
+            filesystemWorld: repo
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("fork-subshell chain must deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+    }
+
     @Test func symlinkEscape_usesCanonicalScopeForPolicy() throws {
         let pack = try runFilesystemPack("rm link")
         #expect(pack.decision == .allow)
@@ -488,6 +641,69 @@ struct ApplyFilesystemSemanticsTests {
             filesystemWorld: repo
         )
         #expect(composed.analysis == pack.analysis)
+    }
+
+    @Test func gitClaim_redirectOutsideRepoDenies() {
+        let command = ShellCommand(rawValue: "git stash list > ../outside-file")
+        let pack = EvaluationResult(
+            outcome: .plain,
+            matchingView: Normalize.matchingView(of: command),
+            analysis: .git(.stash(verb: .list))
+        )
+        let composed = applyFilesystemSemantics(
+            pack: pack,
+            command: command,
+            filesystemWorld: repo
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("redirect outside the repo must deny, got \(composed.decision)")
+            return
+        }
+        #expect(deny.ruleID == ActionPolicyEngine.Builtin.outsideRepository.ruleID)
+    }
+
+    @Test func gitClaim_redirectInsideRepoLeavesPackUntouched() {
+        for raw in ["git stash list > Sources/log.txt", "git stash list"] {
+            let command = ShellCommand(rawValue: raw)
+            let pack = EvaluationResult(
+                outcome: .plain,
+                matchingView: Normalize.matchingView(of: command),
+                analysis: .git(.stash(verb: .list))
+            )
+            let composed = applyFilesystemSemantics(
+                pack: pack,
+                command: command,
+                filesystemWorld: repo
+            )
+            #expect(composed.decision == .allow)
+            #expect(composed.analysis == pack.analysis)
+        }
+    }
+
+    @Test func gitClaim_packFloorStillWinsFirst() {
+        let command = ShellCommand(rawValue: "git stash list > ../outside-file")
+        let packDeny = EvaluationResult(
+            outcome: .deny(
+                Deny(
+                    ruleID: RuleID(pack: .coreFilesystem, pattern: "pack-rule"),
+                    reason: "pack denied first"
+                ),
+                matched: nil
+            ),
+            matchingView: Normalize.matchingView(of: command),
+            analysis: .git(.stash(verb: .list))
+        )
+        let composed = applyFilesystemSemantics(
+            pack: packDeny,
+            command: command,
+            filesystemWorld: repo
+        )
+        guard case .deny(let deny) = composed.decision else {
+            Issue.record("pack deny must stand, got \(composed.decision)")
+            return
+        }
+        // The floor wins: the pack's own reason survives, not the redirect's.
+        #expect(deny.reason == "pack denied first")
     }
 }
 

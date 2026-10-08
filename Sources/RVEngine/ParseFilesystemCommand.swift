@@ -18,26 +18,65 @@ enum FilesystemOperation {
 }
 
 func parseFilesystemCommand(_ argv: Argv) -> ParsedFilesystemCommand? {
-    let head = basename(argv.program).lowercased()
+    let head = unescapeBackslashPairs(basename(argv.program)).lowercased()
     switch head {
+    // Redirects are shell-side: when the verb parse fails (unknown flags,
+    // help, dangling values) the shell still truncated the redirect target,
+    // so every verb falls back to the redirect parse. `cat` keeps its own
+    // redirect-first order; the new writer verbs union internally.
     case "rm":
-        return parseRm(argv)
+        return parseRm(argv) ?? parseRedirectOnly(argv)
     case "unlink":
-        return parseUnlink(argv)
+        return parseUnlink(argv) ?? parseRedirectOnly(argv)
     case "rmdir":
-        return parseRmdir(argv)
+        return parseRmdir(argv) ?? parseRedirectOnly(argv)
     case "mv":
-        return parseMv(argv)
+        return parseMv(argv) ?? parseRedirectOnly(argv)
+    case "cp":
+        return parseCp(argv)
+    case "tee":
+        return parseTee(argv)
+    case "install":
+        return parseInstall(argv)
+    case "ln":
+        return parseLn(argv)
+    case "rsync":
+        return parseRsync(argv)
+    case "tar":
+        return parseTar(argv)
+    case "curl":
+        return parseCurl(argv)
+    case "dd":
+        return parseDd(argv)
+    case "wget":
+        return parseWget(argv)
+    case "iconv":
+        return parseIconv(argv)
+    case "unzip":
+        return parseUnzip(argv)
+    case "split":
+        return parseSplit(argv)
+    case "sed":
+        return parseSed(argv)
+    case "sqlite3":
+        return parseSqlite3(argv)
+    case "ditto":
+        return parseDitto(argv)
+    case "gzip", "gunzip", "bzip2", "bunzip2", "xz", "unxz", "compress",
+        "uncompress":
+        return parseInplaceCompress(argv)
+    case "zip":
+        return parseZip(argv)
     case "chmod":
-        return parseChmod(argv)
+        return parseChmod(argv) ?? parseRedirectOnly(argv)
     case "truncate":
-        return parseTruncate(argv)
+        return parseTruncate(argv) ?? parseRedirectOnly(argv)
     case "shred":
-        return parseShred(argv)
+        return parseShred(argv) ?? parseRedirectOnly(argv)
     case "touch":
-        return parseTouch(argv)
+        return parseTouch(argv) ?? parseRedirectOnly(argv)
     case "mkdir":
-        return parseMkdir(argv)
+        return parseMkdir(argv) ?? parseRedirectOnly(argv)
     case "cat":
         if let redirect = parseRedirectOnly(argv), redirect.paths.isEmpty == false {
             return redirect

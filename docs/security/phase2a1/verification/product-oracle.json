@@ -1,0 +1,17 @@
+{
+  "status": "BLOCKED",
+  "protected_peer_trust_manifest_present": false,
+  "operator_launch_authorization": "WorkspaceOperationAuthorization.permits returns false for launchAgentRuntime/launchCustomRuntime before dispatch",
+  "operator_definition_selection": "No named definition installed by this pass; no operator configuration modified",
+  "three_process_success": false,
+  "authenticated_component_roles": null,
+  "pids": null,
+  "principal_identifiers": null,
+  "revocation_after_service_success": "NOT PROVEN",
+  "actual_host_restart_after_service_success": "NOT PROVEN",
+  "same_user_forged_reference_over_authenticated_transport": "NOT PROVEN",
+  "scope_dependency": "Scoped operator authorization required; approvals deliberately out of scope",
+  "trust_installation": "No administrator trust installation performed; previous sudo -n probe required password",
+  "explicit_fixture_command": "Scripts/swift-6.4 test --disable-sandbox --filter ProductionIdentityLaunchTests",
+  "fixture_proof": "Real supervisor/child minting and fd4/fd5 binding only; not installed XPC authentication"
+}

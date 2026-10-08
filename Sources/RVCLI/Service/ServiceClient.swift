@@ -20,7 +20,6 @@ public struct ServiceClient: Sendable {
     private let transport: (any ServiceTransport)?
     private let door: GatedEvaluate
     private let store: AllowOnceStore
-    private let pendingApprovals: (any PendingApprovalCoordinating)?
     private let home: HomeDirectory?
     private let clock: @Sendable () -> Date
 
@@ -77,7 +76,6 @@ public struct ServiceClient: Sendable {
             self.door = EvaluationWorld.assemble(home: home, snapshots: nil, catalog: nil)
         }
         self.store = Self.resolveStore(store: store, allowOnceDirectory: allowOnceDirectory, home: home)
-        self.pendingApprovals = Self.resolvePending(home: home)
         self.home = home
         self.clock = clock
     }
@@ -94,7 +92,6 @@ public struct ServiceClient: Sendable {
         self.transport = transport
         self.door = GatedEvaluate(lazySession: lazySession)
         self.store = Self.resolveStore(store: nil, allowOnceDirectory: allowOnceDirectory, home: home)
-        self.pendingApprovals = Self.resolvePending(home: home)
         self.home = home
         self.clock = clock
     }
@@ -125,25 +122,31 @@ public struct ServiceClient: Sendable {
         )
     }
 
-    package func insertGranted(matchingView: MatchingView, cwd: WorkingDirectory, now: Date = Date()) async throws {
-        try await store.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
+    /// Diagnostic fallback uses an empty, isolated grant view and cannot spend authority.
+    private func diagnosticPeek(command: ShellCommand, cwd: WorkingDirectory?) async -> EvaluationResult {
+        // Grants stay isolated: a diagnostic fallback must neither honor
+        // nor consume an existing grant. The allowlist loads from the
+        // client's own store directory so saved rules still apply.
+        let diagnosticDirectory = Self.isolatedFactoryDirectory()
+        defer { try? FileManager.default.removeItem(at: diagnosticDirectory) }
+        let diagnosticStore = AllowOnceStore(baseDirectory: diagnosticDirectory)
+        let allowlistDirectory = store.baseDirectory
+        return await LiveEvaluateWorld(
+            home: home,
+            store: diagnosticStore,
+            gated: door,
+            clock: clock,
+            allowlist: { cwd, now in
+                AllowlistStore(baseDirectory: allowlistDirectory)
+                    .loadUserSnapshot(workspacePath: cwd.map(\.rawValue), now: now)
+            }
+        ).peek(command: command, cwd: cwd)
     }
 
-    private func liveWorld() -> LiveEvaluateWorld {
-        LiveEvaluateWorld(home: home, store: store, gated: door, clock: clock)
-    }
-
-    private func inProcessApply(
-        command: ShellCommand,
-        cwd: WorkingDirectory?,
-        host: LedgerHost = .tty
-    ) async -> EvaluationResult {
-        await liveWorld().apply(command: command, cwd: cwd, host: host)
-    }
-
+    /// Diagnostic evaluation: an inProcess result is never execution authorization.
     public func evaluate(command: ShellCommand, cwd: WorkingDirectory? = nil) async -> RoutedEvaluation {
         func inProcessRoute() async -> RoutedEvaluation {
-            RoutedEvaluation(result: await inProcessApply(command: command, cwd: cwd), path: .inProcess)
+            RoutedEvaluation(result: await diagnosticPeek(command: command, cwd: cwd), path: .inProcess)
         }
         guard let transport else {
             return await inProcessRoute()
@@ -178,6 +181,7 @@ public struct ServiceClient: Sendable {
         }
     }
 
+    /// Diagnostic convenience only; product execution paths use authenticated hookEvaluate.
     public func evaluateResult(command: ShellCommand, cwd: WorkingDirectory? = nil) async -> EvaluationResult {
         await evaluate(command: command, cwd: cwd).result
     }
@@ -214,22 +218,95 @@ public struct ServiceClient: Sendable {
         return reply
     }
 
-    /// Maps host stdin through IPC `hookEvaluate`, or in-process `hookWire` on miss.
-    public func hookEvaluate(host: HookHost, stdin: String) async -> HookWire {
-        func inProcessWire() async -> HookWire {
-            await hookWire(
-                host: host,
-                stdin: stdin,
-                world: HookEvaluateWorld.live(
-                    world: liveWorld(),
-                    host: host,
-                    pending: pendingApprovals,
-                    clock: clock
-                )
+    public enum ServiceCommandError: Error, Sendable, Equatable {
+        case noTransport
+        case service(String)
+        case transport(String)
+    }
+
+    @available(*, deprecated, renamed: "ServiceCommandError")
+    public typealias OperatorCommandError = ServiceCommandError
+
+    /// Untrusted launch proposal. Returns the correlation-only operation ID;
+    /// authority arrives only via the host bridge and operator review.
+    public func proposeLaunch(_ params: ProposeLaunchParams) async -> Result<
+        ProposeLaunchReply, ServiceCommandError
+    > {
+        guard let transport else {
+            return .failure(.noTransport)
+        }
+        do {
+            let reply = try await send(
+                ProposeLaunchCall(params: params), using: transport)
+            return .success(reply)
+        } catch let error as IPCCallError {
+            return .failure(mapCallError(error))
+        } catch {
+            return .failure(.transport(String(describing: error)))
+        }
+    }
+
+    public func proposalStatus(operationID: UUID) async -> Result<
+        ProposalStatusReply, ServiceCommandError
+    > {
+        guard let transport else {
+            return .failure(.noTransport)
+        }
+        do {
+            let reply = try await send(
+                ProposalStatusCall(params: ProposalStatusParams(operationID: operationID)),
+                using: transport)
+            return .success(reply)
+        } catch let error as IPCCallError {
+            return .failure(mapCallError(error))
+        } catch {
+            return .failure(.transport(String(describing: error)))
+        }
+    }
+
+    /// Step 8B.1 TTY attestation: plants the reviewed grant in daemon memory.
+    /// Only the pinned genuine CLI passes the daemon's `.cli` role check;
+    /// every other caller fails closed there. No transport (or a refused
+    /// attestation) means NO grant: the caller must fail closed, never
+    /// fall back to file state.
+    public func attestTTYRedemption(_ params: AttestTTYRedemptionParams) async -> Result<
+        AttestTTYRedemptionReply, ServiceCommandError
+    > {
+        guard let transport else {
+            return .failure(.noTransport)
+        }
+        do {
+            let reply = try await send(
+                AttestTTYRedemptionCall(params: params),
+                using: transport,
+                timeoutMs: transport.oneShotEvaluateTimeoutMs
             )
+            return .success(reply)
+        } catch let error as IPCCallError {
+            return .failure(mapCallError(error))
+        } catch {
+            return .failure(.transport(String(describing: error)))
+        }
+    }
+
+    private func mapCallError(_ error: IPCCallError) -> ServiceCommandError {
+        switch error {
+        case .identityMismatch:
+            return .transport("identityMismatch")
+        case .unexpectedResult:
+            return .transport("unexpectedResult")
+        case .service(let ipcError):
+            return .service(String(describing: ipcError))
+        }
+    }
+
+    /// Authority-bearing hooks never retry through the local evaluation door.
+    public func hookEvaluate(host: HookHost, stdin: String) async -> HookWire {
+        func unavailable() -> HookWire {
+            LocalControlBoundary.deniedHook(host: host)
         }
         guard let transport else {
-            return await inProcessWire()
+            return unavailable()
         }
         do {
             let reply = try await send(
@@ -251,23 +328,14 @@ public struct ServiceClient: Sendable {
                 return HookWire(stdout: reply.stdout, exitCode: reply.exitCode, stderr: reply.stderr)
             case .inProcess:
                 transport.invalidate()
-                return await inProcessWire()
+                return unavailable()
             }
         } catch is IPCCallError {
             transport.invalidate()
-            return await inProcessWire()
+            return unavailable()
         } catch {
-            return await inProcessWire()
+            return unavailable()
         }
-    }
-
-    /// Plant+spend a host Allow once on the same grant file evaluate uses.
-    public func spendHostAsk(
-        command: ShellCommand,
-        cwd: WorkingDirectory? = nil,
-        host: LedgerHost = .tty
-    ) async -> EvaluationResult {
-        await liveWorld().spend(command: command, cwd: cwd, host: host)
     }
 
     public func status() async -> ServiceStatusReport {
@@ -421,14 +489,7 @@ public struct ServiceClient: Sendable {
         if let home {
             return AllowOnceStore.makeLive(home: home)
         }
-        return AllowOnceStore(baseDirectory: isolatedFactoryDirectory())
-    }
-
-    private static func resolvePending(home: HomeDirectory?) -> (any PendingApprovalCoordinating)? {
-        if let home {
-            return PendingApprovalStore.makeLive(home: home)
-        }
-        return PendingApprovalStore(baseDirectory: isolatedFactoryDirectory())
+        return AllowOnceStore(baseDirectory: Self.isolatedFactoryDirectory())
     }
 
     private static func isolatedFactoryDirectory() -> URL {

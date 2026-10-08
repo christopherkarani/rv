@@ -26,32 +26,32 @@ private func resetHardEvent() -> [String: Any] {
 @Test func hermesHostAskAdapter_sourceIsConfirmThenSpendNeverApprove() throws {
     let source = try adapterSource(for: .hermes, rvPath: "/opt/rv")
     #expect(source.contains("pre_tool_call"))
-    #expect(source.contains("hostAsk"))
-    #expect(source.contains("spend"))
-    #expect(source.contains("RV_ASK_CONFIRM"))
-    #expect(source.contains("request_tool_approval"))
-    #expect(source.contains("rv-ask:"))
-    #expect(source.contains("uuid.uuid4"))
-    #expect(source.contains("rule_key"))
+    #expect(source.contains("hostAsk") == false)
+    #expect(source.contains("spend") == false)
+    #expect(source.contains("RV_ASK_CONFIRM") == false)
+    #expect(source.contains("request_tool_approval") == false)
+    #expect(source.contains("rv-ask:") == false)
+    #expect(source.contains("uuid.uuid4") == false)
+    #expect(source.contains("rule_key") == false)
     #expect(source.contains("\"action\": \"approve\"") == false)
     #expect(source.contains("RV_BYPASS") == false)
 }
 
-@Test func hermesHostAskAdapter_confirmYesSpendsThenAllows() async throws {
+@Test func hermesHostAskAdapter_confirmYesIgnoredAskBlocks() async throws {
     let result = try await runHermesAdapter(
         event: resetHardEvent(),
         stub: .stdout(askResetHardJSON, exit: 1),
         confirm: "yes",
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.action == nil)
-    #expect(result.message == nil)
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.action == "block")
+    #expect(result.message == resetHardAskReason)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
     #expect(result.lastStdin?.contains("git reset --hard") == true)
 }
 
-@Test func hermesHostAskAdapter_confirmYesFailedSpendDoesNotRunTool() async throws {
+@Test func hermesHostAskAdapter_confirmYesIgnoredSpendStubUnused() async throws {
     let result = try await runHermesAdapter(
         event: resetHardEvent(),
         stub: .stdout(askResetHardJSON, exit: 1),
@@ -59,19 +59,19 @@ private func resetHardEvent() -> [String: Any] {
         secondStub: .stdout(resetHardJSON, exit: 1)
     )
     #expect(result.action == "block")
-    #expect(result.message == resetHardReason)
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.message == resetHardAskReason)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
-@Test func hermesHostAskAdapter_confirmYesMissingSpendDoesNotRunTool() async throws {
+@Test func hermesHostAskAdapter_confirmYesIgnoredBlocksWithoutSecondConsult() async throws {
     let result = try await runHermesAdapter(
         event: resetHardEvent(),
         stub: .stdout(askResetHardJSON, exit: 1),
         confirm: "yes"
     )
     #expect(result.action == "block")
-    #expect(result.spawnCount == 2)
+    #expect(result.spawnCount == 1)
 }
 
 @Test func hermesHostAskAdapter_confirmNoDoesNotSpend() async throws {
@@ -98,7 +98,7 @@ private func resetHardEvent() -> [String: Any] {
     #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
-@Test func hermesHostAskAdapter_confirmTimeoutDoesNotSpend() async throws {
+@Test func hermesHostAskAdapter_approvalProbeIgnoredBlocks() async throws {
     let result = try await runHermesAdapter(
         event: resetHardEvent(),
         stub: .stdout(askResetHardJSON, exit: 1),

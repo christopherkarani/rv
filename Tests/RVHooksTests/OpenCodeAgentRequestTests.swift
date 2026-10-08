@@ -63,29 +63,25 @@ struct OpenCodeAgentRequestTests {
         #expect(agentRequest(from: request) == .failure(.unsupportedKind))
     }
 
-    @Test func hookRequestSpend_isUnsupportedKind() {
-        let request = HookRequest.spend(
-            host: .opencode,
-            command: ShellCommand(rawValue: "git reset --hard"),
-            cwd: nil,
-            session: nil
-        )
-        #expect(agentRequest(from: request) == .failure(.unsupportedKind))
-    }
-
-    @Test func openCodeHostAskSpend_doesNotBecomeAgentRequest() {
+    @Test func openCodeHostAskSpend_decodesAsShellAgentRequest() throws {
+        // Step 8B: legacy spend envelopes are ordinary shell requests.
         let stdin = """
         {"tool":"bash","cwd":"/tmp/ws","args":{"command":"git reset --hard"},"hostAsk":"spend"}
         """
         guard case .request(let hook) = codec.decode(stdin) else {
-            Issue.record("expected .request for hostAsk spend")
+            Issue.record("expected .request for hostAsk spend envelope")
             return
         }
-        guard case .spend = hook else {
-            Issue.record("expected HookRequest.spend")
+        guard case .shell = hook else {
+            Issue.record("expected HookRequest.shell")
             return
         }
-        #expect(agentRequest(from: hook) == .failure(.unsupportedKind))
+        let request = try agentRequest(from: hook).get()
+        guard case .process(let process) = request else {
+            Issue.record("expected .process agent request")
+            return
+        }
+        #expect(process.command.rawValue == "git reset --hard")
     }
 
     @Test func openCodeGitResetHard_composesToProposedAction() throws {

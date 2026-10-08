@@ -3,6 +3,8 @@ import Synchronization
 import Testing
 import RVDomain
 import RVHooks
+import RVIPC
+import RVPolicy
 @testable import RVCLI
 
 private func grokFixture(_ name: String) throws -> String {
@@ -52,6 +54,32 @@ private func expectResetHardMapperDeny(_ wire: HookWire, exit: Int32) throws {
     ))
     #expect(json["rule"] as? String == "core.git/reset-hard")
     #expect(json["next"] == nil)
+    #expect(wire.exitCode == exit)
+}
+
+/// Step 8B ask-denial: a cwd-bound reset-hard is policy ASK, and no host
+/// can pause for a human, so the wire renders deny-with-guidance. The
+/// verdict stays ASK (pending row + TTY code); only the bytes say deny.
+private func expectResetHardAskDeny(_ wire: HookWire, exit: Int32) throws {
+    let json = try denyJSON(wire.stdout)
+    let line = try #require(hostDenyText(
+        from: EvaluationResult(
+            outcome: .deny(
+                Deny(
+                    ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                    reason: "git reset --hard destroys uncommitted changes. Use 'git stash' first."
+                ),
+                matched: nil
+            )
+        ),
+        command: ShellCommand(rawValue: "git reset --hard")
+    ))
+    #expect(json["decision"] as? String == "deny")
+    #expect(json["reason"] as? String == "\(line) \(approvalPendingLine)")
+    #expect(json["rule"] as? String == "core.git/reset-hard")
+    #expect(json["next"] == nil)
+    #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("hostNative") == false)
     #expect(wire.exitCode == exit)
 }
 
@@ -133,7 +161,10 @@ private func runHonorHook(
     let text = try #require(hostDenyText(from: result, command: command))
     let wire = try await runHook(stdin: try grokFixture("deny-git-reset-hard.json"))
     let json = try denyJSON(wire.stdout)
-    #expect(json["reason"] as? String == text)
+    // Step 8B: cwd-bound reset-hard is policy ASK; the wire renders
+    // deny-with-guidance (pending row + TTY code carry the ASK).
+    #expect(json["decision"] as? String == "deny")
+    #expect(json["reason"] as? String == "\(text) \(approvalPendingLine)")
     #expect(json["rule"] as? String == "core.git/reset-hard")
     #expect(json["next"] == nil)
     #expect(wire.exitCode == expected.exit)
@@ -146,25 +177,47 @@ private func runHonorHook(
     #expect(text.components(separatedBy: "RV · Blocked").count == 2)
 }
 
-@Test func hookRun_grokDenyThroughClientMintsCode() async throws {
-    let directory = try isolatedAllowOnceDirectory()
-    let now = Date(timeIntervalSince1970: 1_700_000_000)
-    let client = ServiceClient(
-        transport: nil,
-        allowOnceDirectory: directory,
-        home: try isolatedHome(),
-        clock: { now }
+@Test func hookRun_grokDenyThroughDaemonForwardsCode() async throws {
+    // Step 8B.1: the code-carrying grok deny arrives only through the
+    // daemon (nil transport is the static deny bytes). The CLI forwards
+    // the daemon's decision/reason/next/exit verbatim.
+    let code = try #require(AllowOnceUnlockCode(validating: "abc123"))
+    let denied = EvaluationResult(
+        outcome: .deny(
+            Deny(
+                ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+                reason: "git reset --hard destroys uncommitted changes"
+            ),
+            matched: nil
+        ),
+        matchingView: "git reset --hard"
     )
+    let daemon = GrokHostCodec().encodeEvaluatedDeny(
+        from: denied,
+        command: ShellCommand(rawValue: "git reset --hard"),
+        unlockCode: .code(code)
+    )
+    let transport = ScriptedTransport(
+        ack: HelloAckView(protocolName: "rv.ipc.v1", serviceSemver: "1.0.0", status: .ok),
+        responseResult: .hookEvaluate(HookEvaluateReply(
+            stdout: daemon.stdout,
+            exitCode: daemon.exitCode,
+            stderr: daemon.stderr
+        ))
+    )
+    let client = try isolatedClient(transport: transport)
     var hook = Hook()
     hook.host = .grok
     let outcome = await hook.run(
         stdin: try grokFixture("deny-git-reset-hard.json"),
         client: client
     )
+    #expect(outcome.stdout == daemon.stdout)
+    #expect(outcome.exitCode == daemon.exitCode)
     let json = try denyJSON(outcome.stdout)
     #expect(json["decision"] as? String == "deny")
     let reason = try #require(json["reason"] as? String)
-    let code = try #require(allowOnceUnlockCode(in: reason))
+    #expect(allowOnceUnlockCode(in: reason) == code)
     #expect(json["next"] as? String == unlockLine(for: code))
     #expect(outcome.exitCode == 0)
 }
@@ -195,11 +248,14 @@ private func runHonorHook(
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookNonShellRead_allowsOrdinaryFileWithoutPackEvaluate() async throws {
-    let expected = try grokExpected("allow-non-shell-read")
+@Test func hookNonShellRead_deniesWithoutServiceTransport() async throws {
+    // Step 8B removed the local evaluation door from the honor path: with
+    // no transport even ordinary reads fail closed (no service, no consult).
     let wire = try await runHonorHook(stdin: try grokFixture("allow-non-shell-read.json"))
-    #expect(wire.stdout == expected.stdout)
-    #expect(wire.exitCode == expected.exit)
+    #expect(wire.exitCode == 0)
+    let json = try denyJSON(wire.stdout)
+    #expect(json["decision"] as? String == "deny")
+    #expect(wire.stdout.contains(LocalControlBoundary.reason))
 }
 
 @Test func hookMalformed_failsClosedWithDenyJSONWithoutEvaluating() async throws {
@@ -223,11 +279,17 @@ private func runHonorHook(
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookOrdinaryFileStillAllowsAfterFailClosedMalformed() async throws {
-    let expected = try grokExpected("allow-non-shell-read")
+@Test func hookOrdinaryFile_deniesWithoutServiceTransportAfterMalformed() async throws {
+    // A malformed call poisons nothing: the follow-up ordinary read gets
+    // the same boundary deny (not a malformed sentence, not an allow).
+    let malformed = try await runHonorHook(stdin: try grokFixture("malformed.txt"))
+    #expect(malformed.exitCode == 0)
     let wire = try await runHonorHook(stdin: try grokFixture("allow-non-shell-read.json"))
-    #expect(wire.stdout == expected.stdout)
-    #expect(wire.exitCode == expected.exit)
+    #expect(wire.exitCode == 0)
+    let json = try denyJSON(wire.stdout)
+    #expect(json["decision"] as? String == "deny")
+    #expect(wire.stdout.contains(LocalControlBoundary.reason))
+    #expect(wire.stdout.contains(malformedHookSentence(.unreadable)) == false)
 }
 
 @Test func hookFileTool_omittedEvaluateFileFailClosesIncomplete() async throws {
@@ -240,22 +302,24 @@ private func runHonorHook(
     #expect(wire.stdout.contains("core.secrets") == false)
 }
 
-@Test func hookGrokFileEnv_deniesCoreSecretsWithoutPackEvaluate() async throws {
+@Test func hookGrokFileEnv_deniesWithoutServiceTransport() async throws {
     let wire = try await runHonorHook(stdin: try grokFixture("deny-file-env.json"))
     #expect(wire.exitCode == 0)
     let json = try denyJSON(wire.stdout)
     #expect(json["decision"] as? String == "deny")
-    #expect(wire.stdout.contains("core.secrets"))
+    #expect(wire.stdout.contains(LocalControlBoundary.reason))
+    #expect(wire.stdout.contains("core.secrets") == false)
 }
 
-@Test func hookClaudeFileEnv_deniesPermissionDecision() async throws {
+@Test func hookClaudeFileEnv_deniesWithoutServiceTransport() async throws {
     let wire = try await runHonorHook(
         stdin: try hostFixture("claude", "deny-file-env.json"),
         host: .claude
     )
     #expect(wire.exitCode == 0)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
-    #expect(wire.stdout.contains("core.secrets"))
+    #expect(wire.stdout.contains(LocalControlBoundary.reason))
+    #expect(wire.stdout.contains("core.secrets") == false)
 }
 
 @Test func hookCursorFileSsh_deniesPermission() async throws {
@@ -274,7 +338,7 @@ private func runHonorHook(
     let wire = try await runHook(stdin: try grokFixture("deny-git-reset-hard.json")) { command, _ in
         await client.evaluateResult(command: command)
     }
-    try expectResetHardMapperDeny(wire, exit: expected.exit)
+    try expectResetHardAskDeny(wire, exit: expected.exit)
 }
 
 @Test func hookXPCSkew_stillDeniesResetHard() async throws {
@@ -292,7 +356,7 @@ private func runHonorHook(
     }
     #expect(transport.sendCount == 1)
     #expect(transport.helloCount == 0)
-    try expectResetHardMapperDeny(wire, exit: expected.exit)
+    try expectResetHardAskDeny(wire, exit: expected.exit)
 }
 
 @Test func hookBypassPermissionMode_stillEvaluates() async throws {
@@ -342,7 +406,7 @@ private func runHonorHook(
 @Test func hookDenyReasonIsOneLine_noBannerOrCSI() async throws {
     let expected = try grokExpected("deny-reason-is-one-line")
     let wire = try await runHook(stdin: try grokFixture("deny-reason-is-one-line.json"))
-    try expectResetHardMapperDeny(wire, exit: expected.exit)
+    try expectResetHardAskDeny(wire, exit: expected.exit)
     let parsed = try grokDenyObject(wire.stdout)
     #expect(parsed.reason.contains("\n") == false)
     #expect(parsed.reason.contains("═") == false)
@@ -359,7 +423,7 @@ private func runHonorHook(
             stdin: try grokFixture("deny-git-reset-hard.json"),
             world: hookWorld(evaluate: inProcessEvaluate)
         )
-        try expectResetHardMapperDeny(wire, exit: expected.exit)
+        try expectResetHardAskDeny(wire, exit: expected.exit)
         #expect(wire.stderr.isEmpty)
         #expect(FileManager.default.fileExists(atPath: home.appendingPathComponent(".grok").path) == false)
     }
@@ -386,12 +450,12 @@ private func runHonorHook(
     #expect(try Hook.parse(["--host", "cursor"]).host == .cursor)
 }
 
-@Test func hookClaudeResetHard_encodesAskNotPermissionDeny() async throws {
+@Test func hookClaudeResetHard_encodesAskDeny() async throws {
     let wire = try await runHook(
         stdin: try hostFixture("claude", "deny-git-reset-hard.json"),
         host: .claude
     )
-    try assertClaudeAskWire(wire)
+    try assertClaudeAskDenyWire(wire)
 }
 
 @Test func hookClaudeAllowGitStatus_emptyStdoutExitZero() async throws {
@@ -404,17 +468,17 @@ private func runHonorHook(
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookClaudeOrdinaryFile_allowsWithoutPackEvaluate() async throws {
-    let expected = try hostExpected("claude", "allow-non-shell-read")
+@Test func hookClaudeOrdinaryFile_deniesWithoutServiceTransport() async throws {
     let wire = try await runHonorHook(
         stdin: try hostFixture("claude", "allow-non-shell-read.json"),
         host: .claude
     )
-    #expect(wire.stdout == expected.stdout)
-    #expect(wire.exitCode == expected.exit)
+    #expect(wire.exitCode == 0)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(wire.stdout.contains(LocalControlBoundary.reason))
 }
 
-@Test func hookClaudeXPCDown_stillAsksResetHard() async throws {
+@Test func hookClaudeXPCDown_stillAskDeniesResetHard() async throws {
     let client = try isolatedClient(transport: nil)
     let wire = try await runHook(
         stdin: try hostFixture("claude", "deny-git-reset-hard.json"),
@@ -422,10 +486,10 @@ private func runHonorHook(
     ) { command, _ in
         await client.evaluateResult(command: command)
     }
-    try assertClaudeAskWire(wire)
+    try assertClaudeAskDenyWire(wire)
 }
 
-@Test func hookRun_claudeAskWithTempHome() async throws {
+@Test func hookRun_claudeAskDenyWithTempHome() async throws {
     try await withTempHome { home in
         var hook = Hook()
         hook.host = .claude
@@ -434,7 +498,7 @@ private func runHonorHook(
             stdin: try hostFixture("claude", "deny-git-reset-hard.json"),
             world: hookWorld(evaluate: inProcessEvaluate)
         )
-        try assertClaudeAskWire(stdout: wire.stdout, exitCode: wire.exitCode)
+        try assertClaudeAskDenyWire(stdout: wire.stdout, exitCode: wire.exitCode)
         #expect(wire.stderr.isEmpty)
         #expect(FileManager.default.fileExists(atPath: home.appendingPathComponent(".claude").path) == false)
     }
@@ -457,26 +521,37 @@ private func runHonorHook(
     #expect(wire.stdout.contains(text))
 }
 
-@Test func hookPiPresentCwdHonorsGrantOnce() async throws {
+@Test func hookPiPresentCwdDeniesWithoutDaemonGrant() async throws {
+    // Step 8B.1: no daemon, no memory grant. The hook door denies even
+    // with a matching granted projection row on disk.
     let directory = try isolatedAllowOnceDirectory()
     let client = try isolatedClient(transport: nil, allowOnceDirectory: directory)
-    try await client.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
+    let store = AllowOnceStore(baseDirectory: directory)
+    let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+    let code = try await store.mint(
+        matchingView: "git reset --hard",
+        cwd: wd("/tmp/ws"),
+        ruleID: nil,
+        tty: tty,
+        now: Date()
+    )
+    _ = try await store.redeem(code: code.rawValue, tty: tty, now: Date())
     let stdin = """
     {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git reset --hard"}}
     """
     let wire = try await runHook(stdin: stdin, host: .pi) { command, cwd in
         await client.evaluateResult(command: command, cwd: cwd)
     }
-    #expect(wire.stdout.isEmpty)
-    #expect(wire.exitCode == 0)
-    #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
+    #expect(wire.stdout.isEmpty == false)
+    #expect(wire.exitCode == 1)
+    #expect(wire.stdout.contains("\"decision\":\"deny\""))
 
     let second = await client.evaluateResult(
         command: ShellCommand(rawValue: "git reset --hard"),
         cwd: wd("/tmp/ws")
     )
     guard case .deny(let deny) = second.decision else {
-        Issue.record("second evaluate must deny after the grant is spent")
+        Issue.record("second evaluate must deny")
         return
     }
     #expect(deny.ruleID.rawValue == "core.git:reset-hard")
@@ -518,7 +593,7 @@ private func runHonorHook(
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookOpenClawResetHard_encodesAsk() async throws {
+@Test func hookOpenClawResetHard_encodesAskDeny() async throws {
     let command = ShellCommand(rawValue: "git reset --hard")
     let wire = try await runHook(
         stdin: try hostFixture("openclaw", "deny-git-reset-hard.json"),
@@ -527,12 +602,13 @@ private func runHonorHook(
     let json = try #require(
         JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
     )
-    #expect(json["decision"] as? String == "ask")
-    #expect(json["continuation"] as? String == "hostNative")
+    #expect(json["decision"] as? String == "deny")
     #expect(json["rule"] as? String == "core.git/reset-hard")
-    #expect(json["reason"] as? String == hostAskLine(command: command, ruleID: RuleID(pack: .coreGit, pattern: "reset-hard")))
     #expect(wire.exitCode == 1)
+    #expect(wire.stdout.contains(approvalPendingLine))
     #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)
+    #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("hostNative") == false)
     #expect(wire.stdout.contains("requireApproval") == false)
 }
 
@@ -565,7 +641,7 @@ private func runHonorHook(
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookHermesResetHard_encodesAsk() async throws {
+@Test func hookHermesResetHard_encodesAskDeny() async throws {
     let command = ShellCommand(rawValue: "git reset --hard")
     let wire = try await runHook(
         stdin: try hostFixture("hermes", "deny-git-reset-hard.json"),
@@ -574,12 +650,13 @@ private func runHonorHook(
     let json = try #require(
         JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
     )
-    #expect(json["decision"] as? String == "ask")
-    #expect(json["continuation"] as? String == "hostNative")
+    #expect(json["decision"] as? String == "deny")
     #expect(json["rule"] as? String == "core.git/reset-hard")
-    #expect(json["reason"] as? String == hostAskLine(command: command, ruleID: RuleID(pack: .coreGit, pattern: "reset-hard")))
     #expect(wire.exitCode == 1)
+    #expect(wire.stdout.contains(approvalPendingLine))
     #expect(wire.stdout.contains("\"decision\":\"allow\"") == false)
+    #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(wire.stdout.contains("hostNative") == false)
 }
 
 @Test func hookHermesAllowGitStatus_emptyStdoutExitZero() async throws {
@@ -621,8 +698,11 @@ private func runHonorHook(
         host: .codex
     )
     let json = try denyJSON(wire.stdout)
+    // Step 8B: cwd-bound reset-hard is policy ASK; the wire renders
+    // block-with-guidance (pending row + TTY code carry the ASK).
+    let askLine = "\(text) \(approvalPendingLine)"
     #expect(json["decision"] as? String == "block")
-    #expect(json["reason"] as? String == text)
+    #expect(json["reason"] as? String == askLine)
     #expect(json["permissionDecision"] == nil)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
     #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
@@ -631,7 +711,7 @@ private func runHonorHook(
     #expect(wire.stdout.contains(text))
     #expect(wire.stderr.isEmpty == false)
     #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-    #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == text)
+    #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == askLine)
     #expect(wire.stderr.contains(text))
 }
 
@@ -652,7 +732,7 @@ private func runHonorHook(
         #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
         #expect(wire.stderr.isEmpty == false)
         #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-        #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == text)
+        #expect(wire.stderr.trimmingCharacters(in: .whitespacesAndNewlines) == "\(text) \(approvalPendingLine)")
         #expect(wire.stderr.contains(text))
     }
 }
@@ -711,9 +791,12 @@ private func runHonorHook(
         host: .cursor
     )
     let json = try denyJSON(wire.stdout)
+    // Step 8B: cwd-bound reset-hard is policy ASK; the user message
+    // carries the deny line plus the approval-pending guidance, and the
+    // agent message tells the agent to retry after human approval.
     #expect(json["permission"] as? String == "deny")
-    #expect(json["user_message"] as? String == text)
-    #expect(json["agent_message"] as? String == cursorAgentStopLine)
+    #expect(json["user_message"] as? String == "\(text) \(approvalPendingLine)")
+    #expect(json["agent_message"] as? String == cursorAgentAskLine)
     #expect(json["permissionDecision"] == nil)
     #expect(json["decision"] == nil)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\"") == false)
@@ -736,14 +819,15 @@ private func runHonorHook(
     #expect(json["permission"] as? String == "allow")
 }
 
-@Test func hookCursorOrdinaryFile_allowsWithoutPackEvaluate() async throws {
-    let expected = try hostExpected("cursor", "allow-non-shell-read")
+@Test func hookCursorOrdinaryFile_deniesWithoutServiceTransport() async throws {
     let wire = try await runHonorHook(
         stdin: try hostFixture("cursor", "allow-non-shell-read.json"),
         host: .cursor
     )
-    #expect(wire.stdout == expected.stdout)
-    #expect(wire.exitCode == expected.exit)
+    #expect(wire.exitCode == 0)
+    #expect(wire.stdout.contains("\"permission\":\"deny\""))
+    #expect(wire.stdout.contains("\"permissionDecision\"") == false)
+    #expect(wire.stdout.contains(LocalControlBoundary.reason))
 }
 
 @Test func hookCursorMalformed_deniesWithoutEvaluating() async throws {
@@ -850,21 +934,27 @@ private func runHonorHook(
     }
 }
 
-private func assertClaudeAskWire(stdout: String, exitCode: Int32) throws {
+/// Step 8B ask-denial: Claude cannot pause for a human and its Ask
+/// UI is not authoritative, so a cwd-bound reset-hard renders the rich
+/// deny shape with the approval-pending guidance. The verdict stays ASK
+/// (pending row + TTY code); the bytes say deny.
+private func assertClaudeAskDenyWire(stdout: String, exitCode: Int32) throws {
     let json = try #require(
         JSONSerialization.jsonObject(with: Data(stdout.utf8)) as? [String: Any]
     )
-    #expect(json["decision"] as? String == "ask")
-    #expect(json["continuation"] as? String == "hostNative")
-    #expect(json["rule"] as? String == "core.git/reset-hard")
-    #expect(exitCode == 2)
-    #expect(stdout.contains("\"permissionDecision\":\"ask\"") == false)
-    #expect(stdout.contains("\"permissionDecision\":\"deny\"") == false)
+    let output = try #require(json["hookSpecificOutput"] as? [String: Any])
+    #expect(output["permissionDecision"] as? String == "deny")
+    #expect((json["systemMessage"] as? String)?.contains(approvalPendingLine) == true)
+    #expect((output["permissionDecisionReason"] as? String)?.contains(approvalPendingLine) == true)
+    #expect(output["ruleId"] as? String == "core.git:reset-hard")
+    #expect(exitCode == 0)
+    #expect(stdout.contains("hostNative") == false)
     #expect(stdout.contains("\"decision\":\"allow\"") == false)
+    #expect(stdout.contains("\"decision\":\"ask\"") == false)
 }
 
-private func assertClaudeAskWire(_ wire: HookWire) throws {
-    try assertClaudeAskWire(stdout: wire.stdout, exitCode: wire.exitCode)
+private func assertClaudeAskDenyWire(_ wire: HookWire) throws {
+    try assertClaudeAskDenyWire(stdout: wire.stdout, exitCode: wire.exitCode)
 }
 
 private func hostFixture(_ host: String, _ name: String) throws -> String {

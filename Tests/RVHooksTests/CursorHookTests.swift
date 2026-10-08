@@ -24,14 +24,18 @@ private func cursorExpected(_ stem: String) throws -> (stdout: String, exit: Int
 /// Official Cursor beforeShellExecution honor path
 /// (https://cursor.com/docs/hooks.md): stdout `{permission:deny,user_message,agent_message}`.
 /// Claude `permissionDecision` and Codex `decision:block` + exit 2 are not Cursor's wire.
-private func isCursorHonorPath(_ wire: HookWire, reason: String) -> Bool {
+private func isCursorHonorPath(
+    _ wire: HookWire,
+    reason: String,
+    agentMessage: String = cursorAgentStopLine
+) -> Bool {
     let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
     guard trimmedReason.isEmpty == false else { return false }
     guard wire.exitCode == 0 else { return false }
     guard let json = try? JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any],
           json["permission"] as? String == "deny",
           json["user_message"] as? String == trimmedReason,
-          json["agent_message"] as? String == cursorAgentStopLine
+          json["agent_message"] as? String == agentMessage
     else { return false }
     if json["permissionDecision"] != nil { return false }
     if json["hookSpecificOutput"] != nil { return false }
@@ -43,11 +47,15 @@ private func isCursorHonorPath(_ wire: HookWire, reason: String) -> Bool {
     return true
 }
 
-private func assertCursorHonorPath(_ wire: HookWire, reason: String) throws {
+private func assertCursorHonorPath(
+    _ wire: HookWire,
+    reason: String,
+    agentMessage: String = cursorAgentStopLine
+) throws {
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
     #expect(json["permission"] as? String == "deny")
     #expect(json["user_message"] as? String == reason)
-    #expect(json["agent_message"] as? String == cursorAgentStopLine)
+    #expect(json["agent_message"] as? String == agentMessage)
     #expect(json["permissionDecision"] == nil)
     #expect(json["hookSpecificOutput"] == nil)
     #expect(json["decision"] == nil)
@@ -58,7 +66,7 @@ private func assertCursorHonorPath(_ wire: HookWire, reason: String) throws {
     #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
     #expect(wire.exitCode == 0)
     #expect(wire.stdout.hasSuffix("\n"))
-    #expect(isCursorHonorPath(wire, reason: reason))
+    #expect(isCursorHonorPath(wire, reason: reason, agentMessage: agentMessage))
 }
 
 @Test(arguments: [
@@ -236,10 +244,16 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
         from: result,
         command: command,
         using: CursorHostCodec(),
-        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
+        intent: .firstCall(verdict: .ask, unlockCode: nil)
     )
-    try assertCursorHonorPath(wire, reason: hostDenyLine(command: command, reason: deny.reason))
+    try assertCursorHonorPath(
+        wire,
+        reason:
+            "\(hostDenyLine(command: command, reason: deny.reason)) \(approvalPendingLine)",
+        agentMessage: cursorAgentAskLine
+    )
     #expect(HostNativeAsk.leftoverAskIsPermit == false)
+    #expect(wire.stdout.contains(approvalPendingLine))
     #expect(wire.stdout.contains("\"permission\":\"ask\"") == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
 }
@@ -272,7 +286,7 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
     try assertCursorHonorPath(wire, reason: malformedHookSentence(.unreadable))
 }
 
-@Test func cursorHookWire_mandatoryHumanIsQuietAllow() throws {
+@Test func cursorHookWire_mandatoryHumanIsAskDeny() throws {
     let deny = Deny(
         ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
         reason: "Remote branch mutation requires a human."
@@ -289,20 +303,18 @@ func cursorDecode_extractsBeforeShellCommand(_ file: String, expected: String) t
         using: CursorHostCodec(),
         cwd: wd("/tmp/ws")
     )
-    #expect(
-        HostNativeAsk.hostAskVerdict(
-            host: .cursor,
-            result: result,
-            cwd: wd("/tmp/ws")
-        ) == .allow
-    )
+    // Step 8B: host-free ASK. The wire renders deny-with-guidance.
+    let verdict = HookAuthorization.project(result: result, cwd: wd("/tmp/ws")).verdict
+    #expect(verdict != .allow)
+    #expect(verdict == .ask)
     let json = try #require(
         JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
     )
-    #expect(json["permission"] as? String == "allow")
+    #expect(json["permission"] as? String == "deny")
     #expect(wire.exitCode == 0)
     #expect(wire.stdout.contains("\"permission\":\"ask\"") == false)
-    #expect(wire.stdout.contains("\"permission\":\"deny\"") == false)
+    #expect(json["agent_message"] as? String == cursorAgentAskLine)
+    #expect((json["user_message"] as? String)?.contains(approvalPendingLine) == true)
 }
 
 @Test func cursorDecode_readsCwdSessionAndProposedAction() throws {

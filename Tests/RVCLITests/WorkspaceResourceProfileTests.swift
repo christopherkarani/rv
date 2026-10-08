@@ -75,4 +75,32 @@ import RVIsolation
             == "runtime resource staging failed: executable link 'grok' is unusable"
     )
 }
+
+@Test func workspaceAgentRejectsNulArgumentsBeforeTouchingTheHost() {
+    // The probe project does not exist: a NUL error (not a host error)
+    // proves argv validation runs before any host contact, mirroring `run`.
+    do {
+        try WorkspaceCommandRun.runAgent(
+            "/nonexistent-phase8b-nul-probe", definitionID: "test-agent",
+            arguments: ["ok", "has-\0-nul"], rows: 24, columns: 80
+        )
+        Issue.record("NUL bytes in agent arguments must fail")
+    } catch {
+        #expect("\(error)".contains("NUL"))
+    }
+}
+
+@Test func workspaceCustomRejectsNulArgumentsBeforeTouchingTheHost() {
+    do {
+        try WorkspaceCommandRun.runCustom(
+            "/nonexistent-phase8b-nul-probe",
+            command: ["/bin/echo", "ok", "has-\0-nul"],
+            expectedContentDigestSHA256: String(repeating: "a", count: 64),
+            rows: 24, columns: 80
+        )
+        Issue.record("NUL bytes in custom arguments must fail")
+    } catch {
+        #expect("\(error)".contains("NUL"))
+    }
+}
 #endif

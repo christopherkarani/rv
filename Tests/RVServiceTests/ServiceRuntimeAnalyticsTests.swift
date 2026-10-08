@@ -11,20 +11,16 @@ struct ServiceRuntimeAnalyticsTests {
         let fixture = try makeAnalyticsFixture()
         defer { fixture.removeDirectories() }
 
-        let response = await fixture.runtime.dispatch(
-            IPCRequest(
-                method: .evaluate(
-                    EvaluateParams(
-                        request: EvaluationRequest(
-                            command: ShellCommand(rawValue: "git status"),
-                            enabledPacks: dayOnePackIDs
-                        )
-                    )
-                )
+        // Generic IPC evaluate stays denied (.agent); the daemon evaluates
+        // in process and still snapshots analytics.
+        let response = await fixture.runtime.evaluate(
+            EvaluationRequest(
+                command: ShellCommand(rawValue: "git status"),
+                enabledPacks: dayOnePackIDs
             )
         )
-        guard case .evaluate = response.result else {
-            Issue.record("expected evaluate reply")
+        guard case .allow = response.result.decision else {
+            Issue.record("expected git status to allow")
             return
         }
 
@@ -47,24 +43,18 @@ struct ServiceRuntimeAnalyticsTests {
         })
     }
 
-    @Test func setPackEnabledRefreshesAnalyticsPackSnapshot() async throws {
+    @Test func setPackEnabledDeniedLeavesAnalyticsPackSnapshot() async throws {
         let fixture = try makeAnalyticsFixture()
         defer { fixture.removeDirectories() }
 
-        let evaluate = await fixture.runtime.dispatch(
-            IPCRequest(
-                method: .evaluate(
-                    EvaluateParams(
-                        request: EvaluationRequest(
-                            command: ShellCommand(rawValue: "git status"),
-                            enabledPacks: dayOnePackIDs
-                        )
-                    )
-                )
+        let evaluated = await fixture.runtime.evaluate(
+            EvaluationRequest(
+                command: ShellCommand(rawValue: "git status"),
+                enabledPacks: dayOnePackIDs
             )
         )
-        guard case .evaluate = evaluate.result else {
-            Issue.record("expected evaluate reply")
+        guard case .allow = evaluated.result.decision else {
+            Issue.record("expected git status to allow")
             return
         }
         guard await flushUntilDailyEvent(
@@ -76,6 +66,8 @@ struct ServiceRuntimeAnalyticsTests {
         }
         let eventsBeforeDisable = await fixture.sink.events.count
 
+        // Owner-mutation dispatch stays denied: no pack changes, and the
+        // analytics snapshot keeps reporting the day-one set.
         let disable = await fixture.runtime.dispatch(
             IPCRequest(
                 method: .setPackEnabled(
@@ -83,22 +75,17 @@ struct ServiceRuntimeAnalyticsTests {
                 )
             )
         )
-        guard case .setPackEnabled(let reply) = disable.result else {
-            Issue.record("expected setPackEnabled reply")
-            return
-        }
-        #expect(reply.pack.id == .coreGit)
-        #expect(reply.pack.enabled == false)
+        #expect(disable.result == .error(.authorizationDenied))
 
         guard let daily = await flushUntilDailyEvent(
             coordinator: fixture.coordinator,
             sink: fixture.sink,
             afterEventCount: eventsBeforeDisable,
-            containsCoreGit: false
+            containsCoreGit: true
         ) else {
             return
         }
-        #expect(enabledPackIDs(in: daily)?.contains("core.git") == false)
+        #expect(enabledPackIDs(in: daily)?.contains("core.git") == true)
         #expect(daily.properties.keys.contains("command") == false)
         #expect(daily.properties.keys.contains("path") == false)
     }
@@ -117,7 +104,8 @@ struct ServiceRuntimeAnalyticsTests {
                         clientSemver: ProtocolVersion.serviceSemver
                     )
                 )
-            )
+            ),
+            context: peerHookContext()
         )
         guard case .hookEvaluate(let reply) = response.result else {
             Issue.record("expected hookEvaluate reply")

@@ -22,14 +22,6 @@ public func allowsInteractiveAllowOnce(_ tty: TTYCapability) -> Bool {
     tty.stdinIsTTY && tty.stdoutIsTTY && !tty.ci
 }
 
-public enum AllowOnceConsumeStatus: Sendable, Equatable {
-    case consumed(tokenID: String)
-    case notFound
-    case alreadyConsumed
-    case expired
-    case unavailable
-}
-
 public enum AllowOnceError: Error, Sendable, Equatable {
     case ttyRequired
     case robotRefused
@@ -41,6 +33,13 @@ public enum AllowOnceError: Error, Sendable, Equatable {
     case encodeFailed
     case lockFailed
     case emptyCommand
+    /// M-33: manual mint refused — the command evaluates to a pinned deny
+    /// no allow-once grant can unlock. Pre-arming it would waste the LA
+    /// ceremony plus attestation; spend time would deny anyway.
+    case notUnlockable
+    /// Step 8B.1: the pending row changed between pre-LA display and the
+    /// redeem re-read (TOCTOU bind). Never attest a swapped row.
+    case redemptionChanged
 }
 
 public enum AllowOnceLifecycle: Sendable, Equatable {
@@ -59,12 +58,25 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
     public var schemaVersion: Int
     public var lifecycle: AllowOnceLifecycle
     public var codeHash: String
+    /// Grant fingerprint (`grantFingerprint`, B1): the view digest folded
+    /// with the invocation-prefix digest. The name and wire key predate
+    /// the folding and are kept for row compatibility.
     public var commandFingerprint: String
     public var commandRedacted: String
     public var cwd: WorkingDirectory
     public var ruleID: RuleID?
     public var createdAt: Date
     public var expiresAt: Date
+    /// M-07 content digest of the masked payload. Nil for legacy rows and
+    /// mints without exact text. The redeem TOCTOU binds it, and TTY
+    /// attestation carries it so the daemon plants a bound grant.
+    /// Never exact segments.
+    public var payloadDigest: String?
+    /// Display-safe invocation-prefix tag (`"sudo"`, `"FOO=… sudo"`), or
+    /// nil for bare commands and legacy rows. Names and basenames only —
+    /// never secret values. Shown in `list` and the LA prompt so the
+    /// human sees the wrappers the normalized view erases.
+    public var invocationDisplay: String?
 
     /// List/TTY/robot projection of `lifecycle`. Not stored beside it.
     public var kind: Kind {
@@ -93,7 +105,9 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         cwd: WorkingDirectory,
         ruleID: RuleID?,
         createdAt: Date,
-        expiresAt: Date
+        expiresAt: Date,
+        payloadDigest: String? = nil,
+        invocationDisplay: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.lifecycle = lifecycle
@@ -104,6 +118,8 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         self.ruleID = ruleID
         self.createdAt = createdAt
         self.expiresAt = expiresAt
+        self.payloadDigest = payloadDigest
+        self.invocationDisplay = invocationDisplay
     }
 
     enum CodingKeys: String, CodingKey {
@@ -117,6 +133,8 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         case createdAt = "created_at"
         case expiresAt = "expires_at"
         case consumedAt = "consumed_at"
+        case payloadDigest = "payload_digest"
+        case invocationDisplay = "invocation_display"
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -130,6 +148,8 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         try container.encodeIfPresent(ruleID, forKey: .ruleID)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(expiresAt, forKey: .expiresAt)
+        try container.encodeIfPresent(payloadDigest, forKey: .payloadDigest)
+        try container.encodeIfPresent(invocationDisplay, forKey: .invocationDisplay)
         if case .consumed(let at) = lifecycle {
             try container.encode(at, forKey: .consumedAt)
         }
@@ -146,6 +166,8 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         ruleID = try container.decodeIfPresent(RuleID.self, forKey: .ruleID)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         expiresAt = try container.decode(Date.self, forKey: .expiresAt)
+        payloadDigest = try container.decodeIfPresent(String.self, forKey: .payloadDigest)
+        invocationDisplay = try container.decodeIfPresent(String.self, forKey: .invocationDisplay)
         let stamp = try container.decodeIfPresent(Date.self, forKey: .consumedAt)
         switch kind {
         case .pending:
@@ -186,13 +208,34 @@ public struct AllowOnceListRow: Sendable, Equatable {
     public var cwd: WorkingDirectory
     public var createdAt: Date
     public var expiresAt: Date
+    /// Deny rule this row unlocks, when minted from a deny. Names the
+    /// grant in the TTY redeem authentication prompt; nil for pre-armed
+    /// mints. Part of the redeem TOCTOU row equality.
+    public var ruleID: RuleID? = nil
+    /// Display-safe invocation-prefix tag, or nil for bare commands.
+    /// Part of the redeem TOCTOU row equality.
+    public var invocationDisplay: String? = nil
 }
 
 public func commandFingerprint(_ matchingView: MatchingView) -> String {
     sha256Hex(matchingView.rawValue)
 }
 
-func sha256Hex(_ text: String) -> String {
+/// Grant fingerprint: the view digest folded with the invocation-prefix
+/// digest. The normalized view erases wrappers, assignments, and the argv0
+/// path, so binding the view alone lets one approval cover an unreviewed
+/// `sudo`/`env`/path/assignment variant (B1). Folding the prefix digest
+/// keeps the same opaque 64-hex shape — rows, attestation, and the memory
+/// table carry it unchanged — while separating every erased variant.
+///
+/// `[]` binds the bare invocation. Callers without exact text (legacy
+/// mint ports) bind `[]`: a wrapped spend then mismatches and fails
+/// closed, exactly like an unbound M-07 payload.
+public func grantFingerprint(_ matchingView: MatchingView, invocationPrefix: [String]) -> String {
+    sha256Hex(commandFingerprint(matchingView) + ":" + maskedPayloadContentDigest(invocationPrefix))
+}
+
+public func sha256Hex(_ text: String) -> String {
     let digest = SHA256.hash(data: Data(text.utf8))
     return digest.map { String(format: "%02x", $0) }.joined()
 }

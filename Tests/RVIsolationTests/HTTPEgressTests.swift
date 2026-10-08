@@ -50,7 +50,7 @@ struct HTTPAdmissionTests {
 
     @Test func allowedGETRunsOnce() throws {
         let harness = try HTTPHarness()
-        let first = harness.session.submit(.success(harness.frame("https://example.com/a")))
+        let first = harness.session.submitLegacy(.success(harness.frame("https://example.com/a")))
         #expect(harness.spy.calls == 1)
         #expect(first.event.executionAttempted)
         #expect(first.event.httpMethod == "GET")
@@ -61,7 +61,7 @@ struct HTTPAdmissionTests {
             return
         }
         #expect(receipt.status == 204)
-        let replay = harness.session.submit(.success(harness.frame("https://example.com/a")))
+        let replay = harness.session.submitLegacy(.success(harness.frame("https://example.com/a")))
         #expect(harness.spy.calls == 1)
         #expect(replay.response == .rejected(.replay))
         #expect(replay.event.executionAttempted == false)
@@ -70,11 +70,11 @@ struct HTTPAdmissionTests {
     @Test func capabilitySessionAndClosureDoNotRun() throws {
         let harness = try HTTPHarness()
         let other = try HTTPHarness()
-        let missing = harness.session.submit(
+        let missing = harness.session.submitLegacy(
             .success(harness.frame("https://example.com/", capability: RuntimeCapability()))
         )
-        let foreign = harness.session.submit(.success(other.frame("https://example.com/")))
-        let impersonated = harness.session.submit(
+        let foreign = harness.session.submitLegacy(.success(other.frame("https://example.com/")))
+        let impersonated = harness.session.submitLegacy(
             .success(harness.frame("https://example.com/", claim: other.runtime.id.rawValue))
         )
         #expect(missing.response == .rejected(.invalidCapability))
@@ -92,35 +92,35 @@ struct HTTPAdmissionTests {
 
     @Test func denyPendingAndFailureDoNotRun() throws {
         let harness = try HTTPHarness()
-        let denied = harness.session.submit(.success(harness.frame("https://10.0.0.8/")))
+        let denied = harness.session.submitLegacy(.success(harness.frame("https://10.0.0.8/")))
         #expect(harness.spy.calls == 0)
         if case .denied = denied.response {
         } else {
             Issue.record("private address must be denied, got \(denied.response)")
         }
-        let dns = harness.session.submit(.success(harness.frame("https://allowed.example/")))
+        let dns = harness.session.submitLegacy(.success(harness.frame("https://allowed.example/")))
         #expect(harness.spy.calls == 0)
         if case .denied = dns.response {
         } else {
             Issue.record("private DNS answer must be denied, got \(dns.response)")
         }
         let pending = try HTTPHarness(policy: .mandatoryHuman)
-        let asked = pending.session.submit(.success(pending.frame("https://example.com/")))
+        let asked = pending.session.submitLegacy(.success(pending.frame("https://example.com/")))
         #expect(pending.spy.calls == 0)
         #expect(asked.response == .pending(.mandatoryHuman))
         let approved = try HTTPHarness(
             policy: .mandatoryHuman,
-            approval: { _ in .success(.allowOnce) }
+            approval: { _, _ in .success(.allowOnce) }
         )
-        let ran = approved.session.submit(.success(approved.frame("https://example.com/")))
+        let ran = approved.session.submitLegacy(.success(approved.frame("https://example.com/")))
         #expect(approved.spy.calls == 1)
         guard case .http = ran.response else {
             Issue.record("allow-once must execute, got \(ran.response)")
             return
         }
-        let post = harness.session.submit(.success(harness.frame("https://example.com/", method: "POST")))
-        let scheme = harness.session.submit(.success(harness.frame("http://example.com/")))
-        let broken = harness.session.submit(.success(harness.frame("https://example.com/ a")))
+        let post = harness.session.submitLegacy(.success(harness.frame("https://example.com/", method: "POST")))
+        let scheme = harness.session.submitLegacy(.success(harness.frame("http://example.com/")))
+        let broken = harness.session.submitLegacy(.success(harness.frame("https://example.com/ a")))
         #expect(post.response == .evaluationFailed)
         #expect(scheme.response == .evaluationFailed)
         #expect(broken.response == .evaluationFailed)
@@ -129,7 +129,7 @@ struct HTTPAdmissionTests {
 
     @Test func redirectDoesNotOpenASecondTransfer() throws {
         let harness = try HTTPHarness(exchange: .redirect)
-        let decision = harness.session.submit(.success(harness.frame("https://example.com/start")))
+        let decision = harness.session.submitLegacy(.success(harness.frame("https://example.com/start")))
         #expect(harness.spy.calls == 1)
         #expect(decision.event.executionAttempted)
         guard case .httpFailed(.redirect(let status, let location)) = decision.response else {
@@ -147,7 +147,7 @@ struct HTTPAdmissionTests {
         harness.spy.started = started
         let finished = DispatchSemaphore(value: 0)
         let worker = Thread {
-            _ = harness.session.submit(.success(harness.frame("https://example.com/")))
+            _ = harness.session.submitLegacy(.success(harness.frame("https://example.com/")))
             finished.signal()
         }
         worker.start()
@@ -286,7 +286,7 @@ private struct HTTPHarness: Sendable {
 
     init(
         policy: HTTPHarnessPolicy = .empty,
-        approval: @escaping @Sendable (PendingAuthorization) -> Result<ApprovalDecision, AgentApprovalError>? = { _ in nil },
+        approval: @escaping @Sendable (RuntimeActionRequestID, PendingAuthorization) -> Result<ApprovalDecision, AgentApprovalError>? = { _, _ in nil },
         exchange: HTTPHarnessExchange = .empty
     ) throws {
         let workspace = try #require(WorkingDirectory(validating: "/tmp/rv-http-admission"))

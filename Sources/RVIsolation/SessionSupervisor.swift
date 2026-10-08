@@ -246,8 +246,9 @@ final class LiveSeatbeltChild: Sendable {
     }
 
     /// Ask the watch thread to run one frame. Returns nil if a frame is
-    /// already waiting or the watch does not answer.
-    func submit(_ frame: RuntimeActionFrame) -> RuntimeAdmissionDecision? {
+    /// already waiting or the watch does not answer. Frame routing into
+    /// the session's legacy door; sensitive mediation needs its own door.
+    func submitLegacy(_ frame: RuntimeActionFrame) -> RuntimeAdmissionDecision? {
         let reply = AdmissionReply()
         let posted = pending.withLock { current -> Bool in
             guard current == nil else { return false }
@@ -270,7 +271,7 @@ final class LiveSeatbeltChild: Sendable {
             return current
         }
         guard let job else { return }
-        job.reply.store(admission.submit(.success(job.frame)))
+        job.reply.store(admission.submitLegacy(.success(job.frame)))
     }
 
     deinit {
@@ -307,8 +308,10 @@ func spawnSeatbeltProcess(
     admission: RuntimeAdmissionConfiguration,
     egressProxyPort: Int? = nil,
     host: HookHost? = nil,
-    stagingAgent: String? = nil,
-    keychain: [(name: String, value: String)] = []
+    stagingAgent: DefinitionStagingTag? = nil,
+    keychain: [(name: String, value: String)] = [],
+    preparedEnvironment: [String]? = nil,
+    cwdVerification: CwdCommitVerification? = nil
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
     let first = spawnSeatbeltProcessBody(
         request,
@@ -320,7 +323,9 @@ func spawnSeatbeltProcess(
         egressProxyPort: egressProxyPort,
         host: host,
         stagingAgent: stagingAgent,
-        keychain: keychain
+        keychain: keychain,
+        preparedEnvironment: preparedEnvironment,
+        cwdVerification: cwdVerification
     )
     guard case .failure(.processSpawnFailed) = first else { return first }
     if blockingWorkIsCancelled() { return first }
@@ -340,7 +345,9 @@ func spawnSeatbeltProcess(
         egressProxyPort: egressProxyPort,
         host: host,
         stagingAgent: stagingAgent,
-        keychain: keychain
+        keychain: keychain,
+        preparedEnvironment: preparedEnvironment,
+        cwdVerification: cwdVerification
     )
 }
 
@@ -370,8 +377,10 @@ func spawnSeatbeltProcessBody(
     admission: RuntimeAdmissionConfiguration,
     egressProxyPort: Int? = nil,
     host: HookHost? = nil,
-    stagingAgent: String? = nil,
-    keychain: [(name: String, value: String)] = []
+    stagingAgent: DefinitionStagingTag? = nil,
+    keychain: [(name: String, value: String)] = [],
+    preparedEnvironment: [String]? = nil,
+    cwdVerification: CwdCommitVerification? = nil
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
     // Provenance rides the profile value, not a text scan (same gate as
     // `superviseSeatbelt` above).
@@ -538,7 +547,10 @@ func spawnSeatbeltProcessBody(
         request.command.executable,
     ])
     arguments.append(contentsOf: request.command.arguments)
-    let agentName = stagingAgent ?? host?.rawValue
+    // Step 8 (F2): only the definition-derived staging tag selects
+    // credentials. `host` is routing/metadata and never falls back into
+    // selection — a nil tag stages unfiltered entries only.
+    let agentName = stagingAgent?.rawValue
     if let resources = request.resources {
         switch resources.stage(forAgent: agentName) {
         case .success:
@@ -557,27 +569,32 @@ func spawnSeatbeltProcessBody(
     }
     var resourceStageHandedOff = false
     defer { if !resourceStageHandedOff { request.resources?.remove() } }
-    let agentBin = AgentBin.installedDirectory()
+    let agentBin = request.legacyAgentIntegration ? AgentBin.installedDirectory() : nil
     let productive =
         request.productive
         ?? resolveProductiveWorkspace(
             workspacePath: workspace,
             agentBin: agentBin
         )
-    if case .pseudoTerminal = request.io {
+    if request.legacyAgentIntegration, case .pseudoTerminal = request.io {
         // Stage into the RV-managed home; the degraded workspace home
         // keeps staging working when no managed home exists.
         stageAgentHomes(cageHome: productive.developerHome?.home ?? workspace)
     }
-    let environment = containedRuntimeEnvironment(
-        workspace: workspace,
-        io: request.io,
-        agentBin: agentBin,
-        resources: request.resources,
-        egressProxyPort: egressProxyPort,
-        keychain: keychain,
-        productive: productive
-    )
+    // A retained prepared environment bypasses recomputation entirely:
+    // dispatch executes exactly what preparation froze, byte for byte. Nil
+    // preserves the legacy behavior of resolving live at spawn.
+    let environment =
+        preparedEnvironment
+        ?? containedRuntimeEnvironment(
+            workspace: workspace,
+            io: request.io,
+            agentBin: agentBin,
+            resources: request.resources,
+            egressProxyPort: egressProxyPort,
+            keychain: keychain,
+            productive: productive
+        )
     let argv = SpawnPointers(arguments)
     let envp = SpawnPointers(environment)
     defer {
@@ -589,6 +606,19 @@ func spawnSeatbeltProcessBody(
     // launches that share this process.
     if request.spawnFault == .spawn {
         return .failure(.processSpawnFailed)
+    }
+
+    // Redemption cwd verification, immediately before `posix_spawn`: the
+    // live workspace must still be the retained identity. No observable
+    // side effect sits between this check and the spawn, so a swap here
+    // must win blind at microsecond precision — and must also win the
+    // post-spawn check below to survive.
+    if let cwdVerification,
+        verifyLiveCwdIdentity(
+            policyWorkspacePath: cwdVerification.policyWorkspacePath,
+            expected: cwdVerification.expected
+        ) == false {
+        return .failure(.workspaceInodeBoundaryFailed)
     }
 
     var pid: pid_t = 0
@@ -625,6 +655,22 @@ func spawnSeatbeltProcessBody(
     // Optional-promoted ==.
     guard let spawnResult, let spawnStatus = spawnResult, spawnStatus == 0, pid > 1 else {
         return .failure(.processSpawnFailed)
+    }
+    // The child is START_SUSPENDED: it has chdir'd but never run. Re-verify
+    // the cwd before it resumes: a swap that landed between the pre-spawn
+    // check and the chdir and is still in place fails here, and the
+    // never-started child is reaped without effects. Only a swap-in and
+    // swap-back both landing inside this blind microsecond sandwich can
+    // pass — the residual this path-based chdir cannot close without an
+    // FD-pinned spawn, which remains future hardening work.
+    if let cwdVerification,
+        verifyLiveCwdIdentity(
+            policyWorkspacePath: cwdVerification.policyWorkspacePath,
+            expected: cwdVerification.expected
+        ) == false {
+        terminateSession(pgid: pid, also: [pid])
+        _ = waitUntilSessionIsDead(pgid: pid, also: [pid])
+        return .failure(.workspaceInodeBoundaryFailed)
     }
     // The wait loop polls this fd. A blocking read would ignore cancellation
     // until the child writes or exits, so a failed flag change cannot continue.
@@ -896,7 +942,8 @@ private func addingKeychainEnvironment(
 
 func watchSeatbeltProcess(
     _ live: LiveSeatbeltChild,
-    stop: RuntimeCancellation
+    stop: RuntimeCancellation,
+    onDeathObserved: (() -> Void)? = nil
 ) -> MountedSeatbeltOutcome {
     live.markWatchStarted()
     let outcome = waitForSeatbeltSession(
@@ -907,7 +954,8 @@ func watchSeatbeltProcess(
         admission: live.admission,
         stop: stop,
         onEstablished: { live.markEstablished() },
-        drain: { live.drainPending() }
+        drain: { live.drainPending() },
+        onDeathObserved: onDeathObserved
     )
     let dead = waitUntilSessionIsDead(
         pgid: live.pid,
@@ -966,7 +1014,8 @@ private func waitForSeatbeltSession(
     admission: RuntimeAdmissionSession,
     stop: RuntimeCancellation,
     onEstablished: () -> Void,
-    drain: () -> Void
+    drain: () -> Void,
+    onDeathObserved: (() -> Void)? = nil
 ) -> SeatbeltWaitOutcome {
     var outcome = SeatbeltWaitOutcome()
     var handshake = preface
@@ -994,6 +1043,15 @@ private func waitForSeatbeltSession(
         let rootGone = waited == root || (waited < 0 && errno == ECHILD && outcome.status != nil)
         if outcome.cancelled || rootGone {
             admission.finish()
+            // Definitive leader death is session death: this branch kills
+            // the group next, so authority ends here, before the reap and
+            // group-drain tail — mirroring cancel(), where authority dies
+            // before the reap completes. Fires at most once: this branch
+            // returns. No fire on bare cancel: the leader may still be
+            // alive, and cancel() already revoked synchronously.
+            if rootGone {
+                onDeathObserved?()
+            }
             recorded.formUnion(visibleSessionPIDs(root: root))
             terminateSession(pgid: root, also: recorded)
             if outcome.established == false {

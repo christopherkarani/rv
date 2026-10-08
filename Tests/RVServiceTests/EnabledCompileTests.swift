@@ -104,7 +104,7 @@ struct EnabledCompileTests {
         // XPC notification reaches this warm runtime.
         _ = try PacksFacade.enable(home: home, ids: [sqlite.rawValue])
 
-        let denied = await runtime.dispatch(
+        let probe = await runtime.dispatch(
             IPCRequest(
                 method: .evaluate(
                     EvaluateParams(
@@ -116,10 +116,13 @@ struct EnabledCompileTests {
                 )
             )
         )
-        guard case .evaluate(let reply) = denied.result else {
-            Issue.record("expected evaluate reply")
-            return
-        }
+        #expect(probe.result == .error(.authorizationDenied))
+        let reply = await runtime.evaluate(
+            EvaluationRequest(
+                command: ShellCommand(rawValue: "DROP TABLE users"),
+                enabledPacks: dayOnePackIDs + [sqlite]
+            )
+        )
         guard case .deny(let deny) = reply.result.decision else {
             Issue.record("warm runtime must pick up direct config edits; DROP TABLE users must deny")
             return
@@ -160,46 +163,38 @@ struct EnabledCompileTests {
         )
         #expect(await runtime.compiledPackIDs == dayOnePackIDs)
 
-        let enable = await runtime.dispatch(
+        // Step 8: pack mutation over IPC needs an owner ceremony that does
+        // not exist yet. Production enables via config file; the warm
+        // runtime heals coverage on the next pack-aware call.
+        let denied = await runtime.dispatch(
             IPCRequest(method: .setPackEnabled(SetPackEnabledParams(id: sqlite, enabled: true)))
         )
-        guard case .setPackEnabled = enable.result else {
-            Issue.record("expected setPackEnabled enable reply, got \(enable.result)")
-            return
-        }
+        #expect(denied.result == .error(.authorizationDenied))
+        _ = try PacksFacade.enable(home: home, ids: [sqlite.rawValue])
+        _ = await runtime.dispatch(IPCRequest(method: .listPacks))
         let afterEnable = await runtime.compiledPackIDs
         #expect(afterEnable == (dayOnePackIDs + [sqlite]).sorted { $0.rawValue < $1.rawValue })
 
-        let denied = await runtime.dispatch(
-            IPCRequest(
-                method: .evaluate(
-                    EvaluateParams(
-                        request: EvaluationRequest(
-                            command: ShellCommand(rawValue: "DROP TABLE users"),
-                            enabledPacks: dayOnePackIDs + [sqlite]
-                        )
-                    )
-                )
+        let reply = await runtime.evaluate(
+            EvaluationRequest(
+                command: ShellCommand(rawValue: "DROP TABLE users"),
+                enabledPacks: dayOnePackIDs + [sqlite]
             )
         )
-        guard case .evaluate(let reply) = denied.result else {
-            Issue.record("expected evaluate reply")
-            return
-        }
         guard case .deny(let deny) = reply.result.decision else {
             Issue.record("enabled sqlite must deny DROP TABLE users")
             return
         }
         #expect(deny.ruleID.rawValue == "database.sqlite:drop-table")
 
-        let disable = await runtime.dispatch(
-            IPCRequest(method: .setPackEnabled(SetPackEnabledParams(id: sqlite, enabled: false)))
+        _ = try PacksFacade.disable(home: home, ids: [sqlite.rawValue])
+        // Warm shrink needs the owner pack-mutation ceremony (not yet
+        // built); a fresh runtime compiles the disabled config instead.
+        let cold = ServiceRuntime(
+            home: home,
+            allowOnceDirectory: try isolatedAllowOnceDirectory()
         )
-        guard case .setPackEnabled = disable.result else {
-            Issue.record("expected setPackEnabled disable reply, got \(disable.result)")
-            return
-        }
-        #expect(await runtime.compiledPackIDs == dayOnePackIDs)
+        #expect(await cold.compiledPackIDs == dayOnePackIDs)
     }
 }
 

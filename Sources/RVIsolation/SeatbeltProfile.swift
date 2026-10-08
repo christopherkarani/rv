@@ -505,7 +505,8 @@ public func resolveProductiveWorkspace(
     workspacePath: String,
     hostEnvironment: [String: String]? = nil,
     agentBin: String? = nil,
-    probe: ContainedPATHProbe = .live
+    probe: ContainedPATHProbe = .live,
+    gitIdentity: (@Sendable (String) -> (name: String?, email: String?))? = nil
 ) -> ProductiveWorkspaceResolution {
     let host = hostEnvironment ?? ProcessInfo.processInfo.environment
     guard let hostHome = host["HOME"], isUsableAbsolutePath(hostHome) else {
@@ -514,7 +515,10 @@ public func resolveProductiveWorkspace(
     var developerHome: WorkspaceDeveloperHome?
     if isUsableAbsolutePath(workspacePath),
         let resolved = WorkspaceDeveloperHome.resolve(workspacePath: workspacePath, hostHome: hostHome),
-        resolved.ensure(hostHome: hostHome)
+        resolved.ensure(
+            hostHome: hostHome,
+            gitIdentity: gitIdentity ?? { WorkspaceDeveloperHome.hostGitIdentity(hostHome: $0) }
+        )
     {
         developerHome = resolved
     }

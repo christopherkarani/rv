@@ -88,25 +88,13 @@ struct ExplainDispatchTests {
             return
         }
         #expect(reply.result.decision == .allow)
-        let first = await runtime.dispatch(
+        // Spend-once after a peek is covered by
+        // LiveEvaluateWorldTests.peekDoesNotSpendGrant; generic
+        // `.evaluate` stays denied for IPC callers (Step 8).
+        let denied = await runtime.dispatch(
             IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: wd("/tmp/ws"))))
         )
-        guard case .evaluate(let allowed) = first.result else {
-            Issue.record("expected evaluate reply")
-            return
-        }
-        #expect(allowed.result.decision == .allow)
-        let second = await runtime.dispatch(
-            IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: wd("/tmp/ws"))))
-        )
-        guard case .evaluate(let denied) = second.result else {
-            Issue.record("expected second evaluate reply")
-            return
-        }
-        guard case .deny = denied.result.decision else {
-            Issue.record("evaluate apply must spend the grant after explain peeked")
-            return
-        }
+        #expect(denied.result == .error(.authorizationDenied))
     }
 
     @Test func classifyRiskFollowsDerivation() async throws {
@@ -176,13 +164,12 @@ struct ExplainDispatchTests {
             return
         }
         #expect(reply.decision == .allow)
-        let first = await runtime.dispatch(
+        // Spend-once after a peek is covered by
+        // LiveEvaluateWorldTests.peekDoesNotSpendGrant; generic
+        // `.evaluate` stays denied for IPC callers (Step 8).
+        let denied = await runtime.dispatch(
             IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: wd("/tmp/ws"))))
         )
-        guard case .evaluate(let allowed) = first.result else {
-            Issue.record("expected evaluate reply")
-            return
-        }
-        #expect(allowed.result.decision == .allow)
+        #expect(denied.result == .error(.authorizationDenied))
     }
 }

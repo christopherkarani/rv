@@ -59,11 +59,13 @@ private func decoded(_ json: String) throws -> NSArray {
     let rows = allowOnceRobotRows(from: listRows)
     #expect(rows.map(\.kind) == [.granted, .pending])
     let rendered = try RobotDocument.allowOnceList(rows).render()
+    // B-F4: code_hash must never leave the store file (24-bit brute force).
+    #expect(rendered.contains("code_hash") == false)
     #expect(
         rendered
-            == #"[{"code_hash":"\#(hashA)","command_redacted":"git …","cwd":"/tmp/a","kind":"granted"},{"code_hash":"\#(hashB)","command_redacted":"git …","cwd":"/tmp/b","kind":"pending"}]"#
+            == #"[{"command_redacted":"git …","cwd":"/tmp/a","kind":"granted"},{"command_redacted":"git …","cwd":"/tmp/b","kind":"pending"}]"#
     )
-    let preMigration = #"[{"code_hash":"\#(hashA)","command_redacted":"git …","cwd":"\/tmp\/a","kind":"granted"},{"code_hash":"\#(hashB)","command_redacted":"git …","cwd":"\/tmp\/b","kind":"pending"}]"#
+    let preMigration = #"[{"command_redacted":"git …","cwd":"\/tmp\/a","kind":"granted"},{"command_redacted":"git …","cwd":"\/tmp\/b","kind":"pending"}]"#
     let decodedPreMigration = try decoded(preMigration)
     #expect(try decoded(rendered) == decodedPreMigration)
 }

@@ -1,0 +1,1005 @@
+Building for debugging...
+[Computing dependencies]
+[Provisioning 1 / 96]
+[Using on-disk description]
+[1 / 3] SwiftTerm
+warning: missing creator for mutated node: ('/Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/SwiftTerm_SwiftTerm.bundle/Contents/MacOS')
+Build complete! (1.69 sec)
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite "IsolationApply" started.
+􀟈  Test productiveResolutionHonorsInjectedProbe() started.
+􀟈  Suite "WorkspaceSession" started.
+􀟈  Suite "LaunchBoundaryRegression" started.
+􀟈  Test sanitizeTrimsToPATHBudgetFromTheTail() started.
+􀟈  Suite "RuntimeAdversarial" started.
+􀟈  Suite "AgentInstanceRegistry" started.
+􀟈  Suite "ContainedLaunch" started.
+􀟈  Suite "HTTP admission" started.
+􀟈  Test selectedManifestIsIdenticalForOneShotAndTerminalResources() started.
+􀟈  Test preparedContainedProfileAdmitsLoopbackOnly() started.
+􀟈  Test productiveResolutionCarriesSystemTemporaryDirectory() started.
+􀟈  Test unixPeerEvidenceFromRealConnectedSocket() started.
+􀟈  Suite "Local terminal restore" started.
+􀟈  Test agentNamedExecutableWithNoProfileStagesZeroResources() started.
+􀟈  Suite "IsolationApply" started.
+􀟈  Test ambientSecretsDoNotFlowUnlessExplicitlyNamed() started.
+􀟈  Test egressProxyDeniesUnknownHosts() started.
+􀟈  Suite "Workspace host" started.
+􀟈  Suite "Workspace recovery" started.
+􀟈  Test sanitizedPATHBinParentExpansionHonorsSecretVeto() started.
+􀟈  Suite "DescriptorHygiene" started.
+􀟈  Suite "SeatbeltCapability" started.
+􀟈  Test forgedAndCrossProjectProfileIDsFailClosedAtServer() started.
+􀟈  Test noProfileNeverAdmitsInstalledAgentResources() started.
+􀟈  Test egressProxyRejectsOversizeHeaders() started.
+􀟈  Test stageAgentHomesLinksClaudeCredentials() started.
+􀟈  Test agentBinProfileGrantsFilesTreesAndReadOnlyCredentials() started.
+􀟈  Suite "RuntimeAdmission" started.
+􀟈  Test writeShimRefreshesContent() started.
+􀟈  Suite "Workspace lifecycle core" started.
+􀟈  Test nonTerminalEnvironmentStaysNonInteractive() started.
+􀟈  Suite "Executor lifecycle regressions" started.
+􀟈  Test keychainFailuresNameTheEnvAndStageNothing() started.
+􀟈  Suite "SeatbeltLoopback" started.
+􀟈  Test seedGitIdentityUsesInjectedReader() started.
+􀟈  Test egressProxyDeniesExternalAbsoluteHTTP() started.
+􀟈  Suite "Workspace client terminal queue" started.
+􀟈  Suite "Runtime terminal" started.
+􀟈  Suite "AgentTurn" started.
+􀟈  Suite "SeatbeltContainment" started.
+􀟈  Suite "SeatbeltMachBoundary" started.
+􀟈  Suite "Terminal stream" started.
+􀟈  Test agentFilteredCredentialsStageOnlyForMatchingAgent() started.
+􀟈  Suite "AgentInstanceRegistry concurrency" started.
+􀟈  Test profileStagingFailureKeepsLaunchFailurePath() started.
+􀟈  Test controlRPCRequestRoundTrips() started.
+􀟈  Test terminalBytesRoundTripThroughBase64() started.
+􀟈  Test productiveProfileOmitsSystemTemporaryDirectoryWhenUnresolved() started.
+􀟈  Test terminalEnvironmentKeepsColorAndBoundedLoopbackProxy() started.
+􀟈  Test agentBinResolutionGrantsOnlyResolvedAgents() started.
+􀟈  Test unselectedRuntimeStripsSecretsButProjectsNonSecretVars() started.
+􀟈  Test egressProxyRelaysLoopbackAbsoluteHTTP() started.
+􀟈  Test sanitizedPATHSymlinkGrandparentNeverReachesRoot() started.
+􀟈  Suite "IsolationConformance" started.
+􀟈  Test agentBinDirectoryIsASiblingOfTheHostBinary() started.
+􀟈  Suite "LocalExecutor" started.
+􀟈  Test productiveProfileGrantsSystemTemporaryDirectoryReadWrite() started.
+􀟈  Test controlRPCResponseCodeRoundTrips() started.
+􀟈  Test egressProxyParsesStrictCONNECTOnly() started.
+􀟈  Test loopbackHelpersRejectOutOfRangePorts() started.
+􀟈  Test pseudoTerminalEnvironmentAdvertisesColorOutput() started.
+􀟈  Test controlRPCCodableEncodeAgreesWithValidatedEncode() started.
+􀟈  Test egressProxyParsesAbsoluteHTTP() started.
+􀟈  Test ensureTerminalRuntimeAdjudicatesExplicitProfile() started.
+􀟈  Test terminalEnvironmentKeyPolicy() started.
+􀟈  Test agentBinResolveWithMissingBinDirGrantsNothing() started.
+􀟈  Test sanitizedPATHImpliesBinParentsButNeverRoot() started.
+􀟈  Test keychainEntryInjectsOnlyForMatchingAgent() started.
+􀟈  Test terminalPATHPrefersInstalledAgentBin() started.
+􀟈  Test activeDeveloperRootFollowsSelectLinkToEnclosingApp() started.
+􀟈  Test unixPeerEvidenceRejectsNonSocketDescriptor() started.
+􀟈  Test keychainRawSecretWithoutFieldDecodesAsText() started.
+􀟈  Test egressProxyExternalDialFilterRejectsNonPublicAddresses() started.
+􀟈  Test controlRPCLimitBatteryRejectsIdenticalFramesOnBothPaths() started.
+􀟈  Test controlRPCFramesAreByteIdenticalToLegacyCodec() started.
+􀟈  Test deadExecutableLinkNamesItselfInStagingFailure() started.
+􀟈  Test workspaceControlRejectsUnknownVersionAndFields() started.
+􀟈  Test terminalEnvironmentPassesGatewayThrough() started.
+􀟈  Test egressProxyRelaysLoopbackTargets() started.
+􀟈  Test controlRPCUnknownOperationPreservesRawEcho() started.
+􀟈  Test symlinkedCredentialSourceEscapeFailsClosedStaging() started.
+􀟈  Test unixDifferentExecutableCannotAcquireRoleAndDeadPeerFails() started.
+􀟈  Test profileBoundToProjectAIsUnresolvableForProjectB() started.
+􀟈  Test egressProxyDeniesMalformedAndBypassShapes() started.
+􀟈  Test seedGitIdentitySkipsWhenIdentityIsEmpty() started.
+􀟈  Test dynamicCodeInvalidRequirementFailsAndDefaultHasNoRole() started.
+􀟈  Test profileLessTmpdirStaysOutOfTheWorkspaceRoot() started.
+􀟈  Test agentBinResolutionOmitsClaudeScratchWhenClaudeIsAbsent() started.
+􀟈  Test stagedCredentialMustBeOwnerFileAndNeverSymlink() started.
+􀟈  Test defaultProfileNeverAutoAttachesNilLaunchKeepsBaseFence() started.
+􀟈  Test ensureTerminalRuntimeAcceptsKnownExplicitProfile() started.
+􀟈  Test peerTrustRejectsRealAllowACLDespiteSafePOSIXMode() started.
+􀟈  Test activeDeveloperRootPrefersDeveloperDir() started.
+􀟈  Test emptyAgentsListNormalizesToNilInInitAndDecode() started.
+􀟈  Test controlRPCResponseRoundTrips() started.
+􀟈  Test controlRPCFailureTypedOverloadShape() started.
+􀟈  Test controlRPCPropagatesInvalidAndIncompatible() started.
+􀟈  Test peerTrustRejectsUserOwnedManifest() started.
+􀟈  Test agentBinDirectoryDerivesFromExecutablePath() started.
+􀟈  Test productiveResolutionIncludesActiveDeveloperRoot() started.
+􀟈  Test keychainValuesLandInEnvironmentForAnyIO() started.
+􀟈  Test agentBinResolutionAdmitsMuseInstallFiles() started.
+􀟈  Test unknownResourceProfileIDResolvesToNothing() started.
+􀟈  Test blockedVariableNameMatchesUnderscoreTokens() started.
+􀟈  Test activeDeveloperRootVetoesSensitiveSelection() started.
+􀟈  Test egressProxyReportsDialFailures() started.
+􀟈  Test selectedGenericProfileStagesOnlyItsOwnSyntheticCredential() started.
+􀟈  Test controlRPCCodableInitEnforcesVersionAndLimits() started.
+􀟈  Test terminalReplayDropsTheOldestBytes() started.
+􀟈  Test hfsSliceDevice_prefersAppleHFSContentHint() started.
+􀟈  Test compileSeatbeltProfile_observedAndMediated_returnsProfileNotApplicable() started.
+􀟈  Test seatbelt_prepare_contained_relativeWorkspace_returnsWorkspaceMustBeAbsolute() started.
+􀟈  Test compileSeatbeltProfile_contained_writeLimitIsWorkspaceNotRepositoryRoot() started.
+􀟈  Test workspacePublishDecision_rejectsForeignInodeAndLinkCountChange() started.
+􀟈  Test seatbelt_prepare_contained_missingDirectory_returnsWorkspaceDoesNotExist() started.
+􀟈  Test unavailable_prepareAndRun_observed_establishesObservedFamilyNone_withoutSandboxExec() started.
+􀟈  Test apply_contained_withoutUsableWorkspaceOrBackend_failsClosed() started.
+􀟈  Test rejectWorkspaceInodeAlias_unreadableUserFilesystemMetadataDirectoryRefuses() started.
+􀟈  Test compileSeatbeltProfile_contained_isDenyDefaultWorkspaceScope() started.
+􀟈  Test hfsSliceDevice_fallsBackToSolePartition() started.
+􀟈  Test isolationApply_operatorProbe_printsEstablishedModes() started.
+􀟈  Test compileSeatbeltProfile_newlineWorkspace_returnsWorkspacePathUnsafe() started.
+􀟈  Test unavailable_prepare_contained_returnsBackendUnavailable() started.
+􀟈  Test unavailable_prepareAndRun_mediated_establishesMediatedFamilyNone() started.
+􀟈  Test isolationBackendFamily_hasExactlyNoneSeatbeltAndLandlock() started.
+􀟈  Test isolatedCommand_rejectsEmptyAndRelativeExecutable() started.
+􀟈  Test apply_observedAndMediated_doNotRequireCallerToPickUnavailable() started.
+􀟈  Test seatbelt_prepare_observed_returnsProfileNotApplicable() started.
+􀟈  Test platform_family_isSeatbeltOnDarwin_landlockOnLinux() started.
+􀟈  Test workspaceFilesystemMetadata_ownershipCheckHonorsTemporaryDirectory() started.
+􀟈  Test seatbelt_prepare_launchArguments_areSandboxExecProfileAndInnerArgv() started.
+􀟈  Test twoWorkspacesMintDifferentIDs() started.
+􀟈  Test containedLaunchResult_reportsTeardownFailure() started.
+􀟈  Test rejectWorkspaceInodeAlias_unreadableDirectory_refusesHiddenAlias() started.
+􀟈  Test workspaceFilesystemMetadata_skipsRootBookkeepingWhenRootOwnedOrOwnersIgnored() started.
+􀟈  Test containedEnvironmentContainsOnlyDeliberateValues() started.
+􀟈  Test compileSeatbeltProfile_filesystemRoot_returnsWorkspacePathUnsafe() started.
+􀟈  Test workspaceFilesystemMetadata_treeWalkAndCopyKeepProjectNames() started.
+􀟈  Test invalidSeatbeltProfileDoesNotExecuteInnerCommand() started.
+􀟈  Test appendedSessionRecordsStayIndependent() started.
+􀟈  Test concurrentAppendsKeepEveryRecordReadable() started.
+􀟈  Test supervisorLaunchMintsActivatesAndFinishesInstance() started.
+􀟈  Test revokingIsObservableWhileTeardownRuns() started.
+􀟈  Test supervisorRegisterFaultRetiresAnnouncedInstance() started.
+􀟈  Test preparedWorkspaceRetargetDoesNotChangeGrantOrWorkingDirectory() started.
+􀟈  Test launch_persistsSessionBeforeExecution() started.
+􀟈  Test delegationNarrowsThroughRegistry() started.
+􀟈  Test descendantsCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test denyPendingAndFailureDoNotRun() started.
+􀟈  Test launch_containedInWorkspaceTouch_succeeds() started.
+􀟈  Test unwritableSessionLogDoesNotExecute() started.
+􀟈  Test resolutionReturnsWhenTheSessionStopsDuringLookup() started.
+􀟈  Test launch_containedOutsideTouch_deniedByKernel() started.
+􀟈  Test cleanupFailureKeepsAuthorityDead() started.
+􀟈  Test seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􀟈  Test launch_containedSessionsAreDistinctFromHookSessionID() started.
+􀟈  Test cancellationStopsTheExchangeBeforeFinishReturns() started.
+􀟈  Test cachedContextNeverEqualsLiveValidity() started.
+􀟈  Test launch_containedTrue_establishes() started.
+􀟈  Test requestPayloadCannotReplacePrincipal() started.
+􀟈  Test directConfigurationDisablesProxiesAndCredentials() started.
+􀟈  Test instanceBindsExpectedWorkspaceAndRuntime() started.
+􀟈  Test directConnectorRefusesLoopbackBeforeAccept() started.
+􀟈  Test sessionRecordFailureDoesNotExecuteInnerCommand() started.
+􀟈  Test normalizeSeesTrustedSubjectThePayloadCannotOverride() started.
+􀟈  Test embeddedNULCannotChangeExecutedArgv() started.
+􀟈  Test allowedGETRunsOnce() started.
+􀟈  Test tornSessionLineDoesNotHideTheNextRecord() started.
+􀟈  Test channelBindingNeverMovesToAnotherInstance() started.
+􀟈  Test redirectDoesNotOpenASecondTransfer() started.
+􀟈  Test journalFailureRefusesEstablishment() started.
+􀟈  Test resolutionDoesNotStartWhenTheSessionHasStopped() started.
+􀟈  Test mismatchedPrincipalBindingFails() started.
+􀟈  Test capabilitySessionAndClosureDoNotRun() started.
+􀟈  Test runtimeBindsExactlyOneInstance() started.
+􀟈  Test lifecycleMovesActiveRevokingInactive() started.
+􀟈  Test announcedInstanceIsUnusableUntilEstablished() started.
+􀟈  Test activateJournalFailureLeavesInstanceInactive() started.
+􀟈  Test terminatedRuntimeInvalidatesAndLookupStaysDescriptive() started.
+􀟈  Test supervisorLaunchWithoutDefinitionMintsNoInstance() started.
+􀟈  Test suppressedExecuteKeepsPrincipalAttribution() started.
+􀟈  Test engageAndRestoreAreIdempotent() started.
+􀟈  Test restartMintsFreshIDAndKeepsOldDead() started.
+􀟈  Test recoveryResurrectsNothing() started.
+􀟈  Test unregisteredIDsHaveUnknownValidity() started.
+􀟈  Test landlock_prepare_mediated_returnsProfileNotApplicable() started.
+􀟈  Test apply_contained_onDarwin_stillEstablishesSeatbelt() started.
+􀟈  Test isolationExecExit125_isBackendUnavailable_notEstablished() started.
+􀟈  Test isolationExecIdentity_rejectsWrongNameDirectoryAndWorkspaceLocalHelper() started.
+􀟈  Test compileLandlockRuleset_filesystemRoot_returnsWorkspacePathUnsafe() started.
+􀟈  Test compileLandlockRuleset_contained_writeRootIsResolvedWorkspaceNotRepositoryRoot() started.
+􀟈  Test runLandlock_seatbeltRequest_returnsBackendMismatch() started.
+􀟈  Test compileLandlockRuleset_newlineWorkspace_returnsWorkspacePathUnsafe() started.
+􀟈  Test landlock_run_missingTrampoline_returnsBackendUnavailable() started.
+􀟈  Test landlock_prepare_observed_returnsProfileNotApplicable() started.
+􀟈  Test landlock_run_contained_onDarwin_returnsBackendUnavailable() started.
+􀟈  Test compileLandlockRuleset_observedAndMediated_returnsProfileNotApplicable() started.
+􀟈  Test landlock_prepare_contained_launchArguments_areWorkspaceSeparatorAndInnerArgv() started.
+􀟈  Test landlock_prepare_contained_regularFileWorkspace_returnsWorkspaceDoesNotExist() started.
+􀟈  Test isolatedLaunchRequest_rejectsLandlockWithObservedOrUnsandboxedContained() started.
+􀟈  Test landlock_prepare_contained_relativeWorkspace_returnsWorkspaceMustBeAbsolute() started.
+􀟈  Test landlock_prepare_contained_symlinkToFilesystemRoot_returnsWorkspacePathUnsafe() started.
+􀟈  Test landlock_prepare_contained_missingDirectory_returnsWorkspaceDoesNotExist() started.
+􀟈  Test ambientOutsideFileDescriptorIsNotWritable() started.
+􀟈  Test cleanRecoveryDoesNotTouchTheProject() started.
+􀟈  Test containedProcessReachesLoopbackOnly() started.
+􀟈  Test compileLandlockRuleset_relativeWorkspace_returnsWorkspaceMustBeAbsolute() started.
+􀟈  Test spawn_landlock_trueOrWorkspaceHelper_doesNotEstablish() started.
+􀟈  Test compileLandlockRuleset_symlinkToFilesystemRoot_returnsWorkspacePathUnsafe() started.
+􀟈  Test workspaceRootPolicyRejectsOnlyTheHomeDirectory() started.
+􁁛  Test sanitizedPATHBinParentExpansionHonorsSecretVeto() passed after 0.014 seconds.
+􁁛  Test selectedManifestIsIdenticalForOneShotAndTerminalResources() passed after 0.017 seconds.
+􀟈  Test fakeCapabilityWrongSessionAndClosedChannelDoNotRun() started.
+􀟈  Test seatbeltProfileGainsNoNetworkAllow() started.
+􀟈  Test ptyRuntimeStillAdmitsShellCommands() started.
+􀟈  Test allowedCommandRunsOnce() started.
+􀟈  Test admittedCommandStopsWhenContainedProcessExits() started.
+􀟈  Test containedClientUsesTheGrantedPipes() started.
+􁁛  Test agentBinProfileGrantsFilesTreesAndReadOnlyCredentials() passed after 0.036 seconds.
+􀟈  Test evaluationFailureDoesNotRun() started.
+􀟈  Test malformedFrameDoesNotRun() started.
+􀟈  Test spawnRefusedAtLimit() started.
+􀟈  Test pendingCommandDoesNotRunUntilAllowOnce() started.
+􀟈  Test duplicateSpawnRequestDrains() started.
+􀟈  Test forgetPrunesOnlyFinishedRuntimes() started.
+􁁛  Test sanitizeTrimsToPATHBudgetFromTheTail() passed after 0.037 seconds.
+􀟈  Test evidenceFileRecordsTheSessionAndOutcome() started.
+􀟈  Test cancelledBeforeDispatch_doesNotExecuteOrConsumeAuthorization() started.
+􀟈  Test mismatchedPhaseCompletionsDrain() started.
+􀟈  Test concurrentDispatch_sameAuthorizationExecutesOnlyOnce() started.
+􀟈  Test deniedCommandDoesNotRun() started.
+􁁛  Test nonTerminalEnvironmentStaysNonInteractive() passed after 0.037 seconds.
+􀟈  Test openFailureDiscardsTheWorkspace() started.
+􀟈  Test reservedChildExit_cannotReplayCompletedSideEffect() started.
+􀟈  Test lateControlReplyDrains() started.
+􀟈  Test liveOwnerRefusesOpenAndDrains() started.
+􀟈  Test cancellationTerminatesOwnedProcessesBeforeReturn() started.
+􀟈  Test openSequenceReachesActive() started.
+􀟈  Test cancellingAHelperDoesNotWaitForItToExit() started.
+􀟈  Test closeStopsRuntimesThenFinishes() started.
+􀟈  Test failedApply_consumesAuthorizationBeforeRetry() started.
+􀟈  Test ipv4BindListenAcceptConnectRoundTrip() started.
+􁁛  Test keychainFailuresNameTheEnvAndStageNothing() passed after 0.037 seconds.
+􀟈  Test closeWithoutPublishDoesNotCount() started.
+􀟈  Test blockedRecoveryRefusesOpen() started.
+􀟈  Test spawnRefusedWhenBoundaryLost() started.
+􀟈  Test overflowDiscardsQueuedReplayMetadataUntilResubscribe() started.
+􀟈  Test closeDuringClosingWaitsForTheLeader() started.
+􁁛  Test egressProxyDeniesUnknownHosts() passed after 0.038 seconds.
+􀟈  Test excessControlFramesFailTheStreamExplicitly() started.
+􀟈  Test firstOutputSurvivesAnAggregateByteCapFilledByOtherRuntimes() started.
+􀟈  Test fullLifecycleScript() started.
+􀟈  Test mismatchedReplayBoundaryOverflowsOnlyItsRuntime() started.
+􀟈  Test launchHandshakeSequence() started.
+􀟈  Test cancelStopsARunningRuntime() started.
+􀟈  Test handshakeFailureFailsTheRuntime() started.
+􀟈  Test clearingOverflowedAdmitsOutputWithoutWipingBacklog() started.
+􀟈  Test spawnFailureEndsTheRuntime() started.
+􀟈  Test resettingOneSubscriptionPreservesAnotherRuntime() started.
+􀟈  Test closePublishesAnEmptyWorkspace() started.
+􀟈  Test perform_allowed_containedInWorkspaceWrite() started.
+􀟈  Test perform_pendingWithoutApproval_awaitsAndDoesNotSpawn() started.
+􀟈  Test fourHundredShortOutputFramesStayInOrderWithoutOverflow() started.
+􀟈  Test perform_pendingDeny_doesNotSpawn() started.
+􀟈  Test strayCompletionsDrain() started.
+􀟈  Test openRejectsDimensionsAndFaultsDoNotLeakMasters() started.
+􀟈  Test overflowIsAttributedToItsRuntimeAndDoesNotDropAnotherStream() started.
+􀟈  Test seatbelt_writeUnderRepositoryRootOutsideWorkspace_isBlocked() started.
+􀟈  Test drainsRuntimesFairlyWithoutReorderingOneRuntime() started.
+􀟈  Test observedPlan_containedIsolation_fails() started.
+􀟈  Test seatbelt_touchInsideWorkspace_succeedsAndEstablishesContained() started.
+􀟈  Test perform_pendingAllowOnce_containedInWorkspaceWrite() started.
+􀟈  Test exitIsNotStarvedByAnotherRuntimeAndSurvivesDisconnect() started.
+􀟈  Test cancelUnknownRuntimeReplies() started.
+􀟈  Test replayBatchBoundariesPreserveOrderAndRuntimeAttribution() started.
+􀟈  Test observed_touchOutsideWorkspace_succeeds_notSecretlySandboxed() started.
+􀟈  Test perform_pendingCreateRule_fails() started.
+􀟈  Test unframedReplayIsAdmittedForLegacyHosts() started.
+􀟈  Test keychainSecurityCLICannotReachService() started.
+􀟈  Test oldClientFramesStillDecode() started.
+􀟈  Test perform_denied_doesNotSpawn() started.
+􀟈  Test failedRecoveryRefusesTheAttemptButAllowsRetry() started.
+􀟈  Test windowNoticesDeliverAndCoalesceToLatest() started.
+􀟈  Test seatbelt_touchOutsideWorkspace_isBlockedFileAbsent_stillEstablishedContained() started.
+􁁛  Test egressProxyDeniesExternalAbsoluteHTTP() passed after 0.043 seconds.
+􀟈  Test terminalRulesKeepTheNonceDrainAndPartialWrite() started.
+􀟈  Test perform_sameFingerprint_secondTurnFails() started.
+􀟈  Test aggregateAndFrameCapsKeepFloodsBounded() started.
+􀟈  Test closeDuringCreatingIsRefused() started.
+􀟈  Test seatbelt_binShChild_cannotWriteOutsideWorkspace() started.
+􀟈  Test codecRoundTripsArbitraryBytes() started.
+􀟈  Test firstOutputFromAnotherRuntimeReclaimsTheFloodingRuntime() started.
+􀟈  Test concurrentDeliverAndNextKeepByteAccountingExact() started.
+􀟈  Test denialDetailRoundTripsAndOversizeFailsClosed() started.
+􀟈  Test perform_pendingUnavailable_fails() started.
+􀟈  Test teardownFailedIsTerminal() started.
+􀟈  Test capabilityRepliesRoundTripWithinTheirBounds() started.
+􀟈  Test concurrentDuplicateInstanceAnnounceWinsOnce() started.
+􀟈  Test recoveredWorkspaceAdmits() started.
+􀟈  Test concurrentDuplicateRuntimeAnnounceWinsOnce() started.
+􀟈  Test unknownTerminalFieldFailsClosed() started.
+􀟈  Test allRefusalOutcomesRefuseTheAttempt() started.
+􀟈  Test activateVersusRevokeKeepsSingleAuthority() started.
+􀟈  Test replayKeepsTheNewestBoundedBytes() started.
+􀟈  Test spawnRefusedOutsideActive() started.
+􀟈  Test duplicateRecoveryReportDrains() started.
+􀟈  Test subscriberQueueOverflowsAboveTheBound() started.
+􀟈  Test childrenAliveLeavesCloseRetryable() started.
+􀟈  Test finishRuntimeVersusRevokeRetiresOnce() started.
+􀟈  Test concurrentRevokeRunsTeardownExactlyOnce() started.
+􀟈  Test replayTrimsInsideTheOldestChunk() started.
+􁁛  Test seedGitIdentityUsesInjectedReader() passed after 0.070 seconds.
+􁁛  Test writeShimRefreshesContent() passed after 0.075 seconds.
+􁁛  Test terminalBytesRoundTripThroughBase64() passed after 0.076 seconds.
+􁁛  Test productiveProfileOmitsSystemTemporaryDirectoryWhenUnresolved() passed after 0.076 seconds.
+􁁛  Test stageAgentHomesLinksClaudeCredentials() passed after 0.082 seconds.
+􁁛  Test terminalEnvironmentKeepsColorAndBoundedLoopbackProxy() passed after 0.115 seconds.
+􁁛  Test controlRPCRequestRoundTrips() passed after 0.155 seconds.
+􁁛  Test unselectedRuntimeStripsSecretsButProjectsNonSecretVars() passed after 0.156 seconds.
+􁁛  Test sanitizedPATHSymlinkGrandparentNeverReachesRoot() passed after 0.161 seconds.
+􀟈  Test case passing 1 argument launcher → .sh to descendantsCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test isolationConformance_catalogListsEverySection8ID() started.
+􁁛  Test agentBinDirectoryIsASiblingOfTheHostBinary() passed after 0.176 seconds.
+􀟈  Test compileExecutable_workspaceMismatch_fails() started.
+􀟈  Test case passing 1 argument name → "quote"name" to seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􀟈  Test case passing 1 argument name → "slash\name" to seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􀟈  Test case passing 1 argument name → "close") (allow default) ;" to seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􀟈  Test case passing 1 argument name → "tab	name" to seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􀟈  Test case passing 1 argument name → "carriagename" to seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􀟈  Test localExecutor_containedOutsideWrite_deniedByKernel() started.
+􀟈  Test localExecutor_performWhenCancelled_returnsExecuteCancelled() started.
+􀟈  Test compileExecutable_redirect_fails() started.
+􀟈  Test observedAndMediated_containedIsolation_fails() started.
+􁁛  Test productiveProfileGrantsSystemTemporaryDirectoryReadWrite() passed after 0.184 seconds.
+􀟈  Test compileExecutable_unresolvedName_fails() started.
+􀟈  Test localExecutor_applyFailure_consumesFingerprint() started.
+􁁛  Test controlRPCResponseCodeRoundTrips() passed after 0.186 seconds.
+􀟈  Test compileExecutable_absoluteTouch_succeeds() started.
+􀟈  Test localExecutor_askResolve_containedInWorkspaceTouch() started.
+􀟈  Test localExecutor_sameFingerprint_secondRunFails() started.
+􀟈  Test compileExecutable_missingWorkingDirectory_fails() started.
+􀟈  Test localExecutor_containedInWorkspaceWrite_succeeds() started.
+􀟈  Test compileExecutable_fileAction_fails() started.
+􁁛  Test egressProxyParsesStrictCONNECTOnly() passed after 0.192 seconds.
+􁁛  Test loopbackHelpersRejectOutOfRangePorts() passed after 0.192 seconds.
+􀟈  Test pendingAuthorization_hasNoExecuteInput() started.
+􀟈  Test compileExecutable_missingCommand_fails() started.
+􀟈  Test compileExecutable_bareTouch_resolvesOnSafePath() started.
+􁁛  Test pseudoTerminalEnvironmentAdvertisesColorOutput() passed after 0.194 seconds.
+􁁛  Test egressProxyRelaysLoopbackAbsoluteHTTP() passed after 0.197 seconds.
+􁁛  Test egressProxyParsesAbsoluteHTTP() passed after 0.200 seconds.
+􁁛  Test controlRPCCodableEncodeAgreesWithValidatedEncode() passed after 0.211 seconds.
+􁁛  Test terminalEnvironmentKeyPolicy() passed after 0.221 seconds.
+􁁛  Test agentBinResolveWithMissingBinDirGrantsNothing() passed after 0.221 seconds.
+􁁛  Test sanitizedPATHImpliesBinParentsButNeverRoot() passed after 0.223 seconds.
+􁁛  Test agentFilteredCredentialsStageOnlyForMatchingAgent() passed after 0.224 seconds.
+􁁛  Test keychainEntryInjectsOnlyForMatchingAgent() passed after 0.223 seconds.
+􁁛  Test activeDeveloperRootFollowsSelectLinkToEnclosingApp() passed after 0.370 seconds.
+􁁛  Test unixPeerEvidenceRejectsNonSocketDescriptor() passed after 0.370 seconds.
+􁁛  Test keychainRawSecretWithoutFieldDecodesAsText() passed after 0.370 seconds.
+􁁛  Test egressProxyExternalDialFilterRejectsNonPublicAddresses() passed after 0.371 seconds.
+􁁛  Test agentBinResolutionGrantsOnlyResolvedAgents() passed after 0.371 seconds.
+􁁛  Test controlRPCFramesAreByteIdenticalToLegacyCodec() passed after 0.371 seconds.
+􁁛  Test deadExecutableLinkNamesItselfInStagingFailure() passed after 0.371 seconds.
+􁁛  Test workspaceControlRejectsUnknownVersionAndFields() passed after 0.371 seconds.
+􁁛  Test controlRPCLimitBatteryRejectsIdenticalFramesOnBothPaths() passed after 0.371 seconds.
+􁁛  Test terminalEnvironmentPassesGatewayThrough() passed after 0.371 seconds.
+􁁛  Test controlRPCUnknownOperationPreservesRawEcho() passed after 0.371 seconds.
+􁁛  Test egressProxyRelaysLoopbackTargets() passed after 0.371 seconds.
+􁁛  Test symlinkedCredentialSourceEscapeFailsClosedStaging() passed after 0.371 seconds.
+􁁛  Test profileBoundToProjectAIsUnresolvableForProjectB() passed after 0.371 seconds.
+􁁛  Test egressProxyDeniesMalformedAndBypassShapes() passed after 0.371 seconds.
+􁁛  Test seedGitIdentitySkipsWhenIdentityIsEmpty() passed after 0.371 seconds.
+􁁛  Test unixPeerEvidenceFromRealConnectedSocket() passed after 0.372 seconds.
+􁁛  Test profileLessTmpdirStaysOutOfTheWorkspaceRoot() passed after 0.371 seconds.
+􁁛  Test agentBinResolutionOmitsClaudeScratchWhenClaudeIsAbsent() passed after 0.371 seconds.
+􁁛  Test dynamicCodeInvalidRequirementFailsAndDefaultHasNoRole() passed after 0.371 seconds.
+􁁛  Test stagedCredentialMustBeOwnerFileAndNeverSymlink() passed after 0.371 seconds.
+􁁛  Test unixDifferentExecutableCannotAcquireRoleAndDeadPeerFails() passed after 0.515 seconds.
+􁁛  Test productiveResolutionCarriesSystemTemporaryDirectory() passed after 0.516 seconds.
+􁁛  Test peerTrustRejectsRealAllowACLDespiteSafePOSIXMode() passed after 0.516 seconds.
+􁁛  Test activeDeveloperRootPrefersDeveloperDir() passed after 0.519 seconds.
+􁁛  Test emptyAgentsListNormalizesToNilInInitAndDecode() passed after 0.525 seconds.
+􁁛  Test controlRPCFailureTypedOverloadShape() passed after 0.610 seconds.
+􁁛  Test controlRPCPropagatesInvalidAndIncompatible() passed after 0.627 seconds.
+􁁛  Test peerTrustRejectsUserOwnedManifest() passed after 0.627 seconds.
+􁁛  Test agentBinDirectoryDerivesFromExecutablePath() passed after 0.727 seconds.
+􁁛  Test controlRPCResponseRoundTrips() passed after 0.727 seconds.
+􁁛  Test keychainValuesLandInEnvironmentForAnyIO() passed after 0.732 seconds.
+􁁛  Test agentBinResolutionAdmitsMuseInstallFiles() passed after 0.733 seconds.
+􁁛  Test unknownResourceProfileIDResolvesToNothing() passed after 0.832 seconds.
+􁁛  Test blockedVariableNameMatchesUnderscoreTokens() passed after 0.849 seconds.
+􁁛  Test activeDeveloperRootVetoesSensitiveSelection() passed after 0.862 seconds.
+􁁛  Test egressProxyReportsDialFailures() passed after 1.101 seconds.
+􁁛  Test productiveResolutionIncludesActiveDeveloperRoot() passed after 1.117 seconds.
+􁁛  Test controlRPCCodableInitEnforcesVersionAndLimits() passed after 1.117 seconds.
+􁁛  Test terminalReplayDropsTheOldestBytes() passed after 1.117 seconds.
+􀢄  Test ensureTerminalRuntimeAcceptsKnownExplicitProfile() recorded an issue at RuntimeResourceAdversarialTests.swift:320:2: Caught error: .unauthorizedClient
+􀢄  Test ensureTerminalRuntimeAdjudicatesExplicitProfile() recorded an issue at RuntimeResourceAdversarialTests.swift:269:2: Caught error: .disconnected
+􀢄  Test defaultProfileNeverAutoAttachesNilLaunchKeepsBaseFence() recorded an issue at RuntimeResourceAdversarialTests.swift:167:2: Caught error: .unauthorizedClient
+􁁛  Test hfsSliceDevice_prefersAppleHFSContentHint() passed after 6.870 seconds.
+􁁛  Test compileSeatbeltProfile_observedAndMediated_returnsProfileNotApplicable() passed after 6.870 seconds.
+􁁛  Test seatbelt_prepare_contained_relativeWorkspace_returnsWorkspaceMustBeAbsolute() passed after 6.870 seconds.
+􁁛  Test compileSeatbeltProfile_contained_writeLimitIsWorkspaceNotRepositoryRoot() passed after 6.870 seconds.
+􁁛  Test workspacePublishDecision_rejectsForeignInodeAndLinkCountChange() passed after 6.870 seconds.
+􁁛  Test seatbelt_prepare_contained_missingDirectory_returnsWorkspaceDoesNotExist() passed after 6.870 seconds.
+􁁛  Test unavailable_prepareAndRun_observed_establishesObservedFamilyNone_withoutSandboxExec() passed after 6.870 seconds.
+􁁛  Test rejectWorkspaceInodeAlias_unreadableUserFilesystemMetadataDirectoryRefuses() passed after 6.870 seconds.
+􁁛  Test compileSeatbeltProfile_contained_isDenyDefaultWorkspaceScope() passed after 6.870 seconds.
+􁁛  Test hfsSliceDevice_fallsBackToSolePartition() passed after 6.870 seconds.
+􁁛  Test compileSeatbeltProfile_newlineWorkspace_returnsWorkspacePathUnsafe() passed after 6.869 seconds.
+􁁛  Test unavailable_prepare_contained_returnsBackendUnavailable() passed after 6.869 seconds.
+􁁛  Test unavailable_prepareAndRun_mediated_establishesMediatedFamilyNone() passed after 6.869 seconds.
+􁁛  Test isolationBackendFamily_hasExactlyNoneSeatbeltAndLandlock() passed after 6.869 seconds.
+􁁛  Test isolatedCommand_rejectsEmptyAndRelativeExecutable() passed after 6.869 seconds.
+􁁛  Test seatbelt_prepare_observed_returnsProfileNotApplicable() passed after 6.869 seconds.
+􁁛  Test platform_family_isSeatbeltOnDarwin_landlockOnLinux() passed after 6.869 seconds.
+􁁛  Test workspaceFilesystemMetadata_ownershipCheckHonorsTemporaryDirectory() passed after 6.869 seconds.
+􁁛  Test terminalPATHPrefersInstalledAgentBin() passed after 6.874 seconds.
+􁁛  Test preparedContainedProfileAdmitsLoopbackOnly() passed after 6.875 seconds.
+􁁛  Test containedLaunchResult_reportsTeardownFailure() passed after 6.869 seconds.
+􁁛  Test noProfileNeverAdmitsInstalledAgentResources() passed after 6.875 seconds.
+􁁛  Test workspaceFilesystemMetadata_skipsRootBookkeepingWhenRootOwnedOrOwnersIgnored() passed after 6.869 seconds.
+􁁛  Test compileSeatbeltProfile_filesystemRoot_returnsWorkspacePathUnsafe() passed after 6.869 seconds.
+􁁛  Test rejectWorkspaceInodeAlias_unreadableDirectory_refusesHiddenAlias() passed after 6.869 seconds.
+􀢄  Test profileStagingFailureKeepsLaunchFailurePath() recorded an issue at RuntimeResourceAdversarialTests.swift:223:2: Caught error: .unauthorizedClient
+􁁛  Test appendedSessionRecordsStayIndependent() passed after 6.873 seconds.
+􁁛  Test workspaceFilesystemMetadata_treeWalkAndCopyKeepProjectNames() passed after 6.874 seconds.
+􁁛  Test egressProxyRejectsOversizeHeaders() passed after 6.880 seconds.
+􁁛  Test agentNamedExecutableWithNoProfileStagesZeroResources() passed after 6.880 seconds.
+􁁛  Test selectedGenericProfileStagesOnlyItsOwnSyntheticCredential() passed after 6.878 seconds.
+􁁛  Test delegationNarrowsThroughRegistry() passed after 6.874 seconds.
+􁁛  Test denyPendingAndFailureDoNotRun() passed after 6.874 seconds.
+􁁛  Test resolutionReturnsWhenTheSessionStopsDuringLookup() passed after 6.874 seconds.
+􁁛  Test cleanupFailureKeepsAuthorityDead() passed after 6.874 seconds.
+􁁛  Test cancellationStopsTheExchangeBeforeFinishReturns() passed after 6.875 seconds.
+􁁛  Test cachedContextNeverEqualsLiveValidity() passed after 6.875 seconds.
+􁁛  Test requestPayloadCannotReplacePrincipal() passed after 6.875 seconds.
+􁁛  Test directConfigurationDisablesProxiesAndCredentials() passed after 6.875 seconds.
+􁁛  Test instanceBindsExpectedWorkspaceAndRuntime() passed after 6.875 seconds.
+􁁛  Test directConnectorRefusesLoopbackBeforeAccept() passed after 6.875 seconds.
+􁁛  Test seatbelt_prepare_launchArguments_areSandboxExecProfileAndInnerArgv() passed after 6.876 seconds.
+􁁛  Test normalizeSeesTrustedSubjectThePayloadCannotOverride() passed after 6.875 seconds.
+􁁛  Test embeddedNULCannotChangeExecutedArgv() passed after 6.875 seconds.
+􁁛  Test allowedGETRunsOnce() passed after 6.875 seconds.
+􁁛  Test tornSessionLineDoesNotHideTheNextRecord() passed after 6.875 seconds.
+􁁛  Test channelBindingNeverMovesToAnotherInstance() passed after 6.875 seconds.
+􁁛  Test journalFailureRefusesEstablishment() passed after 6.875 seconds.
+􁁛  Test resolutionDoesNotStartWhenTheSessionHasStopped() passed after 6.875 seconds.
+􁁛  Test redirectDoesNotOpenASecondTransfer() passed after 6.875 seconds.
+􁁛  Test mismatchedPrincipalBindingFails() passed after 6.875 seconds.
+􁁛  Test capabilitySessionAndClosureDoNotRun() passed after 6.875 seconds.
+􁁛  Test runtimeBindsExactlyOneInstance() passed after 6.875 seconds.
+􁁛  Test lifecycleMovesActiveRevokingInactive() passed after 6.875 seconds.
+􁁛  Test activateJournalFailureLeavesInstanceInactive() passed after 6.875 seconds.
+􁁛  Test announcedInstanceIsUnusableUntilEstablished() passed after 6.875 seconds.
+􁁛  Test terminatedRuntimeInvalidatesAndLookupStaysDescriptive() passed after 6.875 seconds.
+􁁛  Test suppressedExecuteKeepsPrincipalAttribution() passed after 6.875 seconds.
+􁁛  Test ambientSecretsDoNotFlowUnlessExplicitlyNamed() passed after 6.883 seconds.
+􁁛  Test engageAndRestoreAreIdempotent() passed after 6.875 seconds.
+􁁛  Test recoveryResurrectsNothing() passed after 6.875 seconds.
+􁁛  Test unregisteredIDsHaveUnknownValidity() passed after 6.875 seconds.
+􁁛  Test landlock_prepare_mediated_returnsProfileNotApplicable() passed after 6.875 seconds.
+􁁛  Test isolationExecExit125_isBackendUnavailable_notEstablished() passed after 6.874 seconds.
+􁁛  Test restartMintsFreshIDAndKeepsOldDead() passed after 6.875 seconds.
+􁁛  Test compileLandlockRuleset_filesystemRoot_returnsWorkspacePathUnsafe() passed after 6.875 seconds.
+􁁛  Test compileLandlockRuleset_contained_writeRootIsResolvedWorkspaceNotRepositoryRoot() passed after 6.874 seconds.
+􁁛  Test isolationExecIdentity_rejectsWrongNameDirectoryAndWorkspaceLocalHelper() passed after 6.875 seconds.
+􁁛  Test compileLandlockRuleset_newlineWorkspace_returnsWorkspacePathUnsafe() passed after 6.874 seconds.
+􁁛  Test landlock_run_missingTrampoline_returnsBackendUnavailable() passed after 6.875 seconds.
+􁁛  Test landlock_prepare_observed_returnsProfileNotApplicable() passed after 6.874 seconds.
+􁁛  Test landlock_run_contained_onDarwin_returnsBackendUnavailable() passed after 6.874 seconds.
+􁁛  Test compileLandlockRuleset_observedAndMediated_returnsProfileNotApplicable() passed after 6.874 seconds.
+􁁛  Test landlock_prepare_contained_launchArguments_areWorkspaceSeparatorAndInnerArgv() passed after 6.874 seconds.
+􁁛  Test landlock_prepare_contained_regularFileWorkspace_returnsWorkspaceDoesNotExist() passed after 6.874 seconds.
+􁁛  Test isolatedLaunchRequest_rejectsLandlockWithObservedOrUnsandboxedContained() passed after 6.874 seconds.
+􁁛  Test landlock_prepare_contained_relativeWorkspace_returnsWorkspaceMustBeAbsolute() passed after 6.874 seconds.
+􁁛  Test landlock_prepare_contained_symlinkToFilesystemRoot_returnsWorkspacePathUnsafe() passed after 6.874 seconds.
+􁁛  Test preparedWorkspaceRetargetDoesNotChangeGrantOrWorkingDirectory() passed after 6.877 seconds.
+􁁛  Test landlock_prepare_contained_missingDirectory_returnsWorkspaceDoesNotExist() passed after 6.874 seconds.
+􁁛  Test cleanRecoveryDoesNotTouchTheProject() passed after 6.874 seconds.
+􁁛  Test productiveResolutionHonorsInjectedProbe() passed after 6.883 seconds.
+􁁛  Test compileLandlockRuleset_relativeWorkspace_returnsWorkspaceMustBeAbsolute() passed after 6.874 seconds.
+􁁛  Test spawn_landlock_trueOrWorkspaceHelper_doesNotEstablish() passed after 6.874 seconds.
+􁁛  Test compileLandlockRuleset_symlinkToFilesystemRoot_returnsWorkspacePathUnsafe() passed after 6.874 seconds.
+􁁛  Test workspaceRootPolicyRejectsOnlyTheHomeDirectory() passed after 6.873 seconds.
+􁁛  Test fakeCapabilityWrongSessionAndClosedChannelDoNotRun() passed after 6.860 seconds.
+􁁛  Test seatbeltProfileGainsNoNetworkAllow() passed after 6.860 seconds.
+􁁛  Test allowedCommandRunsOnce() passed after 6.860 seconds.
+􁁛  Test evaluationFailureDoesNotRun() passed after 6.846 seconds.
+􁁛  Test malformedFrameDoesNotRun() passed after 6.846 seconds.
+􁁛  Test spawnRefusedAtLimit() passed after 6.846 seconds.
+􁁛  Test pendingCommandDoesNotRunUntilAllowOnce() passed after 6.846 seconds.
+􁁛  Test duplicateSpawnRequestDrains() passed after 6.846 seconds.
+􁁛  Test forgetPrunesOnlyFinishedRuntimes() passed after 6.846 seconds.
+􁁛  Test evidenceFileRecordsTheSessionAndOutcome() passed after 6.846 seconds.
+􁁛  Test mismatchedPhaseCompletionsDrain() passed after 6.846 seconds.
+􁁛  Test deniedCommandDoesNotRun() passed after 6.846 seconds.
+􁁛  Test openFailureDiscardsTheWorkspace() passed after 6.846 seconds.
+􁁛  Test lateControlReplyDrains() passed after 6.846 seconds.
+􁁛  Test liveOwnerRefusesOpenAndDrains() passed after 6.846 seconds.
+􁁛  Test openSequenceReachesActive() passed after 6.846 seconds.
+􁁛  Test closeStopsRuntimesThenFinishes() passed after 6.846 seconds.
+􁁛  Test closeWithoutPublishDoesNotCount() passed after 6.846 seconds.
+􁁛  Test blockedRecoveryRefusesOpen() passed after 6.846 seconds.
+􁁛  Test spawnRefusedWhenBoundaryLost() passed after 6.846 seconds.
+􁁛  Test overflowDiscardsQueuedReplayMetadataUntilResubscribe() passed after 6.846 seconds.
+􁁛  Test closeDuringClosingWaitsForTheLeader() passed after 6.846 seconds.
+􁁛  Test firstOutputSurvivesAnAggregateByteCapFilledByOtherRuntimes() passed after 6.845 seconds.
+􁁛  Test fullLifecycleScript() passed after 6.845 seconds.
+􁁛  Test mismatchedReplayBoundaryOverflowsOnlyItsRuntime() passed after 6.845 seconds.
+􁁛  Test launchHandshakeSequence() passed after 6.845 seconds.
+􁁛  Test cancelStopsARunningRuntime() passed after 6.845 seconds.
+􁁛  Test handshakeFailureFailsTheRuntime() passed after 6.845 seconds.
+􁁛  Test clearingOverflowedAdmitsOutputWithoutWipingBacklog() passed after 6.845 seconds.
+􁁛  Test spawnFailureEndsTheRuntime() passed after 6.845 seconds.
+􁁛  Test resettingOneSubscriptionPreservesAnotherRuntime() passed after 6.845 seconds.
+􁁛  Test closePublishesAnEmptyWorkspace() passed after 6.845 seconds.
+􁁛  Test perform_pendingWithoutApproval_awaitsAndDoesNotSpawn() passed after 6.842 seconds.
+􁁛  Test cancellingAHelperDoesNotWaitForItToExit() passed after 6.846 seconds.
+􁁛  Test fourHundredShortOutputFramesStayInOrderWithoutOverflow() passed after 6.842 seconds.
+􁁛  Test strayCompletionsDrain() passed after 6.842 seconds.
+􁁛  Test perform_pendingDeny_doesNotSpawn() passed after 6.842 seconds.
+􁁛  Test overflowIsAttributedToItsRuntimeAndDoesNotDropAnotherStream() passed after 6.841 seconds.
+􁁛  Test drainsRuntimesFairlyWithoutReorderingOneRuntime() passed after 6.841 seconds.
+􁁛  Test observedPlan_containedIsolation_fails() passed after 6.841 seconds.
+􁁛  Test openRejectsDimensionsAndFaultsDoNotLeakMasters() passed after 6.842 seconds.
+􁁛  Test cancelUnknownRuntimeReplies() passed after 6.841 seconds.
+􁁛  Test replayBatchBoundariesPreserveOrderAndRuntimeAttribution() passed after 6.841 seconds.
+􁁛  Test exitIsNotStarvedByAnotherRuntimeAndSurvivesDisconnect() passed after 6.842 seconds.
+􁁛  Test unframedReplayIsAdmittedForLegacyHosts() passed after 6.841 seconds.
+􁁛  Test perform_pendingCreateRule_fails() passed after 6.842 seconds.
+􁁛  Test oldClientFramesStillDecode() passed after 6.841 seconds.
+􁁛  Test perform_denied_doesNotSpawn() passed after 6.841 seconds.
+􁁛  Test failedRecoveryRefusesTheAttemptButAllowsRetry() passed after 6.841 seconds.
+􁁛  Test windowNoticesDeliverAndCoalesceToLatest() passed after 6.841 seconds.
+􁁛  Test terminalRulesKeepTheNonceDrainAndPartialWrite() passed after 6.841 seconds.
+􁁛  Test closeDuringCreatingIsRefused() passed after 6.843 seconds.
+􁁛  Test codecRoundTripsArbitraryBytes() passed after 6.843 seconds.
+􁁛  Test excessControlFramesFailTheStreamExplicitly() passed after 6.848 seconds.
+􁁛  Test aggregateAndFrameCapsKeepFloodsBounded() passed after 6.843 seconds.
+􁁛  Test denialDetailRoundTripsAndOversizeFailsClosed() passed after 6.843 seconds.
+􁁛  Test perform_pendingUnavailable_fails() passed after 6.843 seconds.
+􁁛  Test teardownFailedIsTerminal() passed after 6.843 seconds.
+􁁛  Test capabilityRepliesRoundTripWithinTheirBounds() passed after 6.843 seconds.
+􁁛  Test recoveredWorkspaceAdmits() passed after 6.818 seconds.
+􁁛  Test firstOutputFromAnotherRuntimeReclaimsTheFloodingRuntime() passed after 6.844 seconds.
+􁁛  Test unknownTerminalFieldFailsClosed() passed after 6.818 seconds.
+􁁛  Test allRefusalOutcomesRefuseTheAttempt() passed after 6.818 seconds.
+􀢄  Test ensureTerminalRuntimeAcceptsKnownExplicitProfile() failed after 6.887 seconds with 1 issue.
+􀢄  Test ensureTerminalRuntimeAdjudicatesExplicitProfile() failed after 6.887 seconds with 1 issue.
+􁁛  Test spawnRefusedOutsideActive() passed after 6.818 seconds.
+􁁛  Test duplicateRecoveryReportDrains() passed after 6.818 seconds.
+􁁛  Test replayKeepsTheNewestBoundedBytes() passed after 6.818 seconds.
+􁁛  Test subscriberQueueOverflowsAboveTheBound() passed after 6.818 seconds.
+􁁛  Test childrenAliveLeavesCloseRetryable() passed after 6.818 seconds.
+􀢄  Test defaultProfileNeverAutoAttachesNilLaunchKeepsBaseFence() failed after 6.887 seconds with 1 issue.
+􁁛  Test replayTrimsInsideTheOldestChunk() passed after 6.818 seconds.
+􁁛  Test apply_contained_withoutUsableWorkspaceOrBackend_failsClosed() passed after 6.883 seconds.
+􀢄  Test profileStagingFailureKeepsLaunchFailurePath() failed after 6.888 seconds with 1 issue.
+􁁛  Test invalidSeatbeltProfileDoesNotExecuteInnerCommand() passed after 6.882 seconds.
+􁁛  Test isolationConformance_catalogListsEverySection8ID() passed after 6.723 seconds.
+􁁛  Test compileExecutable_workspaceMismatch_fails() passed after 6.709 seconds.
+􁁛  Test compileExecutable_redirect_fails() passed after 6.705 seconds.
+􁁛  Test observedAndMediated_containedIsolation_fails() passed after 6.705 seconds.
+􁁛  Test compileExecutable_unresolvedName_fails() passed after 6.702 seconds.
+􁁛  Test compileExecutable_absoluteTouch_succeeds() passed after 6.701 seconds.
+􁁛  Test compileExecutable_missingWorkingDirectory_fails() passed after 6.696 seconds.
+􁁛  Test compileExecutable_fileAction_fails() passed after 6.696 seconds.
+􁁛  Test pendingAuthorization_hasNoExecuteInput() passed after 6.697 seconds.
+􁁛  Test compileExecutable_missingCommand_fails() passed after 6.697 seconds.
+􁁛  Test compileExecutable_bareTouch_resolvesOnSafePath() passed after 6.697 seconds.
+􁁛  Test runLandlock_seatbeltRequest_returnsBackendMismatch() passed after 6.881 seconds.
+􁁛  Test observed_touchOutsideWorkspace_succeeds_notSecretlySandboxed() passed after 6.847 seconds.
+􁁛  Suite "HTTP admission" passed after 6.890 seconds.
+􁁛  Test failedApply_consumesAuthorizationBeforeRetry() passed after 6.852 seconds.
+􁁛  Test revokingIsObservableWhileTeardownRuns() passed after 6.884 seconds.
+􁁛  Suite "Workspace lifecycle core" passed after 6.890 seconds.
+􁁛  Suite "Terminal stream" passed after 6.890 seconds.
+􁁛  Test localExecutor_applyFailure_consumesFingerprint() passed after 6.704 seconds.
+􁁛  Test apply_observedAndMediated_doNotRequireCallerToPickUnavailable() passed after 6.884 seconds.
+􀟈  Test secondEngageDoesNotReplaceTheArmedSavedMode() started.
+􀟈  Test tornTrailingLineKeepsTheEarlierWorkspaceVisible() started.
+􀟈  Test startingNewWorkspaceAtHomeRefusesBeforeLaunchingHost() started.
+􀟈  Test subscribersShareOneOrderedBinaryStream() started.
+􀟈  Test isolationConformance_catalogVerdictsMatchSection8() started.
+􁁛  Test secondEngageDoesNotReplaceTheArmedSavedMode() passed after 0.022 seconds.
+􁁛  Test concurrentAppendsKeepEveryRecordReadable() passed after 6.906 seconds.
+􁁛  Test localExecutor_performWhenCancelled_returnsExecuteCancelled() passed after 6.730 seconds.
+􁁛  Test tornTrailingLineKeepsTheEarlierWorkspaceVisible() passed after 0.022 seconds.
+􁁛  Test isolationConformance_catalogVerdictsMatchSection8() passed after 0.022 seconds.
+􀟈  Test workspaceRunRestoresOnExitCloseDisconnectAndStdinEOF() started.
+􀟈  Test tornLineAloneIsNotACleanHistory() started.
+􀟈  Test isolationConformance_kernelFence(_:) started.
+􀢄  Test forgedAndCrossProjectProfileIDsFailClosedAtServer() recorded an issue at RuntimeResourceAdversarialTests.swift:130:2: Caught error: .unauthorizedClient
+􀟈  Test case passing 1 argument id → FS-WRITE-IN to isolationConformance_kernelFence(_:) started.
+􀢄  Test forgedAndCrossProjectProfileIDsFailClosedAtServer() failed after 6.914 seconds with 1 issue.
+􁁛  Test supervisorLaunchMintsActivatesAndFinishesInstance() passed after 6.908 seconds.
+􁁛  Test tornLineAloneIsNotACleanHistory() passed after 0.001 seconds.
+􀟈  Test closedHistoryWithATornTailIsNotClean() started.
+􁁛  Test closedHistoryWithATornTailIsNotClean() passed after 0.001 seconds.
+􀟈  Test reusedProcessGroupIsNotKilled() started.
+􁁛  Test reusedProcessGroupIsNotKilled() passed after 0.001 seconds.
+􀟈  Test provenProcessGroupIsKilled() started.
+􁁛  Test provenProcessGroupIsKilled() passed after 0.011 seconds.
+􀟈  Test liveOwnerRefusesASecondWorkspace() started.
+􁁛  Test subscribersShareOneOrderedBinaryStream() passed after 0.056 seconds.
+􀟈  Test resizePublishesActualWindowOnlyToOptedInSubscribers() started.
+􁁛  Test resizePublishesActualWindowOnlyToOptedInSubscribers() passed after 0.027 seconds.
+􀟈  Test replayKeepsOnlyTheRecentSuffixAndLiveBytesFollow() started.
+􁁛  Test startingNewWorkspaceAtHomeRefusesBeforeLaunchingHost() passed after 0.110 seconds.
+􀟈  Test clientsAttachDetachAndCancelWithoutSharingAuthority() started.
+􁁛  Test replayKeepsOnlyTheRecentSuffixAndLiveBytesFollow() passed after 0.229 seconds.
+􀟈  Test emptyAttachmentStillDeclaresAReplayBatch() started.
+􁁛  Test emptyAttachmentStillDeclaresAReplayBatch() passed after 0.024 seconds.
+􀟈  Test slowSubscriberIsDroppedAndDoesNotStallTheReader() started.
+􁁛  Test slowSubscriberIsDroppedAndDoesNotStallTheReader() passed after 0.047 seconds.
+􀟈  Test resubscribeAfterOverflowResumesFromReplay() started.
+􁁛  Test concurrentDeliverAndNextKeepByteAccountingExact() passed after 7.257 seconds.
+􁁛  Suite "Workspace client terminal queue" passed after 7.301 seconds.
+􁁛  Test resubscribeAfterOverflowResumesFromReplay() passed after 0.099 seconds.
+􀟈  Test clientResubscribeAfterUnsubscribeReceivesReplay() started.
+􁁛  Test supervisorRegisterFaultRetiresAnnouncedInstance() passed after 7.995 seconds.
+􁁛  Test supervisorLaunchWithoutDefinitionMintsNoInstance() passed after 8.014 seconds.
+􁁛  Suite "AgentInstanceRegistry" passed after 8.022 seconds.
+􁁛  Test concurrentRevokeRunsTeardownExactlyOnce() passed after 8.067 seconds.
+􁁛  Test activateVersusRevokeKeepsSingleAuthority() passed after 8.075 seconds.
+􁁛  Test finishRuntimeVersusRevokeRetiresOnce() passed after 8.093 seconds.
+􁁛  Test concurrentDuplicateInstanceAnnounceWinsOnce() passed after 8.173 seconds.
+􁁛  Test concurrentDuplicateRuntimeAnnounceWinsOnce() passed after 8.150 seconds.
+􁁛  Suite "AgentInstanceRegistry concurrency" passed after 8.220 seconds.
+􁁛  Test launch_containedInWorkspaceTouch_succeeds() passed after 17.690 seconds.
+􁁛  Test ambientOutsideFileDescriptorIsNotWritable() passed after 19.618 seconds.
+􀟈  Test ambientSocketpairIsNotUsable() started.
+􁁛  Test ipv4BindListenAcceptConnectRoundTrip() passed after 19.859 seconds.
+􀟈  Test ipv6BindListenAcceptConnectRoundTrip() started.
+􁁛  Test ptyRuntimeStillAdmitsShellCommands() passed after 19.878 seconds.
+􁁛  Test launch_containedOutsideTouch_deniedByKernel() passed after 20.098 seconds.
+􁁛  Test containedClientUsesTheGrantedPipes() passed after 20.070 seconds.
+􁁛  Test admittedCommandStopsWhenContainedProcessExits() passed after 20.380 seconds.
+􁁛  Suite "RuntimeAdmission" passed after 20.403 seconds.
+adversarial technique=sh executable=/bin/sh verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument launcher → .bash to descendantsCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test seatbelt_touchOutsideWorkspace_isBlockedFileAbsent_stillEstablishedContained() passed after 20.389 seconds.
+􁁛  Test containedEnvironmentContainsOnlyDeliberateValues() passed after 20.517 seconds.
+􁁛  Test reservedChildExit_cannotReplayCompletedSideEffect() passed after 20.527 seconds.
+􁁛  Test seatbelt_writeUnderRepositoryRootOutsideWorkspace_isBlocked() passed after 20.539 seconds.
+􁁛  Test unwritableSessionLogDoesNotExecute() passed after 20.591 seconds.
+􁁛  Test keychainSecurityCLICannotReachService() passed after 20.556 seconds.
+􀟈  Test securityFrameworkLookupIsBlockedAtBoundary() started.
+􁁛  Test perform_pendingAllowOnce_containedInWorkspaceWrite() passed after 20.556 seconds.
+􁁛  Test perform_sameFingerprint_secondTurnFails() passed after 20.559 seconds.
+􁁛  Test seatbelt_touchInsideWorkspace_succeedsAndEstablishesContained() passed after 20.564 seconds.
+􁁛  Test apply_contained_onDarwin_stillEstablishesSeatbelt() passed after 20.599 seconds.
+􁁛  Suite "IsolationApply" passed after 20.608 seconds.
+􁁛  Test perform_allowed_containedInWorkspaceWrite() passed after 20.569 seconds.
+􁁛  Test launch_containedTrue_establishes() passed after 20.601 seconds.
+􁁛  Suite "AgentTurn" passed after 20.608 seconds.
+􁁛  Test seatbelt_binShChild_cannotWriteOutsideWorkspace() passed after 20.564 seconds.
+􁁛  Suite "SeatbeltContainment" passed after 20.608 seconds.
+􁁛  Test launch_persistsSessionBeforeExecution() passed after 20.602 seconds.
+􁁛  Test sessionRecordFailureDoesNotExecuteInnerCommand() passed after 20.602 seconds.
+􁁛  Test seatbeltPathEncodingCannotBroadenWriteScope(_:) with 5 test cases passed after 20.635 seconds.
+􁁛  Suite "LaunchBoundaryRegression" passed after 20.642 seconds.
+􀟈  Test case passing 1 argument id → FS-WRITE-OUT to isolationConformance_kernelFence(_:) started.
+􁁛  Test twoWorkspacesMintDifferentIDs() passed after 21.696 seconds.
+􀟈  Test runtimesShareTheWorkspaceAndNotTheCapability() started.
+􁁛  Test localExecutor_askResolve_containedInWorkspaceTouch() passed after 22.259 seconds.
+􁁛  Test concurrentDispatch_sameAuthorizationExecutesOnlyOnce() passed after 22.418 seconds.
+􁁛  Test cancellationTerminatesOwnedProcessesBeforeReturn() passed after 22.422 seconds.
+􀢄  Test workspaceRunRestoresOnExitCloseDisconnectAndStdinEOF() recorded an issue at LocalTerminalRestoreTests.swift:52:6: Caught error: .unauthorizedClient
+􀢄  Test workspaceRunRestoresOnExitCloseDisconnectAndStdinEOF() failed after 16.536 seconds with 1 issue.
+􀟈  Test disconnectAndProtocolErrorRestoreRawMode() started.
+􀢄  Test clientResubscribeAfterUnsubscribeReceivesReplay() recorded an issue at RuntimeTerminalTests.swift:291:6: Caught error: .unauthorizedClient
+􀢄  Test clientResubscribeAfterUnsubscribeReceivesReplay() failed after 16.073 seconds with 1 issue.
+􁁛  Test localExecutor_containedOutsideWrite_deniedByKernel() passed after 23.267 seconds.
+􀟈  Test detachWaitsUntilFlushLeavesEmit() started.
+􀢄  Test clientsAttachDetachAndCancelWithoutSharingAuthority() recorded an issue at WorkspaceHostTests.swift:107:6: Caught error: .unauthorizedClient
+􀢄  Test clientsAttachDetachAndCancelWithoutSharingAuthority() failed after 16.451 seconds with 1 issue.
+􀟈  Test malformedFramesAndForeignTokensDoNotMutate() started.
+􁁛  Test liveOwnerRefusesASecondWorkspace() passed after 16.524 seconds.
+􀟈  Test orphanWithoutAChildPreservesTheNewFileAndMintsANewWorkspace() started.
+􁁛  Test detachWaitsUntilFlushLeavesEmit() passed after 0.152 seconds.
+􀟈  Test failedSendDropsTheSubscriberAfterOneOverflow() started.
+􁁛  Test failedSendDropsTheSubscriberAfterOneOverflow() passed after 0.025 seconds.
+􀟈  Test resizeUpdatesTheSlaveWindowAndRejectsBounds() started.
+􁁛  Test resizeUpdatesTheSlaveWindowAndRejectsBounds() passed after 0.001 seconds.
+􀟈  Test localRawModeRestoresTheSavedTermios() started.
+􁁛  Test localRawModeRestoresTheSavedTermios() passed after 0.001 seconds.
+􀟈  Test containedPTYIsAForegroundSessionAndAdmissionStaysOnFourAndFive() started.
+􁁛  Test localExecutor_containedInWorkspaceWrite_succeeds() passed after 24.519 seconds.
+􁁛  Test ambientSocketpairIsNotUsable() passed after 5.091 seconds.
+􀟈  Test ambientPipeIsNotUsable() started.
+􁁛  Test cancelledBeforeDispatch_doesNotExecuteOrConsumeAuthorization() passed after 24.684 seconds.
+􁁛  Suite "Executor lifecycle regressions" passed after 24.721 seconds.
+􁁛  Test localExecutor_sameFingerprint_secondRunFails() passed after 24.537 seconds.
+􁁛  Suite "LocalExecutor" passed after 24.727 seconds.
+􁁛  Test ipv6BindListenAcceptConnectRoundTrip() passed after 4.848 seconds.
+􀟈  Test pythonHTTPServerServesContainedCurlClient() started.
+adversarial technique=bash executable=/bin/bash verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument launcher → .zsh to descendantsCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test launch_containedSessionsAreDistinctFromHookSessionID() passed after 25.506 seconds.
+􁁛  Suite "ContainedLaunch" passed after 25.513 seconds.
+􁁛  Test containedProcessReachesLoopbackOnly() passed after 25.520 seconds.
+􀟈  Test containedProcessCannotReadSiblingFile() started.
+􀟈  Test case passing 1 argument id → FS-WRITE-REPO to isolationConformance_kernelFence(_:) started.
+􁁛  Test runtimesShareTheWorkspaceAndNotTheCapability() passed after 5.250 seconds.
+􀟈  Test childExitLeavesTheWorkspaceMounted() started.
+􁁛  Test securityFrameworkLookupIsBlockedAtBoundary() passed after 6.358 seconds.
+􀟈  Test blockedMachServiceLookupFailsFromContainedChild() started.
+􀢄  Test malformedFramesAndForeignTokensDoNotMutate() recorded an issue at WorkspaceHostTests.swift:175:6: Caught error: .unauthorizedClient
+􀢄  Test malformedFramesAndForeignTokensDoNotMutate() failed after 4.597 seconds with 1 issue.
+􀟈  Test hostSurvivesTheCreatingClientAndAKilledClient() started.
+􀢄  Test disconnectAndProtocolErrorRestoreRawMode() recorded an issue at LocalTerminalRestoreTests.swift:142:6: Caught error: .unauthorizedClient
+􀢄  Test disconnectAndProtocolErrorRestoreRawMode() failed after 4.603 seconds with 1 issue.
+􀟈  Test clientInterruptRestoresTheLocalTerminal() started.
+􁁛  Test containedPTYIsAForegroundSessionAndAdmissionStaysOnFourAndFive() passed after 5.240 seconds.
+􀟈  Test hookAndBareLaunchesShareTheCageEnvironment() started.
+􁁛  Test ambientPipeIsNotUsable() passed after 4.217 seconds.
+􀟈  Test containedProcessListsOnlyGrantedDescriptors() started.
+􁁛  Test clientInterruptRestoresTheLocalTerminal() passed after 1.288 seconds.
+􀢄  Suite "Local terminal restore" failed after 29.341 seconds with 2 issues.
+requested=contained established=seatbelt family=seatbelt exit=0 error=none
+requested=contained established=seatbelt family=seatbelt exit=0 error=none
+requested=contained established=seatbelt family=seatbelt exit=0 error=none
+requested=observed established=observed family=none exit=0 error=none
+requested=contained established=none family=none exit=none error=backendUnavailable
+􁁛  Test isolationApply_operatorProbe_printsEstablishedModes() passed after 29.549 seconds.
+􁁛  Suite "IsolationApply" passed after 29.554 seconds.
+􁁛  Test containedProcessCannotReadSiblingFile() passed after 4.026 seconds.
+􁁛  Suite "SeatbeltCapability" passed after 29.555 seconds.
+adversarial technique=zsh executable=/bin/zsh verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument launcher → .env to descendantsCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test case passing 1 argument id → FS-MKDIR-OUT to isolationConformance_kernelFence(_:) started.
+􁁛  Test childExitLeavesTheWorkspaceMounted() passed after 3.511 seconds.
+􀟈  Test cancellingOneRuntimeLeavesTheOther() started.
+􀢄  Test hostSurvivesTheCreatingClientAndAKilledClient() recorded an issue at WorkspaceHostTests.swift:238:6: Caught error: .unauthorizedClient
+􀢄  Test hostSurvivesTheCreatingClientAndAKilledClient() failed after 2.828 seconds with 1 issue.
+􀟈  Test hostDeathDuringAPtyRuntimeIsOrphanedNotReattachable() started.
+􁁛  Test blockedMachServiceLookupFailsFromContainedChild() passed after 4.664 seconds.
+􀟈  Test otherCredentialServicesStayBlocked() started.
+􀢄  Test hookAndBareLaunchesShareTheCageEnvironment() recorded an issue at RuntimeTerminalTests.swift:466:6: Caught error: .unauthorizedClient
+􀢄  Test hookAndBareLaunchesShareTheCageEnvironment() failed after 2.759 seconds with 1 issue.
+􀟈  Test containedSessionSurvivesSetsIDAndDoubleForkUntilCancel() started.
+􁁛  Test orphanWithoutAChildPreservesTheNewFileAndMintsANewWorkspace() passed after 8.178 seconds.
+􀟈  Test liveChildDiesBeforePublish() started.
+􁁛  Test pythonHTTPServerServesContainedCurlClient() passed after 6.904 seconds.
+􀟈  Test nodeHTTPServerServesContainedCurlClient() started.
+􁁛  Test containedProcessListsOnlyGrantedDescriptors() passed after 3.709 seconds.
+􀟈  Test inheritedStandardIOMatchesParent() started.
+adversarial technique=env executable=/usr/bin/env verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument launcher → .xargs to descendantsCannotWriteOutsideWorkspace(_:) started.
+􀢄  Test containedSessionSurvivesSetsIDAndDoubleForkUntilCancel() recorded an issue at RuntimeTerminalTests.swift:506:6: Caught error: .unauthorizedClient
+􀢄  Test containedSessionSurvivesSetsIDAndDoubleForkUntilCancel() failed after 2.150 seconds with 1 issue.
+􀟈  Test controlCInterruptsTheForegroundGroupWithoutKillingTheHost() started.
+􀢄  Test hostDeathDuringAPtyRuntimeIsOrphanedNotReattachable() recorded an issue at WorkspaceHostTests.swift:320:6: Caught error: .unauthorizedClient
+􀢄  Test hostDeathDuringAPtyRuntimeIsOrphanedNotReattachable() failed after 2.952 seconds with 1 issue.
+􀟈  Test workspaceStartLeavesALiveHostAfterTheClientExits() started.
+􁁛  Test cancellingOneRuntimeLeavesTheOther() passed after 4.042 seconds.
+􀟈  Test closeKillsEveryRuntimeBeforeItReturns() started.
+􁁛  Test liveChildDiesBeforePublish() passed after 2.988 seconds.
+􀟈  Test publicationConflictKeepsBothCopies() started.
+􀟈  Test case passing 1 argument id → FS-APPEND-OUT to isolationConformance_kernelFence(_:) started.
+􁁛  Test otherCredentialServicesStayBlocked() passed after 3.763 seconds.
+􀟈  Test allowedDirhelperServiceStillSucceeds() started.
+􁁛  Test nodeHTTPServerServesContainedCurlClient() passed after 3.936 seconds.
+􀟈  Test literalHTTPServerCLIServesTypedFile() started.
+ES􁁛  Test inheritedStandardIOMatchesParent() passed after 3.577 seconds.
+􀟈  Test discardedStandardIOIsNullDevice() started.
+􀟈  Test case passing 1 argument launcher → .python to descendantsCannotWriteOutsideWorkspace(_:) started.
+adversarial technique=python coverage=NOT-TESTED reason=outside-baseline-or-stub
+􀟈  Test case passing 1 argument launcher → .ruby to descendantsCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test closeKillsEveryRuntimeBeforeItReturns() passed after 2.282 seconds.
+􀟈  Test launchAfterCloseBeginsDoesNotSpawn() started.
+􁁛  Test publicationConflictKeepsBothCopies() passed after 2.187 seconds.
+􀟈  Test missingMountStaysUnresolved() started.
+􀟈  Test case passing 1 argument id → FS-UNLINK-OUT to isolationConformance_kernelFence(_:) started.
+􀢄  Test controlCInterruptsTheForegroundGroupWithoutKillingTheHost() recorded an issue at RuntimeTerminalTests.swift:542:6: Caught error: .unauthorizedClient
+􀢄  Test controlCInterruptsTheForegroundGroupWithoutKillingTheHost() failed after 3.557 seconds with 1 issue.
+􀟈  Test childObservesResizeAndSignal() started.
+􁁛  Test allowedDirhelperServiceStillSucceeds() passed after 2.779 seconds.
+􀟈  Test swiftBuildSucceedsWithHardenedMachPolicy() started.
+􀢄  Test childObservesResizeAndSignal() recorded an issue at RuntimeTerminalTests.swift:581:6: Caught error: .unauthorizedClient
+􀢄  Test childObservesResizeAndSignal() failed after 1.926 seconds with 1 issue.
+􀟈  Test onlyInputLeaseOwnerCanResizeTerminal() started.
+􁁛  Test literalHTTPServerCLIServesTypedFile() passed after 3.850 seconds.
+􀟈  Test twoRuntimesShareLoopbackInOneWorkspace() started.
+􀟈  Test case passing 1 argument id → FS-RENAME-OUT to isolationConformance_kernelFence(_:) started.
+􁁛  Test discardedStandardIOIsNullDevice() passed after 3.226 seconds.
+􀟈  Test pseudoTerminalStandardIOIsTheSlaveAndDoesNotLeakParentDescriptors() started.
+􁁛  Test missingMountStaysUnresolved() passed after 3.341 seconds.
+􀟈  Test unrelatedMountIsNotDetached() started.
+adversarial technique=ruby executable=/usr/bin/ruby verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument launcher → .node to descendantsCannotWriteOutsideWorkspace(_:) started.
+adversarial technique=node coverage=NOT-TESTED reason=outside-baseline-or-stub
+􁁛  Test descendantsCannotWriteOutsideWorkspace(_:) with 8 test cases passed after 40.150 seconds.
+􀟈  Test shellIndirectionCannotRemoveWriteFence(_:) started.
+􀟈  Test case passing 1 argument technique → "nested" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􁁛  Test launchAfterCloseBeginsDoesNotSpawn() passed after 3.384 seconds.
+􀟈  Test hardlinkRefusesBeforeTheWorkspaceIsActive() started.
+􁁛  Test hardlinkRefusesBeforeTheWorkspaceIsActive() passed after 0.004 seconds.
+􀟈  Test runtimeDoesNotReceiveWorkspaceDescriptors() started.
+􀢄  Test onlyInputLeaseOwnerCanResizeTerminal() recorded an issue at RuntimeTerminalTests.swift:610:6: Caught error: .unauthorizedClient
+􀢄  Test onlyInputLeaseOwnerCanResizeTerminal() failed after 1.705 seconds with 1 issue.
+􀟈  Test twoViewersDetachReattachAndKeepInputExclusive() started.
+􀟈  Test case passing 1 argument id → DESC-SH to isolationConformance_kernelFence(_:) started.
+􁁛  Test pseudoTerminalStandardIOIsTheSlaveAndDoesNotLeakParentDescriptors() passed after 2.114 seconds.
+􀟈  Test innerExecutableDoesNotKeepHandshakeDescriptor() started.
+􁁛  Test twoRuntimesShareLoopbackInOneWorkspace() passed after 2.372 seconds.
+􀟈  Test nonLoopbackBindIsNotScopedBySeatbelt() started.
+􁁛  Test unrelatedMountIsNotDetached() passed after 2.121 seconds.
+􀟈  Test unrelatedSavedTreeIsNotRestored() started.
+adversarial technique=nested verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument technique → "exec" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􁁛  Test runtimeDoesNotReceiveWorkspaceDescriptors() passed after 2.527 seconds.
+􀟈  Test closeKeepsReadOnlyFilesReadable() started.
+􀢄  Test twoViewersDetachReattachAndKeepInputExclusive() recorded an issue at RuntimeTerminalTests.swift:645:6: Caught error: .unauthorizedClient
+􀢄  Test twoViewersDetachReattachAndKeepInputExclusive() failed after 2.138 seconds with 1 issue.
+􀟈  Test concurrentEnsureTerminalRuntimeRequestsShareOneRuntime() started.
+􀟈  Test case passing 1 argument id → DESC-NESTED to isolationConformance_kernelFence(_:) started.
+􁁛  Test innerExecutableDoesNotKeepHandshakeDescriptor() passed after 2.050 seconds.
+􀟈  Test failedLaunchesDoNotAccumulateDescriptors() started.
+􁁛  Test swiftBuildSucceedsWithHardenedMachPolicy() passed after 5.870 seconds.
+􀟈  Test proxiedPublicHTTPSStillSucceeds() started.
+􁁛  Test nonLoopbackBindIsNotScopedBySeatbelt() passed after 2.417 seconds.
+􀟈  Test loopbackOnlyConnectMatrix() started.
+􁁛  Test unrelatedSavedTreeIsNotRestored() passed after 1.962 seconds.
+􀟈  Test partialRecoveryConverges(_:) started.
+􀟈  Test case passing 1 argument boundary → .afterChildTeardown to partialRecoveryConverges(_:) started.
+􁁛  Test closeKeepsReadOnlyFilesReadable() passed after 1.871 seconds.
+􀟈  Test closePublishesEditedReadOnlyFile() started.
+􀢄  Test concurrentEnsureTerminalRuntimeRequestsShareOneRuntime() recorded an issue at RuntimeTerminalTests.swift:698:6: Caught error: .unauthorizedClient
+􀢄  Test concurrentEnsureTerminalRuntimeRequestsShareOneRuntime() failed after 4.384 seconds with 1 issue.
+􀟈  Test inputReachesOnlyTheAddressedRuntime() started.
+adversarial technique=exec verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument technique → "background-wait" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􁁛  Test isolationConformance_kernelFence(_:) with 9 test cases passed after 41.096 seconds.
+􀟈  Test isolationConformance_hole(_:) started.
+􀟈  Test case passing 1 argument id → HOLE-NET to isolationConformance_hole(_:) started.
+􁁛  Test proxiedPublicHTTPSStillSucceeds() passed after 4.426 seconds.
+􀟈  Test filesystemSecretsRemainDenied() started.
+􁁛  Test loopbackOnlyConnectMatrix() passed after 4.247 seconds.
+􀟈  Test cancelKillsLoopbackServerAndFreesPort() started.
+􁁛  Test closePublishesEditedReadOnlyFile() passed after 4.525 seconds.
+􀟈  Test keychainEntryReachesOnlyMatchingAgentRuntime() started.
+􀢄  Test inputReachesOnlyTheAddressedRuntime() recorded an issue at RuntimeTerminalTests.swift:728:6: Caught error: .unauthorizedClient
+􀢄  Test inputReachesOnlyTheAddressedRuntime() failed after 2.182 seconds with 1 issue.
+􀟈  Test runtimeExitClosesTheTerminalAndLeavesTheWorkspace() started.
+􀟈  Test case passing 1 argument boundary → .afterPublish to partialRecoveryConverges(_:) started.
+adversarial technique=background-wait verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument technique → "env-shebang" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􀟈  Test case passing 1 argument id → HOLE-READ to isolationConformance_hole(_:) started.
+􁁛  Test cancelKillsLoopbackServerAndFreesPort() passed after 3.226 seconds.
+􀟈  Test closeKillsAllLoopbackServers() started.
+􀢄  Test runtimeExitClosesTheTerminalAndLeavesTheWorkspace() recorded an issue at RuntimeTerminalTests.swift:770:6: Caught error: .unauthorizedClient
+􀢄  Test runtimeExitClosesTheTerminalAndLeavesTheWorkspace() failed after 2.164 seconds with 1 issue.
+􀟈  Test launchFaultsDoNotReportARunningRuntime() started.
+􀟈  Test case passing 1 argument boundary → .afterUnmount to partialRecoveryConverges(_:) started.
+􁁛  Test filesystemSecretsRemainDenied() passed after 3.398 seconds.
+􀟈  Test processContainmentRemainsGreen() started.
+adversarial technique=env-shebang verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument technique → "path-replacement" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􀟈  Test case passing 1 argument id → HOLE-SYMLINK to isolationConformance_hole(_:) started.
+􁁛  Test keychainEntryReachesOnlyMatchingAgentRuntime() passed after 3.599 seconds.
+􀟈  Test keychainReadFailureFailsLaunchClosed() started.
+􀟈  Test case passing 1 argument boundary → .afterOriginalRestoration to partialRecoveryConverges(_:) started.
+􁁛  Test processContainmentRemainsGreen() passed after 2.399 seconds.
+􀟈  Test ptyRemainsGreen() started.
+􀢄  Test launchFaultsDoNotReportARunningRuntime() recorded an issue at RuntimeTerminalTests.swift:827:9: Expectation failed: writeFrame(raw, stolen)
+􀄵  writeFrame(raw, stolen) → false
+􀄵    raw → ()
+􀄵    stolen → 42
+􀢄  Test launchFaultsDoNotReportARunningRuntime() recorded an issue at RuntimeTerminalTests.swift:808:6: Caught error: .disconnected
+􀢄  Test launchFaultsDoNotReportARunningRuntime() failed after 2.939 seconds with 2 issues.
+􀟈  Test registerFaultRetiresTheStagedPrivateHome() started.
+􁁛  Test keychainReadFailureFailsLaunchClosed() passed after 2.087 seconds.
+􁁛  Suite "WorkspaceSession" passed after 54.789 seconds.
+􁁛  Test closeKillsAllLoopbackServers() passed after 3.106 seconds.
+􀟈  Test portReusableAfterNaturalServerExit() started.
+id=HOLE-SYMLINK effect=unchanged
+􁁛  Test isolationConformance_hole(_:) with 3 test cases passed after 7.311 seconds.
+􀟈  Test isolationConformance_failClosed(_:) started.
+􀟈  Test case passing 1 argument id → FC-UNAVAILABLE to isolationConformance_failClosed(_:) started.
+􀟈  Test case passing 1 argument id → FC-LANDLOCK-DARWIN to isolationConformance_failClosed(_:) started.
+􀟈  Test case passing 1 argument id → FC-ROOT-WS to isolationConformance_failClosed(_:) started.
+􁁛  Test isolationConformance_failClosed(_:) with 3 test cases passed after 0.002 seconds.
+􀟈  Test isolationConformance_operatorProbe_printsCatalog() started.
+adversarial technique=path-replacement verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument technique → "executable-replacement" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􀟈  Test case passing 1 argument boundary → .beforeTerminalAppend to partialRecoveryConverges(_:) started.
+􁁛  Test ptyRemainsGreen() passed after 5.354 seconds.
+􀟈  Test machPolicyHasNoBroadLookupAllow() started.
+􁁛  Test machPolicyHasNoBroadLookupAllow() passed after 0.053 seconds.
+􁁛  Suite "SeatbeltMachBoundary" passed after 59.668 seconds.
+􁁛  Test registerFaultRetiresTheStagedPrivateHome() passed after 7.341 seconds.
+􀟈  Test closingTheWorkspaceKillsEveryPTYRuntime() started.
+􁁛  Test portReusableAfterNaturalServerExit() passed after 7.315 seconds.
+􀟈  Test portCollisionFailsWithEADDRINUSE() started.
+adversarial technique=executable-replacement verdict=WRITE-DENIED
+􁁛  Test shellIndirectionCannotRemoveWriteFence(_:) with 6 test cases passed after 23.789 seconds.
+􀟈  Test relativeTraversalCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test case passing 1 argument target → "../outside" to relativeTraversalCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test partialRecoveryConverges(_:) with 5 test cases passed after 19.717 seconds.
+􀟈  Test canonicalAliasCannotOpenASecondWorkspace() started.
+id=FS-WRITE-IN verdict=allow-in established=seatbelt family=seatbelt exit=0 error=-
+􀢄  Test closingTheWorkspaceKillsEveryPTYRuntime() recorded an issue at RuntimeTerminalTests.swift:932:6: Caught error: .unauthorizedClient
+􀢄  Test closingTheWorkspaceKillsEveryPTYRuntime() failed after 2.900 seconds with 1 issue.
+􀟈  Test aSlowSocketDoesNotStopTheOtherSubscriberOrClose() started.
+􁁛  Test portCollisionFailsWithEADDRINUSE() passed after 3.690 seconds.
+􀟈  Test crossWorkspaceLoopbackIsShared() started.
+􀟈  Test case passing 1 argument target → "../../sibling/outside" to relativeTraversalCannotWriteOutsideWorkspace(_:) started.
+􀢄  Test aSlowSocketDoesNotStopTheOtherSubscriberOrClose() recorded an issue at RuntimeTerminalTests.swift:979:6: Caught error: .unauthorizedClient
+􀢄  Test aSlowSocketDoesNotStopTheOtherSubscriberOrClose() failed after 1.982 seconds with 1 issue.
+􀟈  Test repeatedAttachCyclesDoNotLeakPTYs() started.
+􁁛  Test canonicalAliasCannotOpenASecondWorkspace() passed after 4.194 seconds.
+􀟈  Test oldCapabilityCannotRunInTheNextWorkspace() started.
+􀟈  Test case passing 1 argument target → "./nested/../../outside" to relativeTraversalCannotWriteOutsideWorkspace(_:) started.
+􀢄  Test repeatedAttachCyclesDoNotLeakPTYs() recorded an issue at RuntimeTerminalTests.swift:1017:6: Caught error: .unauthorizedClient
+􀢄  Test repeatedAttachCyclesDoNotLeakPTYs() failed after 1.830 seconds with 1 issue.
+􀟈  Test provingClientRestoresTheLocalTerminal() started.
+􁁛  Test crossWorkspaceLoopbackIsShared() passed after 4.060 seconds.
+􀟈  Test loopbackServerCoexistsWithKeychainBoundary() started.
+􁁛  Test relativeTraversalCannotWriteOutsideWorkspace(_:) with 3 test cases passed after 8.576 seconds.
+􀟈  Test symlinkChainsCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test case passing 1 argument createdByAgent → false to symlinkChainsCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test oldCapabilityCannotRunInTheNextWorkspace() passed after 5.370 seconds.
+􀟈  Test normalCloseDoesNotRecordRecovery() started.
+􁁛  Test loopbackServerCoexistsWithKeychainBoundary() passed after 4.178 seconds.
+􁁛  Suite "SeatbeltLoopback" passed after 74.054 seconds.
+􀟈  Test case passing 1 argument createdByAgent → true to symlinkChainsCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test normalCloseDoesNotRecordRecovery() passed after 3.607 seconds.
+􀟈  Test abandonBlockedConflictRestoresSavedAndDiscardsVolume() started.
+􁁛  Test symlinkChainsCannotWriteOutsideWorkspace(_:) with 2 test cases passed after 6.195 seconds.
+􀟈  Test renameCannotMoveAcrossWriteBoundary() started.
+􁁛  Test abandonBlockedConflictRestoresSavedAndDiscardsVolume() passed after 5.872 seconds.
+􀟈  Test abandonWithIdenticalContentReportsNothingDiscarded() started.
+􁁛  Test abandonWithIdenticalContentReportsNothingDiscarded() passed after 1.876 seconds.
+􀟈  Test abandonMissingVolumeRestoresSaved() started.
+􁁛  Test renameCannotMoveAcrossWriteBoundary() passed after 6.261 seconds.
+􀟈  Test agentCannotCreateAnOutsideHardlinkOrMutateOutsideSource() started.
+􁁛  Test abandonMissingVolumeRestoresSaved() passed after 1.794 seconds.
+􀟈  Test abandonRefusesLiveOwner() started.
+􁁛  Test agentCannotCreateAnOutsideHardlinkOrMutateOutsideSource() passed after 2.025 seconds.
+􀟈  Test preexistingHardlinkAliasRefusesLaunchBeforeExecution() started.
+􁁛  Test preexistingHardlinkAliasRefusesLaunchBeforeExecution() passed after 0.001 seconds.
+􀟈  Test hardlinkCreatedAfterPreflightCannotMutateOutsideInode() started.
+􁁛  Test abandonRefusesLiveOwner() passed after 1.765 seconds.
+􀟈  Test abandonRefusesUnrelatedMount() started.
+􁁛  Test hardlinkCreatedAfterPreflightCannotMutateOutsideInode() passed after 1.916 seconds.
+􀟈  Test nestedDirectoryEditsPublishAfterLinkCountChanges() started.
+􁁛  Test abandonRefusesUnrelatedMount() passed after 1.715 seconds.
+􀟈  Test abandonWithoutAWorkspaceRefuses() started.
+􁁛  Test abandonWithoutAWorkspaceRefuses() passed after 0.001 seconds.
+􁁛  Suite "Workspace recovery" passed after 90.151 seconds.
+􁁛  Test nestedDirectoryEditsPublishAfterLinkCountChanges() passed after 1.975 seconds.
+􀟈  Test knownGapSyntheticCredentialsAreReadableButCannotBeOverwritten() started.
+􀢄  Test provingClientRestoresTheLocalTerminal() recorded an issue at RuntimeTerminalTests.swift:1074:9: Expectation failed: waitUntil(seconds: 40) { FileManager.default.fileExists(atPath: ready.path) }
+􀄵  waitUntil(seconds: 40) { FileManager.default.fileExists(atPath: ready.path) } → <not evaluated>
+id=FS-WRITE-OUT verdict=deny established=seatbelt family=seatbelt exit=1 error=-
+id=FS-WRITE-REPO verdict=deny established=seatbelt family=seatbelt exit=1 error=-
+id=FS-MKDIR-OUT verdict=deny established=seatbelt family=seatbelt exit=1 error=-
+􀢄  Test provingClientRestoresTheLocalTerminal() recorded an issue at RuntimeTerminalTests.swift:1075:9: Expectation failed: waitUntilRaw(pty.slave)
+􀄵  waitUntilRaw(pty.slave) → false
+􀄵    pty.slave → ()
+Error: workspace host is not reachable
+Usage: rv <subcommand>
+  See 'rv --help' for more information.
+􀢄  Test provingClientRestoresTheLocalTerminal() recorded an issue at RuntimeTerminalTests.swift:1048:6: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “client-sleep.pid” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/tmp/rvtTaJPAv/ws/client-sleep.pid, NSURL=file:///tmp/rvtTaJPAv/ws/client-sleep.pid, NSUnderlyingError=0x75310b6af0 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀢄  Test provingClientRestoresTheLocalTerminal() failed after 50.030 seconds with 3 issues.
+􀟈  Test hostDeathDropsTheTerminalAndRecoveryKillsTheGroup() started.
+id=FS-APPEND-OUT verdict=deny established=seatbelt family=seatbelt exit=1 error=-
+id=FS-UNLINK-OUT verdict=deny established=seatbelt family=seatbelt exit=1 error=-
+id=FS-RENAME-OUT verdict=deny established=seatbelt family=seatbelt exit=1 error=-
+Error: workspace host did not become ready
+Usage: rv <subcommand>
+  See 'rv --help' for more information.
+􀢄  Test workspaceStartLeavesALiveHostAfterTheClientExits() recorded an issue at WorkspaceHostTests.swift:412:9: Expectation failed: start.terminationStatus == 0
+􀄵  start.terminationStatus == 0 → false
+􀄵    start.terminationStatus → 64
+􀢄  Test workspaceStartLeavesALiveHostAfterTheClientExits() recorded an issue at WorkspaceHostTests.swift:398:6: Caught error: .unauthorizedClient
+􀢄  Test workspaceStartLeavesALiveHostAfterTheClientExits() failed after 91.379 seconds with 2 issues.
+􀟈  Test rvSpawnedHostDiesOnSIGTERM() started.
+id=DESC-SH verdict=deny established=seatbelt family=seatbelt exit=1 error=-
+􁁛  Test failedLaunchesDoNotAccumulateDescriptors() passed after 87.547 seconds.
+􀟈  Test refusedLaunchPathAttributionIgnoresOtherSuites() started.
+id=DESC-NESTED verdict=deny established=seatbelt family=seatbelt exit=1 error=-
+􁁛  Test refusedLaunchPathAttributionIgnoresOtherSuites() passed after 0.001 seconds.
+􀟈  Test cancellationClosesLaunchDescriptors() started.
+􁁛  Test cancellationClosesLaunchDescriptors() passed after 2.234 seconds.
+􁁛  Suite "DescriptorHygiene" passed after 133.397 seconds.
+id=HOLE-NET verdict=hole established=seatbelt family=seatbelt exit=0 error=-
+id=HOLE-READ verdict=hole established=seatbelt family=seatbelt exit=1 error=-
+id=HOLE-SYMLINK effect=unchanged
+id=HOLE-SYMLINK verdict=hole established=seatbelt family=seatb

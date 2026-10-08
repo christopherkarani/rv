@@ -56,6 +56,18 @@ struct AgentAuthorizationTests {
         )
     }
 
+    @Test func plainPush_isPendingMandatoryHuman() {
+        for branch in ["topic", "main"] {
+            let action = ActionPolicyFixtures.plainPush(branchName: branch)
+            expectPending(
+                AgentAuthorization.decide(action: action, context: shared, gitWorld: .unprobed),
+                action: action,
+                reason: .mandatoryHuman,
+                deny: ActionPolicyEngine.Builtin.remoteBranchAsk
+            )
+        }
+    }
+
     @Test func workingTreeDiscard_isDenied() {
         let action = ActionPolicyFixtures.checkout(
             effects: [.workingTreeDiscard],

@@ -1,6 +1,8 @@
 #if canImport(XPC)
 import Foundation
 import Synchronization
+import RVIsolation
+import RVIPC
 @preconcurrency import XPC
 
 public final class XPCEvaluateClient: Sendable {
@@ -37,8 +39,40 @@ public final class XPCEvaluateClient: Sendable {
         if Task.isCancelled {
             throw XPCEvaluateClientError.cancelled
         }
-        let connection = try liveConnection()
-        let once = OnceResume<Data>()
+        let discovery = try liveConnection()
+        let hello = try IPCJSON.encode(Hello())
+        // This reply is authenticated before its endpoint field is inspected.
+        let discoveryReply = try await exchange(hello, on: discovery, requireEndpoint: true)
+        let discoveryAck = try IPCJSON.decode(HelloAck.self, from: discoveryReply.body)
+        guard discoveryAck.status == .ok, let endpoint = discoveryReply.endpoint else {
+            invalidate()
+            throw XPCEvaluateClientError.authenticationFailed
+        }
+        let actions = xpc_connection_create_from_endpoint(endpoint.object)
+        let heldActions = XPCHeld(actions)
+        xpc_connection_set_event_handler(actions) { event in
+            if xpc_get_type(event) == XPC_TYPE_ERROR {
+                xpc_connection_cancel(heldActions.object)
+            }
+        }
+        xpc_connection_resume(actions)
+        defer { xpc_connection_cancel(actions) }
+        // Authenticate this exact non-rediscoverable peer before sending action bytes.
+        let actionHello = try await exchange(hello, on: actions)
+        let actionAck = try IPCJSON.decode(HelloAck.self, from: actionHello.body)
+        guard actionAck.status == .ok else {
+            throw XPCEvaluateClientError.authenticationFailed
+        }
+        return (try await exchange(body, on: actions)).body
+    }
+
+    private struct VerifiedExchange: Sendable {
+        let body: Data
+        let endpoint: XPCHeld?
+    }
+
+    private func exchange(_ body: Data, on connection: xpc_connection_t, requireEndpoint: Bool = false) async throws -> VerifiedExchange {
+        let once = OnceResume<VerifiedExchange>()
         let held = XPCHeld(connection)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -54,17 +88,43 @@ public final class XPCEvaluateClient: Sendable {
                 xpc_connection_send_message_with_reply(held.object, message, nil) { reply in
                     let type = xpc_get_type(reply)
                     if type == XPC_TYPE_ERROR {
+                        xpc_connection_cancel(held.object)
                         once.resume(throwing: XPCEvaluateClientError.connectFailed)
+                        return
+                    }
+                    // A Mach service name is not server identity. Do not consume
+                    // authority-bearing results from an unverified daemon.
+                    guard let trust = try? ProtectedPeerTrustConfiguration.installed(),
+                        let peer = try? MacOSPeerAuthenticator.capture(
+                            message: reply, connectionID: UUID(), trust: trust
+                        ), peer.componentRole == .service
+                    else {
+                        xpc_connection_cancel(held.object)
+                        once.resume(throwing: XPCEvaluateClientError.authenticationFailed)
+                        self.invalidate()
                         return
                     }
                     guard let data = XPCIPCWire.body(from: reply) else {
                         once.resume(throwing: XPCEvaluateClientError.connectFailed)
                         return
                     }
-                    once.resume(returning: data)
+                    let endpoint: XPCHeld?
+                    if requireEndpoint {
+                        guard let object = xpc_dictionary_get_value(reply, XPCIPCWire.actionEndpointKey),
+                            xpc_get_type(object) == XPC_TYPE_ENDPOINT else {
+                            xpc_connection_cancel(held.object)
+                            once.resume(throwing: XPCEvaluateClientError.authenticationFailed)
+                            return
+                        }
+                        endpoint = XPCHeld(object)
+                    } else {
+                        endpoint = nil
+                    }
+                    once.resume(returning: VerifiedExchange(body: data, endpoint: endpoint))
                 }
             }
         } onCancel: {
+            xpc_connection_cancel(held.object)
             once.resume(throwing: XPCEvaluateClientError.cancelled)
             self.invalidate()
         }
@@ -100,6 +160,7 @@ public final class XPCEvaluateClient: Sendable {
     }
 
     private func forget(_ candidate: xpc_connection_t) {
+        xpc_connection_cancel(candidate)
         state.withLock {
             if $0.connection === candidate {
                 $0.connection = nil
@@ -109,6 +170,7 @@ public final class XPCEvaluateClient: Sendable {
 }
 
 public enum XPCEvaluateClientError: Error, Sendable, Equatable {
+    case authenticationFailed
     case connectFailed
     case cancelled
 }
@@ -191,4 +253,3 @@ final class OnceResume<T: Sendable>: Sendable {
     }
 }
 #endif
-

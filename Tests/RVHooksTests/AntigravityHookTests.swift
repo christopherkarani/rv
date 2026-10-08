@@ -230,10 +230,15 @@ func antigravityDecode_fileToolsAreFileDoor(_ tool: String, kind: FileToolKind) 
         from: result,
         command: command,
         using: AntigravityHostCodec(),
-        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
+        intent: .firstCall(verdict: .ask, unlockCode: nil)
     )
-    try assertAntigravityHonorPath(wire, reason: hostDenyLine(command: command, reason: deny.reason))
+    try assertAntigravityHonorPath(
+        wire,
+        reason:
+            "\(hostDenyLine(command: command, reason: deny.reason)) \(approvalPendingLine)"
+    )
     #expect(HostNativeAsk.leftoverAskIsPermit == false)
+    #expect(wire.stdout.contains(approvalPendingLine))
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
 }
 
@@ -275,7 +280,7 @@ private final class AntigravityEvaluateProbe: Sendable {
     }
 }
 
-@Test func antigravityHookWire_mandatoryHumanIsQuietAllow() throws {
+@Test func antigravityHookWire_mandatoryHumanIsAskDeny() throws {
     let deny = Deny(
         ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
         reason: "Remote branch mutation requires a human."
@@ -292,20 +297,17 @@ private final class AntigravityEvaluateProbe: Sendable {
         using: AntigravityHostCodec(),
         cwd: wd("/tmp/ws")
     )
-    #expect(
-        HostNativeAsk.hostAskVerdict(
-            host: .antigravity,
-            result: result,
-            cwd: wd("/tmp/ws")
-        ) == .allow
-    )
+    // Step 8B: host-free ASK. The wire renders deny-with-guidance.
+    let verdict = HookAuthorization.project(result: result, cwd: wd("/tmp/ws")).verdict
+    #expect(verdict != .allow)
+    #expect(verdict == .ask)
     let json = try #require(
         JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any]
     )
-    #expect(json["decision"] as? String == "allow")
+    #expect(json["decision"] as? String == "deny")
     #expect(wire.exitCode == 0)
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
-    #expect(wire.stdout.contains("\"decision\":\"deny\"") == false)
+    #expect(wire.stdout.contains(approvalPendingLine))
 }
 
 @Test func antigravityDecode_readsCwdSessionAndProposedAction() throws {
