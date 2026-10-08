@@ -6,21 +6,6 @@ import RVPolicy
 import RVService
 
 enum AllowlistCLI {
-    static func interactiveTTY(
-        json: Bool,
-        robot: Bool,
-        plain: Bool,
-        noColor: Bool
-    ) -> TTYCapability {
-        CommandContext.current(
-            command: "allowlist",
-            json: json,
-            robot: robot,
-            plain: plain,
-            noColor: noColor
-        ).tty
-    }
-
     static func home(
         from environment: [String: String] = CLIProcess.environment()
     ) -> HomeDirectory? {
