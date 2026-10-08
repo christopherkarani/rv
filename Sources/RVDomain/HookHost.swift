@@ -23,11 +23,12 @@ public enum HookHost: String, Codable, Hashable, Sendable, CaseIterable {
     ]
 }
 
-/// Agent-tag validation for the launch hook wire. The wire carries the
-/// launch's agent name: when it names a `HookHost`, hook protocol applies,
-/// otherwise it is staging-only (credential `agents` selection with no
-/// hook participation). The 32-byte cap mirrors the control codec's hook
-/// budget so client-side rejection matches the server exactly.
+/// Agent-tag validation for the launch hook wire. The wire carries hook
+/// protocol selection only: when it names a `HookHost`, hook protocol
+/// applies, otherwise the tag selects nothing. Step 8 (F2): wire tags
+/// never select credentials — selection is definition-derived only. The
+/// 32-byte cap mirrors the control codec's hook budget so client-side
+/// rejection matches the server exactly.
 public enum AgentTagValidator {
     public static func isValid(_ value: String) -> Bool {
         !value.isEmpty && value.utf8.count <= 32 && value.utf8.allSatisfy {

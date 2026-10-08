@@ -1,7 +1,7 @@
 import Foundation
 import RVDomain
 
-public struct ClaudeHostCodec: HostAskCodec {
+public struct ClaudeHostCodec: HostCodec {
     public var host: HookHost { .claude }
 
     public init() {}
@@ -17,14 +17,12 @@ public struct ClaudeHostCodec: HostAskCodec {
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId).flatMap { SessionID(validating: $0) }
-        let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
         if envelope.toolName == "Bash" {
             return HookRequest.decoded(
                 host: .claude,
                 command: envelope.toolInput?.command,
                 cwd: cwd,
-                session: session,
-                hostAsk: hostAsk
+                session: session
             )
         }
         if let file = FileToolAction.make(
@@ -43,28 +41,6 @@ public struct ClaudeHostCodec: HostAskCodec {
             )
         }
         return .foreign
-    }
-
-    /// Short `{decision:ask,continuation:hostNative}` for the PreToolUse wrapper.
-    /// Official `permissionDecision: "ask"` is leftover-ask-as-permit. Never emit it.
-    /// Exit 2 (not Claude's deny-honor 0): leftover `rv hook --host claude` must
-    /// block instead of fail-opening schema-invalid JSON. The wrapper maps
-    /// nonempty `decision:ask` regardless of exit.
-    /// Defaults must live here so one-argument `encodeAsk(reason:)` does not
-    /// bind the protocol-extension leftover `decision: ask` at exit `denyExitCode`.
-    public func encodeAsk(
-        reason: String,
-        rule: RuleID? = nil,
-        next: HookVoiceNext = .none
-    ) -> HookWire {
-        HookWire(
-            stdout: hookAskJSON(
-                reason: reason,
-                rule: rule.map(\.slashDisplay),
-                next: hookVoiceNextSentence(next)
-            ),
-            exitCode: 2
-        )
     }
 
     /// Defaults must live here so one-argument `encodeDeny(reason:)` does not
@@ -90,6 +66,39 @@ public struct ClaudeHostCodec: HostAskCodec {
             return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
         case .deny:
             return encodeRichDeny(from: result, command: command, unlockCode: unlockCode)
+        }
+    }
+
+    /// Ask-denial keeps the rich shape (nested `permissionDecision` plus
+    /// match fields). Guidance joins after the deny line so truncation
+    /// cannot drop it. When the pending row failed to record, the guidance
+    /// says so instead of promising RV approval (M-25).
+    public func encodeEvaluatedAskDeny(
+        from result: EvaluationResult,
+        command: ShellCommand,
+        unlockCode: AllowOnceUnlockMint? = nil,
+        askRecorded: Bool = true
+    ) -> HookWire {
+        switch result.decision {
+        case .allow, .indeterminate:
+            return encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
+        case .deny(let deny):
+            let hostDenyText =
+                "\(hostDenyLine(command: command, reason: deny.reason, unlock: unlockCode)) \(askPendingLine(recorded: askRecorded))"
+            guard case .deny(_, let matched?) = result.outcome else {
+                return encodeDeny(
+                    reason: hostDenyText,
+                    rule: deny.ruleID,
+                    next: unlockHookVoiceNext(unlockCode)
+                )
+            }
+            return HookWire(
+                stdout: claudeRichDenyJSON(
+                    hostDenyText: hostDenyText,
+                    match: matched
+                ),
+                exitCode: host.denyExitCode
+            )
         }
     }
 
@@ -151,7 +160,6 @@ private struct ClaudeEnvelope: Decodable {
     var toolInput: ClaudeToolInput?
     var cwd: String?
     var sessionId: String?
-    var hostAsk: String?
 
     enum CodingKeys: String, CodingKey {
         case hookEventName = "hook_event_name"
@@ -159,7 +167,6 @@ private struct ClaudeEnvelope: Decodable {
         case toolInput = "tool_input"
         case cwd
         case sessionId = "session_id"
-        case hostAsk
     }
 }
 

@@ -11,61 +11,37 @@ import RVDomain
 @Suite("Policy gate stress")
 struct PolicyGateStressTests {
     @Test func concurrentConsumeOfOneGrant_winsOnce() async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-policy-stress-race-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let writer = AllowOnceStore(baseDirectory: root)
+        // Step 8B.1: the memory table is an actor, so two racing consumers
+        // serialize and exactly one spends the grant.
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let denied = resetHardDeny()
-        try await writer.insertGranted(
-            matchingView: denied.matchingView,
-            cwd: wd("/tmp/ws"),
-            now: now
+        #expect(
+            await grants.plant(
+                matchingView: denied.matchingView, cwd: wd("/tmp/ws"), codeHash: "stress-race",
+                now: now
+            ) == .planted
         )
-        let a = AllowOnceStore(baseDirectory: root)
-        let b = AllowOnceStore(baseDirectory: root)
         async let first = PolicyGate.consumingGrant(
             for: denied,
             cwd: wd("/tmp/ws"),
-            store: a,
+            grants: grants,
             now: now
         )
         async let second = PolicyGate.consumingGrant(
             for: denied,
             cwd: wd("/tmp/ws"),
-            store: b,
+            grants: grants,
             now: now
         )
         let results = await [first, second]
         let allowed = results.filter { $0.override == .allowOnce }
-        #expect(allowed.count == 1, "two-process consume must spend the grant once")
+        #expect(allowed.count == 1, "racing consumers must spend the grant once")
         #expect(results.contains { $0.override == .none })
     }
 
-    /// Host Ask spend plants a grant each confirm. Two same-turn plants are a
-    /// residual race (no Ask token); the consume CAS above is the lock we have.
-    @Test func sequentialHostAskSpend_plantsEachConfirm() async throws {
-        let store = try isolatedPolicyStressStore()
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let denied = resetHardDeny()
-        let first = await PolicyGate.spendHostAllowOnce(
-            denied,
-            cwd: wd("/tmp/ws"),
-            store: store,
-            now: now
-        )
-        #expect(first.override == .allowOnce)
-        let second = await PolicyGate.spendHostAllowOnce(
-            denied,
-            cwd: wd("/tmp/ws"),
-            store: store,
-            now: now
-        )
-        #expect(second.override == .allowOnce)
-    }
-
-    @Test func emptyMatchingView_neverSpends() async throws {
-        let store = try isolatedPolicyStressStore()
+    @Test func emptyMatchingView_neverConsumes() async throws {
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let empty = EvaluationResult(
             outcome: .deny(
@@ -74,10 +50,10 @@ struct PolicyGateStressTests {
             ),
             matchingView: ""
         )
-        let gated = await PolicyGate.spendHostAllowOnce(
-            empty,
+        let gated = await PolicyGate.consumingGrant(
+            for: empty,
             cwd: wd("/tmp/ws"),
-            store: store,
+            grants: grants,
             now: now
         )
         #expect(gated.override == .none)
@@ -85,19 +61,11 @@ struct PolicyGateStressTests {
             Issue.record("empty matching view must stay deny")
             return
         }
-        #expect((await store.list(now: now)).isEmpty)
-        #expect(
-            await HostGrantWriter.plantAndSpend(
-                matchingView: MatchingView(""),
-                cwd: wd("/tmp/ws"),
-                store: store,
-                now: now
-            ) == .rejected(.missingCallback)
-        )
+        #expect(await grants.hasGrant(matchingView: "", cwd: wd("/tmp/ws"), now: now) == false)
     }
 
     @Test func pinnedSecret_neverSpends() async throws {
-        let store = try isolatedPolicyStressStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let secret = EvaluationResult(
             outcome: .deny(
@@ -111,10 +79,10 @@ struct PolicyGateStressTests {
         )
         #expect(UnlockableDeny.isPinned(secret))
         #expect(UnlockableDeny.matches(result: secret, cwd: wd("/tmp/ws")) == false)
-        let gated = await PolicyGate.spendHostAllowOnce(
-            secret,
+        let gated = await PolicyGate.consumingGrant(
+            for: secret,
             cwd: wd("/tmp/ws"),
-            store: store,
+            grants: grants,
             now: now
         )
         #expect(gated.override == .none)
@@ -122,60 +90,52 @@ struct PolicyGateStressTests {
             Issue.record("pinned secret must not spend")
             return
         }
-        #expect((await store.list(now: now)).isEmpty)
+        #expect(
+            await grants.hasGrant(matchingView: secret.matchingView, cwd: wd("/tmp/ws"), now: now)
+                == false
+        )
     }
 
-    @Test func spendFirstHosts_spendUnlockableDeny() async throws {
-        let store = try isolatedPolicyStressStore()
+    @Test func consumingGrant_withoutGrantStaysDeny() async throws {
+        // Step 8B: no host callback can plant authority. Only a planted
+        // grant (human approval) flips the decision.
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let denied = resetHardDeny()
-        for host in HookHost.allCases {
-            let profile = HostNativeAsk.profile(for: host)
-            switch profile.pause {
-            case .spendFirst:
-                let gated = await PolicyGate.spendHostAllowOnce(
-                    denied,
-                    cwd: wd("/tmp/ws-\(host.rawValue)"),
-                    store: store,
-                    now: now
-                )
-                #expect(gated.override == .allowOnce, "\(host) spend-first")
-                #expect(gated.result.decision == .allow, "\(host)")
-            case .noPause, .leftoverAskForbidden:
-                let withoutSpend = PolicyGate.decision(
-                    for: denied,
-                    cwd: wd("/tmp/ws-\(host.rawValue)"),
-                    allowlist: .empty,
-                    grant: .none,
-                    now: now
-                )
-                #expect(withoutSpend.override == .none, "\(host) deny-or-TTY must not auto-spend")
-                guard case .deny = withoutSpend.result.decision else {
-                    Issue.record("\(host) must stay deny without a spend callback")
-                    continue
-                }
-            }
+        let gated = await PolicyGate.consumingGrant(
+            for: denied,
+            cwd: wd("/tmp/ws"),
+            grants: grants,
+            now: now
+        )
+        #expect(gated.override == .none)
+        guard case .deny = gated.result.decision else {
+            Issue.record("must stay deny without a planted grant")
+            return
         }
+        #expect(
+            await grants.hasGrant(
+                matchingView: denied.matchingView, cwd: wd("/tmp/ws"), now: now
+            ) == false
+        )
     }
 
     @Test func twoStores_casUnderMiss_neitherAllows() async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-policy-stress-miss-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let a = AllowOnceStore(baseDirectory: root)
-        let b = AllowOnceStore(baseDirectory: root)
+        // Step 8B.1: two independent epochs (tables), no grant in either.
+        let a = EphemeralAllowOnceTable()
+        let b = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let denied = resetHardDeny()
         async let first = PolicyGate.consumingGrant(
             for: denied,
             cwd: wd("/tmp/ws"),
-            store: a,
+            grants: a,
             now: now
         )
         async let second = PolicyGate.consumingGrant(
             for: denied,
             cwd: wd("/tmp/ws"),
-            store: b,
+            grants: b,
             now: now
         )
         let results = await [first, second]

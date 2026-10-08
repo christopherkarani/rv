@@ -132,6 +132,7 @@ public struct IPCResponse: Sendable, Equatable, Codable {
 }
 
 public enum IPCError: Error, Sendable, Equatable, Codable {
+    case authorizationDenied
     case unknownMethod
     case decodeFailed
     case protocolSkew(SkewReason)
@@ -152,8 +153,12 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
     case pendingFingerprintMismatch
     case ruleDraftMismatch
     case ruleHardStop
+    /// Coarse launch-proposal refusal (no host, preparation failed, invalid).
+    /// Never carries permit contents or authority.
+    case launchProposalFailed(String)
 
     private enum CodingKeys: String, CodingKey {
+        case authorizationDenied
         case unknownMethod
         case decodeFailed
         case protocolSkew
@@ -168,6 +173,7 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
         case pendingFingerprintMismatch
         case ruleDraftMismatch
         case ruleHardStop
+        case launchProposalFailed
     }
 
     private enum EngineSentence: String {
@@ -181,6 +187,8 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
+        case .authorizationDenied:
+            try container.encode(true, forKey: .authorizationDenied)
         case .unknownMethod:
             try container.encode(true, forKey: .unknownMethod)
         case .decodeFailed:
@@ -219,12 +227,16 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
             try container.encode(true, forKey: .ruleDraftMismatch)
         case .ruleHardStop:
             try container.encode(true, forKey: .ruleHardStop)
+        case .launchProposalFailed(let reason):
+            try container.encode(reason, forKey: .launchProposalFailed)
         }
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        if container.contains(.unknownMethod) {
+        if container.contains(.authorizationDenied) {
+            self = .authorizationDenied
+        } else if container.contains(.unknownMethod) {
             self = .unknownMethod
         } else if container.contains(.decodeFailed) {
             self = .decodeFailed
@@ -252,6 +264,9 @@ public enum IPCError: Error, Sendable, Equatable, Codable {
             self = .ruleDraftMismatch
         } else if container.contains(.ruleHardStop) {
             self = .ruleHardStop
+        } else if let reason = try container.decodeIfPresent(
+            String.self, forKey: .launchProposalFailed) {
+            self = .launchProposalFailed(reason)
         } else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "unknown IPCError")

@@ -108,6 +108,21 @@ private func typeName<T>(of value: T) -> String {
     #expect(AgentDefinitionRevision.resolve(makeDefinition()) == AgentDefinitionRevision.resolve(makeDefinition()))
 }
 
+@Test func revision_digestCaseVariantsResolveToOneRevision() {
+    // Construction canonicalizes the pinned digest to lowercase hex,
+    // so a case-variant pin matches instead of silently never matching.
+    let lower = String(repeating: "ab", count: 32)
+    let upper = lower.uppercased()
+    let pinnedLower = makeDefinition(executableRequirement: ExecutableRequirement(
+        expectedContentDigestSHA256: lower))
+    let pinnedUpper = makeDefinition(executableRequirement: ExecutableRequirement(
+        expectedContentDigestSHA256: upper))
+    #expect(pinnedUpper.executableRequirement.expectedContentDigestSHA256 == lower)
+    #expect(
+        AgentDefinitionRevision.resolve(pinnedUpper)
+            == AgentDefinitionRevision.resolve(pinnedLower))
+}
+
 @Test func revision_changesOnSecurityRelevantChange() {
     let baseline = AgentDefinitionRevision.resolve(makeDefinition())
     let variants: [AgentDefinition] = [
@@ -514,7 +529,7 @@ private func makeBindingInstance(
     var bound: RuntimeChannelBinding? = RuntimeChannelBinding(
         session: session, capability: capability, agentInstanceID: instance.id
     )
-    let admitted = RuntimeAdmissionGate.submit(
+    let admitted = RuntimeAdmissionGate.submitLegacy(
         binding: &bound,
         frame: .success(makeBindingFrame(session: session, capability: capability)),
         agentContext: active
@@ -523,16 +538,17 @@ private func makeBindingInstance(
     #expect(admitted.event.agentInstance == instance.id.rawValue.uuidString)
     #expect(admitted.event.agentDefinition == "claude")
 
-    // No trusted context: perfect payload, unknown principal.
+    // No trusted context: perfect payload, missing principal.
     var missing: RuntimeChannelBinding? = RuntimeChannelBinding(
         session: session, capability: capability, agentInstanceID: instance.id
     )
-    let unknown = RuntimeAdmissionGate.submit(
+    let unknown = RuntimeAdmissionGate.submitLegacy(
         binding: &missing,
         frame: .success(makeBindingFrame(session: session, capability: capability))
     ) { _ in .failure(.failed) }
-    #expect(unknown.response == .rejected(.unknownSession))
+    #expect(unknown.response == .rejected(.principalRequired))
     #expect(unknown.event.agentInstance == instance.id.rawValue.uuidString)
+    #expect(unknown.event.agentDefinition == nil)
 
     // Stale or dead validity fails closed.
     for validity in [AgentInstanceValidity.revoking, .inactive, .unknown] {
@@ -540,7 +556,7 @@ private func makeBindingInstance(
             session: session, capability: capability, agentInstanceID: instance.id
         )
         let context = AuthenticatedAgentContext(instance: instance, validity: validity)
-        let decision = RuntimeAdmissionGate.submit(
+        let decision = RuntimeAdmissionGate.submitLegacy(
             binding: &dead,
             frame: .success(makeBindingFrame(session: session, capability: capability)),
             agentContext: context
@@ -553,24 +569,51 @@ private func makeBindingInstance(
     var crossed: RuntimeChannelBinding? = RuntimeChannelBinding(
         session: session, capability: capability, agentInstanceID: instance.id
     )
-    let crossedDecision = RuntimeAdmissionGate.submit(
+    let crossedDecision = RuntimeAdmissionGate.submitLegacy(
         binding: &crossed,
         frame: .success(makeBindingFrame(session: session, capability: capability)),
         agentContext: AuthenticatedAgentContext(instance: other, validity: .active)
     ) { _ in .failure(.failed) }
     #expect(crossedDecision.response == .rejected(.impersonation))
+    // The smuggled context is unverified: the rejection attributes the
+    // RV-held channel binding, never the presented foreign principal.
+    #expect(crossedDecision.event.agentInstance == instance.id.rawValue.uuidString)
+    #expect(crossedDecision.event.agentInstance != other.id.rawValue.uuidString)
+    #expect(crossedDecision.event.agentDefinition == nil)
 
     // Legacy channels carry no principal and keep the old behavior.
     var legacy: RuntimeChannelBinding? = RuntimeChannelBinding(
         session: session, capability: capability
     )
-    let legacyDecision = RuntimeAdmissionGate.submit(
+    let legacyDecision = RuntimeAdmissionGate.submitLegacy(
         binding: &legacy,
         frame: .success(makeBindingFrame(session: session, capability: capability))
     ) { _ in .failure(.failed) }
     #expect(legacyDecision.response == .evaluationFailed)
     #expect(legacyDecision.event.agentInstance == nil)
     #expect(legacyDecision.event.agentDefinition == nil)
+}
+
+@Test func gate_legacyAcceptStampsNoUnverifiedContext() {
+    // A legacy channel names no instance, so a presented context is
+    // unverified even when authentication accepts: the audit event must
+    // not attribute it.
+    let workspace = WorkspaceSessionID()
+    let runtime = RuntimeSessionID()
+    let session = makeBindingSession(runtime: runtime, workspace: workspace)
+    let capability = RuntimeCapability()
+    let foreign = makeBindingInstance(workspace: workspace, runtime: RuntimeSessionID())
+    var legacy: RuntimeChannelBinding? = RuntimeChannelBinding(
+        session: session, capability: capability
+    )
+    let decision = RuntimeAdmissionGate.submitLegacy(
+        binding: &legacy,
+        frame: .success(makeBindingFrame(session: session, capability: capability)),
+        agentContext: AuthenticatedAgentContext(instance: foreign, validity: .active)
+    ) { _ in .failure(.failed) }
+    #expect(decision.response == .evaluationFailed)
+    #expect(decision.event.agentInstance == nil)
+    #expect(decision.event.agentDefinition == nil)
 }
 
 @Test func gate_subjectCarriesTrustedContextPayloadsCannotSet() {

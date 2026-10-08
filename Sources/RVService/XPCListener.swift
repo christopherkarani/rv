@@ -1,12 +1,14 @@
 #if canImport(XPC)
 import Foundation
 import RVIPC
+import RVIsolation
 import Synchronization
 @preconcurrency import XPC
 
 /// Dictionary key for UTF-8 `IPCRequest` / `IPCResponse` / Hello JSON (`IPCJSON`).
 enum XPCIPCWire {
     static let key = "rv.ipc"
+    static let actionEndpointKey = "rv.action-endpoint"
 
     static func body(from message: xpc_object_t) -> Data? {
         var length = 0
@@ -53,18 +55,47 @@ public final class XPCEvaluateListener: Sendable {
     private let watchdog: IdleWatchdog
     private let serviceName: String
     private let listener = Mutex<xpc_connection_t?>(nil)
+    private let actionListener = Mutex<xpc_connection_t?>(nil)
+    private let hostRegistry: LiveWorkspaceHostRegistry
+    private let uiSessions: LiveOperatorUISessionRegistry
 
-    public init(
+    public convenience init(
         runtime: ServiceRuntime,
         watchdog: IdleWatchdog,
         machServiceName: String = RVService.machServiceName
     ) {
+        self.init(
+            runtime: runtime,
+            watchdog: watchdog,
+            machServiceName: machServiceName,
+            hostRegistry: LiveWorkspaceHostRegistry(),
+            uiSessions: LiveOperatorUISessionRegistry())
+    }
+
+    init(
+        runtime: ServiceRuntime,
+        watchdog: IdleWatchdog,
+        machServiceName: String = RVService.machServiceName,
+        hostRegistry: LiveWorkspaceHostRegistry,
+        uiSessions: LiveOperatorUISessionRegistry
+    ) {
         self.runtime = runtime
         self.watchdog = watchdog
         self.serviceName = machServiceName
+        self.hostRegistry = hostRegistry
+        self.uiSessions = uiSessions
     }
 
     public func start() {
+        // Anonymous endpoint connections cannot rediscover a replacement daemon.
+        let actions = xpc_connection_create(nil, nil)
+        xpc_connection_set_event_handler(actions) { [weak self] event in
+            if xpc_get_type(event) == XPC_TYPE_CONNECTION {
+                self?.accept(event, discoveryOnly: false)
+            }
+        }
+        actionListener.withLock { $0 = actions }
+        xpc_connection_resume(actions)
         let connection = xpc_connection_create_mach_service(
             serviceName,
             nil,
@@ -78,6 +109,12 @@ public final class XPCEvaluateListener: Sendable {
     }
 
     public func stop() {
+        let actions = actionListener.withLock { state -> xpc_connection_t? in
+            let current = state
+            state = nil
+            return current
+        }
+        if let actions { xpc_connection_cancel(actions) }
         let existing = listener.withLock { listener -> xpc_connection_t? in
             let current = listener
             listener = nil
@@ -94,12 +131,17 @@ public final class XPCEvaluateListener: Sendable {
             return
         }
         if type == XPC_TYPE_CONNECTION {
-            accept(event)
+            accept(event, discoveryOnly: true)
         }
     }
 
-    private func accept(_ peer: xpc_connection_t) {
-        let session = XPCPeerSession(runtime: runtime, watchdog: watchdog)
+    private func accept(_ peer: xpc_connection_t, discoveryOnly: Bool) {
+        let endpoint = discoveryOnly ? actionListener.withLock { listener in
+            listener.map { XPCHeld(xpc_endpoint_create($0)) }
+        } : nil
+        let session = XPCPeerSession(runtime: runtime, watchdog: watchdog,
+            discoveryOnly: discoveryOnly, actionEndpoint: endpoint, hostRegistry: hostRegistry,
+            uiSessions: uiSessions)
         xpc_connection_set_event_handler(peer) { event in
             session.handle(event)
         }
@@ -111,17 +153,40 @@ final class XPCPeerSession: Sendable {
     private let runtime: ServiceRuntime
     private let watchdog: IdleWatchdog
     private let handshake = Mutex(false)
+    private let discoveryOnly: Bool
+    private let actionEndpoint: XPCHeld?
+    private let connectionID = UUID()
+    private let hostRegistry: LiveWorkspaceHostRegistry
+    private let uiSessions: LiveOperatorUISessionRegistry
+    private let ceremonies: WorkspaceOperatorCeremonyService
+    private let actionCeremonies: ActionApprovalCeremonyService
+    private let hookCeremonies: HookReviewCeremonyService
+    private let hostLiveness = HostBridgeLiveness()
     private let beginTransaction: @Sendable () -> Void
     private let endTransaction: @Sendable () -> Void
 
     init(
         runtime: ServiceRuntime,
         watchdog: IdleWatchdog,
+        discoveryOnly: Bool = false,
+        actionEndpoint: XPCHeld? = nil,
+        hostRegistry: LiveWorkspaceHostRegistry = LiveWorkspaceHostRegistry(),
+        uiSessions: LiveOperatorUISessionRegistry = LiveOperatorUISessionRegistry(),
+        ceremonies: WorkspaceOperatorCeremonyService? = nil,
+        actionCeremonies: ActionApprovalCeremonyService? = nil,
+        hookCeremonies: HookReviewCeremonyService? = nil,
         beginTransaction: @escaping @Sendable () -> Void = { xpc_transaction_begin() },
         endTransaction: @escaping @Sendable () -> Void = { xpc_transaction_end() }
     ) {
         self.runtime = runtime
         self.watchdog = watchdog
+        self.discoveryOnly = discoveryOnly
+        self.actionEndpoint = actionEndpoint
+        self.hostRegistry = hostRegistry
+        self.uiSessions = uiSessions
+        self.ceremonies = ceremonies ?? runtime.ceremonies
+        self.actionCeremonies = actionCeremonies ?? runtime.actionCeremonies
+        self.hookCeremonies = hookCeremonies ?? runtime.hookCeremonies
         self.beginTransaction = beginTransaction
         self.endTransaction = endTransaction
     }
@@ -130,10 +195,37 @@ final class XPCPeerSession: Sendable {
     func handle(_ event: xpc_object_t) -> Task<Void, Never>? {
         let type = xpc_get_type(event)
         if type == XPC_TYPE_ERROR {
-            return nil
+            hostLiveness.disconnect()
+            let registry = hostRegistry
+            let sessions = uiSessions
+            let ceremonies = ceremonies
+            let actionCeremonies = actionCeremonies
+            let hookCeremonies = hookCeremonies
+            let id = connectionID
+            return Task {
+                await registry.disconnect(connectionID: id)
+                await ceremonies.hostConnectionLost(connectionID: id)
+                await actionCeremonies.hostConnectionLost(connectionID: id)
+                if let uiConnection = await sessions.disconnect(connectionID: id) {
+                    await ceremonies.uiConnectionLost(uiConnection)
+                    await actionCeremonies.uiConnectionLost(uiConnection)
+                    await hookCeremonies.uiConnectionLost(uiConnection)
+                }
+            }
         }
         guard type == XPC_TYPE_DICTIONARY else {
             return nil
+        }
+        // The message's audit-token-backed SecCode is captured synchronously.
+        // A payload PID, host label or later connection lookup cannot replace it.
+        let trust = (try? ProtectedPeerTrustConfiguration.installed()) ?? .denyAll
+        let context: AuthenticatedRequestContext
+        if let peer = try? MacOSPeerAuthenticator.capture(
+            message: event, connectionID: connectionID, trust: trust
+        ) {
+            context = .captured(peer: peer, connectionID: connectionID)
+        } else {
+            context = .unauthenticated
         }
         beginTransaction()
         let held = XPCHeld(event)
@@ -144,12 +236,38 @@ final class XPCPeerSession: Sendable {
             let incoming = XPCIPCWire.body(from: message)
             let stdinOverlay = XPCIPCWire.stdin(from: message)
             let accepted = self.handshake.withLock { $0 }
+            if XPCWorkspaceHostBridge.handles(message) {
+                await XPCWorkspaceHostBridge.handle(message: held, context: context,
+                    handshakeOK: accepted, discoveryOnly: self.discoveryOnly,
+                    liveness: self.hostLiveness, registry: self.hostRegistry, runtime: self.runtime)
+                return
+            }
+            if XPCActionApprovalBridge.handles(message) {
+                await XPCActionApprovalBridge.handle(message: held, context: context,
+                    handshakeOK: accepted, discoveryOnly: self.discoveryOnly,
+                    liveness: self.hostLiveness, ceremonies: self.actionCeremonies)
+                return
+            }
+            if XPCOperatorUIBridge.handles(message) {
+                await XPCOperatorUIBridge.handle(message: held, context: context,
+                    handshakeOK: accepted, discoveryOnly: self.discoveryOnly,
+                    sessions: self.uiSessions, ceremonies: self.ceremonies,
+                    actionCeremonies: self.actionCeremonies,
+                    hookCeremonies: self.hookCeremonies)
+                return
+            }
             let incomingReply: IncomingReply
-            if let incoming {
+            let isHello = incoming.flatMap { try? IPCJSON.decode(Hello.self, from: $0) } != nil
+            if self.discoveryOnly && !isHello {
+                let request = incoming.flatMap { try? IPCJSON.decode(IPCRequest.self, from: $0) }
+                let response = IPCResponse(id: request?.id ?? UUID(), result: .error(.authorizationDenied))
+                incomingReply = IncomingReply(frame: (try? IPCJSON.encode(response)) ?? Data(), handshakeAccepted: false)
+            } else if let incoming {
                 incomingReply = await self.runtime.handleIncoming(
                     incoming,
                     handshakeOK: accepted,
-                    stdinOverlay: stdinOverlay
+                    stdinOverlay: stdinOverlay,
+                    context: context
                 )
             } else {
                 let response = IPCResponse(id: UUID(), result: .error(.decodeFailed))
@@ -163,6 +281,9 @@ final class XPCPeerSession: Sendable {
                 return
             }
             XPCIPCWire.set(incomingReply.frame, on: reply)
+            if isHello && incomingReply.handshakeAccepted, let endpoint = self.actionEndpoint {
+                xpc_dictionary_set_value(reply, XPCIPCWire.actionEndpointKey, endpoint.object)
+            }
             if let peer = xpc_dictionary_get_remote_connection(message) {
                 xpc_connection_send_message(peer, reply)
             }
@@ -180,4 +301,3 @@ final class XPCHeld: @unchecked Sendable {
     }
 }
 #endif
-

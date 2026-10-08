@@ -158,12 +158,14 @@ private func resetHardWait() -> PendingApproval {
             agent: .pi
         ),
         action: .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "fp-pin-ok"),
-                effects: ActionEffects(kinds: []),
-                resources: ActionResources(),
-                scope: ActionScope(workingDirectory: wd("/tmp/ws")),
-                supportingCommand: ShellCommand(rawValue: "git reset --hard")
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "fp-pin-ok"),
+                    effects: ActionEffects(kinds: []),
+                    resources: ActionResources(),
+                    scope: ActionScope(workingDirectory: wd("/tmp/ws")),
+                    supportingCommand: ShellCommand(rawValue: "git reset --hard")
+                )
             )
         ),
         reason: .hostAsk,
@@ -188,13 +190,15 @@ private func forcePushWait(
             agent: .pi
         ),
         action: .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "fp-\(id)"),
-                scope: ActionScope(workingDirectory: wd("/tmp/ws")),
-                supportingCommand: ShellCommand(
-                    rawValue: command ?? "git push --force origin \(branch)"
-                ),
-                gitAction: .push(remote: "origin", refspec: branch, force: .force)
+            ShellAction.analyzed(
+                AnalyzedShell(
+                    fingerprint: ActionFingerprint(rawValue: "fp-\(id)"),
+                    scope: ActionScope(workingDirectory: wd("/tmp/ws")),
+                    supportingCommand: ShellCommand(
+                        rawValue: command ?? "git push --force origin \(branch)"
+                    ),
+                    analysis: .git(.push(remote: "origin", refspec: branch, force: .force))
+                )
             )
         ),
         reason: .hostAsk,

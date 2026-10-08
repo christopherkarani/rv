@@ -303,28 +303,18 @@ func hookWire_samePathHosts_resetHardIsShortDeny(_ host: HookHost) throws {
     #expect(incompleteCodec.denyCalls[0].next == .none)
 }
 
-@Test func hookWire_forcedAskOnDenyOnlyCodecIsLiveDeny() {
+@Test func hookWire_forcedAskIsAskDenyWithGuidance() {
     let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
     let spy = EncodeDenySpy()
     _ = hookWire(
         from: EvaluationResult(outcome: .deny(deny, matched: nil)),
         command: ShellCommand(rawValue: "git reset --hard"),
         using: spy,
-        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
+        intent: .firstCall(verdict: .ask, unlockCode: nil)
     )
     #expect(spy.denyCalls.count == 1)
     #expect(spy.denyCalls[0].rule == RuleID(pack: .coreGit, pattern: "reset-hard"))
-}
-
-@Test func hookMapper_doesNotDowncastHostAskCodec() throws {
-    let url = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .appendingPathComponent("Sources/RVHooks/HookMapper.swift")
-    let source = try String(contentsOf: url, encoding: .utf8)
-    #expect(source.contains("as? any HostAskCodec") == false)
-    #expect(source.contains("as? HostAskCodec") == false)
+    #expect(spy.denyCalls[0].reason.contains(approvalPendingLine))
 }
 
 @Test func hookWire_mintedUnlockCodePassesTypedNext() throws {
@@ -383,19 +373,19 @@ private final class EncodeDenySpy: HostCodec {
     }
 }
 
-private final class EncodeDoorSpy: HostAskCodec {
+private final class EncodeDoorSpy: HostCodec {
     let host: HookHost
     private let counts = Mutex<Counts>(Counts())
 
     private struct Counts: Sendable {
         var allowCalls = 0
         var denyCalls = 0
-        var askCalls = 0
+        var denyReasons: [String] = []
     }
 
     var allowCalls: Int { counts.withLock { $0.allowCalls } }
     var denyCalls: Int { counts.withLock { $0.denyCalls } }
-    var askCalls: Int { counts.withLock { $0.askCalls } }
+    var denyReasons: [String] { counts.withLock { $0.denyReasons } }
 
     init(host: HookHost) {
         self.host = host
@@ -411,13 +401,11 @@ private final class EncodeDoorSpy: HostAskCodec {
     }
 
     func encodeDeny(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
-        counts.withLock { $0.denyCalls += 1 }
+        counts.withLock {
+            $0.denyCalls += 1
+            $0.denyReasons.append(reason)
+        }
         return HookWire(stdout: "deny\n", exitCode: 9)
-    }
-
-    func encodeAsk(reason: String, rule: RuleID?, next: HookVoiceNext) -> HookWire {
-        counts.withLock { $0.askCalls += 1 }
-        return HookWire(stdout: "ask\n", exitCode: 9)
     }
 }
 
@@ -432,7 +420,6 @@ private final class EncodeDoorSpy: HostAskCodec {
     )
     #expect(spy.allowCalls == 0)
     #expect(spy.denyCalls == 1)
-    #expect(spy.askCalls == 0)
 }
 
 @Test func hookWire_firstCallAllowIsWireEvenWhenEvaluateDenied() {
@@ -446,10 +433,9 @@ private final class EncodeDoorSpy: HostAskCodec {
     )
     #expect(spy.allowCalls == 1)
     #expect(spy.denyCalls == 0)
-    #expect(spy.askCalls == 0)
 }
 
-@Test func hookWire_boundMandatoryHumanPiEncodesAsk() {
+@Test func hookWire_boundMandatoryHumanPiEncodesAskDeny() {
     let deny = Deny(
         ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
         reason: "Remote branch mutation requires a human."
@@ -462,14 +448,15 @@ private final class EncodeDoorSpy: HostAskCodec {
         ),
         command: ShellCommand(rawValue: "git push origin feature"),
         using: spy,
-        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
+        intent: .firstCall(verdict: .ask, unlockCode: nil)
     )
     #expect(spy.allowCalls == 0)
-    #expect(spy.denyCalls == 0)
-    #expect(spy.askCalls == 1)
+    #expect(spy.denyCalls == 1)
+    #expect(spy.denyReasons.count == 1)
+    #expect(spy.denyReasons.first?.contains(approvalPendingLine) == true)
 }
 
-@Test func hookWire_boundMandatoryHumanClaudeEncodesAsk() {
+@Test func hookWire_boundMandatoryHumanClaudeEncodesAskDeny() {
     let deny = Deny(
         ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
         reason: "Remote branch mutation requires a human."
@@ -482,14 +469,15 @@ private final class EncodeDoorSpy: HostAskCodec {
         ),
         command: ShellCommand(rawValue: "git push origin feature"),
         using: spy,
-        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
+        intent: .firstCall(verdict: .ask, unlockCode: nil)
     )
     #expect(spy.allowCalls == 0)
-    #expect(spy.denyCalls == 0)
-    #expect(spy.askCalls == 1)
+    #expect(spy.denyCalls == 1)
+    #expect(spy.denyReasons.count == 1)
+    #expect(spy.denyReasons.first?.contains(approvalPendingLine) == true)
 }
 
-@Test func hookWire_unlockablePackDenyWithCwdEncodesAsk() {
+@Test func hookWire_unlockablePackDenyWithCwdEncodesAskDeny() {
     let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
     let spy = EncodeDoorSpy(host: .pi)
     _ = hookWire(
@@ -499,11 +487,12 @@ private final class EncodeDoorSpy: HostAskCodec {
         ),
         command: ShellCommand(rawValue: "git reset --hard"),
         using: spy,
-        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
+        intent: .firstCall(verdict: .ask, unlockCode: nil)
     )
     #expect(spy.allowCalls == 0)
-    #expect(spy.denyCalls == 0)
-    #expect(spy.askCalls == 1)
+    #expect(spy.denyCalls == 1)
+    #expect(spy.denyReasons.count == 1)
+    #expect(spy.denyReasons.first?.contains(approvalPendingLine) == true)
 }
 
 @Test func hookWire_convenienceIsFirstCallOnly() {
@@ -519,8 +508,9 @@ private final class EncodeDoorSpy: HostAskCodec {
         cwd: wd("/tmp/ws")
     )
     #expect(spy.allowCalls == 0)
-    #expect(spy.denyCalls == 0)
-    #expect(spy.askCalls == 1)
+    #expect(spy.denyCalls == 1)
+    #expect(spy.denyReasons.count == 1)
+    #expect(spy.denyReasons.first?.contains(approvalPendingLine) == true)
     // hookWire(..., afterSpend: true) does not compile.
 }
 
@@ -605,8 +595,9 @@ private final class EncodeDoorSpy: HostAskCodec {
     #expect(cursor.exitCode == 0)
 }
 
-@Test func hookWire_askDoesNotCarryMintedCode() throws {
+@Test func hookWire_askCarriesMintedCodeAndGuidance() throws {
     let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
+    let code = try mintedUnlock()
     let wire = hookWire(
         from: EvaluationResult(
             outcome: .deny(deny, matched: nil),
@@ -614,14 +605,15 @@ private final class EncodeDoorSpy: HostAskCodec {
         ),
         command: ShellCommand(rawValue: "git reset --hard"),
         using: PiHostCodec(),
-        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: .code(try mintedUnlock()))
+        intent: .firstCall(verdict: .ask, unlockCode: .code(code))
     )
     let json = try #require(JSONSerialization.jsonObject(with: Data(wire.stdout.utf8)) as? [String: Any])
-    #expect(json["decision"] as? String == "ask")
-    #expect(allowOnceUnlockCode(in: wire.stdout) == nil)
+    #expect(json["decision"] as? String == "deny")
+    #expect(allowOnceUnlockCode(in: wire.stdout) == code)
+    #expect(wire.stdout.contains(approvalPendingLine))
 }
 
-@Test func hookWire_firstCallIntentAskEncodesAskOnPackDeny() {
+@Test func hookWire_firstCallIntentAskEncodesAskDenyOnPackDeny() {
     let deny = Deny(ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"), reason: "x")
     let spy = EncodeDoorSpy(host: .pi)
     _ = hookWire(
@@ -631,11 +623,12 @@ private final class EncodeDoorSpy: HostAskCodec {
         ),
         command: ShellCommand(rawValue: "git reset --hard"),
         using: spy,
-        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
+        intent: .firstCall(verdict: .ask, unlockCode: nil)
     )
     #expect(spy.allowCalls == 0)
-    #expect(spy.denyCalls == 0)
-    #expect(spy.askCalls == 1)
+    #expect(spy.denyCalls == 1)
+    #expect(spy.denyReasons.count == 1)
+    #expect(spy.denyReasons.first?.contains(approvalPendingLine) == true)
 }
 
 @Test func hookWire_firstCallIntentDenyDoesNotAskOnSpendablePackDeny() {
@@ -652,7 +645,6 @@ private final class EncodeDoorSpy: HostAskCodec {
     )
     #expect(spy.allowCalls == 0)
     #expect(spy.denyCalls == 1)
-    #expect(spy.askCalls == 0)
 }
 
 @Test func hookWire_firstCallIntentAllowEncodesAllow() {
@@ -665,7 +657,6 @@ private final class EncodeDoorSpy: HostAskCodec {
     )
     #expect(spy.allowCalls == 1)
     #expect(spy.denyCalls == 0)
-    #expect(spy.askCalls == 0)
 }
 
 @Test func grokDecode_readsCwdWhenPresent() throws {

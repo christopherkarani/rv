@@ -28,9 +28,9 @@ public struct PiStoreAdapter: SessionStoreAdapter {
             guard let object = ScanJSONLEngine.parseObject(line) else {
                 continue
             }
-            let type = object["type"] as? String
+            let type = object["type"]?.string
             if type == "session" {
-                if let id = object["id"] as? String, let parsed = SessionID(validating: id) {
+                if let id = object["id"]?.string, let parsed = SessionID(validating: id) {
                     sessionID = parsed
                 }
                 if let cwd = ScanStoreWorkingDirectory.fromEnvelope(object) {
@@ -38,19 +38,20 @@ public struct PiStoreAdapter: SessionStoreAdapter {
                 }
             }
             guard type == "message",
-                  let message = object["message"] as? [String: Any],
-                  (message["role"] as? String) == "assistant",
-                  let content = message["content"] as? [[String: Any]]
+                  let message = object["message"], message.asObject != nil,
+                  message["role"]?.string == "assistant",
+                  let content = message["content"]?.asArray,
+                  content.allSatisfy({ $0.asObject != nil })
             else {
                 continue
             }
             let occurredAt = ScanTimestamp.coerce(object["timestamp"], allowEpoch: true, requirePositive: false)
                 ?? ScanTimestamp.coerce(message["timestamp"], allowEpoch: true, requirePositive: false)
             for item in content {
-                guard (item["type"] as? String) == "toolCall",
-                      (item["name"] as? String) == "bash",
-                      let arguments = item["arguments"] as? [String: Any],
-                      let command = arguments["command"] as? String,
+                guard item["type"]?.string == "toolCall",
+                      item["name"]?.string == "bash",
+                      let arguments = item["arguments"], arguments.asObject != nil,
+                      let command = arguments["command"]?.string,
                       command.isEmpty == false
                 else {
                     continue

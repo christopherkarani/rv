@@ -90,8 +90,15 @@ extension WorkspaceDeveloperHome {
     /// files contained tools need. Best-effort: returns false when the home
     /// cannot be prepared, in which case the caller falls back to the
     /// legacy workspace home instead of failing the spawn.
+    ///
+    /// The default identity reader may spawn `git` to seed commit identity.
+    /// Callers that must not spawn (identity-launch preparation) pass an
+    /// explicit reader; `{ _ in (nil, nil) }` skips seeding entirely.
     @discardableResult
-    public func ensure(hostHome: String) -> Bool {
+    public func ensure(
+        hostHome: String,
+        gitIdentity: (@Sendable (String) -> (name: String?, email: String?))? = nil
+    ) -> Bool {
         guard isUsableAbsolutePath(hostHome) else { return false }
         let manager = FileManager.default
         for directory in [root, home, cache, tmp, bin] {
@@ -111,7 +118,10 @@ extension WorkspaceDeveloperHome {
         }
         refreshTransparencyShims()
         linkReadOnlyToolState(hostHome: hostHome)
-        seedGitIdentity(hostHome: hostHome)
+        seedGitIdentity(
+            hostHome: hostHome,
+            gitIdentity: gitIdentity ?? { Self.hostGitIdentity(hostHome: $0) }
+        )
         return true
     }
 

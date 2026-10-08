@@ -1,0 +1,72 @@
+[
+  {
+    "path": "Sources/RVCLI/Commands/WorkspaceCommand.swift",
+    "before_sha256": "fe8a4129a1959e7d2315d18d5bf8c9b5b4c651ccc9c85cc8051f44d443ae4596",
+    "after_sha256": "903886a2ab5d0380ee724ee191193ef59a18d73d7ef83cc4f81590914b72b4bf"
+  },
+  {
+    "path": "Sources/RVCLI/Help/HelpCatalog.swift",
+    "before_sha256": "07758e988a316174848472439f8f0f9f96c25546cf1acf4e49182b93cfbd98f7",
+    "after_sha256": "f20440e39fc0b47e7b28f62dd9a7a516723a4e40f716bef726297ae66eb45050"
+  },
+  {
+    "path": "Sources/RVIsolation/IsolationApply.swift",
+    "before_sha256": "ce41c4fb23913e33335cb865e0ed05b5a5f89934012c8913929d42e7e0a5b168",
+    "after_sha256": "d2520d798a2ee4a8075c9afffd569872f43bdedf62e7d35053e953c82f10cbb6"
+  },
+  {
+    "path": "Sources/RVIsolation/SessionSupervisor.swift",
+    "before_sha256": "779eea95d277f5426432b8b3d7433fef54fcfdcaf87feca6577ecbb4572b2ac0",
+    "after_sha256": "98837ea9298c60b0213ac1576141f5de389527016c490585ed5b6a2c44674d02"
+  },
+  {
+    "path": "Sources/RVIsolation/WorkspaceControlProtocol.swift",
+    "before_sha256": "e6b44e904759bdc7b3cab7878a91ff9bbd679adcafa77518f18157f93a24acf7",
+    "after_sha256": "b920b48008a1c83ad1500e401bb7965397dae0a770a7a0e68ae169bf831ad0d1"
+  },
+  {
+    "path": "Sources/RVIsolation/WorkspaceHostClient.swift",
+    "before_sha256": "0ff7a6bb6544fee653bb4bf4809045c5a4a92d83aeac94a3f07cf669957a2870",
+    "after_sha256": "89ca64e24510bc71abed987d7ea10a162c60cdc75e97a8bed09fb4230227bea5"
+  },
+  {
+    "path": "Sources/RVIsolation/WorkspaceHostProcess.swift",
+    "before_sha256": "6710e432e771814a4aff39ff034333da17b04b1ba164300761bcc522f0f4eb80",
+    "after_sha256": "9fc17c17445a81a9bdb91c688d1f903158436b4e78a4676613845e7ec4f835d2"
+  },
+  {
+    "path": "Sources/RVIsolation/WorkspaceHostServer.swift",
+    "before_sha256": "1a372fe0f9c0be8ddc10d7956c2cdb0a71eecf3f103a83e127cbe9012eef9a9b",
+    "after_sha256": "d32e449ff6aba29b20abd20d840a96061ff48625954c3cab02fa4bfdff9fae36"
+  },
+  {
+    "path": "Sources/RVIsolation/WorkspaceOperationAuthorization.swift",
+    "before_sha256": "dd73af1573927ab4252a4801662c21189db5fb051e56552975703d4081a8729f",
+    "after_sha256": "05891c62fb749c982f98cf3eb0c4af82c84ba719f3bd03334eaabb867d8205e4"
+  },
+  {
+    "path": "Sources/RVIsolation/WorkspaceSessionSupervisor.swift",
+    "before_sha256": "f9e4c48432f3512d0d9e1c5b6975d91adc239896abdb2f4dc7700b83ffce6470",
+    "after_sha256": "686cd13ad65c5d0615d93c2c7de917afe040627664db988caa1ef9f3ec90bbeb"
+  },
+  {
+    "path": "Sources/RVPolicy/AgentLaunchSelection.swift",
+    "before_sha256": null,
+    "after_sha256": "71c7775d38d92e98c844162e331cb605fa15646099b4dbbecfdb81c9cbb7a42a"
+  },
+  {
+    "path": "Tests/RVIsolationTests/IdentityAmbientCredentialTests.swift",
+    "before_sha256": null,
+    "after_sha256": "bc84d19c7ad1675ca074a8becdf455be168f0f967529f2d080d3183ccb705e86"
+  },
+  {
+    "path": "Tests/RVIsolationTests/ProductionIdentityLaunchTests.swift",
+    "before_sha256": null,
+    "after_sha256": "e5212fe7571ac27201ee4ec3eaf01051560743ae5f677d6365e2fb53733f854e"
+  },
+  {
+    "path": "Tests/RVPolicyTests/AgentLaunchSelectionTests.swift",
+    "before_sha256": null,
+    "after_sha256": "3edd34c2557601ad0c3e51a3c84af7c5c150ce40633bff171e007f55fa27f0ed"
+  }
+]

@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVIPC
 import RVPolicy
 
 /// In-process overrides for operator HOME / TTY / env. Production reads the
@@ -18,6 +19,9 @@ enum CLIProcess: Sendable {
         var stdoutFileDescriptor: Int32?
         var workspacePath: String?
         var stdinText: String?
+        /// Scripted device-owner outcome for `rv allow-once`. Nil fails
+        /// closed (tests never reach live LocalAuthentication).
+        var ownerAuthOutcome: UIAuthenticationOutcome?
 
         init(
             home: HomeDirectory? = nil,
@@ -27,6 +31,7 @@ enum CLIProcess: Sendable {
             stdoutFileDescriptor: Int32? = nil,
             workspacePath: String? = nil,
             stdinText: String? = nil,
+            ownerAuthOutcome: UIAuthenticationOutcome? = nil,
             includeProcessEnvironment: Bool = false
         ) {
             self.home = home
@@ -47,6 +52,7 @@ enum CLIProcess: Sendable {
             self.stdoutFileDescriptor = stdoutFileDescriptor
             self.workspacePath = workspacePath
             self.stdinText = stdinText
+            self.ownerAuthOutcome = ownerAuthOutcome
         }
     }
 

@@ -29,6 +29,7 @@ public enum HelpTopic: Equatable, Sendable {
     case blocks
     case opencode
     case workspace
+    case `operator`
 }
 
 /// Intercepts help argv before ArgumentParser so passthrough commands still get help.
@@ -126,6 +127,8 @@ public enum HelpDispatch {
             return rest.allSatisfy(isSafetyToken) ? .safety : nil
         case "blocks":
             return rest.allSatisfy(isFormatFlag) ? .blocks : nil
+        case "operator":
+            return .`operator`
         case "help":
             return rest.isEmpty ? .help : nil
         default:
@@ -161,13 +164,15 @@ public enum HelpDispatch {
         while index < tokens.endIndex {
             let token = tokens[index]
             if token == "start" || token == "attach" || token == "status" || token == "close"
-                || token == "run" || token == "tui" || token == "abandon"
+                || token == "run" || token == "agent" || token == "custom"
+                || token == "tui" || token == "abandon"
             {
                 index = tokens.index(after: index)
                 continue
             }
             if token == "--workspace" || token == "--rows" || token == "--columns"
                 || token == "--resource-profile" || token == "--hook"
+                || token == "--expected-content-digest-sha256"
             {
                 let value = tokens.index(after: index)
                 guard value < tokens.endIndex else { return false }
@@ -176,7 +181,7 @@ public enum HelpDispatch {
             }
             if token.hasPrefix("--workspace=") || token.hasPrefix("--rows=")
                 || token.hasPrefix("--columns=") || token.hasPrefix("--resource-profile=")
-                || token.hasPrefix("--hook=")
+                || token.hasPrefix("--hook=") || token.hasPrefix("--expected-content-digest-sha256=")
             {
                 index = tokens.index(after: index)
                 continue

@@ -1,0 +1,14 @@
+{
+  "command": [
+    "Scripts/swift-6.4",
+    "test",
+    "--disable-sandbox",
+    "--skip-build",
+    "--filter",
+    "ProductionIdentityLaunchTests"
+  ],
+  "exit_code": 0,
+  "tests": 3,
+  "seconds": 6.368,
+  "scope": "real contained supervisor/runtime binding; installed rvd success not established"
+}

@@ -36,6 +36,8 @@ from rv.errors import (
 )
 from rv.transports import Transport
 
+pytestmark = pytest.mark.usefixtures("_product_ok")
+
 ACK_OK = b'{"ok":true,"protocol":"rv.ipc.v1","serviceSemver":"1.0.0"}'
 
 
@@ -84,11 +86,6 @@ def respond_error(error: dict):
         ).encode()
 
     return _reply
-
-
-@pytest.fixture(autouse=True)
-def _product_ok(monkeypatch):
-    monkeypatch.setattr(client_module, "_probe_product", lambda rvd=None: "0.1.5")
 
 
 def _client(*script, fail_connect=None) -> tuple[Client, FakeTransport]:

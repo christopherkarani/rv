@@ -42,3 +42,45 @@ public struct DoctorSnapshotCall: IPCCall {
         return nil
     }
 }
+
+public struct ProposeLaunchCall: IPCCall {
+    public var params: ProposeLaunchParams
+    public var method: IPCMethod { .proposeWorkspaceLaunch(params) }
+
+    public init(params: ProposeLaunchParams) {
+        self.params = params
+    }
+
+    public static func extract(_ result: IPCResult) -> ProposeLaunchReply? {
+        if case .proposeWorkspaceLaunch(let reply) = result { return reply }
+        return nil
+    }
+}
+
+public struct ProposalStatusCall: IPCCall {
+    public var params: ProposalStatusParams
+    public var method: IPCMethod { .launchProposalStatus(params) }
+
+    public init(params: ProposalStatusParams) {
+        self.params = params
+    }
+
+    public static func extract(_ result: IPCResult) -> ProposalStatusReply? {
+        if case .launchProposalStatus(let reply) = result { return reply }
+        return nil
+    }
+}
+
+public struct AttestTTYRedemptionCall: IPCCall {
+    public var params: AttestTTYRedemptionParams
+    public var method: IPCMethod { .attestTTYRedemption(params) }
+
+    public init(params: AttestTTYRedemptionParams) {
+        self.params = params
+    }
+
+    public static func extract(_ result: IPCResult) -> AttestTTYRedemptionReply? {
+        if case .attestTTYRedemption(let reply) = result { return reply }
+        return nil
+    }
+}

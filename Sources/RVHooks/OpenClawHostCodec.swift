@@ -2,7 +2,7 @@ import Foundation
 import RVDomain
 
 /// Adapter wire for OpenClaw, not a host protocol.
-public struct OpenClawHostCodec: HostAskCodec {
+public struct OpenClawHostCodec: HostCodec {
     /// The OpenClaw adapter host.
     public var host: HookHost { .openclaw }
 
@@ -26,22 +26,16 @@ public struct OpenClawHostCodec: HostAskCodec {
         let cwd = cwdText.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId, envelope.sessionKey)
             .flatMap { SessionID(validating: $0) }
-        let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
         return HookRequest.decoded(
             host: .openclaw,
             command: envelope.params?.command,
             cwd: cwd,
-            session: session,
-            hostAsk: hostAsk
+            session: session
         )
     }
 
     public func encodeDeny(reason: String, rule: RuleID? = nil, next: HookVoiceNext = .none) -> HookWire {
         encodeLeftoverDecisionDeny(reason: reason, rule: rule, next: next)
-    }
-
-    public func encodeAsk(reason: String, rule: RuleID? = nil, next: HookVoiceNext = .none) -> HookWire {
-        encodeLeftoverDecisionAsk(reason: reason, rule: rule, next: next)
     }
 }
 
@@ -52,7 +46,6 @@ private struct OpenClawEnvelope: Decodable {
     var sessionId: String?
     var sessionKey: String?
     var toolKind: String?
-    var hostAsk: String?
 }
 
 private struct OpenClawParams: Decodable {

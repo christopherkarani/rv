@@ -1,0 +1,260 @@
+[0;36mrv preflight[0m — 22 checks
+────────────────────────────────────────────────────────
+  [0;33m⚠ dcg/ryk in agent-config dotfiles[0m (33, pre-existing — not product code)
+  [0;33m⚠ Test target with 2 module deps[0m (test fakes — review)
+    WARN	RVHooksTests	2 modules: ['RVHooks', 'RVEngine']
+    WARN	RVWorkspaceTUITests	2 modules: ['RVWorkspaceTUI', 'RVIsolation']
+────────────────────────────────────────────────────────
+[0;32m0 failed[0m, [0;33m2 warnings[0m
+Building for debugging...
+[Computing dependencies]
+[Provisioning 1 / 96]
+[Using on-disk description]
+[1 / 2] SwiftTerm
+[1 / 2] RVCLITests-product
+warning: missing creator for mutated node: ('/Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/SwiftTerm_SwiftTerm.bundle/Contents/MacOS')
+Build complete! (2.17 sec)
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite "Exact owner authorization" started.
+􀟈  Suite XPCEndpointLifetimeTests started.
+􀟈  Test fabricatedXPCDictionaryCannotEstablishPeer() started.
+􀟈  Suite "Authenticated dispatch boundary" started.
+􀟈  Test anonymousXPCMessagesAndRepliesCarryLiveCodeEvidence() started.
+􀟈  Test diagnosticsRemainUnprivileged() started.
+􀟈  Test payloadAndAsyncBoundaryCannotUpgradeCaller() started.
+􀟈  Test cancelledEndpointCannotRediscoverReplacementListener() started.
+􀟈  Test helloDoesNotGrantControlAuthority() started.
+􀟈  Test authorizationFailureRoundTrips() started.
+􀟈  Test exactOperationConsumesOnce() started.
+􀟈  Test revokedDuringAuthenticationRejects() started.
+􀟈  Test draftSubstitutionCannotUseReceipt() started.
+􀟈  Test wallRollbackCannotExtendReceiptLifetime() started.
+􀟈  Test legacyRowsCannotCreateOwnerOperation() started.
+􀟈  Test disconnectInvalidatesReceipt() started.
+􀟈  Test rowMutationDuringAuthenticationRejects() started.
+􀟈  Test monotonicExpiryDuringOwnerAuthenticationRejects() started.
+􀟈  Test subjectRoundTripsWithoutBecomingAuthority() started.
+􀟈  Test invalidLifetimeFailsClosed(lifetime:) started.
+􀟈  Test legacyAllowCannotBeDeliveredToHost() started.
+􀟈  Test concurrentConsumptionHasOneWinner() started.
+􀟈  Test freshOwnerAuthenticationRequired() started.
+􀟈  Test subjectDiesBeforeConsumptionRejects() started.
+􀟈  Test case passing 1 argument lifetime → inf to invalidLifetimeFailsClosed(lifetime:) started.
+􁁛  Test diagnosticsRemainUnprivileged() passed after 0.001 seconds.
+􀟈  Test case passing 1 argument lifetime → -inf to invalidLifetimeFailsClosed(lifetime:) started.
+􀟈  Test case passing 1 argument lifetime → nan to invalidLifetimeFailsClosed(lifetime:) started.
+􀟈  Test case passing 1 argument lifetime → 0.0 to invalidLifetimeFailsClosed(lifetime:) started.
+􀟈  Test case passing 1 argument lifetime → -1.0 to invalidLifetimeFailsClosed(lifetime:) started.
+􀟈  Test case passing 1 argument lifetime → 301.0 to invalidLifetimeFailsClosed(lifetime:) started.
+􁁛  Test fabricatedXPCDictionaryCannotEstablishPeer() passed after 0.001 seconds.
+􁁛  Test wallRollbackCannotExtendReceiptLifetime() passed after 0.001 seconds.
+􁁛  Test legacyRowsCannotCreateOwnerOperation() passed after 0.001 seconds.
+􁁛  Test authorizationFailureRoundTrips() passed after 0.001 seconds.
+􁁛  Test rowMutationDuringAuthenticationRejects() passed after 0.001 seconds.
+􁁛  Test freshOwnerAuthenticationRequired() passed after 0.001 seconds.
+􁁛  Test disconnectInvalidatesReceipt() passed after 0.001 seconds.
+􁁛  Test draftSubstitutionCannotUseReceipt() passed after 0.001 seconds.
+􁁛  Test monotonicExpiryDuringOwnerAuthenticationRejects() passed after 0.001 seconds.
+􁁛  Test revokedDuringAuthenticationRejects() passed after 0.001 seconds.
+􁁛  Test subjectDiesBeforeConsumptionRejects() passed after 0.001 seconds.
+􁁛  Test exactOperationConsumesOnce() passed after 0.001 seconds.
+􁁛  Test invalidLifetimeFailsClosed(lifetime:) with 6 test cases passed after 0.001 seconds.
+􁁛  Test concurrentConsumptionHasOneWinner() passed after 0.001 seconds.
+􁁛  Test legacyAllowCannotBeDeliveredToHost() passed after 0.001 seconds.
+􁁛  Test subjectRoundTripsWithoutBecomingAuthority() passed after 0.001 seconds.
+􁁛  Suite "Exact owner authorization" passed after 0.001 seconds.
+􁁛  Test anonymousXPCMessagesAndRepliesCarryLiveCodeEvidence() passed after 0.018 seconds.
+􁁛  Test payloadAndAsyncBoundaryCannotUpgradeCaller() passed after 0.038 seconds.
+􁁛  Test helloDoesNotGrantControlAuthority() passed after 0.038 seconds.
+􁁛  Suite "Authenticated dispatch boundary" passed after 0.038 seconds.
+􁁛  Test cancelledEndpointCannotRediscoverReplacementListener() passed after 0.105 seconds.
+􁁛  Suite XPCEndpointLifetimeTests passed after 0.105 seconds.
+􁁛  Test run with 21 tests in 3 suites passed after 0.105 seconds.
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite "Agent definition store" started.
+􀟈  Test uninstallArtifactsIncludeAgentDefinitions() started.
+􀟈  Test malformedDocumentsFailClosed() started.
+􀟈  Test unknownFieldsFailClosed() started.
+􀟈  Test missingFileLoadsEmpty() started.
+􀟈  Test customExecutableSnapshotGainsNoNamedGrants() started.
+􀟈  Test onlyOwnerFilesWithoutSymlinksAreLoaded() started.
+􀟈  Test duplicateIDsFailClosed() started.
+􀟈  Test boundaryValuesAtCapLoad() started.
+􀟈  Test trustedRootIgnoresRequestProvidedHome() started.
+􀟈  Test displayOnlyEditDoesNotChangeRevision() started.
+􀟈  Test validConfigLoadsAndRevisionIsStable() started.
+􀟈  Test signedExecutablePinsLoad() started.
+􀟈  Test symlinkedConfigDirectoryIsRejected() started.
+􀟈  Test securityRelevantEditChangesRevision() started.
+􀟈  Test unsupportedVersionsFailClosed() started.
+􀟈  Test oversizedDocumentsAreRejected() started.
+􁁛  Test uninstallArtifactsIncludeAgentDefinitions() passed after 0.001 seconds.
+􁁛  Test trustedRootIgnoresRequestProvidedHome() passed after 0.001 seconds.
+􁁛  Test unsupportedVersionsFailClosed() passed after 0.001 seconds.
+􁁛  Test unknownFieldsFailClosed() passed after 0.001 seconds.
+􁁛  Test signedExecutablePinsLoad() passed after 0.002 seconds.
+􁁛  Test boundaryValuesAtCapLoad() passed after 0.002 seconds.
+􁁛  Test missingFileLoadsEmpty() passed after 0.002 seconds.
+􁁛  Test customExecutableSnapshotGainsNoNamedGrants() passed after 0.002 seconds.
+􁁛  Test displayOnlyEditDoesNotChangeRevision() passed after 0.002 seconds.
+􁁛  Test validConfigLoadsAndRevisionIsStable() passed after 0.002 seconds.
+􁁛  Test duplicateIDsFailClosed() passed after 0.003 seconds.
+􁁛  Test oversizedDocumentsAreRejected() passed after 0.003 seconds.
+􁁛  Test malformedDocumentsFailClosed() passed after 0.003 seconds.
+􁁛  Test symlinkedConfigDirectoryIsRejected() passed after 0.003 seconds.
+􁁛  Test securityRelevantEditChangesRevision() passed after 0.003 seconds.
+􁁛  Test onlyOwnerFilesWithoutSymlinksAreLoaded() passed after 0.004 seconds.
+􁁛  Suite "Agent definition store" passed after 0.004 seconds.
+􁁛  Test run with 16 tests in 1 suite passed after 0.004 seconds.
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Test unixPeerEvidenceRejectsNonSocketDescriptor() started.
+􀟈  Test peerTrustRejectsUserOwnedManifest() started.
+􀟈  Test unixDifferentExecutableCannotAcquireRoleAndDeadPeerFails() started.
+􀟈  Suite "AgentInstanceRegistry concurrency" started.
+􀟈  Suite "AgentInstanceRegistry" started.
+􀟈  Test unixPeerEvidenceFromRealConnectedSocket() started.
+􀟈  Test peerTrustRejectsRealAllowACLDespiteSafePOSIXMode() started.
+􀟈  Test dynamicCodeInvalidRequirementFailsAndDefaultHasNoRole() started.
+􀟈  Test concurrentRevokeRunsTeardownExactlyOnce() started.
+􀟈  Test concurrentDuplicateRuntimeAnnounceWinsOnce() started.
+􀟈  Test instanceBindsExpectedWorkspaceAndRuntime() started.
+􀟈  Test activateVersusRevokeKeepsSingleAuthority() started.
+􀟈  Test cachedContextNeverEqualsLiveValidity() started.
+􀟈  Test revokingIsObservableWhileTeardownRuns() started.
+􀟈  Test concurrentDuplicateInstanceAnnounceWinsOnce() started.
+􀟈  Test runtimeBindsExactlyOneInstance() started.
+􀟈  Test supervisorLaunchMintsActivatesAndFinishesInstance() started.
+􀟈  Test supervisorRegisterFaultRetiresAnnouncedInstance() started.
+􀟈  Test finishRuntimeVersusRevokeRetiresOnce() started.
+􀟈  Test delegationNarrowsThroughRegistry() started.
+􀟈  Test activateJournalFailureLeavesInstanceInactive() started.
+􀟈  Test supervisorLaunchWithoutDefinitionMintsNoInstance() started.
+􀟈  Test restartMintsFreshIDAndKeepsOldDead() started.
+􀟈  Test mismatchedPrincipalBindingFails() started.
+􀟈  Test cleanupFailureKeepsAuthorityDead() started.
+􀟈  Test unregisteredIDsHaveUnknownValidity() started.
+􀟈  Test terminatedRuntimeInvalidatesAndLookupStaysDescriptive() started.
+􀟈  Test announcedInstanceIsUnusableUntilEstablished() started.
+􀟈  Test channelBindingNeverMovesToAnotherInstance() started.
+􀟈  Test journalFailureRefusesEstablishment() started.
+􀟈  Test requestPayloadCannotReplacePrincipal() started.
+􀟈  Test recoveryResurrectsNothing() started.
+􀟈  Test lifecycleMovesActiveRevokingInactive() started.
+􀟈  Test suppressedExecuteKeepsPrincipalAttribution() started.
+􀟈  Test normalizeSeesTrustedSubjectThePayloadCannotOverride() started.
+􁁛  Test unixPeerEvidenceRejectsNonSocketDescriptor() passed after 0.010 seconds.
+􁁛  Test peerTrustRejectsUserOwnedManifest() passed after 0.012 seconds.
+􁁛  Test runtimeBindsExactlyOneInstance() passed after 0.011 seconds.
+􁁛  Test instanceBindsExpectedWorkspaceAndRuntime() passed after 0.012 seconds.
+􁁛  Test cachedContextNeverEqualsLiveValidity() passed after 0.012 seconds.
+􁁛  Test activateJournalFailureLeavesInstanceInactive() passed after 0.011 seconds.
+􁁛  Test delegationNarrowsThroughRegistry() passed after 0.011 seconds.
+􁁛  Test restartMintsFreshIDAndKeepsOldDead() passed after 0.011 seconds.
+􁁛  Test mismatchedPrincipalBindingFails() passed after 0.011 seconds.
+􁁛  Test cleanupFailureKeepsAuthorityDead() passed after 0.011 seconds.
+􁁛  Test unregisteredIDsHaveUnknownValidity() passed after 0.011 seconds.
+􁁛  Test terminatedRuntimeInvalidatesAndLookupStaysDescriptive() passed after 0.011 seconds.
+􁁛  Test peerTrustRejectsRealAllowACLDespiteSafePOSIXMode() passed after 0.012 seconds.
+􁁛  Test journalFailureRefusesEstablishment() passed after 0.011 seconds.
+􁁛  Test announcedInstanceIsUnusableUntilEstablished() passed after 0.011 seconds.
+􁁛  Test requestPayloadCannotReplacePrincipal() passed after 0.011 seconds.
+􁁛  Test channelBindingNeverMovesToAnotherInstance() passed after 0.012 seconds.
+􁁛  Test unixDifferentExecutableCannotAcquireRoleAndDeadPeerFails() passed after 0.012 seconds.
+􁁛  Test dynamicCodeInvalidRequirementFailsAndDefaultHasNoRole() passed after 0.012 seconds.
+􁁛  Test recoveryResurrectsNothing() passed after 0.011 seconds.
+􁁛  Test suppressedExecuteKeepsPrincipalAttribution() passed after 0.011 seconds.
+􁁛  Test lifecycleMovesActiveRevokingInactive() passed after 0.011 seconds.
+􁁛  Test normalizeSeesTrustedSubjectThePayloadCannotOverride() passed after 0.011 seconds.
+􁁛  Test unixPeerEvidenceFromRealConnectedSocket() passed after 0.013 seconds.
+􁁛  Test revokingIsObservableWhileTeardownRuns() passed after 0.013 seconds.
+􁁛  Test concurrentRevokeRunsTeardownExactlyOnce() passed after 0.043 seconds.
+􁁛  Test activateVersusRevokeKeepsSingleAuthority() passed after 0.053 seconds.
+􁁛  Test finishRuntimeVersusRevokeRetiresOnce() passed after 0.071 seconds.
+􁁛  Test concurrentDuplicateRuntimeAnnounceWinsOnce() passed after 0.162 seconds.
+􁁛  Test concurrentDuplicateInstanceAnnounceWinsOnce() passed after 0.162 seconds.
+􁁛  Suite "AgentInstanceRegistry concurrency" passed after 0.162 seconds.
+􁁛  Test supervisorLaunchMintsActivatesAndFinishesInstance() passed after 2.652 seconds.
+􁁛  Test supervisorLaunchWithoutDefinitionMintsNoInstance() passed after 3.044 seconds.
+􁁛  Test supervisorRegisterFaultRetiresAnnouncedInstance() passed after 3.079 seconds.
+􁁛  Suite "AgentInstanceRegistry" passed after 3.079 seconds.
+􁁛  Test run with 33 tests in 2 suites passed after 3.080 seconds.
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Test establishedSession_bindsMatchingPairOnly() started.
+􀟈  Test status_transitionsAreForwardOnly() started.
+􀟈  Test instanceIDs_areFreshAndUnguessable() started.
+􀟈  Test delegation_narrowAccepted() started.
+􀟈  Test delegation_childCarriesNoParentCredential() started.
+􀟈  Test definitionID_validatesOperatorNames() started.
+􀟈  Test delegation_widenedRejected() started.
+􀟈  Test authenticatedContext_usabilityFollowsValidity() started.
+􀟈  Test owner_currentIsKernelDerived() started.
+􀟈  Test revision_ignoresDisplayOnlyChange() started.
+􀟈  Test delegation_equalAccepted() started.
+􀟈  Test revision_changesOnSecurityRelevantChange() started.
+􀟈  Test authority_narrowsBySubset() started.
+􀟈  Test revision_ordersListsByUTF8Bytes() started.
+􀟈  Test validity_transitionsMoveOneWayTowardInactive() started.
+􀟈  Test revision_isStableForStableConfig() started.
+􀟈  Test gate_boundChannelRequiresMatchingLiveContext() started.
+􀟈  Test digest_matchesSHA256StandardVectors() started.
+􀟈  Test assurance_reportsOnlyWeakOrUnattested() started.
+􀟈  Test idTypes_areDistinct() started.
+􀟈  Test revision_distinguishesAmbiguousEncodings() started.
+􀟈  Test revision_treatsBindingsAsOrderInsignificantSets() started.
+􀟈  Test revision_changesOnResourceProfileSecurityChange() started.
+􀟈  Test gate_subjectCarriesTrustedContextPayloadsCannotSet() started.
+􁁛  Test status_transitionsAreForwardOnly() passed after 0.003 seconds.
+􁁛  Test owner_currentIsKernelDerived() passed after 0.003 seconds.
+􁁛  Test validity_transitionsMoveOneWayTowardInactive() passed after 0.003 seconds.
+􁁛  Test instanceIDs_areFreshAndUnguessable() passed after 0.003 seconds.
+􁁛  Test authority_narrowsBySubset() passed after 0.003 seconds.
+􁁛  Test assurance_reportsOnlyWeakOrUnattested() passed after 0.003 seconds.
+􁁛  Test idTypes_areDistinct() passed after 0.003 seconds.
+􁁛  Test definitionID_validatesOperatorNames() passed after 0.003 seconds.
+􁁛  Test delegation_narrowAccepted() passed after 0.003 seconds.
+􁁛  Test authenticatedContext_usabilityFollowsValidity() passed after 0.003 seconds.
+􁁛  Test delegation_childCarriesNoParentCredential() passed after 0.003 seconds.
+􁁛  Test delegation_widenedRejected() passed after 0.005 seconds.
+􁁛  Test digest_matchesSHA256StandardVectors() passed after 0.006 seconds.
+􁁛  Test delegation_equalAccepted() passed after 0.006 seconds.
+􁁛  Test gate_subjectCarriesTrustedContextPayloadsCannotSet() passed after 0.007 seconds.
+􁁛  Test establishedSession_bindsMatchingPairOnly() passed after 0.008 seconds.
+􁁛  Test gate_boundChannelRequiresMatchingLiveContext() passed after 0.008 seconds.
+􁁛  Test revision_ordersListsByUTF8Bytes() passed after 0.008 seconds.
+􁁛  Test revision_treatsBindingsAsOrderInsignificantSets() passed after 0.008 seconds.
+􁁛  Test revision_isStableForStableConfig() passed after 0.009 seconds.
+􁁛  Test revision_ignoresDisplayOnlyChange() passed after 0.009 seconds.
+􁁛  Test revision_distinguishesAmbiguousEncodings() passed after 0.010 seconds.
+􁁛  Test revision_changesOnResourceProfileSecurityChange() passed after 0.011 seconds.
+􁁛  Test revision_changesOnSecurityRelevantChange() passed after 0.011 seconds.
+􁁛  Test run with 24 tests in 0 suites passed after 0.012 seconds.
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite LocalControlBoundaryTests started.
+􀟈  Test ttyCannotAuthorizeDirectGrantWrites() started.
+􀟈  Test missingServiceDeniesEveryHostWithoutEvaluatingInput() started.
+􀟈  Test diagnosticFallbackCannotHonorOrConsumeExistingGrant() started.
+􀟈  Test safetyMutationRequiresOwnerAuthorization() started.
+􀟈  Test permanentAllowlistMutationsRequireOwnerAuthorization() started.
+􀟈  Test setupAndUninstallRequireOwnerBeforeMutation() started.
+􀟈  Test agentCannotPlantHostAskGrant() started.
+􀟈  Test protocolFailureDeniesWithoutLocalHookAuthority() started.
+􁁛  Test safetyMutationRequiresOwnerAuthorization() passed after 0.003 seconds.
+􁁛  Test ttyCannotAuthorizeDirectGrantWrites() passed after 0.003 seconds.
+􁁛  Test agentCannotPlantHostAskGrant() passed after 0.004 seconds.
+􁁛  Test missingServiceDeniesEveryHostWithoutEvaluatingInput() passed after 0.004 seconds.
+􁁛  Test protocolFailureDeniesWithoutLocalHookAuthority() passed after 0.005 seconds.
+􁁛  Test setupAndUninstallRequireOwnerBeforeMutation() passed after 0.007 seconds.
+􁁛  Test permanentAllowlistMutationsRequireOwnerAuthorization() passed after 0.012 seconds.
+􁁛  Test diagnosticFallbackCannotHonorOrConsumeExistingGrant() passed after 0.037 seconds.
+􁁛  Suite LocalControlBoundaryTests passed after 0.038 seconds.
+􁁛  Test run with 8 tests in 1 suite passed after 0.038 seconds.

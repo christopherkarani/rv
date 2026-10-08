@@ -92,10 +92,15 @@ enum SeatbeltMachPolicy {
 public struct SeatbeltProfile: Sendable, Equatable {
     public let source: String
     public let workspacePath: String
+    /// True only for profiles assembled by `compileFirstSliceProfile` (and
+    /// its `allowing*` refinements). Hand-built profiles stay false, so the
+    /// supervise gate refuses them without sniffing profile text.
+    public let isContainedCompilerOutput: Bool
 
-    init(source: String, workspacePath: String) {
+    init(source: String, workspacePath: String, isContainedCompilerOutput: Bool = false) {
         self.source = source
         self.workspacePath = workspacePath
+        self.isContainedCompilerOutput = isContainedCompilerOutput
     }
 
     /// Loopback TCP connect. The cage reaches the host-side egress proxy
@@ -115,48 +120,54 @@ public struct SeatbeltProfile: Sendable, Equatable {
         (allow network-outbound
             (remote tcp "localhost:*"))
         """
-        return SeatbeltProfile(source: source + addition, workspacePath: workspacePath)
+        return SeatbeltProfile(source: source + addition, workspacePath: workspacePath, isContainedCompilerOutput: isContainedCompilerOutput)
     }
 
     /// Explicit, project-scoped resources selected by profile ID. The
     /// credential originals are deliberately absent: only private copies in
-    /// `privateHome` can be seen by the contained process.
-    func allowingResources(_ resources: RuntimeResourceManifest) -> SeatbeltProfile {
+    /// `privateHome` can be seen by the contained process. Pure over
+    /// pre-canonicalized paths: the resolve stage canonicalizes. No syscalls.
+    func allowingCanonicalResources(
+        privateHome: String,
+        executableTargets: [String],
+        readFiles: [String],
+        readTrees: [String],
+        writeTrees: [String]
+    ) -> SeatbeltProfile {
         var additions = """
 
         (allow file-read* file-write*
-            (subpath "\(escapeSeatbeltSubpath(resources.privateHome))"))
+            (subpath "\(escapeSeatbeltSubpath(privateHome))"))
         """
-        for link in resources.profile.executableLinks {
-            let target = canonicalResourcePath(link.target)
+        for target in executableTargets {
             additions += """
 
             (allow file-read* file-map-executable
                 (literal "\(escapeSeatbeltSubpath(target))"))
             """
         }
-        for path in resources.profile.readFiles {
+        for path in readFiles {
             additions += """
 
             (allow file-read* file-map-executable
-                (literal "\(escapeSeatbeltSubpath(canonicalResourcePath(path)))"))
+                (literal "\(escapeSeatbeltSubpath(path))"))
             """
         }
-        for path in resources.profile.readTrees {
+        for path in readTrees {
             additions += """
 
             (allow file-read* file-map-executable
-                (subpath "\(escapeSeatbeltSubpath(canonicalResourcePath(path)))"))
+                (subpath "\(escapeSeatbeltSubpath(path))"))
             """
         }
-        for path in resources.profile.writeTrees {
+        for path in writeTrees {
             additions += """
 
             (allow file-read* file-write*
-                (subpath "\(escapeSeatbeltSubpath(canonicalResourcePath(path)))"))
+                (subpath "\(escapeSeatbeltSubpath(path))"))
             """
         }
-        return SeatbeltProfile(source: source + additions, workspacePath: workspacePath)
+        return SeatbeltProfile(source: source + additions, workspacePath: workspacePath, isContainedCompilerOutput: isContainedCompilerOutput)
     }
 
     /// Loopback servers. The cage may bind, listen, and accept for local
@@ -192,7 +203,7 @@ public struct SeatbeltProfile: Sendable, Equatable {
         (allow network-inbound
             (local tcp "localhost:*"))
         """
-        return SeatbeltProfile(source: source + addition, workspacePath: workspacePath)
+        return SeatbeltProfile(source: source + addition, workspacePath: workspacePath, isContainedCompilerOutput: isContainedCompilerOutput)
     }
 
     /// Productive workspace grants: the RV-managed home/cache/tmp roots
@@ -301,7 +312,7 @@ public struct SeatbeltProfile: Sendable, Equatable {
                 (subpath "\(escapeSeatbeltSubpath(systemTmp))"))
             """
         }
-        return SeatbeltProfile(source: source + additions, workspacePath: workspacePath)
+        return SeatbeltProfile(source: source + additions, workspacePath: workspacePath, isContainedCompilerOutput: isContainedCompilerOutput)
     }
 
     /// Real agent CLIs for a contained shell.
@@ -348,17 +359,18 @@ public struct SeatbeltProfile: Sendable, Equatable {
                 (subpath "\(escapeSeatbeltSubpath(tree))"))
             """
         }
-        return SeatbeltProfile(source: source + additions, workspacePath: workspacePath)
+        return SeatbeltProfile(source: source + additions, workspacePath: workspacePath, isContainedCompilerOutput: isContainedCompilerOutput)
     }
 
     /// The granted executable may live outside the workspace. Allow reading
     /// and mapping that one file, including its realpath when the caller path
     /// and the kernel path differ (`/var` versus `/private/var`). This does
-    /// not allow neighboring files.
-    func allowingExecutable(_ executable: String) -> SeatbeltProfile {
-        var paths = [executable]
-        if let resolved = posixRealpath(executable), resolved != executable {
-            paths.append(resolved)
+    /// not allow neighboring files. Pure over a pre-resolved realpath: the
+    /// resolve stage supplies `realPath`. No syscalls.
+    func allowingExecutable(callerPath: String, realPath: String?) -> SeatbeltProfile {
+        var paths = [callerPath]
+        if let realPath, realPath != callerPath {
+            paths.append(realPath)
         }
         let literals = paths.map { "(literal \"\(escapeSeatbeltSubpath($0))\")" }
             .joined(separator: "\n        ")
@@ -367,7 +379,7 @@ public struct SeatbeltProfile: Sendable, Equatable {
         (allow file-read* file-map-executable
             \(literals))
         """
-        return SeatbeltProfile(source: source + addition, workspacePath: workspacePath)
+        return SeatbeltProfile(source: source + addition, workspacePath: workspacePath, isContainedCompilerOutput: isContainedCompilerOutput)
     }
 }
 
@@ -493,7 +505,8 @@ public func resolveProductiveWorkspace(
     workspacePath: String,
     hostEnvironment: [String: String]? = nil,
     agentBin: String? = nil,
-    probe: ContainedPATHProbe = .live
+    probe: ContainedPATHProbe = .live,
+    gitIdentity: (@Sendable (String) -> (name: String?, email: String?))? = nil
 ) -> ProductiveWorkspaceResolution {
     let host = hostEnvironment ?? ProcessInfo.processInfo.environment
     guard let hostHome = host["HOME"], isUsableAbsolutePath(hostHome) else {
@@ -502,7 +515,10 @@ public func resolveProductiveWorkspace(
     var developerHome: WorkspaceDeveloperHome?
     if isUsableAbsolutePath(workspacePath),
         let resolved = WorkspaceDeveloperHome.resolve(workspacePath: workspacePath, hostHome: hostHome),
-        resolved.ensure(hostHome: hostHome)
+        resolved.ensure(
+            hostHome: hostHome,
+            gitIdentity: gitIdentity ?? { WorkspaceDeveloperHome.hostGitIdentity(hostHome: $0) }
+        )
     {
         developerHome = resolved
     }
@@ -708,13 +724,18 @@ public enum AgentBin {
     }
 
     /// Per-spawn grants. `home` is the host user's home, owner of the
-    /// credential files the cage reads (never writes).
-    public static func resolve(binDirectory: String, home: String) -> AgentBinResolution {
+    /// credential files the cage reads (never writes). Filesystem access
+    /// goes through `probe` so tests run hermetic; production passes live.
+    public static func resolve(
+        binDirectory: String,
+        home: String,
+        probe: ContainedPATHProbe = .live
+    ) -> AgentBinResolution {
         var resolution = AgentBinResolution(directory: binDirectory)
         for name in names {
             let link = "\(binDirectory)/\(name)"
-            guard FileManager.default.isExecutableFile(atPath: link),
-                let target = posixRealpath(link)
+            guard probe.isExecutable(link),
+                let target = probe.realpath(link)
             else {
                 continue
             }
@@ -725,14 +746,14 @@ public enum AgentBin {
             switch name {
             case "claude":
                 let auth = "\(home)/.claude/.credentials.json"
-                if FileManager.default.isReadableFile(atPath: auth) {
+                if probe.isReadable(auth) {
                     resolution.credentials.append(auth)
                 }
                 // Model, gateway routing, and hooks live in settings; without
                 // them the CLI falls back to defaults the gateway rejects.
                 for settings in ["settings.json", "settings.local.json"] {
                     let config = "\(home)/.claude/\(settings)"
-                    if FileManager.default.isReadableFile(atPath: config) {
+                    if probe.isReadable(config) {
                         resolution.credentials.append(config)
                     }
                 }
@@ -745,11 +766,11 @@ public enum AgentBin {
                     .deletingLastPathComponent
                 resolution.trees.append(package)
                 let auth = "\(home)/.codex/auth.json"
-                if FileManager.default.isReadableFile(atPath: auth) {
+                if probe.isReadable(auth) {
                     resolution.credentials.append(auth)
                 }
                 let config = "\(home)/.codex/config.toml"
-                if FileManager.default.isReadableFile(atPath: config) {
+                if probe.isReadable(config) {
                     resolution.credentials.append(config)
                 }
             case "muse":
@@ -757,7 +778,7 @@ public enum AgentBin {
                 // binary next to itself. Enumerate (bounded) instead of
                 // parsing so renames stay admitted.
                 let install = (target as NSString).deletingLastPathComponent
-                let entries = (try? FileManager.default.contentsOfDirectory(atPath: install)) ?? []
+                let entries = probe.listDirectory(install) ?? []
                 for entry in entries.prefix(32) {
                     guard entry.hasPrefix("muse-bin-") || entry == ".muse-version"
                         || entry == ".muse-release-info.json"
@@ -767,12 +788,12 @@ public enum AgentBin {
                     resolution.executables.append("\(install)/\(entry)")
                 }
                 let auth = "\(home)/.config/muse/auth.json"
-                if FileManager.default.isReadableFile(atPath: auth) {
+                if probe.isReadable(auth) {
                     resolution.credentials.append(auth)
                 }
             case "opencode":
                 let auth = "\(home)/.local/share/opencode/auth.json"
-                if FileManager.default.isReadableFile(atPath: auth) {
+                if probe.isReadable(auth) {
                     resolution.credentials.append(auth)
                 }
             default:
@@ -790,6 +811,13 @@ public enum AgentBin {
 public func compileSeatbeltProfile(
     _ plan: IsolationPlan
 ) -> Result<SeatbeltProfile, IsolationApplyError> {
+    verifySeatbeltPlan(plan).flatMap { compileFirstSliceProfile(workspace: $0) }
+}
+
+/// Pure half of `compileSeatbeltProfile`: mode plus guarantee checks with
+/// no filesystem access. Returns the contained workspace when this plan is
+/// seatbelt-shaped.
+func verifySeatbeltPlan(_ plan: IsolationPlan) -> Result<WorkingDirectory, IsolationApplyError> {
     switch plan.mode {
     case .observed, .mediated:
         return .failure(.profileNotApplicable)
@@ -823,7 +851,7 @@ public func compileSeatbeltProfile(
         case .notInherited:
             return .failure(.containedGuaranteesUnsupported)
         }
-        return compileFirstSliceProfile(workspace: workspace)
+        return .success(workspace)
     }
 }
 
@@ -873,7 +901,10 @@ func posixRealpath(_ path: String) -> String? {
     }
 }
 
-private func canonicalResourcePath(_ path: String) -> String {
+/// Canonicalize one resource path for profile grants. The prepare
+/// `resolve` stage canonicalizes through this so facts and grants spell
+/// the same path.
+func canonicalResourcePath(_ path: String) -> String {
     if let resolved = posixRealpath(path) { return resolved }
     let parent = (path as NSString).deletingLastPathComponent
     let name = (path as NSString).lastPathComponent
@@ -886,6 +917,16 @@ private func canonicalResourcePath(_ path: String) -> String {
 func compileFirstSliceProfile(
     workspace: WorkingDirectory
 ) -> Result<SeatbeltProfile, IsolationApplyError> {
+    compileFirstSliceProfile(workspace: workspace, resolvedWorkspace: resolvedWorkspacePath(workspace))
+}
+
+/// Pure first-slice assembly over a pre-resolved workspace path. The
+/// resolving wrapper above supplies `resolvedWorkspace`; `compile` stages
+/// pass facts. No syscalls.
+func compileFirstSliceProfile(
+    workspace: WorkingDirectory,
+    resolvedWorkspace: String
+) -> Result<SeatbeltProfile, IsolationApplyError> {
     let raw = workspace.rawValue
     guard raw.hasPrefix("/") else {
         return .failure(.workspaceMustBeAbsolute)
@@ -893,7 +934,7 @@ func compileFirstSliceProfile(
     if raw.contains("\n") || raw.contains("\0") {
         return .failure(.workspacePathUnsafe)
     }
-    let resolved = resolvedWorkspacePath(workspace)
+    let resolved = resolvedWorkspace
     if resolved.isEmpty {
         return .failure(.workspacePathUnresolvable)
     }
@@ -978,7 +1019,9 @@ func compileFirstSliceProfile(
     (allow file-write-data
         (literal "/dev/null"))
     """
-    return .success(SeatbeltProfile(source: source, workspacePath: resolved))
+    return .success(
+        SeatbeltProfile(source: source, workspacePath: resolved, isContainedCompilerOutput: true)
+    )
 }
 
 /// POSIX `/` as the write root applies the first-slice limit to the entire

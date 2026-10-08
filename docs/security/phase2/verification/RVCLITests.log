@@ -1,0 +1,1370 @@
+Building for debugging...
+[Computing dependencies]
+[Provisioning 2 / 96]
+[Using on-disk description]
+[1 / 2] SwiftTerm
+warning: missing creator for mutated node: ('/Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/SwiftTerm_SwiftTerm.bundle/Contents/MacOS')
+Build complete! (1.69 sec)
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite HomeSeamTests started.
+􀟈  Suite AllowlistCommandRunTests started.
+􀟈  Suite CommandRunAllowlistTests started.
+􀟈  Suite OneShotEvaluateClientTests started.
+􀟈  Suite OperatorHomeStoreTests started.
+􀟈  Suite PolicyDraftCommandTests started.
+􀟈  Suite WorkspaceOwnershipTests started.
+􀟈  Test installSh_refusesOlderMacOS(_:) started.
+􀟈  Suite CeremonyCLITests started.
+􀟈  Test installSh_downloadsReleaseTrioWhenInstallBinUnset() started.
+􀟈  Suite "Explain wrapper semantics" started.
+􀟈  Test helpText_root_includesGroupsAndNext() started.
+􀟈  Test helpText_leafPagesOmitTitleAndNext() started.
+􀟈  Test installSh_failsWhenRvCliIsMissing() started.
+􀟈  Test hookBypassPermissionMode_stillEvaluates() started.
+􀟈  Test installScriptRequiresMacOS15() started.
+􀟈  Test scanRobot_showCommand_includesFullMatchingView() started.
+􀟈  Test hookUnknownHost_isArgumentParserUsageError() started.
+􀟈  Test launchAgentTemplate_keepAliveFalse_parsesFalseAndLeavesRunAtLoadFalse() started.
+􀟈  Test hookDenyResetHard_reasonEqualsHostDenyText() started.
+􀟈  Test completions_listEveryParserCommand() started.
+􀟈  Test helpTopic_workspaceAndOpenCodePaths() started.
+􀟈  Test doctor_reachableServiceUsesLaunchAgentProbeState() started.
+􀟈  Test cursorHooksMerge_unreadableThrows() started.
+􀟈  Test scanSetupNudge_nonExecutableRvCli_recommends() started.
+􀟈  Test hookHermesResetHard_encodesAsk() started.
+􀟈  Test hostInstallation_wiredCursorCompanionWithoutFileToolEntryIsShellOnly() started.
+􀟈  Test setup_piOnly_writesOwnedPayloadAndNoSettings() started.
+􀟈  Test skillTableDenies_shareDenyRendererContract() started.
+􀟈  Test hostInstallation_wiredAntigravityMergeIsFileToolWired() started.
+􀟈  Test restoreKeepAliveAfterCompanionUninstall_setsFalseAndLeavesCLI() started.
+􀟈  Test setup_guiBootstrapMiss_fallsBackToUserDomain() started.
+􀟈  Test clangDeploymentTargetIsMacOS15() started.
+􀟈  Suite AllowlistCommandTests started.
+􀟈  Test launcherProfilesLoadDefaultFromOperatorHome() started.
+􀟈  Test uninstall_launchctlBootoutFails_mapsToUnavailableExitAndKindLine() started.
+􀟈  Test hookDispatch_matchesHookButNotHelpOrOtherCommands() started.
+􀟈  Test setup_occupiedNonUTF8GrokHook_leavesBytesUnchanged() started.
+􀟈  Test doctor_cursorShellOnlyWhenPreToolUseMissing() started.
+􀟈  Test hookDispatch_equalsHostForm_allowsStashDrop() started.
+􀟈  Test doctor_robotIsOneJSONObjectWithoutCommandOrTerminalChrome() started.
+􀟈  Test setup_occupiedOwnedName_skipsAndLeavesBytes() started.
+􀟈  Test hostInstallation_currentResourceWithMissingRvCliIsBrokenNotWired(_:) started.
+􀟈  Test scanRun_autoMode_findsClaudeDenyInTempHome() started.
+􀟈  Test setupFlow_missingHOME_failsOnceThroughInjectedFactory_withoutFilesystemAccess() started.
+􀟈  Test scanSetupNudge_unwiredHostThatProducedEvents_emitsOnePrettyLine() started.
+􀟈  Test setup_alreadyRegisteredLaunchAgent_isIdempotentSuccess() started.
+􀟈  Test installSh_copyFailureLeavesPreviousInstallIntact() started.
+􀟈  Test hookOpenClawMalformed_deniesWithoutEvaluating() started.
+􀟈  Test hostInstallation_currentResourceWithNonExecutableRvCliIsBrokenNotWired(_:) started.
+􀟈  Suite ServiceHealthTests started.
+􀟈  Test setupPlan_missingAndOccupiedAndWrite() started.
+􀟈  Test setup_robot_wiredWithSkips_isStillOneLine() started.
+􀟈  Test hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_:) started.
+􀟈  Test scanRun_listingFailure_mapsListingFailed() started.
+􀟈  Test doctor_wiredClaudeReportsWired() started.
+􀟈  Test launcherChoicesNeverDeriveHooksFromExecutables() started.
+􀟈  Suite AllowOnceTTYTests started.
+􀟈  Test setup_robot_twoOccupied_isExactlyOneLine_andHelpAgrees() started.
+􀟈  Test setupFlow_injectedUID_bakesGuiDomainForBootstrapAndBootout() started.
+􀟈  Test companionPresence_defaultSearchRoots_areSystemAndHomeApplications() started.
+􀟈  Suite RVVersionTests started.
+􀟈  Test cursorHooksMerge_uninstallEmptyReturnsNil() started.
+􀟈  Test hostArtifacts_attach_definedForEveryHost() started.
+􀟈  Test hookCodexNonShellRead_doesNotEvaluate() started.
+􀟈  Test doctor_skewFormatsTheSharedWarning() started.
+􀟈  Test mergeEngine_cursorFreshMergeIsByteExact() started.
+􀟈  Test robotDocument_allowOnceList_matchesPreMigrationGolden() started.
+􀟈  Test hookGrokFileEnv_deniesCoreSecretsWithoutPackEvaluate() started.
+􀟈  Test doctor_claudeStaleLegacyFingerprint_reportsBrokenNotOccupied() started.
+􀟈  Test setup_pretty_install_wired_explainCloser() started.
+􀟈  Suite AllowOnceCommandRunTests started.
+􀟈  Suite "OpenCode command" started.
+􀟈  Suite FallbackSkewTests started.
+􀟈  Test setupFailureOutput_mapsEveryCaseToStderrLineAndExitCode() started.
+􀟈  Test helpText_setup_keepsOneLineCopy() started.
+􀟈  Test render_encodesDoctorAndPacksFieldSets() started.
+􀟈  Test robotDocument_testDeny_matchesPreMigrationGolden() started.
+􀟈  Test installSh_linuxStagesRequiredIsolationHelper() started.
+􀟈  Test hookClaudeFileEnv_deniesPermissionDecision() started.
+􀟈  Test helpText_service_defersFlagsToStatus() started.
+􀟈  Test packListFilterKeepsCatalogCountsForFilteredRobotOutput() started.
+􀟈  Test antigravityMerge_inspectionStates() started.
+􀟈  Test hostWiring_applyClaudeCurrentMatchers_fileToolsOnReturnedDataEqualsApplyAndIsWired() started.
+􀟈  Test setup_pretty_occupiedGrok_hollowSkipClause() started.
+􀟈  Suite OperatorSnapshotTests started.
+􀟈  Test hookPiXPCDown_stillDeniesResetHard() started.
+􀟈  Test hookOpenClawNonShellRead_doesNotEvaluate() started.
+􀟈  Suite FallbackDownTests started.
+􀟈  Test hookNonShellRead_allowsOrdinaryFileWithoutPackEvaluate() started.
+􀟈  Test helpTopic_doesNotStealCommandArgs() started.
+􀟈  Test mergeEngine_claudeOccupiedWithoutForceThrows() started.
+􀟈  Test uninstall_claudeOccupiedSymlink_doesNotFollowOrReplace() started.
+􀟈  Test codexHooksMerge_uninstallStripsFingerprintAndKeepsForeign() started.
+􀟈  Test hostInstallation_wiredCursorCompanionWithFileToolEntryIsWired() started.
+􀟈  Test hookHermesNonShellRead_doesNotEvaluate() started.
+􀟈  Test testExplain_sameExitAsTest() started.
+􀟈  Test workspaceRunOtherFailuresIgnoreProfileID() started.
+􀟈  Test test_plainAndNoColor_haveNoEscape() started.
+􀟈  Test workPlan_claudeForceOccupied_carriesSettingsMergeAndSymlinkPrelude() started.
+􀟈  Test setup_claudeSettingsRewrite_preservesRestrictedPermissions() started.
+􀟈  Test doctor_foreignGrokOwnedFileIsOccupiedAndPreserved() started.
+􀟈  Test scanRun_unknownPacks_mapsPacksUnavailable() started.
+􀟈  Suite ResidualLinuxCoverageTests started.
+􀟈  Test installSh_copiesTrioAndPackBundlesThenExecsRvSetup() started.
+􀟈  Test launcherShellVariantsSortByIDWithDefaultFirst() started.
+􀟈  Test mergeEngine_willMergeSeesPreStripRoot() started.
+􀟈  Test launcherUnknownDefaultIsIgnoredSilently() started.
+􀟈  Test hookOpenCodeNonShellRead_doesNotEvaluate() started.
+􀟈  Test setup_live_emptyHOME_isNil() started.
+􀟈  Test case passing 1 argument productVersion → "14.6" to installSh_refusesOlderMacOS(_:) started.
+􀟈  Test mergeEngine_codexFreshMergeIsByteExact() started.
+􀟈  Suite CHookPipeTests started.
+􀟈  Test scanFailOnFindings_withoutFlag_exitsZeroWithFindings() started.
+􀟈  Test setup_openCodeOnly_writesOwnedPayloadWithBakedPath() started.
+􀟈  Test setup_idempotent_secondRunIsQuietAndDoesNotDuplicate() started.
+􀟈  Test hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_:) started.
+􀟈  Test explainRobot_stdoutSchemaIsNotTestSchema() started.
+􀟈  Test hookOpenClawResetHard_encodesAsk() started.
+􀟈  Suite ServiceDiagnosticRoutingTests started.
+􀟈  Test serviceStatus_textFollowsAppearance() started.
+􀟈  Test case passing 1 argument productVersion → "14.0" to installSh_refusesOlderMacOS(_:) started.
+􀟈  Test setup_force_replacesOccupiedOwnedNameAndKeepsBackup() started.
+􀟈  Test case passing 1 argument productVersion → "" to installSh_refusesOlderMacOS(_:) started.
+􀟈  Test hostWiring_cursorCompanionWithoutFileToolEntryIsShellOnly() started.
+􀟈  Test hookDenyReasonIsOneLine_noBannerOrCSI() started.
+􀟈  Test launcherProfilesDeriveMarkedAgentsWithoutBaseEntries() started.
+􀟈  Test mergeEngine_freshUninstallRemovesFile() started.
+􀟈  Suite "Explain Git semantics" started.
+􀟈  Test uninstall_robot_alreadyCleanIsOneLine() started.
+􀟈  Test hookAllowLegacyRunTerminalCmd_emptyStdoutExitZero() started.
+􀟈  Test cliAppearance_ttyAutomaticWithoutCIIsPretty() started.
+􀟈  Test restoreKeepAliveAfterCompanionUninstall_missingPlist_isNoOp() started.
+􀟈  Test hostInstallation_claudeForeignGuardIsOccupied() started.
+􀟈  Test antigravityMerge_uninstallEmptyReturnsNil() started.
+􀟈  Test setup_resolveRv_ignoresPATH_bakesHomeLocalBin() started.
+􀟈  Test hookRun_piAndOpenCodeDenyWithTempHome() started.
+􀟈  Test setup_detectsGrokOnPathWithoutPrecreatedTree() started.
+􀟈  Test doctor_wiredCursorReportsFileTool() started.
+􀟈  Test hookOversize_isIndeterminateDenyJSON() started.
+􀟈  Test launcherProfilesIgnoreOtherProjects() started.
+􀟈  Test hostInstallation_wiredGrokTemplateIsFileToolWired() started.
+􀟈  Test workPlan_forceOccupied_isForceClearThenWrite() started.
+􀟈  Test doctor_xpcSkewSnapshotFormatsAsSkew() started.
+􀟈  Test setup_cursorOnly_writesAdapterAndMergesHooksJSON() started.
+􀟈  Test setup_claudeOccupiedForeignGuard_skipsWithoutForce() started.
+􀟈  Test hostInstallation_antigravityShellOnlyIsBrokenNotOccupied() started.
+􀟈  Suite LocalControlBoundaryTests started.
+􀟈  Test doctor_runningServiceWithUnavailableLocalFallbackExitsOne() started.
+􀟈  Test setupCeremonyPlayer_animate_clearsStaleLinesWhenFrameShrinks() started.
+􀟈  Suite ThemeProbeFactoryTests started.
+􀟈  Suite SafetyCommandTests started.
+􀟈  Suite LazyFallbackTests started.
+􀟈  Suite HostAskSpendTests started.
+􀟈  Suite "Explain filesystem semantics" started.
+􀟈  Suite HostAttachProofTests started.
+􀟈  Test scanSessionsFlags_exposesFailOnFindings() started.
+􀟈  Test mergeEngine_unreadableIsFailClosed() started.
+􀟈  Test groupedPacksSortsRowsAndRendersVerboseDetails() started.
+􀟈  Suite ResidualLinuxEdgesTests started.
+􀢄  Test setup_piOnly_writesOwnedPayloadAndNoSettings() recorded an issue at SetupTests.swift:140:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test restoreKeepAliveAfterCompanionUninstall_setsFalseAndLeavesCLI() recorded an issue at CompanionKeepAliveTests.swift:131:9: Expectation failed: SetupRun.setup(installed).exitCode == 0
+􀄵  SetupRun.setup(installed).exitCode == 0 → false
+􀄵    SetupRun.setup(installed).exitCode → 69
+􀟈  Test companionPresence_machServiceBundleId_isAbsent() started.
+􀟈  Suite OperatorCommandRunTests started.
+􀟈  Test hostInstallation_claudeForeignJSONWithoutFingerprintIsAbsentFile() started.
+􀟈  Suite PolicyDocumentCommandTests started.
+􀢄  Test setup_piOnly_writesOwnedPayloadAndNoSettings() recorded an issue at SetupTests.swift:136:2: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “rv-guard.ts” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-3E00FF0C-A085-4C6F-BDA6-A546A7517AF0/.pi/agent/extensions/rv-guard.ts, NSURL=file:///var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-3E00FF0C-A085-4C6F-BDA6-A546A7517AF0/.pi/agent/extensions/rv-guard.ts, NSUnderlyingError=0x77da710240 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀟈  Test setup_configDirectoryBlockedByFile_mapsToCannotCreateExit() started.
+􀢄  Test restoreKeepAliveAfterCompanionUninstall_setsFalseAndLeavesCLI() recorded an issue at CompanionKeepAliveTests.swift:121:2: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “dev.rv.evaluate.plist” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-D4843D3C-9B3A-4A12-ADAE-B02D59E469AC/Library/LaunchAgents/dev.rv.evaluate.plist, NSURL=file:///var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-D4843D3C-9B3A-4A12-ADAE-B02D59E469AC/Library/LaunchAgents/dev.rv.evaluate.plist, NSUnderlyingError=0x77da710ae0 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀟈  Test scanRun_executeDoesNotContainPipelineLoops() started.
+􀟈  Test setup_bakesCHookPathNotRvCli() started.
+􀟈  Suite EvaluateDoorTests started.
+􀢄  Test uninstall_launchctlBootoutFails_mapsToUnavailableExitAndKindLine() recorded an issue at SetupTests.swift:1033:9: Expectation failed: outcome.stderr == "rv uninstall failed: unable to unload LaunchAgent\n"
+􀄵  outcome.stderr == "rv uninstall failed: unable to unload LaunchAgent\n" → false
+􀄵    outcome.stderr → "rv uninstall failed: Authenticated RV service and operation-bound owner authorization required.
+     "
+􀄵    "rv uninstall failed: unable to unload LaunchAgent\n" → "rv uninstall failed: unable to unload LaunchAgent
+     "
+􀢄  Test setup_guiBootstrapMiss_fallsBackToUserDomain() recorded an issue at SetupTests.swift:1153:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_guiBootstrapMiss_fallsBackToUserDomain() recorded an issue at SetupTests.swift:1154:9: Expectation failed: launchctl.bootstrapDomains == ["gui/4242", "user/4242"]
+􀄵  launchctl.bootstrapDomains == ["gui/4242", "user/4242"] → false
+􀄵    launchctl.bootstrapDomains → []
+􀟈  Suite PacksCommandRunTests started.
+􀟈  Test hookPiNonShellRead_doesNotEvaluate() started.
+􀢄  Test setup_guiBootstrapMiss_fallsBackToUserDomain() recorded an issue at SetupTests.swift:1155:9: Expectation failed: FileManager.default.fileExists(atPath: layout.launchAgent)
+􀄵  FileManager.default.fileExists(atPath: layout.launchAgent) → false
+􀄵    FileManager.default → <NSFileManager: 0x1051e4ff0>
+􀄵    layout.launchAgent → "/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-3A6F3D38-5181-4A11-9CF3-D9BB66637177/Library/LaunchAgents/dev.rv.evaluate.plist"
+􀢄  Test setup_occupiedNonUTF8GrokHook_leavesBytesUnchanged() recorded an issue at SetupTests.swift:861:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_occupiedNonUTF8GrokHook_leavesBytesUnchanged() recorded an issue at SetupTests.swift:862:9: Expectation failed: outcome.stdout.contains("Skipped occupied grok hook.")
+􀄵  outcome.stdout.contains("Skipped occupied grok hook.") → false
+􀄵    outcome.stdout → ""
+􀟈  Test codexHooksMerge_unreadableThrows() started.
+􀟈  Test workPlan_occupiedGrokAndAbsentPi_skipsGrokWritesPiWithoutFilesystem() started.
+􀟈  Test hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_:) started.
+􀟈  Test setup_doesNotTouchLaunchdWhenHomeIsNotLogin() started.
+􀢄  Test setup_occupiedOwnedName_skipsAndLeavesBytes() recorded an issue at SetupTests.swift:451:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_occupiedOwnedName_skipsAndLeavesBytes() recorded an issue at SetupTests.swift:452:9: Expectation failed: outcome.stdout.contains("Skipped occupied grok hook.")
+􀄵  outcome.stdout.contains("Skipped occupied grok hook.") → false
+􀄵    outcome.stdout → ""
+􀟈  Suite "PolicyCommand" started.
+􀟈  Test case passing 1 argument host → .grok to hostInstallation_currentResourceWithMissingRvCliIsBrokenNotWired(_:) started.
+􀟈  Test doctor_wiredGrokReportsWired() started.
+􀟈  Test antigravityMerge_wiredReportsBakedPath() started.
+􀟈  Test case passing 1 argument host → .pi to hostInstallation_currentResourceWithMissingRvCliIsBrokenNotWired(_:) started.
+􀟈  Test setup_live_usesHOME() started.
+􀢄  Test setup_alreadyRegisteredLaunchAgent_isIdempotentSuccess() recorded an issue at SetupTests.swift:1140:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_alreadyRegisteredLaunchAgent_isIdempotentSuccess() recorded an issue at SetupTests.swift:1141:9: Expectation failed: outcome.stderr.isEmpty
+􀄵  outcome.stderr.isEmpty → false
+􀄵    outcome.stderr → "rv setup failed: Authenticated RV service and operation-bound owner authorization required.
+     "
+􀄵    isEmpty → false
+􀢄  Test setup_alreadyRegisteredLaunchAgent_isIdempotentSuccess() recorded an issue at SetupTests.swift:1142:9: Expectation failed: FileManager.default.fileExists(atPath: layout.grokHook)
+􀄵  FileManager.default.fileExists(atPath: layout.grokHook) → false
+􀄵    FileManager.default → <NSFileManager: 0x1051e4ff0>
+􀄵    layout.grokHook → "/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-CC1A3477-7781-4985-A86F-CF84BF06B012/.grok/hooks/rv.json"
+􀢄  Test setup_alreadyRegisteredLaunchAgent_isIdempotentSuccess() recorded an issue at SetupTests.swift:1143:9: Expectation failed: FileManager.default.fileExists(atPath: layout.launchAgent)
+􀄵  FileManager.default.fileExists(atPath: layout.launchAgent) → false
+􀄵    FileManager.default → <NSFileManager: 0x1051e4ff0>
+􀄵    layout.launchAgent → "/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-CC1A3477-7781-4985-A86F-CF84BF06B012/Library/LaunchAgents/dev.rv.evaluate.plist"
+􀟈  Test uninstall_preservesForeignContentInPreexistingConfigDirectory() started.
+􀟈  Test launchAgentTemplate_keepAliveTrue_parsesTrueAndLeavesRunAtLoadFalse() started.
+􀟈  Test case passing 1 argument host → .opencode to hostInstallation_currentResourceWithMissingRvCliIsBrokenNotWired(_:) started.
+􀟈  Suite ServiceClientIPCCallTests started.
+􀟈  Test case passing 1 argument host → .claude to hostInstallation_currentResourceWithMissingRvCliIsBrokenNotWired(_:) started.
+􀟈  Test case passing 1 argument host → .openclaw to hostInstallation_currentResourceWithMissingRvCliIsBrokenNotWired(_:) started.
+􀟈  Test case passing 1 argument host → .grok to hostInstallation_currentResourceWithNonExecutableRvCliIsBrokenNotWired(_:) started.
+􀟈  Suite SystemctlApplyingTests started.
+􀟈  Test case passing 1 argument host → .hermes to hostInstallation_currentResourceWithMissingRvCliIsBrokenNotWired(_:) started.
+􀟈  Test hostInstallation_claudeStaleLegacyCommandIsBrokenNotOccupied() started.
+􀟈  Test serviceClient_flowsInjectedHomeIntoPackSelection() started.
+􀟈  Test evaluateCommand_flowsInjectedHomeIntoPackSelection() started.
+􀟈  Test uninstall_pretty_occupiedLeftAlone() started.
+􀟈  Test case passing 1 argument host → .codex to hostInstallation_currentResourceWithMissingRvCliIsBrokenNotWired(_:) started.
+􀟈  Test case passing 1 argument host → .pi to hostInstallation_currentResourceWithNonExecutableRvCliIsBrokenNotWired(_:) started.
+􀢄  Test setup_robot_wiredWithSkips_isStillOneLine() recorded an issue at SetupShowTests.swift:185:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_robot_wiredWithSkips_isStillOneLine() recorded an issue at SetupShowTests.swift:186:9: Expectation failed: outcome.stdout.split(separator: "\n").count == 1
+􀄵  outcome.stdout.split(separator: "\n").count == 1 → false
+􀄵    outcome.stdout.split(separator: "\n").count → 0
+􀢄  Test setup_robot_wiredWithSkips_isStillOneLine() recorded an issue at SetupShowTests.swift:187:9: Expectation failed: outcome.stdout == setupRobotCompleteLine + ", Skipped occupied grok hook.\n"
+􀄵  outcome.stdout == setupRobotCompleteLine + ", Skipped occupied grok hook.\n" → false
+􀄵    outcome.stdout → ""
+􀄵    setupRobotCompleteLine + ", Skipped occupied grok hook.\n" → "Setup complete. Next  rv test 'git reset --hard'., Skipped occupied grok hook.
+     "
+􀟈  Test hostInstallation_antigravityForeignGuardIsOccupied() started.
+􀟈  Suite BlocksCommandTests started.
+􀟈  Test case passing 1 argument host → .grok to hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_:) started.
+􀟈  Test inProcessServiceClientHonorsAllowlistFromStoreDirectory() started.
+􀟈  Test case passing 1 argument host → .cursor to hostInstallation_currentResourceWithMissingRvCliIsBrokenNotWired(_:) started.
+􀟈  Test case passing 1 argument host → .opencode to hostInstallation_currentResourceWithNonExecutableRvCliIsBrokenNotWired(_:) started.
+􀟈  Test add_slashRuleSucceedsOnTTY() started.
+􀟈  Test case passing 1 argument host → .pi to hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_:) started.
+􀟈  Test evaluateCommandHonorsAllowlistFromStoreDirectory() started.
+􀟈  Test case passing 1 argument host → .antigravity to hostInstallation_currentResourceWithMissingRvCliIsBrokenNotWired(_:) started.
+􀟈  Test case passing 1 argument host → .claude to hostInstallation_currentResourceWithNonExecutableRvCliIsBrokenNotWired(_:) started.
+􀟈  Test case passing 1 argument host → .opencode to hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_:) started.
+􀟈  Test case passing 1 argument host → .openclaw to hostInstallation_currentResourceWithNonExecutableRvCliIsBrokenNotWired(_:) started.
+􀟈  Test remove_normalizedExactAlias() started.
+􀟈  Test case passing 1 argument host → .claude to hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_:) started.
+􀟈  Suite ServiceStatusTests started.
+􀟈  Test scanRobot_defaultRedaction_usesSchemaAndEllipsis() started.
+􀟈  Test case passing 1 argument host → .hermes to hostInstallation_currentResourceWithNonExecutableRvCliIsBrokenNotWired(_:) started.
+􀟈  Test case passing 1 argument host → .openclaw to hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_:) started.
+􀟈  Test addCommand_emptyReasonAndTTYAndSuccess() started.
+􀟈  Test case passing 1 argument host → .codex to hostInstallation_currentResourceWithNonExecutableRvCliIsBrokenNotWired(_:) started.
+􀟈  Test scanRun_includeGlobWithoutPath_failsClosedWithoutWalkingHome() started.
+􀟈  Test case passing 1 argument host → .hermes to hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_:) started.
+􀟈  Test list_invalidFile() started.
+􀟈  Test case passing 1 argument host → .codex to hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_:) started.
+􀟈  Test case passing 1 argument host → .cursor to hostInstallation_currentResourceWithNonExecutableRvCliIsBrokenNotWired(_:) started.
+􀢄  Test setupFlow_injectedUID_bakesGuiDomainForBootstrapAndBootout() recorded an issue at SetupTests.swift:1238:9: Expectation failed: installed.exitCode == 0
+􀄵  installed.exitCode == 0 → false
+􀄵    installed.exitCode → 69
+􀢄  Test setupFlow_injectedUID_bakesGuiDomainForBootstrapAndBootout() recorded an issue at SetupTests.swift:1239:9: Expectation failed: launchctl.bootstrapDomains == ["gui/4242"]
+􀄵  launchctl.bootstrapDomains == ["gui/4242"] → false
+􀄵    launchctl.bootstrapDomains → []
+􀢄  Test setupFlow_injectedUID_bakesGuiDomainForBootstrapAndBootout() recorded an issue at SetupTests.swift:1240:9: Expectation failed: FileManager.default.fileExists(atPath: layout.launchAgent)
+􀄵  FileManager.default.fileExists(atPath: layout.launchAgent) → false
+􀄵    FileManager.default → <NSFileManager: 0x1051e4ff0>
+􀄵    layout.launchAgent → "/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-7C545B8C-5434-4B57-AB47-DF26394B566E/Library/LaunchAgents/dev.rv.evaluate.plist"
+􀢄  Test setupFlow_injectedUID_bakesGuiDomainForBootstrapAndBootout() recorded an issue at SetupTests.swift:1242:9: Expectation failed: removed.exitCode == 0
+􀄵  removed.exitCode == 0 → false
+􀄵    removed.exitCode → 69
+􀢄  Test setupFlow_injectedUID_bakesGuiDomainForBootstrapAndBootout() recorded an issue at SetupTests.swift:1243:9: Expectation failed: launchctl.bootoutDomains == [
+            "user/4242", "gui/4242",
+            "user/4242", "gui/4242",
+        ]
+􀄵  launchctl.bootoutDomains == [
+               "user/4242", "gui/4242",
+               "user/4242", "gui/4242",
+           ] → false
+􀄵    launchctl.bootoutDomains → []
+􀄵    [
+                 "user/4242", "gui/4242",
+                 "user/4242", "gui/4242",
+             ] → ["user/4242", "gui/4242", "user/4242", "gui/4242"]
+􀟈  Suite AllowOnceGrantHonorTests started.
+􀟈  Test case passing 1 argument host → .cursor to hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_:) started.
+􀟈  Test downListenerFallsBackInProcessAndStillDeniesResetHard() started.
+􀟈  Test case passing 1 argument host → .antigravity to hostInstallation_currentResourceWithNonExecutableRvCliIsBrokenNotWired(_:) started.
+􀟈  Test setup_pretty_grokWired_hooksWiredCloser() started.
+􀟈  Test case passing 1 argument host → .antigravity to hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_:) started.
+􀟈  Test hookEvaluateSendFailure_resetHardDeniesAndStashDropAllows() started.
+􀟈  Test setup_ceremonyKind_fromInstallEnv() started.
+􀢄  Test setup_robot_twoOccupied_isExactlyOneLine_andHelpAgrees() recorded an issue at SetupShowTests.swift:164:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀟈  Test list_missingPrettyAndRobot() started.
+􀢄  Test setup_robot_twoOccupied_isExactlyOneLine_andHelpAgrees() recorded an issue at SetupShowTests.swift:166:9: Expectation failed: lines.count == 1
+􀄵  lines.count == 1 → false
+􀄵    lines.count → 0
+􀟈  Test grokHookInspect_matcherIsNotFileToolDoor() started.
+􀟈  Test statusAndDiagnosticsStillHelloFirst() started.
+􀟈  Test mergeEngine_claudeFreshMergeIsByteExact() started.
+􀟈  Test validate_missingOkInvalidAndSymlink() started.
+􀟈  Test setup_grokOnly_writesOwnedPayloadWithBakedPath() started.
+􀟈  Test installSh_copiesLinuxResourcesDirectory() started.
+􀟈  Test hookEvaluateUnexpectedVia_fallsBackInProcessAndDeniesResetHard() started.
+􀢄  Test setup_robot_twoOccupied_isExactlyOneLine_andHelpAgrees() recorded an issue at SetupShowTests.swift:167:9: Expectation failed: lines.first == "Skipped occupied grok hook., Skipped occupied pi hook."
+􀄵  lines.first == "Skipped occupied grok hook., Skipped occupied pi hook." → false
+􀄵    lines.first → nil
+􀄵      some → "Skipped occupied grok hook., Skipped occupied pi hook."
+􀟈  Test add_invalidRule() started.
+􀟈  Test doctor_requestFailureFormatsAsDownWithSharedWarning() started.
+􀟈  Test hookEvaluateIsOneSendWhenClientSemverIsSet_budgetIsConnect200PlusRequest500Equals700Ms() started.
+􀟈  Test list_missingHome() started.
+􀟈  Test uninstall_robot_afterSetupIsCompleteLine() started.
+􀟈  Test setup_injectedCompanionInstalled_writesKeepAliveTrue() started.
+􀟈  Suite "OpenCode frontend" started.
+􀟈  Test hookEvaluateReplyStderr_isForwardedOnWire() started.
+􀟈  Test setup_occupiedGrok_writesPi_joinsSkipOntoOneSuccessLine() started.
+􀟈  Test add_requiresTTY() started.
+􀟈  Test list_emptyOkFile() started.
+􀟈  Test companionPresence_cliPathsAreNotTheApp() started.
+􀟈  Test hookEvaluateNilTransport_codexDenyForwardsStderr() started.
+􀟈  Test remove_ttyLockParseAndSuccess() started.
+􀟈  Test productionHookRun_sendsHookEvaluateNotEvaluate() started.
+􀟈  Test hookEvaluateUnprovableSemver_fallsBackInProcessAndDeniesResetHard() started.
+􀟈  Test hookEvaluateMismatchedResponseID_fallsBackInProcessAndDeniesResetHard() started.
+􀟈  Test remove_lockAndParseErrors() started.
+􀟈  Test hookClaudeResetHard_encodesAskNotPermissionDeny() started.
+􀟈  Test add_lockFailed() started.
+􀟈  Test addCommand_andValidate_missingHome() started.
+􀟈  Test oneShotXPCStashDrop_isEmptyAllowOnHookCodec() started.
+􀟈  Test hookEvaluateEvaluateReply_isNotFirstPath_fallsBackAndDenies() started.
+􀟈  Test list_rowsPrettyRobotAndExpired() started.
+􀟈  Test hookEvaluateNilTransport_resetHardDeniesAndStashDropAllows() started.
+􀟈  Test setupFlow_oneEntry_routesIntentsToSetupAndUninstallOrchestrations() started.
+􀟈  Test mergeEngine_claudeInspectionStatesPreserved() started.
+􀟈  Test addCommand_projectRefused() started.
+􀟈  Test hookEvaluateReplyAskJSON_isForwardedNotSilentAllow() started.
+􀟈  Test add_invalidExistingTOML() started.
+􀟈  Test skewedImplicitHelloFallsBackInProcessAndStillDeniesResetHard() started.
+􀟈  Test workspaceRunRejectsMalformedHookBeforeTouchingTheHost() started.
+􀟈  Test allowOnceCLI_emptyHOME_isAbsence() started.
+􀟈  Test add_emptyReason() started.
+􀟈  Test addCommand_lockAndParseErrors() started.
+􀟈  Test hookEvaluateMismatchedResponseProtocol_fallsBackInProcessAndDeniesResetHard() started.
+􀢄  Test hookGrokFileEnv_deniesCoreSecretsWithoutPackEvaluate() recorded an issue at HookCommandTests.swift:248:5: Expectation failed: wire.stdout.contains("core.secrets")
+􀄵  wire.stdout.contains("core.secrets") → false
+􀄵    wire.stdout → "{"decision":"deny","reason":"Authenticated RV service and operation-bound owner authorization required."}
+     "
+􀟈  Test hookCursorFileSsh_deniesPermission() started.
+􀟈  Test robotDocument_doctor_keepsExactBytes() started.
+􀟈  Test allowOnceCLI_store_usesConfigDirNotSharedFallback() started.
+􀟈  Test allowlistCLI_emptyHOME_isAbsence() started.
+􀟈  Test allowlistCLI_store_usesConfigDirNotSharedFallback() started.
+􀟈  Test commandInvocation_nilHome_usesUniqueEphemeralNotSharedFallback() started.
+􀟈  Test helpText_uninstall_hasNoPasteableTeardown() started.
+􀟈  Test add_missingHome() started.
+􀟈  Test cliAppearance_ciForcesRobot_evenWhenTTYWouldBePretty() started.
+􀟈  Test add_systemLayerRefused() started.
+􀟈  Test uninstall_pretty_configOnly_claimsComplete() started.
+􀟈  Test add_userFlagAndRemoveUnsupportedLayer() started.
+􀟈  Test add_projectLayerRefused() started.
+􀟈  Test robotDocument_explainDeny_matchesPreMigrationGolden() started.
+􀟈  Test setup_occupiedGrokHookWithExtraHook_leavesBytesUnchanged() started.
+􀟈  Test save_persistsMachineDenyTOML() started.
+􀟈  Test helpTopic_forceIsSetupOnly() started.
+􀟈  Test test_prettyIndeterminate_isPlanSentence() started.
+􀟈  Test save_upsertsSamePredicate_keepsOtherMachineRules() started.
+􀟈  Test draftEnglish_robotJSON_includesGitPushAndAllowedToSave() started.
+􀢄  Test hookClaudeFileEnv_deniesPermissionDecision() recorded an issue at HookCommandTests.swift:258:5: Expectation failed: wire.stdout.contains("core.secrets")
+􀄵  wire.stdout.contains("core.secrets") → false
+􀄵    wire.stdout → "{"systemMessage":"Authenticated RV service and operation-bound owner authorization required.","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Authenticated RV service and operation-bound owner authorization required."}}
+     "
+􀟈  Test run_constructsChainAndCallsExecuteOnce() started.
+􀟈  Test helpListsPolicyDraft() started.
+􀟈  Test doctor_live_usesHOME() started.
+􀟈  Test refuse_writesNothing() started.
+􀟈  Test draftEnglish_printsPreview_writesNothing() started.
+􀟈  Test unavailablePrimary_fixtureEnglish_previewsCannedGitPushDeny() started.
+􀟈  Test unavailablePrimary_uncompilableEnglish_refusesAndWritesNothing() started.
+􀢄  Test setup_pretty_install_wired_explainCloser() recorded an issue at SetupShowTests.swift:56:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_pretty_install_wired_explainCloser() recorded an issue at SetupShowTests.swift:57:9: Expectation failed: outcome.stdout.contains(setupCeremonyInstallCloser)
+􀄵  outcome.stdout.contains(setupCeremonyInstallCloser) → false
+􀄵    outcome.stdout → ""
+􀄵    setupCeremonyInstallCloser → "Install complete, run rv explain "rm -rf" to test"
+􀢄  Test setup_pretty_install_wired_explainCloser() recorded an issue at SetupShowTests.swift:58:9: Expectation failed: outcome.stdout.contains("•  Grok")
+􀄵  outcome.stdout.contains("•  Grok") → false
+􀄵    outcome.stdout → ""
+􀢄  Test setup_pretty_install_wired_explainCloser() recorded an issue at SetupShowTests.swift:59:9: Expectation failed: FileManager.default.fileExists(atPath: layout.grokHook)
+􀄵  FileManager.default.fileExists(atPath: layout.grokHook) → false
+􀄵    FileManager.default → <NSFileManager: 0x1051e4ff0>
+􀄵    layout.grokHook → "/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-026FCFE8-81B3-44D2-A29E-A495EFF83DA8/.grok/hooks/rv.json"
+􀟈  Test cliNeverOwnsAWorkspace() started.
+􀟈  Test helpText_root_listsEveryParserCommand() started.
+􀟈  Test save_storeError_doesNotInvokeFallbackAgain() started.
+􀟈  Test workspaceRunAbandonsOnTerminalEOFOnly() started.
+􀟈  Test antigravityWiring_shellOnlyWithoutFileMatchers() started.
+􀟈  Test save_unavailablePrimary_persistsFakePreviewOnce() started.
+􀟈  Test opencodeFrontendUsesTheSharedInteractivePath() started.
+􀟈  Test hookCodexDenyResetHard_isOfficialBlockAndExitTwo() started.
+􀟈  Test robotDocument_testAllow_matchesPreMigrationGolden() started.
+􀟈  Test hostWiring_fileToolHostsWithNilAdapterBytesAreNotApplicable() started.
+􀟈  Test launcherProfilesAttachStagingOnlyTagToUnclaimedHookNames() started.
+􀟈  Test emit_emptyStreamsStillThrowsExit() started.
+􀟈  Test explain_echoQuotedRm_isNotDelete() started.
+􀟈  Test hookHostOption_defaultsToGrok() started.
+􀟈  Test appearance_robotNeverAnimates() started.
+􀟈  Test antigravityMerge_createsGroupedPreToolUseEntries() started.
+􀟈  Test explain_deepWrappers_failClosed() started.
+􀟈  Test cursorHooksMerge_uninstallStripsFingerprintAndKeepsForeign() started.
+􀢄  Test setup_pretty_occupiedGrok_hollowSkipClause() recorded an issue at SetupShowTests.swift:80:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_pretty_occupiedGrok_hollowSkipClause() recorded an issue at SetupShowTests.swift:81:9: Expectation failed: outcome.stdout.contains("◦  Grok  skipped occupied")
+􀄵  outcome.stdout.contains("◦  Grok  skipped occupied") → false
+􀄵    outcome.stdout → ""
+􀢄  Test setup_pretty_occupiedGrok_hollowSkipClause() recorded an issue at SetupShowTests.swift:82:9: Expectation failed: outcome.stdout.contains("•  Pi")
+􀄵  outcome.stdout.contains("•  Pi") → false
+􀄵    outcome.stdout → ""
+􀢄  Test hookNonShellRead_allowsOrdinaryFileWithoutPackEvaluate() recorded an issue at HookCommandTests.swift:201:5: Expectation failed: wire.stdout == expected.stdout
+􀄵  wire.stdout == expected.stdout → false
+􀄵    wire.stdout → "{"decision":"deny","reason":"Authenticated RV service and operation-bound owner authorization required."}
+     "
+􀄵    expected.stdout → ""
+􀢄  Test setup_pretty_occupiedGrok_hollowSkipClause() recorded an issue at SetupShowTests.swift:83:9: Expectation failed: outcome.stdout.contains(setupCeremonyHooksWired)
+􀄵  outcome.stdout.contains(setupCeremonyHooksWired) → false
+􀄵    outcome.stdout → ""
+􀄵    setupCeremonyHooksWired → "Hooks wired"
+􀟈  Test explain_bashDashC_matchesDirectGitAction() started.
+􀟈  Test liveClock_zeroIsNoOp_andPositiveSleeps() started.
+􀟈  Test prettyTest_prefersDenyViewModelOverStaleFlatFields() started.
+􀟈  Test scanRun_autoMode_doesNotReadOutsideRegisteredRoots() started.
+􀟈  Test explain_sudoEnvSh_showsWrappers() started.
+􀟈  Test appearance_ciForcesRobot() started.
+􀟈  Test hookRun_deniesResetHardWithoutTouchingTempHome() started.
+􀟈  Test emit_writesPendingStdoutAndStderrThenThrows() started.
+􀢄  Test uninstall_claudeOccupiedSymlink_doesNotFollowOrReplace() recorded an issue at SetupTests.swift:1597:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_claudeSettingsRewrite_preservesRestrictedPermissions() recorded an issue at SetupTests.swift:1646:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_claudeSettingsRewrite_preservesRestrictedPermissions() recorded an issue at SetupTests.swift:1652:9: Expectation failed: command == expectedClaudeHookCommand(layout: layout)
+􀄵  command == expectedClaudeHookCommand(layout: layout) → false
+􀄵    command → "other-guard evaluate"
+􀄵    expectedClaudeHookCommand(layout: layout) → "RV_BINARY=/tmp/rv-bin/rv python3 /var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-817A4DF8-8E8C-431E-9026-08249B827E73/.claude/hooks/rv-guard.py"
+􀢄  Test setup_claudeSettingsRewrite_preservesRestrictedPermissions() recorded an issue at SetupTests.swift:1653:9: Expectation failed: (try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
+                .last?["hooks"] as? [[String: Any]])?.first?["timeout"] as? Int == 90
+􀄵  (try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
+                   .last?["hooks"] as? [[String: Any]])?.first?["timeout"] as? Int == 90 → <not evaluated>
+􀟈  Test stdoutWriter_writesChunk() started.
+􀟈  Test workPlan_claudeWrite_carriesSettingsMergeWithoutForce() started.
+􀟈  Test test_prettyDeny_doesNotFallBackToAllow() started.
+􀟈  Test emit_skipsAlreadyEmittedStdout() started.
+􀟈  Test grokHookInspect_openPreToolUseIsFileToolDoor() started.
+􀟈  Test uninstall_claudeRemovesFingerprintOnly() started.
+􀟈  Test setupCommand_helpText() started.
+􀟈  Test appearance_prettyAnimatesOnlyWhenStdoutIsTTY() started.
+􀟈  Test ceremonyKind_fromInstallEnvironment() started.
+􀟈  Test hostWiring_cursorCompanionWithoutWiredAdapterIsNotApplicable() started.
+􀢄  Test setup_openCodeOnly_writesOwnedPayloadWithBakedPath() recorded an issue at SetupTests.swift:152:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_openCodeOnly_writesOwnedPayloadWithBakedPath() recorded an issue at SetupTests.swift:148:2: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “rv-guard.js” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-1431F3F7-26B9-42F5-AD96-FCD417D5A019/.config/opencode/plugins/rv-guard.js, NSURL=file:///var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-1431F3F7-26B9-42F5-AD96-FCD417D5A019/.config/opencode/plugins/rv-guard.js, NSUnderlyingError=0x77d84a06c0 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀟈  Test antigravityMerge_preservesForeignNamedHook() started.
+􀟈  Test appearance_jsonNeverAnimates() started.
+􀟈  Test hostWiring_claudeFileToolMatchersAreWired() started.
+􀢄  Test setup_idempotent_secondRunIsQuietAndDoesNotDuplicate() recorded an issue at SetupTests.swift:552:2: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “rv.json” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-18921A7F-9C65-4150-90CA-FF2FAB5E3C43/.grok/hooks/rv.json, NSURL=file:///var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-18921A7F-9C65-4150-90CA-FF2FAB5E3C43/.grok/hooks/rv.json, NSUnderlyingError=0x77d84a1950 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀟈  Test explain_prettyDeny_exit0() started.
+􀟈  Test case passing 1 argument host → .grok to hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_:) started.
+􀟈  Test readme_scanCommandIsScanNotScn() started.
+􀟈  Test case passing 1 argument host → .pi to hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_:) started.
+􀟈  Test installAnalyticsHosts_mapsSlotKinds() started.
+􀟈  Test case passing 1 argument host → .opencode to hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_:) started.
+􀟈  Test case passing 1 argument host → .claude to hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_:) started.
+􀟈  Test launcherAgentMarksClaimWithoutLinks() started.
+􀟈  Test case passing 1 argument host → .openclaw to hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_:) started.
+􀟈  Test hostInstallation_currentResourceWithMissingExecutableIsBroken(_:) started.
+􀟈  Test case passing 1 argument host → .hermes to hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_:) started.
+􀟈  Test antigravityMerge_mergedBytesHaveFileToolMatchers() started.
+􀟈  Test case passing 1 argument host → .codex to hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_:) started.
+􀢄  Test setup_force_replacesOccupiedOwnedNameAndKeepsBackup() recorded an issue at SetupTests.swift:469:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_force_replacesOccupiedOwnedNameAndKeepsBackup() recorded an issue at SetupTests.swift:472:9: Expectation failed: wired == (try HookHost.grok.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv"))
+􀄵  wired == (try HookHost.grok.adapterResource().rendered(rvPath: "/tmp/rv-bin/rv")) → <not evaluated>
+􀟈  Test hookXPCDown_stillDeniesResetHard() started.
+􀟈  Test case passing 1 argument host → .cursor to hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_:) started.
+􀢄  Test setup_force_replacesOccupiedOwnedNameAndKeepsBackup() recorded an issue at SetupTests.swift:458:2: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “rv.json.bak” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-2F019B34-39B3-45DA-9C27-C3B058DECD6D/.grok/hooks/rv.json.bak, NSURL=file:///var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-2F019B34-39B3-45DA-9C27-C3B058DECD6D/.grok/hooks/rv.json.bak, NSUnderlyingError=0x77d84a3c30 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀟈  Test case passing 1 argument host → .antigravity to hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_:) started.
+􀟈  Test uninstall_preservesOccupiedDanglingSymlinkAtOwnedName() started.
+􀟈  Test scanPrettyAndRobot_shareFindingCountAfterDedupe() started.
+􀟈  Test hostWiring_applyCursorCompanion_fileToolsOnReturnedDataEqualsApplyAndIsWired() started.
+􀟈  Test hookCursorDenyResetHard_isOfficialPermissionDeny() started.
+􀟈  Test installSh_failedDownloadLeavesPreviousInstallIntact() started.
+􀟈  Test cliAppearance_robotFlagIsRobot() started.
+􀟈  Test launcherDerivedFromPolicyListsClaimedAndMarkedAgents() started.
+􀟈  Test helpText_setupAndUninstallKeepWorkflowNext() started.
+􀟈  Test setup_resolveRvd_prefersSiblingOverHomeLocalBin() started.
+􀢄  Test uninstall_robot_alreadyCleanIsOneLine() recorded an issue at SetupShowTests.swift:265:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test uninstall_robot_alreadyCleanIsOneLine() recorded an issue at SetupShowTests.swift:266:9: Expectation failed: outcome.stdout == uninstallRobotAlreadyCleanLine + "\n"
+􀄵  outcome.stdout == uninstallRobotAlreadyCleanLine + "\n" → false
+􀄵    outcome.stdout → ""
+􀄵    uninstallRobotAlreadyCleanLine + "\n" → "Already clean.
+     "
+􀟈  Test installSh_fetchesGitHubLatestWhenInstallBinUnset() started.
+􀟈  Test unusableShellPathFallsBackToTheCurrentDirectory() started.
+􀟈  Test hookStashDrop_isEmptyAllow() started.
+􀟈  Test hostInstallation_fileToolsEqualsHostWiringOnSameBytes() started.
+􀟈  Test launcherProfilesPreserveStaticEntryHook() started.
+􀟈  Test helpTopic_subcommands() started.
+􀟈  Test cursorHooksMerge_preservesForeignBeforeShell() started.
+􀟈  Test hookDispatch_invalidHost_doesNotEvaluate() started.
+􀟈  Test installSh_failsWhenRvCliIsNotExecutable() started.
+􀢄  Test setup_detectsGrokOnPathWithoutPrecreatedTree() recorded an issue at SetupTests.swift:735:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_detectsGrokOnPathWithoutPrecreatedTree() recorded an issue at SetupTests.swift:736:9: Expectation failed: FileManager.default.fileExists(atPath: layout.grokHook)
+􀄵  FileManager.default.fileExists(atPath: layout.grokHook) → false
+􀄵    FileManager.default → <NSFileManager: 0x1051e4ff0>
+􀄵    layout.grokHook → "/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-11E4A414-B53E-46A5-B0A5-5D286DD5CC4A/.grok/hooks/rv.json"
+􀟈  Test installSh_setupBakesLocalRvHookNotRvCli() started.
+􀟈  Test doctor_homePackIDReadFailureDoesNotUseServiceSnapshot() started.
+􀟈  Test hookClaudeOrdinaryFile_allowsWithoutPackEvaluate() started.
+􀟈  Test hookIndeterminate_stillDeniesWhenHostDenyTextNilFallback() started.
+􀟈  Test setup_launchAgentTemplate_rendersEmbeddedResource() started.
+􀟈  Test setup_live_touchLaunchdFalseWhenHomeIsNotLogin() started.
+􀟈  Test setup_claudeWritesExclusiveAdapterAndPython3Hook() started.
+􀟈  Test launcherProfilesSkipMarksWithoutLinksAndReservedIds() started.
+􀟈  Test setup_antigravityOnly_mergesGroupedAndStripsOnUninstall() started.
+􀟈  Test mergeEngine_claudeWiredReportsBakedPath() started.
+􁁛  Test helpText_root_includesGroupsAndNext() passed after 0.121 seconds.
+􀟈  Test cursorHooksMerge_createsBeforeShellExecutionFailClosed() started.
+􀟈  Test doctor_missingDayOnePackExitsOne() started.
+􀟈  Test hookClaudeAllowGitStatus_emptyStdoutExitZero() started.
+􀟈  Test hookCursorAllowGitStatus_isPermissionAllow() started.
+􀢄  Test setup_cursorOnly_writesAdapterAndMergesHooksJSON() recorded an issue at SetupTests.swift:286:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_claudeOccupiedForeignGuard_skipsWithoutForce() recorded an issue at SetupTests.swift:1429:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_claudeOccupiedForeignGuard_skipsWithoutForce() recorded an issue at SetupTests.swift:1430:9: Expectation failed: outcome.stdout.contains("Skipped occupied claude hook.")
+􀄵  outcome.stdout.contains("Skipped occupied claude hook.") → false
+􀄵    outcome.stdout → ""
+􀢄  Test setup_cursorOnly_writesAdapterAndMergesHooksJSON() recorded an issue at SetupTests.swift:270:2: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “rv-guard.py” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-E817B495-6492-4A9C-8574-86E0A989E78E/.cursor/hooks/rv-guard.py, NSURL=file:///var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-E817B495-6492-4A9C-8574-86E0A989E78E/.cursor/hooks/rv-guard.py, NSUnderlyingError=0x77d8aa2010 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀟈  Test mergeEngine_roundTripsKeepForeignBytes() started.
+􀟈  Test launcherProfilesAppendShellVariants() started.
+􀟈  Test launcherProfilesAttachHooksFromMarksOnly() started.
+􀟈  Test prettyWriter_joinsWithNewline() started.
+􀟈  Test codexHooksMerge_preservesForeignPreToolUse() started.
+􀟈  Test mergeEngine_cursorIdempotentWithForeignHooksAndPinnedVersion() started.
+􀟈  Test helpText_setup_examplesAreSetupOnly() started.
+􀟈  Test test_prettyDeny_resetHard_exit1() started.
+􀟈  Test codexHooksMerge_createsPreToolUseBashEntry() started.
+􀟈  Test hookRun_codexDenyWritesStderrReason() started.
+􀟈  Test companionPresence_foreignBundleId_isAbsent() started.
+􁁛  Test helpText_leafPagesOmitTitleAndNext() passed after 0.123 seconds.
+􀟈  Test launcherAgentMarksBeatLinkNames() started.
+􀟈  Test allowlistRobotRow_selectorIsExclusiveAndActiveIsJSONString() started.
+􀟈  Test helpTopic_unknownHelpPathFallsBackToRoot() started.
+􀟈  Test antigravityMerge_isIdempotent() started.
+􁁛  Test launchAgentTemplate_keepAliveFalse_parsesFalseAndLeavesRunAtLoadFalse() passed after 0.123 seconds.
+􀟈  Test installSh_acceptsLinuxAarch64() started.
+􀟈  Test hookPiPresentCwdHonorsGrantOnce() started.
+􀟈  Test setup_skipsLaunchAgentWhenRvdIsNotExecutable_stillWritesHosts() started.
+􁁛  Test helpTopic_workspaceAndOpenCodePaths() passed after 0.123 seconds.
+􀟈  Test hookFileTool_omittedEvaluateFileFailClosesIncomplete() started.
+􀟈  Test mergeEngine_nestedUninstallToNilAndDirtyBit() started.
+􀟈  Test setup_codexOnly_writesAdapterAndMergesHooksJSON() started.
+􀟈  Test doctor_configPathThatIsNotDirectoryExitsOne() started.
+􀟈  Test uninstall_claudeUnreadableOccupied_leavesBytes() started.
+􀟈  Test launcherProfilesSkipAmbiguousDerivedMarks() started.
+􀟈  Test installSh_acceptsDarwinMacOS15OrNewer(_:) started.
+􀟈  Test hookRun_grokDenyThroughClientMintsCode() started.
+􀟈  Test setup_pretty_occupiedGrokOnly_neverClaimsWired() started.
+􀟈  Test hostDenyText_indeterminateNoRuleID() started.
+􀟈  Test packageDeclaresMacOS15() started.
+􀟈  Test hostInstallation_wiredGrokBytesWithMatcherAreShellOnly() started.
+􀟈  Test setup_force_clearFailureInReadOnlyHooksDir_mapsToCannotCreateExit() started.
+􀟈  Test hookHermesMalformed_deniesWithoutEvaluating() started.
+􀟈  Test launcherProfilesEmptyLeavesChoicesUntouched() started.
+􀟈  Test hookDispatch_parsesHostTheSameAsHook() started.
+􀟈  Test setup_launchAgentProgramArguments_isSiblingRvdNotDecoy() started.
+􀟈  Test doctor_wiredAntigravityReportsFileTool() started.
+􀟈  Test launcherProfilesAttachHookToEnrichedAgents() started.
+􀟈  Test hostInstallation_detectedWithoutOwnedFileIsAbsentFile(_:) started.
+􀟈  Test commandRunRobot_encodesPresentationPayloads() started.
+􀟈  Test hookCursorOrdinaryFile_allowsWithoutPackEvaluate() started.
+􀟈  Test readme_hasNoBrewInstallPath() started.
+􀟈  Test hookClaudeXPCDown_stillAsksResetHard() started.
+􀟈  Test installSh_setsRVFromInstallBeforeSetup() started.
+􀟈  Test setup_claudeForce_replacesFingerprintedHandlerOnly() started.
+􀟈  Test hookRun_claudeAskWithTempHome() started.
+􀟈  Test doctor_staleServiceSnapshotDoesNotHideEnabledDayOne() started.
+􀟈  Test mergeEngine_nestedStripIsIdempotentAndKeepsForeign() started.
+􀟈  Test installSh_linuxMissingIsolationHelperPreservesPreviousInstall() started.
+􀟈  Test hostWiring_cursorCompanionFileToolEntryIsWired() started.
+􀟈  Test hookIgnorePassiveSessionStart_emptyStdoutExitZero() started.
+􀟈  Test scanRun_missingPath_failsClosed() started.
+􀟈  Test workPlan_openClawWrite_carriesPluginCompanionsFromTable() started.
+􀟈  Test setup_robot_wiredIsOneCompleteLine() started.
+􀟈  Test setup_rewritesMovedBinaryPath() started.
+􀟈  Test mergeEngine_claudeStaleRewritesWithoutForce() started.
+􀟈  Test doctor_nonExecutableRvCliNextToBakedRvIsBrokenNotWired() started.
+􀟈  Test doctor_downWithInstalledAgentIsDownNotNotInstalled() started.
+􀟈  Test hostWiring_applyGrokOpenPreToolUse_fileToolsOnReturnedDataEqualsApplyAndIsWired() started.
+􀟈  Test hookXPCSkew_stillDeniesResetHard() started.
+􀟈  Test scanFailOnFindings_withFlag_exitsTwoWhenFindingsExist() started.
+􀟈  Test doctor_claudeMissingBakedRv_reportsBrokenNotWired() started.
+􀟈  Test uninstall_claudeOccupiedFingerprint_stripsHandlerAndPreservesForeign() started.
+􀟈  Test hostWiring_hostsWithoutFileToolDoorIgnoreBytes(_:) started.
+􀟈  Test hostInstallation_missingIsReadOnly(_:) started.
+􀟈  Test uninstallPlan_removeOccupiedSkip() started.
+􀟈  Test scanPretty_defaultRedaction_hidesFullArgv() started.
+􀟈  Test hookHostOption_parsesPiAndOpenCode() started.
+􀟈  Test doctor_runningServiceWithoutExplicitPackCheckExitsOne() started.
+􀟈  Test fileOps_writeData_refusesSymbolicLink() started.
+􀟈  Test workspaceRunStagingDenialNamesTheGrant() started.
+􀟈  Test doctor_antigravityShellOnly_reportsBrokenNotOccupied() started.
+􀟈  Test robotDocument_allowLists_emptyRenderIsBareEmptyArray() started.
+􀟈  Test setup_claudeOccupiedWithoutForce_surfacesForceHint() started.
+􀟈  Test workspaceRunParsesExplicitResourceProfileSeparatelyFromCommand() started.
+􀟈  Test hookDispatch_injectedEvaluate_allowsStashDrop() started.
+􁁛  Test cursorHooksMerge_unreadableThrows() passed after 0.123 seconds.
+􀟈  Test robotDocument_packsInfo_keepsExactBytes() started.
+􀟈  Test setup_recordsInstallAnalyticsWithoutWritingIdentity() started.
+􁁛  Test installScriptRequiresMacOS15() passed after 0.123 seconds.
+􀟈  Test scanRun_hostFilterPi_ignoresClaudeFixture() started.
+􁁛  Test hostInstallation_wiredCursorCompanionWithoutFileToolEntryIsShellOnly() passed after 0.123 seconds.
+􀟈  Test scanSetupNudge_claudeUnwired_recommends() started.
+􀟈  Test hostDenyText_stashDropIsNil() started.
+􀟈  Test helpText_allowOnce_namesRedeemNotCommandMint() started.
+􁁛  Test completions_listEveryParserCommand() passed after 0.124 seconds.
+􁁛  Test doctor_reachableServiceUsesLaunchAgentProbeState() passed after 0.123 seconds.
+􁁛  Test hookUnknownHost_isArgumentParserUsageError() passed after 0.124 seconds.
+􀟈  Test helpTopic_rootInvocations() started.
+􀟈  Test explicitWorkspacePathTakesPrecedenceOverShellPath() started.
+􀟈  Test doctor_unavailableLocalCoreReportsNoEnabledPacks() started.
+􀟈  Test hostInstallation_wiredCursorAdapterWithoutHooksJSONIsShellOnly() started.
+􀟈  Test setup_hermesOnly_writesPluginAndCompanion() started.
+􀟈  Test doctor_hostlessTempHomeIsReadOnlyAndMentionsSetup() started.
+􁁛  Test skillTableDenies_shareDenyRendererContract() passed after 0.124 seconds.
+􀟈  Test mutationRefusesWithoutTTY() started.
+􀟈  Test setup_pretty_secondRunIsQuiet() started.
+􁁛  Test clangDeploymentTargetIsMacOS15() passed after 0.124 seconds.
+􀟈  Test listValidateAllowedWithoutTTY() started.
+􀟈  Test hostInstallation_currentResourceWithExecutableIsWired(_:) started.
+􀟈  Test removeMatchesNormalizedExactCommandAlias() started.
+􀢄  Test setup_piOnly_writesOwnedPayloadAndNoSettings() failed after 0.125 seconds with 2 issues.
+􀟈  Test setup_filesystemProbeFindsTempHomeCompanionApp() started.
+􀢄  Test restoreKeepAliveAfterCompanionUninstall_setsFalseAndLeavesCLI() failed after 0.125 seconds with 2 issues.
+􀟈  Test setup_writeFailureInReadOnlyHooksDir_mapsToCannotCreateExit() started.
+􁁛  Test launcherProfilesLoadDefaultFromOperatorHome() passed after 0.125 seconds.
+􀟈  Test hookPiDenyResetHard_reasonEqualsHostDenyText() started.
+􀟈  Test hostWiring_claudeWiredAdapterWithoutFileToolMatchersIsShellOnly() started.
+􀟈  Test uninstall_removesPolicyArtifactsAndLocks() started.
+􀢄  Test setup_configDirectoryBlockedByFile_mapsToCannotCreateExit() recorded an issue at SetupTests.swift:1046:9: Expectation failed: outcome.stderr == "rv setup failed: unable to create config directory\n"
+􀄵  outcome.stderr == "rv setup failed: unable to create config directory\n" → false
+􀄵    outcome.stderr → "rv setup failed: Authenticated RV service and operation-bound owner authorization required.
+     "
+􀄵    "rv setup failed: unable to create config directory\n" → "rv setup failed: unable to create config directory
+     "
+􀢄  Test setup_configDirectoryBlockedByFile_mapsToCannotCreateExit() recorded an issue at SetupTests.swift:1047:9: Expectation failed: outcome.exitCode == EX_CANTCREAT
+􀄵  outcome.exitCode == EX_CANTCREAT → false
+􀄵    outcome.exitCode → 69
+􀄵    EX_CANTCREAT → 73
+􀟈  Test setup_force_claudeOccupiedSymlink_doesNotFollowOrReplace() started.
+􀟈  Test packsCommandProcessUsesFacadeForFilteredRobotAndVerboseOutput() started.
+􁁛  Test hookDispatch_matchesHookButNotHelpOrOtherCommands() passed after 0.127 seconds.
+􀟈  Test helpText_workspaceListsTheAbandonCommand() started.
+􀟈  Test antigravityMerge_unreadableThrows() started.
+􀟈  Test companionPresence_machServicePrefixedBundleId_isAbsent() started.
+􁁛  Test hostInstallation_wiredAntigravityMergeIsFileToolWired() passed after 0.127 seconds.
+􀟈  Test hostInstallation_antigravityForeignJSONWithoutFingerprintIsAbsentFile() started.
+􀟈  Test setup_launchctlBootstrapFails_stillWiresDetectedHosts() started.
+􀢄  Test setup_bakesCHookPathNotRvCli() recorded an issue at SetupTests.swift:762:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀟈  Test robotDocument_allowlistList_matchesPreMigrationGolden() started.
+􀟈  Test uninstall_claudeSettingsRewrite_preservesRestrictedPermissions() started.
+􀟈  Test setupFlow_prettyInstall_rendersCeremonyThroughDoorWithInjectedFactory() started.
+􀢄  Test uninstall_launchctlBootoutFails_mapsToUnavailableExitAndKindLine() failed after 0.127 seconds with 1 issue.
+􀟈  Test hookCodexAllowGitStatus_emptyStdoutExitZero() started.
+􀟈  Test uninstall_isIdempotentWhenAlreadyGone() started.
+􀢄  Test setup_guiBootstrapMiss_fallsBackToUserDomain() failed after 0.127 seconds with 3 issues.
+􀟈  Test helpText_hook_hasNoFakeFileExamples() started.
+􀟈  Test test_robotAllow_andDeny() started.
+􀟈  Test workspaceDefaultPrefersTheShellProjectPathAfterHostMountReplacement() started.
+􀢄  Test setup_occupiedNonUTF8GrokHook_leavesBytesUnchanged() failed after 0.127 seconds with 2 issues.
+􀟈  Test doctor_nonExecutableBakedPathIsBrokenNotWired() started.
+􀟈  Test setup_reprobeHealsKeepAliveAfterCompanionLeaves() started.
+􀟈  Test doctor_xpcDownSnapshotFormatsAsDownNotNotInstalled() started.
+􀢄  Test setup_bakesCHookPathNotRvCli() recorded an issue at SetupTests.swift:752:2: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “rv.json” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-B845A38C-CC2D-42E7-AC71-6FF0A9D59332/.grok/hooks/rv.json, NSURL=file:///var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-B845A38C-CC2D-42E7-AC71-6FF0A9D59332/.grok/hooks/rv.json, NSUnderlyingError=0x77d8aa0870 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀟈  Test hostArtifacts_forceClear_claudeDoesNotBackupOwnedPath() started.
+􀟈  Test scanFailOnFindings_withFlag_exitsZeroWhenFindingsEmpty() started.
+􁁛  Test doctor_robotIsOneJSONObjectWithoutCommandOrTerminalChrome() passed after 0.127 seconds.
+􀟈  Test hookCodexMalformed_deniesWithoutEvaluating() started.
+􀟈  Test mergeEngine_flatMergeAddsVersionAndUninstallVersionOnlyIsNil() started.
+􀟈  Test case passing 1 argument host → .grok to hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_:) started.
+􀟈  Test case passing 1 argument host → .pi to hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_:) started.
+􀟈  Test case passing 1 argument host → .opencode to hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_:) started.
+􀟈  Test case passing 1 argument host → .claude to hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_:) started.
+􀟈  Test case passing 1 argument host → .openclaw to hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_:) started.
+􀟈  Test case passing 1 argument host → .hermes to hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_:) started.
+􀟈  Test case passing 1 argument host → .codex to hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_:) started.
+􀟈  Test case passing 1 argument host → .cursor to hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_:) started.
+􀟈  Test case passing 1 argument host → .antigravity to hostInstallation_danglingSymlinkAtOwnedNameIsOccupied(_:) started.
+􀟈  Test scanSetupNudge_wiredHost_doesNotRecommend() started.
+􀟈  Test mergeEngine_locateReportsMatcherAndListKey() started.
+􀢄  Test setup_doesNotTouchLaunchdWhenHomeIsNotLogin() recorded an issue at SetupTests.swift:721:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_doesNotTouchLaunchdWhenHomeIsNotLogin() recorded an issue at SetupTests.swift:722:9: Expectation failed: FileManager.default.fileExists(atPath: layout.launchAgent)
+􀄵  FileManager.default.fileExists(atPath: layout.launchAgent) → false
+􀄵    FileManager.default → <NSFileManager: 0x1051e4ff0>
+􀄵    layout.launchAgent → "/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-821C9EBE-CC14-4AD2-BB8E-544DE4FC1C0B/Library/LaunchAgents/dev.rv.evaluate.plist"
+􀟈  Test mergeEngine_claudeForceRewritesOccupied() started.
+􀟈  Test setupCeremonyPlayer_zeroClock_emitsFinalCloserOnly() started.
+􀟈  Test setup_hostless_createsNoHostTrees_andPrintsSetupLine() started.
+􀟈  Test setup_openClawOnly_writesPluginAndCompanions() started.
+􀟈  Test hostWiring_cursorMissingCompanionIsShellOnly() started.
+􀟈  Test hookEmptyCommand_failsClosedWithMissingCommandDenyJSONWithoutEvaluating() started.
+􁁛  Test setupFlow_missingHOME_failsOnceThroughInjectedFactory_withoutFilesystemAccess() passed after 0.132 seconds.
+􀢄  Test setup_occupiedOwnedName_skipsAndLeavesBytes() failed after 0.132 seconds with 2 issues.
+􁁛  Test doctor_cursorShellOnlyWhenPreToolUseMissing() passed after 0.132 seconds.
+􀟈  Test hookOrdinaryFileStillAllowsAfterFailClosedMalformed() started.
+􁁛  Test hostInstallation_currentResourceWithMissingRvCliIsBrokenNotWired(_:) with 9 test cases passed after 0.132 seconds.
+􀟈  Test setup_force_replacesOccupiedSymlinkWithoutLeavingLink() started.
+􀟈  Test mergeEngine_hookDictionaryOmitsNilExtras() started.
+􀟈  Test uninstall_removesOwnedFiles_leavesForeignSibling() started.
+􀢄  Test setup_alreadyRegisteredLaunchAgent_isIdempotentSuccess() failed after 0.132 seconds with 4 issues.
+􀟈  Test mergeEngine_nestedMergeAppendsOneEntryPerMatcher() started.
+􀟈  Test scanRobot_setupNudgeFieldFollowsCLI() started.
+􀟈  Test mergeEngine_realDescriptorsAreIdempotent() started.
+􀟈  Test antigravityWiring_applyReportsWiredFileTools() started.
+􀟈  Test setup_danglingSymlinkAtOwnedNameIsOccupiedAndPreserved() started.
+􀟈  Test uninstall_preservesOccupiedAdapterAtOwnedName() started.
+􀟈  Test launcherProfilesLeaveAmbiguousAgentDirect() started.
+􁁛  Test hookDispatch_equalsHostForm_allowsStashDrop() passed after 0.133 seconds.
+􀟈  Test hookOpenClawAllowGitStatus_emptyStdoutExitZero() started.
+􀟈  Test doctor_isRegisteredOnRootCommand() started.
+􀟈  Test setup_injectedCompanionAbsent_writesKeepAliveFalse() started.
+􀟈  Test hookMalformed_failsClosedWithDenyJSONWithoutEvaluating() started.
+􁁛  Test hookBypassPermissionMode_stillEvaluates() passed after 0.133 seconds.
+􁁛  Test hookOpenClawMalformed_deniesWithoutEvaluating() passed after 0.133 seconds.
+􀟈  Test workPlan_rvdNotExecutable_skipsLaunchAgent() started.
+􀟈  Test installSh_replacesDestSymlinkWithoutFollowing() started.
+􀟈  Test antigravityMerge_uninstallStripsFingerprintAndKeepsForeign() started.
+􀟈  Test setupError_bridgesAdapterResourceFailureToHostKind() started.
+􀟈  Test test_prettyDeny_pipelineHighlightsDenyingSegment() started.
+􀟈  Test setup_pretty_hostless_paintsSlotsAndHostlessCloser() started.
+􁁛  Test hookHermesResetHard_encodesAsk() passed after 0.133 seconds.
+􀟈  Test installSh_acceptsLinuxX86_64() started.
+􀟈  Test setupCeremonyPlayer_animate_rewritesWithCursorCodes() started.
+􀟈  Test doctor_live_emptyHOME_isNil() started.
+􀟈  Test setup_claudeNewSettings_createsOwnerOnlyPermissions() started.
+􀟈  Test doctor_claudeOccupiedForeignGuard_reportsOccupied() started.
+􀟈  Test observedMissingLaunchAgentMakesDownNotInstalled() started.
+􀟈  Test setup_doesNotMkdirClaudeOnlyToDetect() started.
+􀟈  Test installedLaunchAgentKeepsDownFromBecomingNotInstalled() started.
+􁁛  Test setupPlan_missingAndOccupiedAndWrite() passed after 0.133 seconds.
+􁁛  Test scanRun_autoMode_findsClaudeDenyInTempHome() passed after 0.133 seconds.
+􀢄  Test uninstall_preservesForeignContentInPreexistingConfigDirectory() recorded an issue at SetupTests.swift:666:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀟈  Test launcherProfilesAttachUniqueAgentMatch() started.
+􁁛  Test scanRobot_showCommand_includesFullMatchingView() passed after 0.134 seconds.
+􀟈  Test xpcDownSnapshotIsDownEvenWhenLaunchAgentIsObservedMissing() started.
+􀟈  Test reachableSnapshotKeepsLocalFallbackAndPackChecks() started.
+􁁛  Test scanSetupNudge_unwiredHostThatProducedEvents_emitsOnePrettyLine() passed after 0.133 seconds.
+􀟈  Test requestFailedMeaningIsIndependentOfLaunchAgent() started.
+􀟈  Test setup_launchctlBootstrapFails_mapsToUnavailableExitAndKindLine() started.
+􁁛  Test scanSetupNudge_nonExecutableRvCli_recommends() passed after 0.134 seconds.
+􀟈  Test installSh_stagesSwiftCompatibilityRuntimeBesideCLI() started.
+􀟈  Test omittedLaunchAgentKeepsDownFromBecomingNotInstalled() started.
+􀟈  Test hookOpenCodeDenyResetHard_reasonEqualsHostDenyText() started.
+􀟈  Test idleExitArmedSnapshotIsReachable() started.
+􀢄  Test uninstall_pretty_occupiedLeftAlone() recorded an issue at SetupShowTests.swift:234:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test uninstall_pretty_occupiedLeftAlone() recorded an issue at SetupShowTests.swift:235:9: Expectation failed: outcome.stdout.contains("◦  Grok  left occupied")
+􀄵  outcome.stdout.contains("◦  Grok  left occupied") → false
+􀄵    outcome.stdout → ""
+􀢄  Test uninstall_pretty_occupiedLeftAlone() recorded an issue at SetupShowTests.swift:236:9: Expectation failed: outcome.stdout.contains(uninstallCeremonyAlreadyClean)
+􀄵  outcome.stdout.contains(uninstallCeremonyAlreadyClean) → false
+􀄵    outcome.stdout → ""
+􀄵    uninstallCeremonyAlreadyClean → "Already clean"
+􁁛  Test scanRun_listingFailure_mapsListingFailed() passed after 0.136 seconds.
+􀟈  Test reachableWithoutPacksCheckIsNotPackReady() started.
+􀟈  Test hookDispatch_matchesSkipsHelpDispatchPaths() started.
+􀟈  Test loadedLaunchAgentWinsOverInstalledOnDown() started.
+􀢄  Test setup_robot_wiredWithSkips_isStillOneLine() failed after 0.137 seconds with 3 issues.
+􀟈  Test xpcSkewSnapshotIsSkewWithoutInventingATypedReason() started.
+􀟈  Test installSh_doesNotMentionBrew() started.
+􁁛  Test hostInstallation_currentResourceWithNonExecutableRvCliIsBrokenNotWired(_:) with 9 test cases passed after 0.137 seconds.
+􀟈  Test xpcDownKeepsSnapshotPacksNotDayOneSubstitution() started.
+􀟈  Test hookCursorMalformed_deniesWithoutEvaluating() started.
+􀟈  Test setup_antigravityDetectedByExecutableOnly() started.
+􀟈  Test skewMeaningIsIndependentOfLaunchAgent() started.
+􀢄  Test add_slashRuleSucceedsOnTTY() recorded an issue at AllowlistCommandRunTests.swift:72:6: Caught error: Authenticated RV service and operation-bound owner authorization required.
+􀟈  Test mergeEngine_malformedBytesAreUnreadable() started.
+􀟈  Test emptyEnabledPacksMeansNone() started.
+􀟈  Test hookDispatch_process_allowDenyAndHelp() started.
+􁁛  Test hostInstallation_symlinkAtOwnedNameIsOccupiedWithoutFollowing(_:) with 9 test cases passed after 0.146 seconds.
+􀟈  Test doctor_reachableServiceReportsLaunchAgentLoadedAndCompatibleVersion() started.
+􀟈  Test workspaceRunDenialWithoutIDStaysGeneric() started.
+􁁛  Test doctor_wiredClaudeReportsWired() passed after 0.146 seconds.
+􀟈  Test codexHooksMerge_uninstallEmptyReturnsNil() started.
+􀟈  Test hookAllowGitStatus_emptyStdoutExitZero() started.
+􀟈  Test doctor_missingRvCliNextToBakedRvIsBrokenNotWired() started.
+􀢄  Test remove_normalizedExactAlias() recorded an issue at AllowlistCommandRunTests.swift:179:6: Caught error: Authenticated RV service and operation-bound owner authorization required.
+􀟈  Test workspaceLauncherKeepsPresetsAsMetadataOnly() started.
+􀢄  Test inProcessServiceClientHonorsAllowlistFromStoreDirectory() recorded an issue at AllowOnceTTYTests.swift:208:9: Expectation failed: reply.result.decision == .allow
+􀄵  reply.result.decision == .allow → false
+􀄵    reply.result.decision → .deny(RVDomain.Deny(ruleID: RVDomain.RuleID(pack: RVDomain.PackID(rawValue: "core.git"), pattern: "reset-hard"), reason: "git reset --hard destroys uncommitted changes. Use \'git stash\' first."))
+􀄵      deny → Deny(ruleID: RVDomain.RuleID(pack: RVDomain.PackID(rawValue: "core.git"), pattern: "reset-hard"), reason: "git reset --hard destroys uncommitted changes. Use \'git stash\' first.")
+􀄵        ruleID → RuleID(pack: RVDomain.PackID(rawValue: "core.git"), pattern: "reset-hard")
+􀄵          pack → PackID(rawValue: "core.git")
+􀄵            rawValue → "core.git"
+􀄵          pattern → "reset-hard"
+􀄵        reason → "git reset --hard destroys uncommitted changes. Use 'git stash' first."
+􀟈  Test uninstall_removesAnalyticsConfigJson() started.
+􀟈  Test launchdDomain_agentPrintTarget_isGuiSession() started.
+􀟈  Test testExplainRobot_keepsTestSchemaNotExplainSchema() started.
+􁁛  Test launcherChoicesNeverDeriveHooksFromExecutables() passed after 0.152 seconds.
+􀟈  Test robotDocument_packsList_keepsExactBytes() started.
+􀟈  Test antigravityMerge_occupiedWithoutForceThrows() started.
+􀢄  Test addCommand_emptyReasonAndTTYAndSuccess() recorded an issue at AllowlistCommandRunTests.swift:118:19: Expectation failed: expected error "ExitCode(rawValue: 2)", but "Authenticated RV service and operation-bound owner authorization required." of type ValidationError was thrown instead
+􀄵  ExitCode(2) → Authenticated RV service and operation-bound owner authorization required.
+􀄵    message → "Authenticated RV service and operation-bound owner authorization required."
+􀟈  Test workspaceRunDenialEchoesRequestedProfile() started.
+􀟈  Test uninstall_pretty_removesWiredHostsAndCloser() started.
+􀟈  Test setup_claudeOnly_mergesFingerprintAndPreservesForeignEntry() started.
+􁁛  Test hookDenyResetHard_reasonEqualsHostDenyText() passed after 0.159 seconds.
+􀟈  Test blockingInstallAnalytics_nilCoordinatorReturnsImmediately() started.
+􀟈  Test setupFlow_uninstallMissingHOME_prefixesUninstall() started.
+􀢄  Test addCommand_emptyReasonAndTTYAndSuccess() recorded an issue at AllowlistCommandRunTests.swift:114:6: Caught error: Authenticated RV service and operation-bound owner authorization required.
+􀟈  Test hostInstallation_fileToolsNotApplicableWhenMissing() started.
+􀟈  Test antigravityMerge_outdatedRewritesWithoutForce() started.
+􀟈  Test robotMintRefused() started.
+􁁛  Test companionPresence_defaultSearchRoots_areSystemAndHomeApplications() passed after 0.160 seconds.
+􀟈  Test ciRedeemRefuses() started.
+􀢄  Test setupFlow_injectedUID_bakesGuiDomainForBootstrapAndBootout() failed after 0.160 seconds with 5 issues.
+􀟈  Test nonTTYMintRefuses() started.
+􀟈  Test workspaceRunParsesHookTagSeparatelyFromCommand() started.
+􀟈  Test happyPathMintRedeemAgainstTempDir() started.
+􀟈  Test rvVersion() started.
+rv allowlist list: invalid allowlist.toml
+􀟈  Test workspaceShellLauncherDisablesZshPromptSp() started.
+􀟈  Test scanConfiguration_sessionsOnly_noRepoSubcommand() started.
+􀢄  Test setup_pretty_grokWired_hooksWiredCloser() recorded an issue at SetupShowTests.swift:37:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_pretty_grokWired_hooksWiredCloser() recorded an issue at SetupShowTests.swift:38:9: Expectation failed: outcome.stdout.contains("•  Grok  reload /hooks")
+􀄵  outcome.stdout.contains("•  Grok  reload /hooks") → false
+􀄵    outcome.stdout → ""
+􀢄  Test setup_pretty_grokWired_hooksWiredCloser() recorded an issue at SetupShowTests.swift:39:9: Expectation failed: outcome.stdout.contains(setupCeremonyHooksWired)
+􀄵  outcome.stdout.contains(setupCeremonyHooksWired) → false
+􀄵    outcome.stdout → ""
+􀄵    setupCeremonyHooksWired → "Hooks wired"
+􀢄  Test setup_pretty_grokWired_hooksWiredCloser() recorded an issue at SetupShowTests.swift:41:9: Expectation failed: FileManager.default.fileExists(atPath: layout.grokHook)
+􀄵  FileManager.default.fileExists(atPath: layout.grokHook) → false
+􀄵    FileManager.default → <NSFileManager: 0x1051e4ff0>
+􀄵    layout.grokHook → "/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-8EA9A8D1-D67F-4AAD-B7CD-5BFFAB43C284/.grok/hooks/rv.json"
+􀟈  Test test_prettyAllow_gitStatus_exit0() started.
+􀟈  Test hostArtifacts_writeArtifacts_foldsCompanionsOnClaudeSettingsMerge() started.
+􀟈  Test setup_claudeStaleLegacyFingerprint_upgradesWithoutForce() started.
+􀟈  Test testRobot_stdoutKeepsStableTestSchemaAndBytes() started.
+􀢄  Test hookEvaluateSendFailure_resetHardDeniesAndStashDropAllows() recorded an issue at OneShotEvaluateTests.swift:208:9: Expectation failed: allowOutcome.stdout.isEmpty
+􀄵  allowOutcome.stdout.isEmpty → false
+􀄵    allowOutcome.stdout → "{"decision":"deny","reason":"Authenticated RV service and operation-bound owner authorization required."}
+     "
+􀄵    isEmpty → false
+􀢄  Test hookEvaluateSendFailure_resetHardDeniesAndStashDropAllows() recorded an issue at OneShotEvaluateTests.swift:210:9: Expectation failed: allowOutcome.stdout.contains("deny") == false
+􀄵  allowOutcome.stdout.contains("deny") == false → false
+􀄵    allowOutcome.stdout.contains("deny") → true
+􀟈  Test packsListPretty_usesPacksRendererLayout() started.
+􀟈  Test hostInstallation_wiredCursorWithPreToolUseIsFileToolWired() started.
+􀟈  Test hookHermesAllowGitStatus_emptyStdoutExitZero() started.
+􁁛  Test cursorHooksMerge_uninstallEmptyReturnsNil() passed after 0.164 seconds.
+􀟈  Test doctor_detectedGrokWithoutOwnedFileIsAbsentFile() started.
+allowlist: missing (ok)
+no allowlist rows
+allowlist: ok
+rv allowlist validate: invalidTOML
+[]
+􀟈  Test launcherMarksAmbiguityLeavesAgentDirect() started.
+􀟈  Test hookDispatch_matchesHostOptions() started.
+􀟈  Test scanRun_includeGlob_withExplicitPath_forwardsGlobsAndFindsUnrecognizedGrokDeny() started.
+rv allowlist validate: allowlist.toml resolves into workspace
+􀢄  Test setup_grokOnly_writesOwnedPayloadWithBakedPath() recorded an issue at SetupTests.swift:122:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_grokOnly_writesOwnedPayloadWithBakedPath() recorded an issue at SetupTests.swift:123:9: Expectation failed: outcome.stdout == setupRobotCompleteLine + "\n"
+􀄵  outcome.stdout == setupRobotCompleteLine + "\n" → false
+􀄵    outcome.stdout → ""
+􀄵    setupRobotCompleteLine + "\n" → "Setup complete. Next  rv test 'git reset --hard'.
+     "
+􀢄  Test setup_grokOnly_writesOwnedPayloadWithBakedPath() recorded an issue at SetupTests.swift:118:2: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “rv.json” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-F0771131-5B4D-4E71-AA97-4D850C35ED15/.grok/hooks/rv.json, NSURL=file:///var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-F0771131-5B4D-4E71-AA97-4D850C35ED15/.grok/hooks/rv.json, NSUnderlyingError=0x77d8aa23a0 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀟈  Test installSh_missingPackTarballStillInstallsTrio() started.
+[]
+􀟈  Test setup_plistWriteFailureInReadOnlyLaunchAgentsDir_mapsToCannotCreateExit() started.
+􁁛  Test hostArtifacts_attach_definedForEveryHost() passed after 0.169 seconds.
+􀟈  Test antigravityMerge_forceRewritesOccupied() started.
+􀟈  Test helpText_workspaceListsTheTUICommand() started.
+􀟈  Test companionPresence_fileNamedRvApp_isAbsent() started.
+􀟈  Test doctor_missingServiceDoesNotInventServiceVersion() started.
+[]
+􀟈  Test launcherProfilesLoadFromOperatorHome() started.
+􀟈  Test installSh_refusesWindows() started.
+􁁛  Test doctor_skewFormatsTheSharedWarning() passed after 0.171 seconds.
+􀟈  Test setup_foreignSibling_untouched_andWritesOwnedHook() started.
+􀟈  Test setup_force_leavesForeignSiblingUntouched() started.
+􀟈  Test hostInstallation_wiredClaudeMergeIsFileToolWired() started.
+􁁛  Test mergeEngine_cursorFreshMergeIsByteExact() passed after 0.171 seconds.
+􀟈  Test helpText_helpMeta_hasNoExamples() started.
+rv allowlist: HOME is not set
+􀢄  Test add_invalidRule() recorded an issue at AllowlistCommandRunTests.swift:32:19: Expectation failed: expected error "ExitCode(rawValue: 2)", but "Authenticated RV service and operation-bound owner authorization required." of type ValidationError was thrown instead
+􀄵  ExitCode(2) → Authenticated RV service and operation-bound owner authorization required.
+􀄵    message → "Authenticated RV service and operation-bound owner authorization required."
+􀢄  Test setup_injectedCompanionInstalled_writesKeepAliveTrue() recorded an issue at CompanionKeepAliveTests.swift:72:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀟈  Test setupHelp_jsonAndRobotAreOneLineNotJSON() started.
+􀟈  Test hookDispatch_injectedEvaluate_deniesResetHard() started.
+􁁛  Test robotDocument_allowOnceList_matchesPreMigrationGolden() passed after 0.175 seconds.
+􀢄  Test uninstall_robot_afterSetupIsCompleteLine() recorded an issue at SetupShowTests.swift:278:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test uninstall_robot_afterSetupIsCompleteLine() recorded an issue at SetupShowTests.swift:279:9: Expectation failed: outcome.stdout == uninstallRobotCompleteLine + "\n"
+􀄵  outcome.stdout == uninstallRobotCompleteLine + "\n" → false
+􀄵    outcome.stdout → ""
+􀄵    uninstallRobotCompleteLine + "\n" → "Uninstall complete.
+     "
+􀢄  Test setup_injectedCompanionInstalled_writesKeepAliveTrue() recorded an issue at CompanionKeepAliveTests.swift:63:2: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “dev.rv.evaluate.plist” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-7802BA18-AB51-4F83-8CE5-642D2A9E02DF/Library/LaunchAgents/dev.rv.evaluate.plist, NSURL=file:///var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-7802BA18-AB51-4F83-8CE5-642D2A9E02DF/Library/LaunchAgents/dev.rv.evaluate.plist, NSUnderlyingError=0x77d84a0510 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀟈  Test companionPresence_rvAppWithDevRvBundleId_isInstalled(bundleId:) started.
+􀢄  Test setup_occupiedGrok_writesPi_joinsSkipOntoOneSuccessLine() recorded an issue at SetupTests.swift:903:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_occupiedGrok_writesPi_joinsSkipOntoOneSuccessLine() recorded an issue at SetupTests.swift:904:9: Expectation failed: outcome.stdout.split(separator: "\n").count == 1
+􀄵  outcome.stdout.split(separator: "\n").count == 1 → false
+􀄵    outcome.stdout.split(separator: "\n").count → 0
+􀢄  Test setup_occupiedGrok_writesPi_joinsSkipOntoOneSuccessLine() recorded an issue at SetupTests.swift:905:9: Expectation failed: outcome.stdout == setupRobotCompleteLine + ", Skipped occupied grok hook.\n"
+􀄵  outcome.stdout == setupRobotCompleteLine + ", Skipped occupied grok hook.\n" → false
+􀄵    outcome.stdout → ""
+􀄵    setupRobotCompleteLine + ", Skipped occupied grok hook.\n" → "Setup complete. Next  rv test 'git reset --hard'., Skipped occupied grok hook.
+     "
+􀢄  Test setup_occupiedGrok_writesPi_joinsSkipOntoOneSuccessLine() recorded an issue at SetupTests.swift:908:9: Expectation failed: FileManager.default.fileExists(atPath: layout.piExtension)
+􀄵  FileManager.default.fileExists(atPath: layout.piExtension) → false
+􀄵    FileManager.default → <NSFileManager: 0x1051e4ff0>
+􀄵    layout.piExtension → "/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-EA0A5DE6-7CE5-47D5-8F3B-3FDED8EBBB24/.pi/agent/extensions/rv-guard.ts"
+􀢄  Test setup_occupiedGrok_writesPi_joinsSkipOntoOneSuccessLine() recorded an issue at SetupTests.swift:893:2: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “rv-guard.ts” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-EA0A5DE6-7CE5-47D5-8F3B-3FDED8EBBB24/.pi/agent/extensions/rv-guard.ts, NSURL=file:///var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-EA0A5DE6-7CE5-47D5-8F3B-3FDED8EBBB24/.pi/agent/extensions/rv-guard.ts, NSUnderlyingError=0x77d84a1590 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀢄  Test hookEvaluateNilTransport_codexDenyForwardsStderr() recorded an issue at OneShotEvaluateTests.swift:244:24: Expectation failed: allowOnceUnlockCode(in: stderr)
+􀄵  allowOnceUnlockCode(in: stderr) → nil
+􀄵    stderr → ()
+no allowlist rows
+􀢄  Test add_requiresTTY() recorded an issue at AllowlistCommandRunTests.swift:66:19: Expectation failed: expected error "ExitCode(rawValue: 2)", but "Authenticated RV service and operation-bound owner authorization required." of type ValidationError was thrown instead
+􀄵  ExitCode(2) → Authenticated RV service and operation-bound owner authorization required.
+􀄵    message → "Authenticated RV service and operation-bound owner authorization required."
+􀢄  Test remove_ttyLockParseAndSuccess() recorded an issue at AllowlistCommandRunTests.swift:168:19: Expectation failed: expected error "ExitCode(rawValue: 2)", but "Authenticated RV service and operation-bound owner authorization required." of type ValidationError was thrown instead
+􀄵  ExitCode(2) → Authenticated RV service and operation-bound owner authorization required.
+􀄵    message → "Authenticated RV service and operation-bound owner authorization required."
+􀢄  Test remove_lockAndParseErrors() recorded an issue at AllowlistCommandRunTests.swift:204:19: Expectation failed: expected error "ExitCode(rawValue: 2)", but "Authenticated RV service and operation-bound owner authorization required." of type ValidationError was thrown instead
+􀄵  ExitCode(2) → Authenticated RV service and operation-bound owner authorization required.
+􀄵    message → "Authenticated RV service and operation-bound owner authorization required."
+􀢄  Test add_lockFailed() recorded an issue at AllowlistCommandRunTests.swift:92:19: Expectation failed: expected error "ExitCode(rawValue: 2)", but "Authenticated RV service and operation-bound owner authorization required." of type ValidationError was thrown instead
+􀄵  ExitCode(2) → Authenticated RV service and operation-bound owner authorization required.
+􀄵    message → "Authenticated RV service and operation-bound owner authorization required."
+􀢄  Test remove_ttyLockParseAndSuccess() recorded an issue at AllowlistCommandRunTests.swift:163:6: Caught error: Authenticated RV service and operation-bound owner authorization required.
+􀢄  Test remove_lockAndParseErrors() recorded an issue at AllowlistCommandRunTests.swift:217:19: Expectation failed: expected error "ExitCode(rawValue: 2)", but "Authenticated RV service and operation-bound owner authorization required." of type ValidationError was thrown instead
+􀄵  ExitCode(2) → Authenticated RV service and operation-bound owner authorization required.
+􀄵    message → "Authenticated RV service and operation-bound owner authorization required."
+􀢄  Test hookEvaluateNilTransport_resetHardDeniesAndStashDropAllows() recorded an issue at OneShotEvaluateTests.swift:49:9: Expectation failed: allowOutcome.stdout.isEmpty
+􀄵  allowOutcome.stdout.isEmpty → false
+􀄵    allowOutcome.stdout → "{"decision":"deny","reason":"Authenticated RV service and operation-bound owner authorization required."}
+     "
+􀄵    isEmpty → false
+􀢄  Test hookEvaluateNilTransport_resetHardDeniesAndStashDropAllows() recorded an issue at OneShotEvaluateTests.swift:51:9: Expectation failed: allowOutcome.stdout.contains("deny") == false
+􀄵  allowOutcome.stdout.contains("deny") == false → false
+􀄵    allowOutcome.stdout.contains("deny") → true
+􀢄  Test addCommand_andValidate_missingHome() recorded an issue at AllowlistCommandRunTests.swift:344:19: Expectation failed: expected error "ExitCode(rawValue: 1)", but "Authenticated RV service and operation-bound owner authorization required." of type ValidationError was thrown instead
+􀄵  ExitCode(1) → Authenticated RV service and operation-bound owner authorization required.
+􀄵    message → "Authenticated RV service and operation-bound owner authorization required."
+􀢄  Test setupFlow_oneEntry_routesIntentsToSetupAndUninstallOrchestrations() recorded an issue at SetupTests.swift:1211:9: Expectation failed: installed.exitCode == 0
+􀄵  installed.exitCode == 0 → false
+􀄵    installed.exitCode → 69
+􀢄  Test setupFlow_oneEntry_routesIntentsToSetupAndUninstallOrchestrations() recorded an issue at SetupTests.swift:1212:9: Expectation failed: installed.stdout == setupRobotHostlessLine + "\n"
+􀄵  installed.stdout == setupRobotHostlessLine + "\n" → false
+􀄵    installed.stdout → ""
+􀄵    setupRobotHostlessLine + "\n" → "Run rv setup after Pi, Grok, OpenCode, Claude, OpenClaw, Hermes, Codex, Cursor, or Antigravity exists.
+     "
+􀢄  Test setupFlow_oneEntry_routesIntentsToSetupAndUninstallOrchestrations() recorded an issue at SetupTests.swift:1214:9: Expectation failed: removed.exitCode == 0
+􀄵  removed.exitCode == 0 → false
+􀄵    removed.exitCode → 69
+􀢄  Test setupFlow_oneEntry_routesIntentsToSetupAndUninstallOrchestrations() recorded an issue at SetupTests.swift:1215:9: Expectation failed: removed.stdout == uninstallRobotCompleteLine + "\n"
+􀄵  removed.stdout == uninstallRobotCompleteLine + "\n" → false
+􀄵    removed.stdout → ""
+􀄵    uninstallRobotCompleteLine + "\n" → "Uninstall complete.
+     "
+􁁛  Test hookCodexNonShellRead_doesNotEvaluate() passed after 0.187 seconds.
+rv allowlist: HOME is not set
+rule core.git:reset-hard — reviewed
+exact echo hi — safe (expired)
+rv allowlist: --project/--system not in v1
+􀢄  Test addCommand_andValidate_missingHome() recorded an issue at AllowlistCommandRunTests.swift:352:19: Expectation failed: expected error "ExitCode(rawValue: 1)", but "Authenticated RV service and operation-bound owner authorization required." of type ValidationError was thrown instead
+􀄵  ExitCode(1) → Authenticated RV service and operation-bound owner authorization required.
+􀄵    message → "Authenticated RV service and operation-bound owner authorization required."
+rv allow-once: HOME is not set
+rv allow-once: HOME is not set
+[{"active":"true","reason":"reviewed","rule":"core.git:reset-hard"},{"active":"false","exact_command":"echo hi","reason":"safe"}]
+􀟈  Test redeem_robotRefused() started.
+􀟈  Test redeem_unknownCode() started.
+􀢄  Test add_invalidExistingTOML() recorded an issue at AllowlistCommandRunTests.swift:108:19: Expectation failed: expected error "ExitCode(rawValue: 2)", but "Authenticated RV service and operation-bound owner authorization required." of type ValidationError was thrown instead
+􀄵  ExitCode(2) → Authenticated RV service and operation-bound owner authorization required.
+􀄵    message → "Authenticated RV service and operation-bound owner authorization required."
+􀟈  Test registeredAndDocumented() started.
+􀟈  Test helpDescribesProxiedNetworkNotDeniedNetwork() started.
+􀢄  Test add_emptyReason() recorded an issue at AllowlistCommandRunTests.swift:22:19: Expectation failed: expected error "ExitCode(rawValue: 2)", but "Authenticated RV service and operation-bound owner authorization required." of type ValidationError was thrown instead
+􀄵  ExitCode(2) → Authenticated RV service and operation-bound owner authorization required.
+􀄵    message → "Authenticated RV service and operation-bound owner authorization required."
+􀟈  Test redeem_expiredCode() started.
+􀟈  Test resolve_relativePATHEntriesNeverResolve() started.
+􀢄  Test hookGrokFileEnv_deniesCoreSecretsWithoutPackEvaluate() failed after 0.197 seconds with 1 issue.
+􀟈  Test redeem_storeUnavailable() started.
+􀟈  Test launch_childExitStatusPropagates() started.
+􀟈  Test launch_realShellPreservesArgumentsAndDeniesOutsideWrite() started.
+􀟈  Test redeem_happyPathThenAlreadySpent() started.
+􀟈  Test majorSemverMismatchIsSkew() started.
+􀟈  Test run_unresolvableExecutableRejectedBeforeLaunch() started.
+􀟈  Test resolve_explicitMissingExecutableUnavailable() started.
+􀟈  Test mintAndClear_missingHome() started.
+􀟈  Test mint_missingCommand() started.
+􀟈  Test skewedHelloDoesNotSendEvaluateAndStillDenies() started.
+􀟈  Test mint_requiresTTYAndRefusesRobot() started.
+􀟈  Test mint_storeUnavailable() started.
+􀟈  Test unprovableServiceSemverReplyFallsBackInProcessAndInvalidates() started.
+􀟈  Test run_explicitRelativeExecutableRejectedBeforeLaunch() started.
+􀟈  Test emptyServiceSemverReplyFallsBackInProcessAndInvalidates() started.
+􀟈  Test redeem_requiresTTY() started.
+􁁛  Test helpText_setup_keepsOneLineCopy() passed after 0.197 seconds.
+􀟈  Test resolve_explicitRelativeExecutableRejected() started.
+􁁛  Test setupFailureOutput_mapsEveryCaseToStderrLineAndExitCode() passed after 0.197 seconds.
+􀟈  Test mismatchedEvaluateResponseIDFallsBackInProcess() started.
+􀟈  Test interactiveTTY_ciIsForbid() started.
+rv allowlist: HOME is not set
+rv allowlist: HOME is not set
+􀟈  Test mismatchedEvaluateResponseProtocolFallsBackInProcess() started.
+􀟈  Test clear_storeUnavailable() started.
+􀟈  Test unparseableServiceSemverReplyFallsBackInProcessAndInvalidates() started.
+􀟈  Test list_rowsPrettyAndRobot() started.
+􀟈  Test clear_requiresTTYThenSucceeds() started.
+􀟈  Test mint_succeedsOnTTY() started.
+􀟈  Test redeem_missingHome() started.
+􀢄  Test addCommand_lockAndParseErrors() recorded an issue at AllowlistCommandRunTests.swift:138:19: Expectation failed: expected error "ExitCode(rawValue: 2)", but "Authenticated RV service and operation-bound owner authorization required." of type ValidationError was thrown instead
+􀄵  ExitCode(2) → Authenticated RV service and operation-bound owner authorization required.
+􀄵    message → "Authenticated RV service and operation-bound owner authorization required."
+􀢄  Test add_missingHome() recorded an issue at AllowlistCommandRunTests.swift:12:19: Expectation failed: expected error "ExitCode(rawValue: 1)", but "Authenticated RV service and operation-bound owner authorization required." of type ValidationError was thrown instead
+􀄵  ExitCode(1) → Authenticated RV service and operation-bound owner authorization required.
+􀄵    message → "Authenticated RV service and operation-bound owner authorization required."
+􀟈  Test list_emptyPrettyAndRobot() started.
+􁁛  Test render_encodesDoctorAndPacksFieldSets() passed after 0.201 seconds.
+􀟈  Test list_missingHome() started.
+􀟈  Test redeem_whitespaceCodeIsNotRedeemable() started.
+􀟈  Test redeem_missingCodePrintsUsage() started.
+rv allowlist: --project/--system not in v1
+􁁛  Test robotDocument_testDeny_matchesPreMigrationGolden() passed after 0.201 seconds.
+􁁛  Test helpText_service_defersFlagsToStatus() passed after 0.201 seconds.
+􀢄  Test addCommand_lockAndParseErrors() recorded an issue at AllowlistCommandRunTests.swift:147:19: Expectation failed: expected error "ExitCode(rawValue: 2)", but "Authenticated RV service and operation-bound owner authorization required." of type ValidationError was thrown instead
+􀄵  ExitCode(2) → Authenticated RV service and operation-bound owner authorization required.
+􀄵    message → "Authenticated RV service and operation-bound owner authorization required."
+􀢄  Test uninstall_pretty_configOnly_claimsComplete() recorded an issue at SetupShowTests.swift:255:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test uninstall_pretty_configOnly_claimsComplete() recorded an issue at SetupShowTests.swift:256:9: Expectation failed: outcome.stdout.contains(uninstallCeremonyCloser)
+􀄵  outcome.stdout.contains(uninstallCeremonyCloser) → false
+􀄵    outcome.stdout → ""
+􀄵    uninstallCeremonyCloser → "Uninstall complete"
+􀢄  Test uninstall_pretty_configOnly_claimsComplete() recorded an issue at SetupShowTests.swift:258:9: Expectation failed: FileManager.default.fileExists(atPath: analytics.configFile.path) == false
+􀄵  FileManager.default.fileExists(atPath: analytics.configFile.path) == false → false
+􀄵    FileManager.default.fileExists(atPath: analytics.configFile.path) → true
+􀢄  Test setup_robot_twoOccupied_isExactlyOneLine_andHelpAgrees() failed after 0.202 seconds with 3 issues.
+􀢄  Test setup_occupiedGrokHookWithExtraHook_leavesBytesUnchanged() recorded an issue at SetupTests.swift:836:2: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “rv.json” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-7680083E-EA07-4202-9E26-ACAE7050B163/.grok/hooks/rv.json, NSURL=file:///var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-7680083E-EA07-4202-9E26-ACAE7050B163/.grok/hooks/rv.json, NSUnderlyingError=0x77d8aa2e50 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀢄  Test save_persistsMachineDenyTOML() recorded an issue at PolicyDraftCommandTests.swift:67:6: Caught error: Authenticated RV service and operation-bound owner authorization required.
+􁁛  Test antigravityMerge_inspectionStates() passed after 0.203 seconds.
+􁁛  Test hostWiring_applyClaudeCurrentMatchers_fileToolsOnReturnedDataEqualsApplyAndIsWired() passed after 0.203 seconds.
+􀢄  Test add_userFlagAndRemoveUnsupportedLayer() recorded an issue at AllowlistCommandRunTests.swift:358:6: Caught error: Authenticated RV service and operation-bound owner authorization required.
+􀢄  Test save_upsertsSamePredicate_keepsOtherMachineRules() recorded an issue at PolicyDraftCommandTests.swift:98:6: Caught error: Authenticated RV service and operation-bound owner authorization required.
+􀢄  Test hookClaudeFileEnv_deniesPermissionDecision() failed after 0.205 seconds with 1 issue.
+rv allowlist: --project/--system not in v1
+􀟈  Test project_unknownLaunchAgentKeepsDownFromBecomingNotInstalled() started.
+􀟈  Test project_usesHomePacksNotServiceSnapshot() started.
+􀟈  Test project_unreadableHomePacksStayBroken() started.
+􀢄  Test refuse_writesNothing() recorded an issue at PolicyDraftCommandTests.swift:138:6: Caught error: Authenticated RV service and operation-bound owner authorization required.
+􀢄  Test setup_pretty_install_wired_explainCloser() failed after 0.206 seconds with 4 issues.
+􀢄  Test unavailablePrimary_uncompilableEnglish_refusesAndWritesNothing() recorded an issue at PolicyDraftCommandTests.swift:190:6: Caught error: Authenticated RV service and operation-bound owner authorization required.
+􀟈  Test unexpectedEvaluateViaFallsBackInProcessAndStillDenies() started.
+􀟈  Test bogusEvaluateViaFallsBackInProcessAndStillDenies() started.
+􀟈  Test uncompilableResetHardIsIndeterminateNotAllow() started.
+􀟈  Test missingCoreIsIndeterminateNotAllow() started.
+􀟈  Test midCallInterruptFallsBackAndStillDenies() started.
+􀟈  Test missingListenerEvaluatesInProcessAndDeniesResetHard() started.
+􁁛  Test doctor_claudeStaleLegacyFingerprint_reportsBrokenNotOccupied() passed after 0.207 seconds.
+􀢄  Test save_storeError_doesNotInvokeFallbackAgain() recorded an issue at PolicyDraftCommandTests.swift:264:13: Expectation failed: await fallbackLog.count == 1
+􀄵  await fallbackLog.count == 1 → <not evaluated>
+􀢄  Test save_unavailablePrimary_persistsFakePreviewOnce() recorded an issue at PolicyDraftCommandTests.swift:209:6: Caught error: Authenticated RV service and operation-bound owner authorization required.
+􁁛  Test helpTopic_doesNotStealCommandArgs() passed after 0.207 seconds.
+􁁛  Test hookOpenClawNonShellRead_doesNotEvaluate() passed after 0.208 seconds.
+􁁛  Test codexHooksMerge_uninstallStripsFingerprintAndKeepsForeign() passed after 0.208 seconds.
+􁁛  Test hostInstallation_wiredCursorCompanionWithFileToolEntryIsWired() passed after 0.210 seconds.
+􁁛  Test mergeEngine_claudeOccupiedWithoutForceThrows() passed after 0.211 seconds.
+􀢄  Test hookNonShellRead_allowsOrdinaryFileWithoutPackEvaluate() failed after 0.222 seconds with 1 issue.
+􁁛  Test workspaceRunOtherFailuresIgnoreProfileID() passed after 0.239 seconds.
+􁁛  Test hookHermesNonShellRead_doesNotEvaluate() passed after 0.250 seconds.
+out
+err
+􁁛  Test workPlan_claudeForceOccupied_carriesSettingsMergeAndSymlinkPrelude() passed after 0.250 seconds.
+􀢄  Test setup_pretty_occupiedGrok_hollowSkipClause() failed after 0.250 seconds with 4 issues.
+􀢄  Test uninstall_claudeOccupiedSymlink_doesNotFollowOrReplace() failed after 0.250 seconds with 1 issue.
+􁁛  Test doctor_foreignGrokOwnedFileIsOccupiedAndPreserved() passed after 0.250 seconds.
+ceremony-chunk
+􀟈  Test setupEnvironment_prefersLocalRvdAndHookRunWritesStderr() started.
+􀟈  Test commandRun_remainingOverloads() started.
+􀟈  Test companionPresence_linuxFilesystemProbe() started.
+􀟈  Test helloAckView_andDefaultTransportSendTimeout() started.
+􀟈  Test allowOnceCLI_emptyCommandAndHomeHelpers() started.
+􀟈  Test scanRun_includeGlobRequiresPathAndUnlistable() started.
+􀟈  Test hookMergeHelpers_andUnreadable() started.
+􀟈  Test policyDraft_predicateTextAndRobotRefuse() started.
+􀟈  Test policyDocumentRun_unreadablePath() started.
+􀢄  Test setup_claudeSettingsRewrite_preservesRestrictedPermissions() failed after 0.250 seconds with 3 issues.
+􀟈  Test helpDispatch_formatOnlyServiceAndBrokenHookHost() started.
+􁁛  Test launcherShellVariantsSortByIDWithDefaultFirst() passed after 0.250 seconds.
+􁁛  Test mergeEngine_willMergeSeesPreStripRoot() passed after 0.250 seconds.
+􁁛  Test launcherUnknownDefaultIsIgnoredSilently() passed after 0.250 seconds.
+􁁛  Test hookOpenCodeNonShellRead_doesNotEvaluate() passed after 0.250 seconds.
+􁁛  Test setup_live_emptyHOME_isNil() passed after 0.250 seconds.
+􁁛  Test mergeEngine_codexFreshMergeIsByteExact() passed after 0.250 seconds.
+􀟈  Test cHookProof_stagedBinariesAndTempHome() started.
+􁁛  Test packListFilterKeepsCatalogCountsForFilteredRobotOutput() passed after 0.251 seconds.
+􀢄  Test setup_openCodeOnly_writesOwnedPayloadWithBakedPath() failed after 0.250 seconds with 2 issues.
+􀢄  Test setup_idempotent_secondRunIsQuietAndDoesNotDuplicate() failed after 0.251 seconds with 1 issue.
+􀢄  Test uninstall_claudeRemovesFingerprintOnly() recorded an issue at SetupTests.swift:1511:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􁁛  Test scanRun_unknownPacks_mapsPacksUnavailable() passed after 0.252 seconds.
+􁁛  Test explainRobot_stdoutSchemaIsNotTestSchema() passed after 0.252 seconds.
+􁁛  Test hookPiXPCDown_stillDeniesResetHard() passed after 0.253 seconds.
+􁁛  Test hostInstallation_foreignOwnedBytesAreOccupiedAndUnchanged(_:) with 9 test cases passed after 0.252 seconds.
+􀟈  Test unavailableServiceReturnsLocalReadinessWithoutSending() started.
+􀟈  Test diagnosticRequestUsesDoctorSnapshotMethod() started.
+􀟈  Test malformedHelloIsTypedFailureNotMissingService() started.
+􀟈  Test unmappedDaemonRefusalSurfacesAsRejectedWithoutWireDetail() started.
+􀟈  Test majorVersionSkewReturnsLocalReadinessWithoutSending() started.
+􀟈  Test validHelloReturnsExistingDoctorSnapshot() started.
+􀟈  Test wrongResponseReturnsTypedLocalFallback() started.
+􀟈  Test rejectedCoreHandshakeReportsUnavailableLocalCoreWithoutSending() started.
+􀟈  Test protocolSkewReturnsLocalReadinessWithoutSending() started.
+􁁛  Test serviceStatus_textFollowsAppearance() passed after 0.252 seconds.
+􀟈  Test requestInterruptionReturnsTypedLocalFallback() started.
+􀟈  Test case passing 1 argument host → .grok to hostInstallation_currentResourceWithMissingExecutableIsBroken(_:) started.
+􀟈  Test case passing 1 argument host → .pi to hostInstallation_currentResourceWithMissingExecutableIsBroken(_:) started.
+􀟈  Test case passing 1 argument host → .opencode to hostInstallation_currentResourceWithMissingExecutableIsBroken(_:) started.
+􀟈  Test case passing 1 argument host → .claude to hostInstallation_currentResourceWithMissingExecutableIsBroken(_:) started.
+􀟈  Test case passing 1 argument host → .openclaw to hostInstallation_currentResourceWithMissingExecutableIsBroken(_:) started.
+􀟈  Test case passing 1 argument host → .hermes to hostInstallation_currentResourceWithMissingExecutableIsBroken(_:) started.
+􀟈  Test case passing 1 argument host → .codex to hostInstallation_currentResourceWithMissingExecutableIsBroken(_:) started.
+􀟈  Test case passing 1 argument host → .cursor to hostInstallation_currentResourceWithMissingExecutableIsBroken(_:) started.
+􀟈  Test case passing 1 argument host → .antigravity to hostInstallation_currentResourceWithMissingExecutableIsBroken(_:) started.
+􀢄  Test setup_force_replacesOccupiedOwnedNameAndKeepsBackup() failed after 0.259 seconds with 3 issues.
+􀢄  Test uninstall_preservesOccupiedDanglingSymlinkAtOwnedName() recorded an issue at SetupTests.swift:702:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􁁛  Test hostWiring_cursorCompanionWithoutFileToolEntryIsShellOnly() passed after 0.260 seconds.
+􁁛  Test launcherProfilesDeriveMarkedAgentsWithoutBaseEntries() passed after 0.263 seconds.
+􁁛  Test mergeEngine_freshUninstallRemovesFile() passed after 0.272 seconds.
+􀟈  Test explain_pushVersusForce_changesScopeAndImpact() started.
+􀟈  Test explain_unsupportedGlobals_fallBackInsteadOfAllowing() started.
+􀟈  Test explain_checkoutDiscard_identifiesLocalOverwrite() started.
+􀟈  Test explain_checkoutCreate_identifiesBranchCreationAndAllows() started.
+􀢄  Test uninstall_robot_alreadyCleanIsOneLine() failed after 0.273 seconds with 2 issues.
+􁁛  Test scanFailOnFindings_withoutFlag_exitsZeroWithFindings() passed after 0.274 seconds.
+􁁛  Test cliAppearance_ttyAutomaticWithoutCIIsPretty() passed after 0.274 seconds.
+􁁛  Test hostInstallation_claudeForeignGuardIsOccupied() passed after 0.274 seconds.
+􁁛  Test restoreKeepAliveAfterCompanionUninstall_missingPlist_isNoOp() passed after 0.274 seconds.
+􁁛  Test antigravityMerge_uninstallEmptyReturnsNil() passed after 0.274 seconds.
+􁁛  Test setup_resolveRv_ignoresPATH_bakesHomeLocalBin() passed after 0.274 seconds.
+􁁛  Test testExplain_sameExitAsTest() passed after 0.275 seconds.
+􁁛  Test hookOpenClawResetHard_encodesAsk() passed after 0.275 seconds.
+􀢄  Test setup_detectsGrokOnPathWithoutPrecreatedTree() failed after 0.276 seconds with 2 issues.
+􁁛  Test launcherProfilesIgnoreOtherProjects() passed after 0.287 seconds.
+􁁛  Test doctor_wiredCursorReportsFileTool() passed after 0.287 seconds.
+􁁛  Test hostInstallation_wiredGrokTemplateIsFileToolWired() passed after 0.287 seconds.
+􀢄  Test hookClaudeOrdinaryFile_allowsWithoutPackEvaluate() recorded an issue at HookCommandTests.swift:413:5: Expectation failed: wire.stdout == expected.stdout
+􀄵  wire.stdout == expected.stdout → false
+􀄵    wire.stdout → "{"systemMessage":"Authenticated RV service and operation-bound owner authorization required.","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Authenticated RV service and operation-bound owner authorization required."}}
+     "
+􀄵    expected.stdout → ""
+􁁛  Test workPlan_forceOccupied_isForceClearThenWrite() passed after 0.288 seconds.
+􁁛  Test hookDenyReasonIsOneLine_noBannerOrCSI() passed after 0.288 seconds.
+􁁛  Test hookAllowLegacyRunTerminalCmd_emptyStdoutExitZero() passed after 0.289 seconds.
+􀢄  Test setup_claudeWritesExclusiveAdapterAndPython3Hook() recorded an issue at SetupTests.swift:1337:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_claudeWritesExclusiveAdapterAndPython3Hook() recorded an issue at SetupTests.swift:1339:9: Expectation failed: FileManager.default.fileExists(atPath: adapter)
+􀄵  FileManager.default.fileExists(atPath: adapter) → false
+􀄵    FileManager.default → <NSFileManager: 0x1051e4ff0>
+􀄵    adapter → "/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-92BC14F1-D2E0-4B2D-BC87-B4C8B19E6ABC/.claude/hooks/rv-guard.py"
+􀢄  Test setup_claudeWritesExclusiveAdapterAndPython3Hook() recorded an issue at SetupTests.swift:1328:2: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “rv-guard.py” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-92BC14F1-D2E0-4B2D-BC87-B4C8B19E6ABC/.claude/hooks/rv-guard.py, NSURL=file:///var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-92BC14F1-D2E0-4B2D-BC87-B4C8B19E6ABC/.claude/hooks/rv-guard.py, NSUnderlyingError=0x77d8aa02a0 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􁁛  Test doctor_xpcSkewSnapshotFormatsAsSkew() passed after 0.289 seconds.
+􀢄  Test setup_antigravityOnly_mergesGroupedAndStripsOnUninstall() recorded an issue at SetupTests.swift:364:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_antigravityOnly_mergesGroupedAndStripsOnUninstall() recorded an issue at SetupTests.swift:339:2: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “rv-guard.py” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-7E2428B0-6D0E-4541-A32F-68BB20E695B8/.gemini/config/hooks/rv-guard.py, NSURL=file:///var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-7E2428B0-6D0E-4541-A32F-68BB20E695B8/.gemini/config/hooks/rv-guard.py, NSUnderlyingError=0x77d8aa0240 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀢄  Test setup_cursorOnly_writesAdapterAndMergesHooksJSON() failed after 0.314 seconds with 2 issues.
+􁁛  Test hostInstallation_antigravityShellOnlyIsBrokenNotOccupied() passed after 0.314 seconds.
+􀢄  Test setup_claudeOccupiedForeignGuard_skipsWithoutForce() failed after 0.315 seconds with 2 issues.
+􀟈  Test missingServiceDeniesEveryHostWithoutEvaluatingInput() started.
+􀟈  Test diagnosticFallbackCannotHonorOrConsumeExistingGrant() started.
+􀟈  Test permanentAllowlistMutationsRequireOwnerAuthorization() started.
+􀟈  Test safetyMutationRequiresOwnerAuthorization() started.
+􀟈  Test protocolFailureDeniesWithoutLocalHookAuthority() started.
+􀟈  Test ttyCannotAuthorizeDirectGrantWrites() started.
+􀟈  Test setupAndUninstallRequireOwnerBeforeMutation() started.
+􀟈  Test agentCannotPlantHostAskGrant() started.
+􀢄  Test hookPiPresentCwdHonorsGrantOnce() recorded an issue at HookCommandTests.swift:470:5: Expectation failed: wire.stdout.isEmpty
+􀄵  wire.stdout.isEmpty → false
+􀄵    wire.stdout → "{"decision":"ask","reason":"Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once.","continuation":"hostNative","rule":"core.git/reset-hard","next":"Run it in Terminal, or rv allow-once."}
+     "
+􀄵    isEmpty → false
+􀢄  Test hookPiPresentCwdHonorsGrantOnce() recorded an issue at HookCommandTests.swift:471:5: Expectation failed: wire.exitCode == 0
+􀄵  wire.exitCode == 0 → false
+􀄵    wire.exitCode → 1
+􀢄  Test setup_skipsLaunchAgentWhenRvdIsNotExecutable_stillWritesHosts() recorded an issue at SetupTests.swift:828:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_skipsLaunchAgentWhenRvdIsNotExecutable_stillWritesHosts() recorded an issue at SetupTests.swift:831:9: Expectation failed: FileManager.default.fileExists(atPath: layout.grokHook)
+􀄵  FileManager.default.fileExists(atPath: layout.grokHook) → false
+􀄵    FileManager.default → <NSFileManager: 0x1051e4ff0>
+􀄵    layout.grokHook → "/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-1F41300A-76F6-4040-9CCD-70E888D0CA13/.grok/hooks/rv.json"
+􀢄  Test setup_skipsLaunchAgentWhenRvdIsNotExecutable_stillWritesHosts() recorded an issue at SetupTests.swift:832:9: Expectation failed: outcome.stdout.contains(setupRobotCompleteLine)
+􀄵  outcome.stdout.contains(setupRobotCompleteLine) → false
+􀄵    outcome.stdout → ""
+􀄵    setupRobotCompleteLine → "Setup complete. Next  rv test 'git reset --hard'."
+􀢄  Test setup_codexOnly_writesAdapterAndMergesHooksJSON() recorded an issue at SetupTests.swift:226:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_codexOnly_writesAdapterAndMergesHooksJSON() recorded an issue at SetupTests.swift:206:2: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “rv-guard.py” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-D5411CBD-426E-4748-8402-D25D5D1B117F/.codex/hooks/rv-guard.py, NSURL=file:///var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-D5411CBD-426E-4748-8402-D25D5D1B117F/.codex/hooks/rv-guard.py, NSUnderlyingError=0x77d8aa0180 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀢄  Test uninstall_claudeUnreadableOccupied_leavesBytes() recorded an issue at SetupTests.swift:1577:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􁁛  Test setupCeremonyPlayer_animate_clearsStaleLinesWhenFrameShrinks() passed after 0.355 seconds.
+􀢄  Test hookRun_grokDenyThroughClientMintsCode() recorded an issue at HookCommandTests.swift:167:20: Expectation failed: allowOnceUnlockCode(in: reason)
+􀄵  allowOnceUnlockCode(in: reason) → nil
+􀄵    reason → ()
+􀟈  Test case passing 1 argument productVersion → "15.0" to installSh_acceptsDarwinMacOS15OrNewer(_:) started.
+􀟈  Test live_readsCLIProcessOverrides() started.
+􀟈  Test make_badStdoutFDFallsBackTo80() started.
+􀟈  Test make_stdoutTTY_ioctlMissFallsBackTo80() started.
+􀟈  Test make_nonTTYColumnsAre80() started.
+􀟈  Test case passing 1 argument productVersion → "15.6" to installSh_acceptsDarwinMacOS15OrNewer(_:) started.
+􀟈  Test make_ptyColumnsUseIoctlSuccess() started.
+􀟈  Test make_ciAbsentAndColorfulTerm() started.
+􀟈  Test case passing 1 argument productVersion → "26.0" to installSh_acceptsDarwinMacOS15OrNewer(_:) started.
+􀢄  Test installSh_setupBakesLocalRvHookNotRvCli() recorded an issue at InstallScriptTests.swift:609:5: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test installSh_setupBakesLocalRvHookNotRvCli() recorded an issue at InstallScriptTests.swift:576:2: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “rv.json” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-install-93F882E7-A8A3-42B6-89F6-D2D7CC911AD8/home/.grok/hooks/rv.json, NSURL=file:///var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-install-93F882E7-A8A3-42B6-89F6-D2D7CC911AD8/home/.grok/hooks/rv.json, NSUnderlyingError=0x77d8aa0180 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀟈  Test make_honorsForbidFlagsAndEnvironment() started.
+􀟈  Test make_ptyZeroColumnsFallBackTo80() started.
+􀟈  Test case passing 1 argument productVersion → "26.1" to installSh_acceptsDarwinMacOS15OrNewer(_:) started.
+􀟈  Test live_withoutOverrideUsesProcess() started.
+􀟈  Test show_freshHome_isNormal() started.
+􀟈  Test case passing 1 argument productVersion → "27.0" to installSh_acceptsDarwinMacOS15OrNewer(_:) started.
+􀟈  Test set_writesMachineConfig() started.
+􀟈  Test registeredAndHelpOmitsPackIDs() started.
+􀢄  Test setup_pretty_occupiedGrokOnly_neverClaimsWired() recorded an issue at SetupShowTests.swift:102:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_pretty_occupiedGrokOnly_neverClaimsWired() recorded an issue at SetupShowTests.swift:105:9: Expectation failed: outcome.stdout.contains(setupCeremonyHostlessTitle)
+􀄵  outcome.stdout.contains(setupCeremonyHostlessTitle) → false
+􀄵    outcome.stdout → ""
+􀄵    setupCeremonyHostlessTitle → "No hosts yet"
+􀢄  Test setup_pretty_occupiedGrokOnly_neverClaimsWired() recorded an issue at SetupShowTests.swift:106:9: Expectation failed: outcome.stdout.contains("◦  Grok  skipped occupied")
+􀄵  outcome.stdout.contains("◦  Grok  skipped occupied") → false
+􀄵    outcome.stdout → ""
+􀢄  Test setup_force_clearFailureInReadOnlyHooksDir_mapsToCannotCreateExit() recorded an issue at SetupTests.swift:1065:9: Expectation failed: outcome.stderr == "rv setup failed: unable to clear occupied grok hook\n"
+􀄵  outcome.stderr == "rv setup failed: unable to clear occupied grok hook\n" → false
+􀄵    outcome.stderr → "rv setup failed: Authenticated RV service and operation-bound owner authorization required.
+     "
+􀄵    "rv setup failed: unable to clear occupied grok hook\n" → "rv setup failed: unable to clear occupied grok hook
+     "
+􀢄  Test setup_force_clearFailureInReadOnlyHooksDir_mapsToCannotCreateExit() recorded an issue at SetupTests.swift:1066:9: Expectation failed: outcome.exitCode == EX_CANTCREAT
+􀄵  outcome.exitCode == EX_CANTCREAT → false
+􀄵    outcome.exitCode → 69
+􀄵    EX_CANTCREAT → 73
+􀢄  Test setup_launchAgentProgramArguments_isSiblingRvdNotDecoy() recorded an issue at SetupTests.serror: Process '/Users/chriskarani/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain/usr/libexec/swift/pm/swiftpm-testing-helper --test-bundle-path /Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/RVCLITests.xctest/Contents/MacOS/RVCLITests --filter RVCLITests /Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/RVCLITests.xctest/Contents/MacOS/RVCLITests --testing-library swift-testing' exited with unexpected signal code 5
+wift:815:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_launchAgentProgramArguments_isSiblingRvdNotDecoy() recorded an issue at SetupTests.swift:807:2: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “dev.rv.evaluate.plist” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-94963FC5-18F1-4B2B-A0B0-4FA412370BA6/Library/LaunchAgents/dev.rv.evaluate.plist, NSURL=file:///var/folders/ns/xmz0zmpj7p148vdgr4bwzp8h0000gn/T/rv-setup-94963FC5-18F1-4B2B-A0B0-4FA412370BA6/Library/LaunchAgents/dev.rv.evaluate.plist, NSUnderlyingError=0x77d8aa00c0 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􀟈  Test case passing 1 argument host → .grok to hostInstallation_detectedWithoutOwnedFileIsAbsentFile(_:) started.
+􀟈  Test case passing 1 argument host → .pi to hostInstallation_detectedWithoutOwnedFileIsAbsentFile(_:) started.
+􀟈  Test case passing 1 argument host → .opencode to hostInstallation_detectedWithoutOwnedFileIsAbsentFile(_:) started.
+􀟈  Test case passing 1 argument host → .claude to hostInstallation_detectedWithoutOwnedFileIsAbsentFile(_:) started.
+􀟈  Test case passing 1 argument host → .openclaw to hostInstallation_detectedWithoutOwnedFileIsAbsentFile(_:) started.
+􀟈  Test case passing 1 argument host → .hermes to hostInstallation_detectedWithoutOwnedFileIsAbsentFile(_:) started.
+􀢄  Test hookCursorOrdinaryFile_allowsWithoutPackEvaluate() recorded an issue at HookCommandTests.swift:745:5: Expectation failed: wire.stdout == expected.stdout
+􀄵  wire.stdout == expected.stdout → false
+􀄵    wire.stdout → "{"permission":"deny","user_message":"Authenticated RV service and operation-bound owner authorization required.","agent_message":"RV blocked this command. Do not retry. Do not rewrite the command. Wait for the human."}
+     "
+􀄵    expected.stdout → "{"permission":"allow"}
+     "
+􀟈  Test case passing 1 argument host → .codex to hostInstallation_detectedWithoutOwnedFileIsAbsentFile(_:) started.
+􀟈  Test case passing 1 argument host → .cursor to hostInstallation_detectedWithoutOwnedFileIsAbsentFile(_:) started.
+􀟈  Test case passing 1 argument host → .antigravity to hostInstallation_detectedWithoutOwnedFileIsAbsentFile(_:) started.
+􀢄  Test setup_claudeForce_replacesFingerprintedHandlerOnly() recorded an issue at SetupTests.swift:1484:9: Expectation failed: outcome.exitCode == 0
+􀄵  outcome.exitCode == 0 → false
+􀄵    outcome.exitCode → 69
+􀢄  Test setup_claudeForce_replacesFingerprintedHandlerOnly() recorded an issue at SetupTests.swift:1486:9: Expectation failed: entries.count == 5
+􀄵  entries.count == 5 → false
+􀄵    entries.count → 1
+􀢄  Test setup_claudeForce_replacesFingerprintedHandlerOnly() recorded an issue at SetupTests.swift:1488:9: Expectation failed: shared.map { $0["command"] as? String } == ["other-guard evaluate"]
+􀄵  shared.map { $0["command"] as? String } == ["other-guard evaluate"] → false
+􀄵    shared.map { $0["command"] as? String } → [Optional("other-guard evaluate"), Optional("/old/rv hook --host claude")]
+􀄵    ["other-guard evaluate"] → [Optional("other-guard evaluate")]
+Swift/ContiguousArrayBuffer.swift:695: Fatal error: Index out of range
+Note: Some test targets reported failures:
+  - RVCLITests (Swift Testing)

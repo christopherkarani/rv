@@ -2,7 +2,19 @@ import Foundation
 import RVDomain
 import RVFileStore
 
+/// Step 8B.1: pending-code coordination + display projection ONLY. This file
+/// is same-user writable and MUST NEVER be an authority source: there is no
+/// `consume`, `hasGrant`, or `insertGranted` here by design. Spend/peek
+/// authority lives in `EphemeralAllowOnceTable` (service-held memory).
+/// `redeem` validates the typed code and flips the row as a projection +
+/// fast-path single-use hint; the daemon's table is the authoritative
+/// single-use enforcer.
 public actor AllowOnceStore {
+    /// Hard cap on projection-file rows, enforced on every write.
+    static let maxStoredRows = 2048
+    /// Hard cap on cached live unlock codes, enforced on every prune.
+    static let maxLiveUnlockCodes = 1024
+
     nonisolated public let baseDirectory: URL
     private let store: FileLockedJSONLStore<AllowOnceRecord>
     private var liveUnlockCodes: [UnlockCacheKey: AllowOnceUnlockCode] = [:]
@@ -37,15 +49,21 @@ public actor AllowOnceStore {
         tty: TTYCapability,
         now: Date,
         robot: Bool = false,
-        ttl: TimeInterval = 24 * 60 * 60
+        ttl: TimeInterval = 24 * 60 * 60,
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = [],
+        invocationDisplay: String? = nil
     ) async throws -> AllowOnceUnlockCode {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
         let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { throw AllowOnceError.emptyCommand }
         let view = MatchingView(trimmed)
-        let fingerprint = commandFingerprint(view)
-        let cacheKey = UnlockCacheKey(fingerprint: fingerprint, cwd: cwd.rawValue)
+        let fingerprint = grantFingerprint(view, invocationPrefix: invocationPrefix)
+        let payloadDigest = maskedSegments.map(maskedPayloadContentDigest)
+        let cacheKey = UnlockCacheKey(
+            fingerprint: fingerprint, cwd: cwd.rawValue, payloadDigest: payloadDigest
+        )
         var lastError: AllowOnceError = .collision
         for _ in 0..<8 {
             let code = try generateAllowOnceCode()
@@ -60,17 +78,21 @@ public actor AllowOnceStore {
                         cwd: cwd,
                         ruleID: ruleID,
                         now: now,
-                        ttl: ttl
+                        ttl: ttl,
+                        payloadDigest: payloadDigest,
+                        invocationDisplay: invocationDisplay
                     ) {
                     case let .reused(records):
-                        try writeRecords(records)
+                        let written = try writeRecords(records)
+                        pruneLiveUnlockCodes(against: written, now: now)
                         if let cached = liveUnlockCodes[cacheKey] {
                             return cached
                         }
                         throw AllowOnceError.alreadyPending
                     case let .appended(records):
-                        try writeRecords(records)
+                        let written = try writeRecords(records)
                         liveUnlockCodes[cacheKey] = code
+                        pruneLiveUnlockCodes(against: written, now: now)
                         return code
                     }
                 }
@@ -84,19 +106,27 @@ public actor AllowOnceStore {
 
     /// Hook deny mint. Not TTY-gated. Returns a six-hex code, `earlierPending`, or nil.
     /// Writes `kind: .pending` only. Never plants a granted row. A live pending
-    /// for the same command+cwd is reused instead of minting a new code.
+    /// for the same command+cwd+payload is reused instead of minting a new code.
+    /// TTL matches the pending-row TTL: the wire-delivered code is visible
+    /// to the gated agent, so its bearer window stays short.
     package func mintFromDeny(
         matchingView: MatchingView,
         cwd: WorkingDirectory,
         ruleID: RuleID?,
         now: Date,
-        ttl: TimeInterval = 24 * 60 * 60
+        ttl: TimeInterval = 15 * 60,
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = [],
+        invocationDisplay: String? = nil
     ) async -> AllowOnceUnlockMint? {
         let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
         let view = MatchingView(trimmed)
-        let fingerprint = commandFingerprint(view)
-        let cacheKey = UnlockCacheKey(fingerprint: fingerprint, cwd: cwd.rawValue)
+        let fingerprint = grantFingerprint(view, invocationPrefix: invocationPrefix)
+        let payloadDigest = maskedSegments.map(maskedPayloadContentDigest)
+        let cacheKey = UnlockCacheKey(
+            fingerprint: fingerprint, cwd: cwd.rawValue, payloadDigest: payloadDigest
+        )
         for _ in 0..<8 {
             let code: AllowOnceUnlockCode
             do {
@@ -115,17 +145,21 @@ public actor AllowOnceStore {
                         cwd: cwd,
                         ruleID: ruleID,
                         now: now,
-                        ttl: ttl
+                        ttl: ttl,
+                        payloadDigest: payloadDigest,
+                        invocationDisplay: invocationDisplay
                     ) {
                     case let .reused(records):
-                        try writeRecords(records)
+                        let written = try writeRecords(records)
+                        pruneLiveUnlockCodes(against: written, now: now)
                         if let cached = liveUnlockCodes[cacheKey] {
                             return .code(cached)
                         }
                         return .earlierPending
                     case let .appended(records):
-                        try writeRecords(records)
+                        let written = try writeRecords(records)
                         liveUnlockCodes[cacheKey] = code
+                        pruneLiveUnlockCodes(against: written, now: now)
                         return .code(code)
                     }
                 }
@@ -138,11 +172,17 @@ public actor AllowOnceStore {
         return nil
     }
 
+    /// Validates the typed code and flips the pending row as a projection +
+    /// fast-path single-use hint. Step 8B.1: the flip creates NO authority;
+    /// the CLI must attest to the daemon afterwards. `expectedFingerprint`
+    /// binds the flip to the pre-LA display (TOCTOU); mismatch aborts.
     public func redeem(
         code: String,
         tty: TTYCapability,
         now: Date,
-        robot: Bool = false
+        robot: Bool = false,
+        expectedFingerprint: String? = nil,
+        expectedPayloadDigest: String? = nil
     ) async throws -> AllowOnceListRow {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
@@ -152,128 +192,80 @@ public actor AllowOnceStore {
         }
         let hash = sha256Hex(normalized)
         return try withFileLock {
-            switch try AllowOnceLedger.redeem(records: loadRecords(), codeHash: hash, now: now) {
+            switch try AllowOnceLedger.redeem(
+                records: loadRecords(),
+                codeHash: hash,
+                now: now,
+                expectedFingerprint: expectedFingerprint,
+                expectedPayloadDigest: expectedPayloadDigest
+            ) {
             case let .expired(records):
-                try writeRecords(records)
+                let written = try writeRecords(records)
+                pruneLiveUnlockCodes(against: written, now: now)
                 throw AllowOnceError.expired
             case let .granted(records, row):
-                try writeRecords(records)
+                let written = try writeRecords(records)
+                pruneLiveUnlockCodes(against: written, now: now)
                 return row
             }
         }
     }
 
-    /// Test / service preload of a grant without minting a code.
-    /// Not a human unlock path — does not require a TTY. Keep `package` so CLI cannot plant grants.
-    package func insertGranted(
+    /// Single locked read of a live pending row: display row + action
+    /// fingerprint, atomically. The redeem ceremony captures both BEFORE
+    /// LocalAuthentication and re-checks fingerprint + full row under
+    /// the redeem lock, so a swapped file between display and attest
+    /// aborts instead of attesting a row the human never reviewed.
+    public func validatePending(
+        code: String,
+        now: Date
+    ) async -> (row: AllowOnceListRow, fingerprint: String, payloadDigest: String?)? {
+        let normalized = code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard AllowOnceUnlockCode(validating: normalized) != nil else { return nil }
+        let hash = sha256Hex(normalized)
+        return (try? withFileLock {
+            AllowOnceLedger.pendingRow(in: loadRecords(), codeHash: hash, now: now)
+        }).flatMap { record in
+            AllowOnceLedger.rows(records: [record], now: now).first.map {
+                (row: $0, fingerprint: record.commandFingerprint, payloadDigest: record.payloadDigest)
+            }
+        }
+    }
+
+    /// Daemon projection write: records a memory-table plant/consume as a
+    /// display row so `rv allow-once list` stays truthful. Best-effort,
+    /// display-only: nothing reads these rows for authority. Non-blocking:
+    /// a display-only write must never stall the daemon ceremony path on a
+    /// held lock; a missed projection just leaves `list` one row stale.
+    package func project(
+        lifecycle: AllowOnceLifecycle,
         matchingView: MatchingView,
         cwd: WorkingDirectory,
+        codeHash: String,
         now: Date,
-        ttl: TimeInterval = 24 * 60 * 60
-    ) async throws {
+        ttl: TimeInterval = 24 * 60 * 60,
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = [],
+        invocationDisplay: String? = nil
+    ) async {
         let record = AllowOnceRecord(
             schemaVersion: 1,
-            lifecycle: .granted,
-            codeHash: sha256Hex(UUID().uuidString),
-            commandFingerprint: commandFingerprint(matchingView),
+            lifecycle: lifecycle,
+            codeHash: codeHash,
+            commandFingerprint: grantFingerprint(matchingView, invocationPrefix: invocationPrefix),
             commandRedacted: redactCommand(matchingView),
             cwd: cwd,
             ruleID: nil,
             createdAt: now,
-            expiresAt: now.addingTimeInterval(ttl)
+            expiresAt: now.addingTimeInterval(ttl),
+            payloadDigest: maskedSegments.map(maskedPayloadContentDigest),
+            invocationDisplay: invocationDisplay
         )
-        try withFileLock {
+        try? withFileLock(nonBlocking: true) {
             var records = loadRecords()
             records.append(record)
-            try writeRecords(records)
-        }
-    }
-
-    public func hasGrant(matchingView: MatchingView, cwd: WorkingDirectory, now: Date) async -> Bool {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            return false
-        }
-        let fingerprint = commandFingerprint(matchingView)
-        let records = loadRecords()
-        return records.contains { record in
-            guard case .granted = record.lifecycle else { return false }
-            return record.commandFingerprint == fingerprint
-                && record.cwd == cwd
-                && record.expiresAt >= now
-        }
-    }
-
-    /// Host Allow once: plant a granted row and spend it this turn. Not TTY-gated.
-    public func plantAndConsume(
-        matchingView: MatchingView,
-        cwd: WorkingDirectory,
-        now: Date,
-        ttl: TimeInterval = 24 * 60 * 60
-    ) async -> AllowOnceConsumeStatus {
-        let trimmed = matchingView.rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty == false else {
-            return .notFound
-        }
-        let view = MatchingView(trimmed)
-        do {
-            return try withFileLock {
-                switch AllowOnceLedger.plantAndConsume(
-                    records: loadRecords(),
-                    fingerprint: commandFingerprint(view),
-                    redacted: redactCommand(view),
-                    cwd: cwd,
-                    now: now,
-                    ttl: ttl,
-                    codeHash: sha256Hex(UUID().uuidString)
-                ) {
-                case let .consumed(tokenID, records):
-                    try writeRecords(records)
-                    return .consumed(tokenID: tokenID)
-                case let .expired(records):
-                    try writeRecords(records)
-                    return .expired
-                case .alreadyConsumed:
-                    return .alreadyConsumed
-                case .notFound:
-                    return .notFound
-                }
-            }
-        } catch {
-            return .unavailable
-        }
-    }
-
-    public func consume(
-        matchingView: MatchingView,
-        cwd: WorkingDirectory,
-        now: Date
-    ) async -> AllowOnceConsumeStatus {
-        let fingerprint = commandFingerprint(matchingView)
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            return .notFound
-        }
-        do {
-            return try withFileLock {
-                switch AllowOnceLedger.consume(
-                    records: loadRecords(),
-                    fingerprint: fingerprint,
-                    cwd: cwd,
-                    now: now
-                ) {
-                case let .consumed(tokenID, records):
-                    try writeRecords(records)
-                    return .consumed(tokenID: tokenID)
-                case let .expired(records):
-                    try writeRecords(records)
-                    return .expired
-                case .alreadyConsumed:
-                    return .alreadyConsumed
-                case .notFound:
-                    return .notFound
-                }
-            }
-        } catch {
-            return .unavailable
+            let written = try writeRecords(records)
+            pruneLiveUnlockCodes(against: written, now: now)
         }
     }
 
@@ -296,21 +288,127 @@ public actor AllowOnceStore {
     private struct UnlockCacheKey: Hashable, Sendable {
         var fingerprint: String
         var cwd: String
+        // M1: same-view different-payload mints must not share a code.
+        var payloadDigest: String?
     }
 
     private func loadRecords() -> [AllowOnceRecord] {
         store.load().filter { $0.schemaVersion == 1 }
     }
 
-    private func writeRecords(_ records: [AllowOnceRecord]) throws {
+    /// Saves through the row cap; returns exactly what was written so
+    /// callers prune the live-code cache against on-disk truth.
+    private func writeRecords(_ records: [AllowOnceRecord]) throws -> [AllowOnceRecord] {
+        let written = AllowOnceLedger.capped(records: records, maxRows: Self.maxStoredRows)
         do {
-            try store.save(records)
+            try store.save(written)
         } catch is FileLockedJSONLStoreError {
             // RVFileStore boundary: every save failure (encode or IO) becomes
             // the domain persistence error, so withFileLock only ever sees
             // lock-acquisition or lock-setup failures (FileLockedJSONLStoreError),
             // never untranslated save failures.
             throw AllowOnceError.encodeFailed
+        }
+        return written
+    }
+
+    /// Drops cached codes with no live pending row in the just-written
+    /// records (redeemed, expired, or cap-shed), then enforces the cache
+    /// cap with deterministic sorted-key eviction. A same-user loop of
+    /// distinct denies otherwise grows this map forever on the daemon.
+    /// An evicted-but-live row still redeems from disk; only the mint
+    /// fast-path answer degrades (to `alreadyPending`/`earlierPending`).
+    private func pruneLiveUnlockCodes(against written: [AllowOnceRecord], now: Date) {
+        var liveKeys = Set<UnlockCacheKey>()
+        for record in written {
+            guard case .pending = record.lifecycle, record.expiresAt > now else { continue }
+            liveKeys.insert(UnlockCacheKey(
+                fingerprint: record.commandFingerprint,
+                cwd: record.cwd.rawValue,
+                payloadDigest: record.payloadDigest
+            ))
+        }
+        liveUnlockCodes = liveUnlockCodes.filter { liveKeys.contains($0.key) }
+        guard liveUnlockCodes.count > Self.maxLiveUnlockCodes else { return }
+        let victims = liveUnlockCodes.keys
+            .sorted {
+                ($0.fingerprint, $0.cwd, $0.payloadDigest ?? "")
+                    < ($1.fingerprint, $1.cwd, $1.payloadDigest ?? "")
+            }
+            .dropFirst(Self.maxLiveUnlockCodes)
+        for key in victims {
+            liveUnlockCodes.removeValue(forKey: key)
+        }
+    }
+
+    /// Live-code cache size. Test seam only.
+    package func liveUnlockCodeCountForTesting() -> Int {
+        liveUnlockCodes.count
+    }
+
+    /// M5: LA-prompt budget — at most `maxLAPromptsPerWindow` device-owner
+    /// prompts per sliding `laPromptWindow`. An agent with pty access can
+    /// loop the genuine `rv allow-once` binary and fatigue the human into
+    /// approving an attacker-chosen pending command (MFA fatigue); the
+    /// budget caps that loop. The CLI reserves before every LA prompt in
+    /// mint and redeem; false means "do not prompt, fail closed".
+    ///
+    /// Same-user writable like the projection file, so this is an
+    /// anti-fatigue speed bump, not a security boundary against the file
+    /// owner (who could delete the budget file). A corrupt or missing
+    /// file self-heals to a fresh window rather than bricking approvals;
+    /// a failed write fails closed.
+    public static let maxLAPromptsPerWindow = 10
+    public static let laPromptWindow: TimeInterval = 300
+
+    /// m2: records the daemon epoch of a successful attestation. Returns
+    /// true when a different epoch was previously recorded — the daemon
+    /// restarted since the last attest, so every earlier memory approval
+    /// died with the old table. First sighting (or an unreadable file)
+    /// records and returns false. Display-only; never authority.
+    public func noteAttestedEpoch(_ epoch: String) -> Bool {
+        let url = RVPolicyPaths.attestedEpochFile(inConfigDir: baseDirectory)
+        do {
+            return try withFileLock {
+                var previous: String?
+                if let data = try? Data(contentsOf: url) {
+                    previous = try? JSONDecoder().decode(String.self, from: data)
+                }
+                try? FileManager.default.createDirectory(
+                    at: baseDirectory, withIntermediateDirectories: true
+                )
+                try? JSONEncoder().encode(epoch).write(to: url, options: .atomic)
+                guard let previous, previous.isEmpty == false else { return false }
+                return previous != epoch
+            }
+        } catch {
+            return false
+        }
+    }
+
+    public func reserveLAPrompt(now: Date) -> Bool {
+        let url = RVPolicyPaths.laPromptBudgetFile(inConfigDir: baseDirectory)
+        let cutoff = now.addingTimeInterval(-Self.laPromptWindow).timeIntervalSince1970
+        do {
+            return try withFileLock {
+                var stamps: [TimeInterval] = []
+                if let data = try? Data(contentsOf: url),
+                    let decoded = try? JSONDecoder().decode([TimeInterval].self, from: data)
+                {
+                    stamps = decoded
+                }
+                stamps = stamps.filter { $0 >= cutoff }
+                guard stamps.count < Self.maxLAPromptsPerWindow else { return false }
+                stamps.append(now.timeIntervalSince1970)
+                try? FileManager.default.createDirectory(
+                    at: baseDirectory, withIntermediateDirectories: true
+                )
+                guard (try? JSONEncoder().encode(stamps).write(to: url, options: .atomic)) != nil
+                else { return false }
+                return true
+            }
+        } catch {
+            return false
         }
     }
 

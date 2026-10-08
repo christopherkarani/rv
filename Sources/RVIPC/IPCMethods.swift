@@ -14,6 +14,9 @@ public enum IPCMethod: Sendable, Equatable {
     case pendingResolve(PendingResolveParams)
     case rulePreview(RulePreviewParams)
     case ruleSave(RuleSaveParams)
+    case proposeWorkspaceLaunch(ProposeLaunchParams)
+    case launchProposalStatus(ProposalStatusParams)
+    case attestTTYRedemption(AttestTTYRedemptionParams)
 }
 
 public enum IPCResult: Sendable, Equatable {
@@ -29,6 +32,22 @@ public enum IPCResult: Sendable, Equatable {
     case pendingResolve(PendingResolveReply)
     case rulePreview(RulePreviewReply)
     case ruleSave(RuleSaveReply)
+    case proposeWorkspaceLaunch(ProposeLaunchReply)
+    case launchProposalStatus(ProposalStatusReply)
+    case attestTTYRedemption(AttestTTYRedemptionReply)
+    case uiRegistered(UIRegisteredDTO)
+    case uiReviewList(UIReviewListDTO)
+    case uiChallengeBundle(UIChallengeBundleDTO)
+    case uiOperationStatus(UIOperationStatusDTO)
+    case uiActionReviewList(UIActionReviewListDTO)
+    case uiActionChallengeBundle(UIActionChallengeBundleDTO)
+    case uiActionStatus(UIActionStatusDTO)
+    case uiHookReviewList(UIHookReviewListDTO)
+    case uiHookChallengeBundle(UIHookChallengeBundleDTO)
+    case uiHookStatus(UIHookStatusDTO)
+    case hostActionApprovalCreated(HostActionApprovalCreatedDTO)
+    case hostActionApprovalStatus(HostActionApprovalStatusReplyDTO)
+    case hostActionApprovalDecision(HostActionApprovalDecisionDTO)
     case error(IPCError)
 }
 
@@ -46,6 +65,9 @@ extension IPCMethod: Codable {
         case pendingResolve
         case rulePreview
         case ruleSave
+        case proposeWorkspaceLaunch
+        case launchProposalStatus
+        case attestTTYRedemption
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -75,6 +97,12 @@ extension IPCMethod: Codable {
             try container.encode(params, forKey: .rulePreview)
         case .ruleSave(let params):
             try container.encode(params, forKey: .ruleSave)
+        case .proposeWorkspaceLaunch(let params):
+            try container.encode(params, forKey: .proposeWorkspaceLaunch)
+        case .launchProposalStatus(let params):
+            try container.encode(params, forKey: .launchProposalStatus)
+        case .attestTTYRedemption(let params):
+            try container.encode(params, forKey: .attestTTYRedemption)
         }
     }
 
@@ -104,6 +132,15 @@ extension IPCMethod: Codable {
             self = .rulePreview(params)
         } else if let params = try container.decodeIfPresent(RuleSaveParams.self, forKey: .ruleSave) {
             self = .ruleSave(params)
+        } else if let params = try container.decodeIfPresent(
+            ProposeLaunchParams.self, forKey: .proposeWorkspaceLaunch) {
+            self = .proposeWorkspaceLaunch(params)
+        } else if let params = try container.decodeIfPresent(
+            ProposalStatusParams.self, forKey: .launchProposalStatus) {
+            self = .launchProposalStatus(params)
+        } else if let params = try container.decodeIfPresent(
+            AttestTTYRedemptionParams.self, forKey: .attestTTYRedemption) {
+            self = .attestTTYRedemption(params)
         } else {
             throw DecodingError.dataCorrupted(
                 .init(codingPath: decoder.codingPath, debugDescription: "unknown IPCMethod")
@@ -126,6 +163,22 @@ extension IPCResult: Codable {
         case pendingResolve
         case rulePreview
         case ruleSave
+        case proposeWorkspaceLaunch
+        case launchProposalStatus
+        case attestTTYRedemption
+        case uiRegistered
+        case uiReviewList
+        case uiChallengeBundle
+        case uiOperationStatus
+        case uiActionReviewList
+        case uiActionChallengeBundle
+        case uiActionStatus
+        case uiHookReviewList
+        case uiHookChallengeBundle
+        case uiHookStatus
+        case hostActionApprovalCreated
+        case hostActionApprovalStatus
+        case hostActionApprovalDecision
         case error
     }
 
@@ -156,6 +209,38 @@ extension IPCResult: Codable {
             try container.encode(reply, forKey: .rulePreview)
         case .ruleSave(let reply):
             try container.encode(reply, forKey: .ruleSave)
+        case .proposeWorkspaceLaunch(let reply):
+            try container.encode(reply, forKey: .proposeWorkspaceLaunch)
+        case .launchProposalStatus(let reply):
+            try container.encode(reply, forKey: .launchProposalStatus)
+        case .attestTTYRedemption(let reply):
+            try container.encode(reply, forKey: .attestTTYRedemption)
+        case .uiRegistered(let reply):
+            try container.encode(reply, forKey: .uiRegistered)
+        case .uiReviewList(let reply):
+            try container.encode(reply, forKey: .uiReviewList)
+        case .uiChallengeBundle(let reply):
+            try container.encode(reply, forKey: .uiChallengeBundle)
+        case .uiOperationStatus(let reply):
+            try container.encode(reply, forKey: .uiOperationStatus)
+        case .uiActionReviewList(let reply):
+            try container.encode(reply, forKey: .uiActionReviewList)
+        case .uiActionChallengeBundle(let reply):
+            try container.encode(reply, forKey: .uiActionChallengeBundle)
+        case .uiActionStatus(let reply):
+            try container.encode(reply, forKey: .uiActionStatus)
+        case .uiHookReviewList(let reply):
+            try container.encode(reply, forKey: .uiHookReviewList)
+        case .uiHookChallengeBundle(let reply):
+            try container.encode(reply, forKey: .uiHookChallengeBundle)
+        case .uiHookStatus(let reply):
+            try container.encode(reply, forKey: .uiHookStatus)
+        case .hostActionApprovalCreated(let reply):
+            try container.encode(reply, forKey: .hostActionApprovalCreated)
+        case .hostActionApprovalStatus(let reply):
+            try container.encode(reply, forKey: .hostActionApprovalStatus)
+        case .hostActionApprovalDecision(let reply):
+            try container.encode(reply, forKey: .hostActionApprovalDecision)
         case .error(let error):
             try container.encode(error, forKey: .error)
         }
@@ -187,6 +272,54 @@ extension IPCResult: Codable {
             self = .rulePreview(reply)
         } else if let reply = try container.decodeIfPresent(RuleSaveReply.self, forKey: .ruleSave) {
             self = .ruleSave(reply)
+        } else if let reply = try container.decodeIfPresent(
+            ProposeLaunchReply.self, forKey: .proposeWorkspaceLaunch) {
+            self = .proposeWorkspaceLaunch(reply)
+        } else if let reply = try container.decodeIfPresent(
+            ProposalStatusReply.self, forKey: .launchProposalStatus) {
+            self = .launchProposalStatus(reply)
+        } else if let reply = try container.decodeIfPresent(
+            AttestTTYRedemptionReply.self, forKey: .attestTTYRedemption) {
+            self = .attestTTYRedemption(reply)
+        } else if let reply = try container.decodeIfPresent(
+            UIRegisteredDTO.self, forKey: .uiRegistered) {
+            self = .uiRegistered(reply)
+        } else if let reply = try container.decodeIfPresent(
+            UIReviewListDTO.self, forKey: .uiReviewList) {
+            self = .uiReviewList(reply)
+        } else if let reply = try container.decodeIfPresent(
+            UIChallengeBundleDTO.self, forKey: .uiChallengeBundle) {
+            self = .uiChallengeBundle(reply)
+        } else if let reply = try container.decodeIfPresent(
+            UIOperationStatusDTO.self, forKey: .uiOperationStatus) {
+            self = .uiOperationStatus(reply)
+        } else if let reply = try container.decodeIfPresent(
+            UIActionReviewListDTO.self, forKey: .uiActionReviewList) {
+            self = .uiActionReviewList(reply)
+        } else if let reply = try container.decodeIfPresent(
+            UIActionChallengeBundleDTO.self, forKey: .uiActionChallengeBundle) {
+            self = .uiActionChallengeBundle(reply)
+        } else if let reply = try container.decodeIfPresent(
+            UIActionStatusDTO.self, forKey: .uiActionStatus) {
+            self = .uiActionStatus(reply)
+        } else if let reply = try container.decodeIfPresent(
+            UIHookReviewListDTO.self, forKey: .uiHookReviewList) {
+            self = .uiHookReviewList(reply)
+        } else if let reply = try container.decodeIfPresent(
+            UIHookChallengeBundleDTO.self, forKey: .uiHookChallengeBundle) {
+            self = .uiHookChallengeBundle(reply)
+        } else if let reply = try container.decodeIfPresent(
+            UIHookStatusDTO.self, forKey: .uiHookStatus) {
+            self = .uiHookStatus(reply)
+        } else if let reply = try container.decodeIfPresent(
+            HostActionApprovalCreatedDTO.self, forKey: .hostActionApprovalCreated) {
+            self = .hostActionApprovalCreated(reply)
+        } else if let reply = try container.decodeIfPresent(
+            HostActionApprovalStatusReplyDTO.self, forKey: .hostActionApprovalStatus) {
+            self = .hostActionApprovalStatus(reply)
+        } else if let reply = try container.decodeIfPresent(
+            HostActionApprovalDecisionDTO.self, forKey: .hostActionApprovalDecision) {
+            self = .hostActionApprovalDecision(reply)
         } else if let error = try container.decodeIfPresent(IPCError.self, forKey: .error) {
             self = .error(error)
         } else {

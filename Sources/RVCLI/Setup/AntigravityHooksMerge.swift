@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 
 /// Merge / inspect / uninstall for `$HOME/.gemini/config/hooks.json`.
 /// Global Antigravity hooks file (verified: settings.json embedding does not
@@ -65,22 +66,22 @@ enum AntigravityHooksMerge {
         return path.hasPrefix("/") ? path : nil
     }
 
-    static func matchesCurrentHook(_ hook: [String: Any]) -> Bool {
-        guard let type = hook["type"] as? String, type == hookType,
-              let command = hook["command"] as? String,
+    static func matchesCurrentHook(_ hook: JSONValue) -> Bool {
+        guard let type = hook["type"]?.string, type == hookType,
+              let command = hook["command"]?.string,
               let path = bakedRvPath(in: command),
               path.hasPrefix("/"),
               let adapter = adapterPath(in: command),
               adapter.hasPrefix("/"),
               adapter.hasSuffix("/hooks/rv-guard.py"),
-              hook["timeout"] as? Int == timeout
+              hook["timeout"]?.int == timeout
         else {
             return false
         }
         return command == hookCommand(rvPath: path, adapterPath: adapter)
     }
 
-    static func isFingerprintedHook(_ hook: [String: Any]) -> Bool {
+    static func isFingerprintedHook(_ hook: JSONValue) -> Bool {
         HostHooksMergeEngine.isFingerprintedHook(hook, descriptor: wiringDescriptor)
     }
 
@@ -94,18 +95,18 @@ enum AntigravityHooksMerge {
         )
     }
 
-    static func rvEntry(rvPath: String, adapterPath: String, matcher: String) -> [String: Any] {
-        [
-            "matcher": matcher,
-            "hooks": [
-                HostHooksMergeEngine.hookDictionary(
+    static func rvEntry(rvPath: String, adapterPath: String, matcher: String) -> JSONValue {
+        .object([
+            "matcher": .string(matcher),
+            "hooks": .array([
+                HostHooksMergeEngine.hookValue(
                     hookEntry(rvPath: rvPath, adapterPath: adapterPath)
                 ),
-            ],
-        ]
+            ]),
+        ])
     }
 
-    static func hasFileToolMatchers(in root: [String: Any]) -> Bool {
+    static func hasFileToolMatchers(in root: [String: JSONValue]) -> Bool {
         let present = Set(
             HostHooksMergeEngine.locateFingerprintedHooks(in: root, descriptor: wiringDescriptor)
                 .compactMap { $0.matcher }
@@ -165,7 +166,7 @@ enum AntigravityHooksMerge {
         return inspectionState(of: root)
     }
 
-    static func inspectionState(of root: [String: Any]) -> InspectionState {
+    static func inspectionState(of root: [String: JSONValue]) -> InspectionState {
         let located = HostHooksMergeEngine.locateFingerprintedHooks(
             in: root,
             descriptor: wiringDescriptor
@@ -185,7 +186,7 @@ enum AntigravityHooksMerge {
         guard allCurrent else { return .occupied }
 
         guard let bakedPath = located.compactMap({
-            bakedRvPath(in: ($0.hook["command"] as? String) ?? "")
+            bakedRvPath(in: $0.hook["command"]?.string ?? "")
         }).first
         else {
             return .occupied

@@ -57,7 +57,7 @@ struct WorkspaceSessionDomainTests {
             claimedSession: RuntimeSessionClaim(validating: session.id.rawValue.uuidString)!,
             action: .shell(ShellCommand(rawValue: "echo hello"))
         )
-        let decision = RuntimeAdmissionGate.submit(
+        let decision = RuntimeAdmissionGate.submitLegacy(
             binding: &binding,
             frame: .success(frame),
             propose: { _ in .failure(.failed) }

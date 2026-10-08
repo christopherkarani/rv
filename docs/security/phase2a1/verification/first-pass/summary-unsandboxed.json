@@ -1,0 +1,95 @@
+[
+  {
+    "command": [
+      "Scripts/swift-6.4",
+      "test",
+      "--disable-sandbox",
+      "--filter",
+      "AgentLaunchSelectionTests|ProductionIdentityLaunchTests|AgentPrincipalReference|WorkspacePrincipalAuthority|LiveWorkspaceHost"
+    ],
+    "exit_code": 0,
+    "timeout": false,
+    "summaries": [
+      "\udbc4\udc5b  Test run with 14 tests in 1 suite passed after 0.020 seconds.",
+      "\udbc4\udc5b  Test run with 8 tests in 1 suite passed after 0.003 seconds.",
+      "\udbc4\udc5b  Test run with 8 tests in 2 suites passed after 5.834 seconds.",
+      "\udbc4\udc5b  Test run with 3 tests in 0 suites passed after 0.001 seconds."
+    ]
+  },
+  {
+    "command": [
+      "Scripts/preflight.sh"
+    ],
+    "exit_code": 3,
+    "timeout": false,
+    "summaries": []
+  },
+  {
+    "command": [
+      "Scripts/swift-6.4",
+      "test",
+      "--disable-sandbox",
+      "--filter",
+      "RVDomainTests"
+    ],
+    "exit_code": 1,
+    "timeout": false,
+    "summaries": [
+      "\udbc2\udc84  Test run with 478 tests in 39 suites failed after 0.026 seconds with 8 issues."
+    ]
+  },
+  {
+    "command": [
+      "Scripts/swift-6.4",
+      "test",
+      "--disable-sandbox",
+      "--filter",
+      "RVPolicyTests"
+    ],
+    "exit_code": 1,
+    "timeout": false,
+    "summaries": [
+      "\udbc2\udc84  Test run with 325 tests in 34 suites failed after 0.159 seconds with 4 issues."
+    ]
+  },
+  {
+    "command": [
+      "Scripts/swift-6.4",
+      "test",
+      "--disable-sandbox",
+      "--filter",
+      "RVIsolationTests"
+    ],
+    "exit_code": 1,
+    "timeout": false,
+    "summaries": [
+      "\udbc2\udc84  Test run with 452 tests in 28 suites failed after 338.577 seconds with 54 issues."
+    ]
+  },
+  {
+    "command": [
+      "Scripts/swift-6.4",
+      "test",
+      "--disable-sandbox",
+      "--filter",
+      "RVIPCTests"
+    ],
+    "exit_code": 0,
+    "timeout": false,
+    "summaries": [
+      "\udbc4\udc5b  Test run with 95 tests in 7 suites passed after 0.004 seconds."
+    ]
+  },
+  {
+    "command": [
+      "Scripts/swift-6.4",
+      "test",
+      "--disable-sandbox",
+      "--filter",
+      "RVServiceTests"
+    ],
+    "exit_code": 1,
+    "timeout": false,
+    "summaries": []
+  }
+]

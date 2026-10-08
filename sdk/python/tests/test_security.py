@@ -24,6 +24,8 @@ from rv.errors import (
     PendingNotFound,
 )
 
+pytestmark = pytest.mark.usefixtures("_product_ok")
+
 ACK_OK = test_client.ACK_OK
 
 

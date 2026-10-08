@@ -74,9 +74,11 @@ struct LinuxResidualCoverageTests {
             analysis: .unknown,
             boundReview: .mandatoryHuman(deny)
         )
-        #expect(HostNativeAsk.recordsPending(result: allowedBind, cwd: cwd) == false)
-        #expect(HostNativeAsk.recordsPending(result: denied, cwd: cwd))
-        #expect(HostNativeAsk.recordsPending(result: human, cwd: cwd))
+        #expect(
+            HookAuthorization.project(result: allowedBind, cwd: cwd).shouldRecordPending == false
+        )
+        #expect(HookAuthorization.project(result: denied, cwd: cwd).shouldRecordPending)
+        #expect(HookAuthorization.project(result: human, cwd: cwd).shouldRecordPending)
         let indeterminate = EvaluationResult(
             outcome: .indeterminate(.commandTooLarge),
             matchingView: MatchingView("huge"),
@@ -84,11 +86,7 @@ struct LinuxResidualCoverageTests {
             boundReview: .mandatoryHuman(deny)
         )
         #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .pi,
-                result: indeterminate,
-                cwd: cwd
-            ) == .deny
+            HookAuthorization.project(result: indeterminate, cwd: cwd).verdict == .deny
         )
     }
 
@@ -121,8 +119,9 @@ struct LinuxResidualCoverageTests {
 
         let tag = GitAction.deleteTag(name: "v1", remote: "origin")
         #expect(tag.explainAction == "tag delete")
-        #expect(tag.resources.remoteName == "origin")
-        #expect(tag.resources.branchName == "v1")
+        #expect(
+            tag.resources == .git(remote: RemoteName("origin"), ref: .tag(TagName("v1")))
+        )
 
         let stash = GitAction.stash(verb: .drop)
         #expect(stash.explainAction == "stash drop")
@@ -338,7 +337,14 @@ struct LinuxResidualCoverageTests {
         )
         #expect(action.gitAction == nil)
         #expect(action.effects.kinds.contains(.filesystemRead))
-        #expect(action.resources.filesystemScope == .insideRepository)
+        #expect(
+            action.resources
+                == .filesystem(
+                    path: "/repo/a",
+                    scope: .insideRepository,
+                    kind: .sourceCode
+                )
+        )
         guard case .shell(let shell) = action else {
             Issue.record("expected shell pending action")
             return
@@ -385,26 +391,40 @@ struct LinuxResidualCoverageTests {
     }
 
     @Test func actionPolicyEngine_filesystemHitResiduals() {
-        let inside = ActionResources(filesystemScope: .insideRepository)
-        let outside = ActionResources(filesystemScope: .outsideRepository)
-        let protected = ActionResources(
-            filesystemScope: .protectedPath(SecretPathMatch(pattern: "id_ed25519", category: .ssh))
+        let inside = ResourceScope.filesystem(
+            path: "",
+            scope: .insideRepository,
+            kind: .unknown
+        )
+        let outside = ResourceScope.filesystem(
+            path: "",
+            scope: .outsideRepository,
+            kind: .unknown
+        )
+        let protected = ResourceScope.filesystem(
+            path: "",
+            scope: .protectedPath(SecretPathMatch(pattern: "id_ed25519", category: .ssh)),
+            kind: .unknown
         )
         let writeInside = ProposedAction.shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "fs-inside"),
-                effects: ActionEffects(kinds: [.filesystemOverwrite]),
-                resources: inside
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "fs-inside"),
+                    effects: ActionEffects(kinds: [.filesystemOverwrite]),
+                    resources: inside
+                )
             )
         )
         #expect(
             ActionPolicyEngine.evaluate(action: writeInside).decision == .hardAllow
         )
         let writeOutside = ProposedAction.shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "fs-out"),
-                effects: ActionEffects(kinds: [.filesystemCreate]),
-                resources: outside
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "fs-out"),
+                    effects: ActionEffects(kinds: [.filesystemCreate]),
+                    resources: outside
+                )
             )
         )
         #expect(
@@ -412,10 +432,12 @@ struct LinuxResidualCoverageTests {
                 == .hardDeny(ActionPolicyEngine.Builtin.outsideRepository)
         )
         let writeProtected = ProposedAction.shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "fs-prot"),
-                effects: ActionEffects(kinds: [.filesystemDelete]),
-                resources: protected
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "fs-prot"),
+                    effects: ActionEffects(kinds: [.filesystemDelete]),
+                    resources: protected
+                )
             )
         )
         #expect(

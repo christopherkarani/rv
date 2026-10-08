@@ -19,7 +19,7 @@ public enum WorkspaceEffect: Sendable, Equatable {
     /// Signal one runtime's process group to stop.
     case stopRuntime(RuntimeSessionID)
     /// Run teardown: wait out the group, then publish or discard.
-    case finishTeardown(publish: Bool)
+    case finishTeardown(publish: WorkspaceClosePublish)
     /// Join the close already in flight instead of leading a new one.
     case awaitClose
     /// Refuse a spawn; the reason maps to today's session errors.
@@ -35,11 +35,11 @@ public enum WorkspaceEffect: Sendable, Equatable {
     /// Teardown failed; retryable only for `.childrenAlive`.
     case replyCloseFailed(WorkspaceCloseFailure)
     /// The workspace closed.
-    case replyClosed(published: Bool)
+    case replyClosed(published: WorkspaceClosePublish)
     /// Append a `runtimeEnded` lifecycle record.
     case appendRuntimeEnded(RuntimeSessionID)
     /// Append the `closed` lifecycle record.
-    case appendClosed(published: Bool)
+    case appendClosed(published: WorkspaceClosePublish)
     /// Deliver a control reply to a running runtime.
     case forwardControlReply(RuntimeSessionID)
 }

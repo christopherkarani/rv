@@ -1,7 +1,7 @@
 func isAllArgsData(_ command: String?) -> Bool {
     guard let command else { return false }
     switch command {
-    case "echo", "printf", "man", "tldr", "whatis", "apropos", "awk", "sed", "jq":
+    case "echo", "printf", "man", "tldr", "whatis", "apropos", "awk", "jq":
         return true
     default:
         return false
@@ -59,6 +59,10 @@ func isDataConsumingFlag(command: String?, gitSubcommand: String?, flag: String)
     case "gh":
         return flag == "--title" || flag.hasPrefix("--title=")
             || flag == "--body" || flag.hasPrefix("--body=")
+    case "sed":
+        return flag == "-e" || flag == "-f"
+            || flag == "--expression" || flag.hasPrefix("--expression=")
+            || flag == "--file" || flag.hasPrefix("--file=")
     case "find":
         return flag == "-name" || flag == "-iname"
             || flag == "-path" || flag == "-ipath"
@@ -121,6 +125,16 @@ func maskAttachedDataValue(
             return "--body=" + String(repeating: " ", count: max(valueCount, 1))
         }
     }
+    if command == "sed" {
+        if decoded.hasPrefix("--expression=") {
+            let valueCount = decoded.dropFirst("--expression=".count).count
+            return "--expression=" + String(repeating: " ", count: max(valueCount, 1))
+        }
+        if decoded.hasPrefix("--file=") {
+            let valueCount = decoded.dropFirst("--file=".count).count
+            return "--file=" + String(repeating: " ", count: max(valueCount, 1))
+        }
+    }
     return nil
 }
 
@@ -132,12 +146,14 @@ func shouldMaskQuotedData(
     command: String?,
     gitSubcommand: String?,
     pendingDataFlag: Bool,
-    gitGrepPatternPending: Bool
+    gitGrepPatternPending: Bool,
+    sedScriptPending: Bool = false
 ) -> Bool {
     isAllArgsData(command)
         || isSearchCommand(command)
         || pendingDataFlag
         || (gitSubcommand == "grep" && gitGrepPatternPending)
+        || (command == "sed" && sedScriptPending)
 }
 
 private func isGitPrettyFormatFlag(_ flag: String) -> Bool {

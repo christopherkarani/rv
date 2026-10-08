@@ -84,7 +84,9 @@ struct ServiceRuntimeEvaluateTests {
 
     @Test func dispatchEvaluate_emptyEnabledPacksDoesNotRefillDayOne() async throws {
         let runtime = try isolatedRuntime()
-        let response = await runtime.dispatch(
+        // Generic `.evaluate` stays denied for IPC callers (Step 8); the
+        // semantic runs through the in-process entry instead.
+        let denied = await runtime.dispatch(
             IPCRequest(
                 method: .evaluate(
                     EvaluateParams(
@@ -96,10 +98,13 @@ struct ServiceRuntimeEvaluateTests {
                 )
             )
         )
-        guard case .evaluate(let reply) = response.result else {
-            Issue.record("expected evaluate reply")
-            return
-        }
+        #expect(denied.result == .error(.authorizationDenied))
+        let reply = await runtime.evaluate(
+            EvaluationRequest(
+                command: ShellCommand(rawValue: "git reset --hard"),
+                enabledPacks: []
+            )
+        )
         if case .deny = reply.result.decision {
             Issue.record("empty enabledPacks means none enabled, not day-one refill")
         }
@@ -107,32 +112,26 @@ struct ServiceRuntimeEvaluateTests {
     }
 
     @Test func dispatchEvaluate_disabledCatalogPackStillDeniesResetHard() async throws {
-        let runtime = try isolatedRuntime()
-        let disable = await runtime.dispatch(
+        let homeURL = try isolatedHomeDirectory()
+        defer { try? FileManager.default.removeItem(at: homeURL) }
+        let home = try #require(HomeDirectory(validating: homeURL.path))
+        let runtime = ServiceRuntime(
+            home: home,
+            allowOnceDirectory: try isolatedAllowOnceDirectory()
+        )
+        _ = try PacksFacade.disable(home: home, ids: ["core.git"])
+        let denied = await runtime.dispatch(
             IPCRequest(
                 method: .setPackEnabled(SetPackEnabledParams(id: .coreGit, enabled: false))
             )
         )
-        guard case .setPackEnabled = disable.result else {
-            Issue.record("expected setPackEnabled reply")
-            return
-        }
-        let response = await runtime.dispatch(
-            IPCRequest(
-                method: .evaluate(
-                    EvaluateParams(
-                        request: EvaluationRequest(
-                            command: ShellCommand(rawValue: "git reset --hard"),
-                            enabledPacks: dayOnePackIDs
-                        )
-                    )
-                )
+        #expect(denied.result == .error(.authorizationDenied))
+        let reply = await runtime.evaluate(
+            EvaluationRequest(
+                command: ShellCommand(rawValue: "git reset --hard"),
+                enabledPacks: dayOnePackIDs
             )
         )
-        guard case .evaluate(let reply) = response.result else {
-            Issue.record("expected evaluate reply")
-            return
-        }
         guard case .deny(let deny) = reply.result.decision else {
             Issue.record("catalog disable must not change the evaluate set")
             return
@@ -147,22 +146,14 @@ struct ServiceRuntimeEvaluateTests {
             command: ShellCommand(rawValue: "git reset --hard"),
             enabledPacks: dayOnePackIDs
         )
-        let first = await runtime.dispatch(
+        let probe = await runtime.dispatch(
             IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: wd("/tmp/ws"))))
         )
-        guard case .evaluate(let allowed) = first.result else {
-            Issue.record("expected evaluate reply")
-            return
-        }
-        #expect(allowed.result.decision == .allow)
-        let second = await runtime.dispatch(
-            IPCRequest(method: .evaluate(EvaluateParams(request: request, cwd: wd("/tmp/ws"))))
-        )
-        guard case .evaluate(let denied) = second.result else {
-            Issue.record("expected second evaluate reply")
-            return
-        }
-        guard case .deny = denied.result.decision else {
+        #expect(probe.result == .error(.authorizationDenied))
+        let first = await runtime.evaluate(request, cwd: wd("/tmp/ws"))
+        #expect(first.result.decision == .allow)
+        let second = await runtime.evaluate(request, cwd: wd("/tmp/ws"))
+        guard case .deny = second.result.decision else {
             Issue.record("second evaluate must deny after the grant is spent")
             return
         }

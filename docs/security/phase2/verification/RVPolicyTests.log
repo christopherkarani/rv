@@ -1,0 +1,793 @@
+Building for debugging...
+[Computing dependencies]
+[Provisioning 2 / 96]
+[Using on-disk description]
+[1 / 3] SwiftTerm
+warning: missing creator for mutated node: ('/Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/SwiftTerm_SwiftTerm.bundle/Contents/MacOS')
+Build complete! (1.80 sec)
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite "Agent definition store" started.
+􀟈  Suite AllowOnceLedgerTests started.
+􀟈  Suite GrantPresenceTests started.
+􀟈  Suite RulePinningTests started.
+􀟈  Suite HostGrantWriterTests started.
+􀟈  Test allowOnceRecord_nilRuleIDRoundTrips() started.
+􀟈  Suite NoBypassEnvTests started.
+􀟈  Suite "ActionPolicyEngine shadow wire" started.
+􀟈  Suite PolicyGateTests started.
+􀟈  Suite "PolicyWorkspace" started.
+􀟈  Suite SecretAllowPathsTests started.
+􀟈  Suite "ProposedAction.file review surfaces" started.
+􀟈  Suite LinuxResidualCoverageTests started.
+􀟈  Suite MachineConfigJSONTests started.
+􀟈  Suite "FoundationModelsActionReviewer" started.
+􀟈  Suite FoundationModelsEnglishCompileMappingTests started.
+􀟈  Suite "Policy gate stress" started.
+􀟈  Suite AllowlistTests started.
+􀟈  Suite AllowOnceStoreTests started.
+􀟈  Suite "TypedRuleStore" started.
+􀟈  Suite RebaseRecoveryTests started.
+􀟈  Suite EnglishCompileChainTests started.
+􀟈  Suite PolicyDocumentTOMLTests started.
+􀟈  Suite ReviewPromptBuilderCoverageTests started.
+􀟈  Suite OptionalOverlayDegradeTests started.
+􀟈  Suite "PendingApproval store" started.
+􀟈  Suite "ShadowReviewRunner" started.
+􀟈  Suite SafetyStoreTests started.
+􀟈  Suite DenylistTests started.
+􀟈  Suite "RulePinStore" started.
+􀟈  Test packsConfig_parseRoundTripEmpty() started.
+􀟈  Suite HomeDirectoryTests started.
+􀟈  Test packsConfig_mergePreservesSiblingSections() started.
+􀟈  Suite "Runtime resource policy" started.
+􀟈  Test packsConfig_mergeIntoEmptyExisting() started.
+􀟈  Suite DenylistStoreTests started.
+􀟈  Test allowOnceRecord_pendingAndGrantedOmitConsumedAt() started.
+􀟈  Test allowOnceRecord_decodesLegacyStringRuleID() started.
+􀟈  Test allowOnceRecord_consumedRoundTripsStamp() started.
+􀟈  Suite FoundationModelsEnglishCompilerTests started.
+􀟈  Test allowOnceRecord_encodesRuleIDAsLegacyString() started.
+􀟈  Test signedExecutablePinsLoad() started.
+􀟈  Test trustedRootIgnoresRequestProvidedHome() started.
+􀟈  Test securityRelevantEditChangesRevision() started.
+􀟈  Test symlinkedConfigDirectoryIsRejected() started.
+􀟈  Test missingFileLoadsEmpty() started.
+􀟈  Test allowOnceRecord_illegalLifecycleThrows(json:) started.
+􀟈  Test duplicateIDsFailClosed() started.
+􀟈  Test customExecutableSnapshotGainsNoNamedGrants() started.
+􀟈  Test uninstallArtifactsIncludeAgentDefinitions() started.
+􀟈  Test boundaryValuesAtCapLoad() started.
+􀟈  Test oversizedDocumentsAreRejected() started.
+􀟈  Test validConfigLoadsAndRevisionIsStable() started.
+􀟈  Test displayOnlyEditDoesNotChangeRevision() started.
+􀟈  Test malformedDocumentsFailClosed() started.
+􀟈  Test cases_areDistinct() started.
+􀟈  Test unknownFieldsFailClosed() started.
+􀟈  Test unsupportedVersionsFailClosed() started.
+􀟈  Test plantAndSpendThenReplayDenies() started.
+􀟈  Test mandatoryHumanRemoteBranchAskSpendsOnce() started.
+􀟈  Test indeterminateNeverSpends() started.
+􀟈  Test onlyOwnerFilesWithoutSymlinksAreLoaded() started.
+􀟈  Test pendingResetHard_previewIsWorkingTreeDiscardHardStopNotGitPush() started.
+􀟈  Test emptyEffectsWithBranchName_keepsFingerprintDraftWithoutGitPush() started.
+􀟈  Test alwaysAllowPreview_pinOkMaySave() started.
+􀟈  Test alwaysAllowPreview_hardStopForbidsSave(kind:) started.
+􀟈  Test failedStoreDoesNotAllow() started.
+􀟈  Test emptyMatchingViewDoesNotSpend() started.
+􀟈  Test policyGateDoesNotHonorAllowOnceOnUnwrapLimitedDeny() started.
+􀟈  Test draftBindsIdPolarityAndFingerprint() started.
+􀟈  Test forcePushMainPreview_allowHardStopIncludesGitPushAndBlocksSave() started.
+􀟈  Test plantAndConsumeAppendsGrantedThenSpends() started.
+􀟈  Test unwrapLimitedPackDenyDoesNotPlant() started.
+􀟈  Test consumeRelatedConsumedIsAlreadyConsumed() started.
+􀟈  Test pendingForcePush_draftIsV2GitPushNotFingerprintV1() started.
+􀟈  Test redeemExpiredPendingReturnsRecordsWithoutItForWrite() started.
+􀟈  Test pendingDeleteRemoteRef_isNotGitPushPin() started.
+􀟈  Test saveAlwaysAllowPinsExactCommandIdempotently() started.
+􀟈  Test keepConsumedRetainsOnlyFreshConsumedForClear() started.
+􀟈  Test savePinsCallerMatchingView() started.
+􀟈  Test saveAlwaysAllowHardStopWritesNothing() started.
+􀟈  Test policyGateDoesNotHonorAllowlistOnPackFloorProtectedPathDeny() started.
+􀟈  Test skipShapedEnvsDoNotSkipPolicy() started.
+􀟈  Test engineReviewEligible_invokesReviewer_liveStaysHuman() started.
+􀟈  Test redeemUnknownHashThrowsUnknownCode() started.
+􀟈  Test policyGateDoesNotHonorAllowlistOnSecretDeny() started.
+􀟈  Test engineHardAllow_skipsReviewer() started.
+􀟈  Test nonGitPreview_keepsFingerprintDraftWithoutGitPush() started.
+􀟈  Test redeemExpiredPendingRemovesOnlyThatRow() started.
+􀟈  Test allowlistBeforeAllowOnce() started.
+􀟈  Test engineHardDeny_skipsReviewer() started.
+􀟈  Test missingCwdDoesNotSpend() started.
+􀟈  Test policyGateDoesNotHonorAllowlistOnUnwrapLimitedDeny() started.
+􀟈  Test discardWithBranchName_keepsFingerprintDraftWithoutGitPush() started.
+􀟈  Test storeUnavailableStaysDeny() started.
+􀟈  Test mintExpiredSameHashDoesNotCollide() started.
+􀟈  Test consumeFreshGrantWinsAndPrunesExpiredGrants() started.
+􀟈  Test emptyEffectUnwrapPending_doesNotPreviewUnwrapHardStop() started.
+􀟈  Test rowsKeepLiveAndConsumedPastExpiryDropOthers() started.
+􀟈  Test saveWrongDraftDoesNotWrite() started.
+􀟈  Test denyWithoutGrantStaysDeny() started.
+􀟈  Test redeemGrantsPendingAndPrunesStaleSiblings() started.
+􀟈  Test saveAlwaysBlockPinsAndBeatsAllowlist() started.
+􀟈  Test policyGateDoesNotHonorAllowlistOnProtectedPathDeny() started.
+􀟈  Test consumeExpiredGrantBeatsAlreadyConsumed() started.
+􀟈  Test shadowMissingContext_readsWorkingDirectoryFromFileScope() started.
+􀟈  Test decidePendingGrantHonorsMandatoryHuman() started.
+􀟈  Test invalidMachineTOMLFailsClosed() started.
+􀟈  Test pendingForceWithLease_draftPinsExactlyForceWithLease() started.
+􀟈  Test nilHomeLoadsRepoOnlyLikeGatedEvaluate() started.
+􀟈  Test upsertUsesMergeLayerSemantics() started.
+􀟈  Test exactNowIsStillLive() started.
+􀟈  Test allowOnceKeepsMatchedRuleDetail() started.
+􀟈  Test allowlistParse_errorResidualsAndExpiresRender() started.
+􀟈  Test writeWithoutLayerThrows() started.
+􀟈  Test merge_unionsLiterals() started.
+􀟈  Test load_missingAndNonObject_areEmpty() started.
+􀟈  Test rulePinning_fileActionSecretPath_hardStopsWithoutFakeCommand() started.
+􀟈  Test configDirectoryInitPersistsMachineWithoutHome() started.
+􀟈  Test consumeOnlyExpiredGrantReportsExpiredWithPrunedRecords() started.
+􀟈  Test redeemSpentHashesThrowAlreadySpent() started.
+􀟈  Test write_rejectsNonJSONObject() started.
+􀟈  Test allowOnceStore_emptyRobotAndMissingResiduals() started.
+􀟈  Test mintDifferentFingerprintStillAppends() started.
+􀟈  Test decideEmptyCwdSkipsPendingGrant() started.
+􀟈  Test tomlMachineLoadsThroughHomeSession() started.
+􀟈  Test fileDoor_literalSuppressesNonHostAuth() started.
+􀟈  Test reviewPromptBuilder_fileAction_emitsKindFilePathAndKind() started.
+􀟈  Test loadEffective_readsConfigAndRepoToml() started.
+􀟈  Test saveWithoutMatchingViewWritesNothing() started.
+􀟈  Test decideAllowlistBeforeGrant() started.
+􀟈  Test secretsNeverEnterCapturedPayload() started.
+􀟈  Test redeemThenGateAllowsOnce() started.
+􀟈  Test exactForce_defaultSentencesForEachVerdict() started.
+􀟈  Test previewDoesNotWriteAllowlistOrDenylist() started.
+􀟈  Test pendingUnwrapLimitedAnalysis_doesNotPreviewUnwrapHardStop() started.
+􀟈  Test saveFileToolWithoutMatchingViewWritesNothing() started.
+􀟈  Test alwaysBlockPreview_hardStopMaySave() started.
+􀟈  Test rebaseRecovery_allowIsNotEligible() started.
+􀟈  Test allowOnceStore_skipsInvalidJSONLAndLockFails() started.
+􀟈  Test rulePinning_ruleIDUsesMatchingViewOrPredicate() started.
+􀟈  Test mintFreshHashPrunesExpiredAndReusesSameCommandPending() started.
+􀟈  Test update_preservesSiblingKeysAndSetsOwnerModes() started.
+􀟈  Test denyWithGrantAllowsOnce() started.
+􀟈  Test constructsOnThisHost() started.
+􀟈  Test shadowDisagreement_missingDecisionIsNotDisagreement() started.
+􀟈  Test anyForceNamedBranch_askSentence() started.
+􀟈  Test builder_redactsSecretInSupportingCommand() started.
+􀟈  Test indeterminateIsNotAllow() started.
+􀟈  Test anyForceNilBranch_defaultSentences() started.
+􀟈  Test processHome_emptyWhenHOMEUnset() started.
+􀟈  Test missingFilesLoadEmptyAndDoNotMint() started.
+􀟈  Test allowlistStore_lockDirectoryFailsClosed() started.
+􀟈  Test providedSentence_isKeptAndGenericRuleID() started.
+􀟈  Test mintCollidesWithLivePendingSameHash() started.
+􀟈  Test emptySentence_usesDefaultForcePushMainDenyID() started.
+􀟈  Test documentFieldsIgnoreConfigJSON() started.
+􀟈  Test previewDoesNotSpendGrant() started.
+􀟈  Test reviewTimeout_returnsFastOperation() started.
+􀟈  Test hostAuth_stillDeniesUnderCoveringAllowPath() started.
+􀟈  Test sequentialHostAskSpend_plantsEachConfirm() started.
+􀟈  Test consumeWrongCwdOrFingerprintIsNotFound() started.
+􀟈  Test swapStillGoesThroughActionReviewerOnly() started.
+􀟈  Test reviewTimeout_expiresSlowOperation() started.
+􀟈  Test mergeIncomingPreviewDoesNotWrite() started.
+􀟈  Test reasonRequired() started.
+􀟈  Test prompt_putsSemanticFieldsBeforeSupportingCommand() started.
+􀟈  Test invalidTOMLFailsOpenOnLoad() started.
+􀟈  Test allowDoesNotConsumeGrant() started.
+􀟈  Test repoOverlayMatchesTypedRuleStoreMerge() started.
+􀟈  Test mintFromDeny_emptyMatchingViewIsNil() started.
+􀟈  Test emptyCwdDoesNotHonor() started.
+􀟈  Test projectFileInert() started.
+􀟈  Test mintFromDeny_sameCommandNewStoreDoesNotMintAnotherPending() started.
+􀟈  Test ruleAndExactMatch() started.
+􀟈  Test promotionThresholds_areMeasurableAndDoNotEnableAutoReview() started.
+􀟈  Test concurrentConsumeOfOneGrant_winsOnce() started.
+􀟈  Test emptyMatchingView_neverSpends() started.
+􀟈  Test symlinkIntoWorkspaceIgnored() started.
+􀟈  Test expiredRowIgnored() started.
+􀟈  Test missingMachineFileLoadsEmpty() started.
+􀟈  Test decideIndeterminateNeverHonorsGrant() started.
+􀟈  Test twoStores_casUnderMiss_neitherAllows() started.
+􀟈  Test roundTripsGitPushDenyInTempDirectory() started.
+􀟈  Test shellPayload_includesOptionalResourceAndScopeFields() started.
+􀟈  Test pinnedSecret_neverSpends() started.
+􀟈  Test spendFirstHosts_spendUnlockableDeny() started.
+􀟈  Test tomlWinsOverLegacyJSON() started.
+􀟈  Test repoAllowCannotDropMachineDeny() started.
+􀟈  Test expiredGrantIsExpired() started.
+􀟈  Test generateAllowOnceCode_returnsAllowOnceUnlockCode() started.
+􀟈  Test unavailablePrimary_fixtureEnglish_previewsCannedGitPushDeny() started.
+􀟈  Test machineAllowCannotDropBuiltinDeny() started.
+􀟈  Test legacyJSONLoadsWhenTOMLMissing() started.
+􀟈  Test disabledSystemModel_fallsBackToFakeWithoutLiveApple() started.
+􀟈  Test mintEmptyMatchingView_throwsWithoutTTY() started.
+􀟈  Test saveMachineDocument_keepsEnglish() started.
+􀟈  Test machineFileUsesPolicyPaths() started.
+􀟈  Test missingPredicate_refuses() started.
+􀟈  Test brokenRepoAllowPaths_returnsUsableSet(toml:) started.
+􀟈  Test unavailablePrimary_uncompilableEnglish_refuses() started.
+􀟈  Test wrongCwdDoesNotConsume() started.
+􀟈  Test onDiskJSONOmitsRawArgv() started.
+􀟈  Test invalidMachineFileFailsClosed() started.
+􀟈  Test mergeLayer_keepsTighterVerdict() started.
+􀟈  Test uninstallArtifactsIncludeLocks() started.
+􀟈  Test storeFilesAreOwnerOnly() started.
+􀟈  Test otherError_propagatesWithoutFallback() started.
+􀟈  Test primaryPreview_doesNotCallFallback() started.
+􀟈  Test unreadableRepoPolicy_effectiveStaysNormal() started.
+􀟈  Test duplicatePredicate_refuses() started.
+􀟈  Test invalidRepoSafetyOverlay_effectiveStaysNormal(toml:) started.
+􀟈  Test missingFileIsNotFoundNotUnavailable() started.
+􀟈  Test omittedForce_isAny_distinctFromForceNone() started.
+􀟈  Test live_usesConfigDirectoryUnderHome() started.
+􀟈  Test garbageRepoOverlay_doesNotLowerMachineStrict() started.
+􀟈  Test repoAllowCannotDropMachineDenyFromDisk() started.
+􀟈  Test invalidConfigSafetyLevel_isNormal() started.
+􀟈  Test duplicateId_refuses() started.
+􀟈  Test wave1Predicates_roundTrip() started.
+􀟈  Test cancellation_propagatesWithoutFallback() started.
+􀟈  Test applyRebaseRecoveryDoesNotConsumeStore() started.
+􀟈  Test productInit_isEnglishCompiler() started.
+􀟈  Test resetHardIsNeverEligible() started.
+􀟈  Test fileStoreConsumesOnce() started.
+􀟈  Test unknownKey_refuses() started.
+􀟈  Test packRuleWithoutGitActionIsNotEligible() started.
+􀟈  Test concurrentConsumeAcrossStoresWinsOnce() started.
+􀟈  Test builtinWorkingTreeDiscardWithDiscardWorktreeIsEligible() started.
+􀟈  Test newlineEnglish_roundTripsAsSingleLine() started.
+􀟈  Test reviewEligible_modelDeny_doesNotBecomeLiveDecision() started.
+􀟈  Test concurrentConsumeAcrossProcessesWinsOnce() started.
+􀟈  Test saveFailureSurfacesAsEncodeFailed() started.
+􀟈  Test lockFailureIsUnavailable() started.
+􀟈  Test ciMintRefuses() started.
+􀟈  Test unknownForce_refuses() started.
+􀟈  Test missingConfig_isNormal() started.
+􀟈  Test hardAllow_doesNotInvokeReviewer() started.
+􀟈  Test unknownFlagForce_refuses() started.
+􀟈  Test redeemThenConsumeAllowsOnce() started.
+􀟈  Test unknownPredicate_refuses() started.
+􀟈  Test additiveSafetyAndAllowPaths_roundTrip() started.
+􀟈  Test decideKeepsUnwrapLimitedDeniedDuringRebase() started.
+􀟈  Test mintFromDeny_differentCwdStillMints() started.
+􀟈  Test merge_machineStrict_cannotBeLoweredByRepoNormal() started.
+􀟈  Test splitBlock_dropsLeadingCommentsWithoutHeader() started.
+􀟈  Test brokenRepoAllowPaths_keepsMachineLiterals() started.
+􀟈  Test mintFromDeny_redeemThenConsumeAllowsOnce() started.
+􀟈  Test brokenConfigAllowPaths_returnsUsableSet() started.
+􀟈  Test hardDeny_doesNotInvokeReviewer() started.
+􀟈  Test wrongSchemaVersion_refuses() started.
+􀟈  Test unknownAnalysisDoesNotLiftCompoundCommand() started.
+􀟈  Test swappingAFMShapedReviewers_doesNotTouchLivePath() started.
+􀟈  Test corruptJSONLLineIsSkipped() started.
+􀟈  Test mintFromDeny_nonTTYStillWritesPending() started.
+􀟈  Test saveAlwaysAllow_featureForcePush_writesMachineTypedAllow() started.
+􀟈  Test restoreStagedOnlyIsNotEligible() started.
+􀟈  Test liveUsesConfigDirectoryUnderHome() started.
+􀟈  Test saveTypedBlock_samePredicateDifferentCommand_sameRuleID() started.
+􀟈  Test reviewEligible_invokesReviewer_logsShadow_liveStaysHuman() started.
+􀟈  Test emptyText_isEmptySnapshot() started.
+􀟈  Test unwrapLimitedIsNeverEligibleEvenWithCheckoutDiscardRule() started.
+􀟈  Test mintFromDeny_sameCommandReusesCodeInSameStore() started.
+􀟈  Test saveMachine_roundTripsAndPreservesAnalytics() started.
+􀟈  Test lockSetupFailureSurfacesAsEncodeFailed() started.
+􀟈  Test concurrentResolveWinsOnce() started.
+􀟈  Test twoBlocks_keepOrder() started.
+􀟈  Test merge_repoMayRaiseNormalToStrict() started.
+􀟈  Test plantAndConsumeSpendsThisTurnAndListsConsumed() started.
+􀟈  Test protectedPathDenyIsNeverEligible() started.
+􀟈  Test unavailable_recordsFailure_doesNotWeakenLive() started.
+􀟈  Test roundTripsGitPushDeny() started.
+􀟈  Test machinePolicyDocument_raisesEffectiveLevel() started.
+􀟈  Test configDirIgnoresXDG() started.
+􀟈  Test saveFailureSurfacesAsEncodeFailed() started.
+􀟈  Test decideKeepsResetHardDeniedDuringRebase() started.
+􀟈  Test timeoutPersistsAcrossRestartAndRejectsStaleApprove() started.
+􀟈  Test restoreWorktreeIsEligible() started.
+􀟈  Test processRestartReloadsPendingAndResolvedRecords() started.
+􀟈  Test saveAlwaysAllow_nonGit_stillPinsExactCommand() started.
+􀟈  Test mintFromDeny_lockFailureIsNil() started.
+􀟈  Test saveAlwaysBlock_forcePushMain_loadsAsMachineTypedDeny() started.
+􀟈  Test invalidDate() started.
+􀟈  Test corruptJSONLLineSkipped() started.
+􀟈  Test saveWrongDraft_forcePushMain_throwsDraftMismatchAndWritesNothing() started.
+􀟈  Test timeout_recordsFailure_doesNotWeakenLive() started.
+􀟈  Test parseAndMatch_exactCommand() started.
+􀟈  Test builtinWorkingTreeDiscardWithoutGitActionIsNotEligible() started.
+􀟈  Test repoPolicy_raisesEffectiveLevel() started.
+􀟈  Test unknownKeyAndMissingEquals_areInvalidTOML() started.
+􀟈  Test otherPackCheckoutDiscardPatternIsNotEligible() started.
+􀟈  Test codableRoundTripsAndRejectsEmpty() started.
+􀟈  Test nonTTYMintRefusesAndDoesNotWrite() started.
+􀟈  Test validatingAcceptsNonEmptyPath() started.
+􀟈  Test forcePushIsNeverEligible() started.
+􀟈  Test missingContext_isRecordedOnShadow() started.
+􀟈  Test rawRepresentableInitFailsOnEmpty() started.
+􀟈  Test validatingRejectsEmptyString() started.
+􀟈  Test commentsBlankLinesAndEscapes_roundTrip() started.
+􀟈  Test reviewEligible_modelAbstain_doesNotBecomeLiveDecision() started.
+􀟈  Test decideAllowsEligibleDiscardBeforeWorkingTreePin() started.
+􀟈  Test invalidAgentMarksFailClosed() started.
+􀟈  Test unoverridableHardStop_usesUnlockableDenyExceptWorkingTreeDiscard() started.
+􀟈  Test defaultProfileMustNameAProfileInTheSameDocument() started.
+􀟈  Test saveAlwaysAllow_forcePushMain_throwsHardStopAndWritesNothing() started.
+􀟈  Test deleteRemoteRefIsNeverEligible() started.
+􀟈  Test fractionalSeconds_parse() started.
+􀟈  Test storeFilesAreOwnerOnlyAndUninstallListsThem() started.
+􀟈  Test emptyReason() started.
+􀟈  Test concurrentConsumeWinsOnce() started.
+􀟈  Test allowlistHonor_isSuppressedByBlockedMatchingView() started.
+􀟈  Test legacyDocumentsDecodeWithEmptyKeychain() started.
+􀟈  Test schemaVersionRoundTripsAndRejectsOtherVersions() started.
+􀟈  Test credentialAgentFiltersRoundTripAndFailClosed() started.
+􀟈  Test staleFingerprintIsRejectedAfterRestart() started.
+􀟈  Test contradictoryEnvironmentEntriesFailClosed() started.
+􀟈  Test agentMarksAcceptAnyIdentifier() started.
+􀟈  Test keepWaitingSurvivesRestartPastDeadline() started.
+􀟈  Test case passing 1 argument json → "{"schema_version":1,"kind":"granted","code_hash":"def456","command_fingerprint":"f","command_redacted":"[redacted]","cwd":"/tmp/ws","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z","consumed_at":"2026-01-01T12:00:00Z"}" to allowOnceRecord_illegalLifecycleThrows(json:) started.
+􀟈  Test discardWorktreeIsEligible() started.
+􀟈  Test case passing 1 argument json → "{"schema_version":1,"kind":"pending","code_hash":"abc123","command_fingerprint":"f","command_redacted":"git …","cwd":"/tmp/ws","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z","consumed_at":"2026-01-01T12:00:00Z"}" to allowOnceRecord_illegalLifecycleThrows(json:) started.
+􀟈  Test cancelPersistsAndCannotAuthorizeAfterRestart() started.
+􀟈  Test emptyAgentFiltersNormalizeToNil() started.
+􀟈  Test case passing 1 argument json → "{"schema_version":1,"kind":"consumed","code_hash":"ghi789","command_fingerprint":"f","command_redacted":"[redacted]","cwd":"/tmp/ws","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z"}" to allowOnceRecord_illegalLifecycleThrows(json:) started.
+􀟈  Test onlyOwnerFilesWithoutSymlinksAreLoaded() started.
+􀟈  Test case passing 1 argument json → "{"schema_version":1,"kind":"consumed","code_hash":"ghi789","command_fingerprint":"f","command_redacted":"[redacted]","cwd":"/tmp/ws","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z","consumed_at":null}" to allowOnceRecord_illegalLifecycleThrows(json:) started.
+􀟈  Test emptyMachinePolicyGrantsNothing() started.
+􀟈  Test secretsDenyIsNeverEligibleEvenWithDiscardWorktree() started.
+􀟈  Test subscribeReceivesCreateAndResolve() started.
+􁁛  Test packsConfig_parseRoundTripEmpty() passed after 0.003 seconds.
+􀟈  Test failTaskTimeoutPersistsTimedOutAfterRestart() started.
+􀟈  Test explicitProfileIsScopedToProjectAndKeepsGenericResources() started.
+􀟈  Test legacyDocumentsDecodeWithEmptyAgentsAndNoDefault() started.
+􀟈  Test uninstallArtifacts_includeDenylistAndLock() started.
+􀟈  Test lockSetupFailureSurfacesAsEncodeFailed() started.
+􀟈  Test malformedGrantsAndNewerVersionFailClosed() started.
+􀟈  Test agentMarksRoundTripThroughTheStore() started.
+􀟈  Test keychainEntriesRoundTripThroughTheStore() started.
+􀟈  Test missingAndEmptyCommand() started.
+􀟈  Test pin_writesOwnerOnlyAndLoadRoundTrips() started.
+􀟈  Test keychainEntriesFailClosed() started.
+􀟈  Test directoryAtLockPath_mapsToAllowlistLockFailed() started.
+􀟈  Test missingAddedAt_isEpoch() started.
+􀟈  Test invalidUTF8_isInvalidAndEmptySnapshot() started.
+􀟈  Test missingReason() started.
+􁁛  Test packsConfig_mergePreservesSiblingSections() passed after 0.004 seconds.
+􀟈  Test case passing 1 argument kind → .secretPath to alwaysAllowPreview_hardStopForbidsSave(kind:) started.
+􁁛  Test packsConfig_mergeIntoEmptyExisting() passed after 0.004 seconds.
+􀟈  Test case passing 1 argument kind → .protectedPath to alwaysAllowPreview_hardStopForbidsSave(kind:) started.
+􀟈  Test missingFile_isMissingAndEmptySnapshot() started.
+􀟈  Test case passing 1 argument kind → .protectedSharedBranch to alwaysAllowPreview_hardStopForbidsSave(kind:) started.
+􀟈  Test case passing 1 argument kind → .workingTreeDiscard to alwaysAllowPreview_hardStopForbidsSave(kind:) started.
+􀟈  Test case passing 1 argument kind → .outsideRepository to alwaysAllowPreview_hardStopForbidsSave(kind:) started.
+􀟈  Test case passing 1 argument kind → .unresolvedPath to alwaysAllowPreview_hardStopForbidsSave(kind:) started.
+􀟈  Test pin_sameMatchingView_isIdempotent() started.
+􀟈  Test invalidTOML_isInvalidAndPinFailsClosed() started.
+􁁛  Test allowOnceRecord_pendingAndGrantedOmitConsumedAt() passed after 0.005 seconds.
+􁁛  Test allowOnceRecord_nilRuleIDRoundTrips() passed after 0.006 seconds.
+􁁛  Test allowOnceRecord_decodesLegacyStringRuleID() passed after 0.012 seconds.
+􀟈  Test injectedCompiler_propagatesUnavailable() started.
+􁁛  Test allowOnceRecord_consumedRoundTripsStamp() passed after 0.032 seconds.
+􀟈  Test emptyEnglish_refusesEmptyWithoutLiveApple() started.
+􀟈  Test disabledSystemModel_throwsUnavailableWithoutLiveApple() started.
+􀟈  Test domainSourcesDoNotImportFoundationModels() started.
+􁁛  Test allowOnceRecord_encodesRuleIDAsLegacyString() passed after 0.040 seconds.
+􀟈  Test case passing 1 argument toml → "schema_version = 1
+secret.allow_paths = [".env"
+" to brokenRepoAllowPaths_returnsUsableSet(toml:) started.
+􀟈  Test case passing 1 argument toml → "schema_version = 1
+secret.allow_paths = "nope"
+" to brokenRepoAllowPaths_returnsUsableSet(toml:) started.
+􀟈  Test case passing 1 argument toml → "not-toml
+" to brokenRepoAllowPaths_returnsUsableSet(toml:) started.
+􀟈  Test case passing 1 argument toml → "schema_version = 1
+safety.level = "paranoid"
+" to invalidRepoSafetyOverlay_effectiveStaysNormal(toml:) started.
+􀟈  Test case passing 1 argument toml → "schema_version = 1
+safety.level = "str" to invalidRepoSafetyOverlay_effectiveStaysNormal(toml:) started.
+􀟈  Test case passing 1 argument toml → "not-toml
+" to invalidRepoSafetyOverlay_effectiveStaysNormal(toml:) started.
+􀟈  Test constructsOnThisHost() started.
+􀟈  Test injectedFake_compilesKnownDenyWithoutLiveApple() started.
+􀟈  Test injectedCompiler_propagatesCancellation() started.
+􁁛  Test trustedRootIgnoresRequestProvidedHome() passed after 0.091 seconds.
+􁁛  Test uninstallArtifactsIncludeAgentDefinitions() passed after 0.093 seconds.
+􁁛  Test signedExecutablePinsLoad() passed after 0.095 seconds.
+􁁛  Test cases_areDistinct() passed after 0.100 seconds.
+􁁛  Test unknownFieldsFailClosed() passed after 0.101 seconds.
+􁁛  Test boundaryValuesAtCapLoad() passed after 0.101 seconds.
+􁁛  Test missingFileLoadsEmpty() passed after 0.101 seconds.
+􀢄  Test processRestartReloadsPendingAndResolvedRecords() recorded an issue at PendingApprovalStoreTests.swift:8:6: Caught error: .invalidRequest
+􁁛  Test duplicateIDsFailClosed() passed after 0.101 seconds.
+􁁛  Test unsupportedVersionsFailClosed() passed after 0.101 seconds.
+􁁛  Test displayOnlyEditDoesNotChangeRevision() passed after 0.101 seconds.
+􁁛  Test customExecutableSnapshotGainsNoNamedGrants() passed after 0.101 seconds.
+􁁛  Test oversizedDocumentsAreRejected() passed after 0.101 seconds.
+􁁛  Test emptyMatchingViewDoesNotSpend() passed after 0.101 seconds.
+􁁛  Test policyGateDoesNotHonorAllowOnceOnUnwrapLimitedDeny() passed after 0.101 seconds.
+􁁛  Test validConfigLoadsAndRevisionIsStable() passed after 0.101 seconds.
+􁁛  Test alwaysAllowPreview_hardStopForbidsSave(kind:) with 6 test cases passed after 0.101 seconds.
+􁁛  Test draftBindsIdPolarityAndFingerprint() passed after 0.101 seconds.
+􁁛  Test pendingResetHard_previewIsWorkingTreeDiscardHardStopNotGitPush() passed after 0.101 seconds.
+􁁛  Test indeterminateNeverSpends() passed after 0.101 seconds.
+􁁛  Test failedStoreDoesNotAllow() passed after 0.101 seconds.
+􁁛  Test plantAndConsumeAppendsGrantedThenSpends() passed after 0.101 seconds.
+􁁛  Test consumeRelatedConsumedIsAlreadyConsumed() passed after 0.101 seconds.
+􁁛  Test emptyEffectsWithBranchName_keepsFingerprintDraftWithoutGitPush() passed after 0.102 seconds.
+􁁛  Test redeemExpiredPendingReturnsRecordsWithoutItForWrite() passed after 0.101 seconds.
+􁁛  Test unwrapLimitedPackDenyDoesNotPlant() passed after 0.101 seconds.
+􁁛  Test alwaysAllowPreview_pinOkMaySave() passed after 0.102 seconds.
+􁁛  Test symlinkedConfigDirectoryIsRejected() passed after 0.102 seconds.
+􁁛  Test pendingDeleteRemoteRef_isNotGitPushPin() passed after 0.102 seconds.
+􁁛  Test pendingForcePush_draftIsV2GitPushNotFingerprintV1() passed after 0.102 seconds.
+􁁛  Test policyGateDoesNotHonorAllowlistOnPackFloorProtectedPathDeny() passed after 0.102 seconds.
+􁁛  Test policyGateDoesNotHonorAllowlistOnSecretDeny() passed after 0.102 seconds.
+􁁛  Test keepConsumedRetainsOnlyFreshConsumedForClear() passed after 0.102 seconds.
+􁁛  Test engineHardAllow_skipsReviewer() passed after 0.102 seconds.
+􁁛  Test forcePushMainPreview_allowHardStopIncludesGitPushAndBlocksSave() passed after 0.102 seconds.
+􁁛  Test plantAndSpendThenReplayDenies() passed after 0.102 seconds.
+􁁛  Test redeemExpiredPendingRemovesOnlyThatRow() passed after 0.102 seconds.
+􁁛  Test skipShapedEnvsDoNotSkipPolicy() passed after 0.102 seconds.
+􁁛  Test policyGateDoesNotHonorAllowlistOnUnwrapLimitedDeny() passed after 0.102 seconds.
+􁁛  Test allowOnceRecord_illegalLifecycleThrows(json:) with 4 test cases passed after 0.102 seconds.
+􁁛  Test engineHardDeny_skipsReviewer() passed after 0.102 seconds.
+􁁛  Test missingCwdDoesNotSpend() passed after 0.102 seconds.
+􁁛  Test discardWithBranchName_keepsFingerprintDraftWithoutGitPush() passed after 0.102 seconds.
+􁁛  Test mintExpiredSameHashDoesNotCollide() passed after 0.102 seconds.
+􁁛  Test consumeFreshGrantWinsAndPrunesExpiredGrants() passed after 0.102 seconds.
+􁁛  Test emptyEffectUnwrapPending_doesNotPreviewUnwrapHardStop() passed after 0.102 seconds.
+􁁛  Test rowsKeepLiveAndConsumedPastExpiryDropOthers() passed after 0.102 seconds.
+􁁛  Test saveAlwaysAllowHardStopWritesNothing() passed after 0.102 seconds.
+􁁛  Test securityRelevantEditChangesRevision() passed after 0.102 seconds.
+􁁛  Test redeemGrantsPendingAndPrunesStaleSiblings() passed after 0.102 seconds.
+􁁛  Test policyGateDoesNotHonorAllowlistOnProtectedPathDeny() passed after 0.102 seconds.
+􁁛  Test nonGitPreview_keepsFingerprintDraftWithoutGitPush() passed after 0.102 seconds.
+􁁛  Test consumeExpiredGrantBeatsAlreadyConsumed() passed after 0.102 seconds.
+􁁛  Test engineReviewEligible_invokesReviewer_liveStaysHuman() passed after 0.102 seconds.
+􁁛  Test decidePendingGrantHonorsMandatoryHuman() passed after 0.102 seconds.
+􁁛  Test mandatoryHumanRemoteBranchAskSpendsOnce() passed after 0.102 seconds.
+􁁛  Test saveWrongDraftDoesNotWrite() passed after 0.102 seconds.
+􁁛  Test pendingForceWithLease_draftPinsExactlyForceWithLease() passed after 0.102 seconds.
+􁁛  Test exactNowIsStillLive() passed after 0.102 seconds.
+􁁛  Test denyWithoutGrantStaysDeny() passed after 0.102 seconds.
+􁁛  Test redeemUnknownHashThrowsUnknownCode() passed after 0.102 seconds.
+􁁛  Test shadowMissingContext_readsWorkingDirectoryFromFileScope() passed after 0.102 seconds.
+􁁛  Test onlyOwnerFilesWithoutSymlinksAreLoaded() passed after 0.102 seconds.
+􁁛  Test malformedDocumentsFailClosed() passed after 0.102 seconds.
+􁁛  Test rulePinning_fileActionSecretPath_hardStopsWithoutFakeCommand() passed after 0.102 seconds.
+􁁛  Test merge_unionsLiterals() passed after 0.102 seconds.
+􁁛  Test consumeOnlyExpiredGrantReportsExpiredWithPrunedRecords() passed after 0.102 seconds.
+􁁛  Test redeemSpentHashesThrowAlreadySpent() passed after 0.102 seconds.
+􁁛  Test writeWithoutLayerThrows() passed after 0.102 seconds.
+􁁛  Test write_rejectsNonJSONObject() passed after 0.102 seconds.
+􁁛  Test mintDifferentFingerprintStillAppends() passed after 0.102 seconds.
+􁁛  Test decideEmptyCwdSkipsPendingGrant() passed after 0.102 seconds.
+􁁛  Test storeUnavailableStaysDeny() passed after 0.102 seconds.
+􁁛  Test fileDoor_literalSuppressesNonHostAuth() passed after 0.102 seconds.
+􁁛  Test reviewPromptBuilder_fileAction_emitsKindFilePathAndKind() passed after 0.102 seconds.
+􁁛  Test load_missingAndNonObject_areEmpty() passed after 0.102 seconds.
+􁁛  Test saveWithoutMatchingViewWritesNothing() passed after 0.102 seconds.
+􁁛  Test decideAllowlistBeforeGrant() passed after 0.102 seconds.
+􁁛  Test allowlistParse_errorResidualsAndExpiresRender() passed after 0.102 seconds.
+􁁛  Test secretsNeverEnterCapturedPayload() passed after 0.102 seconds.
+􁁛  Test exactForce_defaultSentencesForEachVerdict() passed after 0.102 seconds.
+􁁛  Test pendingUnwrapLimitedAnalysis_doesNotPreviewUnwrapHardStop() passed after 0.102 seconds.
+􁁛  Test allowlistBeforeAllowOnce() passed after 0.102 seconds.
+􁁛  Test alwaysBlockPreview_hardStopMaySave() passed after 0.102 seconds.
+􁁛  Test previewDoesNotWriteAllowlistOrDenylist() passed after 0.102 seconds.
+􁁛  Test rebaseRecovery_allowIsNotEligible() passed after 0.102 seconds.
+􁁛  Test allowOnceKeepsMatchedRuleDetail() passed after 0.102 seconds.
+􁁛  Test saveFileToolWithoutMatchingViewWritesNothing() passed after 0.102 seconds.
+􁁛  Test mintFreshHashPrunesExpiredAndReusesSameCommandPending() passed after 0.102 seconds.
+􁁛  Test rulePinning_ruleIDUsesMatchingViewOrPredicate() passed after 0.102 seconds.
+􁁛  Test savePinsCallerMatchingView() passed after 0.103 seconds.
+􁁛  Test constructsOnThisHost() passed after 0.102 seconds.
+􁁛  Test shadowDisagreement_missingDecisionIsNotDisagreement() passed after 0.102 seconds.
+􁁛  Test anyForceNamedBranch_askSentence() passed after 0.102 seconds.
+􁁛  Test saveAlwaysAllowPinsExactCommandIdempotently() passed after 0.103 seconds.
+􁁛  Test configDirectoryInitPersistsMachineWithoutHome() passed after 0.102 seconds.
+􁁛  Test anyForceNilBranch_defaultSentences() passed after 0.102 seconds.
+􁁛  Test processHome_emptyWhenHOMEUnset() passed after 0.102 seconds.
+􁁛  Test builder_redactsSecretInSupportingCommand() passed after 0.102 seconds.
+􁁛  Test providedSentence_isKeptAndGenericRuleID() passed after 0.102 seconds.
+􁁛  Test nilHomeLoadsRepoOnlyLikeGatedEvaluate() passed after 0.102 seconds.
+􁁛  Test emptySentence_usesDefaultForcePushMainDenyID() passed after 0.102 seconds.
+􁁛  Test allowOnceStore_emptyRobotAndMissingResiduals() passed after 0.102 seconds.
+􁁛  Test mintCollidesWithLivePendingSameHash() passed after 0.102 seconds.
+􁁛  Test invalidMachineTOMLFailsClosed() passed after 0.102 seconds.
+􁁛  Test hostAuth_stillDeniesUnderCoveringAllowPath() passed after 0.102 seconds.
+􁁛  Test missingFilesLoadEmptyAndDoNotMint() passed after 0.102 seconds.
+􁁛  Test consumeWrongCwdOrFingerprintIsNotFound() passed after 0.102 seconds.
+􁁛  Test swapStillGoesThroughActionReviewerOnly() passed after 0.102 seconds.
+􁁛  Test saveAlwaysBlockPinsAndBeatsAllowlist() passed after 0.103 seconds.
+􁁛  Test reasonRequired() passed after 0.102 seconds.
+􁁛  Test allowlistStore_lockDirectoryFailsClosed() passed after 0.102 seconds.
+􁁛  Test prompt_putsSemanticFieldsBeforeSupportingCommand() passed after 0.102 seconds.
+􁁛  Test allowOnceStore_skipsInvalidJSONLAndLockFails() passed after 0.102 seconds.
+􁁛  Test tomlMachineLoadsThroughHomeSession() passed after 0.103 seconds.
+􁁛  Test mintFromDeny_emptyMatchingViewIsNil() passed after 0.102 seconds.
+􁁛  Test indeterminateIsNotAllow() passed after 0.102 seconds.
+􁁛  Test previewDoesNotSpendGrant() passed after 0.102 seconds.
+􁁛  Test ruleAndExactMatch() passed after 0.102 seconds.
+􁁛  Test sequentialHostAskSpend_plantsEachConfirm() passed after 0.102 seconds.
+􁁛  Test promotionThresholds_areMeasurableAndDoNotEnableAutoReview() passed after 0.102 seconds.
+􁁛  Test denyWithGrantAllowsOnce() passed after 0.103 seconds.
+􁁛  Test emptyMatchingView_neverSpends() passed after 0.102 seconds.
+􁁛  Test projectFileInert() passed after 0.102 seconds.
+􁁛  Test invalidTOMLFailsOpenOnLoad() passed after 0.102 seconds.
+􁁛  Test expiredRowIgnored() passed after 0.102 seconds.
+􁁛  Test loadEffective_readsConfigAndRepoToml() passed after 0.103 seconds.
+􁁛  Test decideIndeterminateNeverHonorsGrant() passed after 0.102 seconds.
+􁁛  Test missingMachineFileLoadsEmpty() passed after 0.102 seconds.
+􁁛  Test shellPayload_includesOptionalResourceAndScopeFields() passed after 0.103 seconds.
+􁁛  Test pinnedSecret_neverSpends() passed after 0.103 seconds.
+􁁛  Test redeemThenGateAllowsOnce() passed after 0.103 seconds.
+􁁛  Test repoAllowCannotDropMachineDeny() passed after 0.103 seconds.
+􁁛  Test generateAllowOnceCode_returnsAllowOnceUnlockCode() passed after 0.103 seconds.
+􁁛  Test unavailablePrimary_fixtureEnglish_previewsCannedGitPushDeny() passed after 0.103 seconds.
+􁁛  Test disabledSystemModel_fallsBackToFakeWithoutLiveApple() passed after 0.103 seconds.
+􁁛  Test allowDoesNotConsumeGrant() passed after 0.103 seconds.
+􁁛  Test machineAllowCannotDropBuiltinDeny() passed after 0.103 seconds.
+􁁛  Test symlinkIntoWorkspaceIgnored() passed after 0.103 seconds.
+􁁛  Test mintEmptyMatchingView_throwsWithoutTTY() passed after 0.103 seconds.
+􁁛  Test emptyCwdDoesNotHonor() passed after 0.103 seconds.
+􁁛  Test missingPredicate_refuses() passed after 0.103 seconds.
+􁁛  Test unavailablePrimary_uncompilableEnglish_refuses() passed after 0.103 seconds.
+􁁛  Test roundTripsGitPushDenyInTempDirectory() passed after 0.103 seconds.
+􁁛  Test machineFileUsesPolicyPaths() passed after 0.103 seconds.
+􁁛  Test mintFromDeny_sameCommandNewStoreDoesNotMintAnotherPending() passed after 0.103 seconds.
+􁁛  Test update_preservesSiblingKeysAndSetsOwnerModes() passed after 0.103 seconds.
+􁁛  Test mergeIncomingPreviewDoesNotWrite() passed after 0.103 seconds.
+􁁛  Test legacyJSONLoadsWhenTOMLMissing() passed after 0.103 seconds.
+􁁛  Test mergeLayer_keepsTighterVerdict() passed after 0.103 seconds.
+􁁛  Test upsertUsesMergeLayerSemantics() passed after 0.104 seconds.
+􁁛  Test uninstallArtifactsIncludeLocks() passed after 0.103 seconds.
+􁁛  Test otherError_propagatesWithoutFallback() passed after 0.103 seconds.
+􁁛  Test duplicatePredicate_refuses() passed after 0.103 seconds.
+􁁛  Test onDiskJSONOmitsRawArgv() passed after 0.103 seconds.
+􁁛  Test expiredGrantIsExpired() passed after 0.103 seconds.
+􁁛  Test omittedForce_isAny_distinctFromForceNone() passed after 0.103 seconds.
+􁁛  Test brokenRepoAllowPaths_returnsUsableSet(toml:) with 3 test cases passed after 0.103 seconds.
+􁁛  Test live_usesConfigDirectoryUnderHome() passed after 0.103 seconds.
+􁁛  Test saveMachineDocument_keepsEnglish() passed after 0.103 seconds.
+􁁛  Test primaryPreview_doesNotCallFallback() passed after 0.103 seconds.
+􁁛  Test missingFileIsNotFoundNotUnavailable() passed after 0.103 seconds.
+􁁛  Test tomlWinsOverLegacyJSON() passed after 0.103 seconds.
+􁁛  Test invalidMachineFileFailsClosed() passed after 0.103 seconds.
+􁁛  Test repoOverlayMatchesTypedRuleStoreMerge() passed after 0.104 seconds.
+􁁛  Test duplicateId_refuses() passed after 0.103 seconds.
+􁁛  Test cancellation_propagatesWithoutFallback() passed after 0.103 seconds.
+􁁛  Test wave1Predicates_roundTrip() passed after 0.103 seconds.
+􁁛  Test productInit_isEnglishCompiler() passed after 0.103 seconds.
+􁁛  Test unknownKey_refuses() passed after 0.103 seconds.
+􁁛  Test resetHardIsNeverEligible() passed after 0.103 seconds.
+􁁛  Test packRuleWithoutGitActionIsNotEligible() passed after 0.103 seconds.
+􁁛  Test wrongCwdDoesNotConsume() passed after 0.103 seconds.
+􁁛  Test newlineEnglish_roundTripsAsSingleLine() passed after 0.103 seconds.
+􁁛  Test builtinWorkingTreeDiscardWithDiscardWorktreeIsEligible() passed after 0.103 seconds.
+􁁛  Test invalidRepoSafetyOverlay_effectiveStaysNormal(toml:) with 3 test cases passed after 0.103 seconds.
+􁁛  Test storeFilesAreOwnerOnly() passed after 0.103 seconds.
+􁁛  Test reviewEligible_modelDeny_doesNotBecomeLiveDecision() passed after 0.103 seconds.
+􁁛  Test ciMintRefuses() passed after 0.103 seconds.
+􁁛  Test unknownForce_refuses() passed after 0.104 seconds.
+􁁛  Test missingConfig_isNormal() passed after 0.103 seconds.
+􁁛  Test unreadableRepoPolicy_effectiveStaysNormal() passed after 0.103 seconds.
+􁁛  Test unknownFlagForce_refuses() passed after 0.103 seconds.
+􁁛  Test hardAllow_doesNotInvokeReviewer() passed after 0.103 seconds.
+􁁛  Test unknownPredicate_refuses() passed after 0.103 seconds.
+􁁛  Test additiveSafetyAndAllowPaths_roundTrip() passed after 0.103 seconds.
+􁁛  Test merge_machineStrict_cannotBeLoweredByRepoNormal() passed after 0.103 seconds.
+􁁛  Test splitBlock_dropsLeadingCommentsWithoutHeader() passed after 0.103 seconds.
+􁁛  Test invalidConfigSafetyLevel_isNormal() passed after 0.103 seconds.
+􁁛  Test decideKeepsUnwrapLimitedDeniedDuringRebase() passed after 0.103 seconds.
+􁁛  Test documentFieldsIgnoreConfigJSON() passed after 0.104 seconds.
+􁁛  Test hardDeny_doesNotInvokeReviewer() passed after 0.103 seconds.
+􁁛  Test wrongSchemaVersion_refuses() passed after 0.103 seconds.
+􁁛  Test unknownAnalysisDoesNotLiftCompoundCommand() passed after 0.103 seconds.
+􁁛  Test applyRebaseRecoveryDoesNotConsumeStore() passed after 0.104 seconds.
+􁁛  Test fileStoreConsumesOnce() passed after 0.103 seconds.
+􁁛  Test swappingAFMShapedReviewers_doesNotTouchLivePath() passed after 0.103 seconds.
+􁁛  Test saveFailureSurfacesAsEncodeFailed() passed after 0.104 seconds.
+􁁛  Test restoreStagedOnlyIsNotEligible() passed after 0.103 seconds.
+􁁛  Test liveUsesConfigDirectoryUnderHome() passed after 0.103 seconds.
+􁁛  Test mintFromDeny_differentCwdStillMints() passed after 0.103 seconds.
+􁁛  Test reviewEligible_invokesReviewer_logsShadow_liveStaysHuman() passed after 0.103 seconds.
+􁁛  Test unwrapLimitedIsNeverEligibleEvenWithCheckoutDiscardRule() passed after 0.103 seconds.
+􁁛  Test emptyText_isEmptySnapshot() passed after 0.103 seconds.
+􁁛  Test garbageRepoOverlay_doesNotLowerMachineStrict() passed after 0.104 seconds.
+􁁛  Test spendFirstHosts_spendUnlockableDeny() passed after 0.104 seconds.
+􁁛  Test twoBlocks_keepOrder() passed after 0.103 seconds.
+􁁛  Test brokenConfigAllowPaths_returnsUsableSet() passed after 0.104 seconds.
+􁁛  Test lockFailureIsUnavailable() passed after 0.104 seconds.
+􁁛  Test merge_repoMayRaiseNormalToStrict() passed after 0.103 seconds.
+􁁛  Test mintFromDeny_nonTTYStillWritesPending() passed after 0.103 seconds.
+􁁛  Test protectedPathDenyIsNeverEligible() passed after 0.104 seconds.
+􁁛  Test lockSetupFailureSurfacesAsEncodeFailed() passed after 0.103 seconds.
+􁁛  Test repoAllowCannotDropMachineDenyFromDisk() passed after 0.104 seconds.
+􁁛  Test roundTripsGitPushDeny() passed after 0.103 seconds.
+􁁛  Test unavailable_recordsFailure_doesNotWeakenLive() passed after 0.103 seconds.
+􁁛  Test configDirIgnoresXDG() passed after 0.103 seconds.
+􁁛  Test decideKeepsResetHardDeniedDuringRebase() passed after 0.103 seconds.
+􁁛  Test restoreWorktreeIsEligible() passed after 0.103 seconds.
+􁁛  Test corruptJSONLLineIsSkipped() passed after 0.104 seconds.
+􁁛  Test plantAndConsumeSpendsThisTurnAndListsConsumed() passed after 0.103 seconds.
+􁁛  Test saveAlwaysAllow_featureForcePush_writesMachineTypedAllow() passed after 0.104 seconds.
+􁁛  Test mintFromDeny_lockFailureIsNil() passed after 0.103 seconds.
+􁁛  Test invalidDate() passed after 0.103 seconds.
+􁁛  Test saveMachine_roundTripsAndPreservesAnalytics() passed after 0.104 seconds.
+􁁛  Test redeemThenConsumeAllowsOnce() passed after 0.104 seconds.
+􁁛  Test builtinWorkingTreeDiscardWithoutGitActionIsNotEligible() passed after 0.103 seconds.
+􁁛  Test unknownKeyAndMissingEquals_areInvalidTOML() passed after 0.103 seconds.
+􁁛  Test parseAndMatch_exactCommand() passed after 0.103 seconds.
+􁁛  Test brokenRepoAllowPaths_keepsMachineLiterals() passed after 0.104 seconds.
+􁁛  Test saveWrongDraft_forcePushMain_throwsDraftMismatchAndWritesNothing() passed after 0.103 seconds.
+􁁛  Test timeout_recordsFailure_doesNotWeakenLive() passed after 0.103 seconds.
+􁁛  Test codableRoundTripsAndRejectsEmpty() passed after 0.103 seconds.
+􁁛  Test validatingAcceptsNonEmptyPath() passed after 0.103 seconds.
+􁁛  Test otherPackCheckoutDiscardPatternIsNotEligible() passed after 0.103 seconds.
+􁁛  Test missingContext_isRecordedOnShadow() passed after 0.103 seconds.
+􁁛  Test forcePushIsNeverEligible() passed after 0.103 seconds.
+􁁛  Test rawRepresentableInitFailsOnEmpty() passed after 0.103 seconds.
+􁁛  Test nonTTYMintRefusesAndDoesNotWrite() passed after 0.103 seconds.
+􁁛  Test validatingRejectsEmptyString() passed after 0.103 seconds.
+􁁛  Test decideAllowsEligibleDiscardBeforeWorkingTreePin() passed after 0.103 seconds.
+􁁛  Test mintFromDeny_redeemThenConsumeAllowsOnce() passed after 0.104 seconds.
+􁁛  Test unoverridableHardStop_usesUnlockableDenyExceptWorkingTreeDiscard() passed after 0.103 seconds.
+􁁛  Test mintFromDeny_sameCommandReusesCodeInSameStore() passed after 0.104 seconds.
+􁁛  Test reviewEligible_modelAbstain_doesNotBecomeLiveDecision() passed after 0.103 seconds.
+􁁛  Test defaultProfileMustNameAProfileInTheSameDocument() passed after 0.103 seconds.
+􁁛  Test saveFailureSurfacesAsEncodeFailed() passed after 0.104 seconds.
+􁁛  Test commentsBlankLinesAndEscapes_roundTrip() passed after 0.103 seconds.
+􁁛  Test deleteRemoteRefIsNeverEligible() passed after 0.103 seconds.
+􁁛  Test invalidAgentMarksFailClosed() passed after 0.103 seconds.
+􁁛  Test emptyReason() passed after 0.104 seconds.
+􁁛  Test allowlistHonor_isSuppressedByBlockedMatchingView() passed after 0.103 seconds.
+􁁛  Test legacyDocumentsDecodeWithEmptyKeychain() passed after 0.104 seconds.
+􁁛  Test credentialAgentFiltersRoundTripAndFailClosed() passed after 0.103 seconds.
+􁁛  Test saveAlwaysAllow_forcePushMain_throwsHardStopAndWritesNothing() passed after 0.104 seconds.
+􁁛  Test saveTypedBlock_samePredicateDifferentCommand_sameRuleID() passed after 0.104 seconds.
+􁁛  Test machinePolicyDocument_raisesEffectiveLevel() passed after 0.104 seconds.
+􁁛  Test agentMarksAcceptAnyIdentifier() passed after 0.103 seconds.
+􁁛  Test discardWorktreeIsEligible() passed after 0.103 seconds.
+􁁛  Test saveAlwaysBlock_forcePushMain_loadsAsMachineTypedDeny() passed after 0.104 seconds.
+􁁛  Test contradictoryEnvironmentEntriesFailClosed() passed after 0.103 seconds.
+􁁛  Test emptyAgentFiltersNormalizeToNil() passed after 0.103 seconds.
+􁁛  Test emptyMachinePolicyGrantsNothing() passed after 0.103 seconds.
+􁁛  Test saveAlwaysAllow_nonGit_stillPinsExactCommand() passed after 0.104 seconds.
+􁁛  Test secretsDenyIsNeverEligibleEvenWithDiscardWorktree() passed after 0.103 seconds.
+􁁛  Test storeFilesAreOwnerOnlyAndUninstallListsThem() passed after 0.104 seconds.
+􁁛  Test repoPolicy_raisesEffectiveLevel() passed after 0.104 seconds.
+􁁛  Test legacyDocumentsDecodeWithEmptyAgentsAndNoDefault() passed after 0.103 seconds.
+􁁛  Test fractionalSeconds_parse() passed after 0.104 seconds.
+􁁛  Test uninstallArtifacts_includeDenylistAndLock() passed after 0.103 seconds.
+􁁛  Test explicitProfileIsScopedToProjectAndKeepsGenericResources() passed after 0.103 seconds.
+􁁛  Test malformedGrantsAndNewerVersionFailClosed() passed after 0.103 seconds.
+􁁛  Test agentMarksRoundTripThroughTheStore() passed after 0.103 seconds.
+􁁛  Test lockSetupFailureSurfacesAsEncodeFailed() passed after 0.103 seconds.
+􁁛  Test missingAndEmptyCommand() passed after 0.103 seconds.
+􁁛  Test directoryAtLockPath_mapsToAllowlistLockFailed() passed after 0.103 seconds.
+􁁛  Test keychainEntriesRoundTripThroughTheStore() passed after 0.103 seconds.
+􁁛  Test keychainEntriesFailClosed() passed after 0.103 seconds.
+􁁛  Test missingAddedAt_isEpoch() passed after 0.102 seconds.
+􀢄  Test processRestartReloadsPendingAndResolvedRecords() failed after 0.104 seconds with 1 issue.
+􁁛  Test missingReason() passed after 0.102 seconds.
+􁁛  Test staleFingerprintIsRejectedAfterRestart() passed after 0.104 seconds.
+􁁛  Test corruptJSONLLineSkipped() passed after 0.104 seconds.
+􁁛  Test timeoutPersistsAcrossRestartAndRejectsStaleApprove() passed after 0.104 seconds.
+􁁛  Test missingFile_isMissingAndEmptySnapshot() passed after 0.101 seconds.
+􁁛  Test onlyOwnerFilesWithoutSymlinksAreLoaded() passed after 0.104 seconds.
+􁁛  Test emptyEnglish_refusesEmptyWithoutLiveApple() passed after 0.073 seconds.
+􁁛  Test disabledSystemModel_throwsUnavailableWithoutLiveApple() passed after 0.071 seconds.
+􁁛  Test pin_writesOwnerOnlyAndLoadRoundTrips() passed after 0.103 seconds.
+􁁛  Test injectedCompiler_propagatesUnavailable() passed after 0.078 seconds.
+􁁛  Test invalidUTF8_isInvalidAndEmptySnapshot() passed after 0.102 seconds.
+􁁛  Test cancelPersistsAndCannotAuthorizeAfterRestart() passed after 0.104 seconds.
+􁁛  Test constructsOnThisHost() passed after 0.050 seconds.
+􁁛  Test subscribeReceivesCreateAndResolve() passed after 0.103 seconds.
+􁁛  Test injectedFake_compilesKnownDenyWithoutLiveApple() passed after 0.047 seconds.
+􁁛  Test schemaVersionRoundTripsAndRejectsOtherVersions() passed after 0.104 seconds.
+􁁛  Test invalidTOML_isInvalidAndPinFailsClosed() passed after 0.101 seconds.
+􁁛  Test injectedCompiler_propagatesCancellation() passed after 0.045 seconds.
+􁁛  Test failTaskTimeoutPersistsTimedOutAfterRestart() passed after 0.104 seconds.
+􁁛  Suite GrantPresenceTests passed after 0.107 seconds.
+􁁛  Suite "Agent definition store" passed after 0.107 seconds.
+􁁛  Suite "ActionPolicyEngine shadow wire" passed after 0.107 seconds.
+􁁛  Suite AllowOnceLedgerTests passed after 0.107 seconds.
+􁁛  Suite "ProposedAction.file review surfaces" passed after 0.107 seconds.
+􁁛  Suite SecretAllowPathsTests passed after 0.107 seconds.
+􁁛  Suite PolicyGateTests passed after 0.107 seconds.
+􁁛  Suite HostGrantWriterTests passed after 0.107 seconds.
+􁁛  Suite MachineConfigJSONTests passed after 0.107 seconds.
+􁁛  Suite RulePinningTests passed after 0.107 seconds.
+􁁛  Suite LinuxResidualCoverageTests passed after 0.107 seconds.
+􁁛  Suite NoBypassEnvTests passed after 0.107 seconds.
+􁁛  Suite AllowlistTests passed after 0.107 seconds.
+􁁛  Suite ReviewPromptBuilderCoverageTests passed after 0.107 seconds.
+􁁛  Suite "PolicyWorkspace" passed after 0.107 seconds.
+􁁛  Suite EnglishCompileChainTests passed after 0.107 seconds.
+􁁛  Suite OptionalOverlayDegradeTests passed after 0.107 seconds.
+􁁛  Suite SafetyStoreTests passed after 0.107 seconds.
+􁁛  Suite "ShadowReviewRunner" passed after 0.107 seconds.
+􁁛  Test twoStores_casUnderMiss_neitherAllows() passed after 0.105 seconds.
+􁁛  Suite RebaseRecoveryTests passed after 0.107 seconds.
+􁁛  Suite "RulePinStore" passed after 0.107 seconds.
+􁁛  Test concurrentConsumeOfOneGrant_winsOnce() passed after 0.105 seconds.
+􁁛  Suite PolicyDocumentTOMLTests passed after 0.107 seconds.
+􁁛  Suite FoundationModelsEnglishCompileMappingTests passed after 0.107 seconds.
+􁁛  Test concurrentConsumeAcrossStoresWinsOnce() passed after 0.105 seconds.
+􁁛  Suite HomeDirectoryTests passed after 0.107 seconds.
+􁁛  Suite "Runtime resource policy" passed after 0.107 seconds.
+􁁛  Test pin_sameMatchingView_isIdempotent() passed after 0.101 seconds.
+􁁛  Suite DenylistTests passed after 0.107 seconds.
+􁁛  Suite "Policy gate stress" passed after 0.107 seconds.
+􁁛  Test reviewTimeout_returnsFastOperation() passed after 0.105 seconds.
+􁁛  Suite "TypedRuleStore" passed after 0.107 seconds.
+􁁛  Suite DenylistStoreTests passed after 0.107 seconds.
+􀢄  Test concurrentConsumeWinsOnce() recorded an issue at PendingApprovalStoreTests.swift:102:9: Expectation failed: results.filter(\.isSuccess).count == 1
+􀄵  results.filter(\.isSuccess).count == 1 → false
+􀄵    results.filter(\.isSuccess).count → 0
+􀢄  Test concurrentConsumeWinsOnce() recorded an issue at PendingApprovalStoreTests.swift:103:9: Expectation failed: results.filter { $0 == .alreadyConsumed }.count == 1
+􀄵  results.filter { $0 == .alreadyConsumed }.count == 1 → false
+􀄵    results.filter { $0 == .alreadyConsumed }.count → 0
+􀢄  Test concurrentConsumeWinsOnce() failed after 0.104 seconds with 2 issues.
+􁁛  Test concurrentResolveWinsOnce() passed after 0.105 seconds.
+􀢄  Test keepWaitingSurvivesRestartPastDeadline() recorded an issue at PendingApprovalStoreTests.swift:231:9: Expectation failed: resolved.authorizes(Self.fingerprint, identity: Self.identity)
+􀄵  resolved.authorizes(Self.fingerprint, identity: Self.identity) → false
+􀄵    resolved → PendingApproval(id: RVDomain.ApprovalID(rawValue: "keep-1"), subject: nil, identity: RVDomain.ApprovalIdentity(session: RVDomain.SessionID(rawValue: "sess-1"), agent: RVDomain.HookHost.pi), action: RVDomain.ProposedAction.shell(RVDomain.ShellAction(fingerprint: RVDomain.ActionFingerprint(rawValue: "shell:git.force-push:origin:main"), effects: RVDomain.ActionEffects(kinds: [RVDomain.ActionEffectKind.remoteSharedBranchMutation]), resources: RVDomain.ActionResources(remoteName: Optional("origin"), branchName: Optional("main"), path: nil, filesystemScope: nil, resourceKind: nil), scope: RVDomain.ActionScope(workingDirectory: Optional(RVDomain.WorkingDirectory(rawValue: "/tmp/rv"))), supportingCommand: nil, analysis: nil)), reason: RVDomain.ApprovalReason.hostAsk, continuation: RVDomain.ApprovalContinuation.hostNative, timeoutPolicy: RVDomain.ApprovalTimeoutPolicy.keepWaiting, createdAt: 2023-11-14 22:13:20 +0000, expiresAt: 2023-11-14 22:13:21 +0000, state: RVDomain.PendingApprovalState.resolved(RVDomain.ApprovalResolution(decision: RVDomain.ApprovalDecision.allowOnce, resolvedAt: 2023-11-14 22:13:22 +0000)))
+􀄵      id → ApprovalID(rawValue: "keep-1")
+􀄵        rawValue → "keep-1"
+􀄵      subject → nil
+􀄵      identity → ApprovalIdentity(session: RVDomain.SessionID(rawValue: "sess-1"), agent: RVDomain.HookHost.pi)
+􀄵        session → SessionID(rawValue: "sess-1")
+􀄵          rawValue → "sess-1"
+􀄵        agent → .pi
+􀄵      action → .shell(RVDomain.ShellAction(fingerprint: RVDomain.ActionFingerprint(rawValue: "shell:git.force-push:origin:main"), effects: RVDomain.ActionEffects(kinds: [RVDomain.ActionEffectKind.remoteSharedBranchMutation]), resources: RVDomain.ActionResources(remoteName: Optional("origin"), branchName: Optional("main"), path: nil, filesystemScope: nil, resourceKind: nil), scope: RVDomain.ActionScope(workingDirectory: Optional(RVDomain.WorkingDirectory(rawValue: "/tmp/rv"))), supportingCommand: nil, analysis: nil))
+􀄵        shell → ShellAction(fingerprint: RVDomain.ActionFingerprint(rawValue: "shell:git.force-push:origin:main"), effects: RVDomain.ActionEffects(kinds: [RVDomain.ActionEffectKind.remoteSharedBranchMutation]), resources: RVDomain.ActionResources(remoteName: Optional("origin"), branchName: Optional("main"), path: nil, filesystemScope: nil, resourceKind: nil), scope: RVDomain.ActionScope(workingDirectory: Optional(RVDomain.WorkingDirectory(rawValue: "/tmp/rv"))), supportingCommand: nil, analysis: nil)
+􀄵          fingerprint → ActionFingerprint(rawValue: "shell:git.force-push:origin:main")
+􀄵            rawValue → "shell:git.force-push:origin:main"
+􀄵          effects → ActionEffects(kinds: [RVDomain.ActionEffectKind.remoteSharedBranchMutation])
+􀄵            kinds → [RVDomain.ActionEffectKind.remoteSharedBranchMutation]
+􀄵          resources → ActionResources(remoteName: Optional("origin"), branchName: Optional("main"), path: nil, filesystemScope: nil, resourceKind: nil)
+􀄵            remoteName → "origin"
+􀄵              some → "origin"
+􀄵            branchName → "main"
+􀄵              some → "main"
+􀄵            path → nil
+􀄵            filesystemScope → nil
+􀄵            resourceKind → nil
+􀄵          scope → ActionScope(workingDirectory: Optional(RVDomain.WorkingDirectory(rawValue: "/tmp/rv")))
+􀄵            workingDirectory → WorkingDirectory(rawValue: "/tmp/rv")
+􀄵              some → WorkingDirectory(rawValue: "/tmp/rv")
+􀄵                rawValue → "/tmp/rv"
+􀄵          supportingCommand → nil
+􀄵          analysis → nil
+􀄵      reason → .hostAsk
+􀄵      continuation → .hostNative
+􀄵      timeoutPolicy → .keepWaiting
+􀄵      createdAt → 2023-11-14 22:13:20 +0000
+􀄵        timeIntervalSinceReferenceDate → 721692800.0
+􀄵      expiresAt → 2023-11-14 22:13:21 +0000
+􀄵        timeIntervalSinceReferenceDate → 721692801.0
+􀄵      state → .resolved(RVDomain.ApprovalResolution(decision: RVDomain.ApprovalDecision.allowOnce, resolvedAt: 2023-11-14 22:13:22 +0000))
+􀄵        resolved → ApprovalResolution(decision: RVDomain.ApprovalDecision.allowOnce, resolvedAt: 2023-11-14 22:13:22 +0000)
+􀄵          decision → .allowOnce
+􀄵          resolvedAt → 2023-11-14 22:13:22 +0000
+􀄵            timeIntervalSinceReferenceDate → 721692802.0
+􀄵    Self.fingerprint → ActionFingerprint(rawValue: "shell:git.force-push:origin:main")
+􀄵      rawValue → "shell:git.force-push:origin:main"
+􀄵    Self.identity → ApprovalIdentity(session: RVDomain.SessionID(rawValue: "sess-1"), agent: RVDomain.HookHost.pi)
+􀄵      session → SessionID(rawValue: "sess-1")
+􀄵        rawValue → "sess-1"
+􀄵      agent → .pi
+􀢄  Test keepWaitingSurvivesRestartPastDeadline() failed after 0.112 seconds with 1 issue.
+􀢄  Suite "PendingApproval store" failed after 0.115 seconds with 4 issues.
+􁁛  Test domainSourcesDoNotImportFoundationModels() passed after 0.084 seconds.
+􁁛  Suite FoundationModelsEnglishCompilerTests passed after 0.121 seconds.
+􁁛  Test reviewTimeout_expiresSlowOperation() passed after 0.124 seconds.
+􁁛  Suite "FoundationModelsActionReviewer" passed after 0.126 seconds.
+􁁛  Test concurrentConsumeAcrossProcessesWinsOnce() passed after 0.157 seconds.
+􁁛  Suite AllowOnceStoreTests passed after 0.159 seconds.
+􀢄  Test run with 317 tests in 33 suites failed after 0.160 seconds with 4 issues.
+Note: Some test targets reported failures:
+  - RVPolicyTests (Swift Testing)

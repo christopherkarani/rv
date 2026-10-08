@@ -12,6 +12,17 @@ public enum Normalize {
     public static func matchingView(of command: ShellCommand) -> MatchingView {
         matchingView(of: command.rawValue)
     }
+
+    /// Exact lexemes masking replaced while producing the matching view.
+    /// M-07: mint and spend digest these (never store or transmit them).
+    public static func maskedSegments(of command: String) -> [String] {
+        ShellPipeline.maskedSegments(of: command)
+    }
+
+    /// Returns the masked segments of `command`.
+    public static func maskedSegments(of command: ShellCommand) -> [String] {
+        maskedSegments(of: command.rawValue)
+    }
 }
 
 struct CommandToken {
@@ -20,14 +31,29 @@ struct CommandToken {
     var wasAnsiC: Bool = false
 }
 
-/// Legacy tokenizer shape kept for `DocumentationQuery`, `Analyze*`, and the
-/// `peelTimeout` compatibility overload. The byte loop lives in
-/// `ShellPipeline.tokenize`; this maps its output 1:1.
+/// Legacy tokenizer shape kept for `DocumentationQuery` and `Analyze*`.
+/// The byte loop lives in `ShellPipeline.tokenize`; this maps its output
+/// 1:1. Assignment prefixes are handled as text, not here: stream-leading
+/// prefixes in `classifyStage` (pre-masking, where quoting boundaries
+/// survive) and per-segment prefixes in `singleEffectiveSegment` and the
+/// `parse*Segments` loops (with a resplit). A token-level strip cannot
+/// distinguish `NAME="v"` (assignment) from `"N=v"` (command name) — the
+/// lexeme lost the quote positions — and keeping substitution-carrying
+/// prefixes hid the tail (`X=$(:) git push` concealed a push).
 func tokenizeCommand(_ text: String) -> [CommandToken] {
     ShellPipeline.tokenize(text).map {
         CommandToken(decoded: $0.lexeme, wasQuoted: $0.wasQuoted, wasAnsiC: $0.wasAnsiC)
     }
 }
+
+/// True when `word` contains an executing substitution.
+func carriesSubstitution(_ word: String) -> Bool {
+    word.contains("$(") || word.contains("`")
+}
+
+let assignmentNameStart = Set("_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+let assignmentNameChars = Set("_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+
 
 func applyRoleAwareQuotes(_ text: String) -> String {
     let tokens = ShellPipeline.tokenize(text)
@@ -38,8 +64,18 @@ func applyRoleAwareQuotes(_ text: String) -> String {
 /// Role-aware masking over pipeline tokens. Both overloads run over
 /// `ShellPipeline.tokenize` output.
 func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
+    applyRoleAwareQuotesDetailed(tokens: tokens).view
+}
+
+/// Masking plus the exact lexemes masking replaced, in token order.
+/// M-07: grants bind a digest of these segments so same-view commands with
+/// different hidden payloads do not share authority. Every site that
+/// overwrites a lexeme with a mask MUST append the pre-mask lexeme here;
+/// ANSI-C surfacing is revealing, not masking, and records nothing.
+func applyRoleAwareQuotesDetailed(tokens: [ShellPipeline.Token]) -> (view: String, masked: [String]) {
     var tokens = tokens
-    guard !tokens.isEmpty else { return "" }
+    guard !tokens.isEmpty else { return ("", []) }
+    var masked: [String] = []
     var commandBase: String?
     var gitSubcommand: String?
     var pendingGitGlobalArg = false
@@ -49,6 +85,9 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
     var pendingGitConfigArg = false
     var wrapperSeek = WrapperSeek.none
     var pendingInterpreterPayload = false
+    // P10e9: sed's positional script (first operand unless `-e`/`-f` gave it)
+    // masks like a grep pattern; file operands stay visible for the parser.
+    var sedScriptPending = false
     let unquotedDataMaskSafe = tokens.contains { tokenHasShellMeta($0.lexeme) } == false
 
     for index in tokens.indices {
@@ -70,6 +109,7 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
 
         if pendingInterpreterPayload {
             if token.wasQuoted, token.containsInlineCode == false {
+                masked.append(decoded)
                 tokens[index].lexeme = " "
             }
             pendingInterpreterPayload = false
@@ -86,6 +126,7 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
             gitConfigValuePending = false
             pendingGitConfigArg = false
             wrapperSeek = .none
+            sedScriptPending = false
             continue
         }
 
@@ -93,10 +134,12 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
             if let next = consumeWrapper(decoded: decoded, seek: &wrapperSeek) {
                 if let command = next {
                     commandBase = command
+                    sedScriptPending = (command == "sed")
                 }
                 continue
             }
             commandBase = basename(decoded)
+            sedScriptPending = (commandBase == "sed")
             continue
         }
 
@@ -125,26 +168,34 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
                 pendingInterpreterPayload = true
                 continue
             }
-            if let masked = maskAttachedInterpreterProgram(command: commandBase, decoded: decoded),
+            if let attached = maskAttachedInterpreterProgram(command: commandBase, decoded: decoded),
                token.containsInlineCode == false
             {
-                tokens[index].lexeme = masked
+                masked.append(decoded)
+                tokens[index].lexeme = attached
                 continue
             }
         }
 
         if token.containsInlineCode {
             pendingDataFlag = false
+            if commandBase == "sed" {
+                sedScriptPending = false
+            }
             continue
         }
 
-        if let masked = maskAttachedDataValue(
+        if let attachedValue = maskAttachedDataValue(
             command: commandBase,
             gitSubcommand: gitSubcommand,
             decoded: decoded
         ) {
-            tokens[index].lexeme = masked
+            masked.append(decoded)
+            tokens[index].lexeme = attachedValue
             pendingDataFlag = false
+            if commandBase == "sed" {
+                sedScriptPending = false
+            }
             continue
         }
 
@@ -166,6 +217,9 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
                 if gitSubcommand == "grep" {
                     gitGrepPatternPending = false
                 }
+                if commandBase == "sed" {
+                    sedScriptPending = false
+                }
             }
             continue
         }
@@ -176,13 +230,15 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
         }
 
         if gitSubcommand == "config" {
-            if token.containsInlineCode == false, let masked = maskGitConfigAssignment(decoded) {
-                tokens[index].lexeme = masked
+            if token.containsInlineCode == false, let assignment = maskGitConfigAssignment(decoded) {
+                masked.append(decoded)
+                tokens[index].lexeme = assignment
                 gitConfigValuePending = false
                 pendingDataFlag = false
                 continue
             }
             if gitConfigValuePending, token.containsInlineCode == false {
+                masked.append(decoded)
                 tokens[index].lexeme = String(repeating: " ", count: max(decoded.count, 1))
                 gitConfigValuePending = false
                 pendingDataFlag = false
@@ -195,8 +251,10 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
 
         if unquotedDataMaskSafe,
            isAllArgsData(commandBase),
-           token.containsInlineCode == false
+           token.containsInlineCode == false,
+           token.isRedirectStructural == false
         {
+            masked.append(decoded)
             tokens[index].lexeme = String(repeating: " ", count: max(decoded.count, 1))
             pendingDataFlag = false
             gitGrepPatternPending = false
@@ -204,23 +262,43 @@ func applyRoleAwareQuotes(tokens: [ShellPipeline.Token]) -> String {
         }
 
         if token.wasQuoted,
+           token.isRedirectStructural == false,
            shouldMaskQuotedData(
                command: commandBase,
                gitSubcommand: gitSubcommand,
                pendingDataFlag: pendingDataFlag,
-               gitGrepPatternPending: gitGrepPatternPending
+               gitGrepPatternPending: gitGrepPatternPending,
+               sedScriptPending: sedScriptPending
            )
         {
-            tokens[index].lexeme = String(repeating: " ", count: max(decoded.count, 1))
+            // Only sed scripts and `-e`/`-f` values mask under sed (files
+            // never do): they survive as `""` placeholders so the parser
+            // still sees the script position. Spaces would collapse and
+            // shift `sed -i "script" file` into `sed -i file` (no files).
+            masked.append(decoded)
+            if commandBase == "sed" {
+                tokens[index].lexeme = "\"\""
+            } else {
+                tokens[index].lexeme = String(repeating: " ", count: max(decoded.count, 1))
+            }
             pendingDataFlag = false
             gitGrepPatternPending = false
+            // An empty first operand is BSD `-i ""` (backup slot), not the
+            // script: keep pending so the real script still masks.
+            if commandBase == "sed", decoded.isEmpty == false {
+                sedScriptPending = false
+            }
             continue
         }
 
         pendingDataFlag = false
         gitGrepPatternPending = false
+        // Redirect operators are shell structure, not the sed script.
+        if commandBase == "sed", isRedirectOperator(decoded) == false {
+            sedScriptPending = false
+        }
     }
-    return joinTokenLexemes(tokens)
+    return (joinTokenLexemes(tokens), masked)
 }
 
 private enum WrapperSeek {
@@ -419,6 +497,41 @@ func basename(_ token: String) -> String {
         return String(token[token.index(after: slash)...])
     }
     return token
+}
+
+/// Pairwise backslash unescape for tool-head dispatch (`\X` → `X`, left
+/// to right; a trailing lone backslash stays). The tokenizer preserves
+/// backslashes in decoded words, so `c\url` would otherwise miss the
+/// `curl` parse while the runtime executes curl (fail-open). Mapping a
+/// quoted literal (`'c\url'`, runtime: not-found) onto the tool
+/// over-claims (fail-closed), so unescape-then-match is sound for tool
+/// recognition. Do NOT use for cwd tracking: a phantom track diverges
+/// the model (see CdTracking builtinHead), where opaque heads poison.
+func unescapeBackslashPairs(_ word: String) -> String {
+    var out = ""
+    out.reserveCapacity(word.count)
+    var iterator = word.makeIterator()
+    while let char = iterator.next() {
+        if char == "\\", let next = iterator.next() {
+            out.append(next)
+        } else {
+            out.append(char)
+        }
+    }
+    return out
+}
+
+/// True when a command head carries glob or brace metacharacters that
+/// could expand it into a different verb (`[c]url`, `{curl,}`). Exact
+/// `[`/`[[` are the static test builtins and excluded. Braces need a
+/// comma: lone `{` is group syntax and `{x}` is literal — neither
+/// expands (`..` sequences yield only numbers/letters, never a verb).
+/// Callers fail closed (analysis claims outside; the tracker also
+/// poisons slashless backslash/substitution heads via its own rule).
+func isGlobBraceHead(_ word: String) -> Bool {
+    if word == "[" || word == "[[" { return false }
+    if word.contains("*") || word.contains("?") || word.contains("[") { return true }
+    return word.contains("{") && word.contains(",")
 }
 
 private func joinTokenLexemes(_ tokens: [ShellPipeline.Token]) -> String {

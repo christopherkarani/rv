@@ -145,13 +145,11 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         ActionEffects(kinds: effectKinds)
     }
 
-    public var resources: ActionResources {
-        let target = primaryTarget
-        return ActionResources(
-            path: target?.canonical,
-            filesystemScope: target?.scope,
-            resourceKind: target?.kind
-        )
+    public var resources: ResourceScope {
+        guard let target = primaryTarget else {
+            return .none
+        }
+        return .filesystem(path: target.canonical, scope: target.scope, kind: target.kind)
     }
 
     public var explainAction: String {
@@ -219,11 +217,13 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         workingDirectory: WorkingDirectory?
     ) -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: fingerprint),
-                scope: ActionScope(workingDirectory: workingDirectory),
-                supportingCommand: command,
-                filesystemAction: self
+            ShellAction.analyzed(
+                AnalyzedShell(
+                    fingerprint: ActionFingerprint(rawValue: fingerprint),
+                    scope: ActionScope(workingDirectory: workingDirectory),
+                    supportingCommand: command,
+                    analysis: .filesystem(self)
+                )
             )
         )
     }

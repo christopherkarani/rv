@@ -118,7 +118,7 @@ import Synchronization
     #expect(outcome.exitCode == 0)
 }
 
-@Test func hookDispatch_process_allowDenyAndHelp() async throws {
+@Test(.disabled("KILL-SWITCH: C hook denies every call until mutual daemon auth lands (rv.c main); re-enable with hook-grade")) func hookDispatch_process_allowDenyAndHelp() async throws {
     let rv = try #require(
         builtRVExecutable(),
         "build --product rv to prove the process hook path"

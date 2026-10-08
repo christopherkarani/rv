@@ -357,7 +357,7 @@ public enum ActionPolicyEngine: Sendable {
                     semanticallyCovered: true
                 )
             }
-            if case .unprobed = gitWorld, shell.resources.branchName == nil {
+            if case .unprobed = gitWorld, shell.resources.gitRef == nil {
                 // Implicit HEAD was not injected. Pack floor; do not treat as private.
                 return CoreHit(
                     decision: .reviewEligible(fallback: Builtin.uncovered),
@@ -366,6 +366,17 @@ public enum ActionPolicyEngine: Sendable {
                     semanticallyCovered: false
                 )
             }
+            return CoreHit(
+                decision: .mandatoryHuman(Builtin.remoteBranchAsk),
+                ruleID: Builtin.remoteBranchAsk.ruleID,
+                reason: Builtin.remoteBranchAsk.reason,
+                semanticallyCovered: true
+            )
+        }
+        if kinds.contains(.remoteBranchMutation) {
+            // Plain push: authority-expanding but not destructive. Ask on
+            // every target, including shared branches and unknown refs —
+            // there is no allow arm for remote mutation.
             return CoreHit(
                 decision: .mandatoryHuman(Builtin.remoteBranchAsk),
                 ruleID: Builtin.remoteBranchAsk.ruleID,
@@ -394,7 +405,13 @@ public enum ActionPolicyEngine: Sendable {
 
     private static func filesystemHit(_ shell: ShellAction) -> CoreHit {
         let kinds = shell.effects.kinds
-        let scope = shell.resources.filesystemScope
+        let scope: FilesystemScope?
+        switch shell.resources {
+        case .filesystem(_, let extracted, _):
+            scope = extracted
+        case .git, .none:
+            scope = nil
+        }
         if kinds.contains(.unresolvedFilesystem) || scope == .unknown || scope == nil {
             return CoreHit(
                 decision: .hardDeny(Builtin.unresolvedFilesystem),
@@ -459,8 +476,8 @@ public enum ActionPolicyEngine: Sendable {
                 .filesystemModeChange, .filesystemCreate, .filesystemRead,
                 .outsideRepositoryMutation, .unresolvedFilesystem:
                 return true
-            case .remoteSharedBranchMutation, .localBranchCreate, .workingTreeDiscard,
-                .protectedPathMutation:
+            case .remoteSharedBranchMutation, .remoteBranchMutation, .localBranchCreate,
+                .workingTreeDiscard, .protectedPathMutation:
                 return false
             }
         })
@@ -472,15 +489,15 @@ public enum ActionPolicyEngine: Sendable {
             case .filesystemDelete, .filesystemMove, .filesystemOverwrite, .filesystemModeChange,
                 .filesystemCreate, .outsideRepositoryMutation:
                 return true
-            case .filesystemRead, .remoteSharedBranchMutation, .localBranchCreate,
-                .workingTreeDiscard, .protectedPathMutation, .unresolvedFilesystem:
+            case .filesystemRead, .remoteSharedBranchMutation, .remoteBranchMutation,
+                .localBranchCreate, .workingTreeDiscard, .protectedPathMutation, .unresolvedFilesystem:
                 return false
             }
         })
     }
 
     private static func isSharedTarget(
-        resources: ActionResources,
+        resources: ResourceScope,
         context: ReviewContext,
         gitWorld: GitAnalysisWorld
     ) -> Bool {
@@ -490,17 +507,34 @@ public enum ActionPolicyEngine: Sendable {
         case .probed(let git):
             // Unprobed never consults implicit HEAD. Probed uses the name
             // against the shared set, not a stored bool on world or ReviewContext.
-            if GitSharedBranch.contains(git.currentBranch)
-                || GitSharedBranch.contains(context.repository.currentBranch)
+            if GitSharedBranch.contains(git.currentBranch.map(BranchName.init(rawValue:)))
+                || GitSharedBranch.contains(
+                    context.repository.currentBranch.map(BranchName.init(rawValue:))
+                )
             {
                 return true
             }
         }
-        return GitSharedBranch.contains(resources.branchName)
+        switch resources {
+        case .git(_, .some(.branch(let name))):
+            return GitSharedBranch.contains(name)
+        case .git(_, .some(.refspec(let spec))):
+            // Legacy exact-match: pre-T2 the refspec traveled in `branchName`
+            // and matched only by string equality, so `main` denies while
+            // `HEAD:main` falls through to ask. Preserved, not repaired.
+            return GitSharedBranch.names.contains(spec)
+        case .git(_, .some(.tag)), .git(_, nil), .filesystem, .none:
+            return false
+        }
     }
 
     private static func semanticAction(of shell: ShellAction) -> SemanticAction? {
-        shell.analysis
+        switch shell {
+        case .effectOnly:
+            return nil
+        case .analyzed(let analyzed):
+            return analyzed.analysis
+        }
     }
 
     /// Restrict-only. Rank is deny > ask > allow, independent of list order.

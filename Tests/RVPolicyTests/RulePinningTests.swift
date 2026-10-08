@@ -802,24 +802,28 @@ struct RulePinningTests {
         let actionScope = ActionScope(workingDirectory: wd("/tmp/ws"))
         let supportingCommand = ShellCommand(rawValue: command)
         if let gitAction {
-            return ShellAction(
-                fingerprint: fingerprint,
-                scope: actionScope,
-                supportingCommand: supportingCommand,
-                analysis: .git(gitAction)
+            return ShellAction.analyzed(
+                AnalyzedShell(
+                    fingerprint: fingerprint,
+                    scope: actionScope,
+                    supportingCommand: supportingCommand,
+                    analysis: .git(gitAction)
+                )
             )
         }
-        return ShellAction(
-            fingerprint: fingerprint,
-            effects: ActionEffects(kinds: effects),
-            resources: ActionResources(
-                remoteName: "origin",
-                branchName: branchName,
-                path: path,
-                filesystemScope: scope
-            ),
-            scope: actionScope,
-            supportingCommand: supportingCommand
+        return ShellAction.effectOnly(
+            EffectShell(
+                fingerprint: fingerprint,
+                effects: ActionEffects(kinds: effects),
+                resources: ActionResources(
+                    remoteName: "origin",
+                    branchName: branchName,
+                    path: path,
+                    filesystemScope: scope
+                ),
+                scope: actionScope,
+                supportingCommand: supportingCommand
+            )
         )
     }
 }

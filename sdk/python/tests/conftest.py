@@ -8,6 +8,16 @@ import tempfile
 
 import pytest
 
+from rv import client as client_module
+
+
+@pytest.fixture
+def _product_ok(monkeypatch):
+    # Unit tests drive Client with scripted transports (no rvd on PATH),
+    # so pin the product probe. Opt-in per module via usefixtures: live
+    # integration tests must exercise the real probe.
+    monkeypatch.setattr(client_module, "_probe_product", lambda rvd=None: "0.1.5")
+
 
 @pytest.fixture
 def socket_path():

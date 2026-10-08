@@ -2,7 +2,7 @@ import RVDomain
 
 /// Maps an already-decoded hook request to a runtime `AgentRequest`.
 ///
-/// `.shell` reuses typed validate. `.file` and `.spend` are unrepresentable.
+/// `.shell` reuses typed validate. `.file` is unrepresentable.
 /// Does not parse host JSON.
 public func agentRequest(
     from request: HookRequest
@@ -15,7 +15,7 @@ public func agentRequest(
             workingDirectory: cwd,
             session: session
         )
-    case .file, .spend:
+    case .file:
         return .failure(.unsupportedKind)
     }
 }

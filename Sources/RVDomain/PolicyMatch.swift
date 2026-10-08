@@ -60,7 +60,10 @@ public enum PolicyMatch: Sendable {
         if case .exactly(let want) = wantForce, want != force {
             return false
         }
-        if let wantBranch, names(wantBranch, refspec: refspec ?? action.resources.branchName) == false {
+        // The refspec comes from the push payload, never from resources: a push
+        // ref is always `.refspec`, so the old `resources.branchName` fallback
+        // (which equaled this same payload) is gone with the bag.
+        if let wantBranch, names(wantBranch, refspec: refspec) == false {
             return false
         }
         return true

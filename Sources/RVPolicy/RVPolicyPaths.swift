@@ -9,6 +9,14 @@ public enum RVPolicyPaths: Sendable {
         configDir.appendingPathComponent("allow-once.jsonl", isDirectory: false)
     }
 
+    public static func laPromptBudgetFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("la-prompt-budget.json", isDirectory: false)
+    }
+
+    public static func attestedEpochFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("attested-epoch.json", isDirectory: false)
+    }
+
     public static func allowOnceLockFile(inConfigDir configDir: URL) -> URL {
         configDir.appendingPathComponent(".allow-once.lock", isDirectory: false)
     }
@@ -63,6 +71,8 @@ public enum RVPolicyPaths: Sendable {
             allowlistFile(inConfigDir: configDir),
             allowOnceFile(inConfigDir: configDir),
             allowOnceLockFile(inConfigDir: configDir),
+            laPromptBudgetFile(inConfigDir: configDir),
+            attestedEpochFile(inConfigDir: configDir),
             allowlistLockFile(inConfigDir: configDir),
             denylistFile(inConfigDir: configDir),
             denylistLockFile(inConfigDir: configDir),

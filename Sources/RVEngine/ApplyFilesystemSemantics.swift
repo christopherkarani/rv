@@ -31,8 +31,22 @@ public func applyFilesystemSemantics(
     enabledPacks: [PackID] = dayOnePackIDs,
     policy: EffectiveActionPolicy = .empty
 ) -> EvaluationResult {
-    if pack.analysis.gitAction != nil {
-        return pack
+    // Single-segment git claims skip filesystem policy (the command was
+    // fully classified as git) — except their shell-side redirects, which
+    // the git claim must not shadow: `git stash list > /tmp/x` writes
+    // outside the repository (A-F2). Chains always fall through: a git
+    // segment must not shadow a filesystem risk in a later segment (§24).
+    let chainView = Normalize.matchingView(of: command.rawValue).rawValue
+    if splitSegments(chainView).count < 2, pack.analysis.gitAction != nil {
+        return gitClaimRedirectResult(
+            pack: pack,
+            analysis: analysis,
+            command: command,
+            view: chainView,
+            filesystemWorld: filesystemWorld,
+            enabledPacks: enabledPacks,
+            policy: policy
+        )
     }
 
     if let floored = pack.packFloor(attaching: analysis) {
@@ -42,10 +56,126 @@ public func applyFilesystemSemantics(
     var result = pack
     result.analysis = analysis
 
+    // Step 8B §24: on a chain, evaluate the shared analysis action
+    // first (it may carry an unwrapped wrapper verdict), then every
+    // parsed filesystem segment; the first deny wins, so a benign prefix
+    // cannot hide a risky later segment. The attached analysis stays the
+    // whole-command analysis.
+    let view = chainView
+    if splitSegments(view).count > 1 {
+        if let action = analysis.filesystemAction,
+            let denied = filesystemSegmentResult(
+                action: action,
+                pack: pack,
+                analysis: analysis,
+                command: command,
+                filesystemWorld: filesystemWorld,
+                enabledPacks: enabledPacks,
+                policy: policy
+            )
+        {
+            return denied
+        }
+        let segmentContext: FilesystemAnalysisContext
+        switch filesystemWorld {
+        case .unprobed:
+            segmentContext = .empty
+        case .probed(let probed):
+            segmentContext = probed
+        }
+        // M-24: values the matcher rewrote excuse their own bare segments.
+        let assignmentValues = ShellPipeline.collectTopLevelAssignmentValues(
+            ShellPipeline.peelStage(command.rawValue)
+        )
+        for action in parseFilesystemSegments(view, context: segmentContext, assignmentValues: assignmentValues) {
+            if let denied = filesystemSegmentResult(
+                action: action,
+                pack: pack,
+                analysis: analysis,
+                command: command,
+                filesystemWorld: filesystemWorld,
+                enabledPacks: enabledPacks,
+                policy: policy
+            ) {
+                return denied
+            }
+        }
+        return result
+    }
+
     guard let action = analysis.filesystemAction else {
         return result
     }
 
+    return filesystemSegmentResult(
+        action: action,
+        pack: pack,
+        analysis: analysis,
+        command: command,
+        filesystemWorld: filesystemWorld,
+        enabledPacks: enabledPacks,
+        policy: policy
+    ) ?? result
+}
+
+/// Evaluates shell-side redirects under a single-segment git claim. The git
+/// action itself is evaluated by the git stage; here only redirect writes
+/// can deny. The segment head is `git` whenever the claim comes from this
+/// command, so the filesystem parse takes the redirect-only path and git
+/// verbs never misparse as filesystem verbs. No redirects (or nothing
+/// parsed) returns `pack` untouched, exactly like the legacy skip; a pack
+/// floor still wins first, exactly like chains. Dynamic segments stay
+/// pack-covered.
+private func gitClaimRedirectResult(
+    pack: EvaluationResult,
+    analysis: SemanticAnalysis,
+    command: ShellCommand,
+    view: String,
+    filesystemWorld: FilesystemAnalysisWorld,
+    enabledPacks: [PackID],
+    policy: EffectiveActionPolicy
+) -> EvaluationResult {
+    if let floored = pack.packFloor(attaching: analysis) {
+        return floored
+    }
+    let segmentContext: FilesystemAnalysisContext
+    switch filesystemWorld {
+    case .unprobed:
+        segmentContext = .empty
+    case .probed(let probed):
+        segmentContext = probed
+    }
+    // M-24: values the matcher rewrote excuse their own bare segments.
+    let assignmentValues = ShellPipeline.collectTopLevelAssignmentValues(
+        ShellPipeline.peelStage(command.rawValue)
+    )
+    for action in parseFilesystemSegments(view, context: segmentContext, assignmentValues: assignmentValues) {
+        if let denied = filesystemSegmentResult(
+            action: action,
+            pack: pack,
+            analysis: analysis,
+            command: command,
+            filesystemWorld: filesystemWorld,
+            enabledPacks: enabledPacks,
+            policy: policy
+        ) {
+            return denied
+        }
+    }
+    return pack
+}
+
+/// Evaluates one filesystem action exactly as the single-command path. Nil
+/// means the pack verdict stands; non-nil is a deny to return.
+private func filesystemSegmentResult(
+    action: FilesystemAction,
+    pack: EvaluationResult,
+    analysis: SemanticAnalysis,
+    command: ShellCommand,
+    filesystemWorld: FilesystemAnalysisWorld,
+    enabledPacks: [PackID],
+    policy: EffectiveActionPolicy
+) -> EvaluationResult? {
     let verdict: ActionPolicyVerdict
     if enabledPacks.contains(.coreFilesystem) {
         verdict = ActionPolicyEngine.evaluate(
@@ -63,11 +193,11 @@ public func applyFilesystemSemantics(
     ) {
         verdict = typed
     } else {
-        return result
+        return nil
     }
     switch verdict.decision {
     case .hardAllow, .reviewEligible:
-        return result
+        return nil
     case .hardDeny(let deny):
         if case .unprobed = filesystemWorld,
             deny.ruleID == ActionPolicyEngine.Builtin.unresolvedFilesystem.ruleID
@@ -82,7 +212,7 @@ public func applyFilesystemSemantics(
                     analysis: analysis
                 )
             }
-            return result
+            return nil
         }
         return filesystemSemanticDeny(deny, pack: pack, analysis: analysis)
     case .mandatoryHuman(let deny):

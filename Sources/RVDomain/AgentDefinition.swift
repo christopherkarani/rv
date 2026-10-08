@@ -21,7 +21,11 @@ public struct ExecutableRequirement: Hashable, Sendable, Equatable, Codable {
         requiredCodeRequirement: String? = nil,
         allowsUnsigned: Bool = false
     ) {
-        self.expectedContentDigestSHA256 = expectedContentDigestSHA256
+        // Canonicalize to the lowercase-hex form every digest check
+        // requires, so a case-variant pin still matches instead of
+        // silently never matching. Form validation stays at the trust
+        // boundaries (operator-config load, intent, snapshot).
+        self.expectedContentDigestSHA256 = expectedContentDigestSHA256?.lowercased()
         self.requiredTeamID = requiredTeamID
         self.requiredCodeRequirement = requiredCodeRequirement
         self.allowsUnsigned = allowsUnsigned

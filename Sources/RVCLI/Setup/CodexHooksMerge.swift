@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 
 /// Merge / inspect / uninstall for `$HOME/.codex/hooks.json`.
 /// Occupancy of the setup slot is the exclusive `rv-guard.py`; this merge only
@@ -42,19 +43,19 @@ enum CodexHooksMerge {
         return path.hasPrefix("/") ? path : nil
     }
 
-    static func matchesCurrentHook(_ hook: [String: Any], adapterPath: String) -> Bool {
-        guard let type = hook["type"] as? String, type == hookType,
-              let command = hook["command"] as? String,
+    static func matchesCurrentHook(_ hook: JSONValue, adapterPath: String) -> Bool {
+        guard let type = hook["type"]?.string, type == hookType,
+              let command = hook["command"]?.string,
               command == hookCommand(adapterPath: adapterPath),
-              hook["timeout"] as? Int == timeout,
-              hook["statusMessage"] as? String == statusMessage
+              hook["timeout"]?.int == timeout,
+              hook["statusMessage"]?.string == statusMessage
         else {
             return false
         }
         return true
     }
 
-    static func isFingerprintedHook(_ hook: [String: Any]) -> Bool {
+    static func isFingerprintedHook(_ hook: JSONValue) -> Bool {
         HostHooksMergeEngine.isFingerprintedHook(hook, descriptor: wiringDescriptor)
     }
 
@@ -68,13 +69,13 @@ enum CodexHooksMerge {
         )
     }
 
-    static func rvEntry(adapterPath: String) -> [String: Any] {
-        [
-            "matcher": matcher,
-            "hooks": [
-                HostHooksMergeEngine.hookDictionary(hookEntry(adapterPath: adapterPath)),
-            ],
-        ]
+    static func rvEntry(adapterPath: String) -> JSONValue {
+        .object([
+            "matcher": .string(matcher),
+            "hooks": .array([
+                HostHooksMergeEngine.hookValue(hookEntry(adapterPath: adapterPath)),
+            ]),
+        ])
     }
 
     /// Returns merged hooks bytes and whether content changed.

@@ -404,9 +404,12 @@ struct AgentDefinitionStoreTests {
     }
 
     @Test func trustedRootIgnoresRequestProvidedHome() throws {
-        // The default file derives from the real OS account root only.
-        // There is no overload accepting a HOME string, so request input
-        // cannot redirect it; this test pins the derivation.
+        // The default file derives from the trusted host RV process
+        // configuration root only: the process environment's HOME under
+        // the owning-user threat model, not a kernel-derived account
+        // lookup. There is no overload accepting a HOME string, so
+        // contained agent request data cannot redirect it; this test pins
+        // the derivation.
         if let home = HomeDirectory.process() {
             #expect(
                 AgentDefinitionStore.defaultConfigFile()

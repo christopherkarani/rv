@@ -62,7 +62,7 @@ public struct AgentProcessRequest: Sendable, Equatable {
     }
 }
 
-/// Validated process request the runtime may normalize. File and spend are unrepresentable.
+/// Validated process request the runtime may normalize. File is unrepresentable.
 public enum AgentRequest: Sendable, Equatable {
     case process(AgentProcessRequest)
 

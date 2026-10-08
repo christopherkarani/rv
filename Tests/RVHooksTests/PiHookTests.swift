@@ -102,35 +102,37 @@ func piDecode_extractsBashCommand(_ file: String, expected: String) throws {
     #expect(request.cwd == nil)
 }
 
-@Test func piDecode_readsHostAskSpend() {
+@Test func piDecode_ignoresHostAskSpend() {
+    // Step 8B: legacy spend envelopes decode as ordinary shell requests.
     let stdin = """
     {"toolName":"bash","cwd":"/tmp/ws","input":{"command":"git reset --hard"},"hostAsk":"spend"}
     """
     guard case .request(let request) = codec.decode(stdin) else {
-        Issue.record("expected .request for hostAsk spend")
+        Issue.record("expected .request for hostAsk spend envelope")
         return
     }
-    guard case .spend(_, let command, _, _) = request else {
-        Issue.record("expected .spend for hostAsk spend")
+    guard case .shell(_, let command, _, _) = request else {
+        Issue.record("expected .shell for hostAsk spend envelope")
         return
     }
     #expect(command.rawValue == "git reset --hard")
     #expect(request.cwd?.rawValue == "/tmp/ws")
 }
 
-@Test func piEncodeAsk_isNotEmptyAllow() {
-    let reason =
-        "Blocked git reset --hard (core.git/reset-hard). Run it in Terminal, or rv allow-once."
-    let wire = codec.encodeAsk(
-        reason: reason,
-        rule: RuleID(pack: .coreGit, pattern: "reset-hard"),
-        next: .ttyHint
+@Test func piEncodeAskDeny_isNotEmptyAllow() {
+    let deny = Deny(
+        ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
+        reason: "git reset --hard destroys uncommitted changes"
+    )
+    let wire = codec.encodeEvaluatedAskDeny(
+        from: EvaluationResult(outcome: .deny(deny, matched: nil)),
+        command: ShellCommand(rawValue: "git reset --hard")
     )
     #expect(wire.exitCode == 1)
     #expect(wire.stdout.isEmpty == false)
-    #expect(wire.stdout.contains("\"decision\":\"ask\""))
-    #expect(wire.stdout.contains("\"continuation\":\"hostNative\""))
-    #expect(wire.stdout.contains(reason))
+    #expect(wire.stdout.contains("\"decision\":\"deny\""))
+    #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
+    #expect(wire.stdout.contains(approvalPendingLine))
 }
 
 @Test func piDecode_missingCwdIsNil() {

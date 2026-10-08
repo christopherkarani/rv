@@ -53,6 +53,11 @@ public enum GitAction: Sendable, Equatable, Codable {
     case reset(mode: GitResetMode, target: String?)
     case clean(force: Bool, dryRun: Bool, directories: Bool)
     case push(remote: String?, refspec: String?, force: GitPushForce)
+    /// Push verb recognized but argv unparsed (unknown flags, extra
+    /// positionals, dynamic tokens, trailing words). Fails closed as a
+    /// remote mutation: there is no allow arm for an unproven push.
+    /// Dry-run is never unparsed (preview sends nothing).
+    case pushUnparsed(args: [String])
     case deleteRemoteRef(remote: String?, refspec: String?)
     case deleteBranch(name: String, force: Bool)
     case deleteTag(name: String, remote: String?)
@@ -79,7 +84,7 @@ public enum GitAction: Sendable, Equatable, Codable {
             case .keep, .mixed, .soft:
                 return .localIndex
             }
-        case .push, .deleteRemoteRef, .deleteTag:
+        case .push, .pushUnparsed, .deleteRemoteRef, .deleteTag:
             return .remote
         }
     }
@@ -88,18 +93,34 @@ public enum GitAction: Sendable, Equatable, Codable {
         ActionEffects(kinds: effectKinds)
     }
 
-    public var resources: ActionResources {
+    public var resources: ResourceScope {
         switch self {
         case .createBranch(let name, _, _), .switchBranch(let name, _):
-            return ActionResources(branchName: name)
+            return .git(remote: nil, ref: .branch(BranchName(name)))
         case .push(let remote, let refspec, _), .deleteRemoteRef(let remote, let refspec):
-            return ActionResources(remoteName: remote, branchName: refspec)
+            // A push payload is always a refspec, even when it spells a plain
+            // branch name — it is never observable as BranchName. A push with
+            // neither remote nor refspec is the empty scope, as before T2.
+            if remote == nil, refspec == nil {
+                return .none
+            }
+            return .git(
+                remote: remote.map(RemoteName.init(rawValue:)),
+                ref: refspec.map { .refspec($0) }
+            )
+        case .pushUnparsed:
+            // Unparsed push: unknown target, no scope. Fails closed as a
+            // remote mutation through effects (see effectKinds); never allow.
+            return .none
         case .deleteBranch(let name, _):
-            return ActionResources(branchName: name)
+            return .git(remote: nil, ref: .branch(BranchName(name)))
         case .deleteTag(let name, let remote):
-            return ActionResources(remoteName: remote, branchName: name)
+            return .git(
+                remote: remote.map(RemoteName.init(rawValue:)),
+                ref: .tag(TagName(name))
+            )
         case .discardWorktree, .restore, .reset, .clean, .stash, .rebase:
-            return ActionResources()
+            return .none
         }
     }
 
@@ -135,7 +156,7 @@ public enum GitAction: Sendable, Equatable, Codable {
             return "force-push"
         case .push(_, _, .forceWithLease):
             return "force-push with lease"
-        case .push:
+        case .push, .pushUnparsed:
             return "push"
         case .deleteRemoteRef:
             return "remote ref delete"
@@ -187,7 +208,7 @@ public enum GitAction: Sendable, Equatable, Codable {
     }
 
     public var explainRemote: String? {
-        resources.remoteName
+        resources.gitRemote?.rawValue
     }
 
     public var explainRef: String? {
@@ -201,7 +222,7 @@ public enum GitAction: Sendable, Equatable, Codable {
             return target
         case .rebase(_, let onto):
             return onto
-        case .discardWorktree, .restore, .clean, .stash:
+        case .discardWorktree, .restore, .clean, .stash, .pushUnparsed:
             return nil
         }
     }
@@ -220,11 +241,13 @@ public enum GitAction: Sendable, Equatable, Codable {
         workingDirectory: WorkingDirectory?
     ) -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: fingerprint),
-                scope: ActionScope(workingDirectory: workingDirectory),
-                supportingCommand: command,
-                gitAction: self
+            ShellAction.analyzed(
+                AnalyzedShell(
+                    fingerprint: ActionFingerprint(rawValue: fingerprint),
+                    scope: ActionScope(workingDirectory: workingDirectory),
+                    supportingCommand: command,
+                    analysis: .git(self)
+                )
             )
         )
     }
@@ -249,7 +272,12 @@ public enum GitAction: Sendable, Equatable, Codable {
         case .clean(let force, let dryRun, _):
             return force && dryRun == false ? [.workingTreeDiscard] : []
         case .push(_, _, let force):
-            return force != .none ? [.remoteSharedBranchMutation] : []
+            return force != .none ? [.remoteSharedBranchMutation] : [.remoteBranchMutation]
+        case .pushUnparsed:
+            // Unknown force-ness, unknown target: unconditional human
+            // review, never the shared-branch probe (no resources) and
+            // never an allow arm.
+            return [.remoteBranchMutation]
         case .deleteRemoteRef:
             return [.remoteSharedBranchMutation]
         case .switchBranch(_, true):
@@ -275,6 +303,12 @@ public enum GitAction: Sendable, Equatable, Codable {
             return "shell:git.clean:\(force):\(dryRun):\(directories)"
         case .push(let remote, let refspec, let force):
             return "shell:git.push:\(force.rawValue):\(remote ?? ""):\(refspec ?? "")"
+        case .pushUnparsed(let args):
+            // The fingerprint must not embed raw argv: unparsed args can
+            // carry secrets (credential-bearing URLs), and space-joining
+            // collides (["a b"] vs ["a", "b"]). Hash NUL-joined args
+            // instead; exec argv cannot contain NUL, so the join is exact.
+            return "shell:git.push:unparsed:\(RVDigest.sha256Hex(Array(args.joined(separator: "\u{0}").utf8)))"
         case .deleteRemoteRef(let remote, let refspec):
             return "shell:git.delete-remote-ref:\(remote ?? ""):\(refspec ?? "")"
         case .deleteBranch(let name, let force):

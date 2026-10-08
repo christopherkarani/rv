@@ -47,12 +47,12 @@ public enum WorkspaceLifecycleTransition {
             effects = [.discardWorkspace, .releaseOwnership]
 
         case .spawnRequested(let id):
-            guard next.phase == .active, next.closeAccepted == false else {
+            guard next.phase == .active, next.closeState == .open else {
                 effects = [.replySpawnRefused(runtime: id, reason: .notAccepting(next.phase))]
                 break
             }
             guard next.runtimes[id] == nil else { break }
-            guard next.boundaryEstablished else {
+            guard next.boundary == .established else {
                 effects = [.replySpawnRefused(runtime: id, reason: .boundaryLost)]
                 break
             }
@@ -112,7 +112,7 @@ public enum WorkspaceLifecycleTransition {
             next.runtimes[id] = nil
 
         case .closeRequested(let publish):
-            if let failure = next.terminalCloseFailure {
+            if case .terminal(let failure) = next.closeState {
                 effects = [.replyCloseFailed(failure)]
                 break
             }
@@ -121,33 +121,39 @@ public enum WorkspaceLifecycleTransition {
                 effects = [.replyCloseRefused(next.phase)]
             case .active:
                 next.phase = .closing
-                next.closeAccepted = true
-                next.closePublish = publish
-                next.teardownInFlight = true
+                next.closeState = .leading(publish: publish)
                 effects = next.runningRuntimeIDs.map { .stopRuntime($0) }
                 effects.append(.finishTeardown(publish: publish))
             case .closing:
                 // A close is already leading teardown; join it. After a
-                // retryable `.childrenAlive` failure no teardown is in
-                // flight, so this request leads with its own publish flag.
-                guard next.teardownInFlight == false else {
+                // retryable `.childrenAlive` failure the state is back to
+                // `.waiting`, so this request leads with its own choice.
+                switch next.closeState {
+                case .leading:
                     effects = [.awaitClose]
+                case .open, .waiting:
+                    next.closeState = .leading(publish: publish)
+                    effects = next.runningRuntimeIDs.map { .stopRuntime($0) }
+                    effects.append(.finishTeardown(publish: publish))
+                case .finished:
+                    // Unreachable through the transition (success closes the
+                    // phase), but constructible via the public init: the
+                    // close already completed, so answer instead of draining
+                    // the request to the caller's own timeout.
+                    effects = [.replyAlreadyClosed]
+                case .terminal:
+                    // Dead: terminal close states replay above.
                     break
                 }
-                next.closeAccepted = true
-                next.closePublish = publish
-                next.teardownInFlight = true
-                effects = next.runningRuntimeIDs.map { .stopRuntime($0) }
-                effects.append(.finishTeardown(publish: publish))
             case .closed:
                 effects = [.replyAlreadyClosed]
             }
 
         case .closeSucceeded(let published):
-            guard next.phase == .closing, next.teardownInFlight else { break }
-            next.teardownInFlight = false
+            guard next.phase == .closing, case .leading = next.closeState else { break }
             next.phase = .closed
-            if published {
+            next.closeState = .finished(published: published)
+            if published == .publish {
                 next.publishCount += 1
             }
             effects = [
@@ -157,20 +163,20 @@ public enum WorkspaceLifecycleTransition {
             ]
 
         case .closeFailed(let failure):
-            guard next.phase == .closing, next.teardownInFlight else { break }
-            next.teardownInFlight = false
+            guard next.phase == .closing, case .leading = next.closeState else { break }
             switch failure {
             case .childrenAlive:
                 // Not cached as terminal: a later close may still publish.
+                next.closeState = .waiting
                 effects = [.replyCloseFailed(failure)]
             case .teardownFailed:
-                next.terminalCloseFailure = failure
+                next.closeState = .terminal(failure)
                 effects = [.replyCloseFailed(failure)]
             }
 
         case .boundaryLost:
             guard next.phase != .closed else { break }
-            next.boundaryEstablished = false
+            next.boundary = .lost
 
         case .controlReplyReceived(let id):
             // A reply that races an exit, names an unknown runtime, or

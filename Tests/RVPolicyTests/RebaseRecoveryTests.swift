@@ -253,32 +253,30 @@ struct RebaseRecoveryTests {
     }
 
     @Test func applyRebaseRecoveryDoesNotConsumeStore() async throws {
-        let store = try isolatedRebaseStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let denied = checkoutDiscardDeny()
-        try await store.insertGranted(
-            matchingView: denied.matchingView,
-            cwd: wd("/tmp/ws"),
-            now: now
+        #expect(
+            await grants.plant(
+                matchingView: denied.matchingView,
+                cwd: wd("/tmp/ws"),
+                codeHash: "rebase-recovery-test",
+                now: now
+            ) == .planted
         )
         let gated = await PolicyGate.consumingGrant(
             for: denied,
             cwd: wd("/tmp/ws"),
-            store: store,
+            grants: grants,
             now: now,
             rebaseInProgress: true
         )
         #expect(gated.override == .rebaseRecovery)
         #expect(gated.result.decision == .allow)
-        let leftover = await store.consume(
-            matchingView: denied.matchingView,
-            cwd: wd("/tmp/ws"),
-            now: now
+        #expect(
+            await grants.consume(matchingView: denied.matchingView, cwd: wd("/tmp/ws"), now: now),
+            "rebase recovery must not spend allow-once"
         )
-        guard case .consumed = leftover else {
-            Issue.record("rebase recovery must not spend allow-once")
-            return
-        }
     }
 }
 

@@ -54,11 +54,19 @@ wait_unloaded() {
 }
 
 CLEANED=0
+RVD_PID=""
+RVD_PROOF_DIR=""
 cleanup() {
   if [[ "$CLEANED" -eq 1 ]]; then
     return
   fi
   CLEANED=1
+  if [[ -n "$RVD_PID" ]]; then
+    kill "$RVD_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$RVD_PROOF_DIR" ]]; then
+    rm -rf "$RVD_PROOF_DIR"
+  fi
   if [[ "$(uname -s)" == "Darwin" ]]; then
     bootout_label
     wait_unloaded
@@ -176,7 +184,10 @@ stage_from_debug() {
   case "$(uname -s)" in
     Darwin) clang_flags=(-arch arm64 -mmacosx-version-min=15.0) ;;
   esac
+  # Proof binary: daemon dialing enabled (TRANSITIONAL-PROOF-DAEMON in
+  # rv.c). Shipped rv is built by Scripts/release.sh without this flag.
   clang -Os "${clang_flags[@]}" -std=c11 -Wall \
+    -DRV_HOOK_PROOF_UNAUTHENTICATED_DAEMON \
     -I "$C_SRC" \
     -o "$STAGE/rv" \
     "$C_SRC/json_escape.c" \
@@ -242,6 +253,118 @@ RV_ON_PATH_REAL="$("$PYTHON3" -c 'import os,sys; print(os.path.realpath(sys.argv
 BIN_RV_REAL="$("$PYTHON3" -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$BIN/rv")"
 if [[ "$RV_ON_PATH_REAL" != "$BIN_RV_REAL" ]]; then
   fail "PATH rv is $RV_ON_PATH_REAL (want $BIN_RV_REAL)"
+fi
+
+# TRANSITIONAL-PROOF-DAEMON: hooks evaluate via a proof-launched rvd over
+# an isolated socket. The daemon serves only this proof and dies in
+# cleanup; shipped hooks stay kill-switched until mutual daemon auth.
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  export XDG_RUNTIME_DIR="$PROOF_ROOT/run"
+  mkdir -p "$XDG_RUNTIME_DIR"
+  chmod 700 "$XDG_RUNTIME_DIR"
+  set +e
+  (
+    cd "$WORK"
+    HOME="$PROOF_HOME" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+      "$BIN/rvd" --idle-exit-seconds 600 \
+      >"$PROOF_ROOT/rvd.out" 2>"$PROOF_ROOT/rvd.err" &
+    printf '%s' "$!" >"$PROOF_ROOT/rvd.pid"
+  )
+  set -e
+  RVD_PID="$(cat "$PROOF_ROOT/rvd.pid")"
+  [[ -n "$RVD_PID" ]] || fail "could not start proof rvd"
+  for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40; do
+    if [[ -S "$XDG_RUNTIME_DIR/rv/evaluate.sock" ]]; then
+      break
+    fi
+    sleep 0.25
+    if [[ "$_i" -eq 40 ]]; then
+      fail "proof rvd did not serve $XDG_RUNTIME_DIR/rv/evaluate.sock: $(cat "$PROOF_ROOT/rvd.err")"
+    fi
+  done
+  printf 'host-attach-proof: proof rvd serving %s\n' "$XDG_RUNTIME_DIR/rv/evaluate.sock"
+fi
+
+# Darwin twin of the Linux rvd block: bootstrap the staged rvd as the
+# proof LaunchAgent and compile a proof rv (daemon dialing enabled) over
+# $BIN/rv. The live agent, if any, was parked above and is restored in
+# cleanup. launchd cannot read plists under TMPDIR, so the plist and
+# daemon logs live under /tmp, not $PROOF_ROOT.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  clang -Os -arch arm64 -mmacosx-version-min=15.0 -std=c11 -Wall \
+    -DRV_HOOK_PROOF_UNAUTHENTICATED_DAEMON \
+    -I "$C_SRC" \
+    -o "$BIN/rv" \
+    "$C_SRC/json_escape.c" \
+    "$C_SRC/json_reply.c" \
+    "$C_SRC/rv.c" || fail "could not compile proof rv"
+  chmod 755 "$BIN/rv"
+  RVD_PROOF_DIR="/tmp/rv-host-attach-$$"
+  mkdir -p "$RVD_PROOF_DIR"
+  cat > "$RVD_PROOF_DIR/rvd.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>${LABEL}</string>
+	<key>MachServices</key>
+	<dict>
+		<key>${LABEL}</key>
+		<true/>
+	</dict>
+	<key>ProgramArguments</key>
+	<array>
+		<string>${BIN}/rvd</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>${PROOF_HOME}</string>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>${BIN}</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<false/>
+	<key>EnableTransactions</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>${RVD_PROOF_DIR}/rvd.out</string>
+	<key>StandardErrorPath</key>
+	<string>${RVD_PROOF_DIR}/rvd.err</string>
+</dict>
+</plist>
+EOF
+  bootout_label
+  wait_unloaded
+  /bin/launchctl bootstrap "$DOMAIN" "$RVD_PROOF_DIR/rvd.plist" \
+    || fail "launchctl bootstrap failed for proof rvd"
+  /bin/launchctl kickstart -k "${DOMAIN}/${LABEL}" >/dev/null 2>&1 || true
+  warm=0
+  for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    set +e
+    (
+      cd "$WORK"
+      HOME="$PROOF_HOME" PATH="$PATH" TERM="dumb" CI=1 \
+        "$BIN/rv" hook --host grok <"$FIXTURES/grok/allow-git-status.json" \
+        >"$PROOF_ROOT/warm.out" 2>"$PROOF_ROOT/warm.err"
+    )
+    st=$?
+    set -e
+    if [[ "$st" -eq 0 && ! -s "$PROOF_ROOT/warm.out" ]]; then
+      warm=1
+      break
+    fi
+    sleep 0.25
+  done
+  if [[ "$warm" -ne 1 ]]; then
+    printf 'host-attach-proof: rvd.err\n' >&2
+    cat "$RVD_PROOF_DIR/rvd.err" >&2 || true
+    fail "could not warm proof rvd (last exit $st)"
+  fi
+  printf 'host-attach-proof: proof rvd serving %s\n' "$LABEL"
 fi
 
 set +e

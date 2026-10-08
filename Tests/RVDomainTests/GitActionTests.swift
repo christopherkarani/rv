@@ -23,7 +23,7 @@ struct GitActionTests {
             refspec: "main",
             force: .force
         )
-        #expect(normal.effects.kinds.isEmpty)
+        #expect(normal.effects.kinds == [.remoteBranchMutation])
         #expect(forced.effects.kinds == [.remoteSharedBranchMutation])
         #expect(normal.effectScope == .remote)
         #expect(forced.effectScope == .remote)
@@ -36,7 +36,9 @@ struct GitActionTests {
         #expect(deleted.effects.kinds == [.remoteSharedBranchMutation])
         #expect(deleted.effectScope == .remote)
         #expect(deleted.explainAction == "remote ref delete")
-        #expect(deleted.resources.branchName == "topic")
+        #expect(
+            deleted.resources == .git(remote: RemoteName("origin"), ref: .refspec("topic"))
+        )
         let proposed = deleted.proposedAction(
             command: ShellCommand(rawValue: "git push origin :topic"),
             workingDirectory: WorkingDirectory(validating: "/tmp/rv")
@@ -51,7 +53,9 @@ struct GitActionTests {
             workingDirectory: WorkingDirectory(validating: "/tmp/rv")
         )
         #expect(proposed.effects.kinds == [.localBranchCreate])
-        #expect(proposed.resources.branchName == "feature")
+        #expect(
+            proposed.resources == .git(remote: nil, ref: .branch(BranchName("feature")))
+        )
         #expect(proposed.supportingCommand?.rawValue == "git checkout -- file.swift")
     }
 
@@ -82,12 +86,38 @@ struct GitActionTests {
         #expect(both.explainAction == "working-tree overwrite/discard")
     }
 
+    @Test func pushUnparsed_fingerprintHidesRawArgsAndSplitsBoundaries() {
+        func fingerprint(_ args: [String]) -> String {
+            GitAction.pushUnparsed(args: args).proposedAction(
+                command: ShellCommand(rawValue: "git push"),
+                workingDirectory: WorkingDirectory(validating: "/tmp/rv")
+            ).fingerprint.rawValue
+        }
+        let secret = "https://user:s3cret@example.com/repo.git"
+        let hashed = fingerprint(["origin", secret])
+        #expect(hashed.hasPrefix("shell:git.push:unparsed:"))
+        #expect(hashed.contains("s3cret") == false)
+        #expect(hashed.contains(secret) == false)
+        // Join-sensitive: ["a b"] and ["a", "b"] must not collide.
+        #expect(fingerprint(["a b"]) != fingerprint(["a", "b"]))
+        #expect(fingerprint(["a", "b"]) == fingerprint(["a", "b"]))
+    }
+
+    @Test func pushUnparsed_hasNoScopeButRemoteMutationEffects() {
+        let action = GitAction.pushUnparsed(args: ["origin", "main"])
+        #expect(action.resources == .none)
+        #expect(action.effects.kinds == [.remoteBranchMutation])
+        #expect(action.effectScope == .remote)
+    }
+
     @Test func deleteBranch_isLocalRefWithoutRemoteFlag() {
         let deleted = GitAction.deleteBranch(name: "stale", force: true)
         #expect(deleted.effectScope == .localRef)
         #expect(deleted.explainAction == "force branch delete")
         #expect(deleted.effects.kinds.isEmpty)
-        #expect(deleted.resources.branchName == "stale")
+        #expect(
+            deleted.resources == .git(remote: nil, ref: .branch(BranchName("stale")))
+        )
         let soft = GitAction.deleteBranch(name: "topic", force: false)
         #expect(soft.explainAction == "branch delete")
         #expect(soft.effectScope == .localRef)

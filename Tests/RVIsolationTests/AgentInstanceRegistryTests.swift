@@ -106,7 +106,7 @@ private func allowTouchNormalize(
     }
     return .success(
         .shell(
-            ShellAction(
+            ShellAction.effectOnly(EffectShell(
                 fingerprint: ActionFingerprint(
                     rawValue: "registry:\(subject.session.id.rawValue.uuidString):\(raw)"
                 ),
@@ -118,7 +118,7 @@ private func allowTouchNormalize(
                 ),
                 scope: ActionScope(workingDirectory: subject.policyWorkspace),
                 supportingCommand: command
-            )
+            ))
         )
     )
 }
@@ -155,7 +155,7 @@ private struct RegistryAdmissionHarness {
         let configuration = RuntimeAdmissionConfiguration(
             normalize: normalize,
             executor: .effect(effects.run),
-            approval: { _ in nil },
+            approval: { _, _ in nil },
             policy: { _ in .empty },
             evidence: RuntimeAdmissionEvidence()
         )
@@ -288,13 +288,13 @@ struct AgentInstanceRegistryTests {
         // No fake active instance before establishment: the channel is
         // bound, the capability and session are right, and the request
         // still fails because the principal is not active.
-        let early = harness.admission.submit(.success(harness.frame("touch early")))
+        let early = harness.admission.submitLegacy(.success(harness.frame("touch early")))
         #expect(early.response == .rejected(.inactiveSession))
         #expect(harness.effects.count == 0)
         let context = try #require(harness.activate(instance))
         #expect(context.validity == .active)
         #expect(harness.registry.validity(of: instance.id) == .active)
-        let admitted = harness.admission.submit(.success(harness.frame("touch marker")))
+        let admitted = harness.admission.submitLegacy(.success(harness.frame("touch marker")))
         #expect(admitted.response == .executed(exitStatus: 0))
         #expect(harness.effects.count == 1)
         #expect(admitted.event.agentInstance == instance.id.rawValue.uuidString)
@@ -347,7 +347,7 @@ struct AgentInstanceRegistryTests {
             configuration: RuntimeAdmissionConfiguration(
                 normalize: allowTouchNormalize,
                 executor: .effect(harness.effects.run),
-                approval: { _ in nil },
+                approval: { _, _ in nil },
                 policy: { _ in .empty },
                 evidence: RuntimeAdmissionEvidence()
             ),
@@ -360,8 +360,8 @@ struct AgentInstanceRegistryTests {
             responseWrite: -1
         )
         defer { phantom.finish() }
-        let rejected = phantom.submit(.success(harness.frame("touch phantom")))
-        #expect(rejected.response == .rejected(.unknownSession))
+        let rejected = phantom.submitLegacy(.success(harness.frame("touch phantom")))
+        #expect(rejected.response == .rejected(.principalRequired))
         #expect(harness.effects.count == 0)
         // Request bytes name no principal at all: the wire frame carries
         // version, request id, capability, session claim, and action only,
@@ -387,7 +387,7 @@ struct AgentInstanceRegistryTests {
         defer { harness.cleanup() }
         let instance = try #require(harness.announceAndBind())
         _ = try #require(harness.activate(instance))
-        let decision = harness.admission.submit(.success(harness.frame("touch marker")))
+        let decision = harness.admission.submitLegacy(.success(harness.frame("touch marker")))
         #expect(decision.response == .executed(exitStatus: 0))
         let subject = try #require(seen.current)
         #expect(subject.agent?.instance.id == instance.id)
@@ -420,7 +420,7 @@ struct AgentInstanceRegistryTests {
             )!,
             action: .shell(ShellCommand(rawValue: "touch foreign"))
         )
-        let foreign = RuntimeAdmissionGate.submit(
+        let foreign = RuntimeAdmissionGate.submitLegacy(
             binding: &foreignBinding,
             frame: .success(foreignFrame),
             agentContext: foreignContext
@@ -443,7 +443,7 @@ struct AgentInstanceRegistryTests {
             )!,
             action: .shell(ShellCommand(rawValue: "touch stray"))
         )
-        let stray = RuntimeAdmissionGate.submit(
+        let stray = RuntimeAdmissionGate.submitLegacy(
             binding: &strayBinding,
             frame: .success(strayFrame),
             agentContext: foreignContext
@@ -456,11 +456,11 @@ struct AgentInstanceRegistryTests {
         defer { harness.cleanup() }
         let instance = try #require(harness.announceAndBind())
         _ = try #require(harness.activate(instance))
-        let before = harness.admission.submit(.success(harness.frame("touch before")))
+        let before = harness.admission.submitLegacy(.success(harness.frame("touch before")))
         #expect(before.response == .executed(exitStatus: 0))
         #expect(harness.registry.finishRuntime(harness.session.id, reason: .runtimeEnded) == .revoked)
         #expect(harness.registry.validity(of: instance.id) == .inactive)
-        let after = harness.admission.submit(.success(harness.frame("touch after")))
+        let after = harness.admission.submitLegacy(.success(harness.frame("touch after")))
         #expect(after.response == .rejected(.inactiveSession))
         #expect(after.event.agentInstance == instance.id.rawValue.uuidString)
         #expect(harness.effects.count == 1)
@@ -483,7 +483,7 @@ struct AgentInstanceRegistryTests {
         #expect(harness.registry.context(for: instance.id)?.isUsable == false)
         // The session re-resolves on every submit, so the stale snapshot
         // it once saw cannot authorize anything now.
-        let denied = harness.admission.submit(.success(harness.frame("touch stale")))
+        let denied = harness.admission.submitLegacy(.success(harness.frame("touch stale")))
         #expect(denied.response == .rejected(.inactiveSession))
     }
 
@@ -499,7 +499,7 @@ struct AgentInstanceRegistryTests {
         )
         #expect(harness.registry.announce(other))
         #expect(harness.admission.bindAgentInstance(other.id, registry: harness.registry) == false)
-        let decision = harness.admission.submit(.success(harness.frame("touch marker")))
+        let decision = harness.admission.submitLegacy(.success(harness.frame("touch marker")))
         #expect(decision.response == .executed(exitStatus: 0))
         #expect(decision.event.agentInstance == instance.id.rawValue.uuidString)
     }
@@ -701,7 +701,12 @@ struct AgentInstanceRegistryTests {
         #expect(registry.instance(forRuntime: instance.runtimeSessionID) == nil)
     }
 
-    @Test func revokingIsObservableWhileTeardownRuns() async throws {
+    @Test func revokingIsObservableWhileTeardownRuns() throws {
+        // Synchronous by design: every pool wakeup here is a flake vector.
+        // Under parallel load an async observer can sleep past teardown's
+        // hang-guard deadline, so the revoke completes before validity is
+        // observed. A sync observer holds its thread and cannot miss the
+        // revoking window it is rendezvousing with.
         let harness = try RegistryAdmissionHarness()
         defer { harness.cleanup() }
         let instance = try #require(harness.announceAndBind())
@@ -721,12 +726,18 @@ struct AgentInstanceRegistryTests {
         }
         let latch = Latch()
         let registry = harness.registry
-        let task = Task.detached {
-            registry.revoke(instance.id, reason: .explicitRevoke) {
+        // The revoke runs on a dedicated thread, not the cooperative pool:
+        // teardown block-holds the revoking window open, and under parallel
+        // load every pool thread can be parked in another blocking wait,
+        // starving a Task.detached revoke past the observation deadline.
+        let outcome = Mutex<AgentRevokeOutcome?>(nil)
+        Thread.detachNewThread {
+            let result = registry.revoke(instance.id, reason: .explicitRevoke) {
                 latch.enter()
                 latch.waitForRelease()
                 return true
             }
+            outcome.withLock { $0 = result }
         }
         // Teardown runs outside the registry lock. Once it starts, the live
         // validity must already read revoking: new privileged use is
@@ -738,11 +749,15 @@ struct AgentInstanceRegistryTests {
         #expect(latch.entered)
         #expect(harness.registry.validity(of: instance.id) == .revoking)
         #expect(harness.registry.context(for: instance.id)?.isUsable == false)
-        let mid = harness.admission.submit(.success(harness.frame("touch mid")))
+        let mid = harness.admission.submitLegacy(.success(harness.frame("touch mid")))
         #expect(mid.response == .rejected(.inactiveSession))
         #expect(harness.effects.count == 0)
         latch.open()
-        #expect(await task.value == .revoked)
+        let finishDeadline = Date().addingTimeInterval(10)
+        while outcome.withLock({ $0 == nil }), Date() < finishDeadline {
+            usleep(1_000)
+        }
+        #expect(outcome.withLock { $0 } == .revoked)
         #expect(harness.registry.validity(of: instance.id) == .inactive)
     }
 
@@ -820,7 +835,7 @@ struct AgentInstanceRegistryTests {
                 return allowTouchNormalize(subject: subject, action: action)
             },
             executor: .effect(effects.run),
-            approval: { _ in nil },
+            approval: { _, _ in nil },
             policy: { _ in .empty },
             evidence: RuntimeAdmissionEvidence()
         )
@@ -856,7 +871,7 @@ struct AgentInstanceRegistryTests {
             claimedSession: RuntimeSessionClaim(validating: session.id.rawValue.uuidString)!,
             action: .shell(ShellCommand(rawValue: "touch marker"))
         )
-        let decision = admission.submit(.success(frame))
+        let decision = admission.submitLegacy(.success(frame))
         #expect(decision.response == .rejected(.inactiveSession))
         #expect(effects.count == 0)
         #expect(decision.event.agentInstance == instance.id.rawValue.uuidString)

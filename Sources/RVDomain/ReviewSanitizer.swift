@@ -26,27 +26,33 @@ public enum ReviewSanitizer: Sendable {
         let supportingCommand = shell.supportingCommand.map { command in
             ShellCommand(rawValue: redactCredentials(in: command.rawValue))
         }
-        if let analysis = shell.analysis.map(sanitize) {
-            return ShellAction(
-                fingerprint: fingerprint,
-                scope: scope,
-                supportingCommand: supportingCommand,
-                analysis: analysis
+        switch shell {
+        case .analyzed(let analyzed):
+            return ShellAction.analyzed(
+                AnalyzedShell(
+                    fingerprint: fingerprint,
+                    scope: scope,
+                    supportingCommand: supportingCommand,
+                    analysis: sanitize(analyzed.analysis)
+                )
+            )
+        case .effectOnly(let effect):
+            return ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: fingerprint,
+                    effects: effect.effects,
+                    resources: ActionResources(
+                        remoteName: sanitizeField(effect.resources.remoteName),
+                        branchName: sanitizeField(effect.resources.branchName),
+                        path: sanitizeField(effect.resources.path),
+                        filesystemScope: effect.resources.filesystemScope,
+                        resourceKind: effect.resources.resourceKind
+                    ),
+                    scope: scope,
+                    supportingCommand: supportingCommand
+                )
             )
         }
-        return ShellAction(
-            fingerprint: fingerprint,
-            effects: shell.effects,
-            resources: ActionResources(
-                remoteName: sanitizeField(shell.resources.remoteName),
-                branchName: sanitizeField(shell.resources.branchName),
-                path: sanitizeField(shell.resources.path),
-                filesystemScope: shell.resources.filesystemScope,
-                resourceKind: shell.resources.resourceKind
-            ),
-            scope: scope,
-            supportingCommand: supportingCommand
-        )
     }
 
     public static func sanitize(_ file: FileAction) -> FileAction {
@@ -159,6 +165,8 @@ public enum ReviewSanitizer: Sendable {
                 refspec: refspec.map(sanitizeText),
                 force: force
             )
+        case .pushUnparsed(let args):
+            return .pushUnparsed(args: args.map(sanitizeText))
         case .deleteRemoteRef(let remote, let refspec):
             return .deleteRemoteRef(
                 remote: remote.map(sanitizeText),

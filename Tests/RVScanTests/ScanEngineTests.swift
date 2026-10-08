@@ -23,7 +23,7 @@ import RVDomain
     let segments = ScanJSONLEngine.byteLines(in: mixed)
     #expect(segments.count == 2)
     #expect(ScanJSONLEngine.parseObject(segments[0]) == nil)
-    #expect(ScanJSONLEngine.parseObject(segments[1])?["k"] as? Int == 1)
+    #expect(ScanJSONLEngine.parseObject(segments[1])?["k"]?.int == 1)
 }
 
 @Test func scanLines_textSplit_gatesOnWholeFileUTF8AndSkipsBlanks() {
@@ -34,31 +34,34 @@ import RVDomain
 }
 
 @Test func scanLines_parseObject_rejectsScalarsAndMalformed() {
-    #expect(ScanJSONLEngine.parseObject(Data("{\"a\":1}".utf8))?["a"] as? Int == 1)
+    #expect(ScanJSONLEngine.parseObject(Data("{\"a\":1}".utf8))?["a"]?.int == 1)
     #expect(ScanJSONLEngine.parseObject(Data("not-json".utf8)) == nil)
     #expect(ScanJSONLEngine.parseObject(Data("null".utf8)) == nil)
     #expect(ScanJSONLEngine.parseObject(Data("[1,2]".utf8)) == nil)
 }
 
 @Test func scanSession_lookup_prefersFirstValidKey() {
-    let object: [String: Any] = ["a": "", "b": "sess-b", "c": "sess-c"]
+    let object = JSONValue.object(["a": .string(""), "b": .string("sess-b"), "c": .string("sess-c")])
     #expect(ScanJSONLEngine.sessionID(keys: ["missing", "a", "b", "c"], in: object) == SessionID(validating: "sess-b"))
     #expect(ScanJSONLEngine.sessionID(keys: ["missing"], in: object) == nil)
     #expect(ScanJSONLEngine.sessionID(keys: [], in: object) == nil)
 }
 
 @Test func scanSession_deepLookup_descendsPayloadChains() {
-    let object: [String: Any] = ["payload": ["payload": ["session_id": "deep"]]]
+    let object = JSONValue.object(["payload": .object(["payload": .object(["session_id": .string("deep")])])])
     #expect(
         ScanJSONLEngine.sessionIDDeep(keys: ["session_id", "sessionId"], recurse: ["payload"], in: object)
             == SessionID(validating: "deep")
     )
-    let shallow: [String: Any] = ["sessionId": "top", "payload": ["session_id": "deep"]]
+    let shallow = JSONValue.object([
+        "sessionId": .string("top"),
+        "payload": .object(["session_id": .string("deep")]),
+    ])
     #expect(
         ScanJSONLEngine.sessionIDDeep(keys: ["session_id", "sessionId"], recurse: ["payload"], in: shallow)
             == SessionID(validating: "top")
     )
-    let none: [String: Any] = ["payload": ["other": 1]]
+    let none = JSONValue.object(["payload": .object(["other": .number(1)])])
     #expect(ScanJSONLEngine.sessionIDDeep(keys: ["session_id"], recurse: ["payload"], in: none) == nil)
 }
 
@@ -84,66 +87,59 @@ import RVDomain
     #expect(ScanTimestamp.epoch(-5, requirePositive: false) == Date(timeIntervalSince1970: -5))
 }
 
-@Test func scanTimestamp_epochValue_numbersAndJSONBooleansBridge() throws {
+@Test func scanTimestamp_epochValue_numbersAndJSONBooleansConvert() throws {
     let parsed = try #require(
-        ScanJSONLEngine.parseObject(Data(#"{"i":1710000000,"f":1710000000.5,"s":"x","b":true,"c":false}"#.utf8))
+        ScanJSONLEngine.parseObject(Data(#"{"i":1710000000,"f":1710000000.5,"s":"x","b":true,"c":false,"n":null}"#.utf8))
     )
     #expect(ScanTimestamp.epochValue(parsed["i"]) == Date(timeIntervalSince1970: 1_710_000_000))
     #expect(ScanTimestamp.epochValue(parsed["f"]) == Date(timeIntervalSince1970: 1_710_000_000.5))
     #expect(ScanTimestamp.epochValue(parsed["s"]) == nil)
+    #expect(ScanTimestamp.epochValue(parsed["n"]) == nil)
     #expect(ScanTimestamp.epochValue(nil) == nil)
-    // Historical bridging preserved byte-identically: JSON booleans arrive as
-    // NSNumber, and `as? NSNumber` converts true->1.0 / false->0.0 exactly as
-    // the pre-T1 `as? NSNumber` (Pi) path did.
+    // Historical bridging preserved: JSON booleans convert true->1.0 /
+    // false->0.0 exactly as the old `as? NSNumber` (Pi) path did.
     #expect(ScanTimestamp.epochValue(parsed["b"]) == Date(timeIntervalSince1970: 1))
     #expect(ScanTimestamp.epochValue(parsed["c"]) == nil)
     #expect(ScanTimestamp.epochValue(parsed["c"], requirePositive: false) == Date(timeIntervalSince1970: 0))
 }
 
-@Test func scanTimestamp_epochValue_nativeScalarsBridgeLikeNSNumber() {
-    // Pins the Pi `as? NSNumber` semantics for scalars without ObjC
-    // bridging (Linux JSON, native Swift values): booleans map to 1/0 and
-    // integers convert, exactly as `NSNumber.doubleValue` does.
-    // `as? Double` alone yields nil for all of these.
-    let nativeTrue: Any = true
-    let nativeFalse: Any = false
-    #expect(ScanTimestamp.epochValue(nativeTrue) == Date(timeIntervalSince1970: 1))
-    #expect(ScanTimestamp.epochValue(nativeFalse) == nil)
-    #expect(ScanTimestamp.epochValue(nativeFalse, requirePositive: false) == Date(timeIntervalSince1970: 0))
-    let nativeInt: Any = 1_710_000_000
-    #expect(ScanTimestamp.epochValue(nativeInt) == Date(timeIntervalSince1970: 1_710_000_000))
-    let nativeInt64: Any = Int64(1_710_000_000)
-    #expect(ScanTimestamp.epochValue(nativeInt64) == Date(timeIntervalSince1970: 1_710_000_000))
-    let nativeUInt64: Any = UInt64(1_710_000_000)
-    #expect(ScanTimestamp.epochValue(nativeUInt64) == Date(timeIntervalSince1970: 1_710_000_000))
-    let nativeDouble: Any = 1_710_000_000.5
-    #expect(ScanTimestamp.epochValue(nativeDouble) == Date(timeIntervalSince1970: 1_710_000_000.5))
+@Test func scanTimestamp_epochValue_boolNumberAndMillisCases() {
+    // Pins the old `as? NSNumber` semantics on typed values: booleans map
+    // to 1/0, int-or-double numbers convert, millis divide by 1000.
+    #expect(ScanTimestamp.epochValue(.bool(true)) == Date(timeIntervalSince1970: 1))
+    #expect(ScanTimestamp.epochValue(.bool(false)) == nil)
+    #expect(ScanTimestamp.epochValue(.bool(false), requirePositive: false) == Date(timeIntervalSince1970: 0))
+    #expect(ScanTimestamp.epochValue(.number(1_710_000_000)) == Date(timeIntervalSince1970: 1_710_000_000))
+    #expect(ScanTimestamp.epochValue(.number(1_710_000_000.5)) == Date(timeIntervalSince1970: 1_710_000_000.5))
     // Millis integers divide by 1000 (Pi message timestamps).
-    let nativeMillis: Any = 1_736_942_460_000
-    #expect(ScanTimestamp.epochValue(nativeMillis) == Date(timeIntervalSince1970: 1_736_942_460))
-    // Strings and nil never convert.
-    #expect(ScanTimestamp.epochValue("1710000000") == nil)
+    #expect(ScanTimestamp.epochValue(.number(1_736_942_460_000)) == Date(timeIntervalSince1970: 1_736_942_460))
+    // Strings, containers, nulls, and nil never convert.
+    #expect(ScanTimestamp.epochValue(.string("1710000000")) == nil)
+    #expect(ScanTimestamp.epochValue(.object([:])) == nil)
+    #expect(ScanTimestamp.epochValue(.array([])) == nil)
+    #expect(ScanTimestamp.epochValue(.null) == nil)
     #expect(ScanTimestamp.epochValue(nil) == nil)
 }
 
 @Test func scanTimestamp_firstValue_presentEmptyStringBlocksLaterKey() {
     // Matches `object["timestamp"] ?? object["ts"]`: presence wins, then
     // coercion yields nil rather than falling through.
-    let object: [String: Any] = ["timestamp": "", "ts": "2026-08-27T00:00:00Z"]
-    // Cast before requiring: `#require` on `Any?` is vacuous (the macro
-    // type-erases the optional) and warns as redundant.
-    let value = try? #require(ScanTimestamp.firstValue(keys: ["timestamp", "ts"], in: object) as? String)
-    #expect(value == "")
+    let object = JSONValue.object([
+        "timestamp": .string(""),
+        "ts": .string("2026-08-27T00:00:00Z"),
+    ])
+    let value = ScanTimestamp.firstValue(keys: ["timestamp", "ts"], in: object)
+    #expect(value?.string == "")
     #expect(ScanTimestamp.coerce(value, allowEpoch: true) == nil)
-    let missing: [String: Any] = [:]
+    let missing = JSONValue.object([:])
     #expect(ScanTimestamp.firstValue(keys: ["timestamp", "ts"], in: missing) == nil)
 }
 
 @Test func scanTimestamp_coerce_stringVsNumberPaths() {
-    #expect(ScanTimestamp.coerce("2026-08-27T00:00:00Z", allowEpoch: false) != nil)
-    #expect(ScanTimestamp.coerce("garbage", allowEpoch: true) == nil)
-    #expect(ScanTimestamp.coerce(NSNumber(value: 1_710_000_000), allowEpoch: true) != nil)
-    #expect(ScanTimestamp.coerce(NSNumber(value: 1_710_000_000), allowEpoch: false) == nil)
+    #expect(ScanTimestamp.coerce(.string("2026-08-27T00:00:00Z"), allowEpoch: false) != nil)
+    #expect(ScanTimestamp.coerce(.string("garbage"), allowEpoch: true) == nil)
+    #expect(ScanTimestamp.coerce(.number(1_710_000_000), allowEpoch: true) != nil)
+    #expect(ScanTimestamp.coerce(.number(1_710_000_000), allowEpoch: false) == nil)
 }
 
 @Test func scanFailClosed_emptyNonUTF8OrJSONLessThrows() {

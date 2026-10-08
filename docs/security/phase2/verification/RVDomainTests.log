@@ -1,0 +1,1392 @@
+Building for debugging...
+[Computing dependencies]
+[Provisioning 1 / 96]
+[Using on-disk description]
+[1 / 3] SwiftTerm
+warning: missing creator for mutated node: ('/Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/SwiftTerm_SwiftTerm.bundle/Contents/MacOS')
+Build complete! (1.78 sec)
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite FakeEnglishCompilerTests started.
+􀟈  Test idTypes_areDistinct() started.
+􀟈  Suite "IsolationPlan" started.
+􀟈  Test secretPathDeny_projectsAsExistingDestructive() started.
+􀟈  Suite "Display" started.
+􀟈  Test gate_boundChannelRequiresMatchingLiveContext() started.
+􀟈  Test egressPolicyRejectsSubdomainsInV1() started.
+􀟈  Suite "EvaluationResultBoundReview" started.
+􀟈  Suite "PolicyMatch" started.
+􀟈  Test assurance_reportsOnlyWeakOrUnattested() started.
+􀟈  Suite SecretAllowPathSetTests started.
+􀟈  Test agentTagValidator_rejectsMalformedTags() started.
+􀟈  Suite "AgentRequest" started.
+􀟈  Suite "AgentApproval" started.
+􀟈  Suite "SemanticAnalysis wrappers" started.
+􀟈  Test fileToolAction_decodedForwardsToMake() started.
+􀟈  Test scanHome_rejectsEmptyPath() started.
+􀟈  Suite EvaluationOutcomeProjectionTests started.
+􀟈  Test delegation_widenedRejected() started.
+􀟈  Test egressPolicyAdmitsLoopbackTargetsOnAnyPort() started.
+􀟈  Test actionFingerprint_make_nilCwdKeepsSessionSlot() started.
+􀟈  Test ruleID_coreSecrets_usesColonPattern() started.
+􀟈  Suite PolicyDocumentTests started.
+􀟈  Suite "WorkspaceSession" started.
+􀟈  Test packID_acceptsDottedAndUndotted() started.
+􀟈  Suite "EvaluationResultWireTests" started.
+􀟈  Suite "ActionPolicyEngineTypedRule" started.
+􀟈  Suite "PolicyPredicate" started.
+􀟈  Suite "TypedRuleAskWins" started.
+􀟈  Suite UnlockableDenyTests started.
+􀟈  Suite "ReviewSanitizer" started.
+􀟈  Suite "TypedRuleExplain" started.
+􀟈  Suite "ShellAction" started.
+􀟈  Test packID_coreSecrets_isVirtualAndNotDayOne() started.
+􀟈  Test packID_rejectsInvalid() started.
+􀟈  Suite "ProposedAction.file" started.
+􀟈  Test secretPathCatalog_matchesCanonicalHostPaths() started.
+􀟈  Suite "AgentNormalization" started.
+􀟈  Test authority_narrowsBySubset() started.
+􀟈  Suite "AgentAuthorization" started.
+􀟈  Test agentTagValidator_acceptsHostAndStagingOnlyNames() started.
+􀟈  Suite "EnglishRefuseTests" started.
+􀟈  Suite LinuxResidualCoverageTests started.
+􀟈  Suite ProductVersionTests started.
+􀟈  Suite "ActionReviewer" started.
+􀟈  Suite "TypedRule" started.
+􀟈  Suite ExplainPipelineTests started.
+􀟈  Suite "HookAuthorization" started.
+􀟈  Suite "ActionPolicyEngine" started.
+􀟈  Suite "PendingApproval ledger" started.
+􀟈  Suite "EvaluationResult.pendingAction" started.
+􀟈  Suite "EnglishCompilerTests" started.
+􀟈  Suite "GitAction" started.
+􀟈  Suite "HTTP egress" started.
+􀟈  Suite "FilesystemAction" started.
+􀟈  Test revision_ignoresDisplayOnlyChange() started.
+􀟈  Suite "RuntimeAdmission" started.
+􀟈  Test hookHost_antigravityIsAHookHost() started.
+􀟈  Test owner_currentIsKernelDerived() started.
+􀟈  Test packID_decodeRejectsInvalidGrammar() started.
+􀟈  Test ruleID_isPackColonPattern() started.
+􀟈  Test packID_codableIsJSONString() started.
+􀟈  Test actionFingerprint_make_nilSessionKeepsCwdSlot() started.
+􀟈  Test delegation_childCarriesNoParentCredential() started.
+􀟈  Test fileToolKind_mapsHostAliases() started.
+􀟈  Test dayOnePackIDs_areNonFailableConstants() started.
+􀟈  Test allowOnceUnlockCode_isSixLowercaseHex() started.
+􀟈  Suite "HostNativeAsk" started.
+􀟈  Test revision_isStableForStableConfig() started.
+􀟈  Test fileToolKind_isClosedReadEditWrite() started.
+􀟈  Test executingCommand_isDistinctFromShellAndMatchingView() started.
+􀟈  Test egressPolicyPublicHTTPSRejectsPortsAndBypassShapes() started.
+􀟈  Test revision_changesOnSecurityRelevantChange() started.
+􀟈  Test gate_subjectCarriesTrustedContextPayloadsCannotSet() started.
+􀟈  Test evaluationRequest_makeDayOne_usesDayOnePacksAndNoBudget() started.
+􀟈  Test fileToolPath_firstPresentPrefersFilePathThenPathThenTargetFileThenTarget() started.
+􀟈  Test establishedSession_bindsMatchingPairOnly() started.
+􀟈  Test scanTypes_areSendableValueTypes() started.
+􀟈  Test ruleID_rejectsInvalidPackGrammar() started.
+􀟈  Test homePath_rejectsEmptyAndAcceptsNonempty() started.
+􀟈  Test instanceIDs_areFreshAndUnguessable() started.
+􀟈  Test hookHost_setupSlotOrderIncludesOpenClawHermesCodexAndCursor() started.
+􀟈  Test matchingView_encodesAsJSONStringNotObject() started.
+􀟈  Test repositoryRoot_rejectsEmptyAndAcceptsNonempty() started.
+􀟈  Test scanHostID_isHookHost() started.
+􀟈  Test scanBounds_defaultsMatchREQ016() started.
+􀟈  Test workingDirectory_codableIsJSONString() started.
+􀟈  Test secretPathCatalog_categoriesAreExplicitAndClosed() started.
+􀟈  Test hookHost_allCasesAreDeclarationOrder() started.
+􀟈  Test egressPolicyRejectsWrongPortAndUnknownHosts() started.
+􀟈  Test packID_rawValueInit_isNonFailable() started.
+􀟈  Test egressPolicyPublicHTTPSAdmitsValidNamesOnWebPorts() started.
+􀟈  Test definitionID_validatesOperatorNames() started.
+􀟈  Test severity_blocksByDefault() started.
+􀟈  Test hookHost_cursorIsAHookHost() started.
+􀟈  Test status_transitionsAreForwardOnly() started.
+􀟈  Test fileToolAction_makeEmptyPathKeysStillYieldsEmptyPath() started.
+􀟈  Test digest_matchesSHA256StandardVectors() started.
+􀟈  Test validity_transitionsMoveOneWayTowardInactive() started.
+􀟈  Test fileToolAction_makeRejectsGrepAndBash() started.
+􀟈  Test deny_alwaysCarriesRuleAndReason() started.
+􀟈  Test authenticatedContext_usabilityFollowsValidity() started.
+􀟈  Test secretPathCatalog_dayOne_isClosedTableInSpecOrder() started.
+􀟈  Test homePath_codableIsJSONString() started.
+􀟈  Test hookHost_decodeRejectsUnknownString() started.
+􀟈  Test delegation_narrowAccepted() started.
+􀟈  Test scanHome_acceptsNonEmptyPath() started.
+􀟈  Test secretPathCatalog_matchesHomeAliasesAndNewHostSecrets() started.
+􀟈  Test egressPolicyRejectsIPAndUserinfoBypassShapes() started.
+􀟈  Test delegation_equalAccepted() started.
+􀟈  Test revision_ordersListsByUTF8Bytes() started.
+􀟈  Test fileToolAction_makeMapsKindAndFirstPresentPath() started.
+􀟈  Test sessionID_rejectsEmptyAndAcceptsNonempty() started.
+􀟈  Test hookHost_codableIsJSONString() started.
+􀟈  Test secretPathCatalog_empty_hasNoRules() started.
+􀟈  Test revision_treatsBindingsAsOrderInsignificantSets() started.
+􀟈  Test fileToolAction_holdsKindAndPath() started.
+􀟈  Test repositoryRoot_codableIsJSONStringAndRejectsEmpty() started.
+􀟈  Test homePath_isDistinctFromWorkingDirectory() started.
+􀟈  Test revision_changesOnResourceProfileSecurityChange() started.
+􀟈  Test sessionID_codableRoundTripsNonemptyJSONString() started.
+􀟈  Test actionFingerprint_make_nilSessionAndCwdUseEmptySlots() started.
+􀟈  Test egressPolicyAllowsExactHostsOn443() started.
+􀟈  Test workingDirectory_rejectsEmptyAndAcceptsNonempty() started.
+􀟈  Test hookHost_codexIsAHookHost() started.
+􀟈  Test hookHost_rawValuesAreWireStable() started.
+􀟈  Test scanHostID_rawValuesMatchSpec() started.
+􀟈  Test actionFingerprint_make_matchesHostDoorSpelling(_:expected:) started.
+􀟈  Test revision_distinguishesAmbiguousEncodings() started.
+􀟈  Test scanHome_isHomePath() started.
+􀟈  Test fileToolPath_emptyIsRepresentable() started.
+􀟈  Test compile_unknownSentence_refusesUncompilable(_:) started.
+􀟈  Test compile_empty_refusesEmpty() started.
+􀟈  Test containedFirstSlice_rejectsUnrestrictedFilesystemAndNotInheritedDescent() started.
+􀟈  Test contained_differingRepositoryRoot_limitsWritesToWorkspace() started.
+􀟈  Test compile_isUsableAsEnglishCompilerExistential() started.
+􀟈  Test contained_withoutWorkspace_failsContainedRequiresWorkspace() started.
+􀟈  Test incompleteEvalSentence_isSharedHookAndTTYCopy() started.
+􀟈  Test displayRuleID_usesSlashNotColon() started.
+􀟈  Test compile_knownDenySentence_yieldsGitPushForceMainDeny(_:) started.
+􀟈  Test enforcementMode_hasExactlyThreeCases() started.
+􀟈  Test emptyStringWorkspace_isUnrepresentableAsWorkingDirectory() started.
+􀟈  Test observed_withoutWorkspace_returnsObserved() started.
+􀟈  Test contained_repositoryRootOnly_failsContainedRequiresWorkspace() started.
+􀟈  Test observed_withWorkspace_returnsObservedNotContained() started.
+􀟈  Test compileContainedIsolation_withoutWorkspace_failsContainedRequiresWorkspace() started.
+􀟈  Test contained_withWorkspace_isWorkspaceScopedDeniedNetwork() started.
+􀟈  Test compileContainedIsolation_differingRepositoryRoot_limitsWritesToWorkspace() started.
+􀟈  Test compileContainedIsolation_withWorkspace_matchesContainedPlan() started.
+􀟈  Test observedAndMediated_neverCarryIsolationGuarantees() started.
+􀟈  Test mediated_withWorkspace_returnsMediatedNotContained() started.
+􀟈  Test liveEvaluation_fieldWinsOverPackProjection() started.
+􀟈  Test isolationCompile_operatorProbe_printsIntendedModes() started.
+􀟈  Test evaluationResult_wireDropsBoundAndLiveRebuildsPackProjection() started.
+􀟈  Test boundReview_carriesMandatoryHumanInProcess() started.
+􀟈  Test live_packDenyKeepsFieldNilForPolicyGate() started.
+􀟈  Test forceMain_doesNotReadSupportingCommand() started.
+􀟈  Test liveEvaluation_alwaysAttachesPackProjection() started.
+􀟈  Test forceMain_doesNotMatchForceWithLease() started.
+􀟈  Test compileContainedPlan_isFirstSliceAndNotObserved() started.
+􀟈  Test homeExpansion_matchesTilde() started.
+􀟈  Test boundReview_defaultsToNil() started.
+􀟈  Test gitPushForceAny_matchesForceAndNonForceMainNotFeature() started.
+􀟈  Test gitPush_doesNotMatchNonPushGitAction() started.
+􀟈  Test boundReview_isOmittedFromCodableWire() started.
+􀟈  Test observedAndMediated_containedIsolation_failsNotContained() started.
+􀟈  Test forceMain_doesNotMatchRefspecThatNamesFeature(_:) started.
+􀟈  Test filesystemDeleteAndMove_matchOnlyThoseActions() started.
+􀟈  Test forceMain_matchesRefspecThatNamesMain(_:) started.
+􀟈  Test forceMain_doesNotMatchFeatureBranch() started.
+􀟈  Test gitPush_doesNotMatchDeleteRemoteRef() started.
+􀟈  Test hostAuth_neverExempt() started.
+􀟈  Test gitPush_doesNotMatchNonForceSwitchBranch() started.
+􀟈  Test directoryLiteral_coversChildren() started.
+􀟈  Test relativeLiteral_coversAbsoluteSuffix() started.
+􀟈  Test gitPushForceExactlyNone_matchesNonForceMainNotForce() started.
+􀟈  Test builtinUnwrapLimited_isStableRule() started.
+􀟈  Test resolve_mandatoryHuman_allowOnce_isAllowed() started.
+􀟈  Test compileContainedIsolation_observedAndMediated_failNotContainedRequest() started.
+􀟈  Test isolationPlan_productionConstruction_isCompileOrInternalFactory() started.
+􀟈  Test gitClean_matchesFlags() started.
+􀟈  Test filesystemAnalysisContext_homeDirectory_isHomePathJSONString() started.
+􀟈  Test live_packFallbackMatchesPackProjected(_:) started.
+􀟈  Test gitReset_matchesMode() started.
+􀟈  Test gitPushForceAny_matchesForcePushToMain_exactlyNoneDoesNot() started.
+􀟈  Test humanDecision_mapsLedgerDecision() started.
+􀟈  Test unwrapLimited_isDistinctFromUnknown() started.
+􀟈  Test resolve_approvalUnavailable_fails() started.
+􀟈  Test gitAnalysisContext_missingBranch_isNotShared() started.
+􀟈  Test emptyIdentityOutcomes(_:) started.
+􀟈  Test hitProjectsMatchIdentity() started.
+􀟈  Test resolve_mandatoryHuman_deny_isDenied() started.
+􀟈  Test decide_stillDoesNotLiftMandatoryHuman() started.
+􀟈  Test wrapping_recordsLayersAndInnermost() started.
+􀟈  Test resolve_reviewAsk_allowOnce_isAllowed() started.
+􀟈  Test denyWithoutMatchUsesDenyRuleID() started.
+􀟈  Test wrapper_codableRoundTrip() started.
+􁁛  Test egressPolicyRejectsSubdomainsInV1() passed after 0.003 seconds.
+􁁛  Test assurance_reportsOnlyWeakOrUnattested() passed after 0.002 seconds.
+􀟈  Test builtinRepositoryBoundary_isStableRule() started.
+􀟈  Test resolve_reviewAsk_deny_isDenied() started.
+􁁛  Test secretPathDeny_projectsAsExistingDestructive() passed after 0.002 seconds.
+􀟈  Test safeOnlyProjectsPackWithoutRule() started.
+􀟈  Test gitAnalysisContext_sharedName_isShared(_:) started.
+􀟈  Test denyIgnoresMatchedRuleID() started.
+􁁛  Test scanHome_rejectsEmptyPath() passed after 0.002 seconds.
+􁁛  Test fileToolAction_decodedForwardsToMake() passed after 0.003 seconds.
+􀟈  Test "RuleMatch decode throws when packID disagrees with ruleID" started.
+􁁛  Test ruleID_coreSecrets_usesColonPattern() passed after 0.002 seconds.
+􀟈  Test "invalid field combinations throw a typed error" started.
+􀟈  Test "hit omits absent safe key like HEAD" started.
+􀟈  Test gitAnalysisContext_feature_isNotShared() started.
+􀟈  Test typedRule_dropsEnglish() started.
+􀟈  Test document_mapsRulesWithOrigin() started.
+􀟈  Test forceMain_matchesGitPushForceMain() started.
+􀟈  Test discardWorktree_matchesDiscardAndWorktreeRestore() started.
+􁁛  Test idTypes_areDistinct() passed after 0.003 seconds.
+􀟈  Test agentProcessRequest_internalInitIsTestSeamOnly() started.
+􀟈  Test "outcomes project onto decision and legacy fields" started.
+􀟈  Test runtimeStartsOnlyWhileTheWorkspaceIsActive() started.
+􁁛  Test agentTagValidator_rejectsMalformedTags() passed after 0.003 seconds.
+􀟈  Test typedDeny_doesNotReadSupportingCommand() started.
+􀟈  Test "round trip preserves every outcome" started.
+􀟈  Test admissionEventCarriesTheParentWorkspace() started.
+􀟈  Test "encode matches the pinned pre-outcome wire bytes" started.
+􀟈  Test newlineEnglish_collapsesToSingleLine() started.
+􀟈  Test mintedIdentifiersDifferFromEachOther() started.
+􀟈  Test typedAsk_featureForcePush_isMandatoryHuman() started.
+􀟈  Test workspaceIdentifierCanNameAnExistingHostSession() started.
+􀟈  Test "RuleMatch decode throws when patternName disagrees with ruleID" started.
+􀟈  Test pendingAction_stillDropsUnwrapLimitedOnStoredAction() started.
+􀟈  Test "golden hit and deny frames keep agreeing identity keys" started.
+􀟈  Test "RuleMatch init projects pack and pattern from ruleID" started.
+􀟈  Test typedWhitespaceCommand_isMissingCommand() started.
+􀟈  Test encodedForm_omitsSupportingCommand() started.
+􀟈  Test "matchingView absent decodes to empty view" started.
+􀟈  Test hitKeepsMatchPackWhenSafeAlsoPresent() started.
+􀟈  Test resolve_deniedCannotBeInput() started.
+􀟈  Test gitPush_decodesForceNoneDistinctFromUnspecified() started.
+􀟈  Test process_gitResetHard_usesHostDoorFingerprintAndEffects() started.
+􀟈  Test typedAsk_beatsTypedAllowOnFeatureForcePush() started.
+􁁛  Test egressPolicyAdmitsLoopbackTargetsOnAnyPort() passed after 0.003 seconds.
+􀟈  Test wave1_decodesFromClosedFormLiterals() started.
+􀟈  Test typedDeny_doesNotMatchWhenGitActionMissing() started.
+􀟈  Test "HEAD frame decodes to the equivalent outcome" started.
+􀟈  Test process_unwrapLimited_producesNoProposedAction() started.
+􀟈  Test typedRestriction_gitPredicateDoesNotMatchFilesystemAction() started.
+􀟈  Test emptyCwdAndSessionStrings_becomeNil() started.
+􀟈  Test emptyEnglish_becomesNil() started.
+􀟈  Test gitPush_omitOrNullForceDecodesAsAny_distinctFromNone() started.
+􀟈  Test typedAllow_cannotBeatBuiltinSharedBranchHardDeny() started.
+􀟈  Test typedDeny_resetSoft_isHardDenyWithTypedRuleID() started.
+􀟈  Test gitPush_codableRoundTrip(_:) started.
+􀟈  Test process_wrappedGit_usesInnermost() started.
+􀟈  Test typedDeny_forcePushMain_isHardDenyWithTypedRuleID() started.
+􀟈  Test unknownCase_failsClosed(_:) started.
+􀟈  Test typedAsk_inRepoDelete_isMandatoryHuman() started.
+􀟈  Test missingOrWhitespaceCommand_failsClosed(_:) started.
+􀟈  Test resetHard_packFallbackUnchangedWhenTypedPushRuleDoesNotMatch() started.
+􀟈  Test typedRestriction_askMatchesPushMainWithoutBuiltinWall() started.
+􀟈  Test typedHookValues_validateTheSameWay() started.
+􁁛  Test actionFingerprint_make_nilCwdKeepsSessionSlot() passed after 0.003 seconds.
+􀟈  Test samePredicate_askAndAllow_onUncoveredPush_isMandatoryHumanFromAsk(_:) started.
+􀟈  Test samePredicate_askAndAllow_isMandatoryHumanFromAsk(_:) started.
+􀟈  Test gitPush_decodesFromClosedFormLiteral() started.
+􀟈  Test commandOneByteOverCap_isCommandTooLarge() started.
+􀟈  Test analyzedShell_keepsEffectsAsSubjectProjection() started.
+􀟈  Test commandAtCap_isValidProcess() started.
+􀟈  Test nilCwdAndSession_remainAbsent() started.
+􁁛  Test packID_acceptsDottedAndUndotted() passed after 0.003 seconds.
+􀟈  Test validOpenCodeShapedProcess_becomesAgentRequest() started.
+􀟈  Test typedAsk_pendingFilesystemDelete_matchesTypedRule() started.
+􀟈  Test matches(_:) started.
+􀟈  Test typedAsk_cannotWeakenSharedBranchHardDeny() started.
+􀟈  Test process_filesystem_copiesEffectsAndResources() started.
+􀟈  Test workingTreeDiscard_explanationRuleID_staysBuiltinWhenTypedPushRulePresent() started.
+􀟈  Test rawAndValidatedRequests_onlyInhabitProcess() started.
+􀟈  Test process_unknown_isEmptyEffectShellProposal() started.
+􀟈  Test decode_rejectsEffectsThatDisagreeWithSubject() started.
+􀟈  Test analyzedShell_roundTripsEqual() started.
+􀟈  Test decode_absentBagUsesSubjectProjection() started.
+􀟈  Test effectOnlyForcePushFixture_keepsNilAnalysis() started.
+􀟈  Test reviewSanitizer_fileAction_redactsSecretShapedPathAndReturnsFile() started.
+􀟈  Test actionFingerprint_makeFile_doesNotCollideWithShellPathCommand() started.
+􀟈  Test proposedActionFile_roundTripAndOldShellWireStillDecodes() started.
+􀟈  Test unknown_staysEffectOnly() started.
+􀟈  Test actionFingerprint_makeFile_usesFileSpellingAndEmptySlots() started.
+􀟈  Test gitSubject_derivesEffectsFromSubject() started.
+􀟈  Test compile_deferredAnalyzerEnglish_refusesUnsupported(_:) started.
+􀟈  Test compile_emptyEnglish_refusesEmpty() started.
+􀟈  Test actionPolicyEngine_emptyEffectsFile_doesNotEmitGitBuiltinDenials() started.
+􀟈  Test hardPolicyDecision_zonesAndCodable() started.
+􀟈  Test ProductVersion_semver() started.
+􀟈  Test compile_refuseEnglish_leavesRuleStoreUnchanged(_:) started.
+􀟈  Test gitAction_explainAndFingerprintResiduals() started.
+􀟈  Test boundReview_packProjectedIndeterminateIsAllow() started.
+􀟈  Test unknownOrigin_failsClosed(_:) started.
+􀟈  Test reviewRequest_redactsSecretShapedValuesAndMidTokenPrefixes() started.
+􀟈  Test coding_rejectsInvalidRuleIDAndUnknownDecision() started.
+􀟈  Test unknownVerdict_failsClosed(_:) started.
+􀟈  Test reviewEligible_unalignedDecisionCategory_isAsk() started.
+􀟈  Test encodedForm_omitsEnglish() started.
+􀟈  Test liveEvaluation_attachesPackProjectionAndWireStripBound() started.
+􀟈  Test timeoutReviewer_fallsBackToAskNotAllow() started.
+􁁛  Test packID_coreSecrets_isVirtualAndNotDayOne() passed after 0.004 seconds.
+􀟈  Test evaluationOutcome_composingResidualsAndDecodeErrorText() started.
+􀟈  Test abstain_doesNotAuthorize() started.
+􀟈  Test decodesFromClosedFormLiteral() started.
+􀟈  Test indeterminateStopsAtIncomplete() started.
+􀟈  Test project_spendFirstUnlockableAsksAndDoesNotMint() started.
+􀟈  Test denyWalksFourSteps() started.
+􀟈  Test englishCompileRefusal_andPackFallbackIndeterminate() started.
+􀟈  Test filesystemAction_scopeLabelsAndMoveChmodRead() started.
+􀟈  Test reviewBind_conflictingAllow_isMandatoryHumanNotAllow() started.
+􀟈  Test englishKey_isNotPartOfTheForm() started.
+􀟈  Test shouldMintUnlock_isHostFreeAndSkipsHardBind() started.
+􀟈  Test codableRoundTrip(verdict:origin:) started.
+􀟈  Test project_noPauseUnlockableIsDenyUnlockable() started.
+􀟈  Test unprobed_ignoresRepositoryIsSharedBranch() started.
+􀟈  Test mandatoryHuman_isNotLiftedByStubAllow() started.
+􁁛  Test authority_narrowsBySubset() passed after 0.004 seconds.
+􀟈  Test liveEvaluation_exposesOutcomeDecision() started.
+􀟈  Test quickRejectSkipsScan() started.
+􀟈  Test project_pinnedSecretIsDenyPinned() started.
+􀟈  Test uncoveredWithoutPack_isReviewEligible() started.
+􀟈  Test pendingAction_usesFilesystemEffectsWhenGitAbsent() started.
+􀟈  Test hostNativeAsk_recordsPendingAndIndeterminateMandatoryStayDeny() started.
+􀟈  Test stubAllow_cannotLiftHardDeny() started.
+􀟈  Test actionReview_conflictingRationale_isSymmetric() started.
+􀟈  Test actionReview_decode_legacyParallelKeys_goThroughFactory() started.
+􀟈  Test policyGateAccess_skipsHardBoundDenyOnly() started.
+􀟈  Test safeHitProjectsRuleID() started.
+􀟈  Test swappingStubReviewers_usesDomainBindOnly() started.
+􀟈  Test proposedActionFile_hasNoGitAction() started.
+􀟈  Test isUnlockable_matchesAbsorbedTable(_:) started.
+􀟈  Test mediumAllowWalksDestructiveThenDefault() started.
+􀟈  Test denyWithMatchedStillShowsNoSafeStage() started.
+􀟈  Test safeHitSurvivesAlongsideMediumMatch() started.
+􀟈  Test project_unlockableAndGrayAreaFollowHostProfile(_:) started.
+􀟈  Test overlayDeny_canTightenHardAllow() started.
+􀟈  Test repositoryReviewContext_sharedBranchIsMainOrMasterOnly() started.
+􀟈  Test reviewRequest_exposesSemanticForcePush_notRawShellAsPrimary() started.
+􀟈  Test packFallback_isIgnoredWhenSemanticRuleCovers() started.
+􀟈  Test forcePushTopic_stubReview_staysPendingMandatoryHuman() started.
+􀟈  Test sanitize_keepsGitPushAnalysis() started.
+􀟈  Test boundReviewAllow_projectsAllowDecision() started.
+􀟈  Test unmatchedAllowWalksFullDefault() started.
+􀟈  Test sanitize_redactsCredentialShapedGitPushAnalysis() started.
+􀟈  Test actionReview_make_allowDeny_hasConflictingRationale() started.
+􀟈  Test unmatchedDestructive_packFallbackStillBlocks() started.
+􀟈  Test gitPushForceConstraint_encodesAnyAndExact() started.
+􀟈  Test unsupportedReviewer_fallsBackToAskNotAllow() started.
+􀟈  Test protectedPathWrite_isDeniedProtectedPath() started.
+􀟈  Test matchingView_rawValueInitAndDescription() started.
+􁁛  Test delegation_widenedRejected() passed after 0.005 seconds.
+􀟈  Test gitCheckoutConcreteCommands_areEvidenceOnly() started.
+􀟈  Test uncovered_qualifiedAllowReview_isAllowed() started.
+􀟈  Test consumeDeliversResolutionExactlyOnce() started.
+􀟈  Test previewDraft_isTypedRuleNotEnglish() started.
+􀟈  Test duplicateIDCannotAuthorizeANewAction() started.
+􀟈  Test compile_beCarefulInProd_refusesUncompilable() started.
+􀟈  Test unavailableCompiler_throwsUnavailable() started.
+􀟈  Test resumeAndRetryContinuationsRoundTrip() started.
+􀟈  Test uncovered_qualifiedDenyReview_isDenied() started.
+􀟈  Test inRepoWrite_isHardAllowAndOverlayCanTighten() started.
+􀟈  Test duplicateResolveIsRejected() started.
+􀟈  Test resolvedWithoutParentConsumedAtStaysResolved() started.
+􀟈  Test fakeCompiler_refusesGitStatusAndNpmAndMcp() started.
+􀟈  Test overlayAllow_cannotLiftProtectedPathMutation() started.
+􀟈  Test compile_emptyEnglish_refusesEmpty() started.
+􀟈  Test autoDenyTimeoutCannotLaterAuthorize() started.
+􀟈  Test hardAllow_isNotWeakenedByDenyReview() started.
+􀟈  Test compile_isInvokedThroughProtocolExistential() started.
+􀟈  Test gitCheckoutFamily_differsByEffectsNotCommandText() started.
+􀟈  Test staleFingerprintCannotResolveOrAuthorize() started.
+􀟈  Test pendingApprovalState_expiredRoundTripAndUnknownKind() started.
+􀟈  Test reviewerConfidence_mediumAndHighAdvise_lowDoesNot() started.
+􀟈  Test outOfRepoWrite_isDeniedOutsideRepository() started.
+􀟈  Test replayedIdenticalActionCannotBeConsumedTwice() started.
+􀟈  Test secondCreateSameIdentityAndFingerprintKeepsOneAwaiting() started.
+􀟈  Test compile_neverAllowForcePushMain_yieldsGitPushDenyPreview() started.
+􀟈  Test emptySessionOnDurableDecodeFails() started.
+􀟈  Test sanitize_redactsCredentialShapedFilesystemAnalysis() started.
+􀟈  Test cancelledWriteDoesNotReadTheResponse() started.
+􀟈  Test explicitExpireBlocksLaterAuthorization() started.
+􀟈  Test policyMatch_rejectsMismatchedCleanAndDelete() started.
+􀟈  Test packFallback_fromEvaluationResultDeny() started.
+􀟈  Test pushForce_isHigherImpactThanNormalPush() started.
+􀟈  Test emptyIDOrZeroTTLIsRejected() started.
+􀟈  Test uncoveredEchoHello_defaultReview_isPendingReviewAsk() started.
+􀟈  Test filesystemScope_protectedPathAndActionResiduals() started.
+􀟈  Test cancelBlocksLaterResolveAndConsume() started.
+􀟈  Test filesystemAnalysis_copiesEffectsAndResources() started.
+􀟈  Test decide_doesNotRequirePacksOrPolicyGate() started.
+􀟈  Test approvalForOneFingerprintCannotAuthorizeASiblingAction() started.
+􀟈  Test shellAction_gitOnlyEncodeOmitsFilesystemAndAnalysisKeys() started.
+􀟈  Test decodeMigratesResolvedPlusParentConsumedAt() started.
+􀟈  Test deleteRemoteRef_isRemoteMutationNotPush() started.
+􀟈  Test exactDeadlineIsStillAwaitingHuman() started.
+􀟈  Test deleteBranch_isLocalRefWithoutRemoteFlag() started.
+􀟈  Test restore_usesClosedDestinationNotBoolFlags() started.
+􀟈  Test actionReview_make_classifiesBody(decision:category:isConflict:) started.
+􀟈  Test lowConfidenceAllow_doesNotAuthorize() started.
+􀟈  Test keepWaitingAllowsResolveAfterDeadline() started.
+􀟈  Test hardDeny_stubAllowReview_staysDenied() started.
+􀟈  Test actionPolicyEngine_filesystemHitResiduals() started.
+􀟈  Test embeddedIPv4TunnelsAreDenied() started.
+􀟈  Test proposedAction_carriesEffectsNotCommandText() started.
+􀟈  Test createAndDiscard_mapToDistinctEffects() started.
+􀟈  Test consumeFoldsEachDecisionIntoConsumedState(decision:) started.
+􀟈  Test conflictingRationale_doesNotAuthorize() started.
+􀟈  Test extraWorkspaceKeyIsMalformedAndDoesNotPropose() started.
+􀟈  Test forcePushTopic_isPendingMandatoryHuman() started.
+􀟈  Test stubAllow_cannotLiftMandatoryHuman() started.
+􀟈  Test awaitingHumanCannotCarryAParallelConsumedAt() started.
+􀟈  Test boundReviewDecision_onPending_isPackDeny_runtimeStaysPending() started.
+􀟈  Test identicalInputs_yieldIdenticalVerdict() started.
+􀟈  Test validHostIdentityRoundTrips() started.
+􀟈  Test publicNameThatResolvesPrivateIsDenied() started.
+􀟈  Test dotAndPercentSegmentsResolveBeforeAuthorization() started.
+􀟈  Test protectedScopeWrite_withoutMutationEffect_isStillHardDeny() started.
+􀟈  Test reviewRequest_fileAction_isSanitizedOnInit() started.
+􀟈  Test hostAdapterCreatesWithoutUIState() started.
+􀟈  Test map_hardAllowBoundDeny_staysAllowed() started.
+􀟈  Test retryContinuationMustMatchActionFingerprint() started.
+􀟈  Test hookBoundQuietAllow_isNotTheRuntimeDoor() started.
+􀟈  Test outsideWrite_addsIndependentEffect() started.
+􀟈  Test unknownAgentOnDurableDecodeFails() started.
+􀟈  Test failTaskTimeoutCannotLaterAuthorize() started.
+􀟈  Test forcePush_usesHostDoorFingerprintNotAnalyzerShellGit() started.
+􀟈  Test primaryTarget_ranksProtectedSourceOverProtectedUnknownRegardlessOfMatchPayload() started.
+􀟈  Test denyIsDeliveredOnceAndNeverAuthorizes() started.
+􀟈  Test shellAction_decodeRejectsBothGitAndFilesystemKeys() started.
+􀟈  Test implicitForcePush_unprobedDefault_isPendingNotProbedSharedDeny() started.
+􀟈  Test qualifiedAllow_appliesOnlyWhenReviewEligible() started.
+􀟈  Test operations_areDistinguished() started.
+􀟈  Test sessionIDWithoutChannelDoesNotAuthorize() started.
+􀟈  Test reviewContext_stripsRawCredentials() started.
+􀟈  Test actionResources_encodeOmitsProtectedMatchAndDecodeIgnoresLegacyKey() started.
+􀟈  Test consumedStateRoundTripsThroughCodable() started.
+􀟈  Test generatedAndSourceDeletes_haveDistinctMetadata() started.
+􁁛  Test agentTagValidator_acceptsHostAndStagingOnlyNames() passed after 0.006 seconds.
+􀟈  Test outOfRepoRead_isIndependentlyGovernable() started.
+􀟈  Test allowOnceApprovalCanExecuteAndChannelFailureCannot() started.
+􀟈  Test identityMismatchCannotResolveOrConsume() started.
+􀟈  Test overlayCanTightenAPublicGETToAskOrDeny() started.
+􀟈  Test sanitize_keepsFilesystemAnalysis() started.
+􀟈  Test probedCurrentBranch_mainIsShared_featureIsNot() started.
+􀟈  Test otherRuntimeSessionIsRejected() started.
+􀟈  Test map_hardDenyBoundAllow_staysDenied() started.
+􀟈  Test actionReview_codable_usesDecisionAndCategoryKeys_notBody() started.
+􀟈  Test inRepoWrite_isAllowedWithInRepositoryExplanation() started.
+􀟈  Test deniedProposalDoesNotExecute() started.
+􀟈  Test redirectIsNotFollowed() started.
+􀟈  Test chunkedBodyStopsAtTheCap() started.
+􀟈  Test reviewTypes_roundTripCodable() started.
+􀟈  Test unsupportedMethodsDoNotCanonicalize(_:) started.
+􀟈  Test protectedTarget_addsNonOverridableEffect() started.
+􀟈  Test unresolvedFilesystem_isFailClosed() started.
+􀟈  Test actionReview_initBody_forgedAlignedAllowDeny_isConflictingAndCannotBindAllow() started.
+􀟈  Test uncertainProtected_doesNotAddExtraDenyEffect() started.
+􀟈  Test evaluationFailureDoesNotExecute() started.
+􀟈  Test finishedBindingDoesNotAuthorize() started.
+􀟈  Test publicGETIsAllowedAndUnsafeTargetsAreDenied() started.
+􀟈  Test hardDeny_isNotLiftedByStubAllow() started.
+􀟈  Test unknownTarget_outranksInsideForFailClosed() started.
+􀟈  Test wrappedGit_stillTakesInnermostGitEffects() started.
+􀟈  Test outOfRepoWrite_isIndependentHardDeny() started.
+􀟈  Test allowIsOneShotForTheSameRequestAndTheSameCommand() started.
+􀟈  Test overlayAllow_cannotWeakenBuiltInHardZones() started.
+􀟈  Test workingTreeDiscard_isDenied() started.
+􀟈  Test literalPrivateAddressDoesNotAskTheResolver() started.
+􀟈  Test overlayAllow_cannotLiftProtectedPath() started.
+􀟈  Test unknownOrUnwrapLimited_keepsHostDoorFingerprintWithEmptyEffects(analysis:) started.
+􀟈  Test pendingWithoutApprovalDoesNotExecute() started.
+􁁛  Test hookHost_antigravityIsAHookHost() passed after 0.005 seconds.
+􀟈  Test forcePushMain_isDeniedRemoteSharedBranch() started.
+􁁛  Test owner_currentIsKernelDerived() passed after 0.005 seconds.
+􀟈  Test oldEmptyEffectPendingJSON_stillDecodes() started.
+􁁛  Test packID_rejectsInvalid() passed after 0.006 seconds.
+􀟈  Test pendingReason_isNeverHostAsk() started.
+􀟈  Test addressClassesRejectLocalAndPrivateRanges() started.
+􀟈  Test payloadInits_areTestSeamsNotProductionMints() started.
+􀟈  Test case passing 1 argument english → "be careful in prod" to compile_unknownSentence_refusesUncompilable(_:) started.
+􀟈  Test map_mandatoryHumanBoundDeny_staysPending() started.
+􀟈  Test deniedPendingAndMalformedHTTPDoNotAuthorize() started.
+􀟈  Test case passing 1 argument english → "please be nice" to compile_unknownSentence_refusesUncompilable(_:) started.
+􀟈  Test uncovered_weakOrConflictingOrFailedReview_isPendingReviewAsk(stub:) started.
+􀟈  Test case passing 2 arguments host → .pi, expected → "pi:s1:/tmp/ws:git status" to actionFingerprint_make_matchesHostDoorSpelling(_:expected:) started.
+􀟈  Test case passing 2 arguments host → .grok, expected → "grok:s1:/tmp/ws:git status" to actionFingerprint_make_matchesHostDoorSpelling(_:expected:) started.
+􀟈  Test case passing 2 arguments host → .opencode, expected → "opencode:s1:/tmp/ws:git status" to actionFingerprint_make_matchesHostDoorSpelling(_:expected:) started.
+􀟈  Test inRepoWrite_stubDenyReview_staysAllowed() started.
+􀟈  Test cancellationStopsTheRead() started.
+􀟈  Test redirectLocationDropsUserinfo() started.
+􁁛  Test ruleID_isPackColonPattern() passed after 0.006 seconds.
+􀟈  Test case passing 2 arguments host → .cursor, expected → "cursor:s1:/tmp/ws:git status" to actionFingerprint_make_matchesHostDoorSpelling(_:expected:) started.
+􀟈  Test case passing 2 arguments host → .codex, expected → "codex:s1:/tmp/ws:git status" to actionFingerprint_make_matchesHostDoorSpelling(_:expected:) started.
+􀟈  Test wrongCapabilityDoesNotPropose() started.
+􀟈  Test successfulExchangeReturnsABoundedBodyAndSelectedHeaders() started.
+􀟈  Test oversizedDeclaredBodyIsNotRead() started.
+􀟈  Test case passing 1 argument english → "never force-push main" to compile_knownDenySentence_yieldsGitPushForceMainDeny(_:) started.
+􀟈  Test case passing 1 argument english → "never allow force-push to main" to compile_knownDenySentence_yieldsGitPushForceMainDeny(_:) started.
+􁁛  Test actionFingerprint_make_nilSessionKeepsCwdSlot() passed after 0.006 seconds.
+􀟈  Test queryIsCanonicalAndSeparateFromTheAuditedPath() started.
+􀟈  Test localSocketFixtureParsesOneResponse() started.
+􀟈  Test ambiguousURLsAreMalformed(_:) started.
+􁁛  Test fileToolKind_mapsHostAliases() passed after 0.006 seconds.
+􁁛  Test dayOnePackIDs_areNonFailableConstants() passed after 0.006 seconds.
+􁁛  Test packID_codableIsJSONString() passed after 0.006 seconds.
+􀟈  Test doorVerdict_builtinHardDenyNeverAsks() started.
+􀟈  Test loopbackDestinationDoesNotWrite() started.
+􁁛  Test allowOnceUnlockCode_isSixLowercaseHex() passed after 0.006 seconds.
+􀟈  Test admittedPublicGETExecutesOnceAndRecordsEvidenceWithoutTheQuery() started.
+􀟈  Test mixedDNSAnswersAreForbiddenAndPublicAnswersPinIPv4() started.
+􀟈  Test doorVerdict_secretPathNeverAsks() started.
+􀟈  Test stalledReadTimesOut() started.
+􀟈  Test hookBound_emptyEffectsPackDeny_staysDeny() started.
+􁁛  Test gate_boundChannelRequiresMatchingLiveContext() passed after 0.007 seconds.
+􀟈  Test resolve_denyAndCreateRuleStayDeny(_:_:) started.
+􀟈  Test digestMatchesTheEmptyAndABCVectors() started.
+􀟈  Test requestBytesCarryNoCredentialsCookiesOrProxyHeaders() started.
+􀟈  Test httpWireShapeRejectsShellFieldsAndExtraKeys() started.
+􀟈  Test leftoverAskDecisionDecodesAsDenyNotAllow() started.
+􀟈  Test canonicalURLKeepsOneMeaning() started.
+􀟈  Test packDecisionIndeterminateIsDeny() started.
+􀟈  Test cookiesAreNotStoredForALaterRequest() started.
+􀟈  Test mandatoryHumanFollowsPauseProfile(_:) started.
+􀟈  Test blockedNamesAreNotResolved() started.
+􀟈  Test unlockablePackDenyFollowsPauseProfile(_:) started.
+􀟈  Test profileTable_coversEveryHost(_:) started.
+requested=observed mode=observed error=none
+requested=mediated mode=mediated error=none
+requested=contained mode=contained error=none
+requested=contained mode=none error=containedRequiresWorkspace
+􀟈  Test unsupportedSchemesFailClosed(_:) started.
+􁁛  Test delegation_childCarriesNoParentCredential() passed after 0.006 seconds.
+􀟈  Test resolve_allowOnceFollowsPauseProfile(_:) started.
+􀟈  Test doorVerdict_emptyMatchingViewNeverAsks() started.
+􀟈  Test packProjected_packAllowWithoutBindStaysAllow() started.
+􀟈  Test hookBound_workingTreeDiscard_isDenied() started.
+􀟈  Test hookBound_remoteMutationOnPrivateBranch_requiresHuman() started.
+􀟈  Test packDecisionAllowIsAllow() started.
+􀟈  Test resolve_nonHostNativeAllowOnceIsDenyOrTTY(_:) started.
+􀟈  Test case passing 1 argument refspec → "HEAD:feature" to forceMain_doesNotMatchRefspecThatNamesFeature(_:) started.
+􀟈  Test case passing 1 argument refspec → "refs/heads/feature" to forceMain_doesNotMatchRefspecThatNamesFeature(_:) started.
+􀟈  Test case passing 1 argument refspec → "main:feature" to forceMain_doesNotMatchRefspecThatNamesFeature(_:) started.
+􀟈  Test case passing 1 argument refspec → "feature" to forceMain_doesNotMatchRefspecThatNamesFeature(_:) started.
+􀟈  Test hookBound_emptyEffectsPackAllow_isAllow() started.
+􀟈  Test packProjected_usesBoundReviewWhenPresent() started.
+􀟈  Test packProjected_packDenyWithoutBindStaysDeny() started.
+􀟈  Test case passing 1 argument refspec → "refs/heads/main" to forceMain_matchesRefspecThatNamesMain(_:) started.
+􀟈  Test hookBound_hardPolicyCases_projectDirectly() started.
+􀟈  Test doorVerdict_missingCwdNeverAsks() started.
+􀟈  Test doorVerdict_boundAllowOnPackDenyNeverAsks() started.
+􀟈  Test case passing 1 argument refspec → "main" to forceMain_matchesRefspecThatNamesMain(_:) started.
+􁁛  Test secretPathCatalog_matchesCanonicalHostPaths() passed after 0.007 seconds.
+􀟈  Test case passing 1 argument refspec → "+main" to forceMain_matchesRefspecThatNamesMain(_:) started.
+􀟈  Test leftoverAskIsNeverAPermit() started.
+􁁛  Test packID_decodeRejectsInvalidGrammar() passed after 0.006 seconds.
+􀟈  Test hookBound_remoteMutationOnSharedContext_isHardDeny() started.
+􀟈  Test case passing 1 argument refspec → "HEAD:main" to forceMain_matchesRefspecThatNamesMain(_:) started.
+􀟈  Test packDecisionDenyStaysDeny() started.
+􀟈  Test doorVerdict_unwrapLimitedPackDenyNeverAsks() started.
+􁁛  Test fileToolKind_isClosedReadEditWrite() passed after 0.006 seconds.
+􁁛  Test executingCommand_isDistinctFromShellAndMatchingView() passed after 0.006 seconds.
+􀟈  Test case passing 1 argument row → LiveBindRow(label: "pack allow", result: RVDomain.EvaluationResult(outcome: RVDomain.EvaluationOutcome.plain, matchingView: git status, analysis: RVDomain.SemanticAnalysis.unknown, boundReview: nil), expected: RVDomain.BoundReview.allow) to live_packFallbackMatchesPackProjected(_:) started.
+􀟈  Test case passing 1 argument outcome → .quickRejected to emptyIdentityOutcomes(_:) started.
+􀟈  Test case passing 1 argument outcome → .plain to emptyIdentityOutcomes(_:) started.
+􀟈  Test case passing 1 argument outcome → .indeterminate(RVDomain.IndeterminateReason.commandTooLarge) to emptyIdentityOutcomes(_:) started.
+􀟈  Test case passing 1 argument outcome → .indeterminate(RVDomain.IndeterminateReason.budgetExhausted) to emptyIdentityOutcomes(_:) started.
+􀟈  Test case passing 1 argument outcome → .indeterminate(RVDomain.IndeterminateReason.corePacksUnavailable) to emptyIdentityOutcomes(_:) started.
+􁁛  Test egressPolicyPublicHTTPSRejectsPortsAndBypassShapes() passed after 0.007 seconds.
+􀟈  Test case passing 1 argument row → LiveBindRow(label: "pack indeterminate", result: RVDomain.EvaluationResult(outcome: RVDomain.EvaluationOutcome.indeterminate(RVDomain.IndeterminateReason.commandTooLarge), matchingView: huge, analysis: RVDomain.SemanticAnalysis.unknown, boundReview: nil), expected: RVDomain.BoundReview.allow) to live_packFallbackMatchesPackProjected(_:) started.
+􁁛  Test evaluationRequest_makeDayOne_usesDayOnePacksAndNoBudget() passed after 0.007 seconds.
+􁁛  Test fileToolPath_firstPresentPrefersFilePathThenPathThenTargetFileThenTarget() passed after 0.007 seconds.
+􁁛  Test scanTypes_areSendableValueTypes() passed after 0.007 seconds.
+􀟈  Test case passing 1 argument name → "master" to gitAnalysisContext_sharedName_isShared(_:) started.
+􀟈  Test case passing 1 argument name → "main" to gitAnalysisContext_sharedName_isShared(_:) started.
+􁁛  Test matchingView_encodesAsJSONStringNotObject() passed after 0.007 seconds.
+􁁛  Test repositoryRoot_rejectsEmptyAndAcceptsNonempty() passed after 0.007 seconds.
+􁁛  Test hookHost_setupSlotOrderIncludesOpenClawHermesCodexAndCursor() passed after 0.007 seconds.
+􁁛  Test homePath_rejectsEmptyAndAcceptsNonempty() passed after 0.007 seconds.
+􁁛  Test ruleID_rejectsInvalidPackGrammar() passed after 0.007 seconds.
+􁁛  Test instanceIDs_areFreshAndUnguessable() passed after 0.007 seconds.
+􁁛  Test scanHostID_isHookHost() passed after 0.007 seconds.
+􁁛  Test gate_subjectCarriesTrustedContextPayloadsCannotSet() passed after 0.007 seconds.
+􁁛  Test scanBounds_defaultsMatchREQ016() passed after 0.007 seconds.
+􁁛  Test hookHost_allCasesAreDeclarationOrder() passed after 0.007 seconds.
+􀟈  Test case passing 1 argument json → "{"mcp":{}}" to unknownCase_failsClosed(_:) started.
+􁁛  Test egressPolicyRejectsWrongPortAndUnknownHosts() passed after 0.007 seconds.
+􀟈  Test case passing 1 argument command → nil to missingOrWhitespaceCommand_failsClosed(_:) started.
+􀟈  Test case passing 1 argument json → "{"status":{}}" to unknownCase_failsClosed(_:) started.
+􀟈  Test case passing 1 argument command → " " to missingOrWhitespaceCommand_failsClosed(_:) started.
+􀟈  Test case passing 1 argument json → "{"gitStatus":{}}" to unknownCase_failsClosed(_:) started.
+􀟈  Test case passing 1 argument command → "	" to missingOrWhitespaceCommand_failsClosed(_:) started.
+􀟈  Test case passing 1 argument command → "
+" to missingOrWhitespaceCommand_failsClosed(_:) started.
+􀟈  Test case passing 1 argument command → "  
+	  " to missingOrWhitespaceCommand_failsClosed(_:) started.
+􁁛  Test revision_isStableForStableConfig() passed after 0.008 seconds.
+􁁛  Test packID_rawValueInit_isNonFailable() passed after 0.007 seconds.
+􀟈  Test case passing 1 argument predicate → .gitPush(force: RVDomain.GitPushForceConstraint.any, branch: nil) to gitPush_codableRoundTrip(_:) started.
+􀟈  Test case passing 1 argument predicate → .gitPush(force: RVDomain.GitPushForceConstraint.any, branch: Optional("main")) to gitPush_codableRoundTrip(_:) started.
+􀟈  Test case passing 1 argument predicate → .gitPush(force: RVDomain.GitPushForceConstraint.exactly(RVDomain.GitPushForce.force), branch: nil) to gitPush_codableRoundTrip(_:) started.
+􀟈  Test case passing 1 argument predicate → .gitPush(force: RVDomain.GitPushForceConstraint.exactly(RVDomain.GitPushForce.force), branch: Optional("main")) to gitPush_codableRoundTrip(_:) started.
+􀟈  Test case passing 1 argument predicate → .gitPush(force: RVDomain.GitPushForceConstraint.exactly(RVDomain.GitPushForce.forceWithLease), branch: Optional("develop")) to gitPush_codableRoundTrip(_:) started.
+􀟈  Test case passing 1 argument predicate → .gitDiscardWorktree(pathspec: Optional("file.swift")) to gitPush_codableRoundTrip(_:) started.
+􀟈  Test case passing 1 argument command → "" to missingOrWhitespaceCommand_failsClosed(_:) started.
+􀟈  Test case passing 1 argument predicate → .gitDiscardWorktree(pathspec: nil) to gitPush_codableRoundTrip(_:) started.
+􀟈  Test case passing 1 argument order → [RVDomain.TypedRuleVerdict.allow, RVDomain.TypedRuleVerdict.ask] to samePredicate_askAndAllow_onUncoveredPush_isMandatoryHumanFromAsk(_:) started.
+􀟈  Test case passing 1 argument order → [RVDomain.TypedRuleVerdict.ask, RVDomain.TypedRuleVerdict.allow] to samePredicate_askAndAllow_isMandatoryHumanFromAsk(_:) started.
+􀟈  Test case passing 1 argument order → [RVDomain.TypedRuleVerdict.allow, RVDomain.TypedRuleVerdict.ask] to samePredicate_askAndAllow_isMandatoryHumanFromAsk(_:) started.
+􀟈  Test case passing 1 argument order → [RVDomain.TypedRuleVerdict.ask, RVDomain.TypedRuleVerdict.allow] to samePredicate_askAndAllow_onUncoveredPush_isMandatoryHumanFromAsk(_:) started.
+􁁛  Test secretPathCatalog_categoriesAreExplicitAndClosed() passed after 0.008 seconds.
+􀟈  Test case passing 1 argument predicate → .gitPush(force: RVDomain.GitPushForceConstraint.exactly(RVDomain.GitPushForce.none), branch: Optional("feature")) to gitPush_codableRoundTrip(_:) started.
+􀟈  Test case passing 1 argument predicate → .gitReset(mode: nil) to gitPush_codableRoundTrip(_:) started.
+􁁛  Test severity_blocksByDefault() passed after 0.008 seconds.
+􁁛  Test workingDirectory_codableIsJSONString() passed after 0.008 seconds.
+􀟈  Test case passing 1 argument predicate → .gitClean(force: nil, directories: nil) to gitPush_codableRoundTrip(_:) started.
+􀟈  Test case passing 1 argument predicate → .gitClean(force: Optional(true), directories: Optional(true)) to gitPush_codableRoundTrip(_:) started.
+􀟈  Test case passing 1 argument json → "{"npm":{}}" to unknownCase_failsClosed(_:) started.
+􀟈  Test case passing 1 argument predicate → .gitReset(mode: Optional(RVDomain.GitResetMode.hard)) to gitPush_codableRoundTrip(_:) started.
+􀟈  Test case passing 1 argument row → core.git reset-hard with cwd to matches(_:) started.
+􁁛  Test establishedSession_bindsMatchingPairOnly() passed after 0.008 seconds.
+􀟈  Test case passing 1 argument row → core.git reset-hard plus unwrapLimited to matches(_:) started.
+􀟈  Test case passing 1 argument row → pack-floor deny plus protectedPath to matches(_:) started.
+􀟈  Test case passing 1 argument predicate → .filesystemDelete(recursive: nil, force: nil) to gitPush_codableRoundTrip(_:) started.
+􀟈  Test case passing 1 argument predicate → .filesystemMove to gitPush_codableRoundTrip(_:) started.
+􁁛  Test definitionID_validatesOperatorNames() passed after 0.008 seconds.
+􀟈  Test case passing 1 argument row → core.secrets to matches(_:) started.
+􀟈  Test case passing 1 argument row → builtin.action to matches(_:) started.
+􀟈  Test case passing 1 argument row → mandatoryHuman remote-branch-ask with cwd to matches(_:) started.
+􀟈  Test case passing 1 argument row → mandatoryHuman remote-branch-ask missing cwd to matches(_:) started.
+􀟈  Test case passing 1 argument row → mandatoryHuman plus unwrapLimited to matches(_:) started.
+􀟈  Test case passing 1 argument row → builtin.action deny without boundReview to matches(_:) started.
+􀟈  Test case passing 1 argument row → missing cwd to matches(_:) started.
+􀟈  Test case passing 1 argument row → empty matching view to matches(_:) started.
+􁁛  Test status_transitionsAreForwardOnly() passed after 0.008 seconds.
+􀟈  Test case passing 1 argument row → indeterminate to matches(_:) started.
+􀟈  Test case passing 1 argument row → pack allow to matches(_:) started.
+􁁛  Test deny_alwaysCarriesRuleAndReason() passed after 0.008 seconds.
+􁁛  Test fileToolAction_makeEmptyPathKeysStillYieldsEmptyPath() passed after 0.008 seconds.
+􀟈  Test case passing 1 argument predicate → .filesystemDelete(recursive: Optional(true), force: Optional(true)) to gitPush_codableRoundTrip(_:) started.
+􁁛  Test hookHost_decodeRejectsUnknownString() passed after 0.008 seconds.
+􁁛  Test secretPathCatalog_dayOne_isClosedTableInSpecOrder() passed after 0.008 seconds.
+􁁛  Test egressPolicyPublicHTTPSAdmitsValidNamesOnWebPorts() passed after 0.008 seconds.
+􁁛  Test fileToolAction_makeRejectsGrepAndBash() passed after 0.008 seconds.
+􁁛  Test egressPolicyRejectsIPAndUserinfoBypassShapes() passed after 0.008 seconds.
+􁁛  Test revision_ignoresDisplayOnlyChange() passed after 0.008 seconds.
+􁁛  Test hookHost_cursorIsAHookHost() passed after 0.008 seconds.
+􀟈  Test case passing 1 argument english → "npm publish" to compile_deferredAnalyzerEnglish_refusesUnsupported(_:) started.
+􁁛  Test fileToolAction_makeMapsKindAndFirstPresentPath() passed after 0.008 seconds.
+􀟈  Test case passing 1 argument english → "mcp__linear__save_issue" to compile_deferredAnalyzerEnglish_refusesUnsupported(_:) started.
+􁁛  Test sessionID_rejectsEmptyAndAcceptsNonempty() passed after 0.008 seconds.
+􁁛  Test validity_transitionsMoveOneWayTowardInactive() passed after 0.008 seconds.
+􁁛  Test hookHost_codableIsJSONString() passed after 0.008 seconds.
+􁁛  Test secretPathCatalog_empty_hasNoRules() passed after 0.008 seconds.
+􁁛  Test homePath_codableIsJSONString() passed after 0.008 seconds.
+􁁛  Test scanHome_acceptsNonEmptyPath() passed after 0.008 seconds.
+􁁛  Test repositoryRoot_codableIsJSONStringAndRejectsEmpty() passed after 0.008 seconds.
+􀟈  Test case passing 1 argument english → "npm publish" to compile_refuseEnglish_leavesRuleStoreUnchanged(_:) started.
+􀟈  Test case passing 1 argument english → "mcp__linear__save_issue" to compile_refuseEnglish_leavesRuleStoreUnchanged(_:) started.
+􁁛  Test digest_matchesSHA256StandardVectors() passed after 0.008 seconds.
+􀟈  Test case passing 1 argument english → "be careful in prod" to compile_refuseEnglish_leavesRuleStoreUnchanged(_:) started.
+􁁛  Test sessionID_codableRoundTripsNonemptyJSONString() passed after 0.008 seconds.
+􁁛  Test authenticatedContext_usabilityFollowsValidity() passed after 0.008 seconds.
+􁁛  Test fileToolAction_holdsKindAndPath() passed after 0.008 seconds.
+􀟈  Test case passing 1 argument english → "" to compile_refuseEnglish_leavesRuleStoreUnchanged(_:) started.
+􀟈  Test case passing 1 argument json → "{"id":"core.git:force-push-main","origin":"user","predicate":{"gitPush":{"branch":"main","force":"force"}},"verdict":"deny"}" to unknownOrigin_failsClosed(_:) started.
+􀟈  Test case passing 1 argument json → "{"id":"core.git:force-push-main","origin":"pack","predicate":{"gitPush":{"branch":"main","force":"force"}},"verdict":"deny"}" to unknownOrigin_failsClosed(_:) started.
+􁁛  Test actionFingerprint_make_nilSessionAndCwdUseEmptySlots() passed after 0.008 seconds.
+􀟈  Test case passing 1 argument json → "{"id":"core.git:force-push-main","origin":"machine","predicate":{"gitPush":{"branch":"main","force":"force"}},"verdict":"permit"}" to unknownVerdict_failsClosed(_:) started.
+􁁛  Test homePath_isDistinctFromWorkingDirectory() passed after 0.008 seconds.
+􀟈  Test case passing 1 argument json → "{"id":"core.git:force-push-main","origin":"machine","predicate":{"gitPush":{"branch":"main","force":"force"}},"verdict":"observe"}" to unknownVerdict_failsClosed(_:) started.
+􁁛  Test egressPolicyAllowsExactHostsOn443() passed after 0.008 seconds.
+􁁛  Test delegation_narrowAccepted() passed after 0.009 seconds.
+􁁛  Test hookHost_codexIsAHookHost() passed after 0.008 seconds.
+􁁛  Test hookHost_rawValuesAreWireStable() passed after 0.008 seconds.
+􁁛  Test workingDirectory_rejectsEmptyAndAcceptsNonempty() passed after 0.008 seconds.
+􁁛  Test secretPathCatalog_matchesHomeAliasesAndNewHostSecrets() passed after 0.009 seconds.
+􁁛  Test delegation_equalAccepted() passed after 0.009 seconds.
+􁁛  Test scanHostID_rawValuesMatchSpec() passed after 0.009 seconds.
+􀟈  Test case passing 2 arguments verdict → .allow, origin → .repo to codableRoundTrip(verdict:origin:) started.
+􀟈  Test case passing 2 arguments verdict → .ask, origin → .machine to codableRoundTrip(verdict:origin:) started.
+􀟈  Test case passing 2 arguments verdict → .allow, origin → .machine to codableRoundTrip(verdict:origin:) started.
+􀟈  Test case passing 2 arguments verdict → .deny, origin → .builtin to codableRoundTrip(verdict:origin:) started.
+􀟈  Test case passing 2 arguments verdict → .deny, origin → .machine to codableRoundTrip(verdict:origin:) started.
+􀟈  Test case passing 2 arguments verdict → .allow, origin → .builtin to codableRoundTrip(verdict:origin:) started.
+􀟈  Test case passing 2 arguments verdict → .ask, origin → .builtin to codableRoundTrip(verdict:origin:) started.
+􀟈  Test case passing 2 arguments verdict → .ask, origin → .repo to codableRoundTrip(verdict:origin:) started.
+􀟈  Test case passing 2 arguments verdict → .deny, origin → .repo to codableRoundTrip(verdict:origin:) started.
+􀟈  Test case passing 1 argument row → core.git reset-hard plus unwrapLimited to isUnlockable_matchesAbsorbedTable(_:) started.
+􀟈  Test case passing 1 argument row → pack-floor deny plus protectedPath to isUnlockable_matchesAbsorbedTable(_:) started.
+􀟈  Test case passing 1 argument row → core.secrets to isUnlockable_matchesAbsorbedTable(_:) started.
+􀟈  Test case passing 1 argument row → core.git reset-hard with cwd to isUnlockable_matchesAbsorbedTable(_:) started.
+􀟈  Test case passing 1 argument row → mandatoryHuman remote-branch-ask with cwd to isUnlockable_matchesAbsorbedTable(_:) started.
+􀟈  Test case passing 1 argument row → builtin.action to isUnlockable_matchesAbsorbedTable(_:) started.
+􀟈  Test case passing 1 argument row → mandatoryHuman remote-branch-ask missing cwd to isUnlockable_matchesAbsorbedTable(_:) started.
+􀟈  Test case passing 1 argument host → .pi to project_unlockableAndGrayAreaFollowHostProfile(_:) started.
+􀟈  Test case passing 1 argument host → .grok to project_unlockableAndGrayAreaFollowHostProfile(_:) started.
+􀟈  Test case passing 1 argument row → builtin.action deny without boundReview to isUnlockable_matchesAbsorbedTable(_:) started.
+􀟈  Test case passing 1 argument host → .claude to project_unlockableAndGrayAreaFollowHostProfile(_:) started.
+􀟈  Test case passing 1 argument host → .opencode to project_unlockableAndGrayAreaFollowHostProfile(_:) started.
+􀟈  Test case passing 1 argument row → missing cwd to isUnlockable_matchesAbsorbedTable(_:) started.
+􁁛  Test revision_ordersListsByUTF8Bytes() passed after 0.009 seconds.
+􀟈  Test case passing 1 argument host → .hermes to project_unlockableAndGrayAreaFollowHostProfile(_:) started.
+􀟈  Test case passing 1 argument host → .openclaw to project_unlockableAndGrayAreaFollowHostProfile(_:) started.
+􀟈  Test case passing 1 argument row → indeterminate to isUnlockable_matchesAbsorbedTable(_:) started.
+􀟈  Test case passing 1 argument host → .cursor to project_unlockableAndGrayAreaFollowHostProfile(_:) started.
+􀟈  Test case passing 1 argument row → pack allow to isUnlockable_matchesAbsorbedTable(_:) started.
+􀟈  Test case passing 1 argument row → mandatoryHuman plus unwrapLimited to isUnlockable_matchesAbsorbedTable(_:) started.
+􀟈  Test case passing 1 argument row → empty matching view to isUnlockable_matchesAbsorbedTable(_:) started.
+􀟈  Test case passing 1 argument host → .antigravity to project_unlockableAndGrayAreaFollowHostProfile(_:) started.
+􀟈  Test case passing 1 argument host → .codex to project_unlockableAndGrayAreaFollowHostProfile(_:) started.
+􀢄  Test consumeDeliversResolutionExactlyOnce() recorded an issue at PendingApprovalLedgerTests.swift:53:6: Caught error: .invalidRequest
+􀢄  Test replayedIdenticalActionCannotBeConsumedTwice() recorded an issue at PendingApprovalLedgerTests.swift:209:6: Caught error: .invalidRequest
+􁁛  Test scanHome_isHomePath() passed after 0.010 seconds.
+􀟈  Test case passing 3 arguments decision → .allow, category → .allow, isConflict → false to actionReview_make_classifiesBody(decision:category:isConflict:) started.
+􀟈  Test case passing 3 arguments decision → .allow, category → .deny, isConflict → true to actionReview_make_classifiesBody(decision:category:isConflict:) started.
+􀟈  Test case passing 3 arguments decision → .deny, category → .allow, isConflict → true to actionReview_make_classifiesBody(decision:category:isConflict:) started.
+􀟈  Test case passing 3 arguments decision → .deny, category → .deny, isConflict → false to actionReview_make_classifiesBody(decision:category:isConflict:) started.
+􀟈  Test case passing 1 argument decision → .createRule to consumeFoldsEachDecisionIntoConsumedState(decision:) started.
+􀟈  Test case passing 1 argument decision → .deny to consumeFoldsEachDecisionIntoConsumedState(decision:) started.
+􀢄  Test consumeFoldsEachDecisionIntoConsumedState(decision:) recorded an issue with 1 argument decision → .createRule at PendingApprovalLedgerTests.swift:474:6: Caught error: .invalidRequest
+􀟈  Test case passing 3 arguments decision → .allow, category → .abstain, isConflict → false to actionReview_make_classifiesBody(decision:category:isConflict:) started.
+􀟈  Test case passing 3 arguments decision → .abstain, category → .uncertain, isConflict → false to actionReview_make_classifiesBody(decision:category:isConflict:) started.
+􀟈  Test case passing 3 arguments decision → .deny, category → .uncertain, isConflict → false to actionReview_make_classifiesBody(decision:category:isConflict:) started.
+􀟈  Test case passing 1 argument decision → .allowOnce to consumeFoldsEachDecisionIntoConsumedState(decision:) started.
+􀟈  Test case passing 3 arguments decision → .abstain, category → .allow, isConflict → false to actionReview_make_classifiesBody(decision:category:isConflict:) started.
+􀢄  Test consumeFoldsEachDecisionIntoConsumedState(decision:) recorded an issue with 1 argument decision → .allowOnce at PendingApprovalLedgerTests.swift:474:6: Caught error: .invalidRequest
+􀢄  Test consumedStateRoundTripsThroughCodable() recorded an issue at PendingApprovalLedgerTests.swift:526:6: Caught error: .invalidRequest
+􁁛  Test revision_treatsBindingsAsOrderInsignificantSets() passed after 0.011 seconds.
+􀟈  Test case passing 1 argument method → "POST" to unsupportedMethodsDoNotCanonicalize(_:) started.
+􀟈  Test case passing 1 argument method → "PUT" to unsupportedMethodsDoNotCanonicalize(_:) started.
+􀟈  Test case passing 1 argument method → "HEAD" to unsupportedMethodsDoNotCanonicalize(_:) started.
+􀟈  Test case passing 1 argument method → "OPTIONS" to unsupportedMethodsDoNotCanonicalize(_:) started.
+􀟈  Test case passing 1 argument method → "PATCH" to unsupportedMethodsDoNotCanonicalize(_:) started.
+􀟈  Test case passing 1 argument method → "DELETE" to unsupportedMethodsDoNotCanonicalize(_:) started.
+􀟈  Test case passing 1 argument method → "TRACE" to unsupportedMethodsDoNotCanonicalize(_:) started.
+􀟈  Test case passing 1 argument method → "CONNECT" to unsupportedMethodsDoNotCanonicalize(_:) started.
+􁁛  Test fileToolPath_emptyIsRepresentable() passed after 0.011 seconds.
+􀟈  Test case passing 1 argument analysis → .unknown to unknownOrUnwrapLimited_keepsHostDoorFingerprintWithEmptyEffects(analysis:) started.
+􀟈  Test case passing 1 argument analysis → .unwrapLimited to unknownOrUnwrapLimited_keepsHostDoorFingerprintWithEmptyEffects(analysis:) started.
+􁁛  Test compile_empty_refusesEmpty() passed after 0.011 seconds.
+􁁛  Test compile_unknownSentence_refusesUncompilable(_:) with 2 test cases passed after 0.011 seconds.
+􀟈  Test case passing 1 argument stub → .lowConfidenceAllow to uncovered_weakOrConflictingOrFailedReview_isPendingReviewAsk(stub:) started.
+􀟈  Test case passing 1 argument stub → .conflictingAllow to uncovered_weakOrConflictingOrFailedReview_isPendingReviewAsk(stub:) started.
+􀟈  Test case passing 1 argument stub → .timeout to uncovered_weakOrConflictingOrFailedReview_isPendingReviewAsk(stub:) started.
+􁁛  Test contained_withoutWorkspace_failsContainedRequiresWorkspace() passed after 0.011 seconds.
+􁁛  Test actionFingerprint_make_matchesHostDoorSpelling(_:expected:) with 5 test cases passed after 0.011 seconds.
+􁁛  Test compile_isUsableAsEnglishCompilerExistential() passed after 0.011 seconds.
+􁁛  Test contained_differingRepositoryRoot_limitsWritesToWorkspace() passed after 0.011 seconds.
+􁁛  Test enforcementMode_hasExactlyThreeCases() passed after 0.011 seconds.
+􁁛  Test displayRuleID_usesSlashNotColon() passed after 0.011 seconds.
+􁁛  Test containedFirstSlice_rejectsUnrestrictedFilesystemAndNotInheritedDescent() passed after 0.011 seconds.
+􁁛  Test contained_repositoryRootOnly_failsContainedRequiresWorkspace() passed after 0.011 seconds.
+􁁛  Test observed_withoutWorkspace_returnsObserved() passed after 0.011 seconds.
+􁁛  Test compile_knownDenySentence_yieldsGitPushForceMainDeny(_:) with 2 test cases passed after 0.011 seconds.
+􀟈  Test case passing 1 argument url → "https://user:secret@example.com/" to ambiguousURLsAreMalformed(_:) started.
+􁁛  Test emptyStringWorkspace_isUnrepresentableAsWorkingDirectory() passed after 0.011 seconds.
+􀟈  Test case passing 1 argument url → "https://user@example.com/" to ambiguousURLsAreMalformed(_:) started.
+􀟈  Test case passing 1 argument url → "https://example.com/a%2fb" to ambiguousURLsAreMalformed(_:) started.
+􀟈  Test case passing 1 argument url → "https://example.com/a%00b" to ambiguousURLsAreMalformed(_:) started.
+􀟈  Test case passing 1 argument url → "https://2130706433/" to ambiguousURLsAreMalformed(_:) started.
+􀟈  Test case passing 1 argument url → "https://0x7f000001/" to ambiguousURLsAreMalformed(_:) started.
+􁁛  Test incompleteEvalSentence_isSharedHookAndTTYCopy() passed after 0.011 seconds.
+􀟈  Test case passing 1 argument url → "https://127.1/" to ambiguousURLsAreMalformed(_:) started.
+􀟈  Test case passing 1 argument url → "https://example.com/a b" to ambiguousURLsAreMalformed(_:) started.
+􀟈  Test case passing 1 argument url → "https://0177.0.0.1/" to ambiguousURLsAreMalformed(_:) started.
+􀟈  Test case passing 1 argument url → "https://example.com/#frag" to ambiguousURLsAreMalformed(_:) started.
+􀟈  Test case passing 1 argument url → "https://exa mple.com/" to ambiguousURLsAreMalformed(_:) started.
+􀟈  Test case passing 1 argument url → "http://example.com/\@example.com/" to ambiguousURLsAreMalformed(_:) started.
+􀟈  Test case passing 1 argument url → "https://[::1%en0]/" to ambiguousURLsAreMalformed(_:) started.
+􁁛  Test contained_withWorkspace_isWorkspaceScopedDeniedNetwork() passed after 0.011 seconds.
+􁁛  Test mediated_withWorkspace_returnsMediatedNotContained() passed after 0.011 seconds.
+􀟈  Test case passing 2 arguments host → .claude, decision → .deny to resolve_denyAndCreateRuleStayDeny(_:_:) started.
+􁁛  Test compileContainedIsolation_withoutWorkspace_failsContainedRequiresWorkspace() passed after 0.011 seconds.
+􀟈  Test case passing 2 arguments host → .hermes, decision → .deny to resolve_denyAndCreateRuleStayDeny(_:_:) started.
+􁁛  Test compileContainedIsolation_withWorkspace_matchesContainedPlan() passed after 0.011 seconds.
+􀟈  Test case passing 1 argument host → .grok to mandatoryHumanFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .pi to mandatoryHumanFollowsPauseProfile(_:) started.
+􀟈  Test case passing 2 arguments host → .claude, decision → .createRule to resolve_denyAndCreateRuleStayDeny(_:_:) started.
+􀟈  Test case passing 2 arguments host → .hermes, decision → .createRule to resolve_denyAndCreateRuleStayDeny(_:_:) started.
+􀟈  Test case passing 1 argument host → .claude to mandatoryHumanFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .openclaw to mandatoryHumanFollowsPauseProfile(_:) started.
+􁁛  Test boundReview_carriesMandatoryHumanInProcess() passed after 0.011 seconds.
+􀟈  Test case passing 1 argument host → .opencode to mandatoryHumanFollowsPauseProfile(_:) started.
+􁁛  Test observed_withWorkspace_returnsObservedNotContained() passed after 0.012 seconds.
+􀟈  Test case passing 1 argument host → .hermes to mandatoryHumanFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .codex to mandatoryHumanFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .antigravity to mandatoryHumanFollowsPauseProfile(_:) started.
+􁁛  Test observedAndMediated_neverCarryIsolationGuarantees() passed after 0.011 seconds.
+􀟈  Test case passing 1 argument host → .grok to unlockablePackDenyFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .pi to unlockablePackDenyFollowsPauseProfile(_:) started.
+􁁛  Test isolationCompile_operatorProbe_printsIntendedModes() passed after 0.011 seconds.
+􀟈  Test case passing 1 argument host → .grok to profileTable_coversEveryHost(_:) started.
+􀟈  Test case passing 1 argument host → .opencode to unlockablePackDenyFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .cursor to mandatoryHumanFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .pi to profileTable_coversEveryHost(_:) started.
+􁁛  Test compileContainedIsolation_differingRepositoryRoot_limitsWritesToWorkspace() passed after 0.011 seconds.
+􁁛  Test liveEvaluation_alwaysAttachesPackProjection() passed after 0.011 seconds.
+􀟈  Test case passing 1 argument host → .opencode to profileTable_coversEveryHost(_:) started.
+􀟈  Test case passing 1 argument host → .codex to unlockablePackDenyFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .cursor to unlockablePackDenyFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .openclaw to unlockablePackDenyFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .claude to unlockablePackDenyFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .hermes to profileTable_coversEveryHost(_:) started.
+􀟈  Test case passing 1 argument url → "http://example.com/" to unsupportedSchemesFailClosed(_:) started.
+􀟈  Test case passing 1 argument host → .antigravity to unlockablePackDenyFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .openclaw to profileTable_coversEveryHost(_:) started.
+􀟈  Test case passing 1 argument host → .claude to profileTable_coversEveryHost(_:) started.
+􀟈  Test case passing 1 argument url → "HTTP://example.com/" to unsupportedSchemesFailClosed(_:) started.
+􀟈  Test case passing 1 argument host → .cursor to profileTable_coversEveryHost(_:) started.
+􀟈  Test case passing 1 argument host → .grok to resolve_allowOnceFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .pi to resolve_allowOnceFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .antigravity to profileTable_coversEveryHost(_:) started.
+􁁛  Test forceMain_doesNotMatchForceWithLease() passed after 0.012 seconds.
+􀟈  Test case passing 1 argument url → "ftp://example.com/" to unsupportedSchemesFailClosed(_:) started.
+􁁛  Test live_packDenyKeepsFieldNilForPolicyGate() passed after 0.012 seconds.
+􀟈  Test case passing 1 argument host → .hermes to unlockablePackDenyFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .opencode to resolve_allowOnceFollowsPauseProfile(_:) started.
+􁁛  Test forceMain_doesNotReadSupportingCommand() passed after 0.012 seconds.
+􀟈  Test case passing 1 argument url → "data:text/plain,hi" to unsupportedSchemesFailClosed(_:) started.
+􀟈  Test case passing 1 argument host → .claude to resolve_allowOnceFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .codex to profileTable_coversEveryHost(_:) started.
+􀟈  Test case passing 1 argument url → "javascript:alert(1)" to unsupportedSchemesFailClosed(_:) started.
+􀟈  Test case passing 1 argument url → "file:///etc/passwd" to unsupportedSchemesFailClosed(_:) started.
+􁁛  Test boundReview_defaultsToNil() passed after 0.012 seconds.
+􀟈  Test case passing 1 argument host → .codex to resolve_allowOnceFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .antigravity to resolve_allowOnceFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument url → "unix:///tmp/socket" to unsupportedSchemesFailClosed(_:) started.
+􀟈  Test case passing 1 argument host → .openclaw to resolve_allowOnceFollowsPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .hermes to resolve_allowOnceFollowsPauseProfile(_:) started.
+􁁛  Test gitPushForceAny_matchesForceAndNonForceMainNotFeature() passed after 0.012 seconds.
+􀟈  Test case passing 1 argument url → "custom://example.com/" to unsupportedSchemesFailClosed(_:) started.
+􁁛  Test homeExpansion_matchesTilde() passed after 0.012 seconds.
+􁁛  Test revision_changesOnSecurityRelevantChange() passed after 0.014 seconds.
+􁁛  Test observedAndMediated_containedIsolation_failsNotContained() passed after 0.012 seconds.
+􁁛  Test evaluationResult_wireDropsBoundAndLiveRebuildsPackProjection() passed after 0.012 seconds.
+􁁛  Test liveEvaluation_fieldWinsOverPackProjection() passed after 0.012 seconds.
+􀟈  Test case passing 1 argument continuation → .retry(RVDomain.ActionFingerprint(rawValue: "shell:x")) to resolve_nonHostNativeAllowOnceIsDenyOrTTY(_:) started.
+􁁛  Test compileContainedPlan_isFirstSliceAndNotObserved() passed after 0.012 seconds.
+􁁛  Test boundReview_isOmittedFromCodableWire() passed after 0.012 seconds.
+􁁛  Test forceMain_doesNotMatchRefspecThatNamesFeature(_:) with 4 test cases passed after 0.012 seconds.
+􁁛  Test forceMain_matchesRefspecThatNamesMain(_:) with 4 test cases passed after 0.012 seconds.
+􀟈  Test case passing 1 argument host → .cursor to resolve_allowOnceFollowsPauseProfile(_:) started.
+􁁛  Test forceMain_doesNotMatchFeatureBranch() passed after 0.012 seconds.
+􁁛  Test gitPush_doesNotMatchNonForceSwitchBranch() passed after 0.012 seconds.
+􀟈  Test case passing 1 argument continuation → .resume(RVDomain.ApprovalResumeToken(rawValue: "tok")) to resolve_nonHostNativeAllowOnceIsDenyOrTTY(_:) started.
+􁁛  Test gitPush_doesNotMatchDeleteRemoteRef() passed after 0.012 seconds.
+􁁛  Test gitPush_doesNotMatchNonPushGitAction() passed after 0.012 seconds.
+􁁛  Test filesystemDeleteAndMove_matchOnlyThoseActions() passed after 0.012 seconds.
+􁁛  Test gitReset_matchesMode() passed after 0.012 seconds.
+􁁛  Test relativeLiteral_coversAbsoluteSuffix() passed after 0.012 seconds.
+􁁛  Test gitPushForceAny_matchesForcePushToMain_exactlyNoneDoesNot() passed after 0.012 seconds.
+􁁛  Test hostAuth_neverExempt() passed after 0.012 seconds.
+􁁛  Test isolationPlan_productionConstruction_isCompileOrInternalFactory() passed after 0.012 seconds.
+􁁛  Test resolve_mandatoryHuman_allowOnce_isAllowed() passed after 0.012 seconds.
+􁁛  Test gitClean_matchesFlags() passed after 0.012 seconds.
+􁁛  Test gitAnalysisContext_missingBranch_isNotShared() passed after 0.012 seconds.
+􁁛  Test compileContainedIsolation_observedAndMediated_failNotContainedRequest() passed after 0.012 seconds.
+􁁛  Test resolve_approvalUnavailable_fails() passed after 0.012 seconds.
+􁁛  Test directoryLiteral_coversChildren() passed after 0.012 seconds.
+􁁛  Test resolve_mandatoryHuman_deny_isDenied() passed after 0.012 seconds.
+􁁛  Test unwrapLimited_isDistinctFromUnknown() passed after 0.012 seconds.
+􁁛  Test hitProjectsMatchIdentity() passed after 0.012 seconds.
+􁁛  Test emptyIdentityOutcomes(_:) with 5 test cases passed after 0.012 seconds.
+􁁛  Test revision_changesOnResourceProfileSecurityChange() passed after 0.013 seconds.
+􁁛  Test live_packFallbackMatchesPackProjected(_:) with 2 test cases passed after 0.012 seconds.
+􁁛  Test resolve_reviewAsk_allowOnce_isAllowed() passed after 0.012 seconds.
+􁁛  Test humanDecision_mapsLedgerDecision() passed after 0.012 seconds.
+􁁛  Test gitPushForceExactlyNone_matchesNonForceMainNotForce() passed after 0.012 seconds.
+􁁛  Test denyWithoutMatchUsesDenyRuleID() passed after 0.012 seconds.
+􁁛  Test decide_stillDoesNotLiftMandatoryHuman() passed after 0.012 seconds.
+􁁛  Test safeOnlyProjectsPackWithoutRule() passed after 0.012 seconds.
+􁁛  Test gitAnalysisContext_sharedName_isShared(_:) with 2 test cases passed after 0.012 seconds.
+􁁛  Test wrapping_recordsLayersAndInnermost() passed after 0.012 seconds.
+􁁛  Test denyIgnoresMatchedRuleID() passed after 0.012 seconds.
+􁁛  Test resolve_reviewAsk_deny_isDenied() passed after 0.012 seconds.
+􁁛  Test builtinRepositoryBoundary_isStableRule() passed after 0.012 seconds.
+􁁛  Test "hit omits absent safe key like HEAD" passed after 0.012 seconds.
+􁁛  Test forceMain_matchesGitPushForceMain() passed after 0.012 seconds.
+􁁛  Test agentProcessRequest_internalInitIsTestSeamOnly() passed after 0.011 seconds.
+􁁛  Test builtinUnwrapLimited_isStableRule() passed after 0.012 seconds.
+􁁛  Test filesystemAnalysisContext_homeDirectory_isHomePathJSONString() passed after 0.012 seconds.
+􁁛  Test revision_distinguishesAmbiguousEncodings() passed after 0.013 seconds.
+􁁛  Test mintedIdentifiersDifferFromEachOther() passed after 0.011 seconds.
+􁁛  Test document_mapsRulesWithOrigin() passed after 0.012 seconds.
+􁁛  Test pendingAction_stillDropsUnwrapLimitedOnStoredAction() passed after 0.011 seconds.
+􁁛  Test gitAnalysisContext_feature_isNotShared() passed after 0.012 seconds.
+􁁛  Test typedDeny_doesNotReadSupportingCommand() passed after 0.011 seconds.
+􁁛  Test runtimeStartsOnlyWhileTheWorkspaceIsActive() passed after 0.011 seconds.
+􁁛  Test typedRule_dropsEnglish() passed after 0.012 seconds.
+􁁛  Test "RuleMatch init projects pack and pattern from ruleID" passed after 0.011 seconds.
+􁁛  Test workspaceIdentifierCanNameAnExistingHostSession() passed after 0.011 seconds.
+􁁛  Test admissionEventCarriesTheParentWorkspace() passed after 0.011 seconds.
+􁁛  Test newlineEnglish_collapsesToSingleLine() passed after 0.011 seconds.
+􁁛  Test encodedForm_omitsSupportingCommand() passed after 0.011 seconds.
+􁁛  Test typedAsk_featureForcePush_isMandatoryHuman() passed after 0.011 seconds.
+􁁛  Test "outcomes project onto decision and legacy fields" passed after 0.012 seconds.
+􁁛  Test typedWhitespaceCommand_isMissingCommand() passed after 0.011 seconds.
+􁁛  Test "RuleMatch decode throws when packID disagrees with ruleID" passed after 0.012 seconds.
+􁁛  Test "matchingView absent decodes to empty view" passed after 0.011 seconds.
+􁁛  Test discardWorktree_matchesDiscardAndWorktreeRestore() passed after 0.012 seconds.
+􁁛  Test typedAsk_beatsTypedAllowOnFeatureForcePush() passed after 0.011 seconds.
+􁁛  Test resolve_deniedCannotBeInput() passed after 0.012 seconds.
+􁁛  Test "golden hit and deny frames keep agreeing identity keys" passed after 0.011 seconds.
+􁁛  Test typedDeny_doesNotMatchWhenGitActionMissing() passed after 0.011 seconds.
+􁁛  Test gitPush_decodesForceNoneDistinctFromUnspecified() passed after 0.011 seconds.
+􁁛  Test process_unwrapLimited_producesNoProposedAction() passed after 0.011 seconds.
+􁁛  Test typedRestriction_gitPredicateDoesNotMatchFilesystemAction() passed after 0.011 seconds.
+􁁛  Test typedDeny_resetSoft_isHardDenyWithTypedRuleID() passed after 0.011 seconds.
+􁁛  Test "HEAD frame decodes to the equivalent outcome" passed after 0.011 seconds.
+􁁛  Test process_gitResetHard_usesHostDoorFingerprintAndEffects() passed after 0.011 seconds.
+􁁛  Test "RuleMatch decode throws when patternName disagrees with ruleID" passed after 0.011 seconds.
+􁁛  Test typedAllow_cannotBeatBuiltinSharedBranchHardDeny() passed after 0.011 seconds.
+􁁛  Test hitKeepsMatchPackWhenSafeAlsoPresent() passed after 0.011 seconds.
+􁁛  Test gitPush_omitOrNullForceDecodesAsAny_distinctFromNone() passed after 0.011 seconds.
+􁁛  Test emptyEnglish_becomesNil() passed after 0.011 seconds.
+􁁛  Test wrapper_codableRoundTrip() passed after 0.012 seconds.
+􁁛  Test typedDeny_forcePushMain_isHardDenyWithTypedRuleID() passed after 0.011 seconds.
+􁁛  Test process_wrappedGit_usesInnermost() passed after 0.011 seconds.
+􁁛  Test wave1_decodesFromClosedFormLiterals() passed after 0.011 seconds.
+􁁛  Test typedAsk_inRepoDelete_isMandatoryHuman() passed after 0.011 seconds.
+􁁛  Test "round trip preserves every outcome" passed after 0.012 seconds.
+􁁛  Test missingOrWhitespaceCommand_failsClosed(_:) with 6 test cases passed after 0.011 seconds.
+􁁛  Test "encode matches the pinned pre-outcome wire bytes" passed after 0.012 seconds.
+􁁛  Test resetHard_packFallbackUnchangedWhenTypedPushRuleDoesNotMatch() passed after 0.011 seconds.
+􁁛  Test emptyCwdAndSessionStrings_becomeNil() passed after 0.011 seconds.
+􁁛  Test typedRestriction_askMatchesPushMainWithoutBuiltinWall() passed after 0.011 seconds.
+􁁛  Test typedHookValues_validateTheSameWay() passed after 0.011 seconds.
+􁁛  Test gitPush_decodesFromClosedFormLiteral() passed after 0.011 seconds.
+􁁛  Test nilCwdAndSession_remainAbsent() passed after 0.011 seconds.
+􁁛  Test samePredicate_askAndAllow_isMandatoryHumanFromAsk(_:) with 2 test cases passed after 0.011 seconds.
+􁁛  Test analyzedShell_keepsEffectsAsSubjectProjection() passed after 0.011 seconds.
+􁁛  Test samePredicate_askAndAllow_onUncoveredPush_isMandatoryHumanFromAsk(_:) with 2 test cases passed after 0.011 seconds.
+􁁛  Test unknownCase_failsClosed(_:) with 4 test cases passed after 0.011 seconds.
+􁁛  Test validOpenCodeShapedProcess_becomesAgentRequest() passed after 0.011 seconds.
+􁁛  Test gitPush_codableRoundTrip(_:) with 15 test cases passed after 0.011 seconds.
+􁁛  Test typedAsk_pendingFilesystemDelete_matchesTypedRule() passed after 0.011 seconds.
+􁁛  Test workingTreeDiscard_explanationRuleID_staysBuiltinWhenTypedPushRulePresent() passed after 0.011 seconds.
+􁁛  Test rawAndValidatedRequests_onlyInhabitProcess() passed after 0.011 seconds.
+􁁛  Test typedAsk_cannotWeakenSharedBranchHardDeny() passed after 0.011 seconds.
+􁁛  Test matches(_:) with 13 test cases passed after 0.011 seconds.
+􁁛  Test "invalid field combinations throw a typed error" passed after 0.012 seconds.
+􁁛  Test effectOnlyForcePushFixture_keepsNilAnalysis() passed after 0.011 seconds.
+􁁛  Test process_filesystem_copiesEffectsAndResources() passed after 0.011 seconds.
+􁁛  Test commandOneByteOverCap_isCommandTooLarge() passed after 0.011 seconds.
+􁁛  Test process_unknown_isEmptyEffectShellProposal() passed after 0.011 seconds.
+􁁛  Test actionFingerprint_makeFile_doesNotCollideWithShellPathCommand() passed after 0.011 seconds.
+􁁛  Test actionFingerprint_makeFile_usesFileSpellingAndEmptySlots() passed after 0.011 seconds.
+􁁛  Test compile_deferredAnalyzerEnglish_refusesUnsupported(_:) with 2 test cases passed after 0.011 seconds.
+􁁛  Test reviewSanitizer_fileAction_redactsSecretShapedPathAndReturnsFile() passed after 0.011 seconds.
+􁁛  Test gitSubject_derivesEffectsFromSubject() passed after 0.011 seconds.
+􁁛  Test unknown_staysEffectOnly() passed after 0.011 seconds.
+􁁛  Test compile_emptyEnglish_refusesEmpty() passed after 0.011 seconds.
+􁁛  Test commandAtCap_isValidProcess() passed after 0.011 seconds.
+􁁛  Test actionPolicyEngine_emptyEffectsFile_doesNotEmitGitBuiltinDenials() passed after 0.011 seconds.
+􁁛  Test ProductVersion_semver() passed after 0.011 seconds.
+􁁛  Test gitAction_explainAndFingerprintResiduals() passed after 0.011 seconds.
+􁁛  Test boundReview_packProjectedIndeterminateIsAllow() passed after 0.011 seconds.
+􁁛  Test compile_refuseEnglish_leavesRuleStoreUnchanged(_:) with 4 test cases passed after 0.011 seconds.
+􁁛  Test encodedForm_omitsEnglish() passed after 0.010 seconds.
+􁁛  Test timeoutReviewer_fallsBackToAskNotAllow() passed after 0.010 seconds.
+􁁛  Test liveEvaluation_attachesPackProjectionAndWireStripBound() passed after 0.010 seconds.
+􁁛  Test hardPolicyDecision_zonesAndCodable() passed after 0.011 seconds.
+􁁛  Test unknownOrigin_failsClosed(_:) with 2 test cases passed after 0.011 seconds.
+􁁛  Test analyzedShell_roundTripsEqual() passed after 0.011 seconds.
+􁁛  Test project_spendFirstUnlockableAsksAndDoesNotMint() passed after 0.010 seconds.
+􁁛  Test coding_rejectsInvalidRuleIDAndUnknownDecision() passed after 0.011 seconds.
+􁁛  Test decode_absentBagUsesSubjectProjection() passed after 0.011 seconds.
+􁁛  Test indeterminateStopsAtIncomplete() passed after 0.010 seconds.
+􁁛  Test reviewRequest_redactsSecretShapedValuesAndMidTokenPrefixes() passed after 0.010 seconds.
+􁁛  Test abstain_doesNotAuthorize() passed after 0.010 seconds.
+􁁛  Test denyWalksFourSteps() passed after 0.010 seconds.
+􁁛  Test reviewEligible_unalignedDecisionCategory_isAsk() passed after 0.010 seconds.
+􁁛  Test project_noPauseUnlockableIsDenyUnlockable() passed after 0.010 seconds.
+􁁛  Test evaluationOutcome_composingResidualsAndDecodeErrorText() passed after 0.010 seconds.
+􁁛  Test unknownVerdict_failsClosed(_:) with 2 test cases passed after 0.010 seconds.
+􁁛  Test decode_rejectsEffectsThatDisagreeWithSubject() passed after 0.011 seconds.
+􁁛  Test unprobed_ignoresRepositoryIsSharedBranch() passed after 0.010 seconds.
+􁁛  Test englishKey_isNotPartOfTheForm() passed after 0.010 seconds.
+􁁛  Test quickRejectSkipsScan() passed after 0.010 seconds.
+􁁛  Test filesystemAction_scopeLabelsAndMoveChmodRead() passed after 0.010 seconds.
+􁁛  Test decodesFromClosedFormLiteral() passed after 0.010 seconds.
+􁁛  Test uncoveredWithoutPack_isReviewEligible() passed after 0.010 seconds.
+􁁛  Test englishCompileRefusal_andPackFallbackIndeterminate() passed after 0.010 seconds.
+􁁛  Test stubAllow_cannotLiftHardDeny() passed after 0.010 seconds.
+􁁛  Test hostNativeAsk_recordsPendingAndIndeterminateMandatoryStayDeny() passed after 0.010 seconds.
+􁁛  Test shouldMintUnlock_isHostFreeAndSkipsHardBind() passed after 0.010 seconds.
+􁁛  Test actionReview_conflictingRationale_isSymmetric() passed after 0.010 seconds.
+􁁛  Test policyGateAccess_skipsHardBoundDenyOnly() passed after 0.010 seconds.
+􁁛  Test safeHitProjectsRuleID() passed after 0.010 seconds.
+􁁛  Test actionReview_decode_legacyParallelKeys_goThroughFactory() passed after 0.010 seconds.
+􁁛  Test proposedActionFile_hasNoGitAction() passed after 0.010 seconds.
+􁁛  Test reviewBind_conflictingAllow_isMandatoryHumanNotAllow() passed after 0.010 seconds.
+􁁛  Test mandatoryHuman_isNotLiftedByStubAllow() passed after 0.010 seconds.
+􁁛  Test project_pinnedSecretIsDenyPinned() passed after 0.010 seconds.
+􁁛  Test denyWithMatchedStillShowsNoSafeStage() passed after 0.010 seconds.
+􁁛  Test proposedActionFile_roundTripAndOldShellWireStillDecodes() passed after 0.011 seconds.
+􁁛  Test repositoryReviewContext_sharedBranchIsMainOrMasterOnly() passed after 0.010 seconds.
+􁁛  Test liveEvaluation_exposesOutcomeDecision() passed after 0.010 seconds.
+􁁛  Test project_unlockableAndGrayAreaFollowHostProfile(_:) with 9 test cases passed after 0.010 seconds.
+􁁛  Test mediumAllowWalksDestructiveThenDefault() passed after 0.010 seconds.
+􁁛  Test pendingAction_usesFilesystemEffectsWhenGitAbsent() passed after 0.010 seconds.
+􁁛  Test codableRoundTrip(verdict:origin:) with 9 test cases passed after 0.010 seconds.
+􁁛  Test swappingStubReviewers_usesDomainBindOnly() passed after 0.010 seconds.
+􁁛  Test forcePushTopic_stubReview_staysPendingMandatoryHuman() passed after 0.010 seconds.
+􁁛  Test reviewRequest_exposesSemanticForcePush_notRawShellAsPrimary() passed after 0.010 seconds.
+􁁛  Test isUnlockable_matchesAbsorbedTable(_:) with 13 test cases passed after 0.010 seconds.
+􁁛  Test overlayDeny_canTightenHardAllow() passed after 0.010 seconds.
+􁁛  Test protectedPathWrite_isDeniedProtectedPath() passed after 0.010 seconds.
+􁁛  Test packFallback_isIgnoredWhenSemanticRuleCovers() passed after 0.010 seconds.
+􁁛  Test unmatchedAllowWalksFullDefault() passed after 0.010 seconds.
+􁁛  Test matchingView_rawValueInitAndDescription() passed after 0.010 seconds.
+􁁛  Test sanitize_keepsGitPushAnalysis() passed after 0.010 seconds.
+􁁛  Test gitPushForceConstraint_encodesAnyAndExact() passed after 0.010 seconds.
+􁁛  Test boundReviewAllow_projectsAllowDecision() passed after 0.010 seconds.
+􁁛  Test unmatchedDestructive_packFallbackStillBlocks() passed after 0.010 seconds.
+􁁛  Test safeHitSurvivesAlongsideMediumMatch() passed after 0.010 seconds.
+􁁛  Test gitCheckoutConcreteCommands_areEvidenceOnly() passed after 0.010 seconds.
+􁁛  Test compile_beCarefulInProd_refusesUncompilable() passed after 0.010 seconds.
+􁁛  Test actionReview_make_allowDeny_hasConflictingRationale() passed after 0.010 seconds.
+􁁛  Test uncovered_qualifiedAllowReview_isAllowed() passed after 0.010 seconds.
+􁁛  Test unsupportedReviewer_fallsBackToAskNotAllow() passed after 0.010 seconds.
+􁁛  Test uncovered_qualifiedDenyReview_isDenied() passed after 0.010 seconds.
+􁁛  Test compile_isInvokedThroughProtocolExistential() passed after 0.010 seconds.
+􁁛  Test gitCheckoutFamily_differsByEffectsNotCommandText() passed after 0.010 seconds.
+􁁛  Test fakeCompiler_refusesGitStatusAndNpmAndMcp() passed after 0.010 seconds.
+􁁛  Test compile_emptyEnglish_refusesEmpty() passed after 0.010 seconds.
+􁁛  Test previewDraft_isTypedRuleNotEnglish() passed after 0.010 seconds.
+􁁛  Test inRepoWrite_isHardAllowAndOverlayCanTighten() passed after 0.010 seconds.
+􁁛  Test hardAllow_isNotWeakenedByDenyReview() passed after 0.010 seconds.
+􁁛  Test duplicateResolveIsRejected() passed after 0.010 seconds.
+􁁛  Test overlayAllow_cannotLiftProtectedPathMutation() passed after 0.010 seconds.
+􁁛  Test staleFingerprintCannotResolveOrAuthorize() passed after 0.010 seconds.
+􀢄  Test consumeDeliversResolutionExactlyOnce() failed after 0.010 seconds with 1 issue.
+􁁛  Test outOfRepoWrite_isDeniedOutsideRepository() passed after 0.010 seconds.
+􁁛  Test duplicateIDCannotAuthorizeANewAction() passed after 0.010 seconds.
+􀢄  Test replayedIdenticalActionCannotBeConsumedTwice() failed after 0.010 seconds with 1 issue.
+􁁛  Test compile_neverAllowForcePushMain_yieldsGitPushDenyPreview() passed after 0.010 seconds.
+􁁛  Test secondCreateSameIdentityAndFingerprintKeepsOneAwaiting() passed after 0.010 seconds.
+􁁛  Test unavailableCompiler_throwsUnavailable() passed after 0.010 seconds.
+􁁛  Test pushForce_isHigherImpactThanNormalPush() passed after 0.010 seconds.
+􁁛  Test explicitExpireBlocksLaterAuthorization() passed after 0.010 seconds.
+􁁛  Test packFallback_fromEvaluationResultDeny() passed after 0.010 seconds.
+􁁛  Test pendingApprovalState_expiredRoundTripAndUnknownKind() passed after 0.010 seconds.
+􁁛  Test filesystemScope_protectedPathAndActionResiduals() passed after 0.010 seconds.
+􁁛  Test uncoveredEchoHello_defaultReview_isPendingReviewAsk() passed after 0.010 seconds.
+􁁛  Test decide_doesNotRequirePacksOrPolicyGate() passed after 0.010 seconds.
+􁁛  Test resumeAndRetryContinuationsRoundTrip() passed after 0.010 seconds.
+􁁛  Test sanitize_redactsCredentialShapedGitPushAnalysis() passed after 0.010 seconds.
+􁁛  Test deleteBranch_isLocalRefWithoutRemoteFlag() passed after 0.010 seconds.
+􁁛  Test policyMatch_rejectsMismatchedCleanAndDelete() passed after 0.010 seconds.
+􁁛  Test reviewerConfidence_mediumAndHighAdvise_lowDoesNot() passed after 0.010 seconds.
+􁁛  Test cancelledWriteDoesNotReadTheResponse() passed after 0.010 seconds.
+􁁛  Test approvalForOneFingerprintCannotAuthorizeASiblingAction() passed after 0.010 seconds.
+􁁛  Test emptyIDOrZeroTTLIsRejected() passed after 0.010 seconds.
+􁁛  Test shellAction_gitOnlyEncodeOmitsFilesystemAndAnalysisKeys() passed after 0.010 seconds.
+􁁛  Test emptySessionOnDurableDecodeFails() passed after 0.010 seconds.
+􁁛  Test filesystemAnalysis_copiesEffectsAndResources() passed after 0.010 seconds.
+􁁛  Test sanitize_redactsCredentialShapedFilesystemAnalysis() passed after 0.010 seconds.
+􁁛  Test proposedAction_carriesEffectsNotCommandText() passed after 0.010 seconds.
+􁁛  Test restore_usesClosedDestinationNotBoolFlags() passed after 0.010 seconds.
+􁁛  Test createAndDiscard_mapToDistinctEffects() passed after 0.010 seconds.
+􁁛  Test conflictingRationale_doesNotAuthorize() passed after 0.010 seconds.
+􁁛  Test autoDenyTimeoutCannotLaterAuthorize() passed after 0.010 seconds.
+􁁛  Test extraWorkspaceKeyIsMalformedAndDoesNotPropose() passed after 0.010 seconds.
+􁁛  Test deleteRemoteRef_isRemoteMutationNotPush() passed after 0.010 seconds.
+􁁛  Test cancelBlocksLaterResolveAndConsume() passed after 0.010 seconds.
+􁁛  Test forcePushTopic_isPendingMandatoryHuman() passed after 0.010 seconds.
+􁁛  Test hardDeny_stubAllowReview_staysDenied() passed after 0.010 seconds.
+􁁛  Test actionPolicyEngine_filesystemHitResiduals() passed after 0.010 seconds.
+􁁛  Test stubAllow_cannotLiftMandatoryHuman() passed after 0.010 seconds.
+􁁛  Test embeddedIPv4TunnelsAreDenied() passed after 0.010 seconds.
+􁁛  Test boundReviewDecision_onPending_isPackDeny_runtimeStaysPending() passed after 0.010 seconds.
+􁁛  Test identicalInputs_yieldIdenticalVerdict() passed after 0.010 seconds.
+􁁛  Test validHostIdentityRoundTrips() passed after 0.010 seconds.
+􁁛  Test decodeMigratesResolvedPlusParentConsumedAt() passed after 0.010 seconds.
+􁁛  Test actionReview_make_classifiesBody(decision:category:isConflict:) with 8 test cases passed after 0.010 seconds.
+􁁛  Test lowConfidenceAllow_doesNotAuthorize() passed after 0.010 seconds.
+􁁛  Test dotAndPercentSegmentsResolveBeforeAuthorization() passed after 0.010 seconds.
+􁁛  Test hookBoundQuietAllow_isNotTheRuntimeDoor() passed after 0.010 seconds.
+􁁛  Test awaitingHumanCannotCarryAParallelConsumedAt() passed after 0.010 seconds.
+􁁛  Test retryContinuationMustMatchActionFingerprint() passed after 0.010 seconds.
+􀢄  Test consumeFoldsEachDecisionIntoConsumedState(decision:) with 3 test cases failed after 0.010 seconds with 2 issues.
+􁁛  Test map_hardAllowBoundDeny_staysAllowed() passed after 0.010 seconds.
+􁁛  Test failTaskTimeoutCannotLaterAuthorize() passed after 0.010 seconds.
+􁁛  Test hostAdapterCreatesWithoutUIState() passed after 0.010 seconds.
+􁁛  Test forcePush_usesHostDoorFingerprintNotAnalyzerShellGit() passed after 0.010 seconds.
+􁁛  Test primaryTarget_ranksProtectedSourceOverProtectedUnknownRegardlessOfMatchPayload() passed after 0.010 seconds.
+􁁛  Test unknownAgentOnDurableDecodeFails() passed after 0.010 seconds.
+􁁛  Test protectedScopeWrite_withoutMutationEffect_isStillHardDeny() passed after 0.010 seconds.
+􁁛  Test outsideWrite_addsIndependentEffect() passed after 0.010 seconds.
+􁁛  Test sessionIDWithoutChannelDoesNotAuthorize() passed after 0.010 seconds.
+􁁛  Test qualifiedAllow_appliesOnlyWhenReviewEligible() passed after 0.010 seconds.
+􀢄  Test consumedStateRoundTripsThroughCodable() failed after 0.010 seconds with 1 issue.
+􁁛  Test generatedAndSourceDeletes_haveDistinctMetadata() passed after 0.010 seconds.
+􁁛  Test operations_areDistinguished() passed after 0.010 seconds.
+􁁛  Test identityMismatchCannotResolveOrConsume() passed after 0.010 seconds.
+􁁛  Test overlayCanTightenAPublicGETToAskOrDeny() passed after 0.010 seconds.
+􁁛  Test reviewRequest_fileAction_isSanitizedOnInit() passed after 0.010 seconds.
+􁁛  Test inRepoWrite_isAllowedWithInRepositoryExplanation() passed after 0.010 seconds.
+􁁛  Test outOfRepoRead_isIndependentlyGovernable() passed after 0.010 seconds.
+􁁛  Test publicNameThatResolvesPrivateIsDenied() passed after 0.010 seconds.
+􁁛  Test allowOnceApprovalCanExecuteAndChannelFailureCannot() passed after 0.010 seconds.
+􁁛  Test otherRuntimeSessionIsRejected() passed after 0.010 seconds.
+􁁛  Test denyIsDeliveredOnceAndNeverAuthorizes() passed after 0.010 seconds.
+􁁛  Test probedCurrentBranch_mainIsShared_featureIsNot() passed after 0.010 seconds.
+􁁛  Test sanitize_keepsFilesystemAnalysis() passed after 0.010 seconds.
+􁁛  Test implicitForcePush_unprobedDefault_isPendingNotProbedSharedDeny() passed after 0.010 seconds.
+􁁛  Test actionResources_encodeOmitsProtectedMatchAndDecodeIgnoresLegacyKey() passed after 0.010 seconds.
+􁁛  Test deniedProposalDoesNotExecute() passed after 0.010 seconds.
+􁁛  Test protectedTarget_addsNonOverridableEffect() passed after 0.010 seconds.
+􁁛  Test unresolvedFilesystem_isFailClosed() passed after 0.010 seconds.
+􁁛  Test unsupportedMethodsDoNotCanonicalize(_:) with 8 test cases passed after 0.010 seconds.
+􁁛  Test map_hardDenyBoundAllow_staysDenied() passed after 0.010 seconds.
+􁁛  Test uncertainProtected_doesNotAddExtraDenyEffect() passed after 0.010 seconds.
+􁁛  Test reviewContext_stripsRawCredentials() passed after 0.010 seconds.
+􁁛  Test actionReview_codable_usesDecisionAndCategoryKeys_notBody() passed after 0.010 seconds.
+􁁛  Test redirectIsNotFollowed() passed after 0.010 seconds.
+􁁛  Test unknownTarget_outranksInsideForFailClosed() passed after 0.010 seconds.
+􁁛  Test evaluationFailureDoesNotExecute() passed after 0.010 seconds.
+􁁛  Test wrappedGit_stillTakesInnermostGitEffects() passed after 0.010 seconds.
+􁁛  Test workingTreeDiscard_isDenied() passed after 0.010 seconds.
+􁁛  Test shellAction_decodeRejectsBothGitAndFilesystemKeys() passed after 0.010 seconds.
+􁁛  Test literalPrivateAddressDoesNotAskTheResolver() passed after 0.010 seconds.
+􁁛  Test overlayAllow_cannotLiftProtectedPath() passed after 0.010 seconds.
+􁁛  Test unknownOrUnwrapLimited_keepsHostDoorFingerprintWithEmptyEffects(analysis:) with 2 test cases passed after 0.010 seconds.
+􁁛  Test actionReview_initBody_forgedAlignedAllowDeny_isConflictingAndCannotBindAllow() passed after 0.010 seconds.
+􁁛  Test outOfRepoWrite_isIndependentHardDeny() passed after 0.010 seconds.
+􁁛  Test allowIsOneShotForTheSameRequestAndTheSameCommand() passed after 0.010 seconds.
+􁁛  Test finishedBindingDoesNotAuthorize() passed after 0.010 seconds.
+􁁛  Test forcePushMain_isDeniedRemoteSharedBranch() passed after 0.010 seconds.
+􁁛  Test pendingReason_isNeverHostAsk() passed after 0.010 seconds.
+􁁛  Test oldEmptyEffectPendingJSON_stillDecodes() passed after 0.010 seconds.
+􁁛  Test publicGETIsAllowedAndUnsafeTargetsAreDenied() passed after 0.010 seconds.
+􁁛  Test overlayAllow_cannotWeakenBuiltInHardZones() passed after 0.010 seconds.
+􁁛  Test pendingWithoutApprovalDoesNotExecute() passed after 0.010 seconds.
+􁁛  Test hardDeny_isNotLiftedByStubAllow() passed after 0.010 seconds.
+􁁛  Test reviewTypes_roundTripCodable() passed after 0.010 seconds.
+􁁛  Test redirectLocationDropsUserinfo() passed after 0.010 seconds.
+􁁛  Test inRepoWrite_stubDenyReview_staysAllowed() passed after 0.010 seconds.
+􁁛  Test chunkedBodyStopsAtTheCap() passed after 0.010 seconds.
+􁁛  Test payloadInits_areTestSeamsNotProductionMints() passed after 0.010 seconds.
+􁁛  Test wrongCapabilityDoesNotPropose() passed after 0.010 seconds.
+􁁛  Test cancellationStopsTheRead() passed after 0.010 seconds.
+􁁛  Test map_mandatoryHumanBoundDeny_staysPending() passed after 0.010 seconds.
+􁁛  Test uncovered_weakOrConflictingOrFailedReview_isPendingReviewAsk(stub:) with 3 test cases passed after 0.010 seconds.
+􁁛  Test oversizedDeclaredBodyIsNotRead() passed after 0.010 seconds.
+􁁛  Test successfulExchangeReturnsABoundedBodyAndSelectedHeaders() passed after 0.010 seconds.
+􁁛  Test deniedPendingAndMalformedHTTPDoNotAuthorize() passed after 0.010 seconds.
+􁁛  Test queryIsCanonicalAndSeparateFromTheAuditedPath() passed after 0.010 seconds.
+􁁛  Test addressClassesRejectLocalAndPrivateRanges() passed after 0.010 seconds.
+􁁛  Test ambiguousURLsAreMalformed(_:) with 13 test cases passed after 0.010 seconds.
+􁁛  Test hookBound_emptyEffectsPackDeny_staysDeny() passed after 0.009 seconds.
+􁁛  Test loopbackDestinationDoesNotWrite() passed after 0.010 seconds.
+􁁛  Test doorVerdict_builtinHardDenyNeverAsks() passed after 0.010 seconds.
+􁁛  Test mixedDNSAnswersAreForbiddenAndPublicAnswersPinIPv4() passed after 0.009 seconds.
+􁁛  Test resolve_denyAndCreateRuleStayDeny(_:_:) with 4 test cases passed after 0.009 seconds.
+􁁛  Test leftoverAskDecisionDecodesAsDenyNotAllow() passed after 0.009 seconds.
+􁁛  Test stalledReadTimesOut() passed after 0.010 seconds.
+􁁛  Test packDecisionIndeterminateIsDeny() passed after 0.009 seconds.
+􁁛  Test localSocketFixtureParsesOneResponse() passed after 0.010 seconds.
+􁁛  Test cookiesAreNotStoredForALaterRequest() passed after 0.009 seconds.
+􁁛  Test admittedPublicGETExecutesOnceAndRecordsEvidenceWithoutTheQuery() passed after 0.010 seconds.
+􁁛  Test digestMatchesTheEmptyAndABCVectors() passed after 0.009 seconds.
+􁁛  Test blockedNamesAreNotResolved() passed after 0.009 seconds.
+􁁛  Test doorVerdict_secretPathNeverAsks() passed after 0.009 seconds.
+􁁛  Test canonicalURLKeepsOneMeaning() passed after 0.009 seconds.
+􁁛  Test unlockablePackDenyFollowsPauseProfile(_:) with 9 test cases passed after 0.009 seconds.
+􁁛  Test doorVerdict_emptyMatchingViewNeverAsks() passed after 0.009 seconds.
+􁁛  Test profileTable_coversEveryHost(_:) with 9 test cases passed after 0.009 seconds.
+􁁛  Test resolve_allowOnceFollowsPauseProfile(_:) with 9 test cases passed after 0.009 seconds.
+􁁛  Test hookBound_remoteMutationOnPrivateBranch_requiresHuman() passed after 0.009 seconds.
+􁁛  Test packDecisionAllowIsAllow() passed after 0.009 seconds.
+􁁛  Test packProjected_packAllowWithoutBindStaysAllow() passed after 0.009 seconds.
+􁁛  Test requestBytesCarryNoCredentialsCookiesOrProxyHeaders() passed after 0.009 seconds.
+􁁛  Test hookBound_emptyEffectsPackAllow_isAllow() passed after 0.009 seconds.
+􁁛  Test unsupportedSchemesFailClosed(_:) with 8 test cases passed after 0.009 seconds.
+􁁛  Test packProjected_usesBoundReviewWhenPresent() passed after 0.009 seconds.
+􁁛  Test packProjected_packDenyWithoutBindStaysDeny() passed after 0.009 seconds.
+􁁛  Test doorVerdict_boundAllowOnPackDenyNeverAsks() passed after 0.009 seconds.
+􁁛  Test httpWireShapeRejectsShellFieldsAndExtraKeys() passed after 0.009 seconds.
+􁁛  Test hookBound_remoteMutationOnSharedContext_isHardDeny() passed after 0.009 seconds.
+􁁛  Test hookBound_hardPolicyCases_projectDirectly() passed after 0.009 seconds.
+􁁛  Test leftoverAskIsNeverAPermit() passed after 0.009 seconds.
+􁁛  Test doorVerdict_missingCwdNeverAsks() passed after 0.009 seconds.
+􁁛  Test resolve_nonHostNativeAllowOnceIsDenyOrTTY(_:) with 2 test cases passed after 0.009 seconds.
+􁁛  Test doorVerdict_unwrapLimitedPackDenyNeverAsks() passed after 0.009 seconds.
+􁁛  Test hookBound_workingTreeDiscard_isDenied() passed after 0.009 seconds.
+􁁛  Test mandatoryHumanFollowsPauseProfile(_:) with 9 test cases passed after 0.009 seconds.
+􁁛  Test packDecisionDenyStaysDeny() passed after 0.009 seconds.
+􁁛  Suite "Display" passed after 0.017 seconds.
+􁁛  Suite FakeEnglishCompilerTests passed after 0.017 seconds.
+􁁛  Suite "EvaluationResultBoundReview" passed after 0.017 seconds.
+􁁛  Suite SecretAllowPathSetTests passed after 0.017 seconds.
+􁁛  Suite "AgentApproval" passed after 0.017 seconds.
+􁁛  Suite "PolicyMatch" passed after 0.017 seconds.
+􁁛  Suite EvaluationOutcomeProjectionTests passed after 0.017 seconds.
+􁁛  Suite "IsolationPlan" passed after 0.017 seconds.
+􁁛  Suite "SemanticAnalysis wrappers" passed after 0.017 seconds.
+􁁛  Suite "EvaluationResultWireTests" passed after 0.017 seconds.
+􁁛  Suite "WorkspaceSession" passed after 0.017 seconds.
+􁁛  Suite "AgentRequest" passed after 0.017 seconds.
+􁁛  Suite PolicyDocumentTests passed after 0.017 seconds.
+􁁛  Suite "TypedRuleAskWins" passed after 0.017 seconds.
+􁁛  Suite "ActionPolicyEngineTypedRule" passed after 0.017 seconds.
+􁁛  Suite "ReviewSanitizer" passed after 0.017 seconds.
+􁁛  Suite "ShellAction" passed after 0.017 seconds.
+􁁛  Suite "PolicyPredicate" passed after 0.017 seconds.
+􁁛  Suite UnlockableDenyTests passed after 0.017 seconds.
+􁁛  Suite "ProposedAction.file" passed after 0.017 seconds.
+􁁛  Suite "TypedRuleExplain" passed after 0.017 seconds.
+􁁛  Suite "AgentNormalization" passed after 0.017 seconds.
+􁁛  Suite "EnglishRefuseTests" passed after 0.017 seconds.
+􁁛  Suite ProductVersionTests passed after 0.017 seconds.
+􁁛  Suite ExplainPipelineTests passed after 0.017 seconds.
+􁁛  Suite "TypedRule" passed after 0.017 seconds.
+􁁛  Suite "HookAuthorization" passed after 0.017 seconds.
+􁁛  Suite LinuxResidualCoverageTests passed after 0.017 seconds.
+􁁛  Suite "EvaluationResult.pendingAction" passed after 0.017 seconds.
+􁁛  Suite "EnglishCompilerTests" passed after 0.017 seconds.
+􁁛  Suite "ActionPolicyEngine" passed after 0.017 seconds.
+􁁛  Suite "AgentAuthorization" passed after 0.017 seconds.
+􁁛  Suite "GitAction" passed after 0.017 seconds.
+􁁛  Suite "ActionReviewer" passed after 0.017 seconds.
+􁁛  Suite "RuntimeAdmission" passed after 0.017 seconds.
+􁁛  Suite "FilesystemAction" passed after 0.017 seconds.
+􁁛  Suite "HTTP egress" passed after 0.017 seconds.
+􁁛  Suite "HostNativeAsk" passed after 0.017 seconds.
+􀢄  Test keepWaitingAllowsResolveAfterDeadline() recorded an issue at PendingApprovalLedgerTests.swift:362:9: Expectation failed: resolved.authorizes(Self.fingerprint, identity: Self.identity)
+􀄵  resolved.authorizes(Self.fingerprint, identity: Self.identity) → false
+􀄵    resolved → PendingApproval(id: RVDomain.ApprovalID(rawValue: "ask-1"), subject: nil, identity: RVDomain.ApprovalIdentity(session: RVDomain.SessionID(rawValue: "sess-1"), agent: RVDomain.HookHost.pi), action: RVDomain.ProposedAction.shell(RVDomain.ShellAction(fingerprint: RVDomain.ActionFingerprint(rawValue: "shell:git.force-push:origin:main"), effects: RVDomain.ActionEffects(kinds: [RVDomain.ActionEffectKind.remoteSharedBranchMutation]), resources: RVDomain.ActionResources(remoteName: Optional("origin"), branchName: Optional("main"), path: nil, filesystemScope: nil, resourceKind: nil), scope: RVDomain.ActionScope(workingDirectory: Optional(RVDomain.WorkingDirectory(rawValue: "/tmp/rv"))), supportingCommand: nil, analysis: nil)), reason: RVDomain.ApprovalReason.mandatoryHuman, continuation: RVDomain.ApprovalContinuation.hostNative, timeoutPolicy: RVDomain.ApprovalTimeoutPolicy.keepWaiting, createdAt: 2023-11-14 22:13:20 +0000, expiresAt: 2023-11-14 22:13:21 +0000, state: RVDomain.PendingApprovalState.resolved(RVDomain.ApprovalResolution(decision: RVDomain.ApprovalDecision.allowOnce, resolvedAt: 2023-11-14 22:13:22 +0000)))
+􀄵      id → ApprovalID(rawValue: "ask-1")
+􀄵        rawValue → "ask-1"
+􀄵      subject → nil
+􀄵      identity → ApprovalIdentity(session: RVDomain.SessionID(rawValue: "sess-1"), agent: RVDomain.HookHost.pi)
+􀄵        session → SessionID(rawValue: "sess-1")
+􀄵          rawValue → "sess-1"
+􀄵        agent → .pi
+􀄵      action → .shell(RVDomain.ShellAction(fingerprint: RVDomain.ActionFingerprint(rawValue: "shell:git.force-push:origin:main"), effects: RVDomain.ActionEffects(kinds: [RVDomain.ActionEffectKind.remoteSharedBranchMutation]), resources: RVDomain.ActionResources(remoteName: Optional("origin"), branchName: Optional("main"), path: nil, filesystemScope: nil, resourceKind: nil), scope: RVDomain.ActionScope(workingDirectory: Optional(RVDomain.WorkingDirectory(rawValue: "/tmp/rv"))), supportingCommand: nil, analysis: nil))
+􀄵        shell → ShellAction(fingerprint: RVDomain.ActionFingerprint(rawValue: "shell:git.force-push:origin:main"), effects: RVDomain.ActionEffects(kinds: [RVDomain.ActionEffectKind.remoteSharedBranchMutation]), resources: RVDomain.ActionResources(remoteName: Optional("origin"), branchName: Optional("main"), path: nil, filesystemScope: nil, resourceKind: nil), scope: RVDomain.ActionScope(workingDirectory: Optional(RVDomain.WorkingDirectory(rawValue: "/tmp/rv"))), supportingCommand: nil, analysis: nil)
+􀄵          fingerprint → ActionFingerprint(rawValue: "shell:git.force-push:origin:main")
+􀄵            rawValue → "shell:git.force-push:origin:main"
+􀄵          effects → ActionEffects(kinds: [RVDomain.ActionEffectKind.remoteSharedBranchMutation])
+􀄵            kinds → [RVDomain.ActionEffectKind.remoteSharedBranchMutation]
+􀄵          resources → ActionResources(remoteName: Optional("origin"), branchName: Optional("main"), path: nil, filesystemScope: nil, resourceKind: nil)
+􀄵            remoteName → "origin"
+􀄵              some → "origin"
+􀄵            branchName → "main"
+􀄵              some → "main"
+􀄵            path → nil
+􀄵            filesystemScope → nil
+􀄵            resourceKind → nil
+􀄵          scope → ActionScope(workingDirectory: Optional(RVDomain.WorkingDirectory(rawValue: "/tmp/rv")))
+􀄵            workingDirectory → WorkingDirectory(rawValue: "/tmp/rv")
+􀄵              some → WorkingDirectory(rawValue: "/tmp/rv")
+􀄵                rawValue → "/tmp/rv"
+􀄵          supportingCommand → nil
+􀄵          analysis → nil
+􀄵      reason → .mandatoryHuman
+􀄵      continuation → .hostNative
+􀄵      timeoutPolicy → .keepWaiting
+􀄵      createdAt → 2023-11-14 22:13:20 +0000
+􀄵        timeIntervalSinceReferenceDate → 721692800.0
+􀄵      expiresAt → 2023-11-14 22:13:21 +0000
+􀄵        timeIntervalSinceReferenceDate → 721692801.0
+􀄵      state → .resolved(RVDomain.ApprovalResolution(decision: RVDomain.ApprovalDecision.allowOnce, resolvedAt: 2023-11-14 22:13:22 +0000))
+􀄵        resolved → ApprovalResolution(decision: RVDomain.ApprovalDecision.allowOnce, resolvedAt: 2023-11-14 22:13:22 +0000)
+􀄵          decision → .allowOnce
+􀄵          resolvedAt → 2023-11-14 22:13:22 +0000
+􀄵            timeIntervalSinceReferenceDate → 721692802.0
+􀄵    Self.fingerprint → ActionFingerprint(rawValue: "shell:git.force-push:origin:main")
+􀄵      rawValue → "shell:git.force-push:origin:main"
+􀄵    Self.identity → ApprovalIdentity(session: RVDomain.SessionID(rawValue: "sess-1"), agent: RVDomain.HookHost.pi)
+􀄵      session → SessionID(rawValue: "sess-1")
+􀄵        rawValue → "sess-1"
+􀄵      agent → .pi
+􀢄  Test exactDeadlineIsStillAwaitingHuman() recorded an issue at PendingApprovalLedgerTests.swift:382:9: Expectation failed: resolved.authorizes(Self.fingerprint, identity: Self.identity)
+􀄵  resolved.authorizes(Self.fingerprint, identity: Self.identity) → false
+􀄵    resolved → PendingApproval(id: RVDomain.ApprovalID(rawValue: "ask-1"), subject: nil, identity: RVDomain.ApprovalIdentity(session: RVDomain.SessionID(rawValue: "sess-1"), agent: RVDomain.HookHost.pi), action: RVDomain.ProposedAction.shell(RVDomain.ShellAction(fingerprint: RVDomain.ActionFingerprint(rawValue: "shell:git.force-push:origin:main"), effects: RVDomain.ActionEffects(kinds: [RVDomain.ActionEffectKind.remoteSharedBranchMutation]), resources: RVDomain.ActionResources(remoteName: Optional("origin"), branchName: Optional("main"), path: nil, filesystemScope: nil, resourceKind: nil), scope: RVDomain.ActionScope(workingDirectory: Optional(RVDomain.WorkingDirectory(rawValue: "/tmp/rv"))), supportingCommand: nil, analysis: nil)), reason: RVDomain.ApprovalReason.mandatoryHuman, continuation: RVDomain.ApprovalContinuation.hostNative, timeoutPolicy: RVDomain.ApprovalTimeoutPolicy.autoDeny, createdAt: 2023-11-14 22:13:20 +0000, expiresAt: 2023-11-14 22:13:30 +0000, state: RVDomain.PendingApprovalState.resolved(RVDomain.ApprovalResolution(decision: RVDomain.ApprovalDecision.allowOnce, resolvedAt: 2023-11-14 22:13:30 +0000)))
+􀄵      id → ApprovalID(rawValue: "ask-1")
+􀄵        rawValue → "ask-1"
+􀄵      subject → nil
+􀄵      identity → ApprovalIdentity(session: RVDomain.SessionID(rawValue: "sess-1"), agent: RVDomain.HookHost.pi)
+􀄵        session → SessionID(rawValue: "sess-1")
+􀄵          rawValue → "sess-1"
+􀄵        agent → .pi
+􀄵      action → .shell(RVDomain.ShellAction(fingerprint: RVDomain.ActionFingerprint(rawValue: "shell:git.force-push:origin:main"), effects: RVDomain.ActionEffects(kinds: [RVDomain.ActionEffectKind.remoteSharedBranchMutation]), resources: RVDomain.ActionResources(remoteName: Optional("origin"), branchName: Optional("main"), path: nil, filesystemScope: nil, resourceKind: nil), scope: RVDomain.ActionScope(workingDirectory: Optional(RVDomain.WorkingDirectory(rawValue: "/tmp/rv"))), supportingCommand: nil, analysis: nil))
+􀄵        shell → ShellAction(fingerprint: RVDomain.ActionFingerprint(rawValue: "shell:git.force-push:origin:main"), effects: RVDomain.ActionEffects(kinds: [RVDomain.ActionEffectKind.remoteSharedBranchMutation]), resources: RVDomain.ActionResources(remoteName: Optional("origin"), branchName: Optional("main"), path: nil, filesystemScope: nil, resourceKind: nil), scope: RVDomain.ActionScope(workingDirectory: Optional(RVDomain.WorkingDirectory(rawValue: "/tmp/rv"))), supportingCommand: nil, analysis: nil)
+􀄵          fingerprint → ActionFingerprint(rawValue: "shell:git.force-push:origin:main")
+􀄵            rawValue → "shell:git.force-push:origin:main"
+􀄵          effects → ActionEffects(kinds: [RVDomain.ActionEffectKind.remoteSharedBranchMutation])
+􀄵            kinds → [RVDomain.ActionEffectKind.remoteSharedBranchMutation]
+􀄵          resources → ActionResources(remoteName: Optional("origin"), branchName: Optional("main"), path: nil, filesystemScope: nil, resourceKind: nil)
+􀄵            remoteName → "origin"
+􀄵              some → "origin"
+􀄵            branchName → "main"
+􀄵              some → "main"
+􀄵            path → nil
+􀄵            filesystemScope → nil
+􀄵            resourceKind → nil
+􀄵          scope → ActionScope(workingDirectory: Optional(RVDomain.WorkingDirectory(rawValue: "/tmp/rv")))
+􀄵            workingDirectory → WorkingDirectory(rawValue: "/tmp/rv")
+􀄵              some → WorkingDirectory(rawValue: "/tmp/rv")
+􀄵                rawValue → "/tmp/rv"
+􀄵          supportingCommand → nil
+􀄵          analysis → nil
+􀄵      reason → .mandatoryHuman
+􀄵      continuation → .hostNative
+􀄵      timeoutPolicy → .autoDeny
+􀄵      createdAt → 2023-11-14 22:13:20 +0000
+􀄵        timeIntervalSinceReferenceDate → 721692800.0
+􀄵      expiresAt → 2023-11-14 22:13:30 +0000
+􀄵        timeIntervalSinceReferenceDate → 721692810.0
+􀄵      state → .resolved(RVDomain.ApprovalResolution(decision: RVDomain.ApprovalDecision.allowOnce, resolvedAt: 2023-11-14 22:13:30 +0000))
+􀄵        resolved → ApprovalResolution(decision: RVDomain.ApprovalDecision.allowOnce, resolvedAt: 2023-11-14 22:13:30 +0000)
+􀄵          decision → .allowOnce
+􀄵          resolvedAt → 2023-11-14 22:13:30 +0000
+􀄵            timeIntervalSinceReferenceDate → 721692810.0
+􀄵    Self.fingerprint → ActionFingerprint(rawValue: "shell:git.force-push:origin:main")
+􀄵      rawValue → "shell:git.force-push:origin:main"
+􀄵    Self.identity → ApprovalIdentity(session: RVDomain.SessionID(rawValue: "sess-1"), agent: RVDomain.HookHost.pi)
+􀄵      session → SessionID(rawValue: "sess-1")
+􀄵        rawValue → "sess-1"
+􀄵      agent → .pi
+􀢄  Test resolvedWithoutParentConsumedAtStaysResolved() recorded an issue at PendingApprovalLedgerTests.swift:617:9: Expectation failed: decoded.authorizes(Self.fingerprint, identity: Self.identity)
+􀄵  decoded.authorizes(Self.fingerprint, identity: Self.identity) → false
+􀄵    decoded → PendingApproval(id: RVDomain.ApprovalID(rawValue: "ask-1"), subject: nil, identity: RVDomain.ApprovalIdentity(session: RVDomain.SessionID(rawValue: "sess-1"), agent: RVDomain.HookHost.pi), action: RVDomain.ProposedAction.shell(RVDomain.ShellAction(fingerprint: RVDomain.ActionFingerprint(rawValue: "shell:git.force-push:origin:main"), effects: RVDomain.ActionEffects(kinds: [RVDomain.ActionEffectKind.remoteSharedBranchMutation]), resources: RVDomain.ActionResources(remoteName: Optional("origin"), branchName: Optional("main"), path: nil, filesystemScope: nil, resourceKind: nil), scope: RVDomain.ActionScope(workingDirectory: Optional(RVDomain.WorkingDirectory(rawValue: "/tmp/rv"))), supportingCommand: nil, analysis: nil)), reason: RVDomain.ApprovalReason.mandatoryHuman, continuation: RVDomain.ApprovalContinuation.hostNative, timeoutPolicy: RVDomain.ApprovalTimeoutPolicy.autoDeny, createdAt: 2023-11-14 22:13:20 +0000, expiresAt: 2023-11-14 22:14:20 +0000, state: RVDomain.PendingApprovalState.resolved(RVDomain.ApprovalResolution(decision: RVDomain.ApprovalDecision.allowOnce, resolvedAt: 2023-11-14 22:13:20 +0000)))
+􀄵      id → ApprovalID(rawValue: "ask-1")
+􀄵        rawValue → "ask-1"
+􀄵      subject → nil
+􀄵      identity → ApprovalIdentity(session: RVDomain.SessionID(rawValue: "sess-1"), agent: RVDomain.HookHost.pi)
+􀄵        session → SessionID(rawValue: "sess-1")
+􀄵          rawValue → "sess-1"
+􀄵        agent → .pi
+􀄵      action → .shell(RVDomain.ShellAction(fingerprint: RVDomain.ActionFingerprint(rawValue: "shell:git.force-push:origin:main"), effects: RVDomain.ActionEffects(kinds: [RVDomain.ActionEffectKind.remoteSharedBranchMutation]), resources: RVDomain.ActionResources(remoteName: Optional("origin"), branchName: Optional("main"), path: nil, filesystemScope: nil, resourceKind: nil), scope: RVDomain.ActionScope(workingDirectory: Optional(RVDomain.WorkingDirectory(rawValue: "/tmp/rv"))), supportingCommand: nil, analysis: nil))
+􀄵        shell → ShellAction(fingerprint: RVDomain.ActionFingerprint(rawValue: "shell:git.force-push:origin:main"), effects: RVDomain.ActionEffects(kinds: [RVDomain.ActionEffectKind.remoteSharedBranchMutation]), resources: RVDomain.ActionResources(remoteName: Optional("origin"), branchName: Optional("main"), path: nil, filesystemScope: nil, resourceKind: nil), scope: RVDomain.ActionScope(workingDirectory: Optional(RVDomain.WorkingDirectory(rawValue: "/tmp/rv"))), supportingCommand: nil, analysis: nil)
+􀄵          fingerprint → ActionFingerprint(rawValue: "shell:git.force-push:origin:main")
+􀄵            rawValue → "shell:git.force-push:origin:main"
+􀄵          effects → ActionEffects(kinds: [RVDomain.ActionEffectKind.remoteSharedBranchMutation])
+􀄵            kinds → [RVDomain.ActionEffectKind.remoteSharedBranchMutation]
+􀄵          resources → ActionResources(remoteName: Optional("origin"), branchName: Optional("main"), path: nil, filesystemScope: nil, resourceKind: nil)
+􀄵            remoteName → "origin"
+􀄵              some → "origin"
+􀄵            branchName → "main"
+􀄵              some → "main"
+􀄵            path → nil
+􀄵            filesystemScope → nil
+􀄵            resourceKind → nil
+􀄵          scope → ActionScope(workingDirectory: Optional(RVDomain.WorkingDirectory(rawValue: "/tmp/rv")))
+􀄵            workingDirectory → WorkingDirectory(rawValue: "/tmp/rv")
+􀄵              some → WorkingDirectory(rawValue: "/tmp/rv")
+􀄵                rawValue → "/tmp/rv"
+􀄵          supportingCommand → nil
+􀄵          analysis → nil
+􀄵      reason → .mandatoryHuman
+􀄵      continuation → .hostNative
+􀄵      timeoutPolicy → .autoDeny
+􀄵      createdAt → 2023-11-14 22:13:20 +0000
+􀄵        timeIntervalSinceReferenceDate → 721692800.0
+􀄵      expiresAt → 2023-11-14 22:14:20 +0000
+􀄵        timeIntervalSinceReferenceDate → 721692860.0
+􀄵      state → .resolved(RVDomain.ApprovalResolution(decision: RVDomain.ApprovalDecision.allowOnce, resolvedAt: 2023-11-14 22:13:20 +0000))
+􀄵        resolved → ApprovalResolution(decision: RVDomain.ApprovalDecision.allowOnce, resolvedAt: 2023-11-14 22:13:20 +0000)
+􀄵          decision → .allowOnce
+􀄵          resolvedAt → 2023-11-14 22:13:20 +0000
+􀄵            timeIntervalSinceReferenceDate → 721692800.0
+􀄵    Self.fingerprint → ActionFingerprint(rawValue: "shell:git.force-push:origin:main")
+􀄵      rawValue → "shell:git.force-push:origin:main"
+􀄵    Self.identity → ApprovalIdentity(session: RVDomain.SessionID(rawValue: "sess-1"), agent: RVDomain.HookHost.pi)
+􀄵      session → SessionID(rawValue: "sess-1")
+􀄵        rawValue → "sess-1"
+􀄵      agent → .pi
+􀢄  Test exactDeadlineIsStillAwaitingHuman() failed after 0.019 seconds with 1 issue.
+􀢄  Test keepWaitingAllowsResolveAfterDeadline() failed after 0.019 seconds with 1 issue.
+􀢄  Test resolvedWithoutParentConsumedAtStaysResolved() failed after 0.019 seconds with 1 issue.
+􀢄  Suite "PendingApproval ledger" failed after 0.024 seconds with 8 issues.
+􀢄  Test run with 475 tests in 39 suites failed after 0.025 seconds with 8 issues.
+Note: Some test targets reported failures:
+  - RVDomainTests (Swift Testing)

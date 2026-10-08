@@ -8,8 +8,8 @@ import RVDomain
 /// one descriptor would need a closure per host plus single-consumer knobs
 /// for Pi's cross-line session state and Grok's layout-derived cwd, which is
 /// the report's documented fallback (keep per-host adapters, share the
-/// JSONL/timestamp/cwd cores). Untyped JSON survives only inside this engine
-/// and the per-host matchers it calls.
+/// JSONL/timestamp/cwd cores). JSON arrives typed as `JSONValue`; no `Any`
+/// casts remain in this engine or the per-host matchers it calls.
 /// Correlated per-host knobs for extractFailClosed. One const per
 /// adapter; Codex keys must never mix with the Cursor matcher or epoch flag.
 struct ScanJSONLProfile: Sendable {
@@ -17,7 +17,7 @@ struct ScanJSONLProfile: Sendable {
     let recurseSessionKeys: [String]
     let timestampKeys: [String]
     let allowEpochTimestamp: Bool
-    let commands: @Sendable ([String: Any]) -> [String]
+    let commands: @Sendable (JSONValue) -> [String]
 
     // Explicit init: a let with a default is excluded from the memberwise
     // initializer, so the default for recurseSessionKeys lives here.
@@ -26,7 +26,7 @@ struct ScanJSONLProfile: Sendable {
         recurseSessionKeys: [String] = [],
         timestampKeys: [String],
         allowEpochTimestamp: Bool,
-        commands: @escaping @Sendable ([String: Any]) -> [String]
+        commands: @escaping @Sendable (JSONValue) -> [String]
     ) {
         self.sessionKeys = sessionKeys
         self.recurseSessionKeys = recurseSessionKeys
@@ -67,15 +67,15 @@ enum ScanJSONLEngine {
 
     /// Parse one line as a JSON object. Malformed lines and JSON scalars
     /// yield nil and contribute zero events.
-    static func parseObject(_ line: Data) -> [String: Any]? {
+    static func parseObject(_ line: Data) -> JSONValue? {
         JSONParse.object(line)
     }
 
     /// First valid session id for `keys` in order. Missing keys and
     /// invalid (empty) values are skipped.
-    static func sessionID(keys: [String], in object: [String: Any]) -> SessionID? {
+    static func sessionID(keys: [String], in value: JSONValue) -> SessionID? {
         for key in keys {
-            if let value = object[key] as? String, let id = SessionID(validating: value) {
+            if let raw = value[key]?.string, let id = SessionID(validating: raw) {
                 return id
             }
         }
@@ -84,12 +84,12 @@ enum ScanJSONLEngine {
 
     /// Session lookup that also descends into `recurse` sub-objects
     /// (Codex `payload` chains).
-    static func sessionIDDeep(keys: [String], recurse: [String], in object: [String: Any]) -> SessionID? {
-        if let id = sessionID(keys: keys, in: object) {
+    static func sessionIDDeep(keys: [String], recurse: [String], in value: JSONValue) -> SessionID? {
+        if let id = sessionID(keys: keys, in: value) {
             return id
         }
         for key in recurse {
-            if let nested = object[key] as? [String: Any],
+            if let nested = value[key], nested.asObject != nil,
                let id = sessionIDDeep(keys: keys, recurse: recurse, in: nested)
             {
                 return id

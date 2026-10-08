@@ -64,104 +64,110 @@ struct AllowOnceStoreTests {
         #expect(disk.contains("code_hash"))
         #expect(disk.contains("short_code") == false)
         _ = try await store.redeem(code: code.rawValue, tty: tty, now: now)
-        let first = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/a"), now: now)
-        let second = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/a"), now: now)
-        guard case .consumed = first else {
-            Issue.record("first consume should succeed")
-            return
-        }
-        #expect(second == .alreadyConsumed)
+        // The file redeem flips projection only; spend lives in memory.
+        #expect((await store.list(now: now)).contains { $0.kind == .granted })
+        let grants = EphemeralAllowOnceTable()
+        #expect(
+            await grants.plant(
+                matchingView: "git reset --hard", cwd: wd("/tmp/a"), codeHash: "store-redeem",
+                now: now
+            ) == .planted
+        )
+        #expect(await grants.consume(matchingView: "git reset --hard", cwd: wd("/tmp/a"), now: now))
+        #expect(
+            await grants.consume(matchingView: "git reset --hard", cwd: wd("/tmp/a"), now: now)
+                == false
+        )
         await #expect(throws: AllowOnceError.alreadySpent) {
             try await store.redeem(code: code.rawValue, tty: tty, now: now)
         }
     }
 
-    @Test func fileStoreConsumesOnce() async throws {
+    @Test func validatePending_showsLiveRowOnly() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
-        let first = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
-        let second = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
-        guard case .consumed = first else {
-            Issue.record("first consume should succeed")
-            return
-        }
-        #expect(second == .alreadyConsumed)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let code: AllowOnceUnlockCode = try await store.mint(
+            matchingView: "git reset --hard",
+            cwd: wd("/tmp/a"),
+            ruleID: nil,
+            tty: tty,
+            now: now
+        )
+        let peeked = await store.validatePending(code: code.rawValue, now: now)
+        let checked = try #require(peeked)
+        #expect(checked.row.kind == .pending)
+        #expect(checked.row.commandRedacted == "git …")
+        #expect(checked.row.cwd == wd("/tmp/a"))
+        #expect(checked.fingerprint.isEmpty == false)
+        #expect(await store.validatePending(code: "ffffff", now: now) == nil)
+        #expect(await store.validatePending(code: "not hex!", now: now) == nil)
+        _ = try await store.redeem(code: code.rawValue, tty: tty, now: now)
+        #expect(await store.validatePending(code: code.rawValue, now: now) == nil)
     }
 
-    @Test func concurrentConsumeAcrossStoresWinsOnce() async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-allow-once-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let writer = AllowOnceStore(baseDirectory: root)
+    @Test func memoryGrantConsumesOnce() async throws {
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        try await writer.insertGranted(matchingView: "git stash clear", cwd: wd("/tmp/ws"), now: now)
-        let a = AllowOnceStore(baseDirectory: root)
-        let b = AllowOnceStore(baseDirectory: root)
-        async let first = a.consume(matchingView: "git stash clear", cwd: wd("/tmp/ws"), now: now)
-        async let second = b.consume(matchingView: "git stash clear", cwd: wd("/tmp/ws"), now: now)
+        #expect(
+            await grants.plant(
+                matchingView: "git reset --hard", cwd: wd("/tmp/ws"), codeHash: "store-once",
+                now: now
+            ) == .planted
+        )
+        #expect(
+            await grants.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now),
+            "first consume should succeed"
+        )
+        #expect(
+            await grants.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+                == false
+        )
+    }
+
+    @Test func concurrentConsumeAcrossTasksWinsOnce() async throws {
+        // Step 8B.1: cross-process file CAS is gone by design (only the
+        // daemon's table spends). The race property is actor serialization.
+        let grants = EphemeralAllowOnceTable()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        #expect(
+            await grants.plant(
+                matchingView: "git stash clear", cwd: wd("/tmp/ws"), codeHash: "store-race",
+                now: now
+            ) == .planted
+        )
+        async let first = grants.consume(matchingView: "git stash clear", cwd: wd("/tmp/ws"), now: now)
+        async let second = grants.consume(matchingView: "git stash clear", cwd: wd("/tmp/ws"), now: now)
         let results = await [first, second]
-        let consumed = results.filter {
-            if case .consumed = $0 { return true }
-            return false
-        }
-        #expect(consumed.count == 1)
-        #expect(results.contains(.alreadyConsumed))
-        #expect(results.allSatisfy { status in
-            switch status {
-            case .consumed, .alreadyConsumed:
-                return true
-            case .notFound, .expired, .unavailable:
-                return false
-            }
-        })
-    }
-
-    /// Two processes, one grant. `rv test` peeks; `rv hook` prefers XPC and will not
-    /// spend an isolated-HOME grant while rvd is up. No consume CLI (T8: no new module).
-    /// Children re-exec this test host and call `AllowOnceStore.consume` on the same dir.
-    @Test func concurrentConsumeAcrossProcessesWinsOnce() async throws {
-        if try await AllowOnceConsumeProbe.runIfRequested() {
-            exit(0)
-        }
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-allow-once-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let writer = AllowOnceStore(baseDirectory: root)
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        try await writer.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
-        let runner = try #require(testHostExecutableURL())
-        let processA = try startConsumeProbe(executable: runner, directory: root, outputName: "a.status")
-        let processB = try startConsumeProbe(executable: runner, directory: root, outputName: "b.status")
-        processA.waitUntilExit()
-        processB.waitUntilExit()
-        let statusA = try readProbeStatus(directory: root, outputName: "a.status", process: processA)
-        let statusB = try readProbeStatus(directory: root, outputName: "b.status", process: processB)
-        let lines = [statusA, statusB]
-        #expect(lines.filter { $0 == "consumed" }.count == 1)
-        #expect(lines.filter { $0 == "alreadyConsumed" }.count == 1)
-        #expect(lines.allSatisfy { $0 == "consumed" || $0 == "alreadyConsumed" })
+        #expect(results.filter { $0 }.count == 1)
+        #expect(results.contains(false))
     }
 
     @Test func wrongCwdDoesNotConsume() async throws {
-        let store = try isolatedStore()
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
-        let miss = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/other"), now: now)
-        #expect(miss == .notFound)
-        let hit = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
-        guard case .consumed = hit else {
-            Issue.record("matching cwd should consume")
-            return
-        }
-    }
-
-    @Test func missingFileIsNotFoundNotUnavailable() async throws {
-        let store = try isolatedStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         #expect(
-            await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
-                == .notFound
+            await grants.plant(
+                matchingView: "git reset --hard", cwd: wd("/tmp/ws"), codeHash: "store-cwd",
+                now: now
+            ) == .planted
+        )
+        #expect(
+            await grants.consume(matchingView: "git reset --hard", cwd: wd("/tmp/other"), now: now)
+                == false
+        )
+        #expect(
+            await grants.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now),
+            "matching cwd should consume"
+        )
+    }
+
+    @Test func emptyTableConsumeIsFalse() async throws {
+        let grants = EphemeralAllowOnceTable()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        #expect(
+            await grants.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+                == false
         )
     }
 
@@ -205,50 +211,110 @@ struct AllowOnceStoreTests {
         }
     }
 
-    @Test func lockFailureIsUnavailable() async throws {
+    @Test func lockFailureKeepsProjectionSilentAndSpendsNothing() async throws {
+        // Step 8B.1: projection writes are best-effort. A sabotaged lock
+        // swallows the projection and creates no authority anywhere.
         let store = try isolatedStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
         try sabotageLock(in: store.baseDirectory)
+        await store.project(
+            lifecycle: .granted,
+            matchingView: "git reset --hard",
+            cwd: wd("/tmp/ws"),
+            codeHash: "sabotaged",
+            now: now
+        )
+        #expect((await store.list(now: now)).isEmpty)
         #expect(
-            await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
-                == .unavailable
+            await grants.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+                == false
         )
     }
 
-    @Test func expiredGrantIsExpired() async throws {
+    @Test func projectSkipsWriteWhileLockHeld() async throws {
+        // M-35: the daemon projection write is non-blocking best-effort.
+        // A held lock skips the row instead of stalling the ceremony.
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        try await store.insertGranted(
+        try FileManager.default.createDirectory(
+            at: store.baseDirectory,
+            withIntermediateDirectories: true
+        )
+        let lockURL = RVPolicyPaths.allowOnceLockFile(inConfigDir: store.baseDirectory)
+        let fd = lockURL.path.withCString { open($0, O_RDWR | O_CREAT, 0o600) }
+        #expect(fd >= 0)
+        defer { close(fd) }
+        #expect(flock(fd, LOCK_EX | LOCK_NB) == 0)
+        defer { _ = flock(fd, LOCK_UN) }
+        await store.project(
+            lifecycle: .granted,
             matchingView: "git reset --hard",
             cwd: wd("/tmp/ws"),
-            now: now,
-            ttl: 1
+            codeHash: "held-lock",
+            now: now
+        )
+        #expect((await store.list(now: now)).isEmpty)
+    }
+
+    @Test func expiredMemoryGrantDoesNotConsume() async throws {
+        let grants = EphemeralAllowOnceTable()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        #expect(
+            await grants.plant(
+                matchingView: "git reset --hard",
+                cwd: wd("/tmp/ws"),
+                codeHash: "store-expired",
+                now: now,
+                ttl: 1
+            ) == .planted
         )
         let later = now.addingTimeInterval(2)
         #expect(
-            await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: later) == .expired
+            await grants.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: later)
+                == false
         )
     }
 
     @Test func corruptJSONLLineSkipped() async throws {
         let store = try isolatedStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
         try FileManager.default.createDirectory(at: store.baseDirectory, withIntermediateDirectories: true)
         let junk = "{not-json}\n"
         try junk.write(to: jsonl(store), atomically: true, encoding: .utf8)
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
-        let hit = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
-        guard case .consumed = hit else {
-            Issue.record("valid grant after corrupt line must consume")
-            return
-        }
+        let code = try await store.mint(
+            matchingView: "git reset --hard",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            tty: tty,
+            now: now
+        )
+        _ = try await store.redeem(code: code.rawValue, tty: tty, now: now)
+        #expect(
+            await grants.plant(
+                matchingView: "git reset --hard", cwd: wd("/tmp/ws"), codeHash: "store-junk",
+                now: now
+            ) == .planted
+        )
+        #expect(
+            await grants.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now),
+            "valid ceremony after corrupt line must still spend"
+        )
     }
 
     @Test func storeFilesAreOwnerOnly() async throws {
         let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        _ = try await store.mint(
+            matchingView: "git reset --hard",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            tty: tty,
+            now: now
+        )
         let lock = RVPolicyPaths.allowOnceLockFile(inConfigDir: store.baseDirectory)
         #expect(try posixMode(store.baseDirectory) == 0o700)
         #expect(try posixMode(jsonl(store)) == 0o600)
@@ -300,26 +366,28 @@ struct AllowOnceStoreTests {
         #expect(store.baseDirectory.path.contains("rv-allow-once-nohome") == false)
     }
 
-    @Test func plantAndConsumeSpendsThisTurnAndListsConsumed() async throws {
+    @Test func memoryConsumeLeavesFileProjectionUntouched() async throws {
+        // Step 8B.1: spend touches no file. No consumed rows are ever
+        // written; the projection file need not even exist.
         let store = try isolatedStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let first = await store.plantAndConsume(
-            matchingView: "git reset --hard",
-            cwd: wd("/tmp/ws"),
-            now: now
+        #expect(
+            await grants.plant(
+                matchingView: "git reset --hard", cwd: wd("/tmp/ws"), codeHash: "store-untouched",
+                now: now
+            ) == .planted
         )
-        guard case .consumed = first else {
-            Issue.record("plantAndConsume should spend this turn")
-            return
-        }
-        let second = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
-        #expect(second == .alreadyConsumed)
-        let rows = await store.list(now: now)
-        #expect(rows.contains { $0.kind == .consumed })
-        let disk = try String(contentsOf: jsonl(store), encoding: .utf8)
-        #expect(disk.contains("\"kind\":\"consumed\""))
-        #expect(disk.contains("consumed_at"))
-        #expect(disk.contains("git reset --hard") == false)
+        #expect(
+            await grants.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now),
+            "planted grant should consume"
+        )
+        #expect(
+            await grants.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+                == false
+        )
+        #expect((await store.list(now: now)).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: jsonl(store).path) == false)
     }
 
     @Test func mintFromDeny_nonTTYStillWritesPending() async throws {
@@ -365,6 +433,42 @@ struct AllowOnceStoreTests {
         #expect((await store.list(now: now)).count == 1)
         let disk = try String(contentsOf: jsonl(store), encoding: .utf8)
         #expect(disk.contains(first.rawValue) == false)
+    }
+
+    @Test func mintFromDeny_sameViewDifferentPayloadMintsDistinctCodes() async throws {
+        // M1: the first writer's payload must not win a shared row.
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = try #require(
+            await store.mintFromDeny(
+                matchingView: "git reset --hard",
+                cwd: wd("/tmp/ws"),
+                ruleID: nil,
+                now: now,
+                maskedSegments: ["aaa"]
+            )?.code
+        )
+        let second = try #require(
+            await store.mintFromDeny(
+                matchingView: "git reset --hard",
+                cwd: wd("/tmp/ws"),
+                ruleID: nil,
+                now: now,
+                maskedSegments: ["bbb"]
+            )?.code
+        )
+        #expect(first != second)
+        #expect((await store.list(now: now)).count == 2)
+        // An identical retry still reuses its own row's code.
+        let retry = await store.mintFromDeny(
+            matchingView: "git reset --hard",
+            cwd: wd("/tmp/ws"),
+            ruleID: nil,
+            now: now,
+            maskedSegments: ["aaa"]
+        )
+        #expect(retry == .code(first))
+        #expect((await store.list(now: now)).count == 2)
     }
 
     @Test func mintFromDeny_sameCommandNewStoreDoesNotMintAnotherPending() async throws {
@@ -465,136 +569,118 @@ struct AllowOnceStoreTests {
         }
         #expect((await store.list(now: now)).contains { $0.kind == .pending })
         _ = try await store.redeem(code: minted.rawValue, tty: tty, now: now)
-        let first = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
-        let second = await store.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
-        guard case .consumed = first else {
-            Issue.record("first consume should succeed after TTY redeem")
-            return
-        }
-        #expect(second == .alreadyConsumed)
+        let grants = EphemeralAllowOnceTable()
+        #expect(
+            await grants.plant(
+                matchingView: "git reset --hard", cwd: wd("/tmp/ws"), codeHash: "store-deny",
+                now: now
+            ) == .planted
+        )
+        #expect(
+            await grants.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now),
+            "first consume should succeed after TTY redeem"
+        )
+        #expect(
+            await grants.consume(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+                == false
+        )
     }
-}
 
-private enum AllowOnceConsumeProbe {
-    static let storeDirEnv = "RV_ALLOW_ONCE_CONSUME_PROBE"
-    static let outputEnv = "RV_ALLOW_ONCE_CONSUME_OUT"
-
-    static func runIfRequested() async throws -> Bool {
-        let env = ProcessInfo.processInfo.environment
-        guard let storeDir = env[storeDirEnv], storeDir.isEmpty == false,
-              let outputName = env[outputEnv], outputName.isEmpty == false
-        else {
-            return false
-        }
-        let root = URL(fileURLWithPath: storeDir, isDirectory: true)
+    @Test func liveCodeCachePrunedOnRedeem() async throws {
+        let store = try isolatedStore()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let store = AllowOnceStore(baseDirectory: root)
-        let status = await store.consume(
-            matchingView: "git reset --hard",
-            cwd: wd("/tmp/ws"),
-            now: now
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        let first: AllowOnceUnlockCode = try await store.mint(
+            matchingView: "cmd-one", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: now
         )
-        let line: String
-        switch status {
-        case .consumed:
-            line = "consumed"
-        case .alreadyConsumed:
-            line = "alreadyConsumed"
-        case .notFound:
-            line = "notFound"
-        case .expired:
-            line = "expired"
-        case .unavailable:
-            line = "unavailable"
-        }
-        try line.write(
-            to: root.appendingPathComponent(outputName),
-            atomically: true,
-            encoding: .utf8
+        let second: AllowOnceUnlockCode = try await store.mint(
+            matchingView: "cmd-two", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: now
         )
-        return true
+        #expect(await store.liveUnlockCodeCountForTesting() == 2)
+        _ = try await store.redeem(code: first.rawValue, tty: tty, now: now)
+        #expect(await store.liveUnlockCodeCountForTesting() == 1)
+        _ = try await store.redeem(code: second.rawValue, tty: tty, now: now)
+        #expect(await store.liveUnlockCodeCountForTesting() == 0)
     }
-}
 
-private func testHostExecutableURL() -> URL? {
-    let argv0 = URL(fileURLWithPath: CommandLine.arguments[0])
-    if FileManager.default.isExecutableFile(atPath: argv0.path) {
-        return argv0
-    }
-    if let url = Bundle.main.executableURL,
-       FileManager.default.isExecutableFile(atPath: url.path)
-    {
-        return url
-    }
-    return nil
-}
-
-private func consumeProbeChildArguments() -> [String] {
-    let original = Array(CommandLine.arguments.dropFirst())
-    let usesSwiftTestingCLI = original.contains { arg in
-        arg == "--filter"
-            || arg.hasPrefix("--filter=")
-            || arg == "--testing-library"
-            || arg.hasPrefix("--testing-library=")
-    }
-    guard usesSwiftTestingCLI else {
-        return original
-    }
-    var args: [String] = []
-    var index = original.startIndex
-    while index < original.endIndex {
-        let arg = original[index]
-        if arg == "--filter" || arg == "--skip" {
-            index = original.index(after: index)
-            if index < original.endIndex {
-                index = original.index(after: index)
-            }
-            continue
-        }
-        if arg.hasPrefix("--filter=") || arg.hasPrefix("--skip=") {
-            index = original.index(after: index)
-            continue
-        }
-        args.append(arg)
-        index = original.index(after: index)
-    }
-    args.append(contentsOf: ["--filter", "concurrentConsumeAcrossProcessesWinsOnce"])
-    return args
-}
-
-private func startConsumeProbe(
-    executable: URL,
-    directory: URL,
-    outputName: String
-) throws -> Process {
-    let errURL = directory.appendingPathComponent("\(outputName).err")
-    FileManager.default.createFile(atPath: errURL.path, contents: Data())
-    let process = Process()
-    process.executableURL = executable
-    process.arguments = consumeProbeChildArguments()
-    var environment = ProcessInfo.processInfo.environment
-    environment[AllowOnceConsumeProbe.storeDirEnv] = directory.path
-    environment[AllowOnceConsumeProbe.outputEnv] = outputName
-    process.environment = environment
-    process.standardInput = FileHandle.nullDevice
-    process.standardOutput = FileHandle.nullDevice
-    process.standardError = try FileHandle(forWritingTo: errURL)
-    try process.run()
-    return process
-}
-
-private func readProbeStatus(directory: URL, outputName: String, process: Process) throws -> String {
-    let url = directory.appendingPathComponent(outputName)
-    if FileManager.default.fileExists(atPath: url.path) == false {
-        let errURL = directory.appendingPathComponent("\(outputName).err")
-        let err = (try? String(contentsOf: errURL, encoding: .utf8)) ?? ""
-        Issue.record(
-            "consume probe \(outputName) missing after exit \(process.terminationStatus). stderr: \(err)"
+    @Test func liveCodeCachePrunedOnExpiry() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        _ = try await store.mint(
+            matchingView: "cmd-stale", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: now, ttl: 60
         )
+        #expect(await store.liveUnlockCodeCountForTesting() == 1)
+        let late = now.addingTimeInterval(61)
+        _ = try await store.mint(
+            matchingView: "cmd-fresh", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: late
+        )
+        #expect(await store.liveUnlockCodeCountForTesting() == 1)
+        #expect((await store.list(now: late)).map(\.commandRedacted) == ["cmd-fresh"])
     }
-    try #require(FileManager.default.fileExists(atPath: url.path))
-    return try String(contentsOf: url, encoding: .utf8)
-        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    @Test func storedRowsNeverExceedCap() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        try seedRows(store: store, count: AllowOnceStore.maxStoredRows + 50, now: now)
+        _ = try await store.mint(
+            matchingView: "cmd-newest", cwd: wd("/tmp/a"), ruleID: nil, tty: tty, now: now
+        )
+        let rows = await store.list(now: now)
+        #expect(rows.count == AllowOnceStore.maxStoredRows)
+        #expect(rows.contains { $0.commandRedacted == "cmd-newest" })
+    }
+
+    @Test func laPromptBudgetAllowsThenThrottles() async throws {
+        // M5: at most maxLAPromptsPerWindow prompts per sliding window.
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        for _ in 0..<AllowOnceStore.maxLAPromptsPerWindow {
+            #expect(await store.reserveLAPrompt(now: now))
+        }
+        #expect(await store.reserveLAPrompt(now: now) == false)
+        // The window slides: past-window stamps stop counting.
+        let later = now.addingTimeInterval(AllowOnceStore.laPromptWindow + 1)
+        #expect(await store.reserveLAPrompt(now: later))
+    }
+
+    @Test func laPromptBudgetSelfHealsCorruptFile() async throws {
+        let store = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let url = RVPolicyPaths.laPromptBudgetFile(inConfigDir: store.baseDirectory)
+        try Data("not-json".utf8).write(to: url)
+        #expect(await store.reserveLAPrompt(now: now))
+        #expect(await store.reserveLAPrompt(now: now))
+    }
+
+    @Test func attestedEpochTracksDaemonRestarts() async throws {
+        // m2: first sighting records silently; a changed epoch reports.
+        let store = try isolatedStore()
+        #expect(await store.noteAttestedEpoch("epoch-a") == false)
+        #expect(await store.noteAttestedEpoch("epoch-a") == false)
+        #expect(await store.noteAttestedEpoch("epoch-b") == true)
+        #expect(await store.noteAttestedEpoch("epoch-b") == false)
+    }
+
+    @Test func attestedEpochSelfHealsCorruptFile() async throws {
+        let store = try isolatedStore()
+        let url = RVPolicyPaths.attestedEpochFile(inConfigDir: store.baseDirectory)
+        try Data("not-json".utf8).write(to: url)
+        #expect(await store.noteAttestedEpoch("epoch-a") == false)
+        #expect(await store.noteAttestedEpoch("epoch-b") == true)
+    }
+
+    @Test func laPromptBudgetIsPerDirectory() async throws {
+        let first = try isolatedStore()
+        let second = try isolatedStore()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        for _ in 0..<AllowOnceStore.maxLAPromptsPerWindow {
+            #expect(await first.reserveLAPrompt(now: now))
+        }
+        #expect(await first.reserveLAPrompt(now: now) == false)
+        #expect(await second.reserveLAPrompt(now: now))
+    }
 }
 
 private func isolatedStore() throws -> AllowOnceStore {
@@ -606,6 +692,31 @@ private func isolatedStore() throws -> AllowOnceStore {
 
 private func jsonl(_ store: AllowOnceStore) -> URL {
     RVPolicyPaths.allowOnceFile(inConfigDir: store.baseDirectory)
+}
+
+private func seedRows(store: AllowOnceStore, count: Int, now: Date) throws {
+    let records = (0..<count).map { index in
+        AllowOnceRecord(
+            schemaVersion: 1,
+            lifecycle: .pending,
+            codeHash: "seed-hash-\(index)",
+            commandFingerprint: "seed-fp-\(index)",
+            commandRedacted: "seed-\(index)",
+            cwd: wd("/tmp/a"),
+            ruleID: nil,
+            createdAt: now.addingTimeInterval(-Double(count - index)),
+            expiresAt: now.addingTimeInterval(3600)
+        )
+    }
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    encoder.outputFormatting = [.sortedKeys]
+    let lines = try records.map { record -> String in
+        let data = try encoder.encode(record)
+        return try #require(String(data: data, encoding: .utf8))
+    }
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: jsonl(store), atomically: true, encoding: .utf8)
 }
 
 private func sabotageLock(in directory: URL) throws {

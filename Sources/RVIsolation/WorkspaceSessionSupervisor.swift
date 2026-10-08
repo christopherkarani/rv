@@ -4,6 +4,7 @@ import Synchronization
 #endif
 import Foundation
 import RVDomain
+import RVPolicy
 
 /// Why a workspace operation stopped.
 ///
@@ -28,6 +29,18 @@ enum WorkspaceSessionError: Error, Sendable, Equatable {
     case recoveryInProgress(UUID)
     /// The previous workspace cannot be reclaimed automatically.
     case unresolvedWorkspace(WorkspaceRecoveryBlock)
+    /// Identity-launch preparation refused the proposal. No process was
+    /// spawned and nothing was stored.
+    case preparationFailed(PreparedLaunchError)
+    /// No usable prepared launch for the presented reference: absent,
+    /// expired, bound to another workspace, or the workspace is no longer
+    /// active. Deliberately undifferentiated: callers must re-prepare, and
+    /// no expiry oracle is exposed. No process was spawned.
+    case unknownPreparedLaunch
+    /// A concurrent redemption attempt already holds this prepared
+    /// operation's single acceptance; the recorded outcome (once finished)
+    /// belongs to that attempt. No second dispatch occurred.
+    case redemptionAlreadyAccepted
 }
 
 enum WorkspaceSessionFailure {
@@ -38,6 +51,12 @@ enum WorkspaceSessionFailure {
         case .childTeardownFailed:
             .lifetimeBoundaryFailed
         case .notAcceptingRuntime, .alreadyClosed, .unknownRuntime, .runtimeLimit:
+            .workspaceInodeBoundaryFailed
+        case .preparationFailed, .unknownPreparedLaunch, .redemptionAlreadyAccepted:
+            // Preparation/dispatch never flow through the executor outcome
+            // mapping; a refused proposal, stale prepared reference, or
+            // duplicate redemption is a request-lifecycle failure, like an
+            // unknown runtime.
             .workspaceInodeBoundaryFailed
         case .ownedByLiveProcess:
             .workspaceUnresolved("liveOwner")
@@ -76,9 +95,9 @@ struct WorkspaceControlFile: Equatable, Sendable {
 /// Only the workspace host process opens a supervisor. Interactive commands
 /// in other processes attach through `WorkspaceClient`; they cannot name
 /// this type.
-// @unchecked: `boundary` (WorkspaceInodeBoundary) is a non-Sendable holder.
-// All supervisor-owned mutable state is in `Mutex<State>`.
-final class WorkspaceSessionSupervisor: @unchecked Sendable {
+// All supervisor-owned mutable state is in `Mutex<State>`; the inode
+// boundary serializes its own fds and flags behind `BoundaryMutable`.
+final class WorkspaceSessionSupervisor: Sendable {
     #if os(macOS)
     private struct State: Sendable {
         var lifecycle: WorkspaceLifecycle
@@ -107,6 +126,11 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
     /// Live Agent Instances this workspace host owns. Launches without an
     /// Agent Definition mint no instance and keep the legacy behavior.
     let agentInstances: AgentInstanceRegistry
+    /// Ephemeral prepared identity launches. In-memory only; every entry
+    /// is dropped when close is accepted. Preparation and closure nest
+    /// store access inside the lifecycle lock (ordering: lifecycle, then
+    /// store) so the two can neither deadlock nor resurrect entries.
+    private let preparedLaunches = PreparedLaunchStore()
     private let state: Mutex<State>
     private let egressProxy: EgressProxy?
     private let egressPort: Int?
@@ -134,10 +158,15 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         // port nil and contained spawns omit proxy variables (fail closed:
         // without a proxy the cage has no route out at all).
         let proxy = EgressProxy()
-        if let port = proxy.start() {
+        switch proxy.start() {
+        case .success(let port):
             self.egressProxy = proxy
             self.egressPort = port
-        } else {
+        case .failure(let error):
+            // Fail closed (no proxy, no route out), but say so: without
+            // this line a bind failure is indistinguishable from any
+            // other "contained agent has no network" cause.
+            complain("rv: egress proxy unavailable: \(error)")
             self.egressProxy = nil
             self.egressPort = nil
         }
@@ -396,13 +425,661 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
     var volumeDevice: UInt64 { boundary.volumeDeviceIdentifier }
     var publishCount: Int { state.withLock { $0.publishCount } }
 
+    /// Identity-aware production entry point. Prepares the trusted
+    /// selection into an immutable launch, then dispatches it. Product
+    /// callers stay denied at the authorization layer; the future
+    /// redemption flow will call prepare and dispatch separately across
+    /// the authorization boundary.
+    func launchAgent(
+        selection: ResolvedAgentLaunch, arguments: [String], io: IsolatedIO,
+        admission: RuntimeAdmissionConfiguration,
+        sessionStore: RuntimeSessionStore, runningLimit: Int? = nil,
+        host: WorkspaceHostID, generation: WorkspaceHostGeneration,
+        requestID: UUID? = nil
+    ) -> Result<RunningRuntime, WorkspaceSessionError> {
+        switch prepareIdentityLaunch(
+            selection: selection, arguments: arguments, io: io,
+            host: host, generation: generation, requestID: requestID
+        ) {
+        case .failure(let error):
+            return .failure(.preparationFailed(error))
+        case .success(let prepared):
+            return dispatchPreparedLaunch(
+                prepared, sessionStore: sessionStore,
+                admission: admission, runningLimit: runningLimit
+            )
+        }
+    }
+
+    /// Freezes one identity-launch proposal into an immutable prepared
+    /// operation without executing anything.
+    ///
+    /// Preparation resolves the effective working directory, compiles the
+    /// containment profile, builds the resource manifest, resolves
+    /// productive-workspace facts, freezes the effective non-secret
+    /// environment, and builds the PR1 `WorkspaceLaunchIntent` from those
+    /// trusted resolved inputs. It never spawns a process (no workload and
+    /// no `git`: commit-identity seeding is disabled on this path), mints
+    /// no `AgentInstance`, issues no `RuntimeCapability`, opens no
+    /// admission authority, creates no PTY child, releases no credentials,
+    /// and mutates no policy. Observable host effects are confined to
+    /// filesystem reads plus idempotent RV-managed directory creation.
+    ///
+    /// Validation order is fixed: selection consistency, credential gate,
+    /// profile correspondence, command, custom executable measurement,
+    /// IO mapping, cwd resolution, volume anchor, intent construction,
+    /// containment preparation, environment freeze, anchored cwd identity
+    /// capture (same resolution), then lifecycle check with atomic store
+    /// insert.
+    func prepareIdentityLaunch(
+        selection: ResolvedAgentLaunch,
+        arguments: [String],
+        io: IsolatedIO,
+        host: WorkspaceHostID,
+        generation: WorkspaceHostGeneration,
+        requestID: UUID? = nil,
+        hostEnvironment: [String: String]? = nil,
+        now: Date = Date(),
+        timeToLive: TimeInterval = PreparedLaunchLimits.timeToLiveSeconds
+    ) -> Result<PreparedWorkspaceLaunch, PreparedLaunchError> {
+        let kind: PreparedSelectionKind
+        switch verifyPreparedSelection(selection) {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let verified):
+            kind = verified
+        }
+        guard isCredentialFreeSelection(selection) else {
+            return .failure(.credentialStagingNotSupported)
+        }
+        let effectiveProfile: RuntimeResourceProfile?
+        switch committedEffectiveProfile(kind: kind, selection: selection) {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let profile):
+            effectiveProfile = profile
+        }
+        guard let command = IsolatedCommand(executable: selection.executable, arguments: arguments) else {
+            return .failure(.invalidCommand)
+        }
+        // M4: measure the custom executable now. The intent below records
+        // the expected digest; the spawn commit re-measures adjacent to
+        // posix_spawn, so a swap between prepare and spawn still refuses.
+        if case .custom(let digest) = kind {
+            guard verifyExecutableContentDigest(
+                path: selection.executable,
+                expectedSHA256: digest,
+                expectedByteCount: measureExecutableSize(atPath: selection.executable)
+            ) else {
+                return .failure(.executableDigestMismatch)
+            }
+        }
+        guard let intentIO = preparedLaunchIO(from: io) else {
+            return .failure(.unsupportedIO)
+        }
+        let policyWorkspace = snapshot.policyWorkspace
+        let resolved: String
+        switch existingResolvedWorkspacePath(policyWorkspace) {
+        case .failure(let error):
+            return .failure(.preparationFailed(error))
+        case .success(let path):
+            resolved = path
+        }
+        // A closed workspace reports inactive, not a boundary failure:
+        // close detaches the mounted volume, so the anchor below would
+        // fail against the restored original. Precedence only — the
+        // insert-time check below remains the atomic one.
+        let preActive = state.withLock({
+            $0.lifecycle.acceptsRuntime && $0.closeAccepted == false
+        })
+        guard preActive else {
+            return .failure(.workspaceNotActive)
+        }
+        // Anchor before the slow containment work: the resolved workspace
+        // must be the boundary volume, not a directory swapped in before
+        // preparation. A swap planted here would otherwise be stamped as
+        // truth below and pass every later self-consistency check.
+        guard cwdAnchoredToVolume(resolved) else {
+            return .failure(.preparationFailed(.workspaceInodeBoundaryFailed))
+        }
+        let intentResult: Result<WorkspaceLaunchIntent, WorkspaceLaunchIntentError>
+        switch kind {
+        case .named(let definition):
+            intentResult = WorkspaceLaunchIntent.makeNamed(
+                definition: definition,
+                revision: selection.resolved.revision,
+                resolvedExecutable: selection.executable,
+                workspaceSessionID: id,
+                workingDirectory: resolved,
+                arguments: arguments,
+                io: intentIO
+            )
+        case .custom(let digest):
+            intentResult = WorkspaceLaunchIntent.makeCustom(
+                executable: selection.executable,
+                expectedContentDigestSHA256: digest,
+                workspaceSessionID: id,
+                workingDirectory: resolved,
+                arguments: arguments,
+                io: intentIO
+            )
+        }
+        let intent: WorkspaceLaunchIntent
+        switch intentResult {
+        case .failure(let error):
+            return .failure(.invalidIntent(error))
+        case .success(let built):
+            intent = built
+        }
+        let plan = compileContainedPlan(workspace: policyWorkspace)
+        let compiled: IsolatedLaunchRequest
+        switch prepareSeatbelt(
+            plan.isolationPlan(), command,
+            resourceProfile: effectiveProfile,
+            legacyAgentIntegration: false,
+            gitIdentity: { _ in (nil, nil) }
+        ) {
+        case .failure(let error):
+            return .failure(.preparationFailed(error))
+        case .success(let request):
+            compiled = request.withIO(io)
+        }
+        guard compiled.containedWorkspacePath == resolved else {
+            return .failure(.preparationFailed(.workspacePathUnresolvable))
+        }
+        guard let productive = compiled.productive else {
+            return .failure(.preparationFailed(.containedGuaranteesUnsupported))
+        }
+        let frozenHost = hostEnvironment ?? ProcessInfo.processInfo.environment
+        let entries = containedRuntimeEnvironment(
+            workspace: resolved,
+            io: io,
+            agentBin: nil,
+            resources: compiled.resources,
+            egressProxyPort: egressPort,
+            hostEnvironment: frozenHost,
+            keychain: [],
+            productive: productive
+        )
+        let environment = WorkspaceLaunchEnvironmentSnapshot(entries: entries)
+        guard environment.totalBytes <= PreparedLaunchLimits.maxFrozenEnvironmentBytes else {
+            return .failure(.environmentTooLarge)
+        }
+        guard let cwdIdentity = captureCwdIdentity(policyWorkspace: policyWorkspace),
+            // The stamp must describe the same resolution this preparation
+            // validated and built upon: a swap during the slow containment
+            // work above that changed canonical resolution fails here
+            // rather than leaving intent and stamp divergent.
+            cwdIdentity.resolvedPath == resolved,
+            // Re-anchor after the slow work: still the boundary volume.
+            cwdIdentity.device == boundary.volumeDeviceIdentifier
+        else {
+            return .failure(.preparationFailed(.workspaceInodeBoundaryFailed))
+        }
+        let prepared = PreparedWorkspaceLaunch(
+            binding: PreparedLaunchBinding(
+                workspace: id, host: host, generation: generation,
+                preparedLaunchID: PreparedLaunchID()
+            ),
+            requestID: requestID,
+            intent: intent,
+            intentDigest: intent.canonicalDigest,
+            preparedAt: now,
+            expiresAt: now.addingTimeInterval(timeToLive),
+            selection: selection,
+            command: command,
+            resolvedWorkspacePath: resolved,
+            cwdIdentity: cwdIdentity,
+            io: io,
+            environment: environment,
+            productive: productive,
+            launchRequest: compiled,
+            egressProxyPort: egressPort,
+            hook: selection.resolved.definition.hookHost,
+            stagingAgent: DefinitionStagingTag(selection.resolved.definition)
+        )
+        enum InsertOutcome { case inserted, inactive, full }
+        let outcome = state.withLock { state -> InsertOutcome in
+            guard state.lifecycle.acceptsRuntime, state.closeAccepted == false else {
+                return .inactive
+            }
+            return preparedLaunches.insert(prepared, now: now) ? .inserted : .full
+        }
+        switch outcome {
+        case .inserted:
+            return .success(prepared)
+        case .inactive:
+            return .failure(.workspaceNotActive)
+        case .full:
+            return .failure(.storeFull)
+        }
+    }
+
+    /// Dispatches a retained prepared launch: the only consumer of
+    /// `PreparedWorkspaceLaunch` execution state.
+    ///
+    /// Consumes retained state exclusively: the compiled request, command,
+    /// resolved path, IO, frozen environment, productive facts, and manifest
+    /// all come from `prepared`. Nothing is re-resolved: no definition
+    /// lookup, no link lookup, no profile selection, no cwd choice, no argv
+    /// parsing, no environment resolution. Only runtime instance data is
+    /// generated here (session, capability, instance, process group,
+    /// admission descriptors), which cannot substitute launch semantics.
+    /// (The egress port is a supervisor-lifetime immutable `let`, so the
+    /// spawn body's live read provably equals the retained copy; the copy
+    /// exists for audit completeness and future redemption checks.)
+    ///
+    /// Internal and unreachable from any product request: identity
+    /// operations stay denied at the authorization layer, so only tests
+    /// and the direct `launchAgent` path exercise this. Authorized
+    /// production dispatch goes through `redeemPreparedLaunch` (permit
+    /// acceptance); this entry never dispatches from a bare
+    /// `PreparedLaunchID` and consumes the prepared entry once an
+    /// establishment is attempted, so sequential re-dispatch fails and no
+    /// dangling redeemable entry survives a direct launch.
+    ///
+    /// Freshness is checked here and re-checked at spawn commit inside the
+    /// spawn critical section, so an invalidation or expiry landing
+    /// between the two still fails the launch.
+    func dispatchPreparedLaunch(
+        _ prepared: PreparedWorkspaceLaunch,
+        sessionStore: RuntimeSessionStore,
+        admission: RuntimeAdmissionConfiguration,
+        runningLimit: Int? = nil,
+        spawnFault: RuntimeSpawnFault? = nil,
+        now: Date = Date()
+    ) -> Result<RunningRuntime, WorkspaceSessionError> {
+        let fresh = state.withLock { state in
+            state.lifecycle.acceptsRuntime && state.closeAccepted == false
+                && prepared.binding.workspace == id
+                && preparedLaunches.isUsable(prepared.binding.preparedLaunchID, now: now)
+        }
+        guard fresh else {
+            return .failure(.unknownPreparedLaunch)
+        }
+        // Retained state must still be credential-free and must correspond
+        // to the bound intent: re-derive the digest from retained parts and
+        // require equality. Any drift fails closed.
+        guard isCredentialFreeSelection(prepared.selection),
+            retainedIntentMatches(prepared)
+        else {
+            return .failure(.unknownPreparedLaunch)
+        }
+        var request = prepared.launchRequest
+        if let spawnFault {
+            request = request.withSpawnFault(spawnFault)
+        }
+        let outcome = establishRuntime(
+            request: request,
+            expectedWorkspacePath: prepared.resolvedWorkspacePath,
+            preparedEnvironment: prepared.environment.entries,
+            host: prepared.hook,
+            stagingAgent: prepared.stagingAgent,
+            sessionStore: sessionStore,
+            admission: admission,
+            runningLimit: runningLimit,
+            // Defense in depth: the credential-free gates above forbid
+            // keychain entries, and this reader stages nothing even if a
+            // gate ever regresses.
+            keychainReader: .denied,
+            agentDefinition: prepared.selection.resolved.definition,
+            preparedID: prepared.binding.preparedLaunchID,
+            executableVerification: Self.executableVerification(for: prepared),
+            now: now
+        )
+        preparedLaunches.remove(prepared.binding.preparedLaunchID)
+        return outcome
+    }
+
+    /// Redeems one authenticated commit: the only path from a prepared
+    /// operation to an authorized dispatch.
+    ///
+    /// Ordering (each phase documented with its failure direction):
+    ///
+    /// 1. Replay check. A recorded outcome for this authorization ends the
+    ///    attempt with history: a lost reply or duplicate delivery never
+    ///    dispatches again.
+    /// 2. In-flight check. An accepted-but-unrecorded operation reports
+    ///    `.redemptionAlreadyAccepted`: the concurrent holder owns the
+    ///    single dispatch.
+    /// 3. Atomic accept. Under the lifecycle lock: workspace active,
+    ///    capacity available, then the store moves prepared→accepted at
+    ///    most once, verifying expiry, live cwd identity, and every
+    ///    binding. Refusal spends nothing and records nothing. Success is
+    ///    the linearization point: from here the authorization is spent —
+    ///    never back to prepared, never a second acceptance, even if the
+    ///    spawn below fails.
+    /// 4. Retained-state re-verification (credential-free, intent
+    ///    correspondence, assurance). Pure functions of the immutable
+    ///    retained state; failure is recorded, never dispatched.
+    /// 5. Dispatch of the retained state (compiled request, command,
+    ///    resolved path, IO, frozen environment, productive facts,
+    ///    manifest). Nothing is re-resolved. The spawn critical section
+    ///    re-checks acceptance, lifecycle, capacity, and live cwd identity
+    ///    adjacent to `posix_spawn`, so a close or cwd swap that wins the
+    ///    race fails the launch instead.
+    /// 6. The terminal outcome is recorded for replay-safe replies.
+    ///
+    /// Close interleaving is always safe: close-before-accept refuses (no
+    /// launch); accept-before-close fails at spawn commit (no launch, the
+    /// authorization stays spent); spawn-commit-before-close launches once
+    /// under normal lifecycle semantics (close then reaps it).
+    func redeemPreparedLaunch(
+        commit: HostRedemptionCommit,
+        sessionStore: RuntimeSessionStore,
+        admission: RuntimeAdmissionConfiguration,
+        runningLimit: Int? = nil,
+        spawnFault: RuntimeSpawnFault? = nil,
+        now: Date = Date(),
+        // Test seam: runs after the entry checks pass, before the
+        // atomic accept. Lets tests force accept-race interleaves.
+        preAcceptHook: (@Sendable () -> Void)? = nil
+    ) -> HostRedemptionResult {
+        if let recorded = preparedLaunches.recordedResult(
+            authorization: commit.authorizationID
+        ) {
+            switch recorded {
+            case .launched(let runtime, let instance):
+                return .launched(runtime: runtime, instance: instance)
+            case .failed:
+                return .failed(accepted: true, error: .apply(.lifetimeBoundaryFailed))
+            }
+        }
+        if preparedLaunches.isAccepted(commit.preparedID) {
+            return .failed(accepted: true, error: .redemptionAlreadyAccepted)
+        }
+        guard commit.workspace == id else {
+            return .failed(accepted: false, error: .unknownPreparedLaunch)
+        }
+        let policyWorkspace = snapshot.policyWorkspace
+        guard let liveCwd = captureCwdIdentity(policyWorkspace: policyWorkspace) else {
+            return .failed(accepted: false, error: .unknownPreparedLaunch)
+        }
+        preAcceptHook?()
+        enum AcceptOutcome {
+            case refused
+            case accepted(PreparedWorkspaceLaunch)
+        }
+        let outcome = state.withLock { state -> AcceptOutcome in
+            guard state.lifecycle.acceptsRuntime, state.closeAccepted == false else {
+                return .refused
+            }
+            if let runningLimit {
+                let running = state.children.values.filter { $0.watchFinished == false }.count
+                if running >= runningLimit {
+                    return .refused
+                }
+            }
+            guard let accepted = preparedLaunches.accept(
+                commit.preparedID, now: now, liveCwd: liveCwd,
+                verifying: { Self.commitMatches($0, commit: commit) }
+            ) else {
+                return .refused
+            }
+            return .accepted(accepted)
+        }
+        guard case .accepted(let prepared) = outcome else {
+            // A concurrent winner accepted between this attempt's checks
+            // and its accept. The winner records its outcome (clearing
+            // the marker atomically), so the ledger wins over the marker:
+            // a recorded outcome for this authorization is the
+            // authoritative reply, an in-flight marker reports the
+            // concurrent acceptance, and unknown here means nobody
+            // accepted.
+            if let recorded = preparedLaunches.recordedResult(
+                authorization: commit.authorizationID
+            ) {
+                switch recorded {
+                case .launched(let runtime, let instance):
+                    return .launched(runtime: runtime, instance: instance)
+                case .failed:
+                    return .failed(accepted: true, error: .apply(.lifetimeBoundaryFailed))
+                }
+            }
+            if preparedLaunches.isAccepted(commit.preparedID) {
+                return .failed(accepted: true, error: .redemptionAlreadyAccepted)
+            }
+            return .failed(accepted: false, error: .unknownPreparedLaunch)
+        }
+        // The accepted transition committed. From here every path records
+        // an outcome; nothing returns to prepared.
+        guard isCredentialFreeSelection(prepared.selection),
+            retainedIntentMatches(prepared),
+            Self.redemptionAssuranceSatisfied(
+                required: prepared.selection.resolved.definition.requiredAssurance)
+        else {
+            preparedLaunches.recordResult(
+                authorization: commit.authorizationID,
+                preparedID: prepared.binding.preparedLaunchID,
+                result: .failed)
+            return .failed(accepted: true, error: .apply(.lifetimeBoundaryFailed))
+        }
+        var request = prepared.launchRequest
+        if let spawnFault {
+            request = request.withSpawnFault(spawnFault)
+        }
+        let dispatched = establishRuntime(
+            request: request,
+            expectedWorkspacePath: prepared.resolvedWorkspacePath,
+            preparedEnvironment: prepared.environment.entries,
+            host: prepared.hook,
+            stagingAgent: prepared.stagingAgent,
+            sessionStore: sessionStore,
+            admission: admission,
+            runningLimit: runningLimit,
+            // Defense in depth: the credential-free gates forbid keychain
+            // entries, and this reader stages nothing even if a gate ever
+            // regresses.
+            keychainReader: .denied,
+            agentDefinition: prepared.selection.resolved.definition,
+            acceptedID: prepared.binding.preparedLaunchID,
+            cwdVerification: CwdCommitVerification(
+                policyWorkspacePath: policyWorkspace.rawValue,
+                expected: prepared.cwdIdentity),
+            executableVerification: Self.executableVerification(for: prepared),
+            now: now
+        )
+        switch dispatched {
+        case .failure(let error):
+            preparedLaunches.recordResult(
+                authorization: commit.authorizationID,
+                preparedID: prepared.binding.preparedLaunchID,
+                result: .failed)
+            return .failed(accepted: true, error: error)
+        case .success(let running):
+            guard let instance = agentInstances.instance(forRuntime: running.id) else {
+                preparedLaunches.recordResult(
+                    authorization: commit.authorizationID,
+                    preparedID: prepared.binding.preparedLaunchID,
+                    result: .failed)
+                return .failed(accepted: true, error: .apply(.lifetimeBoundaryFailed))
+            }
+            preparedLaunches.recordResult(
+                authorization: commit.authorizationID,
+                preparedID: prepared.binding.preparedLaunchID,
+                result: .launched(runtime: running.id, instance: instance.id))
+            return .launched(runtime: running.id, instance: instance.id)
+        }
+    }
+
+    /// Exact commit↔prepared correspondence. No shortcuts: full binding
+    /// quadruple, intent digest, kind, and (for named launches) definition
+    /// id plus revision. Same definition id, same executable, or same
+    /// workspace alone never suffices.
+    static func commitMatches(
+        _ prepared: PreparedWorkspaceLaunch,
+        commit: HostRedemptionCommit
+    ) -> Bool {
+        guard prepared.binding.workspace == commit.workspace,
+            prepared.binding.host == commit.host,
+            prepared.binding.generation == commit.generation,
+            prepared.binding.preparedLaunchID == commit.preparedID,
+            prepared.intentDigest == commit.intentDigest,
+            Self.redemptionKind(of: prepared.intent) == commit.kind
+        else {
+            return false
+        }
+        switch commit.kind {
+        case .launchCustom:
+            return commit.definitionID == nil && commit.definitionRevision == nil
+        case .launchAgent:
+            guard let definitionID = commit.definitionID,
+                let revision = commit.definitionRevision
+            else {
+                return false
+            }
+            return prepared.selection.resolved.definition.id == definitionID
+                && prepared.selection.resolved.revision == revision
+        }
+    }
+
+    static func redemptionKind(of intent: WorkspaceLaunchIntent) -> HostRedemptionKind {
+        switch intent.target {
+        case .named: .launchAgent
+        case .custom: .launchCustom
+        }
+    }
+
+    /// True when the live resolved workspace path is still the boundary
+    /// volume (same device as the held volume descriptor). Anchors
+    /// preparation against pre-prepare swaps; redemption needs only
+    /// stamp equality because the retained stamp was anchored here.
+    func cwdAnchoredToVolume(_ resolved: String) -> Bool {
+        guard let identity = workspacePathIdentity(resolved),
+            identity.isDirectory
+        else {
+            return false
+        }
+        return identity.device == boundary.volumeDeviceIdentifier
+    }
+
+    /// Explicit assurance gate: redemption establishes exactly
+    /// `.launchObserved` (RV spawned and observed the launch; content and
+    /// signing unverified). Every level at or below it passes; any future
+    /// stronger requirement fails closed. Exhaustive over
+    /// `ExecutableAssurance`: adding a level forces an explicit decision
+    /// here at compile time. Human authorization never upgrades assurance.
+    static func redemptionAssuranceSatisfied(required: ExecutableAssurance) -> Bool {
+        switch required {
+        case .unattested: true
+        case .launchObserved: true
+        }
+    }
+
+    /// Safe description of one prepared launch, or nil when absent or
+    /// expired. Point-in-time and non-authoritative; never returns
+    /// retained execution state.
+    func describePreparedLaunch(_ id: PreparedLaunchID, now: Date = Date()) -> PreparedLaunchDescription? {
+        preparedLaunches.description(for: id, now: now)
+    }
+
+    /// Explicitly invalidates one prepared launch. Idempotent. Takes the
+    /// lifecycle lock (ordering: lifecycle, then store) so removal is
+    /// mutually exclusive with the spawn-commit check: an invalidation
+    /// racing dispatch either lands before the commit check (dispatch
+    /// fails) or after the spawn commits (too late, correctly).
+    func invalidatePreparedLaunch(_ id: PreparedLaunchID) {
+        state.withLock { _ in
+            preparedLaunches.remove(id)
+        }
+    }
+
+    /// Derives spawn-commit executable verification from the retained
+    /// prepared record. Custom selections re-measure the exact retained
+    /// executable path against the authorized digest; named selections
+    /// carry no pinned digest (weak-only) and verify nothing. A selection
+    /// that no longer verifies yields a verification that can never
+    /// match, failing closed at spawn commit. The dispatch-captured size
+    /// bounds the commit hash; dispatch runs outside the state lock, so
+    /// the stat here never stalls other operations.
+    static func executableVerification(
+        for prepared: PreparedWorkspaceLaunch
+    ) -> ExecutableCommitVerification? {
+        guard case .success(let kind) = verifyPreparedSelection(prepared.selection) else {
+            return ExecutableCommitVerification(
+                executablePath: prepared.command.executable,
+                expectedSHA256: "unverifiable-selection",
+                expectedByteCount: nil
+            )
+        }
+        guard case .custom(let digest) = kind else { return nil }
+        return ExecutableCommitVerification(
+            executablePath: prepared.command.executable,
+            expectedSHA256: digest,
+            expectedByteCount: measureExecutableSize(atPath: prepared.command.executable)
+        )
+    }
+
+    /// Re-derives the intent from retained parts and requires the identical
+    /// digest, proving the retained selection, profile, cwd, argv, and IO
+    /// correspond to the bound intent instead of having drifted after
+    /// preparation.
+    private func retainedIntentMatches(_ prepared: PreparedWorkspaceLaunch) -> Bool {
+        guard prepared.command.executable == prepared.selection.executable,
+            prepared.launchRequest.command == prepared.command,
+            prepared.launchRequest.containedWorkspacePath == prepared.resolvedWorkspacePath,
+            prepared.io == prepared.launchRequest.io,
+            case .success(let kind) = verifyPreparedSelection(prepared.selection),
+            case .success(let effectiveProfile) = committedEffectiveProfile(
+                kind: kind, selection: prepared.selection
+            ),
+            prepared.launchRequest.resources?.profile == effectiveProfile,
+            let intentIO = preparedLaunchIO(from: prepared.io)
+        else {
+            return false
+        }
+        let rebuilt: Result<WorkspaceLaunchIntent, WorkspaceLaunchIntentError>
+        switch kind {
+        case .named(let definition):
+            rebuilt = WorkspaceLaunchIntent.makeNamed(
+                definition: definition,
+                revision: prepared.selection.resolved.revision,
+                resolvedExecutable: prepared.command.executable,
+                workspaceSessionID: prepared.binding.workspace,
+                workingDirectory: prepared.resolvedWorkspacePath,
+                arguments: prepared.command.arguments,
+                io: intentIO
+            )
+        case .custom(let digest):
+            rebuilt = WorkspaceLaunchIntent.makeCustom(
+                executable: prepared.command.executable,
+                expectedContentDigestSHA256: digest,
+                workspaceSessionID: prepared.binding.workspace,
+                workingDirectory: prepared.resolvedWorkspacePath,
+                arguments: prepared.command.arguments,
+                io: intentIO
+            )
+        }
+        guard case .success(let intent) = rebuilt else {
+            return false
+        }
+        return intent.canonicalDigest == prepared.intentDigest
+    }
+
+    /// Legacy launches do not mint an AgentInstance, regardless of integration name.
+    ///
+    /// Step 8 (F2): this entry takes no staging tag, so wire-selected
+    /// credential staging is unrepresentable here. Filtered credentials
+    /// never stage on this path; only unfiltered operator-policy entries
+    /// apply. Definition-derived selection exists only on the identity path.
+    func launchLegacy(
+        host: HookHost?, command: IsolatedCommand,
+        plan: ContainedPlan, io: IsolatedIO, resourceProfile: RuntimeResourceProfile? = nil,
+        admission: RuntimeAdmissionConfiguration, sessionStore: RuntimeSessionStore,
+        runningLimit: Int? = nil
+    ) -> Result<RunningRuntime, WorkspaceSessionError> {
+        launch(host: host, stagingAgent: nil, command: command, plan: plan,
+               io: io, resourceProfile: resourceProfile, admission: admission,
+               sessionStore: sessionStore, runningLimit: runningLimit, agentDefinition: nil)
+    }
+
     /// Start one contained runtime inside this workspace.
     ///
     /// Returns after the Seatbelt handshake. The process keeps running.
     /// A second call does not create another volume.
     func launch(
         host: HookHost?,
-        stagingAgent: String? = nil,
+        stagingAgent: DefinitionStagingTag? = nil,
         command: IsolatedCommand,
         plan: ContainedPlan,
         io: IsolatedIO = .discard,
@@ -427,7 +1104,7 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
 
     func launch(
         host: HookHost?,
-        stagingAgent: String? = nil,
+        stagingAgent: DefinitionStagingTag? = nil,
         command: IsolatedCommand,
         plan: ContainedPlan,
         io: IsolatedIO,
@@ -440,7 +1117,10 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         agentDefinition: AgentDefinition? = nil
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
         let request: IsolatedLaunchRequest
-        switch prepareSeatbelt(plan.isolationPlan(), command, resourceProfile: resourceProfile) {
+        switch prepareSeatbelt(
+            plan.isolationPlan(), command, resourceProfile: resourceProfile,
+            legacyAgentIntegration: agentDefinition == nil
+        ) {
         case .failure(let error):
             return .failure(.apply(error))
         case .success(let prepared):
@@ -450,7 +1130,48 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
                 request = prepared.withIO(io)
             }
         }
-        guard request.containedWorkspacePath == protected.rawValue else {
+        return establishRuntime(
+            request: request,
+            expectedWorkspacePath: protected.rawValue,
+            preparedEnvironment: nil,
+            host: host,
+            stagingAgent: stagingAgent,
+            sessionStore: sessionStore,
+            admission: admission,
+            runningLimit: runningLimit,
+            keychainReader: keychainReader,
+            agentDefinition: agentDefinition
+        )
+    }
+
+    /// Establishes one runtime from a fully resolved request. Shared by the
+    /// legacy direct-launch path (which resolves its request inline above),
+    /// prepared dispatch (which consumes retained state), and redemption
+    /// dispatch (which consumes accepted state). The workspace check pins
+    /// the request to the expected resolved path; a retained environment
+    /// bypasses spawn-time resolution entirely, while nil preserves legacy
+    /// live resolution. A prepared ID re-validates store usability at spawn
+    /// commit (nil skips the check for legacy); an accepted ID plus cwd
+    /// verification re-validates the redemption acceptance and live cwd
+    /// identity at spawn commit instead.
+    private func establishRuntime(
+        request: IsolatedLaunchRequest,
+        expectedWorkspacePath: String,
+        preparedEnvironment: [String]?,
+        host: HookHost?,
+        stagingAgent: DefinitionStagingTag?,
+        sessionStore: RuntimeSessionStore,
+        admission: RuntimeAdmissionConfiguration,
+        runningLimit: Int?,
+        keychainReader: KeychainReader,
+        agentDefinition: AgentDefinition?,
+        preparedID: PreparedLaunchID? = nil,
+        acceptedID: PreparedLaunchID? = nil,
+        cwdVerification: CwdCommitVerification? = nil,
+        executableVerification: ExecutableCommitVerification? = nil,
+        now: Date = Date()
+    ) -> Result<RunningRuntime, WorkspaceSessionError> {
+        guard request.containedWorkspacePath == expectedWorkspacePath else {
             return .failure(.apply(.workspacePathUnresolvable))
         }
         let spawned: Result<WorkspaceChild, WorkspaceSessionError> = spawn(
@@ -462,7 +1183,13 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
             register: true,
             runningLimit: runningLimit,
             keychainReader: keychainReader,
-            agentDefinition: agentDefinition
+            agentDefinition: agentDefinition,
+            preparedEnvironment: preparedEnvironment,
+            preparedID: preparedID,
+            acceptedID: acceptedID,
+            cwdVerification: cwdVerification,
+            executableVerification: executableVerification,
+            now: now
         )
         switch spawned {
         case .failure(let error):
@@ -471,6 +1198,8 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
             let session = child.live.session
             child.start {
                 self.noteRuntimeEnded(session)
+            } deathObserved: {
+                self.noteDeathObserved(session)
             } settled: {
                 self.pruneFinishedRuntimes(limit: WorkspaceControlLimits.maxRuntimes)
             }
@@ -574,28 +1303,36 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         return descriptors.compactMap(controlFile(of:))
     }
 
-    func submit(
+    /// Routes one frame to a runtime's session legacy door. Frame
+    /// routing only; sensitive mediation needs the identity door.
+    func submitLegacy(
         _ frame: RuntimeActionFrame,
         to runtime: RuntimeSessionID
     ) -> RuntimeAdmissionDecision? {
         let child = state.withLock { $0.children[runtime] }
         guard let child else { return nil }
         if child.watchFinished {
-            return child.live.admission.submit(.success(frame))
+            return child.live.admission.submitLegacy(.success(frame))
         }
-        return child.live.submit(frame)
+        return child.live.submitLegacy(frame)
     }
 
     private func spawn(
         _ request: IsolatedLaunchRequest,
         host: HookHost?,
-        stagingAgent: String? = nil,
+        stagingAgent: DefinitionStagingTag? = nil,
         sessionStore: RuntimeSessionStore,
         admission: RuntimeAdmissionConfiguration,
         register: Bool,
         runningLimit: Int? = nil,
         keychainReader: KeychainReader = .live,
-        agentDefinition: AgentDefinition? = nil
+        agentDefinition: AgentDefinition? = nil,
+        preparedEnvironment: [String]? = nil,
+        preparedID: PreparedLaunchID? = nil,
+        acceptedID: PreparedLaunchID? = nil,
+        cwdVerification: CwdCommitVerification? = nil,
+        executableVerification: ExecutableCommitVerification? = nil,
+        now: Date = Date()
     ) -> Result<WorkspaceChild, WorkspaceSessionError> {
         guard let profile = request.seatbeltProfile,
             let workspace = request.containedWorkspacePath
@@ -606,7 +1343,10 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         // present an unbounded host prompt, and holding the supervisor
         // lock across it would stall cancel/close/launch. Values are
         // reused by the spawn retry, so a launch prompts at most once.
-        let agentName = stagingAgent ?? host?.rawValue
+        // Step 8 (F2): only the definition-derived staging tag selects
+        // credentials. `host` is routing/metadata and never falls back
+        // into selection — a nil tag stages unfiltered entries only.
+        let agentName = stagingAgent?.rawValue
         let keychain: [(name: String, value: String)]
         if let resources = request.resources {
             switch resources.keychainEnvironment(forAgent: agentName, reader: keychainReader) {
@@ -622,6 +1362,28 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         let result: Result<Void, WorkspaceSessionError> = state.withLock { state in
             guard state.closeAccepted == false, state.lifecycle.acceptsRuntime else {
                 return .failure(.notAcceptingRuntime(state.lifecycle))
+            }
+            if let preparedID {
+                // Re-validated at spawn commit, inside the same critical
+                // section as the close check: an invalidation or expiry
+                // that lands after dispatch's entry check still fails
+                // here. Explicit removal serializes fully against this
+                // section; TTL wall-clock expiry during it (~ms) can only
+                // delay the inevitable by that section.
+                guard preparedLaunches.isUsable(preparedID, now: now) else {
+                    return .failure(.unknownPreparedLaunch)
+                }
+            }
+            if let acceptedID {
+                // Redemption re-validation at spawn commit, inside the same
+                // critical section as the close check and `posix_spawn`: the
+                // acceptance must still hold (markers clear only when their
+                // outcome is recorded, so this fails only if the ID was
+                // never accepted). A close that wins this race fails the
+                // launch instead.
+                guard preparedLaunches.isAccepted(acceptedID) else {
+                    return .failure(.unknownPreparedLaunch)
+                }
             }
             if let runningLimit {
                 let running = state.children.values.filter { $0.watchFinished == false }.count
@@ -644,6 +1406,31 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
             case .success:
                 slot.logged = session
             }
+            if let cwdVerification {
+                // Final cwd re-verification, placed after the session-log
+                // append so the append cannot serve as a swap trigger, and
+                // immediately before the spawn call. The spawn body
+                // verifies once more around `posix_spawn` itself.
+                guard verifyLiveCwdIdentity(
+                    policyWorkspacePath: cwdVerification.policyWorkspacePath,
+                    expected: cwdVerification.expected
+                ) else {
+                    return .failure(.unknownPreparedLaunch)
+                }
+            }
+            if let executableVerification {
+                // M4: final executable re-measurement, adjacent to the
+                // spawn call inside the same critical section: a custom
+                // binary swapped after preparation still refuses here.
+                // Deliberately undifferentiated like the cwd check.
+                guard verifyExecutableContentDigest(
+                    path: executableVerification.executablePath,
+                    expectedSHA256: executableVerification.expectedSHA256,
+                    expectedByteCount: executableVerification.expectedByteCount
+                ) else {
+                    return .failure(.unknownPreparedLaunch)
+                }
+            }
             switch spawnSeatbeltProcess(
                 request,
                 workspace: workspace,
@@ -654,7 +1441,9 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
                 egressProxyPort: egressPort,
                 host: host,
                 stagingAgent: stagingAgent,
-                keychain: keychain
+                keychain: keychain,
+                preparedEnvironment: preparedEnvironment,
+                cwdVerification: cwdVerification
             ) {
             case .failure(let error):
                 return .failure(.apply(error))
@@ -768,7 +1557,7 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
                 disk: boundary.diskIdentifier,
                 runtime: child.live.session.id.rawValue,
                 recordedAt: Date(),
-                processGroup: Int64(fact.pgid),
+                processGroup: Int64(fact.pgid.rawValue),
                 processStartSeconds: fact.startSeconds,
                 processStartMicroseconds: fact.startMicroseconds
             )
@@ -862,6 +1651,11 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
             }
             state.closeLeader = true
             state.closeAccepted = true
+            // Prepared launches die with the active workspace. This runs
+            // inside the election lock, so a preparation that won the race
+            // is dropped here, and any later preparation sees the closed
+            // lifecycle and fails: entries can never reappear after close.
+            preparedLaunches.invalidateAll()
             return .lead(publish: publish)
         }
         switch role {
@@ -889,6 +1683,10 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         for child in children {
             child.stop.request()
             _ = stopOwnedSession(leader: child.live.pid, reap: false)
+            // Authority dies on close before the reap completes, mirroring
+            // cancel(): already-dead runtimes observe their terminal state,
+            // and the watch still owns teardown and reports ended().
+            _ = agentInstances.finishRuntime(child.live.session.id, reason: .cancelled)
         }
         guard waitForChildren(children, seconds: 45) else {
             return .failure(.childTeardownFailed)
@@ -923,6 +1721,12 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
         )
         if case .failure(let error) = logged {
             return .failure(.apply(error))
+        }
+        // Best-effort maintenance: this close just turned one workspace's
+        // lines dead. Compaction is threshold-gated (a stat on small files),
+        // fail-closed, and never fails the close.
+        if let life = lifecycleLog.file {
+            _ = WorkspaceLifecycleLog.compactIfNeeded(at: life)
         }
         WorkspaceOwnerRegistry.remove(path: original.rawValue, owner: id.rawValue)
         ownerLock.release()
@@ -963,6 +1767,18 @@ final class WorkspaceSessionSupervisor: @unchecked Sendable {
             usleep(10_000)
         }
         return children.allSatisfy { $0.watchFinished && $0.isProcessGone }
+    }
+
+    /// Ends authority the moment the watch observes definitive leader
+    /// death — before the reap and group-drain tail. The leader's death is
+    /// session death: the watch kills the group next and has already
+    /// finished admission, so nothing legitimate can proceed after this
+    /// point. Registry-only on purpose: the lifecycle record stays
+    /// exactly-once in `noteRuntimeEnded`, and the registry's teardown
+    /// claim keeps concurrent revoke/cancel/ended callers to one teardown.
+    /// Runs on the watch thread; unknown runtimes are a no-op.
+    func noteDeathObserved(_ session: RuntimeSession) {
+        _ = agentInstances.finishRuntime(session.id, reason: .runtimeEnded)
     }
 
     private func noteRuntimeEnded(
@@ -1192,6 +2008,10 @@ private func removeSnapshot(_ path: String, device: UInt64, inode: UInt64) -> Bo
     return path.withCString { unlink($0) == 0 }
 }
 
+private func complain(_ text: String) {
+    FileHandle.standardError.write(Data((text + "\n").utf8))
+}
+
 /// Which finished runtimes to forget so a report still fits in `limit`.
 struct RuntimeRetention: Equatable {
     struct Entry: Equatable {
@@ -1246,11 +2066,12 @@ private final class WorkspaceChild: Sendable {
 
     func start(
         _ ended: @escaping @Sendable () -> Void,
+        deathObserved: (@Sendable () -> Void)? = nil,
         settled: @escaping @Sendable () -> Void
     ) {
         let child = self
         let thread = Thread {
-            _ = watchSeatbeltProcess(child.live, stop: child.stop)
+            _ = watchSeatbeltProcess(child.live, stop: child.stop, onDeathObserved: deathObserved)
             ended()
             child.markFinished()
             settled()

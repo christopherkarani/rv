@@ -15,6 +15,7 @@ public enum ShellPipeline {
         var tokens: [Token] = []
         let utf8 = input.utf8
         var index = utf8.startIndex
+        var pendingRedirectTarget = false
 
         while index < utf8.endIndex {
             var emittedNewline = false
@@ -22,6 +23,7 @@ public enum ShellPipeline {
                 if let width = shellNewlineWidth(utf8, at: index) {
                     if emittedNewline == false {
                         tokens.append(Token(lexeme: "\n", wasQuoted: false))
+                        pendingRedirectTarget = false
                         emittedNewline = true
                     }
                     index = utf8.index(index, offsetBy: width, limitedBy: utf8.endIndex) ?? utf8.endIndex
@@ -127,11 +129,77 @@ public enum ShellPipeline {
             }
 
             if index > tokenStart {
-                tokens.append(Token(lexeme: decoded, wasQuoted: wasQuoted, wasAnsiC: wasAnsiC))
+                let rawWord = input[tokenStart..<index]
+                let structural = pendingRedirectTarget || rawWordCarriesUnquotedRedirectOut(rawWord)
+                pendingRedirectTarget = isBareRedirectOutWord(rawWord)
+                tokens.append(Token(lexeme: decoded, wasQuoted: wasQuoted, wasAnsiC: wasAnsiC, isRedirectStructural: structural))
             }
         }
         return tokens
     }
+}
+
+/// True when the raw word holds an unquoted `>` outside any single-,
+/// double-, or ANSI-C-quoted span, with backslash escapes skipped. Mirrors
+/// `splitRedirectPieces`: every such `>` becomes a claimed write-redirect
+/// downstream (`>`, `>>`, `>|`, `>&`, `<>`, `&>`, fd-prefixed), so the word
+/// is redirect structure even when quoting elsewhere in the word sets
+/// `wasQuoted` (`hi>"/tmp/eve"`). Fully quoted `>` data (`"a>b"`,
+/// `$'a>b'`, `a\>b`) returns false and stays maskable.
+private func rawWordCarriesUnquotedRedirectOut(_ raw: Substring) -> Bool {
+    let chars = Array(raw)
+    var index = 0
+    var singleQuoted = false
+    var doubleQuoted = false
+    while index < chars.count {
+        let current = chars[index]
+        if singleQuoted {
+            if current == "'" { singleQuoted = false }
+            index += 1
+            continue
+        }
+        if doubleQuoted {
+            if current == "\\" { index += 2; continue }
+            if current == "\"" { doubleQuoted = false }
+            index += 1
+            continue
+        }
+        if current == "'" { singleQuoted = true; index += 1; continue }
+        if current == "\"" { doubleQuoted = true; index += 1; continue }
+        if current == "\\" { index += 2; continue }
+        if current == "$", index + 1 < chars.count, chars[index + 1] == "'" {
+            index += 2
+            while index < chars.count, chars[index] != "'" {
+                index += chars[index] == "\\" ? 2 : 1
+            }
+            index += 1
+            continue
+        }
+        if current == ">" { return true }
+        index += 1
+    }
+    return false
+}
+
+/// True when the raw word is exactly one unquoted redirect-out operator
+/// whose file target is the next word: `>`, `>>`, `>|`, `>&`, `<>`,
+/// `&>`, `&>>`, each with optional fd digits (`2>`, `10>>`, `2>&`).
+/// Dup/close gluings (`>&2`, `2>&1`), quoted words, dynamic words, and
+/// input-only words (`<`, `<<`, `<&`) never match: no file target follows.
+private func isBareRedirectOutWord(_ raw: Substring) -> Bool {
+    if raw.contains("'") || raw.contains("\"") || raw.contains("\\")
+        || raw.contains("$") || raw.contains("`")
+    {
+        return false
+    }
+    var word = String(raw)
+    if word.hasPrefix("&") {
+        return word == "&>" || word == "&>>"
+    }
+    while let first = word.first, first.isASCII, first.isNumber {
+        word.removeFirst()
+    }
+    return word == ">" || word == ">>" || word == ">|" || word == ">&" || word == "<>"
 }
 
 /// Unquoted `\n` / `\r\n` / `\r` width. Quoted newlines stay inside the token.

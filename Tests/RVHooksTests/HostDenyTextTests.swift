@@ -225,7 +225,7 @@ func assertMintedHookUnlock(_ text: String, why: String = resetHardHostDeny) thr
     let code = try mintedUnlock()
     #expect(
         unlockLine(for: code)
-            == "Paste in Terminal to allow once: rv allow-once a1b2c3. This unlocks only this exact command."
+            == "Paste in Terminal to allow once: rv allow-once a1b2c3. This unlocks the reviewed command once, including its sudo, env, and path spellings."
     )
     #expect(allowOnceUnlockCode(in: ttyUnlockHint) == nil)
     #expect(allowOnceUnlockCode(in: unlockLine(for: code)) == code)

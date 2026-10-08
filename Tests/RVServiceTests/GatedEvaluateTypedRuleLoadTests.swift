@@ -142,9 +142,15 @@ struct GatedEvaluateTypedRuleLoadTests {
         let command = "git push --force-with-lease origin main"
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
-        try await store.insertGranted(matchingView: MatchingView(command), cwd: cwd, now: now)
+        let grants = EphemeralAllowOnceTable()
+        #expect(
+            await grants.plant(
+                matchingView: MatchingView(command), cwd: cwd, codeHash: "typed-peek",
+                now: now
+            ) == .planted
+        )
 
-        let result = await peek(command, cwd: workspace, home: home, store: store)
+        let result = await peek(command, cwd: workspace, home: home, grants: grants)
         guard case .deny(let deny) = result.decision else {
             Issue.record("typed deny hard bind must not honor matchingView grant, got \(result.decision)")
             return
@@ -161,7 +167,7 @@ struct GatedEvaluateTypedRuleLoadTests {
         #expect(code == nil)
     }
 
-    @Test func typedDeny_forceWithLeaseMain_spendHostAskCannotOverrideHardBind() async throws {
+    @Test func typedDeny_forceWithLeaseMain_applyCannotOverrideHardBind() async throws {
         let homeURL = try isolatedHomeDirectory()
         let home = try #require(HomeDirectory(validating: homeURL.path))
         let workspace = try isolatedWorkspace()
@@ -178,20 +184,25 @@ struct GatedEvaluateTypedRuleLoadTests {
 
         let command = "git push --force-with-lease origin main"
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+        let grants = EphemeralAllowOnceTable()
 
-        let planted = await spendHostAsk(command, cwd: workspace, home: home, store: store)
+        let planted = await gatedApply(command, cwd: workspace, home: home, grants: grants)
         guard case .deny(let deny) = planted.decision else {
-            Issue.record("typed deny hard bind must not plant+spend on Host Ask, got \(planted.decision)")
+            Issue.record("typed deny hard bind must deny on apply, got \(planted.decision)")
             return
         }
         #expect(deny.ruleID == ruleID)
         #expect(planted.boundReview == .deny(deny))
 
-        try await store.insertGranted(matchingView: MatchingView(command), cwd: cwd, now: now)
-        let granted = await spendHostAsk(command, cwd: workspace, home: home, store: store)
+        #expect(
+            await grants.plant(
+                matchingView: MatchingView(command), cwd: cwd, codeHash: "typed-apply",
+                now: now
+            ) == .planted
+        )
+        let granted = await gatedApply(command, cwd: workspace, home: home, grants: grants)
         guard case .deny(let still) = granted.decision else {
-            Issue.record("typed deny hard bind must not honor matchingView grant on Host Ask, got \(granted.decision)")
+            Issue.record("typed deny hard bind must not honor matchingView grant on apply, got \(granted.decision)")
             return
         }
         #expect(still.ruleID == ruleID)
@@ -208,7 +219,7 @@ private func peek(
         command,
         cwd: cwd,
         home: home,
-        store: AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
+        grants: EphemeralAllowOnceTable()
     )
 }
 
@@ -216,29 +227,29 @@ private func peek(
     _ command: String,
     cwd: URL,
     home: HomeDirectory?,
-    store: AllowOnceStore
+    grants: EphemeralAllowOnceTable
 ) async -> EvaluationResult {
     await GatedEvaluate().peek(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
         cwd: WorkingDirectory(validating: cwd.path),
         home: home,
-        store: store,
+        grants: grants,
         now: Date(timeIntervalSince1970: 1_700_000_000),
         allowlist: { .empty }
     )
 }
 
-private func spendHostAsk(
+private func gatedApply(
     _ command: String,
     cwd: URL,
     home: HomeDirectory,
-    store: AllowOnceStore
+    grants: EphemeralAllowOnceTable
 ) async -> EvaluationResult {
-    await GatedEvaluate().spendHostAsk(
+    await GatedEvaluate().apply(
         command: ShellCommand(rawValue: command),
         cwd: WorkingDirectory(validating: cwd.path),
         home: home,
-        store: store,
+        grants: grants,
         now: Date(timeIntervalSince1970: 1_700_000_000),
         allowlist: { .empty }
     )

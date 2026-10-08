@@ -9,9 +9,23 @@ public enum RVDProcess {
     public static func run(configuration: RVDConfiguration) throws {
         let socketURL = try UnixSocketPath.production()
         let analytics = AnalyticsBootstrap.makeLive(productVersion: ProtocolVersion.serviceSemver)
+        let hosts = LiveWorkspaceHostRegistry()
+        let ceremonies = WorkspaceOperatorCeremonyService(hosts: hosts)
+        let actionCeremonies = ActionApprovalCeremonyService(hosts: hosts)
+        let uiSessions = LiveOperatorUISessionRegistry()
         let runtime = ServiceRuntime(
+            snapshots: nil,
+            catalog: nil,
+            home: nil,
+            allowOnce: nil,
+            allowOnceDirectory: nil,
             idleExitSeconds: configuration.idleExitSeconds,
-            analytics: analytics
+            log: nil,
+            analytics: analytics,
+            clock: { Date() },
+            pendingApprovals: .automatic,
+            ceremonies: ceremonies,
+            actionCeremonies: actionCeremonies
         )
         let slot = ListenerSlot()
         let watchdog = IdleWatchdog(seconds: configuration.idleExitSeconds) {
@@ -19,7 +33,8 @@ public enum RVDProcess {
             Darwin.exit(0)
         }
         let listeners = ListenerPair(
-            xpc: XPCEvaluateListener(runtime: runtime, watchdog: watchdog),
+            xpc: XPCEvaluateListener(
+                runtime: runtime, watchdog: watchdog, hostRegistry: hosts, uiSessions: uiSessions),
             unix: UnixSocketListener(runtime: runtime, watchdog: watchdog, socketURL: socketURL)
         )
         slot.listeners = listeners
@@ -60,9 +75,21 @@ public enum RVDProcess {
     public static func run(configuration: RVDConfiguration) throws {
         let socketURL = try UnixSocketPath.production()
         let analytics = AnalyticsBootstrap.makeLive(productVersion: ProtocolVersion.serviceSemver)
+        let ceremonies = WorkspaceOperatorCeremonyService()
+        let actionCeremonies = ActionApprovalCeremonyService()
         let runtime = ServiceRuntime(
+            snapshots: nil,
+            catalog: nil,
+            home: nil,
+            allowOnce: nil,
+            allowOnceDirectory: nil,
             idleExitSeconds: configuration.idleExitSeconds,
-            analytics: analytics
+            log: nil,
+            analytics: analytics,
+            clock: { Date() },
+            pendingApprovals: .automatic,
+            ceremonies: ceremonies,
+            actionCeremonies: actionCeremonies
         )
         let slot = ListenerSlot()
         let watchdog = IdleWatchdog(seconds: configuration.idleExitSeconds) {

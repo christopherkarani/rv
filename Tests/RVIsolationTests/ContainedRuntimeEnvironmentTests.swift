@@ -303,6 +303,44 @@ import Testing
     #expect(found == nil)
 }
 
+@Test func activeDeveloperRootFollowsInjectedReadlink() {
+    // Hermetic: no symlink on disk; the probe answers the readlink.
+    let probe = ContainedPATHProbe(
+        realpath: { $0 },
+        isDirectory: { _ in true },
+        isExecutable: { _ in false },
+        listDirectory: { _ in [] },
+        readlink: {
+            $0 == "/link/xcode_select_link"
+                ? "/Applications/Xcode.app/Contents/Developer" : nil
+        }
+    )
+    let found = ContainedToolchainRoots.activeDeveloperRoot(
+        hostEnvironment: [:],
+        hostHome: "/Users/test",
+        selectLinkPath: "/link/xcode_select_link",
+        probe: probe
+    )
+    #expect(found == "/Applications/Xcode.app")
+}
+
+@Test func activeDeveloperRootMissingLinkGrantsNothing() {
+    let probe = ContainedPATHProbe(
+        realpath: { $0 },
+        isDirectory: { _ in true },
+        isExecutable: { _ in false },
+        listDirectory: { _ in [] },
+        readlink: { _ in nil }
+    )
+    let found = ContainedToolchainRoots.activeDeveloperRoot(
+        hostEnvironment: [:],
+        hostHome: "/Users/test",
+        selectLinkPath: "/link/missing",
+        probe: probe
+    )
+    #expect(found == nil)
+}
+
 @Test func productiveResolutionIncludesActiveDeveloperRoot() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-devres-\(UUID().uuidString)", isDirectory: true)
