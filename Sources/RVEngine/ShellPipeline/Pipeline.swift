@@ -491,16 +491,16 @@ extension ShellPipeline {
     /// re-spelling the sequence; locality: strip-order bugs land here, once.
     struct MatchingDerivation: Sendable, Equatable {
         /// Stage-5 classified view: the role-aware grant key.
-        var view: MatchingView
+        let view: MatchingView
         /// Exact lexemes masking replaced, pipeline order (heredoc body
         /// first, then token order). In-process only: digest, never store.
-        var masked: [String]
+        let masked: [String]
         /// Typed erased-prefix pieces in pipeline order. In-process only:
         /// digest, never store or transmit.
-        var prefix: [InvocationPiece]
+        let prefix: [InvocationPiece]
         /// Substitution-carrying assignment values: the analyze layer's
         /// exemption budget.
-        var assignmentValues: [String]
+        let assignmentValues: [String]
     }
 
     /// Derives the matching bundle for raw input in one pass.
