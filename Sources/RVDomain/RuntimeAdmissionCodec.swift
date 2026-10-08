@@ -352,10 +352,12 @@ public enum RuntimeAdmissionCodec {
     }
 
     private static func keys(in data: Data) -> Set<String>? {
-        guard let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let value = try? JSONDecoder().decode(JSONValue.self, from: data),
+            case .object(let object) = value
+        else {
             return nil
         }
-        return Set(value.keys)
+        return Set(object.keys)
     }
 }
 

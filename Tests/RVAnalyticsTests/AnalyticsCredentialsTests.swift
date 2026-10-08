@@ -113,11 +113,21 @@ struct AnalyticsPathsTests {
 
 @Suite("AnalyticsPropertyValue")
 struct AnalyticsPropertyValueTests {
-    @Test func jsonObjectCases() {
-        #expect(AnalyticsPropertyValue.string("v").jsonObject as? String == "v")
-        #expect(AnalyticsPropertyValue.int(3).jsonObject as? Int == 3)
-        #expect(AnalyticsPropertyValue.bool(false).jsonObject as? Bool == false)
-        #expect(AnalyticsPropertyValue.strings(["a"]).jsonObject as? [String] == ["a"])
+    @Test func codableCasesRoundTripAsJSONScalars() throws {
+        let cases: [AnalyticsPropertyValue] = [
+            .string("v"),
+            .int(3),
+            .bool(false),
+            .strings(["a"]),
+        ]
+        for value in cases {
+            let data = try JSONEncoder().encode(value)
+            #expect(try JSONDecoder().decode(AnalyticsPropertyValue.self, from: data) == value)
+        }
+        #expect(String(data: try JSONEncoder().encode(AnalyticsPropertyValue.string("v")), encoding: .utf8) == "\"v\"")
+        #expect(String(data: try JSONEncoder().encode(AnalyticsPropertyValue.int(3)), encoding: .utf8) == "3")
+        #expect(String(data: try JSONEncoder().encode(AnalyticsPropertyValue.bool(false)), encoding: .utf8) == "false")
+        #expect(String(data: try JSONEncoder().encode(AnalyticsPropertyValue.strings(["a"])), encoding: .utf8) == "[\"a\"]")
     }
 
     @Test func payloadDefaultsAndNames() {
