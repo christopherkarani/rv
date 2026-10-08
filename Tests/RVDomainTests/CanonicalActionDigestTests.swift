@@ -14,10 +14,10 @@ struct CanonicalActionDigestTests {
         cwd: String = "/work",
         fingerprint: String = "test-shell"
     ) -> ProposedAction {
-        .shell(ShellAction(
+        .shell(ShellAction.effectOnly(EffectShell(
             fingerprint: ActionFingerprint(rawValue: fingerprint),
             scope: ActionScope(workingDirectory: WorkingDirectory(rawValue: cwd)),
-            supportingCommand: ShellCommand(rawValue: command)))
+            supportingCommand: ShellCommand(rawValue: command))))
     }
 
     private func file(kind: FileToolKind = .read, path: String) -> ProposedAction {
@@ -104,47 +104,47 @@ struct CanonicalActionDigestTests {
     }
 
     @Test func effectsDistinguish() {
-        let plain = ShellAction(
+        let plain = ShellAction.effectOnly(EffectShell(
             fingerprint: ActionFingerprint(rawValue: "f"),
-            supportingCommand: ShellCommand(rawValue: "git push"))
-        let withEffects = ShellAction(
+            supportingCommand: ShellCommand(rawValue: "git push")))
+        let withEffects = ShellAction.effectOnly(EffectShell(
             fingerprint: ActionFingerprint(rawValue: "f"),
             effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-            supportingCommand: ShellCommand(rawValue: "git push"))
+            supportingCommand: ShellCommand(rawValue: "git push")))
         #expect(
             CanonicalActionDigest.sha256Hex(of: .shell(plain))
                 != CanonicalActionDigest.sha256Hex(of: .shell(withEffects)))
     }
 
     @Test func resourcesDistinguish() {
-        let a = ShellAction(
+        let a = ShellAction.effectOnly(EffectShell(
             fingerprint: ActionFingerprint(rawValue: "f"),
             resources: ActionResources(remoteName: "origin", branchName: "main"),
-            supportingCommand: ShellCommand(rawValue: "git push"))
-        let b = ShellAction(
+            supportingCommand: ShellCommand(rawValue: "git push")))
+        let b = ShellAction.effectOnly(EffectShell(
             fingerprint: ActionFingerprint(rawValue: "f"),
             resources: ActionResources(remoteName: "origin", branchName: "dev"),
-            supportingCommand: ShellCommand(rawValue: "git push"))
+            supportingCommand: ShellCommand(rawValue: "git push")))
         #expect(
             CanonicalActionDigest.sha256Hex(of: .shell(a))
                 != CanonicalActionDigest.sha256Hex(of: .shell(b)))
     }
 
     @Test func semanticAnalysisDistinguishes() {
-        let plain = ShellAction(
+        let plain = ShellAction.effectOnly(EffectShell(
             fingerprint: ActionFingerprint(rawValue: "f"),
-            supportingCommand: ShellCommand(rawValue: "git push"))
-        let analyzed = ShellAction(
+            supportingCommand: ShellCommand(rawValue: "git push")))
+        let analyzed = ShellAction.analyzed(AnalyzedShell(
             fingerprint: ActionFingerprint(rawValue: "f"),
             supportingCommand: ShellCommand(rawValue: "git push"),
-            gitAction: .push(remote: "origin", refspec: "main", force: .none))
+            analysis: .git(.push(remote: "origin", refspec: "main", force: .none))))
         #expect(
             CanonicalActionDigest.sha256Hex(of: .shell(plain))
                 != CanonicalActionDigest.sha256Hex(of: .shell(analyzed)))
-        let forced = ShellAction(
+        let forced = ShellAction.analyzed(AnalyzedShell(
             fingerprint: ActionFingerprint(rawValue: "f"),
             supportingCommand: ShellCommand(rawValue: "git push"),
-            gitAction: .push(remote: "origin", refspec: "main", force: .force))
+            analysis: .git(.push(remote: "origin", refspec: "main", force: .force))))
         #expect(
             CanonicalActionDigest.sha256Hex(of: .shell(analyzed))
                 != CanonicalActionDigest.sha256Hex(of: .shell(forced)))

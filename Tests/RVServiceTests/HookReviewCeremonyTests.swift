@@ -516,7 +516,7 @@ private final class HookCeremonyEnv {
                     agent: .pi
                 ),
                 action: .shell(
-                    ShellAction(
+                    ShellAction.effectOnly(EffectShell(
                         fingerprint: ActionFingerprint.make(
                             host: .pi,
                             session: SessionID(validating: "sess-pi"),
@@ -525,7 +525,7 @@ private final class HookCeremonyEnv {
                         ),
                         scope: ActionScope(workingDirectory: cwd),
                         supportingCommand: shell
-                    )
+                    ))
                 ),
                 reason: .hostAsk,
                 continuation: .hostNative,

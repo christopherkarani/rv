@@ -140,13 +140,15 @@ private struct IdentityMediationHarness {
                 )
                 return .success(
                     .shell(
-                        ShellAction(
-                            fingerprint: ActionFingerprint(
-                                rawValue: "runtime:\(subject.session.id.rawValue.uuidString):\(subject.policyWorkspace.rawValue):touch marker"
-                            ),
-                            scope: ActionScope(workingDirectory: subject.policyWorkspace),
-                            supportingCommand: command,
-                            filesystemAction: .create(targets: [target])
+                        ShellAction.analyzed(
+                            AnalyzedShell(
+                                fingerprint: ActionFingerprint(
+                                    rawValue: "runtime:\(subject.session.id.rawValue.uuidString):\(subject.policyWorkspace.rawValue):touch marker"
+                                ),
+                                scope: ActionScope(workingDirectory: subject.policyWorkspace),
+                                supportingCommand: command,
+                                analysis: .filesystem(.create(targets: [target]))
+                            )
                         )
                     )
                 )

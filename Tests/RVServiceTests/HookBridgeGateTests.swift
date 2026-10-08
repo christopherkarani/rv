@@ -232,7 +232,7 @@ private final class HookBridgeEnv {
                     agent: .pi
                 ),
                 action: .shell(
-                    ShellAction(
+                    ShellAction.effectOnly(EffectShell(
                         fingerprint: ActionFingerprint.make(
                             host: .pi,
                             session: SessionID(validating: "sess-pi"),
@@ -241,7 +241,7 @@ private final class HookBridgeEnv {
                         ),
                         scope: ActionScope(workingDirectory: cwd),
                         supportingCommand: shell
-                    )
+                    ))
                 ),
                 reason: .hostAsk,
                 continuation: .hostNative,

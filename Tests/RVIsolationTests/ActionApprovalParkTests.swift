@@ -260,13 +260,13 @@ private struct ParkHarness {
                     path: tokens[1], filesystemScope: .insideRepository, resourceKind: .unknown)
             }
         }
-        return .success(.shell(ShellAction(
+        return .success(.shell(ShellAction.effectOnly(EffectShell(
             fingerprint: ActionFingerprint(
                 rawValue: "runtime:\(subject.session.id.rawValue.uuidString):\(subject.policyWorkspace.rawValue):\(raw)"),
             effects: effects,
             resources: resources,
             scope: ActionScope(workingDirectory: subject.policyWorkspace),
-            supportingCommand: command)))
+            supportingCommand: command))))
     }
 
     func frame(_ command: String, id: UUID = UUID()) -> RuntimeActionFrame {
