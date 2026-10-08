@@ -43,16 +43,6 @@ enum PendingListProjection {
         }
     }
 
-    static func ipcError(from error: Error) -> IPCError {
-        if let error = error as? IPCError {
-            return error
-        }
-        if let error = error as? PendingApprovalError {
-            return ipcError(from: error)
-        }
-        return coordinatorUnavailable
-    }
-
     private static func item(from record: PendingApproval) -> PendingListItem {
         PendingListItem(
             id: record.id,

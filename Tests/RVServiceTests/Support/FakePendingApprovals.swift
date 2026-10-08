@@ -18,7 +18,7 @@ actor FakePendingApprovals: PendingApprovalCoordinating {
         records.append(record)
     }
 
-    func create(_ request: PendingApprovalRequest, now: Date) async throws -> PendingApproval {
+    func create(_ request: PendingApprovalRequest, now: Date) async throws(PendingApprovalError) -> PendingApproval {
         createCalls.append(request)
         let (record, next) = try PendingApprovalLedger.create(
             records: records,
@@ -29,7 +29,7 @@ actor FakePendingApprovals: PendingApprovalCoordinating {
         return record
     }
 
-    func list(now _: Date) async throws -> [PendingApproval] {
+    func list(now _: Date) async throws(PendingApprovalError) -> [PendingApproval] {
         if let listError {
             throw listError
         }
@@ -41,7 +41,7 @@ actor FakePendingApprovals: PendingApprovalCoordinating {
         }
     }
 
-    func load(id: ApprovalID, now _: Date) async throws -> PendingApproval {
+    func load(id: ApprovalID, now _: Date) async throws(PendingApprovalError) -> PendingApproval {
         guard let record = records.first(where: { $0.id == id }) else {
             throw PendingApprovalError.notFound
         }
@@ -54,7 +54,7 @@ actor FakePendingApprovals: PendingApprovalCoordinating {
         fingerprint: ActionFingerprint,
         identity: ApprovalIdentity,
         now: Date
-    ) async throws -> PendingApproval {
+    ) async throws(PendingApprovalError) -> PendingApproval {
         resolveCalls.append(
             ResolveCall(id: id, decision: decision, fingerprint: fingerprint, identity: identity)
         )
@@ -80,11 +80,11 @@ actor FakePendingApprovals: PendingApprovalCoordinating {
         }
     }
 
-    func expire(id _: ApprovalID, now _: Date) async throws -> PendingApproval {
+    func expire(id _: ApprovalID, now _: Date) async throws(PendingApprovalError) -> PendingApproval {
         throw PendingApprovalError.notFound
     }
 
-    func cancel(id: ApprovalID, now: Date) async throws -> PendingApproval {
+    func cancel(id: ApprovalID, now: Date) async throws(PendingApprovalError) -> PendingApproval {
         guard let index = records.firstIndex(where: { $0.id == id }) else {
             throw PendingApprovalError.notFound
         }
@@ -112,7 +112,7 @@ actor FakePendingApprovals: PendingApprovalCoordinating {
         fingerprint: ActionFingerprint,
         identity: ApprovalIdentity,
         now: Date
-    ) async throws -> ApprovalConsumption {
+    ) async throws(PendingApprovalError) -> ApprovalConsumption {
         guard let index = records.firstIndex(where: { $0.id == id }) else {
             throw PendingApprovalError.notFound
         }
