@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 
 /// Merge / strip the owned OpenCode TUI Ask package in `opencode.json`.
 /// Official 1.18.18 file plugins cannot export both `server()` and `tui()`.
@@ -12,8 +13,8 @@ enum OpenCodeConfigMerge {
             let data = try encode(root)
             return (data, existingData != data)
         }
-        plugins.append(pluginPath)
-        root["plugin"] = plugins
+        plugins.append(.string(pluginPath))
+        root["plugin"] = .array(plugins)
         let data = try encode(root)
         return (data, existingData != data)
     }
@@ -27,7 +28,7 @@ enum OpenCodeConfigMerge {
         if plugins.isEmpty {
             root.removeValue(forKey: "plugin")
         } else {
-            root["plugin"] = plugins
+            root["plugin"] = .array(plugins)
         }
         if root.isEmpty {
             return nil
@@ -35,42 +36,45 @@ enum OpenCodeConfigMerge {
         return try encode(root)
     }
 
-    private static func parseRoot(_ existingData: Data?) throws -> [String: Any] {
+    private static func parseRoot(_ existingData: Data?) throws -> [String: JSONValue] {
         guard let existingData, existingData.isEmpty == false else {
             return [:]
         }
-        let object = try JSONSerialization.jsonObject(with: existingData)
-        guard let root = object as? [String: Any] else {
+        guard let value = try? JSONDecoder().decode(JSONValue.self, from: existingData),
+              let root = value.asObject
+        else {
             throw OpenCodeConfigMergeError.invalidJSON
         }
         return root
     }
 
-    private static func pluginList(from root: [String: Any]) -> [Any] {
+    private static func pluginList(from root: [String: JSONValue]) -> [JSONValue] {
         guard let plugin = root["plugin"] else {
             return []
         }
-        if let list = plugin as? [Any] {
+        if let list = plugin.asArray {
             return list
         }
         return [plugin]
     }
 
-    private static func pluginSpecifier(_ plugin: Any) -> String? {
-        if let spec = plugin as? String {
+    private static func pluginSpecifier(_ plugin: JSONValue) -> String? {
+        if let spec = plugin.string {
             return spec
         }
-        if let pair = plugin as? [Any], let spec = pair.first as? String {
+        if let pair = plugin.asArray, let spec = pair.first?.string {
             return spec
         }
         return nil
     }
 
-    private static func encode(_ root: [String: Any]) throws -> Data {
-        guard JSONSerialization.isValidJSONObject(root) else {
+    private static func encode(_ root: [String: JSONValue]) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        guard let data = try? encoder.encode(JSONValue.object(root)) else {
             throw OpenCodeConfigMergeError.invalidJSON
         }
-        return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys, .prettyPrinted])
+        return data
     }
 }
 

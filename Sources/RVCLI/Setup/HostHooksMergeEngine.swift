@@ -1,7 +1,8 @@
 import Foundation
+import RVDomain
 
-/// Typed hook entry; host files build these instead of `[String: Any]` literals.
-/// The engine serializes to the exact historical dict shapes (T2).
+/// Typed hook entry; host files build these instead of untyped literals.
+/// The engine serializes to the exact historical JSON shapes (T2).
 struct HookEntry: Equatable, Sendable {
     var command: String
     var timeout: Int
@@ -32,9 +33,8 @@ enum HooksLayout: Equatable, Sendable {
 }
 
 /// Per-host wiring descriptor: shape data plus small predicates/builders.
-/// New hook entries are typed (`HookEntry`); raw dicts cross the boundary only
-/// where frozen per-host APIs (`matchesCurrentHook`, `rvEntry`, inspection)
-/// require them.
+/// New hook entries are typed (`HookEntry`); parsed file content crosses the
+/// boundary as `JSONValue`.
 struct HostWiringDescriptor: Sendable {
     var layout: HooksLayout
     /// Nested/grouped insert matchers, in append order (Claude 4, Codex 1, Antigravity 5). Unused for flat.
@@ -52,7 +52,7 @@ struct LocatedHook {
     var matcher: String?
     /// The list key the hook was found under.
     var listKey: String
-    var hook: [String: Any]
+    var hook: JSONValue
 }
 
 enum HostHooksMergeError: Error, Equatable {
@@ -67,7 +67,6 @@ enum HostHooksMergeError: Error, Equatable {
 /// Claude inspection (occupancy, stale legacy, matcher coverage) stays in
 /// `ClaudeSettingsMerge`; Antigravity inspection stays in
 /// `AntigravityHooksMerge`; both are implemented over `locateFingerprintedHooks`.
-/// Follow-up per GUD-002: adopt T1's typed-JSON value here once T1 lands.
 enum HostHooksMergeEngine {
     /// Returns merged bytes and whether content changed.
     /// `willMerge` runs after parsing, before mutation (Claude/Antigravity occupancy trap).
@@ -75,7 +74,7 @@ enum HostHooksMergeEngine {
         existingData: Data?,
         descriptor: HostWiringDescriptor,
         context: HookCommandContext,
-        willMerge: (([String: Any]) throws -> Void)? = nil
+        willMerge: (([String: JSONValue]) throws -> Void)? = nil
     ) throws -> (data: Data, wrote: Bool) {
         let root = try parseRoot(existingData)
         try willMerge?(root)
@@ -107,31 +106,27 @@ enum HostHooksMergeEngine {
     }
 
     static func locateFingerprintedHooks(
-        in root: [String: Any],
+        in root: [String: JSONValue],
         descriptor: HostWiringDescriptor
     ) -> [LocatedHook] {
         switch descriptor.layout {
         case .nested(let hooksRootKey, let listKey):
-            guard let hooksRoot = root[hooksRootKey] as? [String: Any],
-                  let list = hooksRoot[listKey] as? [[String: Any]]
-            else {
+            guard let list = root[hooksRootKey]?[listKey]?.asArray else {
                 return []
             }
             return locate(in: list, listKey: listKey, descriptor: descriptor)
         case .grouped(let hookName, let listKey):
-            guard let group = root[hookName] as? [String: Any],
-                  let list = group[listKey] as? [[String: Any]]
-            else {
+            guard let list = root[hookName]?[listKey]?.asArray else {
                 return []
             }
             return locate(in: list, listKey: listKey, descriptor: descriptor)
         case .flat(let hooksRootKey, let listKeys, _, _):
-            guard let hooksRoot = root[hooksRootKey] as? [String: Any] else {
+            guard let hooksRoot = root[hooksRootKey]?.asObject else {
                 return []
             }
             var located: [LocatedHook] = []
             for key in listKeys {
-                guard let hooks = hooksRoot[key] as? [[String: Any]] else { continue }
+                guard let hooks = hooksRoot[key]?.asArray else { continue }
                 for hook in hooks where isFingerprintedHook(hook, descriptor: descriptor) {
                     located.append(LocatedHook(matcher: nil, listKey: key, hook: hook))
                 }
@@ -141,16 +136,16 @@ enum HostHooksMergeEngine {
     }
 
     private static func locate(
-        in list: [[String: Any]],
+        in list: [JSONValue],
         listKey: String,
         descriptor: HostWiringDescriptor
     ) -> [LocatedHook] {
         var located: [LocatedHook] = []
         for entry in list {
-            guard let hooks = entry["hooks"] as? [[String: Any]] else { continue }
+            guard let hooks = entry["hooks"]?.asArray else { continue }
             for hook in hooks where isFingerprintedHook(hook, descriptor: descriptor) {
                 located.append(LocatedHook(
-                    matcher: entry["matcher"] as? String,
+                    matcher: entry["matcher"]?.string,
                     listKey: listKey,
                     hook: hook
                 ))
@@ -160,28 +155,28 @@ enum HostHooksMergeEngine {
     }
 
     static func isFingerprintedHook(
-        _ hook: [String: Any],
+        _ hook: JSONValue,
         descriptor: HostWiringDescriptor
     ) -> Bool {
         if let hookType = descriptor.hookType {
-            guard (hook["type"] as? String) == hookType else {
+            guard hook["type"]?.string == hookType else {
                 return false
             }
         }
-        guard let command = hook["command"] as? String else {
+        guard let command = hook["command"]?.string else {
             return false
         }
         return descriptor.isFingerprintedCommand(command)
     }
 
     static func stripFingerprinted(
-        from root: [String: Any],
+        from root: [String: JSONValue],
         descriptor: HostWiringDescriptor
-    ) -> [String: Any] {
+    ) -> [String: JSONValue] {
         switch descriptor.layout {
         case .nested(let hooksRootKey, let listKey):
-            guard var hooksRoot = root[hooksRootKey] as? [String: Any],
-                  let list = hooksRoot[listKey] as? [[String: Any]]
+            guard var hooksRoot = root[hooksRootKey]?.asObject,
+                  let list = hooksRoot[listKey]?.asArray
             else {
                 return root
             }
@@ -189,18 +184,18 @@ enum HostHooksMergeEngine {
             if nextEntries.isEmpty {
                 hooksRoot.removeValue(forKey: listKey)
             } else {
-                hooksRoot[listKey] = nextEntries
+                hooksRoot[listKey] = .array(nextEntries)
             }
             var next = root
             if hooksRoot.isEmpty {
                 next.removeValue(forKey: hooksRootKey)
             } else {
-                next[hooksRootKey] = hooksRoot
+                next[hooksRootKey] = .object(hooksRoot)
             }
             return next
         case .grouped(let hookName, let listKey):
-            guard var group = root[hookName] as? [String: Any],
-                  let list = group[listKey] as? [[String: Any]]
+            guard var group = root[hookName]?.asObject,
+                  let list = group[listKey]?.asArray
             else {
                 return root
             }
@@ -208,7 +203,7 @@ enum HostHooksMergeEngine {
             if nextEntries.isEmpty {
                 group.removeValue(forKey: listKey)
             } else {
-                group[listKey] = nextEntries
+                group[listKey] = .array(nextEntries)
             }
             var next = root
             // Drop our named hook when only `enabled` (or nothing) remains;
@@ -216,131 +211,137 @@ enum HostHooksMergeEngine {
             if group.keys.allSatisfy({ $0 == "enabled" }) {
                 next.removeValue(forKey: hookName)
             } else {
-                next[hookName] = group
+                next[hookName] = .object(group)
             }
             return next
         case .flat(let hooksRootKey, let listKeys, _, _):
-            guard var hooksRoot = root[hooksRootKey] as? [String: Any] else {
+            guard var hooksRoot = root[hooksRootKey]?.asObject else {
                 return root
             }
             for key in listKeys {
-                guard let entries = hooksRoot[key] as? [[String: Any]] else { continue }
+                guard let entries = hooksRoot[key]?.asArray else { continue }
                 let kept = entries.filter {
                     isFingerprintedHook($0, descriptor: descriptor) == false
                 }
                 if kept.isEmpty {
                     hooksRoot.removeValue(forKey: key)
                 } else {
-                    hooksRoot[key] = kept
+                    hooksRoot[key] = .array(kept)
                 }
             }
             var next = root
             if hooksRoot.isEmpty {
                 next.removeValue(forKey: hooksRootKey)
             } else {
-                next[hooksRootKey] = hooksRoot
+                next[hooksRootKey] = .object(hooksRoot)
             }
             return next
         }
     }
 
     private static func stripGroups(
-        in list: [[String: Any]],
+        in list: [JSONValue],
         descriptor: HostWiringDescriptor
-    ) -> [[String: Any]] {
-        var nextEntries: [[String: Any]] = []
-        for var entry in list {
-            guard var hooks = entry["hooks"] as? [[String: Any]] else {
+    ) -> [JSONValue] {
+        var nextEntries: [JSONValue] = []
+        for entry in list {
+            guard var object = entry.asObject,
+                  let hooks = object["hooks"]?.asArray
+            else {
                 nextEntries.append(entry)
                 continue
             }
-            hooks.removeAll { isFingerprintedHook($0, descriptor: descriptor) }
-            guard hooks.isEmpty == false else { continue }
-            entry["hooks"] = hooks
-            nextEntries.append(entry)
+            let kept = hooks.filter { isFingerprintedHook($0, descriptor: descriptor) == false }
+            guard kept.isEmpty == false else { continue }
+            object["hooks"] = .array(kept)
+            nextEntries.append(.object(object))
         }
         return nextEntries
     }
 
     static func insertEntries(
-        into root: [String: Any],
+        into root: [String: JSONValue],
         descriptor: HostWiringDescriptor,
         context: HookCommandContext
-    ) -> [String: Any] {
+    ) -> [String: JSONValue] {
         switch descriptor.layout {
         case .nested(let hooksRootKey, let listKey):
             var next = root
-            var hooksRoot = next[hooksRootKey] as? [String: Any] ?? [:]
-            var list = hooksRoot[listKey] as? [[String: Any]] ?? []
+            var hooksRoot = next[hooksRootKey]?.asObject ?? [:]
+            var list = hooksRoot[listKey]?.asArray ?? []
             for matcher in descriptor.matchers {
-                list.append([
-                    "matcher": matcher,
-                    "hooks": [hookDictionary(descriptor.buildEntry(context, matcher))],
-                ])
+                list.append(.object([
+                    "matcher": .string(matcher),
+                    "hooks": .array([hookValue(descriptor.buildEntry(context, matcher))]),
+                ]))
             }
-            hooksRoot[listKey] = list
-            next[hooksRootKey] = hooksRoot
+            hooksRoot[listKey] = .array(list)
+            next[hooksRootKey] = .object(hooksRoot)
             return next
         case .grouped(let hookName, let listKey):
             var next = root
-            var group = next[hookName] as? [String: Any] ?? [:]
-            var list = group[listKey] as? [[String: Any]] ?? []
+            var group = next[hookName]?.asObject ?? [:]
+            var list = group[listKey]?.asArray ?? []
             for matcher in descriptor.matchers {
-                list.append([
-                    "matcher": matcher,
-                    "hooks": [hookDictionary(descriptor.buildEntry(context, matcher))],
-                ])
+                list.append(.object([
+                    "matcher": .string(matcher),
+                    "hooks": .array([hookValue(descriptor.buildEntry(context, matcher))]),
+                ]))
             }
-            group["enabled"] = true
-            group[listKey] = list
-            next[hookName] = group
+            group["enabled"] = .bool(true)
+            group[listKey] = .array(list)
+            next[hookName] = .object(group)
             return next
         case .flat(let hooksRootKey, let listKeys, let versionKey, let schemaVersion):
             var next = root
-            var hooksRoot = next[hooksRootKey] as? [String: Any] ?? [:]
+            var hooksRoot = next[hooksRootKey]?.asObject ?? [:]
             for key in listKeys {
-                var list = hooksRoot[key] as? [[String: Any]] ?? []
-                list.append(hookDictionary(descriptor.buildEntry(context, nil)))
-                hooksRoot[key] = list
+                var list = hooksRoot[key]?.asArray ?? []
+                list.append(hookValue(descriptor.buildEntry(context, nil)))
+                hooksRoot[key] = .array(list)
             }
-            next[hooksRootKey] = hooksRoot
+            next[hooksRootKey] = .object(hooksRoot)
             if let versionKey, let schemaVersion, next[versionKey] == nil {
-                next[versionKey] = schemaVersion
+                next[versionKey] = .number(Double(schemaVersion))
             }
             return next
         }
     }
 
-    /// Serializes one typed entry to its historical dict shape.
-    static func hookDictionary(_ entry: HookEntry) -> [String: Any] {
-        var dict: [String: Any] = [
-            "command": entry.command,
-            "timeout": entry.timeout,
+    /// Serializes one typed entry to its historical JSON shape.
+    static func hookValue(_ entry: HookEntry) -> JSONValue {
+        var dict: [String: JSONValue] = [
+            "command": .string(entry.command),
+            "timeout": .number(Double(entry.timeout)),
         ]
         if let type = entry.type {
-            dict["type"] = type
+            dict["type"] = .string(type)
         }
         if let failClosed = entry.failClosed {
-            dict["failClosed"] = failClosed
+            dict["failClosed"] = .bool(failClosed)
         }
         if let statusMessage = entry.statusMessage {
-            dict["statusMessage"] = statusMessage
+            dict["statusMessage"] = .string(statusMessage)
         }
-        return dict
+        return .object(dict)
     }
 
-    static func parseRoot(_ data: Data?) throws -> [String: Any] {
+    static func parseRoot(_ data: Data?) throws -> [String: JSONValue] {
         guard let data else { return [:] }
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let value = try? JSONDecoder().decode(JSONValue.self, from: data),
+              let object = value.asObject
+        else {
             throw HostHooksMergeError.unreadable
         }
         return object
     }
 
-    private static func encode(_ root: [String: Any]) throws -> Data {
-        guard JSONSerialization.isValidJSONObject(root) else {
+    private static func encode(_ root: [String: JSONValue]) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        guard let data = try? encoder.encode(JSONValue.object(root)) else {
             throw HostHooksMergeError.unreadable
         }
-        return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys, .prettyPrinted])
+        return data
     }
 }

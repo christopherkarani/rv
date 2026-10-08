@@ -1,6 +1,7 @@
 #if os(macOS)
 import Darwin
 import Foundation
+import RVDomain
 import Synchronization
 
 /// Identity of one workspace name, captured before the contained process runs.
@@ -1099,13 +1100,20 @@ private func createMountedDiskBody(
     return .success(MountedDisk(disk: disk, imagePath: image))
 }
 
-private func diskDevice(inPlist stdout: String) -> String? {
+/// `system-entities` from `hdiutil attach -plist` output as typed values.
+/// Plist XML carries only JSON-shaped values here (strings, booleans,
+/// arrays, dicts); malformed XML or anything outside that shape fails
+/// closed to nil.
+private func systemEntities(inPlist stdout: String) -> [JSONValue]? {
     guard let data = stdout.data(using: .utf8),
-        let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
-        let root = plist as? [String: Any],
-        let entities = root["system-entities"] as? [[String: Any]]
+        let root = try? PropertyListDecoder().decode(JSONValue.self, from: data)
     else { return nil }
-    let devices = entities.compactMap { $0["dev-entry"] as? String }
+    return root["system-entities"]?.asArray
+}
+
+private func diskDevice(inPlist stdout: String) -> String? {
+    guard let entities = systemEntities(inPlist: stdout) else { return nil }
+    let devices = entities.compactMap { $0["dev-entry"]?.string }
     return devices.first { $0.contains("disk") && $0.hasSuffix("s1") == false && $0.contains("s") == false }
         ?? devices.first
 }
@@ -1432,14 +1440,10 @@ private func diskDevice(in text: String) -> String? {
 /// whose content hint is Apple_HFS, or the sole partition when hints are
 /// absent (images rv creates carry exactly one volume).
 func hfsSliceDevice(inPlist stdout: String) -> String? {
-    guard let data = stdout.data(using: .utf8),
-        let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
-        let root = plist as? [String: Any],
-        let entities = root["system-entities"] as? [[String: Any]]
-    else { return nil }
+    guard let entities = systemEntities(inPlist: stdout) else { return nil }
     let devices: [(device: String, hint: String?)] = entities.compactMap { entity in
-        guard let device = entity["dev-entry"] as? String else { return nil }
-        return (device, entity["content-hint"] as? String)
+        guard let device = entity["dev-entry"]?.string else { return nil }
+        return (device, entity["content-hint"]?.string)
     }
     if let hfs = devices.first(where: { $0.hint == "Apple_HFS" }) {
         return hfs.device

@@ -101,7 +101,7 @@ let coreLibraryTargets: [Target] = [
     ),
     .target(name: "RVIPC", dependencies: ["RVDomain"]),
     .target(name: "RVHistory", dependencies: ["RVDomain", "RVFileStore"]),
-    .target(name: "RVAnalytics"),
+    .target(name: "RVAnalytics", dependencies: ["RVDomain"]),
     .target(name: "RVPresentation", dependencies: ["RVDomain", "RVTheme"]),
     .target(name: "RVTUI", dependencies: ["RVTheme", "RVPresentation"]),
     .target(
