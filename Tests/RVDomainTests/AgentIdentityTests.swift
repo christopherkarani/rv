@@ -390,6 +390,87 @@ private func typeName<T>(of value: T) -> String {
     #expect(AgentInstanceValidity.inactive.transition(.didDeactivate) == nil)
 }
 
+@Test func validity_establishMovesInactiveToActiveOnly() {
+    #expect(AgentInstanceValidity.inactive.transition(.didEstablish) == .active)
+    #expect(AgentInstanceValidity.active.transition(.didEstablish) == nil)
+    #expect(AgentInstanceValidity.revoking.transition(.didEstablish) == nil)
+    #expect(AgentInstanceValidity.unknown.transition(.didEstablish) == nil)
+}
+
+@Test func ledger_activationDecidesOverExplicitValues() {
+    let announced = AgentInstanceLedger.Record(
+        validity: .inactive, finished: false, teardownClaimed: false
+    )
+    #expect(
+        AgentInstanceLedger.decideActivate(announced, bindingMatches: true)
+            == .establish(next: .active)
+    )
+    #expect(
+        AgentInstanceLedger.decideActivate(announced, bindingMatches: false) == .refuse
+    )
+    let live = AgentInstanceLedger.Record(
+        validity: .active, finished: false, teardownClaimed: false
+    )
+    #expect(AgentInstanceLedger.decideActivate(live, bindingMatches: true) == .alreadyActive)
+    #expect(AgentInstanceLedger.decideActivate(live, bindingMatches: false) == .refuse)
+    for validity in [AgentInstanceValidity.revoking, .inactive, .unknown] {
+        for (finished, claimed) in [(true, false), (false, true), (true, true)] {
+            let dead = AgentInstanceLedger.Record(
+                validity: validity, finished: finished, teardownClaimed: claimed
+            )
+            #expect(AgentInstanceLedger.decideActivate(dead, bindingMatches: true) == .refuse)
+        }
+    }
+    let revoking = AgentInstanceLedger.Record(
+        validity: .revoking, finished: false, teardownClaimed: false
+    )
+    #expect(AgentInstanceLedger.decideActivate(revoking, bindingMatches: true) == .refuse)
+    let unknown = AgentInstanceLedger.Record(
+        validity: .unknown, finished: false, teardownClaimed: false
+    )
+    #expect(AgentInstanceLedger.decideActivate(unknown, bindingMatches: true) == .refuse)
+}
+
+@Test func ledger_revokeClaimNamesNeverActivePath() {
+    let live = AgentInstanceLedger.Record(
+        validity: .active, finished: false, teardownClaimed: false
+    )
+    #expect(
+        AgentInstanceLedger.decideRevokeClaim(live) == .beginRevoking(next: .revoking)
+    )
+    let announced = AgentInstanceLedger.Record(
+        validity: .inactive, finished: false, teardownClaimed: false
+    )
+    #expect(AgentInstanceLedger.decideRevokeClaim(announced) == .neverActive)
+    for validity in [AgentInstanceValidity.active, .revoking, .inactive, .unknown] {
+        let claimed = AgentInstanceLedger.Record(
+            validity: validity, finished: false, teardownClaimed: true
+        )
+        #expect(AgentInstanceLedger.decideRevokeClaim(claimed) == .refuse)
+    }
+}
+
+@Test func ledger_revokeFinishConfirmsInactiveExplicitly() {
+    for validity in [AgentInstanceValidity.active, .revoking, .unknown] {
+        let record = AgentInstanceLedger.Record(
+            validity: validity, finished: false, teardownClaimed: true
+        )
+        #expect(
+            AgentInstanceLedger.decideRevokeFinish(record) == .deactivate(next: .inactive)
+        )
+    }
+    let neverActive = AgentInstanceLedger.Record(
+        validity: .inactive, finished: false, teardownClaimed: true
+    )
+    #expect(AgentInstanceLedger.decideRevokeFinish(neverActive) == .confirmInactive)
+    for validity in [AgentInstanceValidity.active, .revoking, .inactive, .unknown] {
+        let finished = AgentInstanceLedger.Record(
+            validity: validity, finished: true, teardownClaimed: true
+        )
+        #expect(AgentInstanceLedger.decideRevokeFinish(finished) == .alreadyFinished)
+    }
+}
+
 @Test func status_transitionsAreForwardOnly() {
     #expect(AgentInstanceStatus.establishing.transition(.becameActive) == .active)
     #expect(AgentInstanceStatus.establishing.transition(.didFinish) == .finished)

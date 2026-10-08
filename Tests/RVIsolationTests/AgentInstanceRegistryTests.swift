@@ -220,6 +220,36 @@ private struct RegistryAdmissionHarness {
     }
 }
 
+/// Runs `parties` closures on detached threads behind an arrival gate so
+/// the racy registry calls overlap, then joins them. Returns results in
+/// party index order, or nil on timeout instead of hanging the suite.
+private func raceRegistryEdges<T: Sendable>(
+    parties: Int,
+    work: @Sendable @escaping (Int) -> T
+) -> [T]? {
+    let arrived = Mutex(0)
+    let results = Mutex<[T?]>(Array(repeating: nil, count: parties))
+    for index in 0..<parties {
+        Thread.detachNewThread {
+            arrived.withLock { $0 += 1 }
+            let gate = Date().addingTimeInterval(10)
+            while arrived.withLock({ $0 }) < parties, Date() < gate {
+                usleep(100)
+            }
+            results.withLock { $0[index] = work(index) }
+        }
+    }
+    let deadline = Date().addingTimeInterval(30)
+    while Date() < deadline {
+        let snapshot = results.withLock { $0 }
+        if snapshot.allSatisfy({ $0 != nil }) {
+            return snapshot.map { $0! }
+        }
+        usleep(1_000)
+    }
+    return nil
+}
+
 @Suite("AgentInstanceRegistry")
 struct AgentInstanceRegistryTests {
     @Test func runtimeBindsExactlyOneInstance() throws {
@@ -796,6 +826,161 @@ struct AgentInstanceRegistryTests {
         #expect(registry.instance(for: instance.id) == instance)
         #expect(registry.revoke(instance.id, reason: .establishmentFailed) { true } == .revoked)
         #expect(registry.validity(of: instance.id) == .inactive)
+    }
+
+    @Test func concurrentActivateJournalsSingleEstablishment() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (registry, url) = registryJournal(at: root)
+        let definition = makeRegistryDefinition()
+        let workspace = WorkspaceSessionID()
+        let runtime = RuntimeSessionID()
+        let instance = makeRegistryInstance(
+            definition: definition, workspace: workspace, runtime: runtime
+        )
+        #expect(registry.announce(instance))
+        let session = makeRegistrySession(runtime: runtime, workspace: workspace)
+        let established = try #require(EstablishedRuntimeSession(
+            session: session, instance: instance, establishedAt: Date()
+        ))
+        let parties = 8
+        let results = try #require(raceRegistryEdges(parties: parties) { _ in
+            registry.activate(established)?.validity
+        })
+        // Serialized edges: the winner commits the one establishment and
+        // every rival observes the live active record instead of journaling
+        // a phantom `.established` for an activation that never happened.
+        #expect(results.allSatisfy { $0 == .active })
+        #expect(registry.validity(of: instance.id) == .active)
+        #expect(registry.generation(of: instance.id) == 1)
+        #expect(AgentInstanceJournal.records(at: url).map(\.kind) == [.attempted, .established])
+    }
+
+    @Test func activateVersusRevokeNeverPhantomsEstablishment() throws {
+        for _ in 0..<20 {
+            let root = try temporaryRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let (registry, url) = registryJournal(at: root)
+            let definition = makeRegistryDefinition()
+            let workspace = WorkspaceSessionID()
+            let runtime = RuntimeSessionID()
+            let instance = makeRegistryInstance(
+                definition: definition, workspace: workspace, runtime: runtime
+            )
+            #expect(registry.announce(instance))
+            let session = makeRegistrySession(runtime: runtime, workspace: workspace)
+            let established = try #require(EstablishedRuntimeSession(
+                session: session, instance: instance, establishedAt: Date()
+            ))
+            let outcomes = try #require(raceRegistryEdges(parties: 2) { index in
+                if index == 0 {
+                    return registry.activate(established) != nil ? "activated" : "refused"
+                }
+                return registry.revoke(instance.id, reason: .explicitRevoke) { true } == .revoked
+                    ? "revoked" : "inactive"
+            })
+            #expect(outcomes[1] == "revoked")
+            #expect(registry.validity(of: instance.id) == .inactive)
+            // Either order is legal, but the journal always describes what
+            // happened: a commit implies its `.established` line, and a
+            // refusal implies none.
+            let kinds = AgentInstanceJournal.records(at: url).map(\.kind)
+            if outcomes[0] == "activated" {
+                #expect(kinds == [.attempted, .established, .revoking, .finished])
+            } else {
+                #expect(kinds == [.attempted, .finished])
+            }
+        }
+    }
+
+    @Test func revokeNeverActiveSkipsRevokingExplicitly() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (registry, url) = registryJournal(at: root)
+        let definition = makeRegistryDefinition()
+        let workspace = WorkspaceSessionID()
+        let runtime = RuntimeSessionID()
+        let instance = makeRegistryInstance(
+            definition: definition, workspace: workspace, runtime: runtime
+        )
+        #expect(registry.announce(instance))
+        #expect(registry.revoke(instance.id, reason: .establishmentFailed) { true } == .revoked)
+        #expect(registry.validity(of: instance.id) == .inactive)
+        #expect(registry.generation(of: instance.id) == 1)
+        let records = AgentInstanceJournal.records(at: url)
+        #expect(records.map(\.kind) == [.attempted, .finished])
+        #expect(records.last?.detail == "revoked:establishmentFailed")
+        #expect(registry.revoke(instance.id, reason: .explicitRevoke) { true } == .alreadyInactive)
+        #expect(registry.generation(of: instance.id) == 1)
+    }
+
+    @Test func refusedActivationLeavesJournalUntouched() throws {
+        let appends = Mutex(0)
+        let store = AgentInstanceJournalStore(
+            append: { _ in
+                appends.withLock { $0 += 1 }
+                return .success(())
+            },
+            file: nil
+        )
+        let registry = AgentInstanceRegistry(journal: store)
+        let definition = makeRegistryDefinition()
+        let workspace = WorkspaceSessionID()
+        // Unknown instance: nothing announced, nothing journaled.
+        let phantom = makeRegistryInstance(
+            definition: definition, workspace: workspace, runtime: RuntimeSessionID()
+        )
+        let phantomSession = makeRegistrySession(
+            runtime: phantom.runtimeSessionID, workspace: workspace
+        )
+        let phantomEstablished = try #require(EstablishedRuntimeSession(
+            session: phantomSession, instance: phantom, establishedAt: Date()
+        ))
+        #expect(registry.activate(phantomEstablished) == nil)
+        #expect(appends.withLock { $0 } == 0)
+        // Announced instance, mismatched binding: same id, other runtime.
+        let instance = makeRegistryInstance(
+            definition: definition, workspace: workspace, runtime: RuntimeSessionID()
+        )
+        #expect(registry.announce(instance))
+        #expect(appends.withLock { $0 } == 1)
+        let crossed = AgentInstance(
+            id: instance.id,
+            owner: instance.owner,
+            definitionID: instance.definitionID,
+            definitionRevision: instance.definitionRevision,
+            workspaceSessionID: workspace,
+            runtimeSessionID: RuntimeSessionID(),
+            executableEvidence: instance.executableEvidence,
+            assurance: instance.assurance,
+            groupLeader: instance.groupLeader,
+            workloadProcess: instance.workloadProcess,
+            parent: instance.parent,
+            effectiveAuthority: instance.effectiveAuthority,
+            delegableAuthority: instance.delegableAuthority,
+            mintedAt: instance.mintedAt
+        )
+        let crossedSession = makeRegistrySession(
+            runtime: crossed.runtimeSessionID, workspace: workspace
+        )
+        let crossedEstablished = try #require(EstablishedRuntimeSession(
+            session: crossedSession, instance: crossed, establishedAt: Date()
+        ))
+        #expect(registry.activate(crossedEstablished) == nil)
+        #expect(appends.withLock { $0 } == 1)
+        // Finished instance: the one establishment stands, refusals add nothing.
+        let session = makeRegistrySession(
+            runtime: instance.runtimeSessionID, workspace: workspace
+        )
+        let established = try #require(EstablishedRuntimeSession(
+            session: session, instance: instance, establishedAt: Date()
+        ))
+        _ = try #require(registry.activate(established))
+        #expect(appends.withLock { $0 } == 2)
+        #expect(registry.revoke(instance.id, reason: .explicitRevoke) { true } == .revoked)
+        let journaled = appends.withLock { $0 }
+        #expect(registry.activate(established) == nil)
+        #expect(appends.withLock { $0 } == journaled)
     }
 
     @Test func suppressedExecuteKeepsPrincipalAttribution() throws {

@@ -45,6 +45,16 @@ final class AgentInstanceRegistry: Sendable {
         /// revoke that runs teardown; concurrent revokes observe the claim
         /// and run nothing. Set before teardown starts, never cleared.
         var teardownClaimed: Bool
+
+        /// Explicit value inputs for `AgentInstanceLedger`. Copied out from
+        /// under the lock; the ledger never reads the lock itself.
+        var ledgerRecord: AgentInstanceLedger.Record {
+            AgentInstanceLedger.Record(
+                validity: validity,
+                finished: finished,
+                teardownClaimed: teardownClaimed
+            )
+        }
     }
 
     private struct State: Sendable {
@@ -53,6 +63,13 @@ final class AgentInstanceRegistry: Sendable {
     }
 
     private let state = Mutex(State())
+    /// Serializes validity-edge mutations: activation's decide → journal →
+    /// commit, and revoke's claim. A journaled `.established` therefore
+    /// always commits — no rival activation or revoke claim interleaves
+    /// between the journal append and the commit, so refused activations
+    /// leave no phantom line. Lock order is edges → state, never the
+    /// reverse; reads take state only, and teardown runs under neither.
+    private let edges = Mutex(())
     private let journal: AgentInstanceJournalStore
 
     init(journal: AgentInstanceJournalStore = .production) {
@@ -100,41 +117,48 @@ final class AgentInstanceRegistry: Sendable {
     ///
     /// The pairing proof is structural: `EstablishedRuntimeSession` exists
     /// only when the instance names this session and workspace. Returns nil —
-    /// without touching live state — for an unannounced, revoked, or
-    /// already-finished instance, or when the journal append fails.
+    /// without touching live state or the journal — for an unannounced,
+    /// revoked, or already-finished instance, or when the journal append
+    /// fails. The edge routes through `AgentInstanceLedger` and
+    /// `transition(.didEstablish)`; decide, journal, and commit hold the
+    /// edge serializer, so a journaled `.established` always commits.
     func activate(_ established: EstablishedRuntimeSession) -> AuthenticatedAgentContext? {
-        let current = state.withLock { $0.byInstance[established.agentInstanceID] }
-        guard let current,
-            current.finished == false,
-            current.teardownClaimed == false,
-            current.instance.runtimeSessionID == established.session.id,
-            current.instance.workspaceSessionID == established.session.workspaceSessionID
-        else {
-            return nil
-        }
-        if current.validity == .active {
-            return AuthenticatedAgentContext(instance: current.instance, validity: .active)
-        }
-        guard current.validity == .inactive else { return nil }
-        let record = journalRecord(current.instance, kind: .established, detail: nil)
-        guard case .success = journal.append(record) else { return nil }
-        state.withLock { state in
-            guard var live = state.byInstance[established.agentInstanceID],
-                live.finished == false, live.teardownClaimed == false,
-                live.validity == .inactive
-            else {
-                return
+        edges.withLock { _ in
+            let current = state.withLock { $0.byInstance[established.agentInstanceID] }
+            guard let current else { return nil }
+            let bindingMatches =
+                current.instance.runtimeSessionID == established.session.id
+                && current.instance.workspaceSessionID == established.session.workspaceSessionID
+            switch AgentInstanceLedger.decideActivate(current.ledgerRecord, bindingMatches: bindingMatches) {
+            case .refuse:
+                return nil
+            case .alreadyActive:
+                return AuthenticatedAgentContext(instance: current.instance, validity: .active)
+            case .establish(let next):
+                let record = journalRecord(current.instance, kind: .established, detail: nil)
+                guard case .success = journal.append(record) else { return nil }
+                // The commit re-runs the ledger on the fresh record. It is
+                // stable: the edge serializer admits no rival activation or
+                // revoke claim between decide and commit, and a revoke
+                // finish for this record implies a claim the decide already
+                // refused on.
+                return state.withLock { state -> AuthenticatedAgentContext? in
+                    guard var live = state.byInstance[established.agentInstanceID],
+                        case .establish(let commit) = AgentInstanceLedger.decideActivate(
+                            live.ledgerRecord,
+                            bindingMatches: bindingMatches
+                        ),
+                        commit == next
+                    else {
+                        return nil
+                    }
+                    live.validity = commit
+                    live.generation += 1
+                    state.byInstance[established.agentInstanceID] = live
+                    return AuthenticatedAgentContext(instance: live.instance, validity: commit)
+                }
             }
-            live.validity = .active
-            live.generation += 1
-            state.byInstance[established.agentInstanceID] = live
         }
-        guard let live = state.withLock({ $0.byInstance[established.agentInstanceID] }),
-            live.validity == .active
-        else {
-            return nil
-        }
-        return AuthenticatedAgentContext(instance: live.instance, validity: .active)
     }
 
     /// Authoritative live validity. `.unknown` was never announced.
@@ -211,23 +235,32 @@ final class AgentInstanceRegistry: Sendable {
         reason: AgentRevokeReason,
         teardown: @Sendable () -> Bool
     ) -> AgentRevokeOutcome {
-        let snapshot = state.withLock { state -> LiveRecord? in
-            guard var live = state.byInstance[id], live.teardownClaimed == false else {
-                // Unknown instance, or teardown already claimed — in flight
-                // or finished. Authority is already dead: an active record
-                // leaves `.active` in the same critical section that claims.
-                return nil
-            }
-            if live.validity == .active {
-                guard let revoking = live.validity.transition(.beginRevoking) else {
+        let snapshot = edges.withLock { _ in
+            state.withLock { state -> LiveRecord? in
+                guard var live = state.byInstance[id] else {
                     return nil
                 }
-                live.validity = revoking
-                live.generation += 1
+                switch AgentInstanceLedger.decideRevokeClaim(live.ledgerRecord) {
+                case .refuse:
+                    // Teardown already claimed — in flight or finished.
+                    // Authority is already dead: an active record leaves
+                    // `.active` in the same critical section that claims.
+                    return nil
+                case .beginRevoking(let next):
+                    live.validity = next
+                    live.generation += 1
+                    live.teardownClaimed = true
+                    state.byInstance[id] = live
+                    return live
+                case .neverActive:
+                    // Never became active: no `.revoking` edge, no
+                    // generation advance for the claim. Teardown still
+                    // runs exactly once and the finish below still lands.
+                    live.teardownClaimed = true
+                    state.byInstance[id] = live
+                    return live
+                }
             }
-            live.teardownClaimed = true
-            state.byInstance[id] = live
-            return live
         }
         guard let snapshot else {
             if state.withLock({ $0.byInstance[id] == nil }) {
@@ -241,15 +274,24 @@ final class AgentInstanceRegistry: Sendable {
         }
         let clean = teardown()
         state.withLock { state in
-            guard var live = state.byInstance[id], live.finished == false else { return }
-            if let inactive = live.validity.transition(.didDeactivate) {
-                live.validity = inactive
-            } else {
+            guard var live = state.byInstance[id] else { return }
+            switch AgentInstanceLedger.decideRevokeFinish(live.ledgerRecord) {
+            case .alreadyFinished:
+                return
+            case .deactivate(let next):
+                live.validity = next
+                live.generation += 1
+                live.finished = true
+                state.byInstance[id] = live
+            case .confirmInactive:
+                // Never-active record: no `.didDeactivate` edge exists
+                // from `.inactive`, so the ledger names the path
+                // explicitly instead of a silent fallback assignment.
                 live.validity = .inactive
+                live.generation += 1
+                live.finished = true
+                state.byInstance[id] = live
             }
-            live.generation += 1
-            live.finished = true
-            state.byInstance[id] = live
         }
         var detail = "revoked:" + reason.rawValue
         if clean == false {

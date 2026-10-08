@@ -82,6 +82,8 @@ public enum AgentInstanceValidity: String, Hashable, Sendable, Equatable, Codabl
 
     public func transition(_ event: AgentInstanceValidityEvent) -> AgentInstanceValidity? {
         switch (self, event) {
+        case (.inactive, .didEstablish):
+            .active
         case (.active, .beginRevoking):
             .revoking
         case (.active, .didDeactivate), (.revoking, .didDeactivate), (.unknown, .didDeactivate):
@@ -94,8 +96,105 @@ public enum AgentInstanceValidity: String, Hashable, Sendable, Equatable, Codabl
 
 /// Legal moves on `AgentInstanceValidity`. Anything else is refused.
 public enum AgentInstanceValidityEvent: Hashable, Sendable, Equatable {
+    case didEstablish
     case beginRevoking
     case didDeactivate
+}
+
+/// Pure AgentInstance lifecycle ledger. No clock, filesystem, or lock reads.
+///
+/// The registry copies one `Record` of explicit values out from under its
+/// lock and decides here; every validity edge — activation, revoke claim,
+/// revoke finish — routes through `transition(_:)`, so the decisions are
+/// total over their inputs and testable without a registry. The ledger
+/// returns the next validity to commit; journaling and generation stay
+/// with the caller.
+public enum AgentInstanceLedger: Sendable {
+    /// Decision inputs for one live record. Values only; the ledger never
+    /// observes a lock.
+    public struct Record: Hashable, Sendable, Equatable {
+        public let validity: AgentInstanceValidity
+        public let finished: Bool
+        public let teardownClaimed: Bool
+
+        public init(validity: AgentInstanceValidity, finished: Bool, teardownClaimed: Bool) {
+            self.validity = validity
+            self.finished = finished
+            self.teardownClaimed = teardownClaimed
+        }
+    }
+
+    /// Activation decision. Total over (`Record`, `bindingMatches`).
+    public enum Activation: Hashable, Sendable, Equatable {
+        /// Journal `.established`, then commit `next`. Fail-closed: a
+        /// journal failure refuses without touching live state.
+        case establish(next: AgentInstanceValidity)
+        /// Already usable: return the live context, journal nothing.
+        case alreadyActive
+        /// Refuse: return nil, journal nothing, touch nothing.
+        case refuse
+    }
+
+    public static func decideActivate(
+        _ record: Record,
+        bindingMatches: Bool
+    ) -> Activation {
+        guard bindingMatches, record.finished == false, record.teardownClaimed == false else {
+            return .refuse
+        }
+        if record.validity == .active {
+            return .alreadyActive
+        }
+        guard let next = record.validity.transition(.didEstablish) else {
+            return .refuse
+        }
+        return .establish(next: next)
+    }
+
+    /// Revoke-claim decision. Total over `Record`.
+    public enum RevokeClaim: Hashable, Sendable, Equatable {
+        /// Move to `next`, claim teardown, journal `.revoking`.
+        case beginRevoking(next: AgentInstanceValidity)
+        /// The instance never became active: claim teardown and finish
+        /// without a `.revoking` edge or journal line. Totality-wise this
+        /// also covers any other non-active validity; only `.active`
+        /// carries a revoking edge.
+        case neverActive
+        /// Teardown is already claimed: this revoke runs nothing.
+        case refuse
+    }
+
+    public static func decideRevokeClaim(_ record: Record) -> RevokeClaim {
+        guard record.teardownClaimed == false else {
+            return .refuse
+        }
+        guard let next = record.validity.transition(.beginRevoking) else {
+            return .neverActive
+        }
+        return .beginRevoking(next: next)
+    }
+
+    /// Revoke-finish decision. Total over `Record`.
+    public enum RevokeFinish: Hashable, Sendable, Equatable {
+        /// Move to `next` via the `.didDeactivate` edge.
+        case deactivate(next: AgentInstanceValidity)
+        /// Never-active record: already `.inactive`, so there is no
+        /// `.didDeactivate` edge to take. Still finishes and still
+        /// advances the generation exactly like a deactivation.
+        case confirmInactive
+        /// Already finished: no-op.
+        case alreadyFinished
+    }
+
+    public static func decideRevokeFinish(_ record: Record) -> RevokeFinish {
+        guard record.finished == false else {
+            return .alreadyFinished
+        }
+        guard let next = record.validity.transition(.didDeactivate) else {
+            return .confirmInactive
+        }
+        return .deactivate(next: next)
+    }
 }
 
 /// Parent link plus the authority snapshot RV granted the child.
