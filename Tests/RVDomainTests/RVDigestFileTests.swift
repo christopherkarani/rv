@@ -1,75 +1,30 @@
-import Foundation
 import Testing
 import RVDomain
 
-// M4: file-content hashing for custom-launch executable binding. The
-// chunked file reader must agree byte-for-byte with the single-shot
-// hasher, and every unreadable shape must fail closed (nil), never a
-// partial-content digest.
+// Pure byte-vector tests for the domain hasher. File-I/O coverage
+// lives with the shell-side reader in
+// Tests/RVIsolationTests/ExecutableDigestTests.swift.
 
 struct RVDigestFileTests {
-    @Test func fileHashMatchesSingleShot() throws {
-        let url = try writeTemp(bytes: Array("hello executable".utf8))
-        #expect(RVDigest.sha256HexOfFile(atPath: url.path) == RVDigest.sha256Hex(Array("hello executable".utf8)))
-    }
-
-    @Test func emptyFileHashesAsEmpty() throws {
-        let url = try writeTemp(bytes: [])
-        #expect(RVDigest.sha256HexOfFile(atPath: url.path) == RVDigest.sha256Hex([]))
-    }
-
-    @Test func multiChunkFileMatchesSingleShot() throws {
-        var bytes: [UInt8] = []
-        for index in 0..<(200 * 1024) {
-            bytes.append(UInt8(index & 0xFF))
-        }
-        let url = try writeTemp(bytes: bytes)
-        #expect(RVDigest.sha256HexOfFile(atPath: url.path) == RVDigest.sha256Hex(bytes))
-    }
-
-    @Test func missingFileIsNil() {
+    @Test func emptyDigestKnownAnswer() {
         #expect(
-            RVDigest.sha256HexOfFile(atPath: "/nonexistent-rv-dir-\(UUID().uuidString)/nope") == nil
+            RVDigest.sha256Hex([])
+                == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         )
     }
 
-    @Test func directoryIsNil() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-digest-dir-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        #expect(RVDigest.sha256HexOfFile(atPath: dir.path) == nil)
-    }
-
-    @Test func maxBytesAllowsExactSize() throws {
-        let bytes = Array("capped executable".utf8)
-        let url = try writeTemp(bytes: bytes)
+    @Test func abcDigestKnownAnswer() {
         #expect(
-            RVDigest.sha256HexOfFile(atPath: url.path, maxBytes: UInt64(bytes.count))
-                == RVDigest.sha256Hex(bytes)
+            RVDigest.sha256Hex(Array("abc".utf8))
+                == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         )
     }
 
-    @Test func maxBytesRefusesOverflow() throws {
-        let bytes = Array("capped executable".utf8)
-        let url = try writeTemp(bytes: bytes)
-        #expect(
-            RVDigest.sha256HexOfFile(atPath: url.path, maxBytes: UInt64(bytes.count) - 1) == nil
-        )
-    }
-
-    @Test func maxBytesZeroBoundary() throws {
-        let empty = try writeTemp(bytes: [])
-        #expect(
-            RVDigest.sha256HexOfFile(atPath: empty.path, maxBytes: 0) == RVDigest.sha256Hex([])
-        )
-        let one = try writeTemp(bytes: [0x41])
-        #expect(RVDigest.sha256HexOfFile(atPath: one.path, maxBytes: 0) == nil)
-    }
-
-    private func writeTemp(bytes: [UInt8]) throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("rv-digest-\(UUID().uuidString)")
-        try Data(bytes).write(to: url)
-        return url
+    @Test func distinctInputsDistinctDigests() {
+        let one = RVDigest.sha256Hex(Array("hello executable".utf8))
+        #expect(one.count == 64)
+        #expect(one == one.lowercased())
+        #expect(one == RVDigest.sha256Hex(Array("hello executable".utf8)))
+        #expect(one != RVDigest.sha256Hex(Array("hello executablf".utf8)))
     }
 }

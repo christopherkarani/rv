@@ -23,7 +23,7 @@ struct IdentityAmbientCredentialTests {
         try #require(ProcessInfo.processInfo.environment["HOME"] == fixture.home.path)
         // M4: custom preparation measures the executable against the
         // authorized digest; the fixture authorizes the real bytes.
-        let shDigest = try #require(RVDigest.sha256HexOfFile(atPath: "/bin/sh"))
+        let shDigest = try #require(fileSHA256Hex(atPath: "/bin/sh"))
         let selection = try AgentLaunchSelection.resolveCustom(
             executable: "/bin/sh", expectedContentDigestSHA256: shDigest
         ).get()

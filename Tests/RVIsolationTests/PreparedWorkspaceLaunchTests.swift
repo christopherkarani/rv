@@ -151,7 +151,7 @@ struct PreparedWorkspaceLaunchTests {
         defer { _ = supervisor.close() }
         // M4: custom preparation measures the executable against the
         // authorized digest; the fixture authorizes the real bytes.
-        let digest = try #require(RVDigest.sha256HexOfFile(atPath: "/bin/sleep"))
+        let digest = try #require(fileSHA256Hex(atPath: "/bin/sleep"))
         let selection = try preparedCustomSelection(executable: "/bin/sleep", digest: digest)
         let (host, generation) = preparedHost()
         let prepared = try supervisor.prepareIdentityLaunch(
