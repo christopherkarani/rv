@@ -40,10 +40,8 @@ struct Packs: AsyncParsableCommand {
     var format: FormatFlags
 
     func run() async throws {
-        guard let home = CLIProcess.home() else {
-            FileHandle.standardError.write(Data("rv packs: HOME is not set\n".utf8))
-            throw ExitCode(1)
-        }
+        let ctx = CommandContext.current(command: "packs", format: format)
+        let home = try ctx.requireHome()
         // Always load the full snapshot; filtering is local so JSON and pretty share the same view.
         let full = try PacksFacade.list(home: home, enabledOnly: false)
         let filtered = PacksListFilter.apply(
@@ -54,14 +52,14 @@ struct Packs: AsyncParsableCommand {
         )
         let rows = filtered.packs
 
-        if format.json || format.robot {
+        if ctx.explicitRobot {
             let payload = packsRobotPayload(
                 rows: rows.map(packsRobotRow),
                 enabledCount: filtered.enabledCount,
                 totalCount: filtered.totalCount
             )
             let text = try RobotDocument.packsList(payload).render()
-            FileHandle.standardOutput.write(Data((text + "\n").utf8))
+            ctx.writeStdout(text + "\n")
             return
         }
 
@@ -74,7 +72,7 @@ struct Packs: AsyncParsableCommand {
             } else {
                 hint = "No packs found.\n"
             }
-            FileHandle.standardOutput.write(Data(hint.utf8))
+            ctx.writeStdout(hint)
             return
         }
 
@@ -103,14 +101,8 @@ struct Packs: AsyncParsableCommand {
             totalCount: filtered.totalCount
         )
 
-        let appearance = CLIAppearance.resolve(
-            json: format.json,
-            robot: format.robot,
-            plain: format.plain,
-            noColor: format.noColor
-        )
-        let text = PacksListFormat.prettyGrouped(model, appearance: appearance, verbose: verboseFlag, expand: expandFlag, maxPatterns: maxPat, collapsed: false)
-        FileHandle.standardOutput.write(Data(text.utf8))
+        let text = PacksListFormat.prettyGrouped(model, appearance: ctx.appearance, verbose: verboseFlag, expand: expandFlag, maxPatterns: maxPat, collapsed: false)
+        ctx.writeStdout(text)
     }
 
     struct Enable: AsyncParsableCommand {
@@ -154,23 +146,20 @@ struct Packs: AsyncParsableCommand {
         var id: String
 
         func run() async throws {
-            guard let home = CLIProcess.home() else {
-                FileHandle.standardError.write(Data("rv packs: HOME is not set\n".utf8))
-                throw ExitCode(1)
-            }
+            let ctx = CommandContext.current(command: "packs", format: format)
+            let home = try ctx.requireHome()
             let row: PacksListRow
             do {
                 guard let packID = PackID(validating: id) else {
-                    FileHandle.standardError.write(Data("unknown pack id: \(id)\n".utf8))
-                    throw ExitCode(1)
+                    try ctx.fail("unknown pack id: \(id)\n")
                 }
                 row = try PacksFacade.info(home: home, id: packID)
             } catch PacksCommandError.packNotFound {
                 throw ExitCode(1)
             }
-            if format.json || format.robot {
+            if ctx.explicitRobot {
                 let text = try RobotDocument.packsInfo(packsRobotRow(row)).render()
-                FileHandle.standardOutput.write(Data((text + "\n").utf8))
+                ctx.writeStdout(text + "\n")
                 return
             }
             let lines = [
@@ -181,7 +170,7 @@ struct Packs: AsyncParsableCommand {
                 "safe_patterns: \(row.safePatternCount)",
                 "destructive_patterns: \(row.destructivePatternCount)",
             ]
-            FileHandle.standardOutput.write(Data((lines.joined(separator: "\n") + "\n").utf8))
+            ctx.writeStdout(lines.joined(separator: "\n") + "\n")
         }
     }
 }
@@ -231,21 +220,16 @@ func applyPackMutation(ids: [String], enabling: Bool) throws {
     guard !ids.isEmpty else {
         throw ValidationError("missing pack id")
     }
-    guard let home = CLIProcess.home() else {
-        FileHandle.standardError.write(Data("rv packs: HOME is not set\n".utf8))
-        throw ExitCode(1)
-    }
+    let home = try CommandContext.requireHome(command: "packs")
     let result: PacksMutationResult
     do {
         result = enabling
             ? try PacksFacade.enable(home: home, ids: ids)
             : try PacksFacade.disable(home: home, ids: ids)
     } catch PacksCommandError.unknownID(let token) {
-        FileHandle.standardError.write(Data("unknown pack id: \(token.rawValue)\n".utf8))
-        throw ExitCode(1)
+        try CommandContext.fail("unknown pack id: \(token.rawValue)\n")
     } catch PacksCommandError.criticalPatternUncompilable(let rule) {
-        FileHandle.standardError.write(Data("critical pattern uncompilable: \(rule.rawValue)\n".utf8))
-        throw ExitCode(1)
+        try CommandContext.fail("critical pattern uncompilable: \(rule.rawValue)\n")
     } catch {
         throw ExitCode(1)
     }
@@ -253,7 +237,7 @@ func applyPackMutation(ids: [String], enabling: Bool) throws {
     let changed = result.changed.isEmpty ? "none" : result.changed.map(\.rawValue).joined(separator: ", ")
     let line =
         "\(verb): \(changed) (\(result.enabledCount)/\(result.totalCount) enabled)\n"
-    FileHandle.standardOutput.write(Data(line.utf8))
+    CommandContext.writeStdout(line)
 }
 
 enum PacksListFormat {

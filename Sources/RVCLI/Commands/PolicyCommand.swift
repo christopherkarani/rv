@@ -21,10 +21,8 @@ struct Policy: AsyncParsableCommand {
         var format: FormatFlags
 
         func run() async throws {
-            guard let home = CLIProcess.home() else {
-                FileHandle.standardError.write(Data("rv policy show: HOME is not set\n".utf8))
-                throw ExitCode(1)
-            }
+            let ctx = CommandContext.current(command: "policy show", format: format)
+            let home = try ctx.requireHome()
             let workspace = URL(
                 fileURLWithPath: CLIProcess.workspacePath(),
                 isDirectory: true
@@ -33,25 +31,19 @@ struct Policy: AsyncParsableCommand {
             do {
                 snapshot = try PolicyShowRun.load(home: home, workspace: workspace)
             } catch {
-                FileHandle.standardError.write(
-                    Data("rv policy show: invalid policy file\n".utf8)
-                )
-                throw ExitCode(1)
+                try ctx.fail("rv policy show: invalid policy file\n")
             }
             let text: String
-            if format.json || format.robot {
+            if ctx.explicitRobot {
                 do {
                     text = try PolicyShowRun.robot(snapshot)
                 } catch {
-                    FileHandle.standardError.write(
-                        Data("rv policy show: encode failed\n".utf8)
-                    )
-                    throw ExitCode(1)
+                    try ctx.fail("rv policy show: encode failed\n")
                 }
             } else {
                 text = PolicyShowRun.pretty(snapshot)
             }
-            FileHandle.standardOutput.write(Data((text + "\n").utf8))
+            ctx.writeStdout(text + "\n")
         }
     }
 
@@ -69,17 +61,12 @@ struct Policy: AsyncParsableCommand {
             if let path {
                 target = .file(URL(fileURLWithPath: path))
             } else {
-                guard let home = CLIProcess.home() else {
-                    FileHandle.standardError.write(Data("rv policy validate: HOME is not set\n".utf8))
-                    throw ExitCode(1)
-                }
-                target = .machine(home)
+                target = .machine(try CommandContext.requireHome(command: "policy validate"))
             }
             do {
                 try PolicyValidateRun.validate(target)
             } catch {
-                FileHandle.standardError.write(Data("rv policy validate: invalid policy file\n".utf8))
-                throw ExitCode(2)
+                try CommandContext.fail("rv policy validate: invalid policy file\n", exitCode: 2)
             }
         }
     }
@@ -97,10 +84,7 @@ struct Policy: AsyncParsableCommand {
         var output: String?
 
         func run() throws {
-            guard let home = CLIProcess.home() else {
-                FileHandle.standardError.write(Data("rv policy export: HOME is not set\n".utf8))
-                throw ExitCode(1)
-            }
+            let home = try CommandContext.requireHome(command: "policy export")
             let workspace = URL(
                 fileURLWithPath: CLIProcess.workspacePath(),
                 isDirectory: true
@@ -112,8 +96,7 @@ struct Policy: AsyncParsableCommand {
                     ? try session.loadRepoDocument()
                     : try session.loadMachineDocument()
             } catch {
-                FileHandle.standardError.write(Data("rv policy export: invalid policy file\n".utf8))
-                throw ExitCode(1)
+                try CommandContext.fail("rv policy export: invalid policy file\n")
             }
             let text = PolicyDocumentTOML.render(document)
             if let output {
@@ -122,11 +105,10 @@ struct Policy: AsyncParsableCommand {
                 do {
                     try text.write(to: url, atomically: true, encoding: .utf8)
                 } catch {
-                    FileHandle.standardError.write(Data("rv policy export: write failed\n".utf8))
-                    throw ExitCode(1)
+                    try CommandContext.fail("rv policy export: write failed\n")
                 }
             } else {
-                FileHandle.standardOutput.write(Data(text.utf8))
+                CommandContext.writeStdout(text)
             }
         }
     }
@@ -147,10 +129,7 @@ struct Policy: AsyncParsableCommand {
         var repo = false
 
         func run() throws {
-            guard let home = CLIProcess.home() else {
-                FileHandle.standardError.write(Data("rv policy apply: HOME is not set\n".utf8))
-                throw ExitCode(1)
-            }
+            let home = try CommandContext.requireHome(command: "policy apply")
             let workspace = URL(
                 fileURLWithPath: CLIProcess.workspacePath(),
                 isDirectory: true
@@ -159,8 +138,7 @@ struct Policy: AsyncParsableCommand {
             do {
                 incoming = try PolicyDocumentRun.load(URL(fileURLWithPath: path))
             } catch {
-                FileHandle.standardError.write(Data("rv policy apply: invalid policy file\n".utf8))
-                throw ExitCode(1)
+                try CommandContext.fail("rv policy apply: invalid policy file\n")
             }
             let session = PolicyWorkspace(home: home, workspace: workspace)
             let layer: PolicyDocumentLayer = repo ? .repo : .machine
@@ -168,19 +146,17 @@ struct Policy: AsyncParsableCommand {
             do {
                 merged = try session.mergeIncoming(incoming, layer: layer, save: false)
             } catch {
-                FileHandle.standardError.write(Data("rv policy apply: invalid policy file\n".utf8))
-                throw ExitCode(1)
+                try CommandContext.fail("rv policy apply: invalid policy file\n")
             }
             let preview = merged.rules.map { "  \(formatDocumentRule($0))" }.joined(separator: "\n")
             let body = preview.isEmpty ? "  (none)" : preview
-            FileHandle.standardOutput.write(Data(("apply\n\(body)\n").utf8))
+            CommandContext.writeStdout("apply\n\(body)\n")
             if save {
                 try LocalControlBoundary.requireOwnerAuthorization()
                 do {
                     _ = try session.mergeIncoming(incoming, layer: layer, save: true)
                 } catch {
-                    FileHandle.standardError.write(Data("rv policy apply: write failed\n".utf8))
-                    throw ExitCode(1)
+                    try CommandContext.fail("rv policy apply: write failed\n")
                 }
             }
         }

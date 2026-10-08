@@ -75,15 +75,20 @@ public enum HelpDispatch {
             stdoutIsTTY: ttyOut,
             environment: CLIProcess.context?.environment ?? environment
         )
-        let appearance = CLIAppearance.resolve(probe: probe, requested: .automatic)
+        let ctx = CommandContext(
+            command: "help",
+            probe: probe,
+            requested: .automatic,
+            explicitRobot: false
+        )
         let palette: Palette
-        switch appearance {
+        switch ctx.appearance {
         case .robot:
             palette = colorOffPalette
         case .pretty(let painted):
             palette = painted
         }
-        FileHandle.standardOutput.write(Data(text(topic, palette: palette).utf8))
+        CommandContext.writeStdout(text(topic, palette: palette))
         return true
     }
 

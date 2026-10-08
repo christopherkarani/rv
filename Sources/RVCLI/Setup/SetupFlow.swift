@@ -45,7 +45,7 @@ struct SetupFlow {
         guard let env = makeEnvironment() else {
             return SetupOutcome(
                 stdout: "",
-                stderr: "rv \(intent.kind.failureCommand.rawValue): HOME is not set\n",
+                stderr: CommandContext.homeMissingText(command: intent.kind.failureCommand.rawValue),
                 exitCode: 1
             )
         }
