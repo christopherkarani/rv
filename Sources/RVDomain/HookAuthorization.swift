@@ -1,18 +1,22 @@
-/// Whether the Policy gate may consider a live result. Host-free; no Ask.
 public enum PolicyGateAccess: Sendable, Equatable {
-    case skip
     case consider
+    case skip
 }
 
-/// One hook-door authorization. Ask, mint, record, and Policy-gate skip share this.
+/// One hook-door authorization. Decided by policy, never by caller host.
+///
+/// Step 8B policy/transport split: `project` answers "does this operation
+/// require human approval?" with no host input. Transport routing (which
+/// approval surface, which wire bytes) happens downstream and can never
+/// convert ASK into ALLOW.
 public enum HookAuthorization: Sendable, Equatable {
     case allow
-    case denyPinned(Deny)
-    case denyUnlockable(Deny)
-    case ask(ApprovalContinuation)
+    case denyPinned
+    case ask
 
-    /// Semantic hard bind. Pack denials (`boundReview == nil`) and
-    /// `mandatoryHuman` still reach PolicyGate (peek/apply and Host Ask).
+    /// Which live results may consult PolicyGate. Semantic hard bind only:
+    /// pack denials (`boundReview == nil`) and `mandatoryHuman` still reach
+    /// PolicyGate so allow-once grants, allowlist, and rebase recovery apply.
     public static func policyGateAccess(for result: EvaluationResult) -> PolicyGateAccess {
         if case .deny = result.boundReview {
             return .skip
@@ -20,170 +24,97 @@ public enum HookAuthorization: Sendable, Equatable {
         return .consider
     }
 
-    /// Pin half: secrets, builtin.action, unwrap-limited analysis, protected-path.
-    /// `mandatoryHuman` is Ask/spend, not this pin, unless analysis is already
-    /// unwrap-limited or protected-path.
+    /// Pinned when no human transport may ever allow it.
     public static func isPinned(_ result: EvaluationResult) -> Bool {
-        if result.analysis.innermost == .unwrapLimited {
+        if result.analysis.innermost == .unwrapLimited { return true }
+        if let scope = result.analysis.filesystemAction?.primaryTarget?.scope,
+            case .protectedPath = scope
+        {
             return true
         }
-        if case .protectedPath? = result.analysis.filesystemAction?.primaryTarget?.scope {
-            return true
-        }
-        if case .mandatoryHuman = result.boundReview {
-            return false
-        }
-        if case .deny(let deny) = result.decision, isPinnedPack(deny) {
+        if case .deny = result.boundReview { return true }
+        guard case .deny(let deny) = result.decision else { return false }
+        if deny.ruleID.pack == .coreSecrets { return true }
+        if deny.ruleID.pack == ActionPolicyEngine.Builtin.pack {
+            // A carried mandatory-human bind is an explicit human-review
+            // request: human transports may oblige. Any other builtin
+            // deny (shared branch, outside repo, discard, leftover) pins.
+            if case .mandatoryHuman = result.boundReview { return false }
             return true
         }
         return false
     }
 
-    /// Yes for an unpinned deny with cwd and a nonempty matching view.
+    /// Unlockable when a human transport (RVOperatorUI or TTY allow-once)
+    /// may allow exactly this action once.
     public static func isUnlockable(result: EvaluationResult, cwd: WorkingDirectory?) -> Bool {
         guard case .deny = result.decision else { return false }
-        guard isPinned(result) == false else { return false }
-        guard cwd != nil else { return false }
-        guard result.matchingView.isEmpty == false else { return false }
-        return true
+        guard cwd != nil, result.matchingView.isEmpty == false else { return false }
+        return isPinned(result) == false
     }
 
-    /// After apply stayed deny. Not peek. Not Ask. Host-free.
-    public static func shouldMintUnlock(result: EvaluationResult, cwd: WorkingDirectory?) -> Bool {
-        if case .deny = result.boundReview { return false }
+    /// Host-free policy: this operation requires human authorization.
+    /// Either an unlockable deny or a carried mandatory-human bind with a
+    /// spendable action shape. Indeterminate never asks: an unfinished
+    /// evaluation is denied, not delegated to a human.
+    public static func requiresHuman(result: EvaluationResult, cwd: WorkingDirectory?) -> Bool {
+        if case .mandatoryHuman = result.boundReview,
+            cwd != nil,
+            result.matchingView.isEmpty == false
+        {
+            if case .indeterminate = result.decision {
+                return false
+            }
+            return true
+        }
         return isUnlockable(result: result, cwd: cwd)
     }
 
-    public static func project(
-        host: HookHost,
-        live: LiveEvaluation,
-        cwd: WorkingDirectory?,
-        continuation: ApprovalContinuation = .hostNative
-    ) -> HookAuthorization {
-        let profile = HostNativeAsk.profile(for: host)
-        switch live.bound {
-        case .allow:
-            switch live.decision {
-            case .allow:
-                return .allow
-            case .deny(let deny):
-                return .denyPinned(deny)
-            case .indeterminate:
-                return .denyPinned(HostNativeAsk.leftoverAskDeny)
-            }
-        case .deny(let deny):
-            guard isUnlockable(result: live.result, cwd: cwd) else {
-                return .denyPinned(deny)
-            }
-            return pause(
-                host: host,
-                continuation: continuation,
-                ifNoPause: profile.unlockableIfNoPause,
-                deny: deny
-            )
-        case .mandatoryHuman(let deny):
-            switch live.decision {
-            case .indeterminate:
-                return .denyPinned(deny)
-            case .allow, .deny:
-                return pauseIfSpendable(
-                    host: host,
-                    continuation: continuation,
-                    cwd: cwd,
-                    matchingView: live.matchingView,
-                    ifNoPause: profile.grayAreaIfNoPause,
-                    deny: deny
-                )
-            }
-        }
+    /// Mint a TTY unlock code alongside the RVOperatorUI pending row.
+    /// Exactly the asks: every human-approvable action is offered on both
+    /// transports.
+    public static func shouldMintUnlock(result: EvaluationResult, cwd: WorkingDirectory) -> Bool {
+        project(result: result, cwd: cwd) == .ask
     }
 
+    public var shouldMintUnlock: Bool {
+        self == .ask
+    }
+
+    public var shouldRecordPending: Bool {
+        self == .ask
+    }
+
+    /// Decides authorization only. `shouldRecordPending` and
+    /// `shouldMintUnlock` drive transport. Callers must not branch on
+    /// anything else.
     public static func project(
-        host: HookHost,
         result: EvaluationResult,
-        cwd: WorkingDirectory?,
-        continuation: ApprovalContinuation = .hostNative
+        cwd: WorkingDirectory?
     ) -> HookAuthorization {
-        project(host: host, live: result.live, cwd: cwd, continuation: continuation)
+        let bound = BoundReview.packProjected(from: result)
+        switch bound {
+        case .allow:
+            if case .allow = result.decision {
+                return .allow
+            }
+            return .denyPinned
+        case .deny, .mandatoryHuman:
+            if requiresHuman(result: result, cwd: cwd) {
+                return .ask
+            }
+            return .denyPinned
+        }
     }
 
     public var verdict: HostAskVerdict {
         switch self {
         case .allow:
             return .allow
-        case .denyPinned, .denyUnlockable:
+        case .ask:
+            return .ask
+        case .denyPinned:
             return .deny
-        case .ask(let continuation):
-            return .ask(continuation)
-        }
-    }
-
-    public var shouldMintUnlock: Bool {
-        if case .denyUnlockable = self {
-            return true
-        }
-        return false
-    }
-
-    public var shouldRecordPending: Bool {
-        if case .ask = self {
-            return true
-        }
-        return false
-    }
-
-    private static func isPinnedPack(_ deny: Deny) -> Bool {
-        deny.ruleID.pack == .coreSecrets
-            || deny.ruleID.pack == ActionPolicyEngine.Builtin.pack
-    }
-
-    private static func pauseIfSpendable(
-        host: HookHost,
-        continuation: ApprovalContinuation,
-        cwd: WorkingDirectory?,
-        matchingView: MatchingView,
-        ifNoPause: HostNoPauseFallback,
-        deny: Deny
-    ) -> HookAuthorization {
-        guard cwd != nil, matchingView.isEmpty == false else {
-            return .denyPinned(deny)
-        }
-        return pause(
-            host: host,
-            continuation: continuation,
-            ifNoPause: ifNoPause,
-            deny: deny,
-            noPauseDeny: .pinned
-        )
-    }
-
-    private enum NoPauseDeny {
-        case unlockable
-        case pinned
-    }
-
-    private static func pause(
-        host: HookHost,
-        continuation: ApprovalContinuation,
-        ifNoPause: HostNoPauseFallback,
-        deny: Deny,
-        noPauseDeny: NoPauseDeny = .unlockable
-    ) -> HookAuthorization {
-        switch (HostNativeAsk.profile(for: host).pause, continuation) {
-        case (.spendFirst, .hostNative):
-            return .ask(.hostNative)
-        default:
-            switch ifNoPause {
-            case .allow:
-                return .allow
-            case .deny:
-                switch noPauseDeny {
-                case .unlockable:
-                    return .denyUnlockable(deny)
-                case .pinned:
-                    return .denyPinned(deny)
-                }
-            }
         }
     }
 }

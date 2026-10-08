@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 import Testing
 @testable import RVCLI
 
@@ -164,11 +165,10 @@ private func syntheticContext() -> HookCommandContext {
     let root = try HostHooksMergeEngine.parseRoot(existing)
     let once = HostHooksMergeEngine.stripFingerprinted(from: root, descriptor: syntheticNested)
     let twice = HostHooksMergeEngine.stripFingerprinted(from: once, descriptor: syntheticNested)
-    #expect((once as NSDictionary) == (twice as NSDictionary))
-    let list = ((once["h"] as? [String: Any])?["L"] as? [[String: Any]]).flatMap { $0 }
-    let hooks = try #require(list?.first?["hooks"] as? [[String: Any]])
+    #expect(once == twice)
+    let hooks = try #require(once["h"]?["L"]?[0]?["hooks"]?.asArray)
     #expect(hooks.count == 1)
-    #expect(hooks[0]["command"] as? String == "foreign")
+    #expect(hooks[0]["command"]?.string == "foreign")
 }
 
 @Test func mergeEngine_nestedMergeAppendsOneEntryPerMatcher() throws {
@@ -288,15 +288,15 @@ private func syntheticContext() -> HookCommandContext {
     ])
 }
 
-@Test func mergeEngine_hookDictionaryOmitsNilExtras() {
+@Test func mergeEngine_hookValueOmitsNilExtras() {
     #expect(
-        HostHooksMergeEngine.hookDictionary(HookEntry(command: "c", timeout: 1)) as NSDictionary
-            == ["command": "c", "timeout": 1] as NSDictionary
+        HostHooksMergeEngine.hookValue(HookEntry(command: "c", timeout: 1))
+            == .object(["command": .string("c"), "timeout": .number(1)])
     )
-    let full = HostHooksMergeEngine.hookDictionary(
+    let full = HostHooksMergeEngine.hookValue(
         HookEntry(command: "c", timeout: 1, type: "t", failClosed: true, statusMessage: "s")
     )
-    #expect(full.keys.sorted() == ["command", "failClosed", "statusMessage", "timeout", "type"])
+    #expect(full.asObject?.keys.sorted() == ["command", "failClosed", "statusMessage", "timeout", "type"])
 }
 
 @Test func mergeEngine_unreadableIsFailClosed() {

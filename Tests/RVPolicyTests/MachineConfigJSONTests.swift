@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 import Testing
 @testable import RVPolicy
 
@@ -22,16 +23,14 @@ struct MachineConfigJSONTests {
         let nested = root.appendingPathComponent("cfg", isDirectory: true)
         let file = nested.appendingPathComponent("config.json")
         try MachineConfigJSON.update(file: file) { object in
-            object["analytics"] = ["enabled": false]
+            object["analytics"] = .object(["enabled": .bool(false)])
         }
         try MachineConfigJSON.update(file: file) { object in
-            object["safety"] = ["level": "strict"]
+            object["safety"] = .object(["level": .string("strict")])
         }
         let loaded = MachineConfigJSON.load(from: file)
-        let analytics = loaded["analytics"] as? [String: Any]
-        let safety = loaded["safety"] as? [String: Any]
-        #expect(analytics?["enabled"] as? Bool == false)
-        #expect(safety?["level"] as? String == "strict")
+        #expect(loaded["analytics"]?["enabled"]?.bool == false)
+        #expect(loaded["safety"]?["level"]?.string == "strict")
         #expect(try posixMode(nested) == 0o700)
         #expect(try posixMode(file) == 0o600)
         let text = try String(contentsOf: file, encoding: .utf8)
@@ -39,12 +38,12 @@ struct MachineConfigJSONTests {
         #expect(text.contains("safety"))
     }
 
-    @Test func write_rejectsNonJSONObject() throws {
+    @Test func write_rejectsUnencodableValue() throws {
         let root = try makeDirectory("invalid")
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("config.json")
         #expect(throws: SafetyStoreError.invalidFile) {
-            try MachineConfigJSON.write(["when": Date()], to: file)
+            try MachineConfigJSON.write(["when": .number(.infinity)], to: file)
         }
         #expect(FileManager.default.fileExists(atPath: file.path) == false)
     }

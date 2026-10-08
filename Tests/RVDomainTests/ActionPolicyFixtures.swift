@@ -42,6 +42,18 @@ enum ActionPolicyFixtures {
         )
     }
 
+    static func plainPush(branchName: String? = "topic") -> ProposedAction {
+        .shell(
+            ShellAction.effectOnly(EffectShell(
+                fingerprint: ActionFingerprint(rawValue: "shell:git.push:origin:\(branchName ?? "")"),
+                effects: ActionEffects(kinds: [.remoteBranchMutation]),
+                resources: ActionResources(remoteName: "origin", branchName: branchName),
+                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
+                supportingCommand: ShellCommand(rawValue: "git push origin \(branchName ?? "")")
+            ))
+        )
+    }
+
     static func implicitForcePush() -> ProposedAction {
         .shell(
             ShellAction.effectOnly(

@@ -141,6 +141,24 @@ enum WorkspaceLogLoad: Equatable, Sendable {
     case decoded(WorkspaceLogRead)
 }
 
+/// Outcome of opportunistic lifecycle-log compaction. Refusals leave the
+/// file untouched; compaction must never erase evidence it cannot read.
+enum WorkspaceLifecycleCompactResult: Equatable, Sendable {
+    /// At or below the threshold; untouched.
+    case skippedSmall
+    /// Above the threshold but no closed workspace to drop; untouched.
+    case skippedNothingDead
+    /// Lock, read, or rewrite failed; the file is untouched (on rewrite
+    /// failure the rename never ran).
+    case refusedUnreadable
+    /// Trailing partial line; untouched.
+    case refusedTorn
+    /// Non-trailing undecodable line, or non-UTF-8 bytes; untouched.
+    case refusedCorrupt
+    /// Rewrote the file, dropping only closed workspaces' lines.
+    case compacted(dropped: Int, kept: Int)
+}
+
 enum WorkspaceLifecycleLog {
     private struct Encoded: Codable {
         var kind: String
@@ -228,12 +246,20 @@ enum WorkspaceLifecycleLog {
         return .decoded(decode(text))
     }
 
-    private static func decode(_ text: String) -> WorkspaceLogRead {
+    /// Splits a log body into lines, dropping the empty element a trailing
+    /// newline produces. Shared by `decode` and compaction so the
+    /// torn-vs-corrupt boundary cannot drift between readers and rewriters.
+    private static func splitLines(_ text: String) -> (lines: [String], endsWithNewline: Bool) {
         let endsWithNewline = text.hasSuffix("\n")
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         if endsWithNewline, lines.last?.isEmpty == true {
             lines.removeLast()
         }
+        return (lines, endsWithNewline)
+    }
+
+    private static func decode(_ text: String) -> WorkspaceLogRead {
+        let (lines, _) = splitLines(text)
         let decoder = JSONDecoder()
         var records: [WorkspaceLifecycleRecord] = []
         var tornTrailing = false
@@ -256,6 +282,196 @@ enum WorkspaceLifecycleLog {
             tornTrailing: tornTrailing,
             interiorCorruption: interiorCorruption
         )
+    }
+
+    /// Compaction runs only when the log exceeds this size.
+    static let compactThresholdBytes = 1_048_576
+
+    /// Drops lines of workspaces recovery classifies as closed when the log
+    /// exceeds `thresholdBytes`.
+    ///
+    /// Recovery filters to open workspaces before every decision, so removing
+    /// closed workspaces' lines changes no assessment. Kept lines are
+    /// rewritten byte-identical; only dead lines disappear. Refuses (leaving
+    /// the file untouched) when the log is torn, corrupt, or unreadable:
+    /// compaction must never erase evidence it cannot understand. Runs under
+    /// the same cross-process lock as appends, so concurrent appends wait
+    /// and then land on the compacted file; lock-free readers see the old or
+    /// the new file whole via atomic rename.
+    static func compactIfNeeded(
+        at url: URL,
+        thresholdBytes: Int = compactThresholdBytes
+    ) -> WorkspaceLifecycleCompactResult {
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue
+        guard let size, size > thresholdBytes else {
+            return .skippedSmall
+        }
+        guard
+            let outcome = RuntimeSessionLog.withExclusiveFileLock(at: url, body: { locked in
+                compactLocked(at: locked)
+            })
+        else {
+            return .refusedUnreadable
+        }
+        return outcome
+    }
+
+    /// Per-workspace accumulation for the compaction drop predicate.
+    /// Mirrors the inputs to `WorkspaceRecovery.reconstruction()`'s final
+    /// guard, which that function applies after its phase walk.
+    private struct DropTally {
+        var closed = false
+        var created = 0
+        var paths: Set<String> = []
+        var hasOriginal = false
+        var hasProtected = false
+
+        /// True only when recovery classifies this workspace as closed.
+        /// Recovery treats a `.closed`-bearing workspace as `.corrupt`
+        /// (open) when it has zero or two `.created` lines, split paths, or
+        /// empty paths, so dropping on `.closed` alone would flip blocked
+        /// assessments to clean. Workspaces carrying only
+        /// `.recoveryCompleted` also reconstruct as closed, but a later
+        /// `.closed` line for the same id is still possible, so keeping them
+        /// is the conservative direction. `reconstruction()` is macOS-only;
+        /// keep this predicate aligned with it.
+        var droppable: Bool {
+            closed && created == 1 && paths.count <= 1 && hasOriginal && hasProtected
+        }
+    }
+
+    private static func compactLocked(at url: URL) -> WorkspaceLifecycleCompactResult {
+        guard let data = try? Data(contentsOf: url) else {
+            return .refusedUnreadable
+        }
+        if data.isEmpty {
+            return .skippedNothingDead
+        }
+        guard let text = String(data: data, encoding: .utf8) else {
+            return .refusedCorrupt
+        }
+        let (lines, endsWithNewline) = splitLines(text)
+        let decoder = JSONDecoder()
+        var records: [WorkspaceLifecycleRecord?] = []
+        records.reserveCapacity(lines.count)
+        for (index, line) in lines.enumerated() {
+            if line.isEmpty {
+                records.append(nil)
+                continue
+            }
+            guard let record = decodeLine(line, decoder: decoder) else {
+                let isLast = index == lines.index(before: lines.endIndex)
+                return isLast ? .refusedTorn : .refusedCorrupt
+            }
+            records.append(record)
+        }
+        var tallies: [UUID: DropTally] = [:]
+        for record in records.compactMap({ $0 }) {
+            var tally = tallies[record.workspace, default: DropTally()]
+            if record.kind == .closed {
+                tally.closed = true
+            }
+            if record.kind == .created {
+                tally.created += 1
+            }
+            if record.originalPath.isEmpty == false {
+                tally.paths.insert(record.originalPath)
+                tally.hasOriginal = true
+            }
+            if record.protectedPath.isEmpty == false {
+                tally.hasProtected = true
+            }
+            tallies[record.workspace] = tally
+        }
+        let closedIDs = Set(tallies.compactMap { id, tally in tally.droppable ? id : nil })
+        if closedIDs.isEmpty {
+            return .skippedNothingDead
+        }
+        var kept: [String] = []
+        kept.reserveCapacity(lines.count)
+        var dropped = 0
+        for (line, record) in zip(lines, records) {
+            if let record, closedIDs.contains(record.workspace) {
+                dropped += 1
+                continue
+            }
+            kept.append(line)
+        }
+        if dropped == 0 {
+            return .skippedNothingDead
+        }
+        var output = kept.joined(separator: "\n")
+        if endsWithNewline, kept.isEmpty == false {
+            output.append("\n")
+        }
+        guard writeAtomically(Data(output.utf8), to: url) else {
+            return .refusedUnreadable
+        }
+        return .compacted(dropped: dropped, kept: kept.count)
+    }
+
+    /// Temp-file + rename rewrite with the same durability shape as endpoint
+    /// files: exclusive create, full write, fsync, 0600, atomic rename, then
+    /// a directory fsync. Runs under `withExclusiveFileLock`.
+    private static func writeAtomically(_ data: Data, to url: URL) -> Bool {
+        let temporary = url.appendingPathExtension("tmp")
+        _ = temporary.path.withCString { unlink($0) }
+        let fd = temporary.path.withCString {
+            open($0, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0o600)
+        }
+        guard fd >= 0 else {
+            return false
+        }
+        var offset = 0
+        let bytes = [UInt8](data)
+        var wrote = true
+        var interrupts = 0
+        while offset < bytes.count {
+            var writeError: Int32 = 0
+            let count = bytes.withUnsafeBytes { buffer -> Int in
+                guard let base = buffer.baseAddress else { return -1 }
+                let written = write(fd, base.advanced(by: offset), bytes.count - offset)
+                if written < 0 {
+                    writeError = errno
+                }
+                return written
+            }
+            if count > 0 {
+                offset += count
+                interrupts = 0
+                continue
+            }
+            if count < 0, writeError == EINTR, interrupts < 16 {
+                interrupts += 1
+                continue
+            }
+            wrote = false
+            break
+        }
+        if wrote {
+            wrote = fsync(fd) == 0 && fchmod(fd, 0o600) == 0
+        }
+        close(fd)
+        guard wrote else {
+            _ = temporary.path.withCString { unlink($0) }
+            return false
+        }
+        guard temporary.path.withCString({ source in
+            url.path.withCString { destination in
+                rename(source, destination) == 0
+            }
+        }) else {
+            _ = temporary.path.withCString { unlink($0) }
+            return false
+        }
+        let parent = url.deletingLastPathComponent().path.withCString {
+            open($0, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        }
+        if parent >= 0 {
+            _ = fsync(parent)
+            close(parent)
+        }
+        return true
     }
 
     private static func decodeLine(_ line: String, decoder: JSONDecoder) -> WorkspaceLifecycleRecord? {

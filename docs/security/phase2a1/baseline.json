@@ -1,0 +1,34 @@
+{
+  "branch": "phase-2Identity",
+  "head": "2df5484972fa2ad1afe9394941e023e7ad01bef0",
+  "status": [
+    " M Package.swift",
+    " M Sources/RVIsolation/WorkspaceHostProcess.swift",
+    " M Sources/RVIsolation/WorkspaceHostServer.swift",
+    " M Sources/RVService/AuthenticatedRequestContext.swift",
+    " M Sources/RVService/GatedEvaluate.swift",
+    " M Sources/RVService/ServiceLog.swift",
+    " M Sources/RVService/ServiceRuntime.swift",
+    " M Sources/RVService/XPCListener.swift",
+    " M Sources/rv-workspace-host/HostAdmission.swift",
+    " M Sources/rv-workspace-host/main.swift",
+    "?? Scripts/phase2a-development-trust.sh",
+    "?? Sources/RVDomain/AgentPrincipalReference.swift",
+    "?? Sources/RVIsolation/WorkspacePrincipalAuthority.swift",
+    "?? Sources/RVService/LiveWorkspaceHostRegistry.swift",
+    "?? Sources/RVService/WorkspaceHostBridgeClient.swift",
+    "?? Sources/RVService/XPCWorkspaceHostBridge.swift",
+    "?? Tests/RVDomainTests/AgentPrincipalReferenceTests.swift",
+    "?? Tests/RVIsolationTests/WorkspacePrincipalAuthorityTests.swift",
+    "?? Tests/RVServiceTests/LiveWorkspaceHostRegistryTests.swift",
+    "?? Vendor/",
+    "?? docs/security/phase2a/",
+    ""
+  ],
+  "archive": "/private/tmp/rv-phase2a-before-launch-20260930T193132Z.tar.gz",
+  "focused_summaries": [
+    "\udbc4\udc5b  Test run with 14 tests in 1 suite passed after 0.035 seconds.",
+    "\udbc4\udc5b  Test run with 5 tests in 1 suite passed after 0.004 seconds.",
+    "\udbc4\udc5b  Test run with 3 tests in 0 suites passed after 0.002 seconds."
+  ]
+}

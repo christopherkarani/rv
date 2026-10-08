@@ -4,6 +4,7 @@ import Glibc
 #endif
 import Foundation
 import RVIPC
+import RVIsolation
 import Synchronization
 
 enum UnixFrameError: Error, Sendable, Equatable {
@@ -168,6 +169,20 @@ public final class UnixEvaluateListener: Sendable {
     private func serve(_ fd: Int32) {
         var handshakeOK = false
         defer { _ = Glibc.close(fd) }
+        // Kernel-attested peer credentials, captured once per connection
+        // (SO_PEERCRED is fixed at connect time). Same-user socket peers get
+        // a role-less context so hook consult works; anything else — capture
+        // failure, cross-user peer — stays unauthenticated and fails closed.
+        let connectionID = UUID()
+        let context: AuthenticatedRequestContext
+        if let creds = try? LinuxSocketPeerCapture.capture(fd: fd) {
+            let peer = AuthenticatedPeer.socketPeer(
+                processID: creds.processID, effectiveUserID: creds.effectiveUserID,
+                connectionID: connectionID)
+            context = .captured(peer: peer, connectionID: connectionID)
+        } else {
+            context = .unauthenticated
+        }
         while true {
             guard let body = try? UnixFrameIO.readFrame(fd: fd) else { return }
             let gate = UnixReplyGate()
@@ -176,7 +191,7 @@ public final class UnixEvaluateListener: Sendable {
             let accepted = handshakeOK
             Task {
                 await watchdog.ping()
-                let incoming = await runtime.handleIncoming(body, handshakeOK: accepted)
+                let incoming = await runtime.handleIncoming(body, handshakeOK: accepted, context: context)
                 gate.finish(incoming)
             }
             let incoming = gate.wait()

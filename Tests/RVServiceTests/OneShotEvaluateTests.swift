@@ -5,7 +5,7 @@ import RVIPC
 @testable import RVService
 
 struct OneShotEvaluateTests {
-    @Test func implicitHelloOnEvaluate_oneShotDeniesResetHard() async throws {
+    @Test func implicitHelloOnEvaluate_oneShotIsDenied() async throws {
         let runtime = try isolatedRuntime()
         let incoming = await runtime.handleIncoming(
             try evaluateBody(command: "git reset --hard", clientSemver: ProtocolVersion.serviceSemver),
@@ -15,17 +15,13 @@ struct OneShotEvaluateTests {
         let ok = incoming.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
-        guard case .evaluate(let reply) = response.result else {
-            Issue.record("one-shot evaluate must dispatch after implicit hello")
+        guard case .error(.authorizationDenied) = response.result else {
+            Issue.record("one-shot evaluate must deny after implicit hello")
             return
         }
-        guard case .deny(let deny) = reply.result.decision else {
-            Issue.record("one-shot evaluate must deny git reset --hard")
-            return
+        if case .evaluate = response.result {
+            Issue.record("denied one-shot must not return a result")
         }
-        #expect(deny.ruleID.rawValue == "core.git:reset-hard")
-        #expect(reply.via == .service)
-        #expect(reply.serviceSemver == ProtocolVersion.serviceSemver)
     }
 
     @Test func evaluateWithoutClientSemverAndNoHello_isHandshakeRequired() async throws {
@@ -195,7 +191,7 @@ struct OneShotEvaluateTests {
         }
     }
 
-    @Test func matchingClientSemverAfterSuccessfulHello_stillEvaluates() async throws {
+    @Test func matchingClientSemverAfterSuccessfulHello_isDenied() async throws {
         let runtime = try isolatedRuntime()
         let hello = Hello(
             protocolName: ProtocolVersion.name,
@@ -216,18 +212,16 @@ struct OneShotEvaluateTests {
         let ok = next.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
-        guard case .evaluate(let reply) = response.result else {
-            Issue.record("matching clientSemver on an open handshake must still dispatch")
+        guard case .error(.authorizationDenied) = response.result else {
+            Issue.record("matching clientSemver on an open handshake must still deny")
             return
         }
-        guard case .deny(let deny) = reply.result.decision else {
-            Issue.record("open-handshake evaluate must still deny git reset --hard")
-            return
+        if case .evaluate = response.result {
+            Issue.record("denied open-handshake evaluate must not return a result")
         }
-        #expect(deny.ruleID.rawValue == "core.git:reset-hard")
     }
 
-    @Test func oldHelloThenEvaluateWithoutClientSemver_stillWorks() async throws {
+    @Test func oldHelloThenEvaluateWithoutClientSemver_isDenied() async throws {
         let runtime = try isolatedRuntime()
         let hello = Hello(protocolName: ProtocolVersion.name, clientSemver: ProtocolVersion.serviceSemver)
         let incoming = await runtime.handleIncoming(try IPCJSON.encode(hello), handshakeOK: false)
@@ -245,15 +239,13 @@ struct OneShotEvaluateTests {
         let ok = next.handshakeAccepted
         #expect(ok == true)
         let response = try IPCJSON.decode(IPCResponse.self, from: data)
-        guard case .evaluate(let reply) = response.result else {
-            Issue.record("legacy Hello-then-evaluate must still dispatch")
+        guard case .error(.authorizationDenied) = response.result else {
+            Issue.record("legacy Hello-then-evaluate must deny")
             return
         }
-        guard case .deny(let deny) = reply.result.decision else {
-            Issue.record("legacy path must still deny git reset --hard")
-            return
+        if case .evaluate = response.result {
+            Issue.record("denied legacy evaluate must not return a result")
         }
-        #expect(deny.ruleID.rawValue == "core.git:reset-hard")
     }
 }
 

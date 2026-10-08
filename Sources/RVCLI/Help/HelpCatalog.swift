@@ -26,6 +26,7 @@ enum HelpCatalog {
         case .blocks: blocks
         case .opencode: opencode
         case .workspace: workspace
+        case .`operator`: operatorHelp
         }
     }
 
@@ -59,6 +60,7 @@ enum HelpCatalog {
                 HelpRow(name: "allowlist", description: "Permanent user-layer exceptions"),
                 HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor / Antigravity)"),
                 HelpRow(name: "uninstall", description: "Remove rv-owned hooks, config, and LaunchAgent"),
+                HelpRow(name: "operator", description: "Propose and poll identity launches (review required)"),
             ]),
         ],
         examples: [
@@ -117,13 +119,16 @@ enum HelpCatalog {
                 HelpRow(name: "rv workspace status [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace close [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace run [--rows N] [--columns N] [--resource-profile <id>] [--hook <tag>] -- <absolute-executable> [args...]"),
+                HelpRow(name: "rv workspace agent [--workspace <absolute-path>] [--rows N] [--columns N] <definition-id> -- [args...]", description: "Launch a trusted operator-configured Agent Definition"),
+                HelpRow(name: "rv workspace custom [--workspace <absolute-path>] [--rows N] [--columns N] --expected-content-digest-sha256 <digest> -- <absolute-executable> [args...]", description: "Launch an ad-hoc definition; executable image verification is deferred"),
                 HelpRow(name: "rv workspace tui [--workspace <project-path>]", description: "Interactive terminal workspace for contained runtimes"),
                 HelpRow(name: "rv workspace abandon [--workspace <absolute-path>]", description: "Discard a blocked workspace's unpublished volume and restore the saved tree"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--workspace", description: "Project path; default is the current directory"),
                 HelpRow(name: "--resource-profile", description: "Owner-authorized runtime resource profile ID"),
-                HelpRow(name: "--hook", description: "Launch agent tag for credential staging"),
+                HelpRow(name: "--hook", description: "Hook protocol host; tags never stage credentials"),
+                HelpRow(name: "--expected-content-digest-sha256", description: "Lowercase SHA-256 digest for a custom Agent Definition"),
             ]),
         ],
         examples: ["rv workspace start", "rv workspace status"]
@@ -334,6 +339,27 @@ enum HelpCatalog {
         examples: [
             "rv blocks",
             "rv blocks --json",
+        ]
+    )
+
+    static let operatorHelp = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv operator propose --workspace <path> --kind named --definition <id>"),
+                HelpRow(name: "rv operator propose --workspace <path> --kind custom --executable <path> --digest <hex>"),
+                HelpRow(name: "rv operator proposal-status <operation-id>"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(
+                    name: "review",
+                    description: "Proposals are untrusted hints. Nothing launches until the host prepares a description and the device owner authorizes it in RVOperatorUI"
+                ),
+            ]),
+        ],
+        examples: [
+            "rv operator propose --workspace /tmp/p --kind named --definition test-agent",
         ]
     )
 

@@ -6,6 +6,23 @@ import Glibc
 import Foundation
 import RVDomain
 
+/// A credential-selection tag derived from a trusted agent definition.
+///
+/// Step 8 (F2 re-review): the launch layers accept ONLY this type for
+/// filtered staging. The sole constructor takes the definition itself,
+/// so wire tags, HookHost values, and CLI/caller-provided strings are
+/// unrepresentable as selection input — they cannot become this type.
+struct DefinitionStagingTag: Hashable, Sendable, Equatable {
+    let rawValue: String
+
+    /// Maps a trusted definition's tag. Nil when the definition names
+    /// none (unfiltered entries only).
+    init?(_ definition: AgentDefinition) {
+        guard let tag = definition.agentTag else { return nil }
+        rawValue = tag
+    }
+}
+
 /// The one host-resolved resource description consumed by profile compilation,
 /// private staging, and environment construction. A client sends only its ID.
 struct RuntimeResourceManifest: Sendable, Equatable {
@@ -29,8 +46,12 @@ struct RuntimeResourceManifest: Sendable, Equatable {
 
     /// Stage only the selected profile. Credential contents are copied into a
     /// private home; the sandbox never receives a read grant for the originals.
-    /// A credential naming agents stages only when `agent` (the launch's
-    /// hook name) matches; unfiltered credentials stage for every launch.
+    /// A credential naming agents stages only when `agent` matches; unfiltered
+    /// credentials stage for every launch.
+    ///
+    /// Step 8 (F2): `agent` must be a definition-derived tag (identity path)
+    /// or nil (legacy path: filtered entries never stage). Wire tags,
+    /// HookHost values, and CLI/caller-provided names must never be passed.
     func stage(forAgent agent: String? = nil) -> Result<Void, ResourceStagingError> {
         guard privateHome.withCString({ mkdir($0, 0o700) }) == 0 else {
             return .failure(.privateHome)
@@ -75,6 +96,10 @@ struct RuntimeResourceManifest: Sendable, Equatable {
     /// secret yields the named string field; otherwise the whole secret
     /// must decode as UTF-8 text. Every failure names the operator's env
     /// var and stages nothing.
+    ///
+    /// Step 8 (F2): the tag must be definition-derived (identity path) or
+    /// nil (legacy path: filtered entries never match). Wire tags,
+    /// HookHost values, and CLI/caller-provided names must never be passed.
     func keychainEnvironment(
         forAgent agent: String? = nil,
         reader: KeychainReader = .live
@@ -92,8 +117,8 @@ struct RuntimeResourceManifest: Sendable, Equatable {
             }
             let value: String
             if let field = item.field {
-                guard let json = try? JSONSerialization.jsonObject(with: secret) as? [String: Any],
-                    let raw = json[field] as? String
+                guard let json = try? JSONDecoder().decode(JSONValue.self, from: secret),
+                    let raw = json[field]?.string
                 else {
                     return .failure(.keychain(env: item.env))
                 }

@@ -14,11 +14,11 @@ struct ClaudeAdapterHookTests {
         #expect(source.contains("\"Write\""))
         #expect(source.contains("\"claude\""))
         #expect(source.contains("RV_BINARY = \"/opt/rv\""))
-        #expect(source.contains("hostAsk"))
-        #expect(source.contains("spend"))
-        #expect(source.contains("RV_ASK_CONFIRM"))
-        #expect(source.contains("osascript"))
-        #expect(source.contains("display dialog"))
+        #expect(source.contains("hostAsk") == false)
+        #expect(source.contains("spend") == false)
+        #expect(source.contains("RV_ASK_CONFIRM") == false)
+        #expect(source.contains("osascript") == false)
+        #expect(source.contains("display dialog") == false)
         #expect(source.contains("__RV_BINARY__") == false)
         #expect(source.contains("permissionDecision\":\"ask\"") == false)
         #expect(source.contains("permissionDecision': 'ask'") == false)
@@ -26,34 +26,28 @@ struct ClaudeAdapterHookTests {
         #expect(source.contains("RV_BYPASS") == false)
     }
 
-    @Test func confirmYesSpendEmptyAllow_isEmptyStdoutExitZero() async throws {
+    @Test func confirmYesIgnored_legacyAskBlocks() async throws {
         let result = try await runClaudeWrapper(
             event: resetHardEvent(),
             first: (askJSON, 0),
             spend: ("", 0),
             confirm: "yes"
         )
-        #expect(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        #expect(result.exitCode == 0)
-        #expect(result.stdout.contains("permissionDecision") == false)
-        #expect(result.stdout.contains("\"ask\"") == false)
-        #expect(result.spawnCount == 2)
-        #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+        try expectClaudeDeny(result, reason: askReason)
+        #expect(result.spawnCount == 1)
+        #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
     }
 
-    @Test func confirmYesSpendEmptyAllow_askExitTwoStillConfirmsThenSpends() async throws {
+    @Test func confirmYesIgnored_askExitTwoStillBlocks() async throws {
         let result = try await runClaudeWrapper(
             event: resetHardEvent(),
             first: (askJSON, 2),
             spend: ("", 0),
             confirm: "yes"
         )
-        #expect(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        #expect(result.exitCode == 0)
-        #expect(result.stdout.contains("permissionDecision") == false)
-        #expect(result.stdout.contains("\"ask\"") == false)
-        #expect(result.spawnCount == 2)
-        #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+        try expectClaudeDeny(result, reason: askReason)
+        #expect(result.spawnCount == 1)
+        #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
     }
 
     @Test func confirmNo_deniesWithoutSpend() async throws {
@@ -80,38 +74,38 @@ struct ClaudeAdapterHookTests {
         #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
     }
 
-    @Test func confirmYesFailedSpend_deniesAndDoesNotForwardAsk() async throws {
+    @Test func confirmYesIgnored_failedSpendStubUnusedAskBlocks() async throws {
         let result = try await runClaudeWrapper(
             event: resetHardEvent(),
             first: (askJSON, 0),
             spend: (claudeDenyJSON(reason: resetHardReason), 0),
             confirm: "yes"
         )
-        try expectClaudeDeny(result, reason: resetHardReason)
-        #expect(result.spawnCount == 2)
-        #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+        try expectClaudeDeny(result, reason: askReason)
+        #expect(result.spawnCount == 1)
+        #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
     }
 
-    @Test func confirmYesSpendAskJSON_deniesAndDoesNotForwardAsk() async throws {
+    @Test func confirmYesIgnored_secondAskStubUnusedBlocksOnce() async throws {
         let result = try await runClaudeWrapper(
             event: resetHardEvent(),
             first: (askJSON, 0),
             spend: (askJSON, 0),
             confirm: "yes"
         )
-        try expectClaudeDeny(result)
-        #expect(result.spawnCount == 2)
+        try expectClaudeDeny(result, reason: askReason)
+        #expect(result.spawnCount == 1)
     }
 
-    @Test func confirmYesNonJSONSpend_denies() async throws {
+    @Test func confirmYesIgnored_nonJSONSpendStubUnusedBlocks() async throws {
         let result = try await runClaudeWrapper(
             event: resetHardEvent(),
             first: (askJSON, 0),
             spend: ("not-json\n", 1),
             confirm: "yes"
         )
-        try expectClaudeDeny(result, reason: "rv failed")
-        #expect(result.spawnCount == 2)
+        try expectClaudeDeny(result, reason: askReason)
+        #expect(result.spawnCount == 1)
     }
 
     @Test func firstCallClaudeDeny_passesThroughWithoutConfirm() async throws {

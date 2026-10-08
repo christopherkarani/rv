@@ -1,0 +1,14 @@
+canEvaluatePolicy=true error=nil
+evaluatePolicy=false error=Optional(Error Domain=com.apple.LocalAuthentication Code=-9 "Invalidated by client." UserInfo={NSDebugDescription=Invalidated by client., NSLocalizedDescription=Authentication canceled.})
+evaluatePolicy=timeout
+canEvaluatePolicy=true error=nil
+evaluatePolicy=true error=nil
+canEvaluatePolicy=true error=nil
+evaluatePolicy=true error=nil
+canEvaluatePolicy=true error=nil
+evaluatePolicy=true error=nil
+canEvaluatePolicy=true error=nil
+evaluatePolicy=true error=nil
+canEvaluatePolicy=true error=nil
+evaluatePolicy=true error=nil
+canEvaluatePolicy=true error=nil

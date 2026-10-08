@@ -123,6 +123,8 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
     let launch: Launch
     let io: IsolatedIO
     let resources: RuntimeResourceManifest?
+    /// Only explicit legacy launches may inherit ambient agent integration.
+    let legacyAgentIntegration: Bool
     /// Test-only. Production launches leave this nil. A fault fails the
     /// launch before the payload is reported running.
     let spawnFault: RuntimeSpawnFault?
@@ -168,7 +170,8 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         io: IsolatedIO = .discard,
         resources: RuntimeResourceManifest? = nil,
         spawnFault: RuntimeSpawnFault? = nil,
-        productive: ProductiveWorkspaceResolution? = nil
+        productive: ProductiveWorkspaceResolution? = nil,
+        legacyAgentIntegration: Bool = true
     ) {
         switch (launch, plan.mode) {
         case (.seatbelt, .contained):
@@ -189,6 +192,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         self.resources = resources
         self.spawnFault = spawnFault
         self.productive = productive
+        self.legacyAgentIntegration = legacyAgentIntegration
     }
 
     func withIO(_ io: IsolatedIO) -> IsolatedLaunchRequest {
@@ -212,6 +216,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         self.resources = request.resources
         self.spawnFault = spawnFault
         self.productive = request.productive
+        self.legacyAgentIntegration = request.legacyAgentIntegration
     }
 
     public static func == (lhs: IsolatedLaunchRequest, rhs: IsolatedLaunchRequest) -> Bool {
@@ -223,6 +228,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
             && lhs.resources == rhs.resources
             && lhs.spawnFault == rhs.spawnFault
             && lhs.productive == rhs.productive
+            && lhs.legacyAgentIntegration == rhs.legacyAgentIntegration
     }
 
     /// Executable `run` will start. Observed / mediated never use a helper.
@@ -476,65 +482,180 @@ extension IsolationBackend {
 func prepareSeatbelt(
     _ plan: IsolationPlan,
     _ command: IsolatedCommand,
-    resourceProfile: RuntimeResourceProfile? = nil
+    resourceProfile: RuntimeResourceProfile? = nil,
+    legacyAgentIntegration: Bool = true,
+    gitIdentity: (@Sendable (String) -> (name: String?, email: String?))? = nil
 ) -> Result<IsolatedLaunchRequest, IsolationApplyError> {
-    switch plan.mode {
-    case .observed, .mediated:
+    // Pure gate first: non-contained modes refuse with zero filesystem work.
+    guard case .contained = plan.mode else {
         return .failure(.profileNotApplicable)
-    case .contained:
-        switch compileSeatbeltProfile(plan) {
-        case .failure(let error):
-            return .failure(error)
-        case .success(let compiled):
-            let resources = resourceProfile.map(RuntimeResourceManifest.init)
-            var profile = compiled.allowingExecutable(command.executable)
-                .allowingLoopbackEgress()
-                .allowingLoopbackBind()
-            if let resources {
-                profile = profile.allowingResources(resources)
-            }
-            let agentBin = AgentBin.installedDirectory()
-            if let agentBin,
-                let home = ProcessInfo.processInfo.environment["HOME"]
-            {
-                profile = profile.allowingAgentBin(AgentBin.resolve(binDirectory: agentBin, home: home))
-            }
-            guard let workspace = plan.workspace else {
-                return .failure(.containedGuaranteesUnsupported)
-            }
-            // Resolved once here for the profile grants; the spawn body
-            // reuses the carried facts instead of re-resolving.
-            let productive: ProductiveWorkspaceResolution
-            switch existingResolvedWorkspacePath(workspace) {
-            case .failure(let error):
-                return .failure(error)
-            case .success(let resolved):
-                guard profile.workspacePath == resolved else {
-                    return .failure(.workspacePathUnresolvable)
-                }
-                switch rejectWorkspaceInodeAlias(resolved) {
-                case .failure(let error):
-                    return .failure(error)
-                case .success:
-                    break
-                }
-                productive = resolveProductiveWorkspace(workspacePath: resolved, agentBin: agentBin)
-                profile = profile.allowingProductiveWorkspace(productive)
-            }
-            guard
-                let request = IsolatedLaunchRequest(
-                    plan: plan,
-                    command: command,
-                    launch: .seatbelt(profile),
-                    resources: resources,
-                    productive: productive
-                )
-            else {
-                return .failure(.containedGuaranteesUnsupported)
-            }
-            return .success(request)
-        }
     }
+    return resolveSeatbeltFacts(
+        plan, command,
+        resourceProfile: resourceProfile,
+        legacyAgentIntegration: legacyAgentIntegration,
+        gitIdentity: gitIdentity
+    ).flatMap {
+        compileSeatbeltRequest(
+            plan: plan, command: command, facts: $0,
+            legacyAgentIntegration: legacyAgentIntegration
+        )
+    }
+}
+
+/// Canonical resource grants for one contained launch: the profile's
+/// executable links, read files, and read/write trees after
+/// `canonicalResourcePath` (effectful: realpath). Always derived from the
+/// same profile as the facts' `resources` in one place by
+/// `resolveSeatbeltFacts`; `compileSeatbeltRequest` trusts the pairing, so
+/// hand-built facts must keep `resources` and `canonical` consistent
+/// (empty `canonical` when `resources` is nil).
+struct CanonicalResources: Sendable, Equatable {
+    var targets: [String]
+    var readFiles: [String]
+    var readTrees: [String]
+    var writeTrees: [String]
+}
+
+/// Effectful facts for one contained Seatbelt launch. `resolveSeatbeltFacts`
+/// produces them (base profile, realpaths, probes, inode scan, ensures);
+/// pure `compileSeatbeltRequest` assembles the launch from them. The spawn
+/// body reuses the carried facts instead of re-resolving.
+struct SeatbeltLaunchFacts: Sendable, Equatable {
+    /// Base profile: plan verified, workspace leniently resolved.
+    var base: SeatbeltProfile
+    /// Realpath of the granted executable, when it resolves.
+    var executableRealpath: String?
+    /// Resource manifest for staging at run, when a profile was selected.
+    var resources: RuntimeResourceManifest?
+    /// Canonical resource grants (parallel to `resources`, when set).
+    var canonical: CanonicalResources
+    /// Agent bin grants, when an install and a HOME are visible.
+    var agentBin: AgentBinResolution?
+    /// Strictly resolved workspace (exists, is a directory, is safe).
+    var resolvedWorkspace: String
+    /// Productive-workspace grants (ensured on the host).
+    var productive: ProductiveWorkspaceResolution
+}
+
+/// Resolve every effectful fact a contained launch needs. Failure order and
+/// side effects match the old monolithic `prepareSeatbelt`: base profile,
+/// agent bin, strict workspace resolution, the retarget cross-check, the
+/// inode-alias scan, then productive resolution (which ensures directories).
+func resolveSeatbeltFacts(
+    _ plan: IsolationPlan,
+    _ command: IsolatedCommand,
+    resourceProfile: RuntimeResourceProfile? = nil,
+    legacyAgentIntegration: Bool = true,
+    gitIdentity: (@Sendable (String) -> (name: String?, email: String?))? = nil
+) -> Result<SeatbeltLaunchFacts, IsolationApplyError> {
+    let base: SeatbeltProfile
+    switch compileSeatbeltProfile(plan) {
+    case .failure(let error):
+        return .failure(error)
+    case .success(let compiled):
+        base = compiled
+    }
+    let resources = resourceProfile.map(RuntimeResourceManifest.init)
+    let executableRealpath = posixRealpath(command.executable)
+    let agentBinDirectory = legacyAgentIntegration ? AgentBin.installedDirectory() : nil
+    let agentBin: AgentBinResolution?
+    if let directory = agentBinDirectory,
+        let home = ProcessInfo.processInfo.environment["HOME"]
+    {
+        agentBin = AgentBin.resolve(binDirectory: directory, home: home)
+    } else {
+        agentBin = nil
+    }
+    guard let workspace = plan.workspace else {
+        return .failure(.containedGuaranteesUnsupported)
+    }
+    let resolved: String
+    switch existingResolvedWorkspacePath(workspace) {
+    case .failure(let error):
+        return .failure(error)
+    case .success(let path):
+        resolved = path
+    }
+    // Fail before `resolveProductiveWorkspace` ensures directories: a
+    // retargeted caller path must not create host state.
+    guard base.workspacePath == resolved else {
+        return .failure(.workspacePathUnresolvable)
+    }
+    switch rejectWorkspaceInodeAlias(resolved) {
+    case .failure(let error):
+        return .failure(error)
+    case .success:
+        break
+    }
+    let productive = resolveProductiveWorkspace(
+        workspacePath: resolved,
+        agentBin: agentBinDirectory,
+        gitIdentity: gitIdentity
+    )
+    let profile = resources?.profile
+    let canonical = CanonicalResources(
+        targets: (profile?.executableLinks ?? []).map { canonicalResourcePath($0.target) },
+        readFiles: (profile?.readFiles ?? []).map(canonicalResourcePath),
+        readTrees: (profile?.readTrees ?? []).map(canonicalResourcePath),
+        writeTrees: (profile?.writeTrees ?? []).map(canonicalResourcePath)
+    )
+    return .success(
+        SeatbeltLaunchFacts(
+            base: base,
+            executableRealpath: executableRealpath,
+            resources: resources,
+            canonical: canonical,
+            agentBin: agentBin,
+            resolvedWorkspace: resolved,
+            productive: productive
+        )
+    )
+}
+
+/// Pure seatbelt assembly over resolved facts: profile grants, the workspace
+/// cross-check, and request construction. No syscalls, no env, no clock.
+/// `resolveSeatbeltFacts` supplies `facts`.
+func compileSeatbeltRequest(
+    plan: IsolationPlan,
+    command: IsolatedCommand,
+    facts: SeatbeltLaunchFacts,
+    legacyAgentIntegration: Bool = true
+) -> Result<IsolatedLaunchRequest, IsolationApplyError> {
+    var profile = facts.base
+        .allowingExecutable(callerPath: command.executable, realPath: facts.executableRealpath)
+        .allowingLoopbackEgress()
+        .allowingLoopbackBind()
+    if let resources = facts.resources {
+        profile = profile.allowingCanonicalResources(
+            privateHome: resources.privateHome,
+            executableTargets: facts.canonical.targets,
+            readFiles: facts.canonical.readFiles,
+            readTrees: facts.canonical.readTrees,
+            writeTrees: facts.canonical.writeTrees
+        )
+    }
+    if let agentBin = facts.agentBin {
+        profile = profile.allowingAgentBin(agentBin)
+    }
+    profile = profile.allowingProductiveWorkspace(facts.productive)
+    guard profile.workspacePath == facts.resolvedWorkspace else {
+        return .failure(.workspacePathUnresolvable)
+    }
+    guard
+        let request = IsolatedLaunchRequest(
+            plan: plan,
+            command: command,
+            launch: .seatbelt(profile),
+            resources: facts.resources,
+            productive: facts.productive,
+            legacyAgentIntegration: legacyAgentIntegration
+        )
+    else {
+        // The init fails only on mode/launch mismatch.
+        return .failure(.backendMismatch)
+    }
+    return .success(request)
 }
 
 func prepareUnavailable(

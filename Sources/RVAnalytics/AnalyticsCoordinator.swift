@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 
 public enum AnalyticsDecisionKind: String, Sendable, Equatable {
     case allow
@@ -69,8 +70,8 @@ public actor AnalyticsCoordinator {
 
     /// Records enabled pack identifiers for the next daily flush.
     ///
-    /// - Parameter packIDs: Pack identifier strings (`PackID.rawValue`). RVAnalytics
-    ///   does not import RVDomain, so this stays `[String]`.
+    /// - Parameter packIDs: Pack identifier strings (`PackID.rawValue`); this
+    ///   stays `[String]` to keep the analytics boundary free of domain types.
     public func noteEnabledPacks(_ packIDs: [String]) {
         guard preferences.isEnabled else { return }
         state.enabledPackIDs = packIDs.sorted()
@@ -171,11 +172,19 @@ public actor AnalyticsCoordinator {
 
     private static func loadHosts(paths: AnalyticsPaths) -> [String: String] {
         guard let data = FileManager.default.contents(atPath: paths.hostsFile.path),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: String]
+              let root = try? JSONDecoder().decode(JSONValue.self, from: data),
+              let object = root.asObject
         else {
             return [:]
         }
-        return object
+        var hosts: [String: String] = [:]
+        for (key, value) in object {
+            guard let string = value.string else {
+                return [:]
+            }
+            hosts[key] = string
+        }
+        return hosts
     }
 
     private static func dayString(_ date: Date) -> String {

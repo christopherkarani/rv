@@ -52,8 +52,8 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
 
 @Suite struct ShellPipelineFlagScanTests {
     @Test func scan_terminatorIsFirstClassEvent() {
-        // The scan keeps classifying after `--`: most consumers split
-        // there, `clean` skips it, push-family rejects it (T3b).
+        // The flat scan keeps classifying after `--`: split-consumers
+        // stop via splitFlagTerminator, push/branch/tag/stash reject it.
         let argv = Argv(program: "rm", args: ["-rf", "--", "-foo", "bar"])
         #expect(
             ShellPipeline.scanFlags(argv) == [
@@ -97,25 +97,42 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
     }
 
     @Test func scan_clusterConsumesOneWordPerCluster() {
-        // touch -td: both letters arm the expect-flag, one word consumed.
+        // getopt reads left to right: the first taker consumes the rest of
+        // its own cluster (`-td` reads value `d`), and only a bare taker
+        // consumes the next word (`-t` alone reads `2024-01-01`).
         let spec = FlagValueSpec(valueShorts: ["t", "d"])
         let argv = Argv(program: "touch", args: ["-td", "2024-01-01", "file"])
         #expect(
             ShellPipeline.scanFlags(argv, valueSpec: spec) == [
-                .shorts(letters: ["t", "d"], value: "2024-01-01"),
+                .shorts(letters: ["t"], value: "d"),
+                .positional("2024-01-01"),
+                .positional("file"),
+            ]
+        )
+        let bare = Argv(program: "touch", args: ["-t", "2024-01-01", "file"])
+        #expect(
+            ShellPipeline.scanFlags(bare, valueSpec: spec) == [
+                .shorts(letters: ["t"], value: "2024-01-01"),
                 .positional("file"),
             ]
         )
     }
 
     @Test func scan_shortEqualsNeverConsumes() {
-        // Classify-first passthrough: `-t=x` is already `.shortEquals`,
-        // so it never consumes even when `t` takes a value.
+        // getopt reads `-t=x` as value `=x` when `t` takes a value; without
+        // a taker the word stays `.shortEquals` (the tool errors on `=`).
         let spec = FlagValueSpec(valueShorts: ["t"])
         let argv = Argv(program: "touch", args: ["-t=x", "file"])
         #expect(
             ShellPipeline.scanFlags(argv, valueSpec: spec) == [
-                .shortEquals(name: "t", value: "x"),
+                .shorts(letters: ["t"], value: "=x"),
+                .positional("file"),
+            ]
+        )
+        let bare = Argv(program: "touch", args: ["-v=x", "file"])
+        #expect(
+            ShellPipeline.scanFlags(bare, valueSpec: spec) == [
+                .shortEquals(name: "v", value: "x"),
                 .positional("file"),
             ]
         )
@@ -222,54 +239,135 @@ private let singleDashWordGoldens: [(word: String, expected: String?)] = [
             ]
         )
     }
-}
 
-// MARK: - Adapter equivalence: legacy helpers agree with the grammar
-
-@Suite struct ShellPipelineFlagAdapterTests {
-    @Test(arguments: adapterBattery)
-    func adapter_matchesGrammar(word: String) {
-        let classified = FlagToken.classify(word)
-        if case .shorts(let letters, _) = classified {
-            #expect(clusteredShorts(word) == letters)
-        } else {
-            #expect(clusteredShorts(word) == nil)
-        }
-        for long in ["--source", "--branch", "--repo"] {
-            let expected: String? = {
-                guard case .long(let name, let value) = classified,
-                    "--" + name == long,
-                    let value,
-                    value.isEmpty == false
-                else { return nil }
-                return value
-            }()
-            #expect(gitAttachedValue(word, long: long) == expected)
-        }
+    @Test func scan_longResolvesUniquePrefix() {
+        let spec = FlagValueSpec(
+            valueLongs: ["target-directory"],
+            knownLongs: ["force", "no-clobber"]
+        )
+        // Unique prefixes resolve (and consume when value-taking).
+        let argv = Argv(
+            program: "mv",
+            args: ["--targ", "dir", "--forc", "--no-c", "a"]
+        )
+        #expect(
+            ShellPipeline.scanFlags(argv, valueSpec: spec) == [
+                .long(name: "target-directory", value: "dir"),
+                .long(name: "force", value: nil),
+                .long(name: "no-clobber", value: nil),
+                .positional("a"),
+            ]
+        )
+        // Ambiguous and unknown spellings stay unresolved (the tool errors).
+        #expect(spec.resolveLong("no-") == "no-clobber")
+        #expect(spec.resolveLong("t") == "target-directory")
+        #expect(spec.resolveLong("x") == "x")
+        let both = FlagValueSpec(knownLongs: ["dir", "directory"])
+        #expect(both.resolveLong("d") == "d")
+        #expect(both.resolveLong("di") == "di")
+        #expect(both.resolveLong("dir") == "dir")
     }
 
-    // Literal pins for forms the git-refs helper tests don't cover, so the
-    // old-behavior equivalence stands on values independent of the grammar.
-    @Test func adapter_literalOldBehavior() {
-        #expect(clusteredShorts("---") == nil)
-        #expect(clusteredShorts("--") == nil)
-        #expect(clusteredShorts("") == nil)
-        #expect(clusteredShorts("-=x") == nil)
-        #expect(clusteredShorts("-m=") == nil)
-        #expect(gitAttachedValue("--a=b=c", long: "--a") == "b=c")
-        #expect(gitAttachedValue("--=x", long: "--") == "x")
-        #expect(gitAttachedValue("--branch=main", long: "--branch") == "main")
-        #expect(gitAttachedValue("", long: "--source") == nil)
-        // Exact-name match, not prefix: a naive hasPrefix(long) would
-        // accept "--branch=main" for long "--bran"; the grammar form must not.
-        #expect(gitAttachedValue("--branch=main", long: "--bran") == nil)
-        // Narrowed contract: `long` is a bare `--name` form, so a `long`
-        // containing `=` never matches.
-        #expect(gitAttachedValue("--a=b=c", long: "--a=b") == nil)
+    @Test func scan_attachedShortValueIsSelfContained() {
+        // `-tSTAMP` reads `STAMP` without touching `--` or the next word.
+        let spec = FlagValueSpec(valueShorts: ["t"])
+        let argv = Argv(program: "touch", args: ["-tSTAMP", "--", "file"])
+        #expect(
+            ShellPipeline.scanFlags(argv, valueSpec: spec) == [
+                .shorts(letters: ["t"], value: "STAMP"),
+                .terminator,
+                .positional("file"),
+            ]
+        )
+        // Bare letters before the taker are kept as flags.
+        let clustered = Argv(program: "touch", args: ["-vtSTAMP", "file"])
+        #expect(
+            ShellPipeline.scanFlags(clustered, valueSpec: spec) == [
+                .shorts(letters: ["v", "t"], value: "STAMP"),
+                .positional("file"),
+            ]
+        )
     }
 }
 
-private let adapterBattery: [String] = [
-    "-abc", "--abc", "-", "-a=b", "abc", "", "--source=HEAD", "--source=",
-    "--source", "--other=x", "-rf", "--", "-name", "--branch=main", "--=x",
-]
+// MARK: - splitFlagTerminator goldens: pending-aware `--` stop
+
+@Suite struct ShellPipelineSplitTerminatorTests {
+    @Test func split_noTerminator_returnsAllEventsAndEmptyRest() {
+        let (flags, rest) = ShellPipeline.splitFlagTerminator(
+            Argv(program: "rm", args: ["-rf", "f"])
+        )
+        #expect(flags == [.shorts(letters: ["r", "f"], value: nil), .positional("f")])
+        #expect(rest == [])
+    }
+
+    @Test func split_stopsAtTerminator_restVerbatim() {
+        // Same argv as scan_terminatorIsFirstClassEvent: the flat scan
+        // keeps classifying past `--`, the stopping scan cuts there.
+        let (flags, rest) = ShellPipeline.splitFlagTerminator(
+            Argv(program: "rm", args: ["-rf", "--", "-foo", "bar"])
+        )
+        #expect(flags == [.shorts(letters: ["r", "f"], value: nil)])
+        #expect(rest == ["-foo", "bar"])
+    }
+
+    @Test func split_valueTaking_stopsAtTrueTerminator() {
+        let spec = FlagValueSpec(valueLongs: ["size"])
+        let (flags, rest) = ShellPipeline.splitFlagTerminator(
+            Argv(program: "truncate", args: ["--", "--size", "10", "f"]),
+            values: spec
+        )
+        #expect(flags.isEmpty)
+        #expect(rest == ["--size", "10", "f"])
+    }
+
+    @Test func split_pendingValueConsumesDashDash() {
+        // The consumed `--` is a value, not a terminator: no cut, so the
+        // trailing positional stays a head event and rest is empty.
+        let longSpec = FlagValueSpec(valueLongs: ["size"])
+        let (longFlags, longRest) = ShellPipeline.splitFlagTerminator(
+            Argv(program: "truncate", args: ["--size", "--", "file"]),
+            values: longSpec
+        )
+        #expect(longFlags == [.long(name: "size", value: "--"), .positional("file")])
+        #expect(longRest == [])
+        let shortSpec = FlagValueSpec(valueShorts: ["s"])
+        let (shortFlags, shortRest) = ShellPipeline.splitFlagTerminator(
+            Argv(program: "truncate", args: ["-s", "--", "file"]),
+            values: shortSpec
+        )
+        #expect(shortFlags == [.shorts(letters: ["s"], value: "--"), .positional("file")])
+        #expect(shortRest == [])
+    }
+
+    @Test func split_consumedTerminator_secondDashDashStops() {
+        let spec = FlagValueSpec(valueLongs: ["size"])
+        let (flags, rest) = ShellPipeline.splitFlagTerminator(
+            Argv(program: "truncate", args: ["--size", "--", "--", "x"]),
+            values: spec
+        )
+        #expect(flags == [.long(name: "size", value: "--")])
+        #expect(rest == ["x"])
+    }
+
+    @Test func split_rejectsDashValues_danglingThenTerminator() {
+        // checkout-style spec: `-b` dangles on `--`, and the unconsumed
+        // `--` still terminates.
+        let spec = FlagValueSpec(valueShorts: ["b"], rejectsDashValues: true)
+        let (flags, rest) = ShellPipeline.splitFlagTerminator(
+            Argv(program: "checkout", args: ["-b", "--", "x"]),
+            values: spec
+        )
+        #expect(flags == [.dangling(flag: "-b")])
+        #expect(rest == ["x"])
+    }
+
+    @Test func split_valueFree_everyTokenShapeVerbatim() {
+        let words = ["-", "--", "--long", "--long=value", "-xyz", "plain"]
+        let (flags, rest) = ShellPipeline.splitFlagTerminator(
+            Argv(program: "rm", args: ["--"] + words)
+        )
+        #expect(flags.isEmpty)
+        #expect(rest == words)
+    }
+}

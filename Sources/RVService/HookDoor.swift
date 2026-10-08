@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVEngine
 import RVHistory
 import RVHooks
 import RVIPC
@@ -16,6 +17,9 @@ public struct HookDoor: Sendable {
     }
 
     /// Create one awaiting row for a product Ask. Missing session is a no-op.
+    /// A full store drops the row (spam protection): the consult still
+    /// answers ask-denial and the TTY code path is unaffected, so the
+    /// human can still approve the exact action out of band.
     package static func recordPending(
         request: HookRequest,
         action: ProposedAction,
@@ -23,6 +27,16 @@ public struct HookDoor: Sendable {
         now: Date
     ) async throws {
         guard let store, let session = request.session else { return }
+        // M6: shell asks bind the hidden payload in the dedupe key so
+        // same-view different-payload asks mint separate waits. File
+        // asks carry no shell payload; their fingerprint already covers
+        // the action exactly.
+        let payloadDigest: String?
+        if case .shell(_, let command, _, _) = request {
+            payloadDigest = maskedPayloadContentDigest(Normalize.maskedSegments(of: command))
+        } else {
+            payloadDigest = nil
+        }
         let pending = PendingApprovalRequest(
             id: PendingApprovalStore.makeID(),
             identity: ApprovalIdentity(
@@ -31,35 +45,14 @@ public struct HookDoor: Sendable {
             ),
             action: action,
             reason: .hostAsk,
-            continuation: .hostNative,
-            timeoutPolicy: .keepWaiting
+            continuation: .retry(action.fingerprint),
+            timeoutPolicy: .autoDeny,
+            payloadDigest: payloadDigest
         )
-        _ = try await store.create(pending, now: now)
-    }
-
-    /// Cancel every awaiting row with this identity + fingerprint after spend.
-    package static func clearPending(
-        request: HookRequest,
-        action: ProposedAction,
-        store: (any PendingApprovalCoordinating)?,
-        now: Date
-    ) async throws {
-        guard let store, let session = request.session else { return }
-        let identity = ApprovalIdentity(
-            session: session,
-            agent: request.host
-        )
-        let fingerprint = action.fingerprint
-        let awaiting = try await store.list(now: now)
-        for record in awaiting {
-            guard record.identity == identity, record.fingerprint == fingerprint else {
-                continue
-            }
-            do {
-                _ = try await store.cancel(id: record.id, now: now)
-            } catch {
-                continue
-            }
+        do {
+            _ = try await store.create(pending, now: now)
+        } catch PendingApprovalError.storeFull {
+            return
         }
     }
 
@@ -87,11 +80,6 @@ extension HookEvaluateWorld {
             evaluateFile: { action, cwd in
                 world.runFile(action: action, cwd: cwd, host: ledger)
             },
-            spend: { command, cwd in
-                let result = await world.spend(command: command, cwd: cwd, host: ledger)
-                recordDecision?(result)
-                return result
-            },
             mintOnDeny: { result, cwd in
                 await world.mintUnlockCode(for: result, cwd: cwd)
             },
@@ -103,12 +91,17 @@ extension HookEvaluateWorld {
                     now: clock()
                 )
             },
-            clearHostAsk: { request, action in
-                try await HookDoor.clearPending(
-                    request: request,
-                    action: action,
-                    store: pending,
-                    now: clock()
+            // M-07: the hook holds exact text, so its mint binds the
+            // hidden payload; the row stores the digest only. B1: the mint
+            // also binds the erased invocation prefix (wrappers live in the
+            // exact text, never in the view).
+            mintOnDenyWithCommand: { result, cwd, command in
+                await world.mintUnlockCode(
+                    for: result,
+                    cwd: cwd,
+                    maskedSegments: Normalize.maskedSegments(of: command),
+                    invocationPrefix: Normalize.invocationPrefix(of: command),
+                    invocationDisplay: Normalize.invocationDisplay(of: command)
                 )
             }
         )

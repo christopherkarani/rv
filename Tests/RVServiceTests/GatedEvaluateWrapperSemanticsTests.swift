@@ -118,11 +118,10 @@ struct GatedEvaluateWrapperSemanticsTests {
 }
 
 private func peek(_ command: String) async throws -> EvaluationResult {
-    let store = AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
     return await GatedEvaluate().peek(
         EvaluationRequest(command: ShellCommand(rawValue: command), enabledPacks: dayOnePackIDs),
         cwd: WorkingDirectory(validating: "/tmp/ws"),
-        store: store,
+        grants: EphemeralAllowOnceTable(),
         now: Date(timeIntervalSince1970: 1_700_000_000),
         allowlist: { .empty }
     )

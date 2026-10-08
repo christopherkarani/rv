@@ -74,7 +74,9 @@ func stripAbsolutePathOnArgv0(_ text: String) -> String {
     return rest.isEmpty ? base : "\(base) \(rest)"
 }
 
-private func looksLikeAbsoluteExecutable(_ word: String) -> Bool {
+// Internal: the invocation-prefix recorder (NormalizeInvocation) must apply
+// the exact argv0-strip condition the view applies.
+func looksLikeAbsoluteExecutable(_ word: String) -> Bool {
     guard word.contains("/") else { return false }
     if isRedirectToken(word) { return false }
     return word.hasPrefix("/") || word.hasPrefix("./") || word.hasPrefix("../")

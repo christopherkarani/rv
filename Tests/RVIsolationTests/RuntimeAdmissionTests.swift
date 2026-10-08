@@ -14,19 +14,19 @@ struct RuntimeAdmissionIsolationTests {
     @Test func allowedCommandRunsOnce() throws {
         let harness = try AdmissionHarness()
         defer { harness.cleanup() }
-        let first = harness.session.submit(.success(harness.frame("touch marker")))
+        let first = harness.session.submitLegacy(.success(harness.frame("touch marker")))
         #expect(harness.effect.runs == 1)
         #expect(harness.effect.exists)
         #expect(first.response == .executed(exitStatus: 0))
         #expect(first.event.executionAttempted)
         #expect(first.event.session == harness.runtime.id.rawValue.uuidString)
 
-        let replay = harness.session.submit(.success(harness.frame("touch marker", id: harness.requestID)))
+        let replay = harness.session.submitLegacy(.success(harness.frame("touch marker", id: harness.requestID)))
         #expect(harness.effect.runs == 1)
         #expect(replay.response == .rejected(.replay))
         #expect(replay.event.executionAttempted == false)
 
-        let sameCommand = harness.session.submit(
+        let sameCommand = harness.session.submitLegacy(
             .success(harness.frame("touch marker", id: UUID()))
         )
         #expect(harness.effect.runs == 1)
@@ -38,7 +38,7 @@ struct RuntimeAdmissionIsolationTests {
         defer { harness.cleanup() }
         let outside = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-admission-outside-\(UUID().uuidString)")
-        let decision = harness.session.submit(
+        let decision = harness.session.submitLegacy(
             .success(harness.frame("touch \(outside.path)"))
         )
         #expect(harness.effect.runs == 0)
@@ -53,27 +53,27 @@ struct RuntimeAdmissionIsolationTests {
     @Test func pendingCommandDoesNotRunUntilAllowOnce() throws {
         let harness = try AdmissionHarness()
         defer { harness.cleanup() }
-        let pending = harness.session.submit(.success(harness.frame("echo hello")))
+        let pending = harness.session.submitLegacy(.success(harness.frame("echo hello")))
         #expect(harness.effect.runs == 0)
         #expect(pending.response == .pending(.reviewAsk))
 
-        let approved = try AdmissionHarness(approval: { _ in .success(.allowOnce) })
+        let approved = try AdmissionHarness(approval: { _, _ in .success(.allowOnce) })
         defer { approved.cleanup() }
-        let decision = approved.session.submit(.success(approved.frame("echo hello")))
+        let decision = approved.session.submitLegacy(.success(approved.frame("echo hello")))
         #expect(approved.effect.runs == 1)
         #expect(approved.effect.exists)
         #expect(decision.response == .executed(exitStatus: 0))
 
-        let unavailable = try AdmissionHarness(approval: { _ in .failure(.approvalUnavailable) })
+        let unavailable = try AdmissionHarness(approval: { _, _ in .failure(.approvalUnavailable) })
         defer { unavailable.cleanup() }
-        let refused = unavailable.session.submit(.success(unavailable.frame("echo hello")))
+        let refused = unavailable.session.submitLegacy(.success(unavailable.frame("echo hello")))
         #expect(unavailable.effect.runs == 0)
         #expect(unavailable.effect.exists == false)
         #expect(refused.response == .approvalUnavailable)
 
-        let rule = try AdmissionHarness(approval: { _ in .success(.createRule) })
+        let rule = try AdmissionHarness(approval: { _, _ in .success(.createRule) })
         defer { rule.cleanup() }
-        let created = rule.session.submit(.success(rule.frame("echo hello")))
+        let created = rule.session.submitLegacy(.success(rule.frame("echo hello")))
         #expect(rule.effect.runs == 0)
         #expect(created.response == .approvalUnavailable)
     }
@@ -81,7 +81,7 @@ struct RuntimeAdmissionIsolationTests {
     @Test func evaluationFailureDoesNotRun() throws {
         let harness = try AdmissionHarness()
         defer { harness.cleanup() }
-        let decision = harness.session.submit(.success(harness.frame(#"python3 -c "$CMD""#)))
+        let decision = harness.session.submitLegacy(.success(harness.frame(#"python3 -c "$CMD""#)))
         #expect(harness.effect.runs == 0)
         #expect(harness.effect.exists == false)
         #expect(decision.response == .evaluationFailed)
@@ -94,13 +94,13 @@ struct RuntimeAdmissionIsolationTests {
         let other = try AdmissionHarness()
         defer { other.cleanup() }
 
-        let fake = harness.session.submit(
+        let fake = harness.session.submitLegacy(
             .success(harness.frame("touch marker", capability: RuntimeCapability()))
         )
-        let impersonated = harness.session.submit(
+        let impersonated = harness.session.submitLegacy(
             .success(harness.frame("touch marker", claim: other.runtime.id.rawValue))
         )
-        let foreignToken = harness.session.submit(
+        let foreignToken = harness.session.submitLegacy(
             .success(other.frame("touch marker"))
         )
         #expect(fake.response == .rejected(.invalidCapability))
@@ -120,7 +120,7 @@ struct RuntimeAdmissionIsolationTests {
     @Test func malformedFrameDoesNotRun() throws {
         let harness = try AdmissionHarness()
         defer { harness.cleanup() }
-        let decision = harness.session.submit(.failure(.malformed))
+        let decision = harness.session.submitLegacy(.failure(.malformed))
         #expect(harness.effect.runs == 0)
         #expect(decision.response == .rejected(.malformed))
         let extra = Data(
@@ -143,7 +143,7 @@ struct RuntimeAdmissionIsolationTests {
         defer { try? FileManager.default.removeItem(at: log) }
         let harness = try AdmissionHarness(evidenceFile: log)
         defer { harness.cleanup() }
-        _ = harness.session.submit(.success(harness.frame("touch marker")))
+        _ = harness.session.submitLegacy(.success(harness.frame("touch marker")))
         let text = try String(contentsOf: log, encoding: .utf8)
         #expect(text.contains(harness.runtime.id.rawValue.uuidString))
         #expect(text.contains("\"authorization\":\"allowed\""))
@@ -201,7 +201,7 @@ struct RuntimeAdmissionIsolationTests {
                     )
                 )
             },
-            approval: { _ in nil },
+            approval: { _, _ in nil },
             policy: { _ in .empty },
             evidence: evidence
         )
@@ -261,7 +261,7 @@ struct RuntimeAdmissionIsolationTests {
                     )
                 )
             },
-            approval: { _ in nil },
+            approval: { _, _ in nil },
             policy: { _ in .empty },
             evidence: evidence
         )
@@ -312,7 +312,7 @@ struct RuntimeAdmissionIsolationTests {
         let configuration = RuntimeAdmissionConfiguration(
             normalize: allowAdmittedCommand,
             executor: .containedCommand,
-            approval: { _ in nil },
+            approval: { _, _ in nil },
             policy: { _ in .empty },
             evidence: RuntimeAdmissionEvidence()
         )
@@ -369,7 +369,7 @@ private struct AdmissionHarness {
     let session: RuntimeAdmissionSession
 
     init(
-        approval: @escaping @Sendable (PendingAuthorization) -> Result<ApprovalDecision, AgentApprovalError>? = { _ in nil },
+        approval: @escaping @Sendable (RuntimeActionRequestID, PendingAuthorization) -> Result<ApprovalDecision, AgentApprovalError>? = { _, _ in nil },
         evidenceFile: URL? = nil
     ) throws {
         let root = FileManager.default.temporaryDirectory
@@ -407,6 +407,7 @@ private struct AdmissionHarness {
             launch: AdmittedLaunchContext(
                 plan: plan,
                 profileSource: "(deny file-link)",
+                profileIsContainedCompilerOutput: true,
                 workspacePath: workspace.rawValue
             ),
             requestRead: -1,

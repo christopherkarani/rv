@@ -155,27 +155,27 @@ func hostWiring_hostsWithoutFileToolDoorIgnoreBytes(_ host: HookHost) {
 }
 
 private func claudeSettings(matchers: [String]) throws -> Data {
-    let root: [String: Any] = [
-        ClaudeSettingsMerge.hooksRootKey: [
-            ClaudeSettingsMerge.preToolUseKey: matchers.map { matcher in
+    let root = JSONValue.object([
+        ClaudeSettingsMerge.hooksRootKey: .object([
+            ClaudeSettingsMerge.preToolUseKey: .array(matchers.map { matcher in
                 ClaudeSettingsMerge.rvEntry(
                     rvPath: "/usr/local/bin/rv",
                     adapterPath: "/tmp/rv-t1/.claude/hooks/rv-guard.py",
                     matcher: matcher
                 )
-            },
-        ],
-    ]
-    return try JSONSerialization.data(withJSONObject: root)
+            }),
+        ]),
+    ])
+    return try JSONEncoder().encode(root)
 }
 
 private func cursorCompanionWithoutFileToolEntry() throws -> Data {
     let adapterPath = "/tmp/rv-t1/.cursor/hooks/rv-guard.py"
-    let root: [String: Any] = [
-        CursorHooksMerge.versionKey: CursorHooksMerge.schemaVersion,
-        CursorHooksMerge.hooksRootKey: [
-            CursorHooksMerge.beforeShellKey: [CursorHooksMerge.rvEntry(adapterPath: adapterPath)],
-        ],
-    ]
-    return try JSONSerialization.data(withJSONObject: root)
+    let root = JSONValue.object([
+        CursorHooksMerge.versionKey: .number(Double(CursorHooksMerge.schemaVersion)),
+        CursorHooksMerge.hooksRootKey: .object([
+            CursorHooksMerge.beforeShellKey: .array([CursorHooksMerge.rvEntry(adapterPath: adapterPath)]),
+        ]),
+    ])
+    return try JSONEncoder().encode(root)
 }

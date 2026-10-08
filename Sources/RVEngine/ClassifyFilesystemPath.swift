@@ -4,6 +4,19 @@ func classifyFilesystemTarget(
     _ apparent: String,
     context: FilesystemAnalysisContext
 ) -> FilesystemTarget {
+    if apparent == unboundedWriteSentinel {
+        // M-02: the sentinel stands for a write no static bound covers, not
+        // for the filesystem root. It must deny in every world: without this
+        // it fell through to `.unknown` when the root was nil, and unprobed
+        // worlds skip the unresolved tighten — silent allow.
+        return FilesystemTarget(
+            apparent: apparent,
+            canonical: apparent,
+            scope: .outsideRepository,
+            kind: .unknown,
+            resolution: .lexical
+        )
+    }
     if let fact = context.fact(for: apparent) {
         return classifiedTarget(
             apparent: apparent,

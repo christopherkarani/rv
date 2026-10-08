@@ -171,120 +171,44 @@ if ! grep -q -- 'test' "$OUT/operator.argv"; then
   exit 1
 fi
 
-NUL_LOG="$OUT/nul.argv"
-NUL_STDIN="$OUT/nul.stdin"
-set +e
-printf 'a\0b' | RV_C_ARGV_LOG="$NUL_LOG" RV_C_STDIN_LOG="$NUL_STDIN" "$PROBE/rv" hook --host grok
-nul_st=$?
-set -e
-if [[ "$nul_st" -ne 17 ]]; then
-  printf "rv-c tests: NUL miss expected replay exit 17, got %s\n" "$nul_st" >&2
-  exit 1
-fi
-if ! grep -q -- '--host' "$NUL_LOG" || ! grep -q -- 'grok' "$NUL_LOG"; then
-  printf "rv-c tests: NUL miss argv was not hook --host grok\n" >&2
-  exit 1
-fi
-
-CLAUDE_NUL_LOG="$OUT/nul-claude.argv"
-set +e
-printf 'a\0b' | RV_C_ARGV_LOG="$CLAUDE_NUL_LOG" RV_C_STDIN_LOG="/dev/null" "$PROBE/rv" hook --host claude
-claude_nul_st=$?
-set -e
-if [[ "$claude_nul_st" -ne 17 ]]; then
-  printf "rv-c tests: Claude NUL miss expected replay exit 17, got %s\n" "$claude_nul_st" >&2
-  exit 1
-fi
-if ! grep -q -- '--host' "$CLAUDE_NUL_LOG" || ! grep -q -- 'claude' "$CLAUDE_NUL_LOG"; then
-  printf "rv-c tests: Claude NUL miss argv was not hook --host claude\n" >&2
-  exit 1
-fi
-
-CURSOR_NUL_LOG="$OUT/nul-cursor.argv"
-set +e
-printf 'a\0b' | RV_C_ARGV_LOG="$CURSOR_NUL_LOG" RV_C_STDIN_LOG="/dev/null" "$PROBE/rv" hook --host cursor
-cursor_nul_st=$?
-set -e
-if [[ "$cursor_nul_st" -ne 17 ]]; then
-  printf "rv-c tests: Cursor NUL miss expected replay exit 17, got %s\n" "$cursor_nul_st" >&2
-  exit 1
-fi
-if ! grep -q -- '--host' "$CURSOR_NUL_LOG" || ! grep -q -- 'cursor' "$CURSOR_NUL_LOG"; then
-  printf "rv-c tests: Cursor NUL miss argv was not hook --host cursor\n" >&2
-  exit 1
-fi
-if [[ "$(wc -c < "$NUL_STDIN" | tr -d ' ')" != "3" ]]; then
-  printf "rv-c tests: NUL miss did not replay exact stdin\n" >&2
-  exit 1
-fi
-
-# Bounded oversize read: the hook must start the miss child after the XPC
-# prefix limit, without waiting for EOF, and then replay the unread tail.
-LIMIT="$OUT/bounded-stdin-probe"
-rm -rf "$LIMIT"
-mkdir -p "$LIMIT"
-cp "$OUT/rv" "$LIMIT/rv"
-cat > "$LIMIT/rv-cli" <<'EOF'
-#!/bin/sh
-: > "${RV_C_START_LOG:?}"
-cat > "${RV_C_STDIN_LOG:?}"
-wc -c < "$RV_C_STDIN_LOG" > "${RV_C_COUNT_LOG:?}"
-exit 17
-EOF
-chmod 755 "$LIMIT/rv-cli"
-FIFO="$LIMIT/stdin"
-mkfifo "$FIFO"
-{
-  head -c 1048576 /dev/zero | tr '\0' 'x'
-  printf 'x'
-  printf 'tail-data-1234567'
-} > "$LIMIT/expected"
-(
-  head -c 1048576 /dev/zero | tr '\0' 'x'
-  printf 'x'
-  while [[ ! -f "$LIMIT/release" ]]; do
-    sleep 0.01
-  done
-  printf 'tail-data-1234567'
-) > "$FIFO" &
-limit_writer=$!
-set +e
-RV_C_START_LOG="$LIMIT/started" RV_C_COUNT_LOG="$LIMIT/count" \
-  RV_C_STDIN_LOG="$LIMIT/replayed" \
-  "$LIMIT/rv" hook --host grok < "$FIFO" >/dev/null 2>&1 &
-limit_rv=$!
-set -e
-limit_started=0
-for _ in $(seq 1 100); do
-  if [[ -f "$LIMIT/started" ]]; then
-    limit_started=1
-    break
+# Every host denies malformed input directly; an executable CLI sibling must
+# never receive authority-bearing fallback input.
+for host in grok pi opencode claude openclaw hermes codex cursor antigravity; do
+  log="$OUT/deny-$host.argv"
+  rm -f "$log"
+  set +e
+  printf 'a\0b' | RV_C_ARGV_LOG="$log" "$PROBE/rv" hook --host "$host" >"$OUT/deny-$host.json" 2>"$OUT/deny-$host.err"
+  status=$?
+  set -e
+  expected=1
+  case "$host" in grok|claude|cursor|antigravity) expected=0 ;; codex) expected=2 ;; esac
+  if [[ "$status" -ne "$expected" || -e "$log" ]]; then
+    printf 'rv-c tests: %s fallback must deny without invoking CLI\n' "$host" >&2
+    exit 1
   fi
-  sleep 0.01
+  case "$host" in
+    claude) marker='"permissionDecision":"deny"' ;;
+    cursor) marker='"permission":"deny"' ;;
+    codex) marker='"decision":"block"' ;;
+    *) marker='"decision":"deny"' ;;
+  esac
+  if ! grep -q "$marker" "$OUT/deny-$host.json"; then
+    printf 'rv-c tests: %s missing host denial wire\n' "$host" >&2
+    exit 1
+  fi
+  if [[ "$host" == codex && ! -s "$OUT/deny-$host.err" ]]; then
+    printf 'rv-c tests: Codex requires blocking stderr\n' >&2
+    exit 1
+  fi
 done
-if [[ "$limit_started" -ne 1 ]]; then
-  kill "$limit_rv" "$limit_writer" 2>/dev/null || true
-  wait "$limit_rv" 2>/dev/null || true
-  wait "$limit_writer" 2>/dev/null || true
-  printf "rv-c tests: bounded stdin waited for EOF before miss replay\n" >&2
-  exit 1
-fi
-touch "$LIMIT/release"
+
+# Oversized input must also deny without invoking a replay child.
 set +e
-wait "$limit_rv"
-limit_status=$?
+head -c 1048577 /dev/zero | tr '\0' 'x' | RV_C_ARGV_LOG="$OUT/oversize.argv" "$PROBE/rv" hook --host codex >"$OUT/oversize.json" 2>"$OUT/oversize.err"
+oversize_status=${PIPESTATUS[2]}
 set -e
-wait "$limit_writer" 2>/dev/null || true
-if [[ "$limit_status" -ne 17 ]]; then
-  printf "rv-c tests: bounded stdin replay exited %s, expected 17\n" "$limit_status" >&2
-  exit 1
-fi
-if [[ "$(tr -d '[:space:]' < "$LIMIT/count")" != "1048594" ]]; then
-  printf "rv-c tests: bounded stdin replay truncated the unread tail\n" >&2
-  exit 1
-fi
-if ! cmp -s "$LIMIT/expected" "$LIMIT/replayed"; then
-  printf "rv-c tests: bounded stdin replay changed input bytes\n" >&2
+if [[ "$oversize_status" -ne 2 || -e "$OUT/oversize.argv" || ! -s "$OUT/oversize.err" ]]; then
+  printf 'rv-c tests: oversized hook must deny without CLI replay\n' >&2
   exit 1
 fi
 
@@ -322,23 +246,4 @@ if ! grep -q "rv-cli not found" "$BROKEN/err"; then
   exit 1
 fi
 
-# SIGPIPE replay: a child that exits before consuming stdin must leave the
-# parent fail-closed at exit 2, never dead by signal 13. Stdin carries a NUL
-# (skips XPC) and exceeds the 64 KiB pipe buffer so the write cannot win the
-# race against the child's exit.
-DIER="$OUT/sigpipe-probe"
-rm -rf "$DIER"
-mkdir -p "$DIER"
-cp "$OUT/rv" "$DIER/rv"
-printf '#!/bin/sh\nexit 9\n' > "$DIER/rv-cli"
-chmod 755 "$DIER/rv" "$DIER/rv-cli"
-SIG_STDIN="$OUT/sigpipe.stdin"
-{ printf 'a\0b'; head -c 1200000 /dev/zero | tr '\0' 'x'; } > "$SIG_STDIN"
-set +e
-"$DIER/rv" hook --host grok < "$SIG_STDIN"
-sig_st=$?
-set -e
-if [[ "$sig_st" -ne 2 ]]; then
-  printf "rv-c tests: dead replay child must yield fail-closed exit 2, got %s (signal death is 141)\n" "$sig_st" >&2
-  exit 1
-fi
+printf 'rv-c hook fallback boundary: 9 host denial cases and oversized input passed\n'

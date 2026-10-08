@@ -10,18 +10,16 @@ public enum EvaluationIntent: Sendable, Equatable {
     case apply
 }
 
-/// Policy-gate verb after the Evaluate session. Host Ask spend is apply, then
-/// plant-and-spend this turn — not a third EvaluationIntent.
+/// Policy-gate verb after the Evaluate session.
 private enum PolicyVerb: Sendable {
     case peek
     case apply
-    case hostAskSpend
 
     var recordsDenial: Bool {
         switch self {
         case .peek:
             false
-        case .apply, .hostAskSpend:
+        case .apply:
             true
         }
     }
@@ -106,7 +104,7 @@ public struct GatedEvaluate: Sendable {
         command: ShellCommand,
         cwd: WorkingDirectory?,
         home: HomeDirectory? = nil,
-        store: AllowOnceStore,
+        grants: EphemeralAllowOnceTable,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost = .tty,
@@ -118,7 +116,7 @@ public struct GatedEvaluate: Sendable {
                 command: command,
                 cwd: cwd,
                 home: home,
-                store: store,
+                grants: grants,
                 now: now,
                 allowlist: allowlist,
                 host: host,
@@ -129,7 +127,7 @@ public struct GatedEvaluate: Sendable {
                 command: command,
                 cwd: cwd,
                 home: home,
-                store: store,
+                grants: grants,
                 now: now,
                 allowlist: allowlist,
                 host: host,
@@ -143,7 +141,7 @@ public struct GatedEvaluate: Sendable {
         command: ShellCommand,
         cwd: WorkingDirectory?,
         home: HomeDirectory? = nil,
-        store: AllowOnceStore,
+        grants: EphemeralAllowOnceTable,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost = .tty,
@@ -153,7 +151,7 @@ public struct GatedEvaluate: Sendable {
             Self.makeRequest(command: command, home: home),
             cwd: cwd,
             home: home,
-            store: store,
+            grants: grants,
             now: now,
             allowlist: allowlist,
             host: host,
@@ -166,7 +164,7 @@ public struct GatedEvaluate: Sendable {
         command: ShellCommand,
         cwd: WorkingDirectory?,
         home: HomeDirectory? = nil,
-        store: AllowOnceStore,
+        grants: EphemeralAllowOnceTable,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost = .tty,
@@ -176,7 +174,7 @@ public struct GatedEvaluate: Sendable {
             Self.makeRequest(command: command, home: home),
             cwd: cwd,
             home: home,
-            store: store,
+            grants: grants,
             now: now,
             allowlist: allowlist,
             host: host,
@@ -201,7 +199,7 @@ public struct GatedEvaluate: Sendable {
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
         home: HomeDirectory? = nil,
-        store: AllowOnceStore,
+        grants: EphemeralAllowOnceTable,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost = .tty,
@@ -212,53 +210,7 @@ public struct GatedEvaluate: Sendable {
             request,
             cwd: cwd,
             home: home,
-            store: store,
-            now: now,
-            allowlist: allowlist,
-            host: host,
-            tool: tool
-        )
-    }
-
-    /// Host Ask spend: honor an existing grant, else plant+spend this turn. Fail-closed.
-    public func spendHostAsk(
-        command: ShellCommand,
-        cwd: WorkingDirectory?,
-        home: HomeDirectory? = nil,
-        store: AllowOnceStore,
-        now: Date,
-        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
-        host: LedgerHost = .tty,
-        tool: LedgerTool = .bash
-    ) async -> EvaluationResult {
-        await spendHostAsk(
-            Self.makeRequest(command: command, home: home),
-            cwd: cwd,
-            home: home,
-            store: store,
-            now: now,
-            allowlist: allowlist,
-            host: host,
-            tool: tool
-        )
-    }
-
-    func spendHostAsk(
-        _ request: EvaluationRequest,
-        cwd: WorkingDirectory?,
-        home: HomeDirectory? = nil,
-        store: AllowOnceStore,
-        now: Date,
-        allowlist: @escaping @Sendable () -> AllowlistSnapshot,
-        host: LedgerHost = .tty,
-        tool: LedgerTool = .bash
-    ) async -> EvaluationResult {
-        await gated(
-            .hostAskSpend,
-            request,
-            cwd: cwd,
-            home: home,
-            store: store,
+            grants: grants,
             now: now,
             allowlist: allowlist,
             host: host,
@@ -272,7 +224,7 @@ public struct GatedEvaluate: Sendable {
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
         home: HomeDirectory? = nil,
-        store: AllowOnceStore,
+        grants: EphemeralAllowOnceTable,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost = .tty,
@@ -283,7 +235,7 @@ public struct GatedEvaluate: Sendable {
             request,
             cwd: cwd,
             home: home,
-            store: store,
+            grants: grants,
             now: now,
             allowlist: allowlist,
             host: host,
@@ -296,7 +248,7 @@ public struct GatedEvaluate: Sendable {
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
         home: HomeDirectory?,
-        store: AllowOnceStore,
+        grants: EphemeralAllowOnceTable,
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost,
@@ -315,14 +267,21 @@ public struct GatedEvaluate: Sendable {
             } else {
                 let snapshot = allowlist()
                 let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
+                let safety = SafetyStore.loadEffective(
+                    home: home,
+                    workspace: Self.workspaceURL(cwd: cwd)
+                )
                 finished = await Self.applyPolicy(
                     verb,
                     result: result,
                     cwd: cwd,
                     snapshot: snapshot,
-                    store: store,
+                    grants: grants,
                     now: now,
-                    rebaseInProgress: rebasing
+                    rebaseInProgress: rebasing,
+                    safety: safety,
+                    maskedSegments: Normalize.maskedSegments(of: request.command),
+                    invocationPrefix: Normalize.invocationPrefix(of: request.command)
                 )
             }
         }
@@ -337,9 +296,12 @@ public struct GatedEvaluate: Sendable {
         result: EvaluationResult,
         cwd: WorkingDirectory?,
         snapshot: AllowlistSnapshot,
-        store: AllowOnceStore,
+        grants: EphemeralAllowOnceTable,
         now: Date,
-        rebaseInProgress: Bool
+        rebaseInProgress: Bool,
+        safety: SafetyLevel,
+        maskedSegments: [String]?,
+        invocationPrefix: [String]
     ) async -> EvaluationResult {
         switch verb {
         case .peek:
@@ -347,38 +309,24 @@ public struct GatedEvaluate: Sendable {
                 for: result,
                 cwd: cwd,
                 allowlist: snapshot,
-                store: store,
+                grants: grants,
                 now: now,
-                rebaseInProgress: rebaseInProgress
+                rebaseInProgress: rebaseInProgress,
+                safety: safety,
+                maskedSegments: maskedSegments,
+                invocationPrefix: invocationPrefix
             ).result
         case .apply:
             return await PolicyGate.consumingGrant(
                 for: result,
                 cwd: cwd,
                 allowlist: snapshot,
-                store: store,
+                grants: grants,
                 now: now,
-                rebaseInProgress: rebaseInProgress
-            ).result
-        case .hostAskSpend:
-            let applied = await PolicyGate.consumingGrant(
-                for: result,
-                cwd: cwd,
-                allowlist: snapshot,
-                store: store,
-                now: now,
-                rebaseInProgress: rebaseInProgress
-            )
-            if case .allow = applied.result.decision {
-                return applied.result
-            }
-            return await PolicyGate.spendHostAllowOnce(
-                result,
-                cwd: cwd,
-                allowlist: snapshot,
-                store: store,
-                now: now,
-                rebaseInProgress: rebaseInProgress
+                rebaseInProgress: rebaseInProgress,
+                safety: safety,
+                maskedSegments: maskedSegments,
+                invocationPrefix: invocationPrefix
             ).result
         }
     }
@@ -386,6 +334,15 @@ public struct GatedEvaluate: Sendable {
     /// Policy-store I/O (safety, secret allow-paths, typed rules) around the
     /// Engine evaluation door. The door owns evaluate → unwrap → probe →
     /// analyze → apply; the Policy gate runs after, in `gated`.
+    /// Phase 2A has no principal-bound human grant transaction. Evaluate the
+    /// canonical packs and hard policy without reading or consuming owner grants.
+    /// A denied action stays denied until that separate authority flow exists.
+    func evaluateAgent(
+        _ request: EvaluationRequest, cwd: WorkingDirectory?, home: HomeDirectory?
+    ) -> EvaluationResult {
+        evaluateWithSemantics(request, cwd: cwd, home: home)
+    }
+
     private func evaluateWithSemantics(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
@@ -448,7 +405,10 @@ public struct GatedEvaluate: Sendable {
         cwd: WorkingDirectory?,
         store: AllowOnceStore,
         now: Date,
-        home: HomeDirectory?
+        home: HomeDirectory?,
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = [],
+        invocationDisplay: String? = nil
     ) async -> AllowOnceUnlockMint? {
         guard home != nil else { return nil }
         guard let cwd, HookAuthorization.shouldMintUnlock(result: result, cwd: cwd) else {
@@ -459,7 +419,10 @@ public struct GatedEvaluate: Sendable {
             matchingView: result.matchingView,
             cwd: cwd,
             ruleID: deny.ruleID,
-            now: now
+            now: now,
+            maskedSegments: maskedSegments,
+            invocationPrefix: invocationPrefix,
+            invocationDisplay: invocationDisplay
         )
     }
 

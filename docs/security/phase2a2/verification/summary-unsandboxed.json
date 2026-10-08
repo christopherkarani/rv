@@ -1,0 +1,78 @@
+[
+  {
+    "command": [
+      "Scripts/preflight.sh"
+    ],
+    "exit_code": 0,
+    "timeout": false,
+    "summaries": []
+  },
+  {
+    "command": [
+      "Scripts/swift-6.4",
+      "test",
+      "--disable-sandbox",
+      "--filter",
+      "RVDomainTests"
+    ],
+    "exit_code": 1,
+    "timeout": false,
+    "summaries": [
+      "\udbc2\udc84  Test run with 478 tests in 39 suites failed after 0.025 seconds with 8 issues."
+    ]
+  },
+  {
+    "command": [
+      "Scripts/swift-6.4",
+      "test",
+      "--disable-sandbox",
+      "--filter",
+      "RVPolicyTests"
+    ],
+    "exit_code": 1,
+    "timeout": false,
+    "summaries": [
+      "\udbc2\udc84  Test run with 325 tests in 34 suites failed after 0.162 seconds with 4 issues."
+    ]
+  },
+  {
+    "command": [
+      "Scripts/swift-6.4",
+      "test",
+      "--disable-sandbox",
+      "--filter",
+      "RVIsolationTests"
+    ],
+    "exit_code": 1,
+    "timeout": false,
+    "summaries": [
+      "\udbc2\udc84  Test run with 454 tests in 29 suites failed after 340.673 seconds with 54 issues."
+    ]
+  },
+  {
+    "command": [
+      "Scripts/swift-6.4",
+      "test",
+      "--disable-sandbox",
+      "--filter",
+      "RVIPCTests"
+    ],
+    "exit_code": 0,
+    "timeout": false,
+    "summaries": [
+      "\udbc4\udc5b  Test run with 95 tests in 7 suites passed after 0.005 seconds."
+    ]
+  },
+  {
+    "command": [
+      "Scripts/swift-6.4",
+      "test",
+      "--disable-sandbox",
+      "--filter",
+      "RVServiceTests"
+    ],
+    "exit_code": 1,
+    "timeout": false,
+    "summaries": []
+  }
+]

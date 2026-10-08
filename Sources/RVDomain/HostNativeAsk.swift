@@ -1,176 +1,31 @@
-/// Whether a host may pause for Ask because a same-turn spend callback exists.
-package enum HostPause: Sendable, Equatable {
-    /// Host confirm or resolution, then PolicyGate spend, then allow.
-    /// Pi / OpenCode / Claude / Hermes / OpenClaw this slice.
-    /// Claude leftover-ask-as-permit is official `permissionDecision: "ask"` JSON,
-    /// not this case. OpenClaw leftover-ask-as-permit is returning
-    /// `requireApproval` (host Allow runs exec). Spend-first still must not
-    /// emit those leftover keys.
-    case spendFirst
-    /// Host has a pause API that would run the tool without a PolicyGate spend.
-    /// Codex/Cursor leftover `ask`. Do not emit it.
-    case leftoverAskForbidden
-    /// No pause RV will use. Grok this slice (native `decision: ask` is unused).
-    case noPause
-}
-
-/// Wire when the host cannot pause. Never `.ask`.
-package enum HostNoPauseFallback: Sendable, Equatable {
-    case allow
-    case deny
-
-    package var verdict: HostAskVerdict {
-        switch self {
-        case .allow: .allow
-        case .deny: .deny
-        }
-    }
-}
-
-/// Per-host Ask table. Pause is independent of the no-pause fallbacks.
-public struct HostAskProfile: Sendable, Equatable {
-    package var pause: HostPause
-    package var grayAreaIfNoPause: HostNoPauseFallback
-    package var unlockableIfNoPause: HostNoPauseFallback
-
-    package init(
-        pause: HostPause,
-        grayAreaIfNoPause: HostNoPauseFallback,
-        unlockableIfNoPause: HostNoPauseFallback
-    ) {
-        self.pause = pause
-        self.grayAreaIfNoPause = grayAreaIfNoPause
-        self.unlockableIfNoPause = unlockableIfNoPause
-    }
-
-    /// Confirm-then-spend. Fallbacks apply only if the continuation cannot pause.
-    public static let spendFirst = HostAskProfile(
-        pause: .spendFirst,
-        grayAreaIfNoPause: .allow,
-        unlockableIfNoPause: .deny
-    )
-
-    /// No pause API RV will use. Gray-area runs; unlockable pack deny stays deny.
-    public static let noPause = HostAskProfile(
-        pause: .noPause,
-        grayAreaIfNoPause: .allow,
-        unlockableIfNoPause: .deny
-    )
-
-    /// Pause API exists and must not be called. Same fallbacks as `noPause`.
-    public static let leftoverAskForbidden = HostAskProfile(
-        pause: .leftoverAskForbidden,
-        grayAreaIfNoPause: .allow,
-        unlockableIfNoPause: .deny
-    )
-}
-
 /// Product Ask on the hook door. Not a `Decision` case.
+///
+/// NON-AUTHORITATIVE for Secrets/MCP (Step 8 fence): a `.allow` here is a
+/// legacy hook-transport answer, never principal-bound authorization. Future
+/// sensitive mediation must require `AuthenticatedAgentContext` + typed
+/// `ProposedAction` + principal-bound policy (+ Step 6 human approval for
+/// ASK), and must never treat this verdict as authority.
+///
+/// Step 8B: `.ask` encodes deny-with-guidance on every host and records a
+/// pending row for RVOperatorUI. The agent retries after human approval;
+/// the retry consumes the planted grant through the ordinary evaluate path.
 public enum HostAskVerdict: Sendable, Equatable {
     case allow
     case deny
-    case ask(ApprovalContinuation)
+    case ask
 }
 
-/// Pack-door verdict. Ask is uninhabited; product Ask is `BoundReview`.
-public enum PackDoorVerdict: Sendable, Equatable {
-    case allow
-    case deny
-}
-
-/// Pause-plan after a human Allow once / Deny / create-rule.
-/// Grant peek stays on the service edge.
-public enum HostAskBridgeResolution: Sendable, Equatable {
-    /// Caller must plant+spend via PolicyGate, then allow only if that spend succeeds.
-    case spendThenAllow
-    case deny
-    case denyOrTTY
-}
-
-/// Host-native Ask mapping. Leftover unused ask is never a permit.
+/// Hard-policy projection onto the hook-live review boundary.
+///
+/// Step 8B: host-native spend is removed. Human-required operations route
+/// to RVOperatorUI (or TTY allow-once) plus agent retry; the host's Ask UI
+/// is never authoritative. Host capability metadata lives in
+/// `HostApprovalCapability` (routing only, never authority).
 public enum HostNativeAsk {
     public static let leftoverAskDeny = Deny(
         ruleID: RuleID(pack: ActionPolicyEngine.Builtin.pack, pattern: "leftover-ask"),
         reason: "Ask is not a permit."
     )
-
-    public static func profile(for host: HookHost) -> HostAskProfile {
-        switch host {
-        case .pi, .opencode, .claude, .hermes, .openclaw:
-            return .spendFirst
-        case .grok, .antigravity:
-            return .noPause
-        case .codex, .cursor:
-            return .leftoverAskForbidden
-        }
-    }
-
-    /// Pack / evaluate `Decision` on the hook door. Cannot Ask.
-    /// Product Ask is `hostAskVerdict(host:result:cwd:)`.
-    package static func packDoorVerdict(for decision: Decision) -> PackDoorVerdict {
-        switch decision {
-        case .allow:
-            return .allow
-        case .indeterminate, .deny:
-            return .deny
-        }
-    }
-
-    /// Pause plan. Grant peek is not this function.
-    public static func resolve(
-        host: HookHost,
-        continuation: ApprovalContinuation,
-        decision: ApprovalDecision
-    ) -> HostAskBridgeResolution {
-        switch decision {
-        case .deny, .createRule:
-            return .deny
-        case .allowOnce:
-            switch (continuation, profile(for: host).pause) {
-            case (.hostNative, .spendFirst):
-                return .spendThenAllow
-            default:
-                return .denyOrTTY
-            }
-        }
-    }
-
-    /// Product Ask on the live hook door. Pause only when a spend-first host
-    /// could spend: Unlockable deny or `mandatoryHuman`. On a host that cannot
-    /// pause, `mandatoryHuman` uses `grayAreaIfNoPause` (quiet allow today).
-    /// Unlockable pack deny uses `unlockableIfNoPause` (deny today). Secret-path,
-    /// builtin hard deny, unwrap-limited, protected-path, incomplete evaluate,
-    /// missing cwd, and empty matching view stay deny.
-    public static func hostAskVerdict(
-        host: HookHost,
-        result: EvaluationResult,
-        cwd: WorkingDirectory?,
-        continuation: ApprovalContinuation = .hostNative
-    ) -> HostAskVerdict {
-        HookAuthorization.project(
-            host: host,
-            result: result,
-            cwd: cwd,
-            continuation: continuation
-        ).verdict
-    }
-
-    /// Extra / desktop wait. Same eligibility as spend-first Ask. Deny-or-TTY
-    /// hosts already allowed `mandatoryHuman` on the wire; unlockable pack deny
-    /// still blocks there.
-    public static func recordsPending(
-        result: EvaluationResult,
-        cwd: WorkingDirectory?
-    ) -> Bool {
-        switch result.live.bound {
-        case .allow:
-            return false
-        case .deny:
-            return HookAuthorization.isUnlockable(result: result, cwd: cwd)
-        case .mandatoryHuman:
-            return cwd != nil && result.matchingView.isEmpty == false
-        }
-    }
 
     /// Projects hard policy onto the hook-live review boundary.
     /// Uncovered actions remain quiet on the hook door until typed effects are
@@ -205,5 +60,4 @@ public enum HostNativeAsk {
 
     /// A leftover unused ask token is never a permit.
     public static let leftoverAskIsPermit = false
-
 }

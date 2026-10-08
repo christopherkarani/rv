@@ -154,6 +154,15 @@ private func keychainReader(returning data: Data?) -> KeychainReader {
     KeychainReader(read: { _, _ in data })
 }
 
+@Test func deniedReaderFailsClosed() throws {
+    // The identity launch path stages through `.denied`: keychain
+    // entries fail closed, so no value can flow to a runtime even
+    // if a credential-free gate ever regresses.
+    let manifest = RuntimeResourceManifest(keychainProfile(agents: nil))
+    #expect(manifest.keychainEnvironment(reader: .denied).isFailure(.keychain(env: "SYNTHETIC_KEY")))
+    #expect(manifest.keychainEnvironment(forAgent: "muse", reader: .denied).isFailure(.keychain(env: "SYNTHETIC_KEY")))
+}
+
 @Test func keychainEntryInjectsOnlyForMatchingAgent() throws {
     let secret = try #require(#"{"api_key":"synthetic-secret"}"#.data(using: .utf8))
     let manifest = RuntimeResourceManifest(keychainProfile())

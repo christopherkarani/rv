@@ -1306,9 +1306,13 @@ private func expectedClaudeHookCommand(
         let settings = try claudeSettingsObject(at: layout.claudeSettings)
         let entries = try claudePreToolUseEntries(settings)
         #expect(entries.count == 5)
+        // Step 8: setup mutations are fail-closed (WIP owner boundary),
+        // so the merge below may be absent. Record, don't crash.
+        guard entries.count == 5 else { return }
         #expect(entries[0]["matcher"] as? String == "Bash")
         let foreignHooks = try #require(entries[0]["hooks"] as? [[String: Any]])
         #expect(foreignHooks.count == 1)
+        guard foreignHooks.count == 1 else { return }
         #expect(foreignHooks[0]["command"] as? String == "other-guard evaluate")
         #expect(entries[1]["matcher"] as? String == "Bash")
         #expect(entries[2]["matcher"] as? String == "Read")
@@ -1316,6 +1320,7 @@ private func expectedClaudeHookCommand(
         #expect(entries[4]["matcher"] as? String == "Write")
         let rvHooks = try #require(entries[1]["hooks"] as? [[String: Any]])
         #expect(rvHooks.count == 1)
+        guard rvHooks.count == 1 else { return }
         let command = try #require(rvHooks[0]["command"] as? String)
         #expect(command == expectedClaudeHookCommand(layout: layout))
         #expect(command.contains("python3 "))
@@ -1339,9 +1344,13 @@ private func expectedClaudeHookCommand(
         #expect(FileManager.default.fileExists(atPath: adapter))
         let body = try String(contentsOfFile: adapter, encoding: .utf8)
         #expect(body == (try HostAdapterResources.load(for: .claude).rendered(rvPath: "/tmp/rv-bin/rv")))
-        #expect(body.contains("RV_ASK_CONFIRM"))
-        #expect(body.contains("osascript"))
-        #expect(body.contains("hostAsk"))
+        // Step 8B P2: host dialogs never authorize. No native-ask
+        // machinery remains; a legacy `ask` blocks like a deny and the
+        // human approves in RVOperatorUI before the agent retries.
+        #expect(body.contains("RV_ASK_CONFIRM") == false)
+        #expect(body.contains("osascript") == false)
+        #expect(body.contains("hostAsk") == false)
+        #expect(body.contains("host dialogs never authorize"))
         #expect(body.contains("permissionDecision\":\"ask\"") == false)
         let command = try #require(
             (try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
@@ -1484,6 +1493,9 @@ private func expectedClaudeHookCommand(
         #expect(outcome.exitCode == 0)
         let entries = try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
         #expect(entries.count == 5)
+        // Step 8: setup mutations are fail-closed (WIP owner boundary),
+        // so the merge below may be absent. Record, don't crash.
+        guard entries.count == 5 else { return }
         let shared = try #require(entries[0]["hooks"] as? [[String: Any]])
         #expect(shared.map { $0["command"] as? String } == ["other-guard evaluate"])
         #expect(entries[1]["matcher"] as? String == "Bash")
@@ -1512,8 +1524,12 @@ private func expectedClaudeHookCommand(
         let settings = try claudeSettingsObject(at: layout.claudeSettings)
         let entries = try claudePreToolUseEntries(settings)
         #expect(entries.count == 1)
+        // Step 8: uninstall mutations are fail-closed (WIP owner
+        // boundary). Record, don't crash.
+        guard entries.count == 1 else { return }
         let foreignHooks = try #require(entries[0]["hooks"] as? [[String: Any]])
         #expect(foreignHooks.count == 1)
+        guard foreignHooks.count == 1 else { return }
         #expect(foreignHooks[0]["command"] as? String == "other-guard evaluate")
         #expect(
             foreignHooks.contains { hook in
@@ -1558,6 +1574,9 @@ private func expectedClaudeHookCommand(
         let settings = try claudeSettingsObject(at: layout.claudeSettings)
         let entries = try claudePreToolUseEntries(settings)
         #expect(entries.count == 1)
+        // Step 8: uninstall mutations are fail-closed (WIP owner
+        // boundary). Record, don't crash.
+        guard entries.count == 1 else { return }
         let hooks = try #require(entries[0]["hooks"] as? [[String: Any]])
         #expect(hooks.map { $0["command"] as? String } == ["other-guard evaluate"])
     }
@@ -1704,6 +1723,9 @@ private func expectedClaudeHookCommand(
         #expect(try posixMode(URL(fileURLWithPath: layout.claudeSettings)) == 0o600)
         let entries = try claudePreToolUseEntries(try claudeSettingsObject(at: layout.claudeSettings))
         #expect(entries.count == 1)
+        // Step 8: uninstall mutations are fail-closed (WIP owner
+        // boundary). Record, don't crash.
+        guard entries.count == 1 else { return }
         let hooks = try #require(entries[0]["hooks"] as? [[String: Any]])
         #expect(hooks.map { $0["command"] as? String } == ["other-guard evaluate"])
     }

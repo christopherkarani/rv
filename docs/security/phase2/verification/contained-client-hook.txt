@@ -1,0 +1,1 @@
+{"systemMessage":"Authenticated RV service and operation-bound owner authorization required.","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Authenticated RV service and operation-bound owner authorization required."}}

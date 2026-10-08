@@ -28,34 +28,34 @@ private func resetHardEvent() -> [String: Any] {
 @Test func openClawHostAskAdapter_sourceIsWaitThenSpendNeverRequireApproval() throws {
     let source = try adapterSource(for: .openclaw, rvPath: "/opt/rv")
     #expect(source.contains("before_tool_call"))
-    #expect(source.contains("hostAsk"))
-    #expect(source.contains("spend"))
-    #expect(source.contains("RV_ASK_CONFIRM"))
-    #expect(source.contains("plugin.approval.request"))
-    #expect(source.contains("plugin.approval.waitDecision"))
+    #expect(source.contains("hostAsk") == false)
+    #expect(source.contains("spend") == false)
+    #expect(source.contains("RV_ASK_CONFIRM") == false)
+    #expect(source.contains("plugin.approval.request") == false)
+    #expect(source.contains("plugin.approval.waitDecision") == false)
     #expect(source.contains("allow-once"))
-    #expect(source.contains("timeoutMs: RV_ASK_HOOK_BUDGET_MS"))
+    #expect(source.contains("timeoutMs: RV_HOOK_TIMEOUT_MS + 15_000"))
     #expect(source.contains("requireApproval") == false)
     #expect(source.contains("allow-always") == false)
     #expect(source.contains("RV_BYPASS") == false)
 }
 
-@Test func openClawHostAskAdapter_confirmYesSpendsThenAllows() async throws {
+@Test func openClawHostAskAdapter_confirmYesIgnoredAskBlocks() async throws {
     let result = try await runOpenClawAdapter(
         event: resetHardEvent(),
         stub: .stdout(askResetHardJSON, exit: 1),
         confirm: "yes",
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.block != true)
-    #expect(result.blockReason == nil)
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.block == true)
+    #expect(result.blockReason == resetHardAskReason)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
     #expect(result.lastStdin?.contains("git reset --hard") == true)
     #expect(result.gatewayCalls.isEmpty)
 }
 
-@Test func openClawHostAskAdapter_confirmYesFailedSpendDoesNotRunTool() async throws {
+@Test func openClawHostAskAdapter_confirmYesIgnoredSpendStubUnused() async throws {
     let result = try await runOpenClawAdapter(
         event: resetHardEvent(),
         stub: .stdout(askResetHardJSON, exit: 1),
@@ -63,19 +63,19 @@ private func resetHardEvent() -> [String: Any] {
         secondStub: .stdout(resetHardJSON, exit: 1)
     )
     #expect(result.block == true)
-    #expect(result.blockReason == resetHardReason)
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
+    #expect(result.blockReason == resetHardAskReason)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
 }
 
-@Test func openClawHostAskAdapter_confirmYesMissingSpendDoesNotRunTool() async throws {
+@Test func openClawHostAskAdapter_confirmYesIgnoredBlocksWithoutSecondConsult() async throws {
     let result = try await runOpenClawAdapter(
         event: resetHardEvent(),
         stub: .stdout(askResetHardJSON, exit: 1),
         confirm: "yes"
     )
     #expect(result.block == true)
-    #expect(result.spawnCount == 2)
+    #expect(result.spawnCount == 1)
 }
 
 @Test func openClawHostAskAdapter_confirmNoDoesNotSpend() async throws {
@@ -104,18 +104,18 @@ private func resetHardEvent() -> [String: Any] {
     #expect(result.gatewayCalls.isEmpty)
 }
 
-@Test func openClawHostAskAdapter_gatewayAllowOnceSpendsThenAllows() async throws {
+@Test func openClawHostAskAdapter_gatewayAllowOnceIgnoredAskBlocks() async throws {
     let result = try await runOpenClawAdapter(
         event: resetHardEvent(),
         stub: .stdout(askResetHardJSON, exit: 1),
         gatewayDecision: "allow-once",
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.block != true)
-    #expect(result.spawnCount == 2)
-    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == true)
-    #expect(result.gatewayCalls.contains("plugin.approval.request"))
-    #expect(result.gatewayCalls.contains("plugin.approval.waitDecision"))
+    #expect(result.block == true)
+    #expect(result.blockReason == resetHardAskReason)
+    #expect(result.spawnCount == 1)
+    #expect(result.lastStdin?.contains("\"hostAsk\":\"spend\"") == false)
+    #expect(result.gatewayCalls.isEmpty)
     #expect(result.requestedAllowAlways == false)
 }
 
@@ -177,15 +177,15 @@ private func resetHardEvent() -> [String: Any] {
     #expect(result.spawnCount == 1)
 }
 
-@Test func openClawHostAskAdapter_registersAskBudgetAboveDefaultToolHook() async throws {
+@Test func openClawHostAskAdapter_registersShortBudgetAndBlocks() async throws {
     let result = try await runOpenClawAdapter(
         event: resetHardEvent(),
         stub: .stdout(askResetHardJSON, exit: 1),
         confirm: "yes",
         secondStub: .stdout("", exit: 0)
     )
-    #expect(result.hookTimeoutMs == 135_000)
-    #expect(result.block != true)
+    #expect(result.hookTimeoutMs == 20_000)
+    #expect(result.block == true)
 }
 
 @Test func openClawHostAskAdapter_abortedConfirmDoesNotSpend() async throws {

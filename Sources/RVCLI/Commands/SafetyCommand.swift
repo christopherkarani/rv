@@ -9,6 +9,7 @@ enum SafetyRun {
     }
 
     static func set(_ level: SafetyLevel, home: HomeDirectory) throws {
+        try LocalControlBoundary.requireOwnerAuthorization()
         try SafetyStore(
             configDirectory: RVPolicyPaths.configDirectory(home: home)
         ).saveMachine(level)

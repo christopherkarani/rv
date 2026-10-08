@@ -9,6 +9,14 @@ public enum RVPolicyPaths: Sendable {
         configDir.appendingPathComponent("allow-once.jsonl", isDirectory: false)
     }
 
+    public static func laPromptBudgetFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("la-prompt-budget.json", isDirectory: false)
+    }
+
+    public static func attestedEpochFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("attested-epoch.json", isDirectory: false)
+    }
+
     public static func allowOnceLockFile(inConfigDir configDir: URL) -> URL {
         configDir.appendingPathComponent(".allow-once.lock", isDirectory: false)
     }
@@ -53,12 +61,18 @@ public enum RVPolicyPaths: Sendable {
         configDir.appendingPathComponent("runtime-resources.json", isDirectory: false)
     }
 
+    public static func agentDefinitionsFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("agent-definitions.json", isDirectory: false)
+    }
+
     /// Files T6 / `rv uninstall` must delete when present (policy artifacts + locks).
     public static func uninstallArtifacts(inConfigDir configDir: URL) -> [URL] {
         [
             allowlistFile(inConfigDir: configDir),
             allowOnceFile(inConfigDir: configDir),
             allowOnceLockFile(inConfigDir: configDir),
+            laPromptBudgetFile(inConfigDir: configDir),
+            attestedEpochFile(inConfigDir: configDir),
             allowlistLockFile(inConfigDir: configDir),
             denylistFile(inConfigDir: configDir),
             denylistLockFile(inConfigDir: configDir),
@@ -69,6 +83,7 @@ public enum RVPolicyPaths: Sendable {
             policyFile(inConfigDir: configDir),
             policyLockFile(inConfigDir: configDir),
             runtimeResourcesFile(inConfigDir: configDir),
+            agentDefinitionsFile(inConfigDir: configDir),
         ]
     }
 

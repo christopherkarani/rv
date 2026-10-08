@@ -44,36 +44,36 @@ public struct CursorStoreAdapter: SessionStoreAdapter {
         )
     }
 
-    private static func commands(in object: [String: Any]) -> [String] {
-        if let command = hookCommand(in: object) {
+    private static func commands(in value: JSONValue) -> [String] {
+        if let command = hookCommand(in: value) {
             return [command]
         }
         return []
     }
 
-    private static func hookCommand(in object: [String: Any]) -> String? {
-        let event = (object["hook_event_name"] as? String) ?? (object["hookEventName"] as? String)
+    private static func hookCommand(in value: JSONValue) -> String? {
+        let event = value["hook_event_name"]?.string ?? value["hookEventName"]?.string
         if event == "beforeShellExecution" || event == nil {
-            if let command = object["command"] as? String, command.isEmpty == false {
+            if let command = value["command"]?.string, command.isEmpty == false {
                 return command
             }
         }
         if event == nil || event == "preToolUse" || event == "PreToolUse" {
-            let name = (object["tool_name"] as? String) ?? (object["toolName"] as? String)
+            let name = value["tool_name"]?.string ?? value["toolName"]?.string
             guard let name, shellTools.contains(name) else { return nil }
-            return commandText(in: object["tool_input"] ?? object["toolInput"])
+            return commandText(in: value["tool_input"] ?? value["toolInput"])
         }
         return nil
     }
 
-    private static func commandText(in value: Any?) -> String? {
-        if let object = value as? [String: Any] {
-            if let command = object["command"] as? String, command.isEmpty == false {
+    private static func commandText(in value: JSONValue?) -> String? {
+        if value?.asObject != nil {
+            if let command = value?["command"]?.string, command.isEmpty == false {
                 return command
             }
             return nil
         }
-        if let text = value as? String, text.isEmpty == false {
+        if let text = value?.string, text.isEmpty == false {
             return text
         }
         return nil

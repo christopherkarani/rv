@@ -25,24 +25,18 @@ struct HostNativeAskTests {
         #expect(decoded != .allow)
     }
 
-    /// Exhaustive: a new `HookHost` must pick pause and fallbacks here.
+    /// Exhaustive: a new `HookHost` must land in the capability table.
+    /// Capability is routing only — no row manufactures ALLOW.
     @Test(arguments: HookHost.allCases)
-    func profileTable_coversEveryHost(_ host: HookHost) {
-        let profile = HostNativeAsk.profile(for: host)
-        switch host {
-        case .pi, .opencode, .claude, .hermes, .openclaw:
-            #expect(profile.pause == .spendFirst)
-        case .grok, .antigravity:
-            #expect(profile.pause == .noPause)
-        case .codex, .cursor:
-            #expect(profile.pause == .leftoverAskForbidden)
-        }
-        #expect(profile.grayAreaIfNoPause == .allow)
-        #expect(profile.unlockableIfNoPause == .deny)
+    func capabilityTable_coversEveryHost(_ host: HookHost) {
+        let capability = HostApprovalCapability.capability(for: host)
+        #expect(capability.route == .rvOperatorUI)
+        #expect(capability.nativeAskAuthoritative == false)
+        #expect(capability.canBlockForHuman == false)
     }
 
     @Test(arguments: HookHost.allCases)
-    func mandatoryHumanFollowsPauseProfile(_ host: HookHost) throws {
+    func mandatoryHumanAsksEveryHost(_ host: HookHost) throws {
         let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
         let result = EvaluationResult(
             outcome: .plain,
@@ -50,93 +44,50 @@ struct HostNativeAskTests {
             analysis: .unknown,
             boundReview: .mandatoryHuman(askDeny)
         )
-        let profile = HostNativeAsk.profile(for: host)
-        let verdict = HostNativeAsk.hostAskVerdict(
-            host: host,
-            result: result,
-            cwd: cwd,
-            continuation: .hostNative
-        )
-        switch profile.pause {
-        case .spendFirst:
-            #expect(verdict == .ask(.hostNative))
-        case .noPause, .leftoverAskForbidden:
-            #expect(verdict == profile.grayAreaIfNoPause.verdict)
-            #expect(verdict != .ask(.hostNative))
-        }
+        let verdict = HookAuthorization.project(result: result, cwd: cwd).verdict
+        // Step 8B: caller-selected host can never convert ASK to ALLOW,
+        // and ASK no longer depends on host at all.
+        #expect(verdict != .allow, "\(host)")
+        #expect(verdict == .ask, "\(host)")
     }
 
-    @Test func packDecisionDenyStaysDeny() {
-        let denied = Decision.deny(packDeny)
-        let verdict = HostNativeAsk.packDoorVerdict(for: denied)
-        #expect(verdict == .deny)
-    }
-
-    @Test func packDecisionAllowIsAllow() {
-        let verdict = HostNativeAsk.packDoorVerdict(for: .allow)
-        #expect(verdict == .allow)
-    }
-
-    @Test func packDecisionIndeterminateIsDeny() {
-        let verdict = HostNativeAsk.packDoorVerdict(for: .indeterminate(.commandTooLarge))
-        #expect(verdict == .deny)
-    }
-
-    @Test(arguments: HookHost.allCases)
-    func resolve_allowOnceFollowsPauseProfile(_ host: HookHost) {
-        let resolution = HostNativeAsk.resolve(
-            host: host,
-            continuation: .hostNative,
-            decision: .allowOnce
-        )
-        switch HostNativeAsk.profile(for: host).pause {
-        case .spendFirst:
-            #expect(resolution == .spendThenAllow)
-        case .noPause, .leftoverAskForbidden:
-            #expect(resolution == .denyOrTTY)
-        }
-    }
-
-    @Test(arguments: zip(
-        [HookHost.claude, .hermes, .claude, .hermes],
-        [ApprovalDecision.deny, .deny, .createRule, .createRule]
-    ))
-    func resolve_denyAndCreateRuleStayDeny(_ host: HookHost, _ decision: ApprovalDecision) {
-        #expect(
-            HostNativeAsk.resolve(host: host, continuation: .hostNative, decision: decision) == .deny
-        )
-    }
-
-    @Test(arguments: [
-        ApprovalContinuation.resume(ApprovalResumeToken(rawValue: "tok")),
-        .retry(ActionFingerprint(rawValue: "shell:x")),
-    ])
-    func resolve_nonHostNativeAllowOnceIsDenyOrTTY(_ continuation: ApprovalContinuation) {
-        #expect(
-            HostNativeAsk.resolve(host: .pi, continuation: continuation, decision: .allowOnce)
-                == .denyOrTTY
-        )
-    }
-
-    @Test(arguments: HookHost.allCases)
-    func unlockablePackDenyFollowsPauseProfile(_ host: HookHost) throws {
+    @Test func packDecisionDenyAsksWhenUnlockable() throws {
         let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
         let result = EvaluationResult(
             outcome: .deny(packDeny, matched: nil),
             matchingView: MatchingView("git reset --hard")
         )
-        let profile = HostNativeAsk.profile(for: host)
-        let verdict = HostNativeAsk.hostAskVerdict(
-            host: host,
-            result: result,
-            cwd: cwd
+        #expect(HookAuthorization.project(result: result, cwd: cwd).verdict == .ask)
+    }
+
+    @Test func packDecisionAllowIsAllow() throws {
+        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+        let result = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView("git status")
         )
-        switch profile.pause {
-        case .spendFirst:
-            #expect(verdict == .ask(.hostNative))
-        case .noPause, .leftoverAskForbidden:
-            #expect(verdict == profile.unlockableIfNoPause.verdict)
-        }
+        #expect(HookAuthorization.project(result: result, cwd: cwd).verdict == .allow)
+    }
+
+    @Test func packDecisionIndeterminateIsDeny() throws {
+        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+        let result = EvaluationResult(
+            outcome: .indeterminate(.commandTooLarge),
+            matchingView: MatchingView("git reset --hard")
+        )
+        #expect(HookAuthorization.project(result: result, cwd: cwd).verdict == .deny)
+    }
+
+    @Test(arguments: HookHost.allCases)
+    func unlockablePackDenyAsksEveryHost(_ host: HookHost) throws {
+        let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
+        let result = EvaluationResult(
+            outcome: .deny(packDeny, matched: nil),
+            matchingView: MatchingView("git reset --hard")
+        )
+        let verdict = HookAuthorization.project(result: result, cwd: cwd).verdict
+        #expect(verdict == .ask, "\(host)")
+        #expect(verdict != .allow, "\(host)")
     }
 
     @Test func doorVerdict_missingCwdNeverAsks() {
@@ -145,11 +96,10 @@ struct HostNativeAskTests {
             matchingView: MatchingView("git reset --hard")
         )
         #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .pi,
+            HookAuthorization.project(
                 result: result,
                 cwd: nil
-            ) == .deny
+            ).verdict == .deny
         )
         let human = EvaluationResult(
             outcome: .deny(packDeny, matched: nil),
@@ -158,11 +108,10 @@ struct HostNativeAskTests {
             boundReview: .mandatoryHuman(askDeny)
         )
         #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .pi,
+            HookAuthorization.project(
                 result: human,
                 cwd: nil
-            ) == .deny
+            ).verdict == .deny
         )
     }
 
@@ -170,11 +119,10 @@ struct HostNativeAskTests {
         let cwd = try #require(WorkingDirectory(validating: "/tmp/ws"))
         let packResult = EvaluationResult(outcome: .deny(packDeny, matched: nil))
         #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .pi,
+            HookAuthorization.project(
                 result: packResult,
                 cwd: cwd
-            ) == .deny
+            ).verdict == .deny
         )
         let humanResult = EvaluationResult(
             outcome: .plain,
@@ -183,11 +131,10 @@ struct HostNativeAskTests {
             boundReview: .mandatoryHuman(askDeny)
         )
         #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .pi,
+            HookAuthorization.project(
                 result: humanResult,
                 cwd: cwd
-            ) == .deny
+            ).verdict == .deny
         )
     }
 
@@ -199,11 +146,10 @@ struct HostNativeAskTests {
             analysis: .unwrapLimited.wrapping([.bash])
         )
         #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .pi,
+            HookAuthorization.project(
                 result: result,
                 cwd: cwd
-            ) == .deny
+            ).verdict == .deny
         )
     }
 
@@ -218,11 +164,10 @@ struct HostNativeAskTests {
             matchingView: MatchingView("cat ~/.aws/credentials")
         )
         #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .pi,
+            HookAuthorization.project(
                 result: result,
                 cwd: cwd
-            ) == .deny
+            ).verdict == .deny
         )
     }
 
@@ -234,11 +179,10 @@ struct HostNativeAskTests {
             matchingView: MatchingView("git reset --hard")
         )
         #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .pi,
+            HookAuthorization.project(
                 result: result,
                 cwd: cwd
-            ) == .deny
+            ).verdict == .deny
         )
     }
 
@@ -251,11 +195,10 @@ struct HostNativeAskTests {
             boundReview: .allow
         )
         #expect(
-            HostNativeAsk.hostAskVerdict(
-                host: .pi,
+            HookAuthorization.project(
                 result: result,
                 cwd: cwd
-            ) == .deny
+            ).verdict == .deny
         )
     }
 

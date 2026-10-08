@@ -412,70 +412,83 @@ struct IsolationApplyLandlockTests {
         #expect(isResolvedPath("/tmp/ws2", atOrBeneath: "/tmp/ws") == false)
 
         #expect(
-            usableIsolationExecPath("/usr/bin/true", workspacePath: tree.workspacePath) == nil
+            usableIsolationExecPath("/usr/bin/true", workspacePath: tree.workspacePath)
+                == .failure(.wrongName)
         )
         #expect(
-            usableIsolationExecPath("rv-isolation-exec", workspacePath: tree.workspacePath) == nil
+            usableIsolationExecPath("rv-isolation-exec", workspacePath: tree.workspacePath)
+                == .failure(.notAbsolute)
         )
         #expect(
             usableIsolationExecPath(tree.wrongNameHelper.path, workspacePath: tree.workspacePath)
-                == nil
+                == .failure(.wrongName)
         )
         #expect(
             usableIsolationExecPath(tree.directoryHelper.path, workspacePath: tree.workspacePath)
-                == nil
+                == .failure(.isDirectory)
         )
         #expect(
             usableIsolationExecPath(tree.workspaceHelper.path, workspacePath: tree.workspacePath)
-                == nil
+                == .failure(.lookupInsideWorkspace)
         )
         #expect(
             usableIsolationExecPath(
                 "/no/such/rv-isolation-exec-\(UUID().uuidString)",
                 workspacePath: tree.workspacePath
-            ) == nil
+            ) == .failure(.wrongName)
         )
         let accepted = usableIsolationExecPath(
             tree.outsideHelper.path,
             workspacePath: tree.workspacePath
         )
-        #expect(accepted == posixRealpath(tree.outsideHelper.path))
+        let outsideResolved = try #require(posixRealpath(tree.outsideHelper.path))
+        #expect(accepted == .success(outsideResolved))
 
         #expect(
             resolvedIsolationExecPath(
                 override: URL(fileURLWithPath: "/usr/bin/true"),
                 workspacePath: tree.workspacePath
-            ) == nil
+            ) == .failure(.wrongName)
         )
         #expect(
             resolvedIsolationExecPath(
                 override: tree.workspaceHelper,
                 workspacePath: tree.workspacePath
-            ) == nil
+            ) == .failure(.lookupInsideWorkspace)
         )
         #expect(
             resolvedIsolationExecPath(
                 override: tree.outsideHelper,
                 workspacePath: tree.workspacePath
-            ) == posixRealpath(tree.outsideHelper.path)
+            ) == .success(outsideResolved)
         )
         #expect(
             usableIsolationExecPath(tree.unexecutableHelper.path, workspacePath: tree.workspacePath)
-                == nil
+                == .failure(.notExecutable)
         )
         #expect(
             usableIsolationExecPath(tree.brokenSymlinkHelper.path, workspacePath: tree.workspacePath)
-                == nil
+                == .failure(.notExecutable)
         )
         #expect(
             usableIsolationExecPath(tree.symlinkToTrue.path, workspacePath: tree.workspacePath)
-                == nil
+                == .failure(.resolvedWrongName)
         )
         #expect(
             usableIsolationExecPath(
                 tree.workspaceSymlinkToOutside.path,
                 workspacePath: tree.workspacePath
-            ) == nil
+            ) == .failure(.lookupInsideWorkspace)
+        )
+        #expect(
+            usableIsolationExecPath(tree.rootSymlinkHelper.path, workspacePath: tree.workspacePath)
+                == .failure(.resolvedIsRoot)
+        )
+        #expect(
+            usableIsolationExecPath(
+                tree.outsideSymlinkToInside.path,
+                workspacePath: tree.workspacePath
+            ) == .failure(.resolvedInsideWorkspace)
         )
         #expect(isLookupInsideWorkspace(tree.workspaceHelper.path, workspace: tree.workspacePath))
         #expect(
@@ -488,15 +501,26 @@ struct IsolationApplyLandlockTests {
             isLookupInsideWorkspace(tree.outsideHelper.path, workspace: tree.workspacePath) == false
         )
         #expect(
-            usableIsolationExecPath(tree.outsideHelper.path, workspacePath: "/") == nil
+            usableIsolationExecPath(tree.outsideHelper.path, workspacePath: "/")
+                == .failure(.workspaceIsRoot)
         )
-        if let searched = resolvedIsolationExecPath(
+        #if os(Linux)
+        // The test target depends on the helper product, so the self-exe
+        // sibling lookup must succeed on Linux.
+        let searched = try resolvedIsolationExecPath(
             override: nil,
             workspacePath: tree.workspacePath
-        ) {
-            #expect(URL(fileURLWithPath: searched).lastPathComponent == "rv-isolation-exec")
-            #expect(isResolvedPath(searched, atOrBeneath: tree.workspacePath) == false)
-        }
+        ).get()
+        #expect(URL(fileURLWithPath: searched).lastPathComponent == "rv-isolation-exec")
+        #expect(isResolvedPath(searched, atOrBeneath: tree.workspacePath) == false)
+        #else
+        // macOS never builds the helper product, so every candidate
+        // location misses and the search fails closed.
+        #expect(
+            resolvedIsolationExecPath(override: nil, workspacePath: tree.workspacePath)
+                == .failure(.notExecutable)
+        )
+        #endif
     }
 
     @Test func spawn_landlock_trueOrWorkspaceHelper_doesNotEstablish() throws {
@@ -652,6 +676,8 @@ private struct HelperTree {
     let brokenSymlinkHelper: URL
     let symlinkToTrue: URL
     let workspaceSymlinkToOutside: URL
+    let rootSymlinkHelper: URL
+    let outsideSymlinkToInside: URL
 
     init() throws {
         let root = FileManager.default.temporaryDirectory
@@ -727,6 +753,27 @@ private struct HelperTree {
             withDestinationPath: outsideHelper.path
         )
         workspaceSymlinkToOutside = workspaceSymlink
+        let rootLink = outside.appendingPathComponent("rootlink").appendingPathComponent(
+            "rv-isolation-exec"
+        )
+        try FileManager.default.createDirectory(
+            at: rootLink.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(atPath: rootLink.path, withDestinationPath: "/")
+        rootSymlinkHelper = rootLink
+        let insideLink = outside.appendingPathComponent("insidelink").appendingPathComponent(
+            "rv-isolation-exec"
+        )
+        try FileManager.default.createDirectory(
+            at: insideLink.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            atPath: insideLink.path,
+            withDestinationPath: workspaceHelper.path
+        )
+        outsideSymlinkToInside = insideLink
     }
 
     func tearDown() {

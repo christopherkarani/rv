@@ -265,10 +265,6 @@ struct ParseFilesystemCreateReadTests {
 
     @Test func redirectOnly_rejectsDynamicMissingAndNonRedirect() {
         #expect(parseRedirectOnly(["echo", "hi", ">"]) == nil)
-        #expect(parseRedirectOnly(["echo", "hi", ">", "$FILE"]) == nil)
-        #expect(parseRedirectOnly(["echo", "hi", ">", "`cmd`"]) == nil)
-        #expect(parseRedirectOnly(["echo", ">>$FILE"]) == nil)
-        #expect(parseRedirectOnly(["echo", ">`cmd`"]) == nil)
         #expect(parseRedirectOnly(["echo", "hi", "2>&1"]) == nil)
         #expect(parseRedirectOnly(["echo", "hi"]) == nil)
         #expect(parseRedirectOnly(["echo", "&>&1"]) == nil)
@@ -280,6 +276,118 @@ struct ParseFilesystemCreateReadTests {
         #expect(parseRedirectOnly(["echo", ">&1"]) == nil)
         #expect(parseFilesystemCommand([]) == nil)
         #expect(parseFilesystemCommand(["echo", "hello"]) == nil)
+    }
+
+    @Test func redirectOnly_skipsSeparateFdDupDest() {
+        // Separate `>& 2` / `>& -` duplicate/close a descriptor (mirrors
+        // the attached arm); only `>&file` names a destination. `&>` and
+        // `>` always name files, even when numeric.
+        #expect(parseRedirectOnly(["echo", "hi", ">&", "2"]) == nil)
+        #expect(parseRedirectOnly(["echo", "hi", ">&", "-"]) == nil)
+        #expect(parseRedirectOnly(["echo", "hi", "2>&", "1"]) == nil)
+        expectParsed(
+            parseRedirectOnly(["echo", "hi", ">&", "file"]),
+            "overwrite",
+            paths: ["file"]
+        )
+        expectParsed(
+            parseRedirectOnly(["echo", "hi", "&>", "2"]),
+            "overwrite",
+            paths: ["2"]
+        )
+        expectParsed(
+            parseRedirectOnly(["echo", "hi", ">", "2"]),
+            "overwrite",
+            paths: ["2"]
+        )
+    }
+
+    // P10e7: redirect targets are collected verbatim, dynamic included;
+    // the analyze layer fails dynamic mutation paths closed as outside.
+    @Test func redirectOnly_collectsDynamicTargets() {
+        expectParsed(
+            parseRedirectOnly(["echo", "hi", ">", "$FILE"]),
+            "overwrite",
+            paths: ["$FILE"]
+        )
+        expectParsed(
+            parseRedirectOnly(["echo", "hi", ">", "`cmd`"]),
+            "overwrite",
+            paths: ["`cmd`"]
+        )
+        expectParsed(
+            parseRedirectOnly(["echo", ">>$FILE"]),
+            "overwrite",
+            paths: ["$FILE"]
+        )
+        expectParsed(
+            parseRedirectOnly(["echo", "hi", ">", "$f", ">", "/tmp/eve"]),
+            "overwrite",
+            paths: ["$f", "/tmp/eve"]
+        )
+    }
+
+    @Test func chmod_symlinkTraversalAndReference() {
+        expectParsed(
+            parseChmod(["-R", "-H", "755", "dir"]),
+            "chmod",
+            paths: ["dir"],
+            recursive: true,
+            mode: "755"
+        )
+        expectParsed(
+            parseChmod(["-R", "-L", "-P", "u+w", "a"]),
+            "chmod",
+            paths: ["a"],
+            recursive: true,
+            mode: "u+w"
+        )
+        // `--reference` and `-a` replace the mode operand.
+        expectParsed(parseChmod(["--reference=/etc/x", "f"]), "chmod", paths: ["f"])
+        expectParsed(parseChmod(["--ref", "r", "f"]), "chmod", paths: ["f"])
+        expectParsed(parseChmod(["-a", "user allow read", "f"]), "chmod", paths: ["f"])
+        expectParsed(
+            parseChmod(["--from=644", "755", "f"]),
+            "chmod",
+            paths: ["f"],
+            mode: "755"
+        )
+        expectParsed(
+            parseChmod(["--dereference", "644", "f"]),
+            "chmod",
+            paths: ["f"],
+            mode: "644"
+        )
+        // `--r` is ambiguous (`recursive`/`reference`): the tool errors.
+        #expect(parseChmod(["--r", "755", "f"]) == nil)
+        #expect(parseChmod(["--re", "755", "f"]) == nil)
+        expectParsed(
+            parseChmod(["--rec", "755", "f"]),
+            "chmod",
+            paths: ["f"],
+            recursive: true,
+            mode: "755"
+        )
+    }
+
+    @Test func touch_referenceAdjustAndAttached() {
+        expectParsed(parseTouch(["-r", "ref", "f"]), "create", paths: ["f"])
+        expectParsed(parseTouch(["-A", "-010000", "f"]), "create", paths: ["f"])
+        expectParsed(parseTouch(["-A010000", "f"]), "create", paths: ["f"])
+        expectParsed(parseTouch(["--reference=r", "f"]), "create", paths: ["f"])
+        expectParsed(parseTouch(["--ref", "r", "f"]), "create", paths: ["f"])
+        // Attached values and `-x=y` read like getopt.
+        expectParsed(parseTouch(["-t202001010000", "f"]), "create", paths: ["f"])
+        expectParsed(parseTouch(["-t=x", "f"]), "create", paths: ["f"])
+        expectParsed(parseTouch(["--dat", "now", "f"]), "create", paths: ["f"])
+        #expect(parseTouch(["-r"]) == nil)
+        #expect(parseTouch(["-A"]) == nil)
+    }
+
+    @Test func mkdir_contextAndZ() {
+        expectParsed(parseMkdir(["-Z", "a"]), "create", paths: ["a"])
+        expectParsed(parseMkdir(["--context=x", "a"]), "create", paths: ["a"])
+        expectParsed(parseMkdir(["--cont", "a"]), "create", paths: ["a"])
     }
 }
 

@@ -451,7 +451,7 @@ struct HTTPEgressTests {
         var binding: RuntimeChannelBinding? = fixture.binding
         var calls = 0
         let frame = fixture.httpFrame(url: "https://example.com/a?token=secret")
-        let decision = RuntimeAdmissionGate.submit(
+        let decision = RuntimeAdmissionGate.submitLegacy(
             binding: &binding,
             frame: .success(frame),
             propose: { accepted in
@@ -468,7 +468,7 @@ struct HTTPEgressTests {
         let sameID = frame
         var bindingReplay: RuntimeChannelBinding? = binding
         _ = bindingReplay
-        let replay = RuntimeAdmissionGate.submit(
+        let replay = RuntimeAdmissionGate.submitLegacy(
             binding: &binding,
             frame: .success(fixture.httpFrame(url: "https://example.com/a?token=secret"))
         ) { fixture.propose($0) }
@@ -476,7 +476,7 @@ struct HTTPEgressTests {
         #expect(replay.response == .rejected(.replay))
         var fresh: RuntimeChannelBinding? = fixture.binding
         _ = fresh
-        let repeatedID = RuntimeAdmissionGate.submit(
+        let repeatedID = RuntimeAdmissionGate.submitLegacy(
             binding: &binding,
             frame: .success(sameID)
         ) { _ in
@@ -490,7 +490,7 @@ struct HTTPEgressTests {
     @Test func deniedPendingAndMalformedHTTPDoNotAuthorize() throws {
         let fixture = HTTPAdmissionFixture()
         var binding: RuntimeChannelBinding? = fixture.binding
-        let denied = RuntimeAdmissionGate.submit(
+        let denied = RuntimeAdmissionGate.submitLegacy(
             binding: &binding,
             frame: .success(fixture.httpFrame(url: "https://127.0.0.1/")),
             policy: .empty
@@ -502,7 +502,7 @@ struct HTTPEgressTests {
         }
 
         var pendingBinding: RuntimeChannelBinding? = fixture.binding
-        let pending = RuntimeAdmissionGate.submit(
+        let pending = RuntimeAdmissionGate.submitLegacy(
             binding: &pendingBinding,
             frame: .success(fixture.httpFrame(url: "https://example.com/")),
             policy: EffectiveActionPolicy(overlay: .mandatoryHuman(ActionPolicyEngine.Builtin.uncovered))
@@ -511,7 +511,7 @@ struct HTTPEgressTests {
         #expect(pending.response == .pending(.mandatoryHuman))
 
         var failed: RuntimeChannelBinding? = fixture.binding
-        let post = RuntimeAdmissionGate.submit(
+        let post = RuntimeAdmissionGate.submitLegacy(
             binding: &failed,
             frame: .success(fixture.httpFrame(method: "POST", url: "https://example.com/"))
         ) { fixture.propose($0) }
@@ -519,7 +519,7 @@ struct HTTPEgressTests {
         #expect(post.response == .evaluationFailed)
 
         var scheme: RuntimeChannelBinding? = fixture.binding
-        let http = RuntimeAdmissionGate.submit(
+        let http = RuntimeAdmissionGate.submitLegacy(
             binding: &scheme,
             frame: .success(fixture.httpFrame(url: "http://example.com/"))
         ) { fixture.propose($0) }

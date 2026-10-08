@@ -223,8 +223,10 @@ struct LinuxResidualCoverageTests {
         let unknown = await runtime.dispatch(
             IPCRequest(method: .setPackEnabled(SetPackEnabledParams(id: PackID(rawValue: "core.unknown"), enabled: false)))
         )
-        guard case .error(.packNotFound(_)) = unknown.result else {
-            Issue.record("unknown pack must be packNotFound, got \(unknown.result)")
+        // Owner-mutation dispatch stays denied: the gate rejects before
+        // the unknown pack is even looked up.
+        guard case .error(.authorizationDenied) = unknown.result else {
+            Issue.record("unknown pack must deny at the gate, got \(unknown.result)")
             return
         }
 
@@ -241,13 +243,19 @@ struct LinuxResidualCoverageTests {
             return
         }
 
-        let pending = await runtime.dispatch(IPCRequest(method: .pendingList))
+        // Control reads need a service peer; the coordinator check runs
+        // after the gate.
+        let pending = await runtime.dispatch(
+            IPCRequest(method: .pendingList),
+            context: peerServiceContext()
+        )
         guard case .error(.pendingCoordinatorUnavailable) = pending.result else {
             Issue.record("missing coordinator must fail pendingList")
             return
         }
         let watch = await runtime.dispatch(
-            IPCRequest(method: .pendingWatch(PendingWatchParams(afterGeneration: 0)))
+            IPCRequest(method: .pendingWatch(PendingWatchParams(afterGeneration: 0))),
+            context: peerServiceContext()
         )
         guard case .error(.pendingCoordinatorUnavailable) = watch.result else {
             Issue.record("missing coordinator must fail pendingWatch")
@@ -339,7 +347,9 @@ struct LinuxResidualCoverageTests {
         let reply = await runtime.dispatch(
             IPCRequest(method: .setPackEnabled(SetPackEnabledParams(id: .coreGit, enabled: false)))
         )
-        guard case .error(.packEnableFailed) = reply.result else {
+        // The gate denies before HOME is consulted: enabling without
+        // owner authorization fails regardless of HOME.
+        guard case .error(.authorizationDenied) = reply.result else {
             Issue.record("nil HOME must fail pack enable, got \(reply.result)")
             return
         }

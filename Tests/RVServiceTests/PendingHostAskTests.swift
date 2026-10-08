@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import RVDomain
+import RVHooks
 import RVIPC
 import RVPolicy
 @testable import RVService
@@ -14,7 +15,8 @@ struct PendingHostAskServiceTests {
         defer { env.tearDown() }
 
         let wire = await env.runtime.dispatch(
-            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: env.askStdin)))
+            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: env.askStdin))),
+            context: peerHookContext()
         )
         try assertAsk(wire)
 
@@ -23,8 +25,8 @@ struct PendingHostAskServiceTests {
         let row = try #require(listed.first)
         #expect(row.state == .awaitingHuman)
         #expect(row.reason == .hostAsk)
-        #expect(row.continuation == .hostNative)
-        #expect(row.timeoutPolicy == .keepWaiting)
+        #expect(row.continuation == .retry(row.action.fingerprint))
+        #expect(row.timeoutPolicy == .autoDeny)
         #expect(row.identity.session.rawValue == "sess-pi")
         #expect(row.identity.agent.rawValue == HookHost.pi.rawValue)
         #expect(row.action.supportingCommand?.rawValue == "git reset --hard")
@@ -35,7 +37,7 @@ struct PendingHostAskServiceTests {
         #expect(afterRestart.map(\.id) == [row.id])
         #expect(afterRestart.first?.state == .awaitingHuman)
 
-        let ipcList = await env.runtime.dispatch(IPCRequest(method: .pendingList))
+        let ipcList = await env.runtime.dispatch(IPCRequest(method: .pendingList), context: peerServiceContext())
         try assertNoCommandText(ipcList)
         guard case .pendingList(let reply) = ipcList.result else {
             Issue.record("Ask with session must list the wait")
@@ -44,42 +46,55 @@ struct PendingHostAskServiceTests {
         #expect(reply.items.map(\.id) == [row.id])
     }
 
-    @Test func PendingHostAsk_spendAllowEmptiesMatchingAwaiting() async throws {
+    @Test func PendingHostAsk_legacySpendEnvelopeIsIgnoredRowStaysAwaiting() async throws {
         let env = try IsolatedPendingHostAsk()
         defer { env.tearDown() }
 
         _ = await env.runtime.dispatch(
-            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: env.askStdin)))
+            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: env.askStdin))),
+            context: peerHookContext()
         )
         #expect(try await env.store.list(now: now).count == 1)
 
-        let spendAllow = await env.runtime.dispatch(
-            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: env.spendStdin)))
+        // Step 8B: the bare `hostAsk:spend` attestation is ignored. The
+        // envelope decodes as an ordinary shell consult: ask-denial again,
+        // same awaiting row by dedupe, never an allow.
+        let legacy = await env.runtime.dispatch(
+            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: env.spendStdin))),
+            context: peerHookContext()
         )
-        guard case .hookEvaluate(let allowReply) = spendAllow.result else {
-            Issue.record("spend must return hookEvaluate")
+        guard case .hookEvaluate(let reply) = legacy.result else {
+            Issue.record("legacy spend must return hookEvaluate")
             return
         }
-        #expect(allowReply.stdout.isEmpty)
-        #expect(allowReply.exitCode == 0)
-        #expect(try await env.store.list(now: now).isEmpty)
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(reply.stdout.utf8)) as? [String: Any]
+        )
+        #expect(json["decision"] as? String == "deny")
+        #expect(reply.stdout.contains(approvalPendingLine))
+        #expect(reply.exitCode == 1)
+        let listed = try await env.store.list(now: now)
+        #expect(listed.count == 1)
+        #expect(listed.first?.state == .awaitingHuman)
     }
 
-    @Test func PendingHostAsk_spendDenyStillCancelsMatchingAwaiting() async throws {
+    @Test func PendingHostAsk_legacySpendWithUnwritableStoreStillAskDenies() async throws {
         let env = try IsolatedPendingHostAsk()
         defer { env.tearDown() }
 
         _ = await env.runtime.dispatch(
-            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: env.askStdin)))
+            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: env.askStdin))),
+            context: peerHookContext()
         )
         #expect(try await env.store.list(now: now).count == 1)
 
         try env.makeAllowOnceUnwritable()
-        let spendDeny = await env.runtime.dispatch(
-            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: env.spendStdin)))
+        let legacy = await env.runtime.dispatch(
+            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: env.spendStdin))),
+            context: peerHookContext()
         )
-        guard case .hookEvaluate(let denyReply) = spendDeny.result else {
-            Issue.record("failed spend must still return hookEvaluate")
+        guard case .hookEvaluate(let denyReply) = legacy.result else {
+            Issue.record("legacy spend must still return hookEvaluate")
             return
         }
         #expect(denyReply.stdout.isEmpty == false)
@@ -88,7 +103,9 @@ struct PendingHostAskServiceTests {
         )
         #expect(json["decision"] as? String == "deny")
         #expect(json["decision"] as? String != "ask")
-        #expect(try await env.store.list(now: now).isEmpty)
+        #expect(denyReply.stdout.contains(approvalPendingLine))
+        // The pending store (under home) is intact; the row survives by dedupe.
+        #expect(try await env.store.list(now: now).count == 1)
     }
 
     @Test func PendingHostAsk_missingSessionEncodesAskWithEmptyList() async throws {
@@ -105,11 +122,12 @@ struct PendingHostAskServiceTests {
                         """
                     )
                 )
-            )
+            ),
+            context: peerHookContext()
         )
         try assertAsk(wire)
         #expect(try await env.store.list(now: now).isEmpty)
-        let listed = await env.runtime.dispatch(IPCRequest(method: .pendingList))
+        let listed = await env.runtime.dispatch(IPCRequest(method: .pendingList), context: peerServiceContext())
         guard case .pendingList(let reply) = listed.result else {
             Issue.record("missing session must still list")
             return
@@ -122,20 +140,24 @@ struct PendingHostAskServiceTests {
         defer { env.tearDown() }
 
         _ = await env.runtime.dispatch(
-            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: env.askStdin)))
+            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: env.askStdin))),
+            context: peerHookContext()
         )
         _ = await env.runtime.dispatch(
-            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: env.askStdin)))
+            IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: env.askStdin))),
+            context: peerHookContext()
         )
         let listed = try await env.store.list(now: now)
         #expect(listed.count == 1)
         #expect(listed.first?.state == .awaitingHuman)
     }
 
-    @Test func PendingHostAsk_grokCreatesNoRows() async throws {
+    @Test func PendingHostAsk_grokAskDenialCreatesRow() async throws {
         let env = try IsolatedPendingHostAsk()
         defer { env.tearDown() }
 
+        // Step 8B: every host records a universal review row. Grok has no
+        // native Ask, so the row plus TTY code is its whole fallback.
         let wire = await env.runtime.dispatch(
             IPCRequest(
                 method: .hookEvaluate(
@@ -146,7 +168,8 @@ struct PendingHostAskServiceTests {
                         """
                     )
                 )
-            )
+            ),
+            context: peerHookContext()
         )
         guard case .hookEvaluate(let reply) = wire.result else {
             Issue.record("Grok must still encode")
@@ -155,8 +178,12 @@ struct PendingHostAskServiceTests {
         let json = try #require(
             JSONSerialization.jsonObject(with: Data(reply.stdout.utf8)) as? [String: Any]
         )
-        #expect(json["decision"] as? String != "ask")
-        #expect(try await env.store.list(now: now).isEmpty)
+        #expect(json["decision"] as? String == "deny")
+        #expect(reply.stdout.contains(approvalPendingLine))
+        let listed = try await env.store.list(now: now)
+        #expect(listed.count == 1)
+        #expect(listed.first?.state == .awaitingHuman)
+        #expect(listed.first?.identity.agent == .grok)
     }
 
     private func assertAsk(_ response: IPCResponse) throws {
@@ -167,8 +194,11 @@ struct PendingHostAskServiceTests {
         let json = try #require(
             JSONSerialization.jsonObject(with: Data(reply.stdout.utf8)) as? [String: Any]
         )
-        #expect(json["decision"] as? String == "ask")
+        // Step 8B: ASK renders as deny-with-guidance on the wire.
+        #expect(json["decision"] as? String == "deny")
+        #expect(reply.stdout.contains(approvalPendingLine))
         #expect(reply.stdout.contains("\"decision\":\"allow\"") == false)
+        #expect(reply.stdout.contains("\"decision\":\"ask\"") == false)
         #expect(reply.exitCode == 1)
     }
 

@@ -30,12 +30,26 @@ public actor ServiceRuntime {
     private let sessionSnapshots: [PackSnapshot]
     private let configHome: HomeDirectory?
     private let allowOnce: AllowOnceStore
+    /// Step 8B.1 sole grant authority: service-held memory, one instance per
+    /// daemon lifetime. A restart drops the table and invalidates every grant.
+    private let grants: EphemeralAllowOnceTable
     private let log: (any ServiceLog)?
     private let analytics: AnalyticsCoordinator?
     private let clock: @Sendable () -> Date
     private let pendingApprovals: (any PendingApprovalCoordinating)?
     private let approvals: ApprovalRuntime
     private var analyticsEnabledPackIDs: [String] = []
+    /// Operator launch ceremonies (proposal → review → permit). Shared with
+    /// the XPC UI sessions so IPC dispatch and the UI bridge see one state.
+    let ceremonies: WorkspaceOperatorCeremonyService
+    /// Principal-bound action-approval ceremonies (ASK → review → grant).
+    /// Shared with the XPC host/UI sessions so transport and bridges see
+    /// one state. Separate authority from `ceremonies`, always.
+    let actionCeremonies: ActionApprovalCeremonyService
+    /// Hook-ask review ceremonies (pending wait → review → allow-once).
+    /// Shared with the XPC UI sessions. Resolves through `HookAskResolver`
+    /// only: never an `AgentInstance` grant (F3).
+    let hookCeremonies: HookReviewCeremonyService
 
     package private(set) var compiledPackIDs: [PackID]
     private var compiledPackIDSet: Set<PackID>
@@ -46,11 +60,44 @@ public actor ServiceRuntime {
         home: HomeDirectory? = nil,
         allowOnce: AllowOnceStore? = nil,
         allowOnceDirectory: URL? = nil,
+        grants: EphemeralAllowOnceTable? = nil,
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
         log: (any ServiceLog)? = nil,
         analytics: AnalyticsCoordinator? = nil,
         clock: @escaping @Sendable () -> Date = { Date() },
         pendingApprovals: PendingApprovalsBinding = .automatic
+    ) {
+        self.init(
+            snapshots: snapshots,
+            catalog: catalog,
+            home: home,
+            allowOnce: allowOnce,
+            allowOnceDirectory: allowOnceDirectory,
+            grants: grants,
+            idleExitSeconds: idleExitSeconds,
+            log: log,
+            analytics: analytics,
+            clock: clock,
+            pendingApprovals: pendingApprovals,
+            ceremonies: WorkspaceOperatorCeremonyService(),
+            actionCeremonies: ActionApprovalCeremonyService())
+    }
+
+    init(
+        snapshots: [PackSnapshot]?,
+        catalog: PackCatalog?,
+        home: HomeDirectory?,
+        allowOnce: AllowOnceStore?,
+        allowOnceDirectory: URL?,
+        grants: EphemeralAllowOnceTable? = nil,
+        idleExitSeconds: Int,
+        log: (any ServiceLog)?,
+        analytics: AnalyticsCoordinator?,
+        clock: @escaping @Sendable () -> Date,
+        pendingApprovals: PendingApprovalsBinding,
+        ceremonies: WorkspaceOperatorCeremonyService,
+        actionCeremonies: ActionApprovalCeremonyService? = nil,
+        hookCeremonies: HookReviewCeremonyService? = nil
     ) {
         let resolvedHome = home ?? HomeDirectory.process()
         self.configHome = resolvedHome
@@ -80,6 +127,7 @@ public actor ServiceRuntime {
         } else {
             self.allowOnce = AllowOnceStore(baseDirectory: uniqueEphemeralAllowOnceDirectory())
         }
+        self.grants = grants ?? EphemeralAllowOnceTable()
         self.idleExitSeconds = idleExitSeconds
         self.log = log
         self.analytics = analytics
@@ -94,6 +142,15 @@ public actor ServiceRuntime {
             pendingApprovals: self.pendingApprovals
         )
         self.analyticsEnabledPackIDs = Self.analyticsEnabledPackIDs(from: self.catalog)
+        self.ceremonies = ceremonies
+        self.actionCeremonies = actionCeremonies ?? ActionApprovalCeremonyService()
+        self.hookCeremonies = hookCeremonies ?? HookReviewCeremonyService(
+            pending: self.pendingApprovals,
+            allowOnce: self.allowOnce,
+            grants: self.grants,
+            home: resolvedHome,
+            clock: clock
+        )
     }
 
     public func acknowledge(_ hello: Hello) -> HelloAck {
@@ -115,7 +172,8 @@ public actor ServiceRuntime {
     public func handleIncoming(
         _ body: Data,
         handshakeOK: Bool,
-        stdinOverlay: Data? = nil
+        stdinOverlay: Data? = nil,
+        context: AuthenticatedRequestContext = .unauthenticated
     ) async -> IncomingReply {
         if let hello = try? IPCJSON.decode(Hello.self, from: body), hello.clientSemver.isEmpty == false {
             let ack = acknowledge(hello)
@@ -128,11 +186,11 @@ public actor ServiceRuntime {
             }
         }
         if handshakeOK == false {
-            return await handleUnreadyIncoming(body, stdinOverlay: stdinOverlay)
+            return await handleUnreadyIncoming(body, stdinOverlay: stdinOverlay, context: context)
         }
         do {
             let request = try decodeRequest(body, stdinOverlay: stdinOverlay)
-            let response = await dispatch(request)
+            let response = await dispatch(request, context: context)
             return IncomingReply(
                 frame: (try? IPCJSON.encode(response)) ?? Data(),
                 handshakeAccepted: true
@@ -147,7 +205,9 @@ public actor ServiceRuntime {
     }
 
     /// Implicit hello on first evaluate when `clientSemver` is set. Old clients Hello first.
-    private func handleUnreadyIncoming(_ body: Data, stdinOverlay: Data?) async -> IncomingReply {
+    private func handleUnreadyIncoming(
+        _ body: Data, stdinOverlay: Data?, context: AuthenticatedRequestContext
+    ) async -> IncomingReply {
         guard let request = try? IPCJSON.decode(IPCRequest.self, from: body) else {
             let response = IPCResponse(
                 id: UUID(),
@@ -173,7 +233,7 @@ public actor ServiceRuntime {
             let ack = acknowledge(hello)
             switch ack.status {
             case .ok:
-                let response = await dispatch(overlaid)
+                let response = await dispatch(overlaid, context: context)
                 return IncomingReply(
                     frame: (try? IPCJSON.encode(response)) ?? Data(),
                     handshakeAccepted: true
@@ -230,32 +290,38 @@ public actor ServiceRuntime {
         case .hookEvaluate(let params):
             return params.clientSemver
         case .explain, .classify, .listPacks, .setPackEnabled, .doctorSnapshot,
-            .pendingList, .pendingWatch, .pendingResolve, .rulePreview, .ruleSave:
+            .pendingList, .pendingWatch, .pendingResolve, .rulePreview, .ruleSave,
+            .proposeWorkspaceLaunch, .launchProposalStatus:
             return nil
+        case .attestTTYRedemption(let params):
+            return params.clientSemver
         }
     }
 
-    public func dispatch(_ request: IPCRequest) async -> IPCResponse {
+    public func dispatch(
+        _ request: IPCRequest,
+        context: AuthenticatedRequestContext = .unauthenticated
+    ) async -> IPCResponse {
         if request.protocolName != ProtocolVersion.name {
             return IPCResponse(id: request.id, result: .error(.protocolSkew(.protocolSkew)))
+        }
+        // Protocol hygiene before authorization: a skewed client learns to
+        // upgrade instead of a misleading denial. Still never evaluates.
+        if Self.isMajorSkewed(implicitHelloSemver(request.method)) {
+            return IPCResponse(id: request.id, result: .error(.protocolSkew(.majorVersion)))
+        }
+        guard ServiceMethodAuthorization.permits(request.method, context: context) else {
+            return IPCResponse(id: request.id, result: .error(.authorizationDenied))
         }
         let started = DispatchTime.now()
         let result: IPCResult
         switch request.method {
         case .evaluate(let params):
-            if Self.isMajorSkewed(params.clientSemver) {
-                result = .error(.protocolSkew(.majorVersion))
-            } else {
-                result = .evaluate(await evaluate(params.request, cwd: params.cwd))
-            }
+            result = .evaluate(await evaluate(params.request, cwd: params.cwd))
         case .hookEvaluate(let params):
-            if Self.isMajorSkewed(params.clientSemver) {
-                result = .error(.protocolSkew(.majorVersion))
-            } else {
-                switch await makeHookEvaluateResult(params) {
-                case .success(let reply): result = .hookEvaluate(reply)
-                case .failure(let error): result = .error(error)
-                }
+            switch await makeHookEvaluateResult(params) {
+            case .success(let reply): result = .hookEvaluate(reply)
+            case .failure(let error): result = .error(error)
             }
         case .explain(let params):
             result = .explain(await explain(params))
@@ -285,7 +351,7 @@ public actor ServiceRuntime {
                 params,
                 peek: ApprovalRuntime.livePeek(
                     home: configHome,
-                    store: allowOnce,
+                    grants: grants,
                     gated: { await self.currentGated() }
                 )
             ) {
@@ -302,17 +368,135 @@ public actor ServiceRuntime {
             case .success(let reply): result = .ruleSave(reply)
             case .failure(let error): result = .error(error)
             }
+        case .proposeWorkspaceLaunch(let params):
+            do {
+                let reply = try await ceremonies.propose(
+                    params,
+                    requester: WorkspaceAuthorizationRequester(context: context),
+                    clientRequestID: request.id)
+                result = .proposeWorkspaceLaunch(reply)
+            } catch let error as WorkspaceOperatorCeremonyError {
+                result = .error(Self.ceremonyError(error))
+            } catch {
+                result = .error(.authorizationDenied)
+            }
+        case .launchProposalStatus(let params):
+            result = .launchProposalStatus(await ceremonies.proposalStatus(params))
+        case .attestTTYRedemption(let params):
+            result = await attestTTYRedemption(params)
         }
         logIfNeeded(request: request, result: result, started: started)
         return IPCResponse(id: request.id, result: result)
     }
 
-    package func insertGranted(matchingView: MatchingView, cwd: WorkingDirectory, now: Date = Date()) async throws {
-        try await allowOnce.insertGranted(matchingView: matchingView, cwd: cwd, now: now)
+    private static func ceremonyError(_ error: WorkspaceOperatorCeremonyError) -> IPCError {
+        switch error {
+        case .invalidProposal:
+            return .launchProposalFailed("invalidProposal")
+        case .unknownHost:
+            return .launchProposalFailed("unknownHost")
+        case .prepareFailed(let reason):
+            return .launchProposalFailed(reason)
+        case .storeFull:
+            return .launchProposalFailed("storeFull")
+        case .unknownOperation:
+            return .unknownMethod
+        case .notReviewable, .authorizationRejected:
+            return .authorizationDenied
+        case .descriptionMismatch:
+            return .launchProposalFailed("stale")
+        }
+    }
+
+    /// Step 8B.1 test seam: plants directly into the owned memory table.
+    /// Production plants arrive only via ceremony completions.
+    package func insertGranted(
+        matchingView: MatchingView,
+        cwd: WorkingDirectory,
+        codeHash: String = UUID().uuidString,
+        now: Date = Date(),
+        maskedSegments: [String]? = nil,
+        invocationPrefix: [String] = []
+    ) async -> EphemeralAllowOnceTable.PlantResult {
+        await grants.plant(
+            matchingView: matchingView, cwd: cwd, codeHash: codeHash, now: now,
+            maskedSegments: maskedSegments, invocationPrefix: invocationPrefix
+        )
+    }
+
+    /// Genuine-CLI TTY attestation handler. The matrix already restricted
+    /// this method to the pinned `.cli` role; re-validate every field
+    /// anyway (a buggy caller must plant nothing), then plant one memory
+    /// grant. The daemon writes no projection (the attesting CLI flips its
+    /// own). Double-attests report planted:false and create no second grant.
+    private func attestTTYRedemption(_ params: AttestTTYRedemptionParams) async -> IPCResult {
+        func denied() -> IPCResult { .error(.authorizationDenied) }
+        guard params.fingerprint.count == 64,
+            params.fingerprint.allSatisfy(\.isHexDigit),
+            params.fingerprint == params.fingerprint.lowercased()
+        else {
+            return denied()
+        }
+        // params.cwd decoded through WorkingDirectory.init(from:), which
+        // already applies the validating initializer; undecodable paths
+        // never reach dispatch.
+        guard params.codeHash.count == 64,
+            params.codeHash.allSatisfy(\.isHexDigit),
+            params.codeHash == params.codeHash.lowercased()
+        else {
+            return denied()
+        }
+        // M-07: the attested payload digest binds the planted grant. Shape
+        // only — the daemon never sees exact text, so the genuine-CLI
+        // ceremony (same trust as the fingerprint) vouches the value.
+        if let digest = params.payloadDigest {
+            guard digest.count == 64,
+                digest.allSatisfy(\.isHexDigit),
+                digest == digest.lowercased()
+            else {
+                return denied()
+            }
+        }
+        let now = clock()
+        switch await grants.plant(
+            fingerprint: params.fingerprint,
+            cwd: params.cwd,
+            codeHash: "tty:\(params.codeHash)",
+            now: now,
+            payloadContentDigest: params.payloadDigest
+        ) {
+        case .planted:
+            // Memory only. The attesting CLI flips its own display
+            // projection after planted:true; the daemon never writes the
+            // shared projection file (no cross-process append race).
+            return .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: true, epoch: grants.epoch.uuidString
+            ))
+        case .alreadyRedeemed:
+            return .attestTTYRedemption(AttestTTYRedemptionReply(
+                planted: false, epoch: grants.epoch.uuidString
+            ))
+        case .refused:
+            return denied()
+        }
     }
 
     public func evaluate(_ request: EvaluationRequest, cwd: WorkingDirectory? = nil) async -> EvaluateReply {
         EvaluateReply(result: await runEvaluate(request, cwd: cwd))
+    }
+
+    /// Service-local entry point: only a live host validation can construct the
+    /// context. The bridge revalidates after this operation before releasing it.
+    func evaluateAgent(
+        _ params: EvaluateParams, requestID: UUID, context: ServiceValidatedAgentContext
+    ) async -> EvaluateReply {
+        let started = DispatchTime.now()
+        rebuildWhenUncovered(wanted: WalkedPackIDs(ids: params.request.enabledPacks))
+        let reply = EvaluateReply(result: gated.evaluateAgent(params.request, cwd: params.cwd, home: configHome))
+        log?.record(ServiceLogEvent(method: "agentEvaluate", elapsedMs:
+            Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000,
+            requestID: requestID, principal: context.reference))
+        return reply
     }
 
     private func makeHookEvaluateResult(
@@ -343,6 +527,7 @@ public actor ServiceRuntime {
         LiveEvaluateWorld(
             home: configHome,
             store: allowOnce,
+            grants: grants,
             gated: gated,
             clock: clock
         )
@@ -551,6 +736,12 @@ public actor ServiceRuntime {
             method = "rulePreview"
         case .ruleSave:
             method = "ruleSave"
+        case .proposeWorkspaceLaunch:
+            method = "proposeWorkspaceLaunch"
+        case .launchProposalStatus:
+            method = "launchProposalStatus"
+        case .attestTTYRedemption:
+            method = "attestTTYRedemption"
         }
         if case .evaluate(let reply) = result {
             switch reply.result.decision {

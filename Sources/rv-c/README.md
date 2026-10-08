@@ -1,10 +1,11 @@
 # rv-c — C front door
 
 `rv` (the installed front door) is C, not Swift. It locates and execs the
-installed `rv-cli` sibling, fast-paths hook evaluation over XPC (Darwin) or
-AF_UNIX (Linux), and replays (miss) to `rv-cli` on anything unexpected:
-NUL bytes, oversize input, dead child, missing sibling. Fail-closed: every
-miss path exits 2 (deny), never 0.
+installed `rv-cli` sibling for operator commands. Its XPC (Darwin) and
+AF_UNIX (Linux) authority paths are disabled pending server proof. Authority-bearing hooks currently emit a host-compatible
+explicit denial until supported mutual daemon authentication is implemented.
+Transport errors, malformed input and version skew never replay to `rv-cli`.
+Operator/help commands still execute the installed sibling CLI.
 
 Not an SPM target by design (plain `clang -std=c11`). Constraints, all
 enforced by `tests/run.sh`:
@@ -24,7 +25,7 @@ enforced by `tests/run.sh`:
 
 ## Test entry points
 
-- `tests/run.sh` — C unit tests + process proofs (argv forging, NUL replay,
+- `tests/run.sh` — C unit tests + process proofs (argv forging, host-compatible no-replay denials,
   bounded stdin, broken sibling, SIGPIPE). Runs in PR CI on Linux and macOS.
 - `Scripts/c-hook-proof.sh` + `Tests/RVCLITests/CHookPipeTests.swift` —
   end-to-end proof against staged release binaries.

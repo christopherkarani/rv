@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVEngine
 import RVPolicy
 import RVService
 
@@ -99,6 +100,7 @@ struct AllowlistAdd: AsyncParsableCommand {
 
     func run() async throws {
         try layer.refuseUnsupported()
+        try LocalControlBoundary.requireOwnerAuthorization()
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
             FileHandle.standardError.write(Data("rv allowlist add: reason required\n".utf8))
@@ -159,6 +161,7 @@ struct AllowlistAddCommand: AsyncParsableCommand {
 
     func run() async throws {
         try layer.refuseUnsupported()
+        try LocalControlBoundary.requireOwnerAuthorization()
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
             FileHandle.standardError.write(Data("rv allowlist add-command: reason required\n".utf8))
@@ -170,11 +173,14 @@ struct AllowlistAddCommand: AsyncParsableCommand {
             plain: format.plain,
             noColor: format.noColor
         )
-        let matchingView = EvaluationWorld.matchingView(of: ShellCommand(rawValue: command))
+        let shell = ShellCommand(rawValue: command)
+        let matchingView = EvaluationWorld.matchingView(of: shell)
         let entry = AllowlistEntry(
             selector: .exactCommand(matchingView),
             reason: trimmed,
-            addedAt: Date()
+            addedAt: Date(),
+            maskedPayloadDigest: maskedPayloadContentDigest(Normalize.maskedSegments(of: shell)),
+            invocationDigest: maskedPayloadContentDigest(Normalize.invocationPrefix(of: shell))
         )
         do {
             try AllowlistCLI.store(home: try AllowlistCLI.requireHome()).add(entry, tty: tty)
@@ -217,6 +223,7 @@ struct AllowlistRemove: AsyncParsableCommand {
 
     func run() async throws {
         try layer.refuseUnsupported()
+        try LocalControlBoundary.requireOwnerAuthorization()
         let tty = AllowlistCLI.interactiveTTY(
             json: format.json,
             robot: format.robot,

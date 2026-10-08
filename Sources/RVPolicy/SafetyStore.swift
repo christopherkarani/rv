@@ -20,8 +20,7 @@ public struct SafetyStore: Sendable {
     /// Missing file or key is `normal`.
     public func loadMachine() -> SafetyLevel {
         let root = MachineConfigJSON.load(from: configFile)
-        if let safety = root["safety"] as? [String: Any],
-           let raw = safety["level"] as? String,
+        if let raw = root["safety"]?["level"]?.string,
            let level = SafetyLevel(rawValue: raw)
         {
             return level
@@ -31,9 +30,9 @@ public struct SafetyStore: Sendable {
 
     public func saveMachine(_ level: SafetyLevel) throws {
         try MachineConfigJSON.update(file: configFile) { root in
-            var safety = root["safety"] as? [String: Any] ?? [:]
-            safety["level"] = level.rawValue
-            root["safety"] = safety
+            var safety = root["safety"]?.asObject ?? [:]
+            safety["level"] = .string(level.rawValue)
+            root["safety"] = .object(safety)
         }
     }
 

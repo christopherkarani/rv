@@ -27,6 +27,7 @@ struct DenialLedgerRecordTests {
         let rows = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
             .records(asOf: now)
         #expect(rows.count == 1)
+        guard rows.count == 1 else { return }
         #expect(rows[0].host == .hook(.claude))
         #expect(rows[0].tool == .file(.read))
         #expect(rows[0].ruleID == RuleID(pack: .coreSecrets, pattern: "env"))
@@ -78,12 +79,11 @@ struct DenialLedgerRecordTests {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let store = AllowOnceStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
         let result = await GatedEvaluate().peek(
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: WorkingDirectory(validating: home.rawValue),
             home: home,
-            store: store,
+            grants: EphemeralAllowOnceTable(),
             now: now,
             allowlist: { .empty },
             host: .tty
@@ -103,12 +103,11 @@ struct DenialLedgerRecordTests {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let store = AllowOnceStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
         let result = await GatedEvaluate().apply(
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: WorkingDirectory(validating: home.rawValue),
             home: home,
-            store: store,
+            grants: EphemeralAllowOnceTable(),
             now: now,
             allowlist: { .empty },
             host: .hook(.grok)
@@ -120,6 +119,7 @@ struct DenialLedgerRecordTests {
         let rows = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
             .records(asOf: now)
         #expect(rows.count == 1)
+        guard rows.count == 1 else { return }
         #expect(rows[0].host == .hook(.grok))
         #expect(rows[0].tool == .bash)
         #expect(rows[0].ruleID == RuleID(pack: .coreGit, pattern: "reset-hard"))
@@ -127,27 +127,27 @@ struct DenialLedgerRecordTests {
         #expect(rows[0].path.isEmpty)
     }
 
-    @Test func spendHostAsk_appends() async throws {
+    @Test func apply_appends() async throws {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let store = AllowOnceStore(baseDirectory: RVPolicyPaths.configDirectory(home: home))
-        let result = await GatedEvaluate().spendHostAsk(
+        let result = await GatedEvaluate().apply(
             command: ShellCommand(rawValue: "cat .env"),
             cwd: WorkingDirectory(validating: home.rawValue),
             home: home,
-            store: store,
+            grants: EphemeralAllowOnceTable(),
             now: now,
             allowlist: { .empty },
             host: .hook(.claude)
         )
         guard case .deny = result.decision else {
-            Issue.record("expected spend-host-ask deny")
+            Issue.record("expected apply deny")
             return
         }
         let rows = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
             .records(asOf: now)
         #expect(rows.count == 1)
+        guard rows.count == 1 else { return }
         #expect(rows[0].host == .hook(.claude))
         #expect(rows[0].tool == .bash)
         #expect(rows[0].ruleID == RuleID(pack: .coreSecrets, pattern: "env"))
@@ -158,6 +158,8 @@ struct DenialLedgerRecordTests {
         let home = try tempHome()
         defer { try? FileManager.default.removeItem(atPath: home.rawValue) }
         let now = Date(timeIntervalSince1970: 1_800_000_000)
+        // Step 8: generic IPC has no runtime channel binding, so dispatch
+        // denies hookEvaluate before any evaluation or ledger write.
         let runtime = ServiceRuntime(
             home: home,
             allowOnceDirectory: try isolatedAllowOnceDirectory(),
@@ -166,12 +168,34 @@ struct DenialLedgerRecordTests {
         let stdin = """
         {"toolName":"bash","cwd":"\(home.rawValue)","input":{"command":"cat .env"},"hostAsk":"spend"}
         """
-        _ = await runtime.dispatch(
+        let denied = await runtime.dispatch(
             IPCRequest(method: .hookEvaluate(HookEvaluateParams(host: .pi, stdin: stdin)))
         )
+        #expect(denied.result == .error(.authorizationDenied))
+        #expect(
+            DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
+                .records(asOf: now)
+                .isEmpty
+        )
+        // The apply-deny ledger path itself records the hook host, driven
+        // directly through the gated door.
+        let result = await GatedEvaluate().apply(
+            command: ShellCommand(rawValue: "cat .env"),
+            cwd: WorkingDirectory(validating: home.rawValue),
+            home: home,
+            grants: EphemeralAllowOnceTable(),
+            now: now,
+            allowlist: { .empty },
+            host: .hook(.pi)
+        )
+        guard case .deny = result.decision else {
+            Issue.record("expected apply deny")
+            return
+        }
         let rows = DenialLedger(configDirectory: RVPolicyPaths.configDirectory(home: home))
             .records(asOf: now)
         #expect(rows.count == 1)
+        guard rows.count == 1 else { return }
         #expect(rows[0].host == .hook(.pi))
         #expect(rows[0].tool == .bash)
         #expect(rows[0].category == .secret(.environment))

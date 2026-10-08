@@ -155,7 +155,7 @@ struct ApplyGitSemanticsTests {
         #expect(composed.boundReview == .mandatoryHuman(deny))
     }
 
-    @Test func unforcedPush_leavesBoundReviewNil() throws {
+    @Test func unforcedPush_bindsMandatoryHuman() throws {
         let command = "git push origin feature"
         let pack = try runPack(command)
         #expect(pack.decision == .allow)
@@ -163,8 +163,9 @@ struct ApplyGitSemanticsTests {
             pack: pack,
             command: ShellCommand(rawValue: command)
         )
-        #expect(composed.decision == .allow)
-        #expect(composed.boundReview == nil)
+        let deny = ActionPolicyEngine.Builtin.remoteBranchAsk
+        #expect(composed.decision == .deny(deny))
+        #expect(composed.boundReview == .mandatoryHuman(deny))
     }
 
     @Test func coreGitDisabled_doesNotAddSemanticDeny() throws {
