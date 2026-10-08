@@ -2,10 +2,13 @@ import Foundation
 
 /// Pure pending-approval transitions. No clock, filesystem, or process state.
 public enum PendingApprovalLedger: Sendable {
-    /// Apply timeout policy. `expiresAt == now` is still awaiting a human.
+    /// Apply timeout policy. Expiry is fail-closed and harmonized
+    /// codebase-wide: `expiresAt == now` is already expired (live ⟺
+    /// `expiresAt > now`), matching the authorizers, the allow-once
+    /// table, prepared launches, and challenge pruning.
     public static func sweep(_ records: [PendingApproval], now: Date) -> [PendingApproval] {
         records.map { record in
-            guard case .awaitingHuman = record.state, now > record.expiresAt else {
+            guard case .awaitingHuman = record.state, now >= record.expiresAt else {
                 return record
             }
             switch record.timeoutPolicy {
@@ -19,6 +22,10 @@ public enum PendingApprovalLedger: Sendable {
         }
     }
 
+    /// Maximum rows awaiting a human. Retry storms collapse by
+    /// dedupe; beyond this an agent is spamming and new rows drop.
+    public static let maxAwaitingRows = 256
+
     public static func create(
         records: [PendingApproval],
         request: PendingApprovalRequest,
@@ -31,10 +38,23 @@ public enum PendingApprovalLedger: Sendable {
         }
         if let existing = swept.first(where: { record in
             guard case .awaitingHuman = record.state else { return false }
-            return record.identity == request.identity
+            // M6: the dedupe key covers the hidden payload. Same-view
+            // different-payload asks mint separate waits; otherwise the
+            // first payload would win the shared wait and steal the
+            // approval. Nil (file asks, legacy) reuses only with nil.
+            return record.subject == request.subject
+                && record.identity == request.identity
                 && record.fingerprint == request.action.fingerprint
+                && record.payloadDigest == request.payloadDigest
         }) {
             return (existing, swept)
+        }
+        let awaiting = swept.filter {
+            if case .awaitingHuman = $0.state { return true }
+            return false
+        }
+        if awaiting.count >= maxAwaitingRows {
+            throw .storeFull
         }
         let record = PendingApproval(
             id: request.id,
@@ -45,7 +65,9 @@ public enum PendingApprovalLedger: Sendable {
             timeoutPolicy: request.timeoutPolicy,
             createdAt: now,
             expiresAt: now.addingTimeInterval(request.ttl),
-            state: .awaitingHuman
+            state: .awaitingHuman,
+            subject: request.subject,
+            payloadDigest: request.payloadDigest
         )
         var next = swept
         next.append(record)
@@ -122,6 +144,9 @@ public enum PendingApprovalLedger: Sendable {
                 case .awaitingHuman:
                     throw .notResolved
                 case .resolved(let resolution):
+                    // This name-only API has no live principal or owner proof.
+                    // It can deliver a deny, never executable authority.
+                    if resolution.decision.authorizesExactAction { throw .invalidRequest }
                     var next = record
                     next.state = .consumed(resolution, at: now)
                     return next
@@ -181,6 +206,13 @@ public enum PendingApprovalLedger: Sendable {
 
     private static func validate(_ request: PendingApprovalRequest) throws(PendingApprovalError) {
         if request.id.rawValue.isEmpty || request.ttl <= 0 {
+            throw .invalidRequest
+        }
+        if let subject = request.subject,
+            subject.fingerprint != request.action.fingerprint
+                || subject.continuation != request.continuation
+                || subject.policyContext.isEmpty
+        {
             throw .invalidRequest
         }
         switch request.continuation {

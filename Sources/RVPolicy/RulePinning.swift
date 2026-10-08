@@ -248,7 +248,7 @@ public enum RulePinning: Sendable {
 
     private static func isNonPushEffect(_ kind: ActionEffectKind) -> Bool {
         switch kind {
-        case .remoteSharedBranchMutation:
+        case .remoteSharedBranchMutation, .remoteBranchMutation:
             return false
         case .localBranchCreate, .workingTreeDiscard, .filesystemDelete, .filesystemMove,
             .filesystemOverwrite, .filesystemModeChange, .filesystemCreate, .filesystemRead,

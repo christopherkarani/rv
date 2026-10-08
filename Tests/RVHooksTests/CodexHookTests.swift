@@ -188,10 +188,15 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
         from: result,
         command: command,
         using: CodexHostCodec(),
-        intent: .firstCall(verdict: .ask(.hostNative), unlockCode: nil)
+        intent: .firstCall(verdict: .ask, unlockCode: nil)
     )
-    try assertCodexHonorPath(wire, reason: hostDenyLine(command: command, reason: deny.reason))
+    try assertCodexHonorPath(
+        wire,
+        reason:
+            "\(hostDenyLine(command: command, reason: deny.reason)) \(approvalPendingLine)"
+    )
     #expect(HostNativeAsk.leftoverAskIsPermit == false)
+    #expect(wire.stdout.contains(approvalPendingLine))
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
     #expect(wire.stdout.contains("\"permissionDecision\":\"ask\"") == false)
 }
@@ -224,7 +229,7 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
     try assertCodexHonorPath(wire, reason: malformedHookSentence(.unreadable))
 }
 
-@Test func codexHookWire_mandatoryHumanIsQuietAllow() throws {
+@Test func codexHookWire_mandatoryHumanIsAskDeny() throws {
     let deny = Deny(
         ruleID: RuleID(pack: PackID(rawValue: "builtin.action"), pattern: "remote-branch-mutation"),
         reason: "Remote branch mutation requires a human."
@@ -241,17 +246,15 @@ func codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_ missin
         using: CodexHostCodec(),
         cwd: wd("/tmp/ws")
     )
-    #expect(
-        HostNativeAsk.hostAskVerdict(
-            host: .codex,
-            result: result,
-            cwd: wd("/tmp/ws")
-        ) == .allow
-    )
-    #expect(wire.stdout.isEmpty)
-    #expect(wire.exitCode == 0)
+    // Step 8B: host-free ASK. The wire renders deny-with-guidance.
+    let verdict = HookAuthorization.project(result: result, cwd: wd("/tmp/ws")).verdict
+    #expect(verdict != .allow)
+    #expect(verdict == .ask)
+    #expect(wire.stdout.isEmpty == false)
+    #expect(wire.exitCode == 2)
+    #expect(wire.stdout.contains("\"decision\":\"block\""))
     #expect(wire.stdout.contains("\"decision\":\"ask\"") == false)
-    #expect(wire.stdout.contains("\"decision\":\"block\"") == false)
+    #expect(wire.stdout.contains(approvalPendingLine))
 }
 
 @Test func codexDecode_readsCwdSessionAndProposedAction() throws {

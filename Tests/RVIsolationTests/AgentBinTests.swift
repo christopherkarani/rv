@@ -8,6 +8,19 @@ import Testing
     #expect(AgentBin.names == ["claude", "codex", "muse", "opencode", "node"])
 }
 
+@Test func stagingCatalogCoversLegacyScrubPaths() {
+    // `scrubHostStagedAgentHomes` consumes this catalog: every legacy
+    // workspace-staged credential path must stay listed.
+    #expect(
+        Set(AgentHomeStaging.credentialLinks.map(\.relative)) == Set([
+            ".codex/auth.json", ".codex/config.toml", ".config/muse/auth.json",
+            ".claude/.credentials.json", ".claude/settings.json", ".claude/settings.local.json",
+            ".local/share/opencode/auth.json",
+        ])
+    )
+    #expect(AgentHomeStaging.cageDirectoryName == ".rv-cage")
+}
+
 private struct AgentBinFixture {
     let bin: URL
     let home: URL
@@ -117,6 +130,36 @@ private struct AgentBinFixture {
     #expect(resolution.executables.contains("\(installReal)/.muse-version"))
     #expect(resolution.executables.contains(where: { $0.contains("unrelated") }) == false)
     #expect(resolution.credentials == [auth.path])
+}
+
+@Test func agentBinResolutionUsesInjectedProbe() {
+    // Hermetic: no links on disk; the probe answers every check.
+    let probe = ContainedPATHProbe(
+        realpath: {
+            [
+                "/bin/claude": "/real/claude-bin",
+                "/bin/codex": "/real/pkg/bin/codex.js",
+            ][$0]
+        },
+        isDirectory: { _ in false },
+        isExecutable: { ["/bin/claude", "/bin/codex"].contains($0) },
+        listDirectory: { _ in [] },
+        isReadable: {
+            $0 == "/home/.claude/.credentials.json" || $0 == "/home/.codex/auth.json"
+        }
+    )
+    let resolution = AgentBin.resolve(binDirectory: "/bin", home: "/home", probe: probe)
+    #expect(resolution.directory == "/bin")
+    #expect(
+        resolution.executables
+            == ["/bin/claude", "/real/claude-bin", "/bin/codex", "/real/pkg/bin/codex.js"]
+    )
+    #expect(resolution.trees == ["/real/pkg"])
+    #expect(
+        resolution.credentials
+            == ["/home/.claude/.credentials.json", "/home/.codex/auth.json"]
+    )
+    #expect(resolution.writableTrees == AgentHomeStaging.claudeScratchRoots())
 }
 
 @Test func agentBinProfileGrantsFilesTreesAndReadOnlyCredentials() throws {

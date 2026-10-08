@@ -219,11 +219,13 @@ public enum FilesystemAction: Sendable, Equatable, Codable {
         workingDirectory: WorkingDirectory?
     ) -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: fingerprint),
-                scope: ActionScope(workingDirectory: workingDirectory),
-                supportingCommand: command,
-                filesystemAction: self
+            ShellAction.analyzed(
+                AnalyzedShell(
+                    fingerprint: ActionFingerprint(rawValue: fingerprint),
+                    scope: ActionScope(workingDirectory: workingDirectory),
+                    supportingCommand: command,
+                    analysis: .filesystem(self)
+                )
             )
         )
     }

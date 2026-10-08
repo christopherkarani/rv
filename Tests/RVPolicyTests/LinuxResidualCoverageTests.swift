@@ -141,13 +141,20 @@ struct LinuxResidualCoverageTests {
                 robot: true
             )
         }
-        #expect(await store.plantAndConsume(matchingView: "  ", cwd: cwd, now: now) == .notFound)
-        #expect(await store.consume(matchingView: "git reset --hard", cwd: cwd, now: now) == .notFound)
-        #expect(await store.hasGrant(matchingView: "git reset --hard", cwd: cwd, now: now) == false)
+        // Step 8B.1: spend/presence authority lives in the ephemeral
+        // memory table; the file store carries no such API.
+        let grants = EphemeralAllowOnceTable()
+        #expect(await grants.consume(matchingView: "  ", cwd: cwd, now: now) == false)
+        #expect(await grants.consume(matchingView: "git reset --hard", cwd: cwd, now: now) == false)
+        #expect(await grants.hasGrant(matchingView: "git reset --hard", cwd: cwd, now: now) == false)
 
-        try await store.insertGranted(matchingView: MatchingView("git reset --hard"), cwd: cwd, now: now)
-        #expect(await store.hasGrant(matchingView: MatchingView("git reset --hard"), cwd: cwd, now: now))
-        #expect(await store.hasGrant(matchingView: MatchingView("other"), cwd: cwd, now: now) == false)
+        #expect(
+            await grants.plant(
+                matchingView: MatchingView("git reset --hard"), cwd: cwd, codeHash: "cov-1", now: now
+            ) == .planted
+        )
+        #expect(await grants.hasGrant(matchingView: MatchingView("git reset --hard"), cwd: cwd, now: now))
+        #expect(await grants.hasGrant(matchingView: MatchingView("other"), cwd: cwd, now: now) == false)
 
         await #expect(throws: AllowOnceError.unknownCode) {
             try await store.redeem(code: "nope", tty: tty, now: now)
@@ -179,9 +186,11 @@ struct LinuxResidualCoverageTests {
         }
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
         await #expect(throws: AllowOnceError.lockFailed) {
-            try await store.insertGranted(
+            try await store.mint(
                 matchingView: MatchingView("git reset --hard"),
                 cwd: try #require(WorkingDirectory(validating: "/tmp/ws")),
+                ruleID: nil,
+                tty: TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false),
                 now: Date(timeIntervalSince1970: 1)
             )
         }

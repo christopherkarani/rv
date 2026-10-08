@@ -2,7 +2,7 @@ import Foundation
 import RVDomain
 
 /// Adapter wire for Pi, not a host protocol.
-public struct PiHostCodec: HostAskCodec {
+public struct PiHostCodec: HostCodec {
     /// The Pi adapter host.
     public var host: HookHost { .pi }
 
@@ -21,22 +21,16 @@ public struct PiHostCodec: HostAskCodec {
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId).flatMap { SessionID(validating: $0) }
-        let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
         return HookRequest.decoded(
             host: .pi,
             command: envelope.input?.command,
             cwd: cwd,
-            session: session,
-            hostAsk: hostAsk
+            session: session
         )
     }
 
     public func encodeDeny(reason: String, rule: RuleID? = nil, next: HookVoiceNext = .none) -> HookWire {
         encodeLeftoverDecisionDeny(reason: reason, rule: rule, next: next)
-    }
-
-    public func encodeAsk(reason: String, rule: RuleID? = nil, next: HookVoiceNext = .none) -> HookWire {
-        encodeLeftoverDecisionAsk(reason: reason, rule: rule, next: next)
     }
 }
 
@@ -45,7 +39,6 @@ private struct PiEnvelope: Decodable {
     var input: PiInput?
     var cwd: String?
     var sessionId: String?
-    var hostAsk: String?
 }
 
 private struct PiInput: Decodable {

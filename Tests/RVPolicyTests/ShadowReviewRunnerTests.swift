@@ -221,9 +221,11 @@ struct ShadowReviewRunnerTests {
         let log = ReviewCallLog()
         let sparse = ReviewRequest(
             action: .shell(
-                ShellAction(
-                    fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:origin:main"),
-                    effects: ActionEffects(kinds: [.remoteSharedBranchMutation])
+                ShellAction.effectOnly(
+                    EffectShell(
+                        fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:origin:main"),
+                        effects: ActionEffects(kinds: [.remoteSharedBranchMutation])
+                    )
                 )
             ),
             context: ReviewContext(repository: RepositoryReviewContext())

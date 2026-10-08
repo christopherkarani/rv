@@ -87,6 +87,24 @@ struct TerminalStreamTests {
         #expect(TerminalBytesCodec.decode("not base64!", maximum: 16) == nil)
     }
 
+    @Test func codecEnforcesMaximumOnDecodedBytes() {
+        let over = TerminalBytesCodec.encode(Data(repeating: 0x61, count: 20))
+        #expect(TerminalBytesCodec.decode(over, maximum: 16) == nil)
+        let within = TerminalBytesCodec.encode(Data(repeating: 0x61, count: 16))
+        #expect(TerminalBytesCodec.decode(within, maximum: 16) != nil)
+        // The encoded pre-filter never rejects a within-maximum payload,
+        // including at the largest supported bound.
+        let full = TerminalBytesCodec.encode(
+            Data(repeating: 0x61, count: TerminalStreamLimits.maximumInputBytes)
+        )
+        #expect(
+            TerminalBytesCodec.decode(
+                full,
+                maximum: TerminalStreamLimits.maximumInputBytes
+            ) != nil
+        )
+    }
+
     @Test func oldClientFramesStillDecode() throws {
         let id = UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!
         let ping = Data(#"{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","op":"ping","v":1}"#.utf8)

@@ -1,143 +1,78 @@
 import RVDomain
 
-/// First-call vs post-spend encode. Product Ask is `HostAskVerdict`; codecs only encode.
+/// First-call encode. Product Ask is `HostAskVerdict`; codecs only encode.
+///
+/// Step 8B: there is no post-spend intent. Host-native spend is removed;
+/// an `.ask` verdict records a pending row (in `hookBody`) and encodes
+/// deny-with-guidance on every host.
 public enum HookWireIntent: Sendable, Equatable {
-    case firstCall(verdict: HostAskVerdict, unlockCode: AllowOnceUnlockMint?)
-    case afterSpend
+    case firstCall(
+        verdict: HostAskVerdict,
+        unlockCode: AllowOnceUnlockMint?,
+        askRecorded: Bool = true
+    )
 }
 
 /// Returns the host wire for `intent`.
-///
-/// First call switches `HostAskVerdict` once. Live deny is
-/// `encodeEvaluatedDeny`. Adapters honor `decision:ask` only.
-/// Claude first-call Ask is short `{decision:ask}` for the wrapper. Official
-/// `permissionDecision: "ask"` is leftover-ask-as-permit and is never emitted.
-/// Ask JSON is this `HostAskCodec` overload only.
-public func hookWire<C: HostAskCodec>(
+public func hookWire(
     from result: EvaluationResult,
     command: ShellCommand,
-    using codec: C,
+    using codec: any HostCodec,
     intent: HookWireIntent
 ) -> HookWire {
     switch intent {
-    case .afterSpend:
-        return encodePostSpend(from: result, command: command, using: codec)
-    case .firstCall(let verdict, let unlockCode):
+    case .firstCall(let verdict, let unlockCode, let askRecorded):
         return encodeFirstCall(
             from: result,
             command: command,
             using: codec,
             verdict: verdict,
-            unlockCode: unlockCode
-        )
-    }
-}
-
-/// Deny-only first call. A leftover `.ask` verdict is live deny, not Ask JSON.
-public func hookWire<C: HostCodec>(
-    from result: EvaluationResult,
-    command: ShellCommand,
-    using codec: C,
-    intent: HookWireIntent
-) -> HookWire {
-    switch intent {
-    case .afterSpend:
-        return encodePostSpend(from: result, command: command, using: codec)
-    case .firstCall(let verdict, let unlockCode):
-        return encodeFirstCall(
-            from: result,
-            command: command,
-            using: codec,
-            verdict: verdict,
-            unlockCode: unlockCode
+            unlockCode: unlockCode,
+            askRecorded: askRecorded
         )
     }
 }
 
 /// Convenience: project `HostAskVerdict` then encode `.firstCall`.
-/// Spend vs first-call is `hookWire(..., intent: HookWireIntent)` only.
-public func hookWire<C: HostAskCodec>(
+public func hookWire(
     from result: EvaluationResult,
     command: ShellCommand,
-    using codec: C,
+    using codec: any HostCodec,
     cwd: WorkingDirectory? = nil
 ) -> HookWire {
     hookWire(
         from: result,
         command: command,
         using: codec,
-        intent: firstCallIntent(from: result, host: codec.host, cwd: cwd)
-    )
-}
-
-/// Convenience for deny-only codecs. Leftover `.ask` is live deny.
-public func hookWire<C: HostCodec>(
-    from result: EvaluationResult,
-    command: ShellCommand,
-    using codec: C,
-    cwd: WorkingDirectory? = nil
-) -> HookWire {
-    hookWire(
-        from: result,
-        command: command,
-        using: codec,
-        intent: firstCallIntent(from: result, host: codec.host, cwd: cwd)
+        intent: firstCallIntent(from: result, cwd: cwd)
     )
 }
 
 private func firstCallIntent(
     from result: EvaluationResult,
-    host: HookHost,
     cwd: WorkingDirectory?
 ) -> HookWireIntent {
-    let auth = HookAuthorization.project(
-        host: host,
-        result: result,
-        cwd: cwd
-    )
+    let auth = HookAuthorization.project(result: result, cwd: cwd)
     return .firstCall(verdict: auth.verdict, unlockCode: nil)
 }
 
-private func encodeFirstCall<C: HostAskCodec>(
+private func encodeFirstCall(
     from result: EvaluationResult,
     command: ShellCommand,
-    using codec: C,
+    using codec: any HostCodec,
     verdict: HostAskVerdict,
-    unlockCode: AllowOnceUnlockMint?
-) -> HookWire {
-    switch verdict {
-    case .allow:
-        // HostAskVerdict is the wire decision. Deny-or-TTY maps
-        // `mandatoryHuman` to allow while EvaluationResult may still be deny.
-        return codec.encodeAllow()
-    case .ask:
-        return encodeAsked(from: result, command: command, using: codec)
-    case .deny:
-        return encodeLiveDeny(
-            from: result,
-            command: command,
-            using: codec,
-            unlockCode: unlockCode
-        )
-    }
-}
-
-private func encodeFirstCall<C: HostCodec>(
-    from result: EvaluationResult,
-    command: ShellCommand,
-    using codec: C,
-    verdict: HostAskVerdict,
-    unlockCode: AllowOnceUnlockMint?
+    unlockCode: AllowOnceUnlockMint?,
+    askRecorded: Bool
 ) -> HookWire {
     switch verdict {
     case .allow:
         return codec.encodeAllow()
     case .ask:
-        return encodeLiveDeny(
+        return codec.encodeEvaluatedAskDeny(
             from: result,
             command: command,
-            using: codec,
-            unlockCode: nil
+            unlockCode: unlockCode,
+            askRecorded: askRecorded
         )
     case .deny:
         return encodeLiveDeny(
@@ -149,29 +84,10 @@ private func encodeFirstCall<C: HostCodec>(
     }
 }
 
-private func encodePostSpend<C: HostCodec>(
+private func encodeLiveDeny(
     from result: EvaluationResult,
     command: ShellCommand,
-    using codec: C
-) -> HookWire {
-    switch result.decision {
-    case .allow:
-        return codec.encodeAllow()
-    case .deny(let deny):
-        return codec.encodeDeny(
-            reason: hostDenyLine(command: command, reason: deny.reason),
-            rule: deny.ruleID,
-            next: .none
-        )
-    case .indeterminate:
-        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
-    }
-}
-
-private func encodeLiveDeny<C: HostCodec>(
-    from result: EvaluationResult,
-    command: ShellCommand,
-    using codec: C,
+    using codec: any HostCodec,
     unlockCode: AllowOnceUnlockMint?
 ) -> HookWire {
     codec.encodeEvaluatedDeny(
@@ -179,21 +95,4 @@ private func encodeLiveDeny<C: HostCodec>(
         command: command,
         unlockCode: unlockCode
     )
-}
-
-private func encodeAsked<C: HostAskCodec>(
-    from result: EvaluationResult,
-    command: ShellCommand,
-    using codec: C
-) -> HookWire {
-    switch result.live.bound {
-    case .deny(let deny), .mandatoryHuman(let deny):
-        return codec.encodeAsk(
-            reason: hostAskLine(command: command, ruleID: deny.ruleID),
-            rule: deny.ruleID,
-            next: .ttyHint
-        )
-    case .allow:
-        return codec.encodeDeny(reason: incompleteEvalSentence, rule: nil, next: .none)
-    }
 }

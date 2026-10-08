@@ -6,43 +6,33 @@ public func hookWire(
     stdin: String,
     world: HookEvaluateWorld
 ) async -> HookWire {
-    switch productionHostCodec(host) {
-    case .ask(let codec):
-        return await hookBody(
-            stdin: stdin,
-            codec: codec,
-            world: world,
-            firstCall: { result, command, verdict, unlockCode in
-                hookWire(
-                    from: result,
-                    command: command,
-                    using: codec,
-                    intent: .firstCall(verdict: verdict, unlockCode: unlockCode)
+    let codec = productionHostCodec(host)
+    return await hookBody(
+        stdin: stdin,
+        codec: codec,
+        world: world,
+        firstCall: { result, command, verdict, unlockCode, askRecorded in
+            hookWire(
+                from: result,
+                command: command,
+                using: codec,
+                intent: .firstCall(
+                    verdict: verdict,
+                    unlockCode: unlockCode,
+                    askRecorded: askRecorded
                 )
-            }
-        )
-    case .denyOnly(let codec):
-        return await hookBody(
-            stdin: stdin,
-            codec: codec,
-            world: world,
-            firstCall: { result, command, verdict, unlockCode in
-                hookWire(
-                    from: result,
-                    command: command,
-                    using: codec,
-                    intent: .firstCall(verdict: verdict, unlockCode: unlockCode)
-                )
-            }
-        )
-    }
+            )
+        }
+    )
 }
 
-private func hookBody<C: HostCodec>(
+private func hookBody(
     stdin: String,
-    codec: C,
+    codec: any HostCodec,
     world: HookEvaluateWorld,
-    firstCall: (EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockMint?) -> HookWire
+    firstCall: (
+        EvaluationResult, ShellCommand, HostAskVerdict, AllowOnceUnlockMint?, Bool
+    ) -> HookWire
 ) async -> HookWire {
     switch codec.decode(stdin) {
     case .request(let request):
@@ -54,39 +44,30 @@ private func hookBody<C: HostCodec>(
                 codec: codec,
                 evaluateFile: world.evaluateFile
             )
-        case .spend(_, let command, let cwd, _):
-            let result = await world.spend(command, cwd)
-            let wire = hookWire(
-                from: result,
-                command: command,
-                using: codec,
-                intent: .afterSpend
-            )
-            await ignoreHostAskFailure {
-                try await world.clearHostAsk(
-                    request,
-                    pendingAction(from: result, request: request, command: command)
-                )
-            }
-            return wire
         case .shell(_, let command, let cwd, _):
             let result = await world.evaluate(command, cwd)
-            let auth = HookAuthorization.project(host: codec.host, result: result, cwd: cwd)
+            let auth = HookAuthorization.project(result: result, cwd: cwd)
             let unlockCode = await mintUnlockCodeIfNeeded(
                 result: result,
                 authorization: auth,
                 cwd: cwd,
-                mintOnDeny: world.mintOnDeny
+                command: command,
+                mintOnDeny: world.mintOnDeny,
+                mintOnDenyWithCommand: world.mintOnDenyWithCommand
             )
+            // M-25: the ask guidance promises a pending row, so the record
+            // outcome rides into the wire; a failed record renders the
+            // unrecorded guidance instead of a promise no row can keep.
+            var askRecorded = true
             if auth.shouldRecordPending {
-                await ignoreHostAskFailure {
+                askRecorded = await recordHostAskIgnoringFailure {
                     try await world.recordHostAsk(
                         request,
                         pendingAction(from: result, request: request, command: command)
                     )
                 }
             }
-            return firstCall(result, command, auth.verdict, unlockCode)
+            return firstCall(result, command, auth.verdict, unlockCode, askRecorded)
         }
     case .foreign:
         return codec.encodeAllow()
@@ -95,10 +76,10 @@ private func hookBody<C: HostCodec>(
     }
 }
 
-private func hookFileBody<C: HostCodec>(
+private func hookFileBody(
     request: HookRequest,
     file: FileToolAction,
-    codec: C,
+    codec: any HostCodec,
     evaluateFile: @Sendable (FileToolAction, WorkingDirectory?) async -> EvaluationResult
 ) async -> HookWire {
     if file.path.isEmpty {
@@ -112,9 +93,9 @@ private func hookFileBody<C: HostCodec>(
     return hookFileWire(from: result, using: codec)
 }
 
-func hookFileWire<C: HostCodec>(
+func hookFileWire(
     from result: EvaluationResult,
-    using codec: C
+    using codec: any HostCodec
 ) -> HookWire {
     codec.encodeFileDeny(from: result)
 }
@@ -132,11 +113,12 @@ private func pendingAction(
     )
 }
 
-private func ignoreHostAskFailure(_ body: () async throws -> Void) async {
+private func recordHostAskIgnoringFailure(_ body: () async throws -> Void) async -> Bool {
     do {
         try await body()
+        return true
     } catch {
-        return
+        return false
     }
 }
 
@@ -144,8 +126,17 @@ private func mintUnlockCodeIfNeeded(
     result: EvaluationResult,
     authorization: HookAuthorization,
     cwd: WorkingDirectory?,
-    mintOnDeny: @Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockMint?
+    command: ShellCommand,
+    mintOnDeny: @Sendable (EvaluationResult, WorkingDirectory?) async -> AllowOnceUnlockMint?,
+    mintOnDenyWithCommand: (
+        @Sendable (EvaluationResult, WorkingDirectory?, ShellCommand) async -> AllowOnceUnlockMint?
+    )?
 ) async -> AllowOnceUnlockMint? {
     guard authorization.shouldMintUnlock else { return nil }
+    // M-07: prefer the command-carrying port so the daemon binds the
+    // minted row's payload digest; the legacy port mints unbound rows.
+    if let mintOnDenyWithCommand {
+        return await mintOnDenyWithCommand(result, cwd, command)
+    }
     return await mintOnDeny(result, cwd)
 }

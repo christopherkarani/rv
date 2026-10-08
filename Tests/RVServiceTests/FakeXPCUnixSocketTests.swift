@@ -7,7 +7,7 @@ import RVIPC
 
 @Suite(.serialized)
 struct FakeXPCUnixSocketTests {
-    @Test func oneShotEvaluateWithoutPriorHello_deniesResetHard() async throws {
+    @Test func oneShotEvaluateWithoutPriorHello_isDenied() async throws {
         let runtime = try isolatedRuntime()
         let path = "/tmp/rv-t14-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
@@ -21,16 +21,12 @@ struct FakeXPCUnixSocketTests {
             evaluateJSON("git reset --hard", clientSemver: ProtocolVersion.serviceSemver)
         )
         let result = try #require(reply["result"] as? [String: Any])
-        #expect(result["error"] == nil)
-        let evaluate = try #require(result["evaluate"] as? [String: Any])
-        #expect(evaluate["via"] as? String == "xpc")
-        let payload = try #require(evaluate["result"] as? [String: Any])
-        let decision = try #require(payload["decision"] as? [String: Any])
-        #expect(decision["decision"] as? String == "deny")
-        #expect(decision["ruleID"] as? String == "core.git:reset-hard")
+        let error = try #require(result["error"] as? [String: Any])
+        #expect(error["authorizationDenied"] as? Bool == true)
+        #expect(result["evaluate"] == nil)
     }
 
-    @Test func handshakeAndEvaluateDenyResetHard() async throws {
+    @Test func handshakeAndEvaluate_isDenied() async throws {
         let runtime = try isolatedRuntime()
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
@@ -46,15 +42,12 @@ struct FakeXPCUnixSocketTests {
 
         let reply = try client.sendJSON(evaluateJSON("git reset --hard"))
         let result = try #require(reply["result"] as? [String: Any])
-        let evaluate = try #require(result["evaluate"] as? [String: Any])
-        #expect(evaluate["via"] as? String == "xpc")
-        let payload = try #require(evaluate["result"] as? [String: Any])
-        let decision = try #require(payload["decision"] as? [String: Any])
-        #expect(decision["decision"] as? String == "deny")
-        #expect(decision["ruleID"] as? String == "core.git:reset-hard")
+        let error = try #require(result["error"] as? [String: Any])
+        #expect(error["authorizationDenied"] as? Bool == true)
+        #expect(result["evaluate"] == nil)
     }
 
-    @Test func handshakeAndEvaluateAllowsGitStatus() async throws {
+    @Test func handshakeAndEvaluateGitStatus_isDenied() async throws {
         let runtime = try isolatedRuntime()
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
@@ -64,8 +57,9 @@ struct FakeXPCUnixSocketTests {
         defer { client.close() }
         #expect(try client.hello()["ok"] as? Bool == true)
         let reply = try client.sendJSON(evaluateJSON("git status"))
-        let decision = nested(reply, ["result", "evaluate", "result", "decision"])
-        #expect(decision?["decision"] as? String == "allow")
+        let error = nested(reply, ["result", "error"])
+        #expect(error?["authorizationDenied"] as? Bool == true)
+        #expect(nested(reply, ["result", "evaluate"]) == nil)
     }
 
     @Test func remainingMethodsRoundTripOnSocket() async throws {
@@ -79,21 +73,27 @@ struct FakeXPCUnixSocketTests {
         #expect(try client.hello()["ok"] as? Bool == true)
 
         let requests: [[String: Any]] = [
-            evaluateJSON("git status"),
             methodJSON("explain", ["request": requestObject("git status")]),
             methodJSON("classify", ["request": requestObject("git reset --hard")]),
             methodJSON("listPacks", [:] as [String: Any]),
-            methodJSON("setPackEnabled", ["id": "core.git", "enabled": true]),
             methodJSON("doctorSnapshot", [:] as [String: Any]),
         ]
-        let keys = [
-            "evaluate", "explain", "classify", "listPacks",
-            "setPackEnabled", "doctorSnapshot",
-        ]
+        let keys = ["explain", "classify", "listPacks", "doctorSnapshot"]
         for (request, key) in zip(requests, keys) {
             let reply = try client.sendJSON(request)
             let result = try #require(reply["result"] as? [String: Any])
             #expect(result[key] != nil, "missing result key \(key)")
+        }
+        // Step 8: grant-spending evaluate and owner-mutating
+        // setPackEnabled stay denied for socket callers.
+        for request in [
+            evaluateJSON("git status"),
+            methodJSON("setPackEnabled", ["id": "core.git", "enabled": true]),
+        ] {
+            let reply = try client.sendJSON(request)
+            let result = try #require(reply["result"] as? [String: Any])
+            let error = try #require(result["error"] as? [String: Any])
+            #expect(error["authorizationDenied"] as? Bool == true)
         }
     }
 
@@ -116,7 +116,7 @@ struct FakeXPCUnixSocketTests {
         #expect(ids.contains("system.disk"))
     }
 
-    @Test func unknownPackIsPackNotFound() async throws {
+    @Test func unknownPackDeniedBeforeLookup() async throws {
         let runtime = try isolatedRuntime()
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
@@ -129,12 +129,12 @@ struct FakeXPCUnixSocketTests {
             methodJSON("setPackEnabled", ["id": "core.unknown", "enabled": false])
         )
         let error = try #require(nested(reply, ["result", "error"]))
-        #expect(error["packNotFound"] as? String == "core.unknown")
+        #expect(error["authorizationDenied"] as? Bool == true)
+        #expect(error["packNotFound"] == nil)
     }
 
-    @Test func allowOnceConsumeIsUnknownMethodAndDoesNotSpend() async throws {
+    @Test func allowOnceConsumeIsUnknownMethod() async throws {
         let runtime = try isolatedRuntime()
-        try await runtime.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
         let path = "/tmp/rv-t3-\(UUID().uuidString).sock"
         let server = FakeXPCServer(runtime: runtime, path: path)
         try server.start()
@@ -154,15 +154,6 @@ struct FakeXPCUnixSocketTests {
         )
         #expect(nested(second, ["result", "error"])?["decodeFailed"] as? Bool == true)
         #expect(nested(second, ["result", "allowOnceConsume"]) == nil)
-
-        let honored = try client.sendJSON(evaluateJSON("git reset --hard", cwd: wd("/tmp/ws")))
-        let firstDecision = nested(honored, ["result", "evaluate", "result", "decision"])
-        #expect(firstDecision?["decision"] as? String == "allow")
-
-        let spent = try client.sendJSON(evaluateJSON("git reset --hard", cwd: wd("/tmp/ws")))
-        let secondDecision = nested(spent, ["result", "evaluate", "result", "decision"])
-        #expect(secondDecision?["decision"] as? String == "deny")
-        #expect(secondDecision?["ruleID"] as? String == "core.git:reset-hard")
     }
 
     @Test func doctorSnapshotSkipsHostChecks() async throws {
@@ -211,10 +202,9 @@ struct FakeXPCUnixSocketTests {
         let incoming = await runtime.handleIncoming(body, handshakeOK: true)
         let replyData = incoming.frame
         let object = try #require(JSONSerialization.jsonObject(with: replyData) as? [String: Any])
-        let decision = nested(object, ["result", "evaluate", "result", "decision"])
-        #expect(decision?["decision"] as? String == "indeterminate")
-        #expect(decision?["indeterminateReason"] as? String == "corePacksUnavailable")
-        #expect(decision?["decision"] as? String != "allow")
+        let error = nested(object, ["result", "error"])
+        #expect(error?["authorizationDenied"] as? Bool == true)
+        #expect(nested(object, ["result", "evaluate"]) == nil)
     }
 
     @Test func emptyCoreHandshakeIsNotOk() async throws {
@@ -240,9 +230,7 @@ struct FakeXPCUnixSocketTests {
         )
         _ = await runtime.handleIncoming(request, handshakeOK: true)
         let blob = log.snapshot.map { "\($0.method)|\($0.decision ?? "")|\($0.ruleID ?? "")" }.joined()
-        #expect(blob.contains("evaluate"))
-        #expect(blob.contains("/Users/me") == false)
-        #expect(blob.contains("rm -rf") == false)
+        #expect(blob.isEmpty)
     }
 }
 

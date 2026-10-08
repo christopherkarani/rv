@@ -1,0 +1,1022 @@
+Building for debugging...
+[Computing dependencies]
+[Provisioning 1 / 96]
+[Using on-disk description]
+[1 / 2] SwiftTerm
+warning: missing creator for mutated node: ('/Users/chriskarani/CodingProjects/rv/.build/out/Products/Debug/SwiftTerm_SwiftTerm.bundle/Contents/MacOS')
+Build complete! (1.67 sec)
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Test claudeEncodeDeny_withRuleStillClaudeDenyEnvelope() started.
+􀟈  Test cursorHonorPath_claudePermissionDecisionIsNotCursor() started.
+􀟈  Test hookWire_indeterminateOmitsRule() started.
+􀟈  Suite "OpenCode AgentRequest" started.
+􀟈  Test hostAdapter_manualEscape_agreesWithEscapeOnSharedAlphabet() started.
+􀟈  Test hookWire_forcedAskOnDenyOnlyCodecIsLiveDeny() started.
+􀟈  Test openCodeAdapter_hasUIFalseDoesNotSpend() started.
+􀟈  Test codexDecode_nonPreToolUseIsForeign() started.
+􀟈  Test hostDenyText_omitsSentence2WhenBypassish() started.
+􀟈  Test hookWire_firstCallIntentDenyDoesNotAskOnSpendablePackDeny() started.
+􀟈  Test piDecode_extractsBashCommand(_:expected:) started.
+􀟈  Test adapters_missingRvBlocksWithRvMissing() started.
+􀟈  Test openCodeAdapter_sessionShellEnvOfficialOnce204SpendsWhenGetStaysPending() started.
+􀟈  Test codexHookWire_mandatoryHumanIsQuietAllow() started.
+􀟈  Test hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host:) started.
+􀟈  Test adapters_mapRvHookResultMatrix(host:kind:) started.
+􀟈  Test antigravityDecode_viewFileEnvIsCatalogPath() started.
+􀟈  Test hookWire_codexMandatoryHumanIsBlockNotAsk() started.
+􀟈  Test claudeDecode_fileWinsOverSpendFlag() started.
+􀟈  Test hermesHostAskAdapter_confirmTimeoutDoesNotSpend() started.
+􀟈  Test hookWire_claudeEncodeAskIsNotPermissionAsk() started.
+􀟈  Test codexDecode_extractsBashCommand(_:expected:) started.
+􀟈  Test openCodeAdapter_sessionShellEnvUsesThisCallIDNotPriorAllow() started.
+􀟈  Test openCodeAdapter_sessionShellEnvMissingCommandDoesNotAllow() started.
+􀟈  Test cursorHonorPath_permissionAskIsNotHonorPath() started.
+􀟈  Test grokDecode_extractsShellCommand(_:expected:) started.
+􀟈  Test piDecode_emptyCommandIsMissingCommand() started.
+􀟈  Test openClawHostAskAdapter_confirmYesMissingSpendDoesNotRunTool() started.
+􀟈  Test openCodeAdapter_sessionShellConfirmYesSpendsThenAllows() started.
+􀟈  Test hostDenyText_omitsSentence2WhenWhyExceeds180Scalars() started.
+􀟈  Test openClawHostAskAdapter_confirmYesFailedSpendDoesNotRunTool() started.
+􀟈  Test proposedAction_hostFileRequest_isFileNotShell(host:fixture:kind:path:) started.
+􀟈  Test hookWire_claudeAfterSpendAllowIsEmpty() started.
+􀟈  Test openCodeEncodeAllow_isEmptyExitZero() started.
+􀟈  Test codexDecode_readsCwdSessionAndProposedAction() started.
+􀟈  Test hermesHostAskAdapter_confirmYesMissingSpendDoesNotRunTool() started.
+􀟈  Test antigravityHookWire_resetHardIsDecisionDeny() started.
+􀟈  Test openClawEncodeDeny_matchesResetHardFixture() started.
+􀟈  Test hostDenyText_switchesOnDecisionNotNilHeuristic() started.
+􀟈  Test piDecode_hostAskSpendIsSpendCase() started.
+􀟈  Test claudeDecode_malformedIsUnreadable() started.
+􀟈  Suite "Host decode stress" started.
+􀟈  Test grokDecode_bashEqualityUsesShellCase() started.
+􀟈  Test encodeRichDeny_claudeAllowIsIncompleteDeny() started.
+􀟈  Test openCodeDecode_extractsBashCommand(_:expected:) started.
+􀟈  Test hostAdapter_controlAndBackslashPath_roundTrips(host:) started.
+􀟈  Test hookWire_piFirstCallPackDenyAsksWhenSpendable() started.
+􀟈  Test hookFileWire_usesEncodeFileDeny() started.
+􀟈  Test grokDecode_missingCwdIsNil() started.
+􀟈  Test hostAdapter_bakedRvPath_roundTripsAllResources(host:) started.
+􀟈  Test openCodeDecode_notJSONIsUnreadable() started.
+􀟈  Test cursorDecode_readsCwdSessionAndProposedAction() started.
+􀟈  Test hookDispatch_shellResetHardStillEvaluates() started.
+􀟈  Suite "File-tool decode stress" started.
+􀟈  Test hookWire_invalidUnlockCodeOmitsNext() started.
+􀟈  Test piEncodeAllow_isEmptyExitZero() started.
+􀟈  Test productionCodec_matchesPauseProfile(_:) started.
+􀟈  Test hookWire_unlockablePackDenyWithCwdEncodesAsk() started.
+􀟈  Test cursorDecode_extractsBeforeShellCommand(_:expected:) started.
+􀟈  Test cursorWrapper_missingRvDenies() started.
+􀟈  Test piAdapter_resetHardBlocksWithHostDenyText() started.
+􀟈  Test openCodeAdapter_allowDoesNotToast() started.
+􀟈  Test cursorDecode_preToolUseReadSshIsCatalogPath() started.
+􀟈  Test hookWire_piFirstCallPackAllowBindsAllow() started.
+􀟈  Test hermesDecode_emptyCommandIsMissingCommand() started.
+􀟈  Test grokDecode_readFileIsFileTool() started.
+􀟈  Test cursorHonorPath_codexBlockExitTwoIsNotCursor() started.
+􀟈  Test hookWire_denyAndIndeterminateCallEncodeDeny() started.
+􀟈  Test hermesDecode_emptyCwdIsNil() started.
+􀟈  Test hookDispatch_fileDenyVoiceDoesNotUseEmptyShellCommand() started.
+􀟈  Test codexHookWire_malformedDenies() started.
+􀟈  Test openClawEncodeAllow_isEmptyExitZero() started.
+􀟈  Test openCodeAdapter_sessionShellEnvOfficialFetchConfirmSpendsThenAllows() started.
+􀟈  Test antigravityWrapper_emptyOrAskStdoutIsDenyNotAllow(_:) started.
+􀟈  Test openCodeAdapter_bashThenShellEnvDoesNotSilentAllowResetHard() started.
+􀟈  Test case passing 2 arguments host → "pi", kind → "allow" to adapters_mapRvHookResultMatrix(host:kind:) started.
+􀟈  Test case passing 1 argument host → .grok to hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host:) started.
+􀟈  Test case passing 2 arguments file → "allow-git-status.json", expected → "git status" to piDecode_extractsBashCommand(_:expected:) started.
+􀟈  Test case passing 1 argument host → .pi to hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host:) started.
+􀟈  Test case passing 1 argument host → .opencode to hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host:) started.
+􀟈  Test cursorDecode_preToolUseGrepIsForeign() started.
+􀟈  Test case passing 2 arguments host → "opencode", kind → "allow" to adapters_mapRvHookResultMatrix(host:kind:) started.
+􀟈  Test hermesEncodeDeny_sameReasonAsPi() started.
+􀟈  Test case passing 1 argument host → .openclaw to hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host:) started.
+􀟈  Test case passing 2 arguments file → "deny-git-reset-hard.json", expected → "git reset --hard" to piDecode_extractsBashCommand(_:expected:) started.
+􀟈  Test antigravityWrapper_missingRvDenies() started.
+􀟈  Test piAdapter_confirmYesFailedSpendDoesNotRunTool() started.
+􀟈  Test case passing 2 arguments file → "allow-git-status.json", expected → "git status" to codexDecode_extractsBashCommand(_:expected:) started.
+􀟈  Test openCodeEncodeDeny_matchesResetHardFixture() started.
+􀟈  Test piAdapter_nonBashDoesNotSpawn() started.
+􀟈  Test case passing 1 argument host → .hermes to hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host:) started.
+􀟈  Test cursorDecode_notJSONIsUnreadable() started.
+􀟈  Test case passing 2 arguments host → "pi", kind → "crash" to adapters_mapRvHookResultMatrix(host:kind:) started.
+􀟈  Test codexEncodeDeny_isOfficialBlockAndExitTwo() started.
+􀟈  Test case passing 1 argument host → .codex to hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host:) started.
+􀟈  Test openCodeTuiPlugin_defaultExportsServerAndLoadsOnOpenCode11818() started.
+􀟈  Test case passing 2 arguments file → "deny-git-reset-hard.json", expected → "git reset --hard" to codexDecode_extractsBashCommand(_:expected:) started.
+􀟈  Test piEncodeDeny_matchesResetHardFixture() started.
+􀟈  Test piDecode_readsCwd() started.
+􀟈  Test cursorDecode_preToolUseReadIsFileTool() started.
+􀟈  Test case passing 2 arguments host → "opencode", kind → "crash" to adapters_mapRvHookResultMatrix(host:kind:) started.
+􀟈  Test hookWire_openCodeMandatoryHumanEncodesAskNotAllow() started.
+􀟈  Test piAdapter_sendMessageThrowStillBlocks() started.
+􀟈  Test case passing 1 argument host → .cursor to hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host:) started.
+􀟈  Test hermesEncodeDeny_matchesResetHardFixture() started.
+􀟈  Test hostDenyText_oneSentenceBuiltinStaysOneClause() started.
+􀟈  Test case passing 2 arguments host → "pi", kind → "timeout" to adapters_mapRvHookResultMatrix(host:kind:) started.
+􀟈  Test openCodeAdapter_sessionShellEnvPriorAllowLastMatchDoesNotPermitResetHard() started.
+􀟈  Test case passing 2 arguments file → "allow-git-status.json", expected → "git status" to grokDecode_extractsShellCommand(_:expected:) started.
+􀟈  Test case passing 1 argument host → .claude to hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host:) started.
+􀟈  Test hostDenyText_multilineCommand_previewsFirstLine() started.
+􀟈  Test case passing 1 argument host → .antigravity to hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host:) started.
+􀟈  Suite ClaudeAdapterHookTests started.
+􀟈  Test claudeEncodeDeny_indeterminateUsesPlanSentence() started.
+􀟈  Test case passing 2 arguments host → "opencode", kind → "timeout" to adapters_mapRvHookResultMatrix(host:kind:) started.
+􀟈  Test case passing 2 arguments file → "deny-git-reset-hard.json", expected → "git reset --hard" to grokDecode_extractsShellCommand(_:expected:) started.
+􀟈  Test openClawTemplate_registersBeforeToolCallExecAndBlocks() started.
+􀟈  Test openCodeAdapter_sessionShellEnvOfficialCreateHappensWhenSubscribeMissing() started.
+􀟈  Test claudeDecode_otherToolOrEventIsForeign(_:) started.
+􀟈  Test case passing 2 arguments file → "deny-reason-is-one-line.json", expected → "git reset --hard" to grokDecode_extractsShellCommand(_:expected:) started.
+􀟈  Test cursorWrapper_preToolUseReadDenyIsPermissionDeny() started.
+􀟈  Test openClawHostAskAdapter_noRouteDoesNotSpend() started.
+􀟈  Test openClawHostAskAdapter_registersAskBudgetAboveDefaultToolHook() started.
+􀟈  Test antigravityEncodeAllow_isExplicitDecisionAllowNotEmpty() started.
+􀟈  Test case passing 2 arguments file → "allow-legacy-run-terminal-cmd.json", expected → "git status" to grokDecode_extractsShellCommand(_:expected:) started.
+􀟈  Test codexHonorPath_stdoutOnlyBlockWithoutStderrReasonIsNotEnough() started.
+􀟈  Test openCodeAdapter_toastThrowStillBlocks() started.
+􀟈  Test codexDecode_nonBashIsForeign() started.
+􀟈  Test hookMapper_doesNotDowncastHostAskCodec() started.
+􀟈  Test openCodeAdapter_sessionShellEnvResetHardThrows() started.
+􀟈  Test case passing 2 arguments file → "allow-medium-stash-drop.json", expected → "git stash drop" to grokDecode_extractsShellCommand(_:expected:) started.
+􀟈  Test openCodeAdapter_sessionShellEnvOfficialCreateHappensWhenSubscribeThrows() started.
+􀟈  Test piEncodeAsk_isNotEmptyAllow() started.
+􀟈  Test hookWire_afterFailedSpendStaysDeny() started.
+􀟈  Test hermesDecode_prefersWorkdirThenEnvelopeCwd() started.
+􀟈  Test hermesTemplate_registersPreToolCallTerminalAndBlocks() started.
+􀟈  Test openClawHostAskAdapter_gatewayThrowDoesNotSpend() started.
+􀟈  Test openCodeAdapter_sessionShellEnvOfficialOnce204SpendsWhenSubscribeThrows() started.
+􀟈  Test hookWire_grokFirstCallPackDenyStaysDeny() started.
+􀟈  Test hermesEncodeAllow_isEmptyExitZero() started.
+􀟈  Test piDecode_spendWithoutCommandIsMissingCommand() started.
+􀟈  Test openCodeAdapter_confirmYesMissingSpendDoesNotRunTool() started.
+􀟈  Test claudeEncodeRichDeny_unmatchedDenyIsFailClosed() started.
+􀟈  Test hookWire_allowIsEmpty() started.
+􀟈  Test openCodeAdapter_sessionShellEnvOfficialConfirmRejectDoesNotAllow() started.
+􀟈  Test openCodeDecode_missingCwdIsNil() started.
+􀟈  Test openClawDecode_sessionKeyWhenSessionIdMissing() started.
+􀟈  Test case passing 4 arguments host → .claude, fixture → "deny-file-env.json", kind → .read, path → "/tmp/rv-oracle/.env" to proposedAction_hostFileRequest_isFileNotShell(host:fixture:kind:path:) started.
+􀟈  Test encodeFileDeny_claudeMatchedDenyIsRichJSON() started.
+􀟈  Test hermesDecode_readsHostAskSpend() started.
+􀟈  Test hostDenyText_dropsThirdSentence() started.
+􀟈  Test openClawEncodeDeny_sameReasonAsPi() started.
+􀟈  Test piDecode_readsSessionId() started.
+􀟈  Test codexForcedAsk_failClosesToBlockNotLeftoverAsk() started.
+􀟈  Test cursorDecode_preToolUseReadWithoutPathIsFileToolNotForeign() started.
+􀟈  Test cursorWrapper_resetHardWritesPermissionDenyAndExitsZero() started.
+􀟈  Test codexHookRequest_emptySessionStringIsNil() started.
+􀟈  Test cursorDecode_emptyCommandIsMissingCommand() started.
+􀟈  Test hookWire_claudeFirstCallMissingCwdStaysDeny() started.
+􀟈  Test hookVoiceNext_sentencesMatchExistingCopy() started.
+􀟈  Test openCodeAdapter_resolutionSpendsThenAllows() started.
+􀟈  Suite "PendingHostAsk hook door" started.
+􀟈  Test case passing 4 arguments host → .grok, fixture → "deny-file-env.json", kind → .read, path → "/tmp/rv-oracle/.env" to proposedAction_hostFileRequest_isFileNotShell(host:fixture:kind:path:) started.
+􀟈  Test cursorEncodeDeny_isOfficialPermissionDeny() started.
+􀟈  Test antigravityDecode_readsCwdSessionAndProposedAction() started.
+􀟈  Test hookWire_invalidUnlockCodePassesNone() started.
+􀟈  Test openCodeAdapter_nonBashDoesNotSpawn() started.
+􀟈  Test openClawDecode_readsCwdSessionAndProposedAction() started.
+􀟈  Test openClawDecode_extractsExecCommand(_:expected:) started.
+􀟈  Test hostAdapter_manualEscape_pinsSpecVectors(input:expected:) started.
+􀟈  Test case passing 4 arguments host → .cursor, fixture → "deny-file-ssh.json", kind → .read, path → "/tmp/rv-oracle/.ssh/id_ed25519" to proposedAction_hostFileRequest_isFileNotShell(host:fixture:kind:path:) started.
+􀟈  Test case passing 2 arguments file → "allow-git-status.json", expected → "git status" to openCodeDecode_extractsBashCommand(_:expected:) started.
+􀟈  Test case passing 1 argument host → .grok to hostAdapter_controlAndBackslashPath_roundTrips(host:) started.
+􀟈  Test antigravityHookWire_malformedDenies() started.
+􀟈  Test case passing 2 arguments file → "deny-git-reset-hard.json", expected → "git reset --hard" to openCodeDecode_extractsBashCommand(_:expected:) started.
+􀟈  Test hostAdapter_quotedPath_grokJSONIsValidAndBakesOriginalPath() started.
+􀟈  Test claudeDecode_extractsShellCommand(_:expected:) started.
+􀟈  Test hookWire_claudeFirstCallPackDenyAsksWhenSpendable() started.
+􀟈  Test case passing 1 argument host → .pi to hostAdapter_controlAndBackslashPath_roundTrips(host:) started.
+􀟈  Test codexDecode_emptyCommandIsMissingCommand() started.
+􀟈  Test hookWire_askDoesNotCarryMintedCode() started.
+􀟈  Test case passing 1 argument host → .grok to hostAdapter_bakedRvPath_roundTripsAllResources(host:) started.
+􀟈  Test openCodeSessionShell_bridgesToAgentRequest() started.
+􀟈  Test openCodeGitResetHard_composesToProposedAction() started.
+􀟈  Test cursorHookWire_malformedDenies() started.
+􀟈  Test openCodeFixture_decodesThenBridgesToAgentRequest(_:expected:) started.
+􀟈  Test case passing 1 argument host → .pi to hostAdapter_bakedRvPath_roundTripsAllResources(host:) started.
+􀟈  Test hostAdapter_quotedPath_piAndOpenCodeBakeOriginalPath() started.
+􀟈  Test openCodeHostAskSpend_doesNotBecomeAgentRequest() started.
+􀟈  Test antigravityHookWire_mandatoryHumanIsQuietAllow() started.
+􀟈  Test case passing 1 argument host → .opencode to hostAdapter_controlAndBackslashPath_roundTrips(host:) started.
+􀟈  Test hookRequestFile_isUnsupportedKind() started.
+􀟈  Test antigravityDecode_viewFileIsFileTool() started.
+􀟈  Test case passing 1 argument host → .opencode to hostAdapter_bakedRvPath_roundTripsAllResources(host:) started.
+􀟈  Test openCodeNonShell_staysForeignWithoutAgentRequest() started.
+􀟈  Test hostAdapter_openClawCompanions_areNonEmpty() started.
+􀟈  Test case passing 1 argument host → .openclaw to hostAdapter_controlAndBackslashPath_roundTrips(host:) started.
+􀟈  Test hookRequestSpend_isUnsupportedKind() started.
+􀟈  Test case passing 1 argument host → .openclaw to hostAdapter_bakedRvPath_roundTripsAllResources(host:) started.
+􀟈  Test grokEncodeDeny_reasonIsOneLine() started.
+􀟈  Test case passing 1 argument host → .hermes to hostAdapter_controlAndBackslashPath_roundTrips(host:) started.
+􀟈  Test case passing 1 argument host → .hermes to hostAdapter_bakedRvPath_roundTripsAllResources(host:) started.
+􀟈  Test openCodeAdapter_denyJSONDoesNotPause() started.
+􀟈  Test case passing 1 argument host → .codex to hostAdapter_bakedRvPath_roundTripsAllResources(host:) started.
+􀟈  Test hostDenyText_nilOnAllowIncludingMedium() started.
+􀟈  Test case passing 1 argument host → .codex to hostAdapter_controlAndBackslashPath_roundTrips(host:) started.
+􀟈  Test piAdapter_confirmYesMissingSpendDoesNotRunTool() started.
+􀟈  Test case passing 1 argument host → .cursor to hostAdapter_bakedRvPath_roundTripsAllResources(host:) started.
+􀟈  Test openCodeAdapter_sessionShellAskJSONDoesNotAllow() started.
+􀟈  Test case passing 1 argument host → .grok to productionCodec_matchesPauseProfile(_:) started.
+􀟈  Test case passing 1 argument host → .claude to hostAdapter_bakedRvPath_roundTripsAllResources(host:) started.
+􀟈  Test claudeDecode_emptySessionIsNil() started.
+􀟈  Test hermesHostAskAdapter_confirmYesFailedSpendDoesNotRunTool() started.
+􀟈  Test grokTemplate_bakesRvPathWithoutMatcher() started.
+􀟈  Test case passing 1 argument host → .antigravity to hostAdapter_bakedRvPath_roundTripsAllResources(host:) started.
+􀟈  Test case passing 1 argument host → .pi to productionCodec_matchesPauseProfile(_:) started.
+􀟈  Test openCodeAdapter_askJSONDoesNotAllow() started.
+􀟈  Test hostFileDenyLine_doesNotPreviewEmptyShellCommand() started.
+􀟈  Test case passing 1 argument host → .cursor to hostAdapter_controlAndBackslashPath_roundTrips(host:) started.
+􀟈  Test case passing 1 argument host → .opencode to productionCodec_matchesPauseProfile(_:) started.
+􀟈  Test cursorDecode_emptyCwdIsNil() started.
+􀟈  Test cursorWrapper_codexBlockMapsToPermissionDeny() started.
+􀟈  Test encodeFileDeny_claudeUnmatchedAndIncompleteUseEncodeDeny() started.
+􀟈  Test case passing 2 arguments file → "allow-git-status.json", expected → "git status" to cursorDecode_extractsBeforeShellCommand(_:expected:) started.
+􀟈  Test hookDispatch_fileWinsOverSpendCallback() started.
+􀟈  Test case passing 1 argument host → .claude to productionCodec_matchesPauseProfile(_:) started.
+􀟈  Test hookDenyCommandPreview_clipsOverlongFirstLine() started.
+􀟈  Test unlockLine_usesMintedCodeAndHintOtherwise() started.
+􀟈  Test piEncodeDeny_indeterminateUsesPlanSentence() started.
+􀟈  Test case passing 1 argument host → .claude to hostAdapter_controlAndBackslashPath_roundTrips(host:) started.
+􀟈  Test cursorWrapper_emptyOrWhitespaceStdoutExitZeroIsDenyNotAllow(_:) started.
+􀟈  Test claudeDecode_readToolIsFileWithoutEmptyCommand() started.
+􀟈  Test hookWire_claudeRichDenyUsesEncodeRichDeny() started.
+􀟈  Test case passing 1 argument host → .openclaw to productionCodec_matchesPauseProfile(_:) started.
+􀟈  Test case passing 2 arguments file → "deny-git-reset-hard.json", expected → "git reset --hard" to cursorDecode_extractsBeforeShellCommand(_:expected:) started.
+􀟈  Test piDecode_emptyCwdIsNil() started.
+􀟈  Test cursorTemplate_emitsOfficialPermissionDenyNotClaudeOrCodex() started.
+􀟈  Test case passing 1 argument host → .hermes to productionCodec_matchesPauseProfile(_:) started.
+􀟈  Test hookDenyCommandPreview_shortCommandUnchanged() started.
+􀟈  Test openCodeDecode_readsCwd() started.
+􀟈  Test case passing 1 argument host → .antigravity to hostAdapter_controlAndBackslashPath_roundTrips(host:) started.
+􀟈  Test hookWire_cursorMandatoryHumanIsPermissionDenyNotAsk() started.
+􀟈  Test hookWire_firstCallIntentAskEncodesAskOnPackDeny() started.
+􀟈  Test cursorForcedAsk_failClosesToDenyNotLeftoverAsk() started.
+􀟈  Test hookWire_boundMandatoryHumanPiEncodesAsk() started.
+􀟈  Test case passing 1 argument host → .codex to productionCodec_matchesPauseProfile(_:) started.
+􀟈  Test hermesDecode_executeCodeIsForeign() started.
+􀟈  Test openClawHostAskAdapter_gatewayDenyDoesNotSpend() started.
+􀟈  Test openCodeAdapter_sessionShellEnvOfficialCreateAllowIsNotAPermit() started.
+􀟈  Test case passing 1 argument host → .cursor to productionCodec_matchesPauseProfile(_:) started.
+􀟈  Test openClawHostAskAdapter_gatewayTimeoutDoesNotSpend() started.
+􀟈  Test openCodeAdapter_sessionShellEnvAskDoesNotAllow() started.
+􀟈  Test proposedAction_shellAndSpendKeepFingerprint() started.
+􀟈  Test cannotPauseForcedAsk_doesNotEmitAskJSON(_:) started.
+􀟈  Test hookWire_mintedUnlockCodePassesTypedNext() started.
+􀟈  Test hermesDecode_taskIdWhenSessionIdMissing() started.
+􀟈  Test hookWire_boundMandatoryHumanClaudeEncodesAsk() started.
+􀟈  Test case passing 1 argument host → .antigravity to productionCodec_matchesPauseProfile(_:) started.
+􀟈  Test cursorWrapper_preToolUseFileToolMissingRvDenies(_:) started.
+􀟈  Test hookDispatch_fileToolDoesNotCallPackEvaluate() started.
+􀟈  Test grokEncodeAllow_isEmptyExitZero() started.
+􀟈  Test openCodeAdapter_sessionShellEnvNonShellToolCommandIsNotAPermit() started.
+􀟈  Test antigravityForcedAsk_failClosesToDenyNotAsk() started.
+􀟈  Test antigravityWrapper_resetHardWritesDecisionDenyAndExitsZero() started.
+􀟈  Test cursorHookRequest_emptySessionStringIsNil() started.
+􀟈  Test openCodeAdapter_allowedBashDoesNotFailClosedOnFollowUpShellEnv() started.
+􀟈  Test openCodeAdapter_sessionShellEnvOfficialMissingConfirmStillThrowsWhenSubscribeThrows() started.
+􀟈  Test antigravityDecode_missingToolCallIsForeign() started.
+􀟈  Test openCodeDecode_sessionShellEmptyCommandIsMissingCommand() started.
+􀟈  Test hookWire_grokMandatoryHumanIsQuietAllow() started.
+􀟈  Test openCodeAdapter_sessionShellEnvFailedSpendDoesNotRunTool() started.
+􀟈  Test hookWire_claudeFirstCallSecretPathStaysDeny() started.
+􀟈  Test hookWire_convenienceIsFirstCallOnly() started.
+􀟈  Test antigravityHonorPath_claudePermissionDecisionIsNotAntigravity() started.
+􀟈  Test hookWire_claudeFirstCallEmptyMatchingViewStaysDeny() started.
+􀟈  Test piAdapter_allowDoesNotPostDecisionCard() started.
+􀟈  Test grokDecode_readFileEnvIsCatalogPath() started.
+􀟈  Test cursorHookWire_mandatoryHumanIsQuietAllow() started.
+􀟈  Test hostDenyText_resetHardIsWhatAndWhy() started.
+􀟈  Test allowOnceUnlockCode_isSixLowercaseHex() started.
+􀟈  Test antigravityDecode_viewFileWithoutPathIsFileToolNotForeign() started.
+􀟈  Test hermesHostAskAdapter_missingConfirmDoesNotSpend() started.
+􀟈  Test openClawHostAskAdapter_gatewayAllowAlwaysIsNotAPermit() started.
+􀟈  Test hookWire_liveDenyCallsEncodeEvaluatedDeny() started.
+􀟈  Test cursorWrapper_officialPermissionAllowStillAllows() started.
+􀟈  Test hookWire_firstCallAllowCannotSkipPolicyGate(_:) started.
+􀟈  Test cursorDecode_prefersWorkingDirectoryThenCwdThenWorkspaceRoot() started.
+􀟈  Test grokDecode_acceptsBashToolName() started.
+􀟈  Test piAdapter_hasUIFalseDoesNotSpend() started.
+􀟈  Test hookWire_firstCallIntentAllowEncodesAllow() started.
+􀟈  Test antigravityDecode_otherToolIsForeign() started.
+􀟈  Test hookWire_packDoorPiDenyDoesNotEncodeAsk() started.
+􀟈  Test openCodeDecode_sessionShellExtractsCommand() started.
+􀟈  Test openCodeDecode_readsHostAskSpend() started.
+􀟈  Test hermesHostAskAdapter_sourceIsConfirmThenSpendNeverApprove() started.
+􀟈  Test codexDecode_notJSONIsUnreadable() started.
+􀟈  Test openCodeAdapter_resetHardThrowsHostDenyText() started.
+􀟈  Test hookWire_claudeAllowIsEmpty() started.
+􀟈  Test grokDecode_emptyCwdIsNil() started.
+􀟈  Test claudeEncodeRichDeny_neverEmitsPermissionAsk() started.
+􀟈  Test openCodeAdapter_legacyClientToastsViaWrappedBody() started.
+􀟈  Test antigravityTemplate_emitsDecisionDenyExitZeroNotClaudeOrCodex() started.
+􀟈  Test hookWire_denyAddsRuleAndNextWithoutBreakingDecisionReason() started.
+􀟈  Test openCodeAdapter_sessionShellEnvOfficialReject204StillThrows() started.
+􀟈  Test openCodeAdapter_sessionShellEnvOfficialConfirmSpendsThenAllows() started.
+􀟈  Test hermesDecode_nonTerminalIsForeign() started.
+􀟈  Test hookWire_spendIntentWithoutCallbackDenies() started.
+􀟈  Test hookWire_piMandatoryHumanEncodesAskNotAllow() started.
+􀟈  Test hookDispatch_emptyFilePathDeniesWithoutEvaluate() started.
+􀟈  Test case passing 1 argument stubStdout → "" to antigravityWrapper_emptyOrAskStdoutIsDenyNotAllow(_:) started.
+􀟈  Test case passing 1 argument stubStdout → "
+" to antigravityWrapper_emptyOrAskStdoutIsDenyNotAllow(_:) started.
+􀟈  Test encodeEvaluatedDeny_leftoverCodecIsEncodeDeny() started.
+􀟈  Test openCodeDecode_nonShellIsForeign() started.
+􀟈  Test case passing 1 argument stubStdout → "   
+" to antigravityWrapper_emptyOrAskStdoutIsDenyNotAllow(_:) started.
+􀟈  Test piDecode_nonShellIsForeign() started.
+􀟈  Test case passing 1 argument stubStdout → "not-json" to antigravityWrapper_emptyOrAskStdoutIsDenyNotAllow(_:) started.
+􀟈  Test case passing 1 argument stubStdout → "{"decision":"ask"}
+" to antigravityWrapper_emptyOrAskStdoutIsDenyNotAllow(_:) started.
+􀟈  Test openCodeAdapter_sessionShellEnvOfficialOnce204SpendsWhenGet404s() started.
+􀟈  Test cursorEncodeAllow_isOfficialPermissionAllowNotEmpty() started.
+􁁛  Test codexDecode_nonPreToolUseIsForeign() passed after 0.562 seconds.
+􀟈  Test openCodeAdapter_sessionShellEnvConfirmSpendsThenAllows() started.
+􀟈  Test hookWire_openCodeSpendIntentWithoutCallbackDenies() started.
+􀟈  Test hookWire_claudeFirstCallDeny_isRichJSONViaHostCodec() started.
+􀟈  Test piDecode_missingCwdIsNil() started.
+􀟈  Test encodeEvaluatedDeny_claudeAllowOrIncomplete_isIncompleteDeny() started.
+􀟈  Test grokDecode_readsSessionId() started.
+􀟈  Test hookDispatch_omittedEvaluateFileFailClosesIncomplete() started.
+􀟈  Test openClawDecode_readsHostAskSpend() started.
+􀟈  Test codexDecode_emptyCwdIsNil() started.
+􀟈  Test hookWire_openCodeSessionShellResetHardIsNotAllow() started.
+􁁛  Test hookWire_firstCallIntentDenyDoesNotAskOnSpendablePackDeny() passed after 0.563 seconds.
+􀟈  Test hostAdapter_piAndOpenCode_matchOnlyTheirOwnRender() started.
+􁁛  Test hostDenyText_omitsSentence2WhenBypassish() passed after 0.563 seconds.
+􁁛  Test hookWire_indeterminateOmitsRule() passed after 0.563 seconds.
+􀟈  Test proposedAction_fileIsNotEmptyCommandShell() started.
+􀟈  Test hostAdapter_matchesCurrent_acceptsAnyBakedPath() started.
+􁁛  Test hostAdapter_bakedRvPath_rejectsModifiedAndForeignBytes(host:) with 9 test cases passed after 0.563 seconds.
+􁁛  Test hookWire_forcedAskOnDenyOnlyCodecIsLiveDeny() passed after 0.563 seconds.
+􀟈  Test hookWire_claudeIndeterminateOmitsPackFields() started.
+􀟈  Test codexDecode_prefersWorkdirThenEnvelopeCwd() started.
+􁁛  Test hostAdapter_manualEscape_agreesWithEscapeOnSharedAlphabet() passed after 0.563 seconds.
+􁁛  Test claudeEncodeDeny_withRuleStillClaudeDenyEnvelope() passed after 0.563 seconds.
+􁁛  Test hookWire_claudeEncodeAskIsNotPermissionAsk() passed after 0.563 seconds.
+􀟈  Test grokEncodeDeny_indeterminateUsesPlanSentence() started.
+􁁛  Test hookWire_codexMandatoryHumanIsBlockNotAsk() passed after 0.563 seconds.
+􀟈  Test hookWire_grokUnlockableResetHardStaysDeny() started.
+􁁛  Test cursorHonorPath_claudePermissionDecisionIsNotCursor() passed after 0.563 seconds.
+􁁛  Test codexHookWire_mandatoryHumanIsQuietAllow() passed after 0.563 seconds.
+􀟈  Test openClawHostAskAdapter_confirmNoDoesNotSpend() started.
+􀟈  Test antigravityWrapper_fileToolMissingRvDenies(_:) started.
+􀟈  Test openCodeAdapter_sessionShellResetHardThrowsHostDenyText() started.
+􁁛  Test cursorHonorPath_permissionAskIsNotHonorPath() passed after 0.567 seconds.
+􁁛  Test piDecode_extractsBashCommand(_:expected:) with 2 test cases passed after 0.569 seconds.
+􀟈  Test openCodeDecode_readsSessionId(_:expected:) started.
+􁁛  Test codexDecode_extractsBashCommand(_:expected:) with 2 test cases passed after 0.569 seconds.
+􀟈  Test hookWire_claudeFirstCallMandatoryHumanEncodesAsk() started.
+􀟈  Test codexEncodeAllow_isEmptyExitZero() started.
+􀟈  Test codexWrapper_missingReasonDoesNotExitTwoWithWhitespaceStderr(_:) started.
+􀟈  Test antigravityDecode_prefersCwdThenWorkspaceRoot() started.
+􀟈  Test piAdapter_confirmYesSpendsThenAllows() started.
+􀟈  Test grokDecode_readsCwdWhenPresent() started.
+􁁛  Test antigravityDecode_viewFileEnvIsCatalogPath() passed after 0.599 seconds.
+􀟈  Test openCodeAdapter_toastTimeoutStillBlocks() started.
+􀟈  Test claudeDecode_readsSessionId() started.
+􀟈  Test claudeDecode_fileToolsExtractPath(_:kind:path:) started.
+􀟈  Test grokDecode_otherToolOrEventIsForeign(_:) started.
+􀟈  Test openClawDecode_notJSONIsUnreadable() started.
+􀟈  Test openCodeAdapter_sessionShellEnvPriorGatedAllowDoesNotPermitNewCall() started.
+􀟈  Test hermesDecode_readsCwdSessionAndProposedAction() started.
+􀟈  Test hookWire_claudeSpendIntentWithoutCallbackDenies() started.
+􀟈  Test codexHookWire_resetHardIsBlockNotClaudeDeny() started.
+􁁛  Test grokDecode_extractsShellCommand(_:expected:) with 5 test cases passed after 0.600 seconds.
+􀟈  Test adapters_honorDenyJSONRegardlessOfExitIncludingIndeterminate() started.
+􀟈  Test cursorDecode_preToolUseShellIsShell() started.
+􀟈  Test openCodeEncodeAsk_isNotEmptyAllow() started.
+􁁛  Test openCodeAdapter_sessionShellEnvMissingCommandDoesNotAllow() passed after 0.600 seconds.
+􀟈  Test cursorDecode_generationIdWhenConversationIdMissing() started.
+􁁛  Test claudeDecode_fileWinsOverSpendFlag() passed after 0.602 seconds.
+􀟈  Test hookWire_piAndOpenCodeStayShortDeny() started.
+􀟈  Test case passing 1 argument file → "allow-non-shell-mcp.json" to claudeDecode_otherToolOrEventIsForeign(_:) started.
+􁁛  Test piDecode_emptyCommandIsMissingCommand() passed after 0.602 seconds.
+􀟈  Test cursorDecode_afterShellIsForeign() started.
+􀟈  Test openClawDecode_prefersWorkdirThenEnvelopeCwd() started.
+􁁛  Test adapters_missingRvBlocksWithRvMissing() passed after 0.657 seconds.
+􁁛  Test hostDenyText_omitsSentence2WhenWhyExceeds180Scalars() passed after 0.657 seconds.
+􀟈  Test adapters_startedRvTimeoutOrCrashBlocksWithRvFailed() started.
+􀟈  Test antigravityWrapper_allowIsExplicitDecisionAllow() started.
+􀟈  Test openClawHostAskAdapter_gatewayAllowOnceSpendsThenAllows() started.
+􀟈  Test codexWrapper_resetHardWritesStderrReasonAndExitsTwo() started.
+􁁛  Test hookWire_claudeAfterSpendAllowIsEmpty() passed after 0.681 seconds.
+􀟈  Test hookWire_mintedUnlockCodeOnGrokDeny() started.
+􀟈  Test claudeEncodeAllow_isEmptyExitZero() started.
+􀟈  Test openCodeAdapter_sessionShellFailedSpendDoesNotRunTool() started.
+􁁛  Test openCodeEncodeAllow_isEmptyExitZero() passed after 0.739 seconds.
+􀟈  Test openClawDecode_emptyCommandIsMissingCommand() started.
+􀟈  Test antigravityDecode_fileToolsAreFileDoor(_:kind:) started.
+􀟈  Test hermesHostAskAdapter_denyJSONDoesNotPause() started.
+􀟈  Test antigravityDecode_extractsRunCommand(_:expected:) started.
+􁁛  Test codexDecode_readsCwdSessionAndProposedAction() passed after 0.740 seconds.
+􀟈  Test antigravityWrapper_foreignToolMissingRvAllows() started.
+􀟈  Test claudeDecode_readsHostAskSpend() started.
+􀟈  Test hostDenyLine_appendsUnlockWhenCodeIsMinted() started.
+􀟈  Test openCodeAdapter_confirmYesFailedSpendDoesNotRunTool() started.
+􁁛  Test adapters_mapRvHookResultMatrix(host:kind:) with 6 test cases passed after 0.766 seconds.
+􀟈  Test cursorHookWire_resetHardIsPermissionDenyNotClaudeOrCodex() started.
+􀟈  Test antigravityDecode_notJSONIsUnreadable() started.
+􁁛  Test openClawEncodeDeny_matchesResetHardFixture() passed after 0.766 seconds.
+􀟈  Test hermesHostAskAdapter_confirmNoDoesNotSpend() started.
+􀟈  Test piAdapter_denyJSONDoesNotPause() started.
+􁁛  Test antigravityHookWire_resetHardIsDecisionDeny() passed after 0.779 seconds.
+􀟈  Test openClawDecode_codeModeExecIsForeign() started.
+􁁛  Test hostDenyText_switchesOnDecisionNotNilHeuristic() passed after 0.779 seconds.
+􀟈  Test openClawHostAskAdapter_denyJSONDoesNotPause() started.
+􁁛  Test piDecode_hostAskSpendIsSpendCase() passed after 0.779 seconds.
+􁁛  Test claudeDecode_malformedIsUnreadable() passed after 0.789 seconds.
+􀟈  Test hookWire_claudeFirstCallLeftoverAskStaysDeny() started.
+􀟈  Test grokEncodeDeny_matchesResetHardFixture() started.
+􀟈  Test multilineAndUnicodeCommands_extract() started.
+􀟈  Test openCodeDecode_emptySessionIsNil(_:) started.
+􀟈  Test notJSON_isUnreadable() started.
+􀟈  Test commandAsArray_isUnreadable() started.
+􀟈  Test grokEncodeDeny_typedRuleAndNextStaySlashAndExistingSentences() started.
+􀟈  Test canonicalEnvelopes_extractGitStatus() started.
+􁁛  Test grokDecode_bashEqualityUsesShellCase() passed after 0.831 seconds.
+􀟈  Test claudeDecode_readsCwdWhenPresent() started.
+􀟈  Test cmdAlias_isMissingCommand() started.
+􁁛  Test encodeRichDeny_claudeAllowIsIncompleteDeny() passed after 0.848 seconds.
+􁁛  Test proposedAction_hostFileRequest_isFileNotShell(host:fixture:kind:path:) with 3 test cases passed after 0.848 seconds.
+􀟈  Test bomPrefix_stillExtractsCommand() started.
+􀟈  Test hookWire_piFirstCallPackDenyWithoutCwdStaysDeny() started.
+􀟈  Test grokAndPiSnakeCase_areForeign() started.
+􀟈  Test whitespaceOnlyCommand_isExtracted() started.
+􀟈  Test hookWire_openClawMandatoryHumanEncodesAskNotAllow() started.
+􀟈  Test extraKeys_doNotBreakCanonicalDecode() started.
+􀟈  Test claudeEncodeRichDeny_resetHardIsOneShortLine() started.
+􀟈  Test openClawHostAskAdapter_confirmYesSpendsThenAllows() started.
+􀟈  Test case passing 2 arguments file → "allow-git-status.json", expected → "git status" to openClawDecode_extractsExecCommand(_:expected:) started.
+􀟈  Test case passing 2 arguments file → "deny-git-reset-hard.json", expected → "git reset --hard" to openClawDecode_extractsExecCommand(_:expected:) started.
+􀟈  Test hookWire_piCarriedMandatoryHumanAsksOnSpendFirstHost() started.
+􀟈  Test antigravityDecode_absolutePathIsFallbackPathKey() started.
+􀟈  Test openClawDecode_nonExecIsForeign() started.
+􀟈  Test case passing 2 arguments input → """, expected → "\"" to hostAdapter_manualEscape_pinsSpecVectors(input:expected:) started.
+􀟈  Test case passing 2 arguments input → "\", expected → "\\" to hostAdapter_manualEscape_pinsSpecVectors(input:expected:) started.
+􀟈  Test case passing 2 arguments input → "
+", expected → "\n" to hostAdapter_manualEscape_pinsSpecVectors(input:expected:) started.
+􀟈  Test case passing 2 arguments input → "", expected → "\r" to hostAdapter_manualEscape_pinsSpecVectors(input:expected:) started.
+􀟈  Test grokDecode_emptySessionIsNil() started.
+􀟈  Test case passing 2 arguments input → "	", expected → "\t" to hostAdapter_manualEscape_pinsSpecVectors(input:expected:) started.
+􀟈  Test case passing 2 arguments input → "", expected → "\b" to hostAdapter_manualEscape_pinsSpecVectors(input:expected:) started.
+􀟈  Test case passing 2 arguments input → "", expected → "\f" to hostAdapter_manualEscape_pinsSpecVectors(input:expected:) started.
+􀟈  Test case passing 2 arguments input → "􀟈  Test case passing 2 arguments input → "", expected → "\u0001" to hostAdapter_manualEscape_pinsSpecVectors(input:expected:) started.
+􀟈  Test case passing 2 arguments input → "", expected → "\u001B" to hostAdapter_manualEscape_pinsSpecVectors(input:expected:) started.
+􀟈  Test case passing 2 arguments input → "", expected → "\u001F" to hostAdapter_manualEscape_pinsSpecVectors(input:expected:) started.
+􀟈  Test case passing 2 arguments input → "", expected → "\u007F" to hostAdapter_manualEscape_pinsSpecVectors(input:expected:) started.
+􀟈  Test case passing 2 arguments input → "/opt/rv/bin/rv", expected → "/opt/rv/bin/rv" to hostAdapter_manualEscape_pinsSpecVectors(input:expected:) started.
+􀟈  Test case passing 2 arguments input → "plain", expected → "plain" to hostAdapter_manualEscape_pinsSpecVectors(input:expected:) started.
+􀟈  Test case passing 2 arguments input → "café 🪝", expected → "café 🪝" to hostAdapter_manualEscape_pinsSpecVectors(input:expected:) started.
+􀟈  Test case passing 2 arguments input → "/tmp/a"b\c
+d", expected → "/tmp/a\"b\\c\nd" to hostAdapter_manualEscape_pinsSpecVectors(input:expected:) started.
+􀟈  Test openClawEncodeAsk_sameAsHermes() started.
+􀟈  Test hookWire_samePathHosts_resetHardIsShortDeny(_:) started.
+􀟈  Test hermesDecode_extractsTerminalCommand(_:expected:) started.
+􀟈  Test openClawHostAskAdapter_abortedConfirmDoesNotSpend() started.
+􁁛  Test openCodeDecode_extractsBashCommand(_:expected:) with 2 test cases passed after 0.883 seconds.
+􀟈  Test piDecode_emptySessionIsNil() started.
+􁁛  Test hookWire_piFirstCallPackDenyAsksWhenSpendable() passed after 0.883 seconds.
+􀟈  Test openCodeAdapter_toastSplitsWrapperCommand() started.
+􁁛  Test hostAdapter_controlAndBackslashPath_roundTrips(host:) with 9 test cases passed after 0.883 seconds.
+􁁛  Test hookFileWire_usesEncodeFileDeny() passed after 0.883 seconds.
+􀟈  Test hookWire_mintedUnlockCodeOnClaudeCodexCursorDeny() started.
+􀟈  Test openCodeEncodeDeny_sameReasonAsPi() started.
+􀟈  Test hookWire_firstCallAllowIsWireEvenWhenEvaluateDenied() started.
+􀟈  Test case passing 2 arguments file → "allow-git-status.json", expected → "git status" to claudeDecode_extractsShellCommand(_:expected:) started.
+􀟈  Test case passing 2 arguments file → "deny-git-reset-hard.json", expected → "git reset --hard" to claudeDecode_extractsShellCommand(_:expected:) started.
+􀟈  Test openCodeDecode_emptyCommandIsMissingCommand() started.
+􀟈  Test openClawHostAskAdapter_sourceIsWaitThenSpendNeverRequireApproval() started.
+􁁛  Test grokDecode_missingCwdIsNil() passed after 0.884 seconds.
+􀟈  Test hermesDecode_notJSONIsUnreadable() started.
+􁁛  Test openCodeDecode_notJSONIsUnreadable() passed after 0.884 seconds.
+􁁛  Test hostAdapter_bakedRvPath_roundTripsAllResources(host:) with 9 test cases passed after 0.884 seconds.
+􀟈  Test openCodeTemplate_registersExecuteBeforeAndShellEnv() started.
+􀟈  Test piDecode_notJSONIsUnreadable() started.
+􀟈  Test codexDecode_turnIdWhenSessionIdMissing() started.
+􀟈  Test cursorWrapper_leftoverAskIsDenyNotPermit() started.
+􁁛  Test cursorDecode_readsCwdSessionAndProposedAction() passed after 0.884 seconds.
+􀟈  Test openClawHostAskAdapter_missingConfirmWithoutGatewayDoesNotSpend() started.
+􀟈  Test case passing 2 arguments file → "allow-git-status.json", expected → "git status" to openCodeFixture_decodesThenBridgesToAgentRequest(_:expected:) started.
+􀟈  Test case passing 2 arguments file → "deny-git-reset-hard.json", expected → "git reset --hard" to openCodeFixture_decodesThenBridgesToAgentRequest(_:expected:) started.
+􀟈  Test hookWire_openCodeCarriedMandatoryHumanAsksOnSpendFirstHost() started.
+􁁛  Test hookDispatch_shellResetHardStillEvaluates() passed after 0.886 seconds.
+􀟈  Test openCodeDecode_emptyCwdIsNil() started.
+􀟈  Test openCodeAdapter_confirmYesSpendsThenAllows() started.
+􀟈  Test piDecode_readsHostAskSpend() started.
+􀟈  Test cursorWrapper_preservesSplitUserAndAgentMessages() started.
+􀟈  Test canonicalRead_extractsPathOnFileHosts() started.
+􀟈  Test claudeDecode_emptyCommandIsMissingCommand() started.
+􀟈  Test fileToolKind_neverMapsGrepOrMCP() started.
+􀟈  Test codexTemplate_emitsOfficialBlockAndExitTwoNotClaudeDeny() started.
+􀟈  Test grokDecode_emptyCommandIsMissingCommand() started.
+􀟈  Test grokDecode_malformedIsUnreadable() started.
+􀟈  Test missingPath_isEmptyFileNotShell() started.
+􀟈  Test piTemplate_registersToolCallAndDisplayOnlyRenderer() started.
+􀟈  Test grepAndMCP_areForeignOnEveryHost() started.
+􁁛  Test hookWire_invalidUnlockCodeOmitsNext() passed after 0.887 seconds.
+􀟈  Test antigravityDecode_emptyCommandIsMissingCommand() started.
+􀟈  Test pathAsArray_isUnreadable() started.
+􀟈  Test hookWire_packAllowGitPushForceDoesNotAsk() started.
+􀟈  Test antigravityHonorPath_codexBlockExitTwoIsNotAntigravity() started.
+􀟈  Test codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_:) started.
+􀟈  Test extraKeys_doNotBreakFileDecode() started.
+􁁛  Test piEncodeAllow_isEmptyExitZero() passed after 0.887 seconds.
+􀟈  Test claudeEncodeRichDeny_matchesResetHardFixture() started.
+􀟈  Test hostDenyText_denyIsOneLineNoPanelNoCode() started.
+􀟈  Test cursorDecode_workspaceRootWhenCwdMissing() started.
+􀟈  Test openClawDecode_emptyCwdIsNil() started.
+􀟈  Test antigravityEncodeDeny_isDecisionDenyExitZero() started.
+􀟈  Test hermesHostAskAdapter_confirmYesSpendsThenAllows() started.
+􁁛  Test hookWire_unlockablePackDenyWithCwdEncodesAsk() passed after 0.896 seconds.
+􁁛  Test productionCodec_matchesPauseProfile(_:) with 9 test cases passed after 0.896 seconds.
+􀟈  Test hookWire_leftoverAskBoundDoesNotPermit() started.
+􀟈  Test hookWire_piBuiltinDenyWithoutBoundReviewStaysDeny() started.
+􀟈  Test openCodeAdapter_sessionShellEnvMissingCallIDDoesNotLastMatchAllow() started.
+􀟈  Test cursorWrapper_preToolUseForeignMissingRvAllows(_:) started.
+􀟈  Test grokDecode_oversizeExtractsFullCommand() started.
+􀟈  Test hostDenyText_indeterminateIsPlanSentence() started.
+􀟈  Test encodeFileDeny_leftoverCodecIsEncodeDeny() started.
+􁁛  Test cursorDecode_extractsBeforeShellCommand(_:expected:) with 2 test cases passed after 0.909 seconds.
+􀟈  Test case passing 1 argument stubStdout → "" to cursorWrapper_emptyOrWhitespaceStdoutExitZeroIsDenyNotAllow(_:) started.
+􀟈  Test case passing 1 argument stubStdout → "
+" to cursorWrapper_emptyOrWhitespaceStdoutExitZeroIsDenyNotAllow(_:) started.
+􀟈  Test case passing 1 argument stubStdout → "   
+" to cursorWrapper_emptyOrWhitespaceStdoutExitZeroIsDenyNotAllow(_:) started.
+􀟈  Test case passing 1 argument stubStdout → "	" to cursorWrapper_emptyOrWhitespaceStdoutExitZeroIsDenyNotAllow(_:) started.
+􁁛  Test cursorWrapper_missingRvDenies() passed after 0.997 seconds.
+􀟈  Test case passing 1 argument host → .grok to cannotPauseForcedAsk_doesNotEmitAskJSON(_:) started.
+􀟈  Test case passing 1 argument host → .pi to cannotPauseForcedAsk_doesNotEmitAskJSON(_:) started.
+􀟈  Test case passing 1 argument host → .opencode to cannotPauseForcedAsk_doesNotEmitAskJSON(_:) started.
+􀟈  Test case passing 1 argument host → .claude to cannotPauseForcedAsk_doesNotEmitAskJSON(_:) started.
+􀟈  Test case passing 1 argument host → .openclaw to cannotPauseForcedAsk_doesNotEmitAskJSON(_:) started.
+􀟈  Test case passing 1 argument host → .hermes to cannotPauseForcedAsk_doesNotEmitAskJSON(_:) started.
+􀟈  Test case passing 1 argument host → .codex to cannotPauseForcedAsk_doesNotEmitAskJSON(_:) started.
+􀟈  Test case passing 1 argument host → .cursor to cannotPauseForcedAsk_doesNotEmitAskJSON(_:) started.
+􀟈  Test case passing 1 argument host → .antigravity to cannotPauseForcedAsk_doesNotEmitAskJSON(_:) started.
+􀟈  Test case passing 1 argument tool → "Read" to cursorWrapper_preToolUseFileToolMissingRvDenies(_:) started.
+􀟈  Test case passing 1 argument tool → "Edit" to cursorWrapper_preToolUseFileToolMissingRvDenies(_:) started.
+􀟈  Test case passing 1 argument tool → "Write" to cursorWrapper_preToolUseFileToolMissingRvDenies(_:) started.
+􀟈  Test case passing 1 argument tool → "read_file" to cursorWrapper_preToolUseFileToolMissingRvDenies(_:) started.
+􀟈  Test case passing 1 argument tool → "edit_file" to cursorWrapper_preToolUseFileToolMissingRvDenies(_:) started.
+􀟈  Test case passing 1 argument tool → "write_file" to cursorWrapper_preToolUseFileToolMissingRvDenies(_:) started.
+􁁛  Test hookWire_piFirstCallPackAllowBindsAllow() passed after 1.062 seconds.
+􁁛  Test hermesDecode_emptyCommandIsMissingCommand() passed after 1.062 seconds.
+􁁛  Test cursorDecode_preToolUseReadSshIsCatalogPath() passed after 1.062 seconds.
+􀟈  Test case passing 1 argument host → .claude to hookWire_firstCallAllowCannotSkipPolicyGate(_:) started.
+􀟈  Test case passing 1 argument host → .grok to hookWire_firstCallAllowCannotSkipPolicyGate(_:) started.
+􁁛  Test grokDecode_readFileIsFileTool() passed after 1.107 seconds.
+􁁛  Test hookWire_denyAndIndeterminateCallEncodeDeny() passed after 1.107 seconds.
+􁁛  Test hermesDecode_emptyCwdIsNil() passed after 1.107 seconds.
+􁁛  Test cursorHonorPath_codexBlockExitTwoIsNotCursor() passed after 1.108 seconds.
+􁁛  Test hookDispatch_fileDenyVoiceDoesNotUseEmptyShellCommand() passed after 1.109 seconds.
+􁁛  Test codexHookWire_malformedDenies() passed after 1.109 seconds.
+􁁛  Test openClawEncodeAllow_isEmptyExitZero() passed after 1.110 seconds.
+􁁛  Test hermesHostAskAdapter_confirmTimeoutDoesNotSpend() passed after 1.152 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvUsesThisCallIDNotPriorAllow() passed after 1.152 seconds.
+􁁛  Test hermesHostAskAdapter_confirmYesMissingSpendDoesNotRunTool() passed after 1.152 seconds.
+􁁛  Test openClawHostAskAdapter_confirmYesMissingSpendDoesNotRunTool() passed after 1.153 seconds.
+􁁛  Test openCodeAdapter_sessionShellConfirmYesSpendsThenAllows() passed after 1.165 seconds.
+􁁛  Test cursorDecode_preToolUseGrepIsForeign() passed after 1.163 seconds.
+􁁛  Test hermesEncodeDeny_sameReasonAsPi() passed after 1.163 seconds.
+􁁛  Test openClawHostAskAdapter_confirmYesFailedSpendDoesNotRunTool() passed after 1.173 seconds.
+􀟈  Test case passing 1 argument tool → "view_file" to antigravityWrapper_fileToolMissingRvDenies(_:) started.
+􀟈  Test case passing 1 argument tool → "write_to_file" to antigravityWrapper_fileToolMissingRvDenies(_:) started.
+􀟈  Test case passing 1 argument tool → "replace_file_content" to antigravityWrapper_fileToolMissingRvDenies(_:) started.
+􀟈  Test case passing 1 argument tool → "multi_replace_file_content" to antigravityWrapper_fileToolMissingRvDenies(_:) started.
+􁁛  Test openCodeEncodeDeny_matchesResetHardFixture() passed after 1.202 seconds.
+􁁛  Test piAdapter_resetHardBlocksWithHostDenyText() passed after 1.205 seconds.
+􁁛  Test cursorDecode_notJSONIsUnreadable() passed after 1.202 seconds.
+􀟈  Test case passing 2 arguments stdin → "{"tool":"bash","sessionID":"sess_oc","args":{"command":"git status"}}", expected → "sess_oc" to openCodeDecode_readsSessionId(_:expected:) started.
+􀟈  Test case passing 2 arguments stdin → "{"tool":"bash","sessionId":"sess_oc","args":{"command":"git status"}}", expected → "sess_oc" to openCodeDecode_readsSessionId(_:expected:) started.
+􀟈  Test case passing 2 arguments stdin → "{"tool":"session.shell","sessionID":"sess_oc","args":{"command":"git status"}}", expected → "sess_oc" to openCodeDecode_readsSessionId(_:expected:) started.
+􁁛  Test openCodeAdapter_allowDoesNotToast() passed after 1.205 seconds.
+􁁛  Test codexEncodeDeny_isOfficialBlockAndExitTwo() passed after 1.202 seconds.
+􀟈  Test case passing 1 argument stubStdout → "{"decision":"block"}
+" to codexWrapper_missingReasonDoesNotExitTwoWithWhitespaceStderr(_:) started.
+􀟈  Test case passing 1 argument stubStdout → "{"decision":"block","reason":""}
+" to codexWrapper_missingReasonDoesNotExitTwoWithWhitespaceStderr(_:) started.
+􀟈  Test case passing 1 argument stubStdout → "{"decision":"block","reason":"\n"}
+" to codexWrapper_missingReasonDoesNotExitTwoWithWhitespaceStderr(_:) started.
+􁁛  Test piEncodeDeny_matchesResetHardFixture() passed after 1.217 seconds.
+􁁛  Test piDecode_readsCwd() passed after 1.218 seconds.
+􁁛  Test cursorDecode_preToolUseReadIsFileTool() passed after 1.218 seconds.
+􁁛  Test hookWire_openCodeMandatoryHumanEncodesAskNotAllow() passed after 1.217 seconds.
+􁁛  Test antigravityWrapper_missingRvDenies() passed after 1.220 seconds.
+􁁛  Test hermesEncodeDeny_matchesResetHardFixture() passed after 1.218 seconds.
+􁁛  Test hostDenyText_oneSentenceBuiltinStaysOneClause() passed after 1.219 seconds.
+􀟈  Test case passing 3 arguments file → "allow-non-shell-read.json", kind → .read, path → "/tmp/rv-hook-fixture/README.md" to claudeDecode_fileToolsExtractPath(_:kind:path:) started.
+􀟈  Test case passing 3 arguments file → "allow-non-shell-edit.json", kind → .edit, path → "/tmp/rv-hook-fixture/README.md" to claudeDecode_fileToolsExtractPath(_:kind:path:) started.
+􀟈  Test case passing 3 arguments file → "allow-non-shell-write.json", kind → .write, path → "/tmp/rv-hook-fixture/README.md" to claudeDecode_fileToolsExtractPath(_:kind:path:) started.
+􀟈  Test case passing 3 arguments file → "deny-file-env.json", kind → .read, path → "/tmp/rv-oracle/.env" to claudeDecode_fileToolsExtractPath(_:kind:path:) started.
+􁁛  Test piAdapter_nonBashDoesNotSpawn() passed after 1.221 seconds.
+􀟈  Test case passing 1 argument file → "ignore-passive-session-start.json" to grokDecode_otherToolOrEventIsForeign(_:) started.
+􁁛  Test hostDenyText_multilineCommand_previewsFirstLine() passed after 1.245 seconds.
+􀟈  Test missingRv_deniesWithDocumentedFieldsOnly() started.
+􀟈  Test confirmYesFailedSpend_deniesAndDoesNotForwardAsk() started.
+􀟈  Test fileToolDenyJSON_deniesWithoutConfirm(_:) started.
+􀟈  Test confirmYesSpendEmptyAllow_isEmptyStdoutExitZero() started.
+􀟈  Test firstCallEmptyAllow_isEmptyStdoutExitZero() started.
+􀟈  Test confirmYesSpendAskJSON_deniesAndDoesNotForwardAsk() started.
+􀟈  Test missingConfirm_deniesWithoutSpend() started.
+􀟈  Test template_bakesRvAndNeverEmitsPermissionDecisionAsk() started.
+􀟈  Test fileToolDecisionAsk_isDenyNotPermit() started.
+􀟈  Test confirmYesSpendEmptyAllow_askExitTwoStillConfirmsThenSpends() started.
+􀟈  Test fileToolMissingRv_denies(_:) started.
+􀟈  Test confirmNo_deniesWithoutSpend() started.
+􀟈  Test firstCallClaudeDeny_passesThroughWithoutConfirm() started.
+􀟈  Test fileToolLeftoverAsk_isDenyNotPermit() started.
+􀟈  Test firstCallProductionRichDeny_reencodesDocumentedKeysOnly() started.
+􀟈  Test leftoverPermissionDecisionAskFromRv_isNotForwarded() started.
+􀟈  Test foreignToolMissingRv_allows(_:) started.
+􀟈  Test confirmYesNonJSONSpend_denies() started.
+􁁛  Test claudeEncodeDeny_indeterminateUsesPlanSentence() passed after 1.245 seconds.
+􁁛  Test openCodeTuiPlugin_defaultExportsServerAndLoadsOnOpenCode11818() passed after 1.265 seconds.
+􁁛  Test openClawTemplate_registersBeforeToolCallExecAndBlocks() passed after 1.222 seconds.
+􁁛  Test claudeDecode_otherToolOrEventIsForeign(_:) with 1 test case passed after 1.222 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvPriorAllowLastMatchDoesNotPermitResetHard() passed after 1.265 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvOfficialFetchConfirmSpendsThenAllows() passed after 1.269 seconds.
+􁁛  Test openCodeAdapter_bashThenShellEnvDoesNotSilentAllowResetHard() passed after 1.269 seconds.
+􁁛  Test antigravityEncodeAllow_isExplicitDecisionAllowNotEmpty() passed after 1.193 seconds.
+􁁛  Test codexHonorPath_stdoutOnlyBlockWithoutStderrReasonIsNotEnough() passed after 1.193 seconds.
+􁁛  Test piAdapter_sendMessageThrowStillBlocks() passed after 1.270 seconds.
+􁁛  Test codexDecode_nonBashIsForeign() passed after 1.193 seconds.
+􁁛  Test hookMapper_doesNotDowncastHostAskCodec() passed after 1.193 seconds.
+􁁛  Test piAdapter_confirmYesFailedSpendDoesNotRunTool() passed after 1.305 seconds.
+􁁛  Test openClawHostAskAdapter_noRouteDoesNotSpend() passed after 1.259 seconds.
+􁁛  Test piEncodeAsk_isNotEmptyAllow() passed after 1.229 seconds.
+􀟈  Test case passing 2 arguments tool → "view_file", kind → .read to antigravityDecode_fileToolsAreFileDoor(_:kind:) started.
+􀟈  Test case passing 2 arguments tool → "write_to_file", kind → .write to antigravityDecode_fileToolsAreFileDoor(_:kind:) started.
+􀟈  Test case passing 2 arguments tool → "replace_file_content", kind → .edit to antigravityDecode_fileToolsAreFileDoor(_:kind:) started.
+􀟈  Test case passing 2 arguments tool → "multi_replace_file_content", kind → .edit to antigravityDecode_fileToolsAreFileDoor(_:kind:) started.
+􁁛  Test hookWire_afterFailedSpendStaysDeny() passed after 1.229 seconds.
+􁁛  Test hermesDecode_prefersWorkdirThenEnvelopeCwd() passed after 1.234 seconds.
+􀟈  Test case passing 2 arguments file → "allow-git-status.json", expected → "git status" to antigravityDecode_extractsRunCommand(_:expected:) started.
+􀟈  Test case passing 2 arguments file → "deny-git-reset-hard.json", expected → "git reset --hard" to antigravityDecode_extractsRunCommand(_:expected:) started.
+􁁛  Test hermesTemplate_registersPreToolCallTerminalAndBlocks() passed after 1.234 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvOfficialCreateHappensWhenSubscribeMissing() passed after 1.270 seconds.
+􁁛  Test openCodeAdapter_toastThrowStillBlocks() passed after 1.235 seconds.
+􁁛  Test hookWire_grokFirstCallPackDenyStaysDeny() passed after 1.230 seconds.
+􁁛  Test hermesEncodeAllow_isEmptyExitZero() passed after 1.230 seconds.
+􁁛  Test piDecode_spendWithoutCommandIsMissingCommand() passed after 1.230 seconds.
+􁁛  Test openClawHostAskAdapter_registersAskBudgetAboveDefaultToolHook() passed after 1.295 seconds.
+􁁛  Test claudeEncodeRichDeny_unmatchedDenyIsFailClosed() passed after 1.245 seconds.
+􁁛  Test hookWire_allowIsEmpty() passed after 1.245 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvResetHardThrows() passed after 1.293 seconds.
+􁁛  Test openCodeDecode_missingCwdIsNil() passed after 1.274 seconds.
+􁁛  Test openClawDecode_sessionKeyWhenSessionIdMissing() passed after 1.274 seconds.
+􁁛  Test encodeFileDeny_claudeMatchedDenyIsRichJSON() passed after 1.274 seconds.
+􁁛  Test hermesDecode_readsHostAskSpend() passed after 1.275 seconds.
+􁁛  Test hostDenyText_dropsThirdSentence() passed after 1.275 seconds.
+􀟈  Test case passing 1 argument stdin → "{"tool":"bash","sessionID":"","args":{"command":"git status"}}" to openCodeDecode_emptySessionIsNil(_:) started.
+􀟈  Test case passing 1 argument stdin → "{"tool":"bash","sessionId":"","args":{"command":"git status"}}" to openCodeDecode_emptySessionIsNil(_:) started.
+􁁛  Test openClawEncodeDeny_sameReasonAsPi() passed after 1.275 seconds.
+􁁛  Test piDecode_readsSessionId() passed after 1.275 seconds.
+􁁛  Test codexForcedAsk_failClosesToBlockNotLeftoverAsk() passed after 1.275 seconds.
+􁁛  Test cursorDecode_preToolUseReadWithoutPathIsFileToolNotForeign() passed after 1.275 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvOfficialCreateHappensWhenSubscribeThrows() passed after 1.294 seconds.
+􁁛  Test codexHookRequest_emptySessionStringIsNil() passed after 1.275 seconds.
+􁁛  Test cursorDecode_emptyCommandIsMissingCommand() passed after 1.275 seconds.
+􁁛  Test hookWire_claudeFirstCallMissingCwdStaysDeny() passed after 1.275 seconds.
+􁁛  Test hookVoiceNext_sentencesMatchExistingCopy() passed after 1.275 seconds.
+􁁛  Test openClawHostAskAdapter_gatewayThrowDoesNotSpend() passed after 1.293 seconds.
+􀟈  Test PendingHostAsk_openClawAskWithSessionRecordsBeforeEncodeAsk() started.
+􀟈  Test PendingHostAsk_spendClearsAfterSpendAllowAndDeny() started.
+􀟈  Test PendingHostAsk_createThrowStillEncodesAsk() started.
+􀟈  Test PendingHostAsk_piAskWithSessionRecordsBeforeEncodeAsk() started.
+􀟈  Test PendingHostAsk_spendClearsAnalyzedActionFromSpendResult() started.
+􀟈  Test PendingHostAsk_denyOrTTYNeverRecords(_:) started.
+􀟈  Test PendingHostAsk_clearThrowDoesNotChangeSpendWire() started.
+􀟈  Test PendingHostAsk_recordsHostDoorFingerprintAndAnalyzedPushEffects() started.
+􀟈  Test PendingHostAsk_missingSessionStillEncodesAskAndRecords() started.
+􁁛  Test cursorEncodeDeny_isOfficialPermissionDeny() passed after 1.275 seconds.
+􁁛  Test antigravityDecode_readsCwdSessionAndProposedAction() passed after 1.275 seconds.
+􁁛  Test hookWire_invalidUnlockCodePassesNone() passed after 1.275 seconds.
+􁁛  Test openCodeAdapter_nonBashDoesNotSpawn() passed after 1.275 seconds.
+􁁛  Test openClawDecode_readsCwdSessionAndProposedAction() passed after 1.275 seconds.
+􁁛  Test openClawDecode_extractsExecCommand(_:expected:) with 2 test cases passed after 1.278 seconds.
+􁁛  Test hostAdapter_manualEscape_pinsSpecVectors(input:expected:) with 16 test cases passed after 1.278 seconds.
+􀟈  Test case passing 1 argument host → .grok to hookWire_samePathHosts_resetHardIsShortDeny(_:) started.
+􀟈  Test case passing 1 argument host → .pi to hookWire_samePathHosts_resetHardIsShortDeny(_:) started.
+􀟈  Test case passing 1 argument host → .opencode to hookWire_samePathHosts_resetHardIsShortDeny(_:) started.
+􀟈  Test case passing 1 argument host → .openclaw to hookWire_samePathHosts_resetHardIsShortDeny(_:) started.
+􀟈  Test case passing 1 argument host → .hermes to hookWire_samePathHosts_resetHardIsShortDeny(_:) started.
+􀟈  Test case passing 1 argument host → .claude to hookWire_samePathHosts_resetHardIsShortDeny(_:) started.
+􀟈  Test case passing 1 argument host → .codex to hookWire_samePathHosts_resetHardIsShortDeny(_:) started.
+􀟈  Test case passing 1 argument host → .cursor to hookWire_samePathHosts_resetHardIsShortDeny(_:) started.
+􀟈  Test case passing 1 argument host → .antigravity to hookWire_samePathHosts_resetHardIsShortDeny(_:) started.
+􀟈  Test case passing 2 arguments file → "allow-git-status.json", expected → "git status" to hermesDecode_extractsTerminalCommand(_:expected:) started.
+􀟈  Test case passing 2 arguments file → "deny-git-reset-hard.json", expected → "git reset --hard" to hermesDecode_extractsTerminalCommand(_:expected:) started.
+􁁛  Test antigravityHookWire_malformedDenies() passed after 1.296 seconds.
+􁁛  Test hostAdapter_quotedPath_grokJSONIsValidAndBakesOriginalPath() passed after 1.299 seconds.
+􁁛  Test claudeDecode_extractsShellCommand(_:expected:) with 2 test cases passed after 1.299 seconds.
+􁁛  Test hookWire_claudeFirstCallPackDenyAsksWhenSpendable() passed after 1.301 seconds.
+􁁛  Test codexDecode_emptyCommandIsMissingCommand() passed after 1.300 seconds.
+􁁛  Test hookWire_askDoesNotCarryMintedCode() passed after 1.300 seconds.
+􁁛  Test openCodeSessionShell_bridgesToAgentRequest() passed after 1.319 seconds.
+􁁛  Test openCodeGitResetHard_composesToProposedAction() passed after 1.318 seconds.
+􁁛  Test cursorHookWire_malformedDenies() passed after 1.318 seconds.
+􁁛  Test openCodeFixture_decodesThenBridgesToAgentRequest(_:expected:) with 2 test cases passed after 1.324 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvOfficialConfirmRejectDoesNotAllow() passed after 1.325 seconds.
+􁁛  Test openCodeAdapter_confirmYesMissingSpendDoesNotRunTool() passed after 1.326 seconds.
+􁁛  Test openCodeHostAskSpend_doesNotBecomeAgentRequest() passed after 1.323 seconds.
+􁁛  Test antigravityHookWire_mandatoryHumanIsQuietAllow() passed after 1.323 seconds.
+􁁛  Test hookRequestFile_isUnsupportedKind() passed after 1.323 seconds.
+􁁛  Test openCodeNonShell_staysForeignWithoutAgentRequest() passed after 1.333 seconds.
+􁁛  Test antigravityDecode_viewFileIsFileTool() passed after 1.334 seconds.
+􁁛  Test hookRequestSpend_isUnsupportedKind() passed after 1.333 seconds.
+􁁛  Test grokEncodeDeny_reasonIsOneLine() passed after 1.336 seconds.
+􁁛  Test hostAdapter_openClawCompanions_areNonEmpty() passed after 1.337 seconds.
+􀟈  Test case passing 1 argument missing → "" to codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_:) started.
+􀟈  Test case passing 1 argument missing → "
+" to codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_:) started.
+􀟈  Test case passing 1 argument missing → " 
+" to codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_:) started.
+􀟈  Test case passing 1 argument missing → "
+
+" to codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_:) started.
+􀟈  Test case passing 1 argument missing → "   " to codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_:) started.
+􀟈  Test case passing 1 argument missing → "	" to codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_:) started.
+􁁛  Test hostDenyText_nilOnAllowIncludingMedium() passed after 1.336 seconds.
+􁁛  Test hostAdapter_quotedPath_piAndOpenCodeBakeOriginalPath() passed after 1.340 seconds.
+􁁛  Test antigravityWrapper_emptyOrAskStdoutIsDenyNotAllow(_:) with 5 test cases passed after 1.443 seconds.
+􁁛  Test claudeDecode_emptySessionIsNil() passed after 1.345 seconds.
+􁁛  Test grokTemplate_bakesRvPathWithoutMatcher() passed after 1.345 seconds.
+􁁛  Test hostFileDenyLine_doesNotPreviewEmptyShellCommand() passed after 1.346 seconds.
+􀟈  Test case passing 1 argument tool → "Grep" to cursorWrapper_preToolUseForeignMissingRvAllows(_:) started.
+􀟈  Test case passing 1 argument tool → "Glob" to cursorWrapper_preToolUseForeignMissingRvAllows(_:) started.
+􁁛  Test cursorDecode_emptyCwdIsNil() passed after 1.376 seconds.
+􁁛  Test encodeFileDeny_claudeUnmatchedAndIncompleteUseEncodeDeny() passed after 1.375 seconds.
+􁁛  Test hookDispatch_fileWinsOverSpendCallback() passed after 1.375 seconds.
+􁁛  Test hookDenyCommandPreview_clipsOverlongFirstLine() passed after 1.375 seconds.
+􁁛  Test unlockLine_usesMintedCodeAndHintOtherwise() passed after 1.375 seconds.
+􁁛  Test piEncodeDeny_indeterminateUsesPlanSentence() passed after 1.375 seconds.
+􁁛  Test openCodeAdapter_resolutionSpendsThenAllows() passed after 1.382 seconds.
+􁁛  Test cursorWrapper_preToolUseReadDenyIsPermissionDeny() passed after 1.436 seconds.
+􁁛  Test openCodeAdapter_denyJSONDoesNotPause() passed after 1.377 seconds.
+􁁛  Test claudeDecode_readToolIsFileWithoutEmptyCommand() passed after 1.375 seconds.
+􁁛  Test hookWire_claudeRichDenyUsesEncodeRichDeny() passed after 1.375 seconds.
+􁁛  Test piDecode_emptyCwdIsNil() passed after 1.374 seconds.
+􁁛  Test openCodeAdapter_sessionShellAskJSONDoesNotAllow() passed after 1.376 seconds.
+􁁛  Test hookDenyCommandPreview_shortCommandUnchanged() passed after 1.374 seconds.
+􁁛  Test openCodeDecode_readsCwd() passed after 1.374 seconds.
+􁁛  Test hookWire_cursorMandatoryHumanIsPermissionDenyNotAsk() passed after 1.374 seconds.
+􁁛  Test hookWire_firstCallIntentAskEncodesAskOnPackDeny() passed after 1.374 seconds.
+􁁛  Test cursorForcedAsk_failClosesToDenyNotLeftoverAsk() passed after 1.374 seconds.
+􁁛  Test hookWire_boundMandatoryHumanPiEncodesAsk() passed after 1.346 seconds.
+􁁛  Test hermesDecode_executeCodeIsForeign() passed after 1.346 seconds.
+􁁛  Test cursorTemplate_emitsOfficialPermissionDenyNotClaudeOrCodex() passed after 1.374 seconds.
+􁁛  Test openCodeAdapter_askJSONDoesNotAllow() passed after 1.376 seconds.
+􁁛  Test openCodeAdapter_hasUIFalseDoesNotSpend() passed after 1.484 seconds.
+􁁛  Test piAdapter_confirmYesMissingSpendDoesNotRunTool() passed after 1.377 seconds.
+􁁛  Test proposedAction_shellAndSpendKeepFingerprint() passed after 1.346 seconds.
+􁁛  Test cursorWrapper_codexBlockMapsToPermissionDeny() passed after 1.376 seconds.
+􁁛  Test cannotPauseForcedAsk_doesNotEmitAskJSON(_:) with 9 test cases passed after 1.346 seconds.
+􁁛  Test hookWire_mintedUnlockCodePassesTypedNext() passed after 1.346 seconds.
+􁁛  Test hermesDecode_taskIdWhenSessionIdMissing() passed after 1.346 seconds.
+􁁛  Test hookWire_boundMandatoryHumanClaudeEncodesAsk() passed after 1.346 seconds.
+􁁛  Test cursorWrapper_emptyOrWhitespaceStdoutExitZeroIsDenyNotAllow(_:) with 4 test cases passed after 1.375 seconds.
+􁁛  Test hermesHostAskAdapter_confirmYesFailedSpendDoesNotRunTool() passed after 1.377 seconds.
+􁁛  Test cursorWrapper_preToolUseFileToolMissingRvDenies(_:) with 6 test cases passed after 1.346 seconds.
+􁁛  Test hookDispatch_fileToolDoesNotCallPackEvaluate() passed after 1.346 seconds.
+􁁛  Test antigravityForcedAsk_failClosesToDenyNotAsk() passed after 1.346 seconds.
+􁁛  Test grokEncodeAllow_isEmptyExitZero() passed after 1.346 seconds.
+􁁛  Test cursorHookRequest_emptySessionStringIsNil() passed after 1.346 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvOfficialOnce204SpendsWhenGetStaysPending() passed after 1.484 seconds.
+􁁛  Test antigravityDecode_missingToolCallIsForeign() passed after 1.346 seconds.
+􁁛  Test openCodeDecode_sessionShellEmptyCommandIsMissingCommand() passed after 1.346 seconds.
+􁁛  Test hookWire_grokMandatoryHumanIsQuietAllow() passed after 0.962 seconds.
+􁁛  Test hookWire_claudeFirstCallSecretPathStaysDeny() passed after 0.962 seconds.
+􁁛  Test hookWire_convenienceIsFirstCallOnly() passed after 0.962 seconds.
+􁁛  Test antigravityHonorPath_claudePermissionDecisionIsNotAntigravity() passed after 0.962 seconds.
+􁁛  Test hookWire_claudeFirstCallEmptyMatchingViewStaysDeny() passed after 0.962 seconds.
+􁁛  Test grokDecode_readFileEnvIsCatalogPath() passed after 0.962 seconds.
+􁁛  Test cursorHookWire_mandatoryHumanIsQuietAllow() passed after 0.962 seconds.
+􁁛  Test hostDenyText_resetHardIsWhatAndWhy() passed after 0.962 seconds.
+􁁛  Test allowOnceUnlockCode_isSixLowercaseHex() passed after 0.962 seconds.
+􁁛  Test antigravityDecode_viewFileWithoutPathIsFileToolNotForeign() passed after 0.962 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvNonShellToolCommandIsNotAPermit() passed after 1.346 seconds.
+􁁛  Test hookWire_liveDenyCallsEncodeEvaluatedDeny() passed after 0.962 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvOfficialCreateAllowIsNotAPermit() passed after 1.346 seconds.
+􁁛  Test cursorDecode_prefersWorkingDirectoryThenCwdThenWorkspaceRoot() passed after 0.962 seconds.
+􁁛  Test hookWire_firstCallAllowCannotSkipPolicyGate(_:) with 2 test cases passed after 0.962 seconds.
+􁁛  Test grokDecode_acceptsBashToolName() passed after 0.962 seconds.
+􁁛  Test openClawHostAskAdapter_gatewayDenyDoesNotSpend() passed after 1.346 seconds.
+􁁛  Test hookWire_firstCallIntentAllowEncodesAllow() passed after 0.962 seconds.
+􁁛  Test antigravityDecode_otherToolIsForeign() passed after 0.961 seconds.
+􁁛  Test hookWire_packDoorPiDenyDoesNotEncodeAsk() passed after 0.961 seconds.
+􁁛  Test openCodeDecode_sessionShellExtractsCommand() passed after 0.961 seconds.
+􁁛  Test openCodeDecode_readsHostAskSpend() passed after 0.961 seconds.
+􁁛  Test openClawHostAskAdapter_gatewayTimeoutDoesNotSpend() passed after 1.346 seconds.
+􁁛  Test codexDecode_notJSONIsUnreadable() passed after 0.961 seconds.
+􁁛  Test hermesHostAskAdapter_sourceIsConfirmThenSpendNeverApprove() passed after 0.961 seconds.
+􁁛  Test hookWire_claudeAllowIsEmpty() passed after 0.961 seconds.
+􁁛  Test grokDecode_emptyCwdIsNil() passed after 0.961 seconds.
+􁁛  Test claudeEncodeRichDeny_neverEmitsPermissionAsk() passed after 0.961 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvAskDoesNotAllow() passed after 1.347 seconds.
+􁁛  Test antigravityTemplate_emitsDecisionDenyExitZeroNotClaudeOrCodex() passed after 0.961 seconds.
+􁁛  Test hookWire_denyAddsRuleAndNextWithoutBreakingDecisionReason() passed after 0.961 seconds.
+􁁛  Test antigravityWrapper_resetHardWritesDecisionDenyAndExitsZero() passed after 1.346 seconds.
+􁁛  Test cursorWrapper_resetHardWritesPermissionDenyAndExitsZero() passed after 1.383 seconds.
+􁁛  Test hermesDecode_nonTerminalIsForeign() passed after 0.960 seconds.
+􁁛  Test hookWire_spendIntentWithoutCallbackDenies() passed after 0.960 seconds.
+􁁛  Test hookWire_piMandatoryHumanEncodesAskNotAllow() passed after 0.960 seconds.
+􁁛  Test hookDispatch_emptyFilePathDeniesWithoutEvaluate() passed after 0.960 seconds.
+􁁛  Test encodeEvaluatedDeny_leftoverCodecIsEncodeDeny() passed after 0.949 seconds.
+􁁛  Test openCodeDecode_nonShellIsForeign() passed after 0.949 seconds.
+􁁛  Test piDecode_nonShellIsForeign() passed after 0.946 seconds.
+􁁛  Test openCodeAdapter_allowedBashDoesNotFailClosedOnFollowUpShellEnv() passed after 1.346 seconds.
+􁁛  Test cursorEncodeAllow_isOfficialPermissionAllowNotEmpty() passed after 0.940 seconds.
+􁁛  Test piAdapter_allowDoesNotPostDecisionCard() passed after 0.963 seconds.
+􁁛  Test hookWire_openCodeSpendIntentWithoutCallbackDenies() passed after 0.922 seconds.
+􁁛  Test hookWire_claudeFirstCallDeny_isRichJSONViaHostCodec() passed after 0.922 seconds.
+􁁛  Test piDecode_missingCwdIsNil() passed after 0.922 seconds.
+􁁛  Test encodeEvaluatedDeny_claudeAllowOrIncomplete_isIncompleteDeny() passed after 0.922 seconds.
+􁁛  Test grokDecode_readsSessionId() passed after 0.921 seconds.
+􁁛  Test hookDispatch_omittedEvaluateFileFailClosesIncomplete() passed after 0.921 seconds.
+􁁛  Test openClawDecode_readsHostAskSpend() passed after 0.921 seconds.
+􁁛  Test codexDecode_emptyCwdIsNil() passed after 0.921 seconds.
+􁁛  Test hookWire_openCodeSessionShellResetHardIsNotAllow() passed after 0.921 seconds.
+􁁛  Test hostAdapter_piAndOpenCode_matchOnlyTheirOwnRender() passed after 0.921 seconds.
+􁁛  Test proposedAction_fileIsNotEmptyCommandShell() passed after 0.921 seconds.
+􁁛  Test hostAdapter_matchesCurrent_acceptsAnyBakedPath() passed after 0.921 seconds.
+􁁛  Test hookWire_claudeIndeterminateOmitsPackFields() passed after 0.921 seconds.
+􁁛  Test codexDecode_prefersWorkdirThenEnvelopeCwd() passed after 0.921 seconds.
+􁁛  Test grokEncodeDeny_indeterminateUsesPlanSentence() passed after 0.921 seconds.
+􁁛  Test hookWire_grokUnlockableResetHardStaysDeny() passed after 0.921 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvFailedSpendDoesNotRunTool() passed after 0.963 seconds.
+􁁛  Test hermesHostAskAdapter_missingConfirmDoesNotSpend() passed after 0.962 seconds.
+􁁛  Test cursorWrapper_officialPermissionAllowStillAllows() passed after 0.962 seconds.
+􁁛  Test openClawHostAskAdapter_gatewayAllowAlwaysIsNotAPermit() passed after 0.962 seconds.
+􁁛  Test antigravityWrapper_fileToolMissingRvDenies(_:) with 4 test cases passed after 0.918 seconds.
+􁁛  Test openCodeDecode_readsSessionId(_:expected:) with 3 test cases passed after 0.915 seconds.
+􁁛  Test hookWire_claudeFirstCallMandatoryHumanEncodesAsk() passed after 0.915 seconds.
+􁁛  Test codexEncodeAllow_isEmptyExitZero() passed after 0.914 seconds.
+􁁛  Test openCodeAdapter_resetHardThrowsHostDenyText() passed after 0.962 seconds.
+􁁛  Test antigravityDecode_prefersCwdThenWorkspaceRoot() passed after 0.914 seconds.
+􁁛  Test openCodeAdapter_legacyClientToastsViaWrappedBody() passed after 0.962 seconds.
+􁁛  Test grokDecode_readsCwdWhenPresent() passed after 0.886 seconds.
+􁁛  Test piAdapter_hasUIFalseDoesNotSpend() passed after 0.962 seconds.
+􁁛  Test claudeDecode_readsSessionId() passed after 0.885 seconds.
+􁁛  Test grokDecode_otherToolOrEventIsForeign(_:) with 1 test case passed after 0.885 seconds.
+􁁛  Test claudeDecode_fileToolsExtractPath(_:kind:path:) with 4 test cases passed after 0.885 seconds.
+􁁛  Test openClawDecode_notJSONIsUnreadable() passed after 0.885 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvOfficialReject204StillThrows() passed after 0.961 seconds.
+􁁛  Test hermesDecode_readsCwdSessionAndProposedAction() passed after 0.885 seconds.
+􁁛  Test hookWire_claudeSpendIntentWithoutCallbackDenies() passed after 0.885 seconds.
+􁁛  Test codexHookWire_resetHardIsBlockNotClaudeDeny() passed after 0.885 seconds.
+􀟈  Test case passing 1 argument tool → "Read" to fileToolDenyJSON_deniesWithoutConfirm(_:) started.
+􀟈  Test case passing 1 argument tool → "Edit" to fileToolDenyJSON_deniesWithoutConfirm(_:) started.
+􀟈  Test case passing 1 argument tool → "Write" to fileToolDenyJSON_deniesWithoutConfirm(_:) started.
+􀟈  Test case passing 1 argument tool → "Read" to fileToolMissingRv_denies(_:) started.
+􀟈  Test case passing 1 argument tool → "Edit" to fileToolMissingRv_denies(_:) started.
+􀟈  Test case passing 1 argument tool → "Write" to fileToolMissingRv_denies(_:) started.
+􀟈  Test case passing 1 argument tool → "Grep" to foreignToolMissingRv_allows(_:) started.
+􀟈  Test case passing 1 argument tool → "Glob" to foreignToolMissingRv_allows(_:) started.
+􁁛  Test openCodeAdapter_sessionShellEnvOfficialConfirmSpendsThenAllows() passed after 1.408 seconds.
+􁁛  Test cursorDecode_preToolUseShellIsShell() passed after 1.332 seconds.
+􁁛  Test openCodeEncodeAsk_isNotEmptyAllow() passed after 1.332 seconds.
+􁁛  Test cursorDecode_generationIdWhenConversationIdMissing() passed after 1.332 seconds.
+􁁛  Test hookWire_piAndOpenCodeStayShortDeny() passed after 1.330 seconds.
+􁁛  Test cursorDecode_afterShellIsForeign() passed after 1.330 seconds.
+􁁛  Test openClawDecode_prefersWorkdirThenEnvelopeCwd() passed after 1.274 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvConfirmSpendsThenAllows() passed after 1.369 seconds.
+􁁛  Test openClawHostAskAdapter_confirmNoDoesNotSpend() passed after 1.369 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvOfficialOnce204SpendsWhenGet404s() passed after 1.388 seconds.
+􁁛  Test codexWrapper_missingReasonDoesNotExitTwoWithWhitespaceStderr(_:) with 3 test cases passed after 1.362 seconds.
+􁁛  Test hookWire_mintedUnlockCodeOnGrokDeny() passed after 1.244 seconds.
+􁁛  Test claudeEncodeAllow_isEmptyExitZero() passed after 1.192 seconds.
+􁁛  Test openClawDecode_emptyCommandIsMissingCommand() passed after 1.192 seconds.
+􁁛  Test antigravityDecode_fileToolsAreFileDoor(_:kind:) with 4 test cases passed after 1.192 seconds.
+􁁛  Test openCodeAdapter_sessionShellResetHardThrowsHostDenyText() passed after 1.366 seconds.
+􁁛  Test antigravityDecode_extractsRunCommand(_:expected:) with 2 test cases passed after 1.192 seconds.
+􁁛  Test claudeDecode_readsHostAskSpend() passed after 1.186 seconds.
+􁁛  Test hostDenyLine_appendsUnlockWhenCodeIsMinted() passed after 1.166 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvPriorGatedAllowDoesNotPermitNewCall() passed after 1.333 seconds.
+􁁛  Test cursorHookWire_resetHardIsPermissionDenyNotClaudeOrCodex() passed after 1.166 seconds.
+􁁛  Test antigravityDecode_notJSONIsUnreadable() passed after 1.166 seconds.
+􁁛  Test piAdapter_confirmYesSpendsThenAllows() passed after 1.334 seconds.
+􁁛  Test antigravityWrapper_foreignToolMissingRvAllows() passed after 1.192 seconds.
+􁁛  Test openClawDecode_codeModeExecIsForeign() passed after 1.153 seconds.
+􁁛  Test antigravityWrapper_allowIsExplicitDecisionAllow() passed after 1.274 seconds.
+􁁛  Test hookWire_claudeFirstCallLeftoverAskStaysDeny() passed after 1.143 seconds.
+􁁛  Test grokEncodeDeny_matchesResetHardFixture() passed after 1.143 seconds.
+􁁛  Test multilineAndUnicodeCommands_extract() passed after 1.143 seconds.
+􁁛  Test openCodeDecode_emptySessionIsNil(_:) with 2 test cases passed after 1.143 seconds.
+􁁛  Test notJSON_isUnreadable() passed after 1.143 seconds.
+􁁛  Test commandAsArray_isUnreadable() passed after 1.143 seconds.
+􁁛  Test grokEncodeDeny_typedRuleAndNextStaySlashAndExistingSentences() passed after 1.101 seconds.
+􁁛  Test canonicalEnvelopes_extractGitStatus() passed after 1.101 seconds.
+􁁛  Test claudeDecode_readsCwdWhenPresent() passed after 1.101 seconds.
+􁁛  Test cmdAlias_isMissingCommand() passed after 1.101 seconds.
+􀟈  Test case passing 1 argument host → .grok to PendingHostAsk_denyOrTTYNeverRecords(_:) started.
+􀟈  Test case passing 1 argument host → .codex to PendingHostAsk_denyOrTTYNeverRecords(_:) started.
+􀟈  Test case passing 1 argument host → .cursor to PendingHostAsk_denyOrTTYNeverRecords(_:) started.
+􁁛  Test bomPrefix_stillExtractsCommand() passed after 1.085 seconds.
+􁁛  Test hookWire_piFirstCallPackDenyWithoutCwdStaysDeny() passed after 1.084 seconds.
+􁁛  Test grokAndPiSnakeCase_areForeign() passed after 1.084 seconds.
+􁁛  Test whitespaceOnlyCommand_isExtracted() passed after 1.084 seconds.
+􁁛  Test hookWire_openClawMandatoryHumanEncodesAskNotAllow() passed after 1.084 seconds.
+􁁛  Test extraKeys_doNotBreakCanonicalDecode() passed after 1.051 seconds.
+􁁛  Test claudeEncodeRichDeny_resetHardIsOneShortLine() passed after 1.051 seconds.
+􁁛  Test openCodeAdapter_toastTimeoutStillBlocks() passed after 1.334 seconds.
+􁁛  Test hookWire_piCarriedMandatoryHumanAsksOnSpendFirstHost() passed after 1.051 seconds.
+􁁛  Test antigravityDecode_absolutePathIsFallbackPathKey() passed after 1.051 seconds.
+􁁛  Test openClawDecode_nonExecIsForeign() passed after 1.051 seconds.
+􁁛  Test grokDecode_emptySessionIsNil() passed after 1.051 seconds.
+􁁛  Test openClawEncodeAsk_sameAsHermes() passed after 1.050 seconds.
+􁁛  Test hookWire_samePathHosts_resetHardIsShortDeny(_:) with 9 test cases passed after 1.050 seconds.
+􁁛  Test hermesDecode_extractsTerminalCommand(_:expected:) with 2 test cases passed after 1.050 seconds.
+􁁛  Test openClawHostAskAdapter_gatewayAllowOnceSpendsThenAllows() passed after 1.252 seconds.
+􁁛  Test piDecode_emptySessionIsNil() passed after 1.050 seconds.
+􁁛  Test codexWrapper_resetHardWritesStderrReasonAndExitsTwo() passed after 1.251 seconds.
+􁁛  Test hookWire_mintedUnlockCodeOnClaudeCodexCursorDeny() passed after 1.050 seconds.
+􁁛  Test openCodeEncodeDeny_sameReasonAsPi() passed after 1.050 seconds.
+􁁛  Test hookWire_firstCallAllowIsWireEvenWhenEvaluateDenied() passed after 1.050 seconds.
+􁁛  Test openCodeDecode_emptyCommandIsMissingCommand() passed after 1.049 seconds.
+􁁛  Test openClawHostAskAdapter_sourceIsWaitThenSpendNeverRequireApproval() passed after 1.049 seconds.
+􁁛  Test hermesDecode_notJSONIsUnreadable() passed after 1.049 seconds.
+􁁛  Test openCodeTemplate_registersExecuteBeforeAndShellEnv() passed after 1.049 seconds.
+􁁛  Test piDecode_notJSONIsUnreadable() passed after 1.049 seconds.
+􁁛  Test codexDecode_turnIdWhenSessionIdMissing() passed after 1.049 seconds.
+􁁛  Test hermesHostAskAdapter_denyJSONDoesNotPause() passed after 1.193 seconds.
+􁁛  Test openCodeAdapter_sessionShellFailedSpendDoesNotRunTool() passed after 1.194 seconds.
+􁁛  Test hookWire_openCodeCarriedMandatoryHumanAsksOnSpendFirstHost() passed after 1.046 seconds.
+􁁛  Test openCodeDecode_emptyCwdIsNil() passed after 1.046 seconds.
+􁁛  Test openCodeAdapter_confirmYesFailedSpendDoesNotRunTool() passed after 1.167 seconds.
+􁁛  Test piDecode_readsHostAskSpend() passed after 1.046 seconds.
+􁁛  Test hermesHostAskAdapter_confirmNoDoesNotSpend() passed after 1.167 seconds.
+􁁛  Test canonicalRead_extractsPathOnFileHosts() passed after 1.046 seconds.
+􁁛  Test claudeDecode_emptyCommandIsMissingCommand() passed after 1.046 seconds.
+􁁛  Test fileToolKind_neverMapsGrepOrMCP() passed after 1.046 seconds.
+􁁛  Test codexTemplate_emitsOfficialBlockAndExitTwoNotClaudeDeny() passed after 1.046 seconds.
+􁁛  Test grokDecode_emptyCommandIsMissingCommand() passed after 1.046 seconds.
+􁁛  Test grokDecode_malformedIsUnreadable() passed after 1.046 seconds.
+􁁛  Test missingPath_isEmptyFileNotShell() passed after 1.046 seconds.
+􁁛  Test piTemplate_registersToolCallAndDisplayOnlyRenderer() passed after 1.046 seconds.
+􁁛  Test grepAndMCP_areForeignOnEveryHost() passed after 1.046 seconds.
+􁁛  Test antigravityDecode_emptyCommandIsMissingCommand() passed after 1.046 seconds.
+􁁛  Test pathAsArray_isUnreadable() passed after 1.046 seconds.
+􁁛  Test hookWire_packAllowGitPushForceDoesNotAsk() passed after 1.046 seconds.
+􁁛  Test antigravityHonorPath_codexBlockExitTwoIsNotAntigravity() passed after 1.046 seconds.
+􁁛  Test codexHonorPath_missingReasonExitTwoWithWhitespaceStderrIsNotEnough(_:) with 6 test cases passed after 1.046 seconds.
+􁁛  Test extraKeys_doNotBreakFileDecode() passed after 1.046 seconds.
+􁁛  Test claudeEncodeRichDeny_matchesResetHardFixture() passed after 1.046 seconds.
+􁁛  Test hostDenyText_denyIsOneLineNoPanelNoCode() passed after 1.046 seconds.
+􁁛  Test cursorDecode_workspaceRootWhenCwdMissing() passed after 1.040 seconds.
+􁁛  Test openClawDecode_emptyCwdIsNil() passed after 1.040 seconds.
+􁁛  Test antigravityEncodeDeny_isDecisionDenyExitZero() passed after 1.037 seconds.
+􁁛  Test piAdapter_denyJSONDoesNotPause() passed after 1.154 seconds.
+􁁛  Test hookWire_leftoverAskBoundDoesNotPermit() passed after 1.037 seconds.
+􁁛  Test hookWire_piBuiltinDenyWithoutBoundReviewStaysDeny() passed after 1.036 seconds.
+􁁛  Test openClawHostAskAdapter_denyJSONDoesNotPause() passed after 1.154 seconds.
+􁁛  Test adapters_startedRvTimeoutOrCrashBlocksWithRvFailed() passed after 1.276 seconds.
+􁁛  Test cursorWrapper_preToolUseForeignMissingRvAllows(_:) with 2 test cases passed after 1.025 seconds.
+􁁛  Test grokDecode_oversizeExtractsFullCommand() passed after 1.025 seconds.
+􁁛  Test hostDenyText_indeterminateIsPlanSentence() passed after 1.025 seconds.
+􁁛  Test encodeFileDeny_leftoverCodecIsEncodeDeny() passed after 1.025 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvMissingCallIDDoesNotLastMatchAllow() passed after 1.036 seconds.
+􁁛  Test openClawHostAskAdapter_abortedConfirmDoesNotSpend() passed after 1.051 seconds.
+􁁛  Test openClawHostAskAdapter_confirmYesSpendsThenAllows() passed after 1.052 seconds.
+􁁛  Test openCodeAdapter_toastSplitsWrapperCommand() passed after 1.051 seconds.
+􁁛  Test cursorWrapper_leftoverAskIsDenyNotPermit() passed after 1.050 seconds.
+􁁛  Test missingRv_deniesWithDocumentedFieldsOnly() passed after 0.684 seconds.
+􁁛  Test openClawHostAskAdapter_missingConfirmWithoutGatewayDoesNotSpend() passed after 1.048 seconds.
+􁁛  Test cursorWrapper_preservesSplitUserAndAgentMessages() passed after 1.047 seconds.
+􁁛  Test template_bakesRvAndNeverEmitsPermissionDecisionAsk() passed after 0.684 seconds.
+􁁛  Test openCodeAdapter_confirmYesSpendsThenAllows() passed after 1.047 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvOfficialMissingConfirmStillThrowsWhenSubscribeThrows() passed after 1.796 seconds.
+􁁛  Test hermesHostAskAdapter_confirmYesSpendsThenAllows() passed after 1.038 seconds.
+􁁛  Test adapters_honorDenyJSONRegardlessOfExitIncludingIndeterminate() passed after 1.334 seconds.
+􁁛  Test fileToolMissingRv_denies(_:) with 3 test cases passed after 0.684 seconds.
+􁁛  Test fileToolDenyJSON_deniesWithoutConfirm(_:) with 3 test cases passed after 0.684 seconds.
+􁁛  Test firstCallEmptyAllow_isEmptyStdoutExitZero() passed after 0.684 seconds.
+􁁛  Test missingConfirm_deniesWithoutSpend() passed after 0.684 seconds.
+􁁛  Test fileToolDecisionAsk_isDenyNotPermit() passed after 0.684 seconds.
+􁁛  Test PendingHostAsk_openClawAskWithSessionRecordsBeforeEncodeAsk() passed after 0.558 seconds.
+􁁛  Test PendingHostAsk_spendClearsAfterSpendAllowAndDeny() passed after 0.558 seconds.
+􁁛  Test PendingHostAsk_createThrowStillEncodesAsk() passed after 0.558 seconds.
+􁁛  Test PendingHostAsk_piAskWithSessionRecordsBeforeEncodeAsk() passed after 0.558 seconds.
+􁁛  Test PendingHostAsk_spendClearsAnalyzedActionFromSpendResult() passed after 0.558 seconds.
+􁁛  Test PendingHostAsk_denyOrTTYNeverRecords(_:) with 3 test cases passed after 0.558 seconds.
+􁁛  Test PendingHostAsk_clearThrowDoesNotChangeSpendWire() passed after 0.558 seconds.
+􁁛  Test PendingHostAsk_recordsHostDoorFingerprintAndAnalyzedPushEffects() passed after 0.558 seconds.
+􁁛  Test PendingHostAsk_missingSessionStillEncodesAskAndRecords() passed after 0.558 seconds.
+􁁛  Suite "OpenCode AgentRequest" passed after 1.935 seconds.
+􁁛  Suite "Host decode stress" passed after 1.935 seconds.
+􁁛  Suite "File-tool decode stress" passed after 1.935 seconds.
+􁁛  Suite "PendingHostAsk hook door" passed after 1.834 seconds.
+􁁛  Test confirmYesSpendEmptyAllow_isEmptyStdoutExitZero() passed after 0.687 seconds.
+􁁛  Test confirmYesFailedSpend_deniesAndDoesNotForwardAsk() passed after 0.688 seconds.
+􁁛  Test foreignToolMissingRv_allows(_:) with 2 test cases passed after 0.690 seconds.
+􁁛  Test confirmYesSpendAskJSON_deniesAndDoesNotForwardAsk() passed after 0.706 seconds.
+􁁛  Test confirmYesSpendEmptyAllow_askExitTwoStillConfirmsThenSpends() passed after 0.718 seconds.
+􁁛  Test firstCallClaudeDeny_passesThroughWithoutConfirm() passed after 0.746 seconds.
+􁁛  Test fileToolLeftoverAsk_isDenyNotPermit() passed after 0.747 seconds.
+􁁛  Test confirmNo_deniesWithoutSpend() passed after 0.747 seconds.
+􁁛  Test firstCallProductionRichDeny_reencodesDocumentedKeysOnly() passed after 0.785 seconds.
+􁁛  Test leftoverPermissionDecisionAskFromRv_isNotForwarded() passed after 0.785 seconds.
+􁁛  Test confirmYesNonJSONSpend_denies() passed after 0.829 seconds.
+􁁛  Suite ClaudeAdapterHookTests passed after 2.075 seconds.
+􁁛  Test openCodeAdapter_sessionShellEnvOfficialOnce204SpendsWhenSubscribeThrows() passed after 2.303 seconds.
+􁁛  Test run with 414 tests in 5 suites passed after 2.386 seconds.

@@ -11,6 +11,12 @@ struct KeychainReader: Sendable {
     var read: @Sendable (_ service: String, _ account: String) -> Data?
 
     static let live = KeychainReader(read: readKeychainItem)
+
+    /// Reads nothing. The identity launch path (prepare/dispatch/redeem)
+    /// forbids keychain entries by gate and additionally stages through
+    /// this reader, so no secret can reach a runtime even if a gate ever
+    /// regresses: staging fails closed, never to a live secret.
+    static let denied = KeychainReader(read: { _, _ in nil })
 }
 
 #if os(macOS)

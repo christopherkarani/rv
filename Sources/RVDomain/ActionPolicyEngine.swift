@@ -373,6 +373,17 @@ public enum ActionPolicyEngine: Sendable {
                 semanticallyCovered: true
             )
         }
+        if kinds.contains(.remoteBranchMutation) {
+            // Plain push: authority-expanding but not destructive. Ask on
+            // every target, including shared branches and unknown refs —
+            // there is no allow arm for remote mutation.
+            return CoreHit(
+                decision: .mandatoryHuman(Builtin.remoteBranchAsk),
+                ruleID: Builtin.remoteBranchAsk.ruleID,
+                reason: Builtin.remoteBranchAsk.reason,
+                semanticallyCovered: true
+            )
+        }
         if kinds.contains(.localBranchCreate) {
             return CoreHit(
                 decision: .hardAllow,
@@ -459,8 +470,8 @@ public enum ActionPolicyEngine: Sendable {
                 .filesystemModeChange, .filesystemCreate, .filesystemRead,
                 .outsideRepositoryMutation, .unresolvedFilesystem:
                 return true
-            case .remoteSharedBranchMutation, .localBranchCreate, .workingTreeDiscard,
-                .protectedPathMutation:
+            case .remoteSharedBranchMutation, .remoteBranchMutation, .localBranchCreate,
+                .workingTreeDiscard, .protectedPathMutation:
                 return false
             }
         })
@@ -472,8 +483,8 @@ public enum ActionPolicyEngine: Sendable {
             case .filesystemDelete, .filesystemMove, .filesystemOverwrite, .filesystemModeChange,
                 .filesystemCreate, .outsideRepositoryMutation:
                 return true
-            case .filesystemRead, .remoteSharedBranchMutation, .localBranchCreate,
-                .workingTreeDiscard, .protectedPathMutation, .unresolvedFilesystem:
+            case .filesystemRead, .remoteSharedBranchMutation, .remoteBranchMutation,
+                .localBranchCreate, .workingTreeDiscard, .protectedPathMutation, .unresolvedFilesystem:
                 return false
             }
         })
@@ -500,7 +511,12 @@ public enum ActionPolicyEngine: Sendable {
     }
 
     private static func semanticAction(of shell: ShellAction) -> SemanticAction? {
-        shell.analysis
+        switch shell {
+        case .effectOnly:
+            return nil
+        case .analyzed(let analyzed):
+            return analyzed.analysis
+        }
     }
 
     /// Restrict-only. Rank is deny > ask > allow, independent of list order.

@@ -27,24 +27,40 @@ enum ActionPolicyFixtures {
 
     static func forcePush(branchName: String = "main") -> ProposedAction {
         .shell(
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:origin:\(branchName)"),
+                    effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
+                    resources: ActionResources(remoteName: "origin", branchName: branchName),
+                    scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
+                    supportingCommand: ShellCommand(rawValue: "git push --force origin \(branchName)")
+                )
+            )
+        )
+    }
+
+    static func plainPush(branchName: String? = "topic") -> ProposedAction {
+        .shell(
             ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:origin:\(branchName)"),
-                effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
+                fingerprint: ActionFingerprint(rawValue: "shell:git.push:origin:\(branchName ?? "")"),
+                effects: ActionEffects(kinds: [.remoteBranchMutation]),
                 resources: ActionResources(remoteName: "origin", branchName: branchName),
                 scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
-                supportingCommand: ShellCommand(rawValue: "git push --force origin \(branchName)")
+                supportingCommand: ShellCommand(rawValue: "git push origin \(branchName ?? "")")
             )
         )
     }
 
     static func implicitForcePush() -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:implicit"),
-                effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                resources: ActionResources(remoteName: "origin"),
-                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
-                supportingCommand: ShellCommand(rawValue: "git push --force-with-lease")
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "shell:git.force-push:implicit"),
+                    effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
+                    resources: ActionResources(remoteName: "origin"),
+                    scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
+                    supportingCommand: ShellCommand(rawValue: "git push --force-with-lease")
+                )
             )
         )
     }
@@ -55,12 +71,14 @@ enum ActionPolicyFixtures {
         supportingCommand: String
     ) -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:git.checkout"),
-                effects: ActionEffects(kinds: effects),
-                resources: ActionResources(branchName: branchName),
-                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
-                supportingCommand: ShellCommand(rawValue: supportingCommand)
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "shell:git.checkout"),
+                    effects: ActionEffects(kinds: effects),
+                    resources: ActionResources(branchName: branchName),
+                    scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
+                    supportingCommand: ShellCommand(rawValue: supportingCommand)
+                )
             )
         )
     }
@@ -71,27 +89,31 @@ enum ActionPolicyFixtures {
         scope: FilesystemScope
     ) -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:fs.delete"),
-                effects: ActionEffects(kinds: effects),
-                resources: ActionResources(
-                    path: path,
-                    filesystemScope: scope,
-                    resourceKind: .unknown
-                ),
-                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
-                supportingCommand: ShellCommand(rawValue: "rm link")
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "shell:fs.delete"),
+                    effects: ActionEffects(kinds: effects),
+                    resources: ActionResources(
+                        path: path,
+                        filesystemScope: scope,
+                        resourceKind: .unknown
+                    ),
+                    scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
+                    supportingCommand: ShellCommand(rawValue: "rm link")
+                )
             )
         )
     }
 
     static func uncovered(supportingCommand: String) -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "shell:uncovered"),
-                effects: ActionEffects(),
-                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
-                supportingCommand: ShellCommand(rawValue: supportingCommand)
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "shell:uncovered"),
+                    effects: ActionEffects(),
+                    scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv")),
+                    supportingCommand: ShellCommand(rawValue: supportingCommand)
+                )
             )
         )
     }

@@ -2,7 +2,7 @@ import Foundation
 import RVDomain
 
 /// Adapter wire for OpenCode, not a host protocol.
-public struct OpenCodeHostCodec: HostAskCodec {
+public struct OpenCodeHostCodec: HostCodec {
     /// The OpenCode adapter host.
     public var host: HookHost { .opencode }
 
@@ -22,22 +22,16 @@ public struct OpenCodeHostCodec: HostAskCodec {
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionID, envelope.sessionId)
             .flatMap { SessionID(validating: $0) }
-        let hostAsk = envelope.hostAsk.flatMap(HostAskHookIntent.init(rawValue:))
         return HookRequest.decoded(
             host: .opencode,
             command: envelope.args?.command,
             cwd: cwd,
-            session: session,
-            hostAsk: hostAsk
+            session: session
         )
     }
 
     public func encodeDeny(reason: String, rule: RuleID? = nil, next: HookVoiceNext = .none) -> HookWire {
         encodeLeftoverDecisionDeny(reason: reason, rule: rule, next: next)
-    }
-
-    public func encodeAsk(reason: String, rule: RuleID? = nil, next: HookVoiceNext = .none) -> HookWire {
-        encodeLeftoverDecisionAsk(reason: reason, rule: rule, next: next)
     }
 }
 
@@ -50,7 +44,6 @@ private struct OpenCodeEnvelope: Decodable {
     var tool: String?
     var args: OpenCodeArgs?
     var cwd: String?
-    var hostAsk: String?
     var sessionID: String?
     var sessionId: String?
 }

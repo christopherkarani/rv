@@ -17,7 +17,7 @@ struct LinuxUnixSocketTests {
             command: ShellCommand(rawValue: "git reset --hard"),
             cwd: wd("/tmp/ws"),
             home: HomeDirectory(validating: try isolatedHomeDirectory().path),
-            store: AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory()),
+            grants: EphemeralAllowOnceTable(),
             now: Date(timeIntervalSince1970: 1_700_000_000),
             allowlist: { .empty }
         )
@@ -54,16 +54,14 @@ struct LinuxUnixSocketTests {
             IPCResponse.self,
             from: client.send(body: try IPCJSON.encode(resetHardRequest()))
         )
-        guard case .evaluate(let reply) = response.result else {
-            Issue.record("socket evaluate must return evaluate")
+        // Step 8B removed generic IPC evaluate: role-less socket peers can
+        // consult hooks but never evaluate (pinned by
+        // SocketPeerAuthorizationTests.socketPeerHasNoControlOrEvalAuthority).
+        guard case .error(let error) = response.result else {
+            Issue.record("socket evaluate must be refused, got \(response.result)")
             return
         }
-        #expect(reply.via == .service)
-        guard case .deny(let deny) = reply.result.decision else {
-            Issue.record("socket evaluate must deny reset-hard")
-            return
-        }
-        #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+        #expect(error == .authorizationDenied)
     }
 
     @Test func rvdSocketProcessDeniesResetHard() async throws {
@@ -103,15 +101,13 @@ struct LinuxUnixSocketTests {
             IPCResponse.self,
             from: client.send(body: try IPCJSON.encode(resetHardRequest()))
         )
-        guard case .evaluate(let reply) = response.result else {
-            Issue.record("rvd --socket evaluate must return evaluate")
+        // Step 8B removed generic IPC evaluate (see above): the daemon
+        // refuses with authorizationDenied instead of evaluating.
+        guard case .error(let error) = response.result else {
+            Issue.record("rvd --socket evaluate must be refused, got \(response.result)")
             return
         }
-        guard case .deny(let deny) = reply.result.decision else {
-            Issue.record("rvd --socket must deny reset-hard")
-            return
-        }
-        #expect(deny.ruleID.rawValue == "core.git:reset-hard")
+        #expect(error == .authorizationDenied)
         #expect(try UnixSocketPath.posixMode(of: socketURL) & 0o777 == 0o600)
         #expect(try UnixSocketPath.posixMode(of: xdg) & 0o777 == 0o700)
     }

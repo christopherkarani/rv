@@ -49,14 +49,15 @@ struct LiveEvaluateWorldTests {
     }
 
     @Test func applySpendsGrantOnce() async throws {
-        let store = try isolatedStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let world = try makeWorld(store: store, now: now)
+        let world = try makeWorld(grants: grants, now: now)
         let command = ShellCommand(rawValue: "git reset --hard")
-        try await store.insertGranted(
-            matchingView: "git reset --hard",
-            cwd: wd("/tmp/ws"),
-            now: now
+        #expect(
+            await grants.plant(
+                matchingView: "git reset --hard", cwd: wd("/tmp/ws"), codeHash: "live-apply",
+                now: now
+            ) == .planted
         )
 
         let first = await world.apply(command: command, cwd: wd("/tmp/ws"))
@@ -70,14 +71,15 @@ struct LiveEvaluateWorldTests {
     }
 
     @Test func peekDoesNotSpendGrant() async throws {
-        let store = try isolatedStore()
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let world = try makeWorld(store: store, now: now)
+        let world = try makeWorld(grants: grants, now: now)
         let command = ShellCommand(rawValue: "git reset --hard")
-        try await store.insertGranted(
-            matchingView: "git reset --hard",
-            cwd: wd("/tmp/ws"),
-            now: now
+        #expect(
+            await grants.plant(
+                matchingView: "git reset --hard", cwd: wd("/tmp/ws"), codeHash: "live-peek",
+                now: now
+            ) == .planted
         )
 
         let peeked = await world.peek(command: command, cwd: wd("/tmp/ws"))
@@ -94,16 +96,24 @@ struct LiveEvaluateWorldTests {
         }
     }
 
-    @Test func spendPlantsThenReplayDenies() async throws {
-        let store = try isolatedStore()
-        let world = try makeWorld(store: store)
+    @Test func plantedGrantAllowsOnceThenReplayDenies() async throws {
+        let grants = EphemeralAllowOnceTable()
+        let world = try makeWorld(grants: grants)
         let command = ShellCommand(rawValue: "git reset --hard")
+        #expect(
+            await grants.plant(
+                matchingView: MatchingView(command.rawValue),
+                cwd: wd("/tmp/ws"),
+                codeHash: "live-replay",
+                now: Date(timeIntervalSince1970: 1_700_000_000)
+            ) == .planted
+        )
 
-        let first = await world.spend(command: command, cwd: wd("/tmp/ws"))
+        let first = await world.apply(command: command, cwd: wd("/tmp/ws"))
         #expect(first.decision == .allow)
         let second = await world.apply(command: command, cwd: wd("/tmp/ws"))
         guard case .deny = second.decision else {
-            Issue.record("replay after host spend must deny")
+            Issue.record("replay after grant consume must deny")
             return
         }
     }
@@ -159,13 +169,15 @@ struct LiveEvaluateWorldTests {
 }
 
 private func makeWorld(
-    store: AllowOnceStore,
+    store: AllowOnceStore? = nil,
+    grants: EphemeralAllowOnceTable = EphemeralAllowOnceTable(),
     now: Date = Date(timeIntervalSince1970: 1_700_000_000),
     allowlist: (@Sendable (WorkingDirectory?, Date) -> AllowlistSnapshot)? = nil
 ) throws -> LiveEvaluateWorld {
     LiveEvaluateWorld(
         home: try isolatedHome(),
         store: store,
+        grants: grants,
         clock: { now },
         allowlist: allowlist
     )

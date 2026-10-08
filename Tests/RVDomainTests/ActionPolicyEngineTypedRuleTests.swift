@@ -137,12 +137,14 @@ struct ActionPolicyEngineTypedRuleTests {
             return
         }
         let stripped = ProposedAction.shell(
-            ShellAction(
-                fingerprint: shell.fingerprint,
-                effects: shell.effects,
-                resources: shell.resources,
-                scope: shell.scope,
-                supportingCommand: shell.supportingCommand
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: shell.fingerprint,
+                    effects: shell.effects,
+                    resources: shell.resources,
+                    scope: shell.scope,
+                    supportingCommand: shell.supportingCommand
+                )
             )
         )
         #expect(stripped.gitAction == nil)

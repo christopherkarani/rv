@@ -7,8 +7,8 @@ public func analyzeGit(
 ) -> SemanticAnalysis {
     let view = Normalize.matchingView(of: command.rawValue).rawValue
     if view.isEmpty { return .unknown }
-    if splitSegments(view).count > 1 { return .unknown }
-    let tokens = tokenizeCommand(view).map(\.decoded)
+    guard let single = singleEffectiveSegment(view) else { return .unknown }
+    let tokens = tokenizeCommand(single).map(\.decoded)
     guard let parsed = parseGitInvocation(tokens, context: context) else {
         return .unknown
     }
@@ -22,15 +22,29 @@ public func analyzeGit(
     analyzeGit(ExecutingCommand(rawValue: command.rawValue), context: context)
 }
 
+/// Parses every chain segment as a git invocation, in order. Unparseable
+/// (non-git, dynamic, unknown-syntax) segments are skipped: pack patterns
+/// still cover the full text, and the policy stage evaluates each parsed
+/// action. Used by the apply stage so a benign prefix cannot hide a risky
+/// later segment (Step 8B §24).
+func parseGitSegments(
+    _ view: String,
+    context: GitAnalysisContext
+) -> [GitAction] {
+    splitSegments(view).flatMap { splitSegments(ShellPipeline.stripLeadingAssignmentPrefixes($0)) }
+        .compactMap { segment in
+            parseGitInvocation(tokenizeCommand(segment).map(\.decoded), context: context)
+        }
+}
+
 private func parseGitInvocation(
     _ tokens: [String],
     context: GitAnalysisContext
 ) -> GitAction? {
-    guard let first = tokens.first, basename(first).lowercased() == "git" else {
+    guard let first = tokens.first,
+        unescapeBackslashPairs(basename(first)).lowercased() == "git"
+    else {
         return nil
-    }
-    for token in tokens {
-        if isDynamicToken(token) { return nil }
     }
 
     var index = 1
@@ -51,6 +65,24 @@ private func parseGitInvocation(
     guard index < tokens.count else { return nil }
     let subcommand = tokens[index].lowercased()
     let args = Array(tokens[(index + 1)...])
+    if subcommand == "push" {
+        // Push is authority-expanding with no allow arm: a recognized
+        // push verb that fails to parse fails closed as an unproven
+        // remote mutation (unknown flags, extra positionals, dynamic
+        // tokens, trailing words). Dry-run stays unparsed — preview
+        // sends nothing, so the pack floor governs (textual force
+        // patterns still deny).
+        if let push = parsePush(args, context: context) {
+            return push
+        }
+        if pushArgsAreDryRun(args) {
+            return nil
+        }
+        return .pushUnparsed(args: args)
+    }
+    for token in tokens {
+        if isDynamicToken(token) { return nil }
+    }
     switch subcommand {
     case "checkout":
         return parseCheckout(args)
@@ -62,8 +94,6 @@ private func parseGitInvocation(
         return parseReset(args)
     case "clean":
         return parseClean(args)
-    case "push":
-        return parsePush(args, context: context)
     case "branch":
         return parseBranch(args)
     case "tag":

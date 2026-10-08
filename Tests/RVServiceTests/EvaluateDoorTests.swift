@@ -6,18 +6,23 @@ import RVPolicy
 
 struct EvaluateDoorTests {
     @Test func runPeekDoesNotSpendGrantThenApplyDoes() async throws {
-        let store = try isolatedDoorStore()
+        let grants = EphemeralAllowOnceTable()
         let home = try isolatedHome()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let door = GatedEvaluate(EvaluateSession(enabledPacks: dayOnePackIDs))
         let command = ShellCommand(rawValue: "git reset --hard")
-        try await store.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"), now: now)
+        #expect(
+            await grants.plant(
+                matchingView: "git reset --hard", cwd: wd("/tmp/ws"), codeHash: "door-peek",
+                now: now
+            ) == .planted
+        )
 
         let peeked = await door.peek(
             command: command,
             cwd: wd("/tmp/ws"),
             home: home,
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { .empty }
         )
@@ -26,7 +31,7 @@ struct EvaluateDoorTests {
             command: command,
             cwd: wd("/tmp/ws"),
             home: home,
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { .empty }
         )
@@ -36,7 +41,7 @@ struct EvaluateDoorTests {
             command: command,
             cwd: wd("/tmp/ws"),
             home: home,
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { .empty }
         )
@@ -45,7 +50,7 @@ struct EvaluateDoorTests {
             command: command,
             cwd: wd("/tmp/ws"),
             home: home,
-            store: store,
+            grants: grants,
             now: now,
             allowlist: { .empty }
         )
@@ -75,10 +80,6 @@ private func isolatedHome() throws -> HomeDirectory {
         .appendingPathComponent("rv-door-home-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return try #require(HomeDirectory(validating: url.path))
-}
-
-private func isolatedDoorStore() throws -> AllowOnceStore {
-    AllowOnceStore(baseDirectory: try isolatedAllowOnceDirectory())
 }
 
 private func denyPayload(from decision: Decision) -> Deny? {

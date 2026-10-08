@@ -216,7 +216,10 @@ struct AgentRequestTests {
             Issue.record("expected ProposedAction.shell")
             return
         }
-        #expect(shell.analysis == nil)
+        guard case .effectOnly = shell else {
+            Issue.record("expected effect-only shell")
+            return
+        }
         #expect(shell.filesystemAction == nil)
     }
 
@@ -294,7 +297,10 @@ struct AgentRequestTests {
             Issue.record("expected hook pendingAction to remain a shell proposal")
             return
         }
-        #expect(shell.analysis == nil)
+        guard case .effectOnly = shell else {
+            Issue.record("expected hook pendingAction to remain effect-only")
+            return
+        }
     }
 }
 

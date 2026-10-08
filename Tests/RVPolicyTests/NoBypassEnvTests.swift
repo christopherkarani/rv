@@ -29,11 +29,7 @@ struct NoBypassEnvTests {
             }
         }
 
-        let store = AllowOnceStore(
-            baseDirectory: FileManager.default.temporaryDirectory
-                .appendingPathComponent("rv-nobypass-\(UUID().uuidString)", isDirectory: true)
-        )
-        try FileManager.default.createDirectory(at: store.baseDirectory, withIntermediateDirectories: true)
+        let grants = EphemeralAllowOnceTable()
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let denied = EvaluationResult(
             outcome: .deny(
@@ -45,7 +41,7 @@ struct NoBypassEnvTests {
             ),
             matchingView: "git reset --hard"
         )
-        let gated = await PolicyGate.consumingGrant(for: denied, cwd: wd("/tmp/a"), store: store, now: now)
+        let gated = await PolicyGate.consumingGrant(for: denied, cwd: wd("/tmp/a"), grants: grants, now: now)
         #expect(gated.override == .none)
         guard case .deny = gated.result.decision else {
             Issue.record("PolicyGate must still deny when skip-shaped envs are set")

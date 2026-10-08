@@ -23,6 +23,10 @@ func parsePush(_ argv: Argv, context: GitAnalysisContext) -> GitAction? {
             if force != .force { force = .forceWithLease }
         case .long("delete", nil):
             delete = true
+        case .long("dry-run", nil):
+            // Preview only: git sends nothing. Unparsed, so the pack floor
+            // governs (textual force patterns still deny).
+            return nil
         case .shorts(let letters, _):
             for letter in letters {
                 switch letter {
@@ -30,7 +34,9 @@ func parsePush(_ argv: Argv, context: GitAnalysisContext) -> GitAction? {
                     force = .force
                 case "d":
                     delete = true
-                case "u", "q", "v", "n":
+                case "n":
+                    return nil
+                case "u", "q", "v":
                     break
                 default:
                     return nil
@@ -63,9 +69,31 @@ func parsePush(_ argv: Argv, context: GitAnalysisContext) -> GitAction? {
 
 private let pushFlagValues = FlagValueSpec(valueLongs: ["repo"])
 
+/// True when push argv carries a dry-run marker under the SAME flag
+/// grammar `parsePush` uses (value consumption included, so
+/// `--repo -n` does not read `-n` as dry-run). Disambiguates
+/// `parsePush == nil` (preview → pack floor) from unparsed-push
+/// (fail closed). Matches `parsePush`'s two dry-run bail arms exactly.
+func pushArgsAreDryRun(_ args: [String]) -> Bool {
+    let argv = Argv(program: "git", args: args)
+    for token in ShellPipeline.scanFlags(argv, valueSpec: pushFlagValues) {
+        switch token {
+        case .long("dry-run", nil):
+            return true
+        case .shorts(let letters, _):
+            if letters.contains("n") {
+                return true
+            }
+        default:
+            break
+        }
+    }
+    return false
+}
+
 private let pushSkipLongs: Set<String> = [
     "set-upstream", "all", "mirror", "tags", "follow-tags",
-    "quiet", "verbose", "dry-run", "prune",
+    "quiet", "verbose", "prune",
     "no-verify", "verify", "atomic", "no-atomic",
     "progress", "no-progress", "ipv4", "ipv6",
 ]

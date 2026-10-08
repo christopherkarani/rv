@@ -7,6 +7,7 @@ import Foundation
 #if os(macOS)
 import Darwin
 import RVIsolation
+import RVService
 #endif
 
 @main
@@ -49,10 +50,25 @@ enum WorkspaceHostMain {
         resetHostSignalMask()
         signal(SIGHUP, SIG_IGN)
         signal(SIGPIPE, SIG_IGN)
+        let principalBridge = WorkspaceHostBridgeClient()
         Darwin.exit(
             WorkspaceHostProcess.run(
                 workspace: arguments[1],
-                admission: HostRuntimeAdmission.configuration()
+                admission: HostRuntimeAdmission.configuration(bridge: principalBridge),
+                principalBridge: { authority in
+                    Task {
+                        do { try await principalBridge.connect(authority) }
+                        catch {
+                            FileHandle.standardError.write(Data("rv-workspace-host: principal bridge unavailable\n".utf8))
+                        }
+                    }
+                },
+                prepareBridge: { handler in
+                    principalBridge.setPrepareHandler(handler)
+                },
+                redeemBridge: { handler in
+                    principalBridge.setRedeemHandler(handler)
+                }
             )
         )
         #endif

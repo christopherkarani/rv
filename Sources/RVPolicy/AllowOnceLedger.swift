@@ -1,6 +1,9 @@
 import Foundation
 import RVDomain
 
+/// Projection-ledger transitions. Expiry is fail-closed and harmonized
+/// codebase-wide: a record is live ⟺ `expiresAt > now`; `expiresAt == now`
+/// is already expired (no mint-reuse, no redeem, no display row).
 enum AllowOnceLedger {
     enum MintResult: Equatable, Sendable {
         case appended([AllowOnceRecord])
@@ -19,13 +22,6 @@ enum AllowOnceLedger {
         case expired(records: [AllowOnceRecord])
     }
 
-    enum ConsumeOutcome: Equatable, Sendable {
-        case consumed(tokenID: String, records: [AllowOnceRecord])
-        case expired([AllowOnceRecord])
-        case alreadyConsumed
-        case notFound
-    }
-
     static func mint(
         records: [AllowOnceRecord],
         codeHash: String,
@@ -34,15 +30,17 @@ enum AllowOnceLedger {
         cwd: WorkingDirectory,
         ruleID: RuleID?,
         now: Date,
-        ttl: TimeInterval
+        ttl: TimeInterval,
+        payloadDigest: String? = nil,
+        invocationDisplay: String? = nil
     ) throws(AllowOnceError) -> MintResult {
         let updated = prepare(records, now: now)
-        if existingPending(in: updated, fingerprint: fingerprint, cwd: cwd) != nil {
+        if existingPending(in: updated, fingerprint: fingerprint, cwd: cwd, payloadDigest: payloadDigest) != nil {
             return .reused(updated)
         }
         if updated.contains(where: { record in
             guard case .pending = record.lifecycle else { return false }
-            return record.codeHash == codeHash && record.expiresAt >= now
+            return record.codeHash == codeHash && record.expiresAt > now
         }) {
             throw AllowOnceError.collision
         }
@@ -57,7 +55,9 @@ enum AllowOnceLedger {
                 cwd: cwd,
                 ruleID: ruleID,
                 createdAt: now,
-                expiresAt: now.addingTimeInterval(ttl)
+                expiresAt: now.addingTimeInterval(ttl),
+                payloadDigest: payloadDigest,
+                invocationDisplay: invocationDisplay
             )
         )
         return .appended(appended)
@@ -69,7 +69,7 @@ enum AllowOnceLedger {
             case .consumed:
                 return true
             case .pending, .granted:
-                return record.expiresAt >= now
+                return record.expiresAt > now
             }
         }
     }
@@ -77,18 +77,44 @@ enum AllowOnceLedger {
     static func existingPending(
         in records: [AllowOnceRecord],
         fingerprint: String,
-        cwd: WorkingDirectory
+        cwd: WorkingDirectory,
+        payloadDigest: String? = nil
     ) -> AllowOnceRecord? {
         records.first { record in
             guard case .pending = record.lifecycle else { return false }
-            return record.commandFingerprint == fingerprint && record.cwd == cwd
+            // M1: the dedupe key covers the hidden payload. Same-view
+            // commands with different payloads mint separate rows and
+            // codes; otherwise the first writer's payload would win the
+            // shared row and steal the human's approval for an
+            // identical-looking victim row. Nil (legacy/no-text) rows
+            // reuse only with nil.
+            return record.commandFingerprint == fingerprint
+                && record.cwd == cwd
+                && record.payloadDigest == payloadDigest
+        }
+    }
+
+    /// Read-only lookup of a live pending row by code hash. Nil for unknown,
+    /// spent, or expired codes. Used to pre-display the grant in the redeem
+    /// ceremony (B-F6); granting still goes through `redeem`.
+    static func pendingRow(
+        in records: [AllowOnceRecord],
+        codeHash: String,
+        now: Date
+    ) -> AllowOnceRecord? {
+        records.first { record in
+            guard case .pending = record.lifecycle else { return false }
+            guard record.codeHash == codeHash else { return false }
+            return record.expiresAt > now
         }
     }
 
     static func redeem(
         records: [AllowOnceRecord],
         codeHash: String,
-        now: Date
+        now: Date,
+        expectedFingerprint: String? = nil,
+        expectedPayloadDigest: String? = nil
     ) throws(AllowOnceError) -> RedeemOutcome {
         guard let index = records.firstIndex(where: { record in
             guard case .pending = record.lifecycle else { return false }
@@ -107,10 +133,16 @@ enum AllowOnceLedger {
             throw AllowOnceError.unknownCode
         }
         var pending = records[index]
-        guard pending.expiresAt >= now else {
+        guard pending.expiresAt > now else {
             var updated = records
             updated.remove(at: index)
             return .expired(records: updated)
+        }
+        if let expectedFingerprint, pending.commandFingerprint != expectedFingerprint {
+            throw AllowOnceError.redemptionChanged
+        }
+        if let expectedPayloadDigest, pending.payloadDigest != expectedPayloadDigest {
+            throw AllowOnceError.redemptionChanged
         }
         pending.lifecycle = .granted
         var updated = records
@@ -118,83 +150,12 @@ enum AllowOnceLedger {
         updated.removeAll { record in
             switch record.lifecycle {
             case .pending, .granted:
-                return record.expiresAt < now
+                return record.expiresAt <= now
             case .consumed:
                 return false
             }
         }
         return .granted(records: updated, row: row(pending))
-    }
-
-    static func consume(
-        records: [AllowOnceRecord],
-        fingerprint: String,
-        cwd: WorkingDirectory,
-        now: Date
-    ) -> ConsumeOutcome {
-        let related = records.indices.filter {
-            records[$0].commandFingerprint == fingerprint && records[$0].cwd == cwd
-        }
-        if let index = related.first(where: { i in
-            guard case .granted = records[i].lifecycle else { return false }
-            return records[i].expiresAt >= now
-        }) {
-            var granted = records[index]
-            granted.lifecycle = .consumed(at: now)
-            var updated = records
-            updated[index] = granted
-            updated.removeAll { record in
-                guard case .granted = record.lifecycle else { return false }
-                return record.expiresAt < now
-            }
-            return .consumed(tokenID: granted.codeHash, records: updated)
-        }
-        let hadExpiredGrant = related.contains { i in
-            guard case .granted = records[i].lifecycle else { return false }
-            return records[i].expiresAt < now
-        }
-        if hadExpiredGrant {
-            var updated = records
-            updated.removeAll { record in
-                guard case .granted = record.lifecycle else { return false }
-                return record.expiresAt < now
-            }
-            return .expired(updated)
-        }
-        if related.contains(where: { i in
-            if case .consumed = records[i].lifecycle { return true }
-            return false
-        }) {
-            return .alreadyConsumed
-        }
-        return .notFound
-    }
-
-    /// Plant a granted row and consume it in one pass. Same-turn host Allow once.
-    static func plantAndConsume(
-        records: [AllowOnceRecord],
-        fingerprint: String,
-        redacted: String,
-        cwd: WorkingDirectory,
-        now: Date,
-        ttl: TimeInterval,
-        codeHash: String
-    ) -> ConsumeOutcome {
-        var updated = records
-        updated.append(
-            AllowOnceRecord(
-                schemaVersion: 1,
-                lifecycle: .granted,
-                codeHash: codeHash,
-                commandFingerprint: fingerprint,
-                commandRedacted: redacted,
-                cwd: cwd,
-                ruleID: nil,
-                createdAt: now,
-                expiresAt: now.addingTimeInterval(ttl)
-            )
-        )
-        return consume(records: updated, fingerprint: fingerprint, cwd: cwd, now: now)
     }
 
     static func rows(records: [AllowOnceRecord], now: Date) -> [AllowOnceListRow] {
@@ -203,7 +164,7 @@ enum AllowOnceLedger {
             case .consumed:
                 break
             case .pending, .granted:
-                guard record.expiresAt >= now else { return nil }
+                guard record.expiresAt > now else { return nil }
             }
             return row(record)
         }
@@ -212,8 +173,28 @@ enum AllowOnceLedger {
     static func keepConsumed(records: [AllowOnceRecord], now: Date) -> [AllowOnceRecord] {
         records.filter { record in
             guard case .consumed = record.lifecycle else { return false }
-            return record.expiresAt >= now
+            return record.expiresAt > now
         }
+    }
+
+    /// Hard row cap for the projection file. Under the cap the list passes
+    /// through untouched; over it the newest rows by creation survive and
+    /// the oldest are dropped. Newest-first keeps live ceremonies (just
+    /// minted) while shedding stale history: a dropped pending row fails
+    /// closed at redeem (`unknownCode`), and a same-user attacker flooding
+    /// rows can already delete the file outright. Callers apply this on
+    /// every write so the file can never grow past `maxRows`.
+    static func capped(
+        records: [AllowOnceRecord],
+        maxRows: Int
+    ) -> [AllowOnceRecord] {
+        guard records.count > maxRows else { return records }
+        return Array(
+            records
+                .sorted { $0.createdAt > $1.createdAt }
+                .prefix(maxRows)
+                .reversed()
+        )
     }
 
     private static func row(_ record: AllowOnceRecord) -> AllowOnceListRow {
@@ -223,7 +204,9 @@ enum AllowOnceLedger {
             commandRedacted: record.commandRedacted,
             cwd: record.cwd,
             createdAt: record.createdAt,
-            expiresAt: record.expiresAt
+            expiresAt: record.expiresAt,
+            ruleID: record.ruleID,
+            invocationDisplay: record.invocationDisplay
         )
     }
 }

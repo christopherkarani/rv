@@ -21,17 +21,52 @@ public enum HookVoiceNext: Sendable, Equatable {
 
 /// Returns the minted allow-once paste line for `code`.
 /// Code goes first so truncated host cards still show the paste.
+/// The grant binds the normalized command (sudo/env/path spellings share
+/// one grant, B-F2), so the copy must not promise exact-spelling binding.
 public func unlockLine(for code: AllowOnceUnlockCode) -> String {
-    "Paste in Terminal to allow once: rv allow-once \(code.rawValue). This unlocks only this exact command."
+    "Paste in Terminal to allow once: rv allow-once \(code.rawValue). This unlocks the reviewed command once, including its sudo, env, and path spellings."
 }
 
 /// Repeat deny of the same command+cwd. Do not mint a second code.
 public let earlierPendingUnlockLine =
-    "A one-shot unlock is already pending for this exact command. Paste the earlier rv allow-once code in Terminal."
+    "A one-shot unlock is already pending for this command. Paste the earlier rv allow-once code in Terminal."
 
 /// Cursor `agent_message` on deny. User paste stays in `user_message`.
 public let cursorAgentStopLine =
     "RV blocked this command. Do not retry. Do not rewrite the command. Wait for the human."
+
+/// Ask-denial suffix on every host. The policy verdict stays ASK; the wire
+/// renders deny-with-guidance because no host can pause for a human.
+/// One sentence: `hostDenyWhy` keeps sentence 1 + sentence 2 only.
+public let approvalPendingLine =
+    "This action requires human approval: open RV to approve it, then retry the exact command."
+
+/// Ask-denial suffix when the pending row could not be recorded (M-25).
+/// Promising RV approval then would be a lie — there is no row to approve —
+/// so the guidance routes to Terminal instead, where TTY redeem applies.
+public let approvalUnrecordedLine =
+    "This action requires human approval, but RV could not stage it for review. Run it in Terminal instead."
+
+/// Cursor `agent_message` on ask. Unlike a deny, the agent retries the
+/// exact command after the human approves it in RV.
+public let cursorAgentAskLine =
+    "RV blocked this command because it requires approval. Wait for the human to approve it in RV, then retry the exact command."
+
+/// Cursor `agent_message` when the pending row could not be recorded: no
+/// retry can succeed, so the agent waits instead of looping.
+public let cursorAgentAskUnrecordedLine =
+    "RV blocked this command because it requires approval, but RV could not stage it for review. Do not retry. Wait for the human."
+
+/// Ask-denial guidance for the record outcome: the approval-pending line
+/// when a row exists, the unrecorded line when recording failed.
+public func askPendingLine(recorded: Bool) -> String {
+    recorded ? approvalPendingLine : approvalUnrecordedLine
+}
+
+/// Cursor ask `agent_message` for the record outcome.
+public func cursorAgentAskMessage(recorded: Bool) -> String {
+    recorded ? cursorAgentAskLine : cursorAgentAskUnrecordedLine
+}
 
 func hookVoiceNextSentence(_ next: HookVoiceNext) -> String? {
     switch next {
@@ -115,11 +150,6 @@ public func hookDenyCommandPreview(_ command: ShellCommand) -> String {
         return clipped + "…"
     }
     return clipped
-}
-
-/// Ask JSON reason. Deny hook payload must not use this line.
-public func hostAskLine(command: ShellCommand, ruleID: RuleID) -> String {
-    "Blocked \(hookDenyCommandPreview(command)) (\(ruleID.slashDisplay)). \(ttyUnlockHint)"
 }
 
 /// Sentence 1 of `reason`, plus sentence 2 when it is a safe one-line tip.

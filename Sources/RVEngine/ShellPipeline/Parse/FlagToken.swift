@@ -39,7 +39,7 @@ public enum FlagToken: Sendable, Hashable {
     case dangling(flag: String)
 
     /// Structural classification of one argv word. Total: every string maps
-    /// to exactly one case, mirroring the `clusteredShorts` /
+    /// to exactly one case, mirroring the clustered-shorts /
     /// `hasPrefix("-")` split in the legacy per-command loops.
     public static func classify(_ word: String) -> FlagToken {
         if word == "--" { return .terminator }

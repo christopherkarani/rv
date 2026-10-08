@@ -1,18 +1,5 @@
 import Foundation
 
-/// Last-inch host JSON. `rule` is slash display; `next` is a voice sentence.
-/// Callers format `RuleID` / `HookVoiceNext` before this door.
-func hookAskJSON(reason: String, rule: String? = nil, next: String? = nil) -> String {
-    var body = "\"decision\":\"ask\",\"reason\":\(jsonQuoted(reason)),\"continuation\":\"hostNative\""
-    if let rule, rule.isEmpty == false {
-        body += ",\"rule\":\(jsonQuoted(rule))"
-    }
-    if let next, next.isEmpty == false {
-        body += ",\"next\":\(jsonQuoted(next))"
-    }
-    return "{\(body)}\n"
-}
-
 /// Official Antigravity honor path: explicit `decision: allow` + exit 0.
 /// Empty stdout fails protojson unmarshal and blocks, so allow is never empty.
 func hookDecisionAllowJSON() -> String {

@@ -93,6 +93,26 @@ enum RuntimeSessionLog {
         _ data: Data,
         to url: URL
     ) -> Result<Void, IsolationApplyError> {
+        guard
+            let result = withExclusiveFileLock(at: url, body: { locked in
+                appendLocked(data, to: locked)
+            })
+        else {
+            return .failure(.sessionRecordFailed)
+        }
+        return result
+    }
+
+    /// Runs `body` with cross-thread and cross-process exclusion for writers
+    /// of `url`. The lock lives on a `<name>.lock` sidecar so maintenance
+    /// can atomically replace the log: `body` opens the target only after
+    /// exclusion is held, so no append is lost to a rename, and lock-free
+    /// readers always see the old or the new file whole, never a partial
+    /// rewrite. Returns nil when the lock cannot be taken.
+    static func withExclusiveFileLock<T: Sendable>(
+        at url: URL,
+        body: (URL) -> T
+    ) -> T? {
         let directory = url.deletingLastPathComponent()
         do {
             try FileManager.default.createDirectory(
@@ -100,8 +120,32 @@ enum RuntimeSessionLog {
                 withIntermediateDirectories: true
             )
         } catch {
-            return .failure(.sessionRecordFailed)
+            return nil
         }
+        let lockURL = url.appendingPathExtension("lock")
+        let fd = lockURL.path.withCString { path in
+            open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        }
+        guard fd >= 0 else {
+            return nil
+        }
+        defer { close(fd) }
+        return AppendLock.shared.withLock {
+            guard lock(fd) else {
+                return nil
+            }
+            defer { _ = flock(fd, LOCK_UN) }
+            return body(url)
+        }
+    }
+
+    /// Runs under `withExclusiveFileLock`. Opens the target after exclusion
+    /// so a concurrent compaction rename cannot strand this append on a
+    /// replaced inode.
+    private static func appendLocked(
+        _ data: Data,
+        to url: URL
+    ) -> Result<Void, IsolationApplyError> {
         let fd = url.path.withCString { path in
             open(path, O_CREAT | O_APPEND | O_RDWR | O_CLOEXEC, 0o600)
         }
@@ -109,16 +153,10 @@ enum RuntimeSessionLog {
             return .failure(.sessionRecordFailed)
         }
         defer { close(fd) }
-        return AppendLock.shared.withLock {
-            guard lock(fd) else {
-                return .failure(.sessionRecordFailed)
-            }
-            defer { _ = flock(fd, LOCK_UN) }
-            guard closeTornLine(fd), writeAll(fd, data), sync(fd) else {
-                return .failure(.sessionRecordFailed)
-            }
-            return .success(())
+        guard closeTornLine(fd), writeAll(fd, data), sync(fd) else {
+            return .failure(.sessionRecordFailed)
         }
+        return .success(())
     }
 
     /// Threads in this process. macOS `flock` does not block them.

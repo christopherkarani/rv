@@ -13,14 +13,14 @@ struct RuntimeAdmissionTests {
         )
         var proposals = 0
         var binding: RuntimeChannelBinding? = fixture.binding
-        let decision = RuntimeAdmissionGate.submit(binding: &binding, frame: .failure(.malformed)) { _ in
+        let decision = RuntimeAdmissionGate.submitLegacy(binding: &binding, frame: .failure(.malformed)) { _ in
             proposals += 1
             return .failure(.failed)
         }
         _ = body
         let decoded = RuntimeAdmissionCodec.decodeRequest(body)
         #expect(decoded == .failure(.malformed) || decoded.isFailure)
-        let wired = RuntimeAdmissionGate.submit(binding: &binding, frame: decoded) { _ in
+        let wired = RuntimeAdmissionGate.submitLegacy(binding: &binding, frame: decoded) { _ in
             proposals += 1
             return .failure(.failed)
         }
@@ -37,7 +37,7 @@ struct RuntimeAdmissionTests {
         let fixture = AdmissionFixture()
         var binding: RuntimeChannelBinding?
         var proposed = false
-        let decision = RuntimeAdmissionGate.submit(
+        let decision = RuntimeAdmissionGate.submitLegacy(
             binding: &binding,
             frame: .success(fixture.frame(command: "touch marker"))
         ) { _ in
@@ -54,7 +54,7 @@ struct RuntimeAdmissionTests {
         let fixture = AdmissionFixture()
         var binding: RuntimeChannelBinding? = fixture.binding
         var proposed = false
-        let decision = RuntimeAdmissionGate.submit(
+        let decision = RuntimeAdmissionGate.submitLegacy(
             binding: &binding,
             frame: .success(fixture.frame(command: "touch marker", capability: RuntimeCapability()))
         ) { _ in
@@ -70,7 +70,7 @@ struct RuntimeAdmissionTests {
         let fixture = AdmissionFixture()
         let other = UUID()
         var binding: RuntimeChannelBinding? = fixture.binding
-        let decision = RuntimeAdmissionGate.submit(
+        let decision = RuntimeAdmissionGate.submitLegacy(
             binding: &binding,
             frame: .success(fixture.frame(command: "touch marker", claim: other))
         ) { _ in
@@ -84,7 +84,7 @@ struct RuntimeAdmissionTests {
     @Test func finishedBindingDoesNotAuthorize() {
         let fixture = AdmissionFixture()
         var binding: RuntimeChannelBinding? = fixture.binding.finished()
-        let decision = RuntimeAdmissionGate.submit(
+        let decision = RuntimeAdmissionGate.submitLegacy(
             binding: &binding,
             frame: .success(fixture.frame(command: "touch marker"))
         ) { _ in
@@ -98,14 +98,14 @@ struct RuntimeAdmissionTests {
         let fixture = AdmissionFixture()
         var binding: RuntimeChannelBinding? = fixture.binding
         let firstID = UUID()
-        let first = RuntimeAdmissionGate.submit(
+        let first = RuntimeAdmissionGate.submitLegacy(
             binding: &binding,
             frame: .success(fixture.frame(command: "touch marker", id: firstID))
         ) { _ in
             .success(fixture.inside)
         }
         #expect(first.execute != nil)
-        let replay = RuntimeAdmissionGate.submit(
+        let replay = RuntimeAdmissionGate.submitLegacy(
             binding: &binding,
             frame: .success(fixture.frame(command: "touch marker", id: firstID))
         ) { _ in
@@ -113,7 +113,7 @@ struct RuntimeAdmissionTests {
         }
         #expect(replay.execute == nil)
         #expect(replay.response == .rejected(.replay))
-        let sameCommand = RuntimeAdmissionGate.submit(
+        let sameCommand = RuntimeAdmissionGate.submitLegacy(
             binding: &binding,
             frame: .success(fixture.frame(command: "touch marker", id: UUID()))
         ) { _ in
@@ -126,7 +126,7 @@ struct RuntimeAdmissionTests {
     @Test func deniedProposalDoesNotExecute() {
         let fixture = AdmissionFixture()
         var binding: RuntimeChannelBinding? = fixture.binding
-        let decision = RuntimeAdmissionGate.submit(
+        let decision = RuntimeAdmissionGate.submitLegacy(
             binding: &binding,
             frame: .success(fixture.frame(command: "touch /tmp/outside"))
         ) { _ in
@@ -143,7 +143,7 @@ struct RuntimeAdmissionTests {
     @Test func pendingWithoutApprovalDoesNotExecute() {
         let fixture = AdmissionFixture()
         var binding: RuntimeChannelBinding? = fixture.binding
-        let decision = RuntimeAdmissionGate.submit(
+        let decision = RuntimeAdmissionGate.submitLegacy(
             binding: &binding,
             frame: .success(fixture.frame(command: "echo hello"))
         ) { _ in
@@ -157,20 +157,20 @@ struct RuntimeAdmissionTests {
     @Test func allowOnceApprovalCanExecuteAndChannelFailureCannot() {
         let fixture = AdmissionFixture()
         var binding: RuntimeChannelBinding? = fixture.binding
-        let allowed = RuntimeAdmissionGate.submit(
+        let allowed = RuntimeAdmissionGate.submitLegacy(
             binding: &binding,
             frame: .success(fixture.frame(command: "echo hello")),
-            approvalFor: { _ in .success(.allowOnce) }
+            approvalFor: { _, _ in .success(.allowOnce) }
         ) { _ in
             .success(fixture.uncovered)
         }
         #expect(allowed.execute != nil)
 
         var again: RuntimeChannelBinding? = fixture.binding
-        let refused = RuntimeAdmissionGate.submit(
+        let refused = RuntimeAdmissionGate.submitLegacy(
             binding: &again,
             frame: .success(fixture.frame(command: "echo hello")),
-            approvalFor: { _ in .failure(.approvalUnavailable) }
+            approvalFor: { _, _ in .failure(.approvalUnavailable) }
         ) { _ in
             .success(fixture.uncovered)
         }
@@ -178,10 +178,10 @@ struct RuntimeAdmissionTests {
         #expect(refused.response == .approvalUnavailable)
 
         var rule: RuntimeChannelBinding? = fixture.binding
-        let created = RuntimeAdmissionGate.submit(
+        let created = RuntimeAdmissionGate.submitLegacy(
             binding: &rule,
             frame: .success(fixture.frame(command: "echo hello")),
-            approvalFor: { _ in .success(.createRule) }
+            approvalFor: { _, _ in .success(.createRule) }
         ) { _ in
             .success(fixture.uncovered)
         }
@@ -192,7 +192,7 @@ struct RuntimeAdmissionTests {
     @Test func evaluationFailureDoesNotExecute() {
         let fixture = AdmissionFixture()
         var binding: RuntimeChannelBinding? = fixture.binding
-        let decision = RuntimeAdmissionGate.submit(
+        let decision = RuntimeAdmissionGate.submitLegacy(
             binding: &binding,
             frame: .success(fixture.frame(command: "python3 -c \"$CMD\""))
         ) { _ in
@@ -249,12 +249,14 @@ private struct AdmissionFixture {
             scope: .outsideRepository
         )
         uncovered = ProposedAction.shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: "runtime:uncovered"),
-                effects: ActionEffects(),
-                resources: ActionResources(),
-                scope: ActionScope(workingDirectory: workspace),
-                supportingCommand: ShellCommand(rawValue: "echo hello")
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: "runtime:uncovered"),
+                    effects: ActionEffects(),
+                    resources: ActionResources(),
+                    scope: ActionScope(workingDirectory: workspace),
+                    supportingCommand: ShellCommand(rawValue: "echo hello")
+                )
             )
         )
     }
@@ -288,13 +290,15 @@ private struct AdmissionFixture {
             kind: .unknown
         )
         return .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(
-                    rawValue: "runtime:\(session.id.rawValue.uuidString):\(workspace.rawValue):\(command)"
-                ),
-                scope: ActionScope(workingDirectory: workspace),
-                supportingCommand: ShellCommand(rawValue: command),
-                filesystemAction: .create(targets: [target])
+            ShellAction.analyzed(
+                AnalyzedShell(
+                    fingerprint: ActionFingerprint(
+                        rawValue: "runtime:\(session.id.rawValue.uuidString):\(workspace.rawValue):\(command)"
+                    ),
+                    scope: ActionScope(workingDirectory: workspace),
+                    supportingCommand: ShellCommand(rawValue: command),
+                    analysis: .filesystem(.create(targets: [target]))
+                )
             )
         )
     }

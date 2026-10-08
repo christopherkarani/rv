@@ -70,7 +70,7 @@ let coreLibraryTargets: [Target] = [
     .target(name: "RVFileStore"),
     .target(
         name: "RVIsolation",
-        dependencies: ["RVDomain", "RVPolicy"],
+        dependencies: ["RVDomain", "RVPolicy", "RVIPC"],
         // SwiftPM rejects mixed-language targets. The C shim is compiled
         // only into Linux `rv-isolation-exec`.
         exclude: [
@@ -178,12 +178,37 @@ let coreTestTargets: [Target] = [
 
 // P2 (OPE-261): RVService + rvd + RVServiceTests on the Linux graph.
 // P3 (OPE-262): RVCLI + rv + RVCLITests return. XPC stays #if canImport(XPC).
+// RVOperatorUI is SwiftUI/AppKit and ships only on macOS. The conditional
+// lets stay above their single use: manifest evaluation is order-sensitive.
+#if os(macOS)
+let macOSOperatorUITargets: [Target] = [
+    .target(
+        name: "RVOperatorUI",
+        dependencies: ["RVDomain", "RVIPC", "RVService"]
+    ),
+    .executableTarget(
+        name: "rv-operator-ui",
+        dependencies: ["RVOperatorUI"]
+    ),
+]
+let macOSOperatorUIProducts: [Product] = [
+    .library(name: "RVOperatorUI", targets: ["RVOperatorUI"]),
+    .executable(name: "rv-operator-ui", targets: ["rv-operator-ui"]),
+]
+let macOSOperatorUITestTargets: [Target] = [
+    .testTarget(name: "RVOperatorUITests", dependencies: ["RVOperatorUI", "RVIPC"]),
+]
+#else
+let macOSOperatorUITargets: [Target] = []
+let macOSOperatorUIProducts: [Product] = []
+let macOSOperatorUITestTargets: [Target] = []
+#endif
 let serviceLibraryAndDaemon: [Target] = [
     .target(
         name: "RVService",
         dependencies: [
             "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVHooks", "RVIPC", "RVHistory",
-            "RVAnalytics",
+            "RVAnalytics", "RVIsolation",
         ]
     ),
     .executableTarget(
@@ -192,17 +217,17 @@ let serviceLibraryAndDaemon: [Target] = [
     ),
     .executableTarget(
         name: "rv-workspace-host",
-        dependencies: ["RVIsolation", "RVEngine"]
+        dependencies: ["RVIsolation", "RVEngine", "RVService"]
     ),
-]
+] + macOSOperatorUITargets
 let serviceProducts: [Product] = [
     .library(name: "RVService", targets: ["RVService"]),
     .executable(name: "rvd", targets: ["rvd"]),
     .executable(name: "rv-workspace-host", targets: ["rv-workspace-host"]),
-]
+] + macOSOperatorUIProducts
 let serviceTestTargets: [Target] = [
     .testTarget(name: "RVServiceTests", dependencies: ["RVService", "RVAnalytics"]),
-]
+] + macOSOperatorUITestTargets
 
 let cliTargets: [Target] = [
     .target(

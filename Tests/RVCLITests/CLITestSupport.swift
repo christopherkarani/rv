@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import RVDomain
+import RVIPC
 import RVService
 import RVTheme
 import RVPolicy
@@ -97,6 +98,7 @@ func withCLIProcess<T>(
     workspacePath: String? = nil,
     stdoutFileDescriptor: Int32? = nil,
     stdinText: String? = nil,
+    ownerAuthOutcome: UIAuthenticationOutcome? = nil,
     _ body: () throws -> T
 ) throws -> T {
     let context = CLIProcess.Context(
@@ -106,7 +108,8 @@ func withCLIProcess<T>(
         stdoutIsTTY: stdoutIsTTY,
         stdoutFileDescriptor: stdoutFileDescriptor,
         workspacePath: workspacePath,
-        stdinText: stdinText
+        stdinText: stdinText,
+        ownerAuthOutcome: ownerAuthOutcome
     )
     return try CLIProcess.$context.withValue(context, operation: body)
 }
@@ -120,6 +123,7 @@ func withCLIProcess<T>(
     workspacePath: String? = nil,
     stdoutFileDescriptor: Int32? = nil,
     stdinText: String? = nil,
+    ownerAuthOutcome: UIAuthenticationOutcome? = nil,
     _ body: () async throws -> T
 ) async throws -> T {
     let context = CLIProcess.Context(
@@ -129,7 +133,8 @@ func withCLIProcess<T>(
         stdoutIsTTY: stdoutIsTTY,
         stdoutFileDescriptor: stdoutFileDescriptor,
         workspacePath: workspacePath,
-        stdinText: stdinText
+        stdinText: stdinText,
+        ownerAuthOutcome: ownerAuthOutcome
     )
     return try await CLIProcess.$context.withValue(context, operation: body)
 }

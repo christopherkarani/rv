@@ -230,7 +230,7 @@ extension ShellPipeline {
         guard let argv else {
             return .notWrapper
         }
-        let head = basename(argv.program).lowercased()
+        let head = unescapeBackslashPairs(basename(argv.program)).lowercased()
         if head == "timeout" {
             return peelTimeout(tokens, workingDirectory: workingDirectory)
         }
@@ -1147,7 +1147,7 @@ func peelExecutingSink(_ text: String, workingDirectory: WorkingDirectory?) -> P
 private func peelPayloadWrapper(_ consumer: String, cwd: WorkingDirectory?) -> Peel? {
     let tokens = ShellPipeline.tokenize(consumer)
     guard let first = tokens.first else { return nil }
-    let head = basename(first.lexeme).lowercased()
+    let head = unescapeBackslashPairs(basename(first.lexeme)).lowercased()
     guard let kind = sinkKind(head) else { return nil }
 
     switch kind {
@@ -1241,7 +1241,7 @@ private func peelStdinExecuting(
 ) -> Peel? {
     let tokens = ShellPipeline.tokenize(consumer)
     guard let first = tokens.first else { return nil }
-    let head = basename(first.lexeme).lowercased()
+    let head = unescapeBackslashPairs(basename(first.lexeme)).lowercased()
     guard let kind = sinkKind(head) else { return nil }
 
     let processSub = extractProcessSub(consumer)
@@ -1346,7 +1346,7 @@ private func programFromSource(_ source: String) -> String? {
 private func peelEchoPrintf(_ text: String) -> String? {
     let tokens = ShellPipeline.tokenize(text)
     guard let first = tokens.first else { return nil }
-    let head = basename(first.lexeme).lowercased()
+    let head = unescapeBackslashPairs(basename(first.lexeme)).lowercased()
     guard head == "echo" || head == "printf" else { return nil }
     var index = 1
     var args: [String] = []
@@ -1398,7 +1398,7 @@ private func lastExecutingSinkIndex(_ pipes: [String]) -> Int? {
 private func isDataConsumer(_ consumer: String) -> Bool {
     let tokens = ShellPipeline.tokenize(consumer)
     guard let first = tokens.first else { return false }
-    switch basename(first.lexeme).lowercased() {
+    switch unescapeBackslashPairs(basename(first.lexeme)).lowercased() {
     case "grep", "rg", "ripgrep", "wc", "tee", "sort", "uniq", "head", "tail", "less", "more", "cat":
         return true
     default:

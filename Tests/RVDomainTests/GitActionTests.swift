@@ -23,7 +23,7 @@ struct GitActionTests {
             refspec: "main",
             force: .force
         )
-        #expect(normal.effects.kinds.isEmpty)
+        #expect(normal.effects.kinds == [.remoteBranchMutation])
         #expect(forced.effects.kinds == [.remoteSharedBranchMutation])
         #expect(normal.effectScope == .remote)
         #expect(forced.effectScope == .remote)
@@ -80,6 +80,23 @@ struct GitActionTests {
         #expect(both.effectScope == .localWorkingTree)
         #expect(both.effects.kinds == [.workingTreeDiscard])
         #expect(both.explainAction == "working-tree overwrite/discard")
+    }
+
+    @Test func pushUnparsed_fingerprintHidesRawArgsAndSplitsBoundaries() {
+        func fingerprint(_ args: [String]) -> String {
+            GitAction.pushUnparsed(args: args).proposedAction(
+                command: ShellCommand(rawValue: "git push"),
+                workingDirectory: WorkingDirectory(validating: "/tmp/rv")
+            ).fingerprint.rawValue
+        }
+        let secret = "https://user:s3cret@example.com/repo.git"
+        let hashed = fingerprint(["origin", secret])
+        #expect(hashed.hasPrefix("shell:git.push:unparsed:"))
+        #expect(hashed.contains("s3cret") == false)
+        #expect(hashed.contains(secret) == false)
+        // Join-sensitive: ["a b"] and ["a", "b"] must not collide.
+        #expect(fingerprint(["a b"]) != fingerprint(["a", "b"]))
+        #expect(fingerprint(["a", "b"]) == fingerprint(["a", "b"]))
     }
 
     @Test func deleteBranch_isLocalRefWithoutRemoteFlag() {

@@ -34,7 +34,7 @@ struct HTTPTransportConfiguration: Equatable {
     var minimumTLS12: Bool
     var alpn: [String]
     var serverName: String
-    var peer: String
+    var peer: HTTPIPAddress
     var port: Int
     var usesURLSession: Bool
     var sendsAmbientCredentials: Bool
@@ -52,7 +52,7 @@ enum DirectHTTPConnection {
             minimumTLS12: true,
             alpn: ["http/1.1"],
             serverName: serverName,
-            peer: address.presentation,
+            peer: address,
             port: port,
             usesURLSession: false,
             sendsAmbientCredentials: false

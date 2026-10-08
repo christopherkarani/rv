@@ -43,7 +43,7 @@ WARNINGS=0
 print_list() {
   cat <<'EOF'
 Available checks:
-  value-types           No class/actor outside RVService/RVWorkspaceTUI/RVPolicy/RVAnalytics/RVIsolation
+  value-types           No class/actor outside service/TUI/policy/analytics/isolation/operatorUI
   no-isdenied           No boolean isDenied anywhere in Sources
   no-force-unwrap       No try! or force-unwrap (!) on production paths
   no-force-cast         No as! on production paths
@@ -101,7 +101,8 @@ check_empty() {
 
 check_value_types() {
   # Reference types (class, actor) outside the allowed edges.
-  #   class  — RVService (XPC/NSObject) and RVWorkspaceTUI (framework/session adapters).
+  #   class  — RVService (XPC/NSObject) and RVWorkspaceTUI/RVOperatorUI
+  #            (framework/session adapters).
   #   actor  — RVService, RVPolicy, RVAnalytics, and RVIsolation (LocalExecutor).
   #            Domain/Engine/Packs/Presentation remain value-only.
   # A leading attribute (@MainActor, @objc, @unchecked Sendable, …) or access
@@ -111,11 +112,12 @@ check_value_types() {
   local matches
   matches=$(grep -rnE "$pat" "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/RVService/' | grep -v 'Sources/RVPolicy/' | grep -v 'Sources/RVAnalytics/' \
-    | grep -v 'Sources/RVIsolation/' | grep -v 'Sources/RVWorkspaceTUI/' || true)
+    | grep -v 'Sources/RVIsolation/' | grep -v 'Sources/RVWorkspaceTUI/' \
+    | grep -v 'Sources/RVOperatorUI/' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -eq 0 ]; then
-    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "No class/actor outside RVService/RVWorkspaceTUI/RVPolicy/RVAnalytics/RVIsolation"; fi
+    if [ "$QUIET" -eq 0 ]; then printf "  %b✓%b %s\n" "$GREEN" "$NC" "No class/actor outside service/TUI/policy/analytics/isolation/operatorUI"; fi
     return 0
   else
     printf "  %b✗ class/actor outside RVService/RVWorkspaceTUI/RVPolicy/RVAnalytics/RVIsolation%b (%d)\n" "$RED" "$NC" "$count"
@@ -361,7 +363,8 @@ check_no_main_in_library() {
   local matches
   matches=$(find "$SOURCES" -name 'main.swift' \
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
-    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' || true)
+    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' \
+    | grep -v 'Sources/rv-operator-ui/' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -gt 0 ]; then
@@ -375,7 +378,8 @@ check_no_main_in_library() {
   local amatches
   amatches=$(grep -rn '@main' "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
-    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' || true)
+    | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' \
+    | grep -v 'Sources/rv-operator-ui/' || true)
   local acount
   acount=$(echo "$amatches" | grep -c . || true)
   if [ "$acount" -gt 0 ]; then

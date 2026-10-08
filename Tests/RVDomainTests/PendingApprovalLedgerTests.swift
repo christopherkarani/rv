@@ -20,7 +20,6 @@ struct PendingApprovalLedgerTests {
         #expect(record.state == .awaitingHuman)
         #expect(record.consumedAt == nil)
         #expect(record.expiresAt == Self.now.addingTimeInterval(60))
-        #expect(record.authorizes(Self.fingerprint, identity: Self.identity) == false)
     }
 
     @Test func duplicateResolveIsRejected() throws {
@@ -50,9 +49,11 @@ struct PendingApprovalLedgerTests {
         }
     }
 
-    @Test func consumeDeliversResolutionExactlyOnce() throws {
+    @Test func nameOnlyConsumeCannotDeliverAuthorizingResolution() throws {
+        // Step 8: the name-only ledger API has no live principal or owner
+        // proof, so it can deliver a deny but never executable authority.
         let created = try Self.created()
-        let (_, resolved) = try PendingApprovalLedger.resolve(
+        let (resolved, afterResolve) = try PendingApprovalLedger.resolve(
             records: created.records,
             id: created.record.id,
             decision: .allowOnce,
@@ -60,41 +61,29 @@ struct PendingApprovalLedgerTests {
             identity: Self.identity,
             now: Self.now
         )
-        let (first, afterFirst) = try PendingApprovalLedger.consume(
-            records: resolved,
-            id: created.record.id,
-            fingerprint: Self.fingerprint,
-            identity: Self.identity,
-            now: Self.now
+        guard case .resolved = resolved.state else {
+            Issue.record("resolve must still record the decision")
+            return
+        }
+        #expect(throws: PendingApprovalError.invalidRequest) {
+            _ = try PendingApprovalLedger.consume(
+                records: afterResolve,
+                id: created.record.id,
+                fingerprint: Self.fingerprint,
+                identity: Self.identity,
+                now: Self.now
+            )
+        }
+        // The refused consume leaves the record resolved, never folded
+        // into a consumed authority.
+        let (record, _) = try PendingApprovalLedger.record(
+            in: afterResolve, id: created.record.id, now: Self.now
         )
-        #expect(first.decision == .allowOnce)
-        guard case .consumed(let resolution, let at) = first.approval.state else {
-            Issue.record("consume must fold into PendingApprovalState.consumed")
+        guard case .resolved(let resolution) = record.state else {
+            Issue.record("refused consume must leave .resolved")
             return
         }
         #expect(resolution.decision == .allowOnce)
-        #expect(at == Self.now)
-        #expect(first.approval.consumedAt == at)
-        #expect(first.approval.authorizes(Self.fingerprint, identity: Self.identity) == false)
-        #expect(throws: PendingApprovalError.alreadyConsumed) {
-            _ = try PendingApprovalLedger.consume(
-                records: afterFirst,
-                id: created.record.id,
-                fingerprint: Self.fingerprint,
-                identity: Self.identity,
-                now: Self.now
-            )
-        }
-        #expect(throws: PendingApprovalError.alreadyConsumed) {
-            _ = try PendingApprovalLedger.resolve(
-                records: afterFirst,
-                id: created.record.id,
-                decision: .allowOnce,
-                fingerprint: Self.fingerprint,
-                identity: Self.identity,
-                now: Self.now
-            )
-        }
     }
 
     @Test func denyIsDeliveredOnceAndNeverAuthorizes() throws {
@@ -107,7 +96,6 @@ struct PendingApprovalLedgerTests {
             identity: Self.identity,
             now: Self.now
         )
-        #expect(created.record.authorizes(Self.fingerprint, identity: Self.identity) == false)
         let (consumption, after) = try PendingApprovalLedger.consume(
             records: resolved,
             id: created.record.id,
@@ -122,7 +110,6 @@ struct PendingApprovalLedgerTests {
             return
         }
         #expect(resolution.decision == .deny)
-        #expect(consumption.approval.authorizes(Self.fingerprint, identity: Self.identity) == false)
         #expect(throws: PendingApprovalError.alreadyConsumed) {
             _ = try PendingApprovalLedger.consume(
                 records: after,
@@ -164,7 +151,6 @@ struct PendingApprovalLedgerTests {
                 now: Self.now
             )
         }
-        #expect(resolved[0].authorizes(other, identity: Self.identity) == false)
     }
 
     @Test func approvalForOneFingerprintCannotAuthorizeASiblingAction() throws {
@@ -206,7 +192,10 @@ struct PendingApprovalLedgerTests {
         }
     }
 
-    @Test func replayedIdenticalActionCannotBeConsumedTwice() throws {
+    @Test func replayedIdenticalActionCanNeverBeConsumedByName() throws {
+        // Step 8: an authorizing name-only resolution is refused on every
+        // consume attempt — first and replay alike — so no replay can
+        // mint authority the first attempt could not.
         let created = try Self.created()
         let (_, resolved) = try PendingApprovalLedger.resolve(
             records: created.records,
@@ -216,16 +205,18 @@ struct PendingApprovalLedgerTests {
             identity: Self.identity,
             now: Self.now
         )
-        let (_, after) = try PendingApprovalLedger.consume(
-            records: resolved,
-            id: created.record.id,
-            fingerprint: Self.fingerprint,
-            identity: Self.identity,
-            now: Self.now
-        )
-        #expect(throws: PendingApprovalError.alreadyConsumed) {
+        #expect(throws: PendingApprovalError.invalidRequest) {
             _ = try PendingApprovalLedger.consume(
-                records: after,
+                records: resolved,
+                id: created.record.id,
+                fingerprint: Self.fingerprint,
+                identity: Self.identity,
+                now: Self.now
+            )
+        }
+        #expect(throws: PendingApprovalError.invalidRequest) {
+            _ = try PendingApprovalLedger.consume(
+                records: resolved,
                 id: created.record.id,
                 fingerprint: Self.fingerprint,
                 identity: Self.identity,
@@ -264,7 +255,6 @@ struct PendingApprovalLedgerTests {
                 now: Self.now
             )
         }
-        #expect(canceled.authorizes(Self.fingerprint, identity: Self.identity) == false)
     }
 
     @Test func explicitExpireBlocksLaterAuthorization() throws {
@@ -330,7 +320,6 @@ struct PendingApprovalLedgerTests {
             return
         }
         #expect(ending.policy == .failTask)
-        #expect(swept[0].authorizes(Self.fingerprint, identity: Self.identity) == false)
         #expect(throws: PendingApprovalError.timedOut) {
             _ = try PendingApprovalLedger.consume(
                 records: created.records,
@@ -359,27 +348,27 @@ struct PendingApprovalLedgerTests {
             Issue.record("keepWaiting must still resolve")
             return
         }
-        #expect(resolved.authorizes(Self.fingerprint, identity: Self.identity))
+        // Step 8: resolving records the decision; name-only state never
+        // authorizes — live principal validity is proven elsewhere.
     }
 
-    @Test func exactDeadlineIsStillAwaitingHuman() throws {
+    @Test func exactDeadlineIsTimedOut() throws {
         let created = try Self.created(timeoutPolicy: .autoDeny, ttl: 10)
         let atDeadline = created.record.expiresAt
         let awaiting = PendingApprovalLedger.awaitingHuman(created.records, now: atDeadline)
-        #expect(awaiting.count == 1)
-        let (resolved, _) = try PendingApprovalLedger.resolve(
-            records: created.records,
-            id: created.record.id,
-            decision: .allowOnce,
-            fingerprint: Self.fingerprint,
-            identity: Self.identity,
-            now: atDeadline
-        )
-        guard case .resolved = resolved.state else {
-            Issue.record("expiresAt == now must still resolve")
-            return
+        #expect(awaiting.isEmpty)
+        // The sweep times the row out before resolve runs, so the
+        // deadline-instant resolve fails instead of recording a decision.
+        #expect(throws: PendingApprovalError.timedOut) {
+            try PendingApprovalLedger.resolve(
+                records: created.records,
+                id: created.record.id,
+                decision: .allowOnce,
+                fingerprint: Self.fingerprint,
+                identity: Self.identity,
+                now: atDeadline
+            )
         }
-        #expect(resolved.authorizes(Self.fingerprint, identity: Self.identity))
     }
 
     @Test func identityMismatchCannotResolveOrConsume() throws {
@@ -459,7 +448,6 @@ struct PendingApprovalLedgerTests {
         let created = try Self.created()
         #expect(created.record.state == .awaitingHuman)
         #expect(created.record.consumedAt == nil)
-        #expect(created.record.authorizes(Self.fingerprint, identity: Self.identity) == false)
         #expect(throws: PendingApprovalError.notResolved) {
             _ = try PendingApprovalLedger.consume(
                 records: created.records,
@@ -471,19 +459,18 @@ struct PendingApprovalLedgerTests {
         }
     }
 
-    @Test(arguments: [ApprovalDecision.allowOnce, .createRule, .deny])
-    func consumeFoldsEachDecisionIntoConsumedState(decision: ApprovalDecision) throws {
+    @Test func denyFoldsIntoConsumedState() throws {
         let created = try Self.created()
         let (resolved, afterResolve) = try PendingApprovalLedger.resolve(
             records: created.records,
             id: created.record.id,
-            decision: decision,
+            decision: .deny,
             fingerprint: Self.fingerprint,
             identity: Self.identity,
             now: Self.now
         )
         guard case .resolved = resolved.state else {
-            Issue.record("resolve must leave an unconsumed authorizing-or-deny resolution")
+            Issue.record("resolve must leave an unconsumed deny resolution")
             return
         }
         #expect(resolved.consumedAt == nil)
@@ -498,10 +485,9 @@ struct PendingApprovalLedgerTests {
             Issue.record("consume must transition .resolved → .consumed")
             return
         }
-        #expect(resolution.decision == decision)
+        #expect(resolution.decision == .deny)
         #expect(at == Self.now)
         #expect(consumption.approval.consumedAt == at)
-        #expect(consumption.approval.authorizes(Self.fingerprint, identity: Self.identity) == false)
         #expect(throws: PendingApprovalError.alreadyConsumed) {
             _ = try PendingApprovalLedger.consume(
                 records: afterConsume,
@@ -523,12 +509,42 @@ struct PendingApprovalLedgerTests {
         }
     }
 
+    @Test(arguments: [ApprovalDecision.allowOnce, .createRule])
+    func authorizingDecisionsCannotFoldIntoConsumedState(decision: ApprovalDecision) throws {
+        // Step 8: name-only consume refuses authorizing resolutions, so
+        // they stay .resolved and can never become executable authority.
+        let created = try Self.created()
+        let (resolved, afterResolve) = try PendingApprovalLedger.resolve(
+            records: created.records,
+            id: created.record.id,
+            decision: decision,
+            fingerprint: Self.fingerprint,
+            identity: Self.identity,
+            now: Self.now
+        )
+        guard case .resolved = resolved.state else {
+            Issue.record("resolve must still record the decision")
+            return
+        }
+        #expect(throws: PendingApprovalError.invalidRequest) {
+            _ = try PendingApprovalLedger.consume(
+                records: afterResolve,
+                id: created.record.id,
+                fingerprint: Self.fingerprint,
+                identity: Self.identity,
+                now: Self.now
+            )
+        }
+    }
+
     @Test func consumedStateRoundTripsThroughCodable() throws {
         let created = try Self.created()
+        // A deny still folds into .consumed, which is what this
+        // round-trip pins; authorizing resolutions never consume by name.
         let (_, resolved) = try PendingApprovalLedger.resolve(
             records: created.records,
             id: created.record.id,
-            decision: .allowOnce,
+            decision: .deny,
             fingerprint: Self.fingerprint,
             identity: Self.identity,
             now: Self.now
@@ -591,7 +607,6 @@ struct PendingApprovalLedgerTests {
         #expect(migrated == resolution)
         #expect(at == Self.now)
         #expect(decoded.consumedAt == at)
-        #expect(decoded.authorizes(Self.fingerprint, identity: Self.identity) == false)
     }
 
     @Test func resolvedWithoutParentConsumedAtStaysResolved() throws {
@@ -614,7 +629,8 @@ struct PendingApprovalLedgerTests {
             return
         }
         #expect(decoded.consumedAt == nil)
-        #expect(decoded.authorizes(Self.fingerprint, identity: Self.identity))
+        // Step 8: a resolved name-only row describes a decision; it never
+        // authorizes execution.
         #expect(decoded == resolved)
     }
 
@@ -688,6 +704,52 @@ struct PendingApprovalLedgerTests {
         #expect(second.id == first.record.id)
         #expect(second.state == .awaitingHuman)
     }
+
+    @Test func sameViewDifferentPayloadMintsSeparateWaits() throws {
+        // M6: the first payload must not win a shared wait.
+        let (_, firstRecords) = try PendingApprovalLedger.create(
+            records: [],
+            request: Self.request(id: "ask-1", payloadDigest: "digest-a"),
+            now: Self.now
+        )
+        let (second, records) = try PendingApprovalLedger.create(
+            records: firstRecords,
+            request: Self.request(id: "ask-2", payloadDigest: "digest-b"),
+            now: Self.now
+        )
+        #expect(records.count == 2)
+        #expect(second.id.rawValue == "ask-2")
+        #expect(second.payloadDigest == "digest-b")
+    }
+
+    @Test func sameViewSamePayloadReusesWait() throws {
+        let (firstRecord, firstRecords) = try PendingApprovalLedger.create(
+            records: [],
+            request: Self.request(id: "ask-1", payloadDigest: "digest-a"),
+            now: Self.now
+        )
+        let (second, records) = try PendingApprovalLedger.create(
+            records: firstRecords,
+            request: Self.request(id: "ask-2", payloadDigest: "digest-a"),
+            now: Self.now
+        )
+        #expect(records.map(\.id) == [firstRecord.id])
+        #expect(second.id == firstRecord.id)
+    }
+
+    @Test func payloadDigestRoundTripsThroughCodable() throws {
+        let (record, _) = try PendingApprovalLedger.create(
+            records: [],
+            request: Self.request(id: "ask-1", payloadDigest: "digest-a"),
+            now: Self.now
+        )
+        let decoded = try JSONDecoder().decode(
+            PendingApproval.self,
+            from: JSONEncoder().encode(record)
+        )
+        #expect(decoded == record)
+        #expect(decoded.payloadDigest == "digest-a")
+    }
 }
 
 private extension PendingApprovalLedgerTests {
@@ -699,11 +761,13 @@ private extension PendingApprovalLedgerTests {
 
     static func action(fingerprint: String = "shell:git.force-push:origin:main") -> ProposedAction {
         .shell(
-            ShellAction(
-                fingerprint: ActionFingerprint(rawValue: fingerprint),
-                effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
-                resources: ActionResources(remoteName: "origin", branchName: "main"),
-                scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv"))
+            ShellAction.effectOnly(
+                EffectShell(
+                    fingerprint: ActionFingerprint(rawValue: fingerprint),
+                    effects: ActionEffects(kinds: [.remoteSharedBranchMutation]),
+                    resources: ActionResources(remoteName: "origin", branchName: "main"),
+                    scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/rv"))
+                )
             )
         )
     }
@@ -713,7 +777,8 @@ private extension PendingApprovalLedgerTests {
         fingerprint: String = "shell:git.force-push:origin:main",
         continuation: ApprovalContinuation = .hostNative,
         timeoutPolicy: ApprovalTimeoutPolicy = .autoDeny,
-        ttl: TimeInterval = 60
+        ttl: TimeInterval = 60,
+        payloadDigest: String? = nil
     ) -> PendingApprovalRequest {
         PendingApprovalRequest(
             id: ApprovalID(rawValue: id),
@@ -722,7 +787,8 @@ private extension PendingApprovalLedgerTests {
             reason: .mandatoryHuman,
             continuation: continuation,
             timeoutPolicy: timeoutPolicy,
-            ttl: ttl
+            ttl: ttl,
+            payloadDigest: payloadDigest
         )
     }
 
@@ -742,6 +808,34 @@ private extension PendingApprovalLedgerTests {
             ),
             now: now
         )
+    }
+
+    @Test func subject_roundTripsLivePrincipalIDsAsUUIDStrings() throws {
+        // The subject names the live principal with the same typed IDs
+        // the principal reference carries, and encodes every ID field as
+        // one UUID string (no dual struct-vs-UUID encodings).
+        let subject = ApprovalSubject(
+            agentInstanceID: AgentInstanceID(),
+            runtimeSessionID: RuntimeSessionID(),
+            workspaceSessionID: WorkspaceSessionID(),
+            workspaceHostID: WorkspaceHostID(),
+            hostGeneration: WorkspaceHostGeneration(),
+            fingerprint: Self.fingerprint,
+            continuation: .hostNative,
+            policyContext: "trusted-policy-revision"
+        )
+        let body = try JSONEncoder().encode(subject)
+        let decoded = try JSONDecoder().decode(ApprovalSubject.self, from: body)
+        #expect(decoded == subject)
+        let json = try #require(
+            JSONSerialization.jsonObject(with: body) as? [String: Any])
+        for key in [
+            "agentInstanceID", "runtimeSessionID", "workspaceSessionID",
+            "workspaceHostID", "hostGeneration",
+        ] {
+            let value = try #require(json[key] as? String)
+            #expect(UUID(uuidString: value) != nil)
+        }
     }
 }
 

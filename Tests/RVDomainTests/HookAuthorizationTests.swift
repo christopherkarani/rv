@@ -72,10 +72,10 @@ struct HookAuthorizationTests {
     }
 
     @Test(arguments: HookHost.allCases)
-    func project_unlockableAndGrayAreaFollowHostProfile(_ host: HookHost) throws {
+    func project_unlockableAndMandatoryHumanAskEveryHost(_ host: HookHost) throws {
+        // Step 8B: host-free ASK on both transports (pending row + TTY code).
         let workspace = try #require(cwd)
         let unlocked = HookAuthorization.project(
-            host: host,
             result: EvaluationResult(
                 outcome: .deny(packDeny, matched: nil),
                 matchingView: MatchingView("git reset --hard")
@@ -83,7 +83,6 @@ struct HookAuthorizationTests {
             cwd: workspace
         )
         let gray = HookAuthorization.project(
-            host: host,
             result: EvaluationResult(
                 outcome: .plain,
                 matchingView: MatchingView("git push --force origin topic"),
@@ -92,55 +91,26 @@ struct HookAuthorizationTests {
             ),
             cwd: workspace
         )
-
-        switch HostNativeAsk.profile(for: host).pause {
-        case .spendFirst:
-            #expect(unlocked == .ask(.hostNative))
-            #expect(unlocked.shouldRecordPending)
-            #expect(unlocked.shouldMintUnlock == false)
-            #expect(gray == .ask(.hostNative))
-            #expect(gray.shouldMintUnlock == false)
-        case .noPause, .leftoverAskForbidden:
-            #expect(unlocked == .denyUnlockable(packDeny))
-            #expect(unlocked.shouldMintUnlock)
-            #expect(unlocked.shouldRecordPending == false)
-            #expect(gray == .allow)
-            #expect(gray.shouldMintUnlock == false)
-            #expect(gray.shouldRecordPending == false)
-        }
+        #expect(unlocked == .ask, "\(host)")
+        #expect(unlocked.shouldRecordPending)
+        #expect(unlocked.shouldMintUnlock)
+        #expect(unlocked.verdict == .ask)
+        #expect(gray == .ask, "\(host)")
+        #expect(gray.shouldRecordPending)
+        #expect(gray.shouldMintUnlock)
+        #expect(gray != .allow)
     }
 
-    @Test func project_spendFirstUnlockableAsksAndDoesNotMint() throws {
+    @Test func project_unlockableAsksAndMints() throws {
         let workspace = try #require(cwd)
         let result = EvaluationResult(
             outcome: .deny(packDeny, matched: nil),
             matchingView: MatchingView("git reset --hard")
         )
-        let auth = HookAuthorization.project(
-            host: .pi,
-            result: result,
-            cwd: workspace
-        )
-        #expect(auth == .ask(.hostNative))
+        let auth = HookAuthorization.project(result: result, cwd: workspace)
+        #expect(auth == .ask)
         #expect(auth.shouldRecordPending)
-        #expect(auth.shouldMintUnlock == false)
-    }
-
-    @Test func project_noPauseUnlockableIsDenyUnlockable() throws {
-        let workspace = try #require(cwd)
-        let result = EvaluationResult(
-            outcome: .deny(packDeny, matched: nil),
-            matchingView: MatchingView("git reset --hard")
-        )
-        let auth = HookAuthorization.project(
-            host: .grok,
-            result: result,
-            cwd: workspace
-        )
-        #expect(auth == .denyUnlockable(packDeny))
         #expect(auth.shouldMintUnlock)
-        #expect(auth.shouldRecordPending == false)
-        #expect(auth.verdict == .deny)
     }
 
     @Test func project_pinnedSecretIsDenyPinned() throws {
@@ -149,12 +119,30 @@ struct HookAuthorizationTests {
             outcome: .deny(secret, matched: nil),
             matchingView: MatchingView("cat ~/.aws/credentials")
         )
-        let auth = HookAuthorization.project(
-            host: .pi,
-            result: result,
-            cwd: workspace
+        let auth = HookAuthorization.project(result: result, cwd: workspace)
+        #expect(auth == .denyPinned)
+        #expect(auth.shouldMintUnlock == false)
+        #expect(auth.shouldRecordPending == false)
+        #expect(auth.verdict == .deny)
+    }
+
+    @Test func project_allowDecisionAllows() throws {
+        let workspace = try #require(cwd)
+        let result = EvaluationResult(
+            outcome: .plain,
+            matchingView: MatchingView("git status")
         )
-        #expect(auth == .denyPinned(secret))
+        #expect(HookAuthorization.project(result: result, cwd: workspace) == .allow)
+    }
+
+    @Test func project_indeterminateIsDenyPinned() throws {
+        let workspace = try #require(cwd)
+        let result = EvaluationResult(
+            outcome: .indeterminate(.commandTooLarge),
+            matchingView: MatchingView("git reset --hard")
+        )
+        let auth = HookAuthorization.project(result: result, cwd: workspace)
+        #expect(auth == .denyPinned)
         #expect(auth.shouldMintUnlock == false)
         #expect(auth.shouldRecordPending == false)
     }

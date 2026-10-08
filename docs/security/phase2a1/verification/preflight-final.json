@@ -1,0 +1,9 @@
+{
+  "command": [
+    "Scripts/preflight.sh"
+  ],
+  "exit_code": 0,
+  "failures": 0,
+  "warnings": 2,
+  "log": "preflight-final.log"
+}
