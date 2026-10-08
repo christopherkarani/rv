@@ -23,7 +23,7 @@ public struct GrokStoreAdapter: SessionStoreAdapter {
         fileURL.lastPathComponent == "chat_history.jsonl"
     }
 
-    public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
+    public func extract(fileURL: URL, data: Data) throws(ScanStoreError) -> [ExtractedEvent] {
         let sourcePath = fileURL.path
         let sessionID = fileURL.deletingLastPathComponent().lastPathComponent
         let workingDirectory = ScanStoreWorkingDirectory.fromGrokLayout(fileURL: fileURL)

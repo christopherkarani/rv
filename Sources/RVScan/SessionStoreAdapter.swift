@@ -36,7 +36,7 @@ public protocol SessionStoreAdapter: Sendable {
     func recognizes(fileURL: URL) -> Bool
     /// Map recognized store bytes to surface events. `fileURL` is provenance;
     /// `data` is the store.
-    func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent]
+    func extract(fileURL: URL, data: Data) throws(ScanStoreError) -> [ExtractedEvent]
 }
 
 /// Cwd already present in a session store. Lexical only — no `FileManager`,

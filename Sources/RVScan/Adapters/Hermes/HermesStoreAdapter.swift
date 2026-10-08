@@ -22,7 +22,7 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
 
     /// Surface-extract terminal events from provided store bytes.
     /// `fileURL` is provenance only; missing or unreadable `data` throws.
-    public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
+    public func extract(fileURL: URL, data: Data) throws(ScanStoreError) -> [ExtractedEvent] {
         let sourcePath = fileURL.path
         var events: [ExtractedEvent] = []
         try ScanSQLiteEngine.rows(

@@ -17,7 +17,7 @@ public struct PiStoreAdapter: SessionStoreAdapter {
         fileURL.pathExtension.lowercased() == "jsonl"
     }
 
-    public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
+    public func extract(fileURL: URL, data: Data) throws(ScanStoreError) -> [ExtractedEvent] {
         let sourcePath = fileURL.path
         var sessionID: SessionID?
         var sessionCwd: WorkingDirectory?
