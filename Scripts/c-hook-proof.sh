@@ -55,7 +55,11 @@ clang_c_hook() {
 }
 
 linux_c_hook_proof() {
-  local out home bin fixture st
+  # Kill-switch contract (C mutual daemon auth pending — see the deny_hook
+  # call at the top of rv.c main): every hook call denies with the boundary
+  # reason and never execs rv-cli. REVERT to the last_resort/miss_replay
+  # legs when the switch is removed (git log -S killswitch this file).
+  local out home bin st
   out="${TMPDIR:-/tmp}/rv-c-hook-linux-$$"
   mkdir -p "$out/home/.local/bin"
   home="$out/home"
@@ -67,18 +71,28 @@ linux_c_hook_proof() {
   set +e
   HOME="$home" PATH="/usr/bin:/bin" "$out/rv" hook --host grok \
     <"$FIXTURES/deny-git-reset-hard.json" \
-    >"$out/last-resort.out" 2>"$out/last-resort.err"
+    >"$out/deny.out" 2>"$out/deny.err"
   st=$?
   set -e
-  if [[ "$st" -ne 2 ]]; then
-    fail "last_resort without rv-cli must _exit(2), got $st"
+  if [[ "$st" -ne 0 ]]; then
+    fail "kill-switch deny must exit 0, got $st"
   fi
-  printf 'linux-last_resort ok exit=%s\n' "$st"
+  if ! grep -q '"decision":"deny"' "$out/deny.out"; then
+    fail "kill-switch deny missing decision JSON"
+  fi
+  if ! grep -q 'operation-bound owner authorization' "$out/deny.out"; then
+    fail "kill-switch deny missing boundary reason"
+  fi
+  if grep -q 'git reset --hard' "$out/deny.out"; then
+    fail "kill-switch deny echoes the command"
+  fi
+  printf 'linux-killswitch-deny ok exit=%s\n' "$st"
 
   cp "$out/rv" "$bin/rv"
   chmod 755 "$bin/rv"
-  cat >"$bin/rv-cli" <<'EOF'
+  cat >"$bin/rv-cli" <<EOF
 #!/bin/sh
+printf 'invoked\n' > "$out/rv-cli-marker"
 cat
 exit 2
 EOF
@@ -87,17 +101,16 @@ EOF
   set +e
   HOME="$home" PATH="/usr/bin:/bin" "$bin/rv" hook --host grok \
     <"$FIXTURES/deny-git-reset-hard.json" \
-    >"$out/miss.out" 2>"$out/miss.err"
+    >"$out/noreplay.out" 2>"$out/noreplay.err"
   st=$?
   set -e
-  if [[ "$st" -ne 2 ]]; then
-    fail "miss_replay must call rv-cli (exit 2), got $st"
+  if [[ "$st" -ne 0 ]]; then
+    fail "kill-switch deny with rv-cli present must exit 0, got $st"
   fi
-  fixture="$(tr -d '\n' <"$FIXTURES/deny-git-reset-hard.json")"
-  if ! grep -q 'git reset --hard' "$out/miss.out"; then
-    fail "miss_replay did not replay the deny fixture to rv-cli"
+  if [[ -f "$out/rv-cli-marker" ]]; then
+    fail "kill-switch deny must not exec rv-cli"
   fi
-  printf 'linux-miss_replay ok exit=%s\n' "$st"
+  printf 'linux-no-replay ok exit=%s\n' "$st"
   printf 'linux-c-hook-proof ok\n'
   rm -rf "$out"
 }

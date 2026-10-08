@@ -351,9 +351,10 @@ private func plantWorkspace(at ws: URL) throws {
     let tests = ws.appendingPathComponent("tests", isDirectory: true)
     try fm.createDirectory(at: tests, withIntermediateDirectories: true)
     // Real git repo so inside-repo detection behaves as in production.
+    // Resolved through env: the macOS Homebrew path does not exist on Linux.
     let git = Process()
-    git.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/git")
-    git.arguments = ["init", "-q"]
+    git.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    git.arguments = ["git", "init", "-q"]
     git.currentDirectoryURL = ws
     try? git.run()
     git.waitUntilExit()

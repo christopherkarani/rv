@@ -600,6 +600,7 @@ struct OperatorRedemptionTests {
         }
     }
 
+    #if os(macOS)
     @Test func redeemPendingResumesExactlyOnce() async throws {
         // Reply racing timeout: the first finish wins, the second is
         // dropped. A double resume would trap and fail the test.
@@ -627,6 +628,7 @@ struct OperatorRedemptionTests {
         #expect(HostBridgeWire.maxRedeemBytes == HostRedeemWire.maxBodyBytes)
         #expect(HostBridgeWire.redeemKey == HostRedeemWire.redeemKey)
     }
+    #endif
 
     @Test func uiHoldsNoRedemptionAuthority() {
         let completion = UIOperatorCompletion(

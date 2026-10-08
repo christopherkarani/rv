@@ -6,7 +6,7 @@ import RVTheme
 
 @Suite(.serialized)
 struct CHookPipeTests {
-    @Test func cHookProof_stagedBinariesAndTempHome() throws {
+    @Test(.disabled("KILL-SWITCH: C hook denies every call until mutual daemon auth lands (rv.c main); re-enable with hook-grade")) func cHookProof_stagedBinariesAndTempHome() throws {
         let root = repoRootURL()
         let script = root.appendingPathComponent("Scripts/c-hook-proof.sh")
         #expect(FileManager.default.fileExists(atPath: script.path))

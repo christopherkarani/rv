@@ -178,6 +178,31 @@ let coreTestTargets: [Target] = [
 
 // P2 (OPE-261): RVService + rvd + RVServiceTests on the Linux graph.
 // P3 (OPE-262): RVCLI + rv + RVCLITests return. XPC stays #if canImport(XPC).
+// RVOperatorUI is SwiftUI/AppKit and ships only on macOS. The conditional
+// lets stay above their single use: manifest evaluation is order-sensitive.
+#if os(macOS)
+let macOSOperatorUITargets: [Target] = [
+    .target(
+        name: "RVOperatorUI",
+        dependencies: ["RVDomain", "RVIPC", "RVService"]
+    ),
+    .executableTarget(
+        name: "rv-operator-ui",
+        dependencies: ["RVOperatorUI"]
+    ),
+]
+let macOSOperatorUIProducts: [Product] = [
+    .library(name: "RVOperatorUI", targets: ["RVOperatorUI"]),
+    .executable(name: "rv-operator-ui", targets: ["rv-operator-ui"]),
+]
+let macOSOperatorUITestTargets: [Target] = [
+    .testTarget(name: "RVOperatorUITests", dependencies: ["RVOperatorUI", "RVIPC"]),
+]
+#else
+let macOSOperatorUITargets: [Target] = []
+let macOSOperatorUIProducts: [Product] = []
+let macOSOperatorUITestTargets: [Target] = []
+#endif
 let serviceLibraryAndDaemon: [Target] = [
     .target(
         name: "RVService",
@@ -194,26 +219,15 @@ let serviceLibraryAndDaemon: [Target] = [
         name: "rv-workspace-host",
         dependencies: ["RVIsolation", "RVEngine", "RVService"]
     ),
-    .target(
-        name: "RVOperatorUI",
-        dependencies: ["RVDomain", "RVIPC", "RVService"]
-    ),
-    .executableTarget(
-        name: "rv-operator-ui",
-        dependencies: ["RVOperatorUI"]
-    ),
-]
+] + macOSOperatorUITargets
 let serviceProducts: [Product] = [
     .library(name: "RVService", targets: ["RVService"]),
-    .library(name: "RVOperatorUI", targets: ["RVOperatorUI"]),
     .executable(name: "rvd", targets: ["rvd"]),
     .executable(name: "rv-workspace-host", targets: ["rv-workspace-host"]),
-    .executable(name: "rv-operator-ui", targets: ["rv-operator-ui"]),
-]
+] + macOSOperatorUIProducts
 let serviceTestTargets: [Target] = [
     .testTarget(name: "RVServiceTests", dependencies: ["RVService", "RVAnalytics"]),
-    .testTarget(name: "RVOperatorUITests", dependencies: ["RVOperatorUI", "RVIPC"]),
-]
+] + macOSOperatorUITestTargets
 
 let cliTargets: [Target] = [
     .target(

@@ -248,11 +248,14 @@ private func runHonorHook(
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookNonShellRead_allowsOrdinaryFileWithoutPackEvaluate() async throws {
-    let expected = try grokExpected("allow-non-shell-read")
+@Test func hookNonShellRead_deniesWithoutServiceTransport() async throws {
+    // Step 8B removed the local evaluation door from the honor path: with
+    // no transport even ordinary reads fail closed (no service, no consult).
     let wire = try await runHonorHook(stdin: try grokFixture("allow-non-shell-read.json"))
-    #expect(wire.stdout == expected.stdout)
-    #expect(wire.exitCode == expected.exit)
+    #expect(wire.exitCode == 0)
+    let json = try denyJSON(wire.stdout)
+    #expect(json["decision"] as? String == "deny")
+    #expect(wire.stdout.contains(LocalControlBoundary.reason))
 }
 
 @Test func hookMalformed_failsClosedWithDenyJSONWithoutEvaluating() async throws {
@@ -276,11 +279,17 @@ private func runHonorHook(
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookOrdinaryFileStillAllowsAfterFailClosedMalformed() async throws {
-    let expected = try grokExpected("allow-non-shell-read")
+@Test func hookOrdinaryFile_deniesWithoutServiceTransportAfterMalformed() async throws {
+    // A malformed call poisons nothing: the follow-up ordinary read gets
+    // the same boundary deny (not a malformed sentence, not an allow).
+    let malformed = try await runHonorHook(stdin: try grokFixture("malformed.txt"))
+    #expect(malformed.exitCode == 0)
     let wire = try await runHonorHook(stdin: try grokFixture("allow-non-shell-read.json"))
-    #expect(wire.stdout == expected.stdout)
-    #expect(wire.exitCode == expected.exit)
+    #expect(wire.exitCode == 0)
+    let json = try denyJSON(wire.stdout)
+    #expect(json["decision"] as? String == "deny")
+    #expect(wire.stdout.contains(LocalControlBoundary.reason))
+    #expect(wire.stdout.contains(malformedHookSentence(.unreadable)) == false)
 }
 
 @Test func hookFileTool_omittedEvaluateFileFailClosesIncomplete() async throws {
@@ -293,22 +302,24 @@ private func runHonorHook(
     #expect(wire.stdout.contains("core.secrets") == false)
 }
 
-@Test func hookGrokFileEnv_deniesCoreSecretsWithoutPackEvaluate() async throws {
+@Test func hookGrokFileEnv_deniesWithoutServiceTransport() async throws {
     let wire = try await runHonorHook(stdin: try grokFixture("deny-file-env.json"))
     #expect(wire.exitCode == 0)
     let json = try denyJSON(wire.stdout)
     #expect(json["decision"] as? String == "deny")
-    #expect(wire.stdout.contains("core.secrets"))
+    #expect(wire.stdout.contains(LocalControlBoundary.reason))
+    #expect(wire.stdout.contains("core.secrets") == false)
 }
 
-@Test func hookClaudeFileEnv_deniesPermissionDecision() async throws {
+@Test func hookClaudeFileEnv_deniesWithoutServiceTransport() async throws {
     let wire = try await runHonorHook(
         stdin: try hostFixture("claude", "deny-file-env.json"),
         host: .claude
     )
     #expect(wire.exitCode == 0)
     #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
-    #expect(wire.stdout.contains("core.secrets"))
+    #expect(wire.stdout.contains(LocalControlBoundary.reason))
+    #expect(wire.stdout.contains("core.secrets") == false)
 }
 
 @Test func hookCursorFileSsh_deniesPermission() async throws {
@@ -457,14 +468,14 @@ private func runHonorHook(
     #expect(wire.exitCode == expected.exit)
 }
 
-@Test func hookClaudeOrdinaryFile_allowsWithoutPackEvaluate() async throws {
-    let expected = try hostExpected("claude", "allow-non-shell-read")
+@Test func hookClaudeOrdinaryFile_deniesWithoutServiceTransport() async throws {
     let wire = try await runHonorHook(
         stdin: try hostFixture("claude", "allow-non-shell-read.json"),
         host: .claude
     )
-    #expect(wire.stdout == expected.stdout)
-    #expect(wire.exitCode == expected.exit)
+    #expect(wire.exitCode == 0)
+    #expect(wire.stdout.contains("\"permissionDecision\":\"deny\""))
+    #expect(wire.stdout.contains(LocalControlBoundary.reason))
 }
 
 @Test func hookClaudeXPCDown_stillAskDeniesResetHard() async throws {
@@ -808,14 +819,15 @@ private func runHonorHook(
     #expect(json["permission"] as? String == "allow")
 }
 
-@Test func hookCursorOrdinaryFile_allowsWithoutPackEvaluate() async throws {
-    let expected = try hostExpected("cursor", "allow-non-shell-read")
+@Test func hookCursorOrdinaryFile_deniesWithoutServiceTransport() async throws {
     let wire = try await runHonorHook(
         stdin: try hostFixture("cursor", "allow-non-shell-read.json"),
         host: .cursor
     )
-    #expect(wire.stdout == expected.stdout)
-    #expect(wire.exitCode == expected.exit)
+    #expect(wire.exitCode == 0)
+    #expect(wire.stdout.contains("\"permission\":\"deny\""))
+    #expect(wire.stdout.contains("\"permissionDecision\"") == false)
+    #expect(wire.stdout.contains(LocalControlBoundary.reason))
 }
 
 @Test func hookCursorMalformed_deniesWithoutEvaluating() async throws {
