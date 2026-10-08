@@ -24,18 +24,14 @@ enum AllowOnceCLI {
         plain: Bool,
         noColor: Bool
     ) -> (tty: TTYCapability, robot: Bool) {
-        let probe = ThemeProbeFactory.live(
-            jsonFlag: json,
-            robotFlag: robot,
-            plainFlag: plain,
-            noColorFlag: noColor
+        let ctx = CommandContext.current(
+            command: "allow-once",
+            json: json,
+            robot: robot,
+            plain: plain,
+            noColor: noColor
         )
-        let tty = TTYCapability(
-            stdinIsTTY: probe.terminal.stdinIsTTY,
-            stdoutIsTTY: probe.terminal.stdoutIsTTY,
-            ci: probe.forbid.ci
-        )
-        return (tty, json || robot)
+        return (ctx.tty, ctx.explicitRobot)
     }
 
     static func home(
@@ -48,8 +44,7 @@ enum AllowOnceCLI {
         from environment: [String: String] = CLIProcess.environment()
     ) throws -> HomeDirectory {
         guard let home = home(from: environment) else {
-            FileHandle.standardError.write(Data("rv allow-once: HOME is not set\n".utf8))
-            throw ExitCode(1)
+            try CommandContext.failHomeMissing(command: "allow-once")
         }
         return home
     }
@@ -304,82 +299,73 @@ struct AllowOnceRedeem: AsyncParsableCommand {
 
     func run() async throws {
         guard let code, code.isEmpty == false else {
-            FileHandle.standardError.write(
-                Data(
-                    """
-                    usage: rv allow-once mint -- <command>
-                           rv allow-once <code>
-                           rv allow-once list
-                           rv allow-once clear
+            try CommandContext.fail(
+                """
+                usage: rv allow-once mint -- <command>
+                       rv allow-once <code>
+                       rv allow-once list
+                       rv allow-once clear
 
-                    """.utf8
-                )
+                """,
+                exitCode: 2
             )
-            throw ExitCode(2)
         }
-        let live = AllowOnceCLI.interactiveTTY(
-            json: format.json,
-            robot: format.robot,
-            plain: format.plain,
-            noColor: format.noColor
-        )
+        let ctx = CommandContext.current(command: "allow-once", format: format)
         do {
             let redeemed = try await AllowOnceCLI.redeem(
                 code: code,
-                tty: live.tty,
-                robot: live.robot,
-                store: AllowOnceCLI.store(home: try AllowOnceCLI.requireHome()),
+                tty: ctx.tty,
+                robot: ctx.explicitRobot,
+                store: AllowOnceCLI.store(home: try ctx.requireHome()),
                 now: Date()
             )
             if redeemed.epochChanged {
-                FileHandle.standardError.write(
-                    Data("rv allow-once: note: RV service restarted; approvals from before the restart were invalidated\n".utf8)
+                ctx.writeStderr(
+                    "rv allow-once: note: RV service restarted; approvals from before the restart were invalidated\n"
                 )
             }
-            FileHandle.standardOutput.write(
-                Data("granted \(redeemed.row.commandRedacted) (cwd \(redeemed.row.cwd.rawValue))\n".utf8)
+            ctx.writeStdout(
+                "granted \(redeemed.row.commandRedacted) (cwd \(redeemed.row.cwd.rawValue))\n"
             )
         } catch AllowOnceError.ttyRequired {
-            FileHandle.standardError.write(
-                Data("rv allow-once: requires an interactive TTY (stdin and stdout)\n".utf8)
+            try ctx.fail(
+                "rv allow-once: requires an interactive TTY (stdin and stdout)\n",
+                exitCode: 2
             )
-            throw ExitCode(2)
         } catch AllowOnceError.robotRefused {
-            FileHandle.standardError.write(
-                Data("rv allow-once: --json/--robot refused for redeem\n".utf8)
+            try ctx.fail(
+                "rv allow-once: --json/--robot refused for redeem\n",
+                exitCode: 2
             )
-            throw ExitCode(2)
         } catch AllowOnceError.unknownCode, AllowOnceError.expired, AllowOnceError.alreadySpent {
-            FileHandle.standardError.write(Data("rv allow-once: code not redeemable\n".utf8))
-            throw ExitCode(2)
+            try ctx.fail("rv allow-once: code not redeemable\n", exitCode: 2)
         } catch AllowOnceError.redemptionChanged {
-            FileHandle.standardError.write(
-                Data("rv allow-once: grant changed during review; retry with a fresh code\n".utf8)
+            try ctx.fail(
+                "rv allow-once: grant changed during review; retry with a fresh code\n",
+                exitCode: 2
             )
-            throw ExitCode(2)
         } catch AllowOnceAttestError.serviceUnavailable {
-            FileHandle.standardError.write(
-                Data("rv allow-once: RV service unavailable; approval not recorded (code stays live, retry later)\n".utf8)
+            try ctx.fail(
+                "rv allow-once: RV service unavailable; approval not recorded (code stays live, retry later)\n",
+                exitCode: 2
             )
-            throw ExitCode(2)
         } catch AllowOnceAttestError.serviceDenied {
-            FileHandle.standardError.write(
-                Data("rv allow-once: service refused approval; enroll via `rv setup` or approve in RVOperatorUI\n".utf8)
+            try ctx.fail(
+                "rv allow-once: service refused approval; enroll via `rv setup` or approve in RVOperatorUI\n",
+                exitCode: 2
             )
-            throw ExitCode(2)
         } catch AllowOnceError.lockFailed, AllowOnceError.encodeFailed {
-            FileHandle.standardError.write(Data("rv allow-once: store unavailable\n".utf8))
-            throw ExitCode(2)
+            try ctx.fail("rv allow-once: store unavailable\n", exitCode: 2)
         } catch AllowOnceAuthError.required {
-            FileHandle.standardError.write(
-                Data("rv allow-once: device-owner authentication required\n".utf8)
+            try ctx.fail(
+                "rv allow-once: device-owner authentication required\n",
+                exitCode: 2
             )
-            throw ExitCode(2)
         } catch AllowOnceAuthError.throttled {
-            FileHandle.standardError.write(
-                Data("rv allow-once: too many authentication prompts; wait and retry\n".utf8)
+            try ctx.fail(
+                "rv allow-once: too many authentication prompts; wait and retry\n",
+                exitCode: 2
             )
-            throw ExitCode(2)
         }
     }
 }
@@ -399,67 +385,58 @@ struct AllowOnceMint: AsyncParsableCommand {
     func run() async throws {
         let raw = commandParts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         guard raw.isEmpty == false else {
-            FileHandle.standardError.write(Data("rv allow-once mint: missing command\n".utf8))
-            throw ExitCode(2)
+            try CommandContext.fail("rv allow-once mint: missing command\n", exitCode: 2)
         }
-        let live = AllowOnceCLI.interactiveTTY(
-            json: format.json,
-            robot: format.robot,
-            plain: format.plain,
-            noColor: format.noColor
-        )
+        let ctx = CommandContext.current(command: "allow-once", format: format)
         do {
             guard let cwd = WorkingDirectory(validating: FileManager.default.currentDirectoryPath) else {
-                FileHandle.standardError.write(Data("rv allow-once mint: missing working directory\n".utf8))
-                throw ExitCode(2)
+                try ctx.fail("rv allow-once mint: missing working directory\n", exitCode: 2)
             }
             let code = try await AllowOnceCLI.mint(
                 command: ShellCommand(rawValue: raw),
                 cwd: cwd,
-                tty: live.tty,
-                robot: live.robot,
-                store: AllowOnceCLI.store(home: try AllowOnceCLI.requireHome()),
+                tty: ctx.tty,
+                robot: ctx.explicitRobot,
+                store: AllowOnceCLI.store(home: try ctx.requireHome()),
                 now: Date()
             )
-            FileHandle.standardOutput.write(
-                Data("allow-once code: \(code.rawValue)\nrv allow-once \(code.rawValue)\n".utf8)
+            ctx.writeStdout(
+                "allow-once code: \(code.rawValue)\nrv allow-once \(code.rawValue)\n"
             )
         } catch AllowOnceError.ttyRequired {
-            FileHandle.standardError.write(
-                Data("rv allow-once: requires an interactive TTY (stdin and stdout)\n".utf8)
+            try ctx.fail(
+                "rv allow-once: requires an interactive TTY (stdin and stdout)\n",
+                exitCode: 2
             )
-            throw ExitCode(2)
         } catch AllowOnceError.robotRefused {
-            FileHandle.standardError.write(
-                Data("rv allow-once mint: --json/--robot refused\n".utf8)
+            try ctx.fail(
+                "rv allow-once mint: --json/--robot refused\n",
+                exitCode: 2
             )
-            throw ExitCode(2)
         } catch AllowOnceError.emptyCommand {
-            FileHandle.standardError.write(Data("rv allow-once mint: missing command\n".utf8))
-            throw ExitCode(2)
+            try ctx.fail("rv allow-once mint: missing command\n", exitCode: 2)
         } catch AllowOnceError.notUnlockable {
-            FileHandle.standardError.write(
-                Data("rv allow-once mint: no one-shot unlock is possible for this command\n".utf8)
+            try ctx.fail(
+                "rv allow-once mint: no one-shot unlock is possible for this command\n",
+                exitCode: 2
             )
-            throw ExitCode(2)
         } catch AllowOnceError.alreadyPending {
-            FileHandle.standardError.write(
-                Data("rv allow-once mint: a pending unlock already exists for this command\n".utf8)
+            try ctx.fail(
+                "rv allow-once mint: a pending unlock already exists for this command\n",
+                exitCode: 2
             )
-            throw ExitCode(2)
         } catch AllowOnceError.lockFailed, AllowOnceError.encodeFailed, AllowOnceError.collision {
-            FileHandle.standardError.write(Data("rv allow-once mint: store unavailable\n".utf8))
-            throw ExitCode(2)
+            try ctx.fail("rv allow-once mint: store unavailable\n", exitCode: 2)
         } catch AllowOnceAuthError.required {
-            FileHandle.standardError.write(
-                Data("rv allow-once mint: device-owner authentication required\n".utf8)
+            try ctx.fail(
+                "rv allow-once mint: device-owner authentication required\n",
+                exitCode: 2
             )
-            throw ExitCode(2)
         } catch AllowOnceAuthError.throttled {
-            FileHandle.standardError.write(
-                Data("rv allow-once mint: too many authentication prompts; wait and retry\n".utf8)
+            try ctx.fail(
+                "rv allow-once mint: too many authentication prompts; wait and retry\n",
+                exitCode: 2
             )
-            throw ExitCode(2)
         }
     }
 }
@@ -474,14 +451,15 @@ struct AllowOnceList: AsyncParsableCommand {
     var format: FormatFlags
 
     func run() async throws {
-        let rows = await AllowOnceCLI.store(home: try AllowOnceCLI.requireHome()).list(now: Date())
-        if format.json || format.robot {
+        let ctx = CommandContext.current(command: "allow-once", format: format)
+        let rows = await AllowOnceCLI.store(home: try ctx.requireHome()).list(now: Date())
+        if ctx.explicitRobot {
             let document = RobotDocument.allowOnceList(allowOnceRobotRows(from: rows))
-            FileHandle.standardOutput.write(Data((try document.render() + "\n").utf8))
+            ctx.writeStdout(try document.render() + "\n")
             return
         }
         if rows.isEmpty {
-            FileHandle.standardOutput.write(Data("no allow-once rows\n".utf8))
+            ctx.writeStdout("no allow-once rows\n")
             return
         }
         for row in rows {
@@ -491,9 +469,7 @@ struct AllowOnceList: AsyncParsableCommand {
             } else {
                 invoked = row.commandRedacted
             }
-            FileHandle.standardOutput.write(
-                Data("\(row.kind.rawValue) \(invoked) cwd=\(row.cwd.rawValue)\n".utf8)
-            )
+            ctx.writeStdout("\(row.kind.rawValue) \(invoked) cwd=\(row.cwd.rawValue)\n")
         }
     }
 }
@@ -508,26 +484,20 @@ struct AllowOnceClear: AsyncParsableCommand {
     var format: FormatFlags
 
     func run() async throws {
-        let live = AllowOnceCLI.interactiveTTY(
-            json: format.json,
-            robot: format.robot,
-            plain: format.plain,
-            noColor: format.noColor
-        )
+        let ctx = CommandContext.current(command: "allow-once", format: format)
         do {
             // Clearing destroys the operator's own rows and grants nothing,
             // so the TTY gate suffices: no LA tripwire.
-            try await AllowOnceCLI.store(home: try AllowOnceCLI.requireHome())
-                .clear(tty: live.tty, now: Date())
-            FileHandle.standardOutput.write(Data("cleared allow-once rows\n".utf8))
+            try await AllowOnceCLI.store(home: try ctx.requireHome())
+                .clear(tty: ctx.tty, now: Date())
+            ctx.writeStdout("cleared allow-once rows\n")
         } catch AllowOnceError.ttyRequired {
-            FileHandle.standardError.write(
-                Data("rv allow-once clear: requires an interactive TTY\n".utf8)
+            try ctx.fail(
+                "rv allow-once clear: requires an interactive TTY\n",
+                exitCode: 2
             )
-            throw ExitCode(2)
         } catch AllowOnceError.lockFailed, AllowOnceError.encodeFailed {
-            FileHandle.standardError.write(Data("rv allow-once clear: store unavailable\n".utf8))
-            throw ExitCode(2)
+            try ctx.fail("rv allow-once clear: store unavailable\n", exitCode: 2)
         }
     }
 }

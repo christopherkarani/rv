@@ -16,11 +16,11 @@ struct Hook: AsyncParsableCommand {
     func run() async throws {
         let stdin = CLIProcess.standardInputText()
         let outcome = await run(stdin: stdin, client: ServiceClient(home: CLIProcess.home()))
-        FileHandle.standardOutput.write(Data(outcome.stdout.utf8))
-        if !outcome.stderr.isEmpty {
-            FileHandle.standardError.write(Data(outcome.stderr.utf8))
-        }
-        throw ExitCode(outcome.exitCode)
+        try CommandContext.emit(
+            stdout: outcome.stdout,
+            stderr: outcome.stderr,
+            exitCode: outcome.exitCode
+        )
     }
 
     func run(stdin: String, client: ServiceClient) async -> (stdout: String, stderr: String, exitCode: Int32) {

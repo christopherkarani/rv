@@ -26,30 +26,25 @@ struct Safety: AsyncParsableCommand {
     var level: String?
 
     func run() throws {
-        guard let home = CLIProcess.home() else {
-            FileHandle.standardError.write(Data("rv safety: HOME is not set\n".utf8))
-            throw ExitCode(1)
-        }
+        let home = try CommandContext.requireHome(command: "safety")
         if let raw = level {
             guard let parsed = SafetyLevel(rawValue: raw) else {
-                FileHandle.standardError.write(Data("rv safety: expected normal or strict\n".utf8))
-                throw ExitCode(1)
+                try CommandContext.fail("rv safety: expected normal or strict\n")
             }
             do {
                 try SafetyRun.set(parsed, home: home)
             } catch {
-                FileHandle.standardError.write(Data("rv safety: could not write config\n".utf8))
-                throw ExitCode(1)
+                try CommandContext.fail("rv safety: could not write config\n")
             }
-            FileHandle.standardOutput.write(Data((parsed.rawValue + "\n").utf8))
+            CommandContext.writeStdout(parsed.rawValue + "\n")
             return
         }
         let workspace = URL(
             fileURLWithPath: CLIProcess.workspacePath(),
             isDirectory: true
         )
-        FileHandle.standardOutput.write(
-            Data((SafetyRun.show(home: home, workspace: workspace) + "\n").utf8)
+        CommandContext.writeStdout(
+            SafetyRun.show(home: home, workspace: workspace) + "\n"
         )
     }
 }

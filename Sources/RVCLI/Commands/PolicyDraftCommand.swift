@@ -22,14 +22,11 @@ struct PolicyDraftCommand: AsyncParsableCommand {
     var format: FormatFlags
 
     func run() async throws {
+        let ctx = CommandContext.current(command: "policy draft", format: format)
         guard save == false || english.isEmpty == false else {
-            FileHandle.standardError.write(Data("rv policy draft: --save requires --english\n".utf8))
-            throw ExitCode(1)
+            try ctx.fail("rv policy draft: --save requires --english\n")
         }
-        guard let home = CLIProcess.home() else {
-            FileHandle.standardError.write(Data("rv policy draft: HOME is not set\n".utf8))
-            throw ExitCode(1)
-        }
+        let home = try ctx.requireHome()
         let workspace = URL(
             fileURLWithPath: CLIProcess.workspacePath(),
             isDirectory: true
@@ -40,16 +37,15 @@ struct PolicyDraftCommand: AsyncParsableCommand {
                 english: english,
                 save: save,
                 repo: repo,
-                robot: format.json || format.robot,
+                robot: ctx.explicitRobot,
                 home: home,
                 workspace: workspace,
                 compiler: EnglishCompileChain()
             )
         } catch {
-            FileHandle.standardError.write(Data("rv policy draft: failed\n".utf8))
-            throw ExitCode(1)
+            try ctx.fail("rv policy draft: failed\n")
         }
-        FileHandle.standardOutput.write(Data((result.text + "\n").utf8))
+        ctx.writeStdout(result.text + "\n")
         switch result.outcome {
         case .preview(let saved):
             if save && saved == false {

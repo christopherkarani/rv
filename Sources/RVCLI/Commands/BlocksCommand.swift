@@ -58,14 +58,12 @@ struct Blocks: AsyncParsableCommand {
     var format: FormatFlags
 
     func run() throws {
-        guard let home = CLIProcess.home() else {
-            FileHandle.standardError.write(Data("rv blocks: HOME is not set\n".utf8))
-            throw ExitCode(1)
-        }
+        let ctx = CommandContext.current(command: "blocks", format: format)
+        let home = try ctx.requireHome()
         let text = BlocksRun.list(
             home: home,
-            json: format.json || format.robot
+            json: ctx.explicitRobot
         )
-        FileHandle.standardOutput.write(Data(text.utf8))
+        ctx.writeStdout(text)
     }
 }

@@ -12,17 +12,13 @@ enum AllowlistCLI {
         plain: Bool,
         noColor: Bool
     ) -> TTYCapability {
-        let probe = ThemeProbeFactory.live(
-            jsonFlag: json,
-            robotFlag: robot,
-            plainFlag: plain,
-            noColorFlag: noColor
-        )
-        return TTYCapability(
-            stdinIsTTY: probe.terminal.stdinIsTTY,
-            stdoutIsTTY: probe.terminal.stdoutIsTTY,
-            ci: probe.forbid.ci
-        )
+        CommandContext.current(
+            command: "allowlist",
+            json: json,
+            robot: robot,
+            plain: plain,
+            noColor: noColor
+        ).tty
     }
 
     static func home(
@@ -35,8 +31,7 @@ enum AllowlistCLI {
         from environment: [String: String] = CLIProcess.environment()
     ) throws -> HomeDirectory {
         guard let home = home(from: environment) else {
-            FileHandle.standardError.write(Data("rv allowlist: HOME is not set\n".utf8))
-            throw ExitCode(1)
+            try CommandContext.failHomeMissing(command: "allowlist")
         }
         return home
     }
@@ -72,10 +67,7 @@ struct AllowlistLayerFlags: ParsableArguments {
 
     func refuseUnsupported() throws {
         if project || system {
-            FileHandle.standardError.write(
-                Data("rv allowlist: --project/--system not in v1\n".utf8)
-            )
-            throw ExitCode(2)
+            try CommandContext.fail("rv allowlist: --project/--system not in v1\n", exitCode: 2)
         }
     }
 }
@@ -101,42 +93,28 @@ struct AllowlistAdd: AsyncParsableCommand {
     func run() async throws {
         try layer.refuseUnsupported()
         try LocalControlBoundary.requireOwnerAuthorization()
+        let ctx = CommandContext.current(command: "allowlist", format: format)
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
-            FileHandle.standardError.write(Data("rv allowlist add: reason required\n".utf8))
-            throw ExitCode(2)
+            try ctx.fail("rv allowlist add: reason required\n", exitCode: 2)
         }
         guard let ruleID = parseAllowlistRuleID(rule) else {
-            FileHandle.standardError.write(Data("rv allowlist add: invalid rule id\n".utf8))
-            throw ExitCode(2)
+            try ctx.fail("rv allowlist add: invalid rule id\n", exitCode: 2)
         }
-        let tty = AllowlistCLI.interactiveTTY(
-            json: format.json,
-            robot: format.robot,
-            plain: format.plain,
-            noColor: format.noColor
-        )
         let entry = AllowlistEntry(
             selector: .rule(ruleID),
             reason: trimmed,
             addedAt: Date()
         )
         do {
-            try AllowlistCLI.store(home: try AllowlistCLI.requireHome()).add(entry, tty: tty)
-            FileHandle.standardOutput.write(
-                Data("added \(ruleID.rawValue)\n".utf8)
-            )
+            try AllowlistCLI.store(home: try ctx.requireHome()).add(entry, tty: ctx.tty)
+            ctx.writeStdout("added \(ruleID.rawValue)\n")
         } catch AllowOnceError.ttyRequired {
-            FileHandle.standardError.write(
-                Data("rv allowlist add: requires an interactive TTY\n".utf8)
-            )
-            throw ExitCode(2)
+            try ctx.fail("rv allowlist add: requires an interactive TTY\n", exitCode: 2)
         } catch AllowlistStoreError.lockFailed {
-            FileHandle.standardError.write(Data("rv allowlist add: store unavailable\n".utf8))
-            throw ExitCode(2)
+            try ctx.fail("rv allowlist add: store unavailable\n", exitCode: 2)
         } catch is AllowlistParseError {
-            FileHandle.standardError.write(Data("rv allowlist add: invalid allowlist.toml\n".utf8))
-            throw ExitCode(2)
+            try ctx.fail("rv allowlist add: invalid allowlist.toml\n", exitCode: 2)
         }
     }
 }
@@ -162,17 +140,11 @@ struct AllowlistAddCommand: AsyncParsableCommand {
     func run() async throws {
         try layer.refuseUnsupported()
         try LocalControlBoundary.requireOwnerAuthorization()
+        let ctx = CommandContext.current(command: "allowlist", format: format)
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
-            FileHandle.standardError.write(Data("rv allowlist add-command: reason required\n".utf8))
-            throw ExitCode(2)
+            try ctx.fail("rv allowlist add-command: reason required\n", exitCode: 2)
         }
-        let tty = AllowlistCLI.interactiveTTY(
-            json: format.json,
-            robot: format.robot,
-            plain: format.plain,
-            noColor: format.noColor
-        )
         let shell = ShellCommand(rawValue: command)
         let matchingView = EvaluationWorld.matchingView(of: shell)
         let entry = AllowlistEntry(
@@ -183,25 +155,14 @@ struct AllowlistAddCommand: AsyncParsableCommand {
             invocationDigest: maskedPayloadContentDigest(Normalize.invocationPrefix(of: shell))
         )
         do {
-            try AllowlistCLI.store(home: try AllowlistCLI.requireHome()).add(entry, tty: tty)
-            FileHandle.standardOutput.write(
-                Data("added exact command\n".utf8)
-            )
+            try AllowlistCLI.store(home: try ctx.requireHome()).add(entry, tty: ctx.tty)
+            ctx.writeStdout("added exact command\n")
         } catch AllowOnceError.ttyRequired {
-            FileHandle.standardError.write(
-                Data("rv allowlist add-command: requires an interactive TTY\n".utf8)
-            )
-            throw ExitCode(2)
+            try ctx.fail("rv allowlist add-command: requires an interactive TTY\n", exitCode: 2)
         } catch AllowlistStoreError.lockFailed {
-            FileHandle.standardError.write(
-                Data("rv allowlist add-command: store unavailable\n".utf8)
-            )
-            throw ExitCode(2)
+            try ctx.fail("rv allowlist add-command: store unavailable\n", exitCode: 2)
         } catch is AllowlistParseError {
-            FileHandle.standardError.write(
-                Data("rv allowlist add-command: invalid allowlist.toml\n".utf8)
-            )
-            throw ExitCode(2)
+            try ctx.fail("rv allowlist add-command: invalid allowlist.toml\n", exitCode: 2)
         }
     }
 }
@@ -224,34 +185,22 @@ struct AllowlistRemove: AsyncParsableCommand {
     func run() async throws {
         try layer.refuseUnsupported()
         try LocalControlBoundary.requireOwnerAuthorization()
-        let tty = AllowlistCLI.interactiveTTY(
-            json: format.json,
-            robot: format.robot,
-            plain: format.plain,
-            noColor: format.noColor
-        )
+        let ctx = CommandContext.current(command: "allowlist", format: format)
         do {
             let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
             let normalized = EvaluationWorld.matchingView(of: ShellCommand(rawValue: trimmed)).rawValue
-            let removed = try AllowlistCLI.store(home: try AllowlistCLI.requireHome()).remove(
+            let removed = try AllowlistCLI.store(home: try ctx.requireHome()).remove(
                 matching: trimmed,
-                tty: tty,
+                tty: ctx.tty,
                 exactCommandAliases: normalized == trimmed ? [] : [normalized]
             )
-            FileHandle.standardOutput.write(Data("removed \(removed)\n".utf8))
+            ctx.writeStdout("removed \(removed)\n")
         } catch AllowOnceError.ttyRequired {
-            FileHandle.standardError.write(
-                Data("rv allowlist remove: requires an interactive TTY\n".utf8)
-            )
-            throw ExitCode(2)
+            try ctx.fail("rv allowlist remove: requires an interactive TTY\n", exitCode: 2)
         } catch AllowlistStoreError.lockFailed {
-            FileHandle.standardError.write(Data("rv allowlist remove: store unavailable\n".utf8))
-            throw ExitCode(2)
+            try ctx.fail("rv allowlist remove: store unavailable\n", exitCode: 2)
         } catch is AllowlistParseError {
-            FileHandle.standardError.write(
-                Data("rv allowlist remove: invalid allowlist.toml\n".utf8)
-            )
-            throw ExitCode(2)
+            try ctx.fail("rv allowlist remove: invalid allowlist.toml\n", exitCode: 2)
         }
     }
 }
@@ -266,40 +215,36 @@ struct AllowlistList: AsyncParsableCommand {
     var format: FormatFlags
 
     func run() async throws {
+        let ctx = CommandContext.current(command: "allowlist", format: format)
         let now = Date()
-        switch AllowlistCLI.store(home: try AllowlistCLI.requireHome()).loadForValidate(
+        switch AllowlistCLI.store(home: try ctx.requireHome()).loadForValidate(
             workspacePath: CLIProcess.workspacePath()
         ) {
         case .missing, .symlinkIntoWorkspace:
-            if format.json || format.robot {
+            if ctx.explicitRobot {
                 let document = RobotDocument.allowlistList([])
-                FileHandle.standardOutput.write(Data((try document.render() + "\n").utf8))
+                ctx.writeStdout(try document.render() + "\n")
             } else {
-                FileHandle.standardOutput.write(Data("no allowlist rows\n".utf8))
+                ctx.writeStdout("no allowlist rows\n")
             }
         case .invalid:
-            FileHandle.standardError.write(Data("rv allowlist list: invalid allowlist.toml\n".utf8))
-            throw ExitCode(2)
+            try ctx.fail("rv allowlist list: invalid allowlist.toml\n", exitCode: 2)
         case .ok(let entries):
-            if format.json || format.robot {
+            if ctx.explicitRobot {
                 let document = RobotDocument.allowlistList(allowlistRobotRows(from: entries, now: now))
-                FileHandle.standardOutput.write(Data((try document.render() + "\n").utf8))
+                ctx.writeStdout(try document.render() + "\n")
             } else {
                 if entries.isEmpty {
-                    FileHandle.standardOutput.write(Data("no allowlist rows\n".utf8))
+                    ctx.writeStdout("no allowlist rows\n")
                     return
                 }
                 for entry in entries {
                     let mark = entry.isActive(at: now) ? "" : " (expired)"
                     switch entry.selector {
                     case .rule(let ruleID):
-                        FileHandle.standardOutput.write(
-                            Data("rule \(ruleID.rawValue) — \(entry.reason)\(mark)\n".utf8)
-                        )
+                        ctx.writeStdout("rule \(ruleID.rawValue) — \(entry.reason)\(mark)\n")
                     case .exactCommand(let command):
-                        FileHandle.standardOutput.write(
-                            Data("exact \(command.rawValue) — \(entry.reason)\(mark)\n".utf8)
-                        )
+                        ctx.writeStdout("exact \(command.rawValue) — \(entry.reason)\(mark)\n")
                     }
                 }
             }
@@ -314,23 +259,23 @@ struct AllowlistValidate: AsyncParsableCommand {
     )
 
     func run() async throws {
-        switch AllowlistCLI.store(home: try AllowlistCLI.requireHome()).loadForValidate(
+        switch AllowlistCLI.store(home: try CommandContext.requireHome(command: "allowlist")).loadForValidate(
             workspacePath: CLIProcess.workspacePath()
         ) {
         case .missing:
-            FileHandle.standardOutput.write(Data("allowlist: missing (ok)\n".utf8))
+            CommandContext.writeStdout("allowlist: missing (ok)\n")
         case .symlinkIntoWorkspace:
-            FileHandle.standardError.write(
-                Data("rv allowlist validate: allowlist.toml resolves into workspace\n".utf8)
+            try CommandContext.fail(
+                "rv allowlist validate: allowlist.toml resolves into workspace\n",
+                exitCode: 2
             )
-            throw ExitCode(2)
         case .invalid(let error):
-            FileHandle.standardError.write(
-                Data("rv allowlist validate: \(String(describing: error))\n".utf8)
+            try CommandContext.fail(
+                "rv allowlist validate: \(String(describing: error))\n",
+                exitCode: 2
             )
-            throw ExitCode(2)
         case .ok:
-            FileHandle.standardOutput.write(Data("allowlist: ok\n".utf8))
+            CommandContext.writeStdout("allowlist: ok\n")
         }
     }
 }

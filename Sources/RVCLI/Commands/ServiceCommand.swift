@@ -20,16 +20,12 @@ struct Status: AsyncParsableCommand {
     var format: FormatFlags
 
     func run() async throws {
-        let report = await ServiceClient(home: CLIProcess.home()).status()
+        let ctx = CommandContext.current(command: "service status", format: format)
+        let report = await ServiceClient(home: ctx.home).status()
         let text = try ServiceStatusCommand.text(
             report,
-            appearance: CLIAppearance.resolve(
-                json: format.json,
-                robot: format.robot,
-                plain: format.plain,
-                noColor: format.noColor
-            )
+            appearance: ctx.appearance
         )
-        FileHandle.standardOutput.write(Data((text + "\n").utf8))
+        ctx.writeStdout(text + "\n")
     }
 }
