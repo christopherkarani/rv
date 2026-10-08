@@ -12,7 +12,8 @@ import RVDomain
 /// proposal. HTTP names are resolved here so policy sees the address RV dials.
 public func normalizeRuntimeAdmission(
     subject: RuntimeAdmissionSubject,
-    action: RuntimeRequestedAction
+    action: RuntimeRequestedAction,
+    resolve: (String) -> Result<[HTTPIPAddress], HTTPResolutionError> = resolveHTTPHost
 ) -> Result<ProposedAction, RuntimeAdmissionEvaluationError> {
     switch action {
     case .shell(let command):
@@ -22,7 +23,7 @@ public func normalizeRuntimeAdmission(
             subject: subject,
             method: method,
             url: url,
-            resolve: resolveHTTPHost
+            resolve: resolve
         )
     }
 }
