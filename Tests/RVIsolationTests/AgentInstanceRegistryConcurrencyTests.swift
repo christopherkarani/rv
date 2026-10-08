@@ -123,7 +123,14 @@ private enum StressActivation: Sendable {
     case refused
 }
 
-@Suite("AgentInstanceRegistry concurrency")
+@Suite(
+    "AgentInstanceRegistry concurrency",
+    // Serialized: each race fans out to 16 GCD parties behind semaphore
+    // rendezvous. Overlapping races oversubscribe small CI runners and
+    // collapse throughput for the whole shard; one race at a time keeps
+    // every iteration and party while bounding thread pressure.
+    .serialized
+)
 struct AgentInstanceRegistryConcurrencyTests {
     @Test func concurrentRevokeRunsTeardownExactlyOnce() throws {
         for _ in 0..<50 {
