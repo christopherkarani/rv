@@ -305,6 +305,9 @@ enum WriterPolicy {
             words.formIndex(after: &index)
             return true
         }
+        // Attached-only takers always arrive with a non-empty rest (both
+        // `splitShortValue` and `shortEqualsValue` guarantee it), so this
+        // next-word branch only serves plain value shorts.
         guard index + 1 < words.endIndex,
             config.spec.consumesValueWord(words[words.index(after: index)])
         else {
@@ -387,6 +390,9 @@ func extractTargetDirectory(
             }
             args.formIndex(after: &index)
         case .shortEquals(let name, let value):
+            // Post-`=` text is the `=`-value, never cluster letters: a `t`
+            // after `=` is not `-t` (`cp -S=t W a b` reads GNU suffix `=t`,
+            // exact; the legacy scan also ate `W` as an override there).
             if let taken = spec.shortEqualsValue(name: name, value: value),
                 case .shorts(let kept, let attached?) = taken,
                 kept.last == "t"
