@@ -18,6 +18,10 @@ actor FakePendingApprovals: PendingApprovalCoordinating {
         records.append(record)
     }
 
+    func setListError(_ error: PendingApprovalError?) {
+        listError = error
+    }
+
     func create(_ request: PendingApprovalRequest, now: Date) async throws(PendingApprovalError) -> PendingApproval {
         createCalls.append(request)
         let (record, next) = try PendingApprovalLedger.create(

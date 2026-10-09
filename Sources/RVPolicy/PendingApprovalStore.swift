@@ -27,7 +27,7 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
     }
 
     public func create(_ request: PendingApprovalRequest, now: Date) async throws(PendingApprovalError) -> PendingApproval {
-        try mutate(now: now) { records in
+        try mutate(now: now) { records throws(PendingApprovalError) in
             let (record, next) = try PendingApprovalLedger.create(
                 records: records,
                 request: request,
@@ -43,7 +43,7 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
     }
 
     public func load(id: ApprovalID, now: Date) async throws(PendingApprovalError) -> PendingApproval {
-        try mutate(now: now) { records in
+        try mutate(now: now) { records throws(PendingApprovalError) in
             let (record, next) = try PendingApprovalLedger.record(in: records, id: id, now: now)
             return Mutation(record: record, records: next, event: nil)
         }
@@ -56,7 +56,7 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         identity: ApprovalIdentity,
         now: Date
     ) async throws(PendingApprovalError) -> PendingApproval {
-        try mutate(now: now) { records in
+        try mutate(now: now) { records throws(PendingApprovalError) in
             let (record, next) = try PendingApprovalLedger.resolve(
                 records: records,
                 id: id,
@@ -70,14 +70,14 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
     }
 
     public func expire(id: ApprovalID, now: Date) async throws(PendingApprovalError) -> PendingApproval {
-        try mutate(now: now) { records in
+        try mutate(now: now) { records throws(PendingApprovalError) in
             let (record, next) = try PendingApprovalLedger.expire(records: records, id: id, now: now)
             return Mutation(record: record, records: next, event: .expired(record))
         }
     }
 
     public func cancel(id: ApprovalID, now: Date) async throws(PendingApprovalError) -> PendingApproval {
-        try mutate(now: now) { records in
+        try mutate(now: now) { records throws(PendingApprovalError) in
             let (record, next) = try PendingApprovalLedger.cancel(records: records, id: id, now: now)
             return Mutation(record: record, records: next, event: .canceled(record))
         }
@@ -132,7 +132,7 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
 
     private func mutate(
         now: Date,
-        _ body: ([PendingApproval]) throws -> Mutation
+        _ body: ([PendingApproval]) throws(PendingApprovalError) -> Mutation
     ) throws(PendingApprovalError) -> PendingApproval {
         let outcome: (PendingApproval, [PendingApprovalEvent])
         do {
@@ -204,7 +204,7 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         store.load().filter { $0.schemaVersion == 1 }.map(\.approval)
     }
 
-    private func writeRecords(_ records: [PendingApproval]) throws {
+    private func writeRecords(_ records: [PendingApproval]) throws(PendingApprovalError) {
         do {
             try store.save(records.map { PendingApprovalRecord(schemaVersion: 1, approval: $0) })
         } catch {
