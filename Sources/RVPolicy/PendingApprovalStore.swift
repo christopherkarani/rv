@@ -26,8 +26,8 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         ApprovalID(rawValue: UUID().uuidString)
     }
 
-    public func create(_ request: PendingApprovalRequest, now: Date) async throws -> PendingApproval {
-        try mutate(now: now) { records in
+    public func create(_ request: PendingApprovalRequest, now: Date) async throws(PendingApprovalError) -> PendingApproval {
+        try mutate(now: now) { records throws(PendingApprovalError) in
             let (record, next) = try PendingApprovalLedger.create(
                 records: records,
                 request: request,
@@ -37,13 +37,13 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         }
     }
 
-    public func list(now: Date) async throws -> [PendingApproval] {
+    public func list(now: Date) async throws(PendingApprovalError) -> [PendingApproval] {
         let swept = try persistSweep(now: now)
         return PendingApprovalLedger.awaitingHuman(swept, now: now)
     }
 
-    public func load(id: ApprovalID, now: Date) async throws -> PendingApproval {
-        try mutate(now: now) { records in
+    public func load(id: ApprovalID, now: Date) async throws(PendingApprovalError) -> PendingApproval {
+        try mutate(now: now) { records throws(PendingApprovalError) in
             let (record, next) = try PendingApprovalLedger.record(in: records, id: id, now: now)
             return Mutation(record: record, records: next, event: nil)
         }
@@ -55,8 +55,8 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         fingerprint: ActionFingerprint,
         identity: ApprovalIdentity,
         now: Date
-    ) async throws -> PendingApproval {
-        try mutate(now: now) { records in
+    ) async throws(PendingApprovalError) -> PendingApproval {
+        try mutate(now: now) { records throws(PendingApprovalError) in
             let (record, next) = try PendingApprovalLedger.resolve(
                 records: records,
                 id: id,
@@ -69,15 +69,15 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         }
     }
 
-    public func expire(id: ApprovalID, now: Date) async throws -> PendingApproval {
-        try mutate(now: now) { records in
+    public func expire(id: ApprovalID, now: Date) async throws(PendingApprovalError) -> PendingApproval {
+        try mutate(now: now) { records throws(PendingApprovalError) in
             let (record, next) = try PendingApprovalLedger.expire(records: records, id: id, now: now)
             return Mutation(record: record, records: next, event: .expired(record))
         }
     }
 
-    public func cancel(id: ApprovalID, now: Date) async throws -> PendingApproval {
-        try mutate(now: now) { records in
+    public func cancel(id: ApprovalID, now: Date) async throws(PendingApprovalError) -> PendingApproval {
+        try mutate(now: now) { records throws(PendingApprovalError) in
             let (record, next) = try PendingApprovalLedger.cancel(records: records, id: id, now: now)
             return Mutation(record: record, records: next, event: .canceled(record))
         }
@@ -88,7 +88,7 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         fingerprint: ActionFingerprint,
         identity: ApprovalIdentity,
         now: Date
-    ) async throws -> ApprovalConsumption {
+    ) async throws(PendingApprovalError) -> ApprovalConsumption {
         let outcome: (ApprovalConsumption, [PendingApprovalEvent])
         do {
             outcome = try withFileLock {
@@ -132,8 +132,8 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
 
     private func mutate(
         now: Date,
-        _ body: ([PendingApproval]) throws -> Mutation
-    ) throws -> PendingApproval {
+        _ body: ([PendingApproval]) throws(PendingApprovalError) -> Mutation
+    ) throws(PendingApprovalError) -> PendingApproval {
         let outcome: (PendingApproval, [PendingApprovalEvent])
         do {
             outcome = try withFileLock {
@@ -153,7 +153,7 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         return outcome.0
     }
 
-    private func persistSweep(now: Date) throws -> [PendingApproval] {
+    private func persistSweep(now: Date) throws(PendingApprovalError) -> [PendingApproval] {
         let outcome: ([PendingApproval], [PendingApprovalEvent])
         do {
             outcome = try withFileLock {
@@ -204,10 +204,10 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         store.load().filter { $0.schemaVersion == 1 }.map(\.approval)
     }
 
-    private func writeRecords(_ records: [PendingApproval]) throws {
+    private func writeRecords(_ records: [PendingApproval]) throws(PendingApprovalError) {
         do {
             try store.save(records.map { PendingApprovalRecord(schemaVersion: 1, approval: $0) })
-        } catch is FileLockedJSONLStoreError {
+        } catch {
             // RVFileStore boundary: every save failure (encode or IO) becomes
             // the domain persistence error, so withFileLock only ever sees
             // lock-acquisition or lock-setup failures (FileLockedJSONLStoreError),
