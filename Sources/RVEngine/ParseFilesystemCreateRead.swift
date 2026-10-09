@@ -254,8 +254,8 @@ private func redirectTargets(_ tokens: [String]) -> [String]? {
             }
             // `>& 2` / `>& -` (and `N>&` forms) duplicate/close a
             // descriptor; only `>&file` names a destination (mirrors
-            // attachedRedirectTarget). `&>` and `>` always name files,
-            // even numeric ones, so the skip applies to `>&` only.
+            // RedirectOperatorLexer.attachedTarget). `&>` and `>` always
+            // name files, even numeric ones, so the skip applies to `>&` only.
             if token.hasSuffix(">&"),
                 dest == "-" || (dest.isEmpty == false && dest.allSatisfy(\.isNumber))
             {
@@ -264,7 +264,7 @@ private func redirectTargets(_ tokens: [String]) -> [String]? {
             targets.append(dest)
             continue
         }
-        if let attached = attachedRedirectTarget(token) {
+        if let attached = RedirectOperatorLexer.attachedTarget(token) {
             targets.append(attached)
         }
     }
@@ -272,89 +272,11 @@ private func redirectTargets(_ tokens: [String]) -> [String]? {
 }
 
 func isFdDup(_ token: String) -> Bool {
-    token == "2>&1" || token == "1>&2" || token == ">&1" || token == ">&2"
+    RedirectOperatorLexer.isFdDup(token)
 }
 
 func isRedirectOperator(_ token: String) -> Bool {
-    if token == "&>" || token == "&>>" || token == ">&" || token == "<>" {
-        return true
-    }
-    // Optional fd digits (`2>`, `10>>`) then the operator. `<&` is excluded:
-    // input-dups never name a destination.
-    var rest = token[...]
-    while let first = rest.first, first.isASCII, first.isNumber {
-        rest = rest.dropFirst()
-    }
-    return rest == ">" || rest == ">|" || rest == ">>" || rest == ">&" || rest == "<>"
+    // `<&` is excluded: input-dups never name a destination (caller policy
+    // over the lexer — only output operators read true here).
+    RedirectOperatorLexer.classify(token) == .output
 }
-
-private func attachedRedirectTarget(_ token: String) -> String? {
-    if token.hasPrefix(">>"), token.count > 2 {
-        return String(token.dropFirst(2))
-    }
-    if token.hasPrefix(">|"), token.count > 2 {
-        return String(token.dropFirst(2))
-    }
-    // `&>>file` and `>&file` before `&>`: otherwise the rest misparses
-    // (`&>>/t` as `>/t`, `>&/t` as a dup).
-    if token.hasPrefix("&>>"), token.count > 3 {
-        return String(token.dropFirst(3))
-    }
-    // `>&file` duplicates to a file; `>&2` / `>&-` are dup/close, not files.
-    if token.hasPrefix(">&"), token.count > 2 {
-        let rest = String(token.dropFirst(2))
-        if rest == "-" || rest.allSatisfy({ $0.isNumber }) {
-            return nil
-        }
-        return rest.hasPrefix("&") ? nil : rest
-    }
-    if token.hasPrefix("&>"), token.count > 2 {
-        let rest = String(token.dropFirst(2))
-        return rest.hasPrefix("&") ? nil : rest
-    }
-    // `<>file` opens read-write: the target is writable.
-    if token.hasPrefix("<>"), token.count > 2 {
-        return String(token.dropFirst(2))
-    }
-    if token.hasPrefix(">"), token.count > 1, token.hasPrefix(">&") == false {
-        return String(token.dropFirst())
-    }
-    // `[n]>word` / `[n]>>word` / `[n]>|word` / `[n]>&word` / `[n]<>word`.
-    if let fdRest = stripRedirectFdDigits(token) {
-        if fdRest.hasPrefix(">>"), fdRest.count > 2 {
-            let rest = String(fdRest.dropFirst(2))
-            return rest.hasPrefix("&") ? nil : rest
-        }
-        if fdRest.hasPrefix(">|"), fdRest.count > 2 {
-            return String(fdRest.dropFirst(2))
-        }
-        if fdRest.hasPrefix(">&"), fdRest.count > 2 {
-            let rest = String(fdRest.dropFirst(2))
-            if rest == "-" || rest.allSatisfy({ $0.isASCII && $0.isNumber }) {
-                return nil
-            }
-            return rest.hasPrefix("&") ? nil : rest
-        }
-        if fdRest.hasPrefix("<>"), fdRest.count > 2 {
-            return String(fdRest.dropFirst(2))
-        }
-        if fdRest.hasPrefix(">"), fdRest.count > 1, fdRest.hasPrefix(">&") == false {
-            return String(fdRest.dropFirst())
-        }
-    }
-    return nil
-}
-
-/// The operator remainder after fd digits, or nil when the token is not
-/// digit-led (`>>x`, `>&x` keep their own arms above).
-private func stripRedirectFdDigits(_ token: String) -> Substring? {
-    var rest = token[...]
-    var stripped = false
-    while let first = rest.first, first.isASCII, first.isNumber {
-        rest = rest.dropFirst()
-        stripped = true
-    }
-    return stripped ? rest : nil
-}
-
-
