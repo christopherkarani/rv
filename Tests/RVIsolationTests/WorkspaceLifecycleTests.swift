@@ -120,6 +120,73 @@ struct WorkspaceLifecycleTests {
         }
     }
 
+    @Test func closeTerminalFailureReplaysWithoutNewWork() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let lifeLog = tree.rootURL.appendingPathComponent("workspace-\(UUID().uuidString).jsonl")
+        // Fail only the `closed` append: open records normally, then the
+        // leader's close stops terminally at the log write.
+        let store = WorkspaceLifecycleStore(
+            append: { record in
+                if record.kind == .closed {
+                    return .failure(.sessionRecordFailed)
+                }
+                return WorkspaceLifecycleLog.append(record, to: lifeLog)
+            },
+            file: lifeLog
+        )
+        let directory = try #require(WorkingDirectory(validating: tree.workspaceURL.path))
+        let supervisor = try WorkspaceSessionSupervisor.open(directory, lifecycleLog: store).get()
+        guard case .failure(.apply(.sessionRecordFailed)) = supervisor.close() else {
+            Issue.record("close with a failing log must answer apply(sessionRecordFailed)")
+            return
+        }
+        #expect(supervisor.publishCount == 1)
+        // Terminal: the failure replays identically; nothing publishes
+        // again and no `closed` record lands. Without the finished-close
+        // cache this would answer alreadyClosed instead.
+        guard case .failure(.apply(.sessionRecordFailed)) = supervisor.close() else {
+            Issue.record("failed close must replay without new work")
+            return
+        }
+        #expect(supervisor.publishCount == 1)
+        #expect(closedRecordCount(in: lifeLog) == 0)
+    }
+
+    @Test func discardClosePublishesNothing() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let opened = try openLifecycleWorkspace(tree)
+        let supervisor = opened.supervisor
+        let teardown = supervisor.finishSingleRuntime(publish: false)
+        guard case .success = teardown else {
+            Issue.record("discard close must succeed, got \(teardown)")
+            return
+        }
+        #expect(supervisor.snapshot.phase == .closed)
+        #expect(supervisor.publishCount == 0)
+        #expect(closedRecordCount(in: opened.lifeLog) == 1)
+    }
+
+    @Test func discardCloseReplaysWithoutNewWork() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let opened = try openLifecycleWorkspace(tree)
+        let supervisor = opened.supervisor
+        guard case .success = supervisor.finishSingleRuntime(publish: false) else {
+            Issue.record("discard close must succeed")
+            return
+        }
+        // Terminal: the finished discard replays; nothing publishes and
+        // no second `closed` record is appended.
+        guard case .success = supervisor.finishSingleRuntime(publish: false) else {
+            Issue.record("second discard close must replay success")
+            return
+        }
+        #expect(supervisor.publishCount == 0)
+        #expect(closedRecordCount(in: opened.lifeLog) == 1)
+    }
+
     @Test func cancelUnknownRuntimeAnswersWithoutWork() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
