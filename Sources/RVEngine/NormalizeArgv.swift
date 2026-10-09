@@ -78,19 +78,10 @@ func stripAbsolutePathOnArgv0(_ text: String) -> String {
 // the exact argv0-strip condition the view applies.
 func looksLikeAbsoluteExecutable(_ word: String) -> Bool {
     guard word.contains("/") else { return false }
-    if isRedirectToken(word) { return false }
+    if RedirectOperator.isRedirectToken(word) { return false }
     return word.hasPrefix("/") || word.hasPrefix("./") || word.hasPrefix("../")
 }
 
-private func isRedirectToken(_ word: String) -> Bool {
-    if word.hasPrefix(">") || word.hasPrefix("<") || word.hasPrefix("&>") || word.hasPrefix(">&")
-        || word.hasPrefix(":>")
-    {
-        return true
-    }
-    var index = word.startIndex
-    while index < word.endIndex, word[index].isNumber {
-        index = word.index(after: index)
-    }
-    return index > word.startIndex && index < word.endIndex && word[index] == ">"
-}
+// Redirect-head recognition lives in `RedirectOperator`
+// (Normalize.swift): this seam queries its argv view instead of
+// scanning redirect prefixes itself.
