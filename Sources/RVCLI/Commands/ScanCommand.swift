@@ -85,22 +85,9 @@ struct ScanSessions: AsyncParsableCommand {
     }
 
     func run() async throws {
-        let homePath = CLIProcess.environment()["HOME"] ?? ""
-        guard let scanHome = ScanHome(validating: homePath) else {
-            FileHandle.standardError.write(Data("rv scan: HOME is not set\n".utf8))
-            throw ExitCode(1)
-        }
+        let ctx = CommandContext.current(command: "scan", format: format)
+        let scanHome = try ctx.requireHome()
         let packIDs = try flags.resolvedPackIDs()
-        let probe = ThemeProbeFactory.live(
-            jsonFlag: format.json,
-            robotFlag: format.robot,
-            plainFlag: format.plain,
-            noColorFlag: format.noColor
-        )
-        let appearance = CLIAppearance.resolve(probe: probe, requested: OutputModeResolver.requested(
-            json: format.json,
-            robot: format.robot
-        ))
         let result: ScanRunResult
         do {
             result = try ScanRun.execute(
@@ -118,20 +105,15 @@ struct ScanSessions: AsyncParsableCommand {
                 )
             )
         } catch ScanRun.Error.pathNotFound(let missing) {
-            FileHandle.standardError.write(Data("rv scan: path not found: \(missing)\n".utf8))
-            throw ExitCode(1)
+            try ctx.fail("rv scan: path not found: \(missing)\n")
         } catch ScanRun.Error.listingFailed(let path) {
-            FileHandle.standardError.write(Data("rv scan: listing failed: \(path)\n".utf8))
-            throw ExitCode(1)
+            try ctx.fail("rv scan: listing failed: \(path)\n")
         } catch ScanRun.Error.unreadableStore(let path) {
-            FileHandle.standardError.write(Data("rv scan: unreadable store: \(path)\n".utf8))
-            throw ExitCode(1)
+            try ctx.fail("rv scan: unreadable store: \(path)\n")
         } catch ScanRun.Error.prepareFailed(let path) {
-            FileHandle.standardError.write(Data("rv scan: prepare failed: \(path)\n".utf8))
-            throw ExitCode(1)
+            try ctx.fail("rv scan: prepare failed: \(path)\n")
         } catch ScanRun.Error.packsUnavailable {
-            FileHandle.standardError.write(Data("rv scan: packs unavailable\n".utf8))
-            throw ExitCode(1)
+            try ctx.fail("rv scan: packs unavailable\n")
         } catch {
             throw error
         }
@@ -149,13 +131,10 @@ struct ScanSessions: AsyncParsableCommand {
             showCommand: flags.showCommand,
             failOnFindings: flags.failOnFindings,
             setupNudgeRecommended: setupNudge,
-            appearance: appearance,
-            probe: probe
+            appearance: ctx.appearance,
+            probe: ctx.probe
         )
-        if outcome.stdout.isEmpty == false {
-            FileHandle.standardOutput.write(Data(outcome.stdout.utf8))
-        }
-        throw ExitCode(outcome.exitCode)
+        try ctx.emit(stdout: outcome.stdout, exitCode: outcome.exitCode)
     }
 }
 

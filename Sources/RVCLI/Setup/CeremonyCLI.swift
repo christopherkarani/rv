@@ -9,7 +9,7 @@ enum CeremonyCLI {
         plain: Bool,
         noColor: Bool
     ) -> (appearance: CLIAppearance, animate: Bool) {
-        let appearance = CLIAppearance.resolve(
+        let appearance = CommandContext.resolveAppearance(
             json: json,
             robot: robot,
             plain: plain,
@@ -26,16 +26,16 @@ enum CeremonyCLI {
 
     static func stdoutWriter() -> (String) -> Void {
         { chunk in
-            FileHandle.standardOutput.write(Data(chunk.utf8))
+            CommandContext.writeStdout(chunk)
         }
     }
 
     static func emit(_ outcome: SetupOutcome) throws -> Never {
         if outcome.emitted == false, outcome.stdout.isEmpty == false {
-            FileHandle.standardOutput.write(Data(outcome.stdout.utf8))
+            CommandContext.writeStdout(outcome.stdout)
         }
         if outcome.stderr.isEmpty == false {
-            FileHandle.standardError.write(Data(outcome.stderr.utf8))
+            CommandContext.writeStderr(outcome.stderr)
         }
         throw ExitCode(outcome.exitCode)
     }

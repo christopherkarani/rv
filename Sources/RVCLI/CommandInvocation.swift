@@ -8,25 +8,20 @@ enum CommandInvocation {
         guard !raw.isEmpty else {
             throw ValidationError("missing command")
         }
-        let probe = ThemeProbeFactory.live(
-            jsonFlag: format.json,
-            robotFlag: format.robot,
-            plainFlag: format.plain,
-            noColorFlag: format.noColor
+        let ctx = CommandContext.current(
+            command: kind == .explain ? "explain" : "test",
+            format: format
         )
-        let requested = OutputModeResolver.requested(json: format.json, robot: format.robot)
-        let home = CLIProcess.home()
         let result = try await CommandRun.run(
             kind: kind,
             command: raw,
-            probe: probe,
-            requested: requested,
+            probe: ctx.probe,
+            requested: ctx.requested,
             cwd: FileManager.default.currentDirectoryPath,
-            store: allowOnceStore(home: home),
-            home: home
+            store: allowOnceStore(home: ctx.home),
+            home: ctx.home
         )
-        FileHandle.standardOutput.write(Data(result.stdout.utf8))
-        throw ExitCode(result.exitCode)
+        try ctx.emit(stdout: result.stdout, exitCode: result.exitCode)
     }
 
     static func allowOnceStore(home: HomeDirectory?) -> AllowOnceStore {

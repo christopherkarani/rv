@@ -55,8 +55,7 @@ struct OperatorPropose: AsyncParsableCommand {
         case .success(let reply):
             print("operation \(reply.operationID.uuidString) status \(reply.status)")
         case .failure(let error):
-            FileHandle.standardError.write(
-                Data("rv operator propose: \(describe(error))\n".utf8))
+            CommandContext.writeStderr("rv operator propose: \(describe(error))\n")
             throw ExitCode.failure
         }
     }
@@ -141,8 +140,7 @@ struct OperatorProposalStatus: AsyncParsableCommand {
             }
             print(line)
         case .failure(let error):
-            FileHandle.standardError.write(
-                Data("rv operator proposal-status: \(describe(error))\n".utf8))
+            CommandContext.writeStderr("rv operator proposal-status: \(describe(error))\n")
             throw ExitCode.failure
         }
     }
