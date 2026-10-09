@@ -9,7 +9,11 @@ struct RedirectOperatorLexerTests {
     @Test func classify_outputOperatorsBareAndFdPrefixed() {
         for op in [">", ">|", ">>", ">&", "&>", "&>>", "<>"] {
             #expect(RedirectOperatorLexer.classify(op) == .output)
-            #expect(RedirectOperatorLexer.classify("2" + op) == .output || op.hasPrefix("&"))
+        }
+        // `&`-led spellings never take fd digits (pinned as nil in
+        // classify_excludesAmpLedWithFdDigits); the rest do.
+        for op in [">", ">|", ">>", ">&", "<>"] {
+            #expect(RedirectOperatorLexer.classify("2" + op) == .output)
         }
         #expect(RedirectOperatorLexer.classify("2>") == .output)
         #expect(RedirectOperatorLexer.classify("10>>") == .output)
@@ -99,6 +103,14 @@ struct RedirectOperatorLexerTests {
         // Bare `>` names even numeric files; `>&` with a numeric rest dups.
         #expect(RedirectOperatorLexer.attachedTarget(">2") == "2")
         #expect(RedirectOperatorLexer.attachedTarget(">-") == "-")
+    }
+
+    @Test func attachedTarget_unicodeNumericAsymmetry() {
+        // Preserved quirk: the `>&` numeric test is Unicode-bare but
+        // ASCII-gated after fd digits, so `>&²` dups (nil) while `2>&²`
+        // names the file `²`.
+        #expect(RedirectOperatorLexer.attachedTarget(">&²") == nil)
+        #expect(RedirectOperatorLexer.attachedTarget("2>&²") == "²")
     }
 
     @Test func attachedTarget_bareOperatorsNameNothing() {
