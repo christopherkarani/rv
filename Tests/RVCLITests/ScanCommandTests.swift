@@ -221,6 +221,9 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     }
 }
 
+// The Linux gate has no SQLite3 clang module (see scanLinkerSettings in
+// Package.swift): this fixture-backed test compiles only where SQLite3 imports.
+#if canImport(SQLite3)
 @Test func scanRun_prepareFailed_mapsPrepareFailed() throws {
     try withTempScanHome { home, homeURL in
         let tree = homeURL.appendingPathComponent("explicit-tree", isDirectory: true)
@@ -238,6 +241,7 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
         }
     }
 }
+#endif
 
 @Test func scanRun_executeDoesNotContainPipelineLoops() throws {
     let url = URL(fileURLWithPath: #filePath)
@@ -358,6 +362,7 @@ private enum ScanFixtureError: Error {
     case missing(String)
 }
 
+#if canImport(SQLite3)
 private enum ScanSQLiteFixtureError: Error {
     case openFailed
     case execFailed
@@ -373,3 +378,4 @@ private func writeScanSQLiteDatabase(at url: URL, sql: String) throws {
         throw ScanSQLiteFixtureError.execFailed
     }
 }
+#endif
