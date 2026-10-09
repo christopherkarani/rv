@@ -113,4 +113,83 @@ struct CommandContextTests {
         #expect(ctx.explicitRobot)
         #expect(ctx.requested == .robot)
     }
+
+    @Test func intent_initFromFormatFlags() throws {
+        let format = try FormatFlags.parse(["--robot", "--no-color"])
+        let intent = CommandIntent(command: "policy show", format: format)
+        #expect(intent.command == "policy show")
+        #expect(intent.json == false)
+        #expect(intent.robot)
+        #expect(intent.plain == false)
+        #expect(intent.noColor)
+    }
+
+    @Test func resolveAppearance_prettyWhenTTYAndNoForbids() {
+        let probe = ThemeProbe(
+            stdinIsTTY: true,
+            stdoutIsTTY: true,
+            jsonFlag: false,
+            robotFlag: false,
+            plainFlag: false,
+            noColorFlag: false,
+            ci: false,
+            noColorEnv: false,
+            termDumb: false
+        )
+        #expect(
+            CommandContext.resolveAppearance(probe: probe, requested: .automatic)
+                == .pretty(Palette(for: ColorCapability(colorsEnabled: true)))
+        )
+        // Requested pretty wins even without a TTY.
+        let headless = ThemeProbe(
+            terminal: TTYPair(stdinIsTTY: false, stdoutIsTTY: false),
+            forbid: OutputForbid(
+                json: false, robot: false, plain: false, ci: false,
+                noColor: OutputForbid.NoColor(flag: false, env: false, termDumb: false)
+            )
+        )
+        #expect(CommandContext.resolveAppearance(probe: headless, requested: .pretty) != .robot)
+    }
+
+    @Test func current_prettyWhenTTYAndNoFlags() throws {
+        let ctx = try withCLIProcess(stdoutIsTTY: true) {
+            CommandContext.current(command: "scan", json: false, robot: false, plain: false, noColor: false)
+        }
+        #expect(ctx.requested == .automatic)
+        #expect(ctx.explicitRobot == false)
+        #expect(ctx.isRobot == false)
+        #expect(ctx.appearance == .pretty(Palette(for: ColorCapability(colorsEnabled: true))))
+    }
+
+    @Test func emit_skipsEmptyStreamsAndThrows() throws {
+        let ctx = try withCLIProcess {
+            CommandContext.current(command: "doctor", json: false, robot: false, plain: false, noColor: false)
+        }
+        #expect(throws: ExitCode(3)) {
+            try ctx.emit(stdout: "", stderr: "", exitCode: 3)
+        }
+        #expect(throws: ExitCode(7)) {
+            try CommandContext.emit(stdout: "", stderr: "", exitCode: 7)
+        }
+    }
+
+    @Test func fail_defaultsToExitOne() throws {
+        let ctx = try withCLIProcess {
+            CommandContext.current(command: "packs", json: false, robot: false, plain: false, noColor: false)
+        }
+        #expect(throws: ExitCode(1)) {
+            try ctx.fail("rv packs: bad\n")
+        }
+        #expect(throws: ExitCode(1)) {
+            try CommandContext.fail("rv packs: bad\n")
+        }
+    }
+
+    @Test func requireHome_returnsHomeWhenSet() throws {
+        let home = try isolatedHome()
+        let found = try withCLIProcess(home: home) {
+            try CommandContext.requireHome(command: "scan")
+        }
+        #expect(found == home)
+    }
 }
