@@ -272,9 +272,13 @@ private func layoutFixture() throws -> (URL, URL) {
     #expect(try reopenNotice(pad: String(repeating: "x", count: 1024)) == nil)
     #expect(try reopenNotice(pad: String(repeating: "x", count: 1025)) == .corrupt)
     // Nodes: exactly 512 accepted, 513 rejected. The pad array contributes
-    // one node plus one per element.
-    #expect(try reopenNotice(pad: Array(repeating: 1, count: 512 - baseNodes - 1)) == nil)
-    #expect(try reopenNotice(pad: Array(repeating: 1, count: 513 - baseNodes - 1)) == .corrupt)
+    // one node plus one per element. The boundary math needs fixture
+    // headroom: fail loudly here if the fixture ever outgrows the bound,
+    // and clamp at zero so the pad below can never trap in
+    // Array(repeating:count:) with a negative count.
+    #expect(baseNodes < 512)
+    #expect(try reopenNotice(pad: Array(repeating: 1, count: max(0, 512 - baseNodes - 1))) == nil)
+    #expect(try reopenNotice(pad: Array(repeating: 1, count: max(0, 513 - baseNodes - 1))) == .corrupt)
     // Depth: a scalar at depth 32 accepted, at depth 33 rejected. The pad
     // value sits at depth 1, so 31 wrappings land the scalar at 32.
     #expect(try reopenNotice(pad: nestedJSON(wrappings: 31)) == nil)

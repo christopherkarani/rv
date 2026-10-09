@@ -1,6 +1,9 @@
 import Foundation
 
 /// JSON-safe analytics property values. Never command text or paths.
+///
+/// Codable as a bare JSON scalar (or string array). The former
+/// `jsonObject` accessor was removed; encode the value instead.
 public enum AnalyticsPropertyValue: Sendable, Equatable, Codable {
     case string(String)
     case int(Int)

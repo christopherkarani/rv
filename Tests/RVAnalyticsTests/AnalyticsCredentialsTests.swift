@@ -130,6 +130,20 @@ struct AnalyticsPropertyValueTests {
         #expect(String(data: try JSONEncoder().encode(AnalyticsPropertyValue.strings(["a"])), encoding: .utf8) == "[\"a\"]")
     }
 
+    @Test func intZeroOneDoNotDecodeAsBool() throws {
+        // The bool-first decode order must not confuse JSON 0/1 with false/true.
+        #expect(try JSONDecoder().decode(AnalyticsPropertyValue.self, from: Data("0".utf8)) == .int(0))
+        #expect(try JSONDecoder().decode(AnalyticsPropertyValue.self, from: Data("1".utf8)) == .int(1))
+        #expect(try JSONDecoder().decode(AnalyticsPropertyValue.self, from: Data("true".utf8)) == .bool(true))
+        for value: AnalyticsPropertyValue in [.int(0), .int(1), .bool(true)] {
+            let data = try JSONEncoder().encode(value)
+            #expect(try JSONDecoder().decode(AnalyticsPropertyValue.self, from: data) == value)
+        }
+        #expect(String(data: try JSONEncoder().encode(AnalyticsPropertyValue.int(0)), encoding: .utf8) == "0")
+        #expect(String(data: try JSONEncoder().encode(AnalyticsPropertyValue.int(1)), encoding: .utf8) == "1")
+        #expect(String(data: try JSONEncoder().encode(AnalyticsPropertyValue.bool(true)), encoding: .utf8) == "true")
+    }
+
     @Test func payloadDefaultsAndNames() {
         let payload = AnalyticsPayload(event: AnalyticsPayload.installEvent, distinctID: "id")
         #expect(payload.properties.isEmpty)
