@@ -123,6 +123,12 @@ struct ScanSessions: AsyncParsableCommand {
         } catch ScanRun.Error.listingFailed(let path) {
             FileHandle.standardError.write(Data("rv scan: listing failed: \(path)\n".utf8))
             throw ExitCode(1)
+        } catch ScanRun.Error.unreadableStore(let path) {
+            FileHandle.standardError.write(Data("rv scan: unreadable store: \(path)\n".utf8))
+            throw ExitCode(1)
+        } catch ScanRun.Error.prepareFailed(let path) {
+            FileHandle.standardError.write(Data("rv scan: prepare failed: \(path)\n".utf8))
+            throw ExitCode(1)
         } catch ScanRun.Error.packsUnavailable {
             FileHandle.standardError.write(Data("rv scan: packs unavailable\n".utf8))
             throw ExitCode(1)
@@ -208,6 +214,8 @@ enum ScanRun {
         case packsUnavailable
         case includeGlobRequiresPath
         case listingFailed(String)
+        case unreadableStore(String)
+        case prepareFailed(String)
     }
 
     static func run(_ request: Request) throws -> ScanReport {
@@ -231,7 +239,7 @@ enum ScanRun {
                 fileManager: request.fileManager
             )
             return ScanRunResult(report: result.report, eventHosts: result.eventHosts)
-        } catch let error as SessionScanError {
+        } catch {
             throw mapped(error)
         }
     }
@@ -242,6 +250,8 @@ enum ScanRun {
         case .packsUnavailable: .packsUnavailable
         case .includeGlobRequiresPath: .includeGlobRequiresPath
         case .listingFailed(let path): .listingFailed(path)
+        case .unreadableStore(let path): .unreadableStore(path)
+        case .prepareFailed(let path): .prepareFailed(path)
         }
     }
 

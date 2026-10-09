@@ -24,6 +24,20 @@ import RVDomain
     #expect(events.allSatisfy { $0.sourcePath == fixture.path })
 }
 
+@Test func piAdapter_emptyOrUnreadableThrows() throws {
+    let adapter = PiStoreAdapter()
+    let source = URL(fileURLWithPath: "/tmp/pi-unreadable.jsonl")
+    #expect(throws: ScanStoreError.unreadable(sourcePath: source.path)) {
+        _ = try adapter.extract(fileURL: source, data: Data())
+    }
+    #expect(throws: ScanStoreError.unreadable(sourcePath: source.path)) {
+        _ = try adapter.extract(fileURL: source, data: Data([0xFF, 0xFE]))
+    }
+    #expect(throws: ScanStoreError.unreadable(sourcePath: source.path)) {
+        _ = try adapter.extract(fileURL: source, data: Data("not-json\n".utf8))
+    }
+}
+
 @Test func piAdapter_skipsUnrecognizedExtension() throws {
     let adapter = PiStoreAdapter()
     let other = URL(fileURLWithPath: "/tmp/notes.txt")

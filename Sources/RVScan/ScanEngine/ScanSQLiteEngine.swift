@@ -17,33 +17,41 @@ enum ScanSQLiteEngine {
         sourcePath: String,
         sql: String,
         visit: (OpaquePointer) -> Void
-    ) throws {
+    ) throws(ScanStoreError) {
         let opened = try deserializedDatabase(from: data, sourcePath: sourcePath)
 
         // Keep SQLite statement use inside the borrow; the owner stays alive
         // until this closure finalizes every statement and returns.
-        try opened.withConnection { db in
-            var statement: OpaquePointer?
-            let prepareStatus = sqlite3_prepare_v2(db, sql, -1, &statement, nil)
-            guard prepareStatus == SQLITE_OK, let statement else {
-                if statement != nil { _ = sqlite3_finalize(statement) }
-                switch prepareStatus {
-                case SQLITE_NOTADB, SQLITE_CORRUPT, SQLITE_CANTOPEN:
+        // `withConnection` is untyped, so rebind its error: it only rethrows
+        // this body's `ScanStoreError`, making the fallback unreachable.
+        do {
+            try opened.withConnection { db in
+                var statement: OpaquePointer?
+                let prepareStatus = sqlite3_prepare_v2(db, sql, -1, &statement, nil)
+                guard prepareStatus == SQLITE_OK, let statement else {
+                    if statement != nil { _ = sqlite3_finalize(statement) }
+                    switch prepareStatus {
+                    case SQLITE_NOTADB, SQLITE_CORRUPT, SQLITE_CANTOPEN:
+                        throw ScanStoreError.unreadable(sourcePath: sourcePath)
+                    default:
+                        throw ScanStoreError.prepareFailed(sourcePath: sourcePath)
+                    }
+                }
+                defer { _ = sqlite3_finalize(statement) }
+
+                var stepStatus = sqlite3_step(statement)
+                while stepStatus == SQLITE_ROW {
+                    visit(statement)
+                    stepStatus = sqlite3_step(statement)
+                }
+                guard stepStatus == SQLITE_DONE else {
                     throw ScanStoreError.unreadable(sourcePath: sourcePath)
-                default:
-                    throw ScanStoreError.prepareFailed(sourcePath: sourcePath)
                 }
             }
-            defer { _ = sqlite3_finalize(statement) }
-
-            var stepStatus = sqlite3_step(statement)
-            while stepStatus == SQLITE_ROW {
-                visit(statement)
-                stepStatus = sqlite3_step(statement)
-            }
-            guard stepStatus == SQLITE_DONE else {
-                throw ScanStoreError.unreadable(sourcePath: sourcePath)
-            }
+        } catch let error as ScanStoreError {
+            throw error
+        } catch {
+            throw ScanStoreError.unreadable(sourcePath: sourcePath)
         }
     }
 
@@ -55,7 +63,7 @@ enum ScanSQLiteEngine {
     private static func deserializedDatabase(
         from data: Data,
         sourcePath: String
-    ) throws -> OwnedSQLiteDatabase {
+    ) throws(ScanStoreError) -> OwnedSQLiteDatabase {
         guard data.starts(with: sqliteHeader) else {
             throw ScanStoreError.unreadable(sourcePath: sourcePath)
         }

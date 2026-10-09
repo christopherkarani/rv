@@ -22,7 +22,7 @@ public struct OpenCodeStoreAdapter: SessionStoreAdapter {
 
     /// Surface-extract bash `part` rows from provided store bytes.
     /// `fileURL` is provenance only; missing or unreadable `data` throws.
-    public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
+    public func extract(fileURL: URL, data: Data) throws(ScanStoreError) -> [ExtractedEvent] {
         let sourcePath = fileURL.path
         var events: [ExtractedEvent] = []
         try ScanSQLiteEngine.rows(
