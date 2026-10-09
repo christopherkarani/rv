@@ -72,18 +72,10 @@ struct RuntimeAdmissionPipes {
     }
 
     private mutating func relocate(atLeast floor: Int32) -> Bool {
-        relocate(&requestRead, floor) && relocate(&requestWrite, floor)
-            && relocate(&responseRead, floor) && relocate(&responseWrite, floor)
-    }
-
-    private func relocate(_ fd: inout Int32, _ floor: Int32) -> Bool {
-        guard fd >= 0 else { return false }
-        if fd >= floor { return true }
-        let moved = fcntl(fd, F_DUPFD_CLOEXEC, floor)
-        guard moved >= 0 else { return false }
-        close(fd)
-        fd = moved
-        return true
+        relocateDescriptor(&requestRead, above: floor)
+            && relocateDescriptor(&requestWrite, above: floor)
+            && relocateDescriptor(&responseRead, above: floor)
+            && relocateDescriptor(&responseWrite, above: floor)
     }
 }
 
@@ -214,9 +206,6 @@ func runAdmittedSeatbeltCommand(
 }
 
 #if os(macOS)
-private let admittedHandshakeScript =
-    "printf %s \"$1\" >&3 || exit 127; exec 3>&- || exit 127; shift; exec \"$@\""
-
 private func spawnAdmittedCommand(
     _ command: IsolatedCommand,
     launch: AdmittedLaunchContext
@@ -238,15 +227,15 @@ private func spawnAdmittedCommand(
     }
     guard fcntl(readEnd, F_SETFD, FD_CLOEXEC) >= 0,
         fcntl(writeEnd, F_SETFD, FD_CLOEXEC) >= 0,
-        moveAdmittedDescriptor(&readEnd, floor: 8),
-        moveAdmittedDescriptor(&writeEnd, floor: 8)
+        relocateDescriptor(&readEnd, above: 8),
+        relocateDescriptor(&writeEnd, above: 8)
     else {
         return .failure(.spawnFailed)
     }
     let openedNull = open("/dev/null", O_RDWR | O_CLOEXEC)
     guard openedNull >= 0 else { return .failure(.spawnFailed) }
     nullFD = openedNull
-    guard moveAdmittedDescriptor(&nullFD, floor: 8) else { return .failure(.spawnFailed) }
+    guard relocateDescriptor(&nullFD, above: 8) else { return .failure(.spawnFailed) }
 
     var attributes: posix_spawnattr_t?
     guard posix_spawnattr_init(&attributes) == 0 else { return .failure(.spawnFailed) }
@@ -286,7 +275,7 @@ private func spawnAdmittedCommand(
         launch.profileSource,
         "/bin/sh",
         "-c",
-        admittedHandshakeScript,
+        spawnHandshakeScript,
         "rv-admit",
         nonce,
         command.executable,
@@ -299,8 +288,8 @@ private func spawnAdmittedCommand(
         egressProxyPort: launch.egressProxyPort,
         productive: launch.productive
     )
-    let argv = AdmissionSpawnPointers(arguments)
-    let envp = AdmissionSpawnPointers(environment)
+    let argv = SpawnPointers(arguments)
+    let envp = SpawnPointers(environment)
     defer {
         argv.release()
         envp.release()
@@ -342,31 +331,19 @@ private func spawnAdmittedCommand(
     )
 }
 
-private func moveAdmittedDescriptor(_ fd: inout Int32, floor: Int32) -> Bool {
-    guard fd >= 0 else { return false }
-    if fd >= floor { return true }
-    let moved = fcntl(fd, F_DUPFD_CLOEXEC, floor)
-    guard moved >= 0 else { return false }
-    close(fd)
-    fd = moved
-    return true
-}
-
 private func waitForAdmittedPayload(
     root: pid_t,
     readEnd: Int32,
     nonce: String,
     sessionLeader: pid_t
 ) -> Result<Int32, RuntimeAdmissionExecutorError> {
-    let expected = Data(nonce.utf8)
-    var handshake = Data()
+    var matcher = HandshakePrefixMatcher(expected: Data(nonce.utf8))
     var established = false
     var status: Int32?
     while true {
         let cancel = blockingWorkIsCancelled()
         if established == false {
-            handshake.append(admissionReadAvailable(readEnd))
-            if handshake.starts(with: expected), handshake.count >= expected.count {
+            if matcher.append(admissionReadAvailable(readEnd)) {
                 established = true
             }
         }
@@ -380,8 +357,7 @@ private func waitForAdmittedPayload(
         let rootGone = status != nil || (kill(root, 0) == -1 && errno == ESRCH)
         if cancel || rootGone {
             if established == false {
-                handshake.append(admissionReadAvailable(readEnd))
-                if handshake.starts(with: expected), handshake.count >= expected.count {
+                if matcher.append(admissionReadAvailable(readEnd)) {
                     established = true
                 }
             }
@@ -445,32 +421,4 @@ private func admittedExitStatus(_ status: Int32) -> Int32 {
     return status
 }
 
-private struct AdmissionSpawnPointers {
-    private var storage: [UnsafeMutablePointer<CChar>?]
-
-    init(_ values: [String]) {
-        storage = values.map { value in
-            value.withCString { strdup($0) }
-        }
-        storage.append(nil)
-    }
-
-    /// Runs `body` with the vector base pointer. Nil only when the vector is
-    /// empty, which construction forbids (init always appends the terminator).
-    func withPointers<T>(
-        _ body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> T
-    ) -> T? {
-        var values = storage
-        return values.withUnsafeMutableBufferPointer { buffer in
-            guard let base = buffer.baseAddress else {
-                return nil
-            }
-            return body(base)
-        }
-    }
-
-    func release() {
-        for pointer in storage { free(pointer) }
-    }
-}
 #endif
