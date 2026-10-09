@@ -537,30 +537,22 @@ extension ShellPipeline {
         while iteration < Normalize.maxWrapperIterations {
             iteration += 1
             if let next = stripPrefixStep(current, with: stripSudo) {
-                if let head = next.head {
-                    prefix.append(.wrapper(head: head))
-                }
+                prefix.append(.wrapper(head: next.head))
                 current = next.rest
                 continue
             }
             if let next = stripPrefixStep(current, with: stripEnv) {
-                if let head = next.head {
-                    prefix.append(.wrapper(head: head))
-                }
+                prefix.append(.wrapper(head: next.head))
                 current = next.rest
                 continue
             }
             if let next = stripPrefixStep(current, with: stripCommandWrapper) {
-                if let head = next.head {
-                    prefix.append(.wrapper(head: head))
-                }
+                prefix.append(.wrapper(head: next.head))
                 current = next.rest
                 continue
             }
             if let next = stripPrefixStep(current, with: stripLeadingBackslash) {
-                if let head = next.head {
-                    prefix.append(.wrapper(head: head))
-                }
+                prefix.append(.wrapper(head: next.head))
                 current = next.rest
                 continue
             }
@@ -608,17 +600,21 @@ extension ShellPipeline {
         return (stripLeadingAssignmentPrefixes(piece), assignments, values)
     }
 
-    /// Runs one wrapper strip: the view advances whenever the strip fires,
-    /// and the erased head is recorded alongside it, atomically. One loop
-    /// strips and records, so the prefix cannot drift from the view.
-    private static func stripPrefixStep(
+    /// Runs one wrapper strip, guarded on recordability: the view advances
+    /// only when the erased head splits cleanly, so the prefix records
+    /// exactly what the view erases. A strip the recorder cannot split is
+    /// treated as no strip — the wrapper stays in the view (fail-closed) —
+    /// instead of advancing silently unbound. Internal for unit tests.
+    static func stripPrefixStep(
         _ text: String,
         with strip: (String) -> String?
-    ) -> (head: String?, rest: String)? {
-        guard let rest = strip(text) else {
+    ) -> (head: String, rest: String)? {
+        guard let rest = strip(text),
+            let head = erasedHead(of: text, keeping: rest)
+        else {
             return nil
         }
-        return (erasedHead(of: text, keeping: rest), rest)
+        return (head, rest)
     }
 
     /// The span a wrapper strip erased: the input minus the kept remainder,
@@ -626,8 +622,8 @@ extension ShellPipeline {
     /// because masking pads a trailing masked lexeme with spaces, which
     /// would otherwise unalign the suffix split exactly when the tail is
     /// masked (and the strip would go unrecorded while the view strips it).
-    /// Nil when the split does not align or the head is empty; the view
-    /// still advances, exactly as the legacy strip loop did.
+    /// Nil when the split does not align or the head is empty; the caller
+    /// treats that as no strip, so the view never advances unrecorded.
     private static func erasedHead(of text: String, keeping rest: String) -> String? {
         let core = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard core.hasSuffix(rest) else {

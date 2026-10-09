@@ -74,6 +74,54 @@ import RVDomain
     }
 }
 
+@Test func deriveMatching_goldenPinsBundleAndDisplay() {
+    // Full-bundle goldens for the fused derivation, including the
+    // wrapper-behind-masked-tail inputs whose prefix the legacy recorder
+    // dropped (now bound, fail-closed) and the prompt display tag derived
+    // from the same bundle. The leading-newline view matches legacy: the
+    // wrapper strips trim only spaces and tabs.
+    let goldens: [(input: String, view: String, masked: [String], prefix: [String], display: String?)] = [
+        (#"sudo echo "secret""#, "echo", ["secret"], ["sudo"], "sudo"),
+        (#"sudo echo "a" "b""#, "echo", ["a", "b"], ["sudo"], "sudo"),
+        ("env FOO=1 echo aaa", "echo", ["aaa"], ["env FOO=1"], "env"),
+        (#"sudo /bin/echo "secret""#, "echo", ["secret"], ["sudo", "/bin/echo"], "sudo /bin/echo"),
+        ("FOO=bar sudo git reset --hard", "git reset --hard", [], ["FOO=bar", "sudo"], "FOO=… sudo"),
+        (
+            "FOO=bar sudo /bin/git reset --hard", "git reset --hard", [],
+            ["FOO=bar", "sudo", "/bin/git"], "FOO=… sudo /bin/git"
+        ),
+        ("git reset --hard", "git reset --hard", [], [], nil),
+        ("sudo\tgit push", "git push", [], ["sudo"], "sudo"),
+        ("  sudo git push  ", "git push", [], ["sudo"], "sudo"),
+        ("sudo\ngit push", "\ngit push", [], ["sudo"], "sudo"),
+        ("command -v git", "command -v git", [], [], nil),
+        ("\\git reset --hard", "git reset --hard", [], ["\\"], "\\"),
+        ("sudo -u root git reset --hard", "root git reset --hard", [], ["sudo -u"], "sudo"),
+        ("$'sudo' git reset --hard", "git reset --hard", [], ["sudo"], "sudo"),
+    ]
+    for golden in goldens {
+        let derivation = ShellPipeline.deriveMatching(golden.input)
+        #expect(derivation.view == MatchingView(golden.view), "view for: \(golden.input)")
+        #expect(derivation.masked == golden.masked, "masked for: \(golden.input)")
+        #expect(derivation.prefix.map(\.raw) == golden.prefix, "prefix for: \(golden.input)")
+        #expect(
+            ShellPipeline.invocationDisplay(of: golden.input) == golden.display,
+            "display for: \(golden.input)"
+        )
+    }
+}
+
+@Test func stripPrefixStep_guardsUnrecordableStrips() {
+    // A strip that rewrites instead of returning a split-off suffix must
+    // not advance the view: without the guard the loop would erase text
+    // the prefix never records.
+    #expect(ShellPipeline.stripPrefixStep("sudo git push", with: { _ in "REWRITTEN" }) == nil)
+    #expect(ShellPipeline.stripPrefixStep("git push", with: stripSudo) == nil)
+    let sudo = ShellPipeline.stripPrefixStep("sudo git push", with: stripSudo)
+    #expect(sudo?.head == "sudo")
+    #expect(sudo?.rest == "git push")
+}
+
 @Test func deriveMatching_projectionsMatchEntryPoints() {
     // Every public/internal entry point projects its field from the same
     // bundle the derivation returns.

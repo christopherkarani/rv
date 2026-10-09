@@ -17,6 +17,12 @@ import RVDomain
 /// prefix cannot drift from the view — anything the view drops is
 /// recorded here.
 ///
+/// Migration note: the fused pass records wrapper heads behind masked
+/// tails that the legacy recorder silently dropped (`sudo echo "secret"`
+/// now binds `["sudo"]`, previously `[]`). Grants minted under the old
+/// bare binding will not spend for those commands; the owner re-approves
+/// once under the tightened binding.
+///
 /// The pieces are raw command text and may carry secrets (environment
 /// values, wrapper flags). Like masked segments, they must only be
 /// digested — never stored, transmitted, or displayed verbatim. Human
