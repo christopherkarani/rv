@@ -109,22 +109,32 @@ def _stat_socket(path: str) -> tuple[int, int]:
 
 
 def _check_parent_modes(path: str) -> None:
-    """Require the two parent dirs to exist at 0700 owned by this uid.
+    """Require safe parent dirs: the ``rv`` dir must be 0700 owned by this
+    uid; the base dir (``$XDG_RUNTIME_DIR``, ``$HOME/.config``) must exist
+    owned by this uid and must not be group/world-writable.
 
-    Mirrors what ``UnixSocketPath.prepareRuntime`` establishes. Mismatch is
-    ``ConnectionFailed``: the SDK reports, never repairs.
+    Mirrors what ``UnixSocketPath.prepareRuntime`` establishes: the server
+    owns only the ``rv`` dir and never chmods a pre-existing base. Mismatch
+    is ``ConnectionFailed``: the SDK reports, never repairs.
     """
-    parent = os.path.dirname(path)
-    for _ in range(2):
-        try:
-            info = os.stat(parent)
-        except OSError as exc:
-            raise ConnectionFailed(f"cannot stat socket dir {parent}: {exc}") from exc
-        if info.st_uid != os.getuid():
-            raise ConnectionFailed(f"socket dir not owned by uid {os.getuid()}: {parent}")
-        if stat.S_IMODE(info.st_mode) != 0o700:
-            raise ConnectionFailed(f"socket dir is not owner-only (0700): {parent}")
-        parent = os.path.dirname(parent)
+    inner = os.path.dirname(path)
+    try:
+        info = os.stat(inner)
+    except OSError as exc:
+        raise ConnectionFailed(f"cannot stat socket dir {inner}: {exc}") from exc
+    if info.st_uid != os.getuid():
+        raise ConnectionFailed(f"socket dir not owned by uid {os.getuid()}: {inner}")
+    if stat.S_IMODE(info.st_mode) != 0o700:
+        raise ConnectionFailed(f"socket dir is not owner-only (0700): {inner}")
+    base = os.path.dirname(inner)
+    try:
+        base_info = os.stat(base)
+    except OSError as exc:
+        raise ConnectionFailed(f"cannot stat socket dir {base}: {exc}") from exc
+    if base_info.st_uid != os.getuid():
+        raise ConnectionFailed(f"socket dir not owned by uid {os.getuid()}: {base}")
+    if stat.S_IMODE(base_info.st_mode) & 0o022:
+        raise ConnectionFailed(f"socket base dir is group/world-writable: {base}")
 
 
 def _same_socket(before: tuple[int, int], path: str) -> bool:

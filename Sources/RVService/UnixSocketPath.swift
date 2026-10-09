@@ -35,7 +35,7 @@ public enum UnixSocketPath {
         let socket = URL(fileURLWithPath: raw, isDirectory: true)
             .appendingPathComponent(directoryName, isDirectory: true)
             .appendingPathComponent(socketFileName)
-        guard socket.path.utf8.count + 1 <= 108 else {
+        guard socket.path.utf8.count + 1 <= maxSocketPathBytes else {
             throw UnixSocketPathError.pathTooLong
         }
         return socket
@@ -88,15 +88,54 @@ public enum UnixSocketPath {
         return String(cString: pointer)
     }
 
-    /// Creates the socket's two parent directories at 0700, then unlinks a stale socket.
+    /// Prepares the socket's parents, then unlinks a stale socket.
+    ///
+    /// Only the `rv` directory is RV-owned: it is created at 0700 and always
+    /// chmodded back to 0700. The base directory (`$XDG_RUNTIME_DIR`,
+    /// `$HOME/.config`) is created at 0700 when missing, but a pre-existing
+    /// base is never chmodded — it only has to be a directory owned by this
+    /// uid. The stale entry is unlinked only when it is a socket or a
+    /// symlink; anything else fails closed so a directory or user file at the
+    /// socket path is never deleted.
     public static func prepareRuntime(for socketURL: URL) throws {
         let rvDir = socketURL.deletingLastPathComponent()
-        let xdgDir = rvDir.deletingLastPathComponent()
-        try createOwnerOnlyDirectory(xdgDir)
+        let baseDir = rvDir.deletingLastPathComponent()
+        try prepareBaseDirectory(baseDir)
         try createOwnerOnlyDirectory(rvDir)
-        let path = socketURL.path
-        if FileManager.default.fileExists(atPath: path) {
+        try removeStaleSocket(at: socketURL)
+    }
+
+    /// Unlinks `socketURL` when it names a socket. Anything else — including
+    /// a missing path — is left alone. Listener teardown only.
+    static func removeSocketFileIfSocket(at socketURL: URL) {
+        guard fileType(at: socketURL) == .socket else { return }
+        try? FileManager.default.removeItem(at: socketURL)
+    }
+
+    private enum FileKind {
+        case absent
+        case socket
+        case symlink
+        case other
+    }
+
+    private static func fileType(at url: URL) -> FileKind {
+        var status = stat()
+        guard lstat(url.path, &status) == 0 else { return .absent }
+        let mode = UInt32(status.st_mode)
+        if mode & UInt32(S_IFMT) == UInt32(S_IFSOCK) { return .socket }
+        if mode & UInt32(S_IFMT) == UInt32(S_IFLNK) { return .symlink }
+        return .other
+    }
+
+    private static func removeStaleSocket(at socketURL: URL) throws {
+        switch fileType(at: socketURL) {
+        case .absent:
+            return
+        case .socket, .symlink:
             try FileManager.default.removeItem(at: socketURL)
+        case .other:
+            throw UnixSocketPathError.permission
         }
     }
 
@@ -119,6 +158,24 @@ public enum UnixSocketPath {
             throw UnixSocketPathError.permission
         }
         return raw.intValue
+    }
+
+    /// The base directory is shared with the rest of the system: create it
+    /// owner-only when missing, but never chmod a pre-existing base — it
+    /// only has to be a directory owned by this uid.
+    private static func prepareBaseDirectory(_ url: URL) throws {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+            try createOwnerOnlyDirectory(url)
+            return
+        }
+        guard isDirectory.boolValue else {
+            throw UnixSocketPathError.permission
+        }
+        let owner = try FileManager.default.attributesOfItem(atPath: url.path)[.ownerAccountID]
+        guard (owner as? NSNumber)?.uint32Value == geteuid() else {
+            throw UnixSocketPathError.permission
+        }
     }
 
     private static func createOwnerOnlyDirectory(_ url: URL) throws {

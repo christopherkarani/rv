@@ -129,6 +129,35 @@ struct UnixSocketPathTests {
         #expect(try UnixSocketPath.posixMode(of: socket.deletingLastPathComponent()) & 0o777 == 0o700)
         #expect(FileManager.default.fileExists(atPath: socket.path) == false)
     }
+
+    @Test func prepareRuntimeLeavesPreexistingBaseModeAlone() throws {
+        let base = shortRuntimeDir("b")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: base.path
+        )
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let socket = try UnixSocketPath.resolve(xdgRuntimeDir: base.path)
+        try UnixSocketPath.prepareRuntime(for: socket)
+
+        #expect(try UnixSocketPath.posixMode(of: base) & 0o777 == 0o755)
+        #expect(try UnixSocketPath.posixMode(of: socket.deletingLastPathComponent()) & 0o777 == 0o700)
+    }
+
+    @Test func xdgResolveUsesPlatformPathBudget() throws {
+        // 106 bytes + NUL: fits the Linux 108 budget, exceeds Darwin's 104.
+        let base = "/" + String(repeating: "y", count: 89 - 1)
+        #if os(Linux)
+        let socket = try UnixSocketPath.resolve(xdgRuntimeDir: base)
+        #expect(socket.path.hasSuffix("/rv/evaluate.sock"))
+        #else
+        #expect(throws: UnixSocketPathError.pathTooLong) {
+            _ = try UnixSocketPath.resolve(xdgRuntimeDir: base)
+        }
+        #endif
+    }
 }
 
 /// Darwin TMPDIR plus a UUID overflows sockaddr_un (108 bytes) in resolve.

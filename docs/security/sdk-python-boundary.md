@@ -22,10 +22,11 @@ which a non-Swift client must not emulate.
 
 ## The v1 trust root is the OS user boundary
 
-- Transports: owner-only AF_UNIX sockets (`0600` socket, `0700` parents, checked
-  by the SDK and never repaired), same-UID peers (filesystem identity plus the
-  `getpeereid` gate on the macOS listener), no `/tmp` fallback, `sockaddr_un`
-  length caps, post-connect inode re-verify.
+- Transports: owner-only AF_UNIX sockets (`0600` socket, `0700` `rv` dir,
+  base dir owned and not group/world-writable, all checked by the SDK and
+  never repaired), same-UID peers (filesystem identity plus the `getpeereid`
+  gate on the macOS listener), no `/tmp` fallback, `sockaddr_un` length caps,
+  post-connect inode re-verify.
 - Requests carry no principal fields: no owner, definition authority, instance,
   session authority, workspace authority, approval, or `trusted` status. The
   wire has nowhere to put them and the curated API has no such parameters.

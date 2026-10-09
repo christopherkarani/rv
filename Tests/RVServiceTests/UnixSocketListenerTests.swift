@@ -1,6 +1,7 @@
 #if canImport(Darwin)
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 import RVDomain
 import RVIPC
@@ -247,6 +248,154 @@ struct UnixSocketListenerTests {
         #expect(process.terminationStatus == 1)
         let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         #expect(err.contains("HOME is required"))
+    }
+
+    @Test func concurrentConnectionsAreBothServed() throws {
+        let home = try makeIsolatedHome("conc")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
+        let listener = UnixSocketListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        let first = try retryDarwinConnect(path: socketURL.path)
+        defer { first.close() }
+        let firstAck = try IPCJSON.decode(
+            HelloAck.self,
+            from: first.send(body: try IPCJSON.encode(Hello()))
+        )
+        #expect(firstAck.status == .ok)
+
+        // The first connection now parks its serve loop in recv. A second
+        // connection must still be accepted and answered: serving on the
+        // serial accept queue would starve it behind the first connection.
+        let second = try retryDarwinConnect(path: socketURL.path)
+        defer { second.close() }
+        let box = ReplyBox()
+        let done = DispatchSemaphore(value: 0)
+        let held = UncheckedClient(second)
+        DispatchQueue.global().async {
+            box.data = try? held.client.send(body: (try? IPCJSON.encode(Hello())) ?? Data())
+            done.signal()
+        }
+        guard done.wait(timeout: .now() + 10) == .success, let data = box.data else {
+            Issue.record("second concurrent connection was not served within 10s")
+            return
+        }
+        let secondAck = try IPCJSON.decode(HelloAck.self, from: data)
+        #expect(secondAck.status == .ok)
+    }
+
+    @Test func doubleStartThrowsAndFirstListenerKeepsServing() throws {
+        let home = try makeIsolatedHome("dbl")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
+        let listener = UnixSocketListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        #expect(throws: DarwinFrameError.alreadyStarted) {
+            try listener.start()
+        }
+
+        let client = try retryDarwinConnect(path: socketURL.path)
+        defer { client.close() }
+        let ack = try IPCJSON.decode(HelloAck.self, from: client.send(body: try IPCJSON.encode(Hello())))
+        #expect(ack.status == .ok)
+    }
+
+    @Test func stopWithoutStartRemovesNothing() throws {
+        let home = try makeIsolatedHome("nostart")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
+        try FileManager.default.createDirectory(
+            at: socketURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("not-ours".utf8).write(to: socketURL)
+        let listener = UnixSocketListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL
+        )
+        listener.stop()
+        #expect(FileManager.default.fileExists(atPath: socketURL.path))
+        #expect(try Data(contentsOf: socketURL) == Data("not-ours".utf8))
+    }
+
+    @Test func skewedHelloKeepsHandshakeClosedThenRecovers() throws {
+        let home = try makeIsolatedHome("skrec")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let socketURL = try UnixSocketPath.resolve(homeDirectory: home.path)
+        let listener = UnixSocketListener(
+            runtime: try isolatedRuntime(),
+            watchdog: IdleWatchdog(seconds: 300),
+            socketURL: socketURL
+        )
+        try listener.start()
+        defer { listener.stop() }
+
+        let client = try retryDarwinConnect(path: socketURL.path)
+        defer { client.close() }
+        let skew = try IPCJSON.decode(
+            HelloAck.self,
+            from: client.send(
+                body: try IPCJSON.encode(
+                    Hello(protocolName: ProtocolVersion.name, clientSemver: "99.0.0")
+                )
+            )
+        )
+        #expect(skew.status == .skew(.majorVersion))
+
+        // The skewed hello must not open the handshake.
+        let early = IPCRequest(method: .listPacks)
+        let earlyResponse = try IPCJSON.decode(
+            IPCResponse.self,
+            from: client.send(body: try IPCJSON.encode(early))
+        )
+        guard case .error(.protocolSkew(.handshakeRequired)) = earlyResponse.result else {
+            Issue.record("post-skew listPacks must be handshakeRequired, got \(earlyResponse.result)")
+            return
+        }
+        #expect(earlyResponse.id == early.id)
+
+        // A valid hello on the same connection recovers it.
+        let ack = try IPCJSON.decode(HelloAck.self, from: client.send(body: try IPCJSON.encode(Hello())))
+        #expect(ack.status == .ok)
+        let late = try IPCJSON.decode(
+            IPCResponse.self,
+            from: client.send(body: try IPCJSON.encode(IPCRequest(method: .listPacks)))
+        )
+        guard case .listPacks = late.result else {
+            Issue.record("post-hello listPacks must succeed, got \(late.result)")
+            return
+        }
+    }
+}
+
+/// Test-only shared box for one reply from a worker thread.
+private final class ReplyBox: @unchecked Sendable {
+    private let box = Mutex<Data?>(nil)
+
+    var data: Data? {
+        get { box.withLock { $0 } }
+        set { box.withLock { $0 = newValue } }
+    }
+}
+
+private struct UncheckedClient: @unchecked Sendable {
+    let client: DarwinEvaluateClient
+
+    init(_ client: DarwinEvaluateClient) {
+        self.client = client
     }
 }
 

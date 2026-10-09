@@ -795,6 +795,24 @@ def test_runtime_status_missing_is_typed():
     assert status.error
 
 
+def test_failed_connect_closes_transport(monkeypatch):
+    skewed = (
+        b'{"ok":false,"protocol":"rv.ipc.v1","serviceSemver":"2.0.0","skewReason":"major version"}'
+    )
+    client, transport = _client(skewed)
+    with pytest.raises(MajorVersionSkew):
+        client.connect()
+    assert transport.closed
+    assert client.service_semver is None
+
+    monkeypatch.setattr(client_module, "_probe_product", lambda rvd=None: None)
+    client, transport = _client(ACK_OK)
+    with pytest.raises(RuntimeNotFound):
+        client.connect()
+    assert transport.closed
+    assert client.service_semver is None
+
+
 def test_approvals_validation():
     client, _ = _connected()
     with pytest.raises(ValueError):
