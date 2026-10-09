@@ -25,7 +25,8 @@
     "events" : [
 
     ],
-    "label" : "claude\/non-utf8"
+    "label" : "claude\/non-utf8",
+    "thrown" : "unreadable(sourcePath: \"<tmp>\/golden-claude.jsonl\")"
   },
   {
     "events" : [
@@ -215,7 +216,8 @@
     "events" : [
 
     ],
-    "label" : "grok\/non-utf8"
+    "label" : "grok\/non-utf8",
+    "thrown" : "unreadable(sourcePath: \"<tmp>\/chat_history.jsonl\")"
   },
   {
     "events" : [
@@ -240,7 +242,8 @@
     "events" : [
 
     ],
-    "label" : "pi\/non-utf8"
+    "label" : "pi\/non-utf8",
+    "thrown" : "unreadable(sourcePath: \"<tmp>\/golden-pi.jsonl\")"
   },
   {
     "events" : [

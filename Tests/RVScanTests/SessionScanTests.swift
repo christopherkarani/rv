@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(SQLite3)
+import SQLite3
+#endif
 import Testing
 import RVDomain
 @testable import RVScan
@@ -211,6 +214,21 @@ import RVDomain
         let now = Date(timeIntervalSince1970: 1_777_000_000)
         let expected = db.standardizedFileURL.path
         #expect(throws: SessionScanError.unreadableStore(sourcePath: expected)) {
+            try SessionScan().run(
+                SessionScanRequest(home: home, now: now, rootPath: root.path, timeWindow: .all)
+            )
+        }
+    }
+}
+
+@Test func sessionScan_recognizedPrepareFailedOpenCodeStore_mapsPrepareFailed() throws {
+    try withTempTree { root in
+        let db = root.appendingPathComponent("opencode.db")
+        try writeSQLiteDatabase(at: db, sql: "CREATE TABLE other (id TEXT);")
+        let home = try #require(ScanHome(validating: "/tmp/rv-scan-unused-home"))
+        let now = Date(timeIntervalSince1970: 1_777_000_000)
+        let expected = db.standardizedFileURL.path
+        #expect(throws: SessionScanError.prepareFailed(sourcePath: expected)) {
             try SessionScan().run(
                 SessionScanRequest(home: home, now: now, rootPath: root.path, timeWindow: .all)
             )
@@ -539,4 +557,20 @@ private func installCursorResetHard(into homeURL: URL) throws {
         at: try fixtureURL("cursor/before-shell.jsonl"),
         to: transcripts.appendingPathComponent("sess.jsonl")
     )
+}
+
+private enum SessionScanSQLiteFixtureError: Error {
+    case openFailed
+    case execFailed
+}
+
+private func writeSQLiteDatabase(at url: URL, sql: String) throws {
+    var db: OpaquePointer?
+    guard sqlite3_open(url.path, &db) == SQLITE_OK, let db else {
+        throw SessionScanSQLiteFixtureError.openFailed
+    }
+    defer { sqlite3_close(db) }
+    guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+        throw SessionScanSQLiteFixtureError.execFailed
+    }
 }

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(SQLite3)
+import SQLite3
+#endif
 import Testing
 import RVDomain
 import RVPresentation
@@ -218,6 +221,24 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     }
 }
 
+@Test func scanRun_prepareFailed_mapsPrepareFailed() throws {
+    try withTempScanHome { home, homeURL in
+        let tree = homeURL.appendingPathComponent("explicit-tree", isDirectory: true)
+        try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
+        let db = tree.appendingPathComponent("opencode.db")
+        try writeScanSQLiteDatabase(at: db, sql: "CREATE TABLE other (id TEXT);")
+        let expected = db.standardizedFileURL.path
+        do {
+            _ = try ScanRun.run(
+                .fixture(rootPath: tree.path, home: home)
+            )
+            Issue.record("expected prepareFailed")
+        } catch ScanRun.Error.prepareFailed(let path) {
+            #expect(path == expected)
+        }
+    }
+}
+
 @Test func scanRun_executeDoesNotContainPipelineLoops() throws {
     let url = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
@@ -335,4 +356,20 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
 
 private enum ScanFixtureError: Error {
     case missing(String)
+}
+
+private enum ScanSQLiteFixtureError: Error {
+    case openFailed
+    case execFailed
+}
+
+private func writeScanSQLiteDatabase(at url: URL, sql: String) throws {
+    var db: OpaquePointer?
+    guard sqlite3_open(url.path, &db) == SQLITE_OK, let db else {
+        throw ScanSQLiteFixtureError.openFailed
+    }
+    defer { sqlite3_close(db) }
+    guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+        throw ScanSQLiteFixtureError.execFailed
+    }
 }

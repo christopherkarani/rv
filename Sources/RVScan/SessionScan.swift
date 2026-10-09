@@ -98,6 +98,9 @@ public enum SessionScanError: Error, Sendable, Equatable {
     case packsUnavailable
     /// A recognized (non-glob) store failed fail-closed extraction.
     case unreadableStore(sourcePath: String)
+    /// A recognized store opened but its query could not be prepared
+    /// (SQLite schema drift, e.g. a missing table).
+    case prepareFailed(sourcePath: String)
 }
 
 /// Session-forensics entry: walk, extract, classify, time-window, dedupe.
@@ -185,6 +188,11 @@ public struct SessionScan: Sendable {
                 events.append(
                     contentsOf: try candidate.adapter.extract(fileURL: candidate.url, data: data)
                 )
+            } catch ScanStoreError.prepareFailed {
+                // Same glob-only pass as below: unknown layouts must not
+                // abort the scan when another adapter can still extract.
+                if candidate.includeGlobOnly { continue }
+                throw SessionScanError.prepareFailed(sourcePath: candidate.url.path)
             } catch {
                 // Glob-only files are unknown layouts: a fail-closed adapter
                 // (SQLite or JSONL) must not abort the scan when another adapter

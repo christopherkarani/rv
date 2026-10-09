@@ -49,6 +49,20 @@ import RVDomain
     #expect(events.allSatisfy { $0.workingDirectory == nil })
 }
 
+@Test func grokAdapter_emptyOrUnreadableThrows() throws {
+    let adapter = GrokStoreAdapter()
+    let source = URL(fileURLWithPath: "/tmp/sess-grok-1/chat_history.jsonl")
+    #expect(throws: ScanStoreError.unreadable(sourcePath: source.path)) {
+        _ = try adapter.extract(fileURL: source, data: Data())
+    }
+    #expect(throws: ScanStoreError.unreadable(sourcePath: source.path)) {
+        _ = try adapter.extract(fileURL: source, data: Data([0xFF, 0xFE]))
+    }
+    #expect(throws: ScanStoreError.unreadable(sourcePath: source.path)) {
+        _ = try adapter.extract(fileURL: source, data: Data("not-json\n".utf8))
+    }
+}
+
 @Test func grokAdapter_recognizesOnlyChatHistory() throws {
     let adapter = GrokStoreAdapter()
     #expect(adapter.recognizes(fileURL: URL(fileURLWithPath: "/x/chat_history.jsonl")))

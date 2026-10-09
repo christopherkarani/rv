@@ -17,17 +17,26 @@ public struct PiStoreAdapter: SessionStoreAdapter {
         fileURL.pathExtension.lowercased() == "jsonl"
     }
 
+    /// Surface-extract bash `toolCall` rows from provided store bytes.
+    /// `fileURL` is provenance only; missing or unreadable `data` throws.
     public func extract(fileURL: URL, data: Data) throws(ScanStoreError) -> [ExtractedEvent] {
         let sourcePath = fileURL.path
         var sessionID: SessionID?
         var sessionCwd: WorkingDirectory?
         var events: [ExtractedEvent] = []
 
-        guard let lines = ScanJSONLEngine.textLines(in: data) else { return [] }
+        guard data.isEmpty == false else {
+            throw ScanStoreError.unreadable(sourcePath: sourcePath)
+        }
+        guard let lines = ScanJSONLEngine.textLines(in: data) else {
+            throw ScanStoreError.unreadable(sourcePath: sourcePath)
+        }
+        var sawJSON = false
         for line in lines {
             guard let object = ScanJSONLEngine.parseObject(line) else {
                 continue
             }
+            sawJSON = true
             let type = object["type"]?.string
             if type == "session" {
                 if let id = object["id"]?.string, let parsed = SessionID(validating: id) {
@@ -69,6 +78,9 @@ public struct PiStoreAdapter: SessionStoreAdapter {
                     )
                 )
             }
+        }
+        guard sawJSON else {
+            throw ScanStoreError.unreadable(sourcePath: sourcePath)
         }
         return events
     }

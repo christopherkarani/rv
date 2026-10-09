@@ -35,7 +35,10 @@ public protocol SessionStoreAdapter: Sendable {
     func roots(home: ScanHome) -> [URL]
     func recognizes(fileURL: URL) -> Bool
     /// Map recognized store bytes to surface events. `fileURL` is provenance;
-    /// `data` is the store.
+    /// `data` is the store. Fail-closed: empty, non-UTF-8, JSON-less, or
+    /// non-SQLite `data` throws `ScanStoreError`, never a successful empty
+    /// list. Breaking (T2): the requirement narrowed from untyped `throws`
+    /// to `throws(ScanStoreError)`; out-of-tree witnesses must narrow too.
     func extract(fileURL: URL, data: Data) throws(ScanStoreError) -> [ExtractedEvent]
 }
 
