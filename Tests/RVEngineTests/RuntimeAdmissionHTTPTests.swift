@@ -99,6 +99,54 @@ struct RuntimeAdmissionHTTPTests {
         }
     }
 
+    @Test func stubbedEmptyAnswerClosesWithoutAProposal() throws {
+        var lookedUp: [String] = []
+        let emptySuccess = normalizeRuntimeAdmission(
+            subject: try httpAdmissionSubject(),
+            action: .http(method: "GET", url: "https://empty.example/"),
+            resolve: {
+                lookedUp.append($0)
+                return .success([])
+            }
+        )
+        #expect(emptySuccess == .failure(.failed))
+        let emptyFailure = normalizeRuntimeAdmission(
+            subject: try httpAdmissionSubject(),
+            action: .http(method: "GET", url: "https://empty.example/"),
+            resolve: {
+                lookedUp.append($0)
+                return .failure(.empty)
+            }
+        )
+        #expect(emptyFailure == .failure(.failed))
+        #expect(lookedUp == ["empty.example", "empty.example"])
+    }
+
+    @Test func stubbedMixedAnswerIsForbidden() throws {
+        let public4 = try #require(HTTPIPAddress(ipv4: [1, 1, 1, 1]))
+        let loopback = try #require(HTTPIPAddress(ipv4: [127, 0, 0, 1]))
+        var lookedUp: [String] = []
+        let denied = try normalizeRuntimeAdmission(
+            subject: httpAdmissionSubject(),
+            action: .http(method: "GET", url: "https://mixed.example/"),
+            resolve: {
+                lookedUp.append($0)
+                return .success([public4, loopback])
+            }
+        ).get()
+        guard case .http(let http) = denied else {
+            Issue.record("expected an HTTP action")
+            return
+        }
+        #expect(http.destination.address == loopback)
+        #expect(http.destination.isPublicPinned == false)
+        #expect(lookedUp == ["mixed.example"])
+        guard case .denied = AgentAuthorization.decide(action: denied, policy: .empty) else {
+            Issue.record("mixed public/loopback answer must be denied")
+            return
+        }
+    }
+
     @Test func shellActionNeverReachesTheResolver() throws {
         let workspace = try #require(WorkingDirectory(validating: "/tmp/rv-admission-http"))
         let action = try normalizeRuntimeAdmission(
