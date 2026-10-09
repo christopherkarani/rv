@@ -256,7 +256,11 @@ let cliProducts: [Product] = [
     .executable(name: "rv", targets: ["rv"]),
 ]
 let cliTestTargets: [Target] = [
-    .testTarget(name: "RVCLITests", dependencies: ["RVCLI", "RVService"]),
+    .testTarget(
+        name: "RVCLITests",
+        dependencies: ["RVCLI", "RVService"],
+        linkerSettings: scanLinkerSettings
+    ),
 ]
 
 let package = Package(
