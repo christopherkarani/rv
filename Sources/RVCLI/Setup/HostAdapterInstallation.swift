@@ -234,18 +234,31 @@ extension HostAdapterInstallation {
         fileManager: FileManager
     ) throws -> HostAdapterInstallation {
         if path.host == .claude {
-            return try inspectClaude(path: path, pathEntries: pathEntries, fileManager: fileManager)
+            return try inspectHookMerge(
+                path: path,
+                pathEntries: pathEntries,
+                fileManager: fileManager,
+                descriptor: ClaudeSettingsMerge.mergeDescriptor
+            )
         }
         if path.host == .antigravity {
-            return try inspectAntigravity(path: path, pathEntries: pathEntries, fileManager: fileManager)
+            return try inspectHookMerge(
+                path: path,
+                pathEntries: pathEntries,
+                fileManager: fileManager,
+                descriptor: AntigravityHooksMerge.mergeDescriptor
+            )
         }
         return try inspectExclusive(path: path, pathEntries: pathEntries, fileManager: fileManager)
     }
 
-    private static func inspectClaude(
+    /// Inspects a hook-merge host (Claude/Antigravity) through the shared
+    /// merge/inspect policy for its descriptor.
+    private static func inspectHookMerge(
         path: OwnedHostAdapterPath,
         pathEntries: [String],
-        fileManager: FileManager
+        fileManager: FileManager,
+        descriptor: SettingsMergeDescriptor
     ) throws -> HostAdapterInstallation {
         guard isDetected(path, pathEntries: pathEntries, fileManager: fileManager) else {
             return .missing(path)
@@ -260,40 +273,7 @@ extension HostAdapterInstallation {
             return .occupied(path)
         }
 
-        switch ClaudeSettingsMerge.inspectionState(of: data) {
-        case .absentFile:
-            return .absentFile(path)
-        case .occupied:
-            return .occupied(path)
-        case .outdated:
-            return .broken(path: path, existingData: data)
-        case .wired(let bakedPath):
-            if isWiredMissPath(bakedRvPath: bakedPath, fileManager: fileManager) {
-                return .wired(path: path, existingData: data)
-            }
-            return .broken(path: path, existingData: data)
-        }
-    }
-
-    private static func inspectAntigravity(
-        path: OwnedHostAdapterPath,
-        pathEntries: [String],
-        fileManager: FileManager
-    ) throws -> HostAdapterInstallation {
-        guard isDetected(path, pathEntries: pathEntries, fileManager: fileManager) else {
-            return .missing(path)
-        }
-        if (try? fileManager.destinationOfSymbolicLink(atPath: path.destination)) != nil {
-            return .occupied(path)
-        }
-        guard fileManager.fileExists(atPath: path.destination) else {
-            return .absentFile(path)
-        }
-        guard let data = fileManager.contents(atPath: path.destination) else {
-            return .occupied(path)
-        }
-
-        switch AntigravityHooksMerge.inspectionState(of: data) {
+        switch SettingsMergePolicy.inspectionState(of: data, descriptor: descriptor) {
         case .absentFile:
             return .absentFile(path)
         case .occupied:

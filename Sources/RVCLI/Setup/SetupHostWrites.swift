@@ -292,53 +292,25 @@ extension SetupRun {
         force: Bool,
         files: FileOps
     ) throws(SetupError) -> Bool {
-        if files.isSymbolicLink(path) {
-            return false
-        }
-        let adapterPath = ClaudeSettingsMerge.adapterPath(settingsPath: path)
-        if files.isSymbolicLink(adapterPath) {
-            throw SetupError.hostHookWriteFailed(.claude)
-        }
-        let adapter: HostAdapterResource
-        do {
-            adapter = try HostAdapterResources.load(for: .claude)
-        } catch {
-            throw SetupError(adapterResourceFailure: error)
-        }
-        let wroteAdapter: Bool
-        do {
-            wroteAdapter = try writeOwned(
-                path: adapterPath,
-                contents: adapter.rendered(rvPath: rvPath),
-                existingData: files.readData(adapterPath),
-                files: files
-            )
-        } catch {
-            throw SetupError.hostHookWriteFailed(.claude)
-        }
-        let merged: (data: Data, wrote: Bool)
-        do {
-            let applied = try HostWiring.applyClaude(
-                existing: existingData,
-                rvPath: rvPath,
-                adapterPath: adapterPath,
-                force: force
-            )
-            merged = (applied.data, applied.wrote)
-        } catch ClaudeSettingsMergeError.occupiedWithoutForce {
-            throw SetupError.hostHookOccupiedNeedsForce(.claude)
-        } catch {
-            throw SetupError.hostHookWriteFailed(.claude)
-        }
-        if merged.wrote == false {
-            return wroteAdapter
-        }
-        do {
-            try files.writeData(merged.data, to: path)
-        } catch {
-            throw SetupError.hostHookWriteFailed(.claude)
-        }
-        return true
+        try writeHookMerge(
+            host: .claude,
+            path: path,
+            rvPath: rvPath,
+            existingData: existingData,
+            force: force,
+            files: files,
+            adapterPath: ClaudeSettingsMerge.adapterPath(settingsPath: path),
+            apply: { existing, rvPath, adapterPath, force in
+                let applied = try HostWiring.applyClaude(
+                    existing: existing,
+                    rvPath: rvPath,
+                    adapterPath: adapterPath,
+                    force: force
+                )
+                return (applied.data, applied.wrote)
+            },
+            isOccupiedWithoutForce: { ($0 as? ClaudeSettingsMergeError) == .occupiedWithoutForce }
+        )
     }
 
     /// Writes the exclusive Antigravity adapter and hooks merge. Returns whether a write occurred.
@@ -349,16 +321,58 @@ extension SetupRun {
         force: Bool,
         files: FileOps
     ) throws(SetupError) -> Bool {
+        try writeHookMerge(
+            host: .antigravity,
+            path: path,
+            rvPath: rvPath,
+            existingData: existingData,
+            force: force,
+            files: files,
+            adapterPath: AntigravityHooksMerge.adapterPath(hooksPath: path),
+            apply: { existing, rvPath, adapterPath, force in
+                let applied = try HostWiring.applyAntigravity(
+                    existing: existing,
+                    rvPath: rvPath,
+                    adapterPath: adapterPath,
+                    force: force
+                )
+                return (applied.data, applied.wrote)
+            },
+            isOccupiedWithoutForce: {
+                ($0 as? AntigravityHooksMergeError) == .occupiedWithoutForce
+            }
+        )
+    }
+
+    /// Shared exclusive-adapter + hooks-merge write for the hook-merge hosts.
+    /// `apply` runs the host merge; `isOccupiedWithoutForce` recognizes the
+    /// host's occupied error so it maps to the force hint instead of a
+    /// generic write failure. Returns whether a write occurred.
+    private static func writeHookMerge(
+        host: HookHost,
+        path: String,
+        rvPath: String,
+        existingData: Data?,
+        force: Bool,
+        files: FileOps,
+        adapterPath: String,
+        apply: (
+            _ existing: Data?,
+            _ rvPath: String,
+            _ adapterPath: String,
+            _ force: Bool
+        ) throws -> (data: Data, wrote: Bool),
+        isOccupiedWithoutForce: (_ error: any Error) -> Bool
+    ) throws(SetupError) -> Bool {
         if files.isSymbolicLink(path) {
             return false
         }
-        let adapterPath = AntigravityHooksMerge.adapterPath(hooksPath: path)
         if files.isSymbolicLink(adapterPath) {
-            throw SetupError.hostHookWriteFailed(.antigravity)
+            throw SetupError.hostHookWriteFailed(host)
         }
         let adapter: HostAdapterResource
         do {
-            adapter = try HostAdapterResources.load(for: .antigravity)
+            adapter = try HostAdapterResources.load(for: host)
         } catch {
             throw SetupError(adapterResourceFailure: error)
         }
@@ -371,21 +385,16 @@ extension SetupRun {
                 files: files
             )
         } catch {
-            throw SetupError.hostHookWriteFailed(.antigravity)
+            throw SetupError.hostHookWriteFailed(host)
         }
         let merged: (data: Data, wrote: Bool)
         do {
-            let applied = try HostWiring.applyAntigravity(
-                existing: existingData,
-                rvPath: rvPath,
-                adapterPath: adapterPath,
-                force: force
-            )
-            merged = (applied.data, applied.wrote)
-        } catch AntigravityHooksMergeError.occupiedWithoutForce {
-            throw SetupError.hostHookOccupiedNeedsForce(.antigravity)
+            merged = try apply(existingData, rvPath, adapterPath, force)
         } catch {
-            throw SetupError.hostHookWriteFailed(.antigravity)
+            if isOccupiedWithoutForce(error) {
+                throw SetupError.hostHookOccupiedNeedsForce(host)
+            }
+            throw SetupError.hostHookWriteFailed(host)
         }
         if merged.wrote == false {
             return wroteAdapter
@@ -393,7 +402,7 @@ extension SetupRun {
         do {
             try files.writeData(merged.data, to: path)
         } catch {
-            throw SetupError.hostHookWriteFailed(.antigravity)
+            throw SetupError.hostHookWriteFailed(host)
         }
         return true
     }
