@@ -54,7 +54,7 @@ actor WorkspaceOperatorAuthorizer {
         intentDigest: WorkspaceLaunchIntentDigest,
         kind: WorkspaceOperationKind,
         definition: WorkspaceOperationDefinitionBinding?
-    ) throws -> WorkspaceOperationAuthorizationReference {
+    ) throws(WorkspaceOperatorAuthorizationError) -> WorkspaceOperationAuthorizationReference {
         switch kind {
         case .launchAgent:
             guard definition != nil else { throw WorkspaceOperatorAuthorizationError.invalidRequest }
@@ -104,7 +104,7 @@ actor WorkspaceOperatorAuthorizer {
     func issueChallenge(
         operationID: WorkspaceOperationAuthorizationID,
         uiConnection: AuthenticatedOperatorUIConnectionID
-    ) throws -> OperatorAuthorizationChallenge {
+    ) throws(WorkspaceOperatorAuthorizationError) -> OperatorAuthorizationChallenge {
         guard var record = operations[operationID] else {
             throw WorkspaceOperatorAuthorizationError.unknownOperation
         }
@@ -153,7 +153,7 @@ actor WorkspaceOperatorAuthorizer {
         _ challenge: OperatorAuthorizationChallenge,
         uiConnection: AuthenticatedOperatorUIConnectionID,
         result: OperatorAuthenticationResult
-    ) throws -> WorkspaceOperationAuthorizationReference {
+    ) throws(WorkspaceOperatorAuthorizationError) -> WorkspaceOperationAuthorizationReference {
         guard challenge.epoch == epoch else {
             throw WorkspaceOperatorAuthorizationError.wrongEpoch
         }
@@ -216,7 +216,7 @@ actor WorkspaceOperatorAuthorizer {
 
     /// Cancels a live operation. Cancelling an authorized operation burns its
     /// permit (explicit invalidation, audited as such). Terminal states reject.
-    func cancel(operationID: WorkspaceOperationAuthorizationID) throws {
+    func cancel(operationID: WorkspaceOperationAuthorizationID) throws(WorkspaceOperatorAuthorizationError) {
         guard var record = operations[operationID] else {
             throw WorkspaceOperatorAuthorizationError.unknownOperation
         }
@@ -255,7 +255,7 @@ actor WorkspaceOperatorAuthorizer {
     func consumePermit(
         _ reference: WorkspaceOperationAuthorizationReference,
         expectation: WorkspaceOperationRedemptionExpectation
-    ) throws -> VerifiedWorkspaceOperationRedemption {
+    ) throws(WorkspaceOperatorAuthorizationError) -> VerifiedWorkspaceOperationRedemption {
         guard reference.epoch == epoch else {
             throw WorkspaceOperatorAuthorizationError.wrongEpoch
         }
@@ -352,7 +352,7 @@ actor WorkspaceOperatorAuthorizer {
 
     /// Read-only status. Grants nothing. Lazily materializes expiry so the
     /// reported status always reflects the monotonic clock.
-    func status(of operationID: WorkspaceOperationAuthorizationID) throws
+    func status(of operationID: WorkspaceOperationAuthorizationID) throws(WorkspaceOperatorAuthorizationError)
         -> WorkspaceOperationAuthorizationStatus
     {
         guard var record = operations[operationID] else {

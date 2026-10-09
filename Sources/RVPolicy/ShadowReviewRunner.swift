@@ -58,10 +58,8 @@ public enum ShadowReviewRunner: Sendable {
         let review: Result<ActionReview, ActionReviewerError>
         do {
             review = .success(try await reviewer.review(request))
-        } catch let error as ActionReviewerError {
-            review = .failure(error)
         } catch {
-            review = .failure(.unsupported)
+            review = .failure(error)
         }
         let latency = nanoseconds(clock.now - started)
         return ShadowReviewResult(

@@ -38,13 +38,23 @@ public struct FoundationModelsActionReviewer: ActionReviewer {
         self.observePayload = observePayload
     }
 
-    public func review(_ request: ReviewRequest) async throws -> ActionReview {
+    public func review(_ request: ReviewRequest) async throws(ActionReviewerError) -> ActionReview {
         let payload = ReviewPromptBuilder.payload(for: request)
         observePayload?(payload)
         #if canImport(FoundationModels)
         if usesSystemModel, #available(macOS 26, *) {
-            return try await ReviewTimeout.run(timeout: timeout) {
-                try await FoundationModelsReviewClient.review(payload: payload)
+            do {
+                return try await ReviewTimeout.run(timeout: timeout) {
+                    try await FoundationModelsReviewClient.review(payload: payload)
+                }
+            } catch let error as ActionReviewerError {
+                throw error
+            } catch is CancellationError {
+                throw ActionReviewerError.timeout
+            } catch {
+                // Unreachable by construction: the client maps every model
+                // and decoding failure above. Fail closed, never trap.
+                throw ActionReviewerError.unsupported
             }
         }
         #endif

@@ -156,7 +156,7 @@ actor ActionApprovalCeremonyService {
                 principal: principal,
                 hostConnectionID: validated.hostConnectionID,
                 action: dto.action)
-        } catch let error as ActionApprovalError {
+        } catch {
             throw mapAuthorizerError(error)
         }
         let digest = CanonicalActionDigest.sha256Hex(of: dto.action)
@@ -652,18 +652,15 @@ actor ActionApprovalCeremonyService {
         }
     }
 
-    private func mapAuthorizerError(_ error: Error) -> ActionApprovalCeremonyError {
-        if let error = error as? ActionApprovalError {
-            switch error {
-            case .storeFull: return .storeFull
-            case .unknownApproval: return .unknownApproval
-            case .invalidRequest: return .invalidAsk
-            case .wrongEpoch, .stateMismatch, .bindingMismatch, .expired,
-                .consumed, .authenticationFailed, .principalInvalid:
-                return .authorizationRejected(String(describing: error))
-            }
+    private func mapAuthorizerError(_ error: ActionApprovalError) -> ActionApprovalCeremonyError {
+        switch error {
+        case .storeFull: return .storeFull
+        case .unknownApproval: return .unknownApproval
+        case .invalidRequest: return .invalidAsk
+        case .wrongEpoch, .stateMismatch, .bindingMismatch, .expired,
+            .consumed, .authenticationFailed, .principalInvalid:
+            return .authorizationRejected(String(describing: error))
         }
-        return .authorizationRejected("unknown")
     }
 
     private func pruneIfTerminal(id: ActionApprovalID, status: ActionApprovalStatus?) async {

@@ -69,7 +69,7 @@ actor LocalExecutor {
 
     init() {}
 
-    func run(_ executable: ExecutableAction) async throws -> IsolatedRunResult {
+    func run(_ executable: ExecutableAction) async throws(LocalExecutorError) -> IsolatedRunResult {
         guard Task.isCancelled == false else {
             throw LocalExecutorError.cancelled
         }
@@ -87,35 +87,47 @@ actor LocalExecutor {
         // `usleep` and disk-image setup block. Doing that on a cooperative
         // thread stalls every other test task, so cancellation never runs and
         // the suite times out. This thread is the one the watch loop polls.
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                let thread = Thread {
-                    gate.wait()
-                    defer { gate.signal() }
-                    if flag.isSet {
-                        continuation.resume(throwing: LocalExecutorError.cancelled)
-                        return
+        // `withTaskCancellationHandler` rethrows untyped, so the boundary is
+        // mapped here; the typed continuation below keeps every resume site
+        // `LocalExecutorError`-only by construction.
+        do {
+            return try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation {
+                    (continuation: CheckedContinuation<IsolatedRunResult, LocalExecutorError>) in
+                    let thread = Thread {
+                        gate.wait()
+                        defer { gate.signal() }
+                        if flag.isSet {
+                            continuation.resume(throwing: LocalExecutorError.cancelled)
+                            return
+                        }
+                        CooperativeLaunchStop.install(flag)
+                        IsolationBlockingWork.markOffPool()
+                        defer {
+                            IsolationBlockingWork.clearOffPool()
+                            CooperativeLaunchStop.uninstall()
+                        }
+                        switch IsolationBackends.apply(plan, command: command) {
+                        case .success(let result):
+                            continuation.resume(returning: result)
+                        case .failure(.cancelled):
+                            continuation.resume(throwing: LocalExecutorError.cancelled)
+                        case .failure(let error):
+                            continuation.resume(throwing: LocalExecutorError.applyFailed(error))
+                        }
                     }
-                    CooperativeLaunchStop.install(flag)
-                    IsolationBlockingWork.markOffPool()
-                    defer {
-                        IsolationBlockingWork.clearOffPool()
-                        CooperativeLaunchStop.uninstall()
-                    }
-                    switch IsolationBackends.apply(plan, command: command) {
-                    case .success(let result):
-                        continuation.resume(returning: result)
-                    case .failure(.cancelled):
-                        continuation.resume(throwing: LocalExecutorError.cancelled)
-                    case .failure(let error):
-                        continuation.resume(throwing: LocalExecutorError.applyFailed(error))
-                    }
+                    thread.name = "rv-executor-apply"
+                    thread.start()
                 }
-                thread.name = "rv-executor-apply"
-                thread.start()
+            } onCancel: {
+                flag.cancel()
             }
-        } onCancel: {
-            flag.cancel()
+        } catch let error as LocalExecutorError {
+            throw error
+        } catch {
+            // Unreachable by construction: the handler rethrows only the
+            // typed continuation above. Fail closed, never trap.
+            throw LocalExecutorError.unexpected(String(describing: error))
         }
     }
 
@@ -151,18 +163,8 @@ actor LocalExecutor {
         case .success(let executable):
             do {
                 return .success(.executed(try await run(executable)))
-            } catch let error as LocalExecutorError {
-                return .failure(.execute(error))
-            } catch is CancellationError {
-                // Defensive: run throws only LocalExecutorError and awaiting
-                // the continuation never raises bare CancellationError, so no
-                // seam reaches this arm today. A future typed-contract change
-                // must still map cancellation to .cancelled, not .unexpected.
-                return .failure(.execute(.cancelled))
             } catch {
-                // Defensive: unreachable by construction (see above), kept so
-                // a future untyped throw fails closed instead of trapping.
-                return .failure(.execute(.unexpected(String(describing: error))))
+                return .failure(.execute(error))
             }
         }
     }

@@ -4,7 +4,7 @@ struct StubActionReviewer: ActionReviewer {
     var providerID: ReviewerProviderID
     var result: Result<ActionReview, ActionReviewerError>
 
-    func review(_: ReviewRequest) async throws -> ActionReview {
+    func review(_: ReviewRequest) async throws(ActionReviewerError) -> ActionReview {
         switch result {
         case .success(let review):
             return review

@@ -28,7 +28,7 @@ struct FakeFoundationModelsReviewer: ActionReviewer {
         self.log = log
     }
 
-    func review(_ request: ReviewRequest) async throws -> ActionReview {
+    func review(_ request: ReviewRequest) async throws(ActionReviewerError) -> ActionReview {
         await log.mark(request)
         switch result {
         case .success(let review):

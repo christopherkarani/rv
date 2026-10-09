@@ -56,7 +56,7 @@ actor ActionApprovalAuthorizer {
         principal: ActionApprovalPrincipal,
         hostConnectionID: UUID,
         action: ProposedAction
-    ) throws -> (reference: ActionApprovalReference, continuationID: ActionApprovalContinuationID) {
+    ) throws(ActionApprovalError) -> (reference: ActionApprovalReference, continuationID: ActionApprovalContinuationID) {
         evictIfNeeded()
         guard approvals.count < ActionApprovalLimits.maxApprovals else {
             throw ActionApprovalError.storeFull
@@ -100,7 +100,7 @@ actor ActionApprovalAuthorizer {
     func issueChallenge(
         approvalID: ActionApprovalID,
         uiConnection: AuthenticatedOperatorUIConnectionID
-    ) throws -> ActionApprovalChallenge {
+    ) throws(ActionApprovalError) -> ActionApprovalChallenge {
         guard var record = approvals[approvalID] else {
             throw ActionApprovalError.unknownApproval
         }
@@ -148,7 +148,7 @@ actor ActionApprovalAuthorizer {
         _ challenge: ActionApprovalChallenge,
         uiConnection: AuthenticatedOperatorUIConnectionID,
         result: OperatorAuthenticationResult
-    ) throws -> ActionApprovalReference {
+    ) throws(ActionApprovalError) -> ActionApprovalReference {
         guard challenge.epoch == epoch else {
             throw ActionApprovalError.wrongEpoch
         }
@@ -215,7 +215,7 @@ actor ActionApprovalAuthorizer {
     func deny(
         _ challenge: ActionApprovalChallenge,
         uiConnection: AuthenticatedOperatorUIConnectionID
-    ) throws {
+    ) throws(ActionApprovalError) {
         guard challenge.epoch == epoch else {
             throw ActionApprovalError.wrongEpoch
         }
@@ -247,7 +247,7 @@ actor ActionApprovalAuthorizer {
     /// away, or the operator abandoned the review). Cancelling an authorized
     /// approval burns its grant (explicit invalidation, audited as such).
     /// Terminal states reject.
-    func cancel(approvalID: ActionApprovalID) throws {
+    func cancel(approvalID: ActionApprovalID) throws(ActionApprovalError) {
         guard var record = approvals[approvalID] else {
             throw ActionApprovalError.unknownApproval
         }
@@ -290,7 +290,7 @@ actor ActionApprovalAuthorizer {
     func consumeGrant(
         _ reference: ActionApprovalReference,
         expectation: ActionApprovalConsumeExpectation
-    ) throws -> VerifiedActionApprovalConsumption {
+    ) throws(ActionApprovalError) -> VerifiedActionApprovalConsumption {
         guard reference.epoch == epoch else {
             throw ActionApprovalError.wrongEpoch
         }
@@ -393,7 +393,7 @@ actor ActionApprovalAuthorizer {
 
     /// Read-only status. Grants nothing. Lazily materializes expiry so the
     /// reported status always reflects the monotonic clock.
-    func status(of approvalID: ActionApprovalID) throws -> ActionApprovalStatus {
+    func status(of approvalID: ActionApprovalID) throws(ActionApprovalError) -> ActionApprovalStatus {
         guard var record = approvals[approvalID] else {
             throw ActionApprovalError.unknownApproval
         }

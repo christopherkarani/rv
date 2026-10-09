@@ -177,7 +177,7 @@ actor WorkspaceOperatorCeremonyService {
                 intentDigest: WorkspaceLaunchIntentDigest(sha256Hex: verified.intentDigestHex),
                 kind: verified.kind,
                 definition: verified.definition)
-        } catch let error as WorkspaceOperatorAuthorizationError {
+        } catch {
             throw mapAuthorizerError(error)
         }
         reviews[reference.authorizationID] = RetainedReview(
@@ -789,10 +789,7 @@ actor WorkspaceOperatorCeremonyService {
         "credentialDeferred", "invalidDigest",
     ]
 
-    private func mapAuthorizerError(_ error: any Error) -> WorkspaceOperatorCeremonyError {
-        guard let error = error as? WorkspaceOperatorAuthorizationError else {
-            return .authorizationRejected("rejected")
-        }
+    private func mapAuthorizerError(_ error: WorkspaceOperatorAuthorizationError) -> WorkspaceOperatorCeremonyError {
         switch error {
         case .storeFull:
             return .storeFull

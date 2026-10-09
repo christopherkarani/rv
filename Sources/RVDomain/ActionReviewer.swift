@@ -268,5 +268,5 @@ public struct ActionReview: Sendable, Equatable, Codable {
 /// bind happens in `ReviewBind`.
 public protocol ActionReviewer: Sendable {
     var providerID: ReviewerProviderID { get }
-    func review(_ request: ReviewRequest) async throws -> ActionReview
+    func review(_ request: ReviewRequest) async throws(ActionReviewerError) -> ActionReview
 }
