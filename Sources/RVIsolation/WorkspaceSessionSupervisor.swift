@@ -1633,10 +1633,15 @@ final class WorkspaceSessionSupervisor: Sendable {
     /// die after the wait, so a later close must still be able to publish.
     /// Every other failure is terminal and replays without new work.
     static func closeFailureIsTerminal(_ error: WorkspaceSessionError) -> Bool {
-        if case .childTeardownFailed = error {
+        switch error {
+        case .childTeardownFailed:
             return false
+        case .apply, .notAcceptingRuntime, .cleanupFailed, .alreadyClosed,
+            .unknownRuntime, .runtimeLimit, .ownedByLiveProcess,
+            .recoveryInProgress, .unresolvedWorkspace, .preparationFailed,
+            .unknownPreparedLaunch, .redemptionAlreadyAccepted:
+            return true
         }
-        return true
     }
 
     private func finish(publish: Bool) -> Result<Void, WorkspaceSessionError> {
