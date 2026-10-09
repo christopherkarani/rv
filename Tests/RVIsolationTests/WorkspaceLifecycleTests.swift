@@ -1,531 +1,301 @@
+#if canImport(Darwin)
+import Darwin
+#endif
 import Foundation
 import RVDomain
+import Synchronization
 import Testing
 @testable import RVIsolation
 
-/// Scripted lifecycle sequences. These tests drive only the pure
-/// transition; they spawn zero processes by construction.
-@Suite("Workspace lifecycle core")
+#if os(macOS)
+/// Lifecycle decisions through the supervisor, the one surviving decider.
+///
+/// These tests drive `WorkspaceSessionSupervisor`'s real close/recovery
+/// behavior: open reaches active, concurrent closes elect one leader,
+/// finished closes replay without new work, and only a close that stopped
+/// with children alive stays retryable. No test here names a shadow state
+/// machine; the supervisor owns the lock discipline and the threads.
+@Suite("Workspace lifecycle", .serialized)
 struct WorkspaceLifecycleTests {
-    private typealias T = WorkspaceLifecycleTransition
-
-    @discardableResult
-    private func step(
-        _ state: WorkspaceSupervisorState,
-        _ event: WorkspaceEvent
-    ) -> (state: WorkspaceSupervisorState, effects: [WorkspaceEffect]) {
-        T.transition(state: state, event: event)
+    @Test func openReachesActiveAndClosePublishesOnce() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let opened = try openLifecycleWorkspace(tree)
+        let supervisor = opened.supervisor
+        #expect(supervisor.snapshot.phase == .active)
+        #expect(lifecycleSucceeded(supervisor.close()))
+        #expect(supervisor.snapshot.phase == .closed)
+        #expect(supervisor.publishCount == 1)
+        #expect(closedRecordCount(in: opened.lifeLog) == 1)
     }
 
-    private func run(
-        from initial: WorkspaceSupervisorState = WorkspaceSupervisorState(),
-        _ events: [WorkspaceEvent]
-    ) -> (state: WorkspaceSupervisorState, effects: [[WorkspaceEffect]]) {
-        var state = initial
-        var all: [[WorkspaceEffect]] = []
-        for event in events {
-            let out = T.transition(state: state, event: event)
-            state = out.state
-            all.append(out.effects)
-        }
-        return (state, all)
-    }
-
-    private func active() -> WorkspaceSupervisorState {
-        let (state, _) = run([.recoveryReported(.clean), .openCompleted])
-        return state
-    }
-
-    @Test func openSequenceReachesActive() {
-        let (state, effects) = run([.recoveryReported(.clean), .openCompleted])
-        #expect(effects[0] == [.establishBoundary])
-        #expect(effects[1] == [])
-        #expect(state.phase == .active)
-        #expect(state.admissionPending == false)
-    }
-
-    @Test func recoveredWorkspaceAdmits() {
-        let id = UUID()
-        let (state, effects) = run([.recoveryReported(.recovered(id))])
-        #expect(effects == [[.establishBoundary]])
-        #expect(state.phase == .creating)
-        #expect(state.admissionPending == false)
-    }
-
-    @Test func liveOwnerRefusesOpenAndDrains() {
-        let outcome = WorkspaceRecoveryOutcome.liveOwner(nil)
-        let (state, effects) = run([.recoveryReported(outcome)])
-        #expect(effects == [[.replyOpenRefused(outcome), .releaseOwnership]])
-        #expect(state.phase == .closed)
-        // Terminal: later inputs drain without new work.
-        let id = RuntimeSessionID()
-        #expect(step(state, .recoveryReported(.clean)).effects == [])
-        #expect(
-            step(state, .spawnRequested(id)).effects
-                == [.replySpawnRefused(runtime: id, reason: .notAccepting(.closed))]
+    @Test func concurrentClosesElectOneLeader() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let opened = try openLifecycleWorkspace(tree)
+        let supervisor = opened.supervisor
+        let running = try launchLifecycleRuntime(
+            supervisor,
+            log: opened.runtimeLog,
+            script: "printf held > held.txt; /bin/sleep 30"
         )
-        #expect(step(state, .closeRequested(publish: .publish)).effects == [.replyAlreadyClosed])
-        #expect(step(state, .controlReplyReceived(id)).effects == [])
-        // Terminal: a late boundary loss drains without moving state.
-        let lost = step(state, .boundaryLost)
-        #expect(lost.effects == [])
-        #expect(lost.state == state)
+        #expect(waitForLifecycle(tree.workspaceURL.appendingPathComponent("held.txt")))
+        let pid = try #require(running.session.child?.pid)
+        let box = LifecycleCloseBox()
+        let rival = Thread {
+            box.result = supervisor.close()
+        }
+        rival.start()
+        let first = supervisor.close()
+        let join = Date().addingTimeInterval(90)
+        while rival.isExecuting, Date() < join {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        #expect(rival.isExecuting == false)
+        // One close leads teardown; the other joins it. Both observe the
+        // same success and the workspace publishes exactly once.
+        #expect(lifecycleSucceeded(first))
+        #expect(lifecycleSucceeded(box.result))
+        #expect(supervisor.snapshot.phase == .closed)
+        #expect(supervisor.publishCount == 1)
+        #expect(lifecycleProcessGone(pid))
+        #expect(closedRecordCount(in: opened.lifeLog) == 1)
     }
 
-    @Test func blockedRecoveryRefusesOpen() {
-        let block = WorkspaceRecoveryBlock(workspace: nil, reason: .tornLog)
-        let outcome = WorkspaceRecoveryOutcome.blocked(block)
-        let (state, effects) = run([.recoveryReported(outcome)])
-        #expect(effects == [[.replyOpenRefused(outcome), .releaseOwnership]])
-        #expect(state.phase == .closed)
+    @Test func closeAfterCloseReplaysWithoutNewWork() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let opened = try openLifecycleWorkspace(tree)
+        let supervisor = opened.supervisor
+        #expect(lifecycleSucceeded(supervisor.close()))
+        // Terminal: the finished close replays; nothing publishes again and
+        // no second `closed` record is appended.
+        #expect(lifecycleSucceeded(supervisor.close()))
+        #expect(supervisor.publishCount == 1)
+        #expect(closedRecordCount(in: opened.lifeLog) == 1)
     }
 
-    @Test func failedRecoveryRefusesTheAttemptButAllowsRetry() {
-        let (state, _) = run([.recoveryReported(.failed)])
-        #expect(state.phase == .closed)
-        // A fresh state for the retry admits normally.
-        let (retry, effects) = run([.recoveryReported(.clean), .openCompleted])
-        #expect(effects[0] == [.establishBoundary])
-        #expect(retry.phase == .active)
+    @Test func abandonedCloseAnswersAlreadyClosed() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let opened = try openLifecycleWorkspace(tree)
+        let supervisor = opened.supervisor
+        supervisor.abandonForCrashSimulation()
+        // Terminal: every close after abandon answers; none hangs or leads.
+        guard case .failure(.alreadyClosed) = supervisor.close() else {
+            Issue.record("close after abandon must answer alreadyClosed")
+            return
+        }
+        guard case .failure(.alreadyClosed) = supervisor.close() else {
+            Issue.record("second close after abandon must answer alreadyClosed")
+            return
+        }
+        #expect(supervisor.publishCount == 0)
     }
 
-    @Test func allRefusalOutcomesRefuseTheAttempt() {
-        let block = WorkspaceRecoveryBlock(workspace: nil, reason: .tornLog)
-        let refusals: [WorkspaceRecoveryOutcome] = [
-            .liveOwner(nil),
-            .liveOwner(UUID()),
+    @Test func closeFailureCachesOnlyTerminalFailures() {
+        // The leader's retryable-vs-terminal decision: only a close that
+        // stopped with children alive releases leadership so a later close
+        // can publish. Every other failure replays without new work.
+        #expect(WorkspaceSessionSupervisor.closeFailureIsTerminal(.childTeardownFailed) == false)
+        let terminal: [WorkspaceSessionError] = [
+            .apply(.workspaceInodeBoundaryFailed),
+            .notAcceptingRuntime(.closing),
+            .cleanupFailed(.workspaceInodeBoundaryFailed),
+            .alreadyClosed,
+            .unknownRuntime(RuntimeSessionID()),
+            .runtimeLimit,
+            .ownedByLiveProcess(nil),
             .recoveryInProgress(UUID()),
-            .blocked(block),
-            .interrupted(.afterPublish),
-            .failed,
+            .unresolvedWorkspace(WorkspaceRecoveryBlock(workspace: nil, reason: .tornLog)),
+            .preparationFailed(.workspaceNotActive),
+            .unknownPreparedLaunch,
+            .redemptionAlreadyAccepted,
         ]
-        for outcome in refusals {
-            let (state, effects) = run([.recoveryReported(outcome)])
+        for error in terminal {
             #expect(
-                effects == [[.replyOpenRefused(outcome), .releaseOwnership]],
-                "outcome \(outcome) must refuse the attempt"
+                WorkspaceSessionSupervisor.closeFailureIsTerminal(error),
+                "\(error) must be terminal"
             )
-            #expect(state.phase == .closed, "outcome \(outcome) must close the attempt")
-            #expect(state.admissionPending == false)
         }
     }
 
-    @Test func duplicateRecoveryReportDrains() {
-        let (state, _) = run([.recoveryReported(.clean)])
-        let out = step(state, .recoveryReported(.clean))
-        #expect(out.effects == [])
-        #expect(out.state == state)
-    }
-
-    @Test func openFailureDiscardsTheWorkspace() {
-        let (state, effects) = run([.recoveryReported(.clean), .openFailed])
-        #expect(effects[1] == [.discardWorkspace, .releaseOwnership])
-        #expect(state.phase == .closed)
-    }
-
-    @Test func launchHandshakeSequence() {
-        let id = RuntimeSessionID()
-        let (state, effects) = run(
-            from: active(),
-            [.spawnRequested(id), .spawnRecorded(id), .handshakeSucceeded(id)]
-        )
-        #expect(effects[0] == [.spawnRuntime(id)])
-        #expect(effects[1] == [.resumeRuntime(id)])
-        #expect(effects[2] == [])
-        #expect(state.runtimes[id] == .established)
-        #expect(state.phase == .active)
-    }
-
-    @Test func spawnFailureEndsTheRuntime() {
-        let id = RuntimeSessionID()
-        let (state, effects) = run(
-            from: active(),
-            [.spawnRequested(id), .spawnFailed(id)]
-        )
-        #expect(effects[1] == [.appendRuntimeEnded(id)])
-        #expect(state.runtimes[id] == .failed)
-        // A failed spawn cancels successfully and is then forgotten.
-        #expect(step(state, .cancelRequested(id)).effects == [.replyCancelled(id)])
-        let forgotten = step(state, .runtimeForgotten(id))
-        #expect(forgotten.effects == [])
-        #expect(forgotten.state.runtimes[id] == nil)
-    }
-
-    @Test func duplicateSpawnRequestDrains() {
-        // The supervisor mints a fresh id per spawn, so a duplicate names an
-        // already-tracked runtime and drains without a second spawn.
-        let id = RuntimeSessionID()
-        let requested = step(active(), .spawnRequested(id))
-        #expect(requested.effects == [.spawnRuntime(id)])
-        let duplicate = step(requested.state, .spawnRequested(id))
-        #expect(duplicate.effects == [])
-        #expect(duplicate.state == requested.state)
-        // Still tracked after a duplicate: the original request proceeds.
-        let recorded = step(duplicate.state, .spawnRecorded(id))
-        #expect(recorded.effects == [.resumeRuntime(id)])
-        #expect(recorded.state.runtimes[id] == .handshaking)
-    }
-
-    @Test func mismatchedPhaseCompletionsDrain() {
-        let starting = RuntimeSessionID()
-        let established = RuntimeSessionID()
-        var state = active()
-        state = step(state, .spawnRequested(starting)).state
-        for event: WorkspaceEvent in [
-            .spawnRequested(established), .spawnRecorded(established), .handshakeSucceeded(established),
-        ] {
-            state = step(state, event).state
-        }
-        // Known ids, wrong phases: every completion guard must hold.
-        let mismatches: [WorkspaceEvent] = [
-            .spawnRecorded(established),
-            .spawnFailed(established),
-            .handshakeSucceeded(starting),
-            .handshakeFailed(starting),
-            .handshakeFailed(established),
-            .runtimeForgotten(starting),
-            .runtimeForgotten(established),
-        ]
-        for event in mismatches {
-            let out = step(state, event)
-            #expect(out.effects == [], "mismatched \(event) must drain")
-            #expect(out.state == state, "mismatched \(event) must not move state")
-        }
-    }
-
-    @Test func handshakeFailureFailsTheRuntime() {
-        let id = RuntimeSessionID()
-        var state = active()
-        for event: WorkspaceEvent in [.spawnRequested(id), .spawnRecorded(id)] {
-            state = step(state, event).state
-        }
-        let out = step(state, .handshakeFailed(id))
-        #expect(out.effects == [.appendRuntimeEnded(id)])
-        #expect(out.state.runtimes[id] == .failed)
-        // A failed runtime cancels successfully and is then forgotten.
-        #expect(step(out.state, .cancelRequested(id)).effects == [.replyCancelled(id)])
-        let forgotten = step(out.state, .runtimeForgotten(id))
-        #expect(forgotten.state.runtimes[id] == nil)
-    }
-
-    @Test func spawnRefusedOutsideActive() {
-        let id = RuntimeSessionID()
-        for phaseState in [
-            WorkspaceSupervisorState(),
-            run([.recoveryReported(.clean), .openCompleted, .closeRequested(publish: .discard)]).state,
-            run([.recoveryReported(.liveOwner(nil))]).state,
-        ] {
-            let out = step(phaseState, .spawnRequested(id))
-            #expect(
-                out.effects == [.replySpawnRefused(runtime: id, reason: .notAccepting(phaseState.phase))]
-            )
-            #expect(out.state == phaseState)
-        }
-    }
-
-    @Test func spawnRefusedAtLimit() {
-        let first = RuntimeSessionID()
-        let second = RuntimeSessionID()
-        var state = WorkspaceSupervisorState(runningLimit: 1)
-        for event: WorkspaceEvent in [.recoveryReported(.clean), .openCompleted] {
-            state = step(state, event).state
-        }
-        state = step(state, .spawnRequested(first)).state
-        let refused = step(state, .spawnRequested(second))
-        #expect(refused.effects == [.replySpawnRefused(runtime: second, reason: .limitReached)])
-        #expect(refused.state.runtimes[second] == nil)
-        // Configuration: the transition never mutates the cap.
-        #expect(refused.state.runningLimit == 1)
-        // An exited runtime frees its slot without being forgotten.
-        let exited = step(state, .runtimeExited(first)).state
-        let admitted = step(exited, .spawnRequested(second))
-        #expect(admitted.effects == [.spawnRuntime(second)])
-    }
-
-    @Test func spawnRefusedWhenBoundaryLost() {
-        let id = RuntimeSessionID()
-        let lost = step(active(), .boundaryLost)
-        #expect(lost.effects == [])
-        #expect(lost.state.boundary == .lost)
-        let refused = step(lost.state, .spawnRequested(id))
-        #expect(refused.effects == [.replySpawnRefused(runtime: id, reason: .boundaryLost)])
-        // Losing the boundary twice changes nothing further.
-        #expect(step(lost.state, .boundaryLost).state == lost.state)
-    }
-
-    @Test func cancelStopsARunningRuntime() {
-        let id = RuntimeSessionID()
-        var state = active()
-        for event: WorkspaceEvent in [.spawnRequested(id), .spawnRecorded(id), .handshakeSucceeded(id)] {
-            state = step(state, event).state
-        }
-        let cancelled = step(state, .cancelRequested(id))
-        #expect(cancelled.effects == [.stopRuntime(id)])
-        #expect(cancelled.state.runtimes[id] == .exiting)
-        // Cancel is idempotent while the runtime is still going.
-        #expect(step(cancelled.state, .cancelRequested(id)).effects == [.stopRuntime(id)])
-        let exited = step(cancelled.state, .runtimeExited(id))
-        #expect(exited.effects == [.appendRuntimeEnded(id)])
-        #expect(exited.state.runtimes[id] == .exited)
-    }
-
-    @Test func cancelUnknownRuntimeReplies() {
-        let id = RuntimeSessionID()
-        #expect(step(active(), .cancelRequested(id)).effects == [.replyUnknownRuntime(id)])
-        let closed = run([.recoveryReported(.liveOwner(nil))]).state
-        #expect(step(closed, .cancelRequested(id)).effects == [.replyUnknownRuntime(id)])
-        #expect(step(WorkspaceSupervisorState(), .cancelRequested(id)).effects == [.replyUnknownRuntime(id)])
-    }
-
-    @Test func closePublishesAnEmptyWorkspace() {
-        let requested = step(active(), .closeRequested(publish: .publish))
-        #expect(requested.state.phase == .closing)
-        #expect(requested.state.closeState == .leading(publish: .publish))
-        #expect(requested.effects == [.finishTeardown(publish: .publish)])
-        let finished = step(requested.state, .closeSucceeded(published: .publish))
-        #expect(
-            finished.effects
-                == [.appendClosed(published: .publish), .releaseOwnership, .replyClosed(published: .publish)]
-        )
-        #expect(finished.state.phase == .closed)
-        #expect(finished.state.publishCount == 1)
-        #expect(finished.state.closeState == .finished(published: .publish))
-        // A second close replays the terminal answer without new work.
-        let again = step(finished.state, .closeRequested(publish: .publish))
-        #expect(again.effects == [.replyAlreadyClosed])
-        #expect(again.state == finished.state)
-    }
-
-    @Test func closeWithoutPublishDoesNotCount() {
-        let requested = step(active(), .closeRequested(publish: .discard))
-        #expect(requested.effects == [.finishTeardown(publish: .discard)])
-        let finished = step(requested.state, .closeSucceeded(published: .discard))
-        #expect(finished.state.publishCount == 0)
-        #expect(finished.state.phase == .closed)
-    }
-
-    @Test func closeStopsRuntimesThenFinishes() {
-        let first = RuntimeSessionID()
-        let second = RuntimeSessionID()
-        var state = active()
-        for id in [first, second] {
-            for event: WorkspaceEvent in [.spawnRequested(id), .spawnRecorded(id), .handshakeSucceeded(id)] {
-                state = step(state, event).state
-            }
-        }
-        let requested = step(state, .closeRequested(publish: .publish))
-        #expect(requested.state.phase == .closing)
-        let stops = requested.effects
-        let ordered = [first, second].sorted { $0.rawValue.uuidString < $1.rawValue.uuidString }
-        #expect(stops == [.stopRuntime(ordered[0]), .stopRuntime(ordered[1]), .finishTeardown(publish: .publish)])
-        // No new spawns while closing; exits only append records.
-        let third = RuntimeSessionID()
-        #expect(
-            step(requested.state, .spawnRequested(third)).effects
-                == [.replySpawnRefused(runtime: third, reason: .notAccepting(.closing))]
-        )
-        var closing = requested.state
-        for id in [first, second] {
-            let exited = step(closing, .runtimeExited(id))
-            #expect(exited.effects == [.appendRuntimeEnded(id)])
-            closing = exited.state
-        }
-        let finished = step(closing, .closeSucceeded(published: .publish))
-        #expect(finished.state.phase == .closed)
-        #expect(finished.state.publishCount == 1)
-    }
-
-    @Test func closeDuringClosingWaitsForTheLeader() {
-        let requested = step(active(), .closeRequested(publish: .publish))
-        let waiter = step(requested.state, .closeRequested(publish: .discard))
-        #expect(waiter.effects == [.awaitClose])
-        #expect(waiter.state == requested.state)
-    }
-
-    @Test func childrenAliveLeavesCloseRetryable() {
-        let first = RuntimeSessionID()
-        var state = active()
-        for event: WorkspaceEvent in [.spawnRequested(first), .spawnRecorded(first), .handshakeSucceeded(first)] {
-            state = step(state, event).state
-        }
-        let requested = step(state, .closeRequested(publish: .publish))
-        let failed = step(requested.state, .closeFailed(.childrenAlive))
-        #expect(failed.effects == [.replyCloseFailed(.childrenAlive)])
-        #expect(failed.state.phase == .closing)
-        #expect(failed.state.closeState == .waiting)
-        // Only successful publishes count; attempts do not.
-        #expect(failed.state.publishCount == 0)
-        // The next close leads again with its own publish flag.
-        let reled = step(failed.state, .closeRequested(publish: .discard))
-        #expect(
-            reled.effects == [.stopRuntime(first), .finishTeardown(publish: .discard)]
-        )
-        #expect(reled.state.closeState == .leading(publish: .discard))
-        let exited = step(reled.state, .runtimeExited(first)).state
-        let finished = step(exited, .closeSucceeded(published: .discard))
-        #expect(finished.state.phase == .closed)
-    }
-
-    @Test func teardownFailedIsTerminal() {
-        let requested = step(active(), .closeRequested(publish: .publish))
-        let failed = step(requested.state, .closeFailed(.teardownFailed))
-        #expect(failed.effects == [.replyCloseFailed(.teardownFailed)])
-        #expect(failed.state.phase == .closing)
-        #expect(failed.state.publishCount == 0)
-        #expect(failed.state.closeState == .terminal(.teardownFailed))
-        // Later closes replay the failure without new work.
-        let replayed = step(failed.state, .closeRequested(publish: .discard))
-        #expect(replayed.effects == [.replyCloseFailed(.teardownFailed)])
-        #expect(replayed.state == failed.state)
-        let third = RuntimeSessionID()
-        #expect(
-            step(failed.state, .spawnRequested(third)).effects
-                == [.replySpawnRefused(runtime: third, reason: .notAccepting(.closing))]
-        )
-    }
-
-    @Test func closeDuringCreatingIsRefused() {
-        let out = step(WorkspaceSupervisorState(), .closeRequested(publish: .publish))
-        #expect(out.effects == [.replyCloseRefused(.creating)])
-        #expect(out.state.phase == .creating)
-    }
-
-    @Test func closeRequestedAlwaysAnswers() {
-        // A close request rides a request/reply protocol: every (phase,
-        // closeState) combination must emit an effect (a reply, promised
-        // work, or a join), never drain to the caller's own timeout.
-        // Includes states only reachable via the public init, which the
-        // future live-supervisor wiring must also be able to map.
-        let phases: [WorkspaceLifecycle] = [.creating, .active, .closing, .closed]
-        let closes: [WorkspaceCloseState] = [
-            .open,
-            .leading(publish: .publish),
-            .waiting,
-            .terminal(.teardownFailed),
-            .finished(published: .publish),
-        ]
-        for phase in phases {
-            for close in closes {
-                let state = WorkspaceSupervisorState(
-                    phase: phase,
-                    admissionPending: false,
-                    closeState: close
-                )
-                let out = step(state, .closeRequested(publish: .publish))
-                if close == .terminal(.teardownFailed) {
-                    #expect(out.effects == [.replyCloseFailed(.teardownFailed)], "(\(phase), \(close))")
-                } else {
-                    #expect(out.effects.isEmpty == false, "(\(phase), \(close)) drained")
+    @Test func closeTerminalFailureReplaysWithoutNewWork() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let lifeLog = tree.rootURL.appendingPathComponent("workspace-\(UUID().uuidString).jsonl")
+        // Fail only the `closed` append: open records normally, then the
+        // leader's close stops terminally at the log write.
+        let store = WorkspaceLifecycleStore(
+            append: { record in
+                if record.kind == .closed {
+                    return .failure(.sessionRecordFailed)
                 }
-            }
-        }
-        // The close already completed: answer, even though the transition
-        // itself never leaves `.closing` behind a `.finished` state.
-        let finished = WorkspaceSupervisorState(
-            phase: .closing,
-            admissionPending: false,
-            closeState: .finished(published: .discard)
+                return WorkspaceLifecycleLog.append(record, to: lifeLog)
+            },
+            file: lifeLog
         )
-        #expect(step(finished, .closeRequested(publish: .publish)).effects == [.replyAlreadyClosed])
+        let directory = try #require(WorkingDirectory(validating: tree.workspaceURL.path))
+        let supervisor = try WorkspaceSessionSupervisor.open(directory, lifecycleLog: store).get()
+        guard case .failure(.apply(.sessionRecordFailed)) = supervisor.close() else {
+            Issue.record("close with a failing log must answer apply(sessionRecordFailed)")
+            return
+        }
+        #expect(supervisor.publishCount == 1)
+        // Terminal: the failure replays identically; nothing publishes
+        // again and no `closed` record lands. Without the finished-close
+        // cache this would answer alreadyClosed instead.
+        guard case .failure(.apply(.sessionRecordFailed)) = supervisor.close() else {
+            Issue.record("failed close must replay without new work")
+            return
+        }
+        #expect(supervisor.publishCount == 1)
+        #expect(closedRecordCount(in: lifeLog) == 0)
     }
 
-    @Test func lateControlReplyDrains() {
-        let running = RuntimeSessionID()
-        let gone = RuntimeSessionID()
-        var state = active()
-        for id in [running, gone] {
-            for event: WorkspaceEvent in [.spawnRequested(id), .spawnRecorded(id), .handshakeSucceeded(id)] {
-                state = step(state, event).state
-            }
+    @Test func discardClosePublishesNothing() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let opened = try openLifecycleWorkspace(tree)
+        let supervisor = opened.supervisor
+        let teardown = supervisor.finishSingleRuntime(publish: false)
+        guard case .success = teardown else {
+            Issue.record("discard close must succeed, got \(teardown)")
+            return
         }
-        state = step(state, .runtimeExited(gone)).state
-        // A reply for a running runtime is forwarded ...
-        #expect(
-            step(state, .controlReplyReceived(running)).effects
-                == [.forwardControlReply(running)]
+        #expect(supervisor.snapshot.phase == .closed)
+        #expect(supervisor.publishCount == 0)
+        #expect(closedRecordCount(in: opened.lifeLog) == 1)
+    }
+
+    @Test func discardCloseReplaysWithoutNewWork() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let opened = try openLifecycleWorkspace(tree)
+        let supervisor = opened.supervisor
+        guard case .success = supervisor.finishSingleRuntime(publish: false) else {
+            Issue.record("discard close must succeed")
+            return
+        }
+        // Terminal: the finished discard replays; nothing publishes and
+        // no second `closed` record is appended.
+        guard case .success = supervisor.finishSingleRuntime(publish: false) else {
+            Issue.record("second discard close must replay success")
+            return
+        }
+        #expect(supervisor.publishCount == 0)
+        #expect(closedRecordCount(in: opened.lifeLog) == 1)
+    }
+
+    @Test func cancelUnknownRuntimeAnswersWithoutWork() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let opened = try openLifecycleWorkspace(tree)
+        defer { _ = opened.supervisor.close() }
+        let unknown = RuntimeSessionID()
+        guard case .failure(.unknownRuntime(let answered)) = opened.supervisor.cancel(unknown) else {
+            Issue.record("cancel of an unknown runtime must be refused")
+            return
+        }
+        #expect(answered == unknown)
+    }
+
+    @Test func launchAfterCloseIsRefused() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let opened = try openLifecycleWorkspace(tree)
+        let supervisor = opened.supervisor
+        #expect(lifecycleSucceeded(supervisor.close()))
+        let startsBefore = RuntimeSessionLog.records(at: opened.runtimeLog).count
+        let marker = tree.workspaceURL.appendingPathComponent("refused")
+        let refused = supervisor.launch(
+            host: .opencode,
+            command: try lifecycleShell("printf no > refused"),
+            plan: compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace),
+            io: .discard,
+            admission: .failClosed,
+            sessionStore: .file(opened.runtimeLog)
         )
-        // ... but a reply that races an exit, names an unknown runtime, or
-        // arrives after close drains to a no-op.
-        #expect(step(state, .controlReplyReceived(gone)).effects == [])
-        #expect(step(state, .controlReplyReceived(RuntimeSessionID())).effects == [])
-        let closed = run([.recoveryReported(.liveOwner(nil))]).state
-        #expect(step(closed, .controlReplyReceived(running)).effects == [])
-    }
-
-    @Test func strayCompletionsDrain() {
-        let id = RuntimeSessionID()
-        let state = active()
-        let strays: [WorkspaceEvent] = [
-            .spawnRecorded(id),
-            .spawnFailed(id),
-            .handshakeSucceeded(id),
-            .handshakeFailed(id),
-            .runtimeExited(id),
-            .runtimeForgotten(id),
-            .openCompleted,
-            .openFailed,
-            .closeSucceeded(published: .publish),
-            .closeFailed(.childrenAlive),
-        ]
-        for event in strays {
-            let out = step(state, event)
-            #expect(out.effects == [], "stray \(event) must drain")
-            #expect(out.state == state, "stray \(event) must not move state")
+        guard case .failure(.notAcceptingRuntime(let phase)) = refused else {
+            Issue.record("launch after close must be refused, got \(refused)")
+            return
         }
-        // A duplicate exit drains as well.
-        var established = state
-        for event: WorkspaceEvent in [.spawnRequested(id), .spawnRecorded(id), .handshakeSucceeded(id)] {
-            established = step(established, event).state
-        }
-        let exited = step(established, .runtimeExited(id))
-        let duplicate = step(exited.state, .runtimeExited(id))
-        #expect(duplicate.effects == [])
-        #expect(duplicate.state == exited.state)
-    }
-
-    @Test func forgetPrunesOnlyFinishedRuntimes() {
-        let finished = RuntimeSessionID()
-        let running = RuntimeSessionID()
-        var state = active()
-        for id in [finished, running] {
-            for event: WorkspaceEvent in [.spawnRequested(id), .spawnRecorded(id), .handshakeSucceeded(id)] {
-                state = step(state, event).state
-            }
-        }
-        state = step(state, .runtimeExited(finished)).state
-        #expect(step(state, .runtimeForgotten(running)).state == state)
-        #expect(step(state, .runtimeForgotten(RuntimeSessionID())).state == state)
-        let pruned = step(state, .runtimeForgotten(finished))
-        #expect(pruned.effects == [])
-        #expect(pruned.state.runtimes[finished] == nil)
-        #expect(pruned.state.runtimes[running] == .established)
-    }
-
-    @Test func fullLifecycleScript() {
-        let first = RuntimeSessionID()
-        let second = RuntimeSessionID()
-        let (state, effects) = run([
-            .recoveryReported(.clean),
-            .openCompleted,
-            .spawnRequested(first),
-            .spawnRecorded(first),
-            .handshakeSucceeded(first),
-            .spawnRequested(second),
-            .spawnRecorded(second),
-            .handshakeSucceeded(second),
-            .cancelRequested(first),
-            .runtimeExited(first),
-            .closeRequested(publish: .publish),
-            .runtimeExited(second),
-            .closeSucceeded(published: .publish),
-        ])
-        #expect(effects[0] == [.establishBoundary])
-        #expect(effects[8] == [.stopRuntime(first)])
-        #expect(effects[10].last == .finishTeardown(publish: .publish))
-        #expect(effects[12].last == .replyClosed(published: .publish))
-        #expect(state.phase == .closed)
-        #expect(state.publishCount == 1)
-        #expect(state.runtimes[first] == .exited)
-        #expect(state.runtimes[second] == .exited)
+        #expect(phase == .closed)
+        #expect(FileManager.default.fileExists(atPath: marker.path) == false)
+        #expect(RuntimeSessionLog.records(at: opened.runtimeLog).count == startsBefore)
     }
 }
+
+private struct LifecycleOpened {
+    var supervisor: WorkspaceSessionSupervisor
+    var runtimeLog: URL
+    var lifeLog: URL
+}
+
+private func openLifecycleWorkspace(_ tree: ContainmentTree) throws -> LifecycleOpened {
+    let runtimeLog = tree.rootURL.appendingPathComponent("runtime-\(UUID().uuidString).jsonl")
+    let lifeLog = tree.rootURL.appendingPathComponent("workspace-\(UUID().uuidString).jsonl")
+    let directory = try #require(WorkingDirectory(validating: tree.workspaceURL.path))
+    let supervisor = try WorkspaceSessionSupervisor.open(
+        directory,
+        lifecycleLog: .file(lifeLog)
+    ).get()
+    return LifecycleOpened(supervisor: supervisor, runtimeLog: runtimeLog, lifeLog: lifeLog)
+}
+
+private func launchLifecycleRuntime(
+    _ supervisor: WorkspaceSessionSupervisor,
+    log: URL,
+    script: String
+) throws -> RunningRuntime {
+    try supervisor.launch(
+        host: .opencode,
+        command: lifecycleShell(script),
+        plan: compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace),
+        io: .discard,
+        admission: .failClosed,
+        sessionStore: .file(log)
+    ).get()
+}
+
+private func lifecycleShell(_ script: String) throws -> IsolatedCommand {
+    try #require(IsolatedCommand(executable: "/bin/sh", arguments: ["-c", script]))
+}
+
+private func closedRecordCount(in lifeLog: URL) -> Int {
+    WorkspaceLifecycleLog.records(at: lifeLog).count { $0.kind == .closed }
+}
+
+private func waitForLifecycle(_ url: URL) -> Bool {
+    waitUntilLifecycle(seconds: 20) { FileManager.default.fileExists(atPath: url.path) }
+}
+
+private func waitUntilLifecycle(seconds: TimeInterval, _ condition: () -> Bool) -> Bool {
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline {
+        if condition() { return true }
+        Thread.sleep(forTimeInterval: 0.02)
+    }
+    return condition()
+}
+
+private func lifecycleSucceeded(_ result: Result<Void, WorkspaceSessionError>?) -> Bool {
+    guard let result else { return false }
+    if case .success = result { return true }
+    return false
+}
+
+private func lifecycleProcessGone(_ pid: pid_t) -> Bool {
+    if kill(pid, 0) == 0 { return false }
+    return errno == ESRCH
+}
+
+private final class LifecycleCloseBox: Sendable {
+    private let box = Mutex<Result<Void, WorkspaceSessionError>?>(nil)
+
+    var result: Result<Void, WorkspaceSessionError>? {
+        get { box.withLock { $0 } }
+        set { box.withLock { $0 = newValue } }
+    }
+}
+#endif

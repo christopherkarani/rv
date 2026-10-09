@@ -1627,6 +1627,23 @@ final class WorkspaceSessionSupervisor: Sendable {
         return .failure(.apply(child.live.terminalError ?? .seatbeltNotEstablished))
     }
 
+    /// Whether a leader's close failure is cached for replay (terminal) or
+    /// released so a later close can lead again (retryable). Only a close
+    /// that stopped with children alive stays retryable: the children may
+    /// die after the wait, so a later close must still be able to publish.
+    /// Every other failure is terminal and replays without new work.
+    static func closeFailureIsTerminal(_ error: WorkspaceSessionError) -> Bool {
+        switch error {
+        case .childTeardownFailed:
+            return false
+        case .apply, .notAcceptingRuntime, .cleanupFailed, .alreadyClosed,
+            .unknownRuntime, .runtimeLimit, .ownedByLiveProcess,
+            .recoveryInProgress, .unresolvedWorkspace, .preparationFailed,
+            .unknownPreparedLaunch, .redemptionAlreadyAccepted:
+            return true
+        }
+    }
+
     private func finish(publish: Bool) -> Result<Void, WorkspaceSessionError> {
         if state.withLock({ $0.abandoned }) {
             return .failure(.alreadyClosed)
@@ -1666,7 +1683,7 @@ final class WorkspaceSessionSupervisor: Sendable {
         case .lead(let publish):
             let result = performFinish(publish: publish)
             state.withLock { state in
-                if case .failure(.childTeardownFailed) = result {
+                if case .failure(let error) = result, Self.closeFailureIsTerminal(error) == false {
                     // The children may die after this wait. A later close has
                     // to be able to publish; caching this failure would not.
                     state.closeLeader = false
