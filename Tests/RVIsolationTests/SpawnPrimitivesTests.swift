@@ -83,6 +83,22 @@ struct SpawnPrimitivesTests {
         #expect(bad == -1)
     }
 
+    /// fcntl failure returns false and leaves the original fd open and
+    /// unmodified. The floor sits above OPEN_MAX so no fd can satisfy it;
+    /// the fd stays open throughout, so a parallel suite cannot reuse its
+    /// number between a close and the probe.
+    @Test func relocateFailureLeavesOriginalOpen() throws {
+        let (readEnd, writeEnd) = try openPipe()
+        var fd = readEnd
+        defer {
+            if fd >= 0 { close(fd) }
+            close(writeEnd)
+        }
+        #expect(relocateDescriptor(&fd, above: Int32.max) == false)
+        #expect(fd == readEnd)
+        #expect(fcntl(fd, F_GETFD) >= 0)
+    }
+
     // MARK: - vectors
 
     @Test func vectorYieldsContentPlusTerminator() {
