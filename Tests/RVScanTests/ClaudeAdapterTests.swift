@@ -98,6 +98,23 @@ import RVDomain
     }
 }
 
+@Test func claudeAdapter_emptyOrUnreadableThrows() throws {
+    let adapter = ClaudeSessionStoreAdapter()
+    let source = URL(fileURLWithPath: "/tmp/claude-unreadable.jsonl")
+    #expect(throws: ScanStoreError.unreadable(sourcePath: source.path)) {
+        _ = try adapter.extract(fileURL: source, data: Data())
+    }
+    #expect(throws: ScanStoreError.unreadable(sourcePath: source.path)) {
+        _ = try adapter.extract(fileURL: source, data: Data([0xFF, 0xFE, 0x0A]))
+    }
+    #expect(throws: ScanStoreError.unreadable(sourcePath: source.path)) {
+        _ = try adapter.extract(fileURL: source, data: Data("not-json\n".utf8))
+    }
+    // Unrecognized files still yield no events without throwing.
+    let noise = URL(fileURLWithPath: "/tmp/claude-noise.txt")
+    #expect(try adapter.extract(fileURL: noise, data: Data("not-json\n".utf8)).isEmpty)
+}
+
 @Test func claudeAdapter_skipsMalformedLinesAndNonShellTools() throws {
     let payload = """
     {"type":"assistant","sessionId":"s","timestamp":"2026-08-20T12:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"1","name":"Bash","input":{"command":"git reset --hard"}}]}}

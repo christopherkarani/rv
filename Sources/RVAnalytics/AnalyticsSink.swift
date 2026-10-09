@@ -74,19 +74,31 @@ public struct PostHogSink: AnalyticsSink {
     }
 
     package static func encodeBatch(apiKey: String, payload: AnalyticsPayload) throws -> Data {
-        var properties: [String: Any] = ["distinct_id": payload.distinctID]
-        for (key, value) in payload.properties {
-            properties[key] = value.jsonObject
-        }
-        let root: [String: Any] = [
-            "api_key": apiKey,
-            "batch": [
-                [
-                    "event": payload.event,
-                    "properties": properties,
-                ],
-            ],
+        var properties: [String: AnalyticsPropertyValue] = [
+            "distinct_id": .string(payload.distinctID),
         ]
-        return try JSONSerialization.data(withJSONObject: root)
+        for (key, value) in payload.properties {
+            properties[key] = value
+        }
+        let batch = PostHogBatch(
+            apiKey: apiKey,
+            batch: [PostHogEvent(event: payload.event, properties: properties)]
+        )
+        return try JSONEncoder().encode(batch)
     }
+}
+
+private struct PostHogBatch: Codable {
+    var apiKey: String
+    var batch: [PostHogEvent]
+
+    private enum CodingKeys: String, CodingKey {
+        case apiKey = "api_key"
+        case batch
+    }
+}
+
+private struct PostHogEvent: Codable {
+    var event: String
+    var properties: [String: AnalyticsPropertyValue]
 }

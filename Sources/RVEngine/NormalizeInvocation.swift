@@ -12,11 +12,16 @@ import RVDomain
 /// execution semantics under one approval.
 ///
 /// `invocationPrefix` records exactly what the view erases, in pipeline
-/// order, by mirroring `classifyStage` strip-for-strip on the same peeled
-/// text (assignments per top-level piece, then the wrapper loop on the
-/// masked text, then the argv0 path split). It shares every primitive with
-/// the strips (`parseAssignmentPrefix`, the `strip*` family), so the two
-/// cannot drift: anything the view drops is recorded here.
+/// order, projected from the single matching derivation
+/// (`deriveMatching`): one loop strips and records atomically, so the
+/// prefix cannot drift from the view — anything the view drops is
+/// recorded here.
+///
+/// Migration note: the fused pass records wrapper heads behind masked
+/// tails that the legacy recorder silently dropped (`sudo echo "secret"`
+/// now binds `["sudo"]`, previously `[]`). Grants minted under the old
+/// bare binding will not spend for those commands; the owner re-approves
+/// once under the tightened binding.
 ///
 /// The pieces are raw command text and may carry secrets (environment
 /// values, wrapper flags). Like masked segments, they must only be
@@ -65,107 +70,10 @@ extension ShellPipeline {
         }
     }
 
+    /// Typed erased-prefix pieces, projected from the single derivation
+    /// pass so the recorded prefix always describes the returned view.
     static func typedInvocationPrefix(of input: String) -> [InvocationPiece] {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty == false else { return [] }
-        // Same input `classifyStage` strips: heredoc bodies are already
-        // masked (space-filled) and never affect first-word stripping.
-        let peeled = peelStage(input)
-        var pieces: [InvocationPiece] = []
-        let stripped = mapTopLevelPieces(peeled) { piece in
-            recordAssignmentPrefixes(in: piece, into: &pieces)
-            return stripLeadingAssignmentPrefixes(piece)
-        }
-        // Same masked text the wrapper loop strips: an ANSI-C argv0 such as
-        // `$'sudo'` only surfaces as a wrapper after masking.
-        var current = applyRoleAwareQuotes(tokens: tokenize(stripped))
-        var iteration = 0
-        while iteration < Normalize.maxWrapperIterations {
-            iteration += 1
-            if let next = stripRecording(current, with: stripSudo) {
-                pieces.append(.wrapper(head: next.head))
-                current = next.rest
-                continue
-            }
-            if let next = stripRecording(current, with: stripEnv) {
-                pieces.append(.wrapper(head: next.head))
-                current = next.rest
-                continue
-            }
-            if let next = stripRecording(current, with: stripCommandWrapper) {
-                pieces.append(.wrapper(head: next.head))
-                current = next.rest
-                continue
-            }
-            if let next = stripRecording(current, with: stripLeadingBackslash) {
-                pieces.append(.wrapper(head: next.head))
-                current = next.rest
-                continue
-            }
-            break
-        }
-        let (word, _) = firstWord(current)
-        if looksLikeAbsoluteExecutable(word) {
-            pieces.append(.argv0(word: word))
-        }
-        return pieces
-    }
-
-    /// Records every leading assignment span `stripLeadingAssignmentPrefixes`
-    /// erases or rewrites, using the same `parseAssignmentPrefix` detector,
-    /// in order. Substitution values stay in the view (`VALUE ; TAIL`) but
-    /// the `NAME=` carrier is erased, so the whole raw span binds.
-    private static func recordAssignmentPrefixes(
-        in piece: String,
-        into pieces: inout [InvocationPiece]
-    ) {
-        var rest = piece[...]
-        while let parsed = parseAssignmentPrefix(rest) {
-            let raw = String(rest[..<parsed.rest.startIndex])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if raw.isEmpty == false {
-                pieces.append(.assignment(name: assignmentDisplayName(raw), raw: raw))
-            }
-            rest = parsed.rest
-        }
-    }
-
-    /// The assignment target name without value or subscript: `FOO` for
-    /// `FOO=bar`, `A` for `A[0]=x` and `A+=y`. Display only; the digest
-    /// binds the raw span.
-    private static func assignmentDisplayName(_ raw: String) -> String {
-        var name = raw[...]
-        if let eq = name.firstIndex(of: "=") {
-            name = name[..<eq]
-        }
-        if let bracket = name.firstIndex(of: "[") {
-            name = name[..<bracket]
-        }
-        if name.hasSuffix("+") {
-            name = name.dropLast()
-        }
-        return String(name)
-    }
-
-    /// Runs one wrapper strip and splits the input into erased head plus
-    /// remainder. Every strip returns a true suffix of its input (boundary
-    /// blanks stay in the head), so a non-suffix result means no strip.
-    private static func stripRecording(
-        _ text: String,
-        with strip: (String) -> String?
-    ) -> (head: String, rest: String)? {
-        guard let rest = strip(text),
-            rest != text,
-            text.hasSuffix(rest)
-        else {
-            return nil
-        }
-        let head = String(text.dropLast(rest.count))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard head.isEmpty == false else {
-            return nil
-        }
-        return (head, rest)
+        deriveMatching(input).prefix
     }
 }
 

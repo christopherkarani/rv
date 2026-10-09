@@ -71,8 +71,8 @@ private func goldenFixtureCases() throws -> [GoldenCase] {
             )
         )
     }
-    // Best-effort edges: non-UTF8 bytes and unrecognized extensions yield no
-    // events (never throw) on the lenient adapters.
+    // Fail-closed edges: non-UTF8 bytes throw `unreadable` on recognized
+    // files; only unrecognized extensions yield no events (never throw).
     let claudeData = try Data(contentsOf: fixtureURL("claude/projects/-tmp-rv-scan-fixture/ac001-reset-hard.jsonl"))
     cases.append(
         goldenExtract(

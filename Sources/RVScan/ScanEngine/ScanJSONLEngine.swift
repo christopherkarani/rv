@@ -108,7 +108,7 @@ enum ScanJSONLEngine {
         sourcePath: String,
         fallbackSession: SessionID?,
         profile: ScanJSONLProfile
-    ) throws -> [ExtractedEvent] {
+    ) throws(ScanStoreError) -> [ExtractedEvent] {
         guard data.isEmpty == false else {
             throw ScanStoreError.unreadable(sourcePath: sourcePath)
         }

@@ -93,6 +93,19 @@ struct PendingDispatchTests {
         #expect(await approvals.resolveCalls.map(\.decision) == [.allowOnce])
     }
 
+    @Test func coordinatorListErrorSurfacesMappedIPCError() async throws {
+        let approvals = FakePendingApprovals()
+        await approvals.setListError(.lockFailed)
+        let runtime = try makeRuntime(approvals: approvals)
+        let listed = await runtime.dispatch(IPCRequest(method: .pendingList), context: peerServiceContext())
+        #expect(listed.result == .error(.pendingCoordinatorUnavailable))
+        let watch = await runtime.dispatch(
+            IPCRequest(method: .pendingWatch(PendingWatchParams(afterGeneration: 0))),
+            context: peerServiceContext()
+        )
+        #expect(watch.result == .error(.pendingCoordinatorUnavailable))
+    }
+
     @Test func missingCoordinatorFailsClosedWithoutSpendingAGrant() async throws {
         let allowOnceDirectory = try isolatedAllowOnceDirectory()
         let homeURL = try isolatedHomeDirectory()

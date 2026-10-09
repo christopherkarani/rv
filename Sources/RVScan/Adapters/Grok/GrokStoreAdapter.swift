@@ -23,16 +23,27 @@ public struct GrokStoreAdapter: SessionStoreAdapter {
         fileURL.lastPathComponent == "chat_history.jsonl"
     }
 
-    public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
+    /// Surface-extract shell `tool_calls` rows from provided store bytes.
+    /// `fileURL` is provenance only; missing or unreadable `data` throws.
+    public func extract(fileURL: URL, data: Data) throws(ScanStoreError) -> [ExtractedEvent] {
         let sourcePath = fileURL.path
         let sessionID = fileURL.deletingLastPathComponent().lastPathComponent
         let workingDirectory = ScanStoreWorkingDirectory.fromGrokLayout(fileURL: fileURL)
         var events: [ExtractedEvent] = []
 
-        guard let lines = ScanJSONLEngine.textLines(in: data) else { return [] }
+        guard data.isEmpty == false else {
+            throw ScanStoreError.unreadable(sourcePath: sourcePath)
+        }
+        guard let lines = ScanJSONLEngine.textLines(in: data) else {
+            throw ScanStoreError.unreadable(sourcePath: sourcePath)
+        }
+        var sawJSON = false
         for line in lines {
-            guard let object = ScanJSONLEngine.parseObject(line),
-                  object["type"]?.string == "assistant",
+            guard let object = ScanJSONLEngine.parseObject(line) else {
+                continue
+            }
+            sawJSON = true
+            guard object["type"]?.string == "assistant",
                   let toolCalls = object["tool_calls"]?.asArray,
                   toolCalls.allSatisfy({ $0.asObject != nil })
             else {
@@ -57,6 +68,9 @@ public struct GrokStoreAdapter: SessionStoreAdapter {
                     )
                 )
             }
+        }
+        guard sawJSON else {
+            throw ScanStoreError.unreadable(sourcePath: sourcePath)
         }
         return events
     }

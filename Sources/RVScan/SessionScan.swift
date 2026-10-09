@@ -96,6 +96,11 @@ public enum SessionScanError: Error, Sendable, Equatable {
     case listingFailed(String)
     case includeGlobRequiresPath
     case packsUnavailable
+    /// A recognized (non-glob) store failed fail-closed extraction.
+    case unreadableStore(sourcePath: String)
+    /// A recognized store opened but its query could not be prepared
+    /// (SQLite schema drift, e.g. a missing table).
+    case prepareFailed(sourcePath: String)
 }
 
 /// Session-forensics entry: walk, extract, classify, time-window, dedupe.
@@ -105,7 +110,7 @@ public struct SessionScan: Sendable {
     public func run(
         _ request: SessionScanRequest,
         fileManager: FileManager = .default
-    ) throws -> SessionScanResult {
+    ) throws(SessionScanError) -> SessionScanResult {
         if request.includeGlobs.isEmpty == false, request.rootPath == nil {
             throw SessionScanError.includeGlobRequiresPath
         }
@@ -183,12 +188,17 @@ public struct SessionScan: Sendable {
                 events.append(
                     contentsOf: try candidate.adapter.extract(fileURL: candidate.url, data: data)
                 )
+            } catch ScanStoreError.prepareFailed {
+                // Same glob-only pass as below: unknown layouts must not
+                // abort the scan when another adapter can still extract.
+                if candidate.includeGlobOnly { continue }
+                throw SessionScanError.prepareFailed(sourcePath: candidate.url.path)
             } catch {
                 // Glob-only files are unknown layouts: a fail-closed adapter
                 // (SQLite or JSONL) must not abort the scan when another adapter
                 // can still extract.
                 if candidate.includeGlobOnly { continue }
-                throw error
+                throw SessionScanError.unreadableStore(sourcePath: candidate.url.path)
             }
         }
 
@@ -196,6 +206,10 @@ public struct SessionScan: Sendable {
         do {
             classify = try ScanClassify(enabledPacks: request.packIDs)
         } catch ScanClassifyError.packsUnavailable {
+            throw SessionScanError.packsUnavailable
+        } catch {
+            // Unreachable: the initializer is untyped but throws only
+            // `ScanClassifyError.packsUnavailable`.
             throw SessionScanError.packsUnavailable
         }
         let resolver = fileInstantResolver()
@@ -223,11 +237,15 @@ private func walkMapped(
     walker: DirectoryWalker,
     root: URL,
     fileManager: FileManager
-) throws -> DirectoryWalkResult {
+) throws(SessionScanError) -> DirectoryWalkResult {
     do {
         return try walker.walk(at: root, fileManager: fileManager)
     } catch DirectoryWalkError.listingFailed(let path) {
         throw SessionScanError.listingFailed(path)
+    } catch {
+        // Unreachable: `walk` is untyped but throws only
+        // `DirectoryWalkError.listingFailed`.
+        throw SessionScanError.listingFailed(root.path)
     }
 }
 

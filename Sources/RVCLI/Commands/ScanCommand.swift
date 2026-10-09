@@ -108,6 +108,10 @@ struct ScanSessions: AsyncParsableCommand {
             try ctx.fail("rv scan: path not found: \(missing)\n")
         } catch ScanRun.Error.listingFailed(let path) {
             try ctx.fail("rv scan: listing failed: \(path)\n")
+        } catch ScanRun.Error.unreadableStore(let path) {
+            try ctx.fail("rv scan: unreadable store: \(path)\n")
+        } catch ScanRun.Error.prepareFailed(let path) {
+            try ctx.fail("rv scan: prepare failed: \(path)\n")
         } catch ScanRun.Error.packsUnavailable {
             try ctx.fail("rv scan: packs unavailable\n")
         } catch {
@@ -189,6 +193,8 @@ enum ScanRun {
         case packsUnavailable
         case includeGlobRequiresPath
         case listingFailed(String)
+        case unreadableStore(String)
+        case prepareFailed(String)
     }
 
     static func run(_ request: Request) throws -> ScanReport {
@@ -212,7 +218,7 @@ enum ScanRun {
                 fileManager: request.fileManager
             )
             return ScanRunResult(report: result.report, eventHosts: result.eventHosts)
-        } catch let error as SessionScanError {
+        } catch {
             throw mapped(error)
         }
     }
@@ -223,6 +229,8 @@ enum ScanRun {
         case .packsUnavailable: .packsUnavailable
         case .includeGlobRequiresPath: .includeGlobRequiresPath
         case .listingFailed(let path): .listingFailed(path)
+        case .unreadableStore(let path): .unreadableStore(path)
+        case .prepareFailed(let path): .prepareFailed(path)
         }
     }
 

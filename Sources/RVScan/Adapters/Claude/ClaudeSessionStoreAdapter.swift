@@ -5,7 +5,9 @@ import RVDomain
 ///
 /// Layout: `$HOME/.claude/projects/<slug>/**/*.jsonl`. Extract walks assistant
 /// `tool_use` blocks whose `name` is a shell tool and reads `input.command`.
-/// Unknown shapes and bad lines contribute zero events.
+/// Unknown shapes and bad lines contribute zero events, but empty or
+/// JSON-less `data` throws `ScanStoreError.unreadable`; unrecognized files
+/// still yield no events.
 public struct ClaudeSessionStoreAdapter: SessionStoreAdapter {
     private static let shellToolNames: Set<String> = ["Bash", "bash", "Shell", "shell"]
 
@@ -21,37 +23,46 @@ public struct ClaudeSessionStoreAdapter: SessionStoreAdapter {
         fileURL.pathExtension.lowercased() == "jsonl"
     }
 
-    public func extract(fileURL: URL, data: Data) throws -> [ExtractedEvent] {
+    /// Surface-extract shell `tool_use` blocks from provided store bytes.
+    /// `fileURL` is provenance only; missing or unreadable `data` throws.
+    public func extract(fileURL: URL, data: Data) throws(ScanStoreError) -> [ExtractedEvent] {
         guard recognizes(fileURL: fileURL) else { return [] }
+        guard data.isEmpty == false else {
+            throw ScanStoreError.unreadable(sourcePath: fileURL.path)
+        }
 
         let sourcePath = fileURL.path
         let fallbackSessionID = SessionID(validating: fileURL.deletingPathExtension().lastPathComponent)
         var events: [ExtractedEvent] = []
+        var sawJSON = false
 
         for line in ScanJSONLEngine.byteLines(in: data) {
+            guard let root = ScanJSONLEngine.parseObject(line) else {
+                continue
+            }
+            sawJSON = true
             events.append(
                 contentsOf: Self.events(
-                    fromLine: line,
+                    fromRoot: root,
                     host: host,
                     sourcePath: sourcePath,
                     fallbackSessionID: fallbackSessionID
                 )
             )
         }
+        guard sawJSON else {
+            throw ScanStoreError.unreadable(sourcePath: sourcePath)
+        }
 
         return events
     }
 
     private static func events(
-        fromLine line: Data,
+        fromRoot root: JSONValue,
         host: ScanHostID,
         sourcePath: String,
         fallbackSessionID: SessionID?
     ) -> [ExtractedEvent] {
-        guard let root = ScanJSONLEngine.parseObject(line) else {
-            return []
-        }
-
         let occurredAt = root["timestamp"]?.string.flatMap(ScanTimestamp.iso8601)
         let envelopeCwd = ScanStoreWorkingDirectory.fromEnvelope(root)
         let sessionID = ScanJSONLEngine.sessionID(keys: ["sessionId"], in: root) ?? fallbackSessionID

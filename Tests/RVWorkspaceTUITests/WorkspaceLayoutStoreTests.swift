@@ -239,4 +239,73 @@ private func layoutFixture() throws -> (URL, URL) {
     try reopened.session.save(reopened.session.view)
     #expect(reopened.session.revision == 2)
 }
+
+@Test func layoutStorePinsDocumentBoundsAtExactLimits() throws {
+    // T3 JSONValue port: the document bound check must keep the exact
+    // pre-port limits (512 nodes, depth 32, strings <= 1024 UTF-8 bytes).
+    // Each limit is pinned at the boundary through open(): the padding
+    // hides in an unknown key the layout decoder skips, so only the bound
+    // check itself can reject the document.
+    let (root, project) = try layoutFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let config = root.appendingPathComponent("config")
+    let snapshot: URL
+    do {
+        let session = try WorkspaceLayoutStore.open(canonicalOriginalProject: project.path,
+                                                    configurationDirectory: config).session
+        snapshot = session.directoryURL.appendingPathComponent("\(session.viewID.rawValue.uuidString).json")
+        try session.save(session.view)
+    }
+    let saved = try Data(contentsOf: snapshot)
+    let base = try JSONSerialization.jsonObject(with: saved) as? [String: Any]
+    let baseObject = try #require(base)
+    let baseNodes = countJSONNodes(baseObject)
+
+    func reopenNotice(pad: Any) throws -> WorkspaceLayoutNotice? {
+        var object = baseObject
+        object["pad"] = pad
+        try JSONSerialization.data(withJSONObject: object).write(to: snapshot)
+        return try WorkspaceLayoutStore.open(canonicalOriginalProject: project.path,
+                                             configurationDirectory: config).notice
+    }
+    // Strings: 1024 UTF-8 bytes accepted, 1025 rejected.
+    #expect(try reopenNotice(pad: String(repeating: "x", count: 1024)) == nil)
+    #expect(try reopenNotice(pad: String(repeating: "x", count: 1025)) == .corrupt)
+    // Nodes: exactly 512 accepted, 513 rejected. The pad array contributes
+    // one node plus one per element. The boundary math needs fixture
+    // headroom: fail loudly here if the fixture ever outgrows the bound,
+    // and clamp at zero so the pad below can never trap in
+    // Array(repeating:count:) with a negative count.
+    #expect(baseNodes < 512)
+    #expect(try reopenNotice(pad: Array(repeating: 1, count: max(0, 512 - baseNodes - 1))) == nil)
+    #expect(try reopenNotice(pad: Array(repeating: 1, count: max(0, 513 - baseNodes - 1))) == .corrupt)
+    // Depth: a scalar at depth 32 accepted, at depth 33 rejected. The pad
+    // value sits at depth 1, so 31 wrappings land the scalar at 32.
+    #expect(try reopenNotice(pad: nestedJSON(wrappings: 31)) == nil)
+    #expect(try reopenNotice(pad: nestedJSON(wrappings: 32)) == .corrupt)
+    // A non-integer version is corrupt, never a version gate.
+    var booleanVersion = baseObject
+    booleanVersion["version"] = true
+    try JSONSerialization.data(withJSONObject: booleanVersion).write(to: snapshot)
+    #expect(try WorkspaceLayoutStore.open(canonicalOriginalProject: project.path,
+                                          configurationDirectory: config).notice == .corrupt)
+}
+
+private func countJSONNodes(_ value: Any) -> Int {
+    if let dictionary = value as? [String: Any] {
+        return 1 + dictionary.values.reduce(0) { $0 + countJSONNodes($1) }
+    }
+    if let array = value as? [Any] {
+        return 1 + array.reduce(0) { $0 + countJSONNodes($1) }
+    }
+    return 1
+}
+
+private func nestedJSON(wrappings: Int) -> Any {
+    var value: Any = 1
+    for _ in 0..<wrappings {
+        value = ["k": value]
+    }
+    return value
+}
 #endif

@@ -112,30 +112,26 @@ extension ShellPipeline {
         parse(command.rawValue)
     }
 
-    /// Matching-only fast path: peel -> classify without unwrap/parse.
+    /// Matching-only fast path: one derivation pass without unwrap/parse.
     ///
-    /// Byte-identical to `parse(input).matching`: `classifyStage` reads
+    /// Byte-identical to `parse(input).matching`: the derivation reads
     /// only the peeled text, so matching-only callers skip the unwrap
     /// recursion and `Argv` segment build the pre-T4 `matchingView` never
     /// paid for.
     static func matchingView(of input: String) -> MatchingView {
-        classifyStage(peelStage(input))
+        deriveMatching(input).view
     }
 
     /// Exact lexemes masking replaced while producing `matchingView(of:)`,
     /// in pipeline order (heredoc body first, then token order). M-07:
     /// mint and spend both digest these so a grant for one hidden payload
-    /// cannot authorize another. Mirrors `classifyStage`'s inputs exactly:
-    /// heredoc-masked peel, assignment-stripped tokens, role-aware masking.
-    /// Wrapper strips and the argv0 path strip normalize but never mask, so
-    /// they contribute no segments. In-process only: segments may carry
+    /// cannot authorize another. Projected from the single derivation
+    /// pass, so the segments always describe the returned view: wrapper
+    /// strips and the argv0 path strip normalize but never mask, so they
+    /// contribute no segments. In-process only: segments may carry
     /// secrets and must never be stored or transmitted, only digested.
     static func maskedSegments(of input: String) -> [String] {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty == false else { return [] }
-        let (peeled, heredoc) = maskNonExecutingHeredocBodiesDetailed(trimmed)
-        let tokens = tokenize(stripAssignmentPrefixesAllSegments(peeled))
-        return heredoc + applyRoleAwareQuotesDetailed(tokens: tokens).masked
+        deriveMatching(input).masked
     }
 
     /// Stage 2: trim, then mask non-executing heredoc bodies. Total: without
@@ -296,14 +292,10 @@ extension ShellPipeline {
     /// the matched view as an exemption budget: matching rewrites values to
     /// `VALUE ; TAIL`, so a bare `$(...)` segment is textually identical
     /// whether it was a VALUE or a typed standalone — only the budget tells
-    /// them apart. Must run on the same peeled text the matcher strips.
+    /// them apart. Projected from the single derivation pass, so the
+    /// budget always describes the returned view.
     static func collectTopLevelAssignmentValues(_ peeled: String) -> [String] {
-        var values: [String] = []
-        _ = mapTopLevelPieces(peeled) { piece in
-            values.append(contentsOf: splitAssignmentPrefixValues(piece).values)
-            return piece
-        }
-        return values
+        deriveMatching(peeled: peeled).assignmentValues
     }
 
     /// End index of an assignment value starting at `from`: quoted values run
@@ -485,35 +477,180 @@ extension ShellPipeline {
         return nil
     }
 
-    /// Stage 5: role-aware masking, then the outer-wrapper strip loop, then
-    /// the argv0 path strip. Total.
+    /// Stage 5: the classified view, projected from the single derivation
+    /// pass. Total.
+    static func classifyStage(_ peeled: String) -> MatchingView {
+        deriveMatching(peeled: peeled).view
+    }
+
+    /// One matching-derivation pass: classified view plus side-channels in
+    /// a single result. This is the only place that defines the derivation
+    /// order (trim, heredoc mask, per-piece assignment strip, role-aware
+    /// mask, wrapper loop, argv0 strip) and the strip set (`sudo`, `env`,
+    /// `command`, backslash). Depth: callers project one field without
+    /// re-spelling the sequence; locality: strip-order bugs land here, once.
+    struct MatchingDerivation: Sendable, Equatable {
+        /// Stage-5 classified view: the role-aware grant key.
+        let view: MatchingView
+        /// Exact lexemes masking replaced, pipeline order (heredoc body
+        /// first, then token order). In-process only: digest, never store.
+        let masked: [String]
+        /// Typed erased-prefix pieces in pipeline order. In-process only:
+        /// digest, never store or transmit.
+        let prefix: [InvocationPiece]
+        /// Substitution-carrying assignment values: the analyze layer's
+        /// exemption budget.
+        let assignmentValues: [String]
+    }
+
+    /// Derives the matching bundle for raw input in one pass.
+    static func deriveMatching(_ input: String) -> MatchingDerivation {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            return MatchingDerivation(view: MatchingView(""), masked: [], prefix: [], assignmentValues: [])
+        }
+        let (peeled, heredoc) = maskNonExecutingHeredocBodiesDetailed(trimmed)
+        return deriveMatching(peeled: peeled, heredocMasked: heredoc)
+    }
+
+    /// Derives the matching bundle for already-peeled text (trimmed,
+    /// heredoc-masked). `heredocMasked` carries the masked body lexemes when
+    /// the caller peeled with the detailed mask; the view never needs them.
     ///
     /// Mask-before-strip order is load-bearing: an ANSI-C argv0 such as
     /// `$'sudo'` only surfaces as a wrapper *after* masking, so the strip
-    /// loop must run on the masked text, exactly as the legacy pipeline did.
-    static func classifyStage(_ peeled: String) -> MatchingView {
-        var current = applyRoleAwareQuotes(tokens: tokenize(stripAssignmentPrefixesAllSegments(peeled)))
+    /// loop runs on the masked text, exactly as the legacy pipeline did.
+    static func deriveMatching(peeled: String, heredocMasked: [String] = []) -> MatchingDerivation {
+        var prefix: [InvocationPiece] = []
+        var assignmentValues: [String] = []
+        let stripped = mapTopLevelPieces(peeled) { piece in
+            let part = stripAssignmentPiece(piece)
+            prefix.append(contentsOf: part.assignments.map {
+                InvocationPiece.assignment(name: $0.name, raw: $0.raw)
+            })
+            assignmentValues.append(contentsOf: part.values)
+            return part.stripped
+        }
+        let (maskedView, quoteMasked) = applyRoleAwareQuotesDetailed(tokens: tokenize(stripped))
+        var current = maskedView
         var iteration = 0
         while iteration < Normalize.maxWrapperIterations {
             iteration += 1
-            if let stripped = stripSudo(current) {
-                current = stripped
+            if let next = stripPrefixStep(current, with: stripSudo) {
+                prefix.append(.wrapper(head: next.head))
+                current = next.rest
                 continue
             }
-            if let stripped = stripEnv(current) {
-                current = stripped
+            if let next = stripPrefixStep(current, with: stripEnv) {
+                prefix.append(.wrapper(head: next.head))
+                current = next.rest
                 continue
             }
-            if let stripped = stripCommandWrapper(current) {
-                current = stripped
+            if let next = stripPrefixStep(current, with: stripCommandWrapper) {
+                prefix.append(.wrapper(head: next.head))
+                current = next.rest
                 continue
             }
-            if let stripped = stripLeadingBackslash(current) {
-                current = stripped
+            if let next = stripPrefixStep(current, with: stripLeadingBackslash) {
+                prefix.append(.wrapper(head: next.head))
+                current = next.rest
                 continue
             }
             break
         }
-        return MatchingView(stripAbsolutePathOnArgv0(current))
+        let (word, _) = firstWord(current)
+        if looksLikeAbsoluteExecutable(word) {
+            prefix.append(.argv0(word: word))
+        }
+        return MatchingDerivation(
+            view: MatchingView(stripAbsolutePathOnArgv0(current)),
+            masked: heredocMasked + quoteMasked,
+            prefix: prefix,
+            assignmentValues: assignmentValues
+        )
+    }
+
+    /// Strips leading `NAME=value` prefixes from one top-level piece and
+    /// records what the strip observed: the raw erased spans (erased-prefix
+    /// binding) plus the substitution-carrying values (analyze exemption
+    /// budget). The stripped text comes from the canonical
+    /// `stripLeadingAssignmentPrefixes` — its fixpoint re-scan of rewritten
+    /// values is observable in the view — while the recorder observes each
+    /// original leading prefix once via the shared `parseAssignmentPrefix`
+    /// primitive, exactly as the legacy split/record loops did.
+    private static func stripAssignmentPiece(_ piece: String) -> (
+        stripped: String,
+        assignments: [(name: String, raw: String)],
+        values: [String]
+    ) {
+        var assignments: [(name: String, raw: String)] = []
+        var values: [String] = []
+        var rest = piece[...]
+        while let parsed = parseAssignmentPrefix(rest) {
+            let raw = String(rest[..<parsed.rest.startIndex])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if raw.isEmpty == false {
+                assignments.append((assignmentDisplayName(raw), raw))
+            }
+            if carriesSubstitution(parsed.value) {
+                values.append(parsed.value)
+            }
+            rest = parsed.rest
+        }
+        return (stripLeadingAssignmentPrefixes(piece), assignments, values)
+    }
+
+    /// Runs one wrapper strip, guarded on recordability: the view advances
+    /// only when the erased head splits cleanly, so the prefix records
+    /// exactly what the view erases. A strip the recorder cannot split is
+    /// treated as no strip — the wrapper stays in the view (fail-closed) —
+    /// instead of advancing silently unbound. Internal for unit tests.
+    static func stripPrefixStep(
+        _ text: String,
+        with strip: (String) -> String?
+    ) -> (head: String, rest: String)? {
+        guard let rest = strip(text),
+            let head = erasedHead(of: text, keeping: rest)
+        else {
+            return nil
+        }
+        return (head, rest)
+    }
+
+    /// The span a wrapper strip erased: the input minus the kept remainder,
+    /// trimmed of boundary blanks. The split runs on boundary-trimmed text
+    /// because masking pads a trailing masked lexeme with spaces, which
+    /// would otherwise unalign the suffix split exactly when the tail is
+    /// masked (and the strip would go unrecorded while the view strips it).
+    /// Nil when the split does not align or the head is empty; the caller
+    /// treats that as no strip, so the view never advances unrecorded.
+    private static func erasedHead(of text: String, keeping rest: String) -> String? {
+        let core = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard core.hasSuffix(rest) else {
+            return nil
+        }
+        let head = String(core.dropLast(rest.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard head.isEmpty == false else {
+            return nil
+        }
+        return head
+    }
+
+    /// The assignment target name without value or subscript: `FOO` for
+    /// `FOO=bar`, `A` for `A[0]=x` and `A+=y`. Display only; the digest
+    /// binds the raw span.
+    private static func assignmentDisplayName(_ raw: String) -> String {
+        var name = raw[...]
+        if let eq = name.firstIndex(of: "=") {
+            name = name[..<eq]
+        }
+        if let bracket = name.firstIndex(of: "[") {
+            name = name[..<bracket]
+        }
+        if name.hasSuffix("+") {
+            name = name.dropLast()
+        }
+        return String(name)
     }
 }

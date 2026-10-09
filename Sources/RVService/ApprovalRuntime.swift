@@ -42,16 +42,22 @@ actor ApprovalRuntime {
     }
 
     func pendingListResult() async -> Result<PendingListReply, IPCError> {
+        guard let pendingApprovals else {
+            return .failure(PendingListProjection.coordinatorUnavailable)
+        }
         do {
-            return .success(try await makePendingListReply())
+            return .success(try await makePendingListReply(on: pendingApprovals))
         } catch {
             return .failure(PendingListProjection.ipcError(from: error))
         }
     }
 
     func pendingWatchResult(afterGeneration: UInt64) async -> Result<PendingWatchReply, IPCError> {
+        guard let pendingApprovals else {
+            return .failure(PendingListProjection.coordinatorUnavailable)
+        }
         do {
-            let reply = try await makePendingListReply()
+            let reply = try await makePendingListReply(on: pendingApprovals)
             if afterGeneration == reply.generation {
                 return .success(PendingWatchReply(generation: reply.generation, items: []))
             }
@@ -108,10 +114,9 @@ actor ApprovalRuntime {
         }
     }
 
-    private func makePendingListReply() async throws -> PendingListReply {
-        guard let pendingApprovals else {
-            throw PendingListProjection.coordinatorUnavailable
-        }
+    private func makePendingListReply(on pendingApprovals: any PendingApprovalCoordinating) async throws(PendingApprovalError)
+        -> PendingListReply
+    {
         let records = try await pendingApprovals.list(now: clock())
         let fingerprint = PendingListProjection.fingerprint(records)
         if fingerprint != pendingSetFingerprint {
