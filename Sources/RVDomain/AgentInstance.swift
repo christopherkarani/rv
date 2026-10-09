@@ -72,7 +72,7 @@ public enum AgentInstanceStatusEvent: Hashable, Sendable, Equatable {
 }
 
 /// Authorization validity of one instance. Pure transitions only; the
-/// authoritative live lookup lands in PR3. Nothing transitions back to
+/// authoritative live lookup lands in PR3. Only establishment reaches
 /// `active`: recovery means minting a fresh instance, never relabeling.
 public enum AgentInstanceValidity: String, Hashable, Sendable, Equatable, Codable {
     case active

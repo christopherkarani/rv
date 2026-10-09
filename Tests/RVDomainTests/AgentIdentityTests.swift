@@ -413,7 +413,7 @@ private func typeName<T>(of value: T) -> String {
     )
     #expect(AgentInstanceLedger.decideActivate(live, bindingMatches: true) == .alreadyActive)
     #expect(AgentInstanceLedger.decideActivate(live, bindingMatches: false) == .refuse)
-    for validity in [AgentInstanceValidity.revoking, .inactive, .unknown] {
+    for validity in [AgentInstanceValidity.active, .revoking, .inactive, .unknown] {
         for (finished, claimed) in [(true, false), (false, true), (true, true)] {
             let dead = AgentInstanceLedger.Record(
                 validity: validity, finished: finished, teardownClaimed: claimed
@@ -438,10 +438,12 @@ private func typeName<T>(of value: T) -> String {
     #expect(
         AgentInstanceLedger.decideRevokeClaim(live) == .beginRevoking(next: .revoking)
     )
-    let announced = AgentInstanceLedger.Record(
-        validity: .inactive, finished: false, teardownClaimed: false
-    )
-    #expect(AgentInstanceLedger.decideRevokeClaim(announced) == .neverActive)
+    for validity in [AgentInstanceValidity.revoking, .inactive, .unknown] {
+        let announced = AgentInstanceLedger.Record(
+            validity: validity, finished: false, teardownClaimed: false
+        )
+        #expect(AgentInstanceLedger.decideRevokeClaim(announced) == .neverActive)
+    }
     for validity in [AgentInstanceValidity.active, .revoking, .inactive, .unknown] {
         let claimed = AgentInstanceLedger.Record(
             validity: validity, finished: false, teardownClaimed: true
