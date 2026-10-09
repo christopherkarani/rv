@@ -1,4 +1,6 @@
-#if canImport(Glibc)
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
 import Glibc
 #endif
 import Foundation
@@ -31,10 +33,37 @@ struct LinuxResidualCoverageTests {
         defer { try? FileManager.default.removeItem(at: xdg) }
         let socket = try UnixSocketPath.resolve(xdgRuntimeDir: xdg.path)
         try UnixSocketPath.prepareRuntime(for: socket)
-        try Data("stale".utf8).write(to: socket)
+        // A real leftover socket (bound, then closed without unlinking).
+        try bindStaleSocket(at: socket.path)
         #expect(FileManager.default.fileExists(atPath: socket.path))
         try UnixSocketPath.prepareRuntime(for: socket)
         #expect(FileManager.default.fileExists(atPath: socket.path) == false)
+    }
+
+    @Test func unixSocketPath_prepareRuntimePreservesNonSocket() throws {
+        let token = String(UInt32.random(in: .min ... .max), radix: 16)
+        let xdg = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rvn-\(token)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: xdg) }
+        let socket = try UnixSocketPath.resolve(xdgRuntimeDir: xdg.path)
+        try UnixSocketPath.prepareRuntime(for: socket)
+
+        // A regular file at the socket path fails closed and is preserved.
+        try Data("stale".utf8).write(to: socket)
+        #expect(throws: UnixSocketPathError.permission) {
+            try UnixSocketPath.prepareRuntime(for: socket)
+        }
+        #expect(try Data(contentsOf: socket) == Data("stale".utf8))
+
+        // A directory at the socket path is never recursively deleted.
+        try FileManager.default.removeItem(at: socket)
+        try FileManager.default.createDirectory(at: socket, withIntermediateDirectories: false)
+        #expect(throws: UnixSocketPathError.permission) {
+            try UnixSocketPath.prepareRuntime(for: socket)
+        }
+        var isDirectory: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: socket.path, isDirectory: &isDirectory))
+        #expect(isDirectory.boolValue)
     }
 
     @Test func gitRebaseProbe_missingCwdIsFalse() {
@@ -349,4 +378,44 @@ struct LinuxResidualCoverageTests {
             return
         }
     }
+}
+
+/// Binds a pathname socket and closes it without unlinking: the leftover a
+/// crashed daemon would leave behind.
+private func bindStaleSocket(at path: String) throws {
+    #if os(Linux)
+    let fd = Glibc.socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
+    #else
+    let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    #endif
+    try #require(fd >= 0)
+    var addr = sockaddr_un()
+    addr.sun_family = sa_family_t(AF_UNIX)
+    let capacity = MemoryLayout.size(ofValue: addr.sun_path)
+    try #require(path.utf8.count + 1 <= capacity)
+    path.withCString { cString in
+        withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
+            let dest = UnsafeMutableRawPointer(sunPath).assumingMemoryBound(to: CChar.self)
+            #if os(Linux)
+            _ = Glibc.strncpy(dest, cString, capacity - 1)
+            #else
+            _ = Darwin.strncpy(dest, cString, capacity - 1)
+            #endif
+        }
+    }
+    let bound = withUnsafePointer(to: &addr) { ptr in
+        ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            #if os(Linux)
+            Glibc.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            #else
+            Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            #endif
+        }
+    }
+    #if os(Linux)
+    _ = Glibc.close(fd)
+    #else
+    Darwin.close(fd)
+    #endif
+    try #require(bound == 0)
 }

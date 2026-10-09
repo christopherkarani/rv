@@ -41,6 +41,11 @@ final class AgentInstanceRegistry: Sendable {
         var validity: AgentInstanceValidity
         var generation: UInt64
         var finished: Bool
+        /// A revocation claimed this record and owns teardown. Active
+        /// instances also leave `.active` first; announced-never-active ones
+        /// stay `.inactive` (already unusable) and serialize on this flag
+        /// alone so teardown still runs exactly once.
+        var revokeInflight: Bool = false
     }
 
     private struct State: Sendable {
@@ -203,7 +208,10 @@ final class AgentInstanceRegistry: Sendable {
         teardown: @Sendable () -> Bool
     ) -> AgentRevokeOutcome {
         let snapshot = state.withLock { state -> LiveRecord? in
-            guard var live = state.byInstance[id], live.finished == false else {
+            guard var live = state.byInstance[id],
+                live.finished == false,
+                live.revokeInflight == false
+            else {
                 return nil
             }
             guard live.validity == .active || live.validity == .inactive else {
@@ -217,8 +225,9 @@ final class AgentInstanceRegistry: Sendable {
                 }
                 live.validity = revoking
                 live.generation += 1
-                state.byInstance[id] = live
             }
+            live.revokeInflight = true
+            state.byInstance[id] = live
             return live
         }
         guard let snapshot else {
@@ -241,6 +250,7 @@ final class AgentInstanceRegistry: Sendable {
             }
             live.generation += 1
             live.finished = true
+            live.revokeInflight = false
             state.byInstance[id] = live
         }
         var detail = "revoked:" + reason.rawValue

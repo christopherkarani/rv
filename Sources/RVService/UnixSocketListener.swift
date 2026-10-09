@@ -11,6 +11,7 @@ enum DarwinFrameError: Error, Sendable, Equatable {
     case connect
     case eof
     case pathTooLong
+    case alreadyStarted
 }
 
 /// Darwin AF_UNIX frames. Same algebra as Linux `UnixFrameIO`: pathname
@@ -110,10 +111,21 @@ public final class UnixSocketListener: Sendable {
     public let socketURL: URL
     private let state = Mutex<ListenerState>(ListenerState())
     private let queue = DispatchQueue(label: "rv.unix-socket")
+    /// Connections serve here, never on `queue`: each `serve` loop blocks in
+    /// `recv` for the life of its connection, so serving on the serial accept
+    /// queue would starve every later accept behind the first connection.
+    private let connections = DispatchQueue(
+        label: "rv.unix-socket-connections",
+        attributes: .concurrent
+    )
 
     private struct ListenerState {
         var listenFD: Int32 = -1
         var source: ReadSource?
+        /// True once `start` bound and is listening. `stop` unlinks the
+        /// socket file only then: a never-started listener must not remove a
+        /// path it does not own.
+        var ownsSocket: Bool = false
     }
 
     /// Dispatch sources are thread-safe handles. Only the listener touches
@@ -129,6 +141,8 @@ public final class UnixSocketListener: Sendable {
     }
 
     public func start() throws {
+        let already = state.withLock { $0.source != nil }
+        guard already == false else { throw DarwinFrameError.alreadyStarted }
         try UnixSocketPath.prepareRuntime(for: socketURL)
         let fd = try DarwinFrameIO.openStream()
         var addr = try DarwinFrameIO.sockaddr(path: socketURL.path)
@@ -151,7 +165,6 @@ public final class UnixSocketListener: Sendable {
             Darwin.close(fd)
             throw DarwinFrameError.listen
         }
-        state.withLock { $0.listenFD = fd }
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         source.setEventHandler { [weak self] in
             self?.acceptOne()
@@ -159,20 +172,26 @@ public final class UnixSocketListener: Sendable {
         source.setCancelHandler {
             Darwin.close(fd)
         }
+        state.withLock {
+            $0.listenFD = fd
+            $0.source = ReadSource(source: source)
+            $0.ownsSocket = true
+        }
         source.resume()
-        let held = ReadSource(source: source)
-        state.withLock { $0.source = held }
     }
 
     public func stop() {
-        let held = state.withLock { state -> ReadSource? in
+        let held = state.withLock { state -> (ReadSource?, Bool) in
             let current = state.source
+            let owned = state.ownsSocket
             state.source = nil
             state.listenFD = -1
-            return current
+            state.ownsSocket = false
+            return (current, owned)
         }
-        held?.source.cancel()
-        try? FileManager.default.removeItem(at: socketURL)
+        held.0?.source.cancel()
+        guard held.1 else { return }
+        UnixSocketPath.removeSocketFileIfSocket(at: socketURL)
     }
 
     private func acceptOne() {
@@ -184,7 +203,7 @@ public final class UnixSocketListener: Sendable {
             return
         }
         DarwinFrameIO.ignorePipe(client)
-        queue.async { self.serve(client) }
+        connections.async { self.serve(client) }
     }
 
     private func serve(_ fd: Int32) {

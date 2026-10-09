@@ -25,9 +25,12 @@ Protocol identity: `Sources/RVIPC/ProtocolVersion.swift`
 - Resolution (`UnixSocketPath.resolve`): trim ASCII whitespace/newlines; unset or empty
   after trim fails closed (`runtimeDirectoryMissing`) — there is **no `/tmp` fallback**.
 - Length: `utf8.count + 1 <= 108` or `pathTooLong` (room for NUL in `sockaddr_un`).
-- Modes: parent dirs `0700` (create, chmod, verify), socket `0600` (chmod, verify).
-  A client must **check** these modes and refuse to connect on mismatch; it must never
-  repair permissions itself.
+- Modes: the `rv` dir `0700` (create, chmod, verify), socket `0600`
+  (chmod, verify). The base dir is created `0700` when missing; a pre-existing
+  base is never chmodded — it only has to exist owned by this uid and not
+  group/world-writable. A stale socket/symlink at the path is unlinked;
+  anything else fails closed. A client must **check** these modes and refuse
+  to connect on mismatch; it must never repair permissions itself.
 - Server I/O: `Sources/RVService/UnixFrameTransport.swift` (`UnixEvaluateListener`,
   `UnixFrameIO`, `UnixReplyGate`). `SOCK_STREAM` + `SOCK_CLOEXEC`, `MSG_NOSIGNAL`,
   `EINTR`-retrying exact reads, one `ServiceRuntime` dispatch per frame.
@@ -41,7 +44,10 @@ Protocol identity: `Sources/RVIPC/ProtocolVersion.swift`
   and login shells alike, unlike per-session `TMPDIR`.
 - Length: `utf8.count + 1 <= 104` (Darwin `sockaddr_un`) or `pathTooLong`, mirroring
   `WorkspaceControlSocket.maxPathBytes = 103` (`Sources/RVIsolation/WorkspaceControlTransport.swift`).
-- Modes: same `0700`/`0600` create-chmod-verify discipline as Linux.
+- Modes: same discipline as Linux: the `rv` dir `0700` (create, chmod,
+  verify), socket `0600` (chmod, verify); a pre-existing `$HOME/.config` keeps
+  its mode and only has to exist owned by this uid and not
+  group/world-writable.
 - Server I/O: `Sources/RVService/UnixSocketListener.swift` (Darwin). Same
   `ServiceRuntime.handleIncoming` seam as XPC and the Linux listener; `FD_CLOEXEC`
   + `SO_NOSIGPIPE`; `EINTR`-retrying exact reads.

@@ -746,6 +746,62 @@ struct AgentInstanceRegistryTests {
         #expect(harness.registry.validity(of: instance.id) == .inactive)
     }
 
+    @Test func concurrentRevokeOfAnnouncedInstanceTearsDownOnce() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (registry, journalURL) = registryJournal(at: root)
+        let definition = makeRegistryDefinition()
+        let instance = makeRegistryInstance(
+            definition: definition,
+            workspace: WorkspaceSessionID(),
+            runtime: RuntimeSessionID()
+        )
+        #expect(registry.announce(instance))
+        // Never activated: validity stays `.inactive`, so the two revokes
+        // serialize on the in-flight claim alone, not on a transition out
+        // of `.active`.
+        final class Latch: Sendable {
+            private let state = Mutex<(entered: Bool, release: Bool, runs: Int)>((false, false, 0))
+            func enter() { state.withLock { $0.entered = true } }
+            var entered: Bool { state.withLock { $0.entered } }
+            func open() { state.withLock { $0.release = true } }
+            func run() { state.withLock { $0.runs += 1 } }
+            var runs: Int { state.withLock { $0.runs } }
+            func waitForRelease() {
+                let deadline = Date().addingTimeInterval(10)
+                while Date() < deadline {
+                    if state.withLock({ $0.release }) { return }
+                    usleep(1_000)
+                }
+            }
+        }
+        let latch = Latch()
+        let task = Task.detached {
+            registry.revoke(instance.id, reason: .explicitRevoke) {
+                latch.enter()
+                latch.waitForRelease()
+                latch.run()
+                return true
+            }
+        }
+        let deadline = Date().addingTimeInterval(10)
+        while latch.entered == false, Date() < deadline {
+            usleep(1_000)
+        }
+        #expect(latch.entered)
+        let second = registry.revoke(instance.id, reason: .cancelled) {
+            latch.run()
+            return true
+        }
+        #expect(second == .alreadyInactive)
+        latch.open()
+        #expect(await task.value == .revoked)
+        #expect(latch.runs == 1)
+        #expect(registry.validity(of: instance.id) == .inactive)
+        let kinds = AgentInstanceJournal.records(at: journalURL).map(\.kind)
+        #expect(kinds == [.attempted, .finished])
+    }
+
     @Test func activateJournalFailureLeavesInstanceInactive() throws {
         let appends = Mutex(0)
         let store = AgentInstanceJournalStore(

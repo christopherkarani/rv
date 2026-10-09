@@ -79,25 +79,37 @@ class Client:
         return self._service_semver
 
     def connect(self) -> None:
-        """Connect and run the Hello handshake (idempotent)."""
+        """Connect and run the Hello handshake (idempotent).
+
+        A failed handshake closes the transport: no half-open client is
+        left behind for the caller to discover.
+        """
         self._transport.connect()
-        ack_bytes = self._transport.round_trip(protocol.Hello().encode(), self._timeout)
-        ack = protocol.HelloAck.decode(ack_bytes)
-        if ack.protocol != versions.PROTOCOL_NAME:
-            raise ProtocolSkew(
-                f"service protocol is {ack.protocol!r}, want {versions.PROTOCOL_NAME!r}",
-                reason=ack.protocol,
-            )
-        versions.check_compatible(versions.SDK_IPC_SEMVER, ack.service_semver)
-        if not ack.ok:
-            raise _skew_error(ack)
-        product = _probe_product()
-        if product is None:
-            raise RuntimeNotFound(
-                f"rvd not found on PATH; cannot verify minimum RV {versions.MIN_PRODUCT}",
-                remediation="install RV: curl -fsSL https://rykanv.com/install | sh",
-            )
-        versions.check_product_floor(product)
+        try:
+            ack_bytes = self._transport.round_trip(protocol.Hello().encode(), self._timeout)
+            ack = protocol.HelloAck.decode(ack_bytes)
+            if ack.protocol != versions.PROTOCOL_NAME:
+                raise ProtocolSkew(
+                    f"service protocol is {ack.protocol!r}, want {versions.PROTOCOL_NAME!r}",
+                    reason=ack.protocol,
+                )
+            versions.check_compatible(versions.SDK_IPC_SEMVER, ack.service_semver)
+            if not ack.ok:
+                raise _skew_error(ack)
+            product = _probe_product()
+            if product is None:
+                raise RuntimeNotFound(
+                    f"rvd not found on PATH; cannot verify minimum RV {versions.MIN_PRODUCT}",
+                    remediation="install RV: curl -fsSL https://rykanv.com/install | sh",
+                )
+            versions.check_product_floor(product)
+        except BaseException:
+            self._service_semver = None
+            try:
+                self._transport.close()
+            except Exception:
+                pass
+            raise
         self._service_semver = ack.service_semver
 
     def close(self) -> None:

@@ -312,3 +312,41 @@ def test_socket_stat_mode_bits(socket_path):
     finally:
         listener.close()
         os.unlink(path)
+
+
+def test_connect_outer_base_0755_is_accepted(socket_path):
+    # Only the rv dir must be 0700; a pre-existing base keeps its mode.
+    path = socket_path
+    base = os.path.dirname(os.path.dirname(path))
+    os.chmod(base, 0o755)
+    try:
+        ack = b'{"ok":true,"protocol":"rv.ipc.v1","serviceSemver":"1.0.0"}'
+        with FakeServer(path, [ack]):
+            transport = transports.UnixSocketTransport(socket_path=path)
+            transport.connect()
+            try:
+                assert transport.path == path
+                assert json.loads(transport.round_trip(b"{}"))["ok"] is True
+            finally:
+                transport.close()
+    finally:
+        os.chmod(base, 0o700)
+
+
+def test_connect_group_writable_base_is_refused(socket_path):
+    path = socket_path
+    base = os.path.dirname(os.path.dirname(path))
+    os.chmod(base, 0o770)
+    try:
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(path)
+        try:
+            os.chmod(path, 0o600)
+            transport = transports.UnixSocketTransport(socket_path=path)
+            with pytest.raises(ConnectionFailed):
+                transport.connect()
+        finally:
+            listener.close()
+            os.unlink(path)
+    finally:
+        os.chmod(base, 0o700)
