@@ -211,6 +211,18 @@ struct WriterPolicyTests {
         #expect(dash.reduced == ["a"])
     }
 
+    @Test func targetDirectory_equalsTReadsAsValueSuffix() {
+        // A `t` after `=` is the `=`-value, never `-t`: `cp -S=t W a b`
+        // reads GNU suffix `=t` (exact), not a `W` override.
+        let scan = extractTargetDirectory(
+            ["-S=t", "W", "a", "b"], conflictedShorts: ["S"]
+        )
+        #expect(scan.overrides.isEmpty)
+        #expect(scan.reduced == ["-S=t", "W", "a", "b"])
+        #expect(scan.overrideAmbiguous == false)
+        #expect(parseCp(["-S=t", "W", "a", "b"])?.paths == ["b"])
+    }
+
     @Test func abbreviatedLongs_keepEvaluating() {
         #expect(parseCp(["--targ", "/tmp/x", "a", "b"])?.paths == ["/tmp/x"])
         #expect(parseCp(["--ver", "/tmp/c", "a", "b"])?.paths == ["/tmp/c", "b"])
