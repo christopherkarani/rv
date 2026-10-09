@@ -113,11 +113,35 @@ struct AnalyticsPathsTests {
 
 @Suite("AnalyticsPropertyValue")
 struct AnalyticsPropertyValueTests {
-    @Test func jsonObjectCases() {
-        #expect(AnalyticsPropertyValue.string("v").jsonObject as? String == "v")
-        #expect(AnalyticsPropertyValue.int(3).jsonObject as? Int == 3)
-        #expect(AnalyticsPropertyValue.bool(false).jsonObject as? Bool == false)
-        #expect(AnalyticsPropertyValue.strings(["a"]).jsonObject as? [String] == ["a"])
+    @Test func codableCasesRoundTripAsJSONScalars() throws {
+        let cases: [AnalyticsPropertyValue] = [
+            .string("v"),
+            .int(3),
+            .bool(false),
+            .strings(["a"]),
+        ]
+        for value in cases {
+            let data = try JSONEncoder().encode(value)
+            #expect(try JSONDecoder().decode(AnalyticsPropertyValue.self, from: data) == value)
+        }
+        #expect(String(data: try JSONEncoder().encode(AnalyticsPropertyValue.string("v")), encoding: .utf8) == "\"v\"")
+        #expect(String(data: try JSONEncoder().encode(AnalyticsPropertyValue.int(3)), encoding: .utf8) == "3")
+        #expect(String(data: try JSONEncoder().encode(AnalyticsPropertyValue.bool(false)), encoding: .utf8) == "false")
+        #expect(String(data: try JSONEncoder().encode(AnalyticsPropertyValue.strings(["a"])), encoding: .utf8) == "[\"a\"]")
+    }
+
+    @Test func intZeroOneDoNotDecodeAsBool() throws {
+        // The bool-first decode order must not confuse JSON 0/1 with false/true.
+        #expect(try JSONDecoder().decode(AnalyticsPropertyValue.self, from: Data("0".utf8)) == .int(0))
+        #expect(try JSONDecoder().decode(AnalyticsPropertyValue.self, from: Data("1".utf8)) == .int(1))
+        #expect(try JSONDecoder().decode(AnalyticsPropertyValue.self, from: Data("true".utf8)) == .bool(true))
+        for value: AnalyticsPropertyValue in [.int(0), .int(1), .bool(true)] {
+            let data = try JSONEncoder().encode(value)
+            #expect(try JSONDecoder().decode(AnalyticsPropertyValue.self, from: data) == value)
+        }
+        #expect(String(data: try JSONEncoder().encode(AnalyticsPropertyValue.int(0)), encoding: .utf8) == "0")
+        #expect(String(data: try JSONEncoder().encode(AnalyticsPropertyValue.int(1)), encoding: .utf8) == "1")
+        #expect(String(data: try JSONEncoder().encode(AnalyticsPropertyValue.bool(true)), encoding: .utf8) == "true")
     }
 
     @Test func payloadDefaultsAndNames() {

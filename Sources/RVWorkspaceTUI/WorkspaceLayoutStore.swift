@@ -331,8 +331,9 @@ public enum WorkspaceLayoutStore {
             data.append(contentsOf: buffer.prefix(count))
             if data.count > maximumDocumentBytes { throw DocumentError.corrupt }
         }
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let version = root["version"] as? Int else { throw DocumentError.corrupt }
+        guard let root = try? JSONDecoder().decode(JSONValue.self, from: data),
+              case .object(let object) = root,
+              let version = object["version"]?.int else { throw DocumentError.corrupt }
         if version > 1 { throw DocumentError.newer(version) }
         guard version == 1, boundedJSON(root),
               let document = try? JSONDecoder().decode(SavedLayout.self, from: data),
@@ -343,18 +344,21 @@ public enum WorkspaceLayoutStore {
         return document
     }
 
-    private static func boundedJSON(_ root: [String: Any]) -> Bool {
-        var pending: [(Any, Int)] = [(root, 0)]
+    private static func boundedJSON(_ root: JSONValue) -> Bool {
+        var pending: [(JSONValue, Int)] = [(root, 0)]
         var nodes = 0
         while let (value, depth) = pending.popLast() {
             nodes += 1
             if nodes > 512 || depth > 32 { return false }
-            if let dictionary = value as? [String: Any] {
+            switch value {
+            case .object(let dictionary):
                 pending.append(contentsOf: dictionary.values.map { ($0, depth + 1) })
-            } else if let array = value as? [Any] {
+            case .array(let array):
                 pending.append(contentsOf: array.map { ($0, depth + 1) })
-            } else if let string = value as? String, string.utf8.count > 1024 {
-                return false
+            case .string(let string):
+                if string.utf8.count > 1024 { return false }
+            case .number, .bool, .null:
+                break
             }
         }
         return true
