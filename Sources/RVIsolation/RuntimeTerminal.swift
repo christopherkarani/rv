@@ -107,7 +107,7 @@ final class RuntimeTerminal: @unchecked Sendable {
         if injected(.master) { return nil }
         var master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC)
         guard master >= 0 else { return nil }
-        guard relocate(&master, floor: 16) else {
+        guard relocateDescriptor(&master, above: 16) else {
             Darwin.close(master)
             return nil
         }
@@ -146,7 +146,7 @@ final class RuntimeTerminal: @unchecked Sendable {
             Darwin.close(master)
             return nil
         }
-        guard relocate(&slave, floor: 16) else {
+        guard relocateDescriptor(&slave, above: 16) else {
             Darwin.close(slave)
             Darwin.close(master)
             return nil
@@ -182,8 +182,8 @@ final class RuntimeTerminal: @unchecked Sendable {
         var stopWrite = ends[1]
         guard fcntl(stopRead, F_SETFD, FD_CLOEXEC) >= 0,
             fcntl(stopWrite, F_SETFD, FD_CLOEXEC) >= 0,
-            relocate(&stopRead, floor: 16),
-            relocate(&stopWrite, floor: 16),
+            relocateDescriptor(&stopRead, above: 16),
+            relocateDescriptor(&stopWrite, above: 16),
             setNonblocking(master)
         else {
             Darwin.close(stopRead)
@@ -861,15 +861,6 @@ final class RuntimeTerminal: @unchecked Sendable {
         return fcntl(fd, F_SETFL, flags | O_NONBLOCK) >= 0
     }
 
-    private static func relocate(_ fd: inout Int32, floor: Int32) -> Bool {
-        guard fd >= 0 else { return false }
-        if fd >= floor { return true }
-        let moved = fcntl(fd, F_DUPFD_CLOEXEC, floor)
-        guard moved >= 0 else { return false }
-        Darwin.close(fd)
-        fd = moved
-        return true
-    }
 }
 
 // Confined to `RuntimeTerminal.condition`: only touched while the owner holds

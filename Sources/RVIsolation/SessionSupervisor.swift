@@ -4,9 +4,6 @@ import Foundation
 import RVDomain
 import Synchronization
 
-private let seatbeltHandshakeScript =
-    "printf %s \"$1\" >&3 || exit 127; exec 3>&- || exit 127; shift; exec \"$@\""
-
 /// Seatbelt launch: persist the session, spawn into an RV process group,
 /// read a handshake byte string that only the in-sandbox wrapper can write,
 /// then signal the group and wait until it is empty.
@@ -421,11 +418,8 @@ func spawnSeatbeltProcessBody(
     else {
         return .failure(.processSpawnFailed)
     }
-    if readEnd < 16 {
-        let moved = fcntl(readEnd, F_DUPFD_CLOEXEC, 16)
-        guard moved >= 0 else { return .failure(.processSpawnFailed) }
-        close(readEnd)
-        readEnd = moved
+    guard relocateDescriptor(&readEnd, above: 16) else {
+        return .failure(.processSpawnFailed)
     }
 
     let terminal: RuntimeTerminal?
@@ -520,7 +514,7 @@ func spawnSeatbeltProcessBody(
     // Missing claim helper fails closed. Do not spawn sandbox-exec directly:
     // the parent cannot install the controlling terminal from outside the
     // child's session, and a live unclaimed group is the boundary failure.
-    let handshakeScript = seatbeltHandshakeScript
+    let handshakeScript = spawnHandshakeScript
     let spawnPath: String
     var arguments: [String]
     if let terminal {
@@ -1018,8 +1012,8 @@ private func waitForSeatbeltSession(
     onDeathObserved: (() -> Void)? = nil
 ) -> SeatbeltWaitOutcome {
     var outcome = SeatbeltWaitOutcome()
-    var handshake = preface
     let expected = Data(nonce.utf8)
+    var matcher = HandshakePrefixMatcher(expected: expected, preface: preface)
     var recorded: Set<pid_t> = [root]
     while true {
         if blockingWorkIsCancelled() || stop.isRequested {
@@ -1027,8 +1021,7 @@ private func waitForSeatbeltSession(
             admission.finish()
         }
         if outcome.established == false {
-            handshake.append(contentsOf: readAvailable(readEnd, limit: expected.count))
-            if handshake.starts(with: expected), handshake.count >= expected.count {
+            if matcher.append(readAvailable(readEnd, limit: expected.count)) {
                 outcome.established = true
                 onEstablished()
             }
@@ -1055,8 +1048,7 @@ private func waitForSeatbeltSession(
             recorded.formUnion(visibleSessionPIDs(root: root))
             terminateSession(pgid: root, also: recorded)
             if outcome.established == false {
-                handshake.append(contentsOf: readAvailable(readEnd, limit: expected.count))
-                if handshake.starts(with: expected), handshake.count >= expected.count {
+                if matcher.append(readAvailable(readEnd, limit: expected.count)) {
                     outcome.established = true
                     onEstablished()
                 }
@@ -1119,12 +1111,7 @@ private func installGrantedDescriptorActions(
         let opened = open("/dev/null", O_RDWR | O_CLOEXEC)
         guard opened >= 0 else { return false }
         nullFD = opened
-        if nullFD < 16 {
-            let moved = fcntl(nullFD, F_DUPFD_CLOEXEC, 16)
-            guard moved >= 0 else { return false }
-            close(nullFD)
-            nullFD = moved
-        }
+        guard relocateDescriptor(&nullFD, above: 16) else { return false }
         guard posix_spawn_file_actions_adddup2(&actions, nullFD, STDIN_FILENO) == 0,
             posix_spawn_file_actions_adddup2(&actions, nullFD, STDOUT_FILENO) == 0,
             posix_spawn_file_actions_adddup2(&actions, nullFD, STDERR_FILENO) == 0,
@@ -1523,38 +1510,6 @@ private func exitStatus(_ status: Int32) -> Int32 {
         return waited
     }
     return status
-}
-
-/// C string vectors that live until `release()`.
-private struct SpawnPointers {
-    private var storage: [UnsafeMutablePointer<CChar>?]
-
-    init(_ values: [String]) {
-        storage = values.map { value in
-            value.withCString { strdup($0) }
-        }
-        storage.append(nil)
-    }
-
-    /// Runs `body` with the vector base pointer. Nil only when the vector is
-    /// empty, which construction forbids (init always appends the terminator).
-    func withPointers<T>(
-        _ body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> T
-    ) -> T? {
-        var values = storage
-        return values.withUnsafeMutableBufferPointer { buffer in
-            guard let base = buffer.baseAddress else {
-                return nil
-            }
-            return body(base)
-        }
-    }
-
-    func release() {
-        for pointer in storage {
-            free(pointer)
-        }
-    }
 }
 
 #endif
