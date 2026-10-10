@@ -171,7 +171,7 @@ func verifyExecutableContentDigest(
 ) -> Bool {
     guard let expectedByteCount,
         measureExecutableSize(atPath: path) == expectedByteCount,
-        let measured = RVDigest.sha256HexOfFile(atPath: path, maxBytes: expectedByteCount)
+        let measured = RVFileDigest.sha256HexOfFile(atPath: path, maxBytes: expectedByteCount)
     else {
         return false
     }
