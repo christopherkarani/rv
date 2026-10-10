@@ -141,7 +141,7 @@ struct HostRedemptionTests {
         defer { _ = supervisor.close() }
         // M4: custom preparation measures the executable against the
         // authorized digest; the fixture authorizes the real bytes.
-        let sleepDigest = try #require(RVDigest.sha256HexOfFile(atPath: "/bin/sleep"))
+        let sleepDigest = try #require(RVFileDigest.sha256HexOfFile(atPath: "/bin/sleep"))
         let selection = try AgentLaunchSelection.resolveCustom(
             executable: "/bin/sleep",
             expectedContentDigestSHA256: sleepDigest).get()
@@ -175,7 +175,7 @@ struct HostRedemptionTests {
         defer { _ = supervisor.close() }
         let script = tree.rootURL.appendingPathComponent("swap-target.sh")
         try Data("#!/bin/sh\nexec /bin/sleep 30\n".utf8).write(to: script)
-        let digest = try #require(RVDigest.sha256HexOfFile(atPath: script.path))
+        let digest = try #require(RVFileDigest.sha256HexOfFile(atPath: script.path))
         let selection = try AgentLaunchSelection.resolveCustom(
             executable: script.path,
             expectedContentDigestSHA256: digest).get()
@@ -263,7 +263,7 @@ struct HostRedemptionTests {
         defer { _ = supervisor.close() }
         // M4: custom preparation measures the executable against the
         // authorized digest; the fixture authorizes the real bytes.
-        let sleepDigest = try #require(RVDigest.sha256HexOfFile(atPath: "/bin/sleep"))
+        let sleepDigest = try #require(RVFileDigest.sha256HexOfFile(atPath: "/bin/sleep"))
         let selection = try AgentLaunchSelection.resolveCustom(
             executable: "/bin/sleep",
             expectedContentDigestSHA256: sleepDigest).get()
@@ -906,7 +906,7 @@ struct HostRedemptionTests {
         defer { tree.tearDown() }
         let supervisor = try redeemSupervisor(tree)
         defer { _ = supervisor.close() }
-        let shDigest = try #require(RVDigest.sha256HexOfFile(atPath: "/bin/sh"))
+        let shDigest = try #require(RVFileDigest.sha256HexOfFile(atPath: "/bin/sh"))
         let selection = try AgentLaunchSelection.resolveCustom(
             executable: "/bin/sh",
             expectedContentDigestSHA256: shDigest).get()
