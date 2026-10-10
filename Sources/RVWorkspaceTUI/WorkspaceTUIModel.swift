@@ -225,9 +225,9 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             shouldExit: state.shouldExit,
             feedback: state.feedback,
             view: state.view,
-            terminals: state.terminals.mapValues(\.state),
-            recentOutputOnly: state.recentOutputOnly,
-            scrollAnchors: state.scrollAnchors,
+            terminals: state.panes.compactMapValues { $0.terminal?.state },
+            recentOutputOnly: Set(state.panes.filter { $0.value.recentOutputOnly }.keys),
+            scrollAnchors: state.panes.compactMapValues { $0.scroll?.anchor },
             navigatorItems: state.navigatorItems,
             knownRuntimes: state.knownRuntimes,
             reconnecting: state.lifecycle == .disconnected
@@ -293,7 +293,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
               (tab.zoomedPaneID.map { $0 == paneID } ?? tab.tree.leafIDs.contains(paneID)) else { return nil }
         guard let binding = state.bindingKey(for: paneID),
               let slot = emulatorSlots[paneID], slot.binding == binding else { return nil }
-        let anchor = state.scrollAnchors[paneID] ?? 0
+        let anchor = state.panes[paneID]?.scroll?.anchor ?? 0
         guard anchor > 0 else { return nil }
         return slot.emulator.historyFrame(anchor: anchor, rows: rows, columns: slot.emulator.columns)
     }
@@ -301,7 +301,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
     public func terminalSize(for paneID: PaneID) -> (rows: Int, columns: Int)? {
         lock.lock()
         defer { lock.unlock() }
-        return state.terminals[paneID]?.resize.effectiveSize
+        return state.terminal(for: paneID)?.resize.effectiveSize
     }
 
     public func terminalSize() -> (rows: Int, columns: Int)? {
@@ -596,7 +596,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         case .observe(let binding, let context):
             lock.lock()
             let observe = state.bindingKey(for: binding.pane) == binding
-                && state.terminals[binding.pane]?.state.running == true
+                && state.terminal(for: binding.pane)?.state.running == true
             lock.unlock()
             guard observe else { return }
             followups.append(.attachCompleted(
@@ -651,7 +651,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             lock.lock()
             let attempt = state.lifecycle == .connected && state.shouldExit == false
                 && state.bindingKey(for: binding.pane) == binding
-                && state.terminals[binding.pane]?.state.running == true
+                && state.terminal(for: binding.pane)?.state.running == true
             lock.unlock()
             guard attempt else { return }
             let outcome: TUIRPCOutcome

@@ -19,6 +19,12 @@ public indirect enum TUIKey: Equatable, Sendable {
     case functionKey(Int)
 }
 
+/// A pre-binding launch/run-command intent: the pane plus the binding
+/// generation the issuer saw, or nil when the pane is unbound. The
+/// reducer matches nil against unbound panes only and an exact
+/// generation otherwise, so a stale intent can never fire on a rebound
+/// pane. One of three pane-identity keys; see `PaneBindingKey` for why
+/// the optionality differs per role instead of unifying.
 public struct PrefixTarget: Equatable, Sendable {
     public let pane: PaneID
     public let generation: UInt64?
