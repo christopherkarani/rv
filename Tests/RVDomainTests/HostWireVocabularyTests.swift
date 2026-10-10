@@ -65,7 +65,8 @@ struct HostWireVocabularyTests {
             #expect(parsed == .file(kind))
             #expect(parsed.wireValue == canonical)
             #expect(parsed.strictMatch == .file(kind))
-            #expect(parsed.looseMatch == .file(kind))
+            // Loose skips file tools: shell extraction only.
+            #expect(parsed.looseMatch == .foreign)
         }
         #expect(GrokToolName(wireValue: "Grep") == .other("Grep"))
     }
@@ -95,6 +96,8 @@ struct HostWireVocabularyTests {
         #expect(parsed.wireValue == "bash")
         #expect(parsed.strictMatch == .shell)
         #expect(parsed.looseMatch == .shell)
+        #expect(parsed.match(policy: .strict) == .shell)
+        #expect(parsed.match(policy: .loose) == .shell)
         #expect(PiToolName(wireValue: Optional("bash")) == .bash)
         let unknown = PiToolName(wireValue: "Bash")
         #expect(unknown == .other("Bash"))
@@ -121,6 +124,8 @@ struct HostWireVocabularyTests {
             #expect(parsed.wireValue == spelling)
             #expect(parsed.strictMatch == strict)
             #expect(parsed.looseMatch == loose)
+            #expect(parsed.match(policy: .strict) == strict)
+            #expect(parsed.match(policy: .loose) == loose)
             #expect(OpenCodeToolName(wireValue: Optional(spelling)) == expected)
         }
         #expect(OpenCodeToolName(wireValue: "Bash") == .other("Bash"))
@@ -164,7 +169,8 @@ struct HostWireVocabularyTests {
             #expect(parsed == .file(kind))
             #expect(parsed.wireValue == canonical)
             #expect(parsed.strictMatch == .file(kind))
-            #expect(parsed.looseMatch == .file(kind))
+            // Loose skips file tools: shell extraction only.
+            #expect(parsed.looseMatch == .foreign)
         }
         #expect(ClaudeToolName(wireValue: "Grep") == .other("Grep"))
         #expect(ClaudeToolName(wireValue: "Grep").looseMatch == .foreign)
@@ -185,6 +191,8 @@ struct HostWireVocabularyTests {
         #expect(parsed.wireValue == "exec")
         #expect(parsed.strictMatch == .shell)
         #expect(parsed.looseMatch == .shell)
+        #expect(parsed.match(policy: .strict) == .shell)
+        #expect(parsed.match(policy: .loose) == .shell)
         #expect(OpenClawToolName(wireValue: Optional("exec")) == .exec)
         #expect(OpenClawToolName(wireValue: "execute") == .other("execute"))
         #expect(OpenClawToolName(wireValue: "execute").looseMatch == .foreign)
@@ -217,6 +225,8 @@ struct HostWireVocabularyTests {
         #expect(parsed.wireValue == "terminal")
         #expect(parsed.strictMatch == .shell)
         #expect(parsed.looseMatch == .shell)
+        #expect(parsed.match(policy: .strict) == .shell)
+        #expect(parsed.match(policy: .loose) == .shell)
         #expect(HermesToolName(wireValue: Optional("terminal")) == .terminal)
         #expect(HermesToolName(wireValue: "shell") == .other("shell"))
         #expect(HermesToolName(wireValue: "shell").strictMatch == .foreign)
@@ -287,7 +297,8 @@ struct HostWireVocabularyTests {
             #expect(parsed == .file(kind))
             #expect(parsed.wireValue == canonical)
             #expect(parsed.strictMatch == .file(kind))
-            #expect(parsed.looseMatch == .file(kind))
+            // Loose skips file tools: shell extraction only.
+            #expect(parsed.looseMatch == .foreign)
         }
         #expect(CursorToolName(wireValue: "Terminal") == .other("Terminal"))
         #expect(CursorToolName(wireValue: "Terminal").strictMatch == .foreign)
@@ -305,6 +316,8 @@ struct HostWireVocabularyTests {
         #expect(AntigravityToolName(wireValue: "run_command").wireValue == "run_command")
         #expect(AntigravityToolName(wireValue: "run_command").strictMatch == .shell)
         #expect(AntigravityToolName(wireValue: "run_command").looseMatch == .shell)
+        #expect(AntigravityToolName(wireValue: "run_command").match(policy: .strict) == .shell)
+        #expect(AntigravityToolName(wireValue: "run_command").match(policy: .loose) == .shell)
         let files: [(String, FileToolKind)] = [
             ("view_file", .read),
             ("replace_file_content", .edit),
@@ -317,6 +330,8 @@ struct HostWireVocabularyTests {
             #expect(parsed.fileKind == kind)
             #expect(parsed.strictMatch == .file(kind))
             #expect(parsed.looseMatch == .file(kind))
+            #expect(parsed.match(policy: .strict) == .file(kind))
+            #expect(parsed.match(policy: .loose) == .file(kind))
             #expect(AntigravityToolName(wireValue: Optional(spelling)) == parsed)
         }
         #expect(AntigravityToolName.runCommand.fileKind == nil)
@@ -341,6 +356,8 @@ struct HostWireVocabularyTests {
         #expect(parsed.wireValue == "pre_tool_use")
         #expect(parsed.strictMatch)
         #expect(parsed.looseMatch)
+        #expect(parsed.match(policy: .strict))
+        #expect(parsed.match(policy: .loose))
         #expect(GrokEventName(wireValue: Optional("pre_tool_use")) == .preToolUse)
         #expect(GrokEventName(wireValue: "PreToolUse") == .other("PreToolUse"))
         #expect(GrokEventName(wireValue: "PreToolUse").strictMatch == false)
@@ -356,6 +373,8 @@ struct HostWireVocabularyTests {
         #expect(parsed.wireValue == "PreToolUse")
         #expect(parsed.strictMatch)
         #expect(parsed.looseMatch)
+        #expect(parsed.match(policy: .strict))
+        #expect(parsed.match(policy: .loose))
         #expect(ClaudeEventName(wireValue: "pre_tool_use") == .other("pre_tool_use"))
         #expect(ClaudeEventName(wireValue: nil) == nil)
         let encoded = try JSONEncoder().encode(ClaudeEventName.preToolUse)
@@ -368,6 +387,8 @@ struct HostWireVocabularyTests {
         #expect(parsed.wireValue == "PreToolUse")
         #expect(parsed.strictMatch)
         #expect(parsed.looseMatch)
+        #expect(parsed.match(policy: .strict))
+        #expect(parsed.match(policy: .loose))
         #expect(CodexEventName(wireValue: "preToolUse") == .other("preToolUse"))
         #expect(CodexEventName(wireValue: nil) == nil)
         let encoded = try JSONEncoder().encode(CodexEventName.preToolUse)

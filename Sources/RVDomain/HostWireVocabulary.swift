@@ -42,7 +42,7 @@ public enum HostToolMatch: Sendable, Equatable, Hashable {
     case shell
     /// A file-tool invocation of this closed kind.
     case file(FileToolKind)
-    /// Not a shell or file invocation for this host.
+    /// Admitted as neither shell nor file under the matched policy.
     case foreign
 }
 
@@ -136,14 +136,13 @@ public enum GrokToolName: Sendable, Equatable, Hashable, Codable {
         }
     }
 
-    /// Loose-policy table (scan adapter).
+    /// Loose-policy table (scan adapter). The adapter extracts shell
+    /// commands only, so file spellings are foreign here.
     public var looseMatch: HostToolMatch {
         switch self {
         case .runTerminalCommand, .runTerminalCmd, .bash:
             .shell
-        case .file(let kind):
-            .file(kind)
-        case .other:
+        case .file, .other:
             .foreign
         }
     }
@@ -169,6 +168,9 @@ public enum GrokToolName: Sendable, Equatable, Hashable, Codable {
 }
 
 /// Grok hook-event vocabulary (`hookEventName`, camelCase envelope).
+///
+/// The loose side has no event gate (the adapter filters on record shape),
+/// so looseMatch mirrors strict and T3c adopts nothing here.
 public enum GrokEventName: Sendable, Equatable, Hashable, Codable {
     /// `pre_tool_use`: the only admitted event.
     case preToolUse
@@ -459,13 +461,13 @@ public enum ClaudeToolName: Sendable, Equatable, Hashable, Codable {
         }
     }
 
+    /// Loose-policy table (scan adapter). The adapter extracts shell
+    /// commands only, so file spellings are foreign here.
     public var looseMatch: HostToolMatch {
         switch self {
         case .bash, .bashLowercase, .shell, .shellLowercase:
             .shell
-        case .file(let kind):
-            .file(kind)
-        case .other:
+        case .file, .other:
             .foreign
         }
     }
@@ -490,6 +492,9 @@ public enum ClaudeToolName: Sendable, Equatable, Hashable, Codable {
 }
 
 /// Claude hook-event vocabulary (`hook_event_name`).
+///
+/// The loose side has no event gate (the adapter walks `tool_use` blocks),
+/// so looseMatch mirrors strict and T3c adopts nothing here.
 public enum ClaudeEventName: Sendable, Equatable, Hashable, Codable {
     /// `PreToolUse`: the only admitted event.
     case preToolUse
@@ -986,13 +991,13 @@ public enum CursorToolName: Sendable, Equatable, Hashable, Codable {
         }
     }
 
+    /// Loose-policy table (scan adapter). The adapter extracts shell
+    /// commands only, so file spellings are foreign here.
     public var looseMatch: HostToolMatch {
         switch self {
         case .shell, .bash, .shellLowercase, .bashLowercase:
             .shell
-        case .file(let kind):
-            .file(kind)
-        case .other:
+        case .file, .other:
             .foreign
         }
     }
