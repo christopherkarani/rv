@@ -47,11 +47,7 @@ enum ScanStoreWorkingDirectory {
     /// envelope, matching Codex/Cursor/Hermes/OpenClaw `firstNonEmpty`.
     static func fromEnvelope(_ value: JSONValue, depth: Int = 0) -> WorkingDirectory? {
         guard depth < 6 else { return nil }
-        let nestedKeys = [
-            "params", "args", "toolInput", "tool_input", "input",
-            "arguments", "state", "payload", "function",
-        ]
-        for key in nestedKeys {
+        for key in HostWireKeys.nestedContainerKeys {
             if let nested = value[key], nested.asObject != nil,
                let found = fromEnvelope(nested, depth: depth + 1)
             {
@@ -81,7 +77,7 @@ enum ScanStoreWorkingDirectory {
     }
 
     private static func fromFields(_ value: JSONValue) -> WorkingDirectory? {
-        for key in ["cwd", "workdir", "workingDirectory", "working_directory"] {
+        for key in HostWireKeys.workingDirectoryKeys {
             if let raw = value[key]?.string, raw.isEmpty == false {
                 return WorkingDirectory(validating: raw)
             }
