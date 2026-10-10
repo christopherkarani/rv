@@ -61,7 +61,6 @@ public struct AntigravityHostCodec: HostCodec {
     public func encodeDeny(reason: String, rule: RuleID? = nil, next: HookVoiceNext = .none) -> HookWire {
         encodeLeftoverDecisionDeny(reason: reason, rule: rule, next: next)
     }
-
 }
 
 private struct AntigravityEnvelope: Decodable {
