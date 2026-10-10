@@ -11,18 +11,6 @@ enum LocalControlBoundary {
     }
 
     static func deniedHook(host: HookHost) -> HookWire {
-        let codec: any HostCodec
-        switch host {
-        case .grok: codec = GrokHostCodec()
-        case .pi: codec = PiHostCodec()
-        case .opencode: codec = OpenCodeHostCodec()
-        case .claude: codec = ClaudeHostCodec()
-        case .openclaw: codec = OpenClawHostCodec()
-        case .hermes: codec = HermesHostCodec()
-        case .codex: codec = CodexHostCodec()
-        case .cursor: codec = CursorHostCodec()
-        case .antigravity: codec = AntigravityHostCodec()
-        }
-        return codec.encodeDeny(reason: reason, rule: nil, next: .none)
+        productionHostCodec(host).encodeDeny(reason: reason, rule: nil, next: .none)
     }
 }

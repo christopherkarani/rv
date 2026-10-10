@@ -326,25 +326,60 @@ public enum ShellAction: Sendable, Equatable, Codable {
 }
 
 /// Catalog-only Read / Edit / Write action. Never a `ShellCommand`.
+///
+/// `effects` and `resources` are computed from `file`, so a stored bag
+/// disagreeing with its subject is unrepresentable (ShellAction analyzed
+/// pattern). `scope` stays stored: it is request context, not a file fact.
 public struct FileAction: Sendable, Equatable, Codable {
     public var fingerprint: ActionFingerprint
     public var file: FileToolAction
-    public var effects: ActionEffects
-    public var resources: ResourceScope
     public var scope: ActionScope
+
+    /// File tools carry no typed effects; policy reviews the subject.
+    public var effects: ActionEffects { ActionEffects() }
+
+    /// Path-only filesystem projection of `file`.
+    public var resources: ResourceScope {
+        .filesystem(path: file.path.rawValue, scope: .unknown, kind: .unknown)
+    }
 
     public init(
         fingerprint: ActionFingerprint,
         file: FileToolAction,
-        effects: ActionEffects = ActionEffects(),
-        resources: ResourceScope = ResourceScope.none,
         scope: ActionScope = ActionScope()
     ) {
         self.fingerprint = fingerprint
         self.file = file
-        self.effects = effects
-        self.resources = resources
         self.scope = scope
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case fingerprint
+        case file
+        case effects
+        case resources
+        case scope
+    }
+
+    /// Legacy keys decode tolerantly: stored bags are ignored in favor
+    /// of the subject projection. Disagreeing bags resolve to derived
+    /// values. Encode keeps the legacy keys so wire bytes are unchanged.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fingerprint = try container.decode(ActionFingerprint.self, forKey: .fingerprint)
+        file = try container.decode(FileToolAction.self, forKey: .file)
+        scope = try container.decodeIfPresent(ActionScope.self, forKey: .scope) ?? ActionScope()
+        _ = try container.decodeIfPresent(ActionEffects.self, forKey: .effects)
+        _ = try container.decodeIfPresent(ResourceScope.self, forKey: .resources)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(fingerprint, forKey: .fingerprint)
+        try container.encode(file, forKey: .file)
+        try container.encode(effects, forKey: .effects)
+        try container.encode(resources, forKey: .resources)
+        try container.encode(scope, forKey: .scope)
     }
 }
 

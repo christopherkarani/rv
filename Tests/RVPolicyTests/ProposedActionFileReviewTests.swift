@@ -11,8 +11,6 @@ struct ProposedActionFileReviewTests {
                 FileAction(
                     fingerprint: ActionFingerprint(rawValue: "file:claude:s1:/tmp/ws:write:\(path)"),
                     file: FileToolAction(kind: .write, path: FileToolPath(rawValue: path)),
-                    effects: ActionEffects(),
-                    resources: ActionResources(path: path),
                     scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws"))
                 )
             ),
@@ -35,8 +33,6 @@ struct ProposedActionFileReviewTests {
                 FileAction(
                     fingerprint: ActionFingerprint(rawValue: "file:cursor:::read:/tmp/a.md"),
                     file: file,
-                    effects: ActionEffects(),
-                    resources: ActionResources(path: "/tmp/a.md"),
                     scope: ActionScope()
                 )
             ),
@@ -51,8 +47,6 @@ struct ProposedActionFileReviewTests {
                 FileAction(
                     fingerprint: ActionFingerprint(rawValue: "file:cursor::/tmp/ws:read:/tmp/a.md"),
                     file: file,
-                    effects: ActionEffects(),
-                    resources: ActionResources(path: "/tmp/a.md"),
                     scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws"))
                 )
             ),
@@ -67,9 +61,7 @@ struct ProposedActionFileReviewTests {
         let action = ProposedAction.file(
             FileAction(
                 fingerprint: ActionFingerprint(rawValue: "file:claude:::read:.env"),
-                file: FileToolAction(kind: .read, path: FileToolPath(rawValue: ".env")),
-                effects: ActionEffects(),
-                resources: ActionResources(path: ".env")
+                file: FileToolAction(kind: .read, path: FileToolPath(rawValue: ".env"))
             )
         )
         #expect(RulePinning.hardStop(in: action) == .secretPath)

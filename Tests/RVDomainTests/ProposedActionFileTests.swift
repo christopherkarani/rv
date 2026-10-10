@@ -57,12 +57,6 @@ struct ProposedActionFileTests {
                     rawValue: "file:claude:sess:/tmp/ws:read:\(secretPath)"
                 ),
                 file: file,
-                effects: ActionEffects(),
-                resources: .filesystem(
-                    path: secretPath,
-                    scope: .unknown,
-                    kind: .unknown
-                ),
                 scope: ActionScope()
             )
         )
@@ -98,12 +92,6 @@ struct ProposedActionFileTests {
                     kind: .read,
                     path: FileToolPath(rawValue: "/tmp/notes.md")
                 ),
-                effects: ActionEffects(),
-                resources: .filesystem(
-                    path: "/tmp/notes.md",
-                    scope: .unknown,
-                    kind: .unknown
-                ),
                 scope: ActionScope()
             )
         )
@@ -134,12 +122,6 @@ struct ProposedActionFileTests {
                 file: FileToolAction(
                     kind: .edit,
                     path: FileToolPath(rawValue: "/tmp/a.md")
-                ),
-                effects: ActionEffects(),
-                resources: .filesystem(
-                    path: "/tmp/a.md",
-                    scope: .unknown,
-                    kind: .unknown
                 ),
                 scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws"))
             )
