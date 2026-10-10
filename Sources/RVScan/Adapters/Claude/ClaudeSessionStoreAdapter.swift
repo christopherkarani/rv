@@ -9,8 +9,6 @@ import RVDomain
 /// JSON-less `data` throws `ScanStoreError.unreadable`; unrecognized files
 /// still yield no events.
 public struct ClaudeSessionStoreAdapter: SessionStoreAdapter {
-    private static let shellToolNames: Set<String> = ["Bash", "bash", "Shell", "shell"]
-
     public init() {}
 
     public var host: ScanHostID { .claude }
@@ -65,7 +63,7 @@ public struct ClaudeSessionStoreAdapter: SessionStoreAdapter {
     ) -> [ExtractedEvent] {
         let occurredAt = root["timestamp"]?.string.flatMap(ScanTimestamp.iso8601)
         let envelopeCwd = ScanStoreWorkingDirectory.fromEnvelope(root)
-        let sessionID = ScanJSONLEngine.sessionID(keys: ["sessionId"], in: root) ?? fallbackSessionID
+        let sessionID = ScanJSONLEngine.sessionID(keys: ClaudeWireKeys.sessionKeys, in: root) ?? fallbackSessionID
 
         guard let message = root["message"], message.asObject != nil else { return [] }
         guard let content = message["content"]?.asArray else { return [] }
@@ -74,7 +72,11 @@ public struct ClaudeSessionStoreAdapter: SessionStoreAdapter {
         var out: [ExtractedEvent] = []
         for block in blocks {
             guard let type = block["type"]?.string, type == "tool_use" else { continue }
-            guard let name = block["name"]?.string, shellToolNames.contains(name) else { continue }
+            guard let name = block["name"]?.string,
+                  ClaudeToolName(wireValue: name).looseMatch == .shell
+            else {
+                continue
+            }
             guard let input = block["input"], input.asObject != nil else { continue }
             guard let command = input["command"]?.string, command.isEmpty == false else { continue }
             out.append(
