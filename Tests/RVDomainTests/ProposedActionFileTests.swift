@@ -173,4 +173,93 @@ struct ProposedActionFileTests {
         #expect(shell.supportingCommand?.rawValue == "git reset --hard")
         #expect(pending.action.supportingCommand?.rawValue == "git reset --hard")
     }
+
+    @Test func fileAction_legacyDisagreeingBags_decodeTolerantlyAndDerivedWins() throws {
+        // Old wire row: stored bags disagree with the subject (git bag plus
+        // a delete effect on a read). Decode tolerates the legacy keys and
+        // resolves to the subject projection.
+        let json = """
+        {
+          "fingerprint": "file:claude:sess:/tmp/ws:read:/tmp/a.md",
+          "file": {"kind": "read", "path": "/tmp/a.md"},
+          "effects": {"kinds": ["filesystemDelete"]},
+          "resources": {"remoteName": "origin", "branchName": "main"},
+          "scope": {"workingDirectory": "/tmp/ws"}
+        }
+        """
+        let decoded = try JSONDecoder().decode(FileAction.self, from: Data(json.utf8))
+        #expect(decoded.effects == ActionEffects())
+        #expect(
+            decoded.resources
+                == .filesystem(path: "/tmp/a.md", scope: .unknown, kind: .unknown)
+        )
+        #expect(decoded.scope.workingDirectory?.rawValue == "/tmp/ws")
+        #expect(decoded.file.kind == .read)
+    }
+
+    @Test func fileAction_missingBagKeys_decodeWithDerivedDefaults() throws {
+        let json = """
+        {
+          "fingerprint": "file:claude:sess:/tmp/ws:edit:/tmp/b.md",
+          "file": {"kind": "edit", "path": "/tmp/b.md"}
+        }
+        """
+        let decoded = try JSONDecoder().decode(FileAction.self, from: Data(json.utf8))
+        #expect(decoded.effects == ActionEffects())
+        #expect(
+            decoded.resources
+                == .filesystem(path: "/tmp/b.md", scope: .unknown, kind: .unknown)
+        )
+        #expect(decoded.scope == ActionScope())
+    }
+
+    @Test func fileAction_encode_keepsLegacyKeys() throws {
+        // Wire bytes stay key-identical: legacy consumers still see
+        // effects/resources even though they are now computed.
+        let action = FileAction(
+            fingerprint: ActionFingerprint(rawValue: "file:claude:sess:/tmp/ws:read:/tmp/a.md"),
+            file: FileToolAction(kind: .read, path: FileToolPath(rawValue: "/tmp/a.md")),
+            scope: ActionScope(workingDirectory: WorkingDirectory(validating: "/tmp/ws"))
+        )
+        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(action))
+        let keys = try #require((object as? [String: Any])?.keys.sorted())
+        #expect(keys == ["effects", "file", "fingerprint", "resources", "scope"])
+    }
+
+    @Test func httpAction_legacyDisagreeingBags_decodeTolerantlyAndDerivedWins() throws {
+        // Old wire row: stored bags disagree with the subject. Decode
+        // tolerates the legacy keys and resolves to the derived projection.
+        let json = """
+        {
+          "fingerprint": "http-legacy",
+          "method": "GET",
+          "destination": {"host": "example.com", "hostKind": "dns", "port": 443, "path": "/x"},
+          "scope": {"workingDirectory": "/tmp/ws"},
+          "effects": {"kinds": ["filesystemRead"]},
+          "resources": {"remoteName": "origin", "branchName": "main"}
+        }
+        """
+        let decoded = try JSONDecoder().decode(HTTPAction.self, from: Data(json.utf8))
+        #expect(decoded.effects == ActionEffects())
+        #expect(decoded.resources == ActionResources())
+        #expect(decoded.destination.host == "example.com")
+        #expect(decoded.scope.workingDirectory?.rawValue == "/tmp/ws")
+    }
+
+    @Test func httpAction_encode_keepsLegacyKeys() throws {
+        // Wire bytes stay key-identical: legacy consumers still see
+        // effects/resources even though they are now computed.
+        let json = """
+        {
+          "fingerprint": "http-legacy",
+          "method": "GET",
+          "destination": {"host": "example.com", "hostKind": "dns", "port": 443, "path": "/x"},
+          "scope": {"workingDirectory": "/tmp/ws"}
+        }
+        """
+        let decoded = try JSONDecoder().decode(HTTPAction.self, from: Data(json.utf8))
+        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(decoded))
+        let keys = try #require((object as? [String: Any])?.keys.sorted())
+        #expect(keys == ["destination", "effects", "fingerprint", "method", "resources", "scope"])
+    }
 }
