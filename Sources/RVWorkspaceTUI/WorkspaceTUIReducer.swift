@@ -1,6 +1,20 @@
 import Foundation
 import RVDomain
 
+/// Identity of one bound pane: the pane, the runtime it shows, and the
+/// binding generation. Always bound (no optional members): every RPC
+/// effect and bound completion carries one.
+///
+/// Pane identity comes in three keys on purpose, one per role, because
+/// their optionality differs in load-bearing ways (see `PaneIdentityTests`):
+/// - `PaneBindingKey` (this type): a bound operation's exact target.
+/// - `PrefixTarget`: a pre-binding intent (launch, run command). Its
+///   generation is nil for unbound panes and matches unbound only, so
+///   one type cannot serve both roles without admitting operations on
+///   unbound panes or intents that name a runtime that does not exist yet.
+/// - `RuntimeBinding`: the persisted reference, scoped by workspace.
+///   Merging it into operational keys would drag workspace ids and
+///   persistence defaults into every effect.
 struct PaneBindingKey: Hashable, Sendable {
     var pane: PaneID
     var runtime: UUID
@@ -61,16 +75,13 @@ struct WorkspaceTUIState: Equatable, Sendable {
     var initialColumns: Int
     var mode: CommandMode
     var view: WorkspaceView
-    var terminals: [PaneID: AttachedTerminal]
-    /// The runtime this client last acquired input for. A successful acquire
-    /// RPC is authoritative over queued lease notifications (see
-    /// `.inputOwner` handling below).
-    var leasedBindings: Set<PaneBindingKey>
-    var retryAcquirePanes: Set<PaneID>
-    /// Panes whose overflow resubscribe raced the host-side drop and must
-    /// re-attach on tick. Acquire retries stay separate: acquire fails
-    /// closed until a subscription exists.
-    var retrySubscribePanes: Set<PaneID> = []
+    /// One live runtime record per pane, replacing the old parallel
+    /// per-pane maps. Invariant: every bound pane has a record (a bound
+    /// pane with no record can only be a restored pane awaiting its
+    /// first reconcile, covered by the nil branch of
+    /// `derivedLifecycle`). Records without bindings are launch intents
+    /// for fresh panes.
+    var panes: [PaneID: PaneRuntime] = [:]
     var shouldExit: Bool
     var initialLaunchRequested: Bool
     var viewSize: ViewSize?
@@ -82,7 +93,6 @@ struct WorkspaceTUIState: Equatable, Sendable {
         var binding: PaneBindingKey
         var terminal: AttachedTerminal
     }
-    var pendingLaunches: [PaneID: PendingLaunch] = [:]
     /// Typeahead held while a pane's input lease is in flight. The binding
     /// pins the exact runtime generation the bytes belong to, so a
     /// replacement or reattach can never flush stale bytes into a new
@@ -98,20 +108,10 @@ struct WorkspaceTUIState: Equatable, Sendable {
     static let subscriptionProbeInterval: TimeInterval = 5
     /// Last heartbeat fire. Nil probes on the first connected tick.
     var lastSubscriptionProbeAt: Date? = nil
-    var pendingInput: [PaneID: PendingPaneInput] = [:]
-    var replayBatches: [PaneID: UUID] = [:]
-    var recentOutputOnly: Set<PaneID> = []
-    /// RV viewport anchors: lines above live output per pane, 0 when live.
-    var scrollAnchors: [PaneID: Int] = [:]
-    /// Binding generation captured when scroll mode opened, for staleness.
-    var scrollGenerations: [PaneID: UInt64] = [:]
     /// Last inventoried host runtimes, sorted by id. References only.
     var knownRuntimes: [ListedRuntime] = []
     /// Rows built when the navigator opened, rebuilt on inventory refresh.
     var navigatorItems: [NavigatorItem] = []
-    /// Leases held when the host went away. Reconnect restores these (or
-    /// observes) after reconciling against fresh inventory.
-    var preDisconnectLeases: Set<PaneBindingKey> = []
     var reconnectAttempt: Int = 0
     var reconnectInflight: Bool = false
     var reconnectFiresAt: Date? = nil
@@ -131,17 +131,58 @@ struct WorkspaceTUIState: Equatable, Sendable {
         view.panes.first { $0.value.binding?.runtime.rawValue == runtime }?.key
     }
 
+    /// The terminal slot one pane's reads and writes touch. See
+    /// `PaneRuntime.terminal` for the per-phase mapping.
+    func terminal(for paneID: PaneID) -> AttachedTerminal? {
+        panes[paneID]?.terminal
+    }
+
+    /// Reads, mutates, and routes one pane's terminal slot back into its
+    /// phase. Nil-tolerant like the old map subscript: panes without a
+    /// slot are left alone. Stamps the pane's derived lifecycle so the
+    /// stored value never drifts from the phase, even for direct
+    /// (test-side) construction.
+    mutating func updateTerminal(_ paneID: PaneID, _ update: (inout AttachedTerminal) -> Void) {
+        guard var slot = panes[paneID]?.terminal else { return }
+        update(&slot)
+        setTerminal(slot, for: paneID)
+        syncPaneLifecycle(paneID)
+    }
+
+    /// Routes a whole terminal value back into its phase's slot. Panes
+    /// without a record, or a record without a slot, are left alone.
+    mutating func setTerminal(_ terminal: AttachedTerminal, for paneID: PaneID) {
+        switch panes[paneID]?.phase {
+        case .launching(var detail):
+            if detail.previous != nil {
+                detail.previous = terminal
+            } else if detail.candidate != nil {
+                detail.candidate?.terminal = terminal
+            } else {
+                return
+            }
+            panes[paneID]?.phase = .launching(detail)
+        case .attached:
+            panes[paneID]?.phase = .attached(terminal)
+        case .failed:
+            panes[paneID]?.phase = .failed(stale: terminal)
+        case .missing:
+            panes[paneID]?.phase = .missing(stale: terminal)
+        case .disconnected:
+            panes[paneID]?.phase = .disconnected(stale: terminal)
+        case nil:
+            return
+        }
+    }
+
     mutating func assignTerminal(_ value: AttachedTerminal?, to paneID: PaneID) {
         guard let oldPane = view.panes[paneID] else { return }
         if let oldBinding = oldPane.binding, value?.state.runtime != oldBinding.runtime.rawValue {
-            leasedBindings.remove(PaneBindingKey(
+            dropLeaseClaim(PaneBindingKey(
                 pane: paneID, runtime: oldBinding.runtime.rawValue, generation: oldBinding.generation
             ))
         }
-        terminals[paneID] = value
-        pendingInput[paneID] = nil
         let binding: RuntimeBinding?
-        let lifecycle: WorkspacePaneLifecycle
         let outcome: WorkspacePaneOutcome?
         if let value {
             let previous = oldPane.binding
@@ -152,23 +193,148 @@ struct WorkspaceTUIState: Equatable, Sendable {
                 runtime: RuntimeSessionID(rawValue: value.state.runtime),
                 generation: generation
             )
-            lifecycle = value.state.running ? .running : .exited
             outcome = value.state.exitStatus.map(WorkspacePaneOutcome.exited) ?? oldPane.lastOutcome
+            var runtime = panes[paneID] ?? PaneRuntime(phase: .attached(value))
+            runtime.phase = .attached(value)
+            runtime.input = nil
+            panes[paneID] = runtime
         } else {
             binding = nil
-            lifecycle = .empty
             outcome = oldPane.lastOutcome
+            // Only the init seed passes nil, and it skips nil seeds, so
+            // this removes the whole runtime record. No production or
+            // test path assigns nil to a live pane.
+            panes[paneID] = nil
         }
         view = view.updatingPane(WorkspacePane(
             id: paneID, userTitle: oldPane.userTitle, binding: binding,
-            lifecycle: lifecycle, lastOutcome: outcome
+            lifecycle: oldPane.lifecycle, lastOutcome: outcome
         )) ?? view
+        syncPaneLifecycle(paneID)
+    }
+
+    /// Records a launch failure, preserving stale output and every
+    /// non-phase field (claim, typeahead, scroll, retries). A pane with
+    /// an attach in flight keeps its candidate: the failure is for a
+    /// raced query, and the in-flight attach still decides the pane.
+    mutating func failLaunch(for paneID: PaneID, message: String) {
+        switch panes[paneID]?.phase {
+        case .launching(let detail) where detail.candidate != nil:
+            break
+        case .launching(let detail):
+            // A fresh intent holds nothing else (typeahead, scroll,
+            // claims, and retries all require a binding or a slot), so
+            // dropping the record loses nothing. A relaunch intent keeps
+            // its previous output as the stale terminal.
+            if let previous = detail.previous {
+                panes[paneID]?.phase = .failed(stale: previous)
+            } else {
+                panes[paneID] = nil
+            }
+        case .attached(let slot), .failed(let slot?), .missing(let slot?), .disconnected(let slot):
+            panes[paneID]?.phase = .failed(stale: slot)
+        case .failed(nil), .missing(nil):
+            panes[paneID]?.phase = .failed(stale: nil)
+        case nil:
+            break
+        }
+        updatePane(paneID) { $0.lastOutcome = .launchFailed(message) }
+    }
+
+    /// Drops the desired lease claim for exactly this binding. Anything
+    /// else stays put.
+    mutating func dropLeaseClaim(_ binding: PaneBindingKey) {
+        if panes[binding.pane]?.leaseClaim == binding {
+            panes[binding.pane]?.leaseClaim = nil
+        }
+    }
+
+    /// Marks one pane's terminal exited. Resting phases land on the
+    /// exited terminal; a pane with an attach in flight keeps its
+    /// phase, and the in-flight attach still decides it.
+    mutating func markExited(_ paneID: PaneID, status: Int32?) {
+        updateTerminal(paneID) {
+            $0.state.running = false
+            $0.state.exitStatus = status
+            $0.state.lease = .released
+        }
+        switch panes[paneID]?.phase {
+        case .launching:
+            break
+        case .failed, .missing, .disconnected, .attached, nil:
+            if let slot = terminal(for: paneID) {
+                panes[paneID]?.phase = .attached(slot)
+            }
+        }
+    }
+
+    /// Lands a successful attach on the terminal slot: the pane becomes
+    /// attached unless the success is for an older binding while a
+    /// newer candidate is still in flight (a probe or resubscribe racing
+    /// a replacement), in which case the candidate survives and the pane
+    /// keeps reading attaching until that attach decides it.
+    mutating func landAttach(for binding: PaneBindingKey) {
+        if case .launching(let detail)? = panes[binding.pane]?.phase,
+           let candidate = detail.candidate, candidate.binding != binding {
+            return
+        }
+        if let slot = panes[binding.pane]?.terminal {
+            panes[binding.pane]?.phase = .attached(slot)
+        }
     }
 
     mutating func updatePane(_ paneID: PaneID, _ update: (inout WorkspacePane) -> Void) {
         guard var pane = view.panes[paneID] else { return }
         update(&pane)
         view = view.updatingPane(pane) ?? view
+    }
+
+    /// Derives one pane's lifecycle from its runtime phase. This is the
+    /// only function that maps phases to lifecycles: production code
+    /// never assigns `WorkspacePane.lifecycle` directly (the layout
+    /// store's restored views predate any phase and are reconciled on
+    /// connect). The nil branch covers unbound panes (empty, or failed
+    /// when a failure outcome stands) plus bound panes awaiting their
+    /// first reconcile: restored panes before connect, and panes whose
+    /// saved runtime is gone.
+    func derivedLifecycle(for paneID: PaneID) -> WorkspacePaneLifecycle {
+        switch panes[paneID]?.phase {
+        case .launching(let detail):
+            return detail.candidate == nil ? .launching : .attaching
+        case .attached(let terminal):
+            return terminal.state.running ? .running : .exited
+        case .failed:
+            return .launchFailed
+        case .missing:
+            return .missing
+        case .disconnected:
+            return .disconnected
+        case nil:
+            guard let pane = view.panes[paneID] else { return .empty }
+            if pane.binding == nil {
+                if case .launchFailed = pane.lastOutcome { return .launchFailed }
+                return .empty
+            }
+            return lifecycle == .connected ? .missing : .disconnected
+        }
+    }
+
+    /// Stamps one pane's stored lifecycle from its phase. Idempotent.
+    mutating func syncPaneLifecycle(_ paneID: PaneID) {
+        let derived = derivedLifecycle(for: paneID)
+        if view.panes[paneID]?.lifecycle != derived {
+            updatePane(paneID) { $0.lifecycle = derived }
+        }
+    }
+
+    /// Stamps every pane's stored lifecycle from its phase. Runs at the
+    /// end of every reduce, so at rest a lifecycle can never contradict
+    /// its phase. Never touches the presentation revision: each branch
+    /// keeps its own revision accounting.
+    mutating func syncPaneLifecycles() {
+        for paneID in view.panes.keys {
+            syncPaneLifecycle(paneID)
+        }
     }
 
     /// Holds typeahead for a lease that has not landed yet. Bytes past one
@@ -178,11 +344,13 @@ struct WorkspaceTUIState: Equatable, Sendable {
     /// truncated paste is data loss, never a quiet cap.
     mutating func queuePendingInput(_ bytes: Data, for binding: PaneBindingKey) -> Bool {
         guard bytes.isEmpty == false else { return false }
-        var current = pendingInput[binding.pane].flatMap { $0.binding == binding ? $0.bytes : nil } ?? Data()
+        var current = panes[binding.pane]?.input.flatMap { $0.binding == binding ? $0.bytes : nil } ?? Data()
         let room = Self.maximumPendingInputBytes - min(current.count, Self.maximumPendingInputBytes)
         let admitted = bytes.prefix(room)
         current.append(admitted)
-        pendingInput[binding.pane] = PendingPaneInput(binding: binding, bytes: current)
+        panes[binding.pane, default: PaneRuntime(phase: .missing(stale: nil))].input = PendingPaneInput(
+            binding: binding, bytes: current
+        )
         let truncated = admitted.count < bytes.count
         if truncated {
             feedback = "Typeahead full; dropped \(bytes.count - admitted.count) bytes"
@@ -191,20 +359,31 @@ struct WorkspaceTUIState: Equatable, Sendable {
         return truncated
     }
 
+    /// Sets one pane's scroll anchor, preserving the generation scroll
+    /// mode opened under (re-pinned from the live binding when absent,
+    /// which only crafted events without scroll mode can observe).
+    mutating func setScrollAnchor(_ anchor: Int, for paneID: PaneID) {
+        let generation = panes[paneID]?.scroll?.generation
+            ?? bindingKey(for: paneID)?.generation ?? 0
+        panes[paneID, default: PaneRuntime(phase: .missing(stale: nil))].scroll = ScrollPosition(
+            anchor: anchor, generation: generation
+        )
+    }
+
     /// Takes bytes queued for exactly this binding. Anything else stays put.
     mutating func takePendingInput(for binding: PaneBindingKey) -> Data? {
-        guard pendingInput[binding.pane]?.binding == binding,
-              let bytes = pendingInput[binding.pane]?.bytes, bytes.isEmpty == false else { return nil }
-        pendingInput[binding.pane] = nil
+        guard panes[binding.pane]?.input?.binding == binding,
+              let bytes = panes[binding.pane]?.input?.bytes, bytes.isEmpty == false else { return nil }
+        panes[binding.pane]?.input = nil
         return bytes
     }
 
     /// Compatibility projection for the first visible pane. WorkspaceView and
-    /// the pane-keyed presentation map are the only stored presentation state.
+    /// the pane-keyed runtime records are the only stored presentation state.
     var terminal: AttachedTerminal? {
         get {
             guard let activePaneID else { return nil }
-            return terminals[activePaneID]
+            return panes[activePaneID]?.terminal
         }
         set {
             guard let activePaneID else { return }
@@ -213,20 +392,29 @@ struct WorkspaceTUIState: Equatable, Sendable {
     }
 
     var leasedRuntime: UUID? {
-        get { activeBindingKey.flatMap { leasedBindings.contains($0) ? $0.runtime : nil } }
+        get { activeBindingKey.flatMap { panes[$0.pane]?.leaseClaim == $0 ? $0.runtime : nil } }
         set {
             guard let key = activeBindingKey else { return }
-            if newValue == key.runtime { leasedBindings.insert(key) }
-            else { leasedBindings.remove(key) }
+            if newValue == key.runtime {
+                panes[key.pane, default: PaneRuntime(phase: .missing(stale: nil))].leaseClaim = key
+            } else {
+                dropLeaseClaim(key)
+            }
         }
     }
 
     var retryAcquire: Bool {
-        get { activePaneID.map(retryAcquirePanes.contains) ?? false }
+        get { activePaneID.flatMap { panes[$0]?.retries.contains(.acquire) } ?? false }
         set {
             guard let pane = activePaneID else { return }
-            if newValue { retryAcquirePanes.insert(pane) }
-            else { retryAcquirePanes.remove(pane) }
+            if newValue {
+                // A retry without a runtime record is unobservable (the
+                // tick skips panes without a readable lease), so there is
+                // nothing to arm.
+                panes[pane]?.retries.insert(.acquire)
+            } else {
+                panes[pane]?.retries.remove(.acquire)
+            }
         }
     }
 
@@ -263,9 +451,11 @@ struct WorkspaceTUIState: Equatable, Sendable {
             activeTabID: tabID,
             panes: [paneID: WorkspacePane(id: paneID)]
         )
-        self.terminals = [:]
-        self.leasedBindings = []
-        self.retryAcquirePanes = retryAcquire ? [paneID] : []
+        self.panes = [:]
+        // A retry for the fresh pane is unobservable (no binding, no
+        // lease to read), so the seed arms nothing. The model always
+        // passes false; the projection covers live panes.
+        _ = retryAcquire
         self.shouldExit = shouldExit
         self.initialLaunchRequested = initialLaunchRequested || restoredView != nil
         self.viewSize = viewSize
@@ -439,7 +629,10 @@ enum WorkspaceTUIReducer {
                 guard let saved = next.view.panes[paneID]?.binding else { continue }
                 guard saved.workspace.rawValue == described.workspace,
                       let runtime = available[saved.runtime.rawValue] else {
-                    next.updatePane(paneID) { $0.lifecycle = .missing }
+                    // A saved runtime that is gone. The record (with no
+                    // stale terminal) holds scroll and typeahead for the
+                    // pane until the navigator attaches a replacement.
+                    next.panes[paneID] = PaneRuntime(phase: .missing(stale: nil))
                     continue
                 }
                 let rows = runtime.rows.map(Self.bound) ?? next.initialRows
@@ -511,12 +704,11 @@ enum WorkspaceTUIReducer {
                 next.lifecycle = .disconnected
             } else if next.terminal == nil {
                 // A failed auto-shell drops to the launcher; the denial
-                // renders in the footer so the cause is not silent.
+                // renders in the footer so the cause is not silent. A
+                // raced launch that already has a candidate in flight
+                // keeps it; the in-flight attach still decides the pane.
                 let message = Self.launchFailureMessage(error, profileID: profileID)
-                next.updatePane(target.pane) {
-                    $0.lifecycle = .launchFailed
-                    $0.lastOutcome = .launchFailed(message)
-                }
+                next.failLaunch(for: target.pane, message: message)
                 next.feedback = message
                 next.feedbackTicks = 60
                 next.mode = .launcher
@@ -606,7 +798,10 @@ enum WorkspaceTUIReducer {
                     next.view = updated
                     presentationChanged = true
                     if let target = Self.target(next), let shell = Self.defaultShell(next) {
-                        next.updatePane(target.pane) { $0.lifecycle = .launching }
+                        // A fresh pane, so no record can exist yet.
+                        next.panes[target.pane] = PaneRuntime(phase: .launching(LaunchDetail(
+                            previous: nil, candidate: nil
+                        )))
                         effects = [.queueLaunch(target: target, choice: shell)]
                     }
                 } else {
@@ -627,7 +822,10 @@ enum WorkspaceTUIReducer {
                     next.view = updated
                     presentationChanged = true
                     if let target = Self.target(next), let shell = Self.defaultShell(next) {
-                        next.updatePane(target.pane) { $0.lifecycle = .launching }
+                        // A fresh pane, so no record can exist yet.
+                        next.panes[target.pane] = PaneRuntime(phase: .launching(LaunchDetail(
+                            previous: nil, candidate: nil
+                        )))
                         effects = [.queueLaunch(target: target, choice: shell)]
                     }
                 } else {
@@ -649,16 +847,17 @@ enum WorkspaceTUIReducer {
                         ))
                     if let geometry, let updated = next.view.closingFocusedPane(using: geometry) {
                         if let binding = next.bindingKey(for: pane) {
-                            if next.terminals[pane]?.state.subscribed == true
-                                || next.leasedBindings.contains(binding) {
+                            if next.terminal(for: pane)?.state.subscribed == true
+                                || next.panes[pane]?.leaseClaim == binding {
                                 effects.append(.release(runtime: binding.runtime))
                             }
                             effects.append(.dropEmulator(binding: binding))
-                            next.leasedBindings.remove(binding)
                         }
-                        next.terminals.removeValue(forKey: pane)
-                        next.pendingLaunches.removeValue(forKey: pane)
-                        next.pendingInput.removeValue(forKey: pane)
+                        // The whole runtime record goes with the pane: the
+                        // old maps left scroll, retry, and replay entries
+                        // behind for dead panes, observable only as garbage
+                        // in snapshots.
+                        next.panes.removeValue(forKey: pane)
                         next.view = updated
                         next.shouldExit = updated.tabs.isEmpty
                         presentationChanged = true
@@ -694,8 +893,14 @@ enum WorkspaceTUIReducer {
                 }
             case .enterScroll:
                 if case .scroll(let pane) = next.mode, next.view.panes[pane]?.binding != nil {
-                    next.scrollGenerations[pane] = next.bindingKey(for: pane)?.generation ?? 0
-                    if next.scrollAnchors[pane] == nil { next.scrollAnchors[pane] = 0 }
+                    // Entering re-pins the generation and keeps a previous
+                    // anchor (a re-entered mode resumes where it left off).
+                    let anchor = next.panes[pane]?.scroll?.anchor ?? 0
+                    let generation = next.bindingKey(for: pane)?.generation ?? 0
+                    next.panes[pane, default: PaneRuntime(phase: .missing(stale: nil))].scroll = ScrollPosition(
+                        anchor: anchor,
+                        generation: generation
+                    )
                 } else {
                     next.mode = .terminal
                     next.feedback = "Nothing to scroll"
@@ -707,8 +912,9 @@ enum WorkspaceTUIReducer {
                     let step = abs(lines) >= CommandPrefix.scrollPageLines
                         ? (lines >= 0 ? Self.pageHeight(for: pane, in: next) : -Self.pageHeight(for: pane, in: next))
                         : lines
-                    next.scrollAnchors[pane] = min(
-                        Self.scrollTopSentinel, max(0, (next.scrollAnchors[pane] ?? 0) + step)
+                    next.setScrollAnchor(
+                        min(Self.scrollTopSentinel, max(0, (next.panes[pane]?.scroll?.anchor ?? 0) + step)),
+                        for: pane
                     )
                     presentationChanged = true
                 }
@@ -716,18 +922,20 @@ enum WorkspaceTUIReducer {
                 if case .scroll(let pane) = next.mode {
                     // The sentinel means oldest retained; views clamp to the
                     // emulator's real history depth.
-                    next.scrollAnchors[pane] = Self.scrollTopSentinel
+                    next.setScrollAnchor(Self.scrollTopSentinel, for: pane)
                     presentationChanged = true
                 }
             case .scrollBottom:
                 if case .scroll(let pane) = next.mode {
-                    next.scrollAnchors[pane] = 0
+                    next.setScrollAnchor(0, for: pane)
                     presentationChanged = true
                 }
             case .exitScroll:
                 if case .scroll(let pane) = previousMode {
-                    next.scrollAnchors[pane] = 0
-                    next.scrollGenerations.removeValue(forKey: pane)
+                    // Clearing is observably identical to the old
+                    // anchor-0-plus-no-generation: anchors read 0 when
+                    // absent, and staleness needs a generation to compare.
+                    next.panes[pane]?.scroll = nil
                     presentationChanged = true
                 }
             case .enterNavigator:
@@ -847,7 +1055,7 @@ enum WorkspaceTUIReducer {
                   next.activeBindingKey == binding,
                   let terminal = next.terminal,
                   terminal.state.running else { break }
-            guard next.leasedBindings.contains(binding) else {
+            guard next.panes[binding.pane]?.leaseClaim == binding else {
                 // The attach is still in flight; hold the keystrokes as
                 // typeahead instead of dropping them on the floor.
                 if next.queuePendingInput(bytes, for: binding) {
@@ -860,8 +1068,8 @@ enum WorkspaceTUIReducer {
         case .emulatorSendDue(let binding, let bytes):
             guard next.lifecycle == .connected, next.shouldExit == false,
                   next.bindingKey(for: binding.pane) == binding,
-                  next.terminals[binding.pane]?.state.running == true else { break }
-            guard next.leasedBindings.contains(binding) else {
+                  next.terminal(for: binding.pane)?.state.running == true else { break }
+            guard next.panes[binding.pane]?.leaseClaim == binding else {
                 if next.queuePendingInput(bytes, for: binding) {
                     presentationChanged = true
                 }
@@ -872,14 +1080,15 @@ enum WorkspaceTUIReducer {
         case .launchDue(let target, let choice):
             // Re-gate on the command worker: the request may have raced a
             // detach or another attach. A running terminal does not block a
-            // replacement: the success path stashes it as pending and keeps
-            // the old output until the new subscription attaches. The
-            // serial command queue plus the pending marker collapse rapid
-            // double submits; a residual same-instant duplicate stays
-            // host-owned and discoverable, never attached twice.
+            // replacement: the success path stashes it as the previous
+            // terminal and keeps the old output until the new subscription
+            // attaches. The serial command queue plus the in-flight
+            // candidate collapse rapid double submits; a residual
+            // same-instant duplicate stays host-owned and discoverable,
+            // never attached twice.
             guard next.lifecycle == .connected, next.shouldExit == false,
                   Self.matches(target, in: next),
-                  next.pendingLaunches[target.pane] == nil else { break }
+                  next.panes[target.pane]?.phase.candidate == nil else { break }
             let size = Self.launchSize(for: target.pane, in: next)
             effects = [.launchQuery(target: target, choice: choice, rows: size.rows, columns: size.columns)]
 
@@ -897,15 +1106,22 @@ enum WorkspaceTUIReducer {
             let candidate = Self.attached(runtime: runtime, title: choice.title, rows: rows, columns: columns)
             let generation = (next.view.panes[target.pane]?.binding?.generation ?? 0) &+ 1
             let binding = PaneBindingKey(pane: target.pane, runtime: runtime.id, generation: generation)
-            if next.terminals[target.pane] != nil {
+            let slot = next.terminal(for: target.pane)
+            if slot != nil {
                 // Keep the old emulator and output until the replacement
                 // subscription succeeds. A failed attach remains editable.
-                next.pendingLaunches[target.pane] = .init(binding: binding, terminal: candidate)
+                next.panes[target.pane]?.phase = .launching(LaunchDetail(
+                    previous: slot,
+                    candidate: .init(binding: binding, terminal: candidate)
+                ))
             } else {
                 next.assignTerminal(candidate, to: target.pane)
+                next.panes[target.pane]?.phase = .launching(LaunchDetail(
+                    previous: nil,
+                    candidate: .init(binding: binding, terminal: candidate)
+                ))
                 effects.append(.createEmulator(binding: binding, rows: rows, columns: columns))
             }
-            next.updatePane(target.pane) { $0.lifecycle = .attaching }
             if next.activePaneID == target.pane { next.mode = .terminal }
             presentationChanged = true
             effects.append(.attach(binding: binding, context: .launch))
@@ -913,10 +1129,10 @@ enum WorkspaceTUIReducer {
         case .launchQueryFailed(let target, let choice, let error):
             guard next.lifecycle == .connected, Self.matches(target, in: next) else { break }
             let message = Self.launchFailureMessage(error, profileID: choice.resourceProfileID)
-            next.updatePane(target.pane) {
-                $0.lifecycle = .launchFailed
-                $0.lastOutcome = .launchFailed(message)
-            }
+            // A raced duplicate query can fail while a newer candidate is
+            // already in flight; failLaunch keeps the candidate, so the
+            // pane reads attaching until that attach decides it.
+            next.failLaunch(for: target.pane, message: message)
             // The denial renders in the footer: a bare "launch failed"
             // in pane chrome names nothing. The profile case keeps its
             // fix-oriented text; every other failure shows its message.
@@ -958,8 +1174,9 @@ enum WorkspaceTUIReducer {
 
         case .emulatorResponded(let binding, let responses):
             guard next.lifecycle == .connected, responses.isEmpty == false else { break }
-            guard next.leasedBindings.contains(binding), next.bindingKey(for: binding.pane) == binding,
-                  let terminal = next.terminals[binding.pane],
+            guard next.panes[binding.pane]?.leaseClaim == binding,
+                  next.bindingKey(for: binding.pane) == binding,
+                  let terminal = next.terminal(for: binding.pane),
                   terminal.state.lease == .owned else { break }
             effects = responses.map { response in
                 next.activeBindingKey == binding
@@ -969,14 +1186,18 @@ enum WorkspaceTUIReducer {
 
         case .sizeNoted(let rows, let columns, let now):
             // Called from the render pass: records geometry only, never an RPC.
-            guard next.terminal != nil, next.lifecycle == .connected else { break }
-            next.terminal?.resize.record(rows: rows, columns: columns, now: now)
+            guard next.lifecycle == .connected, let pane = next.activePaneID,
+                  next.terminal(for: pane) != nil else { break }
+            // Resize-only: the old spelling wrote back through the
+            // terminal setter, which re-assigned the pane and wiped queued
+            // typeahead on every render pass. Pane-scoped notes always
+            // took this direct path; now both do.
+            next.updateTerminal(pane) { $0.resize.record(rows: rows, columns: columns, now: now) }
             next.viewSize = .init(rows: rows + 2, columns: columns + 2)
 
         case .paneSizeNoted(let pane, let rows, let columns, let now):
-            guard next.lifecycle == .connected, var terminal = next.terminals[pane] else { break }
-            terminal.resize.record(rows: rows, columns: columns, now: now)
-            next.terminals[pane] = terminal
+            guard next.lifecycle == .connected, next.terminal(for: pane) != nil else { break }
+            next.updateTerminal(pane) { $0.resize.record(rows: rows, columns: columns, now: now) }
 
         case .viewportNoted(let rows, let columns):
             next.viewSize = .init(rows: rows, columns: columns)
@@ -1004,32 +1225,45 @@ enum WorkspaceTUIReducer {
                 tab.zoomedPaneID.map { [$0] } ?? tab.tree.leafIDs
             } ?? []
             for pane in visible {
-                guard var terminal = next.terminals[pane],
-                      // Ownership validation runs before the coalescer: an
-                      // observer must not promote a size it cannot send, and
-                      // its emulator keeps the runtime's actual dimensions
-                      // until this client holds the lease.
-                      terminal.state.lease == .owned,
-                      let size = terminal.resize.flush(now: now),
+                // Ownership validation runs before the coalescer: an
+                // observer must not promote a size it cannot send, and
+                // its emulator keeps the runtime's actual dimensions
+                // until this client holds the lease.
+                guard next.terminal(for: pane)?.state.lease == .owned,
+                      var slot = next.terminal(for: pane),
+                      let size = slot.resize.flush(now: now),
                       let binding = next.bindingKey(for: pane) else { continue }
-                next.terminals[pane] = terminal
+                // Only a flushed size writes back: a nil flush may still
+                // have cleared a settled pending entry, which stays
+                // discarded exactly as before.
+                next.setTerminal(slot, for: pane)
                 presentationChanged = true
                 effects.append(.resizeEmulator(binding: binding, rows: size.rows, columns: size.columns))
                 effects.append(.resize(binding: binding, rows: size.rows, columns: size.columns))
             }
-            for pane in next.retryAcquirePanes {
-                guard next.terminals[pane]?.state.lease == .readOnly,
+            let acquirePanes = next.panes.keys.filter {
+                next.panes[$0]?.retries.contains(.acquire) == true
+            }
+            for pane in acquirePanes {
+                guard next.terminal(for: pane)?.state.lease == .readOnly,
                       let binding = next.bindingKey(for: pane) else { continue }
                 effects.append(.acquire(binding: binding))
             }
-            next.retryAcquirePanes.removeAll()
-            for pane in next.retrySubscribePanes {
+            for pane in acquirePanes {
+                next.panes[pane]?.retries.remove(.acquire)
+            }
+            let subscribePanes = next.panes.keys.filter {
+                next.panes[$0]?.retries.contains(.subscribe) == true
+            }
+            for pane in subscribePanes {
                 guard let binding = next.bindingKey(for: pane),
-                      next.terminals[pane]?.state.running == true,
-                      next.terminals[pane]?.state.subscribed == false else { continue }
+                      next.terminal(for: pane)?.state.running == true,
+                      next.terminal(for: pane)?.state.subscribed == false else { continue }
                 effects.append(.attach(binding: binding, context: .resubscribeRetry))
             }
-            next.retrySubscribePanes.removeAll()
+            for pane in subscribePanes {
+                next.panes[pane]?.retries.remove(.subscribe)
+            }
             let probeDue: Bool
             if let lastProbe = next.lastSubscriptionProbeAt {
                 probeDue = now.timeIntervalSince(lastProbe) >= WorkspaceTUIState.subscriptionProbeInterval
@@ -1040,8 +1274,8 @@ enum WorkspaceTUIReducer {
                 next.lastSubscriptionProbeAt = now
                 for paneID in next.view.panes.keys.sorted(by: { $0.rawValue.uuidString < $1.rawValue.uuidString }) {
                     guard let binding = next.bindingKey(for: paneID),
-                          next.terminals[paneID]?.state.running == true,
-                          next.terminals[paneID]?.state.subscribed == true else { continue }
+                          next.terminal(for: paneID)?.state.running == true,
+                          next.terminal(for: paneID)?.state.subscribed == true else { continue }
                     effects.append(.observe(binding: binding, context: .probe))
                 }
             }
@@ -1077,23 +1311,40 @@ enum WorkspaceTUIReducer {
                     // An ambiguous launch never retries blindly: the pane
                     // returns to empty and any orphaned runtime stays
                     // discoverable through the refreshed inventory.
-                    if next.view.panes[paneID]?.lifecycle == .launching {
-                        next.updatePane(paneID) { $0.lifecycle = .empty }
+                    if case .launching(let detail)? = next.panes[paneID]?.phase, detail.candidate == nil {
+                        next.panes[paneID] = nil
                     }
                     continue
                 }
                 guard available.contains(binding.runtime) else {
-                    next.updatePane(paneID) { $0.lifecycle = .missing }
+                    if let stale = next.terminal(for: paneID) {
+                        next.panes[paneID]?.phase = .missing(stale: stale)
+                    } else if next.panes[paneID] == nil {
+                        next.panes[paneID] = PaneRuntime(phase: .missing(stale: nil))
+                    }
                     continue
                 }
-                next.updatePane(paneID) { $0.lifecycle = .attaching }
-                if next.preDisconnectLeases.contains(where: { $0.pane == paneID && $0.runtime == binding.runtime }) {
+                if let stale = next.terminal(for: paneID) {
+                    // Re-attach lands in the candidate slot under the
+                    // current binding: no rebind, so no generation bump.
+                    next.panes[paneID]?.phase = .launching(LaunchDetail(
+                        previous: nil, candidate: .init(binding: binding, terminal: stale)
+                    ))
+                }
+                // A slot-less pane keeps its record (or lack of one): with
+                // no terminal to book the subscription on, the attach
+                // below still issues and its success releases, exactly as
+                // before — the pane keeps reading missing instead of
+                // sticking on attaching.
+                if next.panes[paneID]?.preDisconnectLease?.runtime == binding.runtime {
                     effects.append(.attach(binding: binding, context: .reconnect))
                 } else {
                     effects.append(.observe(binding: binding, context: .reconnect))
                 }
             }
-            next.preDisconnectLeases.removeAll()
+            for paneID in next.panes.keys {
+                next.panes[paneID]?.preDisconnectLease = nil
+            }
             effects.append(.restartEvents)
             presentationChanged = true
 
@@ -1113,9 +1364,10 @@ enum WorkspaceTUIReducer {
                   next.bindingKey(for: binding.pane) == binding else { break }
             switch outcome {
             case .busy:
-                presentationChanged = presentationChanged || next.terminals[binding.pane]?.state.lease != .readOnly
-                next.terminals[binding.pane]?.state.lease = .readOnly
-                next.leasedBindings.remove(binding)
+                presentationChanged = presentationChanged
+                    || next.terminal(for: binding.pane)?.state.lease != .readOnly
+                next.updateTerminal(binding.pane) { $0.state.lease = .readOnly }
+                next.dropLeaseClaim(binding)
                 // The bytes never reached the runtime. Hold them as
                 // typeahead (bounded) instead of dropping the keystroke:
                 // the next grant flushes them, so input across a wedge
@@ -1130,9 +1382,10 @@ enum WorkspaceTUIReducer {
                 // reach here: without a lease their input queues as
                 // typeahead instead of sending.
                 if next.lifecycle == .connected,
-                   next.terminals[binding.pane]?.state.running == true,
-                   next.terminals[binding.pane]?.state.subscribed == true {
-                    next.retryAcquirePanes.insert(binding.pane)
+                   next.terminal(for: binding.pane)?.state.running == true,
+                   next.terminal(for: binding.pane)?.state.subscribed == true {
+                    next.panes[binding.pane, default: PaneRuntime(phase: .missing(stale: nil))]
+                        .retries.insert(.acquire)
                 }
             case .disconnected:
                 Self.applyDisconnect(to: &next, presentationChanged: &presentationChanged)
@@ -1145,7 +1398,7 @@ enum WorkspaceTUIReducer {
                 // The runtime is gone; in-flight bytes died with it. The
                 // pane exit covers that, so feedback only fires when the
                 // pane still claims running (a genuinely surprising loss).
-                if next.terminals[binding.pane]?.state.running == true {
+                if next.terminal(for: binding.pane)?.state.running == true {
                     next.feedback = "Terminal unavailable; input dropped"
                     next.feedbackTicks = 60
                     presentationChanged = true
@@ -1168,45 +1421,46 @@ enum WorkspaceTUIReducer {
                 // lease instead of claiming it.
                 let stillAvailable = next.lifecycle == .connected
                     && next.bindingKey(for: binding.pane) == binding
-                    && next.terminals[binding.pane]?.state.running == true
+                    && next.terminal(for: binding.pane)?.state.running == true
                 if stillAvailable {
-                    if next.terminals[binding.pane]?.state.lease != .owned {
+                    if next.terminal(for: binding.pane)?.state.lease != .owned {
                         presentationChanged = true
                     }
-                    next.terminals[binding.pane]?.state.lease = .owned
-                    next.leasedBindings.insert(binding)
+                    next.updateTerminal(binding.pane) { $0.state.lease = .owned }
+                    next.panes[binding.pane, default: PaneRuntime(phase: .missing(stale: nil))]
+                        .leaseClaim = binding
                     if let bytes = next.takePendingInput(for: binding) {
                         effects.append(.write(binding: binding, bytes: bytes))
                     }
                 } else if next.lifecycle != .connected
-                    || next.leasedBindings.contains(where: { $0.runtime == binding.runtime }) == false {
+                    || next.panes.values.contains(where: { $0.leaseClaim?.runtime == binding.runtime }) == false {
                     effects = [.release(runtime: binding.runtime)]
                 }
             case .busy:
                 guard next.lifecycle != .detached else { break }
                 if next.bindingKey(for: binding.pane) == binding {
-                    if next.terminals[binding.pane]?.state.lease != .readOnly {
+                    if next.terminal(for: binding.pane)?.state.lease != .readOnly {
                         presentationChanged = true
                     }
-                    next.terminals[binding.pane]?.state.lease = .readOnly
+                    next.updateTerminal(binding.pane) { $0.state.lease = .readOnly }
                 }
             case .unavailable, .rejected:
                 guard next.lifecycle != .detached else { break }
                 guard next.bindingKey(for: binding.pane) == binding else { break }
-                if next.terminals[binding.pane]?.state.lease != .readOnly {
+                if next.terminal(for: binding.pane)?.state.lease != .readOnly {
                     presentationChanged = true
                 }
-                next.terminals[binding.pane]?.state.lease = .readOnly
+                next.updateTerminal(binding.pane) { $0.state.lease = .readOnly }
                 // Acquire fails unavailable only when the host has no
                 // subscription for this client (a silent overflow drop) or
                 // the runtime is gone. A pane that believes it is subscribed
                 // re-attaches; behind a gone runtime the attach outcome (or
                 // its exited notice) converges instead of looping.
                 if next.lifecycle == .connected,
-                   next.terminals[binding.pane]?.state.running == true,
-                   next.terminals[binding.pane]?.state.subscribed == true {
-                    next.terminals[binding.pane]?.state.subscribed = false
-                    next.retrySubscribePanes.remove(binding.pane)
+                   next.terminal(for: binding.pane)?.state.running == true,
+                   next.terminal(for: binding.pane)?.state.subscribed == true {
+                    next.updateTerminal(binding.pane) { $0.state.subscribed = false }
+                    next.panes[binding.pane]?.retries.remove(.subscribe)
                     effects.append(.attach(binding: binding, context: .resubscribe))
                     presentationChanged = true
                 }
@@ -1232,9 +1486,9 @@ enum WorkspaceTUIReducer {
                 // The host is the source of truth; any definitive reply
                 // drops the local claim. Later `.inputOwner` events re-sync.
                 presentationChanged = presentationChanged
-                    || next.terminals[binding.pane]?.state.lease != .readOnly
-                next.terminals[binding.pane]?.state.lease = .readOnly
-                next.leasedBindings.remove(binding)
+                    || next.terminal(for: binding.pane)?.state.lease != .readOnly
+                next.updateTerminal(binding.pane) { $0.state.lease = .readOnly }
+                next.dropLeaseClaim(binding)
             }
 
         case .resizeCompleted(let binding, let rows, let columns, let outcome, let now):
@@ -1248,10 +1502,12 @@ enum WorkspaceTUIReducer {
                 // Downgrade like a contended write, and un-apply the failed
                 // size so a later tick retries it after the lease returns.
                 presentationChanged = presentationChanged
-                    || next.terminals[binding.pane]?.state.lease != .readOnly
-                next.terminals[binding.pane]?.state.lease = .readOnly
-                next.leasedBindings.remove(binding)
-                next.terminals[binding.pane]?.resize.nack(rows: rows, columns: columns, now: now)
+                    || next.terminal(for: binding.pane)?.state.lease != .readOnly
+                next.updateTerminal(binding.pane) {
+                    $0.state.lease = .readOnly
+                    $0.resize.nack(rows: rows, columns: columns, now: now)
+                }
+                next.dropLeaseClaim(binding)
             case .disconnected:
                 Self.applyDisconnect(to: &next, presentationChanged: &presentationChanged)
                 if next.lifecycle == .connected {
@@ -1267,32 +1523,45 @@ enum WorkspaceTUIReducer {
 
         case .attachCompleted(let binding, let context, let outcome):
             if context == .launch,
-               let pending = next.pendingLaunches[binding.pane], pending.binding == binding {
-                next.pendingLaunches.removeValue(forKey: binding.pane)
+               case .launching(let detail)? = next.panes[binding.pane]?.phase,
+               let candidate = detail.candidate, candidate.binding == binding,
+               let previousTerminal = detail.previous {
+                // Replacement only: a fresh launch (no previous terminal)
+                // flows to the main branch below, exactly as before.
                 switch outcome {
                 case .owned, .readOnly:
-                    let previous = next.bindingKey(for: binding.pane)
-                    let wasSubscribed = next.terminals[binding.pane]?.state.subscribed == true
-                    next.assignTerminal(pending.terminal, to: binding.pane)
-                    next.terminals[binding.pane]?.state.subscribed = true
-                    next.terminals[binding.pane]?.state.lease = outcome == .owned ? .owned : .readOnly
-                    next.updatePane(binding.pane) { $0.lifecycle = .running; $0.lastOutcome = nil }
-                    if outcome == .owned { next.leasedBindings.insert(binding) }
-                    if let previous {
-                        if wasSubscribed || next.leasedBindings.contains(previous) {
-                            effects.append(.release(runtime: previous.runtime))
-                        }
-                        effects.append(.dropEmulator(binding: previous))
-                        next.leasedBindings.remove(previous)
+                    let previousKey = next.bindingKey(for: binding.pane)
+                    let wasSubscribed = previousTerminal.state.subscribed
+                    next.assignTerminal(candidate.terminal, to: binding.pane)
+                    next.updateTerminal(binding.pane) {
+                        $0.state.subscribed = true
+                        $0.state.lease = outcome == .owned ? .owned : .readOnly
                     }
-                    let size = pending.terminal.resize.effectiveSize
+                    next.updatePane(binding.pane) { $0.lastOutcome = nil }
+                    if outcome == .owned {
+                        next.panes[binding.pane, default: PaneRuntime(phase: .missing(stale: nil))]
+                            .leaseClaim = binding
+                    }
+                    if let previousKey {
+                        // assignTerminal already dropped the old claim, so
+                        // the old post-assign membership check could never
+                        // fire: only a subscribed previous runtime is
+                        // released. (The navigator path checks before
+                        // assigning and differs; both keep their
+                        // historical behavior.)
+                        if wasSubscribed {
+                            effects.append(.release(runtime: previousKey.runtime))
+                        }
+                        effects.append(.dropEmulator(binding: previousKey))
+                    }
+                    let size = candidate.terminal.resize.effectiveSize
                         ?? (rows: next.initialRows, columns: next.initialColumns)
                     effects.append(.createEmulator(
                         binding: binding, rows: size.rows, columns: size.columns
                     ))
                 case .unavailable, .disconnected:
+                    next.panes[binding.pane]?.phase = .failed(stale: previousTerminal)
                     next.updatePane(binding.pane) {
-                        $0.lifecycle = .launchFailed
                         $0.lastOutcome = .launchFailed("Terminal attach failed")
                     }
                     if outcome == .disconnected {
@@ -1310,24 +1579,27 @@ enum WorkspaceTUIReducer {
                 // lease instead of claiming it.
                 let stillAvailable = next.lifecycle == .connected
                     && next.bindingKey(for: binding.pane) == binding
-                    && next.terminals[binding.pane]?.state.running == true
+                    && next.terminal(for: binding.pane)?.state.running == true
                 if stillAvailable {
-                    if next.terminals[binding.pane]?.state.lease != .owned {
+                    if next.terminal(for: binding.pane)?.state.lease != .owned {
                         presentationChanged = true
                     }
-                    next.terminals[binding.pane]?.state.subscribed = true
-                    next.terminals[binding.pane]?.state.lease = .owned
+                    next.updateTerminal(binding.pane) {
+                        $0.state.subscribed = true
+                        $0.state.lease = .owned
+                    }
                     if context == .resubscribe || context == .resubscribeRetry {
-                        next.terminals[binding.pane]?.state.overflowed = false
-                        next.retrySubscribePanes.remove(binding.pane)
+                        next.updateTerminal(binding.pane) { $0.state.overflowed = false }
+                        next.panes[binding.pane]?.retries.remove(.subscribe)
                         presentationChanged = true
                     }
-                    next.updatePane(binding.pane) { $0.lifecycle = .running }
-                    next.leasedBindings.insert(binding)
+                    next.landAttach(for: binding)
+                    next.panes[binding.pane, default: PaneRuntime(phase: .missing(stale: nil))]
+                        .leaseClaim = binding
                     if let bytes = next.takePendingInput(for: binding) {
                         effects.append(.write(binding: binding, bytes: bytes))
                     }
-                } else if next.leasedBindings.contains(where: { $0.runtime == binding.runtime }) == false {
+                } else if next.panes.values.contains(where: { $0.leaseClaim?.runtime == binding.runtime }) == false {
                     effects = [.release(runtime: binding.runtime)]
                 }
             case .readOnly:
@@ -1341,23 +1613,26 @@ enum WorkspaceTUIReducer {
                     // the subscription is live again. Lease claimants keep
                     // their claim and reclaim on tick (confirming rather
                     // than flopping the lease); observers are already home.
-                    if next.leasedBindings.contains(binding) {
-                        next.retryAcquirePanes.insert(binding.pane)
+                    if next.panes[binding.pane]?.leaseClaim == binding {
+                        next.panes[binding.pane, default: PaneRuntime(phase: .missing(stale: nil))]
+                            .retries.insert(.acquire)
                     }
                     presentationChanged = true
                     break
                 }
-                if next.terminals[binding.pane]?.state.lease != .readOnly {
+                if next.terminal(for: binding.pane)?.state.lease != .readOnly {
                     presentationChanged = true
                 }
-                next.terminals[binding.pane]?.state.subscribed = true
-                next.terminals[binding.pane]?.state.lease = .readOnly
+                next.updateTerminal(binding.pane) {
+                    $0.state.subscribed = true
+                    $0.state.lease = .readOnly
+                }
                 if context == .resubscribe || context == .resubscribeRetry {
-                    next.terminals[binding.pane]?.state.overflowed = false
-                    next.retrySubscribePanes.remove(binding.pane)
+                    next.updateTerminal(binding.pane) { $0.state.overflowed = false }
+                    next.panes[binding.pane]?.retries.remove(.subscribe)
                     presentationChanged = true
                 }
-                next.updatePane(binding.pane) { $0.lifecycle = .running }
+                next.landAttach(for: binding)
             case .unavailable, .disconnected:
                 // Failure handling mutates the terminal (unavailable titles,
                 // launcher fallback, emulator drops); detached state is final.
@@ -1372,28 +1647,53 @@ enum WorkspaceTUIReducer {
                 switch context {
                 case .connect:
                     if outcome == .unavailable {
-                        if next.terminals[binding.pane]?.state.lease != .readOnly {
+                        if next.terminal(for: binding.pane)?.state.lease != .readOnly {
                             presentationChanged = true
                         }
-                        next.terminals[binding.pane]?.state.subscribed = false
-                        next.terminals[binding.pane]?.state.lease = .readOnly
+                        next.updateTerminal(binding.pane) {
+                            $0.state.subscribed = false
+                            $0.state.lease = .readOnly
+                        }
                     }
                 case .ensure:
-                    next.terminals[binding.pane]?.state.title += " (unavailable)"
-                    presentationChanged = presentationChanged || next.terminals[binding.pane]?.state.lease != .readOnly
-                    next.terminals[binding.pane]?.state.lease = .readOnly
-                    next.terminals[binding.pane]?.state.subscribed = false
+                    presentationChanged = presentationChanged
+                        || next.terminal(for: binding.pane)?.state.lease != .readOnly
+                    next.updateTerminal(binding.pane) {
+                        $0.state.title += " (unavailable)"
+                        $0.state.lease = .readOnly
+                        $0.state.subscribed = false
+                    }
                 case .launch:
-                    next.updatePane(binding.pane) {
-                        $0.lifecycle = .launchFailed
-                        $0.lastOutcome = .launchFailed("Terminal attach failed")
+                    // A stale launch failure (for an older binding while a
+                    // newer candidate is in flight) must not clobber the
+                    // candidate: the in-flight attach still decides. Only
+                    // failures for the live candidate, or with no
+                    // candidate, fail the pane.
+                    switch next.panes[binding.pane]?.phase {
+                    case .launching(let detail) where detail.candidate != nil
+                        && detail.candidate?.binding != binding:
+                        break
+                    default:
+                        next.updatePane(binding.pane) {
+                            $0.lastOutcome = .launchFailed("Terminal attach failed")
+                        }
+                        if case .launching(let detail)? = next.panes[binding.pane]?.phase,
+                           detail.previous == nil, detail.candidate?.binding == binding {
+                            next.panes[binding.pane]?.phase = .failed(stale: detail.candidate?.terminal)
+                        } else if let slot = next.terminal(for: binding.pane) {
+                            next.panes[binding.pane]?.phase = .failed(stale: slot)
+                        } else {
+                            next.panes[binding.pane]?.phase = .failed(stale: nil)
+                        }
                     }
                     if next.activePaneID == binding.pane, next.lifecycle == .connected {
                         next.mode = .launcher
                     }
                     presentationChanged = true
                 case .reconnect:
-                    next.updatePane(binding.pane) { $0.lifecycle = .missing }
+                    if let slot = next.terminal(for: binding.pane) {
+                        next.panes[binding.pane]?.phase = .missing(stale: slot)
+                    }
                     presentationChanged = true
                 case .resubscribe:
                     // The drop races this RPC across connections; the tick
@@ -1403,7 +1703,8 @@ enum WorkspaceTUIReducer {
                     // read-only would spam acquires that fail closed without
                     // a subscription.
                     if outcome == .unavailable {
-                        next.retrySubscribePanes.insert(binding.pane)
+                        next.panes[binding.pane, default: PaneRuntime(phase: .missing(stale: nil))]
+                            .retries.insert(.subscribe)
                         presentationChanged = true
                     }
                 case .resubscribeRetry:
@@ -1425,21 +1726,25 @@ enum WorkspaceTUIReducer {
             // One release covers the lease and the subscription alike;
             // the usual case (leased and subscribed to one runtime)
             // emits a single effect.
-            var releases = next.leasedBindings.map(\.runtime)
-            for terminal in next.terminals.values where terminal.state.subscribed {
-                if releases.contains(terminal.state.runtime) == false { releases.append(terminal.state.runtime) }
+            var releases = next.panes.values.compactMap { $0.leaseClaim?.runtime }
+            for slot in next.panes.values.compactMap(\.terminal) where slot.state.subscribed {
+                if releases.contains(slot.state.runtime) == false { releases.append(slot.state.runtime) }
             }
             effects.append(contentsOf: releases.map(TUIRuntimeEffect.release))
-            next.leasedBindings.removeAll()
-            next.retryAcquirePanes.removeAll()
-            next.retrySubscribePanes.removeAll()
-            next.pendingInput.removeAll()
-            for pane in next.terminals.keys {
-                next.terminals[pane]?.state.lease = .released
-                next.terminals[pane]?.state.subscribed = false
+            for pane in next.panes.keys {
+                next.panes[pane]?.leaseClaim = nil
+                next.panes[pane]?.retries = []
+                next.panes[pane]?.input = nil
+                next.updateTerminal(pane) {
+                    $0.state.lease = .released
+                    $0.state.subscribed = false
+                }
             }
             effects.append(.detach)
         }
+        // Every transition ends here: stored lifecycles re-derive from
+        // phases, so no observable state can contradict its phase.
+        next.syncPaneLifecycles()
         if presentationChanged {
             next.presentationRevision &+= 1
         }
@@ -1456,17 +1761,17 @@ enum WorkspaceTUIReducer {
         case .replayBegin(let runtime, let batch, let truncated, _):
             guard let pane = next.paneID(for: runtime),
                   let binding = next.bindingKey(for: pane),
-                  let terminal = next.terminals[pane] else { return }
-            next.replayBatches[pane] = batch
-            if truncated { next.recentOutputOnly.insert(pane) }
-            else { next.recentOutputOnly.remove(pane) }
+                  let terminal = next.terminal(for: pane) else { return }
+            next.panes[pane]?.replayBatch = batch
+            next.panes[pane]?.recentOutputOnly = truncated
             let size = terminal.resize.effectiveSize
                 ?? (rows: next.initialRows, columns: next.initialColumns)
             effects.append(.createEmulator(binding: binding, rows: size.rows, columns: size.columns))
             presentationChanged = true
         case .replayEnd(let runtime, let batch):
-            guard let pane = next.paneID(for: runtime), next.replayBatches[pane] == batch else { return }
-            next.replayBatches.removeValue(forKey: pane)
+            guard let pane = next.paneID(for: runtime),
+                  next.panes[pane]?.replayBatch == batch else { return }
+            next.panes[pane]?.replayBatch = nil
             presentationChanged = true
         case .bytes(let runtime, let data):
             guard let pane = next.paneID(for: runtime),
@@ -1477,41 +1782,42 @@ enum WorkspaceTUIReducer {
         case .overflow(let runtime):
             guard let pane = next.paneID(for: runtime),
                   let binding = next.bindingKey(for: pane),
-                  next.terminals[pane]?.state.running == true else { return }
-            if next.terminals[pane]?.state.overflowed != true {
-                next.terminals[pane]?.state.overflowed = true
+                  next.terminal(for: pane)?.state.running == true else { return }
+            if next.terminal(for: pane)?.state.overflowed != true {
+                next.updateTerminal(pane) { $0.state.overflowed = true }
             }
             // The host dropped this subscription; without a resubscribe the
             // pane goes dark and input acquire fails closed. The overflow
             // notice is already on the wire, so the same client id may
             // subscribe again immediately; a cross-connection race lands in
             // the tick retry set through the failure branch below.
-            next.terminals[pane]?.state.subscribed = false
-            next.retrySubscribePanes.remove(pane)
+            next.updateTerminal(pane) { $0.state.subscribed = false }
+            next.panes[pane]?.retries.remove(.subscribe)
             effects.append(.attach(binding: binding, context: .resubscribe))
             presentationChanged = true
         case .window(let runtime, let rows, let columns):
             // Actual PTY dimensions, published by the owner's resize. Only
             // observers apply them: the owner drives its emulator from its
             // own coalescer and must not have it rewritten underneath.
+            // The desired claim (not the observed lease) decides: a
+            // contended claimant keeps its size while it re-acquires.
             guard let pane = next.paneID(for: runtime),
                   let binding = next.bindingKey(for: pane),
-                  next.leasedBindings.contains(binding) == false,
-                  next.terminals[pane]?.state.running == true else { return }
+                  next.panes[pane]?.leaseClaim != binding,
+                  next.terminal(for: pane)?.state.running == true else { return }
             effects.append(.resizeEmulator(binding: binding, rows: rows, columns: columns))
             presentationChanged = true
         case .exited(let runtime, let status):
             guard let pane = next.paneID(for: runtime) else { return }
-            if next.terminals[pane]?.state.running != false || next.terminals[pane]?.state.exitStatus != status
-                || next.terminals[pane]?.state.lease != .released {
+            if next.terminal(for: pane)?.state.running != false
+                || next.terminal(for: pane)?.state.exitStatus != status
+                || next.terminal(for: pane)?.state.lease != .released {
                 presentationChanged = true
             }
-            next.terminals[pane]?.state.running = false
-            next.terminals[pane]?.state.exitStatus = status
-            next.terminals[pane]?.state.lease = .released
-            next.updatePane(pane) { $0.lifecycle = .exited; $0.lastOutcome = .exited(status) }
+            next.markExited(pane, status: status)
+            next.updatePane(pane) { $0.lastOutcome = .exited(status) }
             if let binding = next.bindingKey(for: pane) {
-                next.leasedBindings.remove(binding)
+                next.dropLeaseClaim(binding)
             }
             // The final output stays on screen; the launcher offers a
             // replacement runtime and number keys select it directly.
@@ -1526,20 +1832,23 @@ enum WorkspaceTUIReducer {
                 // The host broadcasts only that an owner exists, not which
                 // client owns it. Only our successful acquire RPC grants
                 // local write authority.
-                if next.leasedBindings.contains(binding) == false {
-                    presentationChanged = presentationChanged || next.terminals[pane]?.state.lease != .readOnly
-                    next.terminals[pane]?.state.lease = .readOnly
+                if next.panes[pane]?.leaseClaim != binding {
+                    presentationChanged = presentationChanged
+                        || next.terminal(for: pane)?.state.lease != .readOnly
+                    next.updateTerminal(pane) { $0.state.lease = .readOnly }
                 }
             } else {
                 // Notifications do not carry a lease generation. A queued
                 // release from an earlier epoch may arrive after a later
                 // acquire succeeded, so the successful acquire is
                 // authoritative while this client still claims ownership.
-                guard next.leasedBindings.contains(binding) == false else { return }
-                presentationChanged = presentationChanged || next.terminals[pane]?.state.lease != .readOnly
-                next.terminals[pane]?.state.lease = .readOnly
-                if next.terminals[pane]?.state.running == true {
-                    next.retryAcquirePanes.insert(pane)
+                guard next.panes[pane]?.leaseClaim != binding else { return }
+                presentationChanged = presentationChanged
+                    || next.terminal(for: pane)?.state.lease != .readOnly
+                next.updateTerminal(pane) { $0.state.lease = .readOnly }
+                if next.terminal(for: pane)?.state.running == true {
+                    next.panes[pane, default: PaneRuntime(phase: .missing(stale: nil))]
+                        .retries.insert(.acquire)
                 }
             }
         }
@@ -1548,20 +1857,34 @@ enum WorkspaceTUIReducer {
     private static func applyDisconnect(to next: inout WorkspaceTUIState, presentationChanged: inout Bool) {
         presentationChanged = presentationChanged
             || next.lifecycle == .connected
-            || next.terminals.values.contains { $0.state.lease != .readOnly || $0.state.subscribed || $0.state.overflowed }
+            || next.panes.values.contains {
+                guard let state = $0.terminal?.state else { return false }
+                return state.lease != .readOnly || state.subscribed || state.overflowed
+            }
         // A second disconnect during reattach must not clobber the original
         // stash with an empty in-flight set.
-        if next.leasedBindings.isEmpty == false {
-            next.preDisconnectLeases = next.leasedBindings
+        if next.panes.values.contains(where: { $0.leaseClaim != nil }) {
+            for pane in next.panes.keys {
+                let claim = next.panes[pane]?.leaseClaim
+                next.panes[pane]?.preDisconnectLease = claim
+            }
         }
-        next.leasedBindings.removeAll()
-        next.retryAcquirePanes.removeAll()
-        next.retrySubscribePanes.removeAll()
-        for pane in next.terminals.keys {
-            next.terminals[pane]?.state.lease = .readOnly
-            next.terminals[pane]?.state.subscribed = false
-            next.terminals[pane]?.state.overflowed = false
-            next.updatePane(pane) { $0.lifecycle = .disconnected }
+        for pane in next.panes.keys {
+            next.panes[pane]?.leaseClaim = nil
+            next.panes[pane]?.retries = []
+            // Only panes with a terminal slot flip: a slot-less launch
+            // intent or missing record survives the outage untouched. An
+            // in-flight candidate is dropped with its launch: the pane
+            // keeps the stale terminal, and a late attach completion for
+            // the candidate releases instead of claiming on a dead
+            // connection (fail closed; the runtime stays discoverable).
+            if let slot = next.terminal(for: pane) {
+                var stale = slot
+                stale.state.lease = .readOnly
+                stale.state.subscribed = false
+                stale.state.overflowed = false
+                next.panes[pane]?.phase = .disconnected(stale: stale)
+            }
         }
     }
 
@@ -1571,14 +1894,12 @@ enum WorkspaceTUIReducer {
         presentationChanged: inout Bool
     ) {
         guard let pane = next.paneID(for: runtime) else { return }
-        var changed = next.terminals[pane]?.state.running != false || next.terminals[pane]?.state.exitStatus != nil
-            || next.terminals[pane]?.state.lease != .released
-        next.terminals[pane]?.state.running = false
-        next.terminals[pane]?.state.exitStatus = nil
-        next.terminals[pane]?.state.lease = .released
-        next.updatePane(pane) { $0.lifecycle = .exited }
+        var changed = next.terminal(for: pane)?.state.running != false
+            || next.terminal(for: pane)?.state.exitStatus != nil
+            || next.terminal(for: pane)?.state.lease != .released
+        next.markExited(pane, status: nil)
         if let binding = next.bindingKey(for: pane) {
-            next.leasedBindings.remove(binding)
+            next.dropLeaseClaim(binding)
         }
         if next.activePaneID == pane, next.mode != .launcher {
             next.mode = .launcher
@@ -1631,7 +1952,7 @@ enum WorkspaceTUIReducer {
 
     private static func scrollStale(_ pane: PaneID, in state: WorkspaceTUIState) -> Bool {
         guard state.view.panes[pane] != nil else { return true }
-        guard let expected = state.scrollGenerations[pane] else { return false }
+        guard let expected = state.panes[pane]?.scroll?.generation else { return false }
         return state.bindingKey(for: pane)?.generation != expected
     }
 
@@ -1647,9 +1968,9 @@ enum WorkspaceTUIReducer {
     private static func navigatorItems(for state: WorkspaceTUIState) -> [NavigatorItem] {
         var items: [NavigatorItem] = []
         if let pane = state.activePaneID,
-           state.terminals[pane]?.state.running == true,
+           state.terminal(for: pane)?.state.running == true,
            let binding = state.bindingKey(for: pane) {
-            items.append(state.leasedBindings.contains(binding) ? .releaseInput : .acquireInput)
+            items.append(state.panes[pane]?.leaseClaim == binding ? .releaseInput : .acquireInput)
         }
         for (index, tab) in state.view.tabs.enumerated() {
             items.append(.tab(id: tab.id, title: tab.userTitle ?? "tab \(index + 1)", index: index))
@@ -1689,7 +2010,7 @@ enum WorkspaceTUIReducer {
                 presentationChanged = true
                 return
             }
-            guard next.terminals[pane]?.state.running != true,
+            guard next.terminal(for: pane)?.state.running != true,
                   let runtime = next.knownRuntimes.first(where: { $0.id == id }),
                   next.paneID(for: id) == nil else {
                 next.feedback = "Runtime is no longer available"
@@ -1698,8 +2019,8 @@ enum WorkspaceTUIReducer {
                 return
             }
             let previous = next.bindingKey(for: pane)
-            let wasSubscribed = next.terminals[pane]?.state.subscribed == true
-            let wasLeased = previous.map { next.leasedBindings.contains($0) } ?? false
+            let wasSubscribed = next.terminal(for: pane)?.state.subscribed == true
+            let wasLeased = previous.map { next.panes[pane]?.leaseClaim == $0 } ?? false
             let rows = runtime.rows.map(Self.bound) ?? next.initialRows
             let columns = runtime.columns.map(Self.bound) ?? next.initialColumns
             next.assignTerminal(Self.attached(
@@ -1708,11 +2029,17 @@ enum WorkspaceTUIReducer {
             if let binding = next.bindingKey(for: pane) {
                 effects.append(.createEmulator(binding: binding, rows: rows, columns: columns))
                 effects.append(.attach(binding: binding, context: .launch))
+                // A fresh attach with no previous terminal: the
+                // completion flows through the main branch, as before.
+                if let slot = next.terminal(for: pane) {
+                    next.panes[pane]?.phase = .launching(LaunchDetail(
+                        previous: nil, candidate: .init(binding: binding, terminal: slot)
+                    ))
+                }
             }
             if let previous, previous.runtime != id, wasSubscribed || wasLeased {
                 effects.append(.release(runtime: previous.runtime))
             }
-            next.updatePane(pane) { $0.lifecycle = .attaching }
             presentationChanged = true
         }
     }
@@ -1724,7 +2051,10 @@ enum WorkspaceTUIReducer {
               let updated = next.view.addingTab() else { return false }
         next.view = updated
         if let pane = next.activePaneID {
-            next.updatePane(pane) { $0.lifecycle = .launching }
+            // A fresh pane, so no record can exist yet.
+            next.panes[pane] = PaneRuntime(phase: .launching(LaunchDetail(
+                previous: nil, candidate: nil
+            )))
         }
         return true
     }
@@ -1735,13 +2065,35 @@ enum WorkspaceTUIReducer {
     private static func relaunchFocusedShell(into next: inout WorkspaceTUIState) -> TUIRuntimeEffect? {
         guard next.lifecycle == .connected,
               let pane = next.activePaneID,
-              next.terminals[pane]?.state.running != true,
-              let lifecycle = next.view.panes[pane]?.lifecycle,
-              [.empty, .exited, .launchFailed].contains(lifecycle),
+              next.terminal(for: pane)?.state.running != true,
+              Self.isRelaunchable(next.panes[pane]?.phase, binding: next.view.panes[pane]?.binding),
               let target = Self.target(next),
               let shell = Self.defaultShell(next) else { return nil }
-        next.updatePane(pane) { $0.lifecycle = .launching }
+        // The intent keeps the current output (and every other field)
+        // until the replacement lands.
+        var runtime = next.panes[pane] ?? PaneRuntime(phase: .launching(LaunchDetail(
+            previous: nil, candidate: nil
+        )))
+        runtime.phase = .launching(LaunchDetail(previous: runtime.terminal, candidate: nil))
+        next.panes[pane] = runtime
         return .queueLaunch(target: target, choice: shell)
+    }
+
+    /// Relaunchable phases: an exited terminal, a failed launch, or an
+    /// unbound pane with no record. Mirrors the old
+    /// [.empty, .exited, .launchFailed] lifecycle check against the
+    /// phases the sync derives those lifecycles from.
+    private static func isRelaunchable(_ phase: PanePhase?, binding: RuntimeBinding?) -> Bool {
+        switch phase {
+        case .attached(let terminal):
+            return terminal.state.running == false
+        case .failed:
+            return true
+        case .launching, .missing, .disconnected:
+            return false
+        case nil:
+            return binding == nil
+        }
     }
 
     private static func target(_ state: WorkspaceTUIState) -> PrefixTarget? {
@@ -1769,7 +2121,7 @@ enum WorkspaceTUIReducer {
            let placement = geometry[pane] {
             return .init(rows: placement.content.height, columns: placement.content.width)
         }
-        if let size = state.terminals[pane]?.resize.effectiveSize {
+        if let size = state.terminal(for: pane)?.resize.effectiveSize {
             return .init(rows: size.rows, columns: size.columns)
         }
         return .init(rows: state.initialRows, columns: state.initialColumns)

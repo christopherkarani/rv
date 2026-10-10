@@ -2,6 +2,10 @@ import Foundation
 import RVDomain
 
 /// A saved reference names a host runtime; it is not an admission token or authority.
+/// The persisted pane-identity key, scoped by workspace so a restored
+/// layout can only reconcile against its own workspace. Operational
+/// keys (`PaneBindingKey`, `PrefixTarget`) derive from it per reduce;
+/// see `PaneBindingKey` for why the three do not unify.
 public struct RuntimeBinding: Equatable, Sendable {
     public let workspace: WorkspaceSessionID
     public let runtime: RuntimeSessionID
