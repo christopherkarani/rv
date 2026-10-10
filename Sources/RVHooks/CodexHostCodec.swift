@@ -16,10 +16,14 @@ public struct CodexHostCodec: HostCodec {
         else {
             return .malformed(.unreadable)
         }
-        guard envelope.hookEventName == "PreToolUse" else {
+        guard let eventName = envelope.hookEventName,
+              CodexEventName(wireValue: eventName).strictMatch
+        else {
             return .foreign
         }
-        guard envelope.toolName == "Bash" else {
+        guard let toolName = envelope.toolName,
+              CodexToolName(wireValue: toolName).strictMatch == .shell
+        else {
             return .foreign
         }
         let cwdText = firstNonEmpty(envelope.toolInput?.workdir, envelope.cwd)
@@ -72,13 +76,4 @@ private struct CodexEnvelope: Decodable {
 private struct CodexToolInput: Decodable {
     var command: String?
     var workdir: String?
-}
-
-private func firstNonEmpty(_ values: String?...) -> String? {
-    for value in values {
-        if let value, value.isEmpty == false {
-            return value
-        }
-    }
-    return nil
 }

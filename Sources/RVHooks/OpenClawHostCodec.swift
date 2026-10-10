@@ -16,10 +16,13 @@ public struct OpenClawHostCodec: HostCodec {
         else {
             return .malformed(.unreadable)
         }
-        if envelope.toolKind == "code_mode_exec" {
+        if let toolKind = envelope.toolKind,
+           OpenClawToolKind(wireValue: toolKind).isExcludedCodeMode {
             return .foreign
         }
-        guard envelope.toolName == "exec" else {
+        guard let toolName = envelope.toolName,
+              OpenClawToolName(wireValue: toolName).strictMatch == .shell
+        else {
             return .foreign
         }
         let cwdText = firstNonEmpty(envelope.params?.workdir, envelope.cwd)
@@ -51,13 +54,4 @@ private struct OpenClawEnvelope: Decodable {
 private struct OpenClawParams: Decodable {
     var command: String?
     var workdir: String?
-}
-
-private func firstNonEmpty(_ values: String?...) -> String? {
-    for value in values {
-        if let value, value.isEmpty == false {
-            return value
-        }
-    }
-    return nil
 }

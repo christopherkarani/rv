@@ -12,12 +12,15 @@ public struct GrokHostCodec: HostCodec {
         else {
             return .malformed(.unreadable)
         }
-        guard envelope.hookEventName == "pre_tool_use" else {
+        guard let eventName = envelope.hookEventName,
+              GrokEventName(wireValue: eventName).strictMatch
+        else {
             return .foreign
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId).flatMap { SessionID(validating: $0) }
-        if Self.shellTools.contains(envelope.toolName ?? "") {
+        if let toolName = envelope.toolName,
+           GrokToolName(wireValue: toolName).strictMatch == .shell {
             return HookRequest.decoded(
                 host: .grok,
                 command: envelope.toolInput?.command,
@@ -42,12 +45,6 @@ public struct GrokHostCodec: HostCodec {
         }
         return .foreign
     }
-
-    private static let shellTools: Set<String> = [
-        "run_terminal_command",
-        "run_terminal_cmd",
-        "Bash",
-    ]
 
     public func encodeDeny(reason: String, rule: RuleID? = nil, next: HookVoiceNext = .none) -> HookWire {
         encodeLeftoverDecisionDeny(reason: reason, rule: rule, next: next)
@@ -77,13 +74,3 @@ private struct GrokToolInput: Decodable {
         case target
     }
 }
-
-private func firstNonEmpty(_ values: String?...) -> String? {
-    for value in values {
-        if let value, value.isEmpty == false {
-            return value
-        }
-    }
-    return nil
-}
-
