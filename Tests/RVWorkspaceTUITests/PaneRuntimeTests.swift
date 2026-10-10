@@ -286,6 +286,153 @@ private func expectCoherent(_ state: WorkspaceTUIState, sourceLocation: SourceLo
         expectCoherent(done.state)
     }
 
+    @Test func racedQueryFailureDuringReplacementKeepsAttaching() {
+        // A duplicate launch query can fail while a newer candidate is
+        // already in flight; the failure is for the raced query, so the
+        // pane keeps reading attaching until that attach decides it.
+        var state = rtConnected()
+        let boundA = PrefixTarget(pane: rtPane, generation: 1)
+        state = WorkspaceTUIReducer.reduce(
+            state,
+            .launchQuerySucceeded(
+                target: boundA, choice: rtShell, runtime: rtListed(rtRuntimeB), rows: 24, columns: 80
+            )
+        ).state
+        let failed = WorkspaceTUIReducer.reduce(
+            state, .launchQueryFailed(target: boundA, choice: rtShell, error: .unavailable)
+        )
+        #expect(failed.state.view.panes[rtPane]?.lifecycle == .attaching)
+        #expect(failed.state.panes[rtPane]?.phase.candidate?.binding.runtime == rtRuntimeB)
+        #expect(failed.state.mode == .launcher)
+        expectCoherent(failed.state)
+    }
+
+    @Test func staleLaunchFailureDuringReplacementKeepsAttaching() {
+        // A launch-attach failure for the previous binding while a
+        // newer candidate is in flight must not clobber the candidate.
+        var state = rtConnected()
+        let boundA = PrefixTarget(pane: rtPane, generation: 1)
+        state = WorkspaceTUIReducer.reduce(
+            state,
+            .launchQuerySucceeded(
+                target: boundA, choice: rtShell, runtime: rtListed(rtRuntimeB), rows: 24, columns: 80
+            )
+        ).state
+        let failed = WorkspaceTUIReducer.reduce(
+            state,
+            .attachCompleted(binding: rtBinding(rtRuntimeA), context: .launch, outcome: .unavailable)
+        )
+        #expect(failed.state.view.panes[rtPane]?.lifecycle == .attaching)
+        #expect(failed.state.panes[rtPane]?.phase.candidate?.binding.runtime == rtRuntimeB)
+        expectCoherent(failed.state)
+    }
+
+    @Test func exitDuringReplacementKeepsAttaching() {
+        // The previous runtime exits while its replacement attaches:
+        // the previous slot records the exit but the pane keeps
+        // reading attaching until the replacement lands.
+        var state = rtConnected()
+        let boundA = PrefixTarget(pane: rtPane, generation: 1)
+        state = WorkspaceTUIReducer.reduce(
+            state,
+            .launchQuerySucceeded(
+                target: boundA, choice: rtShell, runtime: rtListed(rtRuntimeB), rows: 24, columns: 80
+            )
+        ).state
+        let exited = WorkspaceTUIReducer.reduce(
+            state, .hostEvents([.exited(runtime: rtRuntimeA, status: 0)])
+        )
+        #expect(exited.state.view.panes[rtPane]?.lifecycle == .attaching)
+        #expect(exited.state.panes[rtPane]?.phase.candidate?.binding.runtime == rtRuntimeB)
+        if case .launching(let detail)? = exited.state.panes[rtPane]?.phase {
+            #expect(detail.previous?.state.running == false)
+            #expect(detail.previous?.state.exitStatus == 0)
+        } else {
+            Issue.record("expected a launching phase, got \(String(describing: exited.state.panes[rtPane]?.phase))")
+        }
+        #expect(exited.state.mode == .launcher)
+        expectCoherent(exited.state)
+    }
+
+    @Test func slotlessPaneKeepsReadingMissingThroughReconnect() {
+        // A bound pane with no terminal slot (restored runtime that was
+        // gone at connect, now back): the reattach still issues, but
+        // with no slot to book it on the pane keeps reading missing
+        // instead of sticking on attaching, and the success releases.
+        let tab = WorkspaceTab(id: TabID(), tree: .leaf(rtPane), focusedPaneID: rtPane)
+        let restoredBinding = RuntimeBinding(
+            workspace: WorkspaceSessionID(rawValue: rtSummary.workspace),
+            runtime: RuntimeSessionID(rawValue: rtRuntimeA),
+            generation: 0
+        )
+        let view = WorkspaceView(
+            id: ViewID(),
+            tabs: [tab],
+            activeTabID: tab.id,
+            panes: [rtPane: WorkspacePane(id: rtPane, binding: restoredBinding, lifecycle: .disconnected)]
+        )
+        var state = WorkspaceTUIState(
+            lifecycle: .neverConnected,
+            summary: rtSummary,
+            launcher: [rtShell],
+            initialRows: 24,
+            initialColumns: 80,
+            mode: .terminal,
+            terminal: nil,
+            leasedRuntime: nil,
+            retryAcquire: false,
+            shouldExit: false,
+            initialLaunchRequested: false,
+            viewSize: .init(rows: 40, columns: 100),
+            presentationRevision: 0,
+            restoredView: view
+        )
+        let slotless = PaneBindingKey(pane: rtPane, runtime: rtRuntimeA, generation: 0)
+        state = WorkspaceTUIReducer.reduce(
+            state, .connectQuery(described: rtSummary, runtimes: [])
+        ).state
+        #expect(state.view.panes[rtPane]?.lifecycle == .missing)
+        state = WorkspaceTUIReducer.reduce(state, .hostDisconnected).state
+        let reconnected = WorkspaceTUIReducer.reduce(
+            state, .reconnectSucceeded(terminals: [rtListed(rtRuntimeA)])
+        )
+        #expect(reconnected.state.view.panes[rtPane]?.lifecycle == .missing)
+        #expect(reconnected.effects == [
+            .observe(binding: slotless, context: .reconnect), .restartEvents,
+        ])
+        expectCoherent(reconnected.state)
+        let landed = WorkspaceTUIReducer.reduce(
+            reconnected.state,
+            .attachCompleted(binding: slotless, context: .reconnect, outcome: .owned)
+        )
+        #expect(landed.effects == [.release(runtime: rtRuntimeA)])
+        #expect(landed.state.view.panes[rtPane]?.lifecycle == .missing)
+        expectCoherent(landed.state)
+        let contended = WorkspaceTUIReducer.reduce(
+            reconnected.state,
+            .attachCompleted(binding: slotless, context: .reconnect, outcome: .readOnly)
+        )
+        #expect(contended.effects == [])
+        #expect(contended.state.view.panes[rtPane]?.lifecycle == .missing)
+        expectCoherent(contended.state)
+    }
+
+    @Test func launchGateDropsSubmitsWhileReattachInFlight() {
+        // The launch gate covers every attach in flight, including a
+        // reconnect reattach: a submit landing in that window is
+        // dropped exactly like one racing a fresh bind.
+        var state = rtConnected()
+        state = WorkspaceTUIReducer.reduce(state, .hostDisconnected).state
+        state = WorkspaceTUIReducer.reduce(
+            state, .reconnectSucceeded(terminals: [rtListed(rtRuntimeA)])
+        ).state
+        #expect(state.panes[rtPane]?.phase.candidate?.binding == rtBinding(rtRuntimeA))
+        let boundA = PrefixTarget(pane: rtPane, generation: 1)
+        let gated = WorkspaceTUIReducer.reduce(state, .launchDue(target: boundA, choice: rtShell))
+        #expect(gated.effects == [])
+        expectCoherent(gated.state)
+    }
+
     @Test func restoredLayoutWithGoneRuntimeReconcilesToMissing() {
         let tab = WorkspaceTab(id: TabID(), tree: .leaf(rtPane), focusedPaneID: rtPane)
         let view = WorkspaceView(

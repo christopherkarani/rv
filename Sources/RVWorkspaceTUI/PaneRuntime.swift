@@ -119,7 +119,11 @@ enum PanePhase: Equatable, Sendable {
 extension PanePhase {
     /// The replacement/fresh candidate awaiting attach, if any. The
     /// launch gate admits a submit unless a candidate is already in
-    /// flight, which is the phase form of the old pending-launch check.
+    /// flight. This covers every attach in flight — including
+    /// reconnect reattaches and navigator attaches, which the old
+    /// pending-launch map did not track — so a submit landing in one
+    /// of those windows is dropped exactly like one racing a fresh
+    /// bind. See `launchGateDropsSubmitsWhileReattachInFlight`.
     var candidate: WorkspaceTUIState.PendingLaunch? {
         if case .launching(let detail) = self {
             detail.candidate

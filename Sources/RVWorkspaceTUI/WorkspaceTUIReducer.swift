@@ -164,10 +164,12 @@ struct WorkspaceTUIState: Equatable, Sendable {
             panes[paneID]?.phase = .launching(detail)
         case .attached:
             panes[paneID]?.phase = .attached(terminal)
-        case .failed:
+        case .failed(.some):
             panes[paneID]?.phase = .failed(stale: terminal)
-        case .missing:
+        case .missing(.some):
             panes[paneID]?.phase = .missing(stale: terminal)
+        case .failed(nil), .missing(nil):
+            return
         case .disconnected:
             panes[paneID]?.phase = .disconnected(stale: terminal)
         case nil:
