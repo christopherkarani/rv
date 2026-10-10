@@ -494,14 +494,9 @@ final class WorkspaceHostServer: Sendable {
             return Reply(message: describe(message))
         case .listRuntimes:
             return Reply(message: list(message))
-        case .launchRuntime:
-            return Reply(message: launch(message))
-        case .launchAgentRuntime, .launchCustomRuntime:
-            return Reply(message: launchIdentity(message))
-        case .ensureTerminalRuntime:
-            return Reply(message: ensureTerminalRuntime(message))
-        case .cancelRuntime:
-            return Reply(message: cancel(message))
+        case .launchRuntime, .launchAgentRuntime, .launchCustomRuntime,
+            .ensureTerminalRuntime, .cancelRuntime:
+            return launchFamily(message)
         case .closeWorkspace:
             return close(message, connection: connection)
         case .detach:
@@ -576,7 +571,85 @@ final class WorkspaceHostServer: Sendable {
         )
     }
 
-    private func ensureTerminalRuntime(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
+    /// Typed launch-family dispatch. The parse layer validates the
+    /// request; the inner switch routes fully-validated payloads to the
+    /// per-op cores. Unmigrated ops never reach here.
+    private func launchFamily(_ message: WorkspaceControlRequest) -> Reply {
+        // Phase gate sits exactly where the legacy handlers gated: launch
+        // and ensure refuse a non-accepting workspace before validating;
+        // cancel and the identity door never gated on phase.
+        if message.operation == .launchRuntime || message.operation == .ensureTerminalRuntime {
+            let phase = supervisor.snapshot.phase
+            guard phase.acceptsRuntime else {
+                return Reply(message: failure(
+                    message,
+                    workspaceControlCode(.notAcceptingRuntime(phase))
+                ))
+            }
+        }
+        let context = WorkspaceControlLaunchRequest.Context(
+            resourcePolicy: resourcePolicy,
+            project: supervisor.snapshot.originalPath.rawValue
+        )
+        guard let parsed = WorkspaceControlLaunchRequest.parse(message, context: context) else {
+            // Unreachable: the caller matched a launch-family op.
+            return Reply(message: failure(message, .invalidRequest))
+        }
+        switch parsed {
+        case .failure(let code):
+            return Reply(message: failure(message, code))
+        case .success(let typed):
+            switch typed {
+            case .launchRuntime(let payload):
+                return Reply(message: launchCore(
+                    payload,
+                    request: message,
+                    responseOp: .launchRuntime
+                ))
+            case .launchAgentRuntime, .launchCustomRuntime:
+                // The parse above constructed the op payload (documenting
+                // its contract), but the deny door consumes no fields:
+                // any request, valid or not, is denied identically.
+                return Reply(message: failure(message, .requiresOperatorPermit))
+            case .ensureTerminalRuntime(let payload):
+                return Reply(message: ensureCore(payload, request: message))
+            case .cancelRuntime(let payload):
+                return Reply(message: cancelCore(payload, request: message))
+            }
+        }
+    }
+
+    /// Internal for direct-handler tests: exercises the
+    /// wire-to-supervisor wiring without socket peer authentication.
+    func ensureTerminalRuntime(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
+        terminalEnsureLock.lock()
+        defer { terminalEnsureLock.unlock() }
+
+        let phase = supervisor.snapshot.phase
+        guard phase.acceptsRuntime else {
+            return failure(message, workspaceControlCode(.notAcceptingRuntime(phase)))
+        }
+        switch EnsureTerminalRuntimePayload.parse(message) {
+        case .failure(let code):
+            return failure(message, code)
+        case .success(let payload):
+            return ensureLocked(payload, request: message)
+        }
+    }
+
+    private func ensureCore(
+        _ payload: EnsureTerminalRuntimePayload,
+        request: WorkspaceControlRequest
+    ) -> WorkspaceControlResponse {
+        terminalEnsureLock.lock()
+        defer { terminalEnsureLock.unlock() }
+        return ensureLocked(payload, request: request)
+    }
+
+    private func ensureLocked(
+        _ payload: EnsureTerminalRuntimePayload,
+        request: WorkspaceControlRequest
+    ) -> WorkspaceControlResponse {
         // An explicit profile rides along to creation, where launch()
         // adjudicates it; the existing-runtime shortcut below stays
         // ID-agnostic, matching the client's re-attach to the first
@@ -586,23 +659,10 @@ final class WorkspaceHostServer: Sendable {
         // need a specific command use `launchRuntime`. A reused runtime
         // keeps the grants it was created with, which may be fewer than
         // requested, never more.
-        terminalEnsureLock.lock()
-        defer { terminalEnsureLock.unlock() }
-
-        let phase = supervisor.snapshot.phase
-        guard phase.acceptsRuntime else {
-            return failure(message, workspaceControlCode(.notAcceptingRuntime(phase)))
-        }
-        if let rawHook = message.hook, AgentTagValidator.isValid(rawHook) == false {
-            return failure(message, .invalidRequest)
-        }
-        guard let executable = message.executable, executable.hasPrefix("/"),
-            IsolatedCommand(executable: executable, arguments: message.arguments ?? []) != nil,
-            case .success(.pseudoTerminal(_, _)) = launchIO(message)
-        else {
-            return failure(message, .invalidRequest)
-        }
-
+        //
+        // The payload gated entry; creation re-enters launch() with the
+        // original request so the profile lookup and phase re-gate stay
+        // exactly on the legacy path.
         supervisor.pruneFinishedRuntimes(limit: WorkspaceControlLimits.maxRuntimes)
         if let existing = supervisor.runtimeFacts()
             .filter({ $0.running && $0.terminal })
@@ -611,7 +671,7 @@ final class WorkspaceHostServer: Sendable {
         {
             return WorkspaceControlResponse(
                 operation: .ensureTerminalRuntime,
-                id: message.id,
+                id: request.id,
                 runtime: existing.id,
                 hook: existing.hookHost,
                 ok: true,
@@ -623,7 +683,7 @@ final class WorkspaceHostServer: Sendable {
                 created: false
             )
         }
-        return launch(message, responseOp: .ensureTerminalRuntime)
+        return launch(request, responseOp: .ensureTerminalRuntime)
     }
 
     /// Internal for the Step 8 direct-handler test: exercises the
@@ -636,60 +696,35 @@ final class WorkspaceHostServer: Sendable {
         guard phase.acceptsRuntime else {
             return failure(message, workspaceControlCode(.notAcceptingRuntime(phase)))
         }
-        guard let executable = message.executable, executable.hasPrefix("/") else {
-            return failure(message, .invalidRequest)
-        }
-        // Explicit selection only: a missing ID always means the base fence.
-        // The policy's defaultProfile is a UI hint the host never consults.
-        let resourceProfile: RuntimeResourceProfile?
-        if let id = message.resourceProfileID {
-            guard let selected = resourcePolicy.profile(
-                id: id,
-                project: supervisor.snapshot.originalPath.rawValue
-            ) else {
-                return failure(message, .resourceProfileUnavailable)
-            }
-            resourceProfile = selected
-        } else {
-            resourceProfile = nil
-        }
-        // The hook wire carries hook protocol participation only (Step 8
-        // F2): a tag that names a HookHost selects protocol handling; any
-        // other well-formed tag is accepted but selects nothing. Wire tags
-        // never select credentials — selection is definition-derived only,
-        // and the legacy launch path stages no filtered credentials.
-        let hook: HookHost?
-        switch legacyLaunchHookSelection(message.hook) {
+        switch LaunchRuntimePayload.parse(
+            message,
+            resourcePolicy: resourcePolicy,
+            project: supervisor.snapshot.originalPath.rawValue
+        ) {
         case .failure(let code):
             return failure(message, code)
-        case .success(let selected):
-            hook = selected
+        case .success(let payload):
+            return launchCore(payload, request: message, responseOp: responseOp)
         }
-        guard let command = IsolatedCommand(
-            executable: executable,
-            arguments: message.arguments ?? []
-        ) else {
-            return failure(message, .invalidRequest)
-        }
-        let io: IsolatedIO
-        switch launchIO(message) {
-        case .failure(let code):
-            return failure(message, code)
-        case .success(let parsed):
-            io = parsed
-        }
+    }
+
+    private func launchCore(
+        _ payload: LaunchRuntimePayload,
+        request: WorkspaceControlRequest,
+        responseOp: WorkspaceControlOp
+    ) -> WorkspaceControlResponse {
         let plan = compileContainedPlan(workspace: supervisor.snapshot.policyWorkspace)
         let result = supervisor.launchLegacy(
-            host: hook,
-            command: command,
+            host: payload.hook,
+            command: payload.command,
             plan: plan,
-            io: io,
-            resourceProfile: resourceProfile,
+            io: payload.io,
+            resourceProfile: payload.resourceProfile,
             admission: admission,
             sessionStore: sessionStore,
             runningLimit: WorkspaceControlLimits.maxRuntimes
         )
-        return launchResponse(message, responseOp: responseOp, io: io, result: result)
+        return launchResponse(request, responseOp: responseOp, io: payload.io, result: result)
     }
 
     private func launchResponse(
@@ -772,12 +807,6 @@ final class WorkspaceHostServer: Sendable {
     /// is defense in depth. Internal so tests pin the invariant.
     func launchIdentity(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
         failure(message, .requiresOperatorPermit)
-    }
-
-    private func launchIO(
-        _ message: WorkspaceControlRequest
-    ) -> Result<IsolatedIO, WorkspaceControlCode> {
-        workspaceLaunchIO(io: message.io, rows: message.rows, columns: message.columns)
     }
 
     private func subscribe(
@@ -936,20 +965,31 @@ final class WorkspaceHostServer: Sendable {
         }
     }
 
-    private func cancel(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
-        guard let runtime = message.runtime else {
-            return failure(message, .invalidRequest)
+    /// Internal for direct-handler tests: exercises the
+    /// wire-to-supervisor wiring without socket peer authentication.
+    func cancel(_ message: WorkspaceControlRequest) -> WorkspaceControlResponse {
+        switch CancelRuntimePayload.parse(message) {
+        case .failure(let code):
+            return failure(message, code)
+        case .success(let payload):
+            return cancelCore(payload, request: message)
         }
-        switch supervisor.cancel(runtime: runtime) {
+    }
+
+    private func cancelCore(
+        _ payload: CancelRuntimePayload,
+        request: WorkspaceControlRequest
+    ) -> WorkspaceControlResponse {
+        switch supervisor.cancel(runtime: payload.runtime) {
         case .success:
             return WorkspaceControlResponse(
                 operation: .cancelRuntime,
-                id: message.id,
-                runtime: runtime,
+                id: request.id,
+                runtime: payload.runtime,
                 ok: true
             )
         case .failure(let error):
-            return failure(message, workspaceControlCode(error))
+            return failure(request, workspaceControlCode(error))
         }
     }
 
@@ -1055,19 +1095,6 @@ final class WorkspaceHostServer: Sendable {
         guard connections.isEmpty == false else { return false }
         return connections.contains { $0.send(message) }
     }
-}
-
-/// Maps the legacy launch wire's hook field to protocol participation.
-///
-/// Step 8 (F2): a well-formed tag that names a `HookHost` selects hook
-/// protocol handling; any other well-formed tag is accepted but selects
-/// nothing. Malformed tags are refused. The result feeds hook protocol
-/// only — staging selection is definition-derived (`launchLegacy` takes
-/// no tag), so no wire value can select credentials.
-func legacyLaunchHookSelection(_ raw: String?) -> Result<HookHost?, WorkspaceControlCode> {
-    guard let raw else { return .success(nil) }
-    guard AgentTagValidator.isValid(raw) else { return .failure(.invalidRequest) }
-    return .success(HookHost(rawValue: raw))
 }
 
 private func workspaceTerminalMessage(
