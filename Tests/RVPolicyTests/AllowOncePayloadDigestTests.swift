@@ -168,6 +168,10 @@ struct AllowOncePayloadDigestTests {
         #expect(throws: DecodingError.self) {
             try JSONDecoder().decode(PayloadBinding.self, from: Data(both.utf8))
         }
+        // A false unbound marker fails closed at decode.
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(PayloadBinding.self, from: Data(#"{"unbound":false}"#.utf8))
+        }
     }
 }
 

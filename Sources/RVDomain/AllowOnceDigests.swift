@@ -49,7 +49,7 @@ public enum PayloadBinding: Sendable, Equatable, Codable {
         }
         if container.contains(.unbound) {
             guard found == nil else { throw clash() }
-            _ = try container.decode(Bool.self, forKey: .unbound)
+            guard try container.decode(Bool.self, forKey: .unbound) else { throw clash() }
             found = .unbound
         }
         guard let found else {
