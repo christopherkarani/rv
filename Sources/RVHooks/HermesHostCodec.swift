@@ -16,7 +16,9 @@ public struct HermesHostCodec: HostCodec {
         else {
             return .malformed(.unreadable)
         }
-        guard envelope.toolName == "terminal" else {
+        guard let toolName = envelope.toolName,
+              HermesToolName(wireValue: toolName).strictMatch == .shell
+        else {
             return .foreign
         }
         let cwdText = firstNonEmpty(envelope.args?.workdir, envelope.cwd)
@@ -47,13 +49,4 @@ private struct HermesEnvelope: Decodable {
 private struct HermesArgs: Decodable {
     var command: String?
     var workdir: String?
-}
-
-private func firstNonEmpty(_ values: String?...) -> String? {
-    for value in values {
-        if let value, value.isEmpty == false {
-            return value
-        }
-    }
-    return nil
 }

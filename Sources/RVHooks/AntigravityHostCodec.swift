@@ -26,7 +26,8 @@ public struct AntigravityHostCodec: HostCodec {
         let cwd = cwdText.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.conversationId)
             .flatMap { SessionID(validating: $0) }
-        if toolCall.name == "run_command" {
+        if let name = toolCall.name,
+           AntigravityToolName(wireValue: name).strictMatch == .shell {
             return HookRequest.decoded(
                 host: .antigravity,
                 command: toolCall.args?.commandLine,
@@ -34,8 +35,11 @@ public struct AntigravityHostCodec: HostCodec {
                 session: session
             )
         }
+        let mappedFileTool = toolCall.name.flatMap {
+            AntigravityToolName(wireValue: $0).fileKind?.ledgerName
+        }
         if let file = FileToolAction.decoded(
-            toolName: Self.mappedFileToolName(for: toolCall.name),
+            toolName: mappedFileTool,
             paths: toolCall.args?.targetFile, toolCall.args?.absolutePath
         ) {
             return HookRequest.decoded(
@@ -58,19 +62,6 @@ public struct AntigravityHostCodec: HostCodec {
         encodeLeftoverDecisionDeny(reason: reason, rule: rule, next: next)
     }
 
-    /// Antigravity file-tool names onto the closed ledger kinds.
-    private static func mappedFileToolName(for toolName: String?) -> String? {
-        switch toolName {
-        case "view_file":
-            "Read"
-        case "replace_file_content", "multi_replace_file_content":
-            "Edit"
-        case "write_to_file":
-            "Write"
-        default:
-            nil
-        }
-    }
 }
 
 private struct AntigravityEnvelope: Decodable {
@@ -102,13 +93,4 @@ private struct AntigravityToolArgs: Decodable {
         case targetFile = "TargetFile"
         case absolutePath = "AbsolutePath"
     }
-}
-
-private func firstNonEmpty(_ values: String?...) -> String? {
-    for value in values {
-        if let value, value.isEmpty == false {
-            return value
-        }
-    }
-    return nil
 }
