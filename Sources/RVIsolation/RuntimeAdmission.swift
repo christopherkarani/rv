@@ -1110,6 +1110,14 @@ private func admissionResponse(
     }
 }
 
+/// Polled by name lookup while `getaddrinfo` runs on another thread.
+///
+/// The session loop sets this around normalize. A stuck resolver then cannot
+/// keep the contained process group alive after the leader exits.
+enum RuntimeAdmissionStop {
+    @TaskLocal static var shouldStop: @Sendable () -> Bool = { false }
+}
+
 /// Resolves a name without blocking the session reaper.
 ///
 /// `lookup` runs on another thread. This returns when the budget ends or
