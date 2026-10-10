@@ -552,8 +552,6 @@ struct PendingDispatchTests {
                 FileAction(
                     fingerprint: ActionFingerprint(rawValue: "file:claude:sess-pi:/tmp/ws:read:/tmp/a.md"),
                     file: FileToolAction(kind: .read, path: FileToolPath(rawValue: "/tmp/a.md")),
-                    effects: ActionEffects(),
-                    resources: ActionResources(path: "/tmp/a.md"),
                     scope: ActionScope(workingDirectory: wd("/tmp/ws"))
                 )
             ),

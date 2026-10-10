@@ -64,14 +64,6 @@ public enum ReviewSanitizer: Sendable {
                 kind: file.file.kind,
                 path: FileToolPath(rawValue: sanitizeField(file.file.path.rawValue) ?? file.file.path.rawValue)
             ),
-            effects: file.effects,
-            resources: ActionResources(
-                remoteName: sanitizeField(file.resources.remoteName),
-                branchName: sanitizeField(file.resources.branchName),
-                path: sanitizeField(file.resources.path),
-                filesystemScope: file.resources.filesystemScope,
-                resourceKind: file.resources.resourceKind
-            ),
             scope: ActionScope(
                 workingDirectory: file.scope.workingDirectory.flatMap { directory in
                     WorkingDirectory(rawValue: redactCredentials(in: directory.rawValue))

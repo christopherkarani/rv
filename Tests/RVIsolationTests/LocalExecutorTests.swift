@@ -52,12 +52,6 @@ struct LocalExecutorTests {
                     kind: .write,
                     path: FileToolPath(rawValue: "/tmp/rv/new.swift")
                 ),
-                effects: ActionEffects(kinds: [.filesystemCreate]),
-                resources: ActionResources(
-                    path: "/tmp/rv/new.swift",
-                    filesystemScope: .insideRepository,
-                    resourceKind: .unknown
-                ),
                 scope: ActionScope(workingDirectory: workspace)
             )
         )
