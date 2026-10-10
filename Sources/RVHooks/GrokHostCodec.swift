@@ -74,4 +74,3 @@ private struct GrokToolInput: Decodable {
         case target
     }
 }
-
