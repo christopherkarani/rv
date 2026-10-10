@@ -205,6 +205,17 @@ struct LaunchPayloadParseTests {
             resourcePolicy: profile,
             project: "/proj"
         ) == .failure(.invalidRequest))
+        // NUL executable plus unknown profile reports the profile: the
+        // lookup precedes command construction. A command-first reorder
+        // would report invalidRequest instead.
+        #expect(LaunchRuntimePayload.parse(
+            WorkspaceControlRequest(
+                operation: .launchRuntime, executable: "/bin/\0sh",
+                resourceProfileID: "nope"
+            ),
+            resourcePolicy: profile,
+            project: "/proj"
+        ) == .failure(.resourceProfileUnavailable))
     }
 
     @Test func launchParseGatesProfileOnProject() {
@@ -350,10 +361,17 @@ struct LaunchPayloadParseTests {
             context: context
         )
         #expect(invalid == .failure(.invalidRequest))
+        // Every non-launch op keeps the bag path (nil parse). The parse
+        // switch is compiler-exhaustive; this list pins the fallback for
+        // each unmigrated op so a mistyped arm cannot slip through.
         for op: WorkspaceControlOp in [
             .hello, .capabilities, .ping, .describeWorkspace, .listRuntimes,
-            .closeWorkspace, .detach, .subscribeTerminal, .terminalInput,
-            .resizeTerminal,
+            .closeWorkspace, .detach, .workspaceClosed,
+            .subscribeTerminal, .unsubscribeTerminal, .terminalInput,
+            .acquireTerminalInput, .releaseTerminalInput, .resizeTerminal,
+            .terminalReplayBegin, .terminalReplay, .terminalReplayEnd,
+            .terminalOutput, .terminalInputOwner, .terminalWindow,
+            .runtimeExited, .terminalOverflow,
         ] {
             #expect(
                 WorkspaceControlLaunchRequest.parse(
@@ -468,6 +486,16 @@ struct LaunchParityHandlerTests {
         ))
         #expect(refused.ok != true)
         #expect(refused.code == .resourceProfileUnavailable)
+        // Profile lookup also precedes command construction: NUL plus an
+        // unknown profile still reports resourceProfileUnavailable.
+        let refusedCommand = host.server.launch(WorkspaceControlRequest(
+            operation: .launchRuntime,
+            executable: "/bin/\0sleep",
+            arguments: ["30"],
+            resourceProfileID: "no-such-profile"
+        ))
+        #expect(refusedCommand.ok != true)
+        #expect(refusedCommand.code == .resourceProfileUnavailable)
     }
 
     @Test func identityDoorDeniesInvalidFieldsIdentically() throws {
@@ -642,6 +670,20 @@ struct LaunchParityHandlerTests {
         ))
         #expect(ensureRefused.ok != true)
         #expect(ensureRefused.code == .workspaceClosed)
+        // The phase gate precedes validation: malformed requests on a
+        // closed workspace report workspaceClosed, never invalidRequest.
+        let launchInvalid = host.server.launch(WorkspaceControlRequest(
+            operation: .launchRuntime,
+            executable: "bin/sh"
+        ))
+        #expect(launchInvalid.ok != true)
+        #expect(launchInvalid.code == .workspaceClosed)
+        let ensureInvalid = host.server.ensureTerminalRuntime(WorkspaceControlRequest(
+            operation: .ensureTerminalRuntime,
+            executable: "bin/sh"
+        ))
+        #expect(ensureInvalid.ok != true)
+        #expect(ensureInvalid.code == .workspaceClosed)
     }
 }
 #endif
