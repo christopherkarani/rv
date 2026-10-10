@@ -9,13 +9,15 @@ import RVDomain
 
 struct AllowOncePayloadDigestTests {
     private static let now = Date(timeIntervalSince1970: 1_700_000_000)
+    private static let fingerprintHex = String(repeating: "a", count: 64)
+    private static let digestHex = String(repeating: "b", count: 64)
 
-    private static func record(digest: String? = "payload-digest") -> AllowOnceRecord {
+    private static func record(digest: ContentPayloadDigest?) -> AllowOnceRecord {
         AllowOnceRecord(
             schemaVersion: 1,
             lifecycle: .pending,
-            codeHash: "hash",
-            commandFingerprint: "fingerprint",
+            codeHash: CodeHash(rawValue: "hash"),
+            commandFingerprint: GrantFingerprint(rawValue: Self.fingerprintHex),
             commandRedacted: "echo …",
             cwd: wd("/tmp/a"),
             ruleID: nil,
@@ -25,11 +27,15 @@ struct AllowOncePayloadDigestTests {
         )
     }
 
+    private static func boundRecord() -> AllowOnceRecord {
+        Self.record(digest: ContentPayloadDigest(rawValue: Self.digestHex))
+    }
+
     @Test func recordRoundTripsPayloadDigest() throws {
-        let encoded = try JSONEncoder().encode(Self.record())
+        let encoded = try JSONEncoder().encode(Self.boundRecord())
         let decoded = try JSONDecoder().decode(AllowOnceRecord.self, from: encoded)
-        #expect(decoded == Self.record())
-        #expect(decoded.payloadDigest == "payload-digest")
+        #expect(decoded == Self.boundRecord())
+        #expect(decoded.payloadDigest == ContentPayloadDigest(rawValue: Self.digestHex))
     }
 
     @Test func recordOmitsNilDigestAndDecodesLegacy() throws {
@@ -55,7 +61,7 @@ struct AllowOncePayloadDigestTests {
             Issue.record("fresh mint must append")
             return
         }
-        #expect(records.first?.payloadDigest == "payload-digest")
+        #expect(records.first?.payloadDigest?.rawValue == "payload-digest")
     }
 
     @Test func ledgerRedeemBindsExpectedPayloadDigest() throws {
@@ -104,8 +110,8 @@ struct AllowOncePayloadDigestTests {
             maskedSegments: ["aaa"]
         )
         let peeked = try #require(await store.validatePending(code: code.rawValue, now: Self.now))
-        #expect(peeked.fingerprint == grantFingerprint("git reset --hard", invocationPrefix: []))
-        #expect(peeked.payloadDigest == maskedPayloadContentDigest(["aaa"]))
+        #expect(peeked.fingerprint == grantFingerprint("git reset --hard", invocationPrefix: []).rawValue)
+        #expect(peeked.payloadDigest == maskedPayloadContentDigest(["aaa"]).rawValue)
         await #expect(throws: AllowOnceError.redemptionChanged) {
             _ = try await store.redeem(
                 code: code.rawValue, tty: tty, now: Self.now,
@@ -119,6 +125,49 @@ struct AllowOncePayloadDigestTests {
             expectedPayloadDigest: peeked.payloadDigest
         )
         #expect(row.cwd == wd("/tmp/a"))
+    }
+
+    @Test func hexShapeGateAcceptsOnlyLowercaseHex64() {
+        #expect(ContentPayloadDigest(validatingHex: String(repeating: "a", count: 64)) != nil)
+        #expect(ContentPayloadDigest(validatingHex: "short") == nil)
+        #expect(ContentPayloadDigest(validatingHex: String(repeating: "Z", count: 64)) == nil)
+        #expect(ContentPayloadDigest(validatingHex: String(repeating: "A", count: 64)) == nil)
+        #expect(GrantFingerprint(validatingHex: String(repeating: "0", count: 64)) != nil)
+        #expect(GrantFingerprint(validatingHex: "xyz") == nil)
+        #expect(isLowercaseHex64("xyz") == false)
+    }
+
+    @Test func digestDecodeRejectsNonHex() throws {
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(ContentPayloadDigest.self, from: Data("\"short\"".utf8))
+        }
+        let upper = "\"\(String(repeating: "A", count: 64))\""
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(GrantFingerprint.self, from: Data(upper.utf8))
+        }
+        // Opaque domains stay total: prefixed ceremony keys must decode.
+        let codeHash = try JSONDecoder().decode(CodeHash.self, from: Data("\"pending:anything\"".utf8))
+        #expect(codeHash.rawValue == "pending:anything")
+    }
+
+    @Test func payloadBindingRoundTripsCodable() throws {
+        let bindings: [PayloadBinding] = [
+            .unbound,
+            .salted(SaltedPayloadDigest(rawValue: "salted")),
+            .content(ContentPayloadDigest(rawValue: String(repeating: "c", count: 64))),
+        ]
+        for binding in bindings {
+            let decoded = try JSONDecoder().decode(
+                PayloadBinding.self,
+                from: try JSONEncoder().encode(binding)
+            )
+            #expect(decoded == binding)
+        }
+        // A both-set wire shape fails closed at decode.
+        let both = #"{"salted":"s","content":"\#(String(repeating: "c", count: 64))"}"#
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(PayloadBinding.self, from: Data(both.utf8))
+        }
     }
 }
 

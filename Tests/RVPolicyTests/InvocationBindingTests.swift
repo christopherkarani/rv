@@ -16,7 +16,7 @@ struct InvocationBindingTests {
     @Test func grantFingerprintIsDeterministic() {
         let first = grantFingerprint(Self.view, invocationPrefix: ["sudo"])
         #expect(first == grantFingerprint(Self.view, invocationPrefix: ["sudo"]))
-        #expect(first.count == 64)
+        #expect(first.rawValue.count == 64)
     }
 
     @Test func grantFingerprintSeparatesErasedVariants() {
@@ -88,7 +88,7 @@ struct InvocationBindingTests {
 
     // MARK: - Allowlist
 
-    private static func entry(invocationDigest: String?) -> AllowlistEntry {
+    private static func entry(invocationDigest: ContentPayloadDigest?) -> AllowlistEntry {
         AllowlistEntry(
             selector: .exactCommand(Self.view),
             reason: "test",

@@ -21,7 +21,7 @@ struct AllowOncePayloadDigestCLITests {
             maskedSegments: ["aaa"]
         )
         let reviewed = try #require(await store.validatePending(code: code.rawValue, now: now))
-        #expect(reviewed.payloadDigest == maskedPayloadContentDigest(["aaa"]))
+        #expect(reviewed.payloadDigest == maskedPayloadContentDigest(["aaa"]).rawValue)
         #expect(AllowOnceCLI.redemptionUnchanged(before: reviewed, after: reviewed))
 
         var swapped = reviewed

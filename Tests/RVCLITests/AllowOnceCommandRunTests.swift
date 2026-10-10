@@ -155,9 +155,9 @@ struct AllowOnceCommandRunTests {
             Issue.record("redeem must attest exactly once")
             return
         }
-        #expect(params.fingerprint == expected.fingerprint)
+        #expect(params.fingerprint.rawValue == expected.fingerprint)
         #expect(params.cwd == wd("/tmp/a"))
-        #expect(params.codeHash == sha256Hex(code.rawValue.lowercased()))
+        #expect(params.codeHash.rawValue == sha256Hex(code.rawValue.lowercased()))
 
         await #expect(throws: AllowOnceError.alreadySpent) {
             try await withCLIProcess(ownerAuthOutcome: .authenticated) {

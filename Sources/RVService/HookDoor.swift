@@ -31,7 +31,7 @@ public struct HookDoor: Sendable {
         // same-view different-payload asks mint separate waits. File
         // asks carry no shell payload; their fingerprint already covers
         // the action exactly.
-        let payloadDigest: String?
+        let payloadDigest: ContentPayloadDigest?
         if case .shell(_, let command, _, _) = request {
             payloadDigest = maskedPayloadContentDigest(Normalize.maskedSegments(of: command))
         } else {

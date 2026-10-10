@@ -17,26 +17,27 @@ import RVDomain
 /// same-user-readable file). Spend matches the same digest.
 public struct AttestTTYRedemptionParams: Sendable, Equatable, Codable {
     /// Grant fingerprint (`commandFingerprint` row field, B1-folded) of
-    /// the reviewed pending row.
-    public var fingerprint: String
+    /// the reviewed pending row. Decode rejects non-64-hex bytes.
+    public var fingerprint: GrantFingerprint
     public var cwd: WorkingDirectory
     /// sha256 hex of the redeemed unlock code. Dedupe key only; the code
     /// itself never crosses IPC.
-    public var codeHash: String
+    public var codeHash: CodeHash
     public var clientSemver: String
     /// M-07 content digest of the reviewed row's masked payload, when the
     /// row carried one. A digest only — exact segments never cross IPC.
     /// Nil (legacy rows and old clients) plants unbound, which fails
     /// closed on masked spends. Optional for wire compatibility: older
-    /// clients omit the key and decode to nil.
-    public var payloadDigest: String?
+    /// clients omit the key and decode to nil. Decode rejects
+    /// non-64-hex bytes.
+    public var payloadDigest: ContentPayloadDigest?
 
     public init(
-        fingerprint: String,
+        fingerprint: GrantFingerprint,
         cwd: WorkingDirectory,
-        codeHash: String,
+        codeHash: CodeHash,
         clientSemver: String,
-        payloadDigest: String? = nil
+        payloadDigest: ContentPayloadDigest? = nil
     ) {
         self.fingerprint = fingerprint
         self.cwd = cwd

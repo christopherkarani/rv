@@ -157,14 +157,14 @@ enum AllowOnceCLI {
             throw AllowOnceError.redemptionChanged
         }
         let attested = await service.attestTTYRedemption(AttestTTYRedemptionParams(
-            fingerprint: rechecked.fingerprint,
+            fingerprint: GrantFingerprint(rawValue: rechecked.fingerprint),
             cwd: rechecked.row.cwd,
-            codeHash: sha256Hex(normalized),
+            codeHash: CodeHash(rawValue: sha256Hex(normalized)),
             clientSemver: ProtocolVersion.serviceSemver,
             // M-07: the rechecked row's payload digest binds the planted
             // grant to the reviewed hidden payload (digest only — exact
             // segments never cross IPC). Nil rows plant unbound.
-            payloadDigest: rechecked.payloadDigest
+            payloadDigest: rechecked.payloadDigest.map(ContentPayloadDigest.init(rawValue:))
         ))
         let reply: AttestTTYRedemptionReply
         switch attested {

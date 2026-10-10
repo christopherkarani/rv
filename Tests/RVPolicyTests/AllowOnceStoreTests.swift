@@ -699,8 +699,8 @@ private func seedRows(store: AllowOnceStore, count: Int, now: Date) throws {
         AllowOnceRecord(
             schemaVersion: 1,
             lifecycle: .pending,
-            codeHash: "seed-hash-\(index)",
-            commandFingerprint: "seed-fp-\(index)",
+            codeHash: CodeHash(rawValue: "seed-hash-\(index)"),
+            commandFingerprint: GrantFingerprint(rawValue: String(format: "%064x", index)),
             commandRedacted: "seed-\(index)",
             cwd: wd("/tmp/a"),
             ruleID: nil,

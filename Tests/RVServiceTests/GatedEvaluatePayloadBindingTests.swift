@@ -92,7 +92,7 @@ struct GatedEvaluatePayloadBindingTests {
                     invocationPrefix: Normalize.invocationPrefix(of: Self.payloadA)
                 ),
                 cwd: wd("/tmp/ws"),
-                codeHash: "m7-e2e-tty",
+                codeHash: CodeHash(rawValue: "m7-e2e-tty"),
                 now: Self.now
             ) == .planted
         )
