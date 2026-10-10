@@ -49,7 +49,8 @@ public struct PiStoreAdapter: SessionStoreAdapter {
                 ?? ScanTimestamp.coerce(message["timestamp"], allowEpoch: true, requirePositive: false)
             for item in content {
                 guard item["type"]?.string == "toolCall",
-                      item["name"]?.string == "bash",
+                      let name = item["name"]?.string,
+                      PiToolName(wireValue: name).looseMatch == .shell,
                       let arguments = item["arguments"], arguments.asObject != nil,
                       let command = arguments["command"]?.string,
                       command.isEmpty == false

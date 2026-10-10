@@ -7,17 +7,10 @@ import RVDomain
 public struct CodexStoreAdapter: SessionStoreAdapter {
     public var host: ScanHostID { .codex }
 
-    private static let shellTools: Set<String> = [
-        "Bash",
-        "bash",
-        "shell",
-        "local_shell",
-    ]
-
     private static let profile = ScanJSONLProfile(
-        sessionKeys: ["session_id", "sessionId"],
-        recurseSessionKeys: ["payload"],
-        timestampKeys: ["timestamp", "ts"],
+        sessionKeys: CodexWireKeys.sessionKeys,
+        recurseSessionKeys: CodexWireKeys.recurseSessionKeys,
+        timestampKeys: CodexWireKeys.timestampKeys,
         allowEpochTimestamp: true,
         commands: Self.commands(in:)
     )
@@ -60,9 +53,10 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
 
     private static func hookCommand(in value: JSONValue) -> String? {
         let event = value["hook_event_name"]?.string ?? value["hookEventName"]?.string
-        guard event == nil || event == "PreToolUse" else { return nil }
+        let admitted = event.map { CodexEventName(wireValue: $0).looseMatch } ?? true
+        guard admitted else { return nil }
         let name = value["tool_name"]?.string ?? value["toolName"]?.string
-        guard let name, shellTools.contains(name) else { return nil }
+        guard let name, CodexToolName(wireValue: name).looseMatch == .shell else { return nil }
         return commandText(in: value["tool_input"] ?? value["toolInput"])
     }
 
@@ -70,7 +64,7 @@ public struct CodexStoreAdapter: SessionStoreAdapter {
         let type = value["type"]?.string
         if type == "function_call" || type == "tool_use" {
             let name = value["name"]?.string ?? value["toolName"]?.string
-            guard let name, shellTools.contains(name) else { return nil }
+            guard let name, CodexToolName(wireValue: name).looseMatch == .shell else { return nil }
             return commandText(in: value["arguments"] ?? value["input"] ?? value["tool_input"])
         }
         if type == "exec_command_begin" || type == "exec_command" {

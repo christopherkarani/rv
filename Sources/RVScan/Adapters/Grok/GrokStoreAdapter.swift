@@ -7,12 +7,6 @@ import RVDomain
 public struct GrokStoreAdapter: SessionStoreAdapter {
     public var host: ScanHostID { .grok }
 
-    private static let shellTools: Set<String> = [
-        "run_terminal_command",
-        "run_terminal_cmd",
-        "Bash",
-    ]
-
     public init() {}
 
     public func roots(home: ScanHome) -> [URL] {
@@ -40,7 +34,7 @@ public struct GrokStoreAdapter: SessionStoreAdapter {
             }
             for call in toolCalls {
                 guard let name = call["name"]?.string,
-                      Self.shellTools.contains(name),
+                      GrokToolName(wireValue: name).looseMatch == .shell,
                       let command = Self.command(fromArguments: call["arguments"]),
                       command.isEmpty == false
                 else {
