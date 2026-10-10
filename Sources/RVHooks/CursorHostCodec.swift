@@ -115,26 +115,29 @@ private enum CursorEventClass {
 }
 
 private func classify(_ envelope: CursorEnvelope) -> CursorEventClass {
-    let event = envelope.hookEventName ?? ""
-    if event == "beforeShellExecution" || event.isEmpty {
+    guard let eventName = envelope.hookEventName, eventName.isEmpty == false else {
         return .shell
     }
-    if event == "preToolUse" {
-        let tool = envelope.toolName ?? ""
-        if tool == "Shell" || tool == "Bash" {
-            return .shell
-        }
-        if FileToolKind(toolName: tool) != nil {
-            return .file
-        }
+    let event = CursorEventName(wireValue: eventName)
+    if event == .beforeShellExecution {
+        return .shell
+    }
+    guard event == .preToolUse else {
         return .foreign
     }
-    return .foreign
+    switch CursorToolName(wireValue: envelope.toolName ?? "").strictMatch {
+    case .shell:
+        return .shell
+    case .file:
+        return .file
+    case .foreign:
+        return .foreign
+    }
 }
 
 private func shellCommand(in envelope: CursorEnvelope) -> String? {
-    let event = envelope.hookEventName ?? ""
-    if event == "preToolUse" {
+    if let eventName = envelope.hookEventName,
+       CursorEventName(wireValue: eventName) == .preToolUse {
         return firstNonEmpty(envelope.toolInput?.command)
     }
     return firstNonEmpty(envelope.command, envelope.toolInput?.command)
@@ -180,13 +183,4 @@ private struct CursorToolInput: Decodable {
         case targetFile = "target_file"
         case target
     }
-}
-
-private func firstNonEmpty(_ values: String?...) -> String? {
-    for value in values {
-        if let value, value.isEmpty == false {
-            return value
-        }
-    }
-    return nil
 }

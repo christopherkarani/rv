@@ -16,7 +16,9 @@ public struct PiHostCodec: HostCodec {
         else {
             return .malformed(.unreadable)
         }
-        guard envelope.toolName == "bash" else {
+        guard let toolName = envelope.toolName,
+              PiToolName(wireValue: toolName).strictMatch == .shell
+        else {
             return .foreign
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
@@ -43,13 +45,4 @@ private struct PiEnvelope: Decodable {
 
 private struct PiInput: Decodable {
     var command: String?
-}
-
-private func firstNonEmpty(_ values: String?...) -> String? {
-    for value in values {
-        if let value, value.isEmpty == false {
-            return value
-        }
-    }
-    return nil
 }

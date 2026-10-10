@@ -16,7 +16,9 @@ public struct OpenCodeHostCodec: HostCodec {
         else {
             return .malformed(.unreadable)
         }
-        guard let tool = envelope.tool, isOpenCodeShellTool(tool) else {
+        guard let tool = envelope.tool,
+              OpenCodeToolName(wireValue: tool).strictMatch == .shell
+        else {
             return .foreign
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
@@ -35,11 +37,6 @@ public struct OpenCodeHostCodec: HostCodec {
     }
 }
 
-/// Official agent tool id is `bash`. TUI `session.shell` is the same shell door.
-private func isOpenCodeShellTool(_ tool: String) -> Bool {
-    tool == "bash" || tool == "session.shell"
-}
-
 private struct OpenCodeEnvelope: Decodable {
     var tool: String?
     var args: OpenCodeArgs?
@@ -50,13 +47,4 @@ private struct OpenCodeEnvelope: Decodable {
 
 private struct OpenCodeArgs: Decodable {
     var command: String?
-}
-
-private func firstNonEmpty(_ values: String?...) -> String? {
-    for value in values {
-        if let value, value.isEmpty == false {
-            return value
-        }
-    }
-    return nil
 }
