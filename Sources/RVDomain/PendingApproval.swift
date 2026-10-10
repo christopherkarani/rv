@@ -237,7 +237,7 @@ public struct PendingApprovalRequest: Sendable, Equatable {
     /// M-07 content digest of the masked shell payload for shell asks, or
     /// nil for file asks and legacy callers. Part of the create dedupe
     /// key: same-view different-payload asks must not share a wait.
-    public var payloadDigest: String?
+    public var payloadDigest: ContentPayloadDigest?
 
     public init(
         id: ApprovalID,
@@ -248,7 +248,7 @@ public struct PendingApprovalRequest: Sendable, Equatable {
         timeoutPolicy: ApprovalTimeoutPolicy,
         ttl: TimeInterval = PendingApprovalRequest.defaultTTL,
         subject: ApprovalSubject? = nil,
-        payloadDigest: String? = nil
+        payloadDigest: ContentPayloadDigest? = nil
     ) {
         self.id = id
         self.subject = subject
@@ -277,7 +277,7 @@ public struct PendingApproval: Sendable, Equatable, Codable {
     public var state: PendingApprovalState
     /// M-07 content digest of the masked shell payload, or nil for file
     /// asks and historical rows. Part of the create dedupe key.
-    public var payloadDigest: String?
+    public var payloadDigest: ContentPayloadDigest?
 
     package init(
         id: ApprovalID,
@@ -290,7 +290,7 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         expiresAt: Date,
         state: PendingApprovalState,
         subject: ApprovalSubject? = nil,
-        payloadDigest: String? = nil
+        payloadDigest: ContentPayloadDigest? = nil
     ) {
         self.id = id
         self.subject = subject
@@ -369,7 +369,7 @@ public struct PendingApproval: Sendable, Equatable, Codable {
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         expiresAt = try container.decode(Date.self, forKey: .expiresAt)
         var state = try container.decode(PendingApprovalState.self, forKey: .state)
-        payloadDigest = try container.decodeIfPresent(String.self, forKey: .payloadDigest)
+        payloadDigest = try container.decodeIfPresent(ContentPayloadDigest.self, forKey: .payloadDigest)
         let legacyConsumedAt = try container.decodeIfPresent(Date.self, forKey: .consumedAt)
         if case .resolved(let resolution) = state, let consumedAt = legacyConsumedAt {
             state = .consumed(resolution, at: consumedAt)

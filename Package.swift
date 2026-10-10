@@ -11,6 +11,7 @@ let policyTargetDependencies: [Target.Dependency] = [
     "RVDomain",
     "RVFileStore",
     .product(name: "Crypto", package: "swift-crypto"),
+    .product(name: "OrderedCollections", package: "swift-collections"),
 ]
 // Official Linux tarball has no SQLite3 clang module. OpenCode talks system
 // libsqlite3 (no SPM package). Darwin keeps `import SQLite3`.
@@ -22,6 +23,7 @@ let extraPackageDependencies: [Package.Dependency] = []
 let policyTargetDependencies: [Target.Dependency] = [
     "RVDomain",
     "RVFileStore",
+    .product(name: "OrderedCollections", package: "swift-collections"),
 ]
 let scanLinkerSettings: [LinkerSetting] = []
 #endif

@@ -52,7 +52,7 @@ struct AllowOnceAuthorityRegressionTests {
         let view = MatchingView("git reset --hard")
         try plantForgedGrantedRow(
             directory: root,
-            fingerprint: grantFingerprint(view, invocationPrefix: []),
+            fingerprint: grantFingerprint(view, invocationPrefix: []).rawValue,
             cwd: "/tmp/ws"
         )
         let store = AllowOnceStore(baseDirectory: root)

@@ -17,13 +17,13 @@ import RVDomain
 ///
 /// Only digests are stored or transmitted. Exact segments stay in-process at
 /// the mint/spend boundary that already holds the exact command text.
-public func maskedPayloadContentDigest(_ segments: [String]) -> String {
-    RVDigest.sha256Hex(maskedPayloadJoinedBytes(segments))
+public func maskedPayloadContentDigest(_ segments: [String]) -> ContentPayloadDigest {
+    ContentPayloadDigest(rawValue: RVDigest.sha256Hex(maskedPayloadJoinedBytes(segments)))
 }
 
 /// `salt || NUL-joined segments` digest for one ephemeral table.
-func maskedPayloadSaltedDigest(_ segments: [String], salt: [UInt8]) -> String {
-    RVDigest.sha256Hex(salt + maskedPayloadJoinedBytes(segments))
+func maskedPayloadSaltedDigest(_ segments: [String], salt: [UInt8]) -> SaltedPayloadDigest {
+    SaltedPayloadDigest(rawValue: RVDigest.sha256Hex(salt + maskedPayloadJoinedBytes(segments)))
 }
 
 /// NUL-joins segment bytes. Exec argv cannot contain NUL, so the join is

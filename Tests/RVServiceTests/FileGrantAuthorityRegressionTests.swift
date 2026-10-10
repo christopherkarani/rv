@@ -38,7 +38,7 @@ struct FileGrantAuthorityRegressionTests {
         let view = MatchingView("git reset --hard")
         try plantForgedGrantedRow(
             directory: directory,
-            fingerprint: grantFingerprint(view, invocationPrefix: []),
+            fingerprint: grantFingerprint(view, invocationPrefix: []).rawValue,
             cwd: "/tmp/ws"
         )
         let world = LiveEvaluateWorld(

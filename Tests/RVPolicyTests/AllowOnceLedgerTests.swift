@@ -26,11 +26,11 @@ struct AllowOnceLedgerTests {
             Issue.record("same command+cwd must reuse the live pending")
             return
         }
-        #expect(records.map(\.codeHash) == ["spent", "live"])
+        #expect(records.map(\.codeHash.rawValue) == ["spent", "live"])
         #expect(records.first?.kind == .consumed)
         #expect(records.last?.kind == .pending)
-        #expect(records.last?.codeHash == "live")
-        #expect(records.last?.commandFingerprint == "fp")
+        #expect(records.last?.codeHash.rawValue == "live")
+        #expect(records.last?.commandFingerprint.rawValue == "fp")
         #expect(records.last?.cwd == wd("/tmp/ws"))
     }
 
@@ -50,8 +50,8 @@ struct AllowOnceLedgerTests {
             Issue.record("a different command must mint a new pending")
             return
         }
-        #expect(records.map(\.codeHash) == ["live", "fresh"])
-        #expect(records.last?.commandFingerprint == "other-fp")
+        #expect(records.map(\.codeHash.rawValue) == ["live", "fresh"])
+        #expect(records.last?.commandFingerprint.rawValue == "other-fp")
         #expect(records.last?.createdAt == Self.epoch)
         #expect(records.last?.expiresAt == Self.epoch.addingTimeInterval(3600))
     }
@@ -78,8 +78,8 @@ struct AllowOnceLedgerTests {
             Issue.record("a different payload must mint a new pending")
             return
         }
-        #expect(records.map(\.codeHash) == ["live", "fresh"])
-        #expect(records.last?.payloadDigest == "digest-b")
+        #expect(records.map(\.codeHash.rawValue) == ["live", "fresh"])
+        #expect(records.last?.payloadDigest?.rawValue == "digest-b")
     }
 
     @Test func mintSameViewSamePayloadReuses() throws {
@@ -102,7 +102,7 @@ struct AllowOnceLedgerTests {
             Issue.record("an identical retry must reuse the live pending")
             return
         }
-        #expect(records.map(\.codeHash) == ["live"])
+        #expect(records.map(\.codeHash.rawValue) == ["live"])
     }
 
     @Test func mintLegacyNilDigestReusesOnlyNil() throws {
@@ -179,7 +179,7 @@ struct AllowOnceLedgerTests {
             return
         }
         #expect(records.map(\.kind) == [.pending])
-        #expect(records.map(\.codeHash) == ["dup"])
+        #expect(records.map(\.codeHash.rawValue) == ["dup"])
         #expect(records.first?.expiresAt == Self.epoch.addingTimeInterval(3600))
     }
 
@@ -189,7 +189,7 @@ struct AllowOnceLedgerTests {
         let staleGranted = Self.record(kind: .granted, hash: "g3", expiresAt: Self.epoch.addingTimeInterval(-1))
         switch try AllowOnceLedger.redeem(records: [target, stalePending, staleGranted], codeHash: "hit", now: Self.epoch) {
         case let .granted(records, row):
-            #expect(records.map(\.codeHash) == ["hit"])
+            #expect(records.map(\.codeHash.rawValue) == ["hit"])
             #expect(records.map(\.kind) == [.granted])
             #expect(row == AllowOnceListRow(
                 kind: .granted,
@@ -209,7 +209,7 @@ struct AllowOnceLedgerTests {
         let live = Self.record(kind: .pending, hash: "new", expiresAt: Self.epoch.addingTimeInterval(60))
         switch try AllowOnceLedger.redeem(records: [stale, live], codeHash: "old", now: Self.epoch) {
         case let .expired(records):
-            #expect(records.map(\.codeHash) == ["new"])
+            #expect(records.map(\.codeHash.rawValue) == ["new"])
         case .granted:
             Issue.record("expired pending must not redeem")
         }
@@ -225,7 +225,7 @@ struct AllowOnceLedgerTests {
             now: Self.epoch
         ) {
         case let .expired(records):
-            #expect(records.map(\.codeHash) == ["g", "p2"])
+            #expect(records.map(\.codeHash.rawValue) == ["g", "p2"])
         case .granted:
             Issue.record("expired pending must not redeem")
         }
@@ -310,7 +310,7 @@ struct AllowOnceLedgerTests {
             Issue.record("exact-now mint over an expired row must append")
             return
         }
-        #expect(fresh.map(\.codeHash) == ["p"])
+        #expect(fresh.map(\.codeHash.rawValue) == ["p"])
         // No reuse: the same-command row is expired, so a fresh row mints.
         let second = try AllowOnceLedger.mint(
             records: [pending],
@@ -326,7 +326,7 @@ struct AllowOnceLedgerTests {
             Issue.record("exact-now pending for the same command must not be reused")
             return
         }
-        #expect(records.map(\.codeHash) == ["fresh"])
+        #expect(records.map(\.codeHash.rawValue) == ["fresh"])
         switch try AllowOnceLedger.redeem(records: [pending], codeHash: "p", now: Self.epoch) {
         case .expired(let expired):
             #expect(expired.isEmpty)
@@ -351,19 +351,19 @@ struct AllowOnceLedgerTests {
             records: [freshConsumed, staleConsumed, liveGranted],
             now: Self.epoch
         )
-        #expect(out.map(\.codeHash) == ["keep"])
+        #expect(out.map(\.codeHash.rawValue) == ["keep"])
     }
 
     @Test func cappedPassesThroughUnderTheCap() {
         let rows = (0..<4).map { Self.stampedRecord(hash: "h\($0)", createdAt: Self.epoch.addingTimeInterval(Double($0))) }
         let out = AllowOnceLedger.capped(records: rows, maxRows: 4)
-        #expect(out.map(\.codeHash) == ["h0", "h1", "h2", "h3"])
+        #expect(out.map(\.codeHash.rawValue) == ["h0", "h1", "h2", "h3"])
     }
 
     @Test func cappedKeepsNewestRowsInOrder() {
         let rows = (0..<6).map { Self.stampedRecord(hash: "h\($0)", createdAt: Self.epoch.addingTimeInterval(Double($0))) }
         let out = AllowOnceLedger.capped(records: rows, maxRows: 4)
-        #expect(out.map(\.codeHash) == ["h2", "h3", "h4", "h5"])
+        #expect(out.map(\.codeHash.rawValue) == ["h2", "h3", "h4", "h5"])
     }
 }
 
@@ -372,8 +372,8 @@ private extension AllowOnceLedgerTests {
         AllowOnceRecord(
             schemaVersion: 1,
             lifecycle: .pending,
-            codeHash: hash,
-            commandFingerprint: "fp-\(hash)",
+            codeHash: CodeHash(rawValue: hash),
+            commandFingerprint: GrantFingerprint(rawValue: "fp-\(hash)"),
             commandRedacted: "git …",
             cwd: wd("/tmp/ws"),
             ruleID: nil,
@@ -401,14 +401,14 @@ private extension AllowOnceLedgerTests {
         return AllowOnceRecord(
             schemaVersion: 1,
             lifecycle: lifecycle,
-            codeHash: hash,
-            commandFingerprint: fingerprint,
+            codeHash: CodeHash(rawValue: hash),
+            commandFingerprint: GrantFingerprint(rawValue: fingerprint),
             commandRedacted: "git …",
             cwd: wd("/tmp/ws"),
             ruleID: nil,
             createdAt: createdAt,
             expiresAt: expiresAt,
-            payloadDigest: payloadDigest
+            payloadDigest: payloadDigest.map(ContentPayloadDigest.init(rawValue:))
         )
     }
 }

@@ -62,7 +62,7 @@ public actor AllowOnceStore {
         let fingerprint = grantFingerprint(view, invocationPrefix: invocationPrefix)
         let payloadDigest = maskedSegments.map(maskedPayloadContentDigest)
         let cacheKey = UnlockCacheKey(
-            fingerprint: fingerprint, cwd: cwd.rawValue, payloadDigest: payloadDigest
+            fingerprint: fingerprint.rawValue, cwd: cwd.rawValue, payloadDigest: payloadDigest?.rawValue
         )
         var lastError: AllowOnceError = .collision
         for _ in 0..<8 {
@@ -73,13 +73,13 @@ public actor AllowOnceStore {
                     switch try AllowOnceLedger.mint(
                         records: loadRecords(),
                         codeHash: hash,
-                        fingerprint: fingerprint,
+                        fingerprint: fingerprint.rawValue,
                         redacted: redactCommand(view),
                         cwd: cwd,
                         ruleID: ruleID,
                         now: now,
                         ttl: ttl,
-                        payloadDigest: payloadDigest,
+                        payloadDigest: payloadDigest?.rawValue,
                         invocationDisplay: invocationDisplay
                     ) {
                     case let .reused(records):
@@ -125,7 +125,7 @@ public actor AllowOnceStore {
         let fingerprint = grantFingerprint(view, invocationPrefix: invocationPrefix)
         let payloadDigest = maskedSegments.map(maskedPayloadContentDigest)
         let cacheKey = UnlockCacheKey(
-            fingerprint: fingerprint, cwd: cwd.rawValue, payloadDigest: payloadDigest
+            fingerprint: fingerprint.rawValue, cwd: cwd.rawValue, payloadDigest: payloadDigest?.rawValue
         )
         for _ in 0..<8 {
             let code: AllowOnceUnlockCode
@@ -140,13 +140,13 @@ public actor AllowOnceStore {
                     switch try AllowOnceLedger.mint(
                         records: loadRecords(),
                         codeHash: hash,
-                        fingerprint: fingerprint,
+                        fingerprint: fingerprint.rawValue,
                         redacted: redactCommand(view),
                         cwd: cwd,
                         ruleID: ruleID,
                         now: now,
                         ttl: ttl,
-                        payloadDigest: payloadDigest,
+                        payloadDigest: payloadDigest?.rawValue,
                         invocationDisplay: invocationDisplay
                     ) {
                     case let .reused(records):
@@ -227,7 +227,11 @@ public actor AllowOnceStore {
             AllowOnceLedger.pendingRow(in: loadRecords(), codeHash: hash, now: now)
         }).flatMap { record in
             AllowOnceLedger.rows(records: [record], now: now).first.map {
-                (row: $0, fingerprint: record.commandFingerprint, payloadDigest: record.payloadDigest)
+                (
+                    row: $0,
+                    fingerprint: record.commandFingerprint.rawValue,
+                    payloadDigest: record.payloadDigest?.rawValue
+                )
             }
         }
     }
@@ -251,7 +255,7 @@ public actor AllowOnceStore {
         let record = AllowOnceRecord(
             schemaVersion: 1,
             lifecycle: lifecycle,
-            codeHash: codeHash,
+            codeHash: CodeHash(rawValue: codeHash),
             commandFingerprint: grantFingerprint(matchingView, invocationPrefix: invocationPrefix),
             commandRedacted: redactCommand(matchingView),
             cwd: cwd,
@@ -323,9 +327,9 @@ public actor AllowOnceStore {
         for record in written {
             guard case .pending = record.lifecycle, record.expiresAt > now else { continue }
             liveKeys.insert(UnlockCacheKey(
-                fingerprint: record.commandFingerprint,
+                fingerprint: record.commandFingerprint.rawValue,
                 cwd: record.cwd.rawValue,
-                payloadDigest: record.payloadDigest
+                payloadDigest: record.payloadDigest?.rawValue
             ))
         }
         liveUnlockCodes = liveUnlockCodes.filter { liveKeys.contains($0.key) }

@@ -431,29 +431,23 @@ public actor ServiceRuntime {
     /// own). Double-attests report planted:false and create no second grant.
     private func attestTTYRedemption(_ params: AttestTTYRedemptionParams) async -> IPCResult {
         func denied() -> IPCResult { .error(.authorizationDenied) }
-        guard params.fingerprint.count == 64,
-            params.fingerprint.allSatisfy(\.isHexDigit),
-            params.fingerprint == params.fingerprint.lowercased()
-        else {
+        // Shape re-checks for in-process callers: wire bytes already
+        // passed validating decode, but a constructed value can carry
+        // any raw string. Same rule, same refusal as before.
+        guard GrantFingerprint(validatingHex: params.fingerprint.rawValue) != nil else {
             return denied()
         }
         // params.cwd decoded through WorkingDirectory.init(from:), which
         // already applies the validating initializer; undecodable paths
         // never reach dispatch.
-        guard params.codeHash.count == 64,
-            params.codeHash.allSatisfy(\.isHexDigit),
-            params.codeHash == params.codeHash.lowercased()
-        else {
+        guard isLowercaseHex64(params.codeHash.rawValue) else {
             return denied()
         }
         // M-07: the attested payload digest binds the planted grant. Shape
         // only — the daemon never sees exact text, so the genuine-CLI
         // ceremony (same trust as the fingerprint) vouches the value.
         if let digest = params.payloadDigest {
-            guard digest.count == 64,
-                digest.allSatisfy(\.isHexDigit),
-                digest == digest.lowercased()
-            else {
+            guard ContentPayloadDigest(validatingHex: digest.rawValue) != nil else {
                 return denied()
             }
         }
@@ -461,7 +455,7 @@ public actor ServiceRuntime {
         switch await grants.plant(
             fingerprint: params.fingerprint,
             cwd: params.cwd,
-            codeHash: "tty:\(params.codeHash)",
+            codeHash: CodeHash(rawValue: "tty:\(params.codeHash.rawValue)"),
             now: now,
             payloadContentDigest: params.payloadDigest
         ) {
