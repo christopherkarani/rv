@@ -535,6 +535,22 @@ struct SecretsProviderFactoryTests {
         }
     }
 
+    @Test func envProviderDefaultReadsLiveEnvironment() async throws {
+        // The default closure reads the live process environment: whatever
+        // is present resolves, and a surely-absent name fails closed.
+        let provider = EnvSecretsProvider()
+        #expect(provider.id == "env")
+        if let live = ProcessInfo.processInfo.environment.first(where: { $0.key.isEmpty == false }) {
+            let hit = try await provider.resolve(try SecretRef(provider: "env", item: live.key))
+            #expect(hit == .text(live.value))
+        }
+        await #expect(throws: SecretsError.notFound("env")) {
+            try await provider.resolve(
+                try SecretRef(provider: "env", item: "RV_E1F_DEFINITELY_ABSENT_VAR")
+            )
+        }
+    }
+
     // MARK: Broker wiring
 
     @Test func makeBrokerResolvesThroughFactoryProviders() async throws {

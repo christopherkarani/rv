@@ -307,6 +307,12 @@ final class RuntimeAdmissionSession: Sendable {
         var requestRead: Int32
         var responseWrite: Int32
         var httpToken: HTTPCancellation?
+        /// In-flight MCP invoke waiter, if any. Registered atomically with
+        /// its task's creation in `performMCP`; `finish()` takes and cancels
+        /// it so teardown never leaves an invoke running past the channel.
+        /// At most one per channel: production submits are serialized, and a
+        /// second concurrent submit fails closed to `.cancelled`.
+        var mcpWaiter: Task<Void, Never>?
         var stop = false
         /// Live registry that resolves the trusted principal context. Set
         /// together with the channel's instance binding; nil on legacy
@@ -690,31 +696,71 @@ final class RuntimeAdmissionSession: Sendable {
         }
         let done = DispatchSemaphore(value: 0)
         let box = Mutex<MCPPerformOutcome?>(nil)
-        let waiter = Task {
-            let outcome: MCPPerformOutcome
-            do {
-                let result = try await invoker.invoke(
-                    addressLiteral: dispatch.address,
-                    argumentsJSON: dispatch.argumentsJSON,
-                    session: session,
-                    ctx: ctx,
-                    options: mcp.options
-                )
-                outcome = MCPPerformOutcome(
-                    response: .mcp(MCPExecutionReceipt(
-                        address: dispatch.address,
-                        body: Data(result.body.utf8)
-                    )),
-                    authorization: .allowed,
-                    result: "mcp:succeeded",
-                    attempted: true
-                )
-            } catch {
-                outcome = Self.mcpFailureOutcome(error, causes: mcp.causes)
+        // Register the waiter atomically with its creation: `finish()` takes
+        // the same lock to cancel it, so a teardown either cancels this
+        // waiter or lands first and refuses the slot — no window leaks an
+        // uncancellable invoke, and no invoke starts on a stopped channel.
+        // Mirrors the HTTP arm's `beginHTTP` single-flight guard.
+        let waiter: Task<Void, Never>? = state.withLock { channel -> Task<Void, Never>? in
+            guard !channel.stop, channel.binding?.phase == .active, channel.mcpWaiter == nil else {
+                return nil
             }
-            box.withLock { $0 = outcome }
-            done.signal()
+            let task = Task<Void, Never> {
+                // A cancel that landed between registration and start still
+                // runs this body: recheck before touching the invoker so a
+                // torn-down channel never invokes.
+                guard Task.isCancelled == false else {
+                    box.withLock {
+                        $0 = MCPPerformOutcome(
+                            response: .mcpFailed(.cancelled),
+                            authorization: .executorFailed,
+                            result: "cancelled",
+                            attempted: false
+                        )
+                    }
+                    done.signal()
+                    return
+                }
+                let outcome: MCPPerformOutcome
+                do {
+                    let result = try await invoker.invoke(
+                        addressLiteral: dispatch.address,
+                        argumentsJSON: dispatch.argumentsJSON,
+                        session: session,
+                        ctx: ctx,
+                        options: mcp.options,
+                        idempotencyKey: dispatch.idempotencyKey
+                    )
+                    outcome = MCPPerformOutcome(
+                        response: .mcp(MCPExecutionReceipt(
+                            address: dispatch.address,
+                            body: Data(result.body.utf8)
+                        )),
+                        authorization: .allowed,
+                        result: "mcp:succeeded",
+                        attempted: true
+                    )
+                } catch {
+                    outcome = Self.mcpFailureOutcome(error, causes: mcp.causes)
+                }
+                box.withLock { $0 = outcome }
+                done.signal()
+            }
+            channel.mcpWaiter = task
+            return task
         }
+        guard let waiter else {
+            // Stopped, finished, or another invoke already in flight on this
+            // channel (production submits are serialized; only concurrent
+            // misuse lands here). Fail closed without invoking.
+            return MCPPerformOutcome(
+                response: .mcpFailed(.cancelled),
+                authorization: .executorFailed,
+                result: "cancelled",
+                attempted: false
+            )
+        }
+        defer { state.withLock { $0.mcpWaiter = nil } }
         if done.wait(timeout: .now() + mcp.bridgeTimeoutSeconds) == .timedOut {
             waiter.cancel()
             return MCPPerformOutcome(
@@ -1280,19 +1326,28 @@ final class RuntimeAdmissionSession: Sendable {
     }
 
     func finish() {
-        let token = state.withLock { channel -> HTTPCancellation? in
+        let (token, mcpWaiter) = state.withLock { channel -> (HTTPCancellation?, Task<Void, Never>?) in
             channel.stop = true
             if var binding = channel.binding {
                 binding.phase = .finished
                 channel.binding = binding
             }
-            return channel.httpToken
+            let waiter = channel.mcpWaiter
+            channel.mcpWaiter = nil
+            return (channel.httpToken, waiter)
         }
         // Parked ASKs die with the channel: waiters are cancelled and the
         // service-side approvals are best-effort cancelled. Nothing is
         // answered; the file descriptors close below.
         teardownParks()
         token?.cancel()
+        // An in-flight MCP invoke observes this cancel at its next check
+        // (elicitation poll, transport roundtrip) and answers `.cancelled`
+        // instead of invoking past teardown; the waiter still releases its
+        // blocked submit through the semaphore. No bounded wait here: unlike
+        // the HTTP arm's seconds-long budget, an invoke may span the
+        // 15-minute elicitation TTL, and teardown must not stall on it.
+        mcpWaiter?.cancel()
         let deadline = Date().addingTimeInterval(
             TimeInterval(HTTPEgressLimits.requestTimeoutMilliseconds) / 1_000 + 2
         )

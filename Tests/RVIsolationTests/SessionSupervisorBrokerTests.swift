@@ -243,6 +243,25 @@ struct SessionSupervisorBrokerTests {
         #expect(error == .resourceStagingFailed("credential 'cred'"))
     }
 
+    @Test func nilAuditDirectorySwallowsDropsSilently() throws {
+        // Values omit the ref, so the entry drops as .unresolved even
+        // though the batch succeeds. The nil-directory no-op audit runs
+        // instead of the ledger writer: nothing is written anywhere.
+        let entry = spawnBrokerEntry(item: "github", env: "SYNTHETIC_DROPPED")
+        let manifest = RuntimeResourceManifest(spawnBrokerProfile(secrets: [entry]))
+        defer { manifest.remove() }
+        let result = stageResourcesForSpawn(
+            manifest, agentName: nil,
+            brokerValues: [:],
+            brokerAuditDirectory: nil
+        )
+        guard case .success(let payload) = result else {
+            Issue.record("drops must not fail staging, got \(result)")
+            return
+        }
+        #expect(payload.isEmpty)
+    }
+
     @Test func payloadMergesIntoSpawnedEnvironment() throws {
         // The seam the spawn body composes: the captured payload feeds
         // `broker:`, landing in the spawned environment verbatim.
@@ -636,7 +655,7 @@ struct SessionSupervisorBrokerAuditTests {
         )
     }
 
-    @Test func auditRowsShareOneExecution() {
+    @Test func auditRowsShareOneExecution() throws {
         let profile = spawnBrokerProfile(secrets: [
             spawnBrokerEntry(item: "a", env: "SYNTHETIC_DROP_A"),
             spawnBrokerEntry(item: "b", env: "SYNTHETIC_DROP_B"),
@@ -650,18 +669,22 @@ struct SessionSupervisorBrokerAuditTests {
             drops, profile: profile, agentTag: "opencode", now: now
         )
         #expect(records.count == 2)
-        #expect(records[0].executionID == records[1].executionID)
-        #expect(records[0].correlationID == records[1].correlationID)
+        let first = try #require(records.first)
+        let second = try #require(records.dropFirst().first)
+        #expect(first.executionID == second.executionID)
+        #expect(first.correlationID == second.correlationID)
         #expect(records.allSatisfy { $0.timestamp == now })
         #expect(records.allSatisfy { $0.principal.definitionID == "opencode" })
         #expect(records.allSatisfy { $0.principal.ownerUID == geteuid() })
         #expect(records.allSatisfy { $0.kind == .secretResolve })
         #expect(records.allSatisfy { $0.decision == .denied })
+        let firstDrop = try #require(drops.first)
         let legacy = brokerStagingAuditRecords(
-            [drops[0]], profile: profile, agentTag: nil, now: now
+            [firstDrop], profile: profile, agentTag: nil, now: now
         )
         #expect(legacy.count == 1)
-        #expect(legacy[0].principal.definitionID == "unknown")
+        let legacyRow = try #require(legacy.first)
+        #expect(legacyRow.principal.definitionID == "unknown")
     }
 
     @Test func causeFormatPinsReasonAndEnv() {

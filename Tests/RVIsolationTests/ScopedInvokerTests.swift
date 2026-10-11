@@ -1593,7 +1593,15 @@ private func makeInvokerAuditEvent() -> SecretsAuditRecord {
         let action = MCPDispatchAction.build(address: address, arguments: MCPToolArguments(json: "{\"q\":1}"), idempotencyKey: "key-1")
         let text = try #require(MCPDispatchCodec.encode(action))
         #expect(text.contains("\"version\":2"))
-        #expect(try MCPDispatchCodec.decode(text) == action)
+        // The v2 document carries no arguments member by design (E1-E):
+        // the doc roundtrips address, digest, and key, while decode
+        // fills an empty arguments text for the digest-only action.
+        let decoded = try MCPDispatchCodec.decode(text)
+        #expect(decoded.address == action.address)
+        #expect(decoded.argsDigest == action.argsDigest)
+        #expect(decoded.idempotencyKey == action.idempotencyKey)
+        #expect(decoded.argumentsJSON == "")
+        #expect(action.argumentsJSON == "{\"q\":1}")
     }
 
     @Test func v1MigratesDeterministically() throws {

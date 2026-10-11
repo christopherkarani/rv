@@ -99,12 +99,13 @@ func verifyLiveCwdIdentity(
 /// Entries are complete `"name=value"` strings in spawn order (first
 /// spelling wins at lookup, so order is significant and preserved).
 /// Frozen at preparation from a host-environment snapshot plus retained
-/// productive/profile/egress facts; dispatch passes them verbatim and
-/// never re-resolves. Values are host-private: only `digestHex` (a
-/// non-secret immutable identity) ever leaves the retained object for
-/// descriptions. Identity launches stage no credentials, so no secret
-/// value can appear here; credential-bearing shapes are rejected before
-/// any snapshot exists.
+/// productive/profile/egress facts plus broker text pairs resolved at
+/// prepare time; dispatch passes them verbatim and never re-resolves.
+/// Values are host-private: only `digestHex` (a non-secret immutable
+/// identity) ever leaves the retained object for descriptions. Broker
+/// text values MAY appear here (frozen at prepare, injected verbatim at
+/// redemption); legacy credential-bearing shapes are rejected before any
+/// snapshot exists.
 struct WorkspaceLaunchEnvironmentSnapshot: Sendable, Equatable {
     /// Ordered `"name=value"` entries, frozen at preparation.
     let entries: [String]
@@ -207,8 +208,11 @@ struct PreparedWorkspaceLaunch: Sendable, Equatable {
     /// values, and CLI/caller-provided names are unrepresentable here.
     let hook: HookHost?
     let stagingAgent: DefinitionStagingTag?
-    // No keychain field exists: identity launches stage no credentials,
-    // so there is nothing to retain and no reader to consult.
+    // No keychain field exists: identity launches stage no legacy
+    // credentials, so there is nothing to retain and no reader to
+    // consult. Broker pairs need no field either: text values freeze
+    // into `environment.entries` at preparation and redemption injects
+    // them verbatim without re-resolving.
 
     /// Safe descriptive projection. Values that must stay host-private
     /// (environment entries, retained state) never appear here.
@@ -286,9 +290,16 @@ enum PreparedLaunchError: Error, Sendable, Equatable {
     /// carry nil (base fence). Anything else could execute grants the
     /// bound revision never attested.
     case resourceProfileMismatch
-    /// The selection stages credentials. Secrets integration is deferred;
-    /// such shapes cannot be prepared yet.
+    /// The selection stages legacy credentials (credential bindings,
+    /// profile credentials, or profile keychain entries). Broker-bound
+    /// `secrets` entries are admitted through the identity door instead.
     case credentialStagingNotSupported
+    /// Broker-backed secrets could not be frozen at preparation: the
+    /// prepare-time resolve failed, no caller context could resolve
+    /// admitted entries, or a staged value cannot freeze. The detail is
+    /// provider-only (provider ids from the broker's closed allowlist
+    /// plus fixed labels) — never item, field, or value.
+    case brokerSecretsUnavailable(String)
     /// Executable/argv failed `IsolatedCommand` validation.
     case invalidCommand
     /// Custom selection content does not hash to the authorized digest
@@ -585,6 +596,9 @@ func committedEffectiveProfile(
 /// entries, and no broker-bound entries. The legacy capability-only
 /// door admits only these selections; broker entries resolve
 /// exclusively through identity-required mediation, never here.
+/// Preparation admits broker entries through
+/// `isIdentityAdmissibleSelection` instead; this predicate stays the
+/// legacy door and never widens.
 func isCredentialFreeSelection(_ selection: ResolvedAgentLaunch) -> Bool {
     guard isIdentityAdmissibleSelection(selection) else {
         return false
@@ -621,6 +635,65 @@ func isIdentityAdmissibleSelection(_ selection: ResolvedAgentLaunch) -> Bool {
         }
     }
     return true
+}
+
+/// Freezes prepare-time staged broker pairs, refusing unfreezable ones.
+///
+/// Pure freeze map for the prepared broker door: preparation stages the
+/// resolved broker map into a throwaway home (the retained manifest
+/// stages at spawn instead — staging it here would fail that `mkdir`),
+/// and this maps that payload onto the pairs frozen into
+/// `prepared.environment.entries`. A pair freezes only when its backing
+/// value is provably `.text`. A `.filePath`-backed pair cannot freeze:
+/// its staged path points into the throwaway home preparation discards,
+/// and the redemption spawn stages with nil broker values so it stages
+/// no broker files — redemption could never inject it. Refusing the
+/// prepare beats freezing a dangling path or silently dropping a
+/// requested secret. Pairs naming no profile entry or no resolved value
+/// likewise refuse: staging only emits profile entries with resolved
+/// values, so anything else is an integrity anomaly.
+///
+/// Duplicate env names resolve to their first profile entry, mirroring
+/// the first-spelling-wins injection downstream: the pair that would
+/// inject is attributed to the entry that produced it, so a file-backed
+/// first spelling refuses while a text first spelling freezes with its
+/// shadowed siblings dropped. This attribution requires an
+/// entry-ordered payload — one pair per admitted entry, in profile
+/// order, without deduplication — exactly as `stage()` emits; the
+/// preparation call site passes that payload through unmodified.
+///
+/// Failure is provider-only: provider ids from the broker's closed
+/// allowlist plus fixed labels — never item, field, or value.
+func frozenPreparedBrokerPairs(
+    _ payload: [(name: String, value: String)],
+    profile: RuntimeResourceProfile,
+    values: [SecretRef: SecretValue]
+) -> Result<[(name: String, value: String)], PreparedLaunchError> {
+    var fileProviders: [String] = []
+    var unknown = false
+    for pair in payload {
+        guard let ref = profile.secrets.first(where: { $0.env == pair.name })?.ref,
+            let value = values[ref]
+        else {
+            unknown = true
+            continue
+        }
+        if case .filePath = value {
+            fileProviders.append(ref.provider)
+        }
+    }
+    guard fileProviders.isEmpty, unknown == false else {
+        let providers = Array(Set(fileProviders)).sorted()
+        guard providers.isEmpty == false else {
+            return .failure(.brokerSecretsUnavailable("broker staged values cannot freeze"))
+        }
+        return .failure(
+            .brokerSecretsUnavailable(
+                "broker file values from provider '\(providers.joined(separator: "', '"))' cannot freeze"
+            )
+        )
+    }
+    return .success(payload)
 }
 
 /// Maps spawn stdio to the closed intent IO vocabulary. `.inherit` has

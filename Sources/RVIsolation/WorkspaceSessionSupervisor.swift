@@ -456,21 +456,35 @@ final class WorkspaceSessionSupervisor: Sendable {
     ///
     /// Preparation resolves the effective working directory, compiles the
     /// containment profile, builds the resource manifest, resolves
-    /// productive-workspace facts, freezes the effective non-secret
-    /// environment, and builds the PR1 `WorkspaceLaunchIntent` from those
-    /// trusted resolved inputs. It never spawns a process (no workload and
-    /// no `git`: commit-identity seeding is disabled on this path), mints
-    /// no `AgentInstance`, issues no `RuntimeCapability`, opens no
-    /// admission authority, creates no PTY child, releases no credentials,
-    /// and mutates no policy. Observable host effects are confined to
-    /// filesystem reads plus idempotent RV-managed directory creation.
+    /// productive-workspace facts, resolves broker-backed `secrets`
+    /// entries at prepare time (E1-D freeze) and freezes the effective
+    /// environment — including those broker text pairs — and builds the
+    /// PR1 `WorkspaceLaunchIntent` from those trusted resolved inputs.
+    /// It never spawns a process (no workload and no `git`:
+    /// commit-identity seeding is disabled on this path), mints no
+    /// `AgentInstance`, issues no `RuntimeCapability`, opens no admission
+    /// authority, creates no PTY child, stages no legacy credentials, and
+    /// mutates no policy. Observable host effects are confined to
+    /// filesystem reads, the prepare-time broker resolve, plus idempotent
+    /// RV-managed directory creation.
     ///
-    /// Validation order is fixed: selection consistency, credential gate,
+    /// Broker selection mirrors the spawn path's F2 rule: only the
+    /// definition-derived staging tag admits entries, and the resolve
+    /// runs here — before the freeze — so dispatch executes exactly what
+    /// preparation froze and redemption never re-resolves. A nil caller
+    /// context with admittable `secrets` entries fails the prepare
+    /// closed: unlike the spawn path's legacy nil path (which ignores
+    /// `secrets`), a freeze must never silently omit secrets the intent
+    /// admits. Any prepare-time broker failure fails the prepare closed
+    /// with a provider-only cause.
+    ///
+    /// Validation order is fixed: selection consistency, credential gate
+    /// (identity door: legacy shapes refused, broker entries admitted),
     /// profile correspondence, command, custom executable measurement,
     /// IO mapping, cwd resolution, volume anchor, intent construction,
-    /// containment preparation, environment freeze, anchored cwd identity
-    /// capture (same resolution), then lifecycle check with atomic store
-    /// insert.
+    /// containment preparation, broker resolution and staging probe,
+    /// environment freeze, anchored cwd identity capture (same
+    /// resolution), then lifecycle check with atomic store insert.
     func prepareIdentityLaunch(
         selection: ResolvedAgentLaunch,
         arguments: [String],
@@ -480,7 +494,11 @@ final class WorkspaceSessionSupervisor: Sendable {
         requestID: UUID? = nil,
         hostEnvironment: [String: String]? = nil,
         now: Date = Date(),
-        timeToLive: TimeInterval = PreparedLaunchLimits.timeToLiveSeconds
+        timeToLive: TimeInterval = PreparedLaunchLimits.timeToLiveSeconds,
+        brokerCallerContext: AuthenticatedAgentContext? = nil,
+        brokerProviders: [any SecretsProvider]? = nil,
+        secretsConfigDirectory: URL? = nil,
+        brokerTimeoutSeconds: Double = 5
     ) -> Result<PreparedWorkspaceLaunch, PreparedLaunchError> {
         let kind: PreparedSelectionKind
         switch verifyPreparedSelection(selection) {
@@ -489,7 +507,7 @@ final class WorkspaceSessionSupervisor: Sendable {
         case .success(let verified):
             kind = verified
         }
-        guard isCredentialFreeSelection(selection) else {
+        guard isIdentityAdmissibleSelection(selection) else {
             return .failure(.credentialStagingNotSupported)
         }
         let effectiveProfile: RuntimeResourceProfile?
@@ -590,6 +608,74 @@ final class WorkspaceSessionSupervisor: Sendable {
         guard let productive = compiled.productive else {
             return .failure(.preparationFailed(.containedGuaranteesUnsupported))
         }
+        // E1-D freeze-at-prepare: broker-backed `secrets` entries resolve
+        // here, before the freeze, through the same mediated path as the
+        // spawn block (E1-C `prepareBrokerLaunchValues` over the E1-A
+        // factory, then the E1-B staging wrapper). The payload freezes
+        // into `environment.entries` via the `broker:` pairs below, so
+        // redemption injects exactly these pairs without re-resolving.
+        // Runs lock-free like the spawn block: provider IO can stall.
+        let stagingTag = DefinitionStagingTag(selection.resolved.definition)
+        var brokerPairs: [(name: String, value: String)] = []
+        if let resources = compiled.resources, resources.profile.secrets.isEmpty == false {
+            let preparation: BrokerLaunchPreparation
+            switch prepareBrokerLaunchValues(
+                resources: resources,
+                agent: stagingTag?.rawValue,
+                context: brokerCallerContext,
+                providers: brokerProviders,
+                configDirectory: secretsConfigDirectory,
+                registry: agentInstances,
+                timeoutSeconds: brokerTimeoutSeconds
+            ) {
+            case .success(let resolved):
+                preparation = resolved
+            case .failure(let failure):
+                return .failure(.brokerSecretsUnavailable(failure.detail))
+            }
+            if let values = preparation.values {
+                // Throwaway probe home: computes the exact payload the
+                // spawn-time stage would inject, without touching the
+                // retained manifest — whose private home the spawn-time
+                // stage creates, so staging it here would fail that
+                // `mkdir`. Drops audit through the same ledger wrapper
+                // as the spawn path (best-effort, never fails prepare).
+                // The probe runs the full stage, so profile writeTrees
+                // are created here idempotently exactly as the
+                // spawn-time stage would create them.
+                let probe = RuntimeResourceManifest(resources.profile)
+                defer { probe.remove() }
+                let payload: [(name: String, value: String)]
+                switch stageResourcesForSpawn(
+                    probe,
+                    agentName: stagingTag?.rawValue,
+                    brokerValues: values,
+                    brokerAuditDirectory: preparation.auditDirectory
+                ) {
+                case .success(let staged):
+                    payload = staged
+                case .failure(let error):
+                    return .failure(.preparationFailed(error))
+                }
+                switch frozenPreparedBrokerPairs(
+                    payload, profile: resources.profile, values: values
+                ) {
+                case .success(let frozen):
+                    brokerPairs = frozen
+                case .failure(let error):
+                    return .failure(error)
+                }
+            } else if RuntimeAdmissionGate.admittedBrokerEntries(
+                entries: resources.profile.secrets, agent: stagingTag?.rawValue
+            ).isEmpty == false {
+                // Nil caller context with admittable entries: E1-C skips
+                // resolution on its legacy nil path, but a freeze must
+                // never silently omit secrets the intent admits — refuse
+                // instead. Fully tag-filtered selections freeze empty
+                // (nothing is at stake, matching the spawn nil contract).
+                return .failure(.brokerSecretsUnavailable("broker identity required"))
+            }
+        }
         let frozenHost = hostEnvironment ?? ProcessInfo.processInfo.environment
         let entries = containedRuntimeEnvironment(
             workspace: resolved,
@@ -599,6 +685,7 @@ final class WorkspaceSessionSupervisor: Sendable {
             egressProxyPort: egressPort,
             hostEnvironment: frozenHost,
             keychain: [],
+            broker: brokerPairs,
             productive: productive
         )
         let environment = WorkspaceLaunchEnvironmentSnapshot(entries: entries)
@@ -636,7 +723,7 @@ final class WorkspaceSessionSupervisor: Sendable {
             launchRequest: compiled,
             egressProxyPort: egressPort,
             hook: selection.resolved.definition.hookHost,
-            stagingAgent: DefinitionStagingTag(selection.resolved.definition)
+            stagingAgent: stagingTag
         )
         enum InsertOutcome { case inserted, inactive, full }
         let outcome = state.withLock { state -> InsertOutcome in
@@ -697,10 +784,12 @@ final class WorkspaceSessionSupervisor: Sendable {
         guard fresh else {
             return .failure(.unknownPreparedLaunch)
         }
-        // Retained state must still be credential-free and must correspond
-        // to the bound intent: re-derive the digest from retained parts and
-        // require equality. Any drift fails closed.
-        guard isCredentialFreeSelection(prepared.selection),
+        // Retained state must still be identity-admissible (no legacy
+        // credential shapes; broker entries admitted through the frozen
+        // pairs) and must correspond to the bound intent: re-derive the
+        // digest from retained parts and require equality. Any drift
+        // fails closed.
+        guard isIdentityAdmissibleSelection(prepared.selection),
             retainedIntentMatches(prepared)
         else {
             return .failure(.unknownPreparedLaunch)
@@ -718,9 +807,9 @@ final class WorkspaceSessionSupervisor: Sendable {
             sessionStore: sessionStore,
             admission: admission,
             runningLimit: runningLimit,
-            // Defense in depth: the credential-free gates above forbid
-            // keychain entries, and this reader stages nothing even if a
-            // gate ever regresses.
+            // Defense in depth: the identity-admissibility gate above
+            // forbids keychain entries, and this reader stages nothing
+            // even if a gate ever regresses.
             keychainReader: .denied,
             agentDefinition: prepared.selection.resolved.definition,
             preparedID: prepared.binding.preparedLaunchID,
@@ -749,8 +838,8 @@ final class WorkspaceSessionSupervisor: Sendable {
     ///    the linearization point: from here the authorization is spent —
     ///    never back to prepared, never a second acceptance, even if the
     ///    spawn below fails.
-    /// 4. Retained-state re-verification (credential-free, intent
-    ///    correspondence, assurance). Pure functions of the immutable
+    /// 4. Retained-state re-verification (identity-admissibility,
+    ///    intent correspondence, assurance). Pure functions of the immutable
     ///    retained state; failure is recorded, never dispatched.
     /// 5. Dispatch of the retained state (compiled request, command,
     ///    resolved path, IO, frozen environment, productive facts,
@@ -843,7 +932,7 @@ final class WorkspaceSessionSupervisor: Sendable {
         }
         // The accepted transition committed. From here every path records
         // an outcome; nothing returns to prepared.
-        guard isCredentialFreeSelection(prepared.selection),
+        guard isIdentityAdmissibleSelection(prepared.selection),
             retainedIntentMatches(prepared),
             Self.redemptionAssuranceSatisfied(
                 required: prepared.selection.resolved.definition.requiredAssurance)
@@ -867,9 +956,9 @@ final class WorkspaceSessionSupervisor: Sendable {
             sessionStore: sessionStore,
             admission: admission,
             runningLimit: runningLimit,
-            // Defense in depth: the credential-free gates forbid keychain
-            // entries, and this reader stages nothing even if a gate ever
-            // regresses.
+            // Defense in depth: the identity-admissibility gate forbids
+            // keychain entries, and this reader stages nothing even if a
+            // gate ever regresses.
             keychainReader: .denied,
             agentDefinition: prepared.selection.resolved.definition,
             acceptedID: prepared.binding.preparedLaunchID,
@@ -1113,6 +1202,10 @@ final class WorkspaceSessionSupervisor: Sendable {
         sessionStore: RuntimeSessionStore,
         runningLimit: Int? = nil,
         keychainReader: KeychainReader = .live,
+        brokerCallerContext: AuthenticatedAgentContext? = nil,
+        brokerProviders: [any SecretsProvider]? = nil,
+        secretsConfigDirectory: URL? = nil,
+        brokerTimeoutSeconds: Double = 5,
         spawnFault: RuntimeSpawnFault? = nil,
         agentDefinition: AgentDefinition? = nil
     ) -> Result<RunningRuntime, WorkspaceSessionError> {
@@ -1140,6 +1233,10 @@ final class WorkspaceSessionSupervisor: Sendable {
             admission: admission,
             runningLimit: runningLimit,
             keychainReader: keychainReader,
+            brokerCallerContext: brokerCallerContext,
+            brokerProviders: brokerProviders,
+            secretsConfigDirectory: secretsConfigDirectory,
+            brokerTimeoutSeconds: brokerTimeoutSeconds,
             agentDefinition: agentDefinition
         )
     }
@@ -1164,6 +1261,10 @@ final class WorkspaceSessionSupervisor: Sendable {
         admission: RuntimeAdmissionConfiguration,
         runningLimit: Int?,
         keychainReader: KeychainReader,
+        brokerCallerContext: AuthenticatedAgentContext? = nil,
+        brokerProviders: [any SecretsProvider]? = nil,
+        secretsConfigDirectory: URL? = nil,
+        brokerTimeoutSeconds: Double = 5,
         agentDefinition: AgentDefinition?,
         preparedID: PreparedLaunchID? = nil,
         acceptedID: PreparedLaunchID? = nil,
@@ -1183,6 +1284,10 @@ final class WorkspaceSessionSupervisor: Sendable {
             register: true,
             runningLimit: runningLimit,
             keychainReader: keychainReader,
+            brokerCallerContext: brokerCallerContext,
+            brokerProviders: brokerProviders,
+            secretsConfigDirectory: secretsConfigDirectory,
+            brokerTimeoutSeconds: brokerTimeoutSeconds,
             agentDefinition: agentDefinition,
             preparedEnvironment: preparedEnvironment,
             preparedID: preparedID,
@@ -1326,6 +1431,10 @@ final class WorkspaceSessionSupervisor: Sendable {
         register: Bool,
         runningLimit: Int? = nil,
         keychainReader: KeychainReader = .live,
+        brokerCallerContext: AuthenticatedAgentContext? = nil,
+        brokerProviders: [any SecretsProvider]? = nil,
+        secretsConfigDirectory: URL? = nil,
+        brokerTimeoutSeconds: Double = 5,
         agentDefinition: AgentDefinition? = nil,
         preparedEnvironment: [String]? = nil,
         preparedID: PreparedLaunchID? = nil,
@@ -1357,6 +1466,31 @@ final class WorkspaceSessionSupervisor: Sendable {
             }
         } else {
             keychain = []
+        }
+        // Broker resolution runs before the state lock, beside the keychain
+        // block: provider IO (a Vault round trip under its timeout) can
+        // stall, and holding the supervisor lock across it would stall
+        // cancel/close/launch exactly like a keychain prompt. Selection
+        // mirrors the F2 rule above: only the definition-derived staging
+        // tag admits entries — `host` is routing/metadata and never falls
+        // back into selection — and a nil caller context skips resolution
+        // entirely (legacy nil path, `secrets` ignored). Any resolution
+        // failure fails the launch closed before the spawn commit, so no
+        // partial environment is ever built (atomic broker, T0c).
+        let brokerPreparation: BrokerLaunchPreparation
+        switch prepareBrokerLaunchValues(
+            resources: request.resources,
+            agent: agentName,
+            context: brokerCallerContext,
+            providers: brokerProviders,
+            configDirectory: secretsConfigDirectory,
+            registry: agentInstances,
+            timeoutSeconds: brokerTimeoutSeconds
+        ) {
+        case .success(let preparation):
+            brokerPreparation = preparation
+        case .failure(let failure):
+            return .failure(.apply(.resourceStagingFailed(failure.detail)))
         }
         var slot = WorkspaceChildSlot()
         let result: Result<Void, WorkspaceSessionError> = state.withLock { state in
@@ -1442,6 +1576,8 @@ final class WorkspaceSessionSupervisor: Sendable {
                 host: host,
                 stagingAgent: stagingAgent,
                 keychain: keychain,
+                brokerValues: brokerPreparation.values,
+                brokerAuditDirectory: brokerPreparation.auditDirectory,
                 preparedEnvironment: preparedEnvironment,
                 cwdVerification: cwdVerification
             ) {
@@ -2027,6 +2163,212 @@ private func removeSnapshot(_ path: String, device: UInt64, inode: UInt64) -> Bo
 
 private func complain(_ text: String) {
     FileHandle.standardError.write(Data((text + "\n").utf8))
+}
+
+// MARK: - Broker launch preparation (E1-C)
+
+/// What the pre-lock broker block hands the spawn path: the atomic
+/// resolved map for the stage path (E1-B `brokerValues`), plus the
+/// ledger directory for staging-drop rows. Nil values keep the legacy
+/// path byte-identical: `secrets` entries are ignored.
+struct BrokerLaunchPreparation: Sendable, Equatable {
+    var values: [SecretRef: SecretValue]?
+    var auditDirectory: URL?
+
+    /// Legacy skip: no resolution, nothing staged, nothing audited.
+    static let skipped = BrokerLaunchPreparation(values: nil, auditDirectory: nil)
+}
+
+/// Why broker preparation refused a launch. Every case maps to a
+/// provider-only detail: provider ids and fixed labels only — never
+/// item, field, or value.
+enum BrokerLaunchFailure: Error, Sendable, Equatable {
+    /// A caller context requested resolution but no provider set exists:
+    /// neither injected providers nor a config directory for the E1-A
+    /// factory. Fails closed: launching without requested secrets would
+    /// silently degrade the workload.
+    case providersUnavailable
+    /// The E1-A factory refused the operator config.
+    case factory(SecretsProviderFactoryError)
+    /// The atomic broker resolve failed (down/timeout/identity/...).
+    /// The broker commits nothing on failure, so the launch dies with
+    /// no partial environment.
+    case secrets(SecretsError)
+    /// The resolve call never delivered (task dropped or foreign
+    /// failure). Nothing was committed.
+    case interrupted
+
+    /// Operator-legible denial label. Provider ids come from the
+    /// broker's closed allowlist or the factory's fixed labels; item,
+    /// field, and value material is inexpressible here.
+    var detail: String {
+        switch self {
+        case .providersUnavailable:
+            "broker secrets unavailable"
+        case .factory(let error):
+            brokerFactoryDetail(error)
+        case .secrets(let error):
+            brokerSecretsDetail(error)
+        case .interrupted:
+            "broker resolution interrupted"
+        }
+    }
+}
+
+/// Fixed labels for factory failures. The factory error already names
+/// only which config broke; this renders it without paths or values.
+func brokerFactoryDetail(_ error: SecretsProviderFactoryError) -> String {
+    switch error {
+    case .providersInvalid:
+        "broker providers configuration invalid"
+    case .vaultConfigInvalid:
+        "broker vault configuration invalid"
+    case .vaultCredentialsInvalid:
+        "broker vault credentials invalid"
+    case .vaultMisconfigured:
+        "broker vault misconfigured"
+    }
+}
+
+/// Provider-only labels for resolve failures. `SecretsError` payloads
+/// name the provider id only; this renders them without ever touching
+/// item, field, or value.
+func brokerSecretsDetail(_ error: SecretsError) -> String {
+    switch error {
+    case .invalidRef(let provider):
+        "broker ref rejected by provider '\(provider)'"
+    case .notFound(let provider):
+        "broker secret missing from provider '\(provider)'"
+    case .denied(let provider):
+        "broker provider '\(provider)' denied access"
+    case .identityRequired:
+        "broker identity required"
+    case .leaseExpired(let provider):
+        "broker lease expired at provider '\(provider)'"
+    case .providerDown(let provider):
+        "broker provider '\(provider)' unavailable"
+    case .oversized(let provider):
+        "broker value oversized from provider '\(provider)'"
+    case .policyDenied:
+        "broker policy denied"
+    case .timeout(let provider):
+        "broker provider '\(provider)' timed out"
+    }
+}
+
+/// Resolves one launch's `secrets` entries through the mediated broker.
+///
+/// Pure selection first: `admittedBrokerEntries` filters by the
+/// definition-derived tag (nil matches unfiltered entries only). A nil
+/// caller context skips entirely — the legacy nil path, matching
+/// `stage()`'s nil contract. An empty admission with a context present
+/// hands the stage path an empty map (never nil) without touching
+/// providers or the identity gate, so unfiltered invalid refs still
+/// audit their drops; tag-filtered entries stay silent because the
+/// stager re-applies the same agent filter.
+///
+/// Otherwise the effects run at this boundary, in order: provider
+/// construction (injected set, else the E1-A factory over the config
+/// directory), one atomic `SecretBroker.resolve` for the caller
+/// context (ledger sink, registry-backed liveness), and the resolved
+/// map plus the ledger directory for the stage path. Any failure
+/// fails the launch closed with a provider-only cause.
+func prepareBrokerLaunchValues(
+    resources: RuntimeResourceManifest?,
+    agent: String?,
+    context: AuthenticatedAgentContext?,
+    providers: [any SecretsProvider]?,
+    configDirectory: URL?,
+    registry: AgentInstanceRegistry,
+    timeoutSeconds: Double
+) -> Result<BrokerLaunchPreparation, BrokerLaunchFailure> {
+    guard let resources, resources.profile.secrets.isEmpty == false else {
+        return .success(.skipped)
+    }
+    let admitted = RuntimeAdmissionGate.admittedBrokerEntries(
+        entries: resources.profile.secrets, agent: agent
+    )
+    guard let context else {
+        return .success(.skipped)
+    }
+    guard admitted.isEmpty == false else {
+        // Nothing admitted (all tag-filtered or all invalid refs): no
+        // broker call, no provider touch, no identity gate — nothing
+        // secret is at stake, so an unusable context must not deny here
+        // either. Still hand the stage path an empty map (never nil) so
+        // unfiltered invalid refs audit their drops instead of vanishing
+        // silently; a nil map would ignore them.
+        return .success(
+            BrokerLaunchPreparation(values: [:], auditDirectory: configDirectory)
+        )
+    }
+    let resolvedProviders: [any SecretsProvider]
+    if let providers {
+        resolvedProviders = providers
+    } else if let configDirectory {
+        do {
+            resolvedProviders = try SecretsProviderFactory.makeProviders(
+                configDirectory: configDirectory
+            )
+        } catch {
+            return .failure(.factory(error))
+        }
+    } else {
+        return .failure(.providersUnavailable)
+    }
+    let audit: SecretBrokerAuditSink
+    if let configDirectory {
+        audit = .file(directory: configDirectory)
+    } else {
+        audit = SecretBrokerAuditSink(append: { _ in })
+    }
+    let broker = SecretBroker(
+        providers: resolvedProviders, audit: audit,
+        liveness: .registry(registry), timeoutSeconds: timeoutSeconds
+    )
+    switch resolveBrokerValuesBlocking(
+        broker, refs: admitted.map(\.ref), context: context
+    ) {
+    case .success(let values):
+        return .success(
+            BrokerLaunchPreparation(values: values, auditDirectory: configDirectory)
+        )
+    case .failure(let failure):
+        return .failure(failure)
+    }
+}
+
+/// Runs one atomic broker resolve to completion on the caller's thread.
+///
+/// The spawn path is sync, so the resolve runs as an unstructured task
+/// bridged by a semaphore, mirroring the MCP perform bridge: the
+/// caller blocks pre-lock, never under the supervisor lock. The broker
+/// contract throws only `SecretsError` or `CancellationError`, and
+/// nothing cancels this task, so a non-`SecretsError` throw is
+/// unreachable — it still maps closed to `.interrupted`, never past it.
+func resolveBrokerValuesBlocking(
+    _ broker: SecretBroker,
+    refs: [SecretRef],
+    context: AuthenticatedAgentContext
+) -> Result<[SecretRef: SecretValue], BrokerLaunchFailure> {
+    let done = DispatchSemaphore(value: 0)
+    let box = Mutex<Result<[SecretRef: SecretValue], BrokerLaunchFailure>>(
+        .failure(.interrupted)
+    )
+    Task {
+        let result: Result<[SecretRef: SecretValue], BrokerLaunchFailure>
+        do {
+            result = .success(try await broker.resolve(refs, ctx: context))
+        } catch let failure as SecretsError {
+            result = .failure(.secrets(failure))
+        } catch {
+            result = .failure(.interrupted)
+        }
+        box.withLock { $0 = result }
+        done.signal()
+    }
+    done.wait()
+    return box.withLock { $0 }
 }
 
 /// Which finished runtimes to forget so a report still fits in `limit`.

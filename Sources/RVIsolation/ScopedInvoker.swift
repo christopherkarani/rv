@@ -760,17 +760,23 @@ public actor ScopedInvoker {
     ///   - ctx: Fresh identity context. Unusable contexts throw
     ///     `.principalRequired` before anything else is touched.
     ///   - options: Idempotency plus transport and elicitation budgets.
+    ///   - idempotencyKey: Key binding this execution's elicitation park and
+    ///     transport envelope to one admitted call. The dispatch layer passes
+    ///     the admitted wire key so elicitation, transport, and the admission
+    ///     fingerprint join on one value; nil mints a fresh key (direct
+    ///     callers and tests that do not thread a wire key).
     public func invoke(
         addressLiteral: String,
         argumentsJSON: String,
         session: MCPTransportSession,
         ctx: AuthenticatedAgentContext,
-        options: ScopedInvokeOptions
+        options: ScopedInvokeOptions,
+        idempotencyKey: String? = nil
     ) async throws -> MCPInvokeResult {
         var call = InvokeCall(
             attemptedLiteral: addressLiteral,
             executionID: SecretsExecutionID(),
-            idempotencyKey: UUID().uuidString,
+            idempotencyKey: idempotencyKey ?? UUID().uuidString,
             principal: SecretsAuditPrincipal(context: ctx),
             timestamp: now()
         )
