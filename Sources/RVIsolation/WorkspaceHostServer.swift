@@ -136,6 +136,10 @@ final class WorkspaceHostServer: Sendable {
     /// Serializes the TUI's ensure-terminal operation across independent
     /// Workspace Host clients.
     private let terminalEnsureLock = NSLock()
+    /// Launch-family ensures that have reached `terminalEnsureLock` after
+    /// the pre-parse phase gate. Tests wait on this so a close can land
+    /// in the queued window; it is not a lock.
+    private let ensureLockArrivals = Mutex(0)
 
     private struct Registry {
         var connections: [UUID: WorkspaceControlConnection] = [:]
@@ -577,7 +581,9 @@ final class WorkspaceHostServer: Sendable {
     private func launchFamily(_ message: WorkspaceControlRequest) -> Reply {
         // Phase gate sits exactly where the legacy handlers gated: launch
         // and ensure refuse a non-accepting workspace before validating;
-        // cancel and the identity door never gated on phase.
+        // cancel and the identity door never gated on phase. Ensure
+        // rechecks under `terminalEnsureLock` — close does not take that
+        // lock, so a queued request must not reuse a still-running terminal.
         if message.operation == .launchRuntime || message.operation == .ensureTerminalRuntime {
             let phase = supervisor.snapshot.phase
             guard phase.acceptsRuntime else {
@@ -641,6 +647,7 @@ final class WorkspaceHostServer: Sendable {
         _ payload: EnsureTerminalRuntimePayload,
         request: WorkspaceControlRequest
     ) -> WorkspaceControlResponse {
+        ensureLockArrivals.withLock { $0 += 1 }
         terminalEnsureLock.lock()
         defer { terminalEnsureLock.unlock() }
         return ensureLocked(payload, request: request)
@@ -650,6 +657,14 @@ final class WorkspaceHostServer: Sendable {
         _ payload: EnsureTerminalRuntimePayload,
         request: WorkspaceControlRequest
     ) -> WorkspaceControlResponse {
+        // Close flips the phase before it stops children, and it does not
+        // take this lock. A request that already passed the pre-parse gate
+        // can be blocked here and resume in `.closing` while the terminal
+        // is still running. Refuse before the reuse shortcut.
+        let phase = supervisor.snapshot.phase
+        guard phase.acceptsRuntime else {
+            return failure(request, workspaceControlCode(.notAcceptingRuntime(phase)))
+        }
         // An explicit profile rides along to creation, where launch()
         // adjudicates it; the existing-runtime shortcut below stays
         // ID-agnostic, matching the client's re-attach to the first
@@ -1080,6 +1095,35 @@ final class WorkspaceHostServer: Sendable {
         }
         _ = endpointFile.path.withCString { unlink($0) }
         gate.signal()
+    }
+
+    /// Launch-family arm of `operation`, without peer authentication.
+    /// Direct `ensureTerminalRuntime` is a different entry and still gates
+    /// inside its own lock acquisition.
+    func testingDispatchLaunchFamily(
+        _ message: WorkspaceControlRequest
+    ) -> WorkspaceControlResponse {
+        launchFamily(message).message
+    }
+
+    /// Holds `terminalEnsureLock` across `body`. A launch-family ensure
+    /// blocks in `ensureCore` until `body` returns.
+    func testingWithEnsureLockHeld(_ body: () throws -> Void) rethrows {
+        terminalEnsureLock.lock()
+        defer { terminalEnsureLock.unlock() }
+        try body()
+    }
+
+    /// True once a launch-family ensure has reached `terminalEnsureLock`
+    /// after the pre-parse phase gate. The timeout fails a missed arrival
+    /// instead of hanging the caller.
+    func testingWaitForEnsureLockArrival(timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if ensureLockArrivals.withLock({ $0 }) > 0 { return true }
+            Thread.sleep(forTimeInterval: 0.001)
+        }
+        return false
     }
 
     /// Pushes a terminal frame the client must reject. The stream fails closed

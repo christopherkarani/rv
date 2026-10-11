@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import Synchronization
 import Testing
 @testable import RVIsolation
 
@@ -684,6 +685,95 @@ struct LaunchParityHandlerTests {
         ))
         #expect(ensureInvalid.ok != true)
         #expect(ensureInvalid.code == .workspaceClosed)
+    }
+
+    @Test func dispatchClosedWorkspaceReportsPhaseBeforeValidation() throws {
+        // `operation` reaches `launchFamily` after authorization. This is
+        // that arm: an already-closed workspace reports the phase code
+        // before the payload is validated. The direct helper is a
+        // different entry and does not pin this.
+        let host = try LaunchParityHost()
+        defer { host.close() }
+        _ = host.supervisor.close()
+        let launchInvalid = host.server.testingDispatchLaunchFamily(WorkspaceControlRequest(
+            operation: .launchRuntime,
+            executable: "bin/sh"
+        ))
+        #expect(launchInvalid.ok != true)
+        #expect(launchInvalid.code == .workspaceClosed)
+        let ensureInvalid = host.server.testingDispatchLaunchFamily(WorkspaceControlRequest(
+            operation: .ensureTerminalRuntime,
+            executable: "bin/sh"
+        ))
+        #expect(ensureInvalid.ok != true)
+        #expect(ensureInvalid.code == .workspaceClosed)
+    }
+
+    @Test func dispatchEnsureReuseRechecksPhaseUnderLock() throws {
+        // The pre-parse gate has already passed. Close then moves the
+        // phase to `.closing` while this request is blocked on
+        // `terminalEnsureLock` and the terminal is still running. Reuse
+        // must report workspaceClosing. The direct helper never enters
+        // this window: it gates only after it owns the lock.
+        let host = try LaunchParityHost()
+        defer { host.close() }
+        let created = host.server.ensureTerminalRuntime(WorkspaceControlRequest(
+            operation: .ensureTerminalRuntime,
+            executable: "/bin/sleep",
+            arguments: ["60"],
+            io: "terminal",
+            rows: 24,
+            columns: 80
+        ))
+        #expect(created.ok == true)
+        #expect(created.created == true)
+        let runtime = try #require(created.runtime)
+        let request = WorkspaceControlRequest(
+            operation: .ensureTerminalRuntime,
+            executable: "/bin/sh",
+            io: "terminal",
+            rows: 24,
+            columns: 80
+        )
+        let server = host.server
+        let box = LaunchReplyBox()
+        var queuedThenClosed = false
+        server.testingWithEnsureLockHeld {
+            let thread = Thread {
+                box.value = server.testingDispatchLaunchFamily(request)
+            }
+            thread.name = "rv-test-ensure-dispatch"
+            thread.start()
+            // Close only after the pre-parse gate has passed. A timeout
+            // must not flip the phase, or a late pre-parse refusal would
+            // look like the in-lock recheck.
+            guard server.testingWaitForEnsureLockArrival() else { return }
+            #expect(host.supervisor.testingBeginClose())
+            #expect(host.supervisor.snapshot.phase == .closing)
+            queuedThenClosed = true
+        }
+        #expect(queuedThenClosed)
+        let deadline = Date().addingTimeInterval(5)
+        while box.value == nil, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.001)
+        }
+        let refused = try #require(box.value)
+        #expect(refused.ok != true)
+        #expect(refused.code == .workspaceClosing)
+        #expect(refused.runtime == nil)
+        #expect(host.supervisor.snapshot.phase == .closing)
+        #expect(host.supervisor.runtimeFacts().contains {
+            $0.id == runtime && $0.running && $0.terminal
+        })
+    }
+}
+
+private final class LaunchReplyBox: Sendable {
+    private let box = Mutex<WorkspaceControlResponse?>(nil)
+
+    var value: WorkspaceControlResponse? {
+        get { box.withLock { $0 } }
+        set { box.withLock { $0 = newValue } }
     }
 }
 #endif
