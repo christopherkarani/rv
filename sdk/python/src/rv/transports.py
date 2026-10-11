@@ -113,9 +113,11 @@ def _check_parent_modes(path: str) -> None:
     uid; the base dir (``$XDG_RUNTIME_DIR``, ``$HOME/.config``) must exist
     owned by this uid and must not be group/world-writable.
 
-    Mirrors what ``UnixSocketPath.prepareRuntime`` establishes: the server
-    owns only the ``rv`` dir and never chmods a pre-existing base. Mismatch
-    is ``ConnectionFailed``: the SDK reports, never repairs.
+    Mirrors what ``UnixSocketPath.prepareRuntime`` establishes: the ``rv``
+    dir is ``0700``, and a pre-existing base is tightened to ``0700`` unless
+    it is group- or world-writable, in which case the server rejects it and
+    does not chmod it. Mismatch is ``ConnectionFailed``: the SDK reports,
+    never repairs.
     """
     inner = os.path.dirname(path)
     try:

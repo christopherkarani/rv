@@ -92,11 +92,12 @@ public enum UnixSocketPath {
     ///
     /// Only the `rv` directory is RV-owned: it is created at 0700 and always
     /// chmodded back to 0700. The base directory (`$XDG_RUNTIME_DIR`,
-    /// `$HOME/.config`) is created at 0700 when missing, but a pre-existing
-    /// base is never chmodded — it has to be a directory owned by this uid
-    /// and not group- or world-writable. The stale entry is unlinked only
-    /// when it is a socket or a symlink; anything else fails closed so a
-    /// directory or user file at the socket path is never deleted.
+    /// `$HOME/.config`) is created at 0700 when missing. A pre-existing base
+    /// must be a directory owned by this uid; a group- or world-writable one
+    /// is rejected and not chmodded, and any other safe base is tightened to
+    /// 0700. The stale entry is unlinked only when it is a socket or a
+    /// symlink; anything else fails closed so a directory or user file at the
+    /// socket path is never deleted.
     public static func prepareRuntime(for socketURL: URL) throws {
         let rvDir = socketURL.deletingLastPathComponent()
         let baseDir = rvDir.deletingLastPathComponent()
@@ -160,11 +161,11 @@ public enum UnixSocketPath {
         return raw.intValue
     }
 
-    /// The base directory is shared with the rest of the system: create it
-    /// owner-only when missing, but never chmod a pre-existing base. An
-    /// existing base must be a directory owned by this uid and not group-
-    /// or world-writable (`mode & 0o022 == 0`); otherwise the same
-    /// `permission` error as a foreign owner.
+    /// The base directory is shared with the rest of the system. Create it
+    /// owner-only when missing. A pre-existing base must be a directory owned
+    /// by this uid. Group- or world-writable bases (`mode & 0o022 != 0`) are
+    /// the same `permission` error as a foreign owner, and are not chmodded.
+    /// Any other pre-existing base is tightened to 0700, same as one we create.
     private static func prepareBaseDirectory(_ url: URL) throws {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
@@ -180,6 +181,14 @@ public enum UnixSocketPath {
         }
         let mode = try posixMode(of: url)
         guard mode & 0o022 == 0 else {
+            throw UnixSocketPathError.permission
+        }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: url.path
+        )
+        let tightened = try posixMode(of: url)
+        guard tightened & 0o777 == 0o700 else {
             throw UnixSocketPathError.permission
         }
     }

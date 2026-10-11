@@ -130,7 +130,7 @@ struct UnixSocketPathTests {
         #expect(FileManager.default.fileExists(atPath: socket.path) == false)
     }
 
-    @Test func prepareRuntimeLeavesPreexistingBaseModeAlone() throws {
+    @Test func prepareRuntimeTightensSafePreexistingBaseToOwnerOnly() throws {
         let base = shortRuntimeDir("b")
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         try FileManager.default.setAttributes(
@@ -142,7 +142,7 @@ struct UnixSocketPathTests {
         let socket = try UnixSocketPath.resolve(xdgRuntimeDir: base.path)
         try UnixSocketPath.prepareRuntime(for: socket)
 
-        #expect(try UnixSocketPath.posixMode(of: base) & 0o777 == 0o755)
+        #expect(try UnixSocketPath.posixMode(of: base) & 0o777 == 0o700)
         #expect(try UnixSocketPath.posixMode(of: socket.deletingLastPathComponent()) & 0o777 == 0o700)
     }
 
