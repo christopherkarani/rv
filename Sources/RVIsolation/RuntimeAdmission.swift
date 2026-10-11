@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVFileStore
 import RVIPC
 import Synchronization
 
@@ -82,6 +83,75 @@ public enum RuntimeHTTPExecutor: Sendable {
     case direct
 }
 
+/// Seams for one admitted MCP tool call. Mirrors `RuntimeHTTPExecutor`:
+/// the dispatch layer admits the frame first, then invokes through these
+/// seams. Every seam is injected so tests pass scripted doubles; production
+/// wiring builds them from the agent definition plus the operator config
+/// (registry and policies scoped to the definition, elicitation backend,
+/// broker-backed credential resolver, bound transports, file audit sink).
+public struct RuntimeMCPConfiguration: Sendable {
+    public var registry: MCPRegistry
+    public var policies: MCPPolicyStore
+    public var validator: MCPArgumentValidator
+    public var elicitation: any MCPElicitationBackend
+    public var credentials: MCPCredentialResolver
+    public var transport: any MCPTransport
+    public var oauth: MCPOAuthRefresher
+    public var audit: ScopedInvokerAuditSink
+    public var causes: MCPServerCauseLog
+    public var options: ScopedInvokeOptions
+    /// Bound transport session for one admitted dispatch. Receives the
+    /// trusted context so production can key sessions by Agent Definition
+    /// plus connection. Nil (unparseable address, unprovisioned
+    /// connection) falls back to an unbound session: the invoker then
+    /// answers `.unknownTool` or `.crossResource` with audited rows, and
+    /// no transport is ever touched on those paths.
+    public var sessionFor:
+        @Sendable (AuthenticatedAgentContext, MCPDispatchAction) -> MCPTransportSession?
+    /// Longest the channel waits for one invoke. Past it the waiter gives
+    /// up and answers `.cancelled`, mirroring the service-bridge bounded
+    /// wait. Must exceed the worst-case invoke (elicitation TTL plus
+    /// transport budgets); the default clears the 15-minute elicitation
+    /// TTL with the same margin as the parked-approval timeout.
+    public var bridgeTimeoutSeconds: TimeInterval
+
+    public init(
+        registry: MCPRegistry,
+        policies: MCPPolicyStore,
+        validator: MCPArgumentValidator = MCPArgumentValidator(),
+        elicitation: any MCPElicitationBackend,
+        credentials: MCPCredentialResolver,
+        transport: any MCPTransport,
+        oauth: MCPOAuthRefresher = .unavailable,
+        audit: ScopedInvokerAuditSink,
+        causes: MCPServerCauseLog = .discarded,
+        options: ScopedInvokeOptions = ScopedInvokeOptions(idempotent: false),
+        sessionFor: @escaping @Sendable (AuthenticatedAgentContext, MCPDispatchAction) -> MCPTransportSession?,
+        bridgeTimeoutSeconds: TimeInterval = 20 * 60
+    ) {
+        self.registry = registry
+        self.policies = policies
+        self.validator = validator
+        self.elicitation = elicitation
+        self.credentials = credentials
+        self.transport = transport
+        self.oauth = oauth
+        self.audit = audit
+        self.causes = causes
+        self.options = options
+        self.sessionFor = sessionFor
+        self.bridgeTimeoutSeconds = bridgeTimeoutSeconds
+    }
+}
+
+/// How an admitted MCP dispatch is performed. The contained agent is not a case.
+public enum RuntimeMCPExecutor: Sendable {
+    /// No invoke and no side effect.
+    case refuse
+    /// Invoke through `ScopedInvoker` over the configured seams.
+    case invoke(RuntimeMCPConfiguration)
+}
+
 public struct RuntimeAdmissionConfiguration: Sendable {
     public var normalize:
         @Sendable (RuntimeAdmissionSubject, RuntimeRequestedAction) -> Result<
@@ -100,6 +170,16 @@ public struct RuntimeAdmissionConfiguration: Sendable {
     /// set, the session parks pending ASKs for a human decision and resumes
     /// the exact parked continuation at most once.
     public var askBackend: (any ActionApprovalAsking)?
+    /// MCP policy verdicts for the admission gate. Receives the presented
+    /// principal plus the parsed address, so production can key the
+    /// verdict by Agent Definition. The default blocks everything: MCP
+    /// dispatch stays denied until production wiring provides verdicts.
+    public var mcpPolicy:
+        @Sendable (AuthenticatedAgentContext?, MCPToolAddress) -> PolicyAction
+    /// How an admitted MCP dispatch is performed. The default refuses:
+    /// admission may allow, but nothing invokes until production wiring
+    /// provides the invoker seams.
+    public var mcp: RuntimeMCPExecutor
 
     public init(
         normalize: @escaping @Sendable (RuntimeAdmissionSubject, RuntimeRequestedAction) -> Result<
@@ -112,7 +192,9 @@ public struct RuntimeAdmissionConfiguration: Sendable {
         >?,
         policy: @escaping @Sendable (RuntimeSession) -> EffectiveActionPolicy,
         evidence: RuntimeAdmissionEvidence,
-        askBackend: (any ActionApprovalAsking)? = nil
+        askBackend: (any ActionApprovalAsking)? = nil,
+        mcpPolicy: @escaping @Sendable (AuthenticatedAgentContext?, MCPToolAddress) -> PolicyAction = { _, _ in .block },
+        mcp: RuntimeMCPExecutor = .refuse
     ) {
         self.normalize = normalize
         self.executor = executor
@@ -121,6 +203,8 @@ public struct RuntimeAdmissionConfiguration: Sendable {
         self.policy = policy
         self.evidence = evidence
         self.askBackend = askBackend
+        self.mcpPolicy = mcpPolicy
+        self.mcp = mcp
     }
 
     public static var failClosed: RuntimeAdmissionConfiguration {
@@ -345,10 +429,50 @@ final class RuntimeAdmissionSession: Sendable {
         submitCore(frame, principalRequired: true)
     }
 
+    /// Identity-required broker mediation (T5). Resolves `refs` through
+    /// `broker` for a freshly resolved trusted principal.
+    ///
+    /// Preparation-path resolution (T0a): the supervisor builds `refs`
+    /// from `RuntimeAdmissionGate.admittedBrokerEntries` and stages the
+    /// returned map via `RuntimeResourceManifest.stage`. Broker mediation
+    /// never arrives as an action frame, so this door takes refs, never
+    /// bytes. (MCP tool dispatch DOES arrive as a `.mcp` action frame and
+    /// routes through `submitMCPFrame`, not through this door.)
+    ///
+    /// The principal gate mirrors the gate's `submitIdentityRequired`
+    /// pre-guard: no channel, an unbound channel, no registry, or no
+    /// context for the bound instance throws
+    /// `SecretsError.identityRequired` before the broker — providers and
+    /// audit alike — is touched. A resolved-but-unusable context
+    /// reaches the broker, which denies it as `.identityRequired` with
+    /// a denied audit row while still touching no provider. The context
+    /// resolves fresh on every call, so revocation takes effect on the
+    /// next call; no downgrade to capability-only ever happens.
+    func submitIdentityRequired(
+        _ refs: [SecretRef],
+        broker: SecretBroker
+    ) async throws -> [SecretRef: SecretValue] {
+        let snapshot = state.withLock { ($0.binding, $0.agentRegistry) }
+        guard let binding = snapshot.0,
+            binding.agentInstanceID != nil,
+            let registry = snapshot.1,
+            let context = registry.context(forBinding: binding)
+        else {
+            throw SecretsError.identityRequired
+        }
+        return try await broker.resolve(refs, ctx: context)
+    }
+
     private func submitCore(
         _ frame: Result<RuntimeActionFrame, RuntimeAdmissionDecodeError>,
         principalRequired: Bool
     ) -> RuntimeAdmissionDecision {
+        // MCP frames never enter the ProposedAction gate: they route to
+        // the identity-required MCP door, which enforces its own
+        // principal requirement regardless of this submit's door.
+        if case .success(let accepted) = frame, case .mcp = accepted.action {
+            return submitMCPFrame(.success(accepted))
+        }
         // Snapshot binding and registry together: two separate locks could
         // pair a pre-bind channel with a post-bind registry or vice versa.
         let snapshot = state.withLock { ($0.binding, $0.agentRegistry) }
@@ -438,6 +562,264 @@ final class RuntimeAdmissionSession: Sendable {
             response: response,
             event: event,
             execute: nil
+        )
+    }
+
+    // MARK: - MCP dispatch (E1-E)
+
+    /// Routes one decoded MCP frame: identity-required admission, then the
+    /// invoker. Mirrors `submitCore` without the `ProposedAction` gate —
+    /// MCP never normalizes — and without ASK parking: `require_approval`
+    /// elicits inside the invoker. The gate's admit placeholder response
+    /// is always overwritten below with the invoke outcome, so it is never
+    /// written to the channel.
+    private func submitMCPFrame(
+        _ frame: Result<RuntimeActionFrame, RuntimeAdmissionDecodeError>
+    ) -> RuntimeAdmissionDecision {
+        let snapshot = state.withLock { ($0.binding, $0.agentRegistry) }
+        var binding = snapshot.0
+        let registry = snapshot.1
+        // Fresh trusted context for every submit: resolving once and caching
+        // would let a revoked principal act on a stale snapshot.
+        let agentContext = binding.flatMap { registry?.context(forBinding: $0) }
+        let admitted = RuntimeAdmissionGate.submitMCP(
+            binding: &binding,
+            frame: frame,
+            verdict: configuration.mcpPolicy,
+            agentContext: agentContext
+        )
+        state.withLock { channel in
+            if channel.stop {
+                binding?.phase = .finished
+            }
+            // Only auth state (consumed sets, phase) flows back. Identity
+            // fields never change via the gate, so a binding installed
+            // after this submit snapshotted must survive the write-back
+            // rather than be clobbered to the pre-bind snapshot.
+            if binding?.agentInstanceID == nil {
+                binding?.agentInstanceID = channel.binding?.agentInstanceID
+            }
+            channel.binding = binding
+        }
+        guard let dispatch = admitted.invoke, binding?.phase == .active else {
+            if admitted.invoke != nil {
+                let inactive = inactiveDecision(binding: binding, event: admitted.event)
+                configuration.evidence.record(inactive.event)
+                return inactive
+            }
+            configuration.evidence.record(admitted.event)
+            return RuntimeAdmissionDecision(
+                binding: binding,
+                response: admitted.response,
+                event: admitted.event,
+                execute: nil
+            )
+        }
+        // Unreachable by construction: the gate admitted on this same
+        // immutable snapshot, which passed the identity pre-guard plus
+        // binding-match and liveness checks. Kept as defense in depth so
+        // a future gate change cannot smuggle a principal-less invoke.
+        guard let ctx = agentContext, ctx.isUsable else {
+            var event = admitted.event
+            event.authorization = .rejected
+            event.executionAttempted = false
+            event.result = RuntimeAdmissionRejection.principalRequired.rawValue
+            let rejected = RuntimeAdmissionDecision(
+                binding: binding,
+                response: .rejected(.principalRequired),
+                event: event,
+                execute: nil
+            )
+            configuration.evidence.record(rejected.event)
+            return rejected
+        }
+        var event = admitted.event
+        let response: RuntimeAdmissionResponse
+        switch configuration.mcp {
+        case .refuse:
+            event.authorization = .executorFailed
+            event.executionAttempted = false
+            event.result = RuntimeAdmissionExecutorError.unavailable.rawValue
+            response = .executorFailed(.unavailable)
+        case .invoke(let mcp):
+            let performed = performMCP(dispatch: dispatch, ctx: ctx, mcp: mcp)
+            event.authorization = performed.authorization
+            event.executionAttempted = performed.attempted
+            event.result = performed.result
+            response = performed.response
+        }
+        configuration.evidence.record(event)
+        return RuntimeAdmissionDecision(
+            binding: binding,
+            response: response,
+            event: event,
+            execute: nil
+        )
+    }
+
+    /// Invokes one admitted dispatch through `ScopedInvoker` and maps the
+    /// outcome onto the channel response. Synchronous: the waiter blocks
+    /// on a semaphore (bounded by `bridgeTimeoutSeconds`, mirroring the
+    /// service-bridge precedent) while a task runs the async invoke.
+    private func performMCP(
+        dispatch: MCPDispatchAction,
+        ctx: AuthenticatedAgentContext,
+        mcp: RuntimeMCPConfiguration
+    ) -> MCPPerformOutcome {
+        let invoker = ScopedInvoker(
+            registry: mcp.registry,
+            policies: mcp.policies,
+            validator: mcp.validator,
+            elicitation: mcp.elicitation,
+            credentials: mcp.credentials,
+            transport: mcp.transport,
+            oauth: mcp.oauth,
+            audit: mcp.audit,
+            causes: mcp.causes
+        )
+        let session = mcp.sessionFor(ctx, dispatch) ?? Self.fallbackMCPSession()
+        guard let session else {
+            // Unreachable: the fallback resource is a static valid label.
+            // Fail closed without invoking.
+            return MCPPerformOutcome(
+                response: .executorFailed(.unavailable),
+                authorization: .executorFailed,
+                result: RuntimeAdmissionExecutorError.unavailable.rawValue,
+                attempted: false
+            )
+        }
+        let done = DispatchSemaphore(value: 0)
+        let box = Mutex<MCPPerformOutcome?>(nil)
+        let waiter = Task {
+            let outcome: MCPPerformOutcome
+            do {
+                let result = try await invoker.invoke(
+                    addressLiteral: dispatch.address,
+                    argumentsJSON: dispatch.argumentsJSON,
+                    session: session,
+                    ctx: ctx,
+                    options: mcp.options
+                )
+                outcome = MCPPerformOutcome(
+                    response: .mcp(MCPExecutionReceipt(
+                        address: dispatch.address,
+                        body: Data(result.body.utf8)
+                    )),
+                    authorization: .allowed,
+                    result: "mcp:succeeded",
+                    attempted: true
+                )
+            } catch {
+                outcome = Self.mcpFailureOutcome(error, causes: mcp.causes)
+            }
+            box.withLock { $0 = outcome }
+            done.signal()
+        }
+        if done.wait(timeout: .now() + mcp.bridgeTimeoutSeconds) == .timedOut {
+            waiter.cancel()
+            return MCPPerformOutcome(
+                response: .mcpFailed(.cancelled),
+                authorization: .executorFailed,
+                result: "cancelled",
+                attempted: true
+            )
+        }
+        guard let outcome = box.withLock({ $0 }) else {
+            // Unreachable: the waiter stores before signaling.
+            return MCPPerformOutcome(
+                response: .mcpFailed(.cancelled),
+                authorization: .executorFailed,
+                result: "cancelled",
+                attempted: true
+            )
+        }
+        return outcome
+    }
+
+    /// Maps one invoke failure onto the channel response. Result labels
+    /// reuse the invoker's cause labels, so the admission event and the
+    /// ledger rows agree. Transport and auth failures arrive as
+    /// `.internalError` and stay opaque: the caller sees the correlation
+    /// id only, and the cause lives on the server-side log plus the audit
+    /// row the invoker already wrote.
+    private static func mcpFailureOutcome(
+        _ error: any Error,
+        causes: MCPServerCauseLog
+    ) -> MCPPerformOutcome {
+        let failure: MCPDispatchFailure
+        let result: String
+        switch error {
+        case let invoked as ScopedInvokeError:
+            switch invoked {
+            case .principalRequired:
+                // Unreachable: admission checked the same immutable
+                // snapshot. Fail closed without a channel fact the
+                // runtime can use.
+                failure = .cancelled
+                result = "cancelled"
+            case .policyDenied:
+                failure = .policyDenied
+                result = ScopedInvoker.causeLabel(for: invoked)
+            case .unknownTool:
+                failure = .unknownTool
+                result = ScopedInvoker.causeLabel(for: invoked)
+            case .crossResource:
+                failure = .crossResource
+                result = ScopedInvoker.causeLabel(for: invoked)
+            case .invalidArguments:
+                failure = .invalidArguments
+                result = ScopedInvoker.causeLabel(for: invoked)
+            case .elicitationTimeout:
+                failure = .elicitationTimeout
+                result = ScopedInvoker.causeLabel(for: invoked)
+            case .elicitationUnavailable:
+                failure = .elicitationUnavailable
+                result = ScopedInvoker.causeLabel(for: invoked)
+            case .credentialFailed:
+                failure = .credentialFailed
+                result = ScopedInvoker.causeLabel(for: invoked)
+            case .auditFailed:
+                failure = .auditFailed
+                result = ScopedInvoker.causeLabel(for: invoked)
+            case .internalError(let defect):
+                failure = .internalError(correlationID: defect.correlationID.rawValue.uuidString)
+                result = ScopedInvoker.causeLabel(for: invoked)
+            }
+        case is ElicitationDeclinedError:
+            failure = .elicitationDeclined
+            result = "elicitationDeclined"
+        case is CancellationError:
+            failure = .cancelled
+            result = "cancelled"
+        default:
+            let defect = MCPOpaqueDefect(correlationID: SecretsCorrelationID())
+            causes.record(String(describing: error), correlationID: defect.correlationID)
+            failure = .internalError(correlationID: defect.correlationID.rawValue.uuidString)
+            result = "internalError:\(defect.correlationID.rawValue.uuidString)"
+        }
+        return MCPPerformOutcome(
+            response: .mcpFailed(failure),
+            authorization: .executorFailed,
+            result: result,
+            attempted: true
+        )
+    }
+
+    /// Unbound session for unparseable addresses and unprovisioned
+    /// connections. The invoker answers `.unknownTool` or `.crossResource`
+    /// before touching any transport on those paths, and the minted id
+    /// and token can never match a real channel binding — a parsed
+    /// address that literally names the fallback resource still fails
+    /// closed at the transport's session check.
+    private static func fallbackMCPSession() -> MCPTransportSession? {
+        guard let resource = MCPResourceID(rawValue: "unresolved") else {
+            return nil
+        }
+        return MCPTransportSession(
+            id: MCPSessionID(),
+            resource: resource,
+            callerToken: .random(),
+            kind: .streamableHTTP
         )
     }
 
@@ -1066,6 +1448,13 @@ final class RuntimeAdmissionSession: Sendable {
 private enum AdmissionPerformResult {
     case shell(Result<Int32, RuntimeAdmissionExecutorError>)
     case http(Result<HTTPExecutionReceipt, HTTPEgressFailure>)
+}
+
+private struct MCPPerformOutcome: Sendable {
+    var response: RuntimeAdmissionResponse
+    var authorization: RuntimeAdmissionAuthorization
+    var result: String
+    var attempted: Bool
 }
 
 private func admissionResponse(

@@ -93,6 +93,14 @@ public struct AgentDefinition: Sendable, Equatable, Codable {
     /// Permitted credential bindings. Names of bindings only; definitions
     /// carry no secret values, so none can leak into the digest.
     public let credentialBindings: [String]
+    /// Broker provider id selected for this definition's secret
+    /// bindings. Always a member of `SecretRef.allowedProviders`;
+    /// validated at the trust boundary. The default is the offline
+    /// file provider, so definitions written before the field
+    /// existed keep working with no infrastructure behind them.
+    /// Security-relevant: covered by the revision digest, so a
+    /// provider swap reads as a new definition requiring fresh identity.
+    public let secretsProvider: String
     public let requiredAssurance: ExecutableAssurance
     /// Delegable authority ceiling for instances of this definition.
     public let authorityCeiling: AgentAuthority
@@ -106,6 +114,7 @@ public struct AgentDefinition: Sendable, Equatable, Codable {
         agentTag: String?,
         resourceProfile: RuntimeResourceProfile,
         credentialBindings: [String],
+        secretsProvider: String = SecretRef.defaultProvider,
         requiredAssurance: ExecutableAssurance,
         authorityCeiling: AgentAuthority
     ) {
@@ -117,6 +126,7 @@ public struct AgentDefinition: Sendable, Equatable, Codable {
         self.agentTag = agentTag
         self.resourceProfile = resourceProfile
         self.credentialBindings = credentialBindings
+        self.secretsProvider = secretsProvider
         self.requiredAssurance = requiredAssurance
         self.authorityCeiling = authorityCeiling
     }
@@ -149,14 +159,27 @@ public struct AgentDefinitionRevision: Hashable, Sendable, Equatable, Codable {
     /// code-requirement, allows-unsigned), integration (hook-host,
     /// agent-tag), resource-profile (id, projects, agents,
     /// executable-links, read-files, read-trees, write-trees,
-    /// credentials, environment, keychain), credential-bindings,
-    /// required-assurance, authority-ceiling.
+    /// credentials, environment, keychain, secrets*),
+    /// secrets-provider*, credential-bindings, required-assurance,
+    /// authority-ceiling.
     ///
     /// Framing: ASCII field name, LF, decimal UTF-8 byte count, LF, raw
     /// bytes. Absent optionals encode as the field name followed by `-`.
     /// Order-insignificant lists sort byte-wise before encoding, with a
     /// leading element count and presence-tagged optionals so empty and
     /// absent values never collide with real ones.
+    ///
+    /// Starred fields are conditional extensions: `secrets-provider` is
+    /// emitted only when it differs from the `SecretRef.defaultProvider` default, and the
+    /// `secrets` profile part only when the entry list is non-empty.
+    /// Absent therefore unambiguously means default, and a definition
+    /// that uses no broker capability projects byte-identically to the
+    /// pre-extension shape. That stability is load-bearing: the fixed
+    /// cross-implementation intent vectors embed this digest, and
+    /// definitions that predate the fields must resolve to the same
+    /// revision before and after the upgrade. Any non-default broker
+    /// state changes the bytes, so a provider swap or a new entry
+    /// still reads as a new definition requiring fresh identity.
     static func canonicalProjection(_ definition: AgentDefinition) -> [UInt8] {
         var out: [UInt8] = []
         appendField(&out, name: "version", value: "rv-agent-definition-revision/v1")
@@ -169,6 +192,9 @@ public struct AgentDefinitionRevision: Hashable, Sendable, Equatable, Codable {
         appendOptional(&out, name: "integration.hook-host", value: definition.hookHost?.rawValue)
         appendOptional(&out, name: "integration.agent-tag", value: definition.agentTag)
         appendField(&out, name: "resource-profile", value: canonicalResourceProfile(definition.resourceProfile))
+        if definition.secretsProvider != SecretRef.defaultProvider {
+            appendField(&out, name: "secrets-provider", value: definition.secretsProvider)
+        }
         appendList(&out, name: "credential-bindings", values: definition.credentialBindings)
         appendField(&out, name: "required-assurance", value: definition.requiredAssurance.rawValue)
         appendList(&out, name: "authority-ceiling", values: definition.authorityCeiling.scopes)
@@ -215,6 +241,21 @@ public struct AgentDefinitionRevision: Hashable, Sendable, Equatable, Codable {
                     }
                 )
         )
+        // Conditional extension: omitted when empty so profiles that
+        // use no broker capability project byte-identically to the
+        // pre-extension shape (see canonicalProjection).
+        if profile.secrets.isEmpty == false {
+            parts.append(
+                "secrets="
+                    + canonicalStrings(
+                        profile.secrets.map {
+                            escape($0.provider) + "\u{0}" + escape($0.item) + "\u{0}"
+                                + canonicalOptional($0.field) + "\u{0}" + escape($0.env) + "\u{0}"
+                                + canonicalStrings($0.agents ?? [])
+                        }
+                    )
+            )
+        }
         return parts.joined(separator: "\n")
     }
 

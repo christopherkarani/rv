@@ -1,0 +1,554 @@
+Building for debugging...
+[Computing dependencies]
+[Provisioning 1 / 100]
+[Using on-disk description]
+[1 / 2] rvd-product
+[1 / 57] RVIsolation
+[2 / 17] SwiftTerm
+warning: missing creator for mutated node: ('/Users/chriskarani/.herdr/worktrees/rv/worktree-clear-stone-fd72/.build/out/Products/Debug/SwiftTerm_SwiftTerm.bundle/Contents/MacOS')
+Build complete! (1.75 sec)
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite "RuntimeAdversarial" started.
+􀟈  Test descendantsCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test case passing 1 argument launcher → .sh to descendantsCannotWriteOutsideWorkspace(_:) started.
+adversarial technique=sh executable=/bin/sh verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument launcher → .bash to descendantsCannotWriteOutsideWorkspace(_:) started.
+adversarial technique=bash executable=/bin/bash verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument launcher → .zsh to descendantsCannotWriteOutsideWorkspace(_:) started.
+adversarial technique=zsh executable=/bin/zsh verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument launcher → .env to descendantsCannotWriteOutsideWorkspace(_:) started.
+adversarial technique=env executable=/usr/bin/env verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument launcher → .xargs to descendantsCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test case passing 1 argument launcher → .python to descendantsCannotWriteOutsideWorkspace(_:) started.
+adversarial technique=python coverage=NOT-TESTED reason=outside-baseline-or-stub
+􀟈  Test case passing 1 argument launcher → .ruby to descendantsCannotWriteOutsideWorkspace(_:) started.
+adversarial technique=ruby executable=/usr/bin/ruby verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument launcher → .node to descendantsCannotWriteOutsideWorkspace(_:) started.
+adversarial technique=node coverage=NOT-TESTED reason=outside-baseline-or-stub
+􁁛  Test descendantsCannotWriteOutsideWorkspace(_:) with 8 test cases passed after 12.231 seconds.
+􀟈  Test shellIndirectionCannotRemoveWriteFence(_:) started.
+􀟈  Test case passing 1 argument technique → "nested" to shellIndirectionCannotRemoveWriteFence(_:) started.
+adversarial technique=nested verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument technique → "exec" to shellIndirectionCannotRemoveWriteFence(_:) started.
+adversarial technique=exec verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument technique → "background-wait" to shellIndirectionCannotRemoveWriteFence(_:) started.
+adversarial technique=background-wait verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument technique → "env-shebang" to shellIndirectionCannotRemoveWriteFence(_:) started.
+adversarial technique=env-shebang verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument technique → "path-replacement" to shellIndirectionCannotRemoveWriteFence(_:) started.
+adversarial technique=path-replacement verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument technique → "executable-replacement" to shellIndirectionCannotRemoveWriteFence(_:) started.
+adversarial technique=executable-replacement verdict=WRITE-DENIED
+􁁛  Test shellIndirectionCannotRemoveWriteFence(_:) with 6 test cases passed after 12.750 seconds.
+􀟈  Test relativeTraversalCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test case passing 1 argument target → "../outside" to relativeTraversalCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test case passing 1 argument target → "../../sibling/outside" to relativeTraversalCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test case passing 1 argument target → "./nested/../../outside" to relativeTraversalCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test relativeTraversalCannotWriteOutsideWorkspace(_:) with 3 test cases passed after 6.295 seconds.
+􀟈  Test symlinkChainsCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test case passing 1 argument createdByAgent → false to symlinkChainsCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test case passing 1 argument createdByAgent → true to symlinkChainsCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test symlinkChainsCannotWriteOutsideWorkspace(_:) with 2 test cases passed after 3.908 seconds.
+􀟈  Test renameCannotMoveAcrossWriteBoundary() started.
+􁁛  Test renameCannotMoveAcrossWriteBoundary() passed after 4.253 seconds.
+􀟈  Test agentCannotCreateAnOutsideHardlinkOrMutateOutsideSource() started.
+􁁛  Test agentCannotCreateAnOutsideHardlinkOrMutateOutsideSource() passed after 2.362 seconds.
+􀟈  Test preexistingHardlinkAliasRefusesLaunchBeforeExecution() started.
+􁁛  Test preexistingHardlinkAliasRefusesLaunchBeforeExecution() passed after 0.001 seconds.
+􀟈  Test hardlinkCreatedAfterPreflightCannotMutateOutsideInode() started.
+􁁛  Test hardlinkCreatedAfterPreflightCannotMutateOutsideInode() passed after 2.243 seconds.
+􀟈  Test nestedDirectoryEditsPublishAfterLinkCountChanges() started.
+􁁛  Test nestedDirectoryEditsPublishAfterLinkCountChanges() passed after 2.088 seconds.
+􀟈  Test knownGapSyntheticCredentialsAreReadableButCannotBeOverwritten() started.
+􁁛  Test knownGapSyntheticCredentialsAreReadableButCannotBeOverwritten() passed after 53.268 seconds.
+􀟈  Test knownGapWorkspaceGitHooksAndRVConfigurationRemainWritable() started.
+adversarial technique=workspace-control-files security=NOT-SATISFIED reason=no-protected-subpaths
+􁁛  Test knownGapWorkspaceGitHooksAndRVConfigurationRemainWritable() passed after 8.119 seconds.
+􀟈  Test concurrentWorkspacesCannotAcquireEachOthersWriteAuthority() started.
+􁁛  Test concurrentWorkspacesCannotAcquireEachOthersWriteAuthority() passed after 2.437 seconds.
+􀟈  Test backgroundChildCannotRetainWorkspaceAuthorityAfterReturn() started.
+􁁛  Test backgroundChildCannotRetainWorkspaceAuthorityAfterReturn() passed after 2.382 seconds.
+􀟈  Test nestedShellBackgroundChildCannotRetainWorkspaceAuthorityAfterReturn() started.
+􁁛  Test nestedShellBackgroundChildCannotRetainWorkspaceAuthorityAfterReturn() passed after 2.386 seconds.
+􀟈  Test spawnIsAllowedWhileGroupEscapeStaysDenied() started.
+􁁛  Test spawnIsAllowedWhileGroupEscapeStaysDenied() passed after 2.343 seconds.
+􀟈  Test setsidProbeCannotRetainWorkspaceAuthorityAfterReturn() started.
+􁁛  Test setsidProbeCannotRetainWorkspaceAuthorityAfterReturn() passed after 2.649 seconds.
+􀟈  Test doubleForkProbeCannotRetainWorkspaceAuthorityAfterReturn() started.
+􁁛  Test doubleForkProbeCannotRetainWorkspaceAuthorityAfterReturn() passed after 2.819 seconds.
+􀟈  Test posixSpawnSetsidProbeCannotRetainWorkspaceAuthorityAfterReturn() started.
+􁁛  Test posixSpawnSetsidProbeCannotRetainWorkspaceAuthorityAfterReturn() passed after 2.614 seconds.
+􀟈  Test knownGapCanSignalSyntheticUnrelatedProcess() started.
+􁁛  Test knownGapCanSignalSyntheticUnrelatedProcess() passed after 2.537 seconds.
+􀟈  Test containedShellCanSignalItsOwnChild() started.
+􁁛  Test containedShellCanSignalItsOwnChild() passed after 2.313 seconds.
+􁁛  Suite "RuntimeAdversarial" passed after 130.007 seconds.
+􁁛  Test run with 20 tests in 1 suite passed after 130.007 seconds.
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite SecretsAuditRecordsTests started.
+􀟈  Test rotate_disabledReturnsFalseWithoutTouchingDisk() started.
+􀟈  Test ship_linesDecodeBackWithRedactedCausesOnly() started.
+􀟈  Test cause_roundTripsVerbatim() started.
+􀟈  Test append_isSerializedAcrossConcurrentWriters() started.
+􀟈  Test pruned_boundaryTimestampIsKept() started.
+􀟈  Test append_backdatedRowThrowsRowExpired() started.
+􀟈  Test ship_legacyCursorWithoutDuplicateIndexDecodesAsZero() started.
+􀟈  Test paths_layoutMatchesDenialLedgerConvention() started.
+􀟈  Test ship_shipsDuplicateKeyRowsAcrossBatches() started.
+􀟈  Test executionID_validatingRoundTrips(text:) started.
+􀟈  Test retention_validatedClampsFloors() started.
+􀟈  Test load_skipsUnknownKindLine() started.
+􀟈  Test shipConfig_validatedClampsAndLocalOnlyHasNoEndpoint() started.
+􀟈  Test append_ledgerFullWhenRotationDisabled() started.
+􀟈  Test addressOrRef_rejectsUnknownKind() started.
+􀟈  Test approvalLink_storeKeyRoundTrips() started.
+􀟈  Test rotate_blockedDirectoryFailsClosed() started.
+􀟈  Test ledgerFull_recoversAfterPurgeExpired() started.
+􀟈  Test kind_rejectsUnknown() started.
+􀟈  Test recordsIncludingRotated_survivesRestart() started.
+􀟈  Test stress_fullLifecyclesPersistAndOrderNewestFirst() started.
+􀟈  Test record_jsonHoldsLabelsOnly() started.
+􀟈  Test append_survivesRestart() started.
+􀟈  Test cause_keepsBenignTextVerbatim() started.
+􀟈  Test kind_wireNamesMatchSpec(kind:wire:) started.
+􀟈  Test recordsIncludingRotated_respectsRetentionOnUnion() started.
+􀟈  Test pruned_dropsOlderThanWindowAndCapsRows() started.
+􀟈  Test cause_redactsSecretPrefixes(raw:) started.
+􀟈  Test purgeExpired_dropsStaleRowsWithoutAppending() started.
+􀟈  Test append_exactFitBudgetSucceeds() started.
+􀟈  Test approvalDecision_mapsEveryStoreState() started.
+􀟈  Test cause_truncatesPastCapWithMarker() started.
+􀟈  Test load_skipsTornLinesKeepingValidRows() started.
+􀟈  Test recordsIncludingRotated_ignoresGenerationsWhenDisabled() started.
+􀟈  Test rotate_movesHotToGenerationOne() started.
+􀟈  Test append_lockPathIsDirectoryDeniesWithLockFailed() started.
+􀟈  Test pruned_ordersTiesDeterministically() started.
+􀟈  Test executionID_rejectsMalformed(text:) started.
+􀟈  Test purgeExpired_emptyStoreSucceeds() started.
+􀟈  Test append_setsOwnerOnlyPermissions() started.
+􀟈  Test opaqueDefect_roundTripsCorrelationID() started.
+􀟈  Test store_configDirectoryInitPointsAtLedgerFile() started.
+􀟈  Test append_rowDisplacedByNewerRowsThrowsRowExpired() started.
+􀟈  Test record_jsonlBytesMatchGolden() started.
+􀟈  Test ship_sortsUnsortedInputOldestFirst() started.
+􀟈  Test correlationID_validatingRoundTrips() started.
+􀟈  Test append_blockedDirectoryFailsClosed() started.
+􀟈  Test cause_errorTaxonomyNamesProviderOnly(error:label:) started.
+􀟈  Test addressOrRef_secretLabelsRoundTrip() started.
+􀟈  Test principal_rejectsMalformedInstanceID() started.
+􀟈  Test rotate_missingFileReturnsFalse() started.
+􀟈  Test idTypes_areDistinct() started.
+􀟈  Test ship_skipsNothingAcrossSameTimestampCollisions() started.
+􀟈  Test cause_redactsBearerToken() started.
+􀟈  Test correlationIDs_mintUnique() started.
+􀟈  Test rotate_immutableHotFileFailsClosed() started.
+􀟈  Test decision_roundTrips(decision:) started.
+􀟈  Test append_enforcesMaxRowsOnWrite() started.
+􀟈  Test permissions_missingDirectoryReportsFalse() started.
+􀟈  Test factories_tagKind(kind:_:) started.
+􀟈  Test addressOrRef_toolLiteralRoundTripsDotTolerantSegment() started.
+􀟈  Test purgeExpired_blockedDirectoryFailsClosed() started.
+􀟈  Test records_corruptFileReadsEmptyThenAppendHeals() started.
+􀟈  Test purgeExpired_tempPathIsDirectoryFailsClosed() started.
+􀟈  Test recordsIncludingRotated_skipsTornLinesInGenerations() started.
+􀟈  Test ledger_holdsNoSecondPendingMechanism() started.
+􀟈  Test cause_redactsAssignmentKeepingLabel() started.
+􀟈  Test executionIDs_mintUnique() started.
+􀟈  Test ship_clampsBatchSize() started.
+􀟈  Test principal_fromTrustedContextCarriesLabelsOnly() started.
+􀟈  Test ship_cursorRoundTrips() started.
+􀟈  Test permissions_widenedRotatedGenerationReportsFalse() started.
+􀟈  Test append_unicodeAndHostileLabelsRoundTrip() started.
+􀟈  Test opaqueDefect_rejectsMalformed(message:) started.
+􀟈  Test rotate_skipsMissingMiddleGeneration() started.
+􀟈  Test idCodable_rejectsInvalidStrings() started.
+􀟈  Test permissions_looseHotFileReportsFalse() started.
+􀟈  Test addressOrRef_rejectsMalformedToolLiteral() started.
+􀟈  Test append_singleRowOverBudgetDeniesEvenWithRotation() started.
+􀟈  Test append_thenRecordsNewestFirst() started.
+􀟈  Test case passing 1 argument text → "11111111-1111-1111-1111-111111111111" to executionID_validatingRoundTrips(text:) started.
+􀟈  Test rotate_shiftsGenerationsAndDeletesBeyondCap() started.
+􀟈  Test case passing 1 argument text → "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE" to executionID_validatingRoundTrips(text:) started.
+􀟈  Test approvalLink_joinsOnlyMatchingStoreKey() started.
+􀟈  Test decision_rejectsUnknown() started.
+􀟈  Test permissions_looseDirectoryReportsFalse() started.
+􀟈  Test records_forExecutionFilters() started.
+􀟈  Test cause_redactsPEMBlock() started.
+􀟈  Test ship_batchesOldestFirstAndAdvancesCursor() started.
+􀟈  Test append_rotatesAutomaticallyWhenOverBudget() started.
+􀟈  Test records_missingFileIsEmptyAndCreatesNothing() started.
+􀟈  Test case passing 2 arguments kind → .secretResolve, wire → "secret.resolve" to kind_wireNamesMatchSpec(kind:wire:) started.
+􀟈  Test case passing 2 arguments kind → .toolDispatch, wire → "tool.dispatch" to kind_wireNamesMatchSpec(kind:wire:) started.
+􀟈  Test case passing 1 argument raw → "key ghp_abc123def456" to cause_redactsSecretPrefixes(raw:) started.
+􀟈  Test case passing 1 argument raw → "key sk-live-51H7x9Q2mZ8" to cause_redactsSecretPrefixes(raw:) started.
+􀟈  Test case passing 2 arguments kind → .toolApproval, wire → "tool.approval" to kind_wireNamesMatchSpec(kind:wire:) started.
+􀟈  Test case passing 1 argument raw → "key AKIAIOSFODNN7EXAMPLE" to cause_redactsSecretPrefixes(raw:) started.
+􀟈  Test case passing 2 arguments kind → .toolOutcome, wire → "tool.outcome" to kind_wireNamesMatchSpec(kind:wire:) started.
+􀟈  Test case passing 1 argument raw → "key github_pat_22AbCDeFgHiJk" to cause_redactsSecretPrefixes(raw:) started.
+􀟈  Test case passing 1 argument text → "" to executionID_rejectsMalformed(text:) started.
+􀟈  Test case passing 1 argument text → "not-a-uuid" to executionID_rejectsMalformed(text:) started.
+􀟈  Test case passing 1 argument text → "11111111-1111-1111-1111-11111111111" to executionID_rejectsMalformed(text:) started.
+􀟈  Test case passing 1 argument text → "11111111-1111-1111-1111-111111111111-extra" to executionID_rejectsMalformed(text:) started.
+􀟈  Test case passing 1 argument text → "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" to executionID_rejectsMalformed(text:) started.
+􀟈  Test case passing 1 argument text → " 11111111-1111-1111-1111-111111111111 " to executionID_rejectsMalformed(text:) started.
+􀟈  Test case passing 2 arguments error → .invalidRef("vault-http"), label → "invalidRef:vault-http" to cause_errorTaxonomyNamesProviderOnly(error:label:) started.
+􀟈  Test case passing 2 arguments error → .notFound("file"), label → "notFound:file" to cause_errorTaxonomyNamesProviderOnly(error:label:) started.
+􀟈  Test case passing 2 arguments error → .denied("keychain"), label → "denied:keychain" to cause_errorTaxonomyNamesProviderOnly(error:label:) started.
+􀟈  Test case passing 2 arguments error → .identityRequired, label → "identityRequired" to cause_errorTaxonomyNamesProviderOnly(error:label:) started.
+􀟈  Test case passing 2 arguments error → .leaseExpired("vault-http"), label → "leaseExpired:vault-http" to cause_errorTaxonomyNamesProviderOnly(error:label:) started.
+􀟈  Test case passing 2 arguments error → .providerDown("vault-http"), label → "providerDown:vault-http" to cause_errorTaxonomyNamesProviderOnly(error:label:) started.
+􀟈  Test case passing 2 arguments error → .oversized("file"), label → "oversized:file" to cause_errorTaxonomyNamesProviderOnly(error:label:) started.
+􀟈  Test case passing 2 arguments error → .policyDenied, label → "policyDenied" to cause_errorTaxonomyNamesProviderOnly(error:label:) started.
+􀟈  Test case passing 1 argument decision → .resolved to decision_roundTrips(decision:) started.
+􀟈  Test case passing 2 arguments error → .timeout("vault-http"), label → "timeout:vault-http" to cause_errorTaxonomyNamesProviderOnly(error:label:) started.
+􀟈  Test case passing 1 argument decision → .dropped to decision_roundTrips(decision:) started.
+􀟈  Test case passing 1 argument decision → .allowed to decision_roundTrips(decision:) started.
+􀟈  Test case passing 1 argument decision → .pendingApproval to decision_roundTrips(decision:) started.
+􀟈  Test case passing 1 argument decision → .denied to decision_roundTrips(decision:) started.
+􀟈  Test case passing 1 argument decision → .approved to decision_roundTrips(decision:) started.
+􀟈  Test case passing 1 argument decision → .declined to decision_roundTrips(decision:) started.
+􀟈  Test case passing 2 arguments kind → .secretResolve, "secretResolve" to factories_tagKind(kind:_:) started.
+􀟈  Test case passing 1 argument decision → .expired to decision_roundTrips(decision:) started.
+􀟈  Test case passing 2 arguments kind → .toolDispatch, "toolDispatch" to factories_tagKind(kind:_:) started.
+􀟈  Test case passing 1 argument decision → .canceled to decision_roundTrips(decision:) started.
+􀟈  Test case passing 1 argument decision → .timedOut to decision_roundTrips(decision:) started.
+􀟈  Test case passing 1 argument decision → .consumed to decision_roundTrips(decision:) started.
+􀟈  Test case passing 2 arguments kind → .toolApproval, "toolApproval" to factories_tagKind(kind:_:) started.
+􀟈  Test case passing 1 argument decision → .succeeded to decision_roundTrips(decision:) started.
+􀟈  Test case passing 2 arguments kind → .toolOutcome, "toolOutcome" to factories_tagKind(kind:_:) started.
+􀟈  Test case passing 1 argument decision → .failed to decision_roundTrips(decision:) started.
+􀟈  Test case passing 1 argument message → "" to opaqueDefect_rejectsMalformed(message:) started.
+􀟈  Test case passing 1 argument message → "Internal tool error" to opaqueDefect_rejectsMalformed(message:) started.
+􀟈  Test case passing 1 argument message → "Internal tool error []" to opaqueDefect_rejectsMalformed(message:) started.
+􀟈  Test case passing 1 argument message → "Internal tool error [not-a-uuid]" to opaqueDefect_rejectsMalformed(message:) started.
+􀟈  Test case passing 1 argument message → "Internal tool error [[22222222-2222-2222-2222-222222222222]]" to opaqueDefect_rejectsMalformed(message:) started.
+􀟈  Test case passing 1 argument message → "boom [22222222-2222-2222-2222-222222222222] extra [33333333-3333-3333-3333-333333333333]" to opaqueDefect_rejectsMalformed(message:) started.
+􁁛  Test ship_legacyCursorWithoutDuplicateIndexDecodesAsZero() passed after 0.025 seconds.
+􁁛  Test retention_validatedClampsFloors() passed after 0.025 seconds.
+􁁛  Test cause_roundTripsVerbatim() passed after 0.025 seconds.
+􁁛  Test pruned_boundaryTimestampIsKept() passed after 0.026 seconds.
+􁁛  Test executionID_validatingRoundTrips(text:) with 2 test cases passed after 0.026 seconds.
+􁁛  Test shipConfig_validatedClampsAndLocalOnlyHasNoEndpoint() passed after 0.026 seconds.
+􁁛  Test approvalLink_storeKeyRoundTrips() passed after 0.027 seconds.
+􁁛  Test paths_layoutMatchesDenialLedgerConvention() passed after 0.027 seconds.
+􁁛  Test ship_shipsDuplicateKeyRowsAcrossBatches() passed after 0.027 seconds.
+􁁛  Test kind_rejectsUnknown() passed after 0.027 seconds.
+􁁛  Test record_jsonHoldsLabelsOnly() passed after 0.027 seconds.
+􁁛  Test ship_linesDecodeBackWithRedactedCausesOnly() passed after 0.028 seconds.
+􁁛  Test cause_keepsBenignTextVerbatim() passed after 0.027 seconds.
+􁁛  Test pruned_dropsOlderThanWindowAndCapsRows() passed after 0.027 seconds.
+􁁛  Test kind_wireNamesMatchSpec(kind:wire:) with 4 test cases passed after 0.027 seconds.
+􁁛  Test cause_redactsSecretPrefixes(raw:) with 4 test cases passed after 0.027 seconds.
+􁁛  Test addressOrRef_rejectsUnknownKind() passed after 0.028 seconds.
+􁁛  Test approvalDecision_mapsEveryStoreState() passed after 0.027 seconds.
+􁁛  Test rotate_blockedDirectoryFailsClosed() passed after 0.069 seconds.
+􁁛  Test cause_truncatesPastCapWithMarker() passed after 0.069 seconds.
+􁁛  Test load_skipsTornLinesKeepingValidRows() passed after 0.069 seconds.
+􁁛  Test load_skipsUnknownKindLine() passed after 0.069 seconds.
+􁁛  Test pruned_ordersTiesDeterministically() passed after 0.069 seconds.
+􁁛  Test executionID_rejectsMalformed(text:) with 6 test cases passed after 0.069 seconds.
+􁁛  Test append_backdatedRowThrowsRowExpired() passed after 0.069 seconds.
+􁁛  Test append_exactFitBudgetSucceeds() passed after 0.069 seconds.
+􁁛  Test opaqueDefect_roundTripsCorrelationID() passed after 0.069 seconds.
+􁁛  Test store_configDirectoryInitPointsAtLedgerFile() passed after 0.069 seconds.
+􁁛  Test rotate_disabledReturnsFalseWithoutTouchingDisk() passed after 0.069 seconds.
+􁁛  Test record_jsonlBytesMatchGolden() passed after 0.069 seconds.
+􁁛  Test append_survivesRestart() passed after 0.069 seconds.
+􁁛  Test correlationID_validatingRoundTrips() passed after 0.069 seconds.
+􁁛  Test ship_sortsUnsortedInputOldestFirst() passed after 0.069 seconds.
+􁁛  Test cause_errorTaxonomyNamesProviderOnly(error:label:) with 9 test cases passed after 0.069 seconds.
+􁁛  Test principal_rejectsMalformedInstanceID() passed after 0.069 seconds.
+􁁛  Test addressOrRef_secretLabelsRoundTrip() passed after 0.069 seconds.
+􁁛  Test append_lockPathIsDirectoryDeniesWithLockFailed() passed after 0.069 seconds.
+􁁛  Test idTypes_areDistinct() passed after 0.069 seconds.
+􁁛  Test ship_skipsNothingAcrossSameTimestampCollisions() passed after 0.069 seconds.
+􁁛  Test cause_redactsBearerToken() passed after 0.069 seconds.
+􁁛  Test correlationIDs_mintUnique() passed after 0.069 seconds.
+􁁛  Test recordsIncludingRotated_survivesRestart() passed after 0.069 seconds.
+􁁛  Test decision_roundTrips(decision:) with 13 test cases passed after 0.069 seconds.
+􁁛  Test append_blockedDirectoryFailsClosed() passed after 0.069 seconds.
+􁁛  Test permissions_missingDirectoryReportsFalse() passed after 0.069 seconds.
+􁁛  Test addressOrRef_toolLiteralRoundTripsDotTolerantSegment() passed after 0.069 seconds.
+􁁛  Test rotate_missingFileReturnsFalse() passed after 0.069 seconds.
+􁁛  Test factories_tagKind(kind:_:) with 4 test cases passed after 0.069 seconds.
+􁁛  Test purgeExpired_emptyStoreSucceeds() passed after 0.069 seconds.
+􁁛  Test append_ledgerFullWhenRotationDisabled() passed after 0.069 seconds.
+􁁛  Test purgeExpired_dropsStaleRowsWithoutAppending() passed after 0.069 seconds.
+􁁛  Test purgeExpired_blockedDirectoryFailsClosed() passed after 0.069 seconds.
+􁁛  Test rotate_movesHotToGenerationOne() passed after 0.069 seconds.
+􁁛  Test cause_redactsAssignmentKeepingLabel() passed after 0.069 seconds.
+􁁛  Test ship_clampsBatchSize() passed after 0.069 seconds.
+􁁛  Test executionIDs_mintUnique() passed after 0.069 seconds.
+􁁛  Test recordsIncludingRotated_ignoresGenerationsWhenDisabled() passed after 0.069 seconds.
+􁁛  Test principal_fromTrustedContextCarriesLabelsOnly() passed after 0.069 seconds.
+􁁛  Test ship_cursorRoundTrips() passed after 0.069 seconds.
+􁁛  Test opaqueDefect_rejectsMalformed(message:) with 6 test cases passed after 0.069 seconds.
+􁁛  Test append_setsOwnerOnlyPermissions() passed after 0.069 seconds.
+􁁛  Test ledgerFull_recoversAfterPurgeExpired() passed after 0.070 seconds.
+􁁛  Test rotate_immutableHotFileFailsClosed() passed after 0.069 seconds.
+􁁛  Test idCodable_rejectsInvalidStrings() passed after 0.069 seconds.
+􁁛  Test recordsIncludingRotated_respectsRetentionOnUnion() passed after 0.069 seconds.
+􁁛  Test records_corruptFileReadsEmptyThenAppendHeals() passed after 0.069 seconds.
+􁁛  Test addressOrRef_rejectsMalformedToolLiteral() passed after 0.069 seconds.
+􁁛  Test approvalLink_joinsOnlyMatchingStoreKey() passed after 0.069 seconds.
+􁁛  Test decision_rejectsUnknown() passed after 0.069 seconds.
+􁁛  Test recordsIncludingRotated_skipsTornLinesInGenerations() passed after 0.069 seconds.
+􁁛  Test append_unicodeAndHostileLabelsRoundTrip() passed after 0.069 seconds.
+􁁛  Test cause_redactsPEMBlock() passed after 0.069 seconds.
+􁁛  Test ship_batchesOldestFirstAndAdvancesCursor() passed after 0.069 seconds.
+􁁛  Test ledger_holdsNoSecondPendingMechanism() passed after 0.069 seconds.
+􁁛  Test records_missingFileIsEmptyAndCreatesNothing() passed after 0.069 seconds.
+􁁛  Test permissions_looseDirectoryReportsFalse() passed after 0.069 seconds.
+􁁛  Test append_rowDisplacedByNewerRowsThrowsRowExpired() passed after 0.069 seconds.
+􁁛  Test append_singleRowOverBudgetDeniesEvenWithRotation() passed after 0.069 seconds.
+􁁛  Test purgeExpired_tempPathIsDirectoryFailsClosed() passed after 0.069 seconds.
+􁁛  Test permissions_widenedRotatedGenerationReportsFalse() passed after 0.069 seconds.
+􁁛  Test permissions_looseHotFileReportsFalse() passed after 0.069 seconds.
+􁁛  Test append_thenRecordsNewestFirst() passed after 0.069 seconds.
+􁁛  Test append_rotatesAutomaticallyWhenOverBudget() passed after 0.069 seconds.
+􁁛  Test records_forExecutionFilters() passed after 0.069 seconds.
+􁁛  Test rotate_skipsMissingMiddleGeneration() passed after 0.069 seconds.
+􁁛  Test rotate_shiftsGenerationsAndDeletesBeyondCap() passed after 0.069 seconds.
+􁁛  Test append_enforcesMaxRowsOnWrite() passed after 0.069 seconds.
+􁁛  Test append_isSerializedAcrossConcurrentWriters() passed after 0.086 seconds.
+􁁛  Test stress_fullLifecyclesPersistAndOrderNewestFirst() passed after 2.641 seconds.
+􁁛  Suite SecretsAuditRecordsTests passed after 2.642 seconds.
+􁁛  Test run with 89 tests in 1 suite passed after 2.642 seconds.
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite "Secrets redaction" started.
+􀟈  Suite "ReviewSanitizer hardening" started.
+􀟈  Test doubleEncodedPATIsRedacted() started.
+􀟈  Test logScrubsSecretsButKeepsLabels() started.
+􀟈  Test bearerWithTrailingColonStillOwnsFollower() started.
+􀟈  Test bareBasicWithoutAuthContextKeepsValue() started.
+􀟈  Test secretFlagBeforeAnotherFlagKeepsBoth() started.
+􀟈  Test lowercaseAWSKeyIDIsRedacted() started.
+􀟈  Test spacedEqualsMatchesKeyCaseInsensitively() started.
+􀟈  Test urlPercentEncodedValuesAreStillStripped() started.
+􀟈  Test headersAlwaysRedactAuth() started.
+􀟈  Test sanitizeShellRedactsFlagValueInSupportingCommand() started.
+􀟈  Test headersRedactEverythingOutsideTheSafeSet() started.
+􀟈  Test overlongURLFailsClosed() started.
+􀟈  Test spacedEqualsRedactsValue() started.
+􀟈  Test bearerFollowOnIsRedacted() started.
+􀟈  Test underscoreKeyNameRedactsPlainValue() started.
+􀟈  Test urlStripsQueryValuesButKeepsNames() started.
+􀟈  Test zeroWidthKeyStillRedactsValue() started.
+􀟈  Test headersEmptyStaysEmptyAndEmptyNameRedacted() started.
+􀟈  Test suffixedSecretFlagOwnsItsValue() started.
+􀟈  Test emptyAndBlankInputsSurvive() started.
+􀟈  Test plainLogPassesThroughUntouched() started.
+􀟈  Test uppercasePATIsRedacted() started.
+􀟈  Test urlSizeCapCountsMultibyteCharactersAsBytes() started.
+􀟈  Test logRedactsPEMBlocks() started.
+􀟈  Test urlMissingSchemeWithFragmentStillScrubsCredentialShapedPairs() started.
+􀟈  Test patPrefixesCoverGitLabSlackAndGCP() started.
+􀟈  Test urlMissingSchemeFallsBackToCredentialScrub() started.
+􀟈  Test fingerprintColonsSurvive() started.
+􀟈  Test percentEncodedPathSurvives() started.
+􀟈  Test spacedEqualsKeepsFollowingWords() started.
+􀟈  Test analyticsAdmitsOnlyBooleansAndCounts() started.
+􀟈  Test keySubstringsWithoutUnderscoreSurvive() started.
+􀟈  Test commaGluedPATIsRedacted() started.
+􀟈  Test urlEmptySchemeOrAuthorityFallsBackToCredentialScrub() started.
+􀟈  Test secretShapedKeyOrTailDropsWholeToken() started.
+􀟈  Test urlRedactsSecretShapedValuelessPairs() started.
+􀟈  Test uppercasePEMRedactsWholeText() started.
+􀟈  Test headersRejectConfusableAndPaddedSafeNames() started.
+􀟈  Test spacedColonValueIsRedacted() started.
+􀟈  Test overlongLogStillScrubbed() started.
+􀟈  Test urlStripsUserinfoButKeepsHostPortPath() started.
+􀟈  Test urlFragmentCutBeforeUserinfoFailsClosed() started.
+􀟈  Test doubleEqualsAndColonEqualsSeparatorsRedact() started.
+􀟈  Test logRedactsBearerFollowOnToken() started.
+􀟈  Test urlControlCharactersInSchemeAuthorityOrPathFailClosed() started.
+􀟈  Test singleDashAndDottedFlagsRedactValues() started.
+􀟈  Test urlKeepsBareFlagsEmptyPairsAndValuelessNames() started.
+􀟈  Test bareUserinfoIsRedacted() started.
+􀟈  Test urlNewlineSmugglingCannotInjectLabels() started.
+􀟈  Test uppercasePrivateKeyProseIsRedacted() started.
+􀟈  Test urlKeepsSchemeHostCaseAndIPv6Literals() started.
+􀟈  Test gluedEqualsSpacedValueRedactsValueAgain() started.
+􀟈  Test schemeUserinfoDirectlyRedacted() started.
+􀟈  Test urlAtSizeCapStillRedactsStructurally() started.
+􀟈  Test secretFlagOwnsItsValue() started.
+􀟈  Test emailLikeValueSurvives() started.
+􀟈  Test spacedColonAuthRedactsSchemeCredentials() started.
+􀟈  Test hyphenatedWordsNeverMatchShortPrefix() started.
+􀟈  Test basicWithAuthorizationContextIsRedacted() started.
+􀟈  Test urlWithoutQueryRoundTrips() started.
+􀟈  Test urlUnicodeUserinfoStrippedAndUnicodePathKept() started.
+􀟈  Test nonSecretFlagsKeepTheirValues() started.
+􀟈  Test urlSplitSmugglingLastAtSignWins() started.
+􀟈  Test percentEncodedPATIsRedacted() started.
+􀟈  Test spacedColonRedactsValue() started.
+􀟈  Test tokenSchemeWithAuthorizationIsRedacted() started.
+􀟈  Test percentEncodedAssignmentIsRedacted() started.
+􀟈  Test quotedPATIsRedacted() started.
+􀟈  Test malformedPercentSurvives() started.
+􀟈  Test analyticsPropertiesRequireEveryValueSafe() started.
+􀟈  Test tokenizeFlagKeepsItsValue() started.
+􀟈  Test urlQueryPairWithMultipleEqualsKeepsNameOnly() started.
+􀟈  Test sanitizeContextDropsIdeographicSpacedKeyMetadata() started.
+􀟈  Test patPrefixSiblingsAndUppercaseAKIA() started.
+􀟈  Test emptyURLStaysEmpty() started.
+􀟈  Test countAssignmentSurvives() started.
+􀟈  Test urlSemicolonSeparatorCannotLeakValues() started.
+􀟈  Test fullwidthAssignmentIsRedacted() started.
+􀟈  Test colonAssignmentRedactsValueButKeepsKey() started.
+􀟈  Test tripleEncodedBenignValueSurvives() started.
+􀟈  Test sanitizeContextRedactsSecretShapedMetadataKeys() started.
+􀟈  Test longTokenWithEmbeddedSecretIsRedacted() started.
+􀟈  Test ideographicSpaceTokenizesLikeASpace() started.
+􀟈  Test urlStripsFragmentEntirely() started.
+􀟈  Test secretFlagWithInlineEqualsKeepsFlag() started.
+􀟈  Test hyphenGluedPATIsRedacted() started.
+􀟈  Test bareKeyFlagOwnsItsValue() started.
+􀟈  Test challengeRealmWithoutCredentialsSurvives() started.
+􀟈  Test placeholderSurvivesResanitization() started.
+􀟈  Test headersKeepSafeSetCaseInsensitively() started.
+􀟈  Test lowercaseArmorRedactsWholeText() started.
+􀟈  Test shortSecretKeyNamesRedactValues() started.
+􀟈  Test urlWithPortAndPathSurvives() started.
+􀟈  Test spacedKeyGluedValueRedactsWholeToken() started.
+􀟈  Test controlCharFoldRedactsAcrossGap() started.
+􀟈  Test pluralSecretFlagOwnsItsValue() started.
+􀟈  Test gluedAuthorizationBearerStillOwnsFollower() started.
+􀟈  Test parenthesizedSecretIsRedacted() started.
+􀟈  Test proseMentioningPrivateKeySurvives() started.
+􀟈  Test emptyUserinfoPartsSurvive() started.
+􀟈  Test sanitizeContextDropsUnderscoreKeyMetadata() started.
+􀟈  Test gluedColonValueAndSpacedColonEqualsRedact() started.
+􀟈  Test lowercaseHexEncodedPATIsRedacted() started.
+􀟈  Test bareKeyAssignmentRedactsValue() started.
+􀟈  Test digestWithProxyAuthorizationIsRedacted() started.
+􀟈  Test githubServerTokenSiblingIsRedacted() started.
+􀟈  Test nbspacedAssignmentRedactsValue() started.
+􀟈  Test spacedEqualsWithNonSecretKeyKeepsValue() started.
+􀟈  Test enDashKeyStillRedactsValue() started.
+􀟈  Test malformedPercentTripletsSurvive() started.
+􀟈  Test proseWithColonsSurvives() started.
+􀟈  Test manyTokenInputStillRedactsTailSecret() started.
+􀟈  Test uppercaseShortPrefixProductCodeSurvives() started.
+􁁛  Test overlongURLFailsClosed() passed after 0.002 seconds.
+􁁛  Test headersRedactEverythingOutsideTheSafeSet() passed after 0.003 seconds.
+􁁛  Test headersAlwaysRedactAuth() passed after 0.003 seconds.
+􁁛  Test bearerFollowOnIsRedacted() passed after 0.003 seconds.
+􁁛  Test urlStripsQueryValuesButKeepsNames() passed after 0.003 seconds.
+􁁛  Test lowercaseAWSKeyIDIsRedacted() passed after 0.003 seconds.
+􁁛  Test spacedEqualsRedactsValue() passed after 0.003 seconds.
+􁁛  Test underscoreKeyNameRedactsPlainValue() passed after 0.003 seconds.
+􁁛  Test urlPercentEncodedValuesAreStillStripped() passed after 0.003 seconds.
+􁁛  Test zeroWidthKeyStillRedactsValue() passed after 0.003 seconds.
+􁁛  Test headersEmptyStaysEmptyAndEmptyNameRedacted() passed after 0.003 seconds.
+􁁛  Test emptyAndBlankInputsSurvive() passed after 0.003 seconds.
+􁁛  Test bearerWithTrailingColonStillOwnsFollower() passed after 0.003 seconds.
+􁁛  Test uppercasePATIsRedacted() passed after 0.003 seconds.
+􁁛  Test bareBasicWithoutAuthContextKeepsValue() passed after 0.003 seconds.
+􁁛  Test suffixedSecretFlagOwnsItsValue() passed after 0.003 seconds.
+􁁛  Test logRedactsPEMBlocks() passed after 0.003 seconds.
+􁁛  Test patPrefixesCoverGitLabSlackAndGCP() passed after 0.003 seconds.
+􁁛  Test urlSizeCapCountsMultibyteCharactersAsBytes() passed after 0.003 seconds.
+􁁛  Test plainLogPassesThroughUntouched() passed after 0.003 seconds.
+􁁛  Test logScrubsSecretsButKeepsLabels() passed after 0.003 seconds.
+􁁛  Test doubleEncodedPATIsRedacted() passed after 0.003 seconds.
+􁁛  Test analyticsAdmitsOnlyBooleansAndCounts() passed after 0.003 seconds.
+􁁛  Test uppercasePEMRedactsWholeText() passed after 0.003 seconds.
+􁁛  Test urlMissingSchemeWithFragmentStillScrubsCredentialShapedPairs() passed after 0.003 seconds.
+􁁛  Test percentEncodedPathSurvives() passed after 0.003 seconds.
+􁁛  Test urlRedactsSecretShapedValuelessPairs() passed after 0.003 seconds.
+􁁛  Test spacedEqualsMatchesKeyCaseInsensitively() passed after 0.003 seconds.
+􁁛  Test urlMissingSchemeFallsBackToCredentialScrub() passed after 0.003 seconds.
+􁁛  Test urlControlCharactersInSchemeAuthorityOrPathFailClosed() passed after 0.003 seconds.
+􁁛  Test spacedColonValueIsRedacted() passed after 0.003 seconds.
+􁁛  Test urlFragmentCutBeforeUserinfoFailsClosed() passed after 0.003 seconds.
+􁁛  Test logRedactsBearerFollowOnToken() passed after 0.003 seconds.
+􁁛  Test spacedEqualsKeepsFollowingWords() passed after 0.003 seconds.
+􁁛  Test urlNewlineSmugglingCannotInjectLabels() passed after 0.003 seconds.
+􁁛  Test uppercasePrivateKeyProseIsRedacted() passed after 0.003 seconds.
+􁁛  Test secretFlagOwnsItsValue() passed after 0.003 seconds.
+􁁛  Test headersRejectConfusableAndPaddedSafeNames() passed after 0.003 seconds.
+􁁛  Test urlAtSizeCapStillRedactsStructurally() passed after 0.003 seconds.
+􁁛  Test doubleEqualsAndColonEqualsSeparatorsRedact() passed after 0.003 seconds.
+􁁛  Test secretFlagBeforeAnotherFlagKeepsBoth() passed after 0.003 seconds.
+􁁛  Test keySubstringsWithoutUnderscoreSurvive() passed after 0.003 seconds.
+􁁛  Test bareUserinfoIsRedacted() passed after 0.003 seconds.
+􁁛  Test secretShapedKeyOrTailDropsWholeToken() passed after 0.003 seconds.
+􁁛  Test urlKeepsSchemeHostCaseAndIPv6Literals() passed after 0.003 seconds.
+􁁛  Test fingerprintColonsSurvive() passed after 0.003 seconds.
+􁁛  Test urlStripsUserinfoButKeepsHostPortPath() passed after 0.003 seconds.
+􁁛  Test commaGluedPATIsRedacted() passed after 0.003 seconds.
+􁁛  Test urlKeepsBareFlagsEmptyPairsAndValuelessNames() passed after 0.003 seconds.
+􁁛  Test gluedEqualsSpacedValueRedactsValueAgain() passed after 0.003 seconds.
+􁁛  Test emailLikeValueSurvives() passed after 0.003 seconds.
+􁁛  Test hyphenatedWordsNeverMatchShortPrefix() passed after 0.003 seconds.
+􁁛  Test schemeUserinfoDirectlyRedacted() passed after 0.003 seconds.
+􁁛  Test sanitizeShellRedactsFlagValueInSupportingCommand() passed after 0.003 seconds.
+􁁛  Test urlWithoutQueryRoundTrips() passed after 0.003 seconds.
+􁁛  Test urlEmptySchemeOrAuthorityFallsBackToCredentialScrub() passed after 0.003 seconds.
+􁁛  Test percentEncodedPATIsRedacted() passed after 0.003 seconds.
+􁁛  Test basicWithAuthorizationContextIsRedacted() passed after 0.003 seconds.
+􁁛  Test singleDashAndDottedFlagsRedactValues() passed after 0.003 seconds.
+􁁛  Test urlQueryPairWithMultipleEqualsKeepsNameOnly() passed after 0.003 seconds.
+􁁛  Test analyticsPropertiesRequireEveryValueSafe() passed after 0.003 seconds.
+􁁛  Test nonSecretFlagsKeepTheirValues() passed after 0.003 seconds.
+􁁛  Test spacedColonRedactsValue() passed after 0.003 seconds.
+􁁛  Test emptyURLStaysEmpty() passed after 0.003 seconds.
+􁁛  Test urlSemicolonSeparatorCannotLeakValues() passed after 0.003 seconds.
+􁁛  Test fullwidthAssignmentIsRedacted() passed after 0.003 seconds.
+􁁛  Test malformedPercentSurvives() passed after 0.003 seconds.
+􁁛  Test quotedPATIsRedacted() passed after 0.003 seconds.
+􁁛  Test urlStripsFragmentEntirely() passed after 0.003 seconds.
+􁁛  Test percentEncodedAssignmentIsRedacted() passed after 0.003 seconds.
+􁁛  Test urlSplitSmugglingLastAtSignWins() passed after 0.003 seconds.
+􁁛  Test hyphenGluedPATIsRedacted() passed after 0.003 seconds.
+􁁛  Test tokenizeFlagKeepsItsValue() passed after 0.003 seconds.
+􁁛  Test patPrefixSiblingsAndUppercaseAKIA() passed after 0.003 seconds.
+􁁛  Test bareKeyFlagOwnsItsValue() passed after 0.003 seconds.
+􁁛  Test headersKeepSafeSetCaseInsensitively() passed after 0.003 seconds.
+􁁛  Test lowercaseArmorRedactsWholeText() passed after 0.003 seconds.
+􁁛  Test sanitizeContextDropsIdeographicSpacedKeyMetadata() passed after 0.003 seconds.
+􁁛  Test tokenSchemeWithAuthorizationIsRedacted() passed after 0.003 seconds.
+􁁛  Test controlCharFoldRedactsAcrossGap() passed after 0.002 seconds.
+􁁛  Test secretFlagWithInlineEqualsKeepsFlag() passed after 0.003 seconds.
+􁁛  Test placeholderSurvivesResanitization() passed after 0.003 seconds.
+􁁛  Test challengeRealmWithoutCredentialsSurvives() passed after 0.003 seconds.
+􁁛  Test urlUnicodeUserinfoStrippedAndUnicodePathKept() passed after 0.003 seconds.
+􁁛  Test tripleEncodedBenignValueSurvives() passed after 0.003 seconds.
+􁁛  Test shortSecretKeyNamesRedactValues() passed after 0.003 seconds.
+􁁛  Test ideographicSpaceTokenizesLikeASpace() passed after 0.003 seconds.
+􁁛  Test sanitizeContextRedactsSecretShapedMetadataKeys() passed after 0.003 seconds.
+􁁛  Test pluralSecretFlagOwnsItsValue() passed after 0.002 seconds.
+􁁛  Test countAssignmentSurvives() passed after 0.003 seconds.
+􁁛  Test spacedKeyGluedValueRedactsWholeToken() passed after 0.003 seconds.
+􁁛  Test gluedAuthorizationBearerStillOwnsFollower() passed after 0.002 seconds.
+􁁛  Test parenthesizedSecretIsRedacted() passed after 0.002 seconds.
+􁁛  Test urlWithPortAndPathSurvives() passed after 0.003 seconds.
+􁁛  Test spacedColonAuthRedactsSchemeCredentials() passed after 0.003 seconds.
+􁁛  Test gluedColonValueAndSpacedColonEqualsRedact() passed after 0.002 seconds.
+􁁛  Test proseMentioningPrivateKeySurvives() passed after 0.002 seconds.
+􁁛  Test emptyUserinfoPartsSurvive() passed after 0.002 seconds.
+􁁛  Test colonAssignmentRedactsValueButKeepsKey() passed after 0.003 seconds.
+􁁛  Test sanitizeContextDropsUnderscoreKeyMetadata() passed after 0.002 seconds.
+􁁛  Test githubServerTokenSiblingIsRedacted() passed after 0.002 seconds.
+􁁛  Test lowercaseHexEncodedPATIsRedacted() passed after 0.002 seconds.
+􁁛  Test digestWithProxyAuthorizationIsRedacted() passed after 0.002 seconds.
+􁁛  Test bareKeyAssignmentRedactsValue() passed after 0.002 seconds.
+􁁛  Test malformedPercentTripletsSurvive() passed after 0.002 seconds.
+􁁛  Test enDashKeyStillRedactsValue() passed after 0.002 seconds.
+􁁛  Test spacedEqualsWithNonSecretKeyKeepsValue() passed after 0.002 seconds.
+􁁛  Test nbspacedAssignmentRedactsValue() passed after 0.002 seconds.
+􁁛  Test uppercaseShortPrefixProductCodeSurvives() passed after 0.001 seconds.
+􁁛  Test proseWithColonsSurvives() passed after 0.001 seconds.
+􁁛  Test longTokenWithEmbeddedSecretIsRedacted() passed after 0.004 seconds.
+􁁛  Test overlongLogStillScrubbed() passed after 0.288 seconds.
+􁁛  Suite "Secrets redaction" passed after 0.289 seconds.
+􁁛  Test manyTokenInputStillRedactsTailSecret() passed after 0.287 seconds.
+􁁛  Suite "ReviewSanitizer hardening" passed after 0.289 seconds.
+􁁛  Test run with 113 tests in 2 suites passed after 0.289 seconds.

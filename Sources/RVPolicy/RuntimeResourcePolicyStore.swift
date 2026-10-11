@@ -66,15 +66,71 @@ public enum RuntimeResourcePolicyStore {
             return .failure(.unreadable)
         }
         guard count <= maximumBytes else { return .failure(.oversized) }
-        return decode(Data(bytes.prefix(count)))
+        let data = Data(bytes.prefix(count))
+        let result = decode(data)
+        // One-shot v1 normalization: profiles written before the
+        // broker-bound secrets entries existed gain the empty list in
+        // place. Best-effort only; the load already succeeded.
+        if case .success = result,
+            let migrated = migrate(data),
+            MigratedDocumentRewrite.rewrite(
+                fileName: "runtime-resources.json",
+                inDirectory: directory,
+                expectedDevice: UInt64(fileStatus.st_dev),
+                expectedInode: UInt64(fileStatus.st_ino),
+                bytes: migrated
+            )
+        {
+            logMigration("runtime-resources.json", in: configDirectory)
+        }
+        return result
+    }
+
+    /// One-shot v1 normalization: inserts the empty broker-entry list
+    /// into profiles written before the field existed. Returns the
+    /// rewritten document, or nil when the data needs no migration. Pure:
+    /// `load(from:)` decides whether to persist the result.
+    static func migrate(_ data: Data) -> Data? {
+        guard data.count <= maximumBytes,
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            root["version"] as? Int == 1,
+            let profiles = root["profiles"] as? [[String: Any]],
+            profiles.contains(where: { $0["secrets"] == nil })
+        else {
+            return nil
+        }
+        var migrated = root
+        migrated["profiles"] = profiles.map { profile in
+            var patched = profile
+            if patched["secrets"] == nil {
+                patched["secrets"] = [Any]()
+            }
+            return patched
+        }
+        guard let rewritten = try? JSONSerialization.data(withJSONObject: migrated, options: [.sortedKeys]),
+            rewritten.count <= maximumBytes
+        else {
+            return nil
+        }
+        return rewritten
+    }
+
+    private static func logMigration(_ fileName: String, in configDirectory: URL) {
+        let path = configDirectory.appendingPathComponent(fileName, isDirectory: false).path
+        FileHandle.standardError.write(
+            Data(("rv: migrated \(path) (added empty broker secrets list)\n").utf8)
+        )
     }
 
     public static func decode(_ data: Data) -> Result<RuntimeResourcePolicy, RuntimeResourcePolicyError> {
         guard data.count <= maximumBytes else { return .failure(.oversized) }
-        guard let document = try? JSONDecoder().decode(RuntimeResourcePolicy.self, from: data) else {
+        guard let dto = try? JSONDecoder().decode(RuntimeResourcePolicyDocument.self, from: data) else {
             return .failure(.invalidDocument)
         }
-        guard document.version == 1 else { return .failure(.unsupportedVersion) }
+        guard dto.version == 1 else { return .failure(.unsupportedVersion) }
+        let document = RuntimeResourcePolicy(
+            version: dto.version, profiles: dto.profiles, defaultProfile: dto.defaultProfile
+        )
         guard validate(document) else { return .failure(.invalidDocument) }
         return .success(document)
     }
@@ -90,6 +146,7 @@ public enum RuntimeResourcePolicyStore {
                 profile.readFiles.count <= 64, profile.readTrees.count <= 32,
                 profile.writeTrees.count <= 16, profile.credentials.count <= 32,
                 profile.environment.count <= 32, profile.keychain.count <= 8,
+                profile.secrets.count <= 8,
                 profile.readFiles.allSatisfy(absolutePath),
                 profile.readTrees.allSatisfy(absolutePath),
                 profile.writeTrees.allSatisfy(absolutePath)
@@ -141,6 +198,25 @@ public enum RuntimeResourcePolicyStore {
             }
             for entry in profile.keychain {
                 guard keychainLabel(entry.service), keychainLabel(entry.account),
+                    entry.field.map(keychainField) ?? true,
+                    environmentName(entry.env),
+                    !reservedEnvironmentNames.contains(entry.env),
+                    variables.insert(entry.env).inserted
+                else { return false }
+                if let agents = entry.agents {
+                    guard agents.count <= 8,
+                        agents.allSatisfy(AgentTagValidator.isValid),
+                        Set(agents).count == agents.count
+                    else { return false }
+                }
+            }
+            // Broker-bound entries share the injected-variable namespace
+            // with environment and keychain entries: a collision would
+            // stage two values into one variable, so it fails closed.
+            // Unknown providers fail closed against the broker allowlist.
+            for entry in profile.secrets {
+                guard SecretRef.allowedProviders.contains(entry.provider),
+                    keychainLabel(entry.item),
                     entry.field.map(keychainField) ?? true,
                     environmentName(entry.env),
                     !reservedEnvironmentNames.contains(entry.env),
@@ -210,4 +286,26 @@ public enum RuntimeResourcePolicyStore {
         "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
         "http_proxy", "https_proxy", "no_proxy",
     ]
+}
+
+/// Temporary alias: tests pin the historical name; new code uses `StrictJSONKey`.
+typealias ResourcePolicyStrictKey = StrictJSONKey
+
+/// Versioned operator document with a closed top-level key set, mirroring
+/// the sibling stores: a mistyped field fails closed instead of loading a
+/// policy the operator did not write. Nested profile keys still decode
+/// through `RuntimeResourceProfile`, where unknown fields decode as
+/// absent and drop their grants (fail-safe direction).
+private struct RuntimeResourcePolicyDocument: Decodable {
+    let version: Int
+    let profiles: [RuntimeResourceProfile]
+    let defaultProfile: String?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: StrictJSONKey.self)
+        try rejectUnknownKeys(container, allowed: ["version", "profiles", "defaultProfile"])
+        version = try container.decode(Int.self, forKey: StrictJSONKey("version"))
+        profiles = try container.decode([RuntimeResourceProfile].self, forKey: StrictJSONKey("profiles"))
+        defaultProfile = try container.decodeIfPresent(String.self, forKey: StrictJSONKey("defaultProfile"))
+    }
 }

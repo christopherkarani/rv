@@ -147,9 +147,14 @@ public enum RuntimeAdmissionStop {
 }
 
 /// What the agent asked for. This is not a canonical HTTP action and not a permit.
+///
+/// MCP dispatch never normalizes to a `ProposedAction`: the dispatch layer
+/// routes `.mcp` to `ScopedInvoker` after `submitMCP` admits it. Any
+/// `ProposedAction`-shaped normalize that receives `.mcp` fails closed.
 public enum RuntimeRequestedAction: Sendable, Equatable {
     case shell(ShellCommand)
     case http(method: String, url: String)
+    case mcp(dispatch: MCPDispatchAction)
 }
 
 /// Untrusted action after a successful decode. Holding one is not authority.
@@ -218,6 +223,74 @@ public enum RuntimeAdmissionResponse: Sendable, Equatable {
     case executorFailed(RuntimeAdmissionExecutorError)
     case http(HTTPExecutionReceipt)
     case httpFailed(HTTPOpenFailure)
+    case mcp(MCPExecutionReceipt)
+    case mcpFailed(MCPDispatchFailure)
+}
+
+/// One executed MCP tool call. Mirrors `HTTPExecutionReceipt`: the attempted
+/// address plus the bounded tool-result bytes.
+public struct MCPExecutionReceipt: Sendable, Equatable {
+    /// Attempted tool address literal. Labels only; parsing may have failed.
+    public var address: String
+    /// Tool result bytes. Bounded by the response cap; oversized bodies
+    /// fail as `.responseTooLarge` instead of truncating.
+    public var body: Data
+
+    public init(address: String, body: Data) {
+        self.address = address
+        self.body = body
+    }
+}
+
+/// Closed MCP dispatch failure vocabulary. Mirrors `HTTPOpenFailure`:
+/// labels only, never envelopes, values, or causes. Transport and auth
+/// failures collapse to `.internalError`, whose correlation id is the only
+/// caller-visible linkage to the server-side cause and audit row.
+public enum MCPDispatchFailure: Sendable, Equatable {
+    case unknownTool
+    case crossResource
+    case invalidArguments
+    case elicitationTimeout
+    case elicitationUnavailable
+    case elicitationDeclined
+    case credentialFailed
+    case auditFailed
+    /// Defensive only: admission short-circuits `block` verdicts, so an
+    /// admitted call reaches this only if the verdict moved mid-flight.
+    case policyDenied
+    case internalError(correlationID: String)
+    case responseTooLarge
+    case cancelled
+
+    /// Wire reason label. The correlation id rides its own key, never here.
+    public var reasonLabel: String {
+        switch self {
+        case .unknownTool:
+            return "unknownTool"
+        case .crossResource:
+            return "crossResource"
+        case .invalidArguments:
+            return "invalidArguments"
+        case .elicitationTimeout:
+            return "elicitationTimeout"
+        case .elicitationUnavailable:
+            return "elicitationUnavailable"
+        case .elicitationDeclined:
+            return "elicitationDeclined"
+        case .credentialFailed:
+            return "credentialFailed"
+        case .auditFailed:
+            return "auditFailed"
+        case .policyDenied:
+            return "policyDenied"
+        case .internalError:
+            return "internalError"
+        case .responseTooLarge:
+            return "responseTooLarge"
+        case .cancelled:
+            return "cancelled"
+        }
+    }
 }
 
 public enum RuntimeAdmissionAuthorization: String, Sendable, Equatable, Codable {
@@ -252,6 +325,13 @@ public struct RuntimeAdmissionEvent: Sendable, Equatable, Codable {
     public var agentInstance: String?
     /// Agent Definition of the presented trusted context, when any.
     public var agentDefinition: String?
+    /// Present for an MCP attempt. The attempted tool address literal:
+    /// labels only, never arguments or values. Set even when the literal
+    /// failed parsing, mirroring `httpDestination`.
+    public var mcpAddress: String?
+    /// Present for an MCP attempt whose address parsed: the connection
+    /// segment, mirroring `httpAddress`. Nil for unparseable literals.
+    public var mcpConnection: String?
 
     public init(
         session: String?,
@@ -267,7 +347,9 @@ public struct RuntimeAdmissionEvent: Sendable, Equatable, Codable {
         httpStatus: Int? = nil,
         workspace: String? = nil,
         agentInstance: String? = nil,
-        agentDefinition: String? = nil
+        agentDefinition: String? = nil,
+        mcpAddress: String? = nil,
+        mcpConnection: String? = nil
     ) {
         self.session = session
         self.requestID = requestID
@@ -283,6 +365,8 @@ public struct RuntimeAdmissionEvent: Sendable, Equatable, Codable {
         self.workspace = workspace
         self.agentInstance = agentInstance
         self.agentDefinition = agentDefinition
+        self.mcpAddress = mcpAddress
+        self.mcpConnection = mcpConnection
     }
 }
 
@@ -310,6 +394,29 @@ public struct RuntimeAdmissionDecision: Sendable, Equatable {
         self.event = event
         self.execute = execute
         self.responseDeferred = responseDeferred
+    }
+}
+
+/// MCP admission decision. Mirrors `RuntimeAdmissionDecision`, but the
+/// invoke payload is the admitted dispatch action: MCP never becomes a
+/// `ProposedAction`, so there is no `AllowedAction` to execute.
+public struct RuntimeMCPAdmissionDecision: Sendable, Equatable {
+    public var binding: RuntimeChannelBinding?
+    public var response: RuntimeAdmissionResponse
+    public var event: RuntimeAdmissionEvent
+    /// Set only when the dispatch layer must invoke the tool.
+    public var invoke: MCPDispatchAction?
+
+    public init(
+        binding: RuntimeChannelBinding?,
+        response: RuntimeAdmissionResponse,
+        event: RuntimeAdmissionEvent,
+        invoke: MCPDispatchAction? = nil
+    ) {
+        self.binding = binding
+        self.response = response
+        self.event = event
+        self.invoke = invoke
     }
 }
 
@@ -398,6 +505,181 @@ public enum RuntimeAdmissionGate {
             agentContext: agentContext,
             propose: propose
         )
+    }
+
+    // MARK: - Broker mediation (T5)
+
+    /// Broker entries admitted for one identity-required mediation.
+    ///
+    /// Pure selection shared by the preparation path (which refs to
+    /// resolve through `SecretBroker`) and staging (which resolved
+    /// values to inject). An entry whose agent filter is non-empty and
+    /// does not contain `agent` is skipped — filtered entries never
+    /// resolve on a tag mismatch, mirroring credential and keychain
+    /// selection — and an entry whose ref fails validation fails closed
+    /// (skipped here; staging audits the drop). Order-preserving; the
+    /// broker deduplicates refs itself. `agent` must be a
+    /// definition-derived tag or nil (legacy: filtered entries never
+    /// match), never a wire tag or caller-provided name.
+    public static func admittedBrokerEntries(
+        entries: [RuntimeResourceProfile.BrokerEntry],
+        agent: String?
+    ) -> [(entry: RuntimeResourceProfile.BrokerEntry, ref: SecretRef)] {
+        var admitted: [(entry: RuntimeResourceProfile.BrokerEntry, ref: SecretRef)] = []
+        admitted.reserveCapacity(entries.count)
+        for entry in entries {
+            if let filter = entry.agents, filter.isEmpty == false {
+                guard let agent, filter.contains(agent) else { continue }
+            }
+            guard let ref = entry.ref else { continue }
+            admitted.append((entry, ref))
+        }
+        return admitted
+    }
+
+    // MARK: - MCP mediation (E1-E)
+
+    /// Identity-required MCP admission.
+    ///
+    /// Sensitive mediated operation: the `submitIdentityRequired` pre-guard
+    /// runs first (principal-less channels reject with `.principalRequired`
+    /// and never downgrade), then the shared `authenticate` (capability,
+    /// session, binding match, liveness, request replay), then the MCP
+    /// policy gate. A `block` verdict denies before any invoke — no
+    /// elicitation park, no secret touch, no transport. `approve` and
+    /// `require_approval` admit (elicitation runs inside the invoker), as
+    /// does an unparseable address, so the invoker audits the raw literal
+    /// and answers `.unknownTool`. Admission burns the request id and the
+    /// `mcp:<address>:<digest>:<idempotencyKey>` fingerprint exactly like
+    /// the shell/http arms, so a repeated idempotency key replays.
+    ///
+    /// `verdict` resolves the policy for one parsed address; it receives
+    /// the presented principal so production can key policy by Agent
+    /// Definition. Like `submitLegacy`, the admitted placeholder response
+    /// (`.executed(-1)`, result `"authorized"`) is never written: the
+    /// dispatch layer overwrites it with the invoke outcome.
+    public static func submitMCP(
+        binding: inout RuntimeChannelBinding?,
+        frame: Result<RuntimeActionFrame, RuntimeAdmissionDecodeError>,
+        verdict: (AuthenticatedAgentContext?, MCPToolAddress) -> PolicyAction,
+        agentContext: AuthenticatedAgentContext? = nil
+    ) -> RuntimeMCPAdmissionDecision {
+        guard binding != nil else {
+            let requestID = frame.successValue?.requestID.rawValue.uuidString
+            return stampMCP(
+                rejectMCP(
+                    binding: nil,
+                    requestID: requestID,
+                    reason: .unknownSession,
+                    authorization: .rejected
+                ),
+                agentContext: agentContext
+            )
+        }
+        if binding?.agentInstanceID == nil || agentContext == nil {
+            let requestID = frame.successValue?.requestID.rawValue.uuidString
+            return stampMCP(
+                rejectMCP(
+                    binding: binding,
+                    requestID: requestID,
+                    reason: .principalRequired,
+                    authorization: .rejected
+                ),
+                agentContext: nil
+            )
+        }
+        switch authenticate(binding: binding, frame: frame, agentContext: agentContext) {
+        case .reject(let decision):
+            binding = decision.binding
+            return stampMCP(convertMCP(decision), agentContext: agentContext)
+        case .accept(let accepted):
+            guard var active = binding else {
+                let requestID = accepted.requestID.rawValue.uuidString
+                return stampMCP(
+                    rejectMCP(
+                        binding: nil,
+                        requestID: requestID,
+                        reason: .unknownSession,
+                        authorization: .rejected
+                    ),
+                    agentContext: agentContext
+                )
+            }
+            let requestID = accepted.requestID.rawValue.uuidString
+            active.consumedRequestIDs.insert(accepted.requestID)
+            guard case .mcp(let dispatch) = accepted.action else {
+                binding = active
+                return stampMCP(
+                    makeMCP(
+                        binding: active,
+                        requestID: requestID,
+                        fingerprint: nil,
+                        dispatch: nil,
+                        authorization: .evaluationFailed,
+                        response: .evaluationFailed,
+                        result: "evaluationFailed"
+                    ),
+                    agentContext: agentContext
+                )
+            }
+            let fingerprint = ActionFingerprint(
+                rawValue: "mcp:\(dispatch.address):\(dispatch.argsDigest):\(dispatch.idempotencyKey)"
+            )
+            // The policy gate precedes the fingerprint burn: a denied call
+            // burns no fingerprint, so it can run after the verdict
+            // changes — mirroring shell/http, where deny precedes the
+            // execute burn.
+            if let parsed = try? MCPToolAddress.parse(dispatch.address),
+                verdict(agentContext, parsed) == .block
+            {
+                binding = active
+                let deny = Deny(
+                    ruleID: RuleID(pack: PackID(rawValue: "core.mcp"), pattern: "tool-blocked"),
+                    reason: "mcp tool policy blocked this tool"
+                )
+                return stampMCP(
+                    makeMCP(
+                        binding: active,
+                        requestID: requestID,
+                        fingerprint: fingerprint.rawValue,
+                        dispatch: dispatch,
+                        authorization: .denied,
+                        response: .denied(deny),
+                        result: deny.ruleID.rawValue
+                    ),
+                    agentContext: agentContext
+                )
+            }
+            if active.consumedFingerprints.contains(fingerprint) {
+                binding = active
+                return stampMCP(
+                    rejectMCP(
+                        binding: active,
+                        requestID: requestID,
+                        reason: .replay,
+                        authorization: .rejected,
+                        fingerprint: fingerprint.rawValue,
+                        dispatch: dispatch
+                    ),
+                    agentContext: agentContext
+                )
+            }
+            active.consumedFingerprints.insert(fingerprint)
+            binding = active
+            return stampMCP(
+                makeMCP(
+                    binding: active,
+                    requestID: requestID,
+                    fingerprint: fingerprint.rawValue,
+                    dispatch: dispatch,
+                    authorization: .allowed,
+                    response: .executed(exitStatus: -1),
+                    result: "authorized",
+                    invoke: dispatch
+                ),
+                agentContext: agentContext
+            )
+        }
     }
 
     public static func submitLegacy(
@@ -661,6 +943,86 @@ public enum RuntimeAdmissionGate {
         )
     }
 
+    /// Converts an authentication rejection to the MCP decision shape.
+    /// Authentication rejections never carry `execute`, so dropping it is
+    /// lossless; the event converts field-for-field.
+    private static func convertMCP(
+        _ decision: RuntimeAdmissionDecision
+    ) -> RuntimeMCPAdmissionDecision {
+        RuntimeMCPAdmissionDecision(
+            binding: decision.binding,
+            response: decision.response,
+            event: decision.event,
+            invoke: nil
+        )
+    }
+
+    private static func rejectMCP(
+        binding: RuntimeChannelBinding?,
+        requestID: String?,
+        reason: RuntimeAdmissionRejection,
+        authorization: RuntimeAdmissionAuthorization,
+        fingerprint: String? = nil,
+        dispatch: MCPDispatchAction? = nil
+    ) -> RuntimeMCPAdmissionDecision {
+        makeMCP(
+            binding: binding,
+            requestID: requestID,
+            fingerprint: fingerprint,
+            dispatch: dispatch,
+            authorization: authorization,
+            response: .rejected(reason),
+            result: reason.rawValue
+        )
+    }
+
+    private static func makeMCP(
+        binding: RuntimeChannelBinding?,
+        requestID: String?,
+        fingerprint: String?,
+        dispatch: MCPDispatchAction?,
+        authorization: RuntimeAdmissionAuthorization,
+        response: RuntimeAdmissionResponse,
+        result: String,
+        invoke: MCPDispatchAction? = nil
+    ) -> RuntimeMCPAdmissionDecision {
+        let parsed = dispatch.flatMap { try? MCPToolAddress.parse($0.address) }
+        return RuntimeMCPAdmissionDecision(
+            binding: binding,
+            response: response,
+            event: RuntimeAdmissionEvent(
+                session: binding?.session.id.rawValue.uuidString,
+                requestID: requestID,
+                fingerprint: fingerprint,
+                authorization: authorization,
+                executionAttempted: false,
+                result: result,
+                workspace: binding?.session.workspaceSessionID.rawValue.uuidString,
+                mcpAddress: dispatch?.address,
+                mcpConnection: parsed?.connection
+            ),
+            invoke: invoke
+        )
+    }
+
+    /// Principal attribution for one MCP decision. Mirrors `stamp`: the
+    /// presented context only when the RV-held binding names that same
+    /// instance, else the binding's instance with no definition.
+    private static func stampMCP(
+        _ decision: RuntimeMCPAdmissionDecision,
+        agentContext: AuthenticatedAgentContext?
+    ) -> RuntimeMCPAdmissionDecision {
+        var stamped = decision
+        let verified = agentContext.flatMap { context in
+            decision.binding?.agentInstanceID == context.instance.id ? context : nil
+        }
+        stamped.event.agentInstance =
+            verified?.instance.id.rawValue.uuidString
+            ?? decision.binding?.agentInstanceID?.rawValue.uuidString
+        stamped.event.agentDefinition = verified?.instance.definitionID.rawValue
+        return stamped
+    }
+
     /// Attributes the attempt to the presented principal only when the
     /// RV-held binding names that same instance (verified identity: the
     /// context matched the channel). A presented context the binding does
@@ -743,4 +1105,155 @@ private extension Result {
         if case .success(let value) = self { return value }
         return nil
     }
+}
+
+// MARK: - MCP dispatch action (T0a codec, moved by E1-E)
+
+// `RuntimeRequestedAction` holds this type, so it lives in RVDomain: the
+// T0a definition in `ScopedInvoker.swift` moved here verbatim when E1-E
+// added the `.mcp` case (a downstream module cannot own an upstream case
+// payload). The v2 document codec below is untouched by the move.
+
+/// MCP dispatch action with a versioned codec (T0a mediation shape).
+///
+/// T0a adds a new action case only for MCP dispatch, with codec v1→v2
+/// versioning defined in this ticket. v1 carries `{version, address,
+/// argsDigest}`; v2 adds the `idempotencyKey`. Migration fills a missing key
+/// deterministically from the digest; rollback drops it. Unknown versions and
+/// unknown fields fail closed.
+public struct MCPDispatchAction: Hashable, Sendable, Equatable {
+    /// Canonical tool address literal.
+    public var address: String
+    /// FNV-1a hex digest of the validated arguments text (dedupe key, not a
+    /// security boundary: non-cryptographic by design, documented here).
+    public var argsDigest: String
+    /// Idempotency key binding elicitation and retry to one execution.
+    public var idempotencyKey: String
+    /// Raw arguments JSON object text, carried by the admission frame.
+    /// E1-E addition: the T0a v2 document has no arguments member, so the
+    /// dispatch codec ignores this field (decode fills `""`, encode omits
+    /// it) and the v2 wire shape stays byte-identical. Dispatch passes it
+    /// to the invoker, which schema-validates it; digest-only actions
+    /// (`""`) fail there as invalid arguments, never silently.
+    public var argumentsJSON: String
+
+    /// Current codec version.
+    public static let currentVersion = 2
+
+    /// Assembles one dispatch action from validated parts.
+    public init(address: String, argsDigest: String, idempotencyKey: String, argumentsJSON: String = "") {
+        self.address = address
+        self.argsDigest = argsDigest
+        self.idempotencyKey = idempotencyKey
+        self.argumentsJSON = argumentsJSON
+    }
+}
+
+/// Typed dispatch-codec failures. Labels only; payloads never echo.
+public enum MCPDispatchCodecError: Error, Hashable, Sendable, Equatable {
+    /// The version is not 1 or 2.
+    case unsupportedVersion(Int)
+    /// The JSON shape is wrong or a required field is missing.
+    case malformed
+    /// An unknown field is present.
+    case unknownField(String)
+}
+
+/// 64-bit FNV-1a hex digest. Deterministic dedupe key for dispatch actions
+/// and idempotency binding. Explicitly NOT cryptographic: it detects
+/// accidental change, never malice.
+public enum MCPDispatchDigest {
+    /// Digests UTF-8 text to 16 lowercase hex characters.
+    public static func hex(of text: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in text.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x100000001b3
+        }
+        return String(format: "%016llx", hash)
+    }
+}
+
+/// Versioned JSON codec for `MCPDispatchAction`.
+public enum MCPDispatchCodec {
+    /// Encodes the v2 document: `{version:2, address, argsDigest, idempotencyKey}`.
+    public static func encode(_ action: MCPDispatchAction) -> String? {
+        let document: [String: Any] = [
+            "version": MCPDispatchAction.currentVersion,
+            "address": action.address,
+            "argsDigest": action.argsDigest,
+            "idempotencyKey": action.idempotencyKey,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]),
+            let text = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return text
+    }
+
+    /// Decodes a v1 or v2 document. v1 migrates: the missing idempotency key
+    /// fills deterministically as `migrated-<argsDigest>`.
+    public static func decode(_ text: String) throws(MCPDispatchCodecError) -> MCPDispatchAction {
+        guard let data = text.data(using: .utf8),
+            let top = try? JSONSerialization.jsonObject(with: data),
+            let object = top as? [String: Any]
+        else {
+            throw MCPDispatchCodecError.malformed
+        }
+        let known: Set<String> = ["version", "address", "argsDigest", "idempotencyKey"]
+        for key in object.keys where known.contains(key) == false {
+            throw MCPDispatchCodecError.unknownField(key)
+        }
+        guard let version = object["version"] as? Int else {
+            throw MCPDispatchCodecError.malformed
+        }
+        guard version == 1 || version == 2 else {
+            throw MCPDispatchCodecError.unsupportedVersion(version)
+        }
+        guard let address = object["address"] as? String, address.isEmpty == false,
+            let digest = object["argsDigest"] as? String, digest.isEmpty == false
+        else {
+            throw MCPDispatchCodecError.malformed
+        }
+        if version == 2 {
+            guard let key = object["idempotencyKey"] as? String, key.isEmpty == false else {
+                throw MCPDispatchCodecError.malformed
+            }
+            return MCPDispatchAction(address: address, argsDigest: digest, idempotencyKey: key)
+        }
+        return MCPDispatchAction(address: address, argsDigest: digest, idempotencyKey: "migrated-\(digest)")
+    }
+
+    /// Rolls a v2 action back to its v1 document (key dropped).
+    public static func rollbackToV1(_ action: MCPDispatchAction) -> String? {
+        let document: [String: Any] = [
+            "version": 1,
+            "address": action.address,
+            "argsDigest": action.argsDigest,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]),
+            let text = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return text
+    }
+}
+
+// MARK: - MCP admission wire limits
+
+/// Admission wire caps for MCP frames. Mirrors `HTTPEgressLimits` and the
+/// shell arm's `AgentRequestLimits`: every untrusted MCP field is bounded
+/// before parsing. The arguments cap matches the invoker's
+/// `MCPToolArguments.maximumBytes`, so admission never rejects a call the
+/// invoker would accept (parity pinned by test).
+public enum MCPDispatchWireLimits {
+    /// Largest attempted address literal. A valid literal fits in 521
+    /// bytes; unparseable literals fail downstream, but never oversized.
+    public static let maxAddressUTF8Bytes = 1_024
+    /// Largest arguments text. Parity with the invoker cap, pinned by test.
+    public static let maxArgumentsUTF8Bytes = 8_192
+    /// Largest idempotency key (UUIDs and migrated keys fit easily).
+    public static let maxIdempotencyKeyUTF8Bytes = 256
 }

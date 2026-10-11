@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import RVDomain
+import RVFileStore
 import Synchronization
 
 private let seatbeltHandshakeScript =
@@ -310,6 +311,9 @@ func spawnSeatbeltProcess(
     host: HookHost? = nil,
     stagingAgent: DefinitionStagingTag? = nil,
     keychain: [(name: String, value: String)] = [],
+    broker: [(name: String, value: String)] = [],
+    brokerValues: [SecretRef: SecretValue]? = nil,
+    brokerAuditDirectory: URL? = nil,
     preparedEnvironment: [String]? = nil,
     cwdVerification: CwdCommitVerification? = nil
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
@@ -324,6 +328,9 @@ func spawnSeatbeltProcess(
         host: host,
         stagingAgent: stagingAgent,
         keychain: keychain,
+        broker: broker,
+        brokerValues: brokerValues,
+        brokerAuditDirectory: brokerAuditDirectory,
         preparedEnvironment: preparedEnvironment,
         cwdVerification: cwdVerification
     )
@@ -346,6 +353,9 @@ func spawnSeatbeltProcess(
         host: host,
         stagingAgent: stagingAgent,
         keychain: keychain,
+        broker: broker,
+        brokerValues: brokerValues,
+        brokerAuditDirectory: brokerAuditDirectory,
         preparedEnvironment: preparedEnvironment,
         cwdVerification: cwdVerification
     )
@@ -379,6 +389,9 @@ func spawnSeatbeltProcessBody(
     host: HookHost? = nil,
     stagingAgent: DefinitionStagingTag? = nil,
     keychain: [(name: String, value: String)] = [],
+    broker: [(name: String, value: String)] = [],
+    brokerValues: [SecretRef: SecretValue]? = nil,
+    brokerAuditDirectory: URL? = nil,
     preparedEnvironment: [String]? = nil,
     cwdVerification: CwdCommitVerification? = nil
 ) -> Result<LiveSeatbeltChild, IsolationApplyError> {
@@ -551,12 +564,21 @@ func spawnSeatbeltProcessBody(
     // credentials. `host` is routing/metadata and never falls back into
     // selection — a nil tag stages unfiltered entries only.
     let agentName = stagingAgent?.rawValue
+    // The broker payload stages here and merges into the spawned
+    // environment below. Nil values keep legacy staging byte-identical;
+    // staging drops audit best-effort and never fail the spawn.
+    var stagedBroker: [(name: String, value: String)] = []
     if let resources = request.resources {
-        switch resources.stage(forAgent: agentName) {
-        case .success:
-            break
-        case .failure(let staging):
-            return .failure(.resourceStagingFailed(staging.detail))
+        switch stageResourcesForSpawn(
+            resources,
+            agentName: agentName,
+            brokerValues: brokerValues,
+            brokerAuditDirectory: brokerAuditDirectory
+        ) {
+        case .success(let payload):
+            stagedBroker = payload
+        case .failure(let error):
+            return .failure(error)
         }
     } else if case .pseudoTerminal = request.io {
         // Profile-less PTY shells point TMPDIR at the workspace-local cage
@@ -593,6 +615,7 @@ func spawnSeatbeltProcessBody(
             resources: request.resources,
             egressProxyPort: egressProxyPort,
             keychain: keychain,
+            broker: brokerPairsForSpawn(explicit: broker, staged: stagedBroker),
             productive: productive
         )
     let argv = SpawnPointers(arguments)
@@ -766,6 +789,7 @@ func containedRuntimeEnvironment(
     egressProxyPort: Int? = nil,
     hostEnvironment: [String: String]? = nil,
     keychain: [(name: String, value: String)] = [],
+    broker: [(name: String, value: String)] = [],
     productive: ProductiveWorkspaceResolution? = nil,
     probe: ContainedPATHProbe = .live
 ) -> [String] {
@@ -867,15 +891,20 @@ func containedRuntimeEnvironment(
         values.append(("NO_PROXY", "localhost,127.0.0.1,::1"))
         values.append(("no_proxy", "localhost,127.0.0.1,::1"))
     }
-    return addingKeychainEnvironment(
-        addingResourceEnvironment(
-            values,
-            workspace: workspace,
-            io: io,
-            resources: resources,
-            hostEnvironment: hostEnvironment
+    // Keychain appends before broker: first spelling wins, so a legacy
+    // keychain value beats a broker pair on a colliding name.
+    return addingBrokerEnvironment(
+        addingKeychainEnvironment(
+            addingResourceEnvironment(
+                values,
+                workspace: workspace,
+                io: io,
+                resources: resources,
+                hostEnvironment: hostEnvironment
+            ),
+            keychain: keychain
         ),
-        keychain: keychain
+        broker: broker
     ).map { "\($0.0)=\($0.1)" }
 }
 
@@ -928,16 +957,157 @@ private func addingKeychainEnvironment(
     _ values: [(String, String)],
     keychain: [(name: String, value: String)]
 ) -> [(String, String)] {
+    appendingSecretPairs(values, pairs: keychain)
+}
+
+private func addingBrokerEnvironment(
+    _ values: [(String, String)],
+    broker: [(name: String, value: String)]
+) -> [(String, String)] {
+    appendingSecretPairs(values, pairs: broker)
+}
+
+/// One secret-pair batch (keychain or broker) appended to the cage
+/// environment. The two callers share this loop so broker pairs inject
+/// exactly like keychain pairs.
+private func appendingSecretPairs(
+    _ values: [(String, String)],
+    pairs: [(name: String, value: String)]
+) -> [(String, String)] {
     var values = values
     // First spelling wins: `execve` lookup returns the first match, so
     // later duplicates would be dead entries that only confuse auditors.
     var present = Set(values.map(\.0))
-    for entry in keychain {
+    for entry in pairs {
         guard !entry.value.contains("\0"), entry.value.utf8.count <= 8_192 else { continue }
         guard present.insert(entry.name).inserted else { continue }
         values.append((entry.name, entry.value))
     }
     return values
+}
+
+/// Caller pairs before staged pairs: first spelling wins downstream,
+/// so an explicit pair beats a staged pair on a colliding name.
+func brokerPairsForSpawn(
+    explicit: [(name: String, value: String)],
+    staged: [(name: String, value: String)]
+) -> [(name: String, value: String)] {
+    explicit + staged
+}
+
+/// Stage one spawn's resources, returning the broker payload the legacy
+/// path discarded. Nil values keep legacy staging byte-identical:
+/// `secrets` entries are ignored and the payload is empty. Drops audit
+/// best-effort to `<brokerAuditDirectory>/secrets-audit.jsonl` through
+/// the shared ledger writer; a nil directory (the legacy default)
+/// audits nothing, and a ledger failure never fails the spawn.
+func stageResourcesForSpawn(
+    _ resources: RuntimeResourceManifest,
+    agentName: String?,
+    brokerValues: [SecretRef: SecretValue]?,
+    brokerAuditDirectory: URL?
+) -> Result<[(name: String, value: String)], IsolationApplyError> {
+    let drops = Mutex<[BrokerStagingDrop]>([])
+    let audit: @Sendable (BrokerStagingDrop) -> Void
+    if brokerAuditDirectory == nil {
+        audit = { _ in }
+    } else {
+        audit = { drop in drops.withLock { $0.append(drop) } }
+    }
+    let staged = resources.stage(forAgent: agentName, brokerValues: brokerValues, brokerAudit: audit)
+    // Audit before mapping the result: drops must never be lost on a
+    // failure path. Broker staging runs last and never fails today, so
+    // the failure arm audits an empty batch (a no-op); if stage ever
+    // gains a failure point after broker staging, its drops still land.
+    appendBrokerStagingAudit(
+        drops.withLock { $0 },
+        directory: brokerAuditDirectory,
+        profile: resources.profile,
+        agentTag: agentName
+    )
+    switch staged {
+    case .success(let payload):
+        return .success(payload)
+    case .failure(let staging):
+        return .failure(.resourceStagingFailed(staging.detail))
+    }
+}
+
+/// Append one denied `secret.resolve` row per staging drop to
+/// `<directory>/secrets-audit.jsonl` through the shared ledger writer.
+/// Best-effort: ledger failures are swallowed, never fail the spawn —
+/// staging drops must not brick launches, but must leave a row when
+/// the ledger is writable. Nil directory or no drops writes nothing:
+/// not even the directory is created.
+func appendBrokerStagingAudit(
+    _ drops: [BrokerStagingDrop],
+    directory: URL?,
+    profile: RuntimeResourceProfile,
+    agentTag: String?,
+    now: Date = Date()
+) {
+    guard let directory, drops.isEmpty == false else { return }
+    let records = brokerStagingAuditRecords(
+        drops, profile: profile, agentTag: agentTag, now: now
+    )
+    try? SecretsLedger.append(records, directory: directory, retention: .default)
+}
+
+/// One denied `secret.resolve` row per staging drop, sharing one
+/// execution id and correlation id for the spawn's staging batch.
+/// Labels only: the row's target reuses the profile entry's ref when
+/// it names one, and the cause names the closed-vocabulary reason plus
+/// the env var. Secret values are inexpressible here: neither the
+/// drop nor this mapping observes them.
+func brokerStagingAuditRecords(
+    _ drops: [BrokerStagingDrop],
+    profile: RuntimeResourceProfile,
+    agentTag: String?,
+    now: Date
+) -> [SecretsAuditRecord] {
+    let executionID = SecretsExecutionID()
+    let correlationID = SecretsCorrelationID()
+    let principal = SecretsAuditPrincipal(
+        instanceID: AgentInstanceID(),
+        definitionID: agentTag ?? "unknown",
+        ownerUID: geteuid()
+    )
+    return drops.map { drop in
+        SecretsAuditRecord.secretResolve(
+            executionID: executionID,
+            timestamp: now,
+            principal: principal,
+            addressOrRef: stagingDropTarget(drop, profile: profile),
+            decision: .denied,
+            correlationID: correlationID,
+            cause: SecretsAuditCause(redacting: "stagingDrop:\(drop.reason.rawValue):\(drop.env)")
+        )
+    }
+}
+
+/// The audit target for one staging drop, looked up by env name. A drop
+/// whose entry names a valid ref reuses it; otherwise the row preserves
+/// the valid labels and substitutes only the invalid part (unknown
+/// provider falls back to the default, empty item to the env name, empty
+/// env to `"unknown"`), so the row always names the drop. Total by
+/// construction: labels bypass `SecretRef` validation entirely, so this
+/// best-effort path cannot trap even if that validation tightens.
+func stagingDropTarget(
+    _ drop: BrokerStagingDrop,
+    profile: RuntimeResourceProfile
+) -> SecretsAuditAddressOrRef {
+    let entry = profile.secrets.first(where: { $0.env == drop.env })
+    if let ref = entry?.ref { return SecretsAuditAddressOrRef(ref) }
+    var item = entry?.item ?? ""
+    if item.isEmpty { item = drop.env }
+    if item.isEmpty { item = "unknown" }
+    let provider: String
+    if let candidate = entry?.provider, SecretRef.allowedProviders.contains(candidate) {
+        provider = candidate
+    } else {
+        provider = SecretRef.defaultProvider
+    }
+    return .secret(provider: provider, item: item, field: entry?.field)
 }
 
 func watchSeatbeltProcess(

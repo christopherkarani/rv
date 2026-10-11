@@ -1,0 +1,412 @@
+# T11 token-in-log grep — pattern list + transcript + verdicts
+# Date (UTC): 2026-10-11
+# Workdir: docs/security/evidence/secrets-mcp/
+#
+# METHOD
+# Fixture secret/token/password/lease-id literals were extracted from:
+#   Tests/RVIsolationTests/SecretBrokerTests.swift
+#   Tests/RVIsolationTests/VaultHTTPClientTests.swift
+#   Tests/RVIsolationTests/ScopedInvokerTests.swift
+#   Tests/RVIsolationTests/BrokerAdmissionTests.swift
+#   Tests/RVIsolationTests/MCPPolicyTests.swift
+# via .text()/.token()/secretID:/roleID:/leaseID: literals plus sweeps for
+# password/bearer/hunter2/s3cr3t/ghp_/wrapping/synthetic-/t8-/lease-/role-/acc- literals.
+# 97 distinctive patterns stored in token-patterns.txt (fixed strings, -F).
+# Grep targets: rvisolation-full.log + redaction-adversarial.log (the FULL test
+# outputs; this transcript file itself is excluded since it lists the patterns).
+#
+# COMMANDS (run from docs/security/evidence/secrets-mcp/)
+#   grep -c -F -f token-patterns.txt rvisolation-full.log
+#   grep -c -F -f token-patterns.txt redaction-adversarial.log
+#   grep -n -F -f token-patterns.txt rvisolation-full.log
+#   grep -n -F -f token-patterns.txt redaction-adversarial.log
+#   grep -o -F -f token-patterns.txt <log> | sort | uniq -c | sort -rn
+#
+# TIER-B EXCLUSIONS (fixture literals deliberately NOT grepped — 1-3 chars or
+# plain-English-word / structural literals that match arbitrary log prose):
+#   "" "t" "r" "s" "l" "v" "v1" "va" "vb" "vc" "x" "a" "b" "d" "n" "m" "k"
+#   "ok" "2" "3.5" "42" "true" "FAILED"(INCLUDED — uppercase, distinctive)
+#   "first" "second" "bad" "secret" "token" "TOKEN" "secret/" "/secret"
+#   "api/token" "github/token" "secret.resolve" "password-field" "client_token"
+#   Rationale: fixed-string grep for e.g. "ok" or "v1" hits ordinary runner
+#   prose on nearly every line, so a hit carries zero leak signal. Leak
+#   detection rests on the 97 distinctive Tier-A literals above plus the
+#   redaction/adversarial suites (all green, see redaction-adversarial.log).
+#   "held" "once" "static" "inline" "rogue" "unknown" "root" were INCLUDED in
+#   Tier A despite being English words; every hit was triaged below.
+#
+# --- PATTERN LIST (token-patterns.txt, non-comment lines) ---
+a-secret
+abc-123
+acc-1
+acc-9
+acc-r
+b-secret
+B7R0K3R-S3CR3T-M4RK3R
+c-secret
+call-arg
+db-pass
+direct-token
+dot-ok
+FAILED
+ghp-secret-value
+ghp_
+github-token
+good-value
+held
+hunter2
+hunter2token P@ssw0rd! super-secret-item
+inline
+kc-secret
+key-material
+late-value
+lease-1
+lease-a
+lease-b
+lease-c
+lease-gone
+lease-hunter2-db
+lease-neg
+lease-nr
+lease-shared
+lease-w
+lease-zero
+leased-ok
+leased-secret
+line-one
+line-two
+once
+P@ssw0rd!
+parallel-ok
+password=hunter2
+role-1
+role-2
+role-9
+rogue
+root
+s.token
+s3cr3t
+secret-1
+secret-2
+secret-9
+slash-ok
+static
+stub-default-value
+super-secret-item
+SYNTHETIC_DOC
+SYNTHETIC_LOOSE
+SYNTHETIC_TOKEN
+synthetic-a
+synthetic-b
+synthetic-blocker
+synthetic-c
+synthetic-file-payload
+synthetic-first
+synthetic-loose-payload
+synthetic-second
+t8-alpha-secret
+t8-beta-secret
+t8-blip-ok
+t8-broker-secret
+t8-caller-bearer
+t8-conn-bearer
+t8-conn-secret
+t8-connection-secret
+t8-crossed-token
+t8-default-ok
+t8-env-secret
+t8-fielded-secret
+t8-file-secret
+t8-frag-secret
+t8-fresh-token
+t8-header-secret
+t8-oauth-bearer
+t8-ok
+t8-plain-secret
+t8-recovered
+t8-refreshed-token
+t8-url-secret
+test-token
+uni-ok
+unknown
+value-7
+via-approle
+wrapped-secret
+wrapping-token-1
+
+# --- TRANSCRIPT ---
+$ grep -c -F -f token-patterns.txt rvisolation-full.log
+36
+$ grep -c -F -f token-patterns.txt redaction-adversarial.log
+1
+
+$ grep -o -F -f token-patterns.txt rvisolation-full.log | sort | uniq -c | sort -rn
+  18 unknown
+  14 static
+   2 rogue
+   2 once
+$ grep -o -F -f token-patterns.txt redaction-adversarial.log | sort | uniq -c | sort -rn
+   1 ghp_
+
+$ grep -n -F -f token-patterns.txt rvisolation-full.log
+137:􀟈  Test unknownResourceProfileIDResolvesToNothing() started.
+186:􀟈  Test staticPinLeavesOtherAddressesToPatterns() started.
+187:􀟈  Test unknownRecordKeyIsProviderDown() started.
+197:􀟈  Test staticPinBlockBypassesApprovePatterns() started.
+200:􀟈  Test staticPinIsExactOnly() started.
+210:􀟈  Test unknownTopLevelKeyIsProviderDown() started.
+219:􀟈  Test staticPinCodableRoundTrips() started.
+260:􀟈  Test staticPinWithDottedToolIsExact() started.
+278:􀟈  Test staticPinBypassesOrgBlock() started.
+326:􀟈  Test unknownStatusFailsClosed() started.
+367:􀟈  Test terminalRulesKeepTheNonceDrainAndPartialWrite() started.
+374:􀟈  Test unknownTerminalFieldFailsClosed() started.
+393:􀟈  Test unknownInstanceThrowsWithoutTouchingBroker() started.
+547:􀟈  Test staticPinPromptLabelsThePin() started.
+571:􀟈  Test unknownVersionFieldAndShapeFailClosed() started.
+613:􀟈  Test unknownProviderIsAtomic() started.
+741:􁁛  Test unknownResourceProfileIDResolvesToNothing() passed after 0.411 seconds.
+767:􀟈  Test case passing 1 argument validity → .unknown to "principal gate rejects every invalid state" started.
+789:􁁛  Test staticPinLeavesOtherAddressesToPatterns() passed after 4.923 seconds.
+792:􁁛  Test unknownRecordKeyIsProviderDown() passed after 4.923 seconds.
+800:􁁛  Test staticPinBlockBypassesApprovePatterns() passed after 4.923 seconds.
+803:􁁛  Test staticPinIsExactOnly() passed after 4.924 seconds.
+820:􁁛  Test unknownTopLevelKeyIsProviderDown() passed after 5.111 seconds.
+826:􁁛  Test staticPinCodableRoundTrips() passed after 5.121 seconds.
+864:􁁛  Test staticPinWithDottedToolIsExact() passed after 5.248 seconds.
+879:􁁛  Test staticPinBypassesOrgBlock() passed after 5.249 seconds.
+931:􁁛  Test terminalRulesKeepTheNonceDrainAndPartialWrite() passed after 7.489 seconds.
+937:􁁛  Test unknownTerminalFieldFailsClosed() passed after 7.489 seconds.
+952:􁁛  Test unknownInstanceThrowsWithoutTouchingBroker() passed after 7.499 seconds.
+1082:􁁛  Test staticPinPromptLabelsThePin() passed after 7.498 seconds.
+1101:􁁛  Test unknownVersionFieldAndShapeFailClosed() passed after 7.498 seconds.
+1122:􁁛  Test unknownProviderIsAtomic() passed after 7.498 seconds.
+1191:􁁛  Test unknownStatusFailsClosed() passed after 7.532 seconds.
+1632:􀟈  Test rogueLeaseDurationsClampToPolicyMaximum() started.
+1633:􁁛  Test rogueLeaseDurationsClampToPolicyMaximum() passed after 0.001 seconds.
+1793:􀙟  Test unknownOperationReceivesAnInvalidRequestEcho() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+
+$ grep -n -F -f token-patterns.txt redaction-adversarial.log
+186:􀟈  Test case passing 1 argument raw → "key ghp_abc123def456" to cause_redactsSecretPrefixes(raw:) started.
+
+# --- VERDICTS (per hit / hit group) ---
+# Total hits: 37 (36 rvisolation-full.log + 1 redaction-adversarial.log).
+# Every hit line was inspected. ALL 37 are Swift Testing runner status lines
+# ("Test ... started." / "passed after ..." / "skipped:" / "Test case passing
+# ... started.") echoing test names or test arguments. Zero hits are
+# application log output, error payloads, or value dumps. Proof: grepping the
+# 37 hit lines for anything NOT a runner status line returns empty
+# (verified: `{ grep -F -f token-patterns.txt rvisolation-full.log;
+# grep -F -f token-patterns.txt redaction-adversarial.log; } |
+# grep -vE "started\.|passed after|skipped:"` -> no output).
+#
+# Group 1 — pattern "unknown", 18 hits (rvisolation lines 137,187,210,326,
+# 374,393,571,613,741,767,792,820,937,952,1101,1122,1191,1793).
+# Fixture source: leaseID "unknown" (VaultHTTPClientTests).
+# Verdict: TEST-NAME ECHO, not a leak. 17 hits are the English word "unknown"
+# inside test function names (unknownRecordKeyIsProviderDown,
+# unknownTopLevelKeyIsProviderDown, unknownStatusFailsClosed,
+# unknownTerminalFieldFailsClosed, unknownInstanceThrowsWithoutTouchingBroker,
+# unknownVersionFieldAndShapeFailClosed, unknownProviderIsAtomic,
+# unknownResourceProfileIDResolvesToNothing,
+# unknownOperationReceivesAnInvalidRequestEcho). 1 hit (line 767) is a
+# parameterized enum-case echo ("validity -> .unknown"). No line prints a
+# lease-ID value; all are runner started/passed/skipped status lines.
+#
+# Group 2 — pattern "static", 14 hits (rvisolation lines 186,197,200,219,260,
+# 278,547,789,800,803,826,864,879,1082).
+# Fixture source: .text("static") (SecretBrokerTests).
+# Verdict: TEST-NAME ECHO, not a leak. All 14 are the word "static" inside
+# staticPin* test function names (staticPinLeavesOtherAddressesToPatterns,
+# staticPinBlockBypassesApprovePatterns, staticPinIsExactOnly,
+# staticPinCodableRoundTrips, staticPinWithDottedToolIsExact,
+# staticPinBypassesOrgBlock, staticPinPromptLabelsThePin). Runner status
+# lines only; no secret value printed.
+#
+# Group 3 — pattern "rogue", 2 hits (rvisolation lines 1632,1633).
+# Fixture source: leaseID "rogue" (VaultHTTPClientTests).
+# Verdict: TEST-NAME ECHO, not a leak. Both are started/passed status lines
+# for rogueLeaseDurationsClampToPolicyMaximum(); the test name contains the
+# English word "rogue". No lease-ID value printed.
+#
+# Group 4 — pattern "once", 2 hits (rvisolation lines 367,931).
+# Fixture source: .text("once") (SecretBrokerTests).
+# Verdict: TEST-NAME ECHO, not a leak. Both are started/passed status lines
+# for terminalRulesKeepTheNonceDrainAndPartialWrite(); the match is the
+# substring "once" inside "Nonce". No secret value printed.
+#
+# Group 5 — pattern "ghp_", 1 hit (redaction-adversarial.log line 186):
+#   Test case passing 1 argument raw -> "key ghp_..." to
+#   cause_redactsSecretPrefixes(raw:) started.
+# Fixture source of the VALUE: hardcoded parameterized argument in
+# Tests/RVHistoryTests/SecretsAuditRecordsTests.swift:340
+# (@Test(arguments:) for cause_redactsSecretPrefixes). The matched pattern
+# "ghp_" itself comes from VaultHTTPClientTests fixtures.
+# Verdict: TEST-ARGUMENT ECHO (runner echo), not a leak. Evidence:
+# (a) the log argument is byte-identical to the hardcoded source fixture
+#     (both 20 chars, sha256
+#     b1d3f30397483e9b8b2f36b5daa408be839b52b8f5d9eb29f1cfd88d614aae53);
+# (b) the echoing line is the runner's own "Test case passing 1 argument ...
+#     started." status line, not application output;
+# (c) the value is synthetic fixture material whose test ASSERTS redaction
+#     (#expect(cause.redacted.contains(token) == false)), and the test passed;
+# (d) sibling cases (log lines 187/189/191) are likewise byte-identical to
+#     the hardcoded fixtures at SecretsAuditRecordsTests.swift:341/342/343.
+# No application code printed a runtime secret; the runner printed the test's
+# own hardcoded input while reporting the parameterized case start.
+#
+# CONCLUSION: 37 hits, 37 explained as runner test-name/argument echoes,
+# 0 unexplained hits, 0 real leaks. Token-in-log check: GREEN.
+
+# --- ADDENDUM (Wave F fix, 2026-10-11): coverage-secrets.log triage ---
+# The triage above covered rvisolation-full.log + redaction-adversarial.log
+# only. This addendum triages coverage-secrets.log (748 tests, 26 suites,
+# exit 0) with the same 97 Tier-A patterns.
+#
+# COMMANDS (run from docs/security/evidence/secrets-mcp/)
+#   grep -c -F -f token-patterns.txt coverage-secrets.log
+#   grep -o -F -f token-patterns.txt coverage-secrets.log | sort | uniq -c | sort -rn
+#   grep -n -F -f token-patterns.txt coverage-secrets.log
+#   grep -F -f token-patterns.txt coverage-secrets.log | grep -vE "started\.|passed after|skipped:" | wc -l
+
+$ grep -c -F -f token-patterns.txt coverage-secrets.log
+81
+$ grep -o -F -f token-patterns.txt coverage-secrets.log | sort | uniq -c | sort -rn
+  63 unknown
+  14 static
+   2 rogue
+   1 hunter2
+   1 ghp_
+$ grep -n -F -f token-patterns.txt coverage-secrets.log
+40:􀟈  Test unknownKeysFailClosed() started.
+50:􀟈  Test "unknown definition provider rejected" started.
+54:􀟈  Test "unknown provider rejected" started.
+62:􀟈  Test "unknown entry provider rejected" started.
+86:􀟈  Test case passing 1 argument provider → "vault" to "unknown definition provider rejected" started.
+87:􀟈  Test case passing 1 argument provider → "vault" to "unknown provider rejected" started.
+89:􀟈  Test case passing 1 argument provider → "s3" to "unknown provider rejected" started.
+90:􀟈  Test case passing 1 argument provider → "" to "unknown definition provider rejected" started.
+92:􀟈  Test case passing 1 argument provider → "1password" to "unknown provider rejected" started.
+93:􀟈  Test case passing 1 argument provider → "FILE" to "unknown definition provider rejected" started.
+95:􀟈  Test case passing 1 argument provider → " file" to "unknown definition provider rejected" started.
+96:􀟈  Test case passing 1 argument provider → "FILE" to "unknown provider rejected" started.
+98:􀟈  Test case passing 1 argument provider → "File" to "unknown provider rejected" started.
+99:􀟈  Test case passing 1 argument provider → "vault-http-v2" to "unknown definition provider rejected" started.
+100:􀟈  Test case passing 1 argument provider → " file" to "unknown provider rejected" started.
+101:􀟈  Test case passing 1 argument provider → "keychain;id" to "unknown definition provider rejected" started.
+102:􀟈  Test case passing 1 argument provider → "s3" to "unknown definition provider rejected" started.
+103:􀟈  Test case passing 1 argument provider → "file " to "unknown provider rejected" started.
+105:" to "unknown provider rejected" started.
+106:􀟈  Test case passing 1 argument provider → "" to "unknown provider rejected" started.
+107:􀟈  Test case passing 1 argument provider → "vault-http-v2" to "unknown provider rejected" started.
+108:􀟈  Test case passing 1 argument provider → "vault" to "unknown entry provider rejected" started.
+109:􀟈  Test case passing 1 argument provider → "../file" to "unknown provider rejected" started.
+110:􀟈  Test case passing 1 argument provider → "keychain;id" to "unknown provider rejected" started.
+111:􀟈  Test case passing 1 argument provider → "" to "unknown entry provider rejected" started.
+112:􀟈  Test case passing 1 argument provider → " " to "unknown provider rejected" started.
+113:􀟈  Test case passing 1 argument provider → "FILE" to "unknown entry provider rejected" started.
+114:􀟈  Test case passing 1 argument provider → "file􀟈  Test case passing 1 argument provider → " file" to "unknown entry provider rejected" started.
+115:􀟈  Test case passing 1 argument provider → "vault-http-v2" to "unknown entry provider rejected" started.
+116:􀟈  Test case passing 1 argument provider → "keychain;id" to "unknown entry provider rejected" started.
+117:􀟈  Test case passing 1 argument provider → "s3" to "unknown entry provider rejected" started.
+131:􁁛  Test unknownKeysFailClosed() passed after 0.004 seconds.
+148:􁁛  Test "unknown provider rejected" with 14 test cases passed after 0.004 seconds.
+150:􁁛  Test "unknown definition provider rejected" with 7 test cases passed after 0.004 seconds.
+158:􁁛  Test "unknown entry provider rejected" with 7 test cases passed after 0.004 seconds.
+209:􀟈  Test unknownVersionFieldAndShapeFailClosed() started.
+250:􀟈  Test staticPinPromptLabelsThePin() started.
+263:􀟈  Test staticPinCodableRoundTrips() started.
+264:􀟈  Test staticPinWithDottedToolIsExact() started.
+277:􀟈  Test staticPinLeavesOtherAddressesToPatterns() started.
+284:􀟈  Test staticPinBypassesOrgBlock() started.
+291:􀟈  Test staticPinIsExactOnly() started.
+295:􀟈  Test staticPinBlockBypassesApprovePatterns() started.
+333:􀟈  Test unknownTopLevelKeyIsProviderDown() started.
+384:􀟈  Test unknownInstanceThrowsWithoutTouchingBroker() started.
+426:􀟈  Test unknownProviderIsAtomic() started.
+433:􀟈  Test unknownRecordKeyIsProviderDown() started.
+495:􁁛  Test unknownVersionFieldAndShapeFailClosed() passed after 0.018 seconds.
+522:􁁛  Test staticPinPromptLabelsThePin() passed after 0.020 seconds.
+538:􁁛  Test staticPinWithDottedToolIsExact() passed after 0.021 seconds.
+542:􁁛  Test staticPinCodableRoundTrips() passed after 0.022 seconds.
+547:􁁛  Test staticPinLeavesOtherAddressesToPatterns() passed after 0.022 seconds.
+562:􁁛  Test staticPinBypassesOrgBlock() passed after 0.023 seconds.
+563:􁁛  Test staticPinBlockBypassesApprovePatterns() passed after 0.023 seconds.
+564:􁁛  Test staticPinIsExactOnly() passed after 0.023 seconds.
+585:􀟈  Test case passing 1 argument validity → .unknown to "principal gate rejects every invalid state" started.
+613:􁁛  Test unknownTopLevelKeyIsProviderDown() passed after 0.026 seconds.
+655:􁁛  Test unknownInstanceThrowsWithoutTouchingBroker() passed after 0.024 seconds.
+659:􁁛  Test unknownProviderIsAtomic() passed after 0.019 seconds.
+685:􁁛  Test unknownRecordKeyIsProviderDown() passed after 0.019 seconds.
+1017:􀟈  Test rogueLeaseDurationsClampToPolicyMaximum() started.
+1018:􁁛  Test rogueLeaseDurationsClampToPolicyMaximum() passed after 0.001 seconds.
+1123:􀟈  Test case passing 1 argument raw → "key ghp_abc123def456" to cause_redactsSecretPrefixes(raw:) started.
+1306:􀟈  Test "unknown provider rejected" started.
+1392:􀟈  Test case passing 1 argument text → "hunter2" to "text round-trips" started.
+1402:􀟈  Test case passing 1 argument provider → "vault" to "unknown provider rejected" started.
+1408:􀟈  Test case passing 1 argument provider → "1password" to "unknown provider rejected" started.
+1410:􀟈  Test case passing 1 argument provider → "s3" to "unknown provider rejected" started.
+1415:􀟈  Test case passing 1 argument provider → "FILE" to "unknown provider rejected" started.
+1416:􀟈  Test case passing 1 argument provider → " file" to "unknown provider rejected" started.
+1417:􀟈  Test case passing 1 argument provider → "File" to "unknown provider rejected" started.
+1420:􀟈  Test case passing 1 argument provider → "file " to "unknown provider rejected" started.
+1423:" to "unknown provider rejected" started.
+1428:􀟈  Test case passing 1 argument provider → "filé" to "unknown provider rejected" started.
+1430:􀟈  Test case passing 1 argument provider → "🔑" to "unknown provider rejected" started.
+1434:􀟈  Test case passing 1 argument provider → "keychain;id" to "unknown provider rejected" started.
+1437:􀟈  Test case passing 1 argument provider → "../file" to "unknown provider rejected" started.
+1438:􀟈  Test case passing 1 argument provider → "vault-http-v2" to "unknown provider rejected" started.
+1441:􀟈  Test case passing 1 argument provider → " " to "unknown provider rejected" started.
+1444:􀟈  Test case passing 1 argument provider → "	" to "unknown provider rejected" started.
+1533:􁁛  Test "unknown provider rejected" with 15 test cases passed after 0.003 seconds.
+$ grep -F -f token-patterns.txt coverage-secrets.log | grep -vE "started\.|passed after|skipped:" | wc -l
+       0
+
+# --- ADDENDUM VERDICTS ---
+# Total addendum hits: 81, all in coverage-secrets.log. Every hit line was
+# inspected. ALL 81 are Swift Testing runner status lines ("Test ... started."
+# / "passed after ..." / "with N test cases passed ...") echoing test names or
+# parameterized arguments. Proof: the non-status-line filter above returns 0.
+#
+# Group A — pattern "unknown", 63 hits. Test-name echoes
+# (unknownKeysFailClosed, "unknown provider rejected", "unknown definition
+# provider rejected", "unknown entry provider rejected",
+# unknownVersionFieldAndShapeFailClosed, unknownTopLevelKeyIsProviderDown,
+# unknownInstanceThrowsWithoutTouchingBroker, unknownProviderIsAtomic,
+# unknownRecordKeyIsProviderDown) plus parameterized provider-argument echoes
+# ("vault", "s3", "file", "FILE", "keychain;id", "vault-http-v2", ...) and one
+# `.unknown` enum-case echo (:585). Two physical lines (:105, :1423) are the
+# tails of status lines split by an embedded newline inside the echoed
+# argument ("file\n", heads at :104/:1422) — still runner status shape.
+# Verdict: TEST-NAME/ARGUMENT ECHO, not a leak.
+#
+# Group B — pattern "static", 14 hits (staticPin* test names, started/passed
+# pairs). Verdict: TEST-NAME ECHO, not a leak.
+#
+# Group C — pattern "rogue", 2 hits (:1017/:1018, started/passed pair for
+# rogueLeaseDurationsClampToPolicyMaximum). Verdict: TEST-NAME ECHO, not a leak.
+#
+# Group D — pattern "hunter2", 1 hit (:1392): full "hunter2" argument echo of
+# the "text round-trips" parameterized case — the runner echoing the test's
+# own hardcoded input. Verdict: TEST-ARGUMENT ECHO, not a leak.
+#
+# Group E — pattern "ghp_", 1 hit (:1123): the same Group-5 fixture class as
+# the main triage. The log argument is byte-identical to the hardcoded
+# fixture at Tests/RVHistoryTests/SecretsAuditRecordsTests.swift:340, and the
+# sibling-case echoes at :1127/:1131/:1135 are byte-identical to :341/:342/:343
+# (proof commands below; the test asserts redaction and passed).
+# Verdict: TEST-ARGUMENT ECHO, not a leak.
+$ sed -n '1123p' coverage-secrets.log | grep -o 'ghp_[^"]*' | sha256sum
+c0c7538d385ab78e67b2904ca72f8b99270eb8976936c7c75dd289eddef84315  -
+$ sed -n '340p' ../../../../Tests/RVHistoryTests/SecretsAuditRecordsTests.swift | grep -o 'ghp_[^"]*' | sha256sum
+c0c7538d385ab78e67b2904ca72f8b99270eb8976936c7c75dd289eddef84315  -
+$ sed -n '1127p;1131p;1135p' coverage-secrets.log | grep -o 'key [^"]*' > /tmp/cov-sib.txt; sed -n '341,343p' ../../../../Tests/RVHistoryTests/SecretsAuditRecordsTests.swift | grep -o 'key [^"]*' > /tmp/src-sib.txt; diff /tmp/cov-sib.txt /tmp/src-sib.txt && echo SIBLINGS-IDENTICAL
+SIBLINGS-IDENTICAL
+#
+# Non-hit context: :1440 is a 16,462-byte runner status line for
+# "text round-trips" whose argument is 16,384 `v` chars (stress input,
+# verified all-`v`) — benign, and not a Tier-A hit ("v" is Tier-B).
+#
+# ADDENDUM CONCLUSION: 81 hits, 81 explained as runner test-name/argument
+# echoes, 0 unexplained. Combined token-in-log check: 37 + 81 = 118 hits,
+# 118 explained, 0 unexplained, 0 real leaks. GREEN.

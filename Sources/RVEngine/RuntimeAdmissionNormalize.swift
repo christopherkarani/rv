@@ -25,6 +25,11 @@ public func normalizeRuntimeAdmission(
             url: url,
             resolve: resolve
         )
+    case .mcp:
+        // MCP dispatches never become proposals: the dispatch layer routes
+        // them to the invoker after `submitMCP` admits them. Reaching the
+        // shell/http normalize fails closed.
+        return .failure(.failed)
     }
 }
 

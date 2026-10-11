@@ -1592,6 +1592,8 @@ private func ptyAdmissionNormalize(
             return .success([address])
         }
         )
+    case .mcp:
+        return .failure(.failed)
     case .shell(let command):
         let raw = command.rawValue
         let fingerprint = ActionFingerprint(rawValue: "pty:\(raw)")

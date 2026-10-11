@@ -123,6 +123,59 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
         }
     }
 
+    /// A broker-bound secret the identity gate resolves at launch and
+    /// injects as one environment variable. The entry names a
+    /// `SecretRef` (provider plus item plus optional field); it never
+    /// carries secret material. Entries resolve only on the
+    /// identity-required path, never on the legacy capability-only door.
+    public struct BrokerEntry: Codable, Sendable, Equatable {
+        /// Provider id. Always a member of `SecretRef.allowedProviders`.
+        public var provider: String
+        /// Item name within the provider. Never empty.
+        public var item: String
+        /// Field selector within the item, if the provider splits items
+        /// into fields. Without it the whole item must decode as UTF-8 text.
+        public var field: String?
+        /// Environment variable receiving the resolved value.
+        public var env: String
+        /// Agent hook names this entry injects for. Nil means every
+        /// launch; otherwise only launches whose agent tag matches. An
+        /// empty list normalizes to nil, so the two spellings never diverge.
+        public var agents: [String]?
+
+        public init(
+            provider: String, item: String, field: String? = nil,
+            env: String, agents: [String]? = nil
+        ) {
+            self.provider = provider
+            self.item = item
+            self.field = field
+            self.env = env
+            self.agents = agents.flatMap { $0.isEmpty ? nil : $0 }
+        }
+
+        /// The broker ref this entry names, or nil when the provider
+        /// is unknown or the item is empty. Mirrors the store's
+        /// allowlist so unvalidated entries fail closed here too.
+        public var ref: SecretRef? {
+            try? SecretRef(provider: provider, item: item, field: field)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case provider, item, field, env, agents
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            provider = try container.decode(String.self, forKey: .provider)
+            item = try container.decode(String.self, forKey: .item)
+            field = try container.decodeIfPresent(String.self, forKey: .field)
+            env = try container.decode(String.self, forKey: .env)
+            let agents = try container.decodeIfPresent([String].self, forKey: .agents)
+            self.agents = agents.flatMap { $0.isEmpty ? nil : $0 }
+        }
+    }
+
     public var id: String
     /// Canonical original project paths. Empty means no project is eligible.
     public var projects: [String]
@@ -136,6 +189,9 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
     public var credentials: [Credential]
     public var environment: [Environment]
     public var keychain: [KeychainEntry]
+    /// Broker-bound secrets beside `keychain`. Refs only; entries carry
+    /// no secret material and resolve only on the identity-required path.
+    public var secrets: [BrokerEntry]
 
     public init(
         id: String,
@@ -147,7 +203,8 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
         writeTrees: [String] = [],
         credentials: [Credential] = [],
         environment: [Environment] = [],
-        keychain: [KeychainEntry] = []
+        keychain: [KeychainEntry] = [],
+        secrets: [BrokerEntry] = []
     ) {
         self.id = id
         self.projects = projects
@@ -159,16 +216,18 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
         self.credentials = credentials
         self.environment = environment
         self.keychain = keychain
+        self.secrets = secrets
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, projects, agents, executableLinks, readFiles, readTrees
-        case writeTrees, credentials, environment, keychain
+        case writeTrees, credentials, environment, keychain, secrets
     }
 
     /// Backward compatible: documents written before `agents` existed decode
     /// with an empty mark list, preserving legacy link-name behavior.
     /// Documents written before `keychain` decode with no keychain entries.
+    /// Documents written before `secrets` decode with no broker entries.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
@@ -181,6 +240,7 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
         credentials = try container.decode([Credential].self, forKey: .credentials)
         environment = try container.decode([Environment].self, forKey: .environment)
         keychain = try container.decodeIfPresent([KeychainEntry].self, forKey: .keychain) ?? []
+        secrets = try container.decodeIfPresent([BrokerEntry].self, forKey: .secrets) ?? []
     }
 }
 

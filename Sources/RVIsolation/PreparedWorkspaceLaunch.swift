@@ -582,8 +582,32 @@ func committedEffectiveProfile(
 
 /// True when neither the definition nor the effective profile stages
 /// credentials: no binding names, no credential copies, no keychain
-/// entries. Preparation rejects anything else until Secrets exists.
+/// entries, and no broker-bound entries. The legacy capability-only
+/// door admits only these selections; broker entries resolve
+/// exclusively through identity-required mediation, never here.
 func isCredentialFreeSelection(_ selection: ResolvedAgentLaunch) -> Bool {
+    guard isIdentityAdmissibleSelection(selection) else {
+        return false
+    }
+    guard selection.resolved.definition.resourceProfile.secrets.isEmpty else {
+        return false
+    }
+    if let profile = selection.resourceProfile {
+        guard profile.secrets.isEmpty else {
+            return false
+        }
+    }
+    return true
+}
+
+/// True when the selection stages no legacy credentials — no binding
+/// names, no credential copies, no keychain entries — while broker-bound
+/// entries are admitted: they resolve only through identity-required
+/// broker mediation (`RuntimeAdmissionGate.admittedBrokerEntries` plus
+/// `SecretBroker`), never on the legacy door. The preparation path
+/// checks this predicate for identity launches; legacy launches keep
+/// `isCredentialFreeSelection`.
+func isIdentityAdmissibleSelection(_ selection: ResolvedAgentLaunch) -> Bool {
     let definition = selection.resolved.definition
     guard definition.credentialBindings.isEmpty,
         definition.resourceProfile.credentials.isEmpty,

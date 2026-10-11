@@ -75,6 +75,9 @@ public struct AdHocAgentSnapshot: Sendable, Equatable {
                 id: AgentDefinitionStore.reservedSnapshotID, projects: []
             ),
             credentialBindings: [],
+            // The snapshot carries no grants, so the provider selection
+            // is inert; the default names the offline backend explicitly.
+            secretsProvider: SecretRef.defaultProvider,
             requiredAssurance: .unattested,
             authorityCeiling: .none
         )
@@ -173,7 +176,60 @@ public enum AgentDefinitionStore {
             return .failure(.unreadable)
         }
         guard count <= maximumBytes else { return .failure(.oversized) }
-        return decode(Data(bytes.prefix(count)), resourcePolicy: resourcePolicy)
+        let data = Data(bytes.prefix(count))
+        let result = decode(data, resourcePolicy: resourcePolicy)
+        // One-shot v1 normalization: definitions written before the
+        // provider-selection field existed gain the default in place.
+        // Best-effort only; the load already succeeded.
+        if case .success = result,
+            let migrated = migrate(data),
+            MigratedDocumentRewrite.rewrite(
+                fileName: "agent-definitions.json",
+                inDirectory: directory,
+                expectedDevice: UInt64(fileStatus.st_dev),
+                expectedInode: UInt64(fileStatus.st_ino),
+                bytes: migrated
+            )
+        {
+            logMigration("agent-definitions.json", in: configDirectory)
+        }
+        return result
+    }
+
+    /// One-shot v1 normalization: inserts the default provider selection
+    /// into definitions written before the field existed. Returns the
+    /// rewritten document, or nil when the data needs no migration. Pure:
+    /// `load(from:resourcePolicy:)` decides whether to persist the result.
+    static func migrate(_ data: Data) -> Data? {
+        guard data.count <= maximumBytes,
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            root["version"] as? Int == 1,
+            let definitions = root["definitions"] as? [[String: Any]],
+            definitions.contains(where: { $0["secretsProvider"] == nil })
+        else {
+            return nil
+        }
+        var migrated = root
+        migrated["definitions"] = definitions.map { definition in
+            var patched = definition
+            if patched["secretsProvider"] == nil {
+                patched["secretsProvider"] = SecretRef.defaultProvider
+            }
+            return patched
+        }
+        guard let rewritten = try? JSONSerialization.data(withJSONObject: migrated, options: [.sortedKeys]),
+            rewritten.count <= maximumBytes
+        else {
+            return nil
+        }
+        return rewritten
+    }
+
+    private static func logMigration(_ fileName: String, in configDirectory: URL) {
+        let path = configDirectory.appendingPathComponent(fileName, isDirectory: false).path
+        FileHandle.standardError.write(
+            Data(("rv: migrated \(path) (added default secretsProvider \"file\")\n").utf8)
+        )
     }
 
     public static func decode(
@@ -216,6 +272,7 @@ public enum AgentDefinitionStore {
             dto.credentialBindings.count <= 32,
             dto.credentialBindings.allSatisfy(identifier),
             Set(dto.credentialBindings).count == dto.credentialBindings.count,
+            SecretRef.allowedProviders.contains(dto.secretsProvider),
             dto.authorityCeiling.count <= 64,
             dto.authorityCeiling.allSatisfy(scopeName),
             Set(dto.authorityCeiling).count == dto.authorityCeiling.count
@@ -231,6 +288,7 @@ public enum AgentDefinitionStore {
             agentTag: dto.agentTag,
             resourceProfile: profile,
             credentialBindings: dto.credentialBindings,
+            secretsProvider: dto.secretsProvider,
             requiredAssurance: dto.requiredAssurance,
             authorityCeiling: AgentAuthority(scopes: dto.authorityCeiling)
         )
@@ -359,6 +417,7 @@ private struct AgentDefinitionDTO: Decodable {
     let agentTag: String?
     let resourceProfile: String
     let credentialBindings: [String]
+    let secretsProvider: String
     let requiredAssurance: ExecutableAssurance
     let authorityCeiling: [String]
 
@@ -368,7 +427,8 @@ private struct AgentDefinitionDTO: Decodable {
             container,
             allowed: [
                 "id", "displayName", "blurb", "executable", "hookHost", "agentTag",
-                "resourceProfile", "credentialBindings", "requiredAssurance", "authorityCeiling",
+                "resourceProfile", "credentialBindings", "secretsProvider",
+                "requiredAssurance", "authorityCeiling",
             ]
         )
         id = try container.decode(String.self, forKey: StrictKey("id"))
@@ -381,6 +441,12 @@ private struct AgentDefinitionDTO: Decodable {
         credentialBindings = try container.decode(
             [String].self, forKey: StrictKey("credentialBindings")
         )
+        // Documents written before the provider-selection field existed
+        // read as the offline file provider; `load(from:resourcePolicy:)`
+        // rewrites them one-shot so the default is explicit on disk.
+        secretsProvider = try container.decodeIfPresent(
+            String.self, forKey: StrictKey("secretsProvider")
+        ) ?? SecretRef.defaultProvider
         requiredAssurance = try container.decode(
             ExecutableAssurance.self, forKey: StrictKey("requiredAssurance")
         )

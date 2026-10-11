@@ -1,0 +1,139 @@
+# T11 static structural checks
+# Date (UTC): 2026-10-11T01:22:46Z (original); Rev 2 (UTC): 2026-10-11 (Wave F fix)
+# Workdir: repository root. Every section is a verbatim command transcript
+# with exit codes: re-run each `$` line to reproduce its output.
+# `#`-prefixed notes are annotations, not command output.
+
+## CON-001: no Vault server sources in package graph or vendor tree
+$ grep -ni vault Package.swift; echo "exit=$?"
+exit=1
+$ ls vendor 2>&1; echo "exit=$?"
+ls: vendor: No such file or directory
+exit=1
+$ find Sources Tests -iname '*vault*'; echo "exit=$?"
+Sources/RVIsolation/VaultHTTPClient.swift
+Sources/RVPacks/Resources/packs/secrets.vault.json
+Tests/RVIsolationTests/VaultHTTPClientTests.swift
+exit=0
+# (exit=1 above = zero Package.swift hits; only the client, its tests,
+# and one JSON pack descriptor carry the name)
+
+## CON-002: toolchain and platform floor
+$ swift --version 2>&1; echo "exit=$?"
+swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)
+Target: arm64-apple-macosx27.0.0
+exit=0
+$ grep -n "platforms:" Package.swift; echo "exit=$?"
+268:    platforms: [
+exit=0
+$ grep -n "macOS(.v15)" Package.swift; echo "exit=$?"
+269:        .macOS(.v15),
+exit=0
+
+## CON-003: Linux keychain fail-closed (code + test names)
+$ grep -n "canImport(Glibc)\|currentPlatform\|Linux has no keychain" Sources/RVIsolation/SecretBroker.swift; echo "exit=$?"
+3:#elseif canImport(Glibc)
+262:/// Linux has no keychain (CON-003): `currentPlatform()` returns nil there
+288:    static func currentPlatform() -> KeychainSecretsProvider? {
+exit=0
+$ grep -rn "linuxHasNoKeychain" Tests/; echo "exit=$?"
+Tests/RVIsolationTests/SecretBrokerTests.swift:697:    @Test func linuxHasNoKeychain() async throws {
+exit=0
+$ sed -n '688,704p' Tests/RVIsolationTests/SecretBrokerTests.swift; echo "exit=$?"
+
+    @Test func currentPlatformIsLiveOnMacOS() {
+        #expect(KeychainSecretsProvider.currentPlatform() != nil)
+    }
+    #else
+    // Documented platform skip (CON-003): Linux has no keychain. The
+    // factory returns nil fail-closed, and a directly constructed
+    // instance reports down with unhealthy status. This test pins the
+    // gate; the macOS resolve tests above do not run here by design.
+    @Test func linuxHasNoKeychain() async throws {
+        #expect(KeychainSecretsProvider.currentPlatform() == nil)
+        let provider = KeychainSecretsProvider(read: { _, _ in Data("x".utf8) })
+        #expect(await provider.health() == ProviderHealth(ok: false))
+        await #expect(throws: SecretsError.providerDown("keychain")) {
+            try await provider.resolve(makeRef("keychain", "api"))
+        }
+    }
+exit=0
+# (the pinning test sits inside the #else of the macOS gate: it compiles
+# out on macOS and runs on Linux only)
+
+## CON-004/CON-005: 0600 store permissions on the secrets paths
+$ grep -rn "0o600" Sources/RVIsolation/SecretBroker.swift Sources/RVIsolation/RuntimeResourceManifest.swift Sources/RVPolicy/SecretsProviderStore.swift; echo "exit=$?"
+Sources/RVIsolation/SecretBroker.swift:635:                O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600
+Sources/RVIsolation/SecretBroker.swift:644:            fchmod(lockFD, 0o600) == 0
+Sources/RVIsolation/SecretBroker.swift:655:                O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0o600
+Sources/RVIsolation/SecretBroker.swift:664:            fchmod(fd, 0o600) == 0
+Sources/RVIsolation/RuntimeResourceManifest.swift:268:            open($0, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+Sources/RVPolicy/SecretsProviderStore.swift:227:                openat(directory, $0, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
+Sources/RVPolicy/SecretsProviderStore.swift:233:            guard writeAll(bytes: bytes, to: fd), fchmod(fd, 0o600) == 0 else {
+exit=0
+
+## SEC-003: broker never logs secret values (no print/log of value material in broker + client)
+$ grep -n -E "print\(|Logger|log\." Sources/RVIsolation/SecretBroker.swift Sources/RVIsolation/VaultHTTPClient.swift; echo "exit=$?"
+exit=1
+# (no output above: zero print(/Logger/log. hits in either file)
+
+## Addendum: trait imports, staging caps, Linux guard
+$ grep -n "^import" Sources/RVDomain/SecretsProvider.swift Sources/RVDomain/MCPToolPolicy.swift; echo "exit=$?"
+exit=1
+# (no output above: both files have zero imports — types only, no IO) (REQ-001)
+$ grep -rn "maximumBytes = 65_536\|8_192\|0o700" Sources/RVIsolation/SecretBroker.swift Sources/RVIsolation/RuntimeResourceManifest.swift; echo "exit=$?"
+Sources/RVIsolation/SecretBroker.swift:44:    public static let maximumBytes = 65_536
+Sources/RVIsolation/SecretBroker.swift:691:            fchmod(fd, 0o700) == 0
+Sources/RVIsolation/RuntimeResourceManifest.swift:71:        guard privateHome.withCString({ mkdir($0, 0o700) }) == 0 else {
+Sources/RVIsolation/RuntimeResourceManifest.swift:130:                secret.count <= 8_192
+Sources/RVIsolation/RuntimeResourceManifest.swift:148:            guard value.utf8.count <= 8_192, value.contains("\0") == false else {
+Sources/RVIsolation/RuntimeResourceManifest.swift:200:                guard text.utf8.count <= 8_192 else {
+Sources/RVIsolation/RuntimeResourceManifest.swift:240:                    attributes: [.posixPermissions: 0o700]
+exit=0
+# (SecretBroker.swift:44 = 64KB store cap (CON-004); RuntimeResourceManifest
+# 8_192 x3 = per-value cap (REQ-009/CON-005), 0o700 x2 = private home
+# (REQ-009); SecretBroker.swift:691 tightens the broker audit *directory* fd)
+
+## Addendum 2: residuals grounding
+$ grep -c -i "replic" Sources/RVIsolation/VaultHTTPClient.swift; echo "exit=$?"
+0
+exit=1
+# (0 matches: no replication paths in the client) (CON-006)
+$ grep -rn -c "zeroize\|explicitZero\|mlock\|munlock" Sources/RVIsolation/SecretBroker.swift Sources/RVIsolation/VaultHTTPClient.swift Sources/RVDomain/SecretsRedaction.swift Sources/RVIsolation/ScopedInvoker.swift; echo "exit=$?"
+Sources/RVIsolation/SecretBroker.swift:0
+Sources/RVIsolation/VaultHTTPClient.swift:0
+Sources/RVDomain/SecretsRedaction.swift:0
+Sources/RVIsolation/ScopedInvoker.swift:0
+exit=1
+# (0 in each file: no explicit memory zeroization) (T0c)
+$ grep -rli "unstructured" Sources/; echo "exit=$?"
+exit=1
+# (no output above: no matching symbol in Sources/) (rpc unstructured-worker)
+$ grep -n "secret.resolve\|tool.dispatch\|tool.approval\|tool.outcome" Sources/RVHistory/SecretsAuditRecords.swift; echo "exit=$?"
+162:    case secretResolve = "secret.resolve"
+164:    case toolDispatch = "tool.dispatch"
+166:    case toolApproval = "tool.approval"
+168:    case toolOutcome = "tool.outcome"
+247:    /// `secret.resolve`: the broker served the ref (value never logged).
+249:    /// `secret.resolve`: staging dropped one variable; the rest continued.
+251:    /// `tool.dispatch`: policy approved without elicitation.
+253:    /// `tool.dispatch`/`tool.approval`: parked for a human; the wait lives
+258:    /// `tool.approval`: the human authorized the exact parked action.
+260:    /// `tool.approval`: the human declined; no credential was touched.
+262:    /// `tool.approval`: the wait expired.
+264:    /// `tool.approval`: the wait was canceled.
+266:    /// `tool.approval`: the timeout policy closed the wait.
+268:    /// `tool.approval`: the resolution was delivered exactly once.
+270:    /// `tool.outcome`: the invocation succeeded.
+272:    /// `tool.outcome`: the invocation failed; see the redacted cause.
+395:    /// Builds a `secret.resolve` row for one broker outcome.
+417:    /// Builds a `tool.dispatch` row for one policy outcome.
+439:    /// Builds a `tool.approval` row for one human (or timeout) decision.
+461:    /// Builds a `tool.outcome` row closing one execution.
+exit=0
+# (enum cases at 162/164/166/168; the remaining hits are doc comments
+# quoting the same kind strings) (REQ-016)
+$ ls Sources/RVHistory/ | grep -i audit; echo "exit=$?"
+SecretsAuditRecords.swift
+exit=0
+# (no SecretsAuditLedger.swift in this worktree)

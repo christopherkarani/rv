@@ -80,6 +80,18 @@ public enum RuntimeAdmissionCodec {
                 url: url
             )
             return encodeJSON(body)
+        case .mcp(let dispatch):
+            let body = WireMCPRequest(
+                v: frame.version,
+                id: frame.requestID.rawValue.uuidString,
+                capability: frame.capability.rawValue,
+                session: frame.claimedSession.rawValue.uuidString,
+                address: dispatch.address,
+                argsDigest: dispatch.argsDigest,
+                idempotencyKey: dispatch.idempotencyKey,
+                arguments: dispatch.argumentsJSON
+            )
+            return encodeJSON(body)
         }
     }
 
@@ -93,6 +105,11 @@ public enum RuntimeAdmissionCodec {
         }
         if present == ["v", "id", "capability", "session", "method", "url"] {
             return decodeHTTP(data)
+        }
+        if present == [
+            "v", "id", "capability", "session", "address", "argsDigest", "idempotencyKey", "arguments",
+        ] {
+            return decodeMCP(data)
         }
         return .failure(.malformed)
     }
@@ -154,6 +171,51 @@ public enum RuntimeAdmissionCodec {
                 capability: capability,
                 claimedSession: claimedSession,
                 action: .http(method: wire.method, url: wire.url)
+            )
+        )
+    }
+
+    private static func decodeMCP(
+        _ data: Data
+    ) -> Result<RuntimeActionFrame, RuntimeAdmissionDecodeError> {
+        guard let wire = try? JSONDecoder().decode(WireMCPRequest.self, from: data) else {
+            return .failure(.malformed)
+        }
+        guard wire.v == version else { return .failure(.malformed) }
+        guard let requestID = RuntimeActionRequestID(validating: wire.id),
+            let capability = RuntimeCapability(validating: wire.capability),
+            let claimedSession = RuntimeSessionClaim(validating: wire.session)
+        else {
+            return .failure(.malformed)
+        }
+        // Transport consistency only: byte caps, no NULs, and the digest
+        // binding the audited digest to the executed arguments. Address
+        // parsing and argument semantics belong downstream: an unparseable
+        // address must still reach the invoker, which audits the raw
+        // literal and answers `.unknownTool`.
+        if wire.address.isEmpty || wire.address.utf8.count > MCPDispatchWireLimits.maxAddressUTF8Bytes
+            || wire.address.contains("\0")
+            || wire.idempotencyKey.isEmpty
+            || wire.idempotencyKey.utf8.count > MCPDispatchWireLimits.maxIdempotencyKeyUTF8Bytes
+            || wire.idempotencyKey.contains("\0")
+            || wire.arguments.utf8.count > MCPDispatchWireLimits.maxArgumentsUTF8Bytes
+            || wire.arguments.contains("\0")
+            || wire.argsDigest != MCPDispatchDigest.hex(of: wire.arguments)
+        {
+            return .failure(.malformed)
+        }
+        return .success(
+            RuntimeActionFrame(
+                version: wire.v,
+                requestID: requestID,
+                capability: capability,
+                claimedSession: claimedSession,
+                action: .mcp(dispatch: MCPDispatchAction(
+                    address: wire.address,
+                    argsDigest: wire.argsDigest,
+                    idempotencyKey: wire.idempotencyKey,
+                    argumentsJSON: wire.arguments
+                ))
             )
         )
     }
@@ -308,18 +370,58 @@ public enum RuntimeAdmissionCodec {
                 headers: nil,
                 location: location
             )
+        case .mcp(let receipt):
+            wire = WireResponse(
+                v: version,
+                id: requestID,
+                status: "mcp",
+                exit: nil,
+                rule: nil,
+                reason: nil,
+                approval: nil,
+                httpStatus: nil,
+                destination: receipt.address,
+                body: receipt.body.base64EncodedString(),
+                headers: nil,
+                location: nil
+            )
+        case .mcpFailed(let failure):
+            let correlationID: String?
+            if case .internalError(let id) = failure {
+                correlationID = id
+            } else {
+                correlationID = nil
+            }
+            wire = WireResponse(
+                v: version,
+                id: requestID,
+                status: "mcpFailed",
+                exit: nil,
+                rule: nil,
+                reason: failure.reasonLabel,
+                approval: nil,
+                httpStatus: nil,
+                destination: nil,
+                body: nil,
+                headers: nil,
+                location: nil,
+                correlationID: correlationID
+            )
         }
         let limit = responseLimit(response)
         let encoded = encodeJSON(wire, limit: limit)
         if case .http = response, case .failure = encoded {
             return encodeResponse(.httpFailed(.responseTooLarge), requestID: requestID)
         }
+        if case .mcp = response, case .failure = encoded {
+            return encodeResponse(.mcpFailed(.responseTooLarge), requestID: requestID)
+        }
         return encoded
     }
 
     private static func responseLimit(_ response: RuntimeAdmissionResponse) -> Int {
         switch response {
-        case .http, .httpFailed:
+        case .http, .httpFailed, .mcp, .mcpFailed:
             return maxResponseBytes
         default:
             return maxBodyBytes
@@ -385,6 +487,17 @@ private struct WireHTTPRequest: Codable {
     var url: String
 }
 
+private struct WireMCPRequest: Codable {
+    var v: Int
+    var id: String
+    var capability: String
+    var session: String
+    var address: String
+    var argsDigest: String
+    var idempotencyKey: String
+    var arguments: String
+}
+
 private struct WireHTTPHeader: Encodable {
     var name: String
     var value: String
@@ -403,6 +516,7 @@ private struct WireResponse: Encodable {
     var body: String? = nil
     var headers: [WireHTTPHeader]? = nil
     var location: String? = nil
+    var correlationID: String? = nil
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -418,6 +532,7 @@ private struct WireResponse: Encodable {
         try container.encodeIfPresent(body, forKey: .body)
         try container.encodeIfPresent(headers, forKey: .headers)
         try container.encodeIfPresent(location, forKey: .location)
+        try container.encodeIfPresent(correlationID, forKey: .correlationID)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -433,5 +548,6 @@ private struct WireResponse: Encodable {
         case body
         case headers
         case location
+        case correlationID
     }
 }

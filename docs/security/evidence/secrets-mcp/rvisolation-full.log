@@ -1,0 +1,2183 @@
+Building for debugging...
+[Computing dependencies]
+[Provisioning 1 / 100]
+[Using on-disk description]
+[1 / 156] RVThemeTests-product
+[1 / 20] SwiftTerm_SwiftTerm
+[2 / 17] SwiftTerm
+warning: missing creator for mutated node: ('/Users/chriskarani/.herdr/worktrees/rv/worktree-clear-stone-fd72/.build/out/Products/Debug/SwiftTerm_SwiftTerm.bundle/Contents/MacOS')
+Build complete! (1.72 sec)
+􀟈  Test run started.
+􀄵  Testing Library Version: 2084
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Suite "Executor lifecycle regressions" started.
+􀟈  Suite "Workspace launch intent coupling" started.
+􀟈  Test loopbackHelpersRejectOutOfRangePorts() started.
+􀟈  Suite "VaultHTTPClient" started.
+􀟈  Suite "MCPPolicy" started.
+􀟈  Suite ExecutableCommitVerificationTests started.
+􀟈  Suite "IsolationApply" started.
+􀟈  Suite "FileSecretsProvider" started.
+􀟈  Suite ScopedInvokerOrderingTests started.
+􀟈  Suite AgentInstanceDeathTests started.
+􀟈  Suite "Socket peer evidence (Linux SO_PEERCRED model)" started.
+􀟈  Suite ScopedInvokerRetryTests started.
+􀟈  Suite "ContainedLaunch" started.
+􀟈  Test agentBinResolveWithMissingBinDirGrantsNothing() started.
+􀟈  Suite ScopedInvokerStressTests started.
+􀟈  Suite "SeatbeltMachBoundary" started.
+􀟈  Suite HostRedemptionTests started.
+􀟈  Suite "IsolationApply" started.
+􀟈  Suite "Action approval parking" started.
+􀟈  Suite PreparedWorkspaceLaunchTests started.
+􀟈  Suite "SeatbeltCapability" started.
+􀟈  Suite ScopedInvokerOpacityAuditTests started.
+􀟈  Suite "WorkspaceSession" started.
+􀟈  Suite "Terminal stream" started.
+􀟈  Suite "Prepared launch store" started.
+􀟈  Suite "Local terminal restore" started.
+􀟈  Suite "IsolationConformance" started.
+􀟈  Test egressProxyReportsDialFailures() started.
+􀟈  Test productiveResolutionHonorsInjectedProbe() started.
+􀟈  Suite "Workspace lifecycle compaction" started.
+􀟈  Suite "RuntimeAdmission" started.
+􀟈  Suite "Broker admission identity door" started.
+􀟈  Suite ScopedInvokerGateTests started.
+􀟈  Suite ScopedInvokerTransportTests started.
+􀟈  Suite "AgentInstanceRegistry concurrency" started.
+􀟈  Suite WorkspacePrincipalAuthorityTests started.
+􀟈  Test controlRPCResponseRoundTrips() started.
+􀟈  Suite "HTTP admission" started.
+􀟈  Test egressProxyDeniesMalformedAndBypassShapes() started.
+􀟈  Test profileLessTmpdirStaysOutOfTheWorkspaceRoot() started.
+􀟈  Suite "KeychainSecretsProvider" started.
+􀟈  Suite "Runtime terminal" started.
+􀟈  Suite ScopedInvokerTransportEdgeTests started.
+􀟈  Test activeDeveloperRootFollowsInjectedReadlink() started.
+􀟈  Test symlinkedCredentialSourceEscapeFailsClosedStaging() started.
+􀟈  Suite "RuntimeAdversarial" started.
+􀟈  Test egressProxyRelaysLoopbackTargets() started.
+􀟈  Suite "DescriptorHygiene" started.
+􀟈  Suite "LocalExecutor" started.
+􀟈  Suite ProductionIdentityLaunchTests started.
+􀟈  Suite "Broker admission credential gate" started.
+􀟈  Suite "Workspace host" started.
+􀟈  Test productiveProfileOmitsSystemTemporaryDirectoryWhenUnresolved() started.
+􀟈  Suite "Broker admission staging" started.
+􀟈  Suite "Step 8 F3 identity mediation" started.
+􀟈  Suite "AgentInstanceRegistry" started.
+􀟈  Suite "SecretBroker" started.
+􀟈  Suite ScopedInvokerElicitationTests started.
+􀟈  Suite "Broker admission entry selection" started.
+􀟈  Suite ScopedInvokerCodecTests started.
+􀟈  Test peerTrustRejectsRealAllowACLDespiteSafePOSIXMode() started.
+􀟈  Suite "Workspace recovery" started.
+􀟈  Test agentBinDirectoryIsASiblingOfTheHostBinary() started.
+􀟈  Test controlRPCPropagatesInvalidAndIncompatible() started.
+􀟈  Suite "AgentTurn" started.
+􀟈  Test egressProxyRejectsOversizeHeaders() started.
+􀟈  Test writeShimRefreshesContent() started.
+􀟈  Test controlRPCCodableEncodeAgreesWithValidatedEncode() started.
+􀟈  Suite IdentityAmbientCredentialTests started.
+􀙟  Test profileStagingFailureKeepsLaunchFailurePath() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀟈  Test agentBinDirectoryDerivesFromExecutablePath() started.
+􀟈  Suite "SeatbeltContainment" started.
+􀟈  Test seedGitIdentitySkipsWhenIdentityIsEmpty() started.
+􀟈  Suite ScopedInvokerEdgeTests started.
+􀟈  Test selectedManifestIsIdenticalForOneShotAndTerminalResources() started.
+􀟈  Suite "LaunchBoundaryRegression" started.
+􀟈  Suite "SeatbeltLoopback" started.
+􀙟  Test forgedAndCrossProjectProfileIDsFailClosedAtServer() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀟈  Test activeDeveloperRootFollowsSelectLinkToEnclosingApp() started.
+􀟈  Test terminalEnvironmentKeyPolicy() started.
+􀙟  Test defaultProfileNeverAutoAttachesNilLaunchKeepsBaseFence() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test ensureTerminalRuntimeAdjudicatesExplicitProfile() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀟈  Test deniedReaderFailsClosed() started.
+􀟈  Test nonTerminalEnvironmentStaysNonInteractive() started.
+􀟈  Suite "Workspace client terminal queue" started.
+􀟈  Test agentFilteredCredentialsStageOnlyForMatchingAgent() started.
+􀟈  Test agentBinResolutionUsesInjectedProbe() started.
+􀟈  Test selectedGenericProfileStagesOnlyItsOwnSyntheticCredential() started.
+􀟈  Test agentBinResolutionOmitsClaudeScratchWhenClaudeIsAbsent() started.
+􀟈  Test stagingCatalogCoversLegacyScrubPaths() started.
+􀟈  Test controlRPCLimitBatteryRejectsIdenticalFramesOnBothPaths() started.
+􀟈  Test egressProxyDeniesExternalAbsoluteHTTP() started.
+􀟈  Test sanitizedPATHBinParentExpansionHonorsSecretVeto() started.
+􀟈  Test ambientSecretsDoNotFlowUnlessExplicitlyNamed() started.
+􀟈  Test controlRPCResponseCodeRoundTrips() started.
+􀟈  Test egressProxyRelaysLoopbackAbsoluteHTTP() started.
+􀟈  Test productiveResolutionCarriesSystemTemporaryDirectory() started.
+􀟈  Test dynamicCodeInvalidRequirementFailsAndDefaultHasNoRole() started.
+􀟈  Test controlRPCCodableInitEnforcesVersionAndLimits() started.
+􀟈  Test stageAgentHomesLinksClaudeCredentials() started.
+􀟈  Test productiveProfileGrantsSystemTemporaryDirectoryReadWrite() started.
+􀟈  Test activeDeveloperRootPrefersDeveloperDir() started.
+􀟈  Test terminalEnvironmentKeepsColorAndBoundedLoopbackProxy() started.
+􀟈  Suite "Workspace lifecycle" started.
+􀟈  Test unixPeerEvidenceRejectsNonSocketDescriptor() started.
+􀟈  Test workspaceControlRejectsUnknownVersionAndFields() started.
+􀟈  Test keychainEntryInjectsOnlyForMatchingAgent() started.
+􀟈  Test aclLessExistingFileCarriesNoAllowEntries() started.
+􀟈  Test deadExecutableLinkNamesItselfInStagingFailure() started.
+􀟈  Test egressProxyExternalDialFilterRejectsNonPublicAddresses() started.
+􀟈  Test egressDial_reportsFilterRefusalAndConnectOutcomes() started.
+􀟈  Test activeDeveloperRootVetoesSensitiveSelection() started.
+􀟈  Test unixDifferentExecutableCannotAcquireRoleAndDeadPeerFails() started.
+􀟈  Test keychainRawSecretWithoutFieldDecodesAsText() started.
+􀟈  Test egressDenialReasonsPinLogSpellings() started.
+􀟈  Test sanitizeTrimsToPATHBudgetFromTheTail() started.
+􀟈  Test controlRPCFailureTypedOverloadShape() started.
+􀟈  Test terminalBytesRoundTripThroughBase64() started.
+􀟈  Test sanitizedPATHImpliesBinParentsButNeverRoot() started.
+􀟈  Test peerTrustRejectsUserOwnedManifest() started.
+􀟈  Test blockedVariableNameMatchesUnderscoreTokens() started.
+􀟈  Test sanitizedPATHSymlinkGrandparentNeverReachesRoot() started.
+􀟈  Test preparedContainedProfileAdmitsLoopbackOnly() started.
+􀟈  Test terminalReplayDropsTheOldestBytes() started.
+􀟈  Test unknownResourceProfileIDResolvesToNothing() started.
+􀟈  Test terminalEnvironmentPassesGatewayThrough() started.
+􀟈  Test stagedCredentialMustBeOwnerFileAndNeverSymlink() started.
+􀟈  Test unselectedRuntimeStripsSecretsButProjectsNonSecretVars() started.
+􀟈  Test controlRPCRequestRoundTrips() started.
+􀟈  Test noProfileNeverAdmitsInstalledAgentResources() started.
+􀟈  Test activeDeveloperRootMissingLinkGrantsNothing() started.
+􀟈  Test egressProxyRecordsDnsFailuresPrecisely() started.
+􀟈  Test agentBinProfileGrantsFilesTreesAndReadOnlyCredentials() started.
+􀟈  Test egressProxyParsesAbsoluteHTTP() started.
+􀟈  Test agentBinResolutionAdmitsMuseInstallFiles() started.
+􀟈  Test terminalPATHPrefersInstalledAgentBin() started.
+􀟈  Test profileBoundToProjectAIsUnresolvableForProjectB() started.
+􀟈  Test productiveResolutionIncludesActiveDeveloperRoot() started.
+􀟈  Test egressProxyDeniesUnknownHosts() started.
+􀟈  Test agentBinResolutionGrantsOnlyResolvedAgents() started.
+􀟈  Test egressProxyParsesStrictCONNECTOnly() started.
+􀟈  Test controlRPCUnknownOperationPreservesRawEcho() started.
+􀟈  Test unixPeerEvidenceFromRealConnectedSocket() started.
+􀟈  Test keychainValuesLandInEnvironmentForAnyIO() started.
+􀙟  Test ensureTerminalRuntimeAcceptsKnownExplicitProfile() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀟈  Test seedGitIdentityUsesInjectedReader() started.
+􀟈  Test pseudoTerminalEnvironmentAdvertisesColorOutput() started.
+􀟈  Test concurrentDispatch_sameAuthorizationExecutesOnlyOnce() started.
+􀟈  Test discardIOAcceptsNoDimensionsOnBothSides() started.
+􀟈  Test cancellationTerminatesOwnedProcessesBeforeReturn() started.
+􀟈  Test argumentBoundsAgreeWithControlLimits() started.
+􀟈  Test terminalDimensionsAgreeWithStreamLimits() started.
+􀟈  Test emptyAgentsListNormalizesToNilInInitAndDecode() started.
+􀟈  Test cancellingAHelperDoesNotWaitForItToExit() started.
+􀟈  Test failedApply_consumesAuthorizationBeforeRetry() started.
+􀟈  Test agentNamedExecutableWithNoProfileStagesZeroResources() started.
+􀟈  Test keychainFailuresNameTheEnvAndStageNothing() started.
+􀟈  Test controlRPCFramesAreByteIdenticalToLegacyCodec() started.
+􀟈  Test reservedChildExit_cannotReplayCompletedSideEffect() started.
+􀟈  Test intentAloneCannotAuthorizeLaunchOperations() started.
+􀟈  Test identityLaunchOperationsStayReserved() started.
+􀟈  Test hugeSparseSwapRefusesWithoutFullRead() started.
+􀟈  Test executableBoundAgreesWithControlLimits() started.
+􀟈  Test cancelledBeforeDispatch_doesNotExecuteOrConsumeAuthorization() started.
+􀟈  Test fifoRefusesWithoutBlocking() started.
+􀟈  Test wrongDigestRefuses() started.
+􀟈  Test unmeasurableExpectationNeverVerifies() started.
+􀟈  Test sizeMatchAndDigestMatchVerifies() started.
+􀟈  Test missingFileRefuses() started.
+􀟈  Test sizeDriftRefuses() started.
+􀟈  Test directoryRefuses() started.
+􀟈  Test missingDirectoryIsEmptyStore() started.
+􀟈  Test unsupportedVersionIsProviderDown() started.
+􀟈  Test staticPinLeavesOtherAddressesToPatterns() started.
+􀟈  Test unknownRecordKeyIsProviderDown() started.
+􀟈  Test emptyTextIsExplicitEmptySecret() started.
+􀟈  Test tooManyItemsIsProviderDown() started.
+􀟈  Test registryDistinctSiblingsDoNotCollide() started.
+􀟈  Test wholeAgainstFieldsOnlyItemIsNotFound() started.
+􀟈  Test positionTieBreaksById() started.
+􀟈  Test spawn_landlock_trueOrWorkspaceHelper_doesNotEstablish() started.
+􀟈  Test resolvesFieldSubvalue() started.
+􀟈  Test unreadableValuesFileIsProviderDown() started.
+􀟈  Test landlock_prepare_contained_missingDirectory_returnsWorkspaceDoesNotExist() started.
+􀟈  Test staticPinBlockBypassesApprovePatterns() started.
+􀟈  Test runLandlock_seatbeltRequest_returnsBackendMismatch() started.
+􀟈  Test controlByteFieldNameIsProviderDown() started.
+􀟈  Test staticPinIsExactOnly() started.
+􀟈  Test patternExactDoesNotMatchSiblingTool() started.
+􀟈  Test fieldAgainstTextOnlyItemIsNotFound() started.
+􀟈  Test landlock_prepare_contained_relativeWorkspace_returnsWorkspaceMustBeAbsolute() started.
+􀟈  Test orgBlockBeatsUserApprove() started.
+􀟈  Test landlock_prepare_mediated_returnsProfileNotApplicable() started.
+􀟈  Test missingFieldIsNotFound() started.
+􀟈  Test missingItemIsNotFound() started.
+􀟈  Test fallbackProvenanceIsNilAndIsFallback() started.
+􀟈  Test duplicateStaticPinsLastWins() started.
+􀟈  Test unknownTopLevelKeyIsProviderDown() started.
+􀟈  Test compileLandlockRuleset_relativeWorkspace_returnsWorkspaceMustBeAbsolute() started.
+􀟈  Test oversizedFileIsProviderDown() started.
+􀟈  Test landlock_run_contained_onDarwin_returnsBackendUnavailable() started.
+􀟈  Test registryUnicodeLookup() started.
+􀟈  Test landlock_prepare_contained_launchArguments_areWorkspaceSeparatorAndInnerArgv() started.
+􀟈  Test apply_contained_onDarwin_stillEstablishesSeatbelt() started.
+􀟈  Test groupReadableFileIsProviderDown() started.
+􀟈  Test landlock_run_missingTrampoline_returnsBackendUnavailable() started.
+􀟈  Test staticPinCodableRoundTrips() started.
+􀟈  Test registryLookupHitReturnsRecord() started.
+􀟈  Test overlongItemNameIsProviderDown() started.
+􀟈  Test negativeAndInfinitePositionsOrder() started.
+􀟈  Test compileLandlockRuleset_newlineWorkspace_returnsWorkspacePathUnsafe() started.
+􀟈  Test registryPreservesFlagAndDefaultPerRecord() started.
+􀟈  Test missingFileIsEmptyStore() started.
+􀟈  Test resolvesWholeItemText() started.
+􀟈  Test newlineItemNameIsProviderDown() started.
+􀟈  Test compileLandlockRuleset_filesystemRoot_returnsWorkspacePathUnsafe() started.
+􀟈  Test isolationExecIdentity_rejectsWrongNameDirectoryAndWorkspaceLocalHelper() started.
+􀟈  Test anyPatternMatchesThroughStore() started.
+􀟈  Test approvePathPhaseOrderIsExact() started.
+􀟈  Test worldWritableDirectoryIsProviderDown() started.
+􀟈  Test blockTouchesNothingDownstream() started.
+􀟈  Test recordWithNeitherTextNorFieldsIsProviderDown() started.
+􀟈  Test stringIdOrderingFollowsStringCompare() started.
+􀟈  Test compileLandlockRuleset_symlinkToFilesystemRoot_returnsWorkspacePathUnsafe() started.
+􀟈  Test symlinkedValuesFileIsProviderDown() started.
+􀟈  Test userBlockBeatsOrgApprove() started.
+􀟈  Test compileLandlockRuleset_observedAndMediated_returnsProfileNotApplicable() started.
+􀟈  Test invalidJSONIsProviderDown() started.
+􀟈  Test landlock_prepare_observed_returnsProfileNotApplicable() started.
+􀟈  Test requireApprovalAcceptPathPhaseOrderIsExact() started.
+􀟈  Test dotTolerantToolResolves() started.
+􀟈  Test validationFailureTouchesNothingDownstream() started.
+􀟈  Test unmatchedAddressFallsBack() started.
+􀟈  Test timeoutTouchesZeroCredentials() started.
+􀟈  Test unicodeAddressResolves() started.
+􀟈  Test isolatedLaunchRequest_rejectsLandlockWithObservedOrUnsandboxedContained() started.
+􀟈  Test landlock_prepare_contained_regularFileWorkspace_returnsWorkspaceDoesNotExist() started.
+􀟈  Test effectivePolicyCodableRoundTrips() started.
+􀟈  Test fractionalBetweenValuesOrder() started.
+􀟈  Test firstMatchPerOwnerUsesPositionNotRestrictiveness() started.
+􀟈  Test isolationExecExit125_isBackendUnavailable_notEstablished() started.
+􀟈  Test sameOwnerBlockTiebreakPicksFirstRanked() started.
+􀟈  Test landlock_prepare_contained_symlinkToFilesystemRoot_returnsWorkspacePathUnsafe() started.
+􀟈  Test compileLandlockRuleset_contained_writeRootIsResolvedWorkspaceNotRepositoryRoot() started.
+􀟈  Test declineTouchesZeroCredentials() started.
+􀟈  Test registryDuplicateAddressLastWins() started.
+􀟈  Test orgPresentButNonmatchingStillYieldsUserWinner() started.
+􀟈  Test staticPinWithDottedToolIsExact() started.
+􀟈  Test requireApprovalBeatsApproveAcrossOwners() started.
+􀟈  Test actionTieResolvesToOrg() started.
+􀟈  Test singleOwnerStoresResolve() started.
+􀟈  Test handlerRecordCodableRoundTrips() started.
+􀟈  Test winsAreNotFallback() started.
+􀟈  Test registryDottedToolLookupMatchesAcrossConstructions() started.
+􀟈  Test trailingPrefixMatchesThroughStore() started.
+􀟈  Test emptyStringIdSortsFirst() started.
+􀟈  Test emptyRegistryHasZeroCount() started.
+􀟈  Test largePolicySetResolvesFirstMatch() started.
+􀟈  Test registryLookupMissReturnsNil() started.
+􀟈  Test singleExactMatchWinsWithProvenance() started.
+􀟈  Test exactTieKeepsInitOrder() started.
+􀟈  Test singleMidMatchesThroughStore() started.
+􀟈  Test concurrentResolvesAgree() started.
+􀟈  Test registryStressManyHandlers() started.
+􀟈  Test emptyStoreFallsBackToInjectedDefault(fallback:) started.
+􀟈  Test staticPinBypassesOrgBlock() started.
+􀟈  Test unattributedIdentityIsMarkedNotVerified() started.
+􀟈  Test socketPeerCarriesPidAndUidWithoutRole() started.
+􁁛  Test loopbackHelpersRejectOutOfRangePorts() passed after 0.003 seconds.
+􀟈  Test socketPeerIsNeverRoleBearing() started.
+􀟈  Test sigkillOfLeaderInvalidatesPrincipalThroughAuthority() started.
+􀟈  Test socketPeerFactoryPreservesConnection() started.
+􀟈  Test persistentBlipSpendsExactlyTwoAttempts() started.
+􀟈  Test second401AfterRefreshIsOpaqueWithOneRefresh() started.
+􀟈  Test launch_persistsSessionBeforeExecution() started.
+􀟈  Test nonIdempotentNeverRefreshesNorRetries() started.
+􀟈  Test refreshThenRetrySucceedsOnce() started.
+􀟈  Test unavailableRefresherIsTheDefault() started.
+􀟈  Test launch_containedSessionsAreDistinctFromHookSessionID() started.
+􀟈  Test launch_containedInWorkspaceTouch_succeeds() started.
+􀟈  Test failedRefreshCollapsesToOpaque() started.
+􀟈  Test retryableBlipRetriesOnceThenSucceeds() started.
+􀟈  Test launch_containedOutsideTouch_deniedByKernel() started.
+􀟈  Test nonRetryableFailureNeverRetries() started.
+􀟈  Test launch_containedTrue_establishes() started.
+􀟈  Test wrongConnectionTokenSkipsTheRetry() started.
+􀟈  Test refreshThenBlipIsOpaqueAfterTwoAttempts() started.
+􀟈  Test concurrentInvokesOnDistinctSessionsSucceed() started.
+􀟈  Test concurrentParksCapAtEight() started.
+􀟈  Test nonpositiveTransportBudgetNeverSends() started.
+􀟈  Test unicodeAndEmptyArgumentsBehave() started.
+􀟈  Test dotTolerantToolSegmentInvokes() started.
+􀟈  Test keychainSecurityCLICannotReachService() started.
+􀟈  Test idIsVaultHTTP() started.
+􀟈  Test rejectWorkspaceInodeAlias_unreadableUserFilesystemMetadataDirectoryRefuses() started.
+􀟈  Test consumeRefusedExecutesZero() started.
+􀟈  Test seatbelt_prepare_launchArguments_areSandboxExecProfileAndInnerArgv() started.
+􀟈  Test revokeBetweenSpendAndResumeNeverExecutes() started.
+􀟈  Test compileSeatbeltProfile_observedAndMediated_returnsProfileNotApplicable() started.
+􀟈  Test finishCancelsParksWithoutExecution() started.
+􀟈  Test seatbelt_prepare_observed_returnsProfileNotApplicable() started.
+􀟈  Test declinedCreatesReleaseTheParkSlot() started.
+􀟈  Test apply_observedAndMediated_doNotRequireCallerToPickUnavailable() started.
+􀟈  Test waitTimeoutFailsClosedAndCancels() started.
+􀟈  Test sameActionNewRequestCannotDoubleExecute() started.
+􀟈  Test compileSeatbeltProfile_contained_isDenyDefaultWorkspaceScope() started.
+􀟈  Test workspacePublishDecision_rejectsForeignInodeAndLinkCountChange() started.
+􀟈  Test parkCapRefusesNinth() started.
+􀟈  Test hfsSliceDevice_prefersAppleHFSContentHint() started.
+􀟈  Test workspaceFilesystemMetadata_ownershipCheckHonorsTemporaryDirectory() started.
+􀟈  Test statusBlipRetriesUntilDecision() started.
+􀟈  Test revokedParkNeverResumesExecution() started.
+􀟈  Test askParksAndDefersResponse() started.
+􀟈  Test unknownStatusFailsClosed() started.
+􀟈  Test nonPendingActionsNeverPark() started.
+􀟈  Test unavailable_prepareAndRun_mediated_establishesMediatedFamilyNone() started.
+􀟈  Test compileSeatbeltRequest_observedPlanIsBackendMismatch() started.
+􀟈  Test isolationApply_operatorProbe_printsEstablishedModes() started.
+􀟈  Test sameRequestIDRejectedAsReplay() started.
+􀟈  Test denyExecutesZeroWithOriginalDeny() started.
+􀟈  Test unavailable_prepareAndRun_observed_establishesObservedFamilyNone_withoutSandboxExec() started.
+􀟈  Test platform_family_isSeatbeltOnDarwin_landlockOnLinux() started.
+􀟈  Test seatbelt_prepare_contained_relativeWorkspace_returnsWorkspaceMustBeAbsolute() started.
+􀟈  Test compileSeatbeltRequest_retargetedWorkspaceRefuses() started.
+􀟈  Test compileSeatbeltProfile_filesystemRoot_returnsWorkspacePathUnsafe() started.
+􀟈  Test allowOnceExecutesExactlyOnce() started.
+􀟈  Test createDeclinedKeepsLegacyPending() started.
+􀟈  Test isolatedCommand_rejectsEmptyAndRelativeExecutable() started.
+􀟈  Test rejectWorkspaceInodeAlias_unreadableDirectory_refusesHiddenAlias() started.
+􀟈  Test compileSeatbeltRequest_assemblesFromCannedFacts() started.
+􀟈  Test isolationBackendFamily_hasExactlyNoneSeatbeltAndLandlock() started.
+􀟈  Test containedProcessReachesLoopbackOnly() started.
+􀟈  Test namedRedemptionLaunchesExactlyOnce() started.
+􀟈  Test workspaceFilesystemMetadata_treeWalkAndCopyKeepProjectNames() started.
+􀟈  Test compileSeatbeltProfile_newlineWorkspace_returnsWorkspacePathUnsafe() started.
+􀟈  Test seatbelt_prepare_contained_missingDirectory_returnsWorkspaceDoesNotExist() started.
+􀟈  Test unavailable_prepare_contained_returnsBackendUnavailable() started.
+􀟈  Test compileSeatbeltRequest_carriesAgentBinGrants() started.
+􀟈  Test containedLaunchResult_reportsTeardownFailure() started.
+􀟈  Test resolveThenCompile_matchesPrepareSeatbelt() started.
+􀟈  Test compileSeatbeltProfile_contained_writeLimitIsWorkspaceNotRepositoryRoot() started.
+􀟈  Test apply_contained_withoutUsableWorkspaceOrBackend_failsClosed() started.
+􀟈  Test toolFailureIsOpaqueWithServerSideCause() started.
+􀟈  Test hfsSliceDevice_fallsBackToSolePartition() started.
+􀟈  Test workspaceFilesystemMetadata_skipsRootBookkeepingWhenRootOwnedOrOwnersIgnored() started.
+􀟈  Test fileSinkAppendsDecodableLinesAndSkipsEmptyBatches() started.
+􀟈  Test namedProposalResolvesExactTrustedRevision() started.
+􀟈  Test auditCauseTruncatesPastCap() started.
+􀟈  Test causeLabelPinsFallbackAndOpaqueCases() started.
+􀟈  Test auditRowsCarryLabelsOnly() started.
+􀟈  Test twoWorkspacesMintDifferentIDs() started.
+􀟈  Test oldClientFramesStillDecode() started.
+􀟈  Test successAuditsDispatchAndOutcomeWithJoinedExecution() started.
+􀟈  Test declineAuditsDeclinedApprovalAndFailedOutcome() started.
+􀟈  Test terminalRulesKeepTheNonceDrainAndPartialWrite() started.
+􀟈  Test subscriberQueueOverflowsAboveTheBound() started.
+􀟈  Test approvalPathAuditsAllThreeRows() started.
+􀟈  Test replayKeepsTheNewestBoundedBytes() started.
+􀟈  Test denialDetailRoundTripsAndOversizeFailsClosed() started.
+􀟈  Test codecEnforcesMaximumOnDecodedBytes() started.
+􀟈  Test replayTrimsInsideTheOldestChunk() started.
+􀟈  Test unknownTerminalFieldFailsClosed() started.
+􀟈  Test codecRoundTripsArbitraryBytes() started.
+􀟈  Test capabilityRepliesRoundTripWithinTheirBounds() started.
+􀟈  Test insertRejectsDuplicatesAndFull() started.
+􀟈  Test removeAndInvalidateAllDropEntries() started.
+􀟈  Test descriptionCarriesDigestsNotValues() started.
+􀟈  Test expiredEntriesEvictedOnInsert() started.
+􀟈  Test engageAndRestoreAreIdempotent() started.
+􀟈  Test expiryBoundaryFailsClosed() started.
+􀟈  Test isolationConformance_catalogListsEverySection8ID() started.
+􁁛  Test agentBinResolveWithMissingBinDirGrantsNothing() passed after 0.009 seconds.
+􀟈  Test compactDropsClosedWorkspacesAndKeepsOpenBytes() started.
+􀟈  Test allowedCommandRunsOnce() started.
+􀟈  Test fullChainResolvesThenStages() started.
+􀟈  Test fakeCapabilityWrongSessionAndClosedChannelDoNotRun() started.
+􀟈  Test unboundChannelThrowsWithoutTouchingBroker() started.
+􀟈  Test revocationBetweenCallsTakesEffect() started.
+􀟈  Test missingRequiredKeyRejected() started.
+􀟈  Test deniedCommandDoesNotRun() started.
+􀟈  Test unknownInstanceThrowsWithoutTouchingBroker() started.
+􀟈  Test emptyRefsReturnEmptyWithoutProviderContact() started.
+􀟈  Test seatbeltProfileGainsNoNetworkAllow() started.
+􀟈  Test ptyRuntimeStillAdmitsShellCommands() started.
+􀟈  Test mismatchedSessionResourceIsCrossResource() started.
+􀟈  Test commitAuditFailureDeniesTheCall() started.
+􀟈  Test boundActivePrincipalResolvesEndToEnd() started.
+􀟈  Test principalLessRejectedBeforeAnything() started.
+􀟈  Test containedClientUsesTheGrantedPipes() started.
+􀟈  Test admittedCommandStopsWhenContainedProcessExits() started.
+􀟈  Test unregisteredAddressIsUnknownTool() started.
+􀟈  Test frameDoorsIntactOnBoundSession() started.
+􀟈  Test oversizedArgumentsRejected() started.
+􀟈  Test legacyFrameDoorUnaffectedOnSameSession() started.
+􀟈  Test credentialFailureIsTypedAndSkipsTransport() started.
+􀟈  Test malformedFrameDoesNotRun() started.
+􀟈  Test httpWrongCallerIs401AndUnknownSessionIs404() started.
+􀟈  Test pendingCommandDoesNotRunUntilAllowOnce() started.
+􀟈  Test failurePathAuditFailureKeepsOriginalError() started.
+􀟈  Test brokerErrorsPropagateUnmasked() started.
+􀟈  Test malformedAddressIsUnknownTool() started.
+􀟈  Test splitLoopbackURLWithoutPathUsesWholeAuthority() started.
+􀟈  Test revokedPrincipalDeniedByBrokerWithoutProviderContact() started.
+􀟈  Test concurrentRevokeRunsTeardownExactlyOnce() started.
+􀟈  Test evaluationFailureDoesNotRun() started.
+􀟈  Test evidenceFileRecordsTheSessionAndOutcome() started.
+􀟈  Test outcomeCommitFailureDeniesWithoutReinvoke() started.
+􀟈  Test retryableClassification() started.
+􀟈  Test tokenDescriptionsNeverLeakBearers() started.
+􀟈  Test httpCrossResourceIs403() started.
+􀟈  Test nonLoopbackTargetsNeverSend() started.
+􀟈  Test multiTextAuthorizationPicksRefOrderFirst() started.
+􀟈  Test httpRoundtripThroughRouter() started.
+􀟈  Test authorizationSortsAcrossProvidersAndFields() started.
+􀟈  Test splitLoopbackURLRejectsBadPortAndEmptyHost() started.
+􀟈  Test stdioRefusesWrongCallerToken() started.
+􀟈  Test envelopeRejectsUnknownFieldsAndOversize() started.
+􀟈  Test stdioRoundtripEcho() started.
+􀟈  Test stdioRefusesCrossResourceAndForeignSession() started.
+􀟈  Test closeIsIrreversible() started.
+􀟈  Test stdioLifecycleRefusesEarlyLateAndDoubleStart() started.
+􀟈  Test activeLookupAndRevocation() started.
+􀟈  Test requestPreviewRedactsURLAndHeaders() started.
+􀟈  Test everyReferenceFieldIsRequired() started.
+􀟈  Test restartAndDiskHistoryDoNotRestoreAuthority() started.
+􀟈  Test resolutionDoesNotStartWhenTheSessionHasStopped() started.
+􀟈  Test inactiveLaunchCannotIssueReference() started.
+􀟈  Test cancellationStopsTheExchangeBeforeFinishReturns() started.
+􀟈  Test capabilitySessionAndClosureDoNotRun() started.
+􀟈  Test resolutionReturnsWhenTheSessionStopsDuringLookup() started.
+􀟈  Test directConfigurationDisablesProxiesAndCredentials() started.
+􀟈  Test allowedGETRunsOnce() started.
+􀟈  Test directConnectorRefusesLoopbackBeforeAccept() started.
+􀟈  Test redirectDoesNotOpenASecondTransfer() started.
+􀟈  Test denyPendingAndFailureDoNotRun() started.
+􀟈  Test nilDataIsNotFound() started.
+􀟈  Test resolvesThroughReader() started.
+􀟈  Test deniedReaderFailsClosed() started.
+􀟈  Test currentPlatformIsLiveOnMacOS() started.
+􀟈  Test fieldSelectsAccount() started.
+􀟈  Test nonUTF8DataIsNotFound() started.
+􀟈  Test routerUnregisterDropsSession() started.
+􀟈  Test stdioForeignErrorAndBadReply() started.
+􀟈  Test routerRejectsGarbageBodyAndMissingHeaders() started.
+􀟈  Test routerHandlerFailureIs500WithCauseAndTrace() started.
+􀟈  Test routerRejectsGetAndWrongPath() started.
+􀟈  Test routerDefaultCauseLogAndOversizeReply() started.
+􀟈  Test typedTransportErrorsRethrowUnchanged() started.
+􀟈  Test httpForeignErrorAndStatusMapping() started.
+􀟈  Test openRejectsDimensionsAndFaultsDoNotLeakMasters() started.
+􀟈  Test descendantsCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test ambientOutsideFileDescriptorIsNotWritable() started.
+􀟈  Test pendingAuthorization_hasNoExecuteInput() started.
+􀟈  Test compileExecutable_workspaceMismatch_fails() started.
+􀟈  Test compileExecutable_fileAction_fails() started.
+􁁛  Test profileLessTmpdirStaysOutOfTheWorkspaceRoot() passed after 0.012 seconds.
+􀟈  Test localExecutor_performWhenCancelled_returnsExecuteCancelled() started.
+􀟈  Test compileExecutable_bareTouch_resolvesOnSafePath() started.
+􀟈  Test compileExecutable_absoluteTouch_succeeds() started.
+􀟈  Test localExecutor_applyFailure_consumesFingerprint() started.
+􀟈  Test selectedDefinitionMintsAnActivePrincipalAndCancellationInvalidatesIt() started.
+􁁛  Test activeDeveloperRootFollowsInjectedReadlink() passed after 0.013 seconds.
+􀟈  Test identityAdmitsCarriedProfileBrokerEntries() started.
+􀟈  Test identityAdmitsDefinitionBrokerEntries() started.
+􀟈  Test compileExecutable_missingCommand_fails() started.
+􀟈  Test legacyRejectsCarriedProfileShapes() started.
+􀟈  Test compileExecutable_redirect_fails() started.
+􀟈  Test legacyRejectsDefinitionBrokerEntries() started.
+􀟈  Test legacyRejectsDefinitionKeychain() started.
+􀟈  Test observedAndMediated_containedIsolation_fails() started.
+􀟈  Test legacyRejectsDefinitionCredentials() started.
+􀟈  Test identityAdmitsBrokerEntriesAlongsideNeitherLegacyShape() started.
+􀟈  Test localExecutor_sameFingerprint_secondRunFails() started.
+􀟈  Test localExecutor_containedInWorkspaceWrite_succeeds() started.
+􀟈  Test legacyMatchesPreBrokerRuleOnLegacyShapes() started.
+􀟈  Test localExecutor_askResolve_containedInWorkspaceTouch() started.
+􀟈  Test identityAdmitsFullyCredentialFreeSelection() started.
+􀟈  Test localExecutor_containedOutsideWrite_deniedByKernel() started.
+􀟈  Test legacyAdmitsFullyCredentialFreeSelection() started.
+􀟈  Test identityRejectsLegacyCredentialShapes() started.
+􀟈  Test legacyRejectsCredentialBindings() started.
+􀟈  Test compileExecutable_missingWorkingDirectory_fails() started.
+􀟈  Test compileExecutable_unresolvedName_fails() started.
+􀟈  Test fileBlockingSecretsDirDrops() started.
+􀟈  Test unreadableFileValuesDrop() started.
+􀟈  Test defaultBrokerAuditDropsSilently() started.
+􀟈  Test tagMismatchSkipsBeforeInvalidRefAudit() started.
+􀟈  Test nulDropsWhileNewlineInjects() started.
+􀟈  Test groupWritableFileValuesDrop() started.
+􀟈  Test revokedPrincipalIsRejectedOnNextRequest() started.
+􀟈  Test fileValueStagesTo0700Home() started.
+􀟈  Test legacyDoorStillAdmitsHarmlessCapabilityOnlyUse() started.
+􀟈  Test traversalShapedNamesDropAsInvalid() started.
+􀟈  Test boundActivePrincipalReachesPolicyWithTrustedSubject() started.
+􀟈  Test sizeBoundaryCountsBytes() started.
+􀟈  Test dropsCarryLabelsOnly() started.
+􀟈  Test legacyBindingIsRejectedBeforePolicy() started.
+􀟈  Test homeAndStagedFilePermissions() started.
+􀟈  Test supervisorRegisterFaultRetiresAnnouncedInstance() started.
+􀟈  Test duplicateEnvAppendsInOrder() started.
+􀟈  Test invalidRefAndUnresolvedDrop() started.
+􀟈  Test suppressedExecuteKeepsPrincipalAttribution() started.
+􀟈  Test legacyFailureRemovesHomeIncludingBrokerFiles() started.
+􀟈  Test cleanupFailureKeepsAuthorityDead() started.
+􀟈  Test instanceBindsExpectedWorkspaceAndRuntime() started.
+􀟈  Test blockedNamesDrop() started.
+􀟈  Test requestPayloadCannotReplacePrincipal() started.
+􀟈  Test nilBrokerValuesIgnoresSecretsEntries() started.
+􀟈  Test invalidNamesDrop() started.
+􀟈  Test lifecycleMovesActiveRevokingInactive() started.
+􀟈  Test mismatchedPrincipalBindingFails() started.
+􀟈  Test agentFilterSkipsSilently() started.
+􀟈  Test recoveryResurrectsNothing() started.
+􀟈  Test journalFailureRefusesEstablishment() started.
+􀟈  Test emptyMapDropsAllSelected() started.
+􀟈  Test multiProviderResolveFailureIsAtomic() started.
+􁁛  Test productiveProfileOmitsSystemTemporaryDirectoryWhenUnresolved() passed after 0.016 seconds.
+􀟈  Test delegationNarrowsThroughRegistry() started.
+􀟈  Test failureAuditRowsCarryProviderCause() started.
+􀟈  Test workspaceRootPolicyRejectsOnlyTheHomeDirectory() started.
+􀟈  Test symlinkedAuditDirectoryLeavesTargetUntouched() started.
+􀟈  Test oversizedDropKeepsBatch() started.
+􀟈  Test runtimeBindsExactlyOneInstance() started.
+􀟈  Test resolveTimeout() started.
+􀟈  Test textValuesInjectInOrder() started.
+􀟈  Test channelBindingNeverMovesToAnotherInstance() started.
+􀟈  Test causeSpellingMirrorsLedger() started.
+􀟈  Test cachedContextNeverEqualsLiveValidity() started.
+􀟈  Test concurrentConsumeHasExactlyOneWinner() started.
+􀟈  Test parallelResolves() started.
+􀟈  Test fifoLedgerFileTripsTypeGuard() started.
+􀟈  Test announcedInstanceIsUnusableUntilEstablished() started.
+􀟈  Test restartMintsFreshIDAndKeepsOldDead() started.
+􀟈  Test sseFrameToleratesCommentsAndMultilineData() started.
+􀟈  Test staticPinPromptLabelsThePin() started.
+􀟈  Test activateJournalFailureLeavesInstanceInactive() started.
+􀟈  Test healthTimeout() started.
+􀟈  Test revokingIsObservableWhileTeardownRuns() started.
+􀟈  Test expiredWaitReadsExpired() started.
+􀟈  Test unhealthyProviderDeniesWithoutResolving() started.
+􀟈  Test terminatedRuntimeInvalidatesAndLookupStaysDescriptive() started.
+􀟈  Test consumeWaitingThrowsAndPollUnknownIsCanceled() started.
+􀟈  Test fileAuditKeysMatchLedgerTaxonomy() started.
+􀟈  Test supervisorLaunchWithoutDefinitionMintsNoInstance() started.
+􀟈  Test invalidRefEntriesAreSkipped() started.
+􀟈  Test ninthConcurrentParkFailsClosed() started.
+􀟈  Test ssePromptRoundtrip() started.
+􀟈  Test duplicateRefsResolveOnce() started.
+􀟈  Test unfilteredEntriesAdmitForNilAndNamedAgent() started.
+􀟈  Test orderPreserved() started.
+􀟈  Test filteredEntriesMatchTagOnly() started.
+􀟈  Test auditFailureKeepsOriginalError() started.
+􀟈  Test rollbackDropsTheKey() started.
+􀟈  Test normalizeSeesTrustedSubjectThePayloadCannotOverride() started.
+􀟈  Test promptPreviewIsCappedAndRedacted() started.
+􀟈  Test unregisteredIDsHaveUnknownValidity() started.
+􀟈  Test emptyAgentsFilterMatchesAll() started.
+􀟈  Test ledgerLockFileIsOwnerOnly() started.
+􀟈  Test unknownVersionFieldAndShapeFailClosed() started.
+􀟈  Test doubleConsumeThrows() started.
+􀟈  Test multiProviderBatch() started.
+􀟈  Test digestIsDeterministicAndSensitive() started.
+􀟈  Test sseDuplicateIDFailsClosed() started.
+􀟈  Test v1MigratesDeterministically() started.
+􀟈  Test supervisorLaunchMintsActivatesAndFinishesInstance() started.
+􀟈  Test noEchoAcrossErrorsAndAudit() started.
+􀟈  Test sseDecisionRoundtripAndRejects() started.
+􀟈  Test registryLivenessAdmitsLiveContext() started.
+􀟈  Test v2Roundtrip() started.
+􀟈  Test emptyBatchReturnsEmpty() started.
+􀟈  Test symlinkedConfigDirectoryIsUnsafe() started.
+􀟈  Test emptyBatchSkipsFileAudit() started.
+􀟈  Test sweepEvictsConsumedAndDeadParks() started.
+􀟈  Test resolveAfterTerminalIsANoOp() started.
+􀟈  Test promptShowsAddressPatternAndPreview() started.
+􀟈  Test cancellationDuringAuditAppendPropagates() started.
+􀟈  Test symlinkedLedgerFileDenies() started.
+􀟈  Test providerErrorsWithoutProviderPassThrough() started.
+􀟈  Test stressFiftyRefBatch() started.
+􀟈  Test symlinkedAuditDirectoryDenies() started.
+􀟈  Test usableOnlySnapshotPinsNilArm() started.
+􀟈  Test successAuditRows() started.
+􀟈  Test fifoLockFileTripsTypeGuard() started.
+􀟈  Test filePathValuePassesThroughWithLabelOnlyAudit() started.
+􀟈  Test emptyBatchStillGatesPrincipal() started.
+􀟈  Test providerThrownErrorsAreRetaggedToThrowingProvider() started.
+􀟈  Test cleanRecoveryDoesNotTouchTheProject() started.
+􀟈  Test bothUnhealthyNamesFirstSortedProvider() started.
+􀟈  Test "principal gate rejects every invalid state" started.
+􀟈  Test registryRevocationMidFlightDenies() started.
+􀟈  Test symlinkedLockFileDeniesAppend() started.
+􀟈  Test laxAuditDirectoryIsTightened() started.
+􀟈  Test staleContextAtCommitDiscardsValues() started.
+􀟈  Test auditDirectoryIsFileDenies() started.
+􀟈  Test fileAuditAppendEmptyIsNoop() started.
+􀟈  Test leaseExpiredPassesThrough() started.
+􁁛  Test agentBinDirectoryIsASiblingOfTheHostBinary() passed after 0.017 seconds.
+􀟈  Test strictKeysRejectIntegerCodingKeys() started.
+􀟈  Test slowProviderTimeoutIsAtomic() started.
+􀟈  Test perform_pendingCreateRule_fails() started.
+􀟈  Test unknownProviderIsAtomic() started.
+􀟈  Test providerIDsAreSorted() started.
+􀟈  Test perform_sameFingerprint_secondTurnFails() started.
+􀟈  Test usableOnlyIgnoresRegistryRevocation() started.
+􀟈  Test perform_pendingUnavailable_fails() started.
+􀟈  Test cancellationDuringHealthPropagates() started.
+􀟈  Test observedPlan_containedIsolation_fails() started.
+􀟈  Test registryRevocationBeforeEntryDeniesWithoutTouching() started.
+􀟈  Test perform_pendingDeny_doesNotSpawn() started.
+􀟈  Test foreignErrorsMapToProviderDown() started.
+􀟈  Test fileAuditPermissionsAreOwnerOnly() started.
+􀟈  Test cancellationDuringResolvePropagates() started.
+􀟈  Test perform_allowed_containedInWorkspaceWrite() started.
+􀟈  Test atomicBatchDiscardsPartialValues() started.
+􀟈  Test perform_denied_doesNotSpawn() started.
+􀟈  Test nonpositiveTimeoutDeniesImmediately() started.
+􀟈  Test perform_pendingWithoutApproval_awaitsAndDoesNotSpawn() started.
+􀟈  Test auditFailureOnCommitDenies() started.
+􀟈  Test perform_pendingAllowOnce_containedInWorkspaceWrite() started.
+􀟈  Test laterRegistrationWins() started.
+􀟈  Test generationMismatchDeniesWhileActive() started.
+􁁛  Test controlRPCPropagatesInvalidAndIncompatible() passed after 0.018 seconds.
+􀟈  Test customLaunchCannotReadAmbientCodexAuthentication() started.
+􀟈  Test seatbelt_touchInsideWorkspace_succeedsAndEstablishesContained() started.
+􀟈  Test seatbelt_binShChild_cannotWriteOutsideWorkspace() started.
+􀟈  Test seatbelt_touchOutsideWorkspace_isBlockedFileAbsent_stillEstablishedContained() started.
+􀟈  Test observed_touchOutsideWorkspace_succeeds_notSecretlySandboxed() started.
+􀟈  Test seatbelt_writeUnderRepositoryRootOutsideWorkspace_isBlocked() started.
+􁁛  Test agentBinDirectoryDerivesFromExecutablePath() passed after 0.021 seconds.
+􀟈  Test parsePromptRejectsWrongEventAndCorruptData() started.
+􀟈  Test cancelWaitingReadsCanceledAndSweepExpires() started.
+􀟈  Test consumeUnknownTicketThrows() started.
+􀟈  Test cancelThrowingSinkPropagatesCancellation() started.
+􀟈  Test filePathOnlyValuesInvokeWithoutAuthHeader() started.
+􀟈  Test invokerDeadlineBeatsSlowBackend() started.
+􀟈  Test isOpaqueFalseOnTypedErrors() started.
+􀟈  Test fileSinkWritesThroughToLedger() started.
+􀟈  Test validatorTooManyKeysAndBadKey() started.
+􀟈  Test brokerBackedResolverServesEndToEnd() started.
+􀟈  Test seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􀟈  Test sessionRecordFailureDoesNotExecuteInnerCommand() started.
+􀟈  Test consumeThrowingBackendIsUnavailable() started.
+􀟈  Test consumeAfterExpiryThrows() started.
+􀟈  Test preparedWorkspaceRetargetDoesNotChangeGrantOrWorkingDirectory() started.
+􀟈  Test auditCauseCodableRoundtrip() started.
+􀟈  Test tornSessionLineDoesNotHideTheNextRecord() started.
+􀟈  Test toolPatternLabels() started.
+􀟈  Test unwritableSessionLogDoesNotExecute() started.
+􀟈  Test appendedSessionRecordsStayIndependent() started.
+􀟈  Test resourceIDValidation() started.
+􀟈  Test concurrentAppendsKeepEveryRecordReadable() started.
+􀟈  Test cancelDuringWaitPropagatesCancellation() started.
+􀟈  Test auditPrincipalRejectsBadUUID() started.
+􁁛  Test selectedManifestIsIdenticalForOneShotAndTerminalResources() passed after 0.036 seconds.
+􀟈  Test foreignCredentialErrorMapsToProviderDown() started.
+􀟈  Test slowTransportTimesOutToOpaque() started.
+􀟈  Test invalidSeatbeltProfileDoesNotExecuteInnerCommand() started.
+􀟈  Test fileAuditRejectsSymlinkedAndFileDirectories() started.
+􀟈  Test embeddedNULCannotChangeExecutedArgv() started.
+􀟈  Test codecRejectsNonIntegerVersion() started.
+􀟈  Test containedEnvironmentContainsOnlyDeliberateValues() started.
+􀟈  Test invokeLevelTooManyKeysAndBadKey() started.
+􀟈  Test parkThrowingBackendIsUnavailable() started.
+􀟈  Test envelopeKeyIndexedArmsAreNil() started.
+􀟈  Test cancellationThrowingDoublesPropagate() started.
+􀟈  Test spontaneousTransportCancellationRethrows() started.
+􁁛  Test controlRPCResponseRoundTrips() passed after 0.040 seconds.
+􀟈  Test ipv4BindListenAcceptConnectRoundTrip() started.
+􁁛  Test egressProxyReportsDialFailures() passed after 0.046 seconds.
+􁁛  Test egressProxyRelaysLoopbackTargets() passed after 0.047 seconds.
+􁁛  Test controlRPCCodableEncodeAgreesWithValidatedEncode() passed after 0.048 seconds.
+􀟈  Test case passing 1 argument fallback → .approve to emptyStoreFallsBackToInjectedDefault(fallback:) started.
+􀟈  Test case passing 1 argument fallback → .requireApproval to emptyStoreFallsBackToInjectedDefault(fallback:) started.
+􀟈  Test case passing 1 argument fallback → .block to emptyStoreFallsBackToInjectedDefault(fallback:) started.
+􁁛  Test deniedReaderFailsClosed() passed after 0.051 seconds.
+􁁛  Test agentBinResolutionUsesInjectedProbe() passed after 0.051 seconds.
+􁁛  Test nonTerminalEnvironmentStaysNonInteractive() passed after 0.051 seconds.
+􁁛  Test stagingCatalogCoversLegacyScrubPaths() passed after 0.052 seconds.
+􁁛  Test terminalEnvironmentKeyPolicy() passed after 0.052 seconds.
+􁁛  Test egressProxyDeniesMalformedAndBypassShapes() passed after 0.052 seconds.
+􁁛  Test sanitizedPATHBinParentExpansionHonorsSecretVeto() passed after 0.052 seconds.
+􀟈  Test unframedReplayIsAdmittedForLegacyHosts() started.
+􁁛  Test controlRPCResponseCodeRoundTrips() passed after 0.053 seconds.
+􀟈  Test replayBatchBoundariesPreserveOrderAndRuntimeAttribution() started.
+􀟈  Test resettingOneSubscriptionPreservesAnotherRuntime() started.
+􀟈  Test drainsRuntimesFairlyWithoutReorderingOneRuntime() started.
+􀟈  Test concurrentDeliverAndNextKeepByteAccountingExact() started.
+􀟈  Test clearingOverflowedAdmitsOutputWithoutWipingBacklog() started.
+􀟈  Test mismatchedReplayBoundaryOverflowsOnlyItsRuntime() started.
+􀟈  Test exitIsNotStarvedByAnotherRuntimeAndSurvivesDisconnect() started.
+􀟈  Test overflowIsAttributedToItsRuntimeAndDoesNotDropAnotherStream() started.
+􀟈  Test excessControlFramesFailTheStreamExplicitly() started.
+􀟈  Test aggregateAndFrameCapsKeepFloodsBounded() started.
+􁁛  Test egressProxyDeniesExternalAbsoluteHTTP() passed after 0.061 seconds.
+􀟈  Test overflowDiscardsQueuedReplayMetadataUntilResubscribe() started.
+􀟈  Test firstOutputSurvivesAnAggregateByteCapFilledByOtherRuntimes() started.
+􀟈  Test firstOutputFromAnotherRuntimeReclaimsTheFloodingRuntime() started.
+􀟈  Test windowNoticesDeliverAndCoalesceToLatest() started.
+􀟈  Test fourHundredShortOutputFramesStayInOrderWithoutOverflow() started.
+􁁛  Test seedGitIdentitySkipsWhenIdentityIsEmpty() passed after 0.063 seconds.
+􁁛  Test egressProxyRelaysLoopbackAbsoluteHTTP() passed after 0.069 seconds.
+􁁛  Test agentBinResolutionOmitsClaudeScratchWhenClaudeIsAbsent() passed after 0.071 seconds.
+􁁛  Test controlRPCCodableInitEnforcesVersionAndLimits() passed after 0.083 seconds.
+􁁛  Test controlRPCLimitBatteryRejectsIdenticalFramesOnBothPaths() passed after 0.084 seconds.
+􁁛  Test productiveProfileGrantsSystemTemporaryDirectoryReadWrite() passed after 0.095 seconds.
+􁁛  Test activeDeveloperRootFollowsSelectLinkToEnclosingApp() passed after 0.096 seconds.
+􁁛  Test terminalEnvironmentKeepsColorAndBoundedLoopbackProxy() passed after 0.100 seconds.
+􀟈  Test openReachesActiveAndClosePublishesOnce() started.
+􁁛  Test unixPeerEvidenceRejectsNonSocketDescriptor() passed after 0.185 seconds.
+􁁛  Test activeDeveloperRootPrefersDeveloperDir() passed after 0.186 seconds.
+􁁛  Test keychainEntryInjectsOnlyForMatchingAgent() passed after 0.186 seconds.
+􁁛  Test workspaceControlRejectsUnknownVersionAndFields() passed after 0.229 seconds.
+􁁛  Test egressProxyExternalDialFilterRejectsNonPublicAddresses() passed after 0.274 seconds.
+􁁛  Test writeShimRefreshesContent() passed after 0.275 seconds.
+􁁛  Test aclLessExistingFileCarriesNoAllowEntries() passed after 0.274 seconds.
+􁁛  Test deadExecutableLinkNamesItselfInStagingFailure() passed after 0.274 seconds.
+􁁛  Test egressDenialReasonsPinLogSpellings() passed after 0.290 seconds.
+􁁛  Test keychainRawSecretWithoutFieldDecodesAsText() passed after 0.296 seconds.
+􁁛  Test symlinkedCredentialSourceEscapeFailsClosedStaging() passed after 0.297 seconds.
+􁁛  Test dynamicCodeInvalidRequirementFailsAndDefaultHasNoRole() passed after 0.297 seconds.
+􁁛  Test stageAgentHomesLinksClaudeCredentials() passed after 0.347 seconds.
+􁁛  Test controlRPCFailureTypedOverloadShape() passed after 0.365 seconds.
+􁁛  Test terminalBytesRoundTripThroughBase64() passed after 0.403 seconds.
+􁁛  Test blockedVariableNameMatchesUnderscoreTokens() passed after 0.408 seconds.
+􁁛  Test activeDeveloperRootVetoesSensitiveSelection() passed after 0.409 seconds.
+􁁛  Test sanitizedPATHImpliesBinParentsButNeverRoot() passed after 0.409 seconds.
+􁁛  Test sanitizedPATHSymlinkGrandparentNeverReachesRoot() passed after 0.409 seconds.
+􁁛  Test sanitizeTrimsToPATHBudgetFromTheTail() passed after 0.411 seconds.
+􁁛  Test unknownResourceProfileIDResolvesToNothing() passed after 0.411 seconds.
+􁁛  Test peerTrustRejectsUserOwnedManifest() passed after 0.411 seconds.
+􁁛  Test terminalReplayDropsTheOldestBytes() passed after 0.411 seconds.
+􁁛  Test terminalEnvironmentPassesGatewayThrough() passed after 0.412 seconds.
+􁁛  Test unselectedRuntimeStripsSecretsButProjectsNonSecretVars() passed after 0.412 seconds.
+􁁛  Test controlRPCRequestRoundTrips() passed after 0.412 seconds.
+􁁛  Test egressDial_reportsFilterRefusalAndConnectOutcomes() passed after 0.412 seconds.
+􁁛  Test activeDeveloperRootMissingLinkGrantsNothing() passed after 0.412 seconds.
+􁁛  Test egressProxyParsesAbsoluteHTTP() passed after 0.415 seconds.
+􁁛  Test agentBinProfileGrantsFilesTreesAndReadOnlyCredentials() passed after 0.419 seconds.
+􀟈  Test case passing 1 argument launcher → .sh to descendantsCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test agentFilteredCredentialsStageOnlyForMatchingAgent() passed after 0.421 seconds.
+􁁛  Test stagedCredentialMustBeOwnerFileAndNeverSymlink() passed after 0.475 seconds.
+􁁛  Test profileBoundToProjectAIsUnresolvableForProjectB() passed after 0.475 seconds.
+􁁛  Test egressProxyRecordsDnsFailuresPrecisely() passed after 0.475 seconds.
+􁁛  Test egressProxyDeniesUnknownHosts() passed after 0.475 seconds.
+􁁛  Test egressProxyParsesStrictCONNECTOnly() passed after 0.477 seconds.
+􁁛  Test controlRPCUnknownOperationPreservesRawEcho() passed after 0.484 seconds.
+􁁛  Test unixPeerEvidenceFromRealConnectedSocket() passed after 0.485 seconds.
+􁁛  Test agentBinResolutionAdmitsMuseInstallFiles() passed after 0.488 seconds.
+􁁛  Test keychainValuesLandInEnvironmentForAnyIO() passed after 0.493 seconds.
+􁁛  Test peerTrustRejectsRealAllowACLDespiteSafePOSIXMode() passed after 0.536 seconds.
+􁁛  Test pseudoTerminalEnvironmentAdvertisesColorOutput() passed after 0.540 seconds.
+STEP7-PROBE sigkill leader=81548 killToDeathMs=1 deathToFlipMs=2 flipToResolveNilMs=0 firstSampleAfterDeath=active
+􀟈  Test case passing 1 argument validity → .inactive to "principal gate rejects every invalid state" started.
+􀟈  Test case passing 1 argument validity → .revoking to "principal gate rejects every invalid state" started.
+􀟈  Test case passing 1 argument validity → .unknown to "principal gate rejects every invalid state" started.
+􁁛  Test discardIOAcceptsNoDimensionsOnBothSides() passed after 4.904 seconds.
+􁁛  Test seedGitIdentityUsesInjectedReader() passed after 4.904 seconds.
+􁁛  Test agentBinResolutionGrantsOnlyResolvedAgents() passed after 4.915 seconds.
+􁁛  Test emptyAgentsListNormalizesToNilInInitAndDecode() passed after 4.917 seconds.
+􁁛  Test argumentBoundsAgreeWithControlLimits() passed after 4.917 seconds.
+􁁛  Test keychainFailuresNameTheEnvAndStageNothing() passed after 4.917 seconds.
+􁁛  Test intentAloneCannotAuthorizeLaunchOperations() passed after 4.917 seconds.
+􁁛  Test identityLaunchOperationsStayReserved() passed after 4.917 seconds.
+􁁛  Test terminalDimensionsAgreeWithStreamLimits() passed after 4.917 seconds.
+􀢄  Test customLaunchCannotReadAmbientCodexAuthentication() recorded an issue at IdentityAmbientCredentialTests.swift:13:6: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “swiftpm-testing-helper” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/usr/libexec/swift/pm/swiftpm-testing-helper, NSURL=file:///usr/libexec/swift/pm/swiftpm-testing-helper, NSUnderlyingError=0x7ccc6fa850 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􁁛  Test hugeSparseSwapRefusesWithoutFullRead() passed after 4.921 seconds.
+􁁛  Test executableBoundAgreesWithControlLimits() passed after 4.921 seconds.
+􁁛  Test fifoRefusesWithoutBlocking() passed after 4.922 seconds.
+􁁛  Test controlRPCFramesAreByteIdenticalToLegacyCodec() passed after 4.922 seconds.
+􁁛  Test sizeMatchAndDigestMatchVerifies() passed after 4.923 seconds.
+􁁛  Test wrongDigestRefuses() passed after 4.923 seconds.
+􁁛  Test missingFileRefuses() passed after 4.923 seconds.
+􁁛  Test unmeasurableExpectationNeverVerifies() passed after 4.923 seconds.
+􁁛  Test sizeDriftRefuses() passed after 4.923 seconds.
+􁁛  Test directoryRefuses() passed after 4.923 seconds.
+􁁛  Test missingDirectoryIsEmptyStore() passed after 4.923 seconds.
+􁁛  Test staticPinLeavesOtherAddressesToPatterns() passed after 4.923 seconds.
+􁁛  Test unsupportedVersionIsProviderDown() passed after 4.923 seconds.
+􁁛  Test emptyTextIsExplicitEmptySecret() passed after 4.923 seconds.
+􁁛  Test unknownRecordKeyIsProviderDown() passed after 4.923 seconds.
+􁁛  Test registryDistinctSiblingsDoNotCollide() passed after 4.923 seconds.
+􁁛  Test wholeAgainstFieldsOnlyItemIsNotFound() passed after 4.923 seconds.
+􁁛  Test positionTieBreaksById() passed after 4.923 seconds.
+􁁛  Test tooManyItemsIsProviderDown() passed after 4.923 seconds.
+􁁛  Test resolvesFieldSubvalue() passed after 4.923 seconds.
+􁁛  Test unreadableValuesFileIsProviderDown() passed after 4.923 seconds.
+􁁛  Test landlock_prepare_contained_missingDirectory_returnsWorkspaceDoesNotExist() passed after 4.923 seconds.
+􁁛  Test staticPinBlockBypassesApprovePatterns() passed after 4.923 seconds.
+􁁛  Test spawn_landlock_trueOrWorkspaceHelper_doesNotEstablish() passed after 4.923 seconds.
+􁁛  Test controlByteFieldNameIsProviderDown() passed after 4.923 seconds.
+􁁛  Test staticPinIsExactOnly() passed after 4.924 seconds.
+􁁛  Test patternExactDoesNotMatchSiblingTool() passed after 4.924 seconds.
+􁁛  Test fieldAgainstTextOnlyItemIsNotFound() passed after 4.925 seconds.
+􁁛  Test landlock_prepare_contained_relativeWorkspace_returnsWorkspaceMustBeAbsolute() passed after 4.925 seconds.
+􀟈  Test case passing 1 argument name → "quote"name" to seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􀟈  Test case passing 1 argument name → "slash\name" to seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􀟈  Test case passing 1 argument name → "close") (allow default) ;" to seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􀟈  Test case passing 1 argument name → "tab	name" to seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􀟈  Test case passing 1 argument name → "carriagename" to seatbeltPathEncodingCannotBroadenWriteScope(_:) started.
+􁁛  Test orgBlockBeatsUserApprove() passed after 4.928 seconds.
+􁁛  Test landlock_prepare_mediated_returnsProfileNotApplicable() passed after 4.928 seconds.
+􁁛  Test missingFieldIsNotFound() passed after 4.928 seconds.
+􁁛  Test missingItemIsNotFound() passed after 4.928 seconds.
+􁁛  Test duplicateStaticPinsLastWins() passed after 5.104 seconds.
+􁁛  Test fallbackProvenanceIsNilAndIsFallback() passed after 5.104 seconds.
+􁁛  Test unixDifferentExecutableCannotAcquireRoleAndDeadPeerFails() passed after 5.108 seconds.
+􁁛  Test compileLandlockRuleset_relativeWorkspace_returnsWorkspaceMustBeAbsolute() passed after 5.107 seconds.
+􁁛  Test unknownTopLevelKeyIsProviderDown() passed after 5.111 seconds.
+􁁛  Test landlock_run_contained_onDarwin_returnsBackendUnavailable() passed after 5.112 seconds.
+􁁛  Test registryUnicodeLookup() passed after 5.113 seconds.
+􁁛  Test landlock_prepare_contained_launchArguments_areWorkspaceSeparatorAndInnerArgv() passed after 5.115 seconds.
+􁁛  Test oversizedFileIsProviderDown() passed after 5.121 seconds.
+􁁛  Test landlock_run_missingTrampoline_returnsBackendUnavailable() passed after 5.121 seconds.
+􁁛  Test staticPinCodableRoundTrips() passed after 5.121 seconds.
+􁁛  Test registryLookupHitReturnsRecord() passed after 5.121 seconds.
+􁁛  Test groupReadableFileIsProviderDown() passed after 5.121 seconds.
+􁁛  Test negativeAndInfinitePositionsOrder() passed after 5.121 seconds.
+􁁛  Test compileLandlockRuleset_newlineWorkspace_returnsWorkspacePathUnsafe() passed after 5.122 seconds.
+􁁛  Test registryPreservesFlagAndDefaultPerRecord() passed after 5.123 seconds.
+􁁛  Test missingFileIsEmptyStore() passed after 5.123 seconds.
+􁁛  Test overlongItemNameIsProviderDown() passed after 5.123 seconds.
+􁁛  Test resolvesWholeItemText() passed after 5.123 seconds.
+􁁛  Test compileLandlockRuleset_filesystemRoot_returnsWorkspacePathUnsafe() passed after 5.248 seconds.
+􁁛  Test newlineItemNameIsProviderDown() passed after 5.248 seconds.
+􁁛  Test anyPatternMatchesThroughStore() passed after 5.248 seconds.
+􁁛  Test productiveResolutionCarriesSystemTemporaryDirectory() passed after 5.250 seconds.
+􁁛  Test worldWritableDirectoryIsProviderDown() passed after 5.248 seconds.
+􁁛  Test blockTouchesNothingDownstream() passed after 5.248 seconds.
+􁁛  Test stringIdOrderingFollowsStringCompare() passed after 5.248 seconds.
+􁁛  Test compileLandlockRuleset_symlinkToFilesystemRoot_returnsWorkspacePathUnsafe() passed after 5.248 seconds.
+􁁛  Test recordWithNeitherTextNorFieldsIsProviderDown() passed after 5.248 seconds.
+􁁛  Test userBlockBeatsOrgApprove() passed after 5.248 seconds.
+􁁛  Test compileLandlockRuleset_observedAndMediated_returnsProfileNotApplicable() passed after 5.248 seconds.
+􁁛  Test invalidJSONIsProviderDown() passed after 5.248 seconds.
+􁁛  Test dotTolerantToolResolves() passed after 5.248 seconds.
+􁁛  Test landlock_prepare_observed_returnsProfileNotApplicable() passed after 5.248 seconds.
+􁁛  Test productiveResolutionIncludesActiveDeveloperRoot() passed after 5.249 seconds.
+􁁛  Test unmatchedAddressFallsBack() passed after 5.248 seconds.
+􁁛  Test isolatedLaunchRequest_rejectsLandlockWithObservedOrUnsandboxedContained() passed after 5.248 seconds.
+􁁛  Test unicodeAddressResolves() passed after 5.248 seconds.
+􁁛  Test symlinkedValuesFileIsProviderDown() passed after 5.248 seconds.
+􁁛  Test validationFailureTouchesNothingDownstream() passed after 5.248 seconds.
+􁁛  Test effectivePolicyCodableRoundTrips() passed after 5.248 seconds.
+􁁛  Test firstMatchPerOwnerUsesPositionNotRestrictiveness() passed after 5.248 seconds.
+􁁛  Test isolationExecExit125_isBackendUnavailable_notEstablished() passed after 5.248 seconds.
+􁁛  Test fractionalBetweenValuesOrder() passed after 5.248 seconds.
+􁁛  Test landlock_prepare_contained_regularFileWorkspace_returnsWorkspaceDoesNotExist() passed after 5.248 seconds.
+􁁛  Test sameOwnerBlockTiebreakPicksFirstRanked() passed after 5.248 seconds.
+􁁛  Test registryDuplicateAddressLastWins() passed after 5.248 seconds.
+􁁛  Test orgPresentButNonmatchingStillYieldsUserWinner() passed after 5.248 seconds.
+􁁛  Test compileLandlockRuleset_contained_writeRootIsResolvedWorkspaceNotRepositoryRoot() passed after 5.248 seconds.
+􁁛  Test staticPinWithDottedToolIsExact() passed after 5.248 seconds.
+􁁛  Test requireApprovalBeatsApproveAcrossOwners() passed after 5.248 seconds.
+􁁛  Test landlock_prepare_contained_symlinkToFilesystemRoot_returnsWorkspacePathUnsafe() passed after 5.248 seconds.
+􁁛  Test actionTieResolvesToOrg() passed after 5.248 seconds.
+􁁛  Test singleOwnerStoresResolve() passed after 5.248 seconds.
+􁁛  Test winsAreNotFallback() passed after 5.248 seconds.
+􁁛  Test registryDottedToolLookupMatchesAcrossConstructions() passed after 5.249 seconds.
+􁁛  Test emptyStringIdSortsFirst() passed after 5.248 seconds.
+􁁛  Test emptyRegistryHasZeroCount() passed after 5.248 seconds.
+􁁛  Test handlerRecordCodableRoundTrips() passed after 5.249 seconds.
+􁁛  Test trailingPrefixMatchesThroughStore() passed after 5.249 seconds.
+􁁛  Test registryLookupMissReturnsNil() passed after 5.248 seconds.
+􁁛  Test singleExactMatchWinsWithProvenance() passed after 5.249 seconds.
+􁁛  Test singleMidMatchesThroughStore() passed after 5.249 seconds.
+􁁛  Test exactTieKeepsInitOrder() passed after 5.249 seconds.
+􁁛  Test staticPinBypassesOrgBlock() passed after 5.249 seconds.
+􁁛  Test unattributedIdentityIsMarkedNotVerified() passed after 5.249 seconds.
+􁁛  Test socketPeerCarriesPidAndUidWithoutRole() passed after 5.249 seconds.
+􁁛  Test emptyStoreFallsBackToInjectedDefault(fallback:) with 3 test cases passed after 5.249 seconds.
+􁁛  Test socketPeerIsNeverRoleBearing() passed after 5.249 seconds.
+􁁛  Test isolationExecIdentity_rejectsWrongNameDirectoryAndWorkspaceLocalHelper() passed after 5.249 seconds.
+􁁛  Test largePolicySetResolvesFirstMatch() passed after 5.249 seconds.
+􁁛  Test socketPeerFactoryPreservesConnection() passed after 5.249 seconds.
+􁁛  Test nonpositiveTransportBudgetNeverSends() passed after 5.249 seconds.
+􁁛  Test registryStressManyHandlers() passed after 5.250 seconds.
+􁁛  Test rejectWorkspaceInodeAlias_unreadableUserFilesystemMetadataDirectoryRefuses() passed after 7.428 seconds.
+􁁛  Test idIsVaultHTTP() passed after 7.429 seconds.
+􁁛  Test compileSeatbeltProfile_observedAndMediated_returnsProfileNotApplicable() passed after 7.455 seconds.
+􁁛  Test seatbelt_prepare_observed_returnsProfileNotApplicable() passed after 7.454 seconds.
+􁁛  Test declinedCreatesReleaseTheParkSlot() passed after 7.455 seconds.
+􁁛  Test compileSeatbeltProfile_contained_isDenyDefaultWorkspaceScope() passed after 7.454 seconds.
+􁁛  Test workspacePublishDecision_rejectsForeignInodeAndLinkCountChange() passed after 7.453 seconds.
+􁁛  Test parkCapRefusesNinth() passed after 7.453 seconds.
+􁁛  Test hfsSliceDevice_prefersAppleHFSContentHint() passed after 7.453 seconds.
+􁁛  Test workspaceFilesystemMetadata_ownershipCheckHonorsTemporaryDirectory() passed after 7.453 seconds.
+􁁛  Test askParksAndDefersResponse() passed after 7.453 seconds.
+􁁛  Test nonPendingActionsNeverPark() passed after 7.453 seconds.
+􁁛  Test unavailable_prepareAndRun_mediated_establishesMediatedFamilyNone() passed after 7.453 seconds.
+􁁛  Test compileSeatbeltRequest_observedPlanIsBackendMismatch() passed after 7.453 seconds.
+􁁛  Test sameRequestIDRejectedAsReplay() passed after 7.453 seconds.
+􁁛  Test seatbelt_prepare_contained_relativeWorkspace_returnsWorkspaceMustBeAbsolute() passed after 7.453 seconds.
+􁁛  Test platform_family_isSeatbeltOnDarwin_landlockOnLinux() passed after 7.453 seconds.
+􁁛  Test compileSeatbeltRequest_retargetedWorkspaceRefuses() passed after 7.453 seconds.
+􁁛  Test compileSeatbeltProfile_filesystemRoot_returnsWorkspacePathUnsafe() passed after 7.453 seconds.
+􁁛  Test unavailable_prepareAndRun_observed_establishesObservedFamilyNone_withoutSandboxExec() passed after 7.453 seconds.
+􁁛  Test isolatedCommand_rejectsEmptyAndRelativeExecutable() passed after 7.453 seconds.
+􁁛  Test createDeclinedKeepsLegacyPending() passed after 7.453 seconds.
+􁁛  Test compileSeatbeltRequest_assemblesFromCannedFacts() passed after 7.453 seconds.
+􁁛  Test isolationBackendFamily_hasExactlyNoneSeatbeltAndLandlock() passed after 7.453 seconds.
+􁁛  Test rejectWorkspaceInodeAlias_unreadableDirectory_refusesHiddenAlias() passed after 7.453 seconds.
+􁁛  Test terminalPATHPrefersInstalledAgentBin() passed after 7.459 seconds.
+􁁛  Test workspaceFilesystemMetadata_treeWalkAndCopyKeepProjectNames() passed after 7.453 seconds.
+􁁛  Test compileSeatbeltProfile_newlineWorkspace_returnsWorkspacePathUnsafe() passed after 7.453 seconds.
+􁁛  Test seatbelt_prepare_contained_missingDirectory_returnsWorkspaceDoesNotExist() passed after 7.453 seconds.
+􁁛  Test unavailable_prepare_contained_returnsBackendUnavailable() passed after 7.453 seconds.
+􁁛  Test compileSeatbeltRequest_carriesAgentBinGrants() passed after 7.453 seconds.
+􁁛  Test containedLaunchResult_reportsTeardownFailure() passed after 7.453 seconds.
+􁁛  Test noProfileNeverAdmitsInstalledAgentResources() passed after 7.459 seconds.
+􁁛  Test compileSeatbeltProfile_contained_writeLimitIsWorkspaceNotRepositoryRoot() passed after 7.453 seconds.
+􁁛  Test hfsSliceDevice_fallsBackToSolePartition() passed after 7.453 seconds.
+􁁛  Test workspaceFilesystemMetadata_skipsRootBookkeepingWhenRootOwnedOrOwnersIgnored() passed after 7.453 seconds.
+􁁛  Test fileSinkAppendsDecodableLinesAndSkipsEmptyBatches() passed after 7.453 seconds.
+􁁛  Test selectedGenericProfileStagesOnlyItsOwnSyntheticCredential() passed after 7.460 seconds.
+􁁛  Test auditCauseTruncatesPastCap() passed after 7.489 seconds.
+􁁛  Test causeLabelPinsFallbackAndOpaqueCases() passed after 7.489 seconds.
+􁁛  Test preparedContainedProfileAdmitsLoopbackOnly() passed after 7.496 seconds.
+􁁛  Test oldClientFramesStillDecode() passed after 7.489 seconds.
+􁁛  Test terminalRulesKeepTheNonceDrainAndPartialWrite() passed after 7.489 seconds.
+􁁛  Test subscriberQueueOverflowsAboveTheBound() passed after 7.489 seconds.
+􁁛  Test replayKeepsTheNewestBoundedBytes() passed after 7.489 seconds.
+􁁛  Test denialDetailRoundTripsAndOversizeFailsClosed() passed after 7.489 seconds.
+􁁛  Test codecEnforcesMaximumOnDecodedBytes() passed after 7.489 seconds.
+􁁛  Test replayTrimsInsideTheOldestChunk() passed after 7.489 seconds.
+􁁛  Test unknownTerminalFieldFailsClosed() passed after 7.489 seconds.
+􁁛  Test codecRoundTripsArbitraryBytes() passed after 7.489 seconds.
+􁁛  Test capabilityRepliesRoundTripWithinTheirBounds() passed after 7.489 seconds.
+􁁛  Test seatbelt_prepare_launchArguments_areSandboxExecProfileAndInnerArgv() passed after 7.506 seconds.
+􁁛  Test agentNamedExecutableWithNoProfileStagesZeroResources() passed after 7.508 seconds.
+􁁛  Test productiveResolutionHonorsInjectedProbe() passed after 7.510 seconds.
+􁁛  Test engageAndRestoreAreIdempotent() passed after 7.501 seconds.
+􁁛  Test egressProxyRejectsOversizeHeaders() passed after 7.510 seconds.
+􁁛  Test isolationConformance_catalogListsEverySection8ID() passed after 7.501 seconds.
+􁁛  Test compactDropsClosedWorkspacesAndKeepsOpenBytes() passed after 7.500 seconds.
+􁁛  Test allowedCommandRunsOnce() passed after 7.500 seconds.
+􁁛  Test fakeCapabilityWrongSessionAndClosedChannelDoNotRun() passed after 7.500 seconds.
+􁁛  Test unboundChannelThrowsWithoutTouchingBroker() passed after 7.500 seconds.
+􁁛  Test missingRequiredKeyRejected() passed after 7.499 seconds.
+􁁛  Test deniedCommandDoesNotRun() passed after 7.499 seconds.
+􁁛  Test unknownInstanceThrowsWithoutTouchingBroker() passed after 7.499 seconds.
+􁁛  Test ambientSecretsDoNotFlowUnlessExplicitlyNamed() passed after 7.509 seconds.
+􁁛  Test seatbeltProfileGainsNoNetworkAllow() passed after 7.499 seconds.
+􁁛  Test emptyRefsReturnEmptyWithoutProviderContact() passed after 7.499 seconds.
+􁁛  Test mismatchedSessionResourceIsCrossResource() passed after 7.499 seconds.
+􁁛  Test commitAuditFailureDeniesTheCall() passed after 7.499 seconds.
+􁁛  Test principalLessRejectedBeforeAnything() passed after 7.499 seconds.
+􁁛  Test cancellingAHelperDoesNotWaitForItToExit() passed after 7.509 seconds.
+􁁛  Test resolveThenCompile_matchesPrepareSeatbelt() passed after 7.503 seconds.
+􁁛  Test unregisteredAddressIsUnknownTool() passed after 7.499 seconds.
+􁁛  Test frameDoorsIntactOnBoundSession() passed after 7.499 seconds.
+􁁛  Test oversizedArgumentsRejected() passed after 7.499 seconds.
+􁁛  Test legacyFrameDoorUnaffectedOnSameSession() passed after 7.499 seconds.
+􁁛  Test credentialFailureIsTypedAndSkipsTransport() passed after 7.499 seconds.
+􁁛  Test malformedFrameDoesNotRun() passed after 7.499 seconds.
+􁁛  Test httpWrongCallerIs401AndUnknownSessionIs404() passed after 7.499 seconds.
+􁁛  Test pendingCommandDoesNotRunUntilAllowOnce() passed after 7.499 seconds.
+􁁛  Test failurePathAuditFailureKeepsOriginalError() passed after 7.499 seconds.
+􁁛  Test malformedAddressIsUnknownTool() passed after 7.499 seconds.
+􁁛  Test splitLoopbackURLWithoutPathUsesWholeAuthority() passed after 7.499 seconds.
+􁁛  Test evaluationFailureDoesNotRun() passed after 7.499 seconds.
+􁁛  Test revokedPrincipalDeniedByBrokerWithoutProviderContact() passed after 7.500 seconds.
+􁁛  Test retryableClassification() passed after 7.500 seconds.
+􁁛  Test tokenDescriptionsNeverLeakBearers() passed after 7.500 seconds.
+􁁛  Test httpCrossResourceIs403() passed after 7.500 seconds.
+􁁛  Test nonLoopbackTargetsNeverSend() passed after 7.500 seconds.
+􁁛  Test multiTextAuthorizationPicksRefOrderFirst() passed after 7.500 seconds.
+􁁛  Test httpRoundtripThroughRouter() passed after 7.500 seconds.
+􁁛  Test authorizationSortsAcrossProvidersAndFields() passed after 7.500 seconds.
+􁁛  Test splitLoopbackURLRejectsBadPortAndEmptyHost() passed after 7.500 seconds.
+􁁛  Test stdioRefusesWrongCallerToken() passed after 7.500 seconds.
+􁁛  Test envelopeRejectsUnknownFieldsAndOversize() passed after 7.500 seconds.
+􁁛  Test stdioRoundtripEcho() passed after 7.500 seconds.
+􁁛  Test stdioRefusesCrossResourceAndForeignSession() passed after 7.500 seconds.
+􁁛  Test evidenceFileRecordsTheSessionAndOutcome() passed after 7.500 seconds.
+􁁛  Test stdioLifecycleRefusesEarlyLateAndDoubleStart() passed after 7.500 seconds.
+􁁛  Test closeIsIrreversible() passed after 7.500 seconds.
+􁁛  Test requestPreviewRedactsURLAndHeaders() passed after 7.500 seconds.
+􁁛  Test everyReferenceFieldIsRequired() passed after 7.500 seconds.
+􁁛  Test activeLookupAndRevocation() passed after 7.500 seconds.
+􁁛  Test resolutionDoesNotStartWhenTheSessionHasStopped() passed after 7.500 seconds.
+􁁛  Test inactiveLaunchCannotIssueReference() passed after 7.500 seconds.
+􁁛  Test restartAndDiskHistoryDoNotRestoreAuthority() passed after 7.500 seconds.
+􁁛  Test capabilitySessionAndClosureDoNotRun() passed after 7.500 seconds.
+􁁛  Test cancellationStopsTheExchangeBeforeFinishReturns() passed after 7.500 seconds.
+􁁛  Test directConfigurationDisablesProxiesAndCredentials() passed after 7.500 seconds.
+􁁛  Test allowedGETRunsOnce() passed after 7.500 seconds.
+􁁛  Test directConnectorRefusesLoopbackBeforeAccept() passed after 7.499 seconds.
+􁁛  Test redirectDoesNotOpenASecondTransfer() passed after 7.499 seconds.
+􁁛  Test denyPendingAndFailureDoNotRun() passed after 7.499 seconds.
+􁁛  Test nilDataIsNotFound() passed after 7.499 seconds.
+􁁛  Test resolvesThroughReader() passed after 7.499 seconds.
+􁁛  Test deniedReaderFailsClosed() passed after 7.499 seconds.
+􁁛  Test currentPlatformIsLiveOnMacOS() passed after 7.499 seconds.
+􁁛  Test fieldSelectsAccount() passed after 7.499 seconds.
+􁁛  Test nonUTF8DataIsNotFound() passed after 7.499 seconds.
+􁁛  Test routerUnregisterDropsSession() passed after 7.499 seconds.
+􁁛  Test stdioForeignErrorAndBadReply() passed after 7.499 seconds.
+􁁛  Test routerRejectsGarbageBodyAndMissingHeaders() passed after 7.499 seconds.
+􁁛  Test routerHandlerFailureIs500WithCauseAndTrace() passed after 7.499 seconds.
+􁁛  Test routerRejectsGetAndWrongPath() passed after 7.499 seconds.
+􁁛  Test routerDefaultCauseLogAndOversizeReply() passed after 7.499 seconds.
+􁁛  Test typedTransportErrorsRethrowUnchanged() passed after 7.499 seconds.
+􁁛  Test httpForeignErrorAndStatusMapping() passed after 7.498 seconds.
+􁁛  Test openRejectsDimensionsAndFaultsDoNotLeakMasters() passed after 7.499 seconds.
+􁁛  Test resolutionReturnsWhenTheSessionStopsDuringLookup() passed after 7.500 seconds.
+􁁛  Test pendingAuthorization_hasNoExecuteInput() passed after 7.498 seconds.
+􁁛  Test compileExecutable_workspaceMismatch_fails() passed after 7.498 seconds.
+􁁛  Test compileExecutable_fileAction_fails() passed after 7.498 seconds.
+􁁛  Test compileExecutable_bareTouch_resolvesOnSafePath() passed after 7.498 seconds.
+􁁛  Test compileExecutable_absoluteTouch_succeeds() passed after 7.498 seconds.
+􁁛  Test identityAdmitsCarriedProfileBrokerEntries() passed after 7.501 seconds.
+􁁛  Test identityAdmitsDefinitionBrokerEntries() passed after 7.501 seconds.
+􁁛  Test compileExecutable_missingCommand_fails() passed after 7.501 seconds.
+􁁛  Test legacyRejectsCarriedProfileShapes() passed after 7.501 seconds.
+􁁛  Test compileExecutable_redirect_fails() passed after 7.501 seconds.
+􁁛  Test legacyRejectsDefinitionBrokerEntries() passed after 7.501 seconds.
+􁁛  Test legacyRejectsDefinitionKeychain() passed after 7.500 seconds.
+􁁛  Test observedAndMediated_containedIsolation_fails() passed after 7.500 seconds.
+􁁛  Test legacyRejectsDefinitionCredentials() passed after 7.500 seconds.
+􁁛  Test identityAdmitsBrokerEntriesAlongsideNeitherLegacyShape() passed after 7.500 seconds.
+􁁛  Test identityAdmitsFullyCredentialFreeSelection() passed after 7.499 seconds.
+􁁛  Test legacyAdmitsFullyCredentialFreeSelection() passed after 7.499 seconds.
+􁁛  Test legacyMatchesPreBrokerRuleOnLegacyShapes() passed after 7.500 seconds.
+􁁛  Test legacyRejectsCredentialBindings() passed after 7.498 seconds.
+􁁛  Test compileExecutable_missingWorkingDirectory_fails() passed after 7.498 seconds.
+􁁛  Test compileExecutable_unresolvedName_fails() passed after 7.498 seconds.
+􁁛  Test identityRejectsLegacyCredentialShapes() passed after 7.498 seconds.
+􁁛  Test fileBlockingSecretsDirDrops() passed after 7.498 seconds.
+􁁛  Test unreadableFileValuesDrop() passed after 7.498 seconds.
+􁁛  Test defaultBrokerAuditDropsSilently() passed after 7.498 seconds.
+􁁛  Test tagMismatchSkipsBeforeInvalidRefAudit() passed after 7.498 seconds.
+􁁛  Test nulDropsWhileNewlineInjects() passed after 7.498 seconds.
+􁁛  Test groupWritableFileValuesDrop() passed after 7.498 seconds.
+􁁛  Test revokedPrincipalIsRejectedOnNextRequest() passed after 7.498 seconds.
+􁁛  Test legacyDoorStillAdmitsHarmlessCapabilityOnlyUse() passed after 7.498 seconds.
+􁁛  Test fileValueStagesTo0700Home() passed after 7.498 seconds.
+􁁛  Test traversalShapedNamesDropAsInvalid() passed after 7.498 seconds.
+􁁛  Test boundActivePrincipalReachesPolicyWithTrustedSubject() passed after 7.498 seconds.
+􁁛  Test sizeBoundaryCountsBytes() passed after 7.498 seconds.
+􁁛  Test dropsCarryLabelsOnly() passed after 7.498 seconds.
+􁁛  Test legacyBindingIsRejectedBeforePolicy() passed after 7.498 seconds.
+􁁛  Test homeAndStagedFilePermissions() passed after 7.498 seconds.
+􁁛  Test duplicateEnvAppendsInOrder() passed after 7.498 seconds.
+􁁛  Test invalidRefAndUnresolvedDrop() passed after 7.498 seconds.
+􁁛  Test suppressedExecuteKeepsPrincipalAttribution() passed after 7.498 seconds.
+􁁛  Test legacyFailureRemovesHomeIncludingBrokerFiles() passed after 7.498 seconds.
+􁁛  Test cleanupFailureKeepsAuthorityDead() passed after 7.498 seconds.
+􁁛  Test instanceBindsExpectedWorkspaceAndRuntime() passed after 7.498 seconds.
+􁁛  Test blockedNamesDrop() passed after 7.498 seconds.
+􁁛  Test requestPayloadCannotReplacePrincipal() passed after 7.498 seconds.
+􁁛  Test nilBrokerValuesIgnoresSecretsEntries() passed after 7.498 seconds.
+􁁛  Test invalidNamesDrop() passed after 7.498 seconds.
+􁁛  Test lifecycleMovesActiveRevokingInactive() passed after 7.498 seconds.
+􁁛  Test mismatchedPrincipalBindingFails() passed after 7.498 seconds.
+􁁛  Test agentFilterSkipsSilently() passed after 7.498 seconds.
+􁁛  Test recoveryResurrectsNothing() passed after 7.498 seconds.
+􁁛  Test journalFailureRefusesEstablishment() passed after 7.498 seconds.
+􁁛  Test emptyMapDropsAllSelected() passed after 7.498 seconds.
+􁁛  Test delegationNarrowsThroughRegistry() passed after 7.498 seconds.
+􁁛  Test workspaceRootPolicyRejectsOnlyTheHomeDirectory() passed after 7.498 seconds.
+􁁛  Test oversizedDropKeepsBatch() passed after 7.498 seconds.
+􁁛  Test runtimeBindsExactlyOneInstance() passed after 7.498 seconds.
+􁁛  Test textValuesInjectInOrder() passed after 7.498 seconds.
+􁁛  Test channelBindingNeverMovesToAnotherInstance() passed after 7.498 seconds.
+􁁛  Test causeSpellingMirrorsLedger() passed after 7.498 seconds.
+􁁛  Test cachedContextNeverEqualsLiveValidity() passed after 7.498 seconds.
+􁁛  Test announcedInstanceIsUnusableUntilEstablished() passed after 7.498 seconds.
+􁁛  Test restartMintsFreshIDAndKeepsOldDead() passed after 7.498 seconds.
+􁁛  Test sseFrameToleratesCommentsAndMultilineData() passed after 7.498 seconds.
+􁁛  Test staticPinPromptLabelsThePin() passed after 7.498 seconds.
+􁁛  Test activateJournalFailureLeavesInstanceInactive() passed after 7.498 seconds.
+􁁛  Test revokingIsObservableWhileTeardownRuns() passed after 7.498 seconds.
+􁁛  Test expiredWaitReadsExpired() passed after 7.498 seconds.
+􁁛  Test terminatedRuntimeInvalidatesAndLookupStaysDescriptive() passed after 7.498 seconds.
+􁁛  Test consumeWaitingThrowsAndPollUnknownIsCanceled() passed after 7.498 seconds.
+􁁛  Test invalidRefEntriesAreSkipped() passed after 7.498 seconds.
+􁁛  Test namedRedemptionLaunchesExactlyOnce() passed after 7.509 seconds.
+􁁛  Test sigkillOfLeaderInvalidatesPrincipalThroughAuthority() passed after 7.513 seconds.
+􁁛  Test ninthConcurrentParkFailsClosed() passed after 7.498 seconds.
+􁁛  Test unfilteredEntriesAdmitForNilAndNamedAgent() passed after 7.498 seconds.
+􁁛  Test orderPreserved() passed after 7.498 seconds.
+􁁛  Test filteredEntriesMatchTagOnly() passed after 7.498 seconds.
+􁁛  Test ssePromptRoundtrip() passed after 7.498 seconds.
+􁁛  Test auditFailureKeepsOriginalError() passed after 7.498 seconds.
+􁁛  Test rollbackDropsTheKey() passed after 7.498 seconds.
+􁁛  Test promptPreviewIsCappedAndRedacted() passed after 7.498 seconds.
+􁁛  Test unregisteredIDsHaveUnknownValidity() passed after 7.498 seconds.
+􁁛  Test emptyAgentsFilterMatchesAll() passed after 7.498 seconds.
+􁁛  Test unknownVersionFieldAndShapeFailClosed() passed after 7.498 seconds.
+􁁛  Test doubleConsumeThrows() passed after 7.498 seconds.
+􁁛  Test digestIsDeterministicAndSensitive() passed after 7.498 seconds.
+􁁛  Test sseDuplicateIDFailsClosed() passed after 7.498 seconds.
+􁁛  Test v1MigratesDeterministically() passed after 7.498 seconds.
+􁁛  Test normalizeSeesTrustedSubjectThePayloadCannotOverride() passed after 7.499 seconds.
+􁁛  Test sseDecisionRoundtripAndRejects() passed after 7.499 seconds.
+􁁛  Test v2Roundtrip() passed after 7.499 seconds.
+􁁛  Test emptyBatchReturnsEmpty() passed after 7.499 seconds.
+􁁛  Test symlinkedConfigDirectoryIsUnsafe() passed after 7.499 seconds.
+􁁛  Test emptyBatchSkipsFileAudit() passed after 7.499 seconds.
+􁁛  Test sweepEvictsConsumedAndDeadParks() passed after 7.499 seconds.
+􁁛  Test resolveAfterTerminalIsANoOp() passed after 7.499 seconds.
+􁁛  Test promptShowsAddressPatternAndPreview() passed after 7.499 seconds.
+􁁛  Test usableOnlySnapshotPinsNilArm() passed after 7.499 seconds.
+􁁛  Test emptyBatchStillGatesPrincipal() passed after 7.499 seconds.
+􁁛  Test cleanRecoveryDoesNotTouchTheProject() passed after 7.499 seconds.
+􁁛  Test "principal gate rejects every invalid state" with 3 test cases passed after 7.499 seconds.
+􁁛  Test fileAuditAppendEmptyIsNoop() passed after 7.499 seconds.
+􁁛  Test strictKeysRejectIntegerCodingKeys() passed after 7.499 seconds.
+􁁛  Test perform_pendingCreateRule_fails() passed after 7.498 seconds.
+􁁛  Test unknownProviderIsAtomic() passed after 7.498 seconds.
+􁁛  Test providerIDsAreSorted() passed after 7.498 seconds.
+􁁛  Test perform_pendingUnavailable_fails() passed after 7.498 seconds.
+􁁛  Test observedPlan_containedIsolation_fails() passed after 7.498 seconds.
+􁁛  Test registryRevocationBeforeEntryDeniesWithoutTouching() passed after 7.499 seconds.
+􁁛  Test perform_pendingDeny_doesNotSpawn() passed after 7.499 seconds.
+􁁛  Test perform_denied_doesNotSpawn() passed after 7.498 seconds.
+􁁛  Test nonpositiveTimeoutDeniesImmediately() passed after 7.498 seconds.
+􁁛  Test perform_pendingWithoutApproval_awaitsAndDoesNotSpawn() passed after 7.498 seconds.
+􁁛  Test generationMismatchDeniesWhileActive() passed after 7.498 seconds.
+􁁛  Test failedApply_consumesAuthorizationBeforeRetry() passed after 7.515 seconds.
+􀢄  Test customLaunchCannotReadAmbientCodexAuthentication() failed after 7.497 seconds with 1 issue.
+􀄵  /// A real contained child records only whether the unrelated dummy
+􀄵  /// credential was readable. Neither stdout nor the marker carries its body.
+􁁛  Test parsePromptRejectsWrongEventAndCorruptData() passed after 7.493 seconds.
+􁁛  Test cancelWaitingReadsCanceledAndSweepExpires() passed after 7.492 seconds.
+􁁛  Test consumeUnknownTicketThrows() passed after 7.492 seconds.
+􁁛  Test cancelThrowingSinkPropagatesCancellation() passed after 7.492 seconds.
+􁁛  Test isOpaqueFalseOnTypedErrors() passed after 7.489 seconds.
+􁁛  Test fileSinkWritesThroughToLedger() passed after 7.492 seconds.
+􁁛  Test validatorTooManyKeysAndBadKey() passed after 7.492 seconds.
+􁁛  Test consumeAfterExpiryThrows() passed after 7.488 seconds.
+􁁛  Test preparedWorkspaceRetargetDoesNotChangeGrantOrWorkingDirectory() passed after 7.489 seconds.
+􁁛  Test auditCauseCodableRoundtrip() passed after 7.489 seconds.
+􁁛  Test tornSessionLineDoesNotHideTheNextRecord() passed after 7.489 seconds.
+􁁛  Test toolPatternLabels() passed after 7.489 seconds.
+􁁛  Test appendedSessionRecordsStayIndependent() passed after 7.488 seconds.
+􁁛  Test resourceIDValidation() passed after 7.488 seconds.
+􁁛  Test auditPrincipalRejectsBadUUID() passed after 7.495 seconds.
+􁁛  Test foreignCredentialErrorMapsToProviderDown() passed after 7.495 seconds.
+􁁛  Test fileAuditRejectsSymlinkedAndFileDirectories() passed after 7.495 seconds.
+􁁛  Test embeddedNULCannotChangeExecutedArgv() passed after 7.494 seconds.
+􁁛  Test codecRejectsNonIntegerVersion() passed after 7.494 seconds.
+􁁛  Test invokeLevelTooManyKeysAndBadKey() passed after 7.493 seconds.
+􁁛  Test parkThrowingBackendIsUnavailable() passed after 7.493 seconds.
+􁁛  Test envelopeKeyIndexedArmsAreNil() passed after 7.493 seconds.
+􁁛  Test unframedReplayIsAdmittedForLegacyHosts() passed after 7.479 seconds.
+􁁛  Test replayBatchBoundariesPreserveOrderAndRuntimeAttribution() passed after 7.479 seconds.
+􁁛  Test resettingOneSubscriptionPreservesAnotherRuntime() passed after 7.479 seconds.
+􁁛  Test drainsRuntimesFairlyWithoutReorderingOneRuntime() passed after 7.479 seconds.
+􁁛  Test removeAndInvalidateAllDropEntries() passed after 7.525 seconds.
+􁁛  Test clearingOverflowedAdmitsOutputWithoutWipingBacklog() passed after 7.477 seconds.
+􁁛  Test mismatchedReplayBoundaryOverflowsOnlyItsRuntime() passed after 7.477 seconds.
+􁁛  Test namedProposalResolvesExactTrustedRevision() passed after 7.526 seconds.
+􁁛  Test descriptionCarriesDigestsNotValues() passed after 7.525 seconds.
+􁁛  Test exitIsNotStarvedByAnotherRuntimeAndSurvivesDisconnect() passed after 7.476 seconds.
+􁁛  Test expiredEntriesEvictedOnInsert() passed after 7.525 seconds.
+􁁛  Test overflowIsAttributedToItsRuntimeAndDoesNotDropAnotherStream() passed after 7.474 seconds.
+􁁛  Test expiryBoundaryFailsClosed() passed after 7.525 seconds.
+􁁛  Test overflowDiscardsQueuedReplayMetadataUntilResubscribe() passed after 7.472 seconds.
+􁁛  Test windowNoticesDeliverAndCoalesceToLatest() passed after 7.472 seconds.
+􁁛  Test firstOutputSurvivesAnAggregateByteCapFilledByOtherRuntimes() passed after 7.472 seconds.
+􁁛  Test apply_contained_withoutUsableWorkspaceOrBackend_failsClosed() passed after 7.528 seconds.
+􁁛  Test insertRejectsDuplicatesAndFull() passed after 7.527 seconds.
+􁁛  Test runLandlock_seatbeltRequest_returnsBackendMismatch() passed after 7.534 seconds.
+􁁛  Test localExecutor_applyFailure_consumesFingerprint() passed after 7.523 seconds.
+􁁛  Suite "Workspace launch intent coupling" passed after 7.537 seconds.
+􁁛  Suite ExecutableCommitVerificationTests passed after 7.537 seconds.
+􁁛  Suite "FileSecretsProvider" passed after 7.537 seconds.
+􁁛  Test observed_touchOutsideWorkspace_succeeds_notSecretlySandboxed() passed after 7.516 seconds.
+􁁛  Test invalidSeatbeltProfileDoesNotExecuteInnerCommand() passed after 7.500 seconds.
+􁁛  Test concurrentResolvesAgree() passed after 7.535 seconds.
+􁁛  Suite "Socket peer evidence (Linux SO_PEERCRED model)" passed after 7.538 seconds.
+􁁛  Test concurrentParksCapAtEight() passed after 7.534 seconds.
+􁁛  Test timeoutTouchesZeroCredentials() passed after 7.535 seconds.
+􁁛  Test reservedChildExit_cannotReplayCompletedSideEffect() passed after 7.536 seconds.
+􁁛  Test consumeRefusedExecutesZero() passed after 7.534 seconds.
+􁁛  Test revokeBetweenSpendAndResumeNeverExecutes() passed after 7.534 seconds.
+􁁛  Test revokedParkNeverResumesExecution() passed after 7.532 seconds.
+􁁛  Test unknownStatusFailsClosed() passed after 7.532 seconds.
+􁁛  Test denyExecutesZeroWithOriginalDeny() passed after 7.531 seconds.
+􁁛  Test allowOnceExecutesExactlyOnce() passed after 7.531 seconds.
+􁁛  Test apply_observedAndMediated_doNotRequireCallerToPickUnavailable() passed after 7.534 seconds.
+􁁛  Suite "Terminal stream" passed after 7.538 seconds.
+􁁛  Suite ScopedInvokerTransportTests passed after 7.538 seconds.
+􁁛  Suite WorkspacePrincipalAuthorityTests passed after 7.538 seconds.
+􁁛  Suite "HTTP admission" passed after 7.538 seconds.
+􁁛  Suite "KeychainSecretsProvider" passed after 7.538 seconds.
+􁁛  Suite ScopedInvokerTransportEdgeTests passed after 7.539 seconds.
+􁁛  Test localExecutor_performWhenCancelled_returnsExecuteCancelled() passed after 7.526 seconds.
+􁁛  Suite "Broker admission credential gate" passed after 7.538 seconds.
+􁁛  Suite "Broker admission staging" passed after 7.538 seconds.
+􁁛  Suite "Step 8 F3 identity mediation" passed after 7.538 seconds.
+􁁛  Test concurrentConsumeHasExactlyOneWinner() passed after 7.521 seconds.
+􁁛  Suite "Broker admission entry selection" passed after 7.538 seconds.
+􁁛  Suite ScopedInvokerCodecTests passed after 7.538 seconds.
+􁁛  Test invokerDeadlineBeatsSlowBackend() passed after 7.511 seconds.
+􁁛  Test concurrentAppendsKeepEveryRecordReadable() passed after 7.502 seconds.
+􁁛  Suite "Prepared launch store" passed after 7.540 seconds.
+􁁛  Test approvePathPhaseOrderIsExact() passed after 7.539 seconds.
+􁁛  Suite "MCPPolicy" passed after 7.542 seconds.
+􁁛  Test nonIdempotentNeverRefreshesNorRetries() passed after 7.539 seconds.
+􁁛  Test unavailableRefresherIsTheDefault() passed after 7.539 seconds.
+􁁛  Test failedRefreshCollapsesToOpaque() passed after 7.539 seconds.
+􁁛  Test nonRetryableFailureNeverRetries() passed after 7.539 seconds.
+􁁛  Test wrongConnectionTokenSkipsTheRetry() passed after 7.539 seconds.
+􁁛  Test unicodeAndEmptyArgumentsBehave() passed after 7.538 seconds.
+􁁛  Test dotTolerantToolSegmentInvokes() passed after 7.538 seconds.
+􁁛  Test declineTouchesZeroCredentials() passed after 7.539 seconds.
+􀟈  Test versionParsesThreeParts() started.
+􁁛  Test toolFailureIsOpaqueWithServerSideCause() passed after 7.534 seconds.
+􁁛  Test auditRowsCarryLabelsOnly() passed after 7.534 seconds.
+􁁛  Test successAuditsDispatchAndOutcomeWithJoinedExecution() passed after 7.534 seconds.
+􀟈  Test secondEngageDoesNotReplaceTheArmedSavedMode() started.
+􀟈  Test isolationConformance_catalogVerdictsMatchSection8() started.
+􀟈  Test compactRefusesTornTail() started.
+􁁛  Test outcomeCommitFailureDeniesWithoutReinvoke() passed after 7.531 seconds.
+􀟈  Test subscribersShareOneOrderedBinaryStream() started.
+􀟈  Test startingNewWorkspaceAtHomeRefusesBeforeLaunchingHost() started.
+􁁛  Suite ScopedInvokerElicitationTests passed after 7.542 seconds.
+􁁛  Test waitTimeoutFailsClosedAndCancels() passed after 7.537 seconds.
+􁁛  Test sameActionNewRequestCannotDoubleExecute() passed after 7.537 seconds.
+􀟈  Test customRedemptionKeepsBaseFence() started.
+􀟈  Test sigtermOfLeaderInvalidatesPrincipal() started.
+􀟈  Test tornTrailingLineKeepsTheEarlierWorkspaceVisible() started.
+􁁛  Test bothUnhealthyNamesFirstSortedProvider() passed after 7.524 seconds.
+􀟈  Test customPreparationDoesNotGrantAmbientCodexAuthentication() started.
+􁁛  Test filePathOnlyValuesInvokeWithoutAuthHeader() passed after 7.515 seconds.
+􁁛  Test cancelDuringWaitPropagatesCancellation() passed after 7.506 seconds.
+􁁛  Test spontaneousTransportCancellationRethrows() passed after 7.502 seconds.
+􀟈  Test customProposalFreezesAdHocSelection() started.
+􀢄  Test customPreparationDoesNotGrantAmbientCodexAuthentication() recorded an issue at IdentityAmbientCredentialTests.swift:62:6: Caught error: Error Domain=NSCocoaErrorDomain Code=260 "The file “swiftpm-testing-helper” couldn’t be opened because there is no such file." UserInfo={NSFilePath=/usr/libexec/swift/pm/swiftpm-testing-helper, NSURL=file:///usr/libexec/swift/pm/swiftpm-testing-helper, NSUnderlyingError=0x7ccb3ec7e0 {Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"}}
+􁁛  Test cancellationDuringHealthPropagates() passed after 7.591 seconds.
+􁁛  Test cancellationDuringResolvePropagates() passed after 7.591 seconds.
+􁁛  Test concurrentInvokesOnDistinctSessionsSucceed() passed after 7.606 seconds.
+􁁛  Test versionParsesThreeParts() passed after 0.094 seconds.
+􁁛  Test secondEngageDoesNotReplaceTheArmedSavedMode() passed after 0.094 seconds.
+􁁛  Test isolationConformance_catalogVerdictsMatchSection8() passed after 0.094 seconds.
+􁁛  Test compactRefusesTornTail() passed after 0.094 seconds.
+􁁛  Suite ScopedInvokerGateTests passed after 7.636 seconds.
+􁁛  Test fourHundredShortOutputFramesStayInOrderWithoutOverflow() passed after 7.575 seconds.
+􁁛  Test startingNewWorkspaceAtHomeRefusesBeforeLaunchingHost() passed after 0.094 seconds.
+􁁛  Test excessControlFramesFailTheStreamExplicitly() passed after 7.577 seconds.
+􁁛  Test subscribersShareOneOrderedBinaryStream() passed after 0.094 seconds.
+􁁛  Test tornTrailingLineKeepsTheEarlierWorkspaceVisible() passed after 0.094 seconds.
+􀢄  Test customPreparationDoesNotGrantAmbientCodexAuthentication() failed after 0.094 seconds with 1 issue.
+􀄵  /// The production prepare oracle for an explicit custom executable must
+􀄵  /// omit unrelated provider credentials from the host's installed bin set.
+􀄵  /// This checks the generated OS policy, not credential read success.
+􁁛  Test aggregateAndFrameCapsKeepFloodsBounded() passed after 7.578 seconds.
+􁁛  Test persistentBlipSpendsExactlyTwoAttempts() passed after 7.639 seconds.
+􁁛  Test second401AfterRefreshIsOpaqueWithOneRefresh() passed after 7.639 seconds.
+􁁛  Test refreshThenRetrySucceedsOnce() passed after 7.639 seconds.
+􁁛  Test retryableBlipRetriesOnceThenSucceeds() passed after 7.639 seconds.
+􁁛  Test refreshThenBlipIsOpaqueAfterTwoAttempts() passed after 7.639 seconds.
+􁁛  Suite ScopedInvokerStressTests passed after 7.642 seconds.
+􁁛  Test requireApprovalAcceptPathPhaseOrderIsExact() passed after 7.640 seconds.
+􁁛  Test firstOutputFromAnotherRuntimeReclaimsTheFloodingRuntime() passed after 7.581 seconds.
+􁁛  Test brokerErrorsPropagateUnmasked() passed after 7.631 seconds.
+􁁛  Test failureAuditRowsCarryProviderCause() passed after 7.625 seconds.
+􁁛  Test revocationBetweenCallsTakesEffect() passed after 7.632 seconds.
+􁁛  Test finishCancelsParksWithoutExecution() passed after 7.638 seconds.
+􁁛  Test symlinkedAuditDirectoryLeavesTargetUntouched() passed after 7.626 seconds.
+􁁛  Test unhealthyProviderDeniesWithoutResolving() passed after 7.625 seconds.
+􁁛  Test duplicateRefsResolveOnce() passed after 7.625 seconds.
+􁁛  Test fifoLedgerFileTripsTypeGuard() passed after 7.626 seconds.
+􁁛  Test registryLivenessAdmitsLiveContext() passed after 7.625 seconds.
+􁁛  Test ledgerLockFileIsOwnerOnly() passed after 7.625 seconds.
+􁁛  Test cancellationDuringAuditAppendPropagates() passed after 7.625 seconds.
+􁁛  Test symlinkedAuditDirectoryDenies() passed after 7.625 seconds.
+􁁛  Test symlinkedLedgerFileDenies() passed after 7.625 seconds.
+􁁛  Test filePathValuePassesThroughWithLabelOnlyAudit() passed after 7.625 seconds.
+􁁛  Test fifoLockFileTripsTypeGuard() passed after 7.625 seconds.
+􁁛  Test symlinkedLockFileDeniesAppend() passed after 7.625 seconds.
+􁁛  Test staleContextAtCommitDiscardsValues() passed after 7.625 seconds.
+􁁛  Test auditDirectoryIsFileDenies() passed after 7.625 seconds.
+􁁛  Test leaseExpiredPassesThrough() passed after 7.625 seconds.
+􁁛  Test laxAuditDirectoryIsTightened() passed after 7.625 seconds.
+􁁛  Test foreignErrorsMapToProviderDown() passed after 7.625 seconds.
+􁁛  Test usableOnlyIgnoresRegistryRevocation() passed after 7.625 seconds.
+􁁛  Test auditFailureOnCommitDenies() passed after 7.625 seconds.
+􁁛  Test laterRegistrationWins() passed after 7.625 seconds.
+􀢄  Suite IdentityAmbientCredentialTests failed after 7.643 seconds with 2 issues.
+􁁛  Test declineAuditsDeclinedApprovalAndFailedOutcome() passed after 7.635 seconds.
+􁁛  Test consumeThrowingBackendIsUnavailable() passed after 7.610 seconds.
+􁁛  Test cancellationThrowingDoublesPropagate() passed after 7.604 seconds.
+􁁛  Test fileAuditPermissionsAreOwnerOnly() passed after 7.625 seconds.
+􁁛  Suite ScopedInvokerRetryTests passed after 7.644 seconds.
+􁁛  Suite ScopedInvokerOrderingTests passed after 7.644 seconds.
+􀟈  Test versionParsesSuffixes() started.
+􀙟  Test workspaceRunRestoresOnExitCloseDisconnectAndStdinEOF() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀟈  Test isolationConformance_kernelFence(_:) started.
+􀟈  Test compactRefusesInteriorCorruption() started.
+􀙟  Test clientsAttachDetachAndCancelWithoutSharingAuthority() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀟈  Test resizePublishesActualWindowOnlyToOptedInSubscribers() started.
+􀟈  Test tornLineAloneIsNotACleanHistory() started.
+􁁛  Test parallelResolves() passed after 7.626 seconds.
+􀟈  Test case passing 1 argument id → FS-WRITE-IN to isolationConformance_kernelFence(_:) started.
+􁁛  Test healthTimeout() passed after 7.628 seconds.
+􁁛  Test slowTransportTimesOutToOpaque() passed after 7.608 seconds.
+􁁛  Test resolveTimeout() passed after 7.629 seconds.
+􁁛  Test versionParsesSuffixes() passed after 0.004 seconds.
+􁁛  Test registryRevocationMidFlightDenies() passed after 7.630 seconds.
+􁁛  Test boundActivePrincipalResolvesEndToEnd() passed after 7.637 seconds.
+􁁛  Test fullChainResolvesThenStages() passed after 7.638 seconds.
+􁁛  Test fileAuditKeysMatchLedgerTaxonomy() passed after 7.631 seconds.
+􁁛  Test compactRefusesInteriorCorruption() passed after 0.004 seconds.
+􁁛  Test tornLineAloneIsNotACleanHistory() passed after 0.004 seconds.
+􁁛  Test atomicBatchDiscardsPartialValues() passed after 7.630 seconds.
+􁁛  Test brokerBackedResolverServesEndToEnd() passed after 7.616 seconds.
+􁁛  Test approvalPathAuditsAllThreeRows() passed after 7.641 seconds.
+􀙟  Test disconnectAndProtocolErrorRestoreRawMode() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􁁛  Suite "Broker admission identity door" passed after 7.649 seconds.
+􀙟  Test malformedFramesAndForeignTokensDoNotMutate() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􁁛  Suite ScopedInvokerEdgeTests passed after 7.649 seconds.
+􁁛  Suite ScopedInvokerOpacityAuditTests passed after 7.650 seconds.
+􀟈  Test versionRejectsInvalid() started.
+􁁛  Test multiProviderResolveFailureIsAtomic() passed after 7.634 seconds.
+􀟈  Test compactSkipsSmallFile() started.
+􁁛  Test multiProviderBatch() passed after 7.634 seconds.
+􁁛  Test noEchoAcrossErrorsAndAudit() passed after 7.634 seconds.
+􁁛  Test providerErrorsWithoutProviderPassThrough() passed after 7.634 seconds.
+􁁛  Test successAuditRows() passed after 7.634 seconds.
+􀟈  Test closedHistoryWithATornTailIsNotClean() started.
+􁁛  Test versionRejectsInvalid() passed after 0.004 seconds.
+􀟈  Test clientInterruptRestoresTheLocalTerminal() started.
+􀙟  Test hostSurvivesTheCreatingClientAndAKilledClient() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􁁛  Test compactSkipsSmallFile() passed after 0.004 seconds.
+􁁛  Test closedHistoryWithATornTailIsNotClean() passed after 0.004 seconds.
+􁁛  Test clientInterruptRestoresTheLocalTerminal() passed after 0.013 seconds.
+􁁛  Test statusBlipRetriesUntilDecision() passed after 7.663 seconds.
+􀟈  Test versionOrdersCorrectly() started.
+􁁛  Suite "Local terminal restore" passed after 7.670 seconds.
+􀙟  Test hostDeathDuringAPtyRuntimeIsOrphanedNotReattachable() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􁁛  Suite "Action approval parking" passed after 7.670 seconds.
+􀟈  Test compactSkipsWhenNothingDead() started.
+􀟈  Test reusedProcessGroupIsNotKilled() started.
+􁁛  Test versionOrdersCorrectly() passed after 0.006 seconds.
+􁁛  Test resizePublishesActualWindowOnlyToOptedInSubscribers() passed after 0.032 seconds.
+􁁛  Test compactSkipsWhenNothingDead() passed after 0.006 seconds.
+􀙟  Test workspaceStartLeavesALiveHostAfterTheClientExits() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀟈  Test minimumIs1150() started.
+􀟈  Test replayKeepsOnlyTheRecentSuffixAndLiveBytesFollow() started.
+􀟈  Test compactKeepsClosedWorkspaceWithoutCreated() started.
+􁁛  Test minimumIs1150() passed after 0.001 seconds.
+􀙟  Test rvSpawnedHostDiesOnSIGTERM() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􁁛  Test reusedProcessGroupIsNotKilled() passed after 0.008 seconds.
+􁁛  Test compactKeepsClosedWorkspaceWithoutCreated() passed after 0.002 seconds.
+􀟈  Test tlsSystemMatchesAny() started.
+􀙟  Test simultaneousCreatorsProduceOneOwner() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀟈  Test provenProcessGroupIsKilled() started.
+􀟈  Test compactKeepsClosedWorkspaceWithSplitPaths() started.
+􁁛  Test tlsSystemMatchesAny() passed after 0.017 seconds.
+􁁛  Test provenProcessGroupIsKilled() passed after 0.017 seconds.
+􁁛  Test compactKeepsClosedWorkspaceWithSplitPaths() passed after 0.017 seconds.
+􀟈  Test runningLimitRefusesASecondLaunch() started.
+􀟈  Test tlsPinnedMatchesExact() started.
+􁁛  Test replayKeepsOnlyTheRecentSuffixAndLiveBytesFollow() passed after 0.239 seconds.
+􀟈  Test liveOwnerRefusesASecondWorkspace() started.
+􀟈  Test compactKeepsClosedWorkspaceWithEmptyPaths() started.
+􁁛  Test tlsPinnedMatchesExact() passed after 4.866 seconds.
+adversarial technique=sh executable=/bin/sh verdict=WRITE-DENIED
+􁁛  Test supervisorLaunchWithoutDefinitionMintsNoInstance() passed after 12.773 seconds.
+􁁛  Test compactKeepsClosedWorkspaceWithEmptyPaths() passed after 4.874 seconds.
+􁁛  Test localExecutor_askResolve_containedInWorkspaceTouch() passed after 12.776 seconds.
+􁁛  Test ptyRuntimeStillAdmitsShellCommands() passed after 12.780 seconds.
+􁁛  Test localExecutor_containedOutsideWrite_deniedByKernel() passed after 12.776 seconds.
+􁁛  Test localExecutor_containedInWorkspaceWrite_succeeds() passed after 12.776 seconds.
+􁁛  Test apply_contained_onDarwin_stillEstablishesSeatbelt() passed after 12.788 seconds.
+􁁛  Test launch_containedTrue_establishes() passed after 12.787 seconds.
+􁁛  Test localExecutor_sameFingerprint_secondRunFails() passed after 12.776 seconds.
+􁁛  Test launch_containedInWorkspaceTouch_succeeds() passed after 12.788 seconds.
+􁁛  Test containedClientUsesTheGrantedPipes() passed after 12.780 seconds.
+􁁛  Test launch_containedOutsideTouch_deniedByKernel() passed after 12.788 seconds.
+􁁛  Test keychainSecurityCLICannotReachService() passed after 12.787 seconds.
+􀟈  Test emptyAttachmentStillDeclaresAReplayBatch() started.
+􀟈  Test case passing 1 argument launcher → .bash to descendantsCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test slowProviderTimeoutIsAtomic() passed after 12.773 seconds.
+􁁛  Suite "LocalExecutor" passed after 12.806 seconds.
+􁁛  Suite "IsolationApply" passed after 12.807 seconds.
+􀟈  Test authLabelNeverEchoes() started.
+􁁛  Test selectedDefinitionMintsAnActivePrincipalAndCancellationInvalidatesIt() passed after 12.793 seconds.
+􁁛  Test supervisorRegisterFaultRetiresAnnouncedInstance() passed after 12.790 seconds.
+􀟈  Test assessParityAcrossCompaction() started.
+􀟈  Test securityFrameworkLookupIsBlockedAtBoundary() started.
+􁁛  Test authLabelNeverEchoes() passed after 0.002 seconds.
+􁁛  Test assessParityAcrossCompaction() passed after 0.002 seconds.
+􀟈  Test legacyHookLabelDoesNotMintAPrincipal() started.
+􁁛  Test emptyAttachmentStillDeclaresAReplayBatch() passed after 0.028 seconds.
+􀟈  Test endpointRejectsMalformed() started.
+􀟈  Test closeCompactsOverThresholdLog() started.
+􁁛  Test endpointRejectsMalformed() passed after 0.710 seconds.
+􀟈  Test slowSubscriberIsDroppedAndDoesNotStallTheReader() started.
+􁁛  Test launch_persistsSessionBeforeExecution() passed after 13.544 seconds.
+􁁛  Test admittedCommandStopsWhenContainedProcessExits() passed after 13.536 seconds.
+􁁛  Test ambientOutsideFileDescriptorIsNotWritable() passed after 13.534 seconds.
+􁁛  Test providerThrownErrorsAreRetaggedToThrowingProvider() passed after 13.529 seconds.
+􁁛  Test slowSubscriberIsDroppedAndDoesNotStallTheReader() passed after 0.067 seconds.
+􁁛  Suite "RuntimeAdmission" passed after 13.614 seconds.
+􀟈  Test httpLoopbackAllowed() started.
+􀟈  Test ambientSocketpairIsNotUsable() started.
+􁁛  Test httpLoopbackAllowed() passed after 0.001 seconds.
+􀟈  Test resubscribeAfterOverflowResumesFromReplay() started.
+􁁛  Test resubscribeAfterOverflowResumesFromReplay() passed after 0.118 seconds.
+􀟈  Test endpointAcceptsUppercaseSchemeAndTrailingSlash() started.
+􁁛  Test endpointAcceptsUppercaseSchemeAndTrailingSlash() passed after 0.001 seconds.
+􀙟  Test clientResubscribeAfterUnsubscribeReceivesReplay() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀟈  Test httpNonLoopbackRejected() started.
+􀟈  Test detachWaitsUntilFlushLeavesEmit() started.
+􁁛  Test httpNonLoopbackRejected() passed after 0.001 seconds.
+􁁛  Test detachWaitsUntilFlushLeavesEmit() passed after 0.165 seconds.
+􀟈  Test mountValidation() started.
+􀟈  Test failedSendDropsTheSubscriberAfterOneOverflow() started.
+􁁛  Test mountValidation() passed after 0.001 seconds.
+􁁛  Test failedSendDropsTheSubscriberAfterOneOverflow() passed after 0.001 seconds.
+􀟈  Test emptyCredentialsRejected() started.
+􀟈  Test resizeUpdatesTheSlaveWindowAndRejectsBounds() started.
+􁁛  Test emptyCredentialsRejected() passed after 0.001 seconds.
+􁁛  Test resizeUpdatesTheSlaveWindowAndRejectsBounds() passed after 0.001 seconds.
+􀟈  Test pinValidation() started.
+􀟈  Test localRawModeRestoresTheSavedTermios() started.
+􁁛  Test pinValidation() passed after 0.001 seconds.
+􁁛  Test localRawModeRestoresTheSavedTermios() passed after 0.001 seconds.
+􀟈  Test timeoutValidation() started.
+􀟈  Test containedPTYIsAForegroundSessionAndAdmissionStaysOnFourAndFive() started.
+􁁛  Test timeoutValidation() passed after 0.001 seconds.
+􀟈  Test liveSystemInitSucceeds() started.
+􁁛  Test liveSystemInitSucceeds() passed after 0.001 seconds.
+􀟈  Test livePinnedPlatformBehavior() started.
+􁁛  Test livePinnedPlatformBehavior() passed after 0.001 seconds.
+􀟈  Test tokenResolvesValueKey() started.
+􁁛  Test stressFiftyRefBatch() passed after 14.041 seconds.
+􁁛  Suite "SecretBroker" passed after 14.059 seconds.
+􁁛  Test tokenResolvesValueKey() passed after 0.002 seconds.
+􀟈  Test tokenResolvesSingleKey() started.
+􁁛  Test tokenResolvesSingleKey() passed after 0.001 seconds.
+􀟈  Test tokenResolvesField() started.
+􁁛  Test tokenResolvesField() passed after 0.001 seconds.
+􀟈  Test scalarsStringify() started.
+􁁛  Test scalarsStringify() passed after 0.001 seconds.
+􀟈  Test objectReencodesAsSortedJSON() started.
+􁁛  Test objectReencodesAsSortedJSON() passed after 0.001 seconds.
+􀟈  Test unicodeItemResolves() started.
+􁁛  Test unicodeItemResolves() passed after 0.001 seconds.
+􀟈  Test dotToolNameAndSlashesNormalize() started.
+􁁛  Test dotToolNameAndSlashesNormalize() passed after 0.001 seconds.
+􀟈  Test missingFieldIsNotFound() started.
+􁁛  Test missingFieldIsNotFound() passed after 0.001 seconds.
+􀟈  Test ambiguousWithoutFieldIsNotFound() started.
+􁁛  Test ambiguousWithoutFieldIsNotFound() passed after 0.001 seconds.
+􀟈  Test destroyedAndDeletedAreNotFound() started.
+􁁛  Test destroyedAndDeletedAreNotFound() passed after 0.001 seconds.
+􀟈  Test kv404IsNotFound() started.
+􁁛  Test kv404IsNotFound() passed after 0.001 seconds.
+􀟈  Test kv400IsInvalidRef() started.
+􁁛  Test kv400IsInvalidRef() passed after 0.001 seconds.
+􀟈  Test providerMismatchMakesNoRequest() started.
+􁁛  Test providerMismatchMakesNoRequest() passed after 0.001 seconds.
+􀟈  Test hostileItemsRejectedWithoutRequest() started.
+􁁛  Test hostileItemsRejectedWithoutRequest() passed after 0.001 seconds.
+􀟈  Test sealedHealthIsSealed() started.
+􁁛  Test sealedHealthIsSealed() passed after 0.001 seconds.
+􀟈  Test sealedKVRaceIsSealed() started.
+􁁛  Test sealedKVRaceIsSealed() passed after 0.001 seconds.
+􀟈  Test uninitializedHealthIsUninitialized() started.
+􁁛  Test uninitializedHealthIsUninitialized() passed after 0.001 seconds.
+􀟈  Test uninitializedKVRaceIsUninitialized() started.
+􁁛  Test uninitializedKVRaceIsUninitialized() passed after 0.001 seconds.
+􀟈  Test forbiddenMapsToForbidden() started.
+􁁛  Test forbiddenMapsToForbidden() passed after 0.001 seconds.
+􀟈  Test rateLimitedMapsToRateLimited() started.
+􁁛  Test rateLimitedMapsToRateLimited() passed after 0.001 seconds.
+􀟈  Test standbyMapsToStandby() started.
+􁁛  Test standbyMapsToStandby() passed after 0.001 seconds.
+􀟈  Test versionOldRejected() started.
+􁁛  Test versionOldRejected() passed after 0.001 seconds.
+􀟈  Test versionMissingInvalidRejected() started.
+􁁛  Test versionMissingInvalidRejected() passed after 0.001 seconds.
+􀟈  Test healthDecodeFailure() started.
+􁁛  Test healthDecodeFailure() passed after 0.001 seconds.
+􀟈  Test serverErrorsMapToServer() started.
+􁁛  Test serverErrorsMapToServer() passed after 0.001 seconds.
+􀟈  Test unreachableMapsToUnreachable() started.
+􁁛  Test unreachableMapsToUnreachable() passed after 0.001 seconds.
+􀟈  Test tlsMapsToTLS() started.
+􁁛  Test tlsMapsToTLS() passed after 0.001 seconds.
+􀟈  Test timeoutMapsToTimeout() started.
+􁁛  Test timeoutMapsToTimeout() passed after 0.001 seconds.
+􀟈  Test cancellationPropagates() started.
+􁁛  Test cancellationPropagates() passed after 0.001 seconds.
+􀟈  Test secretsErrorPassthrough() started.
+􁁛  Test secretsErrorPassthrough() passed after 0.001 seconds.
+􀟈  Test appRoleLoginSuccessUsesMintedToken() started.
+􁁛  Test appRoleLoginSuccessUsesMintedToken() passed after 0.001 seconds.
+􀟈  Test appRoleBadCredentialsAreAuth() started.
+􁁛  Test appRoleBadCredentialsAreAuth() passed after 0.001 seconds.
+􀟈  Test login401IsForbidden() started.
+􁁛  Test login401IsForbidden() passed after 0.001 seconds.
+􀟈  Test appRoleMissingTokenAccessorTTLAreAuth() started.
+􁁛  Test appRoleMissingTokenAccessorTTLAreAuth() passed after 0.002 seconds.
+􀟈  Test appRoleTTLEdgesAccepted() started.
+􁁛  Test appRoleTTLEdgesAccepted() passed after 0.001 seconds.
+􀟈  Test appRoleFailureMakesNoKVRequest() started.
+􁁛  Test appRoleFailureMakesNoKVRequest() passed after 0.001 seconds.
+􀟈  Test tokenMakesNoLoginRequest() started.
+􁁛  Test tokenMakesNoLoginRequest() passed after 0.001 seconds.
+􀟈  Test precheckFailureMakesNoLoginOrKV() started.
+􁁛  Test precheckFailureMakesNoLoginOrKV() passed after 0.001 seconds.
+􀟈  Test headersAndURLsNeverCarrySecrets() started.
+􁁛  Test headersAndURLsNeverCarrySecrets() passed after 0.001 seconds.
+􀟈  Test errorsNeverEchoSecrets() started.
+􁁛  Test errorsNeverEchoSecrets() passed after 0.001 seconds.
+􀟈  Test healthTrueAndFalse() started.
+􁁛  Test healthTrueAndFalse() passed after 0.001 seconds.
+􀟈  Test oversizedBodiesFailClosed() started.
+􁁛  Test oversizedBodiesFailClosed() passed after 0.001 seconds.
+􀟈  Test appRoleStoreValidAndTrim() started.
+􁁛  Test appRoleStoreValidAndTrim() passed after 0.002 seconds.
+􀟈  Test appRoleStoreMissingIsUnreadable() started.
+􁁛  Test appRoleStoreMissingIsUnreadable() passed after 0.001 seconds.
+􀟈  Test appRoleStoreUnsafePerms() started.
+􁁛  Test appRoleStoreUnsafePerms() passed after 0.001 seconds.
+􀟈  Test appRoleStoreInvalidDocs() started.
+􁁛  Test appRoleStoreInvalidDocs() passed after 0.003 seconds.
+􀟈  Test appRoleStoreSymlinkDenied() started.
+􁁛  Test appRoleStoreSymlinkDenied() passed after 0.001 seconds.
+􀟈  Test concurrentResolvesAllSucceed() started.
+􁁛  Test concurrentResolvesAllSucceed() passed after 0.005 seconds.
+􀟈  Test liveDevRoundtripIfAvailableElseSkip() started.
+􁁛  Test liveDevRoundtripIfAvailableElseSkip() passed after 0.001 seconds.
+􀟈  Test versionTwoPartPatchZero() started.
+􁁛  Test versionTwoPartPatchZero() passed after 0.001 seconds.
+􀟈  Test loginTransportThrowsMapped() started.
+􁁛  Test loginTransportThrowsMapped() passed after 0.001 seconds.
+􀟈  Test kvTransportThrowsMapped() started.
+􁁛  Test kvTransportThrowsMapped() passed after 0.001 seconds.
+􀟈  Test loginStatusMappings() started.
+􁁛  Test loginStatusMappings() passed after 0.002 seconds.
+􀟈  Test health200DefensiveFlags() started.
+􁁛  Test health200DefensiveFlags() passed after 0.001 seconds.
+􀟈  Test arrayValueReencodes() started.
+􁁛  Test arrayValueReencodes() passed after 0.001 seconds.
+􀟈  Test allTypesRoundTrip() started.
+􁁛  Test allTypesRoundTrip() passed after 0.001 seconds.
+􀟈  Test jsonValueDirect() started.
+􁁛  Test jsonValueDirect() passed after 0.001 seconds.
+􀟈  Test approleKeyRejectsInt() started.
+􁁛  Test approleKeyRejectsInt() passed after 0.001 seconds.
+􀟈  Test pinningDelegateCancelsWithoutTrust() started.
+􁁛  Test pinningDelegateCancelsWithoutTrust() passed after 0.001 seconds.
+􀟈  Test pinningDelegateRefusesRedirects() started.
+􁁛  Test pinningDelegateRefusesRedirects() passed after 0.001 seconds.
+􀟈  Test systemDelegateRefusesRedirects() started.
+􁁛  Test systemDelegateRefusesRedirects() passed after 0.001 seconds.
+􀟈  Test versionIntOverflowFailsClosed() started.
+􁁛  Test versionIntOverflowFailsClosed() passed after 0.001 seconds.
+􀟈  Test versionMajorDiffersOrdersByMajor() started.
+􁁛  Test versionMajorDiffersOrdersByMajor() passed after 0.001 seconds.
+􀟈  Test trailingSlashEndpointStripsInJoining() started.
+􁁛  Test trailingSlashEndpointStripsInJoining() passed after 0.001 seconds.
+􀟈  Test joiningFallsBackToEndpointOnGarbage() started.
+􁁛  Test joiningFallsBackToEndpointOnGarbage() passed after 0.001 seconds.
+􀟈  Test appRolePartialAuthObjectDefaultsAreAuth() started.
+􁁛  Test appRolePartialAuthObjectDefaultsAreAuth() passed after 0.001 seconds.
+􀟈  Test unsupportedJSONValueThrowsDataCorrupted() started.
+􁁛  Test unsupportedJSONValueThrowsDataCorrupted() passed after 0.001 seconds.
+􀟈  Test leasedValueServedFromCache() started.
+􁁛  Test leasedValueServedFromCache() passed after 0.001 seconds.
+􀟈  Test renewalRefreshesExpiry() started.
+􁁛  Test renewalRefreshesExpiry() passed after 0.001 seconds.
+􀟈  Test doubleRenewIsIdempotent() started.
+􁁛  Test doubleRenewIsIdempotent() passed after 0.001 seconds.
+􀟈  Test nonRenewableLeaseCachedUntilExpiryThenThrows() started.
+􁁛  Test nonRenewableLeaseCachedUntilExpiryThenThrows() passed after 0.001 seconds.
+􀟈  Test zeroNegativeAndMissingLeaseUntracked() started.
+􁁛  Test zeroNegativeAndMissingLeaseUntracked() passed after 0.001 seconds.
+􀟈  Test renewAfterExpiryThrowsLeaseExpired() started.
+􁁛  Test renewAfterExpiryThrowsLeaseExpired() passed after 0.001 seconds.
+􀟈  Test expiryDuringCallCompletesThenNextThrows() started.
+􁁛  Test expiryDuringCallCompletesThenNextThrows() passed after 0.001 seconds.
+􀟈  Test sealedMidRunFailsDownButHeldUsable() started.
+􁁛  Test sealedMidRunFailsDownButHeldUsable() passed after 0.001 seconds.
+􀟈  Test renewFailureKeepsLeaseUntilExpiry() started.
+􁁛  Test renewFailureKeepsLeaseUntilExpiry() passed after 0.001 seconds.
+􀟈  Test renew400DropsLeaseAsExpired() started.
+􁁛  Test renew400DropsLeaseAsExpired() passed after 0.001 seconds.
+􀟈  Test renewStatusMappingsKeepLease() started.
+􁁛  Test renewStatusMappingsKeepLease() passed after 0.003 seconds.
+􀟈  Test renewBadBodyKeepsLease() started.
+􁁛  Test renewBadBodyKeepsLease() passed after 0.001 seconds.
+􀟈  Test renewHonorsRenewableFlip() started.
+􁁛  Test renewHonorsRenewableFlip() passed after 0.001 seconds.
+􀟈  Test renewTransportMappedAndCancellationPropagates() started.
+􁁛  Test renewTransportMappedAndCancellationPropagates() passed after 0.001 seconds.
+􀟈  Test renewUsesAppRoleLogin() started.
+􁁛  Test renewUsesAppRoleLogin() passed after 0.001 seconds.
+􀟈  Test renewalLoopRenewsDueLeasesUntilCancelled() started.
+􁁛  Test renewalLoopRenewsDueLeasesUntilCancelled() passed after 0.077 seconds.
+􀟈  Test wrapTTLUnwrapsAfterCommitExactlyOnce() started.
+􁁛  Test wrapTTLUnwrapsAfterCommitExactlyOnce() passed after 0.001 seconds.
+􀟈  Test unwrapFailureIsDownWithoutRetry() started.
+􁁛  Test unwrapFailureIsDownWithoutRetry() passed after 0.001 seconds.
+􀟈  Test wrapMissingTokenIsWrapDown() started.
+􁁛  Test wrapMissingTokenIsWrapDown() passed after 0.001 seconds.
+􀟈  Test unwrappedFieldSelectsLikeDirectRead() started.
+􁁛  Test unwrappedFieldSelectsLikeDirectRead() passed after 0.001 seconds.
+􀟈  Test wrapTTLWithInlineDataServesDirectly() started.
+􁁛  Test wrapTTLWithInlineDataServesDirectly() passed after 0.001 seconds.
+􀟈  Test invalidWrapTTLRejected() started.
+􁁛  Test invalidWrapTTLRejected() passed after 0.001 seconds.
+􀟈  Test jitterBoundsAndClamping() started.
+􁁛  Test jitterBoundsAndClamping() passed after 0.001 seconds.
+􀟈  Test trackerJitterSourceClamped() started.
+􁁛  Test trackerJitterSourceClamped() passed after 0.001 seconds.
+􀟈  Test cardinalityCapBoundsTracking() started.
+􁁛  Test cardinalityCapBoundsTracking() passed after 0.001 seconds.
+􀟈  Test cardinalityCapEvictsExpiredFirst() started.
+􁁛  Test cardinalityCapEvictsExpiredFirst() passed after 0.001 seconds.
+􀟈  Test leaseExpiredNeverEchoes() started.
+􁁛  Test leaseExpiredNeverEchoes() passed after 0.001 seconds.
+􀟈  Test rogueLeaseDurationsClampToPolicyMaximum() started.
+􁁛  Test rogueLeaseDurationsClampToPolicyMaximum() passed after 0.001 seconds.
+􀟈  Test renewLoginFailureFailsAllDueWithoutThrowing() started.
+􁁛  Test renewLoginFailureFailsAllDueWithoutThrowing() passed after 0.001 seconds.
+􀟈  Test unwrapStatusMappings() started.
+􁁛  Test unwrapStatusMappings() passed after 0.005 seconds.
+􀟈  Test concurrentLeasedResolvesShareOneTrackedLease() started.
+􁁛  Test concurrentLeasedResolvesShareOneTrackedLease() passed after 0.005 seconds.
+􀟈  Test trackRejectsEmptyLeaseIDAndNonpositiveDuration() started.
+􁁛  Test trackRejectsEmptyLeaseIDAndNonpositiveDuration() passed after 0.001 seconds.
+􀟈  Test didRenewReturnsNilForUnknownLeaseAndNonpositiveDuration() started.
+􁁛  Test didRenewReturnsNilForUnknownLeaseAndNonpositiveDuration() passed after 0.001 seconds.
+􀟈  Test kv200WithNullDataAndNullWrapInfoIsDecodeDown() started.
+􁁛  Test kv200WithNullDataAndNullWrapInfoIsDecodeDown() passed after 0.001 seconds.
+􀟈  Test unwrapSecretsErrorRethrown() started.
+􁁛  Test unwrapSecretsErrorRethrown() passed after 0.001 seconds.
+􀟈  Test trackedLeaseDefaultsMissingRenewableToFalse() started.
+􁁛  Test trackedLeaseDefaultsMissingRenewableToFalse() passed after 0.001 seconds.
+􀟈  Test renewLoginTransportTimeoutFailsAllDueLeases() started.
+􁁛  Test renewLoginTransportTimeoutFailsAllDueLeases() passed after 0.001 seconds.
+􀟈  Test renewSecretsErrorBecomesFailedOutcome() started.
+􁁛  Test renewSecretsErrorBecomesFailedOutcome() passed after 0.001 seconds.
+􀟈  Test renewOversizedBodyBecomesFailedOutcome() started.
+􁁛  Test renewOversizedBodyBecomesFailedOutcome() passed after 0.001 seconds.
+􀟈  Test renewResponseDefaultsMissingRenewableToFalse() started.
+􁁛  Test renewResponseDefaultsMissingRenewableToFalse() passed after 0.001 seconds.
+􀟈  Test renewOneUntrackedLeaseReportsLeaseExpired() started.
+􁁛  Test renewOneUntrackedLeaseReportsLeaseExpired() passed after 0.001 seconds.
+􀟈  Test renewalLoopCancelledDuringRenewReturnsCleanly() started.
+􁁛  Test renewalLoopCancelledDuringRenewReturnsCleanly() passed after 0.057 seconds.
+􁁛  Suite "VaultHTTPClient" passed after 14.276 seconds.
+􁁛  Test concurrentDeliverAndNextKeepByteAccountingExact() passed after 14.474 seconds.
+􁁛  Suite "Workspace client terminal queue" passed after 14.529 seconds.
+􁁛  Test concurrentRevokeRunsTeardownExactlyOnce() passed after 17.637 seconds.
+􀟈  Test activateVersusRevokeKeepsSingleAuthority() started.
+􁁛  Test activateVersusRevokeKeepsSingleAuthority() passed after 0.036 seconds.
+􀟈  Test finishRuntimeVersusRevokeRetiresOnce() started.
+􁁛  Test finishRuntimeVersusRevokeRetiresOnce() passed after 0.058 seconds.
+􀟈  Test concurrentDuplicateRuntimeAnnounceWinsOnce() started.
+􁁛  Test unwritableSessionLogDoesNotExecute() passed after 19.085 seconds.
+􁁛  Test customRedemptionKeepsBaseFence() passed after 11.718 seconds.
+􀟈  Test redemptionRefusesSwappedExecutableBytes() started.
+􁁛  Test ipv4BindListenAcceptConnectRoundTrip() passed after 19.292 seconds.
+􀟈  Test ipv6BindListenAcceptConnectRoundTrip() started.
+􁁛  Test concurrentDuplicateRuntimeAnnounceWinsOnce() passed after 2.867 seconds.
+􀟈  Test concurrentDuplicateInstanceAnnounceWinsOnce() started.
+􁁛  Test concurrentDuplicateInstanceAnnounceWinsOnce() passed after 4.110 seconds.
+􁁛  Suite "AgentInstanceRegistry concurrency" passed after 24.721 seconds.
+􁁛  Test cancelledBeforeDispatch_doesNotExecuteOrConsumeAuthorization() passed after 25.335 seconds.
+􁁛  Test seatbelt_touchInsideWorkspace_succeedsAndEstablishesContained() passed after 25.328 seconds.
+􁁛  Test customProposalFreezesAdHocSelection() passed after 17.827 seconds.
+􀟈  Test customPrepareRefusesDigestMismatch() started.
+􁁛  Test supervisorLaunchMintsActivatesAndFinishesInstance() passed after 25.374 seconds.
+􁁛  Suite "AgentInstanceRegistry" passed after 25.392 seconds.
+􁁛  Test cancellationTerminatesOwnedProcessesBeforeReturn() passed after 25.408 seconds.
+􁁛  Test seatbelt_writeUnderRepositoryRootOutsideWorkspace_isBlocked() passed after 25.390 seconds.
+􁁛  Test sessionRecordFailureDoesNotExecuteInnerCommand() passed after 25.406 seconds.
+􁁛  Test perform_sameFingerprint_secondTurnFails() passed after 25.430 seconds.
+􁁛  Test seatbeltPathEncodingCannotBroadenWriteScope(_:) with 5 test cases passed after 25.445 seconds.
+􁁛  Test seatbelt_touchOutsideWorkspace_isBlockedFileAbsent_stillEstablishedContained() passed after 25.476 seconds.
+􁁛  Test liveOwnerRefusesASecondWorkspace() passed after 17.661 seconds.
+􀟈  Test orphanWithoutAChildPreservesTheNewFileAndMintsANewWorkspace() started.
+􁁛  Test concurrentDispatch_sameAuthorizationExecutesOnlyOnce() passed after 25.576 seconds.
+􁁛  Suite "Executor lifecycle regressions" passed after 25.578 seconds.
+􁁛  Test perform_pendingAllowOnce_containedInWorkspaceWrite() passed after 25.561 seconds.
+􁁛  Test seatbelt_binShChild_cannotWriteOutsideWorkspace() passed after 25.559 seconds.
+􁁛  Suite "SeatbeltContainment" passed after 25.580 seconds.
+􁁛  Test sigtermOfLeaderInvalidatesPrincipal() passed after 18.038 seconds.
+􀟈  Test normalExitInvalidatesPrincipal() started.
+􀟈  Test case passing 1 argument id → FS-WRITE-OUT to isolationConformance_kernelFence(_:) started.
+􁁛  Test perform_allowed_containedInWorkspaceWrite() passed after 25.587 seconds.
+􁁛  Suite "AgentTurn" passed after 25.605 seconds.
+􁁛  Test openReachesActiveAndClosePublishesOnce() passed after 25.435 seconds.
+􀟈  Test concurrentClosesElectOneLeader() started.
+􁁛  Test legacyHookLabelDoesNotMintAPrincipal() passed after 12.797 seconds.
+􀟈  Test realAdmissionPipesResolveTheSelectedChildPrincipal() started.
+􁁛  Test runningLimitRefusesASecondLaunch() passed after 17.911 seconds.
+􀙟  Test oneClientSerializesOverlappedCalls() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test streamingClientMultiplexesOverlappedCalls() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀟈  Test negotiatedFeaturesTreatInvalidRequestAsLegacy() started.
+􁁛  Test negotiatedFeaturesTreatInvalidRequestAsLegacy() passed after 0.001 seconds.
+􀟈  Test boundedCloseWaitTimesOutBeforeStopAndSucceedsAfter() started.
+􁁛  Test containedEnvironmentContainsOnlyDeliberateValues() passed after 25.598 seconds.
+􁁛  Suite "LaunchBoundaryRegression" passed after 25.637 seconds.
+􁁛  Test twoWorkspacesMintDifferentIDs() passed after 28.633 seconds.
+􀟈  Test runtimesShareTheWorkspaceAndNotTheCapability() started.
+􁁛  Test launch_containedSessionsAreDistinctFromHookSessionID() passed after 28.749 seconds.
+􁁛  Suite "ContainedLaunch" passed after 28.753 seconds.
+􁁛  Test ambientSocketpairIsNotUsable() passed after 15.139 seconds.
+􀟈  Test ambientPipeIsNotUsable() started.
+􁁛  Test containedPTYIsAForegroundSessionAndAdmissionStaysOnFourAndFive() passed after 14.789 seconds.
+􀙟  Test hookAndBareLaunchesShareTheCageEnvironment() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test containedSessionSurvivesSetsIDAndDoubleForkUntilCancel() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test controlCInterruptsTheForegroundGroupWithoutKillingTheHost() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test childObservesResizeAndSignal() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test onlyInputLeaseOwnerCanResizeTerminal() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test twoViewersDetachReattachAndKeepInputExclusive() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test concurrentEnsureTerminalRuntimeRequestsShareOneRuntime() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test inputReachesOnlyTheAddressedRuntime() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test runtimeExitClosesTheTerminalAndLeavesTheWorkspace() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test launchFaultsDoNotReportARunningRuntime() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀟈  Test registerFaultRetiresTheStagedPrivateHome() started.
+adversarial technique=bash executable=/bin/bash verdict=WRITE-DENIED
+􁁛  Test closeCompactsOverThresholdLog() passed after 15.978 seconds.
+􀟈  Test case passing 1 argument launcher → .zsh to descendantsCannotWriteOutsideWorkspace(_:) started.
+􁁛  Suite "Workspace lifecycle compaction" passed after 28.798 seconds.
+􁁛  Test securityFrameworkLookupIsBlockedAtBoundary() passed after 15.990 seconds.
+􀟈  Test blockedMachServiceLookupFailsFromContainedChild() started.
+􁁛  Test customPrepareRefusesDigestMismatch() passed after 5.493 seconds.
+􀟈  Test customPrepareRefusesUnreadableExecutable() started.
+􁁛  Test redemptionRefusesSwappedExecutableBytes() passed after 11.614 seconds.
+􀟈  Test bindingMatrixRejectsSingleFieldMutations() started.
+􁁛  Test boundedCloseWaitTimesOutBeforeStopAndSucceedsAfter() passed after 6.690 seconds.
+􀟈  Test concurrentControlFileReadsDoNotRaceOrHang() started.
+􁁛  Test realAdmissionPipesResolveTheSelectedChildPrincipal() passed after 6.691 seconds.
+􁁛  Suite ProductionIdentityLaunchTests passed after 32.299 seconds.
+􁁛  Test concurrentClosesElectOneLeader() passed after 6.712 seconds.
+􀟈  Test closeAfterCloseReplaysWithoutNewWork() started.
+􀟈  Test case passing 1 argument id → FS-WRITE-REPO to isolationConformance_kernelFence(_:) started.
+􁁛  Test ipv6BindListenAcceptConnectRoundTrip() passed after 15.193 seconds.
+􀟈  Test pythonHTTPServerServesContainedCurlClient() started.
+􁁛  Test normalExitInvalidatesPrincipal() passed after 8.947 seconds.
+􀟈  Test groupKillInvalidatesExactlyOnce() started.
+􁁛  Test runtimesShareTheWorkspaceAndNotTheCapability() passed after 5.888 seconds.
+􀟈  Test childExitLeavesTheWorkspaceMounted() started.
+􁁛  Test blockedMachServiceLookupFailsFromContainedChild() passed after 7.174 seconds.
+􀟈  Test otherCredentialServicesStayBlocked() started.
+􁁛  Test registerFaultRetiresTheStagedPrivateHome() passed after 7.222 seconds.
+􀙟  Test closingTheWorkspaceKillsEveryPTYRuntime() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test aSlowSocketDoesNotStopTheOtherSubscriberOrClose() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test repeatedAttachCyclesDoNotLeakPTYs() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test provingClientRestoresTheLocalTerminal() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test hostDeathDropsTheTerminalAndRecoveryKillsTheGroup() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􁁛  Suite "Runtime terminal" passed after 35.978 seconds.
+requested=contained established=seatbelt family=seatbelt exit=0 error=none
+requested=contained established=seatbelt family=seatbelt exit=0 error=none
+requested=contained established=seatbelt family=seatbelt exit=0 error=none
+requested=observed established=observed family=none exit=0 error=none
+requested=contained established=none family=none exit=none error=backendUnavailable
+􁁛  Test isolationApply_operatorProbe_printsEstablishedModes() passed after 35.977 seconds.
+􁁛  Test ambientPipeIsNotUsable() passed after 7.229 seconds.
+􁁛  Suite "IsolationApply" passed after 35.984 seconds.
+􀟈  Test containedProcessListsOnlyGrantedDescriptors() started.
+adversarial technique=zsh executable=/bin/zsh verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument launcher → .env to descendantsCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test customPrepareRefusesUnreadableExecutable() passed after 6.771 seconds.
+􀟈  Test argvRetainedByteForByte() started.
+􁁛  Test bindingMatrixRejectsSingleFieldMutations() passed after 7.609 seconds.
+􀟈  Test customCommitRejectsDefinitionUpgrade() started.
+􁁛  Test orphanWithoutAChildPreservesTheNewFileAndMintsANewWorkspace() passed after 12.910 seconds.
+􀟈  Test liveChildDiesBeforePublish() started.
+􁁛  Test closeAfterCloseReplaysWithoutNewWork() passed after 6.714 seconds.
+􀟈  Test abandonedCloseAnswersAlreadyClosed() started.
+􁁛  Test concurrentControlFileReadsDoNotRaceOrHang() passed after 6.736 seconds.
+􀟈  Test negotiatedFeaturesMapCapabilitiesReplyToFeatures() started.
+􁁛  Test negotiatedFeaturesMapCapabilitiesReplyToFeatures() passed after 0.001 seconds.
+􀙟  Test legacyHostStaysUsableAndGatesProfilesPerCall() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test explicitProfilesKeepSyntheticCredentialsAndSupportDisjoint() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test hookAndProfileStayOrthogonalAtLaunch() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀟈  Test negotiatedFeaturesAcceptsOnlyTypedCapabilitiesReplies() started.
+􁁛  Test negotiatedFeaturesAcceptsOnlyTypedCapabilitiesReplies() passed after 0.001 seconds.
+􀙟  Test unknownOperationReceivesAnInvalidRequestEcho() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test legacyEnsureReusesARunningTerminalAndLaunchesWhenEmpty() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test ensureTerminalRuntimeIsExecutableAgnosticByContract() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test ensureTerminalRuntimeNeverRelabelsTheExistingPrincipal() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀟈  Test launchHandlerIgnoresWireTagForStaging() started.
+􀟈  Test case passing 1 argument id → FS-MKDIR-OUT to isolationConformance_kernelFence(_:) started.
+􁁛  Test groupKillInvalidatesExactlyOnce() passed after 5.732 seconds.
+􀟈  Test deathObservedRevokesImmediatelyWithoutResurrection() started.
+􁁛  Test childExitLeavesTheWorkspaceMounted() passed after 5.736 seconds.
+􀟈  Test cancellingOneRuntimeLeavesTheOther() started.
+􁁛  Test pythonHTTPServerServesContainedCurlClient() passed after 5.744 seconds.
+􀟈  Test nodeHTTPServerServesContainedCurlClient() started.
+adversarial technique=env executable=/usr/bin/env verdict=WRITE-DENIED
+􁁛  Test containedProcessListsOnlyGrantedDescriptors() passed after 5.825 seconds.
+􀟈  Test inheritedStandardIOMatchesParent() started.
+􀟈  Test case passing 1 argument launcher → .xargs to descendantsCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test otherCredentialServicesStayBlocked() passed after 5.839 seconds.
+􀟈  Test allowedDirhelperServiceStillSucceeds() started.
+􁁛  Test abandonedCloseAnswersAlreadyClosed() passed after 3.823 seconds.
+􀟈  Test closeFailureCachesOnlyTerminalFailures() started.
+􁁛  Test closeFailureCachesOnlyTerminalFailures() passed after 0.001 seconds.
+􀟈  Test closeTerminalFailureReplaysWithoutNewWork() started.
+􁁛  Test customCommitRejectsDefinitionUpgrade() passed after 6.633 seconds.
+􀟈  Test commitDTORequiresExactShape() started.
+􁁛  Test argvRetainedByteForByte() passed after 7.484 seconds.
+􀟈  Test ioRetainedExactly() started.
+􁁛  Test liveChildDiesBeforePublish() passed after 6.633 seconds.
+􀟈  Test publicationConflictKeepsBothCopies() started.
+􁁛  Test launchHandlerIgnoresWireTagForStaging() passed after 6.096 seconds.
+􀟈  Test wireHookSelectionNeverSelectsStaging() started.
+􁁛  Test wireHookSelectionNeverSelectsStaging() passed after 0.001 seconds.
+􀙟  Test malformedHookTagIsRefusedBeforeSpawn() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test controlLaunchBounds_fitDeveloperCommands() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􀙟  Test hostBinaryRunsTheProductionAdmission() skipped: "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land"
+􁁛  Suite "Workspace host" passed after 45.132 seconds.
+􀟈  Test case passing 1 argument id → FS-APPEND-OUT to isolationConformance_kernelFence(_:) started.
+􁁛  Test cancellingOneRuntimeLeavesTheOther() passed after 6.063 seconds.
+􀟈  Test closeKillsEveryRuntimeBeforeItReturns() started.
+􁁛  Test nodeHTTPServerServesContainedCurlClient() passed after 6.061 seconds.
+􀟈  Test literalHTTPServerCLIServesTypedFile() started.
+􁁛  Test deathObservedRevokesImmediatelyWithoutResurrection() passed after 6.077 seconds.
+􀟈  Test deathVersusExplicitRevokeRetiresOnce() started.
+ES􁁛  Test inheritedStandardIOMatchesParent() passed after 4.916 seconds.
+􀟈  Test discardedStandardIOIsNullDevice() started.
+􀟈  Test case passing 1 argument launcher → .python to descendantsCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test allowedDirhelperServiceStillSucceeds() passed after 5.643 seconds.
+adversarial technique=python coverage=NOT-TESTED reason=outside-baseline-or-stub
+􀟈  Test swiftBuildSucceedsWithHardenedMachPolicy() started.
+􀟈  Test case passing 1 argument launcher → .ruby to descendantsCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test closeTerminalFailureReplaysWithoutNewWork() passed after 6.142 seconds.
+􀟈  Test discardClosePublishesNothing() started.
+􁁛  Test commitDTORequiresExactShape() passed after 6.128 seconds.
+􀟈  Test directDispatchConsumesThePreparedEntry() started.
+􁁛  Test deathVersusExplicitRevokeRetiresOnce() passed after 4.909 seconds.
+􀟈  Test replacementInstanceGetsFreshAuthority() started.
+􀟈  Test case passing 1 argument id → FS-UNLINK-OUT to isolationConformance_kernelFence(_:) started.
+􁁛  Test closeKillsEveryRuntimeBeforeItReturns() passed after 4.944 seconds.
+􀟈  Test launchAfterCloseBeginsDoesNotSpawn() started.
+􁁛  Test literalHTTPServerCLIServesTypedFile() passed after 4.947 seconds.
+􀟈  Test twoRuntimesShareLoopbackInOneWorkspace() started.
+􁁛  Test ioRetainedExactly() passed after 6.165 seconds.
+􀟈  Test resourceStateCorrespondsToRevision() started.
+􁁛  Test publicationConflictKeepsBothCopies() passed after 6.178 seconds.
+􀟈  Test missingMountStaysUnresolved() started.
+􁁛  Test discardedStandardIOIsNullDevice() passed after 5.391 seconds.
+􀟈  Test pseudoTerminalStandardIOIsTheSlaveAndDoesNotLeakParentDescriptors() started.
+adversarial technique=ruby executable=/usr/bin/ruby verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument launcher → .node to descendantsCannotWriteOutsideWorkspace(_:) started.
+adversarial technique=node coverage=NOT-TESTED reason=outside-baseline-or-stub
+􁁛  Test descendantsCannotWriteOutsideWorkspace(_:) with 8 test cases passed after 52.604 seconds.
+􀟈  Test shellIndirectionCannotRemoveWriteFence(_:) started.
+􀟈  Test case passing 1 argument technique → "nested" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􁁛  Test discardClosePublishesNothing() passed after 5.074 seconds.
+􀟈  Test discardCloseReplaysWithoutNewWork() started.
+􀟈  Test case passing 1 argument id → FS-RENAME-OUT to isolationConformance_kernelFence(_:) started.
+􁁛  Test missingMountStaysUnresolved() passed after 4.663 seconds.
+􀟈  Test unrelatedMountIsNotDetached() started.
+􁁛  Test twoRuntimesShareLoopbackInOneWorkspace() passed after 4.687 seconds.
+􀟈  Test nonLoopbackBindIsNotScopedBySeatbelt() started.
+adversarial technique=nested verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument technique → "exec" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􁁛  Test replacementInstanceGetsFreshAuthority() passed after 6.245 seconds.
+􀟈  Test closeAfterDeathLeavesNoStaleInstance() started.
+􁁛  Test directDispatchConsumesThePreparedEntry() passed after 6.261 seconds.
+􀟈  Test replayReturnsRecordedOutcomeWithoutSecondSpawn() started.
+􁁛  Test resourceStateCorrespondsToRevision() passed after 6.225 seconds.
+􀟈  Test cwdIsResolvedBeforeIntentCreation() started.
+􁁛  Test launchAfterCloseBeginsDoesNotSpawn() passed after 6.248 seconds.
+􀟈  Test hardlinkRefusesBeforeTheWorkspaceIsActive() started.
+􁁛  Test hardlinkRefusesBeforeTheWorkspaceIsActive() passed after 0.002 seconds.
+􀟈  Test runtimeDoesNotReceiveWorkspaceDescriptors() started.
+􁁛  Test pseudoTerminalStandardIOIsTheSlaveAndDoesNotLeakParentDescriptors() passed after 5.420 seconds.
+􀟈  Test innerExecutableDoesNotKeepHandshakeDescriptor() started.
+􁁛  Test discardCloseReplaysWithoutNewWork() passed after 4.310 seconds.
+􀟈  Test cancelUnknownRuntimeAnswersWithoutWork() started.
+􀟈  Test case passing 1 argument id → DESC-SH to isolationConformance_kernelFence(_:) started.
+􁁛  Test swiftBuildSucceedsWithHardenedMachPolicy() passed after 12.524 seconds.
+􀟈  Test proxiedPublicHTTPSStillSucceeds() started.
+􁁛  Test unrelatedMountIsNotDetached() passed after 4.022 seconds.
+􀟈  Test unrelatedSavedTreeIsNotRestored() started.
+􁁛  Test cwdIsResolvedBeforeIntentCreation() passed after 4.078 seconds.
+􀟈  Test differentSpellingsResolveToSameExecution() started.
+adversarial technique=exec verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument technique → "background-wait" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􁁛  Test replayReturnsRecordedOutcomeWithoutSecondSpawn() passed after 4.081 seconds.
+􀟈  Test failedOutcomeReplaysWithoutSecondAttempt() started.
+􁁛  Test nonLoopbackBindIsNotScopedBySeatbelt() passed after 5.627 seconds.
+􀟈  Test loopbackOnlyConnectMatrix() started.
+􁁛  Test runtimeDoesNotReceiveWorkspaceDescriptors() passed after 4.088 seconds.
+􀟈  Test closeKeepsReadOnlyFilesReadable() started.
+􁁛  Test closeAfterDeathLeavesNoStaleInstance() passed after 4.405 seconds.
+􀟈  Test closeRevokesLiveChildAsCancelled() started.
+􁁛  Test innerExecutableDoesNotKeepHandshakeDescriptor() passed after 5.109 seconds.
+􁁛  Test cancelUnknownRuntimeAnswersWithoutWork() passed after 4.261 seconds.
+􀟈  Test failedLaunchesDoNotAccumulateDescriptors() started.
+􀟈  Test launchAfterCloseIsRefused() started.
+􁁛  Test unrelatedSavedTreeIsNotRestored() passed after 4.467 seconds.
+􀟈  Test partialRecoveryConverges(_:) started.
+􀟈  Test case passing 1 argument boundary → .afterChildTeardown to partialRecoveryConverges(_:) started.
+􁁛  Test loopbackOnlyConnectMatrix() passed after 5.036 seconds.
+􀟈  Test cancelKillsLoopbackServerAndFreesPort() started.
+􁁛  Test failedOutcomeReplaysWithoutSecondAttempt() passed after 5.799 seconds.
+􀟈  Test concurrentRedemptionHasSingleWinner() started.
+􀟈  Test case passing 1 argument id → DESC-NESTED to isolationConformance_kernelFence(_:) started.
+􁁛  Test proxiedPublicHTTPSStillSucceeds() passed after 7.412 seconds.
+􁁛  Test closeKeepsReadOnlyFilesReadable() passed after 5.778 seconds.
+􀟈  Test filesystemSecretsRemainDenied() started.
+􀟈  Test closePublishesEditedReadOnlyFile() started.
+adversarial technique=background-wait verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument technique → "env-shebang" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􁁛  Test closeRevokesLiveChildAsCancelled() passed after 6.868 seconds.
+􀟈  Test authorityCloseVersusDeathBothOrdersFailClosed() started.
+􁁛  Test launchAfterCloseIsRefused() passed after 6.181 seconds.
+􁁛  Suite "Workspace lifecycle" passed after 68.829 seconds.
+􀟈  Test case passing 1 argument boundary → .afterPublish to partialRecoveryConverges(_:) started.
+􁁛  Test cancelKillsLoopbackServerAndFreesPort() passed after 4.168 seconds.
+􀟈  Test closeKillsAllLoopbackServers() started.
+􁁛  Test differentSpellingsResolveToSameExecution() passed after 9.993 seconds.
+􀟈  Test prepareRejectsInvalidProposals() started.
+􁁛  Test closePublishesEditedReadOnlyFile() passed after 4.292 seconds.
+􀟈  Test keychainEntryReachesOnlyMatchingAgentRuntime() started.
+􁁛  Test concurrentRedemptionHasSingleWinner() passed after 4.294 seconds.
+􀟈  Test acceptLoserAfterWinnerRecordsReturnsRecordedOutcome() started.
+􁁛  Test isolationConformance_kernelFence(_:) with 9 test cases passed after 64.739 seconds.
+􀟈  Test isolationConformance_hole(_:) started.
+􀟈  Test case passing 1 argument id → HOLE-NET to isolationConformance_hole(_:) started.
+􁁛  Test filesystemSecretsRemainDenied() passed after 5.002 seconds.
+􀟈  Test processContainmentRemainsGreen() started.
+adversarial technique=env-shebang verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument technique → "path-replacement" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􁁛  Test authorityCloseVersusDeathBothOrdersFailClosed() passed after 5.286 seconds.
+􀟈  Test numericPidReuseCannotResurrect() started.
+􁁛  Test numericPidReuseCannotResurrect() passed after 0.008 seconds.
+􀟈  Test deadInstanceSubmitIsRefused() started.
+􀟈  Test case passing 1 argument boundary → .afterUnmount to partialRecoveryConverges(_:) started.
+􀢄  Test containedProcessReachesLoopbackOnly() recorded an issue at SeatbeltCapabilityTests.swift:38:9: Expectation failed: unsandboxed.output.contains("public ok")
+􀄵  unsandboxed.output.contains("public ok") → false
+􀄵    unsandboxed.output → "tcp4 ok
+     udp4 ok
+     tcp6 ok
+     public errno=60
+     unix ok
+     dns ok
+     "
+􁁛  Test prepareRejectsInvalidProposals() passed after 4.846 seconds.
+􀟈  Test preparationLaunchesNothing() started.
+􁁛  Test keychainEntryReachesOnlyMatchingAgentRuntime() passed after 4.745 seconds.
+􀟈  Test keychainReadFailureFailsLaunchClosed() started.
+􁁛  Test closeKillsAllLoopbackServers() passed after 6.597 seconds.
+􀟈  Test portReusableAfterNaturalServerExit() started.
+􁁛  Test acceptLoserAfterWinnerRecordsReturnsRecordedOutcome() passed after 5.739 seconds.
+􀟈  Test expiredPreparedRefusesWithoutSpending() started.
+􀟈  Test case passing 1 argument id → HOLE-READ to isolationConformance_hole(_:) started.
+􁁛  Test processContainmentRemainsGreen() passed after 7.152 seconds.
+􀟈  Test ptyRemainsGreen() started.
+adversarial technique=path-replacement verdict=WRITE-DENIED
+􀟈  Test case passing 1 argument technique → "executable-replacement" to shellIndirectionCannotRemoveWriteFence(_:) started.
+􀟈  Test case passing 1 argument boundary → .afterOriginalRestoration to partialRecoveryConverges(_:) started.
+􀟈  Test case passing 1 argument id → HOLE-SYMLINK to isolationConformance_hole(_:) started.
+􁁛  Test expiredPreparedRefusesWithoutSpending() passed after 7.082 seconds.
+􀟈  Test invalidatedPreparedRefuses() started.
+􁁛  Test keychainReadFailureFailsLaunchClosed() passed after 10.745 seconds.
+􀟈  Test legacyLaunchStagesNoFilteredFileCredentials(_:) started.
+􀟈  Test case passing 1 argument host → nil to legacyLaunchStagesNoFilteredFileCredentials(_:) started.
+􁁛  Test ptyRemainsGreen() passed after 7.653 seconds.
+􀟈  Test machPolicyHasNoBroadLookupAllow() started.
+􁁛  Test preparationLaunchesNothing() passed after 10.778 seconds.
+􀟈  Test preparationConsultsNoGit() started.
+􁁛  Test deadInstanceSubmitIsRefused() passed after 13.146 seconds.
+􁁛  Suite AgentInstanceDeathTests passed after 87.209 seconds.
+􁁛  Test portReusableAfterNaturalServerExit() passed after 9.814 seconds.
+􀟈  Test portCollisionFailsWithEADDRINUSE() started.
+􁁛  Test machPolicyHasNoBroadLookupAllow() passed after 0.067 seconds.
+􁁛  Suite "SeatbeltMachBoundary" passed after 87.269 seconds.
+adversarial technique=executable-replacement verdict=WRITE-DENIED
+􁁛  Test shellIndirectionCannotRemoveWriteFence(_:) with 6 test cases passed after 36.697 seconds.
+􀟈  Test relativeTraversalCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test case passing 1 argument target → "../outside" to relativeTraversalCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test invalidatedPreparedRefuses() passed after 7.559 seconds.
+􀟈  Test redeemAfterCloseRefuses() started.
+id=HOLE-SYMLINK effect=unchanged
+􁁛  Test isolationConformance_hole(_:) with 3 test cases passed after 19.686 seconds.
+􀟈  Test isolationConformance_failClosed(_:) started.
+􀟈  Test case passing 1 argument id → FC-UNAVAILABLE to isolationConformance_failClosed(_:) started.
+􀟈  Test case passing 1 argument id → FC-LANDLOCK-DARWIN to isolationConformance_failClosed(_:) started.
+􀟈  Test case passing 1 argument id → FC-ROOT-WS to isolationConformance_failClosed(_:) started.
+􁁛  Test isolationConformance_failClosed(_:) with 3 test cases passed after 0.001 seconds.
+􀟈  Test isolationConformance_operatorProbe_printsCatalog() started.
+􀟈  Test case passing 1 argument boundary → .beforeTerminalAppend to partialRecoveryConverges(_:) started.
+􀢄  Test containedProcessReachesLoopbackOnly() failed after 92.101 seconds with 1 issue.
+􀄵  /// The cage reaches loopback TCP (egress proxy, local gateways) and
+􀄵  /// nothing else: no UDP, no public IPs, no unix sockets it does not own,
+􀄵  /// no DNS. Descent inherits the same rule.
+􀟈  Test containedProcessCannotReadSiblingFile() started.
+􀟈  Test case passing 1 argument host → .codex to legacyLaunchStagesNoFilteredFileCredentials(_:) started.
+􁁛  Test preparationConsultsNoGit() passed after 6.221 seconds.
+􀟈  Test descriptionRevealsNoSecrets() started.
+􁁛  Test portCollisionFailsWithEADDRINUSE() passed after 7.559 seconds.
+􀟈  Test crossWorkspaceLoopbackIsShared() started.
+􀟈  Test case passing 1 argument target → "../../sibling/outside" to relativeTraversalCannotWriteOutsideWorkspace(_:) started.
+id=FS-WRITE-IN verdict=allow-in established=seatbelt family=seatbelt exit=0 error=-
+􁁛  Test partialRecoveryConverges(_:) with 5 test cases passed after 33.240 seconds.
+􀟈  Test canonicalAliasCannotOpenASecondWorkspace() started.
+􁁛  Test redeemAfterCloseRefuses() passed after 5.629 seconds.
+􀟈  Test storeAcceptanceFenceIsLinearizable() started.
+􀟈  Test case passing 1 argument host → .grok to legacyLaunchStagesNoFilteredFileCredentials(_:) started.
+􁁛  Test descriptionRevealsNoSecrets() passed after 5.541 seconds.
+􀟈  Test frozenEnvironmentIgnoresLaterHostChanges() started.
+􁁛  Test containedProcessCannotReadSiblingFile() passed after 6.867 seconds.
+􀢄  Suite "SeatbeltCapability" failed after 98.976 seconds with 1 issue.
+􀄵  /// Kernel effects of the deny-default Seatbelt profile. Payloads must run.
+􀄵  /// A tool that exits before the operation is not a denial.
+􀟈  Test case passing 1 argument target → "./nested/../../outside" to relativeTraversalCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test storeAcceptanceFenceIsLinearizable() passed after 4.786 seconds.
+􀟈  Test storeAcceptDropsExpiredEntries() started.
+􁁛  Test frozenEnvironmentIgnoresLaterHostChanges() passed after 4.188 seconds.
+􀟈  Test dispatchExecutesFrozenEnvironmentNotLive() started.
+id=FS-WRITE-OUT verdict=deny established=seatbelt family=seatbelt exit=1 error=-
+􁁛  Test legacyLaunchStagesNoFilteredFileCredentials(_:) with 3 test cases passed after 15.984 seconds.
+􀟈  Test nilTagKeychainSelectionIgnoresHost(_:) started.
+􀟈  Test case passing 1 argument host → nil to nilTagKeychainSelectionIgnoresHost(_:) started.
+􁁛  Test relativeTraversalCannotWriteOutsideWorkspace(_:) with 3 test cases passed after 15.966 seconds.
+􀟈  Test symlinkChainsCannotWriteOutsideWorkspace(_:) started.
+􀟈  Test case passing 1 argument createdByAgent → false to symlinkChainsCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test crossWorkspaceLoopbackIsShared() passed after 10.976 seconds.
+􀟈  Test loopbackServerCoexistsWithKeychainBoundary() started.
+􁁛  Test storeAcceptDropsExpiredEntries() passed after 3.783 seconds.
+􀟈  Test cwdIdentityClosesSwapAndRecreate() started.
+􁁛  Test canonicalAliasCannotOpenASecondWorkspace() passed after 8.574 seconds.
+􀟈  Test oldCapabilityCannotRunInTheNextWorkspace() started.
+􁁛  Test cwdIdentityClosesSwapAndRecreate() passed after 0.001 seconds.
+􀟈  Test liveCwdVerificationIsExact() started.
+􁁛  Test liveCwdVerificationIsExact() passed after 0.001 seconds.
+􀟈  Test cwdSwapRefusesAndRestoreRecovers() started.
+􀟈  Test case passing 1 argument host → .codex to nilTagKeychainSelectionIgnoresHost(_:) started.
+􁁛  Test dispatchExecutesFrozenEnvironmentNotLive() passed after 4.011 seconds.
+􀟈  Test mutationAfterPreparationLeavesPreparedUnchanged() started.
+id=FS-WRITE-REPO verdict=deny established=seatbelt family=seatbelt exit=1 error=-
+􀟈  Test case passing 1 argument createdByAgent → true to symlinkChainsCannotWriteOutsideWorkspace(_:) started.
+􁁛  Test loopbackServerCoexistsWithKeychainBoundary() passed after 3.823 seconds.
+􁁛  Suite "SeatbeltLoopback" passed after 109.573 seconds.
+􁁛  Test mutationAfterPreparationLeavesPreparedUnchanged() passed after 3.170 seconds.
+􀟈  Test configChangeAffectsOnlyNewPreparations() started.
+􁁛  Test nilTagKeychainSelectionIgnoresHost(_:) with 2 test cases passed after 7.182 seconds.
+􀟈  Test definitionTagStillSelectsFilteredKeychain() started.
+􁁛  Test cwdSwapRefusesAndRestoreRecovers() passed after 4.772 seconds.
+􀟈  Test prePrepareSwapIsRefusedNotAdopted() started.
+id=FS-MKDIR-OUT verdict=deny established=seatbelt family=seatbelt exit=1 error=-
+􁁛  Test symlinkChainsCannotWriteOutsideWorkspace(_:) with 2 test cases passed after 7.878 seconds.
+􀟈  Test renameCannotMoveAcrossWriteBoundary() started.
+􁁛  Test configChangeAffectsOnlyNewPreparations() passed after 4.387 seconds.
+􀟈  Test ttlExpiryMakesPreparedUnusable() started.
+􁁛  Test definitionTagStillSelectsFilteredKeychain() passed after 4.387 seconds.
+􁁛  Suite "WorkspaceSession" passed after 114.730 seconds.
+􁁛  Test oldCapabilityCannotRunInTheNextWorkspace() passed after 8.862 seconds.
+􀟈  Test normalCloseDoesNotRecordRecovery() started.
+􁁛  Test prePrepareSwapIsRefusedNotAdopted() passed after 6.618 seconds.
+􀟈  Test redemptionUsesFrozenEnvironment() started.
+id=FS-APPEND-OUT verdict=deny established=seatbelt family=seatbelt exit=1 error=-
+􁁛  Test ttlExpiryMakesPreparedUnusable() passed after 3.811 seconds.
+􀟈  Test explicitInvalidateMakesPreparedUnusable() started.
+􁁛  Test normalCloseDoesNotRecordRecovery() passed after 4.979 seconds.
+􀟈  Test abandonBlockedConflictRestoresSavedAndDiscardsVolume() started.
+􁁛  Test redemptionUsesFrozenEnvironment() passed after 3.952 seconds.
+􀟈  Test redemptionPreservesArgvExactly() started.
+􁁛  Test explicitInvalidateMakesPreparedUnusable() passed after 4.505 seconds.
+􀟈  Test workspaceClosureInvalidatesPrepared() started.
+id=FS-UNLINK-OUT verdict=deny established=seatbelt family=seatbelt exit=1 error=-
+􁁛  Test renameCannotMoveAcrossWriteBoundary() passed after 9.888 seconds.
+􀟈  Test agentCannotCreateAnOutsideHardlinkOrMutateOutsideSource() started.
+􁁛  Test redemptionPreservesArgvExactly() passed after 4.410 seconds.
+􀟈  Test redeemedChildImageMatchesRetainedExecutable() started.
+􁁛  Test workspaceClosureInvalidatesPrepared() passed after 4.121 seconds.
+􀟈  Test preparationsDoNotCrossHosts() started.
+􁁛  Test failedLaunchesDoNotAccumulateDescriptors() passed after 64.521 seconds.
+􀟈  Test refusedLaunchPathAttributionIgnoresOtherSuites() started.
+􁁛  Test refusedLaunchPathAttributionIgnoresOtherSuites() passed after 0.001 seconds.
+􀟈  Test cancellationClosesLaunchDescriptors() started.
+􁁛  Test agentCannotCreateAnOutsideHardlinkOrMutateOutsideSource() passed after 5.740 seconds.
+􀟈  Test preexistingHardlinkAliasRefusesLaunchBeforeExecution() started.
+id=FS-RENAME-OUT verdict=deny established=seatbelt family=seatbelt exit=1 error=-
+􁁛  Test preexistingHardlinkAliasRefusesLaunchBeforeExecution() passed after 0.001 seconds.
+􀟈  Test hardlinkCreatedAfterPreflightCannotMutateOutsideInode() started.
+􁁛  Test abandonBlockedConflictRestoresSavedAndDiscardsVolume() passed after 8.696 seconds.
+􀟈  Test abandonWithIdenticalContentReportsNothingDiscarded() started.
+􁁛  Test redeemedChildImageMatchesRetainedExecutable() passed after 4.061 seconds.
+􀟈  Test bothAssuranceLevelsLaunchHonestly() started.
+􁁛  Test cancellationClosesLaunchDescriptors() passed after 3.714 seconds.
+􁁛  Suite "DescriptorHygiene" passed after 130.884 seconds.
+􁁛  Test abandonWithIdenticalContentReportsNothingDiscarded() passed after 2.390 seconds.
+􀟈  Test abandonMissingVolumeRestoresSaved() started.
+id=DESC-SH verdict=deny established=seatbelt family=seatbelt exit=1 error=-
+􁁛  Test hardlinkCreatedAfterPreflightCannotMutateOutsideInode() passed after 3.119 seconds.
+􀟈  Test nestedDirectoryEditsPublishAfterLinkCountChanges() started.
+􁁛  Test abandonMissingVolumeRestoresSaved() passed after 2.092 seconds.
+􀟈  Test abandonRefusesLiveOwner() started.
+􁁛  Test preparationsDoNotCrossHosts() passed after 6.815 seconds.
+􀟈  Test duplicateClientRequestIDsStayDistinct() started.
+id=DESC-NESTED verdict=deny established=seatbelt family=seatbelt exit=1 error=-
+􁁛  Test nestedDirectoryEditsPublishAfterLinkCountChanges() passed after 2.075 seconds.
+􀟈  Test knownGapSyntheticCredentialsAreReadableButCannotBeOverwritten() started.
+􁁛  Test bothAssuranceLevelsLaunchHonestly() passed after 5.646 seconds.
+􀟈  Test postSpawnFailureRecordsFailedWithoutRetry() started.
+􁁛  Test abandonRefusesLiveOwner() passed after 2.445 seconds.
+􀟈  Test abandonRefusesUnrelatedMount() started.
+id=HOLE-NET verdict=hole established=seatbelt family=seatbelt exit=0 error=-
+􁁛  Test duplicateClientRequestIDsStayDistinct() passed after 3.699 seconds.
+􀟈  Test concurrentPreparationsAreDistinct() started.
+􁁛  Test abandonRefusesUnrelatedMount() passed after 3.513 seconds.
+􀟈  Test corruptProcessGroupFailsClosedWithoutTrapping() started.
+􁁛  Test corruptProcessGroupFailsClosedWithoutTrapping() passed after 0.001 seconds.
+􀟈  Test abandonWithoutAWorkspaceRefuses() started.
+􁁛  Test abandonWithoutAWorkspaceRefuses() passed after 0.001 seconds.
+􀟈  Test abandonPhaseGateAdmitsOnlyAuthoritativeSavedTrees() started.
+􁁛  Test abandonPhaseGateAdmitsOnlyAuthoritativeSavedTrees() passed after 0.001 seconds.
+􁁛  Suite "Workspace recovery" passed after 139.250 seconds.
+􁁛  Test postSpawnFailureRecordsFailedWithoutRetry() passed after 3.519 seconds.
+􀟈  Test closeDuringRedemptionStaysSafe() started.
+id=HOLE-READ verdict=hole established=seatbelt family=seatbelt exit=1 error=-
+􁁛  Test concurrentPreparationsAreDistinct() passed after 2.653 seconds.
+􀟈  Test preparationRacingClosureLeavesNothingUsable() started.
+􁁛  Test closeDuringRedemptionStaysSafe() passed after 2.050 seconds.
+􀟈  Test launchGrantsNoTerminalOrDirectLaunchAuthority() started.
+id=HOLE-SYMLINK effect=unchanged
+id=HOLE-SYMLINK verdict=hole established=seatbelt family=seatbelt exit=1 error=- effect=unchanged
+id=FC-UNAVAILABLE verdict=failClosed established=- family=- exit=- error=backendUnavailable
+id=FC-LANDLOCK-DARWIN verdict=failClosed established=- family=- exit=- error=containedGuaranteesUnsupported
+id=FC-ROOT-WS verdict=failClosed established=- family=- exit=- error=workspacePathUnsafe
+id=FC-HELPER-IN-WS verdict=failClosed established=- family=- exit=- error=linux-only
+􁁛  Test isolationConformance_operatorProbe_printsCatalog() passed after 50.104 seconds.
+􁁛  Suite "IsolationConformance" passed after 142.177 seconds.
+􁁛  Test preparationRacingClosureLeavesNothingUsable() passed after 2.539 seconds.
+􀟈  Test prepareThenDispatchRoundTrip() started.
+􁁛  Test launchGrantsNoTerminalOrDirectLaunchAuthority() passed after 1.999 seconds.
+􀟈  Test identityLaunchDoorRequiresOperatorPermitAndNeverSpawns() started.
+􁁛  Test prepareThenDispatchRoundTrip() passed after 2.265 seconds.
+􀟈  Test dispatchRejectsDivergentRetainedSelection() started.
+􁁛  Test identityLaunchDoorRequiresOperatorPermitAndNeverSpawns() passed after 2.032 seconds.
+􀟈  Test redeemHandlerRefusesForeignIncarnation() started.
+􁁛  Test dispatchRejectsDivergentRetainedSelection() passed after 2.663 seconds.
+􁁛  Suite PreparedWorkspaceLaunchTests passed after 147.805 seconds.
+􁁛  Test redeemHandlerRefusesForeignIncarnation() passed after 2.471 seconds.
+􀟈  Test malformedCommitAuditsNoRawStrings() started.
+􁁛  Test malformedCommitAuditsNoRawStrings() passed after 2.327 seconds.
+􁁛  Suite HostRedemptionTests passed after 150.134 seconds.
+􁁛  Test knownGapSyntheticCredentialsAreReadableButCannotBeOverwritten() passed after 56.350 seconds.
+􀟈  Test knownGapWorkspaceGitHooksAndRVConfigurationRemainWritable() started.
+adversarial technique=workspace-control-files security=NOT-SATISFIED reason=no-protected-subpaths
+􁁛  Test knownGapWorkspaceGitHooksAndRVConfigurationRemainWritable() passed after 8.265 seconds.
+􀟈  Test concurrentWorkspacesCannotAcquireEachOthersWriteAuthority() started.
+􁁛  Test concurrentWorkspacesCannotAcquireEachOthersWriteAuthority() passed after 2.613 seconds.
+􀟈  Test backgroundChildCannotRetainWorkspaceAuthorityAfterReturn() started.
+􁁛  Test backgroundChildCannotRetainWorkspaceAuthorityAfterReturn() passed after 2.753 seconds.
+􀟈  Test nestedShellBackgroundChildCannotRetainWorkspaceAuthorityAfterReturn() started.
+􁁛  Test nestedShellBackgroundChildCannotRetainWorkspaceAuthorityAfterReturn() passed after 2.859 seconds.
+􀟈  Test spawnIsAllowedWhileGroupEscapeStaysDenied() started.
+􁁛  Test spawnIsAllowedWhileGroupEscapeStaysDenied() passed after 2.360 seconds.
+􀟈  Test setsidProbeCannotRetainWorkspaceAuthorityAfterReturn() started.
+􁁛  Test setsidProbeCannotRetainWorkspaceAuthorityAfterReturn() passed after 2.798 seconds.
+􀟈  Test doubleForkProbeCannotRetainWorkspaceAuthorityAfterReturn() started.
+􁁛  Test doubleForkProbeCannotRetainWorkspaceAuthorityAfterReturn() passed after 2.850 seconds.
+􀟈  Test posixSpawnSetsidProbeCannotRetainWorkspaceAuthorityAfterReturn() started.
+􁁛  Test posixSpawnSetsidProbeCannotRetainWorkspaceAuthorityAfterReturn() passed after 2.846 seconds.
+􀟈  Test knownGapCanSignalSyntheticUnrelatedProcess() started.
+􁁛  Test knownGapCanSignalSyntheticUnrelatedProcess() passed after 2.605 seconds.
+􀟈  Test containedShellCanSignalItsOwnChild() started.
+􁁛  Test containedShellCanSignalItsOwnChild() passed after 2.001 seconds.
+􁁛  Suite "RuntimeAdversarial" passed after 222.292 seconds.
+􀢄  Test run with 990 tests in 58 suites failed after 222.293 seconds with 3 issues.
+Note: Some test targets reported failures:
+  - RVIsolationTests (Swift Testing)

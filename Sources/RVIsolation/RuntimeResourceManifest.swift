@@ -52,7 +52,22 @@ struct RuntimeResourceManifest: Sendable, Equatable {
     /// Step 8 (F2): `agent` must be a definition-derived tag (identity path)
     /// or nil (legacy path: filtered entries never stage). Wire tags,
     /// HookHost values, and CLI/caller-provided names must never be passed.
-    func stage(forAgent agent: String? = nil) -> Result<Void, ResourceStagingError> {
+    ///
+    /// T5 broker mediation: `brokerValues` carries the atomic map one
+    /// identity-required `SecretBroker.resolve` returned for this
+    /// profile's `secrets` entries. Broker file values are copied into
+    /// the 0700 home under `secrets/<env>`; text values at most 8KB
+    /// (CON-005) inject as environment pairs, returned on success.
+    /// Every per-variable drop — oversized, inadmissible name, invalid
+    /// value, invalid ref, missing value, unreadable file — is reported
+    /// through `brokerAudit` and never fails the batch. Nil (the
+    /// default) keeps the legacy behavior byte-identical: `secrets`
+    /// entries are ignored and the success payload is empty.
+    func stage(
+        forAgent agent: String? = nil,
+        brokerValues: [SecretRef: SecretValue]? = nil,
+        brokerAudit: @Sendable (BrokerStagingDrop) -> Void = { _ in }
+    ) -> Result<[(name: String, value: String)], ResourceStagingError> {
         guard privateHome.withCString({ mkdir($0, 0o700) }) == 0 else {
             return .failure(.privateHome)
         }
@@ -82,8 +97,9 @@ struct RuntimeResourceManifest: Sendable, Equatable {
                 return .failure(.writeTree(path: tree))
             }
         }
+        let broker = stageBrokerSecrets(brokerValues, forAgent: agent, audit: brokerAudit)
         complete = true
-        return .success(())
+        return .success(broker)
     }
 
     func remove() {
@@ -137,6 +153,85 @@ struct RuntimeResourceManifest: Sendable, Equatable {
         return .success(entries)
     }
 
+    /// Injects one identity-required broker resolution as environment
+    /// pairs, copying file values into the 0700 home first.
+    ///
+    /// Selection mirrors credential filtering: a filtered entry injects
+    /// only on a tag match, silently skipped otherwise (selection, not
+    /// failure, so no audit row). Every other per-entry refusal is a
+    /// drop with an audit row — invalid ref, missing value, malformed
+    /// or policy-blocked env name (SEC-002: only admitted names
+    /// inject), text over 8KB (CON-005), NUL-bearing text, or an
+    /// unreadable file value — and none fails the batch. Newlines stay
+    /// legal in text values (multiline secrets), matching keychain
+    /// injection; only NUL is rejected. Nil values keep legacy staging
+    /// byte-identical: `secrets` entries are ignored.
+    private func stageBrokerSecrets(
+        _ values: [SecretRef: SecretValue]?,
+        forAgent agent: String?,
+        audit: (BrokerStagingDrop) -> Void
+    ) -> [(name: String, value: String)] {
+        guard let values else { return [] }
+        var injected: [(name: String, value: String)] = []
+        for entry in profile.secrets {
+            if let filter = entry.agents, filter.isEmpty == false {
+                guard let agent, filter.contains(agent) else { continue }
+            }
+            guard let ref = entry.ref else {
+                audit(BrokerStagingDrop(env: entry.env, reason: .invalidRef))
+                continue
+            }
+            guard let value = values[ref] else {
+                audit(BrokerStagingDrop(env: entry.env, reason: .unresolved))
+                continue
+            }
+            guard ContainedEnvironmentPolicy.isValidName(entry.env) else {
+                audit(BrokerStagingDrop(env: entry.env, reason: .invalidName))
+                continue
+            }
+            guard ContainedEnvironmentPolicy.isManagedByRuntime(entry.env) == false,
+                ContainedEnvironmentPolicy.isBlockedVariableName(entry.env) == false
+            else {
+                audit(BrokerStagingDrop(env: entry.env, reason: .blockedName))
+                continue
+            }
+            switch value {
+            case .text(let text):
+                guard text.utf8.count <= 8_192 else {
+                    audit(BrokerStagingDrop(env: entry.env, reason: .oversized))
+                    continue
+                }
+                guard text.contains("\0") == false else {
+                    audit(BrokerStagingDrop(env: entry.env, reason: .invalidValue))
+                    continue
+                }
+                injected.append((entry.env, text))
+            case .filePath(let source):
+                guard let staged = stageBrokerFile(source, env: entry.env) else {
+                    audit(BrokerStagingDrop(env: entry.env, reason: .fileUnreadable))
+                    continue
+                }
+                injected.append((entry.env, staged))
+            }
+        }
+        return injected
+    }
+
+    /// Copies one broker file value into the 0700 home under
+    /// `secrets/<env>`, returning the staged path for env injection.
+    /// Same owner-only, no-symlink, 1MB discipline as credential
+    /// copies; `env` passed `isValidName`, so it cannot traverse.
+    private func stageBrokerFile(_ source: String, env: String) -> String? {
+        let directory = "\(privateHome)/secrets"
+        let destination = "\(directory)/\(env)"
+        guard makeDirectory(directory),
+            copyCredential(source, to: destination)
+        else {
+            return nil
+        }
+        return destination
+    }
+
     private func makeDirectory(_ path: String) -> Bool {
         if FileManager.default.fileExists(atPath: path) == false {
             do {
@@ -173,12 +268,21 @@ struct RuntimeResourceManifest: Sendable, Equatable {
             open($0, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         }
         guard output >= 0 else { return false }
-        defer { close(output) }
+        var complete = false
+        defer {
+            close(output)
+            if !complete {
+                destination.withCString { _ = unlink($0) }
+            }
+        }
         var buffer = [UInt8](repeating: 0, count: 16_384)
         var copied = 0
         while true {
             let count = buffer.withUnsafeMutableBytes { raw in read(input, raw.baseAddress, raw.count) }
-            if count == 0 { return true }
+            if count == 0 {
+                complete = true
+                return true
+            }
             if count < 0 {
                 if errno == EINTR { continue }
                 return false
@@ -199,6 +303,26 @@ struct RuntimeResourceManifest: Sendable, Equatable {
             }
         }
     }
+}
+
+/// One broker variable dropped at stage time. Labels only: the env
+/// name plus the closed-vocabulary reason. Secret values are
+/// inexpressible here by construction.
+struct BrokerStagingDrop: Sendable, Equatable {
+    var env: String
+    var reason: BrokerStagingDropReason
+}
+
+/// Why one broker variable was dropped. Every drop keeps the batch
+/// succeeding; the variable is simply not injected.
+enum BrokerStagingDropReason: String, Sendable, Equatable {
+    case oversized
+    case invalidName
+    case blockedName
+    case invalidValue
+    case invalidRef
+    case unresolved
+    case fileUnreadable
 }
 
 /// Which policy grant broke staging. The detail names the

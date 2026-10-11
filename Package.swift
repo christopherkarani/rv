@@ -40,11 +40,11 @@ let isolationExecTargets: [Target] = [
         ]
     ),
 ]
-let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-isolation-exec"]
+let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "RVFileStore", "rv-isolation-exec"]
 #else
 let isolationExecProducts: [Product] = []
 let isolationExecTargets: [Target] = []
-let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "rv-pty-claim"]
+let isolationTestDependencies: [Target.Dependency] = ["RVIsolation", "RVFileStore", "rv-pty-claim"]
 #endif
 
 #if os(macOS)
@@ -67,10 +67,10 @@ let terminalProbeTargets: [Target] = []
 
 let coreLibraryTargets: [Target] = [
     .target(name: "RVDomain"),
-    .target(name: "RVFileStore"),
+    .target(name: "RVFileStore", dependencies: ["RVDomain"]),
     .target(
         name: "RVIsolation",
-        dependencies: ["RVDomain", "RVPolicy", "RVIPC"],
+        dependencies: ["RVDomain", "RVPolicy", "RVIPC", "RVFileStore"],
         // SwiftPM rejects mixed-language targets. The C shim is compiled
         // only into Linux `rv-isolation-exec`.
         exclude: [
@@ -135,7 +135,7 @@ let coreProducts: [Product] = [
 
 let coreTestTargets: [Target] = [
     .testTarget(name: "RVDomainTests", dependencies: ["RVDomain"]),
-    .testTarget(name: "RVFileStoreTests", dependencies: ["RVFileStore"]),
+    .testTarget(name: "RVFileStoreTests", dependencies: ["RVFileStore", "RVDomain"]),
     .testTarget(name: "RVIsolationTests", dependencies: isolationTestDependencies),
     .testTarget(
         name: "RVEngineTests",
@@ -167,7 +167,7 @@ let coreTestTargets: [Target] = [
         name: "RVWorkspaceTUITests",
         dependencies: ["RVWorkspaceTUI", "RVIsolation"]
     ),
-    .testTarget(name: "RVHistoryTests", dependencies: ["RVHistory"]),
+    .testTarget(name: "RVHistoryTests", dependencies: ["RVHistory", "RVFileStore"]),
     .testTarget(name: "RVAnalyticsTests", dependencies: ["RVAnalytics"]),
     .testTarget(
         name: "RVCorpusTests",

@@ -288,4 +288,58 @@ struct RuntimeResourcePolicyStoreTests {
         )
         #expect(entry.agents == nil)
     }
+
+    @Test func unknownTopLevelKeyFailsClosed() {
+        let raw = Data(#"{"version":1,"profiles":[],"bogusField":true}"#.utf8)
+        #expect(RuntimeResourcePolicyStore.decode(raw) == .failure(.invalidDocument))
+    }
+
+    @Test func strictKeysRejectIntegerCodingKeys() {
+        #expect(ResourcePolicyStrictKey(intValue: 3) == nil)
+    }
+
+    @Test func missingDocumentLoadsAsEmpty() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-resources-policy-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        #expect(RuntimeResourcePolicyStore.load(from: root) == .success(.empty))
+    }
+
+    @Test func thirtyThreeProfilesFailClosed() throws {
+        let profiles = (0..<33).map {
+            RuntimeResourceProfile(id: "p\($0)", projects: ["/tmp/project"])
+        }
+        let encoded = try JSONEncoder().encode(RuntimeResourcePolicy(profiles: profiles))
+        #expect(RuntimeResourcePolicyStore.decode(encoded) == .failure(.invalidDocument))
+    }
+
+    @Test func duplicateLinkNamesFailClosed() throws {
+        let profile = RuntimeResourceProfile(
+            id: "profile-a", projects: ["/tmp/project"],
+            executableLinks: [
+                RuntimeResourceProfile.ExecutableLink(name: "tool", target: "/bin/a"),
+                RuntimeResourceProfile.ExecutableLink(name: "tool", target: "/bin/b"),
+            ]
+        )
+        let encoded = try JSONEncoder().encode(RuntimeResourcePolicy(profiles: [profile]))
+        #expect(RuntimeResourcePolicyStore.decode(encoded) == .failure(.invalidDocument))
+    }
+
+    @Test func identifierCharsetAcceptsDigitsAndMarks() throws {
+        let profile = RuntimeResourceProfile(id: "a1-._Z", projects: ["/tmp/project"])
+        let decoded = try RuntimeResourcePolicyStore.decode(
+            try JSONEncoder().encode(RuntimeResourcePolicy(profiles: [profile]))
+        ).get()
+        #expect(decoded.profiles.map(\.id) == ["a1-._Z"])
+        let bad = RuntimeResourceProfile(id: "has space", projects: ["/tmp/project"])
+        #expect(
+            RuntimeResourcePolicyStore.decode(
+                try JSONEncoder().encode(RuntimeResourcePolicy(profiles: [bad]))
+            ) == .failure(.invalidDocument)
+        )
+    }
 }

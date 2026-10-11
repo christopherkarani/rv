@@ -37,6 +37,11 @@ enum HostRuntimeAdmission {
                         return .failure(.failed)
                     }
                     return normalizeRuntimeAdmission(subject: subject, action: action)
+                case .mcp:
+                    // MCP dispatches never become proposals: the dispatch
+                    // layer routes them to the invoker after `submitMCP`
+                    // admits them. Reaching here fails closed.
+                    return .failure(.failed)
                 }
             },
             executor: .containedCommand,
