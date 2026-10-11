@@ -71,6 +71,42 @@ private func rtListed(_ runtime: UUID) -> ListedRuntime {
     ListedRuntime(id: runtime, hook: nil, running: true, terminal: true)
 }
 
+/// A restored pane whose saved runtime is already gone: bound, slot-less,
+/// phase `.missing(nil)`.
+private func rtRestoredSlotless() -> WorkspaceTUIState {
+    let tab = WorkspaceTab(id: TabID(), tree: .leaf(rtPane), focusedPaneID: rtPane)
+    let restoredBinding = RuntimeBinding(
+        workspace: WorkspaceSessionID(rawValue: rtSummary.workspace),
+        runtime: RuntimeSessionID(rawValue: rtRuntimeA),
+        generation: 0
+    )
+    let view = WorkspaceView(
+        id: ViewID(),
+        tabs: [tab],
+        activeTabID: tab.id,
+        panes: [rtPane: WorkspacePane(id: rtPane, binding: restoredBinding, lifecycle: .disconnected)]
+    )
+    let state = WorkspaceTUIState(
+        lifecycle: .neverConnected,
+        summary: rtSummary,
+        launcher: [rtShell],
+        initialRows: 24,
+        initialColumns: 80,
+        mode: .terminal,
+        terminal: nil,
+        leasedRuntime: nil,
+        retryAcquire: false,
+        shouldExit: false,
+        initialLaunchRequested: false,
+        viewSize: .init(rows: 40, columns: 100),
+        presentationRevision: 0,
+        restoredView: view
+    )
+    return WorkspaceTUIReducer.reduce(
+        state, .connectQuery(described: rtSummary, runtimes: [])
+    ).state
+}
+
 /// Pane-state coherence: every stored lifecycle derives from its phase,
 /// claims name the live binding, and candidates name their own pane.
 private func expectCoherent(_ state: WorkspaceTUIState, sourceLocation: SourceLocation = #_sourceLocation) {
@@ -481,6 +517,118 @@ private func expectCoherent(_ state: WorkspaceTUIState, sourceLocation: SourceLo
         #expect(transition.state.mode == .scroll(pane: rtPane))
         #expect(transition.state.panes[rtPane]?.scroll == ScrollPosition(anchor: 0, generation: 0))
         expectCoherent(transition.state)
+    }
+
+    @Test func boundSlotlessRetryFailureStaysLaunchFailed() {
+        // Restored runtime is gone (.missing(nil)). A launcher failure
+        // becomes .failed(nil), so Enter retries with a slot-less
+        // launching intent. The next query failure must keep .failed(nil)
+        // and the binding: dropping the record would derive .missing and
+        // refuse another Enter.
+        var state = rtRestoredSlotless()
+        let target = PrefixTarget(pane: rtPane, generation: 0)
+        #expect(state.panes[rtPane]?.phase == .missing(stale: nil))
+        state.mode = .launcher
+        state = WorkspaceTUIReducer.reduce(state, .key(.character("1"))).state
+        state = WorkspaceTUIReducer.reduce(
+            state, .launchDue(target: target, choice: rtShell)
+        ).state
+        var failed = WorkspaceTUIReducer.reduce(
+            state, .launchQueryFailed(target: target, choice: rtShell, error: .unavailable)
+        )
+        #expect(failed.state.panes[rtPane]?.phase == .failed(stale: nil))
+        #expect(failed.state.view.panes[rtPane]?.lifecycle == .launchFailed)
+        #expect(failed.state.view.panes[rtPane]?.binding?.runtime.rawValue == rtRuntimeA)
+        failed.state.panes[rtPane]?.scroll = ScrollPosition(anchor: 4, generation: 0)
+        let retry = WorkspaceTUIReducer.reduce(failed.state, .key(.enter))
+        #expect(retry.effects == [.queueLaunch(target: target, choice: rtShell)])
+        #expect(retry.state.panes[rtPane]?.phase == .launching(LaunchDetail(previous: nil, candidate: nil)))
+        #expect(retry.state.panes[rtPane]?.scroll == ScrollPosition(anchor: 4, generation: 0))
+        let again = WorkspaceTUIReducer.reduce(
+            retry.state, .launchQueryFailed(target: target, choice: rtShell, error: .unavailable)
+        )
+        #expect(again.state.panes[rtPane]?.phase == .failed(stale: nil))
+        #expect(again.state.view.panes[rtPane]?.lifecycle == .launchFailed)
+        #expect(again.state.view.panes[rtPane]?.binding?.runtime.rawValue == rtRuntimeA)
+        #expect(again.state.panes[rtPane]?.scroll == ScrollPosition(anchor: 4, generation: 0))
+        expectCoherent(again.state)
+        let third = WorkspaceTUIReducer.reduce(again.state, .key(.enter))
+        #expect(third.effects == [.queueLaunch(target: target, choice: rtShell)])
+    }
+
+    @Test func unboundFreshLaunchFailureDropsTheRecord() {
+        // Dropping the record is only valid for an unbound pane.
+        // lastOutcome still derives .launchFailed, and Enter can retry.
+        var fresh = rtConnected(terminal: nil, leasedRuntime: nil)
+        let target = PrefixTarget(pane: rtPane, generation: nil)
+        let started = WorkspaceTUIReducer.reduce(fresh, .key(.enter))
+        #expect(started.effects == [.queueLaunch(target: target, choice: rtShell)])
+        #expect(started.state.panes[rtPane]?.phase == .launching(LaunchDetail(previous: nil, candidate: nil)))
+        let failed = WorkspaceTUIReducer.reduce(
+            started.state, .launchQueryFailed(target: target, choice: rtShell, error: .unavailable)
+        )
+        #expect(failed.state.panes[rtPane] == nil)
+        #expect(failed.state.view.panes[rtPane]?.binding == nil)
+        #expect(failed.state.view.panes[rtPane]?.lifecycle == .launchFailed)
+        expectCoherent(failed.state)
+        let retry = WorkspaceTUIReducer.reduce(failed.state, .key(.enter))
+        #expect(retry.effects == [.queueLaunch(target: target, choice: rtShell)])
+    }
+
+    @Test func reconnectResolvesSlotlessLaunchingToMissing() {
+        // Enter-retry of a slot-less .failed pane whose launch returns
+        // during the outage. launchQueryFailed is ignored off .connected,
+        // and disconnect leaves the slot-less intent. A reconnect whose
+        // inventory lacks the saved runtime must land .missing(nil):
+        // leaving .launching blocks Enter.
+        var state = rtRestoredSlotless()
+        let target = PrefixTarget(pane: rtPane, generation: 0)
+        state = WorkspaceTUIReducer.reduce(
+            state, .launchQueryFailed(target: target, choice: rtShell, error: .unavailable)
+        ).state
+        #expect(state.panes[rtPane]?.phase == .failed(stale: nil))
+        state.panes[rtPane]?.scroll = ScrollPosition(anchor: 3, generation: 0)
+        let retry = WorkspaceTUIReducer.reduce(state, .key(.enter))
+        #expect(retry.state.panes[rtPane]?.phase == .launching(LaunchDetail(previous: nil, candidate: nil)))
+        let disconnected = WorkspaceTUIReducer.reduce(retry.state, .hostDisconnected)
+        #expect(disconnected.state.lifecycle == .disconnected)
+        #expect(disconnected.state.panes[rtPane]?.phase == .launching(LaunchDetail(previous: nil, candidate: nil)))
+        let ignored = WorkspaceTUIReducer.reduce(
+            disconnected.state,
+            .launchQueryFailed(target: target, choice: rtShell, error: .unavailable)
+        )
+        #expect(ignored.state.panes[rtPane]?.phase == .launching(LaunchDetail(previous: nil, candidate: nil)))
+        let reconnected = WorkspaceTUIReducer.reduce(
+            ignored.state, .reconnectSucceeded(terminals: [])
+        )
+        #expect(reconnected.state.panes[rtPane]?.phase == .missing(stale: nil))
+        #expect(reconnected.state.view.panes[rtPane]?.lifecycle == .missing)
+        #expect(reconnected.state.view.panes[rtPane]?.binding?.runtime.rawValue == rtRuntimeA)
+        #expect(reconnected.state.panes[rtPane]?.scroll == ScrollPosition(anchor: 3, generation: 0))
+        #expect(reconnected.effects == [.restartEvents])
+        expectCoherent(reconnected.state)
+    }
+
+    @Test func reconnectMarksExistingSlotlessFailureMissing() {
+        // Any slot-less bound record whose runtime is absent from the
+        // reconnect inventory becomes .missing, not only a missing
+        // record created from nil. A .failed(nil) pane is that case.
+        var state = rtRestoredSlotless()
+        let target = PrefixTarget(pane: rtPane, generation: 0)
+        state = WorkspaceTUIReducer.reduce(
+            state, .launchQueryFailed(target: target, choice: rtShell, error: .unavailable)
+        ).state
+        #expect(state.panes[rtPane]?.phase == .failed(stale: nil))
+        state.panes[rtPane]?.scroll = ScrollPosition(anchor: 2, generation: 0)
+        state = WorkspaceTUIReducer.reduce(state, .hostDisconnected).state
+        #expect(state.panes[rtPane]?.phase == .failed(stale: nil))
+        let reconnected = WorkspaceTUIReducer.reduce(
+            state, .reconnectSucceeded(terminals: [])
+        )
+        #expect(reconnected.state.panes[rtPane]?.phase == .missing(stale: nil))
+        #expect(reconnected.state.view.panes[rtPane]?.lifecycle == .missing)
+        #expect(reconnected.state.panes[rtPane]?.scroll == ScrollPosition(anchor: 2, generation: 0))
+        expectCoherent(reconnected.state)
     }
 }
 

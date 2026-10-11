@@ -224,13 +224,19 @@ struct WorkspaceTUIState: Equatable, Sendable {
         case .launching(let detail) where detail.candidate != nil:
             break
         case .launching(let detail):
-            // A fresh intent holds nothing else (typeahead, scroll,
-            // claims, and retries all require a binding or a slot), so
-            // dropping the record loses nothing. A relaunch intent keeps
-            // its previous output as the stale terminal.
             if let previous = detail.previous {
+                // A relaunch keeps its previous output as the stale terminal.
                 panes[paneID]?.phase = .failed(stale: previous)
+            } else if view.panes[paneID]?.binding != nil {
+                // A bound pane with no slot (restored runtime, or Enter
+                // retrying a slot-less failure) must stay .failed. Dropping
+                // the record would derive .missing and refuse another Enter.
+                // Scroll, claims, and the rest of the record stay.
+                panes[paneID]?.phase = .failed(stale: nil)
             } else {
+                // A fresh unbound intent holds nothing else, so dropping
+                // the record loses nothing. lastOutcome still derives
+                // .launchFailed.
                 panes[paneID] = nil
             }
         case .attached(let slot), .failed(let slot?), .missing(let slot?), .disconnected(let slot):
@@ -1321,8 +1327,16 @@ enum WorkspaceTUIReducer {
                 guard available.contains(binding.runtime) else {
                     if let stale = next.terminal(for: paneID) {
                         next.panes[paneID]?.phase = .missing(stale: stale)
-                    } else if next.panes[paneID] == nil {
-                        next.panes[paneID] = PaneRuntime(phase: .missing(stale: nil))
+                    } else {
+                        // No slot: an existing record (a slot-less
+                        // .launching left when the query returned during
+                        // the outage, or a restored .missing/.failed)
+                        // becomes .missing. Creating a record only when
+                        // absent would leave .launching stuck, and Enter
+                        // cannot start another shell from that phase.
+                        var runtime = next.panes[paneID] ?? PaneRuntime(phase: .missing(stale: nil))
+                        runtime.phase = .missing(stale: nil)
+                        next.panes[paneID] = runtime
                     }
                     continue
                 }
