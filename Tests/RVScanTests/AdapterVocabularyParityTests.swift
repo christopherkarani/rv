@@ -125,7 +125,6 @@ import RVDomain
     #expect(events.allSatisfy { $0.sessionID == SessionID(validating: "pi-parity-1") })
 }
 
-#if canImport(SQLite3)
 @Test func hermesVocabulary_terminalExtractsOthersSkipped() throws {
     try withTempHome { homeURL in
         let dbURL = homeURL.appendingPathComponent("state.db")
@@ -184,7 +183,7 @@ private func openParityDatabase(at url: URL, ddl: String, insertSQL: String, row
     guard sqlite3_open(url.path, &db) == SQLITE_OK, let db else {
         throw ParityFixtureError.openFailed
     }
-    defer { sqlite3_close(db) }
+    defer { _ = sqlite3_close(db) }
     guard sqlite3_exec(db, ddl, nil, nil, nil) == SQLITE_OK else {
         throw ParityFixtureError.execFailed
     }
@@ -192,7 +191,7 @@ private func openParityDatabase(at url: URL, ddl: String, insertSQL: String, row
     guard sqlite3_prepare_v2(db, insertSQL, -1, &statement, nil) == SQLITE_OK, let statement else {
         throw ParityFixtureError.prepareFailed
     }
-    defer { sqlite3_finalize(statement) }
+    defer { _ = sqlite3_finalize(statement) }
     let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
     for (sessionID, json) in rows {
         _ = sessionID.withCString { sqlite3_bind_text(statement, 1, $0, -1, transient) }
@@ -200,7 +199,7 @@ private func openParityDatabase(at url: URL, ddl: String, insertSQL: String, row
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw ParityFixtureError.stepFailed
         }
-        sqlite3_reset(statement)
+        _ = sqlite3_reset(statement)
     }
 }
 
@@ -227,7 +226,7 @@ private func writeParityOpenCodeDatabase(at url: URL, rows: [(String, String)]) 
     guard sqlite3_open(url.path, &db) == SQLITE_OK, let db else {
         throw ParityFixtureError.openFailed
     }
-    defer { sqlite3_close(db) }
+    defer { _ = sqlite3_close(db) }
     let ddl = "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);"
     guard sqlite3_exec(db, ddl, nil, nil, nil) == SQLITE_OK else {
         throw ParityFixtureError.execFailed
@@ -237,7 +236,7 @@ private func writeParityOpenCodeDatabase(at url: URL, rows: [(String, String)]) 
     guard sqlite3_prepare_v2(db, insert, -1, &statement, nil) == SQLITE_OK, let statement else {
         throw ParityFixtureError.prepareFailed
     }
-    defer { sqlite3_finalize(statement) }
+    defer { _ = sqlite3_finalize(statement) }
     let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
     for (index, row) in rows.enumerated() {
         _ = "part_\(index)".withCString { sqlite3_bind_text(statement, 1, $0, -1, transient) }
@@ -247,7 +246,6 @@ private func writeParityOpenCodeDatabase(at url: URL, rows: [(String, String)]) 
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw ParityFixtureError.stepFailed
         }
-        sqlite3_reset(statement)
+        _ = sqlite3_reset(statement)
     }
 }
-#endif
