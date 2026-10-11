@@ -8,6 +8,16 @@ import tempfile
 
 import pytest
 
+from rv import client as client_module
+
+
+@pytest.fixture(autouse=True)
+def _product_ok(monkeypatch, request):
+    """Unit tests never probe a real ``rvd``. Live integration keeps the probe."""
+    if request.node.get_closest_marker("integration"):
+        return
+    monkeypatch.setattr(client_module, "_probe_product", lambda rvd=None: "0.1.5")
+
 
 @pytest.fixture
 def socket_path():

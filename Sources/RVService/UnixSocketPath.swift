@@ -93,10 +93,10 @@ public enum UnixSocketPath {
     /// Only the `rv` directory is RV-owned: it is created at 0700 and always
     /// chmodded back to 0700. The base directory (`$XDG_RUNTIME_DIR`,
     /// `$HOME/.config`) is created at 0700 when missing, but a pre-existing
-    /// base is never chmodded — it only has to be a directory owned by this
-    /// uid. The stale entry is unlinked only when it is a socket or a
-    /// symlink; anything else fails closed so a directory or user file at the
-    /// socket path is never deleted.
+    /// base is never chmodded — it has to be a directory owned by this uid
+    /// and not group- or world-writable. The stale entry is unlinked only
+    /// when it is a socket or a symlink; anything else fails closed so a
+    /// directory or user file at the socket path is never deleted.
     public static func prepareRuntime(for socketURL: URL) throws {
         let rvDir = socketURL.deletingLastPathComponent()
         let baseDir = rvDir.deletingLastPathComponent()
@@ -161,8 +161,10 @@ public enum UnixSocketPath {
     }
 
     /// The base directory is shared with the rest of the system: create it
-    /// owner-only when missing, but never chmod a pre-existing base — it
-    /// only has to be a directory owned by this uid.
+    /// owner-only when missing, but never chmod a pre-existing base. An
+    /// existing base must be a directory owned by this uid and not group-
+    /// or world-writable (`mode & 0o022 == 0`); otherwise the same
+    /// `permission` error as a foreign owner.
     private static func prepareBaseDirectory(_ url: URL) throws {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
@@ -174,6 +176,10 @@ public enum UnixSocketPath {
         }
         let owner = try FileManager.default.attributesOfItem(atPath: url.path)[.ownerAccountID]
         guard (owner as? NSNumber)?.uint32Value == geteuid() else {
+            throw UnixSocketPathError.permission
+        }
+        let mode = try posixMode(of: url)
+        guard mode & 0o022 == 0 else {
             throw UnixSocketPathError.permission
         }
     }

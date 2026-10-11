@@ -86,11 +86,6 @@ def respond_error(error: dict):
     return _reply
 
 
-@pytest.fixture(autouse=True)
-def _product_ok(monkeypatch):
-    monkeypatch.setattr(client_module, "_probe_product", lambda rvd=None: "0.1.5")
-
-
 def _client(*script, fail_connect=None) -> tuple[Client, FakeTransport]:
     transport = FakeTransport(list(script), fail_connect=fail_connect)
     return Client(transport=transport), transport

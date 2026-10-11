@@ -146,6 +146,25 @@ struct UnixSocketPathTests {
         #expect(try UnixSocketPath.posixMode(of: socket.deletingLastPathComponent()) & 0o777 == 0o700)
     }
 
+    @Test func prepareRuntimeRejectsGroupOrWorldWritableBase() throws {
+        for mode in [0o770, 0o707] {
+            let base = shortRuntimeDir("w")
+            try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: base) }
+            try FileManager.default.setAttributes(
+                [.posixPermissions: mode],
+                ofItemAtPath: base.path
+            )
+
+            let socket = try UnixSocketPath.resolve(xdgRuntimeDir: base.path)
+            #expect(throws: UnixSocketPathError.permission) {
+                try UnixSocketPath.prepareRuntime(for: socket)
+            }
+            #expect(try UnixSocketPath.posixMode(of: base) & 0o777 == mode)
+            #expect(FileManager.default.fileExists(atPath: socket.deletingLastPathComponent().path) == false)
+        }
+    }
+
     @Test func xdgResolveUsesPlatformPathBudget() throws {
         // 106 bytes + NUL: fits the Linux 108 budget, exceeds Darwin's 104.
         let base = "/" + String(repeating: "y", count: 89 - 1)
