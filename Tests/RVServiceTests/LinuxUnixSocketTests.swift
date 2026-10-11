@@ -54,14 +54,17 @@ struct LinuxUnixSocketTests {
             IPCResponse.self,
             from: client.send(body: try IPCJSON.encode(resetHardRequest()))
         )
-        // Step 8B removed generic IPC evaluate: role-less socket peers can
-        // consult hooks but never evaluate (pinned by
-        // SocketPeerAuthorizationTests.socketPeerHasNoControlOrEvalAuthority).
-        guard case .error(let error) = response.result else {
-            Issue.record("socket evaluate must be refused, got \(response.result)")
+        // Same-UID SDK socket runs evaluate. Generic dispatch still denies it
+        // (SocketPeerAuthorizationTests.socketPeerHasNoControlOrEvalAuthority).
+        guard case .evaluate(let reply) = response.result else {
+            Issue.record("socket evaluate must return evaluate, got \(response.result)")
             return
         }
-        #expect(error == .authorizationDenied)
+        guard case .deny(let deny) = reply.result.decision else {
+            Issue.record("socket evaluate must deny reset-hard")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.git:reset-hard")
     }
 
     @Test func rvdSocketProcessDeniesResetHard() async throws {
@@ -101,13 +104,15 @@ struct LinuxUnixSocketTests {
             IPCResponse.self,
             from: client.send(body: try IPCJSON.encode(resetHardRequest()))
         )
-        // Step 8B removed generic IPC evaluate (see above): the daemon
-        // refuses with authorizationDenied instead of evaluating.
-        guard case .error(let error) = response.result else {
-            Issue.record("rvd --socket evaluate must be refused, got \(response.result)")
+        guard case .evaluate(let reply) = response.result else {
+            Issue.record("rvd --socket evaluate must return evaluate, got \(response.result)")
             return
         }
-        #expect(error == .authorizationDenied)
+        guard case .deny(let deny) = reply.result.decision else {
+            Issue.record("rvd --socket must deny reset-hard")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.git:reset-hard")
         #expect(try UnixSocketPath.posixMode(of: socketURL) & 0o777 == 0o600)
         #expect(try UnixSocketPath.posixMode(of: xdg) & 0o777 == 0o700)
     }

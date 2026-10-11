@@ -361,12 +361,13 @@ impossible combinations (the Swift side throws `EvaluationResultDecodingError`):
 ## 7. Errors
 
 `IPCError` (`Sources/RVIPC/IPCEnvelope.swift:134-278`) is a closed, wire-stable
-enum. Wire JSON → meaning (decode order is normative: `unknownMethod`,
-`decodeFailed`, `protocolSkew`, `engine`, `packNotFound`, `allowOnce*`,
-`pending*`, `rule*`; anything else is `decodeFailed`):
+enum. Wire JSON → meaning (decode order is normative: `authorizationDenied`,
+`unknownMethod`, `decodeFailed`, `protocolSkew`, `engine`, `packNotFound`,
+`allowOnce*`, `pending*`, `rule*`; anything else is `decodeFailed`):
 
 | Wire JSON | Meaning | Retriable |
 |---|---|---|
+| `{"authorizationDenied":true}` | The service refused the call. | No. |
 | `{"unknownMethod":true}` | No such method key. | No — version/capability issue. |
 | `{"decodeFailed":true}` | Body is not a valid request, or an unknown result shape. | No. |
 | `{"protocolSkew":"<§3.2>"}` | Version/handshake refusal. | No — fix versions, re-handshake. |

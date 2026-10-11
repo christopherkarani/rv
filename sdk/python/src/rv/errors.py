@@ -106,6 +106,10 @@ class UnknownMethod(ProtocolError):
     """The service decoded the frame but refuses the method key."""
 
 
+class AuthorizationDenied(RvError):
+    """The service refused the call (``IPCError.authorizationDenied``)."""
+
+
 class UnexpectedResult(ProtocolError):
     """id/protocol echo mismatch or wrong reply variant for the call."""
 
@@ -248,6 +252,8 @@ class IPCErrorValue:
 def raise_for_ipc_error(error: IPCErrorValue) -> NoReturn:
     """Raise the typed exception for a decoded wire ``IPCError``. Never returns."""
     kind, payload = error.kind, error.payload
+    if kind == "authorizationDenied":
+        raise AuthorizationDenied("rvd denied the call")
     if kind == "unknownMethod":
         raise UnknownMethod("rvd refused the method key (version/capability issue)")
     if kind == "decodeFailed":

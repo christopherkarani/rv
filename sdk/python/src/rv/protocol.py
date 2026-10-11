@@ -183,6 +183,8 @@ def decode_ipc_error(value: Any) -> IPCErrorValue:
     """
     if not isinstance(value, dict):
         raise DecodeError("IPCError is not an object")
+    if "authorizationDenied" in value:
+        return IPCErrorValue("authorizationDenied")
     if "unknownMethod" in value:
         return IPCErrorValue("unknownMethod")
     if "decodeFailed" in value:

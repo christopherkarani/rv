@@ -173,7 +173,8 @@ public actor ServiceRuntime {
         _ body: Data,
         handshakeOK: Bool,
         stdinOverlay: Data? = nil,
-        context: AuthenticatedRequestContext = .unauthenticated
+        context: AuthenticatedRequestContext = .unauthenticated,
+        sameUIDSocket: Bool = false
     ) async -> IncomingReply {
         if let hello = try? IPCJSON.decode(Hello.self, from: body), hello.clientSemver.isEmpty == false {
             let ack = acknowledge(hello)
@@ -186,11 +187,12 @@ public actor ServiceRuntime {
             }
         }
         if handshakeOK == false {
-            return await handleUnreadyIncoming(body, stdinOverlay: stdinOverlay, context: context)
+            return await handleUnreadyIncoming(
+                body, stdinOverlay: stdinOverlay, context: context, sameUIDSocket: sameUIDSocket)
         }
         do {
             let request = try decodeRequest(body, stdinOverlay: stdinOverlay)
-            let response = await dispatch(request, context: context)
+            let response = await dispatch(request, context: context, sameUIDSocket: sameUIDSocket)
             return IncomingReply(
                 frame: (try? IPCJSON.encode(response)) ?? Data(),
                 handshakeAccepted: true
@@ -206,7 +208,10 @@ public actor ServiceRuntime {
 
     /// Implicit hello on first evaluate when `clientSemver` is set. Old clients Hello first.
     private func handleUnreadyIncoming(
-        _ body: Data, stdinOverlay: Data?, context: AuthenticatedRequestContext
+        _ body: Data,
+        stdinOverlay: Data?,
+        context: AuthenticatedRequestContext,
+        sameUIDSocket: Bool
     ) async -> IncomingReply {
         guard let request = try? IPCJSON.decode(IPCRequest.self, from: body) else {
             let response = IPCResponse(
@@ -233,7 +238,8 @@ public actor ServiceRuntime {
             let ack = acknowledge(hello)
             switch ack.status {
             case .ok:
-                let response = await dispatch(overlaid, context: context)
+                let response = await dispatch(
+                    overlaid, context: context, sameUIDSocket: sameUIDSocket)
                 return IncomingReply(
                     frame: (try? IPCJSON.encode(response)) ?? Data(),
                     handshakeAccepted: true
@@ -302,7 +308,8 @@ public actor ServiceRuntime {
 
     public func dispatch(
         _ request: IPCRequest,
-        context: AuthenticatedRequestContext = .unauthenticated
+        context: AuthenticatedRequestContext = .unauthenticated,
+        sameUIDSocket: Bool = false
     ) async -> IPCResponse {
         if request.protocolName != ProtocolVersion.name {
             return IPCResponse(id: request.id, result: .error(.protocolSkew(.protocolSkew)))
@@ -312,7 +319,9 @@ public actor ServiceRuntime {
         if Self.isMajorSkewed(implicitHelloSemver(request.method)) {
             return IPCResponse(id: request.id, result: .error(.protocolSkew(.majorVersion)))
         }
-        guard ServiceMethodAuthorization.permits(request.method, context: context) else {
+        let allowed = Self.sameUIDSocketSession(request.method, enabled: sameUIDSocket)
+            || ServiceMethodAuthorization.permits(request.method, context: context)
+        guard allowed else {
             return IPCResponse(id: request.id, result: .error(.authorizationDenied))
         }
         let started = DispatchTime.now()
@@ -389,6 +398,20 @@ public actor ServiceRuntime {
         }
         logIfNeeded(request: request, result: result, started: started)
         return IPCResponse(id: request.id, result: result)
+    }
+
+    /// The production SDK socket has already attested a same-UID peer.
+    /// Generic dispatch keeps the role matrix (evaluate, control reads, and
+    /// owner mutations stay denied for a role-less context). TTY attestation
+    /// and launch proposals stay on that matrix even for this session.
+    private static func sameUIDSocketSession(_ method: IPCMethod, enabled: Bool) -> Bool {
+        guard enabled else { return false }
+        switch ServiceMethodAuthorization.requirement(for: method) {
+        case .ttyAttestation, .launchProposal:
+            return false
+        case .diagnostic, .agent, .hookConsult, .controlRead, .ownerMutation:
+            return true
+        }
     }
 
     private static func ceremonyError(_ error: WorkspaceOperatorCeremonyError) -> IPCError {

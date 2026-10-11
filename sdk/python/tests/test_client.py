@@ -658,6 +658,7 @@ def test_ipc_error_kinds_all_map_to_rv_errors():
     from rv.errors import IPCErrorValue, raise_for_ipc_error
 
     kinds = [
+        ("authorizationDenied", None),
         ("unknownMethod", None),
         ("decodeFailed", None),
         ("protocolSkew", "major version"),
@@ -678,7 +679,7 @@ def test_ipc_error_kinds_all_map_to_rv_errors():
         ("ruleDraftMismatch", None),
         ("ruleHardStop", None),
     ]
-    assert len(kinds) == 19
+    assert len(kinds) == 20
     for kind, payload in kinds:
         with pytest.raises(RvError):
             raise_for_ipc_error(IPCErrorValue(kind, payload))

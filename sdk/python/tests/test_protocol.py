@@ -13,6 +13,7 @@ from rv.errors import (
     AllowOnceExpired,
     AllowOnceNotFound,
     AllowOnceNotUnlockable,
+    AuthorizationDenied,
     CoordinatorUnavailable,
     DecodeError,
     EngineError,
@@ -159,6 +160,7 @@ def test_decode_response_surfaces_errors_as_typed_exceptions():
 
 def test_ipc_error_unit_cases_decode_by_presence():
     cases = {
+        "authorizationDenied": AuthorizationDenied,
         "unknownMethod": UnknownMethod,
         "decodeFailed": DecodeError,
         "allowOnceNotFound": AllowOnceNotFound,
@@ -182,7 +184,12 @@ def test_ipc_error_unit_cases_decode_by_presence():
 
 
 def test_ipc_error_decode_order_is_normative():
-    # unknownMethod wins over decodeFailed; decodeFailed wins over engine.
+    # authorizationDenied wins over unknownMethod; unknownMethod wins over
+    # decodeFailed; decodeFailed wins over engine.
+    assert (
+        protocol.decode_ipc_error({"authorizationDenied": True, "unknownMethod": True}).kind
+        == "authorizationDenied"
+    )
     assert protocol.decode_ipc_error({"unknownMethod": True, "decodeFailed": True}).kind == (
         "unknownMethod"
     )

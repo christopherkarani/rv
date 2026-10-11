@@ -194,30 +194,6 @@ public final class UnixSocketListener: Sendable {
         UnixSocketPath.removeSocketFileIfSocket(at: socketURL)
     }
 
-    /// Same-UID SDK peers get a real `evaluate` reply. Generic dispatch still
-    /// denies `evaluate` for role-less contexts; this listener is the SDK
-    /// socket, and the peer check already happened at accept.
-    private static func incomingReply(
-        body: Data, handshakeOK: Bool, runtime: ServiceRuntime
-    ) async -> IncomingReply {
-        if handshakeOK,
-           let request = try? IPCJSON.decode(IPCRequest.self, from: body),
-           case .evaluate(let params) = request.method,
-           ProtocolVersion.isMajorSkew(
-               clientSemver: params.clientSemver ?? "",
-               serviceSemver: ProtocolVersion.serviceSemver
-           ) == false
-        {
-            let reply = await runtime.evaluate(params.request, cwd: params.cwd)
-            let response = IPCResponse(id: request.id, result: .evaluate(reply))
-            return IncomingReply(
-                frame: (try? IPCJSON.encode(response)) ?? Data(),
-                handshakeAccepted: true
-            )
-        }
-        return await runtime.handleIncoming(body, handshakeOK: handshakeOK)
-    }
-
     private func acceptOne() {
         let listenFD = state.withLock { $0.listenFD }
         let client = Darwin.accept(listenFD, nil, nil)
@@ -243,8 +219,9 @@ public final class UnixSocketListener: Sendable {
             // cooperative pool that has to run the actor.
             Task.detached {
                 await watchdog.ping()
-                let incoming = await Self.incomingReply(
-                    body: body, handshakeOK: accepted, runtime: runtime)
+                // acceptOne already dropped every peer whose uid is not ours.
+                let incoming = await runtime.handleIncoming(
+                    body, handshakeOK: accepted, sameUIDSocket: true)
                 gate.finish(incoming)
             }
             let incoming = gate.wait()

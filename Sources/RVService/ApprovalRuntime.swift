@@ -100,9 +100,22 @@ actor ApprovalRuntime {
         _ params: PendingResolveParams,
         peek: @escaping @Sendable (ShellCommand, WorkingDirectory?, Date) async -> EvaluationResult
     ) async -> Result<PendingResolveReply, IPCError> {
-        // The old name-bound resolver planted a command/cwd grant. Neither
-        // knowing a row ID nor authenticating a CLI can authorize that grant.
-        .failure(.authorizationDenied)
+        // Knowing a row id is not authority: this path never resolves and
+        // never plants a grant. A missing row is `pendingNotFound` so a
+        // forged id fails closed as "no such approval". A real row stays
+        // `authorizationDenied`.
+        guard let pendingApprovals else {
+            return .failure(.authorizationDenied)
+        }
+        do {
+            _ = try await pendingApprovals.load(id: params.id, now: clock())
+        } catch {
+            if case .notFound = error {
+                return .failure(.pendingNotFound)
+            }
+            return .failure(.authorizationDenied)
+        }
+        return .failure(.authorizationDenied)
     }
 
     private func pinnedPolarity(_ wire: RulePolarity) -> PinnedRulePolarity {

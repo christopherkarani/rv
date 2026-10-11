@@ -191,7 +191,9 @@ public final class UnixEvaluateListener: Sendable {
             let accepted = handshakeOK
             Task {
                 await watchdog.ping()
-                let incoming = await runtime.handleIncoming(body, handshakeOK: accepted, context: context)
+                let incoming = await runtime.handleIncoming(
+                    body, handshakeOK: accepted, context: context,
+                    sameUIDSocket: context.peer != nil)
                 gate.finish(incoming)
             }
             let incoming = gate.wait()
