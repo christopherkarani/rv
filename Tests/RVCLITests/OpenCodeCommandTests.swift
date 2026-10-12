@@ -83,6 +83,17 @@ struct OpenCodeCommandTests {
         #expect(help.contains("RV proxy"))
     }
 
+    @Test func bannerAndHelpDiscloseAcceptedLimits() {
+        // R1/R2: caged loopback servers are LAN-visible and reachable from
+        // other local processes. R3: same-user temp files are readable.
+        #expect(OpenCodeRun.isolationNotice.contains(AcceptedRuntimeLimits.line))
+        #expect(AcceptedRuntimeLimits.line.contains("LAN-visible"))
+        #expect(AcceptedRuntimeLimits.line.contains("other local processes"))
+        #expect(AcceptedRuntimeLimits.line.contains("Same-user temp files are readable"))
+        let help = HelpDispatch.text(.opencode, palette: colorOffPalette)
+        #expect(help.contains(AcceptedRuntimeLimits.line))
+    }
+
     @Test func resolve_explicitRelativeExecutableRejected() {
         let result = OpenCodeRun.resolveExecutable("bin/sh", environment: ["PATH": "/usr/bin:/bin"])
         #expect(result == .failure(.executableMustBeAbsolute))
