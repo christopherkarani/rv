@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// A protected workspace that never closed and has no live host: a host or
@@ -80,7 +81,6 @@ public struct WorkspaceDiskLeftovers: Sendable, Equatable {
     public var detachedImageFiles: [String]
 }
 
-#if os(macOS)
 extension WorkspaceHosts {
     /// Disk-level leftovers: attached rv images with no live host, and image
     /// files nothing has attached. Nil when the attachment list is unreadable.
