@@ -138,77 +138,23 @@ enum MigratedDocumentRewrite {
     ) -> Bool {
         // The live file must still be the one the caller validated: a
         // concurrent swap aborts the rewrite instead of clobbering it.
-        let current = fileName.withCString {
-            openat(directory, $0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
-        }
-        guard current >= 0 else { return false }
-        defer { close(current) }
-        var status = stat()
-        guard fstat(current, &status) == 0,
-            (status.st_mode & S_IFMT) == S_IFREG,
-            status.st_uid == getuid(),
-            UInt64(status.st_dev) == expectedDevice,
-            UInt64(status.st_ino) == expectedInode
-        else {
+        // Deliberate divergences from the sink staging, preserved: the
+        // dev/ino recheck plus the retrying loop (`.all`, eight attempts
+        // with `EEXIST` retry).
+        guard OwnerOnlyFileWrite.verifyIdentity(
+            fileName: fileName, inDirectory: directory,
+            expectedDevice: expectedDevice, expectedInode: expectedInode
+        ) else {
             return false
         }
-        guard let staged = stage(bytes: bytes, fileName: fileName, inDirectory: directory) else {
+        guard let staged = OwnerOnlyFileWrite.stage(
+            bytes: bytes, fileName: fileName, tag: "migrate",
+            inDirectory: directory, policy: .all, attempts: 8
+        ) else {
             return false
         }
         defer { close(staged.fd) }
-        let renamed = staged.name.withCString { temp in
-            fileName.withCString { live in
-                renameat(directory, temp, directory, live)
-            }
-        }
-        guard renamed == 0 else {
-            _ = staged.name.withCString { unlinkat(directory, $0, 0) }
-            return false
-        }
-        return true
-    }
-
-    private struct StagedFile {
-        let fd: Int32
-        let name: String
-    }
-
-    /// Stages `bytes` in a uniquely named 0600 temp file under
-    /// `directory`. Returns the open fd plus its name, or nil.
-    private static func stage(bytes: Data, fileName: String, inDirectory directory: Int32) -> StagedFile? {
-        for _ in 0..<8 {
-            let nonce = String(UInt64.random(in: 0...UInt64.max), radix: 16)
-            let name = ".\(fileName).migrate-\(getpid())-\(nonce)"
-            let fd = name.withCString {
-                openat(directory, $0, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
-            }
-            if fd < 0 {
-                if errno == EEXIST { continue }
-                return nil
-            }
-            guard writeAll(bytes: bytes, to: fd), fchmod(fd, 0o600) == 0 else {
-                _ = name.withCString { unlinkat(directory, $0, 0) }
-                close(fd)
-                return nil
-            }
-            return StagedFile(fd: fd, name: name)
-        }
-        return nil
-    }
-
-    private static func writeAll(bytes: Data, to fd: Int32) -> Bool {
-        var offset = 0
-        while offset < bytes.count {
-            let written = bytes.withUnsafeBytes { raw -> Int in
-                guard let base = raw.baseAddress else { return -1 }
-                return write(fd, base.advanced(by: offset), bytes.count - offset)
-            }
-            if written > 0 { offset += written; continue }
-            if written == 0 { return false }
-            if errno == EINTR { continue }
-            return false
-        }
-        return true
+        return OwnerOnlyFileWrite.commit(staged: staged, as: fileName, inDirectory: directory)
     }
 }
 

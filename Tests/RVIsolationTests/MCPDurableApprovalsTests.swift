@@ -1052,11 +1052,12 @@ struct X1RIsolationTests {
         ), now: Self.now)
 
         let listed = try await backend.parkedTickets()
-        #expect(Set(listed.map(\.id.uuidString)) == Set([goodID, badTokenID, nativeID]))
+        // Ownership requires a decodable mcp1 envelope, so the garbage
+        // token and host-native rows are ignored, not listed with empty
+        // keys: a planted prefix-only row must not surface as a wait.
+        #expect(Set(listed.map(\.id.uuidString)) == Set([goodID]))
         let keys = Dictionary(uniqueKeysWithValues: listed.map { ($0.id.uuidString, $0.idempotencyKey) })
         #expect(keys[goodID] == "good-key")
-        #expect(keys[badTokenID] == "")
-        #expect(keys[nativeID] == "")
     }
 
     @Test func resolvedParksLeaveTheListing() async throws {
@@ -1154,7 +1155,10 @@ struct X1RIsolationTests {
         #expect(record?.state == .awaitingHuman)
     }
 
-    @Test func corruptExpiredFallsBackToTicketID() async throws {
+    @Test func corruptExpiredRowReadsUnknownTicket() async throws {
+        // Ownership requires a decodable mcp1 envelope: a host-native row
+        // wearing our prefix is foreign, so its terminal state never
+        // surfaces — not even as expired-with-ticket-id.
         let (fake, _) = rig()
         let id = UUID().uuidString
         _ = try await fake.create(x1rSeedRequest(
@@ -1165,9 +1169,10 @@ struct X1RIsolationTests {
         _ = try await fake.expire(id: ApprovalID(rawValue: id), now: Self.now)
         let cold = MCPDurableApprovalBackend(store: fake, identity: x1rIdentity(), now: { Self.now })
         let ticket = MCPElicitationTicket(id: UUID(uuidString: id)!, idempotencyKey: "x")
-        await #expect(throws: MCPDurableApprovalError.expired(address: id)) {
+        await #expect(throws: MCPElicitationError.unknownTicket) {
             try await cold.consume(ticket)
         }
+        #expect(await cold.poll(ticket) == .canceled)
     }
 }
 
@@ -1462,34 +1467,36 @@ struct X1RTamperTests {
         let cold = MCPDurableApprovalBackend(store: store, identity: x1rIdentity(), now: { clock.now() })
         let ticket = MCPElicitationTicket(id: UUID(uuidString: id)!, idempotencyKey: "x")
         #expect(try await cold.prompt(for: ticket) == nil)
-        let listed = try await cold.parkedTickets()
-        #expect(listed.map(\.id) == [ticket.id])
-        #expect(listed.first?.idempotencyKey == "")
+        // The garbage-token row is ignored everywhere: no prompt, no
+        // listing, and its terminal state never surfaces as expired.
+        #expect(try await cold.parkedTickets().isEmpty)
         _ = try await store.expire(id: ApprovalID(rawValue: id), now: clock.now())
-        await #expect(throws: MCPDurableApprovalError.expired(address: id)) {
+        await #expect(throws: MCPElicitationError.unknownTicket) {
             try await cold.consume(ticket)
         }
     }
 
-    @Test func corruptJSONLFailsClosedAndHeals() async throws {
+    @Test func corruptJSONLFailsClosedAndPreservesBytes() async throws {
+        // The store refuses rewrites over a corrupt file (the rewrite would
+        // silently drop the torn line), so a corrupted file does NOT heal
+        // by parking over it: the park throws typed and the bytes stay.
         let dir = try x1rTempDir()
         let clock = X1RClock()
         let store = PendingApprovalStore(baseDirectory: dir)
         let backend = MCPDurableApprovalBackend(store: store, identity: x1rIdentity(), now: { clock.now() })
         let ticket = try await backend.park(x1rPrompt(), ttl: 600)
         #expect(await backend.poll(ticket) == .waiting)
-        try "garbage-not-json\n".write(
-            to: RVPolicyPaths.pendingApprovalsFile(inConfigDir: dir),
-            atomically: true, encoding: .utf8
-        )
+        let file = RVPolicyPaths.pendingApprovalsFile(inConfigDir: dir)
+        try "garbage-not-json\n".write(to: file, atomically: true, encoding: .utf8)
         #expect(await backend.poll(ticket) == .canceled)
         await #expect(throws: MCPElicitationError.unknownTicket) {
             try await backend.consume(ticket)
         }
         #expect(try await backend.parkedTickets().isEmpty)
-        let healed = try await backend.park(x1rPrompt(key: "after"), ttl: 600)
-        #expect(await backend.poll(healed) == .waiting)
-        #expect(await backend.poll(ticket) == .canceled)
+        await #expect(throws: MCPDurableApprovalError.storeFailed(.encodeFailed)) {
+            try await backend.park(x1rPrompt(key: "after"), ttl: 600)
+        }
+        #expect(try String(contentsOf: file, encoding: .utf8) == "garbage-not-json\n")
     }
 }
 
@@ -1529,6 +1536,302 @@ struct X1RHostileHandlerTests {
             }
             #expect(await fake.recordCount() == 0)
         }
+    }
+}
+
+// MARK: - Ownership hardening (H1+H4+M6)
+
+private func x1rValidToken(key: String = "k") -> String {
+    MCPDurablePromptEnvelope(
+        address: "tools.demo.org.main.echo", matchedPattern: "policy:test",
+        argumentPreview: "p", idempotencyKey: key, source: .policy
+    ).encoded()
+}
+
+/// Replaces the JSONL row with id `hostID` by the donor row `donorID`
+/// with ONLY its id swapped to `hostID`: the transplanted row keeps the
+/// donor's fingerprint, decision, and envelope — the deny→allowOnce flip
+/// the fingerprint binding must catch.
+private func x1rTransplantRow(in file: URL, donor donorID: String, host hostID: String) throws {
+    let text = try String(contentsOf: file, encoding: .utf8)
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        .filter { $0.isEmpty == false }
+    var replacement: String?
+    for line in lines {
+        guard let object = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+            var approval = object["approval"] as? [String: Any],
+            approval["id"] as? String == donorID
+        else { continue }
+        approval["id"] = hostID
+        var row = object
+        row["approval"] = approval
+        let data = try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys])
+        replacement = String(data: data, encoding: .utf8)
+    }
+    guard let replacement else { throw X1RBoom() }
+    let rewritten = lines.map { line -> String in
+        guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+            let approval = object["approval"] as? [String: Any],
+            approval["id"] as? String == hostID
+        else { return line }
+        return replacement
+    }
+    try (rewritten.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+}
+
+@Suite("X1-R ownership hardening")
+struct X1ROwnershipTests {
+    private static let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+    private func rig() -> (X1RFakeCoordinator, MCPDurableApprovalBackend) {
+        let fake = X1RFakeCoordinator()
+        let backend = MCPDurableApprovalBackend(store: fake, identity: x1rIdentity(), now: { Self.now })
+        return (fake, backend)
+    }
+
+    @Test func transplantedAllowRowFailsClosedOnFingerprint() async throws {
+        // Attack: the operator denied the victim; the attacker flips its
+        // outcome to allow by transplanting the donor's approved row over
+        // the victim's id, keeping the donor fingerprint. Without the
+        // consume-time fingerprint binding this mints authority; with it
+        // the victim fails closed while the untouched donor still consumes.
+        let dir = try x1rTempDir()
+        let clock = X1RClock()
+        let store = PendingApprovalStore(baseDirectory: dir)
+        let backend = MCPDurableApprovalBackend(store: store, identity: x1rIdentity(), now: { clock.now() })
+        let victim = try await backend.park(x1rPrompt(key: "victim"), ttl: 600)
+        let donor = try await backend.park(
+            x1rPrompt(address: "tools.demo.org.main.admin", key: "donor"), ttl: 600
+        )
+        try await backend.resolve(victim, decision: .declined)
+        try await backend.resolve(donor, decision: .approved)
+        try x1rTransplantRow(
+            in: RVPolicyPaths.pendingApprovalsFile(inConfigDir: dir),
+            donor: donor.id.uuidString, host: victim.id.uuidString
+        )
+        await #expect(throws: MCPElicitationError.unknownTicket) {
+            try await backend.consume(victim)
+        }
+        #expect(try await backend.consume(donor) == .approved)
+    }
+
+    @Test func foreignRowCancelRefused() async throws {
+        let (fake, backend) = rig()
+        let foreignID = UUID().uuidString
+        _ = try await fake.create(x1rSeedRequest(
+            id: foreignID, identity: x1rForeignIdentity(),
+            fingerprint: "mcp:tools.demo.org.main.echo:\(foreignID)",
+            continuation: .resume(ApprovalResumeToken(rawValue: x1rValidToken(key: "f")))
+        ), now: Self.now)
+        let shellID = UUID().uuidString
+        _ = try await fake.create(x1rSeedRequest(
+            id: shellID, identity: x1rIdentity(),
+            fingerprint: "shell:opencode:sess:cwd:echo",
+            continuation: .hostNative
+        ), now: Self.now)
+        await backend.cancel(MCPElicitationTicket(id: UUID(uuidString: foreignID)!, idempotencyKey: "x"))
+        await backend.cancel(MCPElicitationTicket(id: UUID(uuidString: shellID)!, idempotencyKey: "x"))
+        await backend.cancel(MCPElicitationTicket(id: UUID(), idempotencyKey: "unknown"))
+        // No store call for any of them: foreign and unknown rows are
+        // refused before the cancel, and both rows still await a human.
+        #expect(await fake.cancelsAttempted() == 0)
+        #expect(await fake.record(id: ApprovalID(rawValue: foreignID))?.state == .awaitingHuman)
+        #expect(await fake.record(id: ApprovalID(rawValue: shellID))?.state == .awaitingHuman)
+        // ...and an owned park still cancels.
+        let ticket = try await backend.park(x1rPrompt(), ttl: 600)
+        await backend.cancel(ticket)
+        #expect(await backend.poll(ticket) == .canceled)
+        #expect(await fake.cancelsAttempted() == 1)
+    }
+
+    @Test func plantedPrefixRowIgnoredEverywhere() async throws {
+        // Attack: a row with our identity and the mcp: prefix but a
+        // garbage token (no shape/envelope proof). Ignored on every
+        // surface: no wait, no grant, no prompt, no cancel.
+        let (fake, backend) = rig()
+        let plantedID = UUID().uuidString
+        _ = try await fake.create(x1rSeedRequest(
+            id: plantedID, identity: x1rIdentity(),
+            fingerprint: "mcp:tools.demo.org.main.echo:\(plantedID)",
+            continuation: .resume(ApprovalResumeToken(rawValue: "garbage"))
+        ), now: Self.now)
+        let ticket = MCPElicitationTicket(id: UUID(uuidString: plantedID)!, idempotencyKey: "x")
+        #expect(await backend.poll(ticket) == .canceled)
+        await #expect(throws: MCPElicitationError.unknownTicket) {
+            try await backend.consume(ticket)
+        }
+        #expect(try await backend.prompt(for: ticket) == nil)
+        #expect(try await backend.parkedTickets().isEmpty)
+        await backend.cancel(ticket)
+        #expect(await fake.record(id: ApprovalID(rawValue: plantedID))?.state == .awaitingHuman)
+    }
+
+    @Test func foreignIdentityAllowConsumeFailsClosed() async throws {
+        // A resolved-allow row under a foreign identity never authorizes,
+        // even with a valid envelope: the explicit identity check before
+        // the memory mark holds (redundant with isOurs by design).
+        let (fake, backend) = rig()
+        let id = UUID().uuidString
+        let fingerprint = "mcp:tools.demo.org.main.echo:\(id)"
+        _ = try await fake.create(x1rSeedRequest(
+            id: id, identity: x1rForeignIdentity(),
+            fingerprint: fingerprint,
+            continuation: .resume(ApprovalResumeToken(rawValue: x1rValidToken(key: "f")))
+        ), now: Self.now)
+        _ = try await fake.resolve(
+            id: ApprovalID(rawValue: id), decision: .allowOnce,
+            fingerprint: ActionFingerprint(rawValue: fingerprint),
+            identity: x1rForeignIdentity(), now: Self.now
+        )
+        await #expect(throws: MCPElicitationError.unknownTicket) {
+            try await backend.consume(MCPElicitationTicket(id: UUID(uuidString: id)!, idempotencyKey: "f"))
+        }
+    }
+
+    @Test func pollAfterConsumeStaysInformative() async throws {
+        // Poll-after-consume contract: the durable allow row stays
+        // approved and the deny-consumed row stays declined; the polls are
+        // informational (delivery itself was exactly-once).
+        let (_, backend) = rig()
+        let approved = try await backend.park(x1rPrompt(key: "a"), ttl: 600)
+        try await backend.resolve(approved, decision: .approved)
+        #expect(try await backend.consume(approved) == .approved)
+        #expect(await backend.poll(approved) == .approved)
+        let declined = try await backend.park(x1rPrompt(key: "d"), ttl: 600)
+        try await backend.resolve(declined, decision: .declined)
+        #expect(try await backend.consume(declined) == .declined)
+        #expect(await backend.poll(declined) == .declined)
+    }
+}
+
+// MARK: - Paused waits (H-6)
+
+@Suite("X1-R paused waits")
+struct X1RPausedWaitTests {
+    private static let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+    @Test func waitsListArrivalOrderedWithDeadlines() async throws {
+        let dir = try x1rTempDir()
+        let clock = X1RClock()
+        let store = PendingApprovalStore(baseDirectory: dir)
+        let backend = MCPDurableApprovalBackend(store: store, identity: x1rIdentity(), now: { clock.now() })
+        clock.advance(by: 10)
+        let first = try await backend.park(
+            x1rPrompt(key: "first"), source: .policy, ttl: 600, onApproval: nil
+        )
+        clock.advance(by: 10)
+        let second = try await backend.park(
+            x1rPrompt(key: "second"), source: .tool, ttl: 600, onApproval: nil
+        )
+        clock.advance(by: 10)
+        let third = try await backend.park(
+            x1rPrompt(key: "third"), source: nil, ttl: 600, onApproval: nil
+        )
+        let waits = try await backend.waits()
+        #expect(waits.map(\.ticket.id) == [first.id, second.id, third.id])
+        #expect(waits.map(\.prompt.idempotencyKey) == ["first", "second", "third"])
+        #expect(waits.map(\.source) == [.policy, .tool, nil])
+        #expect(waits[0].parkedAt < waits[1].parkedAt && waits[1].parkedAt < waits[2].parkedAt)
+        for wait in waits {
+            #expect(wait.deadline == wait.parkedAt.addingTimeInterval(600))
+        }
+    }
+
+    @Test func waitsTiesKeepListingOrder() async throws {
+        // Same-tick parks share a createdAt; the stable sort keeps their
+        // arrival (listing) order, so FIFO holds even then.
+        let fake = X1RFakeCoordinator()
+        let backend = MCPDurableApprovalBackend(store: fake, identity: x1rIdentity(), now: { Self.now })
+        let first = try await backend.park(x1rPrompt(key: "first"), ttl: 600)
+        let second = try await backend.park(x1rPrompt(key: "second"), ttl: 600)
+        let third = try await backend.park(x1rPrompt(key: "third"), ttl: 600)
+        let waits = try await backend.waits()
+        #expect(waits.map(\.ticket.id) == [first.id, second.id, third.id])
+    }
+
+    @Test func waitsSkipForeignAndMalformed() async throws {
+        let fake = X1RFakeCoordinator()
+        let backend = MCPDurableApprovalBackend(store: fake, identity: x1rIdentity(), now: { Self.now })
+        let good = try await backend.park(x1rPrompt(key: "good"), ttl: 600)
+        _ = try await fake.create(x1rSeedRequest(
+            id: UUID().uuidString, identity: x1rForeignIdentity(),
+            fingerprint: "mcp:tools.demo.org.main.echo:foreign",
+            continuation: .resume(ApprovalResumeToken(rawValue: x1rValidToken()))
+        ), now: Self.now)
+        _ = try await fake.create(x1rSeedRequest(
+            id: UUID().uuidString, identity: x1rIdentity(),
+            fingerprint: "mcp:tools.demo.org.main.echo:garbage",
+            continuation: .resume(ApprovalResumeToken(rawValue: "garbage"))
+        ), now: Self.now)
+        // Owned and well-formed but with an unparseable id: no ticket can
+        // name it, so it skips too.
+        _ = try await fake.create(x1rSeedRequest(
+            id: "not-a-uuid", identity: x1rIdentity(),
+            fingerprint: "mcp:tools.demo.org.main.echo:bad-id",
+            continuation: .resume(ApprovalResumeToken(rawValue: x1rValidToken(key: "bad")))
+        ), now: Self.now)
+        let waits = try await backend.waits()
+        #expect(waits.map(\.ticket.id) == [good.id])
+    }
+
+    @Test func waitsListOutageThrowsTyped() async throws {
+        let fake = X1RFakeCoordinator()
+        let backend = MCPDurableApprovalBackend(store: fake, identity: x1rIdentity(), now: { Self.now })
+        await fake.setListError(.lockFailed)
+        await #expect(throws: MCPDurableApprovalError.storeFailed(.lockFailed)) {
+            try await backend.waits()
+        }
+    }
+
+    @Test func waitsSurviveRebind() async throws {
+        let dir = try x1rTempDir()
+        let clock = X1RClock()
+        let first = MCPDurableApprovalBackend(
+            store: PendingApprovalStore(baseDirectory: dir), identity: x1rIdentity(), now: { clock.now() }
+        )
+        let a = try await first.park(x1rPrompt(key: "a"), source: .tool, ttl: 600, onApproval: nil)
+        let b = try await first.park(x1rPrompt(key: "b"), source: .policy, ttl: 600, onApproval: nil)
+        let cold = MCPDurableApprovalBackend(
+            store: PendingApprovalStore(baseDirectory: dir), identity: x1rIdentity(), now: { clock.now() }
+        )
+        let waits = try await cold.waits()
+        #expect(waits.map(\.ticket.id) == [a.id, b.id])
+        #expect(waits.map(\.prompt.idempotencyKey) == ["a", "b"])
+        #expect(waits.map(\.source) == [.tool, .policy])
+    }
+
+    @Test func resolveWithResumerRebindsIdentity() async throws {
+        let fake = X1RFakeCoordinator()
+        let owner = MCPDurableApprovalBackend(store: fake, identity: x1rIdentity(), now: { Self.now })
+        let console = MCPDurableApprovalBackend(store: fake, identity: x1rForeignIdentity(), now: { Self.now })
+        let ticket = try await owner.park(x1rPrompt(), ttl: 600)
+        // The rebound console does not own the row: plain resolve is a noop.
+        try await console.resolve(ticket, decision: .approved)
+        #expect(await owner.poll(ticket) == .waiting)
+        // A non-owning resumer is likewise a noop.
+        try await console.resolve(ticket, decision: .approved, resumer: x1rForeignIdentity())
+        #expect(await owner.poll(ticket) == .waiting)
+        // Resuming AS the owner resolves.
+        try await console.resolve(ticket, decision: .approved, resumer: x1rIdentity())
+        #expect(await owner.poll(ticket) == .approved)
+        #expect(try await owner.consume(ticket) == .approved)
+    }
+
+    @Test func durableMCPApprovalsFactoryServes() async throws {
+        let fake = X1RFakeCoordinator()
+        let backend: any MCPElicitationBackend = durableMCPApprovals(
+            store: fake, identity: x1rIdentity(), now: { Self.now }
+        )
+        let ticket = try await backend.park(x1rPrompt(), ttl: 600)
+        #expect(await backend.poll(ticket) == .waiting)
+        await backend.cancel(ticket)
+        #expect(await backend.poll(ticket) == .canceled)
+        // Defaults serve too: nil handler parks for a human, wall clock ticks.
+        let defaulted: any MCPElicitationBackend = durableMCPApprovals(
+            store: fake, identity: x1rIdentity()
+        )
+        let human = try await defaulted.park(x1rPrompt(key: "human"), ttl: 600)
+        #expect(await defaulted.poll(human) == .waiting)
     }
 }
 

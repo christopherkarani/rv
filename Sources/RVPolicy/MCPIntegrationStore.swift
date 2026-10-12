@@ -20,7 +20,7 @@ public enum MCPIntegrationStoreError: Error, Sendable, Equatable {
 /// Mirrors Executor `McpRemoteTransport` (`streamable-http` | `sse` | `auto`)
 /// from `packages/plugins/mcp/src/sdk/types.ts`. Absent on the wire reads as
 /// `.auto`, matching Executor's constructor default.
-public enum McpRemoteTransport: String, Sendable, Equatable {
+public enum MCPRemoteTransport: String, Sendable, Equatable {
     case streamableHttp = "streamable-http"
     case sse = "sse"
     case auto = "auto"
@@ -147,7 +147,15 @@ public enum MCPHeaderValue: Sendable, Equatable, Encodable {
 /// `packages/core/config/src/schema.ts`. The header variant's `secret` is a
 /// `MCPSecretSelector` (never literal credential material); the oauth2
 /// variant names the connection holding token material by stable id.
-public enum McpAuthConfig: Sendable, Equatable, Encodable {
+///
+/// Credential-shape map: this enum is the STORED declaration (refs and
+/// labels only, never secret material). At invoke time the broker resolves
+/// it into a `ToolInvocationCredential` (resolved values, one call only);
+/// on failure paths the JSON-RPC error taxonomy reports it as an
+/// `MCPAuthCredential` (label bundle: kind + label, never values). The three
+/// never mix: declarations live in config, resolved values live in memory,
+/// labels live in errors and logs.
+public enum MCPAuthConfig: Sendable, Equatable, Encodable {
     case none
     case header(headerName: String, secret: MCPSecretSelector, prefix: String?)
     case oauth2(connectionId: String)
@@ -177,20 +185,45 @@ public enum McpAuthConfig: Sendable, Equatable, Encodable {
 public struct MCPRemoteIntegration: Sendable, Equatable, Encodable {
     public let name: String
     public let endpoint: String
-    public let remoteTransport: McpRemoteTransport
+    public let remoteTransport: MCPRemoteTransport
     public let namespace: String?
     public let queryParams: [String: MCPHeaderValue]?
     public let headers: [String: MCPHeaderValue]?
-    public let auth: McpAuthConfig
+    public let auth: MCPAuthConfig
 
+    /// Validated construction: every value faces the store's
+    /// `validateRemote` rules, so invalid models are unrepresentable outside
+    /// this file. Throws `.invalidDocument` (labels only) on any violation.
     public init(
         name: String,
         endpoint: String,
-        remoteTransport: McpRemoteTransport = .auto,
+        remoteTransport: MCPRemoteTransport = .auto,
         namespace: String? = nil,
         queryParams: [String: MCPHeaderValue]? = nil,
         headers: [String: MCPHeaderValue]? = nil,
-        auth: McpAuthConfig = .none
+        auth: MCPAuthConfig = .none
+    ) throws(MCPIntegrationStoreError) {
+        self.init(
+            unchecked: name, endpoint: endpoint, remoteTransport: remoteTransport,
+            namespace: namespace, queryParams: queryParams, headers: headers, auth: auth
+        )
+        if MCPIntegrationStore.validateRemote(self) != nil {
+            throw MCPIntegrationStoreError.invalidDocument
+        }
+    }
+
+    /// Unchecked construction for the store's decode path (which validates
+    /// through `validateRemote` for per-field reasons) and for tests that
+    /// need invalid models: the sink's defense-in-depth round-trip guard is
+    /// reachable only with one. Production callers use the throwing init.
+    init(
+        unchecked name: String,
+        endpoint: String,
+        remoteTransport: MCPRemoteTransport = .auto,
+        namespace: String? = nil,
+        queryParams: [String: MCPHeaderValue]? = nil,
+        headers: [String: MCPHeaderValue]? = nil,
+        auth: MCPAuthConfig = .none
     ) {
         self.name = name
         self.endpoint = endpoint
@@ -242,8 +275,31 @@ public struct MCPStdioIntegration: Sendable, Equatable, Encodable {
     public let cwd: String?
     public let namespace: String?
 
+    /// Validated construction: every value faces the store's
+    /// `validateStdio` rules, so invalid models are unrepresentable outside
+    /// this file. Throws `.invalidDocument` (labels only) on any violation.
     public init(
         name: String,
+        command: String,
+        args: [String]? = nil,
+        env: [String: String]? = nil,
+        cwd: String? = nil,
+        namespace: String? = nil
+    ) throws(MCPIntegrationStoreError) {
+        self.init(
+            unchecked: name, command: command, args: args,
+            env: env, cwd: cwd, namespace: namespace
+        )
+        if MCPIntegrationStore.validateStdio(self) != nil {
+            throw MCPIntegrationStoreError.invalidDocument
+        }
+    }
+
+    /// Unchecked construction for the store's decode path (which validates
+    /// through `validateStdio` for per-field reasons) and for tests that
+    /// need invalid models. Production callers use the throwing init.
+    init(
+        unchecked name: String,
         command: String,
         args: [String]? = nil,
         env: [String: String]? = nil,
@@ -476,146 +532,221 @@ public enum MCPIntegrationStore {
         return String(parts[parts.index(before: parts.endIndex)])
     }
 
+    /// Per-integration diagnostics for `data`: one `(index, reason)` per
+    /// problem, document-level problems at index `-1`. Empty means `decode`
+    /// succeeds. Reasons are field labels (`"endpoint"`,
+    /// `"auth.connectionId"`, `"duplicateNamespace"`), never values.
+    public static func validate(_ data: Data) -> [(index: Int, reason: String)] {
+        guard data.count <= maximumBytes else { return [(index: -1, reason: "oversized")] }
+        guard let document = try? JSONDecoder().decode(MCPIntegrationDocumentDTO.self, from: data) else {
+            return [(index: -1, reason: "invalidDocument")]
+        }
+        guard document.version == 1 else { return [(index: -1, reason: "unsupportedVersion")] }
+        guard document.integrations.count <= maximumIntegrations else {
+            return [(index: -1, reason: "tooManyIntegrations")]
+        }
+        var seen = Set<String>()
+        var problems: [(index: Int, reason: String)] = []
+        for (index, dto) in document.integrations.enumerated() {
+            switch resolveResult(dto) {
+            case .valid(let config):
+                if seen.insert(config.resolvedNamespace).inserted == false {
+                    problems.append((index: index, reason: "duplicateNamespace"))
+                }
+            case .invalid(let reason):
+                problems.append((index: index, reason: reason))
+            }
+        }
+        return problems
+    }
+
     private static func resolve(_ dto: IntegrationDTO) -> MCPIntegrationConfig? {
+        resolveResult(dto).value
+    }
+
+    private static func resolveResult(_ dto: IntegrationDTO) -> ResolveOutcome<MCPIntegrationConfig> {
         switch dto {
         case .remote(let remote):
-            guard let resolved = resolveRemote(remote) else { return nil }
-            return .remote(resolved)
+            return resolveRemoteResult(remote).map(MCPIntegrationConfig.remote)
         case .stdio(let stdio):
-            guard let resolved = resolveStdio(stdio) else { return nil }
-            return .stdio(resolved)
+            return resolveStdioResult(stdio).map(MCPIntegrationConfig.stdio)
         }
     }
 
-    private static func resolveRemote(_ dto: RemoteDTO) -> MCPRemoteIntegration? {
-        guard boundedText(dto.name, maxBytes: 256) else { return nil }
-        guard validEndpoint(dto.endpoint) else { return nil }
-        let transport: McpRemoteTransport
+    private static func resolveRemoteResult(_ dto: RemoteDTO) -> ResolveOutcome<MCPRemoteIntegration> {
+        let transport: MCPRemoteTransport
         if let raw = dto.remoteTransport {
-            guard let parsed = McpRemoteTransport(rawValue: raw) else { return nil }
+            guard let parsed = MCPRemoteTransport(rawValue: raw) else { return .invalid(reason: "remoteTransport") }
             transport = parsed
         } else {
             transport = .auto
         }
-        let namespace: String?
-        if let raw = dto.namespace {
-            guard identifier(raw) else { return nil }
-            namespace = raw
-        } else {
-            namespace = nil
+        let candidate = MCPRemoteIntegration(
+            unchecked: dto.name, endpoint: dto.endpoint, remoteTransport: transport,
+            namespace: dto.namespace,
+            queryParams: dto.queryParams.map(convertHeaderMap),
+            headers: dto.headers.map(convertHeaderMap),
+            auth: convertAuth(dto.auth)
+        )
+        if let reason = validateRemote(candidate) {
+            return .invalid(reason: reason)
         }
-        guard let queryParams = resolveHeaderMap(dto.queryParams, keyRule: queryKey) else { return nil }
-        guard let headers = resolveHeaderMap(dto.headers, keyRule: httpToken) else { return nil }
-        guard let auth = resolveAuth(dto.auth) else { return nil }
-        return MCPRemoteIntegration(
-            name: dto.name, endpoint: dto.endpoint, remoteTransport: transport,
-            namespace: namespace, queryParams: queryParams, headers: headers, auth: auth
+        return .valid(candidate)
+    }
+
+    private static func resolveStdioResult(_ dto: StdioDTO) -> ResolveOutcome<MCPStdioIntegration> {
+        let candidate = MCPStdioIntegration(
+            unchecked: dto.name, command: dto.command, args: dto.args,
+            env: dto.env, cwd: dto.cwd, namespace: dto.namespace
+        )
+        if let reason = validateStdio(candidate) {
+            return .invalid(reason: reason)
+        }
+        return .valid(candidate)
+    }
+
+    /// Total DTO-to-model converters: every DTO shape maps to a model, and
+    /// `validateRemote` judges the result. The only failable conversion is
+    /// the transport raw string, handled at the resolve site above.
+    private static func convertHeaderMap(_ dto: [String: HeaderValueDTO]) -> [String: MCPHeaderValue] {
+        Dictionary(
+            uniqueKeysWithValues: dto.map { (key, value) in (key, convertHeaderValue(value)) }
         )
     }
 
-    private static func resolveStdio(_ dto: StdioDTO) -> MCPStdioIntegration? {
-        guard boundedText(dto.name, maxBytes: 256) else { return nil }
-        guard absolutePath(dto.command), shellSafe(dto.command) else { return nil }
-        let args: [String]?
-        if let raw = dto.args {
-            guard raw.count <= maximumArgs, raw.allSatisfy({ boundedText($0, maxBytes: 1024) }) else { return nil }
-            args = raw
-        } else {
-            args = nil
-        }
-        let env: [String: String]?
-        if let raw = dto.env {
-            guard raw.count <= maximumEnv else { return nil }
-            for (key, value) in raw {
-                guard environmentName(key), boundedText(value, maxBytes: 1024),
-                    !value.hasPrefix(MCPSecretSelector.executorRefPrefix)
-                else { return nil }
-            }
-            env = raw
-        } else {
-            env = nil
-        }
-        let cwd: String?
-        if let raw = dto.cwd {
-            guard absolutePath(raw) else { return nil }
-            cwd = raw
-        } else {
-            cwd = nil
-        }
-        let namespace: String?
-        if let raw = dto.namespace {
-            guard identifier(raw) else { return nil }
-            namespace = raw
-        } else {
-            namespace = nil
-        }
-        return MCPStdioIntegration(
-            name: dto.name, command: dto.command, args: args,
-            env: env, cwd: cwd, namespace: namespace
-        )
-    }
-
-    /// Resolves an optional header-shaped map. Tri-state: `.some(nil)` when
-    /// absent, `.some(map)` when valid, `.none` when present but invalid.
-    private static func resolveHeaderMap(
-        _ dto: [String: HeaderValueDTO]?, keyRule: (String) -> Bool
-    ) -> [String: MCPHeaderValue]?? {
-        guard let dto else { return .some(nil) }
-        guard dto.count <= maximumHeaders else { return .none }
-        var resolved: [String: MCPHeaderValue] = [:]
-        for (key, value) in dto {
-            guard keyRule(key), let header = resolveHeaderValue(value) else { return .none }
-            resolved[key] = header
-        }
-        return .some(resolved)
-    }
-
-    private static func resolveHeaderValue(_ dto: HeaderValueDTO) -> MCPHeaderValue? {
+    private static func convertHeaderValue(_ dto: HeaderValueDTO) -> MCPHeaderValue {
         switch dto {
         case .literal(let value):
-            guard boundedText(value, maxBytes: 1024) else { return nil }
             return .literal(value)
         case .secret(let selector, let prefix):
-            guard let resolved = resolveSelector(selector),
-                prefix.map({ boundedText($0, maxBytes: 128) }) ?? true
-            else { return nil }
-            return .secret(resolved, prefix: prefix)
+            return .secret(convertSelector(selector), prefix: prefix)
         }
     }
 
     /// Absent auth reads as `.none`, matching Executor's optional `auth`.
-    private static func resolveAuth(_ dto: AuthDTO?) -> McpAuthConfig? {
-        guard let dto else { return McpAuthConfig.none }
+    private static func convertAuth(_ dto: AuthDTO?) -> MCPAuthConfig {
+        guard let dto else { return MCPAuthConfig.none }
         switch dto {
         case .none:
-            return McpAuthConfig.none
+            return MCPAuthConfig.none
         case .header(let headerName, let secret, let prefix):
-            guard httpToken(headerName),
-                let selector = resolveSelector(secret),
-                prefix.map({ boundedText($0, maxBytes: 128) }) ?? true
-            else { return nil }
-            return .header(headerName: headerName, secret: selector, prefix: prefix)
+            return .header(headerName: headerName, secret: convertSelector(secret), prefix: prefix)
         case .oauth2(let connectionId):
-            guard identifier(connectionId) else { return nil }
             return .oauth2(connectionId: connectionId)
         }
     }
 
-    private static func resolveSelector(_ dto: SecretSelectorDTO) -> MCPSecretSelector? {
-        guard SecretRef.allowedProviders.contains(dto.provider),
-            SecretLabels.isValidItem(dto.item),
-            dto.field.map(SecretLabels.isValidField) ?? true
-        else { return nil }
-        return MCPSecretSelector(provider: dto.provider, item: dto.item, field: dto.field)
+    private static func convertSelector(_ dto: SecretSelectorDTO) -> MCPSecretSelector {
+        MCPSecretSelector(provider: dto.provider, item: dto.item, field: dto.field)
     }
 
-    /// Non-empty bounded text without control bytes. Shared by names,
-    /// literals, args, values, and prefixes; each caller passes its cap.
-    /// Rejects every C0 control (NUL/CR/LF included — a bare vertical tab or
-    /// form feed would split an HTTP field value at some servers), DEL, and
-    /// C1 controls; printable text at U+0020 and U+00A0-up passes.
+    /// The single value-rule choke point for remote integrations: the
+    /// throwing init, `decode`, and `validate` all judge through here. Nil
+    /// means valid, otherwise the failing field label (never the value).
+    static func validateRemote(_ remote: MCPRemoteIntegration) -> String? {
+        guard boundedText(remote.name, maxBytes: 256) else { return "name" }
+        guard validEndpoint(remote.endpoint) else { return "endpoint" }
+        if let namespace = remote.namespace {
+            guard identifier(namespace) else { return "namespace" }
+        }
+        if let reason = validateHeaderMap(remote.queryParams, keyRule: queryKey, field: "queryParams") {
+            return reason
+        }
+        if let reason = validateHeaderMap(remote.headers, keyRule: httpToken, field: "headers") {
+            return reason
+        }
+        return validateAuth(remote.auth)
+    }
+
+    /// The single value-rule choke point for stdio integrations: the
+    /// throwing init, `decode`, and `validate` all judge through here. Nil
+    /// means valid, otherwise the failing field label (never the value).
+    static func validateStdio(_ stdio: MCPStdioIntegration) -> String? {
+        guard boundedText(stdio.name, maxBytes: 256) else { return "name" }
+        guard absolutePath(stdio.command) else { return "command" }
+        guard shellSafe(stdio.command) else { return "command.shell" }
+        if let args = stdio.args {
+            guard args.count <= maximumArgs else { return "args" }
+            guard args.allSatisfy({ boundedText($0, maxBytes: 1024) }) else { return "args.value" }
+        }
+        if let env = stdio.env {
+            guard env.count <= maximumEnv else { return "env" }
+            for (key, value) in env {
+                guard environmentName(key) else { return "env.name" }
+                guard boundedText(value, maxBytes: 1024) else { return "env.value" }
+                guard !value.hasPrefix(MCPSecretSelector.executorRefPrefix) else { return "env.secretRef" }
+            }
+        }
+        if let cwd = stdio.cwd {
+            guard absolutePath(cwd) else { return "cwd" }
+        }
+        if let namespace = stdio.namespace {
+            guard identifier(namespace) else { return "namespace" }
+        }
+        return nil
+    }
+
+    private static func validateHeaderMap(
+        _ map: [String: MCPHeaderValue]?, keyRule: (String) -> Bool, field: String
+    ) -> String? {
+        guard let map else { return nil }
+        guard map.count <= maximumHeaders else { return field }
+        for (key, value) in map {
+            guard keyRule(key) else { return "\(field).key" }
+            guard validateHeaderValue(value) else { return "\(field).value" }
+        }
+        return nil
+    }
+
+    private static func validateHeaderValue(_ value: MCPHeaderValue) -> Bool {
+        switch value {
+        case .literal(let text):
+            return boundedText(text, maxBytes: 1024)
+        case .secret(let selector, let prefix):
+            return validateSelector(selector)
+                && (prefix.map({ boundedText($0, maxBytes: 128) }) ?? true)
+        }
+    }
+
+    private static func validateAuth(_ auth: MCPAuthConfig) -> String? {
+        switch auth {
+        case .none:
+            return nil
+        case .header(let headerName, let secret, let prefix):
+            guard httpToken(headerName) else { return "auth.headerName" }
+            guard validateSelector(secret) else { return "auth.secret" }
+            guard prefix.map({ boundedText($0, maxBytes: 128) }) ?? true else { return "auth.prefix" }
+            return nil
+        case .oauth2(let connectionId):
+            // References must resolve: the id parses as a dotted connection
+            // handle (`<integration>.<owner>.<name>`), so every accepted id
+            // names a real connection row. Dotted EXPLICIT namespaces stay
+            // allowed (file-identity keys; the join is enforced at
+            // registration, not here).
+            guard (try? MCPConnectionID.parse(connectionId)) != nil else {
+                return "auth.connectionId"
+            }
+            return nil
+        }
+    }
+
+    private static func validateSelector(_ selector: MCPSecretSelector) -> Bool {
+        SecretRef.allowedProviders.contains(selector.provider)
+            && SecretLabels.isValidItem(selector.item)
+            && (selector.field.map(SecretLabels.isValidField) ?? true)
+    }
+
+    /// Non-empty bounded operator text. Shared by names, literals, args,
+    /// values, and prefixes; each caller passes its cap. Delegates the
+    /// character rule to `OperatorText`: controls (NUL/CR/LF included — a
+    /// bare vertical tab or form feed would split an HTTP field value at
+    /// some servers), invisible format characters (zero-width joiners,
+    /// directional marks), and line/paragraph separators all fail closed.
+    /// (RVDomain offers no `isClean` spelling; the negated detector below
+    /// is that predicate.)
     private static func boundedText(_ value: String, maxBytes: Int) -> Bool {
-        !value.isEmpty && value.utf8.count <= maxBytes && controlFree(value)
+        !value.isEmpty && value.utf8.count <= maxBytes
+            && OperatorText.containsDisallowedTextScalar(value) == false
     }
 
     /// No C0/C1 controls or DEL. UTF-8 text at U+00A0 and above passes.
@@ -627,14 +758,16 @@ public enum MCPIntegrationStore {
 
     /// Endpoint safety: absolute http(s) URL with a host, no whitespace or
     /// control bytes, no embedded userinfo (credentials are refs, never
-    /// smuggled into the URL).
+    /// smuggled into the URL), and no query or fragment (query pairs belong
+    /// in `queryParams`, where the renderer percent-encodes them).
     private static func validEndpoint(_ value: String) -> Bool {
         guard !value.isEmpty, value.utf8.count <= 2048, urlSafe(value) else { return false }
         guard let components = URLComponents(string: value),
             let scheme = components.scheme?.lowercased(),
             scheme == "http" || scheme == "https",
             let host = components.host, !host.isEmpty,
-            components.user == nil, components.password == nil
+            components.user == nil, components.password == nil,
+            components.query == nil, components.fragment == nil
         else { return false }
         return true
     }
@@ -717,6 +850,25 @@ public enum MCPIntegrationStore {
         controlFree(value)
             && value.split(separator: "/", omittingEmptySubsequences: false).dropFirst()
                 .allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+    }
+}
+
+/// One resolve outcome: the model, or the failing field label (never the
+/// value). A `Result` cannot carry a `String` failure, hence the enum.
+private enum ResolveOutcome<Value> {
+    case valid(Value)
+    case invalid(reason: String)
+
+    var value: Value? {
+        if case .valid(let value) = self { return value }
+        return nil
+    }
+
+    func map<Next>(_ transform: (Value) -> Next) -> ResolveOutcome<Next> {
+        switch self {
+        case .valid(let value): return .valid(transform(value))
+        case .invalid(let reason): return .invalid(reason: reason)
+        }
     }
 }
 
@@ -913,49 +1065,29 @@ public struct MCPIntegrationLiveIO: MCPIntegrationSinkIO {
     static func replaceFile(bytes: Data, dirFd: Int32) -> Bool {
         guard let staged = stage(bytes: bytes, dirFd: dirFd) else { return false }
         defer { close(staged.fd) }
-        let renamed = staged.name.withCString { temp in
-            MCPIntegrationStore.fileName.withCString { live in
-                renameat(dirFd, temp, dirFd, live)
-            }
-        }
-        guard renamed == 0 else {
-            _ = staged.name.withCString { unlinkat(dirFd, $0, 0) }
-            return false
-        }
-        return true
+        return OwnerOnlyFileWrite.commit(
+            staged: staged, as: MCPIntegrationStore.fileName, inDirectory: dirFd
+        )
     }
 
-    /// Stages `bytes` in a uniquely named 0600 temp file. Any failure
-    /// cleans up unconditionally (`close(-1)` and unlinking an absent name
-    /// are harmless no-ops), so there is no partial-progress branch: one
-    /// failure block serves open, write, and chmod alike. Single-attempt IO
-    /// throughout: a short write or signal interruption fails the staging
-    /// instead of retrying, and the sink reconciles on the next mutation.
+    /// Stages `bytes` into a 0600 temp via the shared sidecar. Deliberate
+    /// divergences from the migration rewrite, preserved: single-attempt
+    /// (`.once`, one attempt, no `EEXIST` retry) and no dev/ino recheck —
+    /// a failed staging reports and the sink reconciles on its next
+    /// mutation instead of retrying here.
     static func stage(bytes: Data, dirFd: Int32) -> StagedFile? {
-        let name = ".\(MCPIntegrationStore.fileName).sink-\(getpid())-\(UInt64.random(in: 0...UInt64.max))"
-        let fd = name.withCString {
-            openat(dirFd, $0, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
-        }
-        guard fd >= 0, writeOnce(bytes, to: fd), fchmod(fd, 0o600) == 0 else {
-            close(fd)
-            _ = name.withCString { unlinkat(dirFd, $0, 0) }
-            return nil
-        }
-        return StagedFile(fd: fd, name: name)
+        OwnerOnlyFileWrite.stage(
+            bytes: bytes, fileName: MCPIntegrationStore.fileName, tag: "sink",
+            inDirectory: dirFd, policy: .once, attempts: 1
+        )
     }
 
-    /// One write attempt. Empty input succeeds trivially (zero bytes to
-    /// write); otherwise the bridged base pointer is always addressable,
-    /// so there is no nil-base branch to cover.
+    /// One write attempt, via the shared sidecar's `.once` policy.
     static func writeOnce(_ bytes: Data, to fd: Int32) -> Bool {
-        if bytes.isEmpty { return true }
-        return write(fd, (bytes as NSData).bytes, bytes.count) == bytes.count
+        OwnerOnlyFileWrite.writeBytes(bytes, to: fd, policy: .once)
     }
 
-    struct StagedFile {
-        let fd: Int32
-        let name: String
-    }
+    typealias StagedFile = OwnerOnlyFileWrite.StagedFile
 }
 
 /// Canonical encoded document. Hand-written like every `encode(to:)` in

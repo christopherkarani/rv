@@ -25,17 +25,33 @@ extension ToolPattern {
 
 extension EffectivePolicy {
     /// Provenance label for the elicitation prompt: the winning rule id,
-    /// the static-pin literal, or the plugin-default fallback marker.
+    /// the static-pin literal, or the plugin-default fallback marker. Rule
+    /// ids and literals are sanitized at this sink: they ride single-line
+    /// prompts and logs, so a hostile id must not forge lines.
     public var elicitationLabel: String {
         switch provenance {
         case .fallback:
             return "plugin-default"
         case .staticPin(let literal):
-            return "static:\(literal)"
+            return "static:\(sanitizedElicitationLabelFragment(literal))"
         case .pattern(let id, _):
-            return "policy:\(id)"
+            return "policy:\(sanitizedElicitationLabelFragment(id))"
         }
     }
+}
+
+/// Strips line-breaking characters (controls, line/paragraph separators)
+/// from a label fragment. Non-breaking text passes through untouched.
+private func sanitizedElicitationLabelFragment(_ value: String) -> String {
+    String(
+        String.UnicodeScalarView(
+            value.unicodeScalars.filter { scalar in
+                let category = scalar.properties.generalCategory
+                return category != .control && category != .lineSeparator
+                    && category != .paragraphSeparator
+            }
+        )
+    )
 }
 
 // MARK: - Argument validation
@@ -354,10 +370,11 @@ public actor InMemoryElicitationBackend: MCPElicitationBackend {
             .map { MCPElicitationTicket(id: $0.key, idempotencyKey: $0.value.prompt.idempotencyKey) }
     }
 
-    /// Parks one prompt. Full or nonpositive TTL fails closed.
+    /// Parks one prompt. A full table or an unusable TTL (nonpositive or
+    /// non-finite, shared with the durable backend) fails closed.
     public func park(_ prompt: MCPElicitationPrompt, ttl: TimeInterval) async throws -> MCPElicitationTicket {
         sweepLocked()
-        guard parkedCount < Self.maximumParks, ttl > 0 else {
+        guard parkedCount < Self.maximumParks, isUsableElicitationTTL(ttl) else {
             throw MCPElicitationError.parkFull
         }
         let ticket = MCPElicitationTicket(id: UUID(), idempotencyKey: prompt.idempotencyKey)

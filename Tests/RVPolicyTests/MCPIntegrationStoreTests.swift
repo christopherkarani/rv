@@ -493,7 +493,7 @@ struct MCPIntegrationStoreTests {
 
     @Test func endpointRules() throws {
         for endpoint in [
-            "http://h", "https://h", "https://h/", "HTTP://EXAMPLE.COM", "https://h:8443/p?q=1#f",
+            "http://h", "https://h", "https://h/", "HTTP://EXAMPLE.COM",
             "http://192.168.1.1:8080/", "http://[::1]/", "https://tökén.example/mcp",
             "https://h/" + String(repeating: "p", count: 2038),
         ] {
@@ -510,6 +510,7 @@ struct MCPIntegrationStoreTests {
             "", "ftp://h", "ws://h", "wss://h", "example.com", "/relative", "http://",
             "https://", "https://h/a b", "https://h\ta", "https://h\0", "https://h\n", "https://h\r",
             "https://h/\u{7F}", "https://h/\u{80}", "https://user@h/", "https://user:pass@h/",
+            "https://h:8443/p?q=1#f", "https://h/p?x=1", "https://h/p#f", "https://h?", "https://h#",
             "https://h/" + String(repeating: "p", count: 2039),
         ] {
             #expect(
@@ -921,14 +922,14 @@ struct MCPIntegrationStoreTests {
         // oauth2.
         let oauth = try MCPIntegrationStore.decode(
             try Self.documentData([
-                Self.validRemote(extra: ["auth": ["kind": "oauth2", "connectionId": "conn-1"]])
+                Self.validRemote(extra: ["auth": ["kind": "oauth2", "connectionId": "github.user.main"]])
             ])
         ).get()
         guard case .remote(let oauthRemote) = oauth.integrations[0] else {
             Issue.record("expected remote")
             return
         }
-        #expect(oauthRemote.auth == .oauth2(connectionId: "conn-1"))
+        #expect(oauthRemote.auth == .oauth2(connectionId: "github.user.main"))
         // Unknown kinds and mistyped auth blocks.
         for auth: Any in [
             ["kind": "bearer"], ["kind": "apiKey"], ["kind": ""], ["kind": "NONE"], ["kind": 42],
@@ -1005,7 +1006,9 @@ struct MCPIntegrationStoreTests {
     }
 
     @Test func connectionIdRules() throws {
-        for id in ["conn-1", "550e8400-e29b-41d4-a716-446655440000", String(repeating: "c", count: 64)] {
+        // References must resolve: every accepted id parses as a dotted
+        // connection handle, so the oauth2 arm names a real connection row.
+        for id in ["github.user.main", "acme.org.widget1", "9aBc_-x.user._crm$1"] {
             let loaded = try MCPIntegrationStore.decode(
                 try Self.documentData([
                     Self.validRemote(extra: ["auth": ["kind": "oauth2", "connectionId": id]])
@@ -1017,7 +1020,12 @@ struct MCPIntegrationStoreTests {
             }
             #expect(remote.auth == .oauth2(connectionId: id))
         }
-        for id in ["", String(repeating: "c", count: 65), "has space", "has/slash", "tökén", "has\0nul"] {
+        for id in [
+            "", "conn-1", "550e8400-e29b-41d4-a716-446655440000",
+            String(repeating: "c", count: 64), "a.b", "a.b.c.d", "github.bogus.main",
+            ".user.main", "github.user.", "github..main", "has space", "has/slash",
+            "tökén", "has\0nul",
+        ] {
             #expect(
                 MCPIntegrationStore.decode(
                     try Self.documentData([
@@ -1025,6 +1033,225 @@ struct MCPIntegrationStoreTests {
                     ])
                 ) == .failure(.invalidDocument)
             )
+        }
+    }
+
+    @Test func connectionIdRoundTripsThroughParse() throws {
+        // Every accepted connectionId parses and formats back to itself.
+        for id in ["github.user.main", "acme.org.widget1", "9aBc_-x.user._crm$1"] {
+            let loaded = try MCPIntegrationStore.decode(
+                try Self.documentData([
+                    Self.validRemote(extra: ["auth": ["kind": "oauth2", "connectionId": id]])
+                ])
+            ).get()
+            guard case .remote(let remote) = loaded.integrations[0],
+                case .oauth2(let accepted) = remote.auth
+            else {
+                Issue.record("expected oauth2 remote")
+                return
+            }
+            #expect(try MCPConnectionID.parse(accepted).description == accepted)
+        }
+    }
+
+    @Test func dottedNamespacesStayAllowed() throws {
+        // Dotted EXPLICIT namespaces are file-identity keys, not references:
+        // they stay allowed while connectionIds must parse.
+        let loaded = try MCPIntegrationStore.decode(
+            try Self.documentData([
+                Self.validRemote(extra: ["namespace": "a.b.c"]),
+                Self.validStdio(extra: ["namespace": "x.y"]),
+            ])
+        ).get()
+        #expect(loaded.integrations.count == 2)
+        #expect(loaded.integrations[0].resolvedNamespace == "a.b.c")
+        #expect(loaded.integrations[1].resolvedNamespace == "x.y")
+    }
+
+    @Test func operatorTextRejectsInvisibleFormatAndSeparators() throws {
+        // boundedText delegates to OperatorText: zero-width joiners and
+        // line/paragraph separators fail closed everywhere bounded text
+        // applies, while emoji (symbols, not format) still loads.
+        for name in ["a\u{200D}b", "a\u{2028}b", "a\u{2029}b", "\u{FEFF}bom", "a\u{200E}b"] {
+            #expect(
+                MCPIntegrationStore.decode(
+                    try Self.documentData([Self.validRemote(name: name)])
+                ) == .failure(.invalidDocument)
+            )
+        }
+        #expect(
+            MCPIntegrationStore.decode(
+                try Self.documentData([
+                    Self.validRemote(extra: ["headers": ["X-Lit": "a\u{2028}b"]])
+                ])
+            ) == .failure(.invalidDocument)
+        )
+        #expect(
+            MCPIntegrationStore.decode(
+                try Self.documentData([
+                    Self.validStdio(extra: ["args": ["a\u{200D}b"]])
+                ])
+            ) == .failure(.invalidDocument)
+        )
+        let loaded = try MCPIntegrationStore.decode(
+            try Self.documentData([Self.validRemote(name: "🔥 Deploy")])
+        ).get()
+        #expect(loaded.integrations[0].name == "🔥 Deploy")
+    }
+
+    @Test func throwingInitsAcceptValidModels() throws {
+        let remote = try MCPRemoteIntegration(
+            name: "GitHub",
+            endpoint: "https://api.example.com/mcp",
+            remoteTransport: .sse,
+            namespace: "github",
+            queryParams: ["plain": .literal("value")],
+            headers: ["X-Literal": .literal("yes")],
+            auth: .oauth2(connectionId: "github.user.main")
+        )
+        #expect(remote.resolvedNamespace == "github")
+        let stdio = try MCPStdioIntegration(
+            name: "Helper",
+            command: "/usr/local/bin/mcp-helper",
+            args: ["serve"],
+            env: ["LOG_LEVEL": "debug"],
+            cwd: "/tmp/work",
+            namespace: "helper"
+        )
+        #expect(stdio.resolvedNamespace == "helper")
+    }
+
+    @Test func throwingInitsRejectInvalidModels() {
+        #expect(throws: MCPIntegrationStoreError.invalidDocument) {
+            try MCPRemoteIntegration(name: "", endpoint: "https://h")
+        }
+        #expect(throws: MCPIntegrationStoreError.invalidDocument) {
+            try MCPRemoteIntegration(name: "R", endpoint: "notaurl")
+        }
+        #expect(throws: MCPIntegrationStoreError.invalidDocument) {
+            try MCPRemoteIntegration(name: "R", endpoint: "https://h/p?x=1")
+        }
+        #expect(throws: MCPIntegrationStoreError.invalidDocument) {
+            try MCPRemoteIntegration(name: "R", endpoint: "https://h", namespace: "has space")
+        }
+        #expect(throws: MCPIntegrationStoreError.invalidDocument) {
+            try MCPRemoteIntegration(
+                name: "R", endpoint: "https://h", auth: .oauth2(connectionId: "conn-1")
+            )
+        }
+        #expect(throws: MCPIntegrationStoreError.invalidDocument) {
+            try MCPStdioIntegration(name: "", command: "/bin/s")
+        }
+        #expect(throws: MCPIntegrationStoreError.invalidDocument) {
+            try MCPStdioIntegration(name: "S", command: "relative/path")
+        }
+        #expect(throws: MCPIntegrationStoreError.invalidDocument) {
+            try MCPStdioIntegration(name: "S", command: "/bin/a;b")
+        }
+        #expect(throws: MCPIntegrationStoreError.invalidDocument) {
+            try MCPStdioIntegration(
+                name: "S", command: "/bin/s",
+                env: ["TOKEN": "secret-public-ref:file/x"]
+            )
+        }
+    }
+
+    @Test func endpointQueryBelongsInQueryParams() throws {
+        // The same query the endpoint rejects loads fine as queryParams.
+        #expect(
+            MCPIntegrationStore.decode(
+                try Self.documentData([Self.validRemote(endpoint: "https://h/mcp?x=1")])
+            ) == .failure(.invalidDocument)
+        )
+        let loaded = try MCPIntegrationStore.decode(
+            try Self.documentData([
+                Self.validRemote(
+                    endpoint: "https://h/mcp", extra: ["queryParams": ["x": "1"]]
+                )
+            ])
+        ).get()
+        guard case .remote(let remote) = loaded.integrations[0] else {
+            Issue.record("expected remote")
+            return
+        }
+        #expect(remote.queryParams?["x"] == .literal("1"))
+    }
+
+    @Test func validateReportsPerFieldReasons() throws {
+        #expect(
+            MCPIntegrationStore.validate(
+                try Self.documentData([Self.validRemote(), Self.validStdio()])
+            ).isEmpty
+        )
+        let endpoint = MCPIntegrationStore.validate(
+            try Self.documentData([Self.validRemote(endpoint: "notaurl")])
+        )
+        #expect(endpoint.count == 1)
+        #expect(endpoint.first?.index == 0)
+        #expect(endpoint.first?.reason == "endpoint")
+        let connection = MCPIntegrationStore.validate(
+            try Self.documentData([
+                Self.validRemote(extra: ["auth": ["kind": "oauth2", "connectionId": "conn-1"]])
+            ])
+        )
+        #expect(connection.map(\.reason) == ["auth.connectionId"])
+        let both = MCPIntegrationStore.validate(
+            try Self.documentData([
+                Self.validRemote(name: ""),
+                Self.validStdio(extra: ["command": "relative"]),
+            ])
+        )
+        #expect(both.map(\.index) == [0, 1])
+        #expect(both.map(\.reason) == ["name", "command"])
+        let duplicate = MCPIntegrationStore.validate(
+            try Self.documentData([
+                Self.validRemote(extra: ["namespace": "same"]),
+                Self.validRemote(extra: ["namespace": "same"]),
+            ])
+        )
+        #expect(duplicate.map(\.index) == [1])
+        #expect(duplicate.map(\.reason) == ["duplicateNamespace"])
+        #expect(
+            MCPIntegrationStore.validate(
+                try Self.documentData([Self.validRemote()], version: 2)
+            ).map(\.reason) == ["unsupportedVersion"]
+        )
+        #expect(
+            MCPIntegrationStore.validate(Data("{\"version\":}".utf8)).map(\.reason)
+                == ["invalidDocument"]
+        )
+        #expect(
+            MCPIntegrationStore.validate(
+                Data(repeating: 0x61, count: MCPIntegrationStore.maximumBytes + 1)
+            ).map(\.reason) == ["oversized"]
+        )
+        let many = MCPIntegrationStore.validate(
+            try Self.documentData(
+                (0...MCPIntegrationStore.maximumIntegrations).map { _ in Self.validRemote() }
+            )
+        )
+        #expect(many.map(\.reason) == ["tooManyIntegrations"])
+    }
+
+    @Test func validateAgreesWithDecode() throws {
+        // validate is empty exactly when decode succeeds.
+        let documents: [Data] = try [
+            Self.documentData([Self.validRemote(), Self.validStdio()]),
+            Self.documentData([]),
+            Self.documentData([Self.validRemote(endpoint: "notaurl")]),
+            Self.documentData([Self.validStdio(extra: ["command": "relative"])]),
+            Self.documentData(
+                [Self.validRemote(extra: ["namespace": "dup"]), Self.validRemote(extra: ["namespace": "dup"])]
+            ),
+            Data("not json".utf8),
+        ]
+        for document in documents {
+            let valid: Bool
+            switch MCPIntegrationStore.decode(document) {
+            case .success: valid = true
+            case .failure: valid = false
+            }
+            #expect(MCPIntegrationStore.validate(document).isEmpty == valid)
         }
     }
 
@@ -1287,36 +1514,36 @@ struct MCPIntegrationStoreTests {
         #expect(MCPIntegrationStore.deriveNamespace(name: "UPPER lower 09", endpoint: nil, command: nil) == "upper_lower_09")
     }
 
-    @Test func resolvedNamespacePrefersExplicit() {
+    @Test func resolvedNamespacePrefersExplicit() throws {
         // Explicit wins even when a name would derive differently.
         let explicit = MCPIntegrationConfig.remote(
-            MCPRemoteIntegration(name: "GitHub MCP", endpoint: "https://api.example.com", namespace: "custom")
+            try MCPRemoteIntegration(name: "GitHub MCP", endpoint: "https://api.example.com", namespace: "custom")
         )
         #expect(explicit.explicitNamespace == "custom")
         #expect(explicit.resolvedNamespace == "custom")
         // Derived paths through the models (hand-built blanks exercise the
         // endpoint/command legs that validated models never reach, since
-        // validation requires a non-empty name).
+        // validation requires a non-empty name; hence the unchecked init).
         let fromEndpoint = MCPIntegrationConfig.remote(
-            MCPRemoteIntegration(name: "", endpoint: "https://api.example.com/x")
+            MCPRemoteIntegration(unchecked: "", endpoint: "https://api.example.com/x")
         )
         #expect(fromEndpoint.explicitNamespace == nil)
         #expect(fromEndpoint.resolvedNamespace == "api_example_com")
         let fromCommand = MCPIntegrationConfig.stdio(
-            MCPStdioIntegration(name: "", command: "/opt/bin/my-server")
+            MCPStdioIntegration(unchecked: "", command: "/opt/bin/my-server")
         )
         #expect(fromCommand.resolvedNamespace == "my_server")
-        let fallback = MCPIntegrationConfig.stdio(MCPStdioIntegration(name: "", command: "///"))
+        let fallback = MCPIntegrationConfig.stdio(MCPStdioIntegration(unchecked: "", command: "///"))
         #expect(fallback.resolvedNamespace == "mcp")
     }
 
-    @Test func unionAccessors() {
-        let remote = MCPIntegrationConfig.remote(MCPRemoteIntegration(name: "R", endpoint: "https://h"))
+    @Test func unionAccessors() throws {
+        let remote = MCPIntegrationConfig.remote(try MCPRemoteIntegration(name: "R", endpoint: "https://h"))
         #expect(remote.name == "R")
         #expect(remote.explicitNamespace == nil)
         #expect(remote.resolvedNamespace == "r")
         let stdio = MCPIntegrationConfig.stdio(
-            MCPStdioIntegration(name: "S", command: "/bin/s", namespace: "ess")
+            try MCPStdioIntegration(name: "S", command: "/bin/s", namespace: "ess")
         )
         #expect(stdio.name == "S")
         #expect(stdio.explicitNamespace == "ess")
@@ -1450,7 +1677,7 @@ struct MCPIntegrationStoreTests {
 
     @Test func minimalRemoteEncodesExactly() throws {
         let set = MCPIntegrationSet(integrations: [
-            .remote(MCPRemoteIntegration(name: "H", endpoint: "https://h/mcp"))
+            .remote(try MCPRemoteIntegration(name: "H", endpoint: "https://h/mcp"))
         ])
         let bytes = try MCPIntegrationStore.encode(set).get()
         #expect(
@@ -1562,10 +1789,10 @@ struct MCPIntegrationStoreTests {
     @Test func authNoneEncodesDirectly() throws {
         // The store encoder omits defaulted auth, so the none wire form is
         // pinned by direct encoding instead.
-        let bytes = try JSONEncoder().encode(McpAuthConfig.none)
+        let bytes = try JSONEncoder().encode(MCPAuthConfig.none)
         #expect(String(data: bytes, encoding: .utf8) == "{\"kind\":\"none\"}")
         let header = try JSONEncoder().encode(
-            McpAuthConfig.header(
+            MCPAuthConfig.header(
                 headerName: "X", secret: MCPSecretSelector(provider: "file", item: "x"), prefix: nil
             )
         )
@@ -2177,7 +2404,7 @@ struct MCPIntegrationStoreTests {
         // producing bytes the next load would choke on (which would stick,
         // since invalid files are never clobbered).
         let invalid = MCPIntegrationConfig.remote(
-            MCPRemoteIntegration(name: "", endpoint: "notaurl")
+            MCPRemoteIntegration(unchecked: "", endpoint: "notaurl")
         )
         #expect(
             MCPIntegrationFileSinkTransform.upsert(invalid, into: .empty)
@@ -2197,7 +2424,7 @@ struct MCPIntegrationStoreTests {
         let sink = MCPIntegrationFileSink.live(directory: directory) { op, error in
             errors.calls.append(SinkError(operation: op, error: error))
         }
-        sink.upsert(.remote(MCPRemoteIntegration(name: "", endpoint: "https://h")))
+        sink.upsert(.remote(MCPRemoteIntegration(unchecked: "", endpoint: "https://h")))
         #expect(errors.calls == [SinkError(operation: .upsert, error: .invalidDocument)])
         #expect(
             FileManager.default.fileExists(
@@ -2453,12 +2680,15 @@ struct MCPIntegrationStoreTests {
         return URL(fileURLWithPath: path)
     }
 
+    // Fixture factories build through the unchecked init: every default is
+    // known-valid (the throwing init has its own tests below), which keeps
+    // the sink suites free of try-churn.
     static func remoteModel(
         namespace: String? = "gh",
         name: String = "GitHub",
         endpoint: String = "https://api.example.com/mcp"
     ) -> MCPIntegrationConfig {
-        .remote(MCPRemoteIntegration(name: name, endpoint: endpoint, namespace: namespace))
+        .remote(MCPRemoteIntegration(unchecked: name, endpoint: endpoint, namespace: namespace))
     }
 
     static func stdioModel(
@@ -2466,14 +2696,14 @@ struct MCPIntegrationStoreTests {
         name: String = "Helper",
         command: String = "/usr/local/bin/mcp-helper"
     ) -> MCPIntegrationConfig {
-        .stdio(MCPStdioIntegration(name: name, command: command, namespace: namespace))
+        .stdio(MCPStdioIntegration(unchecked: name, command: command, namespace: namespace))
     }
 
     static func maximalRemote() -> MCPIntegrationConfig {
         .remote(
             MCPRemoteIntegration(
-                name: "GitHub MCP",
-                endpoint: "https://api.example.com:8443/mcp?x=1#f",
+                unchecked: "GitHub MCP",
+                endpoint: "https://api.example.com:8443/mcp",
                 remoteTransport: .sse,
                 namespace: "github",
                 queryParams: [
@@ -2501,7 +2731,7 @@ struct MCPIntegrationStoreTests {
     static func maximalStdio() -> MCPIntegrationConfig {
         .stdio(
             MCPStdioIntegration(
-                name: "Helper",
+                unchecked: "Helper",
                 command: "/usr/local/bin/mcp-helper",
                 args: ["serve", "--port", "8080"],
                 env: ["LOG_LEVEL": "debug", "WORKERS": "4"],
@@ -2517,7 +2747,7 @@ struct MCPIntegrationStoreTests {
         let big = String(repeating: "v", count: 1024)
         return .remote(
             MCPRemoteIntegration(
-                name: "Big",
+                unchecked: "Big",
                 endpoint: "https://h/" + String(repeating: "p", count: 2038),
                 namespace: "big",
                 queryParams: Dictionary(
@@ -2526,7 +2756,7 @@ struct MCPIntegrationStoreTests {
                 headers: Dictionary(
                     uniqueKeysWithValues: (0..<32).map { ("X-H-\($0)", MCPHeaderValue.literal(big)) }
                 ),
-                auth: .oauth2(connectionId: "conn-1")
+                auth: .oauth2(connectionId: "big.user.main")
             )
         )
     }

@@ -345,20 +345,85 @@ struct PendingApprovalStoreTests {
         }
     }
 
-    @Test func corruptJSONLLineIsSkipped() async throws {
+    @Test func corruptJSONLLineRefusesRewriteButKeepsReads() async throws {
         let root = try isolatedDirectory()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let junk = "{not-json}\n"
-        try junk.write(
-            to: RVPolicyPaths.pendingApprovalsFile(inConfigDir: root),
-            atomically: true,
-            encoding: .utf8
-        )
+        let file = RVPolicyPaths.pendingApprovalsFile(inConfigDir: root)
         let store = PendingApprovalStore(baseDirectory: root)
-        let created = try await store.create(Self.request(id: "after-junk"), now: Self.now)
-        #expect(created.id.rawValue == "after-junk")
+        let created = try await store.create(Self.request(id: "good-1"), now: Self.now)
+        // Rot appends a torn line after the good write.
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{not-json}\n".utf8))
+        try handle.close()
+        let poisoned = try Data(contentsOf: file)
+        // Mutations refuse: the rewrite would silently drop the torn line.
+        // (A distinct fingerprint: same-fingerprint creates dedupe without
+        // rewriting, which is a read, not a rewrite.)
+        await #expect(throws: PendingApprovalError.encodeFailed) {
+            _ = try await store.create(
+                Self.request(
+                    id: "after-junk",
+                    fingerprint: ActionFingerprint(rawValue: "shell:distinct:after-junk")
+                ),
+                now: Self.now
+            )
+        }
+        await #expect(throws: PendingApprovalError.encodeFailed) {
+            _ = try await store.resolve(
+                id: created.id, decision: .deny,
+                fingerprint: Self.fingerprint, identity: Self.identity, now: Self.now
+            )
+        }
+        // Bytes preserved...
+        #expect(try Data(contentsOf: file) == poisoned)
+        // ...and reads still see the good record.
         let listed = try await store.list(now: Self.now)
         #expect(listed.map(\.id) == [created.id])
+        let loaded = try await store.load(id: created.id, now: Self.now)
+        #expect(loaded.id == created.id)
+    }
+
+    @Test func corruptOnlyFileRefusesMutationPreservesBytes() async throws {
+        let root = try isolatedDirectory()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = RVPolicyPaths.pendingApprovalsFile(inConfigDir: root)
+        // Torn JSON plus an invalid-UTF8 line: both count as raw lines the
+        // decode cannot recover.
+        try Data([0x7B, 0xFF, 0x7D, 0x0A, 0x7B, 0x6E, 0x6F, 0x74, 0x2D, 0x6A, 0x73, 0x6F, 0x6E, 0x7D, 0x0A])
+            .write(to: file)
+        let poisoned = try Data(contentsOf: file)
+        let store = PendingApprovalStore(baseDirectory: root)
+        await #expect(throws: PendingApprovalError.encodeFailed) {
+            _ = try await store.create(Self.request(id: "nope"), now: Self.now)
+        }
+        #expect(try Data(contentsOf: file) == poisoned)
+        #expect(try await store.list(now: Self.now) == [])
+    }
+
+    @Test func blankLinesDoNotBreakIntegrity() async throws {
+        // Blank lines are inert (the writer never emits them), so a file
+        // with a stray blank still accepts mutations; the rewrite drops
+        // the blank and loses nothing.
+        let root = try isolatedDirectory()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = RVPolicyPaths.pendingApprovalsFile(inConfigDir: root)
+        let store = PendingApprovalStore(baseDirectory: root)
+        _ = try await store.create(Self.request(id: "good-1"), now: Self.now)
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("\n   \n".utf8))
+        try handle.close()
+        let second = try await store.create(
+            Self.request(
+                id: "good-2",
+                fingerprint: ActionFingerprint(rawValue: "shell:distinct:good-2")
+            ),
+            now: Self.now
+        )
+        #expect(second.id.rawValue == "good-2")
+        let listed = try await store.list(now: Self.now)
+        #expect(listed.map(\.id.rawValue) == ["good-1", "good-2"])
     }
 }
 
@@ -418,7 +483,8 @@ private extension PendingApprovalStoreTests {
     static func request(
         id: String,
         timeoutPolicy: ApprovalTimeoutPolicy = .keepWaiting,
-        ttl: TimeInterval = 60
+        ttl: TimeInterval = 60,
+        fingerprint: ActionFingerprint = PendingApprovalStoreTests.fingerprint
     ) -> PendingApprovalRequest {
         PendingApprovalRequest(
             id: ApprovalID(rawValue: id),

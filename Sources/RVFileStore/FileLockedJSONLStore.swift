@@ -60,8 +60,22 @@ public struct FileLockedJSONLStore<Record: Codable & Sendable>: Sendable {
     /// UTF-8 and undecodable, empty, or whitespace-only lines are skipped.
     /// Fail-open: callers cannot distinguish an empty store from a corrupt one.
     public func load() -> [Record] {
+        loadCore().records
+    }
+
+    /// Load with integrity counts: the decoded records plus the raw
+    /// non-blank line count and the decoded count. Callers that rewrite the
+    /// file refuse when the counts differ — a corrupt line would otherwise
+    /// be silently dropped by the rewrite. Blank lines (including the
+    /// trailing segment after the final newline) count in neither: the
+    /// writer never emits them, so dropping them loses nothing.
+    public func loadDetailed() -> (records: [Record], rawLines: Int, decodedLines: Int) {
+        loadCore()
+    }
+
+    private func loadCore() -> (records: [Record], rawLines: Int, decodedLines: Int) {
         guard let data = try? Data(contentsOf: fileURL) else {
-            return []
+            return ([], 0, 0)
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -72,23 +86,34 @@ public struct FileLockedJSONLStore<Record: Codable & Sendable>: Sendable {
         // CRLF loadable — the CR stays on the line and is stripped below.
         // Character-wise split cannot be used here: CRLF is a single
         // Character and would swallow the LF.
-        return data.split(separator: 0x0A).compactMap { bytes in
+        var records: [Record] = []
+        var rawLines = 0
+        var decodedLines = 0
+        for bytes in data.split(separator: 0x0A, omittingEmptySubsequences: false) {
             guard let line = String(bytes: bytes, encoding: .utf8) else {
-                return nil
+                // Invalid UTF-8 is never blank (blank is ASCII), so it is
+                // always a raw line the decode below cannot recover.
+                rawLines += 1
+                continue
             }
             var withoutCR = line[...]
             while withoutCR.hasSuffix("\r") {
                 withoutCR = withoutCR.dropLast()
             }
             let raw = withoutCR.trimmingCharacters(in: .whitespaces)
-            guard raw.isEmpty == false,
-                  let lineData = raw.data(using: .utf8),
-                  let record = try? decoder.decode(Record.self, from: lineData)
-            else {
-                return nil
+            guard raw.isEmpty == false else {
+                continue
             }
-            return record
+            rawLines += 1
+            guard let lineData = raw.data(using: .utf8),
+                let record = try? decoder.decode(Record.self, from: lineData)
+            else {
+                continue
+            }
+            decodedLines += 1
+            records.append(record)
         }
+        return (records, rawLines, decodedLines)
     }
 
     /// Atomic save: temp-file + `rename(2)`, 0600 on temp and final, 0700 on

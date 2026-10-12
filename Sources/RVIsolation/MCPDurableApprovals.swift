@@ -40,6 +40,46 @@ public struct MCPApprovalPrompt: Sendable, Hashable, Equatable, Codable {
     }
 }
 
+/// One paused MCP wait for operator consoles: the ticket, the prompt to
+/// show, who raised it, when it parked, and when it ends. `deadline` is
+/// the record's own `expiresAt` — past it the `.failTask` sweep times the
+/// wait out on next load.
+public struct MCPPausedWait: Sendable, Hashable, Equatable {
+    /// The parked wait handle.
+    public var ticket: MCPElicitationTicket
+    /// The operator-facing prompt.
+    public var prompt: MCPElicitationPrompt
+    /// Who raised it. Nil reads as `.tool`.
+    public var source: MCPElicitationSource?
+    /// When the wait parked (the record's `createdAt`).
+    public var parkedAt: Date
+    /// When the wait ends (the record's `expiresAt`).
+    public var deadline: Date
+
+    /// Assembles one paused wait from validated parts.
+    public init(
+        ticket: MCPElicitationTicket,
+        prompt: MCPElicitationPrompt,
+        source: MCPElicitationSource? = nil,
+        parkedAt: Date,
+        deadline: Date
+    ) {
+        self.ticket = ticket
+        self.prompt = prompt
+        self.source = source
+        self.parkedAt = parkedAt
+        self.deadline = deadline
+    }
+}
+
+/// True for parkable TTLs: positive and finite. Nonpositive TTLs can never
+/// elapse-into-waiting and non-finite ones have no encodable expiry, so
+/// both fail closed before any handler runs. Shared by the durable and
+/// in-memory backends.
+func isUsableElicitationTTL(_ ttl: TimeInterval) -> Bool {
+    ttl > 0 && ttl.isFinite
+}
+
 // MARK: - Handler seam
 
 /// One handler answer to an approval prompt.
@@ -253,58 +293,41 @@ struct MCPDurablePromptEnvelope: Sendable, Hashable, Equatable {
 
 /// `MCPElicitationBackend` over the durable `PendingApprovalStore`.
 ///
-/// BRIDGE, not a parallel executor-shaped store: every wait is a
-/// `PendingApproval` record bound by the store's fingerprint+identity
-/// contract. Park creates the record, poll loads it, deny-consume consumes it
-/// (durable exactly-once), cancel cancels it, and the TTL is the store's own
-/// sweep (`timeoutPolicy .failTask`: past `expiresAt` the record times out on
-/// next load — a timed-out MCP approval fails the call, it is never a human
-/// deny; compare the ASK flow's `.autoDeny`).
+/// BRIDGE, not a parallel store: park writes a `PendingApproval` record,
+/// poll loads it, deny-consume consumes it (durable exactly-once), cancel
+/// cancels it, and the TTL is the store's own `.failTask` sweep (a timed-out
+/// approval fails the call, never a human deny).
 ///
-/// Record shape per park: id = the ticket id (so a rebound backend
-/// reconstructs tickets from record ids), identity = the constructor
-/// identity, action = `.shell(.effectOnly)` carrying fingerprint
-/// `mcp:<address>:<ticket-uuid>` (unique per park, so parks never dedupe and
-/// the prefix filters MCP rows out of the shared store; the shell case is a
-/// carrier only — no MCP `ProposedAction` case exists yet and adding one is
-/// T0a work), reason = `.hostAsk` (this bridge is a host adapter asking),
-/// continuation = `.resume(token)` carrying the prompt envelope (the token is
-/// host-defined; the MCP bridge is the host here), timeoutPolicy = `.failTask`.
+/// Record shape per park: id = ticket id, identity = constructor identity,
+/// action = `.shell(.effectOnly)` carrying fingerprint
+/// `mcp:<address>:<ticket-uuid>`, reason = `.hostAsk`, continuation =
+/// `.resume(token)` with the prompt envelope, timeoutPolicy = `.failTask`.
 ///
-/// LOUD CONTRACT NOTES, each pinned by tests:
-///
-/// - Allow-consumption exactly-once is IN-MEMORY. Name-only `consume`
-///   delivers denies only (`PendingApprovalLedger.consume` rejects
-///   authorizing decisions, so restart persistence never mints authority);
-///   the allow row stays `.resolved` durably and this backend's
-///   `consumedApprovals` set enforces one delivery. A crash between consume
-///   and invoke could re-deliver after a rebind. The window is narrow (the
-///   invoker consumes once per ticket, tickets are memory-only, and resolved
-///   rows never list — re-delivery needs an out-of-band ticket replay after
-///   the crash), but it is real — closing it needs a durably-marked
-///   allow-consume, which the store has no transition for. The same window
-///   covers two LIVE backends over one store+identity (marks are per
-///   instance), so wire exactly one backend per (store, identity).
-/// - `allowOnce` and `createRule` both read as approved. MCP has no rule
-///   surface (persistence negotiation is out of scope), so a `createRule`
-///   resolution authorizes this one call exactly like `allowOnce`.
-/// - `poll` maps every store failure (including outages) to `.canceled`:
-///   the protocol signature cannot throw, so reads fail closed. The invoker
-///   denies canceled waits without running anything.
-/// - `cancel` is best-effort per the protocol and swallows store outages;
-///   the next poll/consume surfaces store health typed.
-/// - MCP rows must resolve via `MCPDurableApprovalBackend.resolve` (or
-///   `store.resolve` directly). The shell allow-once ceremony
-///   (`HookAskResolver`) cannot plant them — an MCP row has no
-///   `supportingCommand` — so operator consoles must route `mcp:`-prefixed
-///   rows here, never into the shell ceremony.
-/// - There is no local park cap (the in-memory backend caps at 8): the
-///   store's 256 awaiting-row cap is the cap, and `storeFull` maps to
-///   `MCPElicitationError.parkFull`.
-/// - Memory grows per park (prompt cache + consumed marks) and is never
-///   evicted, matching the store's append-only rows. Compaction is future
-///   work; dropping consumed-approval marks would reopen double delivery.
+/// - Allow-consumption exactly-once is IN-MEMORY (see DESIGN below).
+/// - `allowOnce` and `createRule` both read as approved (no MCP rule surface).
+/// - `poll` maps every store failure to `.canceled` (fail-closed reads).
+/// - `cancel` is best-effort; the next poll/consume surfaces health typed.
+/// - No local park cap: the store's 256 awaiting-row cap is the cap.
+/// - Memory grows per park and is never evicted (matches append-only rows).
 public actor MCPDurableApprovalBackend: MCPElicitationBackend {
+    // DESIGN: allow-consume crash window. Name-only `consume` delivers
+    // denies only (the ledger rejects authorizing decisions, so restart
+    // persistence never mints authority); the allow row stays `.resolved`
+    // and `consumedApprovals` enforces one delivery. A crash between
+    // consume and invoke could re-deliver after a rebind. The window is
+    // narrow (the invoker consumes once per ticket, tickets are
+    // memory-only, resolved rows never list — re-delivery needs an
+    // out-of-band ticket replay after the crash), but real; closing it
+    // needs a durably-marked allow-consume, which the store has no
+    // transition for. The same window covers two LIVE backends over one
+    // store+identity (marks are per instance): wire exactly one backend
+    // per (store, identity).
+    // DESIGN: operator routing. MCP rows must resolve via this backend's
+    // `resolve` (or `store.resolve` directly). The shell allow-once
+    // ceremony cannot plant them — an MCP row has no `supportingCommand`
+    // — so consoles must route `mcp:`-prefixed rows here, never into the
+    // shell ceremony.
+
     /// Fingerprint prefix marking MCP rows in the shared store.
     private static let fingerprintPrefix = "mcp:"
 
@@ -343,7 +366,10 @@ public actor MCPDurableApprovalBackend: MCPElicitationBackend {
 
     /// Polls one wait without consuming. Unknown tickets, foreign records,
     /// and store outages all read `.canceled` (fail-closed; the protocol
-    /// cannot throw, so this collapse is structural and loud).
+    /// cannot throw, so this collapse is structural and loud). Polls after
+    /// a consume stay informative: the allow row remains `.resolved`
+    /// durably, so a post-consume poll still reads `.approved` (delivery
+    /// itself was exactly-once); a deny-consumed row reads `.declined`.
     public func poll(_ ticket: MCPElicitationTicket) async -> MCPElicitationStatus {
         let record: PendingApproval
         do {
@@ -383,6 +409,22 @@ public actor MCPDurableApprovalBackend: MCPElicitationBackend {
             throw MCPElicitationError.unknownTicket
         case .resolved(let resolution):
             if resolution.decision.authorizesExactAction {
+                // Bind the grant to THIS ticket before the memory mark: the
+                // identity must be ours (explicit, not just the isOurs
+                // prefix gate above) and the fingerprint must be the one
+                // this backend minted for this ticket — address from the
+                // cached prompt, post-rebind from the durable envelope,
+                // fail closed when the envelope is undecodable. A planted
+                // or transplanted row with a foreign fingerprint fails
+                // closed instead of minting authority.
+                guard record.identity == identity else {
+                    throw MCPElicitationError.unknownTicket
+                }
+                guard let bound = addressForFingerprint(ticket: ticket, record: record),
+                    record.fingerprint.rawValue == Self.fingerprint(address: bound, ticket: ticket)
+                else {
+                    throw MCPElicitationError.unknownTicket
+                }
                 // Re-check after the load: N consumers can all pass the
                 // fast-path check above before any inserts (the load
                 // suspends, so those checks interleave). No await sits
@@ -416,10 +458,20 @@ public actor MCPDurableApprovalBackend: MCPElicitationBackend {
         }
     }
 
-    /// Best-effort cancel. Unknown tickets are a no-op; store outages are
+    /// Best-effort cancel, mirroring `resolve`: load, refuse foreign rows,
+    /// then cancel. Unknown tickets are a no-op; store outages are
     /// swallowed (the protocol cannot throw — see the type docs).
     public func cancel(_ ticket: MCPElicitationTicket) async {
-        _ = try? await store.cancel(id: ApprovalID(rawValue: ticket.id.uuidString), now: now())
+        let record: PendingApproval
+        do {
+            record = try await store.load(id: ApprovalID(rawValue: ticket.id.uuidString), now: now())
+        } catch {
+            return
+        }
+        guard isOurs(record) else {
+            return
+        }
+        _ = try? await store.cancel(id: record.id, now: now())
     }
 
     // MARK: Sourced park + operator seams
@@ -429,19 +481,18 @@ public actor MCPDurableApprovalBackend: MCPElicitationBackend {
     /// else the constructor handler, else a human wait). A handler answer
     /// still writes its durable record first, then transitions it, so the
     /// park→poll→consume flow and the crash story stay uniform: handler
-    /// failures throw typed and write nothing. Nonpositive or non-finite TTLs
-    /// throw `.parkFull` before the handler runs, so a doomed park never
-    /// invokes host code (the store's `ttl <= 0` check lets NaN through, and
-    /// it has no non-finite expiry encoding, so the seam validates instead of
-    /// misreporting store health; NaN matches the in-memory backend, while
-    /// +inf diverges loudly — accepted there, unparkable here).
+    /// failures throw typed and write nothing. Unusable TTLs (nonpositive
+    /// or non-finite) throw `.parkFull` before the handler runs, so a doomed
+    /// park never invokes host code (the store's `ttl <= 0` check lets NaN
+    /// through, and it has no non-finite expiry encoding, so the seam
+    /// validates instead of misreporting store health).
     public func park(
         _ prompt: MCPElicitationPrompt,
         source: MCPElicitationSource?,
         ttl: TimeInterval,
         onApproval: MCPApprovalHandler?
     ) async throws -> MCPElicitationTicket {
-        guard ttl > 0, ttl.isFinite else {
+        guard isUsableElicitationTTL(ttl) else {
             throw MCPElicitationError.parkFull
         }
         let ticket = MCPElicitationTicket(id: UUID(), idempotencyKey: prompt.idempotencyKey)
@@ -467,6 +518,19 @@ public actor MCPDurableApprovalBackend: MCPElicitationBackend {
     /// foreign tickets are left untouched (no-op, matching the in-memory
     /// backend); store outages throw typed.
     public func resolve(_ ticket: MCPElicitationTicket, decision: MCPElicitationDecision) async throws {
+        try await resolve(ticket, decision: decision, resumer: identity)
+    }
+
+    /// Operator seam with an explicit resumer: a rebound console resolves
+    /// AS `resumer`, which rebinds the acting identity for this call —
+    /// ownership is checked against the RESUMER, not the constructor
+    /// identity, and the store call carries it. A resumer that does not own
+    /// the row is a no-op; terminal and unknown tickets likewise.
+    public func resolve(
+        _ ticket: MCPElicitationTicket,
+        decision: MCPElicitationDecision,
+        resumer: ApprovalIdentity
+    ) async throws {
         let record: PendingApproval
         do {
             record = try await store.load(id: ApprovalID(rawValue: ticket.id.uuidString), now: now())
@@ -478,7 +542,7 @@ public actor MCPDurableApprovalBackend: MCPElicitationBackend {
         guard case .awaitingHuman = record.state else {
             return
         }
-        guard isOurs(record) else {
+        guard isOwned(record, by: resumer) else {
             return
         }
         let rvDecision: ApprovalDecision = decision == .approved ? .allowOnce : .deny
@@ -487,7 +551,7 @@ public actor MCPDurableApprovalBackend: MCPElicitationBackend {
                 id: record.id,
                 decision: rvDecision,
                 fingerprint: record.fingerprint,
-                identity: identity,
+                identity: resumer,
                 now: now()
             )
         } catch {
@@ -502,11 +566,50 @@ public actor MCPDurableApprovalBackend: MCPElicitationBackend {
         }
     }
 
+    /// Arrival-ordered paused waits for operator consoles (survives rebind:
+    /// prompts reconstruct from durable envelopes). Foreign records,
+    /// non-MCP action shapes, unparseable ids, and undecodable prompts are
+    /// skipped; outages throw typed. Creates append and every rewrite
+    /// preserves row order, so the listing already arrives oldest-first;
+    /// the stable `createdAt` sort makes that explicit and survives
+    /// hand-reordered files (same-tick ties keep listing order).
+    public func waits() async throws -> [MCPPausedWait] {
+        let records: [PendingApproval]
+        do {
+            records = try await store.list(now: now())
+        } catch {
+            throw MCPDurableApprovalError.storeFailed(error)
+        }
+        let ours = records.filter { isOurs($0) }.sorted { $0.createdAt < $1.createdAt }
+        var waits: [MCPPausedWait] = []
+        for record in ours {
+            guard let id = UUID(uuidString: record.id.rawValue),
+                let envelope = Self.envelope(for: record)
+            else {
+                continue
+            }
+            let cached = prompts[id]
+            waits.append(
+                MCPPausedWait(
+                    ticket: MCPElicitationTicket(
+                        id: id,
+                        idempotencyKey: cached?.prompt.idempotencyKey ?? envelope.idempotencyKey
+                    ),
+                    prompt: cached?.prompt ?? envelope.prompt(),
+                    source: cached?.source ?? envelope.source,
+                    parkedAt: record.createdAt,
+                    deadline: record.expiresAt
+                )
+            )
+        }
+        return waits
+    }
+
     /// Lists waiting tickets (operator-console discovery; survives rebind —
     /// the tickets reconstruct from record ids). Foreign records, non-MCP
-    /// fingerprints, and unparseable ids are skipped; undecodable prompts
-    /// list with an empty key (the ticket still polls/consumes). Outages
-    /// throw typed (this seam, unlike `poll`, is allowed to fail loudly).
+    /// action shapes, unparseable ids, and undecodable prompts are skipped.
+    /// Outages throw typed (this seam, unlike `poll`, is allowed to fail
+    /// loudly).
     public func parkedTickets() async throws -> [MCPElicitationTicket] {
         let records: [PendingApproval]
         do {
@@ -641,12 +744,45 @@ public actor MCPDurableApprovalBackend: MCPElicitationBackend {
 
     /// One park's fingerprint: MCP-prefixed, address-labeled, ticket-unique.
     private static func fingerprint(prompt: MCPElicitationPrompt, ticket: MCPElicitationTicket) -> String {
-        "mcp:\(prompt.address):\(ticket.id.uuidString)"
+        fingerprint(address: prompt.address, ticket: ticket)
+    }
+
+    /// The fingerprint one address plus one ticket must carry.
+    private static func fingerprint(address: String, ticket: MCPElicitationTicket) -> String {
+        "mcp:\(address):\(ticket.id.uuidString)"
     }
 
     /// True for records this backend owns: our identity plus the MCP prefix.
     private func isOurs(_ record: PendingApproval) -> Bool {
-        record.identity == identity && record.fingerprint.rawValue.hasPrefix(Self.fingerprintPrefix)
+        isOwned(record, by: identity)
+    }
+
+    /// True for records one identity owns: its identity, the MCP prefix,
+    /// the MCP action shape (effect-only shell carrier with no supporting
+    /// command — the shell ceremony's rows always carry one), and a
+    /// decodable mcp1 resume envelope whose address parses as a tool
+    /// address. A planted prefix-only row fails every arm after the first.
+    private func isOwned(_ record: PendingApproval, by candidate: ApprovalIdentity) -> Bool {
+        guard record.identity == candidate,
+            record.fingerprint.rawValue.hasPrefix(Self.fingerprintPrefix),
+            case .shell(.effectOnly(let shell)) = record.action,
+            shell.supportingCommand == nil,
+            let envelope = Self.envelope(for: record),
+            (try? MCPToolAddress.parse(envelope.address)) != nil
+        else {
+            return false
+        }
+        return true
+    }
+
+    /// The fingerprint-bound address for one consume: the cached prompt's
+    /// address, post-rebind the durable envelope's. Nil when the envelope
+    /// is undecodable — the consume then fails closed.
+    private func addressForFingerprint(ticket: MCPElicitationTicket, record: PendingApproval) -> String? {
+        if let cached = prompts[ticket.id] {
+            return cached.prompt.address
+        }
+        return Self.envelope(for: record)?.address
     }
 
     /// Decodes the record's prompt envelope. Nil for non-resume
@@ -734,4 +870,19 @@ public actor MCPDurableApprovalBackend: MCPElicitationBackend {
             return MCPDurableApprovalError.storeFailed(error)
         }
     }
+}
+
+// MARK: - Spec-named factory
+
+/// One durable MCP elicitation backend over one store plus one identity.
+/// Returns the protocol existential so call sites stay seam-typed.
+public func durableMCPApprovals(
+    store: any PendingApprovalCoordinating,
+    identity: ApprovalIdentity,
+    defaultHandler: MCPApprovalHandler? = nil,
+    now: @escaping @Sendable () -> Date = { Date() }
+) -> any MCPElicitationBackend {
+    MCPDurableApprovalBackend(
+        store: store, identity: identity, defaultHandler: defaultHandler, now: now
+    )
 }

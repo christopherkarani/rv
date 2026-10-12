@@ -92,17 +92,17 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         let outcome: (ApprovalConsumption, [PendingApprovalEvent])
         do {
             outcome = try withFileLock {
-                let loaded = loadRecords()
+                let loaded = loadCheckedRecords()
                 let (consumption, next) = try PendingApprovalLedger.consume(
-                    records: loaded,
+                    records: loaded.approvals,
                     id: id,
                     fingerprint: fingerprint,
                     identity: identity,
                     now: now
                 )
-                let events = timeoutEvents(before: loaded, after: next)
+                let events = timeoutEvents(before: loaded.approvals, after: next)
                     + [.consumed(consumption.approval)]
-                try writeRecords(next)
+                try writeCheckedRecords(next, over: loaded)
                 return (consumption, events)
             }
         } catch let error as PendingApprovalError {
@@ -137,11 +137,11 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         let outcome: (PendingApproval, [PendingApprovalEvent])
         do {
             outcome = try withFileLock {
-                let loaded = loadRecords()
-                let mutation = try body(loaded)
-                let events = timeoutEvents(before: loaded, after: mutation.records)
+                let loaded = loadCheckedRecords()
+                let mutation = try body(loaded.approvals)
+                let events = timeoutEvents(before: loaded.approvals, after: mutation.records)
                     + [mutation.event].compactMap { $0 }
-                try writeRecords(mutation.records)
+                try writeCheckedRecords(mutation.records, over: loaded)
                 return (mutation.record, events)
             }
         } catch let error as PendingApprovalError {
@@ -157,12 +157,10 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         let outcome: ([PendingApproval], [PendingApprovalEvent])
         do {
             outcome = try withFileLock {
-                let loaded = loadRecords()
-                let swept = PendingApprovalLedger.sweep(loaded, now: now)
-                let events = timeoutEvents(before: loaded, after: swept)
-                if swept != loaded {
-                    try writeRecords(swept)
-                }
+                let loaded = loadCheckedRecords()
+                let swept = PendingApprovalLedger.sweep(loaded.approvals, now: now)
+                let events = timeoutEvents(before: loaded.approvals, after: swept)
+                try writeCheckedRecords(swept, over: loaded)
                 return (swept, events)
             }
         } catch let error as PendingApprovalError {
@@ -200,8 +198,32 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         subscribers[id] = nil
     }
 
-    private func loadRecords() -> [PendingApproval] {
-        store.load().filter { $0.schemaVersion == 1 }.map(\.approval)
+    /// One guarded load: the decoded approvals plus whether the file is
+    /// intact (raw line count equals decoded count). Unknown schema
+    /// versions decode fine and keep their pre-existing drop-on-rewrite;
+    /// only undecodable lines break intactness.
+    private struct CheckedRecords {
+        var approvals: [PendingApproval]
+        var intact: Bool
+    }
+
+    private func loadCheckedRecords() -> CheckedRecords {
+        let detailed = store.loadDetailed()
+        return CheckedRecords(
+            approvals: detailed.records.filter { $0.schemaVersion == 1 }.map(\.approval),
+            intact: detailed.rawLines == detailed.decodedLines
+        )
+    }
+
+    /// Persists `next` unless it equals what was loaded (the codec is
+    /// deterministic, so skipping the write is byte-identical and keeps
+    /// reads available over a corrupt file). A rewrite over a non-intact
+    /// load throws `.encodeFailed` with the bytes preserved: the corrupt
+    /// line would otherwise be silently dropped.
+    private func writeCheckedRecords(_ next: [PendingApproval], over loaded: CheckedRecords) throws(PendingApprovalError) {
+        guard next != loaded.approvals else { return }
+        guard loaded.intact else { throw PendingApprovalError.encodeFailed }
+        try writeRecords(next)
     }
 
     private func writeRecords(_ records: [PendingApproval]) throws(PendingApprovalError) {
