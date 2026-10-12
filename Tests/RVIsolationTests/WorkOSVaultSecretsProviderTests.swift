@@ -1317,6 +1317,24 @@ struct WorkOSVaultMetadataStoreTests {
             _ = try WorkOSVaultMetadataStore(path: missing.path)
         }
     }
+
+    #if os(macOS)
+    @Test func untightenableFileFailsClosed() throws {
+        // chmod(2) on an immutable-flagged file fails EPERM: the tighten
+        // step fails closed instead of serving lax metadata. macOS-only:
+        // the immutable trigger is chflags(2) (Linux chattr needs privs).
+        let dir = try makeTempWorkOSDir(prefix: "rv-workos-immutable")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(WorkOSVaultMetadataStore.fileName)
+        try Data("squat".utf8).write(to: url)
+        let flagged: Int32 = url.path.withCString { chflags($0, UInt32(UF_IMMUTABLE)) }
+        #expect(flagged == 0)
+        defer { url.path.withCString { _ = chflags($0, 0) } }
+        #expect(throws: WorkOSVaultStoreError.storeFailure) {
+            try WorkOSVaultMetadataStore.ensureOwnerOnlyFile(path: url.path)
+        }
+    }
+    #endif
     #endif
 
     @Test func crudRoundTrip() async throws {
