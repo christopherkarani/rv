@@ -356,6 +356,29 @@ struct IsolationApplyTests {
         }
     }
 
+    @Test func compileSeatbeltProfile_contained_deniesWorkspaceControlWrites() throws {
+        let workspace = try requireWorkspace("/workspace")
+        let plan = try requirePlan(
+            IsolationCompileRequest(requested: .contained, workspace: workspace)
+        )
+        let resolved = resolvedWorkspacePath(workspace)
+        let escaped = escapeSBPL(resolved)
+        switch compileSeatbeltProfile(plan) {
+        case .success(let profile):
+            #expect(profile.source.contains("(deny file-write*"))
+            #expect(profile.source.contains("(subpath \"\(escaped)/.git/hooks\")"))
+            #expect(profile.source.contains("(subpath \"\(escaped)/.rv\")"))
+            #expect(profile.source.contains("(subpath \"\(escaped)/.config/rv\")"))
+            #expect(profile.source.contains("(literal \"\(escaped)/.git\")"))
+            #expect(profile.source.contains("(literal \"\(escaped)/.config\")"))
+            // Narrow: the whole `.git` tree stays writable (index, objects),
+            // only the hooks subpath and the RV control dirs are denied.
+            #expect(profile.source.contains("(subpath \"\(escaped)/.git\")") == false)
+        case .failure(let error):
+            recordUnexpectedApplyError(error, expected: "control-path deny in contained profile")
+        }
+    }
+
     @Test func compileSeatbeltProfile_observedAndMediated_returnsProfileNotApplicable() throws {
         let workspace = try requireWorkspace("/workspace")
         let observed = try requirePlan(

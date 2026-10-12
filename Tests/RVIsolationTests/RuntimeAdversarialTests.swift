@@ -307,17 +307,69 @@ struct RuntimeAdversarialTests {
         }
     }
 
-    @Test func knownGapWorkspaceGitHooksAndRVConfigurationRemainWritable() async throws {
+    @Test func workspaceGitHooksAndRVConfigurationDenyWrites() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
-        for relative in [".git/hooks/pre-commit", ".rv/policy.toml", ".config/rv/policy.toml", ".zshrc"] {
+        for relative in [".git/hooks/pre-commit", ".rv/policy.toml", ".config/rv/policy.toml"] {
             let target = tree.workspaceURL.appendingPathComponent(relative)
             try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("original".utf8).write(to: target)
             let run = try await runShell(tree.contained, "printf modified > \(quote(target.path))")
-            #expect(run.exitStatus == 0)
-            #expect(try String(contentsOf: target, encoding: .utf8) == "modified")
+            #expect(run.exitStatus != 0)
+            #expect(try String(contentsOf: target, encoding: .utf8) == "original")
         }
-        print("adversarial technique=workspace-control-files security=NOT-SATISFIED reason=no-protected-subpaths")
+        let fresh = tree.workspaceURL.appendingPathComponent(".git/hooks/post-commit")
+        let create = try await runShell(tree.contained, "printf new > \(quote(fresh.path))")
+        #expect(create.exitStatus != 0)
+        #expect(!exists(fresh))
+        print("adversarial technique=workspace-control-files verdict=WRITE-DENIED")
+    }
+
+    @Test func workspaceControlDenyKeepsOrdinaryAndGitMetadataWrites() async throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        for parent in [".git", ".rv-cage/tmp"] {
+            try FileManager.default.createDirectory(
+                at: tree.workspaceURL.appendingPathComponent(parent), withIntermediateDirectories: true
+            )
+        }
+        // `.zshrc` stays writable on purpose: ISO-06 protects only the git
+        // hooks and RV control subpaths, not shell startup files.
+        let script = [
+            "printf a > \(quote(tree.workspaceURL.appendingPathComponent("ordinary.txt").path))",
+            "printf b > \(quote(tree.workspaceURL.appendingPathComponent(".zshrc").path))",
+            "printf c > \(quote(tree.workspaceURL.appendingPathComponent(".git/index").path))",
+            "printf d > \(quote(tree.workspaceURL.appendingPathComponent(".rv-cage/tmp/scratch").path))",
+        ].joined(separator: " && ")
+        let run = try await runShell(tree.contained, script)
+        #expect(run.exitStatus == 0)
+        #expect(try String(contentsOf: tree.workspaceURL.appendingPathComponent("ordinary.txt"), encoding: .utf8) == "a")
+        #expect(try String(contentsOf: tree.workspaceURL.appendingPathComponent(".git/index"), encoding: .utf8) == "c")
+    }
+
+    @Test func workspaceControlDenyBlocksParentRenameBypass() async throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let hook = tree.workspaceURL.appendingPathComponent(".git/hooks/pre-commit")
+        let policy = tree.workspaceURL.appendingPathComponent(".config/rv/policy.toml")
+        try FileManager.default.createDirectory(at: hook.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: policy.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("original".utf8).write(to: hook)
+        try Data("original".utf8).write(to: policy)
+        let gitStash = tree.workspaceURL.appendingPathComponent("git-stash")
+        let gitScript = "/bin/mv \(quote(tree.workspaceURL.appendingPathComponent(".git").path)) \(quote(gitStash.path))"
+            + " && printf hacked > \(quote(gitStash.appendingPathComponent("hooks/pre-commit").path))"
+            + " && /bin/mv \(quote(gitStash.path)) \(quote(tree.workspaceURL.appendingPathComponent(".git").path))"
+        let gitRun = try await runShell(tree.contained, gitScript)
+        #expect(gitRun.exitStatus != 0)
+        #expect(try String(contentsOf: hook, encoding: .utf8) == "original")
+        let configStash = tree.workspaceURL.appendingPathComponent("cfg-stash")
+        let configScript = "/bin/mv \(quote(tree.workspaceURL.appendingPathComponent(".config").path)) \(quote(configStash.path))"
+            + " && printf hacked > \(quote(configStash.appendingPathComponent("rv/policy.toml").path))"
+            + " && /bin/mv \(quote(configStash.path)) \(quote(tree.workspaceURL.appendingPathComponent(".config").path))"
+        let configRun = try await runShell(tree.contained, configScript)
+        #expect(configRun.exitStatus != 0)
+        #expect(try String(contentsOf: policy, encoding: .utf8) == "original")
     }
 
     @Test func concurrentWorkspacesCannotAcquireEachOthersWriteAuthority() async throws {
