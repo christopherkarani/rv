@@ -27,7 +27,7 @@ private struct FixedStubSecretsProvider: SecretsProvider {
 }
 
 struct SecretsProviderTests {
-    @Test("every allowed provider constructs", arguments: ["file", "keychain", "vault-http", "env", "exec"])
+    @Test("every allowed provider constructs", arguments: ["file", "keychain", "vault-http", "env", "exec", "encrypted", "workos-vault", "onepassword"])
     func allowedProvider_constructs(provider: String) throws {
         let ref = try SecretRef(provider: provider, item: "api-token", field: "token")
         #expect(ref.provider == provider)
@@ -95,11 +95,11 @@ struct SecretsProviderTests {
         #expect(ref.item == "../etc/passwd\0\n injection")
     }
 
-    @Test func allowedProviders_containsExactlySevenIds() {
+    @Test func allowedProviders_containsExactlyEightIds() {
         #expect(
             SecretRef.allowedProviders == [
                 "file", "keychain", "vault-http", "env", "exec", "encrypted",
-                "workos-vault",
+                "workos-vault", "onepassword",
             ]
         )
     }

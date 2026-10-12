@@ -629,7 +629,7 @@ struct MCPConnectionTests {
     }
 
     @Test func externalRef_allowedProvidersBattery() throws {
-        for provider in ["file", "keychain", "vault-http", "env", "exec", "encrypted", "workos-vault"] {
+        for provider in ["file", "keychain", "vault-http", "env", "exec", "encrypted", "workos-vault", "onepassword"] {
             let secret = try (try ConnectionExternalRef(provider: provider, id: "x")).secretRef()
             #expect(secret.provider == provider)
         }
