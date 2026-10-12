@@ -364,7 +364,8 @@ enum HelpCatalog {
         sections: [
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv audit [tail] [-n <count>] [--since <duration>] [--kind <kind>]... [--json]"),
-                HelpRow(name: "rv audit export [--since <duration>] [--kind <kind>]..."),
+                HelpRow(name: "rv audit export [--since <duration>] [--kind <kind>]... [--format rv|ocsf]"),
+                HelpRow(name: "rv audit forward [--to <url>] [--header NAME=VALUE]... [--format ocsf|rv] [--from-now]"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "-n, --limit", description: "Newest events to show (default 50)"),
@@ -377,13 +378,16 @@ enum HelpCatalog {
                     name: "sources",
                     description: "Joins every rv ledger in ~/.config/rv into one rv.audit.v1 stream"
                 ),
-                HelpRow(name: "export", description: "JSON Lines, oldest first, for SIEM ingest"),
+                HelpRow(name: "export", description: "JSON Lines, oldest first, for SIEM ingest (OCSF 1.3.0 with --format ocsf)"),
+                HelpRow(name: "forward", description: "POSTs new events in batches; cursor advances only on 2xx (at-least-once)"),
+                HelpRow(name: "forward --to", description: "https, or http to localhost; default is the org policy audit.forward"),
             ]),
         ],
         examples: [
             "rv audit",
             "rv audit --kind egress --since 24h",
             "rv audit export --since 7d > rv-audit.jsonl",
+            "rv audit forward --to https://siem.example.com/rv --header 'Authorization=Bearer ${secret:SIEM_TOKEN}'",
         ]
     )
 

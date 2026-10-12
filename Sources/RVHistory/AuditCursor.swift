@@ -1,0 +1,103 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+import Foundation
+
+/// How far a consumer (`rv audit forward`) has read each ledger, by byte
+/// offset. A file that shrank or was replaced restarts at 0: duplicates are
+/// possible, loss is not.
+public struct AuditCursor: Sendable, Equatable, Codable {
+    public struct Position: Sendable, Equatable, Codable {
+        public var offset: UInt64
+        public var inode: UInt64
+
+        public init(offset: UInt64, inode: UInt64) {
+            self.offset = offset
+            self.inode = inode
+        }
+    }
+
+    public var positions: [String: Position]
+
+    public init(positions: [String: Position] = [:]) {
+        self.positions = positions
+    }
+}
+
+extension AuditLedger {
+    /// Bytes read per source per call.
+    public static let cursorChunkBytes = 4 * 1024 * 1024
+
+    /// Up to `limit` events after `cursor`, oldest first, and the cursor that
+    /// follows them. Only complete lines are consumed; a line longer than a
+    /// chunk is skipped so it cannot stall the cursor.
+    public func events(after cursor: AuditCursor, limit: Int) -> (events: [AuditEvent], next: AuditCursor) {
+        var next = cursor
+        var events: [AuditEvent] = []
+        for source in Source.allCases where events.count < limit {
+            let url = configDirectory.appendingPathComponent(source.rawValue, isDirectory: false)
+            guard let chunk = Self.chunk(url, after: cursor.positions[source.rawValue]) else { continue }
+            var consumed = chunk.start
+            var lineStart = chunk.bytes.startIndex
+            for index in chunk.bytes.indices where chunk.bytes[index] == UInt8(ascii: "\n") {
+                if events.count >= limit { break }
+                let line = String(decoding: chunk.bytes[lineStart..<index], as: UTF8.self)
+                if let event = Self.event(fromLine: Substring(line), source: source) { events.append(event) }
+                consumed = chunk.start + UInt64(index - chunk.bytes.startIndex + 1)
+                lineStart = index + 1
+            }
+            if consumed == chunk.start, chunk.bytes.count == Self.cursorChunkBytes {
+                consumed += UInt64(chunk.bytes.count)
+            }
+            next.positions[source.rawValue] = .init(offset: consumed, inode: chunk.inode)
+        }
+        return (events.sorted { $0.time < $1.time }, next)
+    }
+
+    /// The cursor at the current end of every ledger (forward from now on).
+    public func endCursor() -> AuditCursor {
+        var cursor = AuditCursor()
+        for source in Source.allCases {
+            var info = stat()
+            let path = configDirectory.appendingPathComponent(source.rawValue).path
+            guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { continue }
+            cursor.positions[source.rawValue] = .init(offset: UInt64(info.st_size), inode: UInt64(info.st_ino))
+        }
+        return cursor
+    }
+
+    struct Chunk {
+        var start: UInt64
+        var inode: UInt64
+        var bytes: [UInt8]
+    }
+
+    static func chunk(_ url: URL, after position: AuditCursor.Position?) -> Chunk? {
+        let fd = open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { return nil }
+        let size = UInt64(info.st_size)
+        let inode = UInt64(info.st_ino)
+        var start = position?.offset ?? 0
+        if position?.inode != inode || start > size { start = 0 }
+        let length = Int(min(UInt64(cursorChunkBytes), size - start))
+        guard length > 0, lseek(fd, off_t(start), SEEK_SET) >= 0 else { return Chunk(start: start, inode: inode, bytes: []) }
+        var bytes = [UInt8](repeating: 0, count: length)
+        var filled = 0
+        while filled < length {
+            let count = bytes.withUnsafeMutableBytes { raw -> Int in
+                guard let base = raw.baseAddress else { return -1 }
+                return read(fd, base + filled, length - filled)
+            }
+            if count < 0, errno == EINTR { continue }
+            guard count > 0 else { break }
+            filled += count
+        }
+        bytes.removeSubrange(filled...)
+        return Chunk(start: start, inode: inode, bytes: bytes)
+    }
+}

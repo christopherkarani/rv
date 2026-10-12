@@ -715,13 +715,22 @@ health from the doctor checks that need no root.
       `rv mcp serve --server <blocked>` refuses; `sudo chmod g+w` the file → status invalid
 
 ### 4.3 Audit export OCSF + forward
-- [ ] OCSF mapping + `--format ocsf`
-- [ ] Offset cursor reader in `AuditLedger`, `rv audit forward`
-- [ ] Tests: mapping, cursor (append, rotate, failure keeps cursor);
-      E2E real binary → local python HTTP receiver, at-least-once on a 500
+- [x] OCSF mapping + `--format ocsf` (`Sources/RVHistory/AuditOCSF.swift`: mcp.call/secret.use →
+      6003 API Activity, egress → 4001 Network Activity, command.denied → 1007, lifecycle → 6002;
+      `metadata.uid` = sha256 of the event for SIEM dedupe; rv fields under `unmapped`)
+- [x] Offset cursor reader in `AuditLedger` (`Sources/RVHistory/AuditCursor.swift`: per-source
+      byte offset + inode, complete lines only, restart on rotation/truncation) and
+      `rv audit forward` (`Sources/RVCLI/Commands/AuditForward.swift`: https or loopback http,
+      `--header` with `${secret:NAME}`, default URL from org policy `audit.forward`, flock so two
+      forwarders never overlap, cursor 0600 under `audit-forward/`, committed per 2xx batch)
+- [x] Tests: `AuditCursorTests` 3, `AuditOCSFTests` 2, `AuditForwardTests` 4. E2E real binary →
+      python receiver failing the 2nd POST: pass 1 "sent 2 events, then HTTP 500" exit 1, pass 2
+      "forwarded 4 events in 2 batches", pass 3 "nothing new"; receiver got all 6 events exactly
+      once with the Authorization header resolved from an rv secret; http to a non-loopback
+      host refused
 
 ### 4.4 Control plane spec
-- [ ] `docs/plans/agent-governance/control-plane-spec.md`: SSO/SCIM,
+- [x] `docs/plans/agent-governance/control-plane-spec.md`: SSO/SCIM,
       dashboard, approval routing, policy distribution; spec only
 
 ---
@@ -783,6 +792,15 @@ health from the doctor checks that need no root.
   failures (allowlisted `MCPGatewayRuntime.swift` as a process supervisor).
   E2E evidence under 3.2/3.3. Linux not compiled locally (no container
   running); relying on CI.
+- 2026-10-12: Phase 4 agent items landed on `governance/phase-4-enterprise`:
+  `rv report` (rv.report.v1), managed restrict-only org policy with Ed25519
+  signing (`rv managed status|verify|keygen|sign`, MCP + secrets merge,
+  fails closed when invalid), OCSF export + `rv audit forward`
+  (at-least-once, cursor per destination), control plane spec. Suites:
+  RVCLITests 827, RVPolicyTests 406, RVMCPTests 52, RVHistoryTests 34,
+  secret broker/gateway + help/completions all pass; preflight 0 failures.
+  Real-binary E2E evidence under 4.1-4.3. Remaining: owner L3 managed-dir
+  install (sudo) and Phase 5 (human-owned).
 - 2026-10-13: Rereview of PR #394. Named each ledger writer (only `blocks`,
   `allow-once`, and `pending-approvals` are `FileLockedJSONLStore`). Seatbelt
   ground truth now says outbound connect is loopback TCP and the listen rule

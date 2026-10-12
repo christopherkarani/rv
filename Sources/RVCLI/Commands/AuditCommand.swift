@@ -77,7 +77,7 @@ struct Audit: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "audit",
         abstract: "Show the unified audit trail.",
-        subcommands: [AuditTail.self, AuditExport.self],
+        subcommands: [AuditTail.self, AuditExport.self, AuditForward.self],
         defaultSubcommand: AuditTail.self
     )
 }
@@ -112,8 +112,11 @@ struct AuditTail: AsyncParsableCommand {
 struct AuditExport: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "export",
-        abstract: "Write audit events as JSON Lines (rv.audit.v1) for SIEM ingest."
+        abstract: "Write audit events as JSON Lines (rv.audit.v1 or OCSF) for SIEM ingest."
     )
+
+    @Option(help: "rv (rv.audit.v1) or ocsf (OCSF 1.3.0).")
+    var format: AuditForwardRun.Format = .rv
 
     @Option(help: "Only events newer than a duration (30m, 24h, 7d).")
     var since: String?
@@ -126,6 +129,13 @@ struct AuditExport: AsyncParsableCommand {
             command: "audit export", json: true, robot: false, plain: true, noColor: true)
         let home = try ctx.requireHome()
         let filter = try AuditRun.filter(since: since, kinds: kind, limit: nil, now: Date())
-        ctx.writeStdout(AuditRun.jsonLines(AuditRun.events(home: home, filter: filter)))
+        let events = AuditRun.events(home: home, filter: filter)
+        switch format {
+        case .rv:
+            ctx.writeStdout(AuditRun.jsonLines(events))
+        case .ocsf:
+            let host = ProcessInfo.processInfo.hostName
+            ctx.writeStdout(events.compactMap { AuditOCSF.jsonLine($0, hostName: host) }.map { $0 + "\n" }.joined())
+        }
     }
 }
