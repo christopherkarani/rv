@@ -63,6 +63,26 @@ import Testing
             == "read only")
 }
 
+@Test func statusLabelHeaderWordsDoNotRelyOnColorAlone() {
+    // Each header colour must pair with a distinct short word (UX-07).
+    #expect(WorkspaceStatusLabel.header(connection: .disconnected, terminalNeedsAttention: false, phase: "active", protected: true) == "disconnected")
+    #expect(WorkspaceStatusLabel.header(connection: .connected, terminalNeedsAttention: true, phase: "active", protected: true) == "attention")
+    #expect(WorkspaceStatusLabel.header(connection: .connected, terminalNeedsAttention: false, phase: "active", protected: true) == "running")
+    #expect(WorkspaceStatusLabel.header(connection: .connected, terminalNeedsAttention: false, phase: "idle", protected: false) == "idle")
+}
+
+@Test func statusLabelPaneIndicatorPairsGlyphWithWord() {
+    #expect(WorkspaceStatusLabel.paneIndicator(focused: true) == "● focused")
+    #expect(WorkspaceStatusLabel.paneIndicator(focused: false) == "╭ unfocused")
+    #expect(WorkspaceStatusLabel.focus(focused: true) == "focused")
+    #expect(WorkspaceStatusLabel.focus(focused: false) == "unfocused")
+    // Pane runtime status is already a word; it must stay non-empty for every lifecycle.
+    let pane = PaneID()
+    for lifecycle in [WorkspacePaneLifecycle.empty, .launching, .attaching, .running, .exited, .launchFailed, .disconnected, .missing] {
+        #expect(WorkspacePaneChrome.status(WorkspacePane(id: pane, lifecycle: lifecycle), terminal: nil).isEmpty == false)
+    }
+}
+
 @Test func terminalCellClipperKeepsGraphemesAndAvoidsHalfWidePaint() {
     let wide = [TerminalCell(text: "界"), TerminalCell(text: "")]
     #expect(TerminalCellClipper.clipped(wide, columns: 1).map(\.text) == [" "])

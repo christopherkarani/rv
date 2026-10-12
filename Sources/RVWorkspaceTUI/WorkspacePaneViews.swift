@@ -123,11 +123,12 @@ struct WorkspacePanePanel: View {
             ? (hasNewOutput ? "SCROLL • new" : "SCROLL")
             : WorkspacePaneChrome.status(pane, terminal: terminal,
                                          recentOutputOnly: recentOutputOnly)
+        let indicator = WorkspaceStatusLabel.paneIndicator(focused: focused)
         let statusWidth = min(20, max(10, width / 3))
-        let titleWidth = max(0, width - 2 - statusWidth)
+        let titleWidth = max(0, width - indicator.count - 1 - statusWidth)
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
-                Text(focused ? "●" : "╭").foregroundStyle(border)
+                Text(indicator).foregroundStyle(border)
                 Text(" \(WorkspacePaneChrome.title(pane, terminal: terminal))")
                     .lineLimit(1).truncationMode(.tail)
                     .frame(width: titleWidth, height: 1, alignment: .leading)

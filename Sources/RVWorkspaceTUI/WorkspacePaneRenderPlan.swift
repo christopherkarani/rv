@@ -47,6 +47,21 @@ struct WorkspacePaneRenderPlan: Equatable, Sendable {
     }
 }
 
+/// Short text beside every colour/glyph status indicator, so runtime and
+/// focus state are never signalled by colour alone (UX-07).
+enum WorkspaceStatusLabel {
+    static func header(connection: ConnectionState, terminalNeedsAttention: Bool, phase: String, protected: Bool) -> String {
+        if connection == .disconnected { return "disconnected" }
+        if terminalNeedsAttention { return "attention" }
+        if phase == "active", protected { return "running" }
+        return "idle"
+    }
+
+    static func focus(focused: Bool) -> String { focused ? "focused" : "unfocused" }
+
+    static func paneIndicator(focused: Bool) -> String { focused ? "● focused" : "╭ unfocused" }
+}
+
 enum WorkspacePaneChrome {
     static func title(_ pane: WorkspacePane, terminal: WorkspaceTerminalState?) -> String {
         safe(pane.userTitle) ?? safe(terminal?.title) ?? "terminal"

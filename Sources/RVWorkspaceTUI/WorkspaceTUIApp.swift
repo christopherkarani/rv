@@ -104,10 +104,13 @@ struct WorkspaceShellView: View {
         } else {
             indicatorColor = .yellow
         }
+        let headerLabel = WorkspaceStatusLabel.header(
+            connection: snapshot.connection, terminalNeedsAttention: terminalNeedsAttention,
+            phase: snapshot.phase, protected: snapshot.protected)
         HStack(spacing: 1) {
             Text("RV  \(name)").bold()
             Spacer(minLength: 0)
-            Text("●").foregroundStyle(indicatorColor)
+            Text("● \(headerLabel)").foregroundStyle(indicatorColor)
         }
         .frame(maxWidth: .infinity)
     }
