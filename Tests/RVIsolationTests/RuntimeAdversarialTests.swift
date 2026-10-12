@@ -280,7 +280,7 @@ struct RuntimeAdversarialTests {
         #expect(try String(contentsOf: outside, encoding: .utf8) == "original\n")
     }
 
-    @Test func knownGapSyntheticCredentialsAreReadableButCannotBeOverwritten() async throws {
+    @Test func syntheticCredentialsCannotBeReadOrOverwritten() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let home = tree.siblingURL.appendingPathComponent("fake-home")
@@ -400,7 +400,7 @@ struct RuntimeAdversarialTests {
         try await assertProbeCannotSurvive(tree, executable: probe.path)
     }
 
-    @Test func knownGapCanSignalSyntheticUnrelatedProcess() async throws {
+    @Test func cannotSignalSyntheticUnrelatedProcess() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let victim = Process()
