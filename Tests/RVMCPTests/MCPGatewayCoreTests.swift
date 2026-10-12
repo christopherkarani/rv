@@ -1,0 +1,277 @@
+import Foundation
+import Synchronization
+import Testing
+@testable import RVMCP
+
+final class FakeApprovals: Sendable {
+    let granted = Mutex<Set<String>>([])
+    let requested = Mutex<[String]>([])
+
+    var gate: MCPApprovalGate {
+        MCPApprovalGate(
+            consumeGrant: { server, tool, hash in
+                self.granted.withLock { $0.remove("\(server)/\(tool)/\(hash)") }.map { _ in "grant1" }
+            },
+            request: { server, tool, _, _ in
+                self.requested.withLock { $0.append("\(server)/\(tool)") }
+                return "req1"
+            })
+    }
+}
+
+struct GatewayHarness {
+    var core: MCPGatewayCore
+    let approvals = FakeApprovals()
+
+    init(_ configuration: MCPConfiguration, secrets: [String: [(name: String, value: String)]] = [:]) {
+        let upstreams = configuration.servers.map {
+            MCPGatewayCore.Upstream(definition: $0, secretValues: secrets[$0.name] ?? [])
+        }
+        let approvals = self.approvals
+        core = MCPGatewayCore(configuration: configuration, upstreams: upstreams, approvals: approvals.gate, clock: { Date() })
+    }
+
+    /// Starts and answers every upstream initialize.
+    mutating func ready() -> [MCPGatewayOutput] {
+        var outputs: [MCPGatewayOutput] = []
+        for case .toUpstream(let server, let message) in core.start() {
+            outputs += core.handle(.upstream(server: server, message: .object([
+                "jsonrpc": .string("2.0"), "id": message["id"] ?? .null,
+                "result": .object(["protocolVersion": .string("2025-06-18"), "capabilities": .object([:])]),
+            ])))
+        }
+        return outputs
+    }
+
+    mutating func client(_ text: String) -> [MCPGatewayOutput] {
+        core.handle(.client(try! JSONValue.parse(text)))
+    }
+
+    mutating func upstream(_ server: String, _ text: String) -> [MCPGatewayOutput] {
+        core.handle(.upstream(server: server, message: try! JSONValue.parse(text)))
+    }
+}
+
+extension [MCPGatewayOutput] {
+    var toClient: [JSONValue] { compactMap { if case .toClient(let m) = $0 { m } else { nil } } }
+    var toUpstream: [(String, JSONValue)] { compactMap { if case .toUpstream(let s, let m) = $0 { (s, m) } else { nil } } }
+    var audits: [MCPCallRecord] { compactMap { if case .audit(let r) = $0 { r } else { nil } } }
+}
+
+@Suite("MCPGatewayCore")
+struct MCPGatewayCoreTests {
+    static let github = MCPServerDefinition(
+        name: "github", command: "gh-mcp",
+        tools: MCPToolPolicy(defaultDecision: .allow, ask: ["create_*"], deny: ["delete_*"]))
+    static let notes = MCPServerDefinition(name: "notes", command: "notes-mcp", tools: MCPToolPolicy(defaultDecision: .allow))
+
+    @Test func initializesUpstreamsAndAnswersTheClientItself() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        let started = harness.core.start()
+        #expect(started.toUpstream.count == 1)
+        #expect(started.toUpstream.first?.1["method"] == .string("initialize"))
+        #expect(started.toUpstream.first?.1["params"]?["capabilities"] == .object([:]))
+
+        let reply = harness.client(#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#)
+        #expect(reply.toClient.first?["result"]?["protocolVersion"] == .string("2025-03-26"))
+        #expect(reply.toClient.first?["result"]?["capabilities"]?["tools"] != nil)
+        let unknown = harness.client(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01"}}"#)
+        #expect(unknown.toClient.first?["result"]?["protocolVersion"] == .string(MCPGatewayCore.upstreamVersion))
+        #expect(harness.client(#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#).toClient.first?["result"] == .object([:]))
+        #expect(harness.client(#"{"jsonrpc":"2.0","id":3,"method":"resources/list"}"#).toClient.first?["error"]?["code"] == .int(-32601))
+        #expect(harness.client(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).isEmpty)
+        #expect(harness.client(#"{"id":4,"method":"ping"}"#).toClient.first?["error"]?["code"] == .int(-32600))
+        #expect(harness.core.handle(.clientUnparseable).toClient.first?["error"]?["code"] == .int(-32700))
+    }
+
+    @Test func toolsListWaitsForUpstreamsThenSendsNotificationsInitialized() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        let initialize = harness.core.start().toUpstream[0].1
+        #expect(harness.client(#"{"jsonrpc":"2.0","id":"a","method":"tools/list"}"#).isEmpty)
+        let afterInit = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": initialize["id"] ?? .null, "result": .object([:]),
+        ])))
+        #expect(afterInit.toUpstream.map(\.1["method"]) == [.string("notifications/initialized"), .string("tools/list")])
+    }
+
+    @Test func singleServerKeepsNamesHidesDeniedAndMarksAsk() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        _ = harness.ready()
+        let list = harness.client(#"{"jsonrpc":"2.0","id":7,"method":"tools/list"}"#)
+        let id = list.toUpstream[0].1["id"]?.intValue ?? -1
+        let reply = harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(id),"result":{"tools":[{"name":"list_issues","inputSchema":{"type":"object"}},{"name":"delete_repo"},{"name":"create_issue","description":"Open one"}]}}"#)
+        let tools = reply.toClient.first?["result"]?["tools"]?.arrayValue ?? []
+        #expect(reply.toClient.first?["id"] == .int(7))
+        #expect(tools.map { $0["name"] } == [.string("list_issues"), .string("create_issue")])
+        #expect(tools[1]["description"] == .string("[rv: needs the user's approval] Open one"))
+        #expect(tools[0]["inputSchema"] == .object(["type": .string("object")]))
+    }
+
+    @Test func multipleServersArePrefixedAndPagesAreFollowed() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github, Self.notes]))
+        _ = harness.ready()
+        let fanout = harness.client(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).toUpstream
+        #expect(Set(fanout.map(\.0)) == ["github", "notes"])
+        let githubID = fanout.first { $0.0 == "github" }?.1["id"]?.intValue ?? -1
+        let notesID = fanout.first { $0.0 == "notes" }?.1["id"]?.intValue ?? -1
+
+        let page = harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(githubID),"result":{"tools":[{"name":"a"}],"nextCursor":"p2"}}"#)
+        #expect(page.toUpstream.first?.1["params"]?["cursor"] == .string("p2"))
+        let secondID = page.toUpstream.first?.1["id"]?.intValue ?? -1
+        #expect(harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(secondID),"result":{"tools":[{"name":"b"}]}}"#).toClient.isEmpty)
+        let done = harness.upstream("notes", #"{"jsonrpc":"2.0","id":\#(notesID),"result":{"tools":[{"name":"write"}]}}"#)
+        let names = done.toClient.first?["result"]?["tools"]?.arrayValue?.compactMap { $0["name"]?.stringValue }
+        #expect(names == ["github__a", "github__b", "notes__write"])
+
+        let call = harness.client(#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"notes__write","arguments":{"text":"hi"}}}"#)
+        #expect(call.toUpstream.first?.0 == "notes")
+        #expect(call.toUpstream.first?.1["params"]?["name"] == .string("write"))
+        let unknown = harness.client(#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"nope__x"}}"#)
+        #expect(unknown.toClient.first?["error"]?["code"] == .int(-32602))
+    }
+
+    @Test func allowedCallIsForwardedMappedBackAndAudited() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        _ = harness.ready()
+        let call = harness.client(#"{"jsonrpc":"2.0","id":"c1","method":"tools/call","params":{"name":"list_issues","arguments":{"repo":"x","state":"open"},"_meta":{"progressToken":5}}}"#)
+        let forwarded = call.toUpstream[0].1
+        #expect(forwarded["params"]?["_meta"]?["progressToken"] == .int(5))
+        let upstreamID = forwarded["id"]?.intValue ?? -1
+        let reply = harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(upstreamID),"result":{"content":[{"type":"text","text":"ok"}]}}"#)
+        #expect(reply.toClient.first?["id"] == .string("c1"))
+        #expect(reply.toClient.first?["result"]?["content"]?.arrayValue?.first?["text"] == .string("ok"))
+        let record = reply.audits.first
+        #expect(record?.decision == .allow)
+        #expect(record?.argumentKeys == ["repo", "state"])
+        #expect(record?.isError == false)
+        #expect(record?.durationMilliseconds != nil)
+    }
+
+    @Test func deniedCallNeverReachesTheUpstream() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        _ = harness.ready()
+        let reply = harness.client(#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_repo","arguments":{"repo":"x"}}}"#)
+        #expect(reply.toUpstream.isEmpty)
+        #expect(reply.toClient.first?["result"]?["isError"] == .bool(true))
+        #expect(reply.audits.first?.decision == .deny)
+    }
+
+    @Test func askRecordsARequestThenAGrantLetsTheSameCallThroughOnce() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        _ = harness.ready()
+        let call = #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_issue","arguments":{"title":"t","body":"b"}}}"#
+        let paused = harness.client(call)
+        #expect(paused.toUpstream.isEmpty)
+        let text = paused.toClient.first?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue ?? ""
+        #expect(text.contains("rv mcp approve req1"))
+        #expect(paused.audits.first?.decision == .ask)
+        #expect(harness.approvals.requested.withLock { $0 } == ["github/create_issue"])
+
+        let hash = JSONValue.object(["body": .string("b"), "title": .string("t")]).canonicalHash
+        _ = harness.approvals.granted.withLock { $0.insert("github/create_issue/\(hash)") }
+        let allowed = harness.client(call)
+        #expect(allowed.toUpstream.first?.1["params"]?["name"] == .string("create_issue"))
+        let id = allowed.toUpstream.first?.1["id"]?.intValue ?? -1
+        let done = harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(id),"result":{"content":[]}}"#)
+        #expect(done.audits.first?.approvalID == "grant1")
+        #expect(harness.client(call).toUpstream.isEmpty)
+    }
+
+    @Test func cancellationIsMappedAndTheLateResponseDropped() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        _ = harness.ready()
+        let call = harness.client(#"{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"list_issues"}}"#)
+        let upstreamID = call.toUpstream[0].1["id"]?.intValue ?? -1
+        let cancel = harness.client(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":42,"reason":"user"}}"#)
+        #expect(cancel.toUpstream.first?.1["params"]?["requestId"] == .int(upstreamID))
+        #expect(harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(upstreamID),"result":{}}"#).isEmpty)
+    }
+
+    @Test func secretValuesAreScrubbedFromEverythingTheUpstreamReturns() {
+        var harness = GatewayHarness(
+            MCPConfiguration(servers: [Self.github]), secrets: ["github": [("GITHUB_TOKEN", "ghp_REALVALUE123")]])
+        _ = harness.ready()
+        let list = harness.client(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+        let listID = list.toUpstream[0].1["id"]?.intValue ?? -1
+        let tools = harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(listID),"result":{"tools":[{"name":"t","description":"uses ghp_REALVALUE123"}]}}"#)
+        #expect(tools.toClient.first?.compactText.contains("ghp_REALVALUE123") == false)
+        let call = harness.client(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"t"}}"#)
+        let id = call.toUpstream[0].1["id"]?.intValue ?? -1
+        let reply = harness.upstream("github", #"{"jsonrpc":"2.0","id":\#(id),"result":{"content":[{"type":"text","text":"token=ghp_REALVALUE123!"}]}}"#)
+        #expect(reply.toClient.first?["result"]?["content"]?.arrayValue?.first?["text"] == .string("token=[redacted:GITHUB_TOKEN]!"))
+    }
+
+    @Test func upstreamRequestsAreRefusedAndListChangedForwarded() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        _ = harness.ready()
+        let sampling = harness.upstream("github", #"{"jsonrpc":"2.0","id":"s1","method":"sampling/createMessage","params":{}}"#)
+        #expect(sampling.toUpstream.first?.1["error"]?["code"] == .int(-32601))
+        let ping = harness.upstream("github", #"{"jsonrpc":"2.0","id":"p","method":"ping"}"#)
+        #expect(ping.toUpstream.first?.1["result"] == .object([:]))
+        let changed = harness.upstream("github", #"{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}"#)
+        #expect(changed.toClient.first?["method"] == .string("notifications/tools/list_changed"))
+        #expect(harness.upstream("github", #"{"jsonrpc":"2.0","method":"notifications/message","params":{}}"#).isEmpty)
+    }
+
+    @Test func upstreamExitFailsInFlightCallsAndLaterCalls() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        _ = harness.ready()
+        _ = harness.client(#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_issues"}}"#)
+        let exited = harness.core.handle(.upstreamExited(server: "github"))
+        #expect(exited.toClient.first?["id"] == .int(5))
+        #expect(exited.toClient.first?["error"]?["code"] == .int(-32603))
+        #expect(exited.audits.first?.reason == "upstream exited")
+        let later = harness.client(#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"list_issues"}}"#)
+        #expect(later.toClient.first?["error"] != nil)
+        let list = harness.client(#"{"jsonrpc":"2.0","id":7,"method":"tools/list"}"#)
+        #expect(list.toClient.first?["result"]?["tools"] == .array([]))
+    }
+
+    @Test func upstreamThatFailsToStartReleasesWaitingClients() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github, Self.notes]))
+        let started = harness.core.start().toUpstream
+        _ = harness.client(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+        let notesInit = started.first { $0.0 == "notes" }?.1["id"] ?? .null
+        _ = harness.core.handle(.upstream(server: "notes", message: .object([
+            "jsonrpc": .string("2.0"), "id": notesInit, "result": .object([:]),
+        ])))
+        let released = harness.core.handle(.upstreamExited(server: "github"))
+        #expect(released.toUpstream.contains { $0.0 == "notes" && $0.1["method"] == .string("tools/list") })
+    }
+}
+
+@Suite("MCPApprovalStore")
+struct MCPApprovalStoreTests {
+    @Test func requestGrantConsumeLifecycle() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-approvals-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MCPApprovalStore(configDirectory: directory)
+        let id = try #require(store.request(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"]))
+        #expect(store.request(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"]) == id)
+        #expect(store.pending().map(\.id) == [id])
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == nil)
+        #expect(store.grant(id: id)?.state == .granted)
+        #expect(store.pending().isEmpty)
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "other") == nil)
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == id)
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == nil)
+        #expect(store.grant(id: "missing") == nil)
+    }
+
+    @Test func oldRequestsExpire() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-approvals-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let then = Date(timeIntervalSince1970: 1_000_000)
+        _ = MCPApprovalStore(configDirectory: directory, clock: { then })
+            .request(server: "gh", tool: "x", argumentsHash: "h", argumentKeys: [])
+        let later = MCPApprovalStore(configDirectory: directory, clock: { then.addingTimeInterval(25 * 3600) })
+        #expect(later.pending().isEmpty)
+    }
+
+    @Test func canonicalHashIgnoresKeyOrder() throws {
+        let a = try JSONValue.parse(#"{"b":[1,{"y":2,"x":1}],"a":"s"}"#)
+        let b = try JSONValue.parse(#"{"a":"s","b":[1,{"x":1,"y":2}]}"#)
+        #expect(a.canonicalHash == b.canonicalHash)
+        #expect(a.canonicalHash != (try JSONValue.parse(#"{"a":"t","b":[1,{"x":1,"y":2}]}"#)).canonicalHash)
+    }
+}

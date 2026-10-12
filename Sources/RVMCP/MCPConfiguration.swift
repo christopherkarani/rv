@@ -249,6 +249,11 @@ enum MCPConfigurationDecoding {
         }
         if let raw = object["args"] {
             guard let args = raw.stringArray else { throw MCPConfigurationError.invalid("\(context) args must be strings") }
+            for arg in args {
+                guard let names = MCPSecretReference.names(in: arg), names.allSatisfy(SecretsConfiguration.isVariableName) else {
+                    throw MCPConfigurationError.invalid("\(context) has a malformed ${secret:NAME} in its args")
+                }
+            }
             definition.args = args
         }
         definition.environment = try variableMap(object["env"], "\(context) env")
@@ -375,5 +380,31 @@ public enum MCPGlob {
         }
         while pi < p.count, p[pi] == "*" { pi += 1 }
         return pi == p.count
+    }
+}
+
+/// `${secret:NAME}` inside an mcp.json arg: replaced at launch with the rv
+/// secret's value, so credentials passed as flags never live in a config file.
+public enum MCPSecretReference {
+    static let opener = "${secret:"
+
+    /// Names referenced by `arg`; nil when a reference is unterminated or empty.
+    public static func names(in arg: String) -> [String]? {
+        var names: [String] = []
+        var rest = Substring(arg)
+        while let start = rest.range(of: opener) {
+            guard let end = rest[start.upperBound...].firstIndex(of: "}") else { return nil }
+            let name = String(rest[start.upperBound..<end])
+            guard name.isEmpty == false else { return nil }
+            names.append(name)
+            rest = rest[rest.index(after: end)...]
+        }
+        return names
+    }
+
+    public static func substitute(_ arg: String, values: [String: String]) -> String {
+        var output = arg
+        for (name, value) in values { output = output.replacingOccurrences(of: opener + name + "}", with: value) }
+        return output
     }
 }

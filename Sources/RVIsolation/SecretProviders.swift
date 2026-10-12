@@ -14,14 +14,14 @@ public struct SecretValue: Sendable, Equatable, CustomStringConvertible, CustomD
 
     let bytes: [UInt8]
 
-    init?(_ bytes: [UInt8]) {
+    public init?(_ bytes: [UInt8]) {
         guard bytes.isEmpty == false, bytes.count <= Self.maximumBytes, bytes.contains(0) == false else {
             return nil
         }
         self.bytes = bytes
     }
 
-    init?(_ text: String) {
+    public init?(_ text: String) {
         self.init(Array(text.utf8))
     }
 

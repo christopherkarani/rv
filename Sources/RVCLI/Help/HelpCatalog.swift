@@ -424,6 +424,17 @@ enum HelpCatalog {
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv mcp [list] [--project <dir>] [--json]"),
                 HelpRow(name: "rv mcp check [--project <dir>] [--json]"),
+                HelpRow(name: "rv mcp import --host <host> [--server <name>...] [--allow-tools] [--dry-run]"),
+                HelpRow(name: "rv mcp setup --host <host> [--server <name>...] [--rv-path <path>] [--undo]"),
+                HelpRow(name: "rv mcp serve --server <name> [--server <name>...]"),
+                HelpRow(name: "rv mcp pending | approve <id> [--always] | deny <id>"),
+            ]),
+            HelpSection(heading: "Tool policy", rows: [
+                HelpRow(name: "order", description: "deny glob > ask glob > allow glob > server default > defaultDecision"),
+                HelpRow(name: "deny", description: "Hidden from the agent; calls fail"),
+                HelpRow(name: "ask", description: "Paused until `rv mcp approve`; a grant covers one identical call"),
+                HelpRow(name: "secrets", description: "\"secrets\": {\"VAR\": \"NAME\"} or ${secret:NAME} in args; values scrubbed"),
+                HelpRow(name: "sandbox", description: "\"sandbox\": {\"network\": false} cages the server (macOS)"),
             ]),
             HelpSection(heading: "Statuses", rows: [
                 HelpRow(name: "governed", description: "Host runs it through `rv mcp serve`"),
@@ -431,6 +442,7 @@ enum HelpCatalog {
                 HelpRow(name: "bypass", description: "rv has a definition; the host runs it directly"),
                 HelpRow(name: "unreviewed", description: "rv has never reviewed it"),
                 HelpRow(name: "blocked", description: "Listed in mcp.json \"blocked\""),
+                HelpRow(name: "dangling", description: "Routed through rv, but mcp.json has no such server"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "config", description: "~/.config/rv/mcp.json (owner-only)"),
@@ -439,10 +451,13 @@ enum HelpCatalog {
                     description: "Claude Code, Claude Desktop, Cursor, Codex, OpenCode, Gemini, Antigravity, VS Code, Windsurf"
                 ),
                 HelpRow(name: "redaction", description: "Env and header values never shown; credential-like args masked"),
+                HelpRow(name: "audit", description: "rv audit tail --kind mcp.call shows every tool call"),
             ]),
         ],
         examples: [
             "rv mcp list",
+            "rv mcp import --host cursor --dry-run",
+            "rv mcp setup --host cursor",
             "rv mcp check",
         ]
     )

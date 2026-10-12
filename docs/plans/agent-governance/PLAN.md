@@ -20,11 +20,11 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 0 Plan + reset | `plan/agent-governance` | [#394](https://github.com/christopherkarani/rv/pull/394) | in progress |
 | 1 Trustworthy sandbox | `governance/phase-1-sandbox` | [#395](https://github.com/christopherkarani/rv/pull/395) | agent items done; PR open |
 | 2 Secrets the agent can't leak | `governance/phase-2-secrets` | [#413](https://github.com/christopherkarani/rv/pull/413) | agent items done (PR open); L3 demo needs owner trust |
-| 3 MCP governance | `governance/phase-3-mcp` | _not opened_ | not started |
+| 3 MCP governance | `governance/phase-3-mcp` | _opening_ | agent items done |
 | 4 Enterprise client features | `governance/phase-4-enterprise` | _not opened_ | not started |
 | 5 Launch readiness | human-owned | n/a | not started |
 
-**Next action:** Phase 3.2 gateway on `governance/phase-3-mcp` (design in the Phase 3 section). Linux CI passed on #395 and #413. (the gateway was never compiled on Linux locally: Docker was down). Then Phase 3.1: branch `governance/phase-3-mcp` from `governance/phase-2-secrets`, start `rv mcp list`.
+**Next action:** Phase 4 on `governance/phase-4-enterprise` (branch from `governance/phase-3-mcp`): start with `rv report --json`, then managed restrict-only policy. Check the Phase 3 PR's Linux CI first.
 
 Gotcha: never run the `rv` binary with a fake `HOME` on a path that writes to
 the Keychain (`rv secrets set`). macOS opens a SecurityAgent "keychain not
@@ -563,39 +563,58 @@ move them into rv secrets with `rv mcp import`.
 - [x] Tests: `Tests/RVMCPTests` (JSONValue, MiniTOML, MCPConfiguration, MCPRedaction, MCPInventory: 23). Real binary on this Mac: 23 entries in 7 host files, Codex `--api-key` masked, 2 plaintext credentials flagged
 
 ### 3.2 Gateway: `rv mcp serve`, approvals
-- [ ] `JSONValue` + framing with bounds; pure gateway core (state machine:
-      client/upstream messages in → messages + audit out)
-- [ ] Runtime: spawn upstreams (Foundation `Process`, pipes, stderr passthrough),
-      Phase 2 secrets in env, line readers, shutdown when the client closes stdin
-- [ ] Policy + approvals store; `rv mcp pending`, `rv mcp approve <id> [--always]`, `rv mcp deny <id>`
-- [ ] Response scrubbing of secret values
-- [ ] Audit `mcp.call`
-- [ ] Tests: L1 core (init, list aggregation + paging, prefixing, deny hides,
-      ask → pending → approve → allowed once, cancel mapping, scrub);
-      L2 a real python3 stdio MCP server fixture through the real gateway
-      process; E2E with the official MCP Inspector CLI and
-      `@modelcontextprotocol/server-everything`, and Claude Code / Codex on
-      this Mac listing tools through rv
+- [x] `JSONValue` + framing with bounds; pure gateway core (state machine:
+      client/upstream messages in → messages + audit out): `Sources/RVMCP/MCPGatewayCore.swift`
+- [x] Runtime: spawn upstreams (Foundation `Process`, pipes, stderr passthrough),
+      Phase 2 secrets in env, line readers (64 MiB line cap), shutdown when the client
+      closes stdin (close upstream stdin → SIGTERM after 2 s → SIGKILL): `MCPGatewayRuntime.swift`
+      (the one class in RVMCP; preflight allows that file only)
+- [x] Policy + approvals store (`~/.config/rv/mcp-approvals.json`, flock, 24 h, grant bound to the
+      SHA-256 of canonical arguments, consumed once): `MCPApprovals.swift`; `rv mcp pending`,
+      `rv mcp approve <id> [--always]` (`--always` moves the tool to the allow list), `rv mcp deny <id>`
+- [x] Response scrubbing of secret values (`[redacted:NAME]`)
+- [x] Audit `mcp.call` (source `mcp-gateway`; argument keys only)
+- [x] Tests: L1 core (`MCPGatewayCoreTests`), L2 python3 fixture through the real runtime
+      (`MCPGatewayRuntimeTests`, gated on python3). E2E on this Mac: MCP Inspector CLI +
+      `@modelcontextprotocol/server-everything` (deny hid `get-env`, prefixed names), Claude Code
+      `claude mcp list` → Connected, Codex exec (gpt-5.5) saw only allowed tools, `whoami` paused for
+      approval, both calls in `rv audit tail --kind mcp.call`; the secret value never reached the
+      audit or approvals file
 
 ### 3.3 `rv mcp import` / `rv mcp setup` / `--undo`
-- [ ] `import --host H [--server N]`: copy host definitions into mcp.json;
-      literal secret-looking env values move into the Keychain as rv secrets
-      (`<SERVER>_<VAR>`) referenced from `secrets`
-- [ ] `setup --host H [--server N]`: rewrite JSON host configs so approved
-      servers run `<rv> mcp serve --server <name>`; backup file + manifest at
-      `~/.config/rv/mcp-setup/<host>.json`; `--undo` restores each entry only
-      if it still equals what rv wrote (surgical, survives hosts rewriting
-      the file). Codex TOML: print the `codex mcp add` line instead.
+- [x] `import --host H [--server N] [--allow-tools] [--dry-run]`: copy host definitions into mcp.json
+      (`MCPImport` in `Sources/RVMCP/MCPHostSetup.swift`). Literal credential env values become
+      Keychain-backed rv secrets (keep the variable name; `<SERVER>_<VAR>` on collision);
+      credential flag values and bare tokens in args become `${secret:<SERVER>_<FLAG>}` /
+      `${secret:<SERVER>_ARG_<n>}`. Order: Keychain first (abort with nothing written on failure),
+      then secrets.json, then mcp.json. Imported servers ask for every tool unless `--allow-tools`.
+- [x] `${secret:NAME}` in mcp.json args: validated on load, substituted by `MCPLaunchPlanner`,
+      undefined names refuse to launch, values join the scrub list. Honest limit: an arg value
+      is visible in `ps` to the same user; prefer `secrets` (env) when the server supports it.
+- [x] `setup --host H [--server N] [--rv-path P]`: rewrite JSON host configs so mcp.json servers
+      run `<rv> mcp serve --server <name>` (opencode `command` array shape, `type` kept). Undo
+      manifest `~/.config/rv/mcp-setup.json` (owner-only) holds each original entry and is saved
+      before the host file is rewritten; host files keep their mode; files with comments/trailing
+      commas are refused untouched. `--undo` restores each entry only if it still equals what rv
+      wrote. Codex TOML: prints `codex mcp remove/add` lines instead.
+- [x] Tests: `MCPImportTests` (4), `MCPHostSetupTests` (4), `Tests/RVCLITests/MCPCommandTests` (4:
+      import → setup takes check from failing to passing with the token only in the fake Keychain,
+      dry run and Keychain failure write nothing, approve once/always, rv path). E2E with the real
+      binary in a temp HOME: check fails (3 unreviewed) → import cursor → setup cursor → Cursor's
+      rewritten entry launched by MCP Inspector ran `echo` through rv (audited) → `--undo` restored
+      the original JSON → second undo is a no-op; Codex printed the manual line
 
 ### 3.4 Sandboxed upstreams
-- [ ] `sandbox` on a server definition: spawn through `/usr/bin/sandbox-exec`
-      with a generated profile: writes only to a per-server scratch dir,
-      `$TMPDIR`, and listed `writable` paths; reads denied for `~/.ssh`,
-      `~/.aws`, `~/.gnupg`, `~/.config/rv`, Keychains, browser profiles;
-      `network: false` denies all network except the local socket pair.
+- [x] `sandbox` on a server definition (`Sources/RVMCP/MCPSandbox.swift`): spawn through
+      `/usr/bin/sandbox-exec` with a generated profile: writes only to a per-server scratch dir
+      (`~/Library/Caches/rv-mcp/<name>`, also the working directory), temp dirs, package caches
+      and listed `writable` paths; reads denied for credential dirs, browser profiles, Keychains,
+      other hosts' MCP configs and the rv config dir; `network: false` → `(deny network*)`.
+      Linux fails closed (refuses to launch a server that asks for a sandbox).
       Honest limit: allow-default profile (not deny-default) so npx/uvx work;
       no per-host egress allowlist yet.
-- [ ] Tests: L2 a caged fixture cannot read `~/.ssh` stand-in or write outside scratch
+- [x] Tests: L2 `MCPSandboxLiveTests` (macOS): a caged shell cannot read a `~/.ssh` stand-in or
+      the rv config, cannot write outside scratch, can write inside scratch
 
 Exit criteria: Cursor or Claude Code on this Mac lists tools through
 `rv mcp serve`; a denied tool is blocked; every call shows in `rv audit`.
@@ -667,6 +686,13 @@ Exit criteria: Cursor or Claude Code on this Mac lists tools through
   `WorkspaceAttachment`; gated on Phase 1, merged forward into Phase 2.
   Linux `swift test` then passed on both PRs (gateway included). Phase 3.1
   inventory landed: new `RVMCP` target, `rv mcp list|check`.
+- 2026-10-12: Phase 3.2–3.4 landed: gateway core + runtime (`rv mcp serve`),
+  approvals (`pending|approve [--always]|deny`), `mcp.call` audit, secret
+  scrubbing, `${secret:NAME}` args, `rv mcp import|setup [--undo]`, Seatbelt
+  cage for upstreams. Suites: RVMCPTests 49, RVCLITests 819, preflight 0
+  failures (allowlisted `MCPGatewayRuntime.swift` as a process supervisor).
+  E2E evidence under 3.2/3.3. Linux not compiled locally (no container
+  running); relying on CI.
 - 2026-10-13: Rereview of PR #394. Named each ledger writer (only `blocks`,
   `allow-once`, and `pending-approvals` are `FileLockedJSONLStore`). Seatbelt
   ground truth now says outbound connect is loopback TCP and the listen rule
