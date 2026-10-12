@@ -45,7 +45,7 @@ enum WorkspaceTUICommand {
         guard case .success(let session) = LiveWorkspaceTUISession.connect(
             endpoint, project: project, hostExecutable: host
         ) else {
-            throw ValidationError("workspace host is not reachable")
+            throw ValidationError(WorkspaceCommandRun.hostNotReachableText)
         }
         let described: WorkspaceTUISummary
         switch session.inventory() {
@@ -53,7 +53,7 @@ enum WorkspaceTUICommand {
             described = inventoried.summary
         case .failure:
             session.close()
-            throw ValidationError("workspace host is not reachable")
+            throw ValidationError(WorkspaceCommandRun.hostNotReachableText)
         }
         let openedLayout: WorkspaceLayoutOpenResult
         do {
@@ -98,7 +98,7 @@ enum WorkspaceTUICommand {
             model.launchDefaultRuntimeIfEmpty()
         case .failure:
             session.close()
-            throw ValidationError("workspace host is not reachable")
+            throw ValidationError(WorkspaceCommandRun.hostNotReachableText)
         }
         let savePump = WorkspaceLayoutSavePump(model: model, layout: openedLayout.session) { message in
             model.reportNotice(message)

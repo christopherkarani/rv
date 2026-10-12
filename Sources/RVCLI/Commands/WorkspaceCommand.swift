@@ -179,6 +179,18 @@ struct WorkspaceAbandon: AsyncParsableCommand {
 }
 
 enum WorkspaceCommandRun {
+    /// Refusal for a live endpoint whose host does not answer. The failed
+    /// connect mutates nothing, so the text promises the volume and saved
+    /// tree are untouched and names the next checks.
+    static let hostNotReachableText =
+        "workspace host is not reachable: the workspace was left untouched (volume and saved changes are preserved); run 'rv workspace status' to check its state, or 'rv doctor' if it stays unreachable"
+
+    /// Refusal for an endpoint file whose host does not answer. Shared by
+    /// `workspace status`, the inspect dump, and client failures so every
+    /// surface gives the same state, safety, and next action.
+    static let staleEndpointText =
+        "stale endpoint: the workspace host did not answer; your volume and saved changes are untouched — run 'rv workspace status' to re-check, or 'rv doctor' if it persists"
+
     static func start(_ raw: String?) throws {
         #if !os(macOS)
         throw ValidationError("contained workspace host is unavailable")
@@ -187,7 +199,7 @@ enum WorkspaceCommandRun {
         let before = WorkspaceHosts.inspect(project: project)
         let endpoint = try requireEndpoint(WorkspaceHosts.ensure(project: project, executable: try hostBinary()))
         guard let client = connected(endpoint) else {
-            throw ValidationError("workspace host is not reachable")
+            throw ValidationError(hostNotReachableText)
         }
         let described = client.describe()
         _ = client.detach()
@@ -216,7 +228,7 @@ enum WorkspaceCommandRun {
             throw ValidationError(text(WorkspaceHosts.inspect(project: project)))
         }
         guard let client = connected(endpoint) else {
-            throw ValidationError("workspace host is not reachable")
+            throw ValidationError(hostNotReachableText)
         }
         let described = client.describe()
         switch described {
@@ -244,7 +256,7 @@ enum WorkspaceCommandRun {
             return
         }
         guard let client = connected(endpoint) else {
-            emit("stale endpoint")
+            emit(staleEndpointText)
             return
         }
         let described = client.describe()
@@ -267,7 +279,7 @@ enum WorkspaceCommandRun {
             throw ValidationError(text(WorkspaceHosts.inspect(project: project)))
         }
         guard let client = connected(endpoint) else {
-            throw ValidationError("workspace host is not reachable")
+            throw ValidationError(hostNotReachableText)
         }
         switch client.closeWorkspace() {
         case .success(let description):
@@ -298,7 +310,10 @@ enum WorkspaceCommandRun {
         case .refused(let refusal):
             throw ValidationError(text(refusal))
         case .failed(let reason):
-            throw ValidationError(reason.map { "abandon stopped: \($0.rawValue)" } ?? "abandon failed")
+            throw ValidationError(
+                reason.map { "abandon stopped: \($0.rawValue): the workspace was left as-is; run 'rv workspace status' and retry, or 'rv doctor' if it repeats" }
+                    ?? "abandon failed: the workspace was left as-is; run 'rv workspace status' and retry, or 'rv doctor' if it repeats"
+            )
         }
         #endif
     }
@@ -429,7 +444,7 @@ enum WorkspaceCommandRun {
             WorkspaceHosts.ensure(project: project, executable: try hostBinary())
         )
         guard let client = connected(endpoint) else {
-            throw ValidationError("workspace host is not reachable")
+            throw ValidationError(hostNotReachableText)
         }
         let window = LocalTerminalWindow.current(fd: STDOUT_FILENO)
         let rows = rows ?? window?.rows ?? TerminalStreamLimits.defaultRows
@@ -632,39 +647,39 @@ enum WorkspaceCommandRun {
         return emitted.joined(separator: "\n")
     }
 
-    private static func text(_ attachment: WorkspaceAttachment) -> String {
+    static func text(_ attachment: WorkspaceAttachment) -> String {
         switch attachment {
         case .absent:
-            "no workspace"
+            "no workspace: no workspace host is running for this project; run 'rv workspace start' to create one"
         case .live(let endpoint):
             "workspace \(endpoint.workspace.uuidString)"
         case .starting:
-            "workspace host is starting"
+            "workspace host is starting: not ready yet and no changes have been published; wait a moment, then run 'rv workspace status'"
         case .orphaned(let id):
-            "orphaned \(id.uuidString)"
+            "orphaned \(id.uuidString): the workspace host exited without closing; your saved tree is untouched and the unpublished volume is preserved — run 'rv workspace status', then 'rv workspace start' to recover"
         case .recovering(let id):
-            "recovering \(id.uuidString)"
+            "recovering \(id.uuidString): workspace recovery is in progress; your saved tree and volume are untouched — wait, then run 'rv workspace status'"
         case .blocked(let block):
-            "recovery blocked: \(block.reason.rawValue)"
+            "recovery blocked: \(block.reason.rawValue): the workspace is blocked; your saved tree is untouched and the unpublished volume is still present — run 'rv workspace status' for state, or 'rv workspace abandon' to discard the volume and restore the saved tree"
         case .staleEndpoint:
-            "stale endpoint"
+            staleEndpointText
         case .unsupported:
-            "contained workspace host is unavailable"
+            "contained workspace host is unavailable on this platform; run 'rv doctor' to check the installation"
         }
     }
 
-    private static func text(_ refusal: WorkspaceAbandonRefusal) -> String {
+    static func text(_ refusal: WorkspaceAbandonRefusal) -> String {
         switch refusal {
         case .live:
-            "workspace is live; close it instead"
+            "workspace is live; close it instead: nothing was changed — run 'rv workspace close'; retry 'rv workspace abandon' only if it becomes blocked"
         case .notBlocked:
-            "workspace is not blocked"
+            "workspace is not blocked: nothing was changed and no abandon is needed; run 'rv workspace status' to see its state, or 'rv workspace start' to use it"
         case .configurationUnavailable:
-            "workspace host configuration is unavailable"
+            "workspace host configuration is unavailable: nothing was changed and the workspace state could not be checked; run 'rv doctor' to inspect the installation"
         case .unsafeReason(let reason):
-            "abandon refused: \(reason.rawValue)"
+            "abandon refused: \(reason.rawValue): nothing was changed; this block cannot be cleared by abandoning — run 'rv workspace status' and 'rv doctor' for state"
         case .unprovenOwner:
-            "abandon refused: workspace ownership is unproven"
+            "abandon refused: workspace ownership is unproven: nothing was changed; run 'rv workspace status' and 'rv doctor'; do not delete workspace files by hand"
         }
     }
 
@@ -681,7 +696,7 @@ enum WorkspaceCommandRun {
         case .spawnFailed:
             "workspace host failed to start"
         case .recoveryBlocked(let block):
-            "recovery blocked: \(block.reason.rawValue)"
+            "recovery blocked: \(block.reason.rawValue): your saved tree is untouched and the unpublished volume is still present; run 'rv workspace status' for state, or 'rv workspace abandon' to discard the volume and restore the saved tree"
         case .endpointUnavailable:
             "workspace host endpoint is unavailable"
         case .timedOut:
@@ -705,7 +720,7 @@ enum WorkspaceCommandRun {
         return text(error)
     }
 
-    private static func text(_ error: WorkspaceClientFailure) -> String {
+    static func text(_ error: WorkspaceClientFailure) -> String {
         switch error {
         case .disconnected: "workspace host disconnected"
         case .malformed: "workspace host rejected the request"
@@ -722,10 +737,10 @@ enum WorkspaceCommandRun {
         case .requiresOperatorPermit: "operator permits not yet available"
         case .resourceProfileUnavailable: "runtime resource profile is unavailable"
         case .resourceStagingFailed(let detail): "runtime resource staging failed: \(detail) is unusable"
-        case .recoveryRequired: "workspace recovery is required"
+        case .recoveryRequired: "workspace recovery is required: run 'rv workspace status' for state; if it is blocked, run 'rv workspace abandon' to discard the volume and restore the saved tree"
         case .childTeardownFailed: "runtime teardown failed"
         case .runtimeLimit: "workspace runtime limit reached"
-        case .staleEndpoint: "stale endpoint"
+        case .staleEndpoint: staleEndpointText
         case .terminalUnavailable: "runtime has no terminal"
         case .terminalBusy: "terminal input is owned by another client"
         case .terminalLimit: "terminal subscriber limit reached"
