@@ -410,8 +410,8 @@ public actor MCPDurableApprovalBackend: MCPElicitationBackend {
         case .resolved(let resolution):
             if resolution.decision.authorizesExactAction {
                 // Bind the grant to THIS ticket before the memory mark: the
-                // identity must be ours (explicit, not just the isOurs
-                // prefix gate above) and the fingerprint must be the one
+                // identity must be ours (re-asserting the isOurs exact
+                // match above) and the fingerprint must be the one
                 // this backend minted for this ticket — address from the
                 // cached prompt, post-rebind from the durable envelope,
                 // fail closed when the envelope is undecodable. A planted
