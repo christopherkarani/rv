@@ -68,6 +68,24 @@ struct AuditCursorTests {
         #expect(ledger.events(after: whole.next, limit: 10).events.map(\.subject) == ["rotated.example:443"])
     }
 
+    @Test func fileRewrittenInPlaceWithSameInodeRestarts() throws {
+        let ledgers = try Ledgers()
+        let ledger = AuditLedger(configDirectory: ledgers.directory)
+        try ledgers.append("egress-denials.jsonl", ledgers.egress("a.example", at: 100))
+        let first = ledger.events(after: AuditCursor(), limit: 10)
+        #expect(first.events.map(\.subject) == ["a.example:443"])
+
+        let url = ledgers.directory.appendingPathComponent("egress-denials.jsonl")
+        let replacement = ledgers.egress("replacement.example", at: 200) + ledgers.egress("second.example", at: 201)
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: Data(replacement.utf8))
+        try handle.close()
+
+        let after = ledger.events(after: first.next, limit: 10)
+        #expect(after.events.map(\.subject) == ["replacement.example:443", "second.example:443"])
+    }
+
     @Test func endCursorSkipsHistory() throws {
         let ledgers = try Ledgers()
         try ledgers.append("egress-denials.jsonl", ledgers.egress("old.example", at: 100))

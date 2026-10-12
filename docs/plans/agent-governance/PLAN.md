@@ -801,6 +801,11 @@ health from the doctor checks that need no root.
   secret broker/gateway + help/completions all pass; preflight 0 failures.
   Real-binary E2E evidence under 4.1-4.3. Remaining: owner L3 managed-dir
   install (sudo) and Phase 5 (human-owned).
+- 2026-10-12: Linux CI on #415 caught the audit cursor missing a replaced
+  ledger: ext4 reuses the inode at once, so delete + recreate looked like the
+  same file. The cursor now also stores an FNV-1a hash of the first 64 bytes
+  and restarts at 0 when it changes. New test rewrites in place (same inode
+  on every OS) and fails without the fix.
 - 2026-10-13: Rereview of PR #394. Named each ledger writer (only `blocks`,
   `allow-once`, and `pending-approvals` are `FileLockedJSONLStore`). Seatbelt
   ground truth now says outbound connect is loopback TCP and the listen rule
