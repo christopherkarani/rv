@@ -81,6 +81,16 @@ public enum SecretsProviderFactoryError: Error, Sendable, Equatable {
     /// without an enforcement hook). Defense in depth; unreachable on
     /// macOS, reachable on Linux with a pinned live client.
     case vaultMisconfigured
+    /// `workos-vault.json` is present but unusable (unsafe, corrupt,
+    /// oversized, or failing endpoint validation). Mirrors the Vault
+    /// rule: a half-understood config must not silently degrade.
+    case workosVaultConfigInvalid
+    /// `workos-vault.json` is valid but `workos-vault-apikey.json` is
+    /// missing or unusable. The API key has no empty default.
+    case workosVaultCredentialsInvalid
+    /// WorkOS Vault config plus key passed factory validation but the
+    /// client, metadata store, or provider init still rejected them.
+    case workosVaultMisconfigured
 }
 
 // MARK: - Vault endpoint config
@@ -338,6 +348,19 @@ public enum SecretsProviderFactory {
         {
             providers.append(encrypted)
         }
+        // X1-G: Vault-shaped opt-in. Absent workos-vault.json skips;
+        // present-but-unusable fails the factory (never silent), and a
+        // valid config without a usable API key fails credentials.
+        switch WorkOSVaultEndpointStore.load(from: configDirectory) {
+        case .success(nil):
+            break
+        case .success(let config?):
+            providers.append(
+                try workosVaultClient(config: config, configDirectory: configDirectory)
+            )
+        case .failure:
+            throw SecretsProviderFactoryError.workosVaultConfigInvalid
+        }
         return providers
     }
 
@@ -405,6 +428,42 @@ public enum SecretsProviderFactory {
             )
         } catch {
             throw SecretsProviderFactoryError.vaultMisconfigured
+        }
+    }
+
+    /// Builds one WorkOS Vault provider: API key via the owner-only key
+    /// store, then the public live client init (the stub init is
+    /// internal/test-only and never used here), the file-backed metadata
+    /// store, and the provider with the config binding.
+    private static func workosVaultClient(
+        config: WorkOSVaultEndpointConfig,
+        configDirectory: URL
+    ) throws(SecretsProviderFactoryError) -> WorkOSVaultSecretsProvider {
+        let apiKey: String
+        switch WorkOSVaultAPIKeyStore.load(from: configDirectory) {
+        case .success(let loaded):
+            apiKey = loaded
+        case .failure:
+            throw SecretsProviderFactoryError.workosVaultCredentialsInvalid
+        }
+        do {
+            let client = try WorkOSVaultHTTPClient(
+                endpoint: config.endpoint, apiKey: apiKey,
+                timeoutSeconds: config.timeoutSeconds
+            )
+            let store = try WorkOSVaultMetadataStore(
+                path: configDirectory
+                    .appendingPathComponent(WorkOSVaultMetadataStore.fileName).path
+            )
+            return try WorkOSVaultSecretsProvider(
+                client: client, store: store,
+                binding: WorkOSVaultOwnerBinding(
+                    tenant: config.tenant, subject: config.subject
+                ),
+                objectPrefix: config.objectPrefix
+            )
+        } catch {
+            throw SecretsProviderFactoryError.workosVaultMisconfigured
         }
     }
 

@@ -301,6 +301,74 @@ struct SecretsProviderFactoryTests {
     }
     #endif
 
+    // MARK: Matrix — workos-vault iff workos config (X1-G parent hookup)
+
+    @Test func workosPresentAddsProvider() throws {
+        let dir = try makeFactoryTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeFactoryFile(
+            at: dir, name: "workos-vault.json",
+            json: #"{"version":1,"endpoint":"https://api.workos.test","tenant":"factory-tenant"}"#
+        )
+        try writeFactoryFile(
+            at: dir, name: "workos-vault-apikey.json",
+            json: #"{"version":1,"api_key":"factory-test-key"}"#
+        )
+        let providers = try SecretsProviderFactory.makeProviders(configDirectory: dir)
+        #expect(
+            providers.map(\.id).sorted() == (expectedAlwaysOnIDs() + ["workos-vault"]).sorted()
+        )
+        let workos = try #require(providers.compactMap { $0 as? WorkOSVaultSecretsProvider }.first)
+        #expect(workos.id == "workos-vault")
+    }
+
+    @Test func corruptWorkosConfigFailsClosed() throws {
+        let dir = try makeFactoryTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeFactoryFile(at: dir, name: "workos-vault.json", json: "not-json{{{")
+        try writeFactoryFile(
+            at: dir, name: "workos-vault-apikey.json",
+            json: #"{"version":1,"api_key":"factory-test-key"}"#
+        )
+        #expect(throws: SecretsProviderFactoryError.workosVaultConfigInvalid) {
+            try SecretsProviderFactory.makeProviders(configDirectory: dir)
+        }
+    }
+
+    @Test func workosWithoutKeyFailsCredentials() throws {
+        let dir = try makeFactoryTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeFactoryFile(
+            at: dir, name: "workos-vault.json",
+            json: #"{"version":1,"tenant":"factory-tenant"}"#
+        )
+        #expect(throws: SecretsProviderFactoryError.workosVaultCredentialsInvalid) {
+            try SecretsProviderFactory.makeProviders(configDirectory: dir)
+        }
+    }
+
+    #if canImport(SQLite3)
+    @Test func workosBlockedDatabaseFailsMisconfigured() throws {
+        let dir = try makeFactoryTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeFactoryFile(
+            at: dir, name: "workos-vault.json",
+            json: #"{"version":1,"tenant":"factory-tenant"}"#
+        )
+        try writeFactoryFile(
+            at: dir, name: "workos-vault-apikey.json",
+            json: #"{"version":1,"api_key":"factory-test-key"}"#
+        )
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent(WorkOSVaultMetadataStore.fileName),
+            withIntermediateDirectories: false
+        )
+        #expect(throws: SecretsProviderFactoryError.workosVaultMisconfigured) {
+            try SecretsProviderFactory.makeProviders(configDirectory: dir)
+        }
+    }
+    #endif
+
     // MARK: Matrix — corrupt config fails closed
 
     @Test func corruptBindingsFailsClosed() throws {

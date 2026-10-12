@@ -2227,6 +2227,12 @@ func brokerFactoryDetail(_ error: SecretsProviderFactoryError) -> String {
         "broker vault credentials invalid"
     case .vaultMisconfigured:
         "broker vault misconfigured"
+    case .workosVaultConfigInvalid:
+        "broker workos-vault configuration invalid"
+    case .workosVaultCredentialsInvalid:
+        "broker workos-vault credentials invalid"
+    case .workosVaultMisconfigured:
+        "broker workos-vault misconfigured"
     }
 }
 
