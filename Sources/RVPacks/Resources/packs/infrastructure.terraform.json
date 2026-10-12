@@ -77,56 +77,56 @@
       "pattern": "(?:terraform|tofu)\\b.*?\\bplan\\s+.*-destroy",
       "severity": "medium",
       "description": "terraform/tofu plan -destroy shows what would be destroyed. Review carefully before applying.",
-      "explanation": "terraform plan -destroy shows destruction preview:\n\n\\ - This is a read-only operation (safe to run) \\ - Shows what WOULD be destroyed if you apply \\ - Review output carefully before proceeding\n\n\\ This is actually the safe way to preview destroy."
+      "explanation": "terraform plan -destroy shows destruction preview:\n\n- This is a read-only operation (safe to run)\n- Shows what WOULD be destroyed if you apply\n- Review output carefully before proceeding\n\nThis is actually the safe way to preview destroy."
     },
     {
       "name": "destroy",
       "pattern": "(?:terraform|tofu)\\b.*?\\bdestroy(?=\\s|$)",
       "severity": "critical",
       "description": "terraform/tofu destroy removes ALL managed infrastructure. Use 'terraform plan -destroy' first.",
-      "explanation": "terraform destroy removes ALL managed infrastructure:\n\n\\ - Every resource in your state file is destroyed \\ - Cloud resources (VMs, databases, networks) deleted \\ - Cannot be undone without backups/recreation \\ - Use -target to destroy specific resources only\n\n\\ Preview first: terraform plan -destroy"
+      "explanation": "terraform destroy removes ALL managed infrastructure:\n\n- Every resource in your state file is destroyed\n- Cloud resources (VMs, databases, networks) deleted\n- Cannot be undone without backups/recreation\n- Use -target to destroy specific resources only\n\nPreview first: terraform plan -destroy"
     },
     {
       "name": "apply-auto-approve",
       "pattern": "(?:terraform|tofu)\\b.*?\\bapply\\s+.*-auto-approve",
       "severity": "high",
       "description": "terraform/tofu apply -auto-approve skips confirmation. Remove -auto-approve for safety.",
-      "explanation": "terraform apply -auto-approve skips confirmation:\n\n\\ - No opportunity to review changes before applying \\ - Intended for CI/CD, not interactive use \\ - Changes may destroy or recreate resources\n\n\\ For safety: remove -auto-approve and review the plan"
+      "explanation": "terraform apply -auto-approve skips confirmation:\n\n- No opportunity to review changes before applying\n- Intended for CI/CD, not interactive use\n- Changes may destroy or recreate resources\n\nFor safety: remove -auto-approve and review the plan"
     },
     {
       "name": "taint",
       "pattern": "(?:terraform|tofu)\\b.*?\\btaint\\b",
       "severity": "high",
       "description": "terraform/tofu taint marks a resource to be destroyed and recreated on next apply.",
-      "explanation": "terraform taint marks resource for recreation:\n\n\\ - Resource will be destroyed on next apply \\ - New resource created with same config \\ - May cause downtime during recreation \\ - IP addresses and identifiers may change\n\n\\ Use -replace in plan/apply instead (Terraform 0.15.2+)"
+      "explanation": "terraform taint marks resource for recreation:\n\n- Resource will be destroyed on next apply\n- New resource created with same config\n- May cause downtime during recreation\n- IP addresses and identifiers may change\n\nUse -replace in plan/apply instead (Terraform 0.15.2+)"
     },
     {
       "name": "state-rm",
       "pattern": "(?:terraform|tofu)\\b.*?\\bstate\\s+rm\\b",
       "severity": "high",
       "description": "terraform/tofu state rm removes resource from state without destroying it. Resource becomes unmanaged.",
-      "explanation": "terraform state rm orphans resources:\n\n\\ - Resource removed from Terraform state \\ - Actual cloud resource still exists \\ - Resource becomes 'unmanaged' (Terraform ignores it) \\ - May cause drift between state and reality\n\n\\ Back up state first: terraform state pull > backup.tfstate"
+      "explanation": "terraform state rm orphans resources:\n\n- Resource removed from Terraform state\n- Actual cloud resource still exists\n- Resource becomes 'unmanaged' (Terraform ignores it)\n- May cause drift between state and reality\n\nBack up state first: terraform state pull > backup.tfstate"
     },
     {
       "name": "state-mv",
       "pattern": "(?:terraform|tofu)\\b.*?\\bstate\\s+mv\\b",
       "severity": "high",
       "description": "terraform/tofu state mv moves resources in state. Incorrect moves can cause resource recreation.",
-      "explanation": "terraform state mv moves resources in state:\n\n\\ - Renames resource address in state file \\ - Wrong move can cause destruction/recreation \\ - Use -dry-run to preview the move first \\ - Does not affect actual cloud resources\n\n\\ Preview first: terraform state mv -dry-run SOURCE DEST"
+      "explanation": "terraform state mv moves resources in state:\n\n- Renames resource address in state file\n- Wrong move can cause destruction/recreation\n- Use -dry-run to preview the move first\n- Does not affect actual cloud resources\n\nPreview first: terraform state mv -dry-run SOURCE DEST"
     },
     {
       "name": "force-unlock",
       "pattern": "(?:terraform|tofu)\\b.*?\\bforce-unlock\\b",
       "severity": "high",
       "description": "terraform/tofu force-unlock removes state lock. Only use if lock is stale.",
-      "explanation": "terraform force-unlock removes state locks:\n\n\\ - Forces removal of a state lock \\ - May cause corruption if another process is running \\ - Only use when you're sure no other operation is active \\ - Lock ID required to prevent accidents\n\n\\ Verify no other operations: check CI/CD pipelines, other users"
+      "explanation": "terraform force-unlock removes state locks:\n\n- Forces removal of a state lock\n- May cause corruption if another process is running\n- Only use when you're sure no other operation is active\n- Lock ID required to prevent accidents\n\nVerify no other operations: check CI/CD pipelines, other users"
     },
     {
       "name": "workspace-delete",
       "pattern": "(?:terraform|tofu)\\b.*?\\bworkspace\\s+delete\\b",
       "severity": "medium",
       "description": "terraform/tofu workspace delete removes a workspace. Ensure it's not in use.",
-      "explanation": "terraform workspace delete removes workspace:\n\n\\ - Workspace and its state file deleted \\ - Does NOT destroy actual infrastructure \\ - Resources become unmanaged (orphaned) \\ - Cannot be undone without state backup\n\n\\ Destroy resources first: terraform destroy, then delete workspace"
+      "explanation": "terraform workspace delete removes workspace:\n\n- Workspace and its state file deleted\n- Does NOT destroy actual infrastructure\n- Resources become unmanaged (orphaned)\n- Cannot be undone without state backup\n\nDestroy resources first: terraform destroy, then delete workspace"
     }
   ]
 }

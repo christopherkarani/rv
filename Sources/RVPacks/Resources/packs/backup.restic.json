@@ -58,35 +58,35 @@
       "pattern": "restic\\b.*\\sforget\\b",
       "severity": "critical",
       "description": "restic forget removes snapshots and can permanently delete backup data.",
-      "explanation": "restic forget removes snapshots from repository:\n\n\\ - Snapshot metadata removed from repository \\ - Data not deleted until prune is run \\ - Use --keep-* flags to retain recent snapshots \\ - --dry-run shows what would be forgotten\n\n\\ Preview first: restic forget --dry-run [options]"
+      "explanation": "restic forget removes snapshots from repository:\n\n- Snapshot metadata removed from repository\n- Data not deleted until prune is run\n- Use --keep-* flags to retain recent snapshots\n- --dry-run shows what would be forgotten\n\nPreview first: restic forget --dry-run [options]"
     },
     {
       "name": "restic-prune",
       "pattern": "restic\\b.*\\sprune\\b",
       "severity": "critical",
       "description": "restic prune removes unreferenced data and is irreversible.",
-      "explanation": "restic prune permanently deletes unreferenced data:\n\n\\ - Removes data no longer referenced by snapshots \\ - Usually run after 'restic forget' \\ - Cannot be undone - data is permanently deleted \\ - May take a long time for large repositories\n\n\\ Consider: restic forget --prune to combine operations"
+      "explanation": "restic prune permanently deletes unreferenced data:\n\n- Removes data no longer referenced by snapshots\n- Usually run after 'restic forget'\n- Cannot be undone - data is permanently deleted\n- May take a long time for large repositories\n\nConsider: restic forget --prune to combine operations"
     },
     {
       "name": "restic-key-remove",
       "pattern": "restic\\b.*\\skey\\b.*\\sremove\\b",
       "severity": "critical",
       "description": "restic key remove deletes encryption keys and can make backups unrecoverable.",
-      "explanation": "restic key remove deletes repository encryption keys:\n\n\\ - Key is permanently deleted from repository \\ - If all keys removed, repository becomes inaccessible \\ - Cannot recover data without a valid key \\ - Always keep at least one key available\n\n\\ List keys first: restic key list"
+      "explanation": "restic key remove deletes repository encryption keys:\n\n- Key is permanently deleted from repository\n- If all keys removed, repository becomes inaccessible\n- Cannot recover data without a valid key\n- Always keep at least one key available\n\nList keys first: restic key list"
     },
     {
       "name": "restic-unlock-remove-all",
       "pattern": "restic\\b.*\\sunlock\\b.*\\s--remove-all\\b",
       "severity": "high",
       "description": "restic unlock --remove-all force-removes repository locks.",
-      "explanation": "restic unlock --remove-all force-removes all locks:\n\n\\ - Removes locks from potentially active operations \\ - May cause corruption if operations are in progress \\ - Use only when locks are stale/orphaned\n\n\\ Check first: ensure no other restic processes are running"
+      "explanation": "restic unlock --remove-all force-removes all locks:\n\n- Removes locks from potentially active operations\n- May cause corruption if operations are in progress\n- Use only when locks are stale/orphaned\n\nCheck first: ensure no other restic processes are running"
     },
     {
       "name": "restic-cache-cleanup",
       "pattern": "restic\\b.*\\scache\\b.*\\s--cleanup\\b",
       "severity": "low",
       "description": "restic cache --cleanup removes cached data from disk.",
-      "explanation": "restic cache --cleanup removes local cache:\n\n\\ - Deletes cached data from local disk \\ - Does not affect repository data \\ - Cache will be rebuilt on next operation \\ - May slow down subsequent operations\n\n\\ Lower risk: only affects local cache, not backups"
+      "explanation": "restic cache --cleanup removes local cache:\n\n- Deletes cached data from local disk\n- Does not affect repository data\n- Cache will be rebuilt on next operation\n- May slow down subsequent operations\n\nLower risk: only affects local cache, not backups"
     }
   ]
 }
