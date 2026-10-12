@@ -21,7 +21,7 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 1 Trustworthy sandbox | `governance/phase-1-sandbox` | [#395](https://github.com/christopherkarani/rv/pull/395) | agent items done; PR open |
 | 2 Secrets the agent can't leak | `governance/phase-2-secrets` | [#413](https://github.com/christopherkarani/rv/pull/413) | agent items done (PR open); L3 demo needs owner trust |
 | 3 MCP governance | `governance/phase-3-mcp` | [#414](https://github.com/christopherkarani/rv/pull/414) | agent items done (PR open) |
-| 4 Enterprise client features | `governance/phase-4-enterprise` | _not opened_ | not started |
+| 4 Enterprise client features | `governance/phase-4-enterprise` | _not opened_ | in progress (design written) |
 | 5 Launch readiness | human-owned | n/a | not started |
 
 **Next action:** Phase 4 on `governance/phase-4-enterprise` (branch from `governance/phase-3-mcp`): start with `rv report --json`, then managed restrict-only policy. Check the Phase 3 PR's Linux CI first.
@@ -623,16 +623,94 @@ Exit criteria: Cursor or Claude Code on this Mac lists tools through
 
 ## Phase 4: Enterprise client features
 
-- [ ] Managed policy: root-owned `/Library/Application Support/RV/managed/`
-      (`secrets.json`, `mcp.json`, egress additions) merged restrict-only over
-      user files: org blocks win, users can't approve what org blocks
-- [ ] Optional signed bundles: org public key pinned in managed dir;
-      unsigned or bad-signature bundles refused
-- [ ] `rv audit export --format ocsf` and `rv audit forward --to URL`
-      (batched HTTPS POST, at-least-once with a cursor file)
-- [ ] `rv report --json`: version, policy hashes, MCP inventory status,
-      secret binding names, sandbox health; suitable for MDM collection
-- [ ] Control plane (SSO/SCIM/dashboard/approval routing): spec doc only
+Branch `governance/phase-4-enterprise` from `governance/phase-3-mcp`; PR base
+`governance/phase-3-mcp`.
+
+### Design (decided 2026-10-12)
+
+**Managed policy** lives in RVPolicy (`Sources/RVPolicy/ManagedPolicy.swift`)
+because RVPolicy already has Ed25519 on both platforms (CryptoKit on Darwin,
+swift-crypto on Linux) and both RVIsolation (secrets) and RVMCP sit above it.
+
+- Location (fixed, no env override: an override would be a bypass):
+  macOS `/Library/Application Support/RV/managed/`, Linux `/etc/rv/managed/`.
+- Files: `policy.json`; optional `org-key.pub` (base64 raw 32-byte Ed25519
+  key); `policy.json.sig` (base64 signature over the exact file bytes).
+- Trust: directory and files owned by root, not group/world writable, no
+  symlinks. Tests inject the required owner uid; the binary always uses 0.
+- States: `none` (no directory or no policy.json), `active`, `invalid(reason)`.
+  When `org-key.pub` exists the signature is required. `invalid` fails closed:
+  `rv mcp serve` refuses, `rv mcp check` fails, secret staging refuses.
+- Schema (strict keys, unknown keys rejected so a typo cannot weaken policy):
+  ```json
+  {"version": 1, "organization": "Acme", "serial": 7,
+   "mcp": {"blocked": ["shell-*"], "allowDirect": false, "requireSandbox": false,
+           "deny": ["*/delete_*"], "ask": ["github/create_*"], "allow": [],
+           "defaultDecision": "allow"},
+   "secrets": {"allowedSources": ["keychain", "vault"], "allowEnvironmentDelivery": false},
+   "audit": {"forward": {"url": "https://siem.example.com/rv",
+                         "headers": {"Authorization": "${secret:SIEM_TOKEN}"}}}}
+  ```
+- Restrict-only merge: MCP tool decision = stricter(user decision, org
+  decision) with deny > ask > allow; org decision for `server/tool` = deny glob
+  > ask glob > allow glob > org `defaultDecision` (default allow). Org-blocked
+  servers are `blocked` in the inventory and refused by `serve`. With
+  `allowDirect: false` the user's `direct` list is ignored. `requireSandbox`
+  refuses to serve servers without `sandbox`. `rv mcp approve --always`
+  refuses when the org decision is not allow. Secrets: sources outside
+  `allowedSources` refuse to resolve; `allowEnvironmentDelivery: false`
+  refuses environment delivery to agents (MCP upstreams always get env).
+- Admin CLI: `rv managed status` (installed state), `rv managed verify <dir>`
+  (pre-deploy check of a candidate bundle, no ownership check),
+  `rv managed keygen --out <dir>`, `rv managed sign <policy.json> --key <file>`.
+- Not in Phase 4: org additions to the cage egress policy. The owner's
+  uncommitted `impro-ref` work rewrites the egress files (D10 conflict risk);
+  follow-up once that lands.
+
+**Audit export / forward** (RVHistory + RVCLI):
+- `rv audit export --format ocsf`: OCSF 1.3.0 mapping. `mcp.call`,
+  `secret.use` → API Activity (6003); `egress.denied` → Network Activity
+  (4001); `command.denied` → Process Activity (1007); everything else →
+  Application Lifecycle (6002, activity Other). `disposition_id`
+  Allowed/Blocked, `status_id`, `severity_id`, `metadata.product`,
+  `metadata.log_name` = source ledger, rv fields under `unmapped`.
+- `rv audit forward [--to URL] [--format ocsf|rv] [--header K=V]`: one pass
+  (cron/launchd friendly). Reads each ledger from a per-source byte offset
+  (cursor `audit-forward/<sha256(url)>.json`: offset + inode per source; size
+  < offset or new inode → restart at 0), POSTs JSON-array batches (≤ 500
+  events), advances the cursor only after a 2xx: at-least-once. HTTPS only
+  (http allowed for loopback). Header values may be `${secret:NAME}`. With no
+  `--to`, uses the managed `audit.forward`.
+
+**`rv report [--json]`** (MDM collection, schema `rv.report.v1`): rv version,
+host/user, managed policy state (org, serial, sha256, signed), config file
+hashes (mcp.json, secrets.json, policy files), MCP inventory counts + failing
+entries, secret names with source kind and delivery (never resolves values,
+so no prompts), audit counts for the last 24 h by kind/decision, sandbox
+health from the doctor checks that need no root.
+
+### 4.1 `rv report`
+- [ ] `ReportBuilder` (pure over injected inputs) + `rv report [--json]`
+- [ ] Tests + real-binary run on this Mac
+
+### 4.2 Managed policy
+- [ ] Model + strict decode + trust checks + signature verify (RVPolicy)
+- [ ] MCP merge (inventory, serve, approve --always) and secrets enforcement
+- [ ] `rv managed status|verify|keygen|sign`
+- [ ] Tests: decode, trust (injected owner), signature good/bad/missing,
+      restrict-only merge, approve refusal; E2E keygen → sign → verify →
+      tamper → verify fails with the real binary. L3 (root-owned install) is
+      an owner item: needs sudo.
+
+### 4.3 Audit export OCSF + forward
+- [ ] OCSF mapping + `--format ocsf`
+- [ ] Offset cursor reader in `AuditLedger`, `rv audit forward`
+- [ ] Tests: mapping, cursor (append, rotate, failure keeps cursor);
+      E2E real binary → local python HTTP receiver, at-least-once on a 500
+
+### 4.4 Control plane spec
+- [ ] `docs/plans/agent-governance/control-plane-spec.md`: SSO/SCIM,
+      dashboard, approval routing, policy distribution; spec only
 
 ---
 
