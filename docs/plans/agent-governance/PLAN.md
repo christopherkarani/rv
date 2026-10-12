@@ -24,7 +24,7 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 4 Enterprise client features | `governance/phase-4-enterprise` | _not opened_ | not started |
 | 5 Launch readiness | human-owned | n/a | not started |
 
-**Next action:** check the Linux CI job on #413 (the gateway was never compiled on Linux locally: Docker was down). Then Phase 3.1: branch `governance/phase-3-mcp` from `governance/phase-2-secrets`, start `rv mcp list`.
+**Next action:** Phase 3.1 on `governance/phase-3-mcp` (design is written in the Phase 3 section). Also check the Linux CI job on #413 (the gateway was never compiled on Linux locally: Docker was down). Then Phase 3.1: branch `governance/phase-3-mcp` from `governance/phase-2-secrets`, start `rv mcp list`.
 
 Gotcha: never run the `rv` binary with a fake `HOME` on a path that writes to
 the Keychain (`rv secrets set`). macOS opens a SecurityAgent "keychain not
@@ -479,7 +479,12 @@ still needs the owner's trust install.
 
 ## Phase 3: MCP governance
 
-### Config: `~/.config/rv/mcp.json`
+Branch `governance/phase-3-mcp` (from `governance/phase-2-secrets`). Code
+lives in a new target `Sources/RVMCP` (deps: RVDomain, RVHistory,
+RVIsolation for the Phase 2 secrets engine); tests in `Tests/RVMCPTests`
+(portable, run by the Linux CI job). CLI: `Sources/RVCLI/Commands/MCPCommand.swift`.
+
+### Config: `~/.config/rv/mcp.json` (owner-only 0600, strict decode, atomic writes)
 
 ```json
 {
@@ -487,43 +492,110 @@ still needs the owner's trust install.
   "defaultDecision": "ask",
   "servers": [
     { "name": "github", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "LOG_LEVEL": "info" },
       "secrets": { "GITHUB_PERSONAL_ACCESS_TOKEN": "GITHUB_TOKEN" },
-      "tools": { "default": "allow", "deny": ["delete_*"], "ask": ["create_pull_request"] } }
+      "tools": { "default": "allow", "deny": ["delete_*"], "ask": ["create_pull_request"] },
+      "sandbox": { "network": true, "writable": ["~/.npm"] } }
   ],
+  "direct": ["stripe"],
   "blocked": ["filesystem"]
 }
 ```
 
-### 3.1 Inventory: `rv mcp list`
-- [ ] Readers for Claude Code (`~/.claude.json` user + per-project, `.mcp.json`),
-      Claude Desktop, Cursor (`~/.cursor/mcp.json`, `.cursor/mcp.json`),
-      Codex (`~/.codex/config.toml` `[mcp_servers.*]`), OpenCode
-      (`opencode.json` `mcp`), Gemini/Antigravity (`~/.gemini/settings.json`),
-      VS Code (`mcp.json` `servers`), Windsurf
-- [ ] Redact args/URLs/env (names only) before display
-- [ ] Status against `mcp.json`: approved / blocked / unreviewed;
-      `rv mcp check` exits non-zero when unreviewed or blocked servers exist
-- [ ] Tests: fixture configs per host, redaction, status
+- `servers`: definitions rv runs behind its gateway. `secrets` maps an
+  upstream env var to an rv secret name (Phase 2 `secrets.json`); values are
+  resolved at spawn, never stored here.
+- `direct`: servers the owner accepts running outside the gateway (e.g.
+  remote OAuth servers). `blocked`: names that must not appear anywhere.
+- Tool decision: deny glob > ask glob > allow glob > server `default` >
+  top-level `defaultDecision` (default `ask`). Globs: `*` and `?`.
 
-### 3.2 Gateway: `rv mcp serve`
-- [ ] stdio JSON-RPC 2.0 server (initialize, tools/list, tools/call,
-      notifications), depth/size bounds
-- [ ] Spawn approved stdio upstreams with Phase 2 secrets in their env;
-      aggregate `tools/list` as `<server>__<tool>`
-- [ ] Per-tool allow / ask / deny (glob); `ask` → denied with an instructive
-      error plus a pending approval, `rv mcp approve <id>` grants once or
-      always
-- [ ] Audit every call as `mcp.call` (server, tool, decision, duration,
-      argument keys only)
-- [ ] Tests: L1 protocol + policy; L2 real upstream (a tiny stdio MCP server
-      fixture) through the gateway
+### Inventory statuses (`rv mcp list` / `rv mcp check`)
+| status | meaning | check |
+|---|---|---|
+| governed | host entry runs `rv mcp serve --server <name>` | pass |
+| direct | name is in `direct` | pass |
+| bypass | rv has a definition, but the host runs the server itself | fail |
+| unreviewed | rv has never seen it | fail |
+| blocked | name is in `blocked` | fail |
 
-### 3.3 `rv mcp setup` / `--undo`
-- [ ] Rewrite a host's MCP config to route approved servers through
-      `rv mcp serve --server <name>`, with backup and exact undo
+Redaction: env and header values never shown (names only); URLs shown as
+scheme://host; args redacted after secret-named flags (`--api-key X`,
+`--token=X`) and when they look like tokens (known prefixes or long mixed
+alphanumerics). Each entry also reports `plaintextCredentials` (names of
+env vars / flags that hold literal secret-looking values) so the owner can
+move them into rv secrets with `rv mcp import`.
+
+### Gateway behavior (`rv mcp serve [--server NAME]...`)
+- stdio, newline-delimited JSON-RPC 2.0. Lines ≤ 64 MiB, JSON depth ≤ 64.
+- Gateway answers `initialize` itself (capabilities: `tools.listChanged`),
+  initializes each upstream with its own ids, consumes
+  `notifications/initialized`, answers `ping`.
+- `tools/list`: fans out to every upstream (following `nextCursor`),
+  hides denied tools, names them `<server>__<tool>` when more than one
+  server is served (one server keeps its native names).
+- `tools/call`: allow → forwarded with a gateway id, response mapped back;
+  deny → result `isError: true` with the reason; ask → a pending approval
+  (`~/.config/rv/mcp-approvals.json`, bound to server + tool + SHA-256 of
+  canonical arguments) and `isError: true` telling the user to run
+  `rv mcp approve <id>` (once) or `--always` (adds the tool to the server's
+  allow list), then retry.
+- Upstream responses are scrubbed of every secret value the upstream was
+  given (raw and JSON-escaped forms) before reaching the agent.
+- Other methods → -32601. Upstream server→client requests → -32601 back to
+  the upstream (gateway declares no client capabilities). Client
+  `notifications/cancelled` is mapped to the upstream id. Upstream
+  `notifications/tools/list_changed` is forwarded.
+- Every `tools/call` is audited as `mcp.call` (server, tool, decision,
+  duration ms, argument keys only, isError, approval id).
+
+### 3.1 Inventory: `rv mcp list`, `rv mcp check`
+- [ ] `MCPConfiguration` (mcp.json model, strict decode, atomic 0600 write)
+- [ ] Readers: Claude Code (`~/.claude.json` `mcpServers` + `projects[dir].mcpServers`,
+      project `.mcp.json`), Claude Desktop, Cursor (`~/.cursor/mcp.json`,
+      project `.cursor/mcp.json`), Codex (`~/.codex/config.toml`
+      `[mcp_servers.*]`, minimal TOML reader), OpenCode (`opencode.json` `mcp`),
+      Gemini (`~/.gemini/settings.json`), Antigravity
+      (`~/.gemini/antigravity/mcp_config.json`), VS Code (`mcp.json` `servers`),
+      Windsurf (`~/.codeium/windsurf/mcp_config.json`)
+- [ ] Redaction + plaintext-credential detection
+- [ ] Status per entry; `rv mcp check` exits 1 on bypass/unreviewed/blocked
+- [ ] Tests: fixture configs per host, TOML reader, redaction, status
+
+### 3.2 Gateway: `rv mcp serve`, approvals
+- [ ] `JSONValue` + framing with bounds; pure gateway core (state machine:
+      client/upstream messages in → messages + audit out)
+- [ ] Runtime: spawn upstreams (Foundation `Process`, pipes, stderr passthrough),
+      Phase 2 secrets in env, line readers, shutdown when the client closes stdin
+- [ ] Policy + approvals store; `rv mcp pending`, `rv mcp approve <id> [--always]`, `rv mcp deny <id>`
+- [ ] Response scrubbing of secret values
+- [ ] Audit `mcp.call`
+- [ ] Tests: L1 core (init, list aggregation + paging, prefixing, deny hides,
+      ask → pending → approve → allowed once, cancel mapping, scrub);
+      L2 a real python3 stdio MCP server fixture through the real gateway
+      process; E2E with the official MCP Inspector CLI and
+      `@modelcontextprotocol/server-everything`, and Claude Code / Codex on
+      this Mac listing tools through rv
+
+### 3.3 `rv mcp import` / `rv mcp setup` / `--undo`
+- [ ] `import --host H [--server N]`: copy host definitions into mcp.json;
+      literal secret-looking env values move into the Keychain as rv secrets
+      (`<SERVER>_<VAR>`) referenced from `secrets`
+- [ ] `setup --host H [--server N]`: rewrite JSON host configs so approved
+      servers run `<rv> mcp serve --server <name>`; backup file + manifest at
+      `~/.config/rv/mcp-setup/<host>.json`; `--undo` restores each entry only
+      if it still equals what rv wrote (surgical, survives hosts rewriting
+      the file). Codex TOML: print the `codex mcp add` line instead.
 
 ### 3.4 Sandboxed upstreams
-- [ ] Run stdio upstreams in a Seatbelt cage (scratch dir, egress via proxy)
+- [ ] `sandbox` on a server definition: spawn through `/usr/bin/sandbox-exec`
+      with a generated profile: writes only to a per-server scratch dir,
+      `$TMPDIR`, and listed `writable` paths; reads denied for `~/.ssh`,
+      `~/.aws`, `~/.gnupg`, `~/.config/rv`, Keychains, browser profiles;
+      `network: false` denies all network except the local socket pair.
+      Honest limit: allow-default profile (not deny-default) so npx/uvx work;
+      no per-host egress allowlist yet.
+- [ ] Tests: L2 a caged fixture cannot read `~/.ssh` stand-in or write outside scratch
 
 Exit criteria: Cursor or Claude Code on this Mac lists tools through
 `rv mcp serve`; a denied tool is blocked; every call shows in `rv audit`.
