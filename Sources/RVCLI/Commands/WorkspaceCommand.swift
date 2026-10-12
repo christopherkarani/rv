@@ -97,7 +97,7 @@ struct WorkspaceRun: AsyncParsableCommand {
 struct WorkspaceAgent: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "agent",
-        abstract: "Launch a trusted operator-configured Agent Definition on the workspace host."
+        abstract: "Launch a trusted operator-configured Agent Definition on the workspace host (not yet available)."
     )
 
     @OptionGroup var path: WorkspacePath
@@ -126,7 +126,7 @@ struct WorkspaceAgent: AsyncParsableCommand {
 struct WorkspaceCustom: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "custom",
-        abstract: "Launch a custom executable with an ad-hoc Agent Definition."
+        abstract: "Launch a custom executable with an ad-hoc Agent Definition (not yet available)."
     )
 
     @OptionGroup var path: WorkspacePath
@@ -168,7 +168,7 @@ struct WorkspaceClose: AsyncParsableCommand {
 struct WorkspaceAbandon: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "abandon",
-        abstract: "Abandon a blocked workspace, discarding its unpublished volume and restoring the saved tree."
+        abstract: "Abandon a blocked workspace, discarding its unpublished volume and restoring the saved tree (not yet available)."
     )
 
     @OptionGroup var path: WorkspacePath
@@ -280,7 +280,11 @@ enum WorkspaceCommandRun {
     }
 
     static func abandon(_ raw: String?) throws {
-        try LocalControlBoundary.requireOwnerAuthorization()
+        do {
+            try LocalControlBoundary.requireOwnerAuthorization()
+        } catch {
+            throw ValidationError("'rv workspace abandon' is not yet available: it needs owner authorization over an authenticated service route, which does not exist yet; use 'rv workspace status' to inspect the blocked workspace")
+        }
         try abandonBlockedWorkspace(raw)
     }
 
@@ -418,7 +422,7 @@ enum WorkspaceCommandRun {
         // host so the reserved ops never reach the wire from here.
         switch selection {
         case .named, .custom:
-            throw ValidationError("operator permits not yet available")
+            throw ValidationError("identity launches are not yet available: they require a scoped operator permit, which cannot be issued yet; use 'rv workspace run -- <absolute-executable> [args...]' for a contained launch")
         case .legacy:
             break
         }
