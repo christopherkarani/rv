@@ -19,12 +19,12 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 |---|---|---|---|
 | 0 Plan + reset | `plan/agent-governance` | [#394](https://github.com/christopherkarani/rv/pull/394) | in progress |
 | 1 Trustworthy sandbox | `governance/phase-1-sandbox` | [#395](https://github.com/christopherkarani/rv/pull/395) | agent items done; PR open |
-| 2 Secrets the agent can't leak | `governance/phase-2-secrets` | _PR pending_ | agent items done and tested (L1/L2/L4 + real binary); PR next |
+| 2 Secrets the agent can't leak | `governance/phase-2-secrets` | [#413](https://github.com/christopherkarani/rv/pull/413) | agent items done (PR open); L3 demo needs owner trust |
 | 3 MCP governance | `governance/phase-3-mcp` | _not opened_ | not started |
 | 4 Enterprise client features | `governance/phase-4-enterprise` | _not opened_ | not started |
 | 5 Launch readiness | human-owned | n/a | not started |
 
-**Next action:** if the Phase 2 PR is not open yet, open it (base `governance/phase-1-sandbox`) and watch its Linux CI job (the gateway was never compiled on Linux locally: Docker was down). Then Phase 3.1: branch `governance/phase-3-mcp` from `governance/phase-2-secrets`, start `rv mcp list`.
+**Next action:** check the Linux CI job on #413 (the gateway was never compiled on Linux locally: Docker was down). Then Phase 3.1: branch `governance/phase-3-mcp` from `governance/phase-2-secrets`, start `rv mcp list`.
 
 Gotcha: never run the `rv` binary with a fake `HOME` on a path that writes to
 the Keychain (`rv secrets set`). macOS opens a SecurityAgent "keychain not
