@@ -21,10 +21,10 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 1 Trustworthy sandbox | `governance/phase-1-sandbox` | [#395](https://github.com/christopherkarani/rv/pull/395) | agent items done; PR open |
 | 2 Secrets the agent can't leak | `governance/phase-2-secrets` | [#413](https://github.com/christopherkarani/rv/pull/413) | agent items done (PR open); L3 demo needs owner trust |
 | 3 MCP governance | `governance/phase-3-mcp` | [#414](https://github.com/christopherkarani/rv/pull/414) | agent items done (PR open) |
-| 4 Enterprise client features | `governance/phase-4-enterprise` | _not opened_ | in progress (design written) |
+| 4 Enterprise client features | `governance/phase-4-enterprise` | [#415](https://github.com/christopherkarani/rv/pull/415) | agent items done (PR open) |
 | 5 Launch readiness | human-owned | n/a | not started |
 
-**Next action:** Phase 4 on `governance/phase-4-enterprise` (branch from `governance/phase-3-mcp`): start with `rv report --json`, then managed restrict-only policy. Check the Phase 3 PR's Linux CI first.
+**Next action:** All agent-ownable items are done. Watch Linux CI on #394, #395, #413, #414, #415 and fix any failure on the owning branch, then merge forward. Remaining work is owner-only: L3 sudo items (peer trust reinstall, managed-dir install in 4.2), D13, signing/notarization, and Phase 5.
 
 Gotcha: never run the `rv` binary with a fake `HOME` on a path that writes to
 the Keychain (`rv secrets set`). macOS opens a SecurityAgent "keychain not
