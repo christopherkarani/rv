@@ -206,6 +206,13 @@ import RVTheme
     }
 }
 
+@Test func helpText_test_documentsDenyExitCode() {
+    let text = HelpDispatch.text(.test, palette: colorOffPalette)
+    #expect(text.contains("Exit codes"))
+    #expect(text.contains("Deny"))
+    #expect(text.contains("1"))
+}
+
 @Test func helpTopic_operator() {
     #expect(HelpDispatch.topic(arguments: ["operator", "--help"]) == .`operator`)
     #expect(HelpDispatch.topic(arguments: ["help", "operator"]) == .`operator`)
