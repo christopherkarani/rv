@@ -9,6 +9,9 @@ import Foundation
 /// credential copy. Tests pass explicit fakes; production uses `.live`.
 struct KeychainReader: Sendable {
     var read: @Sendable (_ service: String, _ account: String) -> Data?
+    /// Whether profile `secrets` may be leased on this path. False makes a
+    /// profile that lists secrets fail staging.
+    var allowsSecrets = true
 
     static let live = KeychainReader(read: readKeychainItem)
 
@@ -16,7 +19,7 @@ struct KeychainReader: Sendable {
     /// forbids keychain entries by gate and additionally stages through
     /// this reader, so no secret can reach a runtime even if a gate ever
     /// regresses: staging fails closed, never to a live secret.
-    static let denied = KeychainReader(read: { _, _ in nil })
+    static let denied = KeychainReader(read: { _, _ in nil }, allowsSecrets: false)
 }
 
 #if os(macOS)

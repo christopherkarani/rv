@@ -134,6 +134,8 @@ final class WorkspaceSessionSupervisor: Sendable {
     private let state: Mutex<State>
     private let egressProxy: EgressProxy?
     private let egressPort: Int?
+    /// Leases profile `secrets` per launch; the gateway starts on first use.
+    private let secretBroker: SecretLaunchBroker?
 
     private init(
         id: WorkspaceSessionID,
@@ -143,8 +145,10 @@ final class WorkspaceSessionSupervisor: Sendable {
         boundary: WorkspaceInodeBoundary,
         lifecycleLog: WorkspaceLifecycleStore,
         ownerLock: WorkspaceOwnerLock,
-        instanceJournal: AgentInstanceJournalStore
+        instanceJournal: AgentInstanceJournalStore,
+        secretBroker: SecretLaunchBroker?
     ) {
+        self.secretBroker = secretBroker ?? SecretLaunchBroker.production(workspace: id.rawValue.uuidString)
         self.id = id
         self.original = original
         self.protected = protected
@@ -193,7 +197,8 @@ final class WorkspaceSessionSupervisor: Sendable {
         _ workspace: WorkingDirectory,
         lifecycleLog: WorkspaceLifecycleStore,
         runtimeLog: URL? = nil,
-        instanceJournal: AgentInstanceJournalStore = .production
+        instanceJournal: AgentInstanceJournalStore = .production,
+        secretBroker: SecretLaunchBroker? = nil
     ) -> Result<WorkspaceSessionSupervisor, WorkspaceSessionError> {
         let resolved: String
         switch existingResolvedWorkspacePath(workspace) {
@@ -332,7 +337,8 @@ final class WorkspaceSessionSupervisor: Sendable {
             boundary: boundary,
             lifecycleLog: lifecycleLog,
             ownerLock: ownerLock,
-            instanceJournal: instanceJournal
+            instanceJournal: instanceJournal,
+            secretBroker: secretBroker
         )
         let activated = supervisor.state.withLock { state -> Bool in
             guard let active = state.lifecycle.transition(.becameActive) else { return false }
@@ -373,6 +379,7 @@ final class WorkspaceSessionSupervisor: Sendable {
 
     deinit {
         egressProxy?.stop()
+        secretBroker?.stop()
         let abandoned = state.withLock { $0.abandoned }
         if abandoned {
             let children = state.withLock { Array($0.children.values) }
@@ -1362,7 +1369,7 @@ final class WorkspaceSessionSupervisor: Sendable {
         // credentials. `host` is routing/metadata and never falls back
         // into selection — a nil tag stages unfiltered entries only.
         let agentName = stagingAgent?.rawValue
-        let keychain: [(name: String, value: String)]
+        var keychain: [(name: String, value: String)]
         if let resources = request.resources {
             switch resources.keychainEnvironment(forAgent: agentName, reader: keychainReader) {
             case .success(let entries):
@@ -1372,6 +1379,22 @@ final class WorkspaceSessionSupervisor: Sendable {
             }
         } else {
             keychain = []
+        }
+        // Secret providers (Keychain, 1Password, Vault, AWS) can prompt or
+        // block, so the lease is also taken before the state lock.
+        let secretNames = request.resources?.profile.secrets ?? []
+        var lease = SecretLease.empty
+        if secretNames.isEmpty == false {
+            guard keychainReader.allowsSecrets, let secretBroker else {
+                return .failure(.apply(.resourceStagingFailed("secrets are not available on this launch path")))
+            }
+            switch secretBroker.lease(names: secretNames, agent: agentName) {
+            case .failure(let error):
+                return .failure(.apply(.resourceStagingFailed(error.message)))
+            case .success(let leased):
+                lease = leased
+                keychain += leased.environment
+            }
         }
         var slot = WorkspaceChildSlot()
         let result: Result<Void, WorkspaceSessionError> = state.withLock { state in
@@ -1421,6 +1444,7 @@ final class WorkspaceSessionSupervisor: Sendable {
             case .success:
                 slot.logged = session
             }
+            secretBroker?.bind(lease, runtime: session.id.rawValue.uuidString)
             if let cwdVerification {
                 // Final cwd re-verification, placed after the session-log
                 // append so the append cannot serve as a swap trigger, and
@@ -1473,6 +1497,7 @@ final class WorkspaceSessionSupervisor: Sendable {
         }
         switch result {
         case .failure(let error):
+            secretBroker?.revoke(lease)
             if slot.child == nil, let session = slot.logged {
                 noteRuntimeEnded(session, reason: .spawnFailed)
             }
@@ -1724,6 +1749,7 @@ final class WorkspaceSessionSupervisor: Sendable {
             return .failure(.childTeardownFailed)
         }
         egressProxy?.stop()
+        secretBroker?.stop()
         if publish {
             state.withLock { $0.publishCount += 1 }
         }
@@ -1818,6 +1844,7 @@ final class WorkspaceSessionSupervisor: Sendable {
         reason: AgentRevokeReason = .runtimeEnded
     ) {
         _ = agentInstances.finishRuntime(session.id, reason: reason)
+        secretBroker?.revoke(runtime: session.id.rawValue.uuidString)
         let recorded = lifecycleLog.append(
             WorkspaceLifecycleRecord(
                 kind: .runtimeEnded,

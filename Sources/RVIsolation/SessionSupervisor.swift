@@ -923,12 +923,23 @@ private func addingKeychainEnvironment(
     keychain: [(name: String, value: String)]
 ) -> [(String, String)] {
     var values = values
-    // First spelling wins: `execve` lookup returns the first match, so
-    // later duplicates would be dead entries that only confuse auditors.
-    var present = Set(values.map(\.0))
+    // One entry per name: `execve` lookup returns the first match, so
+    // duplicates would be dead entries that only confuse auditors. Profile
+    // credentials replace an ambient host value of the same name — a host
+    // copy winning would hand the cage the real key instead of the staged
+    // one. Runtime-owned and proxy names are never replaced.
+    let present = Set(values.map(\.0))
+    var staged = Set<String>()
     for entry in keychain {
-        guard !entry.value.contains("\0"), entry.value.utf8.count <= 8_192 else { continue }
-        guard present.insert(entry.name).inserted else { continue }
+        guard !entry.value.contains("\0"), entry.value.utf8.count <= 8_192,
+            staged.insert(entry.name).inserted
+        else { continue }
+        if present.contains(entry.name) {
+            guard ContainedEnvironmentPolicy.isManagedByRuntime(entry.name) == false,
+                entry.name.uppercased().hasSuffix("_PROXY") == false
+            else { continue }
+            values.removeAll { $0.0 == entry.name }
+        }
         values.append((entry.name, entry.value))
     }
     return values

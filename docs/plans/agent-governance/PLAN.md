@@ -19,15 +19,12 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 |---|---|---|---|
 | 0 Plan + reset | `plan/agent-governance` | [#394](https://github.com/christopherkarani/rv/pull/394) | in progress |
 | 1 Trustworthy sandbox | `governance/phase-1-sandbox` | [#395](https://github.com/christopherkarani/rv/pull/395) | agent items done; PR open |
-| 2 Secrets the agent can't leak | `governance/phase-2-secrets` | _not opened_ | not started |
+| 2 Secrets the agent can't leak | `governance/phase-2-secrets` | _not opened_ | in progress: engine + launch wiring done and tested (L1/L2/L4); CLI next |
 | 3 MCP governance | `governance/phase-3-mcp` | _not opened_ | not started |
 | 4 Enterprise client features | `governance/phase-4-enterprise` | _not opened_ | not started |
 | 5 Launch readiness | human-owned | n/a | not started |
 
-**Next action:** Phase 1 agent items are on `governance/phase-1-sandbox`
-([#395](https://github.com/christopherkarani/rv/pull/395)). Phase 0 stays in
-progress until [PR #394](https://github.com/christopherkarani/rv/pull/394)
-merges. Do not reopen that PR or re-close #393.
+**Next action:** Phase 2.1 CLI: `rv secrets list|check|set|remove` (`Sources/RVCLI/Commands/SecretsCommand.swift`, registered in RV.swift, HelpDispatch, HelpCatalog, completions), then 2.3 `rv secrets scan`, then open the Phase 2 PR (base `governance/phase-1-sandbox`).
 
 Branching rule: each phase branch starts from the previous phase branch (or
 `origin/main` if the previous phase merged). Each phase PR targets the previous
@@ -378,36 +375,62 @@ Sources: `keychain`, `hostEnvironment`, `onePassword` (`op read`),
 Profiles in `runtime-resources.json` gain `"secrets": ["STRIPE_SECRET_KEY"]`.
 
 ### 2.1 Schema, providers, CLI
-- [ ] `SecretsConfiguration` model + strict loader (owner-only file checks,
-      duplicate names, env-name grammar, https upstream only, ≤32 secrets)
-- [ ] Providers behind `SecretValueProvider` protocol, each with timeout and
-      typed errors; never log values
+- [x] `SecretsConfiguration` model + strict loader (owner-only file checks,
+      duplicate names, env-name grammar, https upstream only, ≤64 secrets,
+      no two secrets exporting the same variable): `Sources/RVIsolation/SecretsConfiguration.swift`
+- [x] Providers as one `SecretResolver` closure struct (`.live` dispatches by
+      source kind; tests inject fakes), 30 s timeout and 1 MiB cap on CLI
+      providers, typed `SecretResolutionError`; `SecretValue` prints
+      `<redacted>`: `Sources/RVIsolation/SecretProviders.swift`
 - [ ] `rv secrets list` (name, source kind, delivery, bound upstream, status;
       never values), `rv secrets check` (resolve each, show fingerprint),
       `rv secrets set NAME` (stdin, no echo, stores in Keychain `rv.secrets`),
       `rv secrets remove NAME`
-- [ ] Install key `~/.config/rv/audit.key` (32 random bytes, 0600) and
-      `SecretFingerprint` = first 16 hex of HMAC-SHA256
-- [ ] Tests: decode/validation matrix, provider stubs, CLI output, real
-      Keychain round trip (set → check → remove) on macOS
+- [x] Install key `~/.config/rv/audit.key` (32 random bytes, 0600, created
+      lazily on first lease) and `SecretFingerprinter` = first 16 hex of
+      HMAC-SHA256: `Sources/RVIsolation/SecretFingerprint.swift`
+- [x] Tests: decode/validation matrix (`SecretsConfigurationTests`), real
+      Keychain read via the live resolver (`SecretKeychainLiveTests`,
+      `RV_LIVE_KEYCHAIN=1`)
+- [ ] Tests: CLI output, Keychain round trip through the CLI (set → check → remove)
 
 ### 2.2 Placeholder gateway (boundary injection)
-- [ ] `SecretGateway` loopback HTTP/1.1 listener per workspace host;
-      routes `/s/<binding>/<path>` to the binding's upstream origin
-- [ ] Per-runtime placeholder minting; substitution only of placeholders
-      minted for that runtime + binding, in headers and query; request
-      without a valid placeholder is rejected (no open relay)
-- [ ] Upstream via URLSession (ephemeral, no cookies/cache/proxy; the gateway
-      refuses upstream redirects); streaming responses (SSE)
-- [ ] Response scrubbing of the real value across chunk boundaries
-- [ ] Audit each request as `secret.use` (`secrets-audit.jsonl`): secret name,
-      upstream host, method, path (no query), status, bytes, fingerprint
-- [ ] Wire into launch: profile `secrets` → placeholders + base-URL env in
-      the cage env (minimal seam in the env builder)
-- [ ] Tests: L1 parser/substitution/scrub; L2 real cage `curl`s the gateway
-      with only the placeholder and a local upstream sees the real value;
-      L4 live `postman-echo.com` echo proves swap + scrub; negative tests
-      (wrong runtime token, other host, redirect, oversize headers)
+- [x] `SecretGateway` loopback HTTP/1.1 listener per workspace host, started
+      lazily on the first gateway lease; routes `/s/<NAME>/<path>` to the
+      secret's upstream origin: `Sources/RVIsolation/SecretGateway.swift`,
+      pure logic in `SecretGatewayProtocol.swift`
+- [x] Per-launch placeholder minting (`<prefix>rvph_<32 hex>`); substitution
+      only of placeholders live for that secret, in target and header values
+      (body untouched); no placeholder → 401, unknown/revoked → 403, other
+      secret's placeholder → 403 (no open relay)
+- [x] Upstream via URLSession (ephemeral, no cookies/cache, redirects returned
+      to the client, not followed); streaming chunked responses; client
+      `Accept-Encoding` stripped so scrubbing sees plaintext
+- [x] Response scrubbing of the real value across chunk boundaries (body and
+      header values)
+- [x] Audit each request as `secret.use` into the unified `audit.jsonl`
+      (`AuditLog.append`, so `rv audit tail --kind secret.use` shows it):
+      secret, runtime, upstream host, method, path (no query), status, bytes,
+      fingerprint. Leases also record a `staged` event with delivery + provider.
+- [x] Wire into launch: `SecretLaunchBroker` (per workspace supervisor)
+      leases profile `secrets` in `WorkspaceSessionSupervisor.spawn` before
+      the state lock, binds the lease to the runtime ID inside the lock,
+      revokes in `noteRuntimeEnded` and on spawn failure; entries ride the
+      existing keychain env list. Identity path (`KeychainReader.denied`,
+      `allowsSecrets=false`) refuses profiles that list secrets.
+- [x] Fix found while wiring: profile credentials now replace an ambient host
+      variable of the same name in the cage env (`addingKeychainEnvironment`);
+      before, a host `OPENAI_BASE_URL`/passthrough key silently won.
+      Runtime-owned and `*_PROXY` names are never replaced.
+- [x] Tests: L1 `SecretGatewayProtocolTests` (parser, routing, substitution
+      refusals, scrub at every split), `SecretGatewayTests` (real sockets +
+      recording upstream: swap, scrub, chunked, Expect, HEAD, 413, revoked),
+      `SecretLaunchBrokerTests`; L2 `SecretGatewayCageTests` (real Seatbelt
+      cage `curl`s the gateway; upstream sees the real key; cage env, reply
+      and audit never do; lease revoked at runtime end; undefined secret and
+      denied path fail before spawn); L4 `SecretGatewayLiveTests`
+      (`RV_LIVE_NETWORK=1`, postman-echo: wire carries real value, echo comes
+      back scrubbed, 302 not followed)
 
 ### 2.3 Leak checks
 - [ ] `rv secrets scan [PATH]`: exact-match scan of a tree for any value rv
@@ -528,6 +551,10 @@ Exit criteria: Cursor or Claude Code on this Mac lists tools through
   completions suites: all pass. Found: tests leak volumes and write to the
   real `~/.config/rv` (logged as a 1.2 item). D13 opened for the disabled
   E2E tests.
+- 2026-10-12: Phase 2 engine landed on `governance/phase-2-secrets`: config,
+  providers, fingerprints, gateway, broker, launch seam, credential-override
+  fix. 28 secrets tests + live (network, keychain) pass. RVIsolation now
+  depends on RVHistory (for `AuditLog`). Next: `rv secrets` CLI.
 - 2026-10-13: Rereview of PR #394. Named each ledger writer (only `blocks`,
   `allow-once`, and `pending-approvals` are `FileLockedJSONLStore`). Seatbelt
   ground truth now says outbound connect is loopback TCP and the listen rule
