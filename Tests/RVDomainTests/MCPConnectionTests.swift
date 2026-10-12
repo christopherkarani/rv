@@ -321,9 +321,11 @@ struct MCPConnectionTests {
         let record = try MCPConnection(owner: .user, name: "n", integration: "i", template: "t", provider: "p", identityLabel: "", description: "")
         #expect(record.identityLabel == "")
         #expect(record.description == "")
-        let scoped = try MCPConnection(owner: .user, name: "n", integration: "i", template: "t", provider: "p", oauthScope: "")
-        #expect(scoped.oauthScope == "")
-        #expect(grantedScopes(fromOAuthScope: scoped.oauthScope) == nil)
+        // Unknown scope is spelled nil, never "": an empty echo is rejected.
+        #expect(throws: MCPConnectionError.emptyField(.oauthScope)) {
+            try MCPConnection(owner: .user, name: "n", integration: "i", template: "t", provider: "p", oauthScope: "")
+        }
+        #expect(grantedScopes(fromOAuthScope: nil) == nil)
     }
 
     @Test func oauthScope_acceptsNewlineSeparators() throws {
@@ -590,10 +592,10 @@ struct MCPConnectionTests {
 
     @Test func resolve_mapsVariablesToValues() throws {
         let inputs = try normalizeConnectionInput(.values(["b": "two", "a": "one"]))
-        let resolved = try resolveConnectionValues(inputs) { _ in .text("unused") }
+        let resolved = try resolveConnectionInputValues(inputs) { _ in .text("unused") }
         #expect(resolved["a"] == .text("one"))
         #expect(resolved["b"] == .text("two"))
-        #expect(try resolveConnectionValues([]) { _ in nil } == [:])
+        #expect(try resolveConnectionInputValues([]) { _ in nil } == [:])
     }
 
     @Test func resolve_preservesUnresolvableExternalsAsNil() throws {
@@ -601,7 +603,7 @@ struct MCPConnectionTests {
             "missing": .from(provider: "keychain", id: "gone"),
             "found": .from(provider: "keychain", id: "here"),
         ]))
-        let resolved = try resolveConnectionValues(inputs) { ref in
+        let resolved = try resolveConnectionInputValues(inputs) { ref in
             ref.id == "here" ? .text("sekret") : nil
         }
         #expect(resolved.keys.contains("missing"))
@@ -643,16 +645,16 @@ struct MCPConnectionTests {
 
     @Test func resolve_rejectsHandBuiltVariables() {
         #expect(throws: MCPConnectionError.invalidCharacters(field: .variable)) {
-            try resolveConnectionValues([NamedConnectionInput(variable: "has space", origin: .value("x"))]) { _ in nil }
+            try resolveConnectionInputValues([NamedConnectionInput(variable: "has space", origin: .value("x"))]) { _ in nil }
         }
         #expect(throws: MCPConnectionError.emptyField(.variable)) {
-            try resolveConnectionValues([NamedConnectionInput(variable: "", origin: .value("x"))]) { _ in nil }
+            try resolveConnectionInputValues([NamedConnectionInput(variable: "", origin: .value("x"))]) { _ in nil }
         }
         #expect(throws: MCPConnectionError.tooLong(field: .variable, maxBytes: MCPConnection.maxVariableBytes)) {
-            try resolveConnectionValues([NamedConnectionInput(variable: String(repeating: "v", count: MCPConnection.maxVariableBytes + 1), origin: .value("x"))]) { _ in nil }
+            try resolveConnectionInputValues([NamedConnectionInput(variable: String(repeating: "v", count: MCPConnection.maxVariableBytes + 1), origin: .value("x"))]) { _ in nil }
         }
         #expect(throws: MCPConnectionError.invalidCharacters(field: .externalID)) {
-            try resolveConnectionValues([NamedConnectionInput(variable: "token", origin: .from(provider: "keychain", id: "bad\u{07}id"))]) { _ in nil }
+            try resolveConnectionInputValues([NamedConnectionInput(variable: "token", origin: .from(provider: "keychain", id: "bad\u{07}id"))]) { _ in nil }
         }
     }
 
@@ -662,7 +664,7 @@ struct MCPConnectionTests {
             "a": .from(provider: "keychain", id: "vault/item:1 with space"),
             "b": .from(provider: "keychain", id: "项目-1 ✓"),
         ]))
-        let resolved = try resolveConnectionValues(inputs) { ref in
+        let resolved = try resolveConnectionInputValues(inputs) { ref in
             #expect(ref.provider == "keychain")
             return .text("seen:\(ref.id)")
         }
@@ -1185,5 +1187,159 @@ struct MCPConnectionTests {
         #expect(throws: failure) {
             throw failure
         }
+    }
+
+    // MARK: - Review: operator text
+
+    @Test func operatorText_rejectsControlFormatAndSeparators() {
+        // Zero-width joiner, BOM, line/paragraph separators: all disallowed.
+        for hostile in ["a\u{200D}b", "\u{FEFF}lead", "line\u{2028}sep", "para\u{2029}sep", "bell\u{07}", "esc\u{1B}x"] {
+            #expect(OperatorText.containsDisallowedTextScalar(hostile) == true, "\(hostile.debugDescription) rejected")
+            #expect(throws: MCPConnectionError.invalidCharacters(field: .identityLabel)) {
+                try OperatorText.requireDisplayText(hostile, field: .identityLabel, maxBytes: MCPConnection.maxLabelBytes)
+            }
+        }
+        // Emoji, symbols, punctuation, and spaces pass; only the four
+        // categories are disallowed.
+        for fine in ["staging CRM 🙂", "Reads only. Owner: data-team!", "", "plain", "tab-free ✓"] {
+            #expect(OperatorText.containsDisallowedTextScalar(fine) == false, "\(fine) accepted")
+        }
+        #expect(throws: MCPConnectionError.tooLong(field: .identityLabel, maxBytes: MCPConnection.maxLabelBytes)) {
+            try OperatorText.requireDisplayText(
+                String(repeating: "l", count: MCPConnection.maxLabelBytes + 1),
+                field: .identityLabel, maxBytes: MCPConnection.maxLabelBytes
+            )
+        }
+    }
+
+    @Test func operatorText_connectionDelegatesToSharedRule() {
+        // The record enforces the shared rule: invisible-format labels fail
+        // through the record the same way they fail through OperatorText.
+        #expect(throws: MCPConnectionError.invalidCharacters(field: .identityLabel)) {
+            try MCPConnection(owner: .user, name: "n", integration: "i", template: "t", provider: "p", identityLabel: "a\u{200D}b")
+        }
+        #expect(throws: MCPConnectionError.invalidCharacters(field: .description)) {
+            try MCPConnection(owner: .user, name: "n", integration: "i", template: "t", provider: "p", description: "para\u{2029}sep")
+        }
+        #expect(throws: MCPConnectionError.invalidCharacters(field: .externalID)) {
+            try ConnectionExternalRef(provider: "keychain", id: "\u{FEFF}item")
+        }
+    }
+
+    // MARK: - Review: connection IDs
+
+    @Test func connectionID_parseRoundTrips() throws {
+        let id = try MCPConnectionID.parse("github.user.main")
+        let direct = try MCPConnectionID(integration: "github", owner: .user, name: "main")
+        #expect(id == direct)
+        #expect(id.integration == "github")
+        #expect(id.owner == .user)
+        #expect(id.name == "main")
+        #expect(id.description == "github.user.main")
+        #expect(try MCPConnectionID.parse(id.description) == id)
+        let org = try MCPConnectionID(integration: "9aBc_-x", owner: .org, name: "_crm$1")
+        #expect(org.description == "9aBc_-x.org._crm$1")
+        #expect(try MCPConnectionID.parse(org.description) == org)
+    }
+
+    @Test func connectionID_rejectsShapesAndCharsets() {
+        #expect(throws: MCPConnectionIDError.malformed) {
+            try MCPConnectionID.parse("github.user")
+        }
+        #expect(throws: MCPConnectionIDError.malformed) {
+            try MCPConnectionID.parse("a.b.c.d")
+        }
+        #expect(throws: MCPConnectionIDError.malformed) {
+            try MCPConnectionID.parse("github..main")
+        }
+        #expect(throws: MCPConnectionIDError.malformed) {
+            try MCPConnectionID.parse(".user.main")
+        }
+        #expect(throws: MCPConnectionIDError.malformed) {
+            try MCPConnectionID.parse("")
+        }
+        #expect(throws: MCPConnectionIDError.unknownOwner) {
+            try MCPConnectionID.parse("github.admin.main")
+        }
+        #expect(throws: MCPConnectionIDError.unknownOwner) {
+            try MCPConnectionID.parse("github.User.main")
+        }
+        // Parts face the record charsets: dotted segments cannot occur, and
+        // bad characters report the record field.
+        #expect(throws: MCPConnectionError.invalidCharacters(field: .integration)) {
+            try MCPConnectionID.parse("has space.user.main")
+        }
+        #expect(throws: MCPConnectionError.invalidCharacters(field: .name)) {
+            try MCPConnectionID.parse("github.user.0bad")
+        }
+        #expect(throws: MCPConnectionError.emptyField(.name)) {
+            try MCPConnectionID(integration: "i", owner: .user, name: "")
+        }
+    }
+
+    // MARK: - Review: scope fail-open split
+
+    @Test func evaluateScopeGap_oauthNilGrantFailsClosed() throws {
+        // OAuth with unknown coverage: every countable declared scope misses.
+        let gap = try #require(evaluateScopeGap(
+            declared: ["read", "write"], grantedScopes: nil, oauthClient: "app",
+            integration: "github", connection: "main", operation: "repos.delete"
+        ))
+        #expect(gap.missing == ["read", "write"])
+        #expect(gap.prompt.contains("Reconnect 'main'"))
+        #expect(gap.prompt.contains("repos.delete"))
+        #expect(gap.retryable == false)
+        // Nothing required, nothing missing — even on OAuth.
+        #expect(evaluateScopeGap(
+            declared: [], grantedScopes: nil, oauthClient: "app",
+            integration: "i", connection: "c", operation: "op"
+        ) == nil)
+        #expect(evaluateScopeGap(
+            declared: ["openid", "email"], grantedScopes: nil, oauthClient: "app",
+            integration: "i", connection: "c", operation: "op"
+        ) == nil)
+        // Known-empty grants fail closed on both sides already.
+        #expect(evaluateScopeGap(
+            declared: ["read"], grantedScopes: [], integration: "i", connection: "c", operation: "op"
+        )?.missing == ["read"])
+        #expect(evaluateScopeGap(
+            declared: ["read"], grantedScopes: [], oauthClient: "app",
+            integration: "i", connection: "c", operation: "op"
+        )?.missing == ["read"])
+        // Known coverage still diffs normally when the client is named.
+        #expect(evaluateScopeGap(
+            declared: ["read"], grantedScopes: ["read"], oauthClient: "app",
+            integration: "i", connection: "c", operation: "op"
+        ) == nil)
+    }
+
+    @Test func scopeGap_legacyRowsPreserved() throws {
+        // Legacy static row: no OAuth fields at all, still fails open.
+        let staticRow = try MCPConnection(owner: .user, name: "main", integration: "github", template: "apiKey", provider: "default")
+        #expect(evaluateScopeGap(
+            declared: ["read"], grantedScopes: grantedScopes(fromOAuthScope: staticRow.oauthScope),
+            oauthClient: staticRow.oauthClient,
+            integration: staticRow.integration, connection: staticRow.name, operation: "op"
+        ) == nil)
+        // Legacy OAuth row: a client with no scope echo still constructs and
+        // decodes (the linkage invariant is advisory at rest) ...
+        let legacyOAuth = try MCPConnection(owner: .user, name: "main", integration: "github", template: "oauth", provider: "default", oauthClient: "app")
+        #expect(legacyOAuth.oauthScope == nil)
+        let decoded = try JSONDecoder().decode(
+            MCPConnection.self,
+            from: Data(#"{"owner":"user","name":"main","integration":"github","template":"oauth","provider":"default","oauthClient":"app"}"#.utf8)
+        )
+        #expect(decoded == legacyOAuth)
+        // ... but evaluates fail-closed once declared scopes exist.
+        #expect(evaluateScopeGap(
+            declared: ["read"], grantedScopes: grantedScopes(fromOAuthScope: decoded.oauthScope),
+            oauthClient: decoded.oauthClient,
+            integration: decoded.integration, connection: decoded.name, operation: "op"
+        )?.missing == ["read"])
+        #expect(evaluateScopeGap(
+            declared: [], grantedScopes: grantedScopes(fromOAuthScope: decoded.oauthScope),
+            oauthClient: decoded.oauthClient,
+            integration: decoded.integration, connection: decoded.name, operation: "op"
+        ) == nil)
     }
 }

@@ -914,7 +914,8 @@ struct SegmentPatternPlacementTests {
 
     @Test func position_emptyRowsReturnsZero() throws {
         let pattern = try SegmentPattern.parse("a.*")
-        #expect(SegmentPattern.positionForNewPattern(pattern, rows: []) == FractionalIndex(value: 0))
+        let noRows: [Row] = []
+        #expect(SegmentPattern.positionForNewPattern(pattern, rows: noRows) == FractionalIndex(value: 0))
     }
 
     @Test func position_singleRow() throws {
@@ -1064,6 +1065,132 @@ struct SegmentPatternPlacementTests {
             let above = SegmentPattern.positionForNewPattern(ceiling, rows: rows)
             #expect(below > maximum, "iter \(iteration): universal lands below the maximum")
             #expect(above < minimum, "iter \(iteration): sharpest pattern lands above the minimum")
+        }
+    }
+
+    @Test func specificity_toolPatternLegacyMapping() throws {
+        let address = try MCPToolAddress.parse("tools.github.user.main.repos.list")
+        // Six literal segments: 6 * 2 + 1 exact bonus.
+        #expect(ToolPattern.exact(address).specificity == 13)
+        #expect(ToolPattern.any.specificity == 0)
+        // Trailing-dot or not, the prefix scores its real segments, no bonus.
+        #expect(ToolPattern.trailingPrefix("tools.github.").specificity == 4)
+        #expect(ToolPattern.trailingPrefix("tools.github").specificity == 4)
+        #expect(ToolPattern.trailingPrefix("").specificity == 0)
+        // Prefix-plus-suffix segments, doubled.
+        #expect(ToolPattern.singleMid(prefix: "tools.a.", suffix: ".list").specificity == 6)
+        #expect(ToolPattern.singleMid(prefix: "", suffix: "").specificity == 0)
+        // Segment patterns delegate untouched.
+        #expect(ToolPattern.segments(try SegmentPattern.parse("a.b.*")).specificity == 4)
+        #expect(ToolPattern.segments(try SegmentPattern.parse("a.b.c")).specificity == 7)
+        #expect(ToolPattern.segments(try SegmentPattern.parse("*")).specificity == 0)
+    }
+
+    @Test func position_toolPatternRowsPlaceAmongLegacy() throws {
+        typealias LegacyRow = (id: String, pattern: ToolPattern, position: FractionalIndex)
+        let leaf = try MCPToolAddress.parse("tools.github.user.main.repos.list")
+        let rows: [LegacyRow] = [
+            (id: "exact", pattern: .exact(leaf), position: FractionalIndex(value: 0)),
+            (id: "any", pattern: .any, position: FractionalIndex(value: 10)),
+        ]
+        // Newcomer (score 4) lands between the exact leaf (13) and `any` (0).
+        let middle = SegmentPattern.positionForNewPattern(
+            try SegmentPattern.parse("a.b.*"), rows: rows
+        )
+        #expect(middle == FractionalIndex(value: 5))
+        // Sharper than every row lands above; with only the leaf committed,
+        // the universal newcomer lands below it.
+        let above = SegmentPattern.positionForNewPattern(
+            try SegmentPattern.parse("a.b.c.d.e.f.g"), rows: rows
+        )
+        #expect(above == FractionalIndex(value: -1))
+        let below = SegmentPattern.positionForNewPattern(
+            try SegmentPattern.parse("*"), rows: [(id: "exact", pattern: ToolPattern.exact(leaf), position: FractionalIndex(value: 0))]
+        )
+        #expect(below == FractionalIndex(value: 1))
+        // The exact bonus is load-bearing: a score-12 newcomer lands below
+        // the exact leaf (13) — without the bonus it would land above.
+        let bonusProof = SegmentPattern.positionForNewPattern(
+            try SegmentPattern.parse("a.b.c.d.e.f.*"), rows: rows
+        )
+        #expect(bonusProof == FractionalIndex(value: 5))
+        // A legacy prefix row holds its mapped place (score 4): the equally
+        // specific newcomer lands above it.
+        let prefixed: [LegacyRow] = [
+            (id: "prefix", pattern: .trailingPrefix("tools.github."), position: FractionalIndex(value: 7)),
+        ]
+        let peer = SegmentPattern.positionForNewPattern(
+            try SegmentPattern.parse("a.b.*"), rows: prefixed
+        )
+        #expect(peer == FractionalIndex(value: 6))
+    }
+
+    @Test func position_toolPatternRowsNeverShadowLeaf() throws {
+        // Mixed legacy + segment rows: the newcomer still lands strictly
+        // below every more-specific row and strictly above every equally or
+        // less specific one, so fresh group rules never shadow leaf rules.
+        let addresses = try [
+            "tools.github.user.main.repos.list",
+            "tools.github.org.ops.deploy",
+            "tools.i.o.c.t",
+        ].map(MCPToolAddress.parse)
+        let pool: [ToolPattern] = [
+            .any,
+            .exact(addresses[0]),
+            .exact(addresses[2]),
+            .trailingPrefix("tools.github."),
+            .trailingPrefix("tools.i.o"),
+            .singleMid(prefix: "tools.", suffix: ".list"),
+            .singleMid(prefix: "x", suffix: "y"),
+            .segments(try SegmentPattern.parse("*")),
+            .segments(try SegmentPattern.parse("a.*")),
+            .segments(try SegmentPattern.parse("a.b.c")),
+            .segments(try SegmentPattern.parse("q.*.z")),
+        ]
+        let newcomers = try [
+            SegmentPattern.parse("*"),
+            SegmentPattern.parse("a.*"),
+            SegmentPattern.parse("a.b.c"),
+            SegmentPattern.parse("m.n"),
+        ]
+        var rng: UInt64 = 0x5EED_1234_ABCD_0042
+        func next(_ upper: Int) -> Int {
+            rng = rng &* 6364136223846793005 &+ 1442695040888963407
+            return Int((rng >> 33) % UInt64(upper))
+        }
+        for iteration in 0..<300 {
+            let count = next(9)
+            var patterns: [ToolPattern] = []
+            for _ in 0..<count {
+                patterns.append(pool[next(pool.count)])
+            }
+            patterns.sort { $0.specificity > $1.specificity }
+            var rows: [(id: String, pattern: ToolPattern, position: FractionalIndex)] = []
+            for (i, pattern) in patterns.enumerated() {
+                rows.append((
+                    id: "m\(iteration)-\(i)",
+                    pattern: pattern,
+                    position: FractionalIndex(value: Double(i))
+                ))
+            }
+            for i in stride(from: rows.count - 1, through: 1, by: -1) {
+                rows.swapAt(i, next(i + 1))
+            }
+            let newcomer = newcomers[next(newcomers.count)]
+            let placed = SegmentPattern.positionForNewPattern(newcomer, rows: rows)
+            for rule in rows {
+                if rule.pattern.specificity > newcomer.specificity {
+                    #expect(
+                        rule.position < placed,
+                        "iter \(iteration): more-specific row stays above"
+                    )
+                } else {
+                    #expect(
+                        placed < rule.position,
+                        "iter \(iteration): newcomer stays above equally-or-less row"
+                    )
+                }
+            }
         }
     }
 }
@@ -1297,5 +1424,138 @@ struct SegmentPatternEdgesTests {
         #expect(below == FractionalIndex(value: .infinity))
         let middle = SegmentPattern.positionForNewPattern(try SegmentPattern.parse("m.n"), rows: rows)
         #expect(middle == FractionalIndex(value: -.infinity))
+    }
+
+    @Test func parse_rejectsOverlongRawInput() {
+        // 200KB of hostile input: rejected by the cap on every entry point.
+        let huge = String(repeating: "a.", count: 100_000)
+        #expect(huge.count == 200_000)
+        #expect(throws: ToolPatternError.patternTooLong) {
+            try SegmentPattern.parse(huge)
+        }
+        #expect(SegmentPattern.isValid(huge) == false)
+        #expect(ToolPattern.isValid(huge) == false)
+        #expect(throws: ToolPatternError.patternTooLong) {
+            try ToolPattern.parse(huge)
+        }
+    }
+
+    @Test func parse_lengthCapBoundary() throws {
+        let ok = String(repeating: "a", count: SegmentPattern.maxRawCharacters)
+        #expect(SegmentPattern.maxRawCharacters == 1024)
+        #expect(try SegmentPattern.parse(ok) == .exact(segments: [ok]))
+        #expect(throws: ToolPatternError.patternTooLong) {
+            try SegmentPattern.parse(String(repeating: "a", count: SegmentPattern.maxRawCharacters + 1))
+        }
+        // The cap runs before the grammar: an over-long input reports length
+        // however else it reads.
+        #expect(throws: ToolPatternError.patternTooLong) {
+            try SegmentPattern.parse("." + String(repeating: "a", count: SegmentPattern.maxRawCharacters))
+        }
+        #expect(throws: ToolPatternError.patternTooLong) {
+            try SegmentPattern.parse(String(repeating: "a", count: SegmentPattern.maxRawCharacters + 1) + ".*")
+        }
+    }
+
+    @Test func parse_newlineIsLiteralAndNeverMatches() throws {
+        // No per-segment character checks (Executor parity): a newline parses
+        // as literal text that no valid address can contain, so the pattern
+        // is matchable only by the literal raw string itself, never by address.
+        let pattern = try SegmentPattern.parse("tools.a\nb.c")
+        #expect(pattern == .exact(segments: ["tools", "a\nb", "c"]))
+        let address = try MCPToolAddress.parse("tools.a.user.main.x")
+        #expect(pattern.matches(address) == false)
+        #expect(pattern.matches(literal: "tools.a\nb.c") == true)
+        #expect(ToolPattern.isValid("x\ny") == true)
+    }
+}
+
+@Suite("ToolPatternMigration")
+struct ToolPatternMigrationTests {
+    @Test func migratedToSegments_exactShapes() throws {
+        #expect(ToolPattern.any.migratedToSegments == .any)
+        let segments = try SegmentPattern.parse("a.*.c")
+        #expect(ToolPattern.segments(segments).migratedToSegments == segments)
+        let address = try MCPToolAddress.parse("tools.github.user.main.repos.list")
+        #expect(ToolPattern.exact(address).migratedToSegments == .exact(segments: ["tools", "github", "user", "main", "repos", "list"]))
+        // An empty prefix matches everything, exactly like the universal.
+        #expect(ToolPattern.trailingPrefix("").migratedToSegments == .any)
+        // Prefixes migrate to subtree wildcards, never to exact.
+        #expect(ToolPattern.trailingPrefix("tools.github.").migratedToSegments == .wildcard(segments: [.literal("tools"), .literal("github")], subtree: true))
+        #expect(ToolPattern.trailingPrefix("tools.github").migratedToSegments == .wildcard(segments: [.literal("tools"), .literal("github")], subtree: true))
+    }
+
+    @Test func migratedToSegments_refusesNarrowing() {
+        // singleMid is substring-based: its middle may span segments, so
+        // every rendering narrows — refuse, however aligned it looks.
+        #expect(ToolPattern.singleMid(prefix: "tools.a.", suffix: ".list").migratedToSegments == nil)
+        #expect(ToolPattern.singleMid(prefix: "tools.", suffix: "").migratedToSegments == nil)
+        #expect(ToolPattern.singleMid(prefix: "", suffix: "").migratedToSegments == nil)
+        // A literal star would flip meaning under segments: refuse.
+        #expect(ToolPattern.trailingPrefix("tools.*.").migratedToSegments == nil)
+        #expect(ToolPattern.trailingPrefix("*").migratedToSegments == nil)
+        // No segments left to anchor: refuse.
+        #expect(ToolPattern.trailingPrefix(".").migratedToSegments == nil)
+        #expect(ToolPattern.trailingPrefix("...").migratedToSegments == nil)
+    }
+
+    @Test func migratedToSegments_preservesEveryMatch() throws {
+        // Migration never narrows: every address a legacy pattern matches,
+        // its migrated form matches too. Refusals preserve vacuously.
+        let addresses = try [
+            "tools.github.user.main.repos.list",
+            "tools.github.user.main.repos",
+            "tools.github.org.ops.deploy",
+            "tools.github.user.main.x",
+            "tools.i.o.c.t",
+            "tools.i.o.c.t.u",
+            "tools.a.b.c.d",
+            "tools.a.b.c.d.e.f",
+            "tools.x.y.z.w",
+            "tools.gitlab.user.ci.pipelines.run",
+        ].map(MCPToolAddress.parse)
+        let legacies: [ToolPattern] = [
+            .any,
+            .exact(addresses[0]),
+            .exact(addresses[4]),
+            .trailingPrefix(""),
+            .trailingPrefix("tools."),
+            .trailingPrefix("tools.github"),
+            .trailingPrefix("tools.github."),
+            .trailingPrefix("tools.i.o.c.t."),
+            .trailingPrefix("tools.git"),
+            .trailingPrefix("tools.a.b.c.d.e.f."),
+            .trailingPrefix("tools.nomatch."),
+            .trailingPrefix("."),
+            .trailingPrefix("tools.*."),
+            .singleMid(prefix: "tools.", suffix: ".list"),
+            .singleMid(prefix: "tools.github.", suffix: ""),
+            .singleMid(prefix: "", suffix: ""),
+            .segments(try SegmentPattern.parse("a.*")),
+        ]
+        for legacy in legacies {
+            guard let migrated = legacy.migratedToSegments else { continue }
+            for address in addresses {
+                if legacy.matches(address) {
+                    #expect(migrated.matches(address), "\(legacy) lost \(address.literal)")
+                }
+            }
+        }
+    }
+
+    @Test func migratedToSegments_trailingDotGainsBarePrefixOnly() throws {
+        // The one documented widening: a trailing-dot prefix gains its bare
+        // prefix (which the boundary rule excluded) and nothing else.
+        let legacy = ToolPattern.trailingPrefix("tools.i.o.c.t.")
+        let migrated = try #require(legacy.migratedToSegments)
+        let bare = try MCPToolAddress.parse("tools.i.o.c.t")
+        #expect(legacy.matches(bare) == false)
+        #expect(migrated.matches(bare) == true)
+        let deeper = try MCPToolAddress.parse("tools.i.o.c.t.u")
+        #expect(legacy.matches(deeper) == true)
+        #expect(migrated.matches(deeper) == true)
+        let elsewhere = try MCPToolAddress.parse("tools.i.o.c.x")
+        #expect(legacy.matches(elsewhere) == false)
+        #expect(migrated.matches(elsewhere) == false)
     }
 }

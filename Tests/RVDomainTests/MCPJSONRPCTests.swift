@@ -71,10 +71,16 @@ struct MCPJSONRPCTests {
         #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":1.5,\"method\":\"m\"}"))
     }
 
-    @Test func decode_requestIntegralDoubleIDReadsAsInteger() {
-        let result = decode("{\"jsonrpc\":\"2.0\",\"id\":1.0,\"method\":\"m\"}")
-        guard case .success(.request(let request)) = result else {
-            Issue.record("expected request, got \(result)")
+    @Test func decode_requestIntegralDoubleIDFails() {
+        // Strict ids: 1.0 must not collapse onto 1. Fractional and exponent
+        // forms are malformed, however integral their value.
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":1.0,\"method\":\"m\"}"))
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":1e2,\"method\":\"m\"}"))
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":-0.0,\"method\":\"m\"}"))
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":1E2,\"method\":\"m\"}"))
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":1.5e1,\"method\":\"m\"}"))
+        guard case .success(.request(let request)) = decode("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"m\"}") else {
+            Issue.record("plain 1 must still decode")
             return
         }
         #expect(request.id == .number(1))
@@ -1056,13 +1062,15 @@ struct MCPJSONRPCTests {
 
     @Test func codes_rawValuesExact() {
         let raw = Dictionary(uniqueKeysWithValues: MCPToolErrorCode.allCases.map { ($0, $0.rawValue) })
-        #expect(raw.count == 10)
+        #expect(raw.count == 12)
         #expect(raw[.toolNotFound] == "tool_not_found")
+        #expect(raw[.integrationNotFound] == "integration_not_found")
         #expect(raw[.toolBlocked] == "tool_blocked")
         #expect(raw[.invalidToolArguments] == "invalid_tool_arguments")
         #expect(raw[.bindingError] == "binding_error")
         #expect(raw[.connectionValueMissing] == "connection_value_missing")
         #expect(raw[.connectionRejected] == "connection_rejected")
+        #expect(raw[.connectionBlockedByAdmin] == "connection_blocked_by_admin")
         #expect(raw[.oauthConnectionMissing] == "oauth_connection_missing")
         #expect(raw[.oauthRefreshFailed] == "oauth_refresh_failed")
         #expect(raw[.oauthReauthRequired] == "oauth_reauth_required")
@@ -1071,10 +1079,11 @@ struct MCPJSONRPCTests {
 
     @Test func codes_retryableFalseAndAuthSplit() {
         let auth: Set<MCPToolErrorCode> = [
-            .connectionValueMissing, .connectionRejected, .oauthConnectionMissing,
-            .oauthRefreshFailed, .oauthReauthRequired, .oauthScopeInsufficient,
+            .connectionValueMissing, .connectionRejected, .connectionBlockedByAdmin,
+            .oauthConnectionMissing, .oauthRefreshFailed, .oauthReauthRequired,
+            .oauthScopeInsufficient,
         ]
-        #expect(auth.count == 6)
+        #expect(auth.count == 7)
         for code in MCPToolErrorCode.allCases {
             #expect(code.retryable == false)
             #expect(code.isAuthentication == auth.contains(code))
@@ -1274,7 +1283,8 @@ struct MCPJSONRPCTests {
                 MCPToolError.self, from: body("{\"code\":\"tool_blocked\",\"retryable\":false}")
             )
         }
-        // Absent retryable reads as the code default; explicit true survives.
+        // Absent retryable reads as the code default; a hostile explicit
+        // true is ignored (the key stays accepted for forward compatibility).
         let implicit = try JSONDecoder().decode(
             MCPToolError.self, from: body("{\"code\":\"tool_blocked\",\"message\":\"m\"}")
         )
@@ -1285,7 +1295,7 @@ struct MCPJSONRPCTests {
             MCPToolError.self,
             from: body("{\"code\":\"tool_blocked\",\"message\":\"m\",\"retryable\":true}")
         )
-        #expect(explicit.retryable == true)
+        #expect(explicit.retryable == false)
     }
 
     @Test func details_discrimination() throws {
@@ -1910,12 +1920,8 @@ struct MCPJSONRPCTests {
     }
 
     @Test func decode_idEdges() {
-        // Exponent-form integral doubles read as their integer.
-        guard case .success(.request(let exp)) = decode("{\"jsonrpc\":\"2.0\",\"id\":1e3,\"method\":\"m\"}") else {
-            Issue.record("1e3 id should decode")
-            return
-        }
-        #expect(exp.id == .number(1000))
+        // Exponent-form numbers are malformed ids, however integral.
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":1e3,\"method\":\"m\"}"))
         // Empty-string ids are valid; the SDK accepts any string.
         guard case .success(.request(let empty)) = decode("{\"jsonrpc\":\"2.0\",\"id\":\"\",\"method\":\"m\"}") else {
             Issue.record("empty-string id should decode")
@@ -2202,6 +2208,271 @@ struct MCPJSONRPCTests {
             return
         }
         #expect(batch.count == 128)
+    }
+
+    // MARK: - Review: strict ids
+
+    @Test func decode_strictIDIntegersOnly() {
+        // Int64 edges: the bounds decode, one past each bound is malformed.
+        for (literal, value) in [("9223372036854775807", Int64.max), ("-9223372036854775808", Int64.min)] {
+            guard case .success(.request(let request)) = decode("{\"jsonrpc\":\"2.0\",\"id\":\(literal),\"method\":\"m\"}") else {
+                Issue.record("\(literal) should decode")
+                continue
+            }
+            #expect(request.id == .number(value))
+        }
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":9223372036854775808,\"method\":\"m\"}"))
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":-9223372036854775809,\"method\":\"m\"}"))
+        // Negative zero is an integer literal; leading zeros and `+` are not.
+        guard case .success(.request(let negativeZero)) = decode("{\"jsonrpc\":\"2.0\",\"id\":-0,\"method\":\"m\"}") else {
+            Issue.record("-0 should decode")
+            return
+        }
+        #expect(negativeZero.id == .number(0))
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":01,\"method\":\"m\"}"))
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":-01,\"method\":\"m\"}"))
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":+1,\"method\":\"m\"}"))
+        // Whitespace around the token is fine; responses face the same rule.
+        guard case .success(.request(let spaced)) = decode("{\"jsonrpc\" : \"2.0\" , \"method\" : \"m\" , \"id\" : 42 }") else {
+            Issue.record("spaced id should decode")
+            return
+        }
+        #expect(spaced.id == .number(42))
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":1.0,\"result\":1}"))
+        guard case .success(.response(.failure(id: nil, error: _))) = decode("{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":1,\"message\":\"m\"}}") else {
+            Issue.record("null failure id should decode")
+            return
+        }
+    }
+
+    @Test func decode_strictIDScanScopesToTopLevel() {
+        // A nested `params.id` is free-form params content, not the request
+        // id: fractional values there must not trip the top-level scan.
+        guard case .success(.request(let request)) = decode("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"m\",\"params\":{\"id\":1.0,\"deep\":{\"id\":\"1e2\"}}}") else {
+            Issue.record("nested params ids should not trip the scan")
+            return
+        }
+        #expect(request.id == .number(1))
+        #expect(request.params?["id"] == .number(1.0))
+        // An escaped top-level key spelling still counts as `id`: no smuggling.
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"i\\u0064\":1.0,\"method\":\"m\"}"))
+        guard case .success(.request(let escaped)) = decode("{\"jsonrpc\":\"2.0\",\"i\\u0064\":7,\"method\":\"m\"}") else {
+            Issue.record("escaped integer id should decode")
+            return
+        }
+        #expect(escaped.id == .number(7))
+        // A string merely mentioning `"id":` inside params is content, not a key.
+        guard case .success(.request(let quoted)) = decode("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"m\",\"params\":{\"note\":\"\\\"id\\\":1.0\"}}") else {
+            Issue.record("quoted id mention should decode")
+            return
+        }
+        #expect(quoted.id == .number(3))
+    }
+
+    @Test func decode_duplicateKeysAreFirstWins() {
+        // Foundation pins first-wins; the strict scan honors the same key.
+        guard case .success(.request(let request)) = decode("{\"jsonrpc\":\"2.0\",\"id\":2,\"id\":1,\"method\":\"m\"}") else {
+            Issue.record("duplicate id should decode first-wins")
+            return
+        }
+        #expect(request.id == .number(2))
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":1.0,\"id\":2,\"method\":\"m\"}"))
+    }
+
+    @Test func decode_strictIDScanTruncationsAndBareTokens() {
+        // Truncated bodies defer through the scan to the decoders, which
+        // reject them as invalid JSON; bare or letter-led number tokens
+        // fail the integer grammar in the scan itself.
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\""))
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\" 1}"))
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":"))
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":-,\"method\":\"m\"}"))
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":-.5,\"method\":\"m\"}"))
+        #expect(isMalformed("{\"jsonrpc\":\"2.0\",\"id\":-e1,\"method\":\"m\"}"))
+    }
+
+    @Test func strictKey_indexedInitNeverFires() {
+        #expect(StrictJSONKey(intValue: 5) == nil)
+        #expect(StrictJSONKey(stringValue: "id")?.stringValue == "id")
+    }
+
+    // MARK: - Review: batch items
+
+    private func batchItem(_ json: String) -> Result<MCPJSONRPCInbound, MCPJSONRPCDecodeError> {
+        guard let value = try? JSONDecoder().decode(JSONValue.self, from: body(json)) else {
+            Issue.record("fixture is not JSON: \(json)")
+            return .failure(.malformed)
+        }
+        return MCPJSONRPCCodec.decodeBatchItem(value)
+    }
+
+    private func isMalformedItem(_ json: String) -> Bool {
+        if case .failure(.malformed) = batchItem(json) { return true }
+        return false
+    }
+
+    @Test func batchItem_shapesRequestsNotificationsAndResponses() {
+        guard case .success(.request(let request)) = batchItem("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"m\",\"params\":{\"a\":1}}") else {
+            Issue.record("request item should shape")
+            return
+        }
+        #expect(request.id == .number(9))
+        #expect(request.params?["a"] == .number(1))
+        guard case .success(.notification(let notification)) = batchItem("{\"jsonrpc\":\"2.0\",\"method\":\"n\"}") else {
+            Issue.record("notification item should shape")
+            return
+        }
+        #expect(notification.method == "n")
+        guard case .success(.response(.success(id: .number(4), result: .number(1)))) = batchItem("{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":1}") else {
+            Issue.record("response item should shape")
+            return
+        }
+        guard case .success(.response(.failure(id: nil, error: let error))) = batchItem("{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":1,\"message\":\"m\"}}") else {
+            Issue.record("null-id failure item should shape")
+            return
+        }
+        #expect(error.code == 1)
+        // Documented residual: `JSONValue` already collapsed the `1.0`
+        // literal, so the item shapes as its integer.
+        guard case .success(.request(let collapsed)) = batchItem("{\"jsonrpc\":\"2.0\",\"id\":1.0,\"method\":\"m\"}") else {
+            Issue.record("collapsed batch id should shape")
+            return
+        }
+        #expect(collapsed.id == .number(1))
+    }
+
+    @Test func batchItem_rejectsUnshapedItems() {
+        #expect(isMalformedItem("{}"))
+        #expect(isMalformedItem("{\"jsonrpc\":\"1.0\",\"id\":1,\"method\":\"m\"}"))
+        #expect(isMalformedItem("{\"jsonrpc\":\"2.0\",\"id\":1}"))
+        #expect(isMalformedItem("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"m\",\"extra\":true}"))
+        #expect(isMalformedItem("{\"jsonrpc\":\"2.0\",\"id\":1.5,\"method\":\"m\"}"))
+        #expect(isMalformedItem("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"m\",\"params\":[1]}"))
+        #expect(isMalformedItem("5"))
+        #expect(isMalformedItem("\"x\""))
+        #expect(isMalformedItem("null"))
+        #expect(isMalformedItem("[{\"jsonrpc\":\"2.0\",\"method\":\"n\"}]"))
+        // Unencodable items (no JSON literal exists) fail closed without throwing.
+        let unencodable = JSONValue.object([
+            "jsonrpc": .string("2.0"),
+            "id": .number(.infinity),
+            "method": .string("m"),
+        ])
+        guard case .failure(.malformed) = MCPJSONRPCCodec.decodeBatchItem(unencodable) else {
+            Issue.record("unencodable item should be malformed")
+            return
+        }
+        // A batch-shaped item never nests: arrays reject even when full of objects.
+        guard case .success(.batch(let items)) = decode("[{\"jsonrpc\":\"2.0\",\"method\":\"n\"}]") else {
+            Issue.record("single-item batch should decode")
+            return
+        }
+        guard case .success(.notification(let notification)) = MCPJSONRPCCodec.decodeBatchItem(items[0]) else {
+            Issue.record("decoded batch item should shape")
+            return
+        }
+        #expect(notification.method == "n")
+    }
+
+    // MARK: - Review: hostile retryable
+
+    @Test func toolError_ignoresHostileWireRetryable() throws {
+        // Every code's verdict wins over the wire, however the peer flags it.
+        for code in ["tool_blocked", "connection_blocked_by_admin", "integration_not_found", "oauth_scope_insufficient"] {
+            let error = try JSONDecoder().decode(
+                MCPToolError.self,
+                from: body("{\"code\":\"\(code)\",\"message\":\"m\",\"retryable\":true}")
+            )
+            #expect(error.retryable == false, "\(code) must ignore wire true")
+        }
+    }
+
+    // MARK: - Review: admin-blocked failures
+
+    @Test func factory_connectionBlockedByAdmin() throws {
+        let error = MCPToolError.connectionBlockedByAdmin(
+            label: "github.user.main",
+            integration: MCPAuthIntegration(id: "github"),
+            oauthErrorCode: "access_denied"
+        )
+        #expect(error.code == .connectionBlockedByAdmin)
+        #expect(error.code.rawValue == "connection_blocked_by_admin")
+        #expect(error.retryable == false)
+        #expect(error.code.isAuthentication == true)
+        #expect(error.message.contains("administrator policy"))
+        #expect(error.message.contains("signing in again cannot help"))
+        guard case .authentication(let details) = try #require(error.details) else {
+            Issue.record("expected authentication details")
+            return
+        }
+        #expect(details.category == "authentication")
+        #expect(details.integration == MCPAuthIntegration(id: "github"))
+        #expect(details.credential?.label == "github.user.main")
+        #expect(details.upstream?.details?["oauthErrorCode"] == .string("access_denied"))
+        // No re-mint tool anywhere in the hints: policy cannot be walked around.
+        #expect(details.recovery.createConnectionTool == nil)
+        #expect(details.recovery.startOAuthTool == nil)
+        #expect(details.recovery.connectionInstructions == nil)
+        #expect(details.recovery.oauthInstructions == nil)
+        #expect(details.recovery.scopeInstructions == nil)
+        #expect(details.recovery.listConnectionsTool == MCPToolErrorRecovery.listConnectionsToolName)
+        #expect(details.recovery.adminInstructions == MCPToolErrorRecovery.adminInstructionsText)
+        #expect(MCPToolErrorRecovery.adminInstructionsText.contains("administrator") == true)
+        // The generic auth factory routes the code to the admin branch too.
+        let generic = MCPToolError.authentication(code: .connectionBlockedByAdmin, message: "m")
+        guard case .authentication(let genericDetails) = try #require(generic.details) else {
+            Issue.record("expected authentication details")
+            return
+        }
+        #expect(genericDetails.recovery == .blockedByAdmin())
+        #expect(genericDetails.recovery.startOAuthTool == nil)
+        // Round-trip: the admin branch survives coding with its strict keys.
+        let roundTripped = try JSONDecoder().decode(
+            MCPToolError.self, from: JSONEncoder().encode(error)
+        )
+        #expect(roundTripped == error)
+    }
+
+    // MARK: - Review: integration misses
+
+    @Test func factory_integrationNotFound() throws {
+        let error = MCPToolError.integrationNotFound(integration: "githob", suggestions: ["github"])
+        #expect(error.code == .integrationNotFound)
+        #expect(error.code.rawValue == "integration_not_found")
+        #expect(error.retryable == false)
+        #expect(error.code.isAuthentication == false)
+        #expect(error.message.contains("githob"))
+        #expect(error.message.contains("Re-sync the integration catalog"))
+        guard case .integrationNotFound(let details) = try #require(error.details) else {
+            Issue.record("expected integration-miss details")
+            return
+        }
+        #expect(details == MCPIntegrationNotFoundDetails(integration: "githob", suggestions: ["github"]))
+        let roundTripped = try JSONDecoder().decode(
+            MCPToolError.self, from: JSONEncoder().encode(error)
+        )
+        #expect(roundTripped == error)
+    }
+
+    @Test func details_integrationMissDisjointFromBinding() throws {
+        // Both shapes carry `integration`: the required `suggestions` key
+        // keeps the miss shape from collapsing onto binding details.
+        let miss = try JSONDecoder().decode(
+            MCPToolErrorDetails.self,
+            from: body("{\"integration\":\"githob\",\"suggestions\":[\"github\"]}")
+        )
+        #expect(miss == .integrationNotFound(MCPIntegrationNotFoundDetails(integration: "githob", suggestions: ["github"])))
+        let binding = try JSONDecoder().decode(
+            MCPToolErrorDetails.self,
+            from: body("{\"integration\":\"github\"}")
+        )
+        #expect(binding == .binding(MCPBindingDetails(integration: "github")))
+        #expect(throws: (any Error).self) {
+            try JSONDecoder().decode(
+                MCPIntegrationNotFoundDetails.self,
+                from: body("{\"integration\":\"github\",\"suggestions\":[\"x\"],\"extra\":1}")
+            )
+        }
     }
 }
 

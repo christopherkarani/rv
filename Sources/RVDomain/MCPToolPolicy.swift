@@ -170,6 +170,65 @@ public enum ToolPattern: Sendable, Equatable, Hashable, Codable {
     public static func isValid(_ raw: String) -> Bool {
         SegmentPattern.isValid(raw)
     }
+
+    /// Specificity score for placement among committed rows. Segment patterns
+    /// delegate to `SegmentPattern.specificity`; the frozen legacy cases map
+    /// onto the same scale: `exact` is its literal segment count × 2 + 1 (the
+    /// exact bonus), `trailingPrefix` is its prefix segment count × 2 (a
+    /// subtree-like score, no exact bonus), `singleMid` is its prefix-plus-
+    /// suffix segment count × 2, and `any` is 0. Segment counts drop empty
+    /// parts, so a trailing-dot prefix scores its real segments. Scores exist
+    /// so legacy rows keep meaningful stored positions next to segment rows;
+    /// legacy patterns are frozen and never placed anew.
+    public var specificity: Int {
+        switch self {
+        case .exact(let address):
+            return address.literal.split(separator: ".").count * 2 + 1
+        case .any:
+            return 0
+        case .trailingPrefix(let prefix):
+            return prefix.split(separator: ".").count * 2
+        case .singleMid(let prefix, let suffix):
+            let parts = prefix.split(separator: ".").count + suffix.split(separator: ".").count
+            return parts * 2
+        case .segments(let pattern):
+            return pattern.specificity
+        }
+    }
+
+    /// Migrates this pattern to segment form, or refuses with nil when the
+    /// migration could narrow (drop a pre-migration match). `segments`
+    /// passes through, `any` maps to `any`, and `exact` maps to the exact
+    /// segment list — all match-identical. `trailingPrefix` maps to a subtree
+    /// wildcard over its non-empty segments (never to `exact`: a subtree
+    /// rendered exact would drop every deeper match); a trailing-dot prefix
+    /// additionally gains its bare prefix, the one widening this migration
+    /// allows. Refusals: `singleMid` always (its substring middle may span
+    /// segments, so any segment rendering narrows), prefixes containing `*`
+    /// (a literal star would flip to a wildcard), and prefixes with no
+    /// segments left (nothing faithful to anchor). Every pre-migration match
+    /// still matches after a non-nil migration; verify widening against the
+    /// rule's verdict before storing.
+    public var migratedToSegments: SegmentPattern? {
+        switch self {
+        case .segments(let pattern):
+            return pattern
+        case .any:
+            return .any
+        case .exact(let address):
+            return .exact(segments: address.literal.split(separator: ".").map(String.init))
+        case .trailingPrefix(let prefix):
+            if prefix.isEmpty {
+                return .any
+            }
+            guard prefix.contains("*") == false else { return nil }
+            let parts = prefix.split(separator: ".").map(String.init)
+            guard parts.isEmpty == false else { return nil }
+            return .wildcard(segments: parts.map(PatternSegment.literal), subtree: true)
+        case .singleMid:
+            return nil
+        }
+    }
 }
 
 /// Policy scope. Comparison ranks org above user.
@@ -293,6 +352,8 @@ public enum PatternSegment: Sendable, Equatable, Hashable, Codable {
 /// Raw-string pattern grammar failures. Cases carry no payload, so a thrown
 /// error never echoes the rejected pattern.
 public enum ToolPatternError: Error, Sendable, Equatable {
+    /// The raw pattern exceeds `SegmentPattern.maxRawCharacters`.
+    case patternTooLong
     /// The pattern is empty.
     case emptyPattern
     /// The pattern starts with a dot.
@@ -349,9 +410,25 @@ public enum SegmentPattern: Sendable, Equatable, Hashable, Codable {
         }
     }
 
+    /// Longest raw pattern `parse` accepts, in characters. Bounds the split
+    /// and match work a hostile string can demand; legitimate patterns are a
+    /// handful of segments. The Executor has no cap, so any input past this
+    /// is the one deliberate accept/reject divergence between the engines.
+    public static let maxRawCharacters = 1024
+
     /// Parses a raw pattern string. Guards run in Executor `isValidPattern`
-    /// order, so the first failure wins identically in both engines.
+    /// order, so the first failure wins identically in both engines — except
+    /// the length cap, which runs first in both outcomes (an over-long input
+    /// is rejected however else it reads).
+    ///
+    /// Migration warning: this parses NEW raw strings only. Stored legacy
+    /// patterns (`exact`, `trailingPrefix`, `singleMid`, `any`) must migrate
+    /// through `ToolPattern.migratedToSegments`, which refuses narrowings —
+    /// never by re-parsing a rendered string or hand-building segments.
     public static func parse(_ raw: String) throws -> SegmentPattern {
+        guard raw.count <= Self.maxRawCharacters else {
+            throw ToolPatternError.patternTooLong
+        }
         guard raw.isEmpty == false else {
             throw ToolPatternError.emptyPattern
         }
@@ -457,13 +534,37 @@ public enum SegmentPattern: Sendable, Equatable, Hashable, Codable {
     /// like `between` (below `-inf`/above `+inf` is inexpressible in `Double`,
     /// so the edge key ties the extreme row and id order breaks the tie);
     /// this function never traps.
+    ///
+    /// Segments-only: both the newcomer and the rows are segment patterns.
+    /// Legacy rules keep their stored positions (legacy is frozen: no new
+    /// legacy placements); use the `ToolPattern` overload to place a segment
+    /// newcomer among rows that still include legacy patterns.
     public static func positionForNewPattern(
         _ pattern: SegmentPattern,
         rows: [(id: String, pattern: SegmentPattern, position: FractionalIndex)]
     ) -> FractionalIndex {
+        positionForNewPattern(score: pattern.specificity, rows: rows.map { ($0.id, $0.pattern.specificity, $0.position) })
+    }
+
+    /// Default fractional position for a segment newcomer among committed
+    /// rows that may still include frozen legacy patterns. Legacy rows score
+    /// through `ToolPattern.specificity`, so they hold their meaningful place
+    /// in the order; the never-shadows-leaf guarantee holds across the mixed
+    /// set exactly as in the segments-only overload. The newcomer stays a
+    /// segment pattern: legacy is frozen and takes no new placements.
+    public static func positionForNewPattern(
+        _ pattern: SegmentPattern,
+        rows: [(id: String, pattern: ToolPattern, position: FractionalIndex)]
+    ) -> FractionalIndex {
+        positionForNewPattern(score: pattern.specificity, rows: rows.map { ($0.id, $0.pattern.specificity, $0.position) })
+    }
+
+    private static func positionForNewPattern(
+        score: Int,
+        rows: [(id: String, specificity: Int, position: FractionalIndex)]
+    ) -> FractionalIndex {
         let committed = rows.sorted { ($0.position, $0.id) < ($1.position, $1.id) }
-        let score = pattern.specificity
-        let index = committed.firstIndex { $0.pattern.specificity <= score } ?? committed.count
+        let index = committed.firstIndex { $0.specificity <= score } ?? committed.count
         if index == 0 {
             guard let first = committed.first else {
                 return FractionalIndex(value: 0)

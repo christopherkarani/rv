@@ -42,3 +42,19 @@ public func rejectUnknownKeys(
         )
     }
 }
+
+/// Decodes an optional member: a missing key reads as nil, an explicit null
+/// fails closed, otherwise the value decodes as `T`. Mirrors Effect's
+/// `optional`, where only a missing key is absent.
+public func decodeStrictOptional<T: Decodable>(
+    _ type: T.Type, forKey key: StrictJSONKey,
+    in container: KeyedDecodingContainer<StrictJSONKey>
+) throws -> T? {
+    guard container.contains(key) else { return nil }
+    if try container.decodeNil(forKey: key) {
+        throw DecodingError.dataCorruptedError(
+            forKey: key, in: container, debugDescription: "null is not absent"
+        )
+    }
+    return try container.decode(T.self, forKey: key)
+}

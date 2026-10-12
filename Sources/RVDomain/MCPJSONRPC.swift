@@ -16,22 +16,6 @@ import Foundation
 
 // MARK: - Bounds
 
-/// Decodes an optional member: a missing key reads as nil, an explicit null
-/// fails closed, otherwise the value decodes as `T`. Mirrors Effect's
-/// `optional`, where only a missing key is absent.
-private func decodeStrictOptional<T: Decodable>(
-    _ type: T.Type, forKey key: StrictJSONKey,
-    in container: KeyedDecodingContainer<StrictJSONKey>
-) throws -> T? {
-    guard container.contains(key) else { return nil }
-    if try container.decodeNil(forKey: key) {
-        throw DecodingError.dataCorruptedError(
-            forKey: key, in: container, debugDescription: "null is not absent"
-        )
-    }
-    return try container.decode(T.self, forKey: key)
-}
-
 /// Byte and count bounds for the serving envelope. Fixed constants (no caller
 /// tuning): the caps are part of the wire contract, mirroring how
 /// `RuntimeAdmissionCodec` fixes `maxBodyBytes`/`maxResponseBytes`.
@@ -64,8 +48,11 @@ public enum MCPJSONRPCLimits {
 
 /// JSON-RPC request id: an integer or a string. Mirrors the SDK's request-id
 /// schema (string | integer): fractional numbers, booleans, null, and missing
-/// ids are not request ids. An integral double (`1.0`) reads as its integer,
-/// matching `Number.isInteger`; ids outside `Int64` do not decode.
+/// ids are not request ids. Only JSON integer literals in `Int64` range
+/// decode; fractional and exponent forms (`1.0`, `1e2`, `-0.0`) are malformed,
+/// deliberately stricter than `Number.isInteger`, so `1` and `1.0` never
+/// collapse. Foundation's `Int64` decode would accept those forms, so the
+/// codec pre-validates the raw top-level `id` token before decoding.
 public enum MCPJSONRPCID: Sendable, Equatable {
     /// Integer id.
     case number(Int64)
@@ -343,13 +330,19 @@ public enum MCPJSONRPCInbound: Sendable, Equatable {
     case response(MCPJSONRPCResponse)
     /// A batch: 1 to `maxBatchItems` JSON objects. Items stay unshaped (the
     /// serving edge answers batches through the transport, never here); the
-    /// object check keeps primitives and nesting out.
+    /// object check keeps primitives and nesting out. Dispatch must shape
+    /// each item through `MCPJSONRPCCodec.decodeBatchItem`, never by reading
+    /// the raw `JSONValue`.
     case batch([JSONValue])
 }
 
 /// Single entry point for inbound bodies: size checks, then strict
 /// classification. Attempts run request → notification → response → batch;
 /// anything else is malformed.
+///
+/// Duplicate object keys are first-wins under Foundation: when a body repeats
+/// a member, the earliest value decodes. Intermediaries (proxies, gateways)
+/// may apply a different rule, so senders must not rely on duplicates.
 public enum MCPJSONRPCCodec {
     /// Decodes and classifies one inbound body.
     public static func decode(_ data: Data) -> Result<MCPJSONRPCInbound, MCPJSONRPCDecodeError> {
@@ -357,6 +350,7 @@ public enum MCPJSONRPCCodec {
         guard data.count <= MCPJSONRPCLimits.maxBodyBytes else { return .failure(.oversized) }
         guard hasBOMPrefix(data) == false else { return .failure(.malformed) }
         guard exceedsMaxDepth(data) == false else { return .failure(.malformed) }
+        guard topLevelIDTokenIsStrict(data) else { return .failure(.malformed) }
         if let request = try? JSONDecoder().decode(MCPJSONRPCRequest.self, from: data) {
             return .success(.request(request))
         }
@@ -420,6 +414,176 @@ public enum MCPJSONRPCCodec {
             index = next
         }
         return false
+    }
+
+    /// True unless the body's first top-level `id` member carries a number
+    /// literal that is not a plain JSON integer. Foundation decodes `1.0`,
+    /// `1e2`, and `-0.0` as `Int64`, collapsing them onto integers the sender
+    /// never wrote; the strict id contract rejects those forms, so this
+    /// string-aware scan inspects the raw token before decoding. Only a
+    /// numeric `id` token can fail here: strings, `null`, booleans, objects,
+    /// arrays, missing keys, non-object bodies, and unparseable bytes all
+    /// defer to the decode attempts, which accept or reject them. The first
+    /// `id` key wins, matching Foundation's duplicate-key rule; keys compare
+    /// after JSON unescaping, so an escaped spelling (`"i\u0064"`) cannot
+    /// smuggle a fractional id past the scan.
+    private static func topLevelIDTokenIsStrict(_ data: Data) -> Bool {
+        let bytes = Array(data)
+        var index = 0
+        skipJSONWhitespace(bytes, index: &index)
+        guard index < bytes.count, bytes[index] == 0x7B else { return true }
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var keyPosition = false
+        var capturingKey = false
+        var keyStart = 0
+        while index < bytes.count {
+            let byte = bytes[index]
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if byte == 0x5C {
+                    escaped = true
+                } else if byte == 0x22 {
+                    inString = false
+                    if capturingKey {
+                        capturingKey = false
+                        if unescapedKeyIsID(bytes[keyStart..<index]) {
+                            return idValueTokenIsStrict(bytes, from: index + 1)
+                        }
+                    }
+                }
+                index += 1
+                continue
+            }
+            switch byte {
+            case 0x22:
+                inString = true
+                if depth == 1, keyPosition {
+                    capturingKey = true
+                    keyStart = index + 1
+                }
+            case 0x7B, 0x5B:
+                depth += 1
+                if depth == 1 {
+                    keyPosition = true
+                }
+            case 0x7D, 0x5D:
+                if depth > 0 {
+                    depth -= 1
+                }
+            case 0x3A:
+                if depth == 1 {
+                    keyPosition = false
+                }
+            case 0x2C:
+                if depth == 1 {
+                    keyPosition = true
+                }
+            default:
+                break
+            }
+            index += 1
+        }
+        return true
+    }
+
+    /// True unless the value token after a top-level `id` key is a numeric
+    /// literal outside the plain-integer grammar `-?(0|[1-9][0-9]*)`.
+    /// Integer literals defer to the decoder, which range-checks `Int64`.
+    private static func idValueTokenIsStrict(_ bytes: [UInt8], from start: Int) -> Bool {
+        var index = start
+        skipJSONWhitespace(bytes, index: &index)
+        guard index < bytes.count, bytes[index] == 0x3A else { return true }
+        index += 1
+        skipJSONWhitespace(bytes, index: &index)
+        guard index < bytes.count else { return true }
+        let first = bytes[index]
+        guard first == 0x2D || (0x30...0x39).contains(first) else { return true }
+        let tokenStart = index
+        while index < bytes.count, isJSONNumberByte(bytes[index]) {
+            index += 1
+        }
+        return isPlainIntegerToken(bytes[tokenStart..<index])
+    }
+
+    /// True for the raw bytes of a top-level key spelling `id`, after JSON
+    /// string unescaping. Escaped spellings re-decode through Foundation, so
+    /// the comparison uses exactly the decoder's own escape semantics;
+    /// undecodable bytes read as not-`id` and the decode attempts reject the
+    /// body as invalid JSON.
+    private static func unescapedKeyIsID(_ raw: ArraySlice<UInt8>) -> Bool {
+        if raw.elementsEqual([0x69, 0x64]) {
+            return true
+        }
+        guard raw.contains(0x5C) else { return false }
+        var fragment = Data([0x22])
+        fragment.append(contentsOf: raw)
+        fragment.append(0x22)
+        return (try? JSONDecoder().decode(String.self, from: fragment)) == "id"
+    }
+
+    /// True for the raw bytes of `-?(0|[1-9][0-9]*)` and nothing else.
+    private static func isPlainIntegerToken(_ token: ArraySlice<UInt8>) -> Bool {
+        var index = token.startIndex
+        guard index < token.endIndex else { return false }
+        if token[index] == 0x2D {
+            index = token.index(after: index)
+            guard index < token.endIndex else { return false }
+        }
+        guard index < token.endIndex, (0x30...0x39).contains(token[index]) else { return false }
+        if token[index] == 0x30 {
+            return token.index(after: index) == token.endIndex
+        }
+        index = token.index(after: index)
+        while index < token.endIndex {
+            guard (0x30...0x39).contains(token[index]) else { return false }
+            index = token.index(after: index)
+        }
+        return true
+    }
+
+    private static func skipJSONWhitespace(_ bytes: [UInt8], index: inout Int) {
+        while index < bytes.count {
+            switch bytes[index] {
+            case 0x20, 0x09, 0x0A, 0x0D:
+                index += 1
+            default:
+                return
+            }
+        }
+    }
+
+    private static func isJSONNumberByte(_ byte: UInt8) -> Bool {
+        byte == 0x2D || byte == 0x2B || byte == 0x2E
+            || (0x30...0x39).contains(byte)
+            || byte == 0x65 || byte == 0x45
+    }
+
+    /// Strictly shapes one batch item into a request, notification, or
+    /// response, reusing the single-item decoders. Dispatch must call this on
+    /// every `.batch` item and answer `.failure(.malformed)` items with a
+    /// per-item error; it must never read item fields off the raw `JSONValue`,
+    /// which skips version, key, id, and method validation. Never returns
+    /// `.batch`: items do not nest. One residual: `JSONValue` numbers are
+    /// `Double`, so id literals already collapsed there (`1.0`, `1e3` read as
+    /// their integer) shape as their integer rather than rejecting as the
+    /// top-level strict id scan would.
+    public static func decodeBatchItem(_ item: JSONValue) -> Result<MCPJSONRPCInbound, MCPJSONRPCDecodeError> {
+        guard case .object = item else { return .failure(.malformed) }
+        guard let data = try? JSONEncoder().encode(item) else { return .failure(.malformed) }
+        // Same attempt order as `decode`, minus the batch arm: items nest never.
+        if let request = try? JSONDecoder().decode(MCPJSONRPCRequest.self, from: data) {
+            return .success(.request(request))
+        }
+        if let notification = try? JSONDecoder().decode(MCPJSONRPCNotification.self, from: data) {
+            return .success(.notification(notification))
+        }
+        if let response = try? JSONDecoder().decode(MCPJSONRPCResponse.self, from: data) {
+            return .success(.response(response))
+        }
+        return .failure(.malformed)
     }
 
     private static func decodeBatch(_ data: Data) throws -> [JSONValue] {
@@ -878,12 +1042,15 @@ public enum MCPPreInitializeGuard {
 /// Caller-visible expected-failure codes. Mirrors the Executor's
 /// `expectedToolFailure` mapping (tool-invoker.ts) plus the
 /// `AuthToolFailureCode` union (auth-tool-failure.ts): dispatch misses,
-/// policy blocks, argument mismatches, binding failures, and the six
-/// credential/OAuth failures. Unknown codes never decode: the vocabulary is
-/// closed, so callers can switch exhaustively.
+/// policy blocks, argument mismatches, binding failures, the seven
+/// credential/OAuth failures, and the catalog miss. Unknown codes never
+/// decode: the vocabulary is closed, so callers can switch exhaustively.
 public enum MCPToolErrorCode: String, Sendable, Equatable, Codable, CaseIterable {
     /// No tool at the path. Details carry the path plus suggestions.
     case toolNotFound = "tool_not_found"
+    /// No integration under the name. Details carry the name plus
+    /// suggestions; recovery re-syncs the catalog, never the grant.
+    case integrationNotFound = "integration_not_found"
     /// Policy blocked the tool. Details carry the path plus the pattern.
     case toolBlocked = "tool_blocked"
     /// Arguments missed the input schema (or the OpenAPI pre-flight message).
@@ -894,6 +1061,9 @@ public enum MCPToolErrorCode: String, Sendable, Equatable, Codable, CaseIterable
     case connectionValueMissing = "connection_value_missing"
     /// The upstream rejected the credential (a 401 is a refresh trigger).
     case connectionRejected = "connection_rejected"
+    /// An enterprise identity provider declined under administrator policy.
+    /// Re-authenticating cannot help, so recovery names no re-mint tool.
+    case connectionBlockedByAdmin = "connection_blocked_by_admin"
     /// The referenced OAuth connection does not exist.
     case oauthConnectionMissing = "oauth_connection_missing"
     /// Minting or refreshing the OAuth grant failed.
@@ -911,14 +1081,16 @@ public enum MCPToolErrorCode: String, Sendable, Equatable, Codable, CaseIterable
     /// is a re-mint, not a retry.)
     public var retryable: Bool { false }
 
-    /// True for the six credential/OAuth codes, whose details carry the
+    /// True for the seven credential/OAuth codes, whose details carry the
     /// `authentication` category plus recovery hints.
     public var isAuthentication: Bool {
         switch self {
-        case .connectionValueMissing, .connectionRejected, .oauthConnectionMissing,
-            .oauthRefreshFailed, .oauthReauthRequired, .oauthScopeInsufficient:
+        case .connectionValueMissing, .connectionRejected, .connectionBlockedByAdmin,
+            .oauthConnectionMissing, .oauthRefreshFailed, .oauthReauthRequired,
+            .oauthScopeInsufficient:
             return true
-        case .toolNotFound, .toolBlocked, .invalidToolArguments, .bindingError:
+        case .toolNotFound, .integrationNotFound, .toolBlocked, .invalidToolArguments,
+            .bindingError:
             return false
         }
     }
@@ -951,6 +1123,40 @@ extension MCPToolNotFoundDetails: Codable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: StrictJSONKey.self)
         try container.encode(path, forKey: StrictJSONKey("path"))
+        try container.encode(suggestions, forKey: StrictJSONKey("suggestions"))
+    }
+}
+
+/// `integration_not_found` details: the unknown integration name plus
+/// up-to-five suggestions.
+/// Strict keys: `integration`, `suggestions`. Both keys are required, so the
+/// shape never collapses onto binding details, which also carries an
+/// `integration` member.
+public struct MCPIntegrationNotFoundDetails: Sendable, Equatable {
+    /// Unknown integration name, a label, never a value.
+    public let integration: String
+    /// Alternate names, closest first.
+    public let suggestions: [String]
+
+    /// Assembles integration-miss details.
+    public init(integration: String, suggestions: [String]) {
+        self.integration = integration
+        self.suggestions = suggestions
+    }
+}
+
+extension MCPIntegrationNotFoundDetails: Codable {
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: StrictJSONKey.self)
+        try rejectUnknownKeys(container, allowed: ["integration", "suggestions"])
+        let integration = try container.decode(String.self, forKey: StrictJSONKey("integration"))
+        let suggestions = try container.decode([String].self, forKey: StrictJSONKey("suggestions"))
+        self.init(integration: integration, suggestions: suggestions)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: StrictJSONKey.self)
+        try container.encode(integration, forKey: StrictJSONKey("integration"))
         try container.encode(suggestions, forKey: StrictJSONKey("suggestions"))
     }
 }
@@ -1101,7 +1307,8 @@ public enum MCPAuthCredentialKind: String, Sendable, Equatable, Codable {
 public struct MCPAuthCredential: Sendable, Equatable {
     /// Which mint the failure concerns.
     public let kind: MCPAuthCredentialKind
-    /// Connection label (`<integration>.<owner>.<name>`), when known.
+    /// Connection label (the `MCPConnectionID` description
+    /// `<integration>.<owner>.<name>`), when known.
     public let label: String?
     /// Credential slot key, when known.
     public let slotKey: String?
@@ -1184,11 +1391,13 @@ extension MCPAuthUpstream: Codable {
 
 /// Recovery hints for auth failures. Exact Executor vocabulary
 /// (auth-tool-failure.ts): tool names the agent can call plus the
-/// instructions for guiding the user through the fix. Two builders: the
-/// standard branch (re-mint or re-authorize, then retry) and the
+/// instructions for guiding the user through the fix. Three builders: the
+/// standard branch (re-mint or re-authorize, then retry), the
 /// scope-insufficient branch (reconnect with broader access — deliberately no
 /// re-authenticate tools, since re-running the same grant loops on the same
-/// 403). Strict keys: the seven hint fields.
+/// 403), and the blocked-by-admin branch (contact an administrator —
+/// deliberately no re-mint tool, since signing in again cannot walk around
+/// the policy). Strict keys: the eight hint fields.
 public struct MCPToolErrorRecovery: Sendable, Equatable {
     /// Connection-handoff tool for API keys and tokens.
     public let createConnectionTool: String?
@@ -1204,6 +1413,8 @@ public struct MCPToolErrorRecovery: Sendable, Equatable {
     public let oauthInstructions: String?
     /// How to fix scope-insufficient failures (scope branch only).
     public let scopeInstructions: String?
+    /// How to fix admin-blocked failures (admin branch only).
+    public let adminInstructions: String?
 
     /// Exact Executor tool name.
     public static let createConnectionToolName = "executor.coreTools.connections.createHandoff"
@@ -1220,13 +1431,17 @@ public struct MCPToolErrorRecovery: Sendable, Equatable {
     /// Exact Executor instructions.
     public static let scopeInstructionsText =
         "The connection's OAuth grant does not cover the scope this operation requires; re-authenticating with the same grant will return the same error. Tell the user which operation was denied and ask them to reconnect the integration with broader access (or use a connection that already has it). Call listConnectionsTool to see the available connections and their scopes."
+    /// Admin-branch instructions: no re-mint route exists, so the agent
+    /// points the user at an administrator instead of any sign-in tool.
+    public static let adminInstructionsText =
+        "The connection was declined by administrator policy. Signing in again cannot help, and no other sign-in route walks around the policy. Ask an administrator to allow the connection, then retry the tool."
 
     /// Assembles recovery hints from validated parts.
     public init(
         createConnectionTool: String? = nil, startOAuthTool: String? = nil,
         listConnectionsTool: String? = nil, configureIntegrationTool: String? = nil,
         connectionInstructions: String? = nil, oauthInstructions: String? = nil,
-        scopeInstructions: String? = nil
+        scopeInstructions: String? = nil, adminInstructions: String? = nil
     ) {
         self.createConnectionTool = createConnectionTool
         self.startOAuthTool = startOAuthTool
@@ -1235,6 +1450,7 @@ public struct MCPToolErrorRecovery: Sendable, Equatable {
         self.connectionInstructions = connectionInstructions
         self.oauthInstructions = oauthInstructions
         self.scopeInstructions = scopeInstructions
+        self.adminInstructions = adminInstructions
     }
 
     /// Standard branch: re-mint or re-authorize, then retry.
@@ -1261,6 +1477,22 @@ public struct MCPToolErrorRecovery: Sendable, Equatable {
             scopeInstructions: scopeInstructionsText
         )
     }
+
+    /// Blocked-by-admin branch: contact an administrator. No re-mint tool:
+    /// signing in again cannot walk around administrator policy, so the
+    /// hints must never offer the ordinary OAuth flow as an alternative
+    /// route (mirroring `MCPCredentialFailure.recovery` for `.blockedByAdmin`).
+    public static func blockedByAdmin(
+        configureIntegrationTool: String? = nil
+    ) -> MCPToolErrorRecovery {
+        MCPToolErrorRecovery(
+            createConnectionTool: nil, startOAuthTool: nil,
+            listConnectionsTool: listConnectionsToolName,
+            configureIntegrationTool: configureIntegrationTool,
+            connectionInstructions: nil, oauthInstructions: nil,
+            scopeInstructions: nil, adminInstructions: adminInstructionsText
+        )
+    }
 }
 
 extension MCPToolErrorRecovery: Codable {
@@ -1271,7 +1503,7 @@ extension MCPToolErrorRecovery: Codable {
             allowed: [
                 "createConnectionTool", "startOAuthTool", "listConnectionsTool",
                 "configureIntegrationTool", "connectionInstructions", "oauthInstructions",
-                "scopeInstructions",
+                "scopeInstructions", "adminInstructions",
             ]
         )
         self.init(
@@ -1281,7 +1513,8 @@ extension MCPToolErrorRecovery: Codable {
             configureIntegrationTool: try decodeStrictOptional(String.self, forKey: StrictJSONKey("configureIntegrationTool"), in: container),
             connectionInstructions: try decodeStrictOptional(String.self, forKey: StrictJSONKey("connectionInstructions"), in: container),
             oauthInstructions: try decodeStrictOptional(String.self, forKey: StrictJSONKey("oauthInstructions"), in: container),
-            scopeInstructions: try decodeStrictOptional(String.self, forKey: StrictJSONKey("scopeInstructions"), in: container)
+            scopeInstructions: try decodeStrictOptional(String.self, forKey: StrictJSONKey("scopeInstructions"), in: container),
+            adminInstructions: try decodeStrictOptional(String.self, forKey: StrictJSONKey("adminInstructions"), in: container)
         )
     }
 
@@ -1302,6 +1535,7 @@ extension MCPToolErrorRecovery: Codable {
         )
         try container.encodeIfPresent(oauthInstructions, forKey: StrictJSONKey("oauthInstructions"))
         try container.encodeIfPresent(scopeInstructions, forKey: StrictJSONKey("scopeInstructions"))
+        try container.encodeIfPresent(adminInstructions, forKey: StrictJSONKey("adminInstructions"))
     }
 }
 
@@ -1370,12 +1604,17 @@ extension MCPAuthFailureDetails: Codable {
 }
 
 /// Per-code details shapes. Decoding tries each shape in order — not-found,
-/// blocked, authentication, binding, invalid-arguments — and the strict keys
-/// keep the shapes disjoint, except that a bare `{}` reads as empty binding
-/// details and a path-only object reads as not-found (both deterministic).
+/// blocked, authentication, integration-miss, binding, invalid-arguments —
+/// and the strict keys keep the shapes disjoint, except that a bare `{}`
+/// reads as empty binding details and a path-only object reads as not-found
+/// (both deterministic). The integration-miss shape stays disjoint from
+/// binding — which also carries `integration` — through its required
+/// `suggestions` key, not through trial order.
 public enum MCPToolErrorDetails: Sendable, Equatable {
     /// `tool_not_found` details.
     case toolNotFound(MCPToolNotFoundDetails)
+    /// `integration_not_found` details.
+    case integrationNotFound(MCPIntegrationNotFoundDetails)
     /// `tool_blocked` details.
     case toolBlocked(MCPToolBlockedDetails)
     /// `invalid_tool_arguments` details.
@@ -1400,6 +1639,10 @@ extension MCPToolErrorDetails: Codable {
             self = .authentication(value)
             return
         }
+        if let value = try? MCPIntegrationNotFoundDetails(from: decoder) {
+            self = .integrationNotFound(value)
+            return
+        }
         if let value = try? MCPBindingDetails(from: decoder) {
             self = .binding(value)
             return
@@ -1419,6 +1662,8 @@ extension MCPToolErrorDetails: Codable {
     public func encode(to encoder: Encoder) throws {
         switch self {
         case .toolNotFound(let value):
+            try value.encode(to: encoder)
+        case .integrationNotFound(let value):
             try value.encode(to: encoder)
         case .toolBlocked(let value):
             try value.encode(to: encoder)
@@ -1470,8 +1715,12 @@ extension MCPToolError: Codable {
         let message = try container.decode(String.self, forKey: StrictJSONKey("message"))
         let status = try decodeStrictOptional(Int.self, forKey: StrictJSONKey("status"), in: container)
         let details = try decodeStrictOptional(MCPToolErrorDetails.self, forKey: StrictJSONKey("details"), in: container)
-        let retryable = try decodeStrictOptional(Bool.self, forKey: StrictJSONKey("retryable"), in: container) ?? code.retryable
-        self.init(code: code, message: message, status: status, details: details, retryable: retryable)
+        // The wire `retryable` is untrusted: a hostile or stale peer could flip
+        // it and turn a fail-closed auth wall into a retry loop. The key stays
+        // accepted for forward compatibility, but the value is always the
+        // code's own verdict.
+        _ = try decodeStrictOptional(Bool.self, forKey: StrictJSONKey("retryable"), in: container)
+        self.init(code: code, message: message, status: status, details: details, retryable: code.retryable)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1490,6 +1739,20 @@ extension MCPToolError {
         MCPToolError(
             code: .toolNotFound, message: "Tool not found: \(path)",
             details: .toolNotFound(MCPToolNotFoundDetails(path: path, suggestions: suggestions))
+        )
+    }
+
+    /// `integration_not_found`: the catalog holds no such integration.
+    /// Recovery re-syncs the catalog (the grant is never the problem), so the
+    /// message carries the re-sync guidance directly: this miss is not an
+    /// auth failure and takes no `authentication` recovery hints.
+    public static func integrationNotFound(integration: String, suggestions: [String] = []) -> MCPToolError {
+        MCPToolError(
+            code: .integrationNotFound,
+            message: "Integration not found: \(integration). Re-sync the integration catalog, then retry.",
+            details: .integrationNotFound(
+                MCPIntegrationNotFoundDetails(integration: integration, suggestions: suggestions)
+            )
         )
     }
 
@@ -1543,8 +1806,9 @@ extension MCPToolError {
 
     /// Auth-code failure with the `authentication` category, the halves the
     /// caller names, and the recovery hints for the code: the standard branch
-    /// for every auth code except `oauth_scope_insufficient`, which takes the
-    /// reconnect branch. Documented precondition: `code.isAuthentication`;
+    /// for every auth code except `oauth_scope_insufficient` (reconnect
+    /// branch) and `connection_blocked_by_admin` (administrator branch, with
+    /// no re-mint tool). Documented precondition: `code.isAuthentication`;
     /// other codes still build a well-formed value.
     public static func authentication(
         code: MCPToolErrorCode, message: String, status: Int? = nil,
@@ -1554,6 +1818,8 @@ extension MCPToolError {
         let recovery: MCPToolErrorRecovery
         if code == .oauthScopeInsufficient {
             recovery = .scopeInsufficient(configureIntegrationTool: configureIntegrationTool)
+        } else if code == .connectionBlockedByAdmin {
+            recovery = .blockedByAdmin(configureIntegrationTool: configureIntegrationTool)
         } else {
             recovery = .standard(configureIntegrationTool: configureIntegrationTool)
         }
@@ -1589,6 +1855,23 @@ extension MCPToolError {
         authentication(
             code: .oauthRefreshFailed,
             message: "OAuth connection \"\(label)\" could not be resolved: \(message)",
+            credential: MCPAuthCredential(kind: .oauth, label: label),
+            upstream: upstreamForOAuthCode(oauthErrorCode)
+        )
+    }
+
+    /// `connection_blocked_by_admin`: an enterprise identity provider declined
+    /// under administrator policy. Recovery names no re-mint tool — signing
+    /// in again cannot help — mirroring `MCPCredentialFailure.blockedByAdmin`.
+    /// The authorization server's RFC 6749 verdict rides structured in
+    /// `upstream.details.oauthErrorCode` when the caller names one.
+    public static func connectionBlockedByAdmin(
+        label: String, integration: MCPAuthIntegration? = nil, oauthErrorCode: String? = nil
+    ) -> MCPToolError {
+        authentication(
+            code: .connectionBlockedByAdmin,
+            message: "Connection \"\(label)\" was declined by administrator policy; signing in again cannot help.",
+            integration: integration,
             credential: MCPAuthCredential(kind: .oauth, label: label),
             upstream: upstreamForOAuthCode(oauthErrorCode)
         )

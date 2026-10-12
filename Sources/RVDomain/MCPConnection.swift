@@ -70,6 +70,14 @@ public struct MCPConnection: Sendable, Equatable, Hashable, Codable {
     /// Validates names/identifiers (closed charsets, byte caps) and labels
     /// (byte caps, no control/format characters). Errors carry field labels
     /// and caps only, never the rejected text.
+    ///
+    /// OAuth linkage invariant: `oauthClient` set marks an OAuth connection,
+    /// which is expected to carry its token-endpoint scope echo in
+    /// `oauthScope`; static connections (`oauthClient` nil) normally carry
+    /// none. The invariant is advisory at construction — legacy persisted
+    /// rows with an OAuth client but no scope still decode — and enforced at
+    /// evaluation: `evaluateScopeGap` fails open on nil coverage for static
+    /// connections and fails closed for OAuth ones.
     public init(
         owner: PolicyOwner,
         name: String,
@@ -90,10 +98,10 @@ public struct MCPConnection: Sendable, Equatable, Hashable, Codable {
         try requireConnectionSlug(template, field: .template, maxBytes: Self.maxSlugBytes)
         try requireConnectionSlug(provider, field: .provider, maxBytes: Self.maxSlugBytes)
         if let identityLabel {
-            try requireDisplayText(identityLabel, field: .identityLabel, maxBytes: Self.maxLabelBytes)
+            try OperatorText.requireDisplayText(identityLabel, field: .identityLabel, maxBytes: Self.maxLabelBytes)
         }
         if let description {
-            try requireDisplayText(description, field: .description, maxBytes: Self.maxDescriptionBytes)
+            try OperatorText.requireDisplayText(description, field: .description, maxBytes: Self.maxDescriptionBytes)
         }
         if let oauthClient {
             try requireConnectionSlug(oauthClient, field: .oauthClient, maxBytes: Self.maxSlugBytes)
@@ -184,6 +192,59 @@ public enum MCPConnectionError: Error, Sendable, Equatable {
     case tooLong(field: MCPConnectionField, maxBytes: Int)
     /// A field holds characters outside its closed charset.
     case invalidCharacters(field: MCPConnectionField)
+}
+
+/// Dotted connection handle: `<integration>.<owner>.<name>` (for example
+/// `github.user.main`). The dotted form is unambiguous because every part is
+/// dot-free per the connection charsets (integration is a slug, name is an
+/// identifier, owner is `user`/`org`), so `description` round-trips through
+/// `parse` exactly. Parts face the same closed charsets and byte caps as the
+/// record; shape failures throw `MCPConnectionIDError`, charset failures the
+/// record's `MCPConnectionError`. Labels only, never values.
+public struct MCPConnectionID: Sendable, Equatable, Hashable, CustomStringConvertible {
+    /// Integration slug (dot-free).
+    public let integration: String
+    /// Connection owner.
+    public let owner: PolicyOwner
+    /// Connection name (dot-free).
+    public let name: String
+
+    /// Validates parts against the record charsets: integration as a slug,
+    /// name as an identifier, owner typed. Errors never echo the rejected text.
+    public init(integration: String, owner: PolicyOwner, name: String) throws {
+        try requireConnectionSlug(integration, field: .integration, maxBytes: MCPConnection.maxSlugBytes)
+        try requireConnectionIdentifier(name, field: .name, maxBytes: MCPConnection.maxNameBytes)
+        self.integration = integration
+        self.owner = owner
+        self.name = name
+    }
+
+    /// Parses a dotted handle; exactly three non-empty dot-separated parts
+    /// with a `user`/`org` middle. Dotted parts cannot occur: the split that
+    /// finds them is the split that rejects them.
+    public static func parse(_ raw: String) throws -> MCPConnectionID {
+        let parts = raw.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 3, parts.allSatisfy({ $0.isEmpty == false }) else {
+            throw MCPConnectionIDError.malformed
+        }
+        guard let owner = PolicyOwner(rawValue: parts[1]) else {
+            throw MCPConnectionIDError.unknownOwner
+        }
+        return try MCPConnectionID(integration: parts[0], owner: owner, name: parts[2])
+    }
+
+    /// Canonical dotted handle: `<integration>.<owner>.<name>`.
+    public var description: String {
+        "\(integration).\(owner.rawValue).\(name)"
+    }
+}
+
+/// Dotted-handle shape failures. Never echoes the rejected text.
+public enum MCPConnectionIDError: Error, Sendable, Equatable {
+    /// Not exactly three non-empty dot-separated parts.
+    case malformed
+    /// The middle part is not `user` or `org`.
+    case unknownOwner
 }
 
 // MARK: - Name normalization
@@ -401,7 +462,9 @@ public func routeConnectionInputs(
 /// dropped), mirroring the executor's `string | null` map. Variables and
 /// external references are revalidated, so hand-built (non-normalized) inputs
 /// fail closed instead of smuggling unexpected keys into template rendering.
-public func resolveConnectionValues(
+/// Named `...InputValues` (not `...Values`) to avoid confusion with the
+/// invoker's ref-resolving `resolveConnectionValues` at the X1-S seam.
+public func resolveConnectionInputValues(
     _ inputs: [NamedConnectionInput],
     lookup: (ConnectionExternalRef) -> SecretValue?
 ) throws -> [String: SecretValue?] {
@@ -473,7 +536,8 @@ private func validatedOrigin(_ origin: ConnectionInputOrigin) throws -> Connecti
 
 /// Resolved credential handed to invoke so the caller renders auth onto the
 /// request. `value` is always `values[token]`; `grantedScopes` is absent for
-/// non-OAuth connections, so scope comparisons must fail open on nil.
+/// non-OAuth connections (fail open on nil there) and for OAuth grants that
+/// echoed nothing (fail closed there — see `evaluateScopeGap`).
 public struct ToolInvocationCredential: Sendable, Equatable {
     /// Connection owner.
     public let owner: PolicyOwner
@@ -519,7 +583,8 @@ public struct ToolInvocationCredential: Sendable, Equatable {
 
 /// Parses a connection row's `oauthScope` (space-delimited, as echoed by the
 /// token endpoint) into the credential's `grantedScopes`. Nil when the row
-/// carries none, so scope comparisons downstream fail open.
+/// carries none; `evaluateScopeGap` fails open on nil for static connections
+/// and fails closed for OAuth ones.
 public func grantedScopes(fromOAuthScope scope: String?) -> [String]? {
     guard let scope else {
         return nil
@@ -879,6 +944,11 @@ private func lastPathSegment(_ path: Substring) -> String {
 /// Compares requested scopes against the granted set. Both sides canonicalize;
 /// meta-scopes, informational scopes, blanks, and duplicates are skipped, and
 /// the result preserves requested order. Mirrors `missingGrantedOAuthScopes`.
+/// Case-sensitive (fail closed): `Mail.Read` does not cover `mail.read`.
+/// Scope strings are case-sensitive upstream (Microsoft Graph treats those as
+/// different scopes), so folding would grant coverage the provider denies.
+/// Only the meta-scope suffix (`/.default`) and the graph host compare
+/// case-insensitively; the scope leaf keeps its case.
 public func missingGrantedScopes(requested: [String], granted: [String]) -> [String] {
     let grantedSet = Set(granted.map { canonicalOAuthScope($0.trimmingCharacters(in: .whitespacesAndNewlines)) }.filter { $0.isEmpty == false })
     var seen = Set<String>()
@@ -944,20 +1014,31 @@ public struct OAuthScopeGap: Sendable, Equatable {
     }
 }
 
-/// Evaluates declared scopes against the granted set. Nil grants fail open
-/// (unknown coverage, no gap); full coverage yields no gap; otherwise the
-/// returned gap carries the reconnect prompt.
+/// Evaluates declared scopes against the granted set. `oauthClient` splits
+/// unknown coverage: a nil grant on a non-OAuth connection fails open
+/// (unknown coverage, no gap — static credentials carry no scope echo), while
+/// a nil grant on an OAuth connection (`oauthClient` set) fails closed (an
+/// OAuth grant that echoes nothing covers nothing, so every countable
+/// declared scope misses and the gap prompts a reconnect). Full coverage
+/// yields no gap; otherwise the returned gap carries the reconnect prompt.
+/// An empty declared list yields no gap on either side: nothing required.
 public func evaluateScopeGap(
     declared: [String],
     grantedScopes: [String]?,
+    oauthClient: String? = nil,
     integration: String,
     connection: String,
     operation: String
 ) -> OAuthScopeGap? {
-    guard let grantedScopes else {
+    let granted: [String]
+    if let grantedScopes {
+        granted = grantedScopes
+    } else if oauthClient != nil {
+        granted = []
+    } else {
         return nil
     }
-    let missing = missingGrantedScopes(requested: declared, granted: grantedScopes)
+    let missing = missingGrantedScopes(requested: declared, granted: granted)
     guard missing.isEmpty == false else {
         return nil
     }
@@ -1017,10 +1098,10 @@ public struct MCPConnectionHealth: Sendable, Equatable, Hashable, Codable {
         reason: MCPHealthCheckReason? = nil
     ) throws {
         if let identity {
-            try requireDisplayText(identity, field: .healthIdentity, maxBytes: MCPConnection.maxHealthIdentityBytes)
+            try OperatorText.requireDisplayText(identity, field: .healthIdentity, maxBytes: MCPConnection.maxHealthIdentityBytes)
         }
         if let detail {
-            try requireDisplayText(detail, field: .healthDetail, maxBytes: MCPConnection.maxHealthDetailBytes)
+            try OperatorText.requireDisplayText(detail, field: .healthDetail, maxBytes: MCPConnection.maxHealthDetailBytes)
         }
         self.status = status
         self.httpStatus = httpStatus
@@ -1142,32 +1223,14 @@ private func isSlugRest(_ scalar: Unicode.Scalar) -> Bool {
     }
 }
 
-/// Human-facing text: byte-capped, spaces allowed; control, invisible
-/// format, and line/paragraph-separator characters rejected (the separators
-/// break line-oriented logs and persistence exactly like `\n` does).
-private func requireDisplayText(_ value: String, field: MCPConnectionField, maxBytes: Int) throws {
-    try requireByteCap(value, field: field, maxBytes: maxBytes)
-    guard containsDisallowedTextScalar(value) == false else {
-        throw MCPConnectionError.invalidCharacters(field: field)
-    }
-}
-
-private func containsDisallowedTextScalar(_ value: String) -> Bool {
-    value.unicodeScalars.contains {
-        let category = $0.properties.generalCategory
-        return category == .control || category == .format
-            || category == .lineSeparator || category == .paragraphSeparator
-    }
-}
-
 /// Opaque external item id: non-empty, capped, no control/format characters.
-/// Core never parses the id itself.
+/// Core never parses the id itself. Scalar rule delegated to `OperatorText`.
 private func requireExternalID(_ value: String) throws {
     guard value.isEmpty == false else {
         throw MCPConnectionError.emptyField(.externalID)
     }
     try requireByteCap(value, field: .externalID, maxBytes: MCPConnection.maxExternalIDBytes)
-    guard containsDisallowedTextScalar(value) == false else {
+    guard OperatorText.containsDisallowedTextScalar(value) == false else {
         throw MCPConnectionError.invalidCharacters(field: .externalID)
     }
 }
@@ -1183,8 +1246,13 @@ private func requireScopeToken(_ value: String, field: MCPConnectionField, maxBy
     }
 }
 
-/// Space-delimited granted scope: capped whole, each token validated.
+/// Space-delimited granted scope: non-empty, capped whole, each token
+/// validated. Empty reads as unknown downstream, so it is rejected here:
+/// unknown is spelled nil, never "".
 private func requireOAuthScope(_ value: String) throws {
+    guard value.isEmpty == false else {
+        throw MCPConnectionError.emptyField(.oauthScope)
+    }
     try requireByteCap(value, field: .oauthScope, maxBytes: MCPConnection.maxOAuthScopeBytes)
     for token in value.split(whereSeparator: { $0.isWhitespace }) {
         try requireScopeToken(String(token), field: .oauthScope, maxBytes: MCPConnection.maxScopeTokenBytes)
