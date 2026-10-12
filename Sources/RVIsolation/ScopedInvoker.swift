@@ -17,6 +17,8 @@ extension ToolPattern {
             return "prefix:\(prefix)"
         case .singleMid(let prefix, let suffix):
             return "mid:\(prefix)*\(suffix)"
+        case .segments(let pattern):
+            return "segments:\(pattern.rawValue)"
         }
     }
 }

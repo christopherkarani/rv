@@ -407,6 +407,7 @@ struct MCPToolPolicyTests {
             .any,
             .trailingPrefix("tools.github."),
             .singleMid(prefix: "tools.", suffix: ".read"),
+            try .segments(SegmentPattern.parse("tools.github.*.main.read")),
         ]
         for pattern in patterns {
             let data = try JSONEncoder().encode(pattern)
@@ -479,5 +480,822 @@ struct MCPToolPolicyTests {
         #expect(throws: DecodingError.self) {
             try PropertyListDecoder().decode(FractionalIndex.self, from: plist)
         }
+    }
+}
+
+@Suite("SegmentPatternGrammar")
+struct SegmentPatternGrammarTests {
+    // Parse accept matrix. Valid fixtures mirror Executor isValidPattern (policies.test.ts:83-98).
+
+    @Test func parse_universalWildcard() throws {
+        let pattern = try SegmentPattern.parse("*")
+        #expect(pattern == .any)
+        #expect(pattern.rawValue == "*")
+        #expect(pattern.specificity == 0)
+    }
+
+    @Test func parse_exactShapes() throws {
+        #expect(try SegmentPattern.parse("a") == .exact(segments: ["a"]))
+        #expect(try SegmentPattern.parse("a.b") == .exact(segments: ["a", "b"]))
+        #expect(try SegmentPattern.parse("a.b.c") == .exact(segments: ["a", "b", "c"]))
+        #expect(
+            try SegmentPattern.parse("tools.a.b.c.d")
+                == .exact(segments: ["tools", "a", "b", "c", "d"])
+        )
+    }
+
+    @Test func parse_trailingWildcardIsSubtree() throws {
+        #expect(
+            try SegmentPattern.parse("a.*")
+                == .wildcard(segments: [.literal("a")], subtree: true)
+        )
+        #expect(
+            try SegmentPattern.parse("a.b.*")
+                == .wildcard(segments: [.literal("a"), .literal("b")], subtree: true)
+        )
+    }
+
+    @Test func parse_singleMidWildcard() throws {
+        #expect(
+            try SegmentPattern.parse("a.*.b")
+                == .wildcard(
+                    segments: [.literal("a"), .wildcard, .literal("b")],
+                    subtree: false
+                )
+        )
+    }
+
+    @Test func parse_repeatedMidWildcards() throws {
+        let pattern = try SegmentPattern.parse("github.*.*.repos.list")
+        #expect(
+            pattern
+                == .wildcard(
+                    segments: [
+                        .literal("github"), .wildcard, .wildcard,
+                        .literal("repos"), .literal("list"),
+                    ],
+                    subtree: false
+                )
+        )
+        #expect(pattern.specificity == 11)
+    }
+
+    @Test func parse_midPlusTrailingWildcards() throws {
+        #expect(
+            try SegmentPattern.parse("github.*.*.repos.*")
+                == .wildcard(
+                    segments: [
+                        .literal("github"), .wildcard, .wildcard, .literal("repos"),
+                    ],
+                    subtree: true
+                )
+        )
+    }
+
+    @Test func parse_toolsAnchoredPatterns() throws {
+        #expect(
+            try SegmentPattern.parse("tools.github.*.main.read")
+                == .wildcard(
+                    segments: [
+                        .literal("tools"), .literal("github"), .wildcard,
+                        .literal("main"), .literal("read"),
+                    ],
+                    subtree: false
+                )
+        )
+        #expect(
+            try SegmentPattern.parse("tools.*")
+                == .wildcard(segments: [.literal("tools")], subtree: true)
+        )
+    }
+
+    @Test func parse_acceptsAnyLiteralText() throws {
+        // Executor performs no character or length checks; a literal no valid
+        // address can contain simply never matches.
+        #expect(try SegmentPattern.parse("a.b c") == .exact(segments: ["a", "b c"]))
+        #expect(try SegmentPattern.parse("TOOLS.a") == .exact(segments: ["TOOLS", "a"]))
+        #expect(try SegmentPattern.parse("a.é.🔌") == .exact(segments: ["a", "é", "🔌"]))
+        let long = String(repeating: "z", count: 500)
+        #expect(try SegmentPattern.parse("a.\(long)") == .exact(segments: ["a", long]))
+    }
+
+    @Test func parse_allExecutorValidFixtures() throws {
+        let valid = [
+            "a", "a.b", "a.b.c", "a.*", "a.b.*",
+            "a.*.b", "github.*.*.repos.list", "github.*.*.repos.*",
+            "github.user.alice.repos.*", "*",
+        ]
+        for fixture in valid {
+            #expect(SegmentPattern.isValid(fixture), "expected valid: \(fixture)")
+            _ = try SegmentPattern.parse(fixture)
+        }
+    }
+
+    // Parse rejection shapes. Invalid fixtures mirror Executor isValidPattern (policies.test.ts:102-108).
+
+    @Test func parse_rejectsEmpty() {
+        #expect(throws: ToolPatternError.emptyPattern) {
+            try SegmentPattern.parse("")
+        }
+    }
+
+    @Test func parse_rejectsLeadingDot() {
+        #expect(throws: ToolPatternError.leadingDot) {
+            try SegmentPattern.parse(".a")
+        }
+        #expect(throws: ToolPatternError.leadingDot) {
+            try SegmentPattern.parse(".")
+        }
+        #expect(throws: ToolPatternError.leadingDot) {
+            try SegmentPattern.parse("..a")
+        }
+    }
+
+    @Test func parse_rejectsTrailingDot() {
+        #expect(throws: ToolPatternError.trailingDot) {
+            try SegmentPattern.parse("a.")
+        }
+        #expect(throws: ToolPatternError.trailingDot) {
+            try SegmentPattern.parse("a..")
+        }
+    }
+
+    @Test func parse_rejectsEmptySegment() {
+        #expect(throws: ToolPatternError.emptySegment) {
+            try SegmentPattern.parse("a..b")
+        }
+        #expect(throws: ToolPatternError.emptySegment) {
+            try SegmentPattern.parse("a...b")
+        }
+    }
+
+    @Test func parse_rejectsLeadingWildcard() {
+        #expect(throws: ToolPatternError.leadingWildcard) {
+            try SegmentPattern.parse("*.a")
+        }
+        #expect(throws: ToolPatternError.leadingWildcard) {
+            try SegmentPattern.parse("*.*")
+        }
+        #expect(throws: ToolPatternError.leadingWildcard) {
+            try SegmentPattern.parse("**")
+        }
+        #expect(throws: ToolPatternError.leadingWildcard) {
+            try SegmentPattern.parse("**.a")
+        }
+    }
+
+    @Test func parse_rejectsPartialWildcard() {
+        #expect(throws: ToolPatternError.partialWildcard) {
+            try SegmentPattern.parse("a*")
+        }
+        #expect(throws: ToolPatternError.partialWildcard) {
+            try SegmentPattern.parse("a.b*")
+        }
+        #expect(throws: ToolPatternError.partialWildcard) {
+            try SegmentPattern.parse("a*b.c")
+        }
+        #expect(throws: ToolPatternError.partialWildcard) {
+            try SegmentPattern.parse("a.*b")
+        }
+        #expect(throws: ToolPatternError.partialWildcard) {
+            try SegmentPattern.parse("a.**.b")
+        }
+    }
+
+    @Test func parse_firstFailureWinsInExecutorOrder() {
+        // ".*": the leading-dot check precedes the trailing-dot check.
+        #expect(throws: ToolPatternError.leadingDot) {
+            try SegmentPattern.parse(".*")
+        }
+        // "*.": the trailing-dot check precedes the leading-wildcard check.
+        #expect(throws: ToolPatternError.trailingDot) {
+            try SegmentPattern.parse("*.")
+        }
+        // "*..a": the empty-segment check precedes the leading-wildcard check.
+        #expect(throws: ToolPatternError.emptySegment) {
+            try SegmentPattern.parse("*..a")
+        }
+        // "*.a*": the leading-wildcard check precedes the partial-wildcard scan.
+        #expect(throws: ToolPatternError.leadingWildcard) {
+            try SegmentPattern.parse("*.a*")
+        }
+    }
+
+    @Test func parse_errorsNeverEchoInput() {
+        let hostile = "sk-live-\(String(repeating: "x", count: 64))*ADMIN"
+        let cases: [(String, ToolPatternError)] = [
+            ("", .emptyPattern),
+            (".\(hostile)", .leadingDot),
+            ("\(hostile).", .trailingDot),
+            ("a..\(hostile)", .emptySegment),
+            ("*.\(hostile)", .leadingWildcard),
+            (hostile, .partialWildcard),
+        ]
+        for (input, expected) in cases {
+            do {
+                _ = try SegmentPattern.parse(input)
+                Issue.record("expected \(expected) for rejected input")
+            } catch let error as ToolPatternError {
+                #expect(error == expected)
+                #expect(String(describing: error).contains(hostile) == false)
+            } catch {
+                Issue.record("wrong error type: \(error)")
+            }
+        }
+    }
+
+    // isValid mirrors Executor isValidPattern accept/reject on every input.
+
+    @Test func isValid_mirrorsExecutorFixtures() {
+        let valid = [
+            "a", "a.b", "a.b.c", "a.*", "a.b.*",
+            "a.*.b", "github.*.*.repos.list", "github.*.*.repos.*",
+            "github.user.alice.repos.*", "*",
+        ]
+        let invalid = ["", ".a", "a.", "a..b", "*.a", "a*", "a.b*"]
+        for fixture in valid {
+            #expect(SegmentPattern.isValid(fixture), "expected valid: \(fixture)")
+        }
+        for fixture in invalid {
+            #expect(SegmentPattern.isValid(fixture) == false, "expected invalid: \(fixture)")
+        }
+    }
+
+    @Test func isValid_agreesWithParse() throws {
+        let raws = [
+            "*", "a", "tools.*", "tools.*.*", "a.*.*.*.b", "a b.c", "a b",
+            "x.y.z.*", ".", "..", "*.", ".*", "**", "a.**.b", "*.a*",
+            "", "a.", ".a", "a..b", "*.a", "a*",
+        ]
+        for raw in raws {
+            let parsed: SegmentPattern?
+            do {
+                parsed = try SegmentPattern.parse(raw)
+            } catch {
+                parsed = nil
+            }
+            #expect(SegmentPattern.isValid(raw) == (parsed != nil), "agreement for: \(raw)")
+        }
+    }
+
+    // rawValue roundtrips and Codable.
+
+    @Test func rawValue_roundTrips() throws {
+        let fixtures = [
+            "*", "a", "a.b.c", "a.*", "a.b.*", "a.*.b",
+            "github.*.*.repos.list", "github.*.*.repos.*",
+            "github.user.alice.repos.*", "tools.github.*.main.read", "tools.*",
+        ]
+        for fixture in fixtures {
+            let pattern = try SegmentPattern.parse(fixture)
+            #expect(pattern.rawValue == fixture, "canonical form of \(fixture)")
+            #expect(try SegmentPattern.parse(pattern.rawValue) == pattern)
+        }
+    }
+
+    @Test func codable_roundTripsEveryShape() throws {
+        let patterns: [SegmentPattern] = [
+            .any,
+            .exact(segments: ["a", "b"]),
+            .wildcard(segments: [.literal("a"), .wildcard], subtree: false),
+            .wildcard(segments: [.literal("a")], subtree: true),
+        ]
+        for pattern in patterns {
+            let data = try JSONEncoder().encode(pattern)
+            #expect(try JSONDecoder().decode(SegmentPattern.self, from: data) == pattern)
+        }
+        let segments: [PatternSegment] = [.literal("a"), .wildcard]
+        for segment in segments {
+            let data = try JSONEncoder().encode(segment)
+            #expect(try JSONDecoder().decode(PatternSegment.self, from: data) == segment)
+        }
+    }
+
+    // matches. Fixtures mirror Executor matchPattern (policies.test.ts:33-77).
+
+    @Test func matches_exactRequiresFullEquality() throws {
+        let pattern = try SegmentPattern.parse("vercel.dns.create")
+        #expect(pattern.matches(literal: "vercel.dns.create"))
+        #expect(pattern.matches(literal: "vercel.dns.delete") == false)
+    }
+
+    @Test func matches_trailingWildcardIsSubtree() throws {
+        let pattern = try SegmentPattern.parse("vercel.dns.*")
+        #expect(pattern.matches(literal: "vercel.dns.create"))
+        #expect(pattern.matches(literal: "vercel.dns.delete"))
+        #expect(pattern.matches(literal: "vercel.dns.zones.list"))
+        #expect(pattern.matches(literal: "vercel.dnstool") == false)
+        #expect(pattern.matches(literal: "vercel.deploy") == false)
+    }
+
+    @Test func matches_pluginWide() throws {
+        let pattern = try SegmentPattern.parse("vercel.*")
+        #expect(pattern.matches(literal: "vercel.dns.create"))
+        #expect(pattern.matches(literal: "vercel.deploy"))
+        #expect(pattern.matches(literal: "vercelapp.deploy") == false)
+    }
+
+    @Test func matches_universal() throws {
+        let pattern = try SegmentPattern.parse("*")
+        #expect(pattern.matches(literal: "vercel.dns.create"))
+        #expect(pattern.matches(literal: "github.repos.list"))
+        #expect(pattern.matches(literal: "x"))
+        #expect(pattern.matches(literal: ""))
+    }
+
+    @Test func matches_repeatedMidWildcard() throws {
+        let pattern = try SegmentPattern.parse("github.*.*.repos.list")
+        #expect(pattern.matches(literal: "github.org.acme.repos.list"))
+        #expect(pattern.matches(literal: "github.user.alice.repos.list"))
+        #expect(pattern.matches(literal: "github.org.acme.repos.delete") == false)
+        #expect(pattern.matches(literal: "github.acme.repos.list") == false)
+    }
+
+    @Test func matches_midPlusTrailing() throws {
+        let pattern = try SegmentPattern.parse("github.*.*.repos.*")
+        #expect(pattern.matches(literal: "github.org.acme.repos.list"))
+        #expect(pattern.matches(literal: "github.org.acme.repos"))
+        #expect(pattern.matches(literal: "github.org.acme.deploy") == false)
+        let scoped = try SegmentPattern.parse("github.user.alice.repos.*")
+        #expect(scoped.matches(literal: "github.user.alice.repos.list"))
+        #expect(scoped.matches(literal: "github.user.bob.repos.list") == false)
+    }
+
+    @Test func matches_midWildcardConsumesExactlyOneSegment() throws {
+        let pattern = try SegmentPattern.parse("a.*.c")
+        #expect(pattern.matches(literal: "a.b.c"))
+        #expect(pattern.matches(literal: "a.b.b.c") == false)
+        #expect(pattern.matches(literal: "a.c") == false)
+        #expect(pattern.matches(literal: "a.b.c.d") == false)
+    }
+
+    @Test func matches_shortAddressFailsMidWildcard() throws {
+        // A mid-`*` needs a segment to consume: the address ends first.
+        let pattern = try SegmentPattern.parse("a.b.*.d")
+        #expect(pattern.matches(literal: "a.b.c.d"))
+        #expect(pattern.matches(literal: "a.b") == false)
+        #expect(pattern.matches(literal: "a") == false)
+    }
+
+    @Test func matches_trailingWildcardMatchesPrefixItself() throws {
+        // Executor trailing `*` matches "at this position and anything deeper (or nothing)".
+        #expect(try SegmentPattern.parse("a.*").matches(literal: "a"))
+        #expect(try SegmentPattern.parse("a.b.*").matches(literal: "a.b"))
+    }
+
+    @Test func matches_addressOverload() throws {
+        let read = try MCPToolAddress.parse("tools.github.acme.main.read")
+        let write = try MCPToolAddress.parse("tools.github.acme.main.write")
+        let dotted = try MCPToolAddress.parse("tools.github.acme.main.my.tool.v2")
+        let mid = try SegmentPattern.parse("tools.github.*.main.read")
+        #expect(mid.matches(read))
+        #expect(mid.matches(write) == false)
+        #expect(mid.matches(dotted) == false)
+        #expect(try SegmentPattern.parse("tools.github.acme.main.*").matches(dotted))
+        #expect(try SegmentPattern.parse("tools.github.acme.main.read").matches(read))
+        #expect(try SegmentPattern.parse("tools.github.acme.main.read").matches(write) == false)
+        #expect(SegmentPattern.any.matches(read))
+    }
+
+    @Test func matches_isCaseSensitive() throws {
+        #expect(try SegmentPattern.parse("A.*").matches(literal: "a.b") == false)
+        #expect(try SegmentPattern.parse("a.B").matches(literal: "a.b") == false)
+    }
+
+    @Test func matches_emptyLiteral() throws {
+        #expect(try SegmentPattern.parse("*").matches(literal: ""))
+        #expect(try SegmentPattern.parse("a.*").matches(literal: "") == false)
+        #expect(try SegmentPattern.parse("a").matches(literal: "") == false)
+    }
+
+    // specificity. Formula and table mirror Executor patternSpecificity (policies.ts:195).
+
+    @Test func specificity_matchesExecutorTable() throws {
+        #expect(try SegmentPattern.parse("*").specificity == 0)
+        #expect(try SegmentPattern.parse("vercel.*").specificity == 2)
+        #expect(try SegmentPattern.parse("vercel.dns.*").specificity == 4)
+        #expect(try SegmentPattern.parse("vercel.dns").specificity == 5)
+        #expect(try SegmentPattern.parse("vercel.dns.create").specificity == 7)
+    }
+
+    @Test func specificity_exactBeatsSamePrefixWildcard() throws {
+        let pairs = [("a.b", "a.b.*"), ("a.b.c", "a.b.c.*"), ("tools.a", "tools.a.*")]
+        for (exact, wildcard) in pairs {
+            let exactScore = try SegmentPattern.parse(exact).specificity
+            let wildcardScore = try SegmentPattern.parse(wildcard).specificity
+            #expect(exactScore == wildcardScore + 1, "\(exact) beats \(wildcard)")
+        }
+        let chain = ["*", "a.*", "a.b.*", "a.b", "a.b.c.*", "a.b.c"]
+        var previous = -1
+        for raw in chain {
+            let score = try SegmentPattern.parse(raw).specificity
+            #expect(score > previous, "\(raw) orders above previous")
+            previous = score
+        }
+    }
+
+    @Test func specificity_countsMidWildcardsAsSegments() throws {
+        // Executor counts every non-trailing segment, mid-`*` included.
+        #expect(try SegmentPattern.parse("github.*.*.repos.list").specificity == 11)
+        #expect(try SegmentPattern.parse("github.*.*.repos.*").specificity == 8)
+        #expect(try SegmentPattern.parse("a.*.b").specificity == 7)
+    }
+}
+
+@Suite("SegmentPatternPlacement")
+struct SegmentPatternPlacementTests {
+    // Default placement mirrors Executor positionForNewPattern (policies.ts:213).
+
+    private typealias Row = (id: String, pattern: SegmentPattern, position: FractionalIndex)
+
+    private func row(_ id: String, _ raw: String, _ value: Double) throws -> Row {
+        (id: id, pattern: try SegmentPattern.parse(raw), position: FractionalIndex(value: value))
+    }
+
+    @Test func position_emptyRowsReturnsZero() throws {
+        let pattern = try SegmentPattern.parse("a.*")
+        #expect(SegmentPattern.positionForNewPattern(pattern, rows: []) == FractionalIndex(value: 0))
+    }
+
+    @Test func position_singleRow() throws {
+        let leaf = try row("leaf", "a.b.c", 4)
+        let group = try SegmentPattern.parse("a.*")
+        #expect(
+            SegmentPattern.positionForNewPattern(group, rows: [leaf]) == FractionalIndex(value: 5)
+        )
+        let leafier = try SegmentPattern.parse("a.b.c.d")
+        #expect(
+            SegmentPattern.positionForNewPattern(leafier, rows: [leaf]) == FractionalIndex(value: 3)
+        )
+    }
+
+    @Test func position_newMostSpecificGoesAboveAll() throws {
+        let rows = try [row("a", "a.*", 2), row("b", "a.b.*", 4)]
+        let leaf = try SegmentPattern.parse("a.b.c")
+        let position = SegmentPattern.positionForNewPattern(leaf, rows: rows)
+        #expect(position == FractionalIndex(value: 1))
+    }
+
+    @Test func position_newLeastSpecificGoesBelowAll() throws {
+        let rows = try [row("a", "a.b.c", 2), row("b", "a.b.c.d", 4)]
+        let group = try SegmentPattern.parse("a.*")
+        let position = SegmentPattern.positionForNewPattern(group, rows: rows)
+        #expect(position == FractionalIndex(value: 5))
+    }
+
+    @Test func position_newMiddleUsesBetween() throws {
+        let rows = try [row("leaf", "a.b.c", 0), row("group", "a.*", 10)]
+        let middle = try SegmentPattern.parse("a.b.*")
+        let position = SegmentPattern.positionForNewPattern(middle, rows: rows)
+        #expect(
+            position
+                == FractionalIndex.between(FractionalIndex(value: 0), FractionalIndex(value: 10))
+        )
+        #expect(position == FractionalIndex(value: 5))
+    }
+
+    @Test func position_newGoesAboveEquallySpecificRows() throws {
+        // Executor `<=`: equally specific rows sort at or after the newcomer.
+        let rows = try [row("a", "x.y", 2), row("b", "m.n", 4)]
+        let peer = try SegmentPattern.parse("a.b")
+        let position = SegmentPattern.positionForNewPattern(peer, rows: rows)
+        #expect(position == FractionalIndex(value: 1))
+    }
+
+    @Test func position_sortsUnsortedInput() throws {
+        let rows = try [
+            row("group", "a.*", 10),
+            row("leaf", "a.b.c", 0),
+        ]
+        let middle = try SegmentPattern.parse("a.b.*")
+        #expect(
+            SegmentPattern.positionForNewPattern(middle, rows: rows) == FractionalIndex(value: 5)
+        )
+    }
+
+    @Test func position_tieBreaksEqualPositionsById() throws {
+        // Equal positions sort by id before placement: input order runs against
+        // id order, so a position-only sort would land between 0 and 1.
+        let rows = try [
+            row("b", "q.*", 1),
+            row("lo", "a.b.c", 0),
+            row("a", "x.y.z", 1),
+        ]
+        let middle = try SegmentPattern.parse("m.n")
+        let position = SegmentPattern.positionForNewPattern(middle, rows: rows)
+        // Sorted: (0,lo,7),(1,a,7),(1,b,2); first specificity <= 5 is b at index 2.
+        #expect(position == FractionalIndex(value: 1))
+    }
+
+    @Test func position_neverShadowsLeafProperty() throws {
+        // Fresh group rules never shadow leaf rules: over random rule sets
+        // whose positions already run most-specific-first (the invariant every
+        // placed rule maintains), the newcomer lands strictly below every
+        // more-specific row and strictly above every equally or less specific
+        // row. A second loop asserts the unconditional edges on fully random
+        // sets: a strictly least-specific newcomer lands below the maximum, a
+        // strictly most-specific (or peer-or-better) newcomer above the minimum.
+        let pool = [
+            "*", "a.*", "a.b.*", "a.b", "m.n", "a.b.c",
+            "x.y.z.*", "a.b.c.d", "q.*.z", "k.l.m.n.*",
+        ]
+        var rng: UInt64 = 0x1234_5678_9ABC_DEF1
+        func next(_ upper: Int) -> Int {
+            rng = rng &* 6364136223846793005 &+ 1442695040888963407
+            return Int((rng >> 33) % UInt64(upper))
+        }
+        for iteration in 0..<300 {
+            let count = next(9)
+            var patterns: [SegmentPattern] = []
+            for _ in 0..<count {
+                patterns.append(try SegmentPattern.parse(pool[next(pool.count)]))
+            }
+            // Most-specific-first positions, then shuffled input order.
+            patterns.sort { $0.specificity > $1.specificity }
+            var rows: [Row] = []
+            for (i, pattern) in patterns.enumerated() {
+                rows.append((
+                    id: "r\(iteration)-\(i)",
+                    pattern: pattern,
+                    position: FractionalIndex(value: Double(i))
+                ))
+            }
+            for i in stride(from: rows.count - 1, through: 1, by: -1) {
+                rows.swapAt(i, next(i + 1))
+            }
+            let newcomer = try SegmentPattern.parse(pool[next(pool.count)])
+            let placed = SegmentPattern.positionForNewPattern(newcomer, rows: rows)
+            for rule in rows {
+                if rule.pattern.specificity > newcomer.specificity {
+                    #expect(
+                        rule.position < placed,
+                        "iter \(iteration): more-specific \(rule.pattern.rawValue) stays above"
+                    )
+                } else {
+                    #expect(
+                        placed < rule.position,
+                        "iter \(iteration): newcomer stays above \(rule.pattern.rawValue)"
+                    )
+                }
+            }
+        }
+        // No universal pattern here: the floor newcomer must be strictly least specific.
+        let raised = pool.filter { $0 != "*" }
+        for iteration in 0..<300 {
+            let count = next(9)
+            var rows: [Row] = []
+            for i in 0..<count {
+                let pattern = try SegmentPattern.parse(raised[next(raised.count)])
+                let value = Double(next(33)) / 2 - 4
+                rows.append((
+                    id: "s\(iteration)-\(i)",
+                    pattern: pattern,
+                    position: FractionalIndex(value: value)
+                ))
+            }
+            guard let minimum = rows.map(\.position).min(),
+                let maximum = rows.map(\.position).max()
+            else {
+                continue
+            }
+            let floor = try SegmentPattern.parse("*")
+            let ceiling = try SegmentPattern.parse("w.x.y.z.*.v")
+            let below = SegmentPattern.positionForNewPattern(floor, rows: rows)
+            let above = SegmentPattern.positionForNewPattern(ceiling, rows: rows)
+            #expect(below > maximum, "iter \(iteration): universal lands below the maximum")
+            #expect(above < minimum, "iter \(iteration): sharpest pattern lands above the minimum")
+        }
+    }
+}
+
+@Suite("ToolPatternSegments")
+struct ToolPatternSegmentsTests {
+    // Wiring: the Executor grammar is reachable through the policy path.
+    // `ToolPattern.parse` always yields `.segments`; `matches` delegates.
+
+    @Test func segments_matchesRepeatedMidWildcard() throws {
+        let pattern = try ToolPattern.parse("tools.*.*.main.read")
+        let hit = try MCPToolAddress.parse("tools.github.acme.main.read")
+        #expect(pattern.matches(hit))
+        #expect(pattern.matches(try MCPToolAddress.parse("tools.github.acme.main.write")) == false)
+        #expect(pattern.matches(try MCPToolAddress.parse("tools.github.acme.main.my.read")) == false)
+        #expect(pattern.matches(try MCPToolAddress.parse("tools.github.acme.other.read")) == false)
+    }
+
+    @Test func segments_matchesSingleMidWildcard() throws {
+        let pattern = try ToolPattern.parse("tools.github.*.main.read")
+        #expect(pattern.matches(try MCPToolAddress.parse("tools.github.acme.main.read")))
+        #expect(pattern.matches(try MCPToolAddress.parse("tools.github.acme.main.write")) == false)
+        #expect(pattern.matches(try MCPToolAddress.parse("tools.gitlab.acme.main.read")) == false)
+    }
+
+    @Test func segments_matchesSubtreeExactAndUniversal() throws {
+        let subtree = try ToolPattern.parse("tools.github.acme.main.*")
+        #expect(subtree.matches(try MCPToolAddress.parse("tools.github.acme.main.my.tool.v2")))
+        #expect(subtree.matches(try MCPToolAddress.parse("tools.github.acme.main.read")))
+        #expect(subtree.matches(try MCPToolAddress.parse("tools.github.acme.other.read")) == false)
+        let exact = try ToolPattern.parse("tools.github.acme.main.read")
+        #expect(exact.matches(try MCPToolAddress.parse("tools.github.acme.main.read")))
+        #expect(exact.matches(try MCPToolAddress.parse("tools.github.acme.main.write")) == false)
+        // Uniform wrap: even the universal pattern parses to `.segments`, never `.any`.
+        #expect(try ToolPattern.parse("*") == .segments(.any))
+        #expect(try ToolPattern.parse("*").matches(try MCPToolAddress.parse("tools.a.b.c.d")))
+    }
+
+    @Test func parse_alwaysYieldsSegments() throws {
+        let fixtures = [
+            "*", "a", "a.b.c", "a.*", "a.b.*", "a.*.b",
+            "github.*.*.repos.list", "github.*.*.repos.*",
+            "github.user.alice.repos.*", "tools.github.*.main.read", "tools.*",
+        ]
+        for fixture in fixtures {
+            #expect(
+                try ToolPattern.parse(fixture) == .segments(try SegmentPattern.parse(fixture)),
+                "parse wraps \(fixture)"
+            )
+        }
+    }
+
+    @Test func parse_rejectsWithSegmentErrors() {
+        let cases: [(String, ToolPatternError)] = [
+            ("", .emptyPattern),
+            (".a", .leadingDot),
+            ("a.", .trailingDot),
+            ("a..b", .emptySegment),
+            ("*.a", .leadingWildcard),
+            ("**", .leadingWildcard),
+            ("a*", .partialWildcard),
+            ("a.**.b", .partialWildcard),
+        ]
+        for (input, expected) in cases {
+            do {
+                _ = try ToolPattern.parse(input)
+                Issue.record("expected \(expected) for rejected input")
+            } catch let error as ToolPatternError {
+                #expect(error == expected)
+            } catch {
+                Issue.record("wrong error type: \(error)")
+            }
+        }
+    }
+
+    @Test func isValid_parityWithSegmentPattern() {
+        let valid = [
+            "a", "a.b", "a.b.c", "a.*", "a.b.*",
+            "a.*.b", "github.*.*.repos.list", "github.*.*.repos.*",
+            "github.user.alice.repos.*", "*",
+        ]
+        let invalid = ["", ".a", "a.", "a..b", "*.a", "a*", "a.b*"]
+        for fixture in valid {
+            #expect(ToolPattern.isValid(fixture), "expected valid: \(fixture)")
+        }
+        for fixture in invalid {
+            #expect(ToolPattern.isValid(fixture) == false, "expected invalid: \(fixture)")
+        }
+    }
+
+    @Test func codable_roundTripsSegmentsCase() throws {
+        let pattern = try ToolPattern.parse("tools.github.*.main.read")
+        let data = try JSONEncoder().encode(pattern)
+        #expect(try JSONDecoder().decode(ToolPattern.self, from: data) == pattern)
+        let policy = ToolPolicy(
+            id: "p1",
+            owner: .org,
+            pattern: pattern,
+            action: .block,
+            position: FractionalIndex(value: 1)
+        )
+        let policyData = try JSONEncoder().encode(policy)
+        #expect(try JSONDecoder().decode(ToolPolicy.self, from: policyData) == policy)
+    }
+
+    @Test func policy_carriesSegmentsPattern() throws {
+        let address = try MCPToolAddress.parse("tools.github.acme.main.read")
+        let policy = ToolPolicy(
+            id: "p1",
+            owner: .user,
+            pattern: try ToolPattern.parse("tools.*.*.main.read"),
+            action: .approve,
+            position: FractionalIndex(value: 1)
+        )
+        #expect(policy.pattern.matches(address))
+        #expect(policy.pattern.matches(try MCPToolAddress.parse("tools.github.acme.main.write")) == false)
+    }
+
+    @Test func singleMidIsNotSegmentAnchored() throws {
+        // Executable form of the pattern-story rule: `singleMid` is a
+        // substring matcher whose middle may span segments, so it neither
+        // implies nor is implied by one segment-anchored mid-`*`.
+        let address = try MCPToolAddress.parse("tools.github.acme.main.x.read")
+        #expect(ToolPattern.singleMid(prefix: "tools.github.", suffix: ".read").matches(address))
+        #expect(try ToolPattern.parse("tools.github.*.read").matches(address) == false)
+        #expect(try ToolPattern.parse("tools.github.*.*.*.read").matches(address))
+    }
+
+    @Test func singleMidDivergenceRule() throws {
+        // Precise form of the divergence rule over valid addresses:
+        // `singleMid(prefix, suffix)` and its one-mid-`*` translation agree
+        // exactly when the middle is one dot-free segment. A multi-segment
+        // middle matches only the legacy side. (The reverse direction —
+        // segment-only hits on a degenerate empty middle — needs literals
+        // outside the address grammar; see
+        // `matches_midWildcardConsumesEmptyLiteralSegments`.)
+        let legacy = ToolPattern.singleMid(prefix: "tools.a.b.", suffix: ".read")
+        let anchored = try ToolPattern.parse("tools.a.b.*.read")
+        let oneSegment = try MCPToolAddress.parse("tools.a.b.x.read")
+        #expect(legacy.matches(oneSegment))
+        #expect(anchored.matches(oneSegment))
+        let twoSegments = try MCPToolAddress.parse("tools.a.b.x.y.read")
+        #expect(legacy.matches(twoSegments))
+        #expect(anchored.matches(twoSegments) == false)
+        let neitherSide = try MCPToolAddress.parse("tools.a.b.x.write")
+        #expect(legacy.matches(neitherSide) == false)
+        #expect(anchored.matches(neitherSide) == false)
+    }
+
+    @Test func legacyStoredPayloadsDecodeWithFrozenBehavior() throws {
+        // Stored-rule compat: blobs encoded by the pre-`segments` wire shape
+        // decode under the new code with byte-identical legacy behavior.
+        // Shapes captured from the base-commit encoder (key order varies by
+        // process; decoding is order-insensitive).
+        let address = try MCPToolAddress.parse("tools.github.acme.main.read")
+        let blobs: [(String, ToolPattern)] = [
+            (
+                #"{"exact":{"_0":"tools.github.acme.main.read"}}"#,
+                .exact(address)
+            ),
+            (#"{"any":{}}"#, .any),
+            (
+                #"{"trailingPrefix":{"_0":"tools.github."}}"#,
+                .trailingPrefix("tools.github.")
+            ),
+            (
+                #"{"singleMid":{"prefix":"tools.","suffix":".read"}}"#,
+                .singleMid(prefix: "tools.", suffix: ".read")
+            ),
+        ]
+        for (json, expected) in blobs {
+            let decoded = try JSONDecoder().decode(
+                ToolPattern.self,
+                from: Data(json.utf8)
+            )
+            #expect(decoded == expected)
+            #expect(decoded.matches(address) == expected.matches(address))
+        }
+    }
+}
+
+@Suite("SegmentPatternEdges")
+struct SegmentPatternEdgesTests {
+    // Adversarial and degenerate inputs: non-ASCII lookalikes, degenerate
+    // literals, bare-dot rejections, infinite placement rows.
+
+    @Test func matches_fullwidthMetacharsAreLiterals() throws {
+        // Executor splits/compares on ASCII `.`/`*` only; fullwidth lookalikes
+        // are literal text in both engines, never metacharacters.
+        let star = try SegmentPattern.parse("a.\u{FF0A}")
+        #expect(star == .exact(segments: ["a", "\u{FF0A}"]))
+        #expect(star.matches(literal: "a.\u{FF0A}"))
+        #expect(star.matches(literal: "a.b") == false)
+        #expect(star.matches(literal: "a.whatever") == false)
+        let stop = try SegmentPattern.parse("a\u{3002}b")
+        #expect(stop == .exact(segments: ["a\u{3002}b"]))
+        #expect(stop.matches(literal: "a\u{3002}b"))
+        #expect(stop.matches(literal: "a.b") == false)
+    }
+
+    @Test func matches_midWildcardConsumesEmptyLiteralSegments() throws {
+        // Verbatim Executor: the literal is split without validation, so a
+        // mid-`*` consumes one segment that exists even when it is empty, and
+        // a trailing `*` counts degenerate tails toward the subtree floor.
+        #expect(try SegmentPattern.parse("a.*.b").matches(literal: "a..b"))
+        #expect(try SegmentPattern.parse("a.*").matches(literal: "a."))
+        #expect(try SegmentPattern.parse("a").matches(literal: "a.") == false)
+    }
+
+    @Test func parse_rejectsBareDots() {
+        #expect(throws: ToolPatternError.leadingDot) {
+            try SegmentPattern.parse("..")
+        }
+        #expect(throws: ToolPatternError.leadingDot) {
+            try SegmentPattern.parse("...")
+        }
+    }
+
+    @Test func position_infiniteRowsNeverTrap() throws {
+        // Infinities saturate like `FractionalIndex.between`: below `-inf`
+        // and above `+inf` are inexpressible, so the edge key ties the
+        // extreme row instead of trapping.
+        typealias Row = (id: String, pattern: SegmentPattern, position: FractionalIndex)
+        let rows: [Row] = [
+            (id: "a", pattern: try SegmentPattern.parse("a.b.c"), position: FractionalIndex(value: -.infinity)),
+            (id: "b", pattern: try SegmentPattern.parse("a.*"), position: FractionalIndex(value: .infinity)),
+        ]
+        let above = SegmentPattern.positionForNewPattern(try SegmentPattern.parse("x.y.z.w"), rows: rows)
+        #expect(above == FractionalIndex(value: -.infinity))
+        let below = SegmentPattern.positionForNewPattern(try SegmentPattern.parse("*"), rows: rows)
+        #expect(below == FractionalIndex(value: .infinity))
+        let middle = SegmentPattern.positionForNewPattern(try SegmentPattern.parse("m.n"), rows: rows)
+        #expect(middle == FractionalIndex(value: -.infinity))
     }
 }

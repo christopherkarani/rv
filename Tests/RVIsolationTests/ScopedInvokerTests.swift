@@ -1874,6 +1874,7 @@ private struct T8MapProvider: SecretsProvider, Sendable {
         #expect(ToolPattern.any.elicitationLabel == "any")
         #expect(ToolPattern.trailingPrefix("tools.demo.").elicitationLabel == "prefix:tools.demo.")
         #expect(ToolPattern.singleMid(prefix: "tools.a.", suffix: ".read").elicitationLabel == "mid:tools.a.*.read")
+        #expect(try ToolPattern.parse("tools.*.*.read").elicitationLabel == "segments:tools.*.*.read")
     }
 
     @Test func validatorTooManyKeysAndBadKey() throws {

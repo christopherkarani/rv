@@ -105,7 +105,17 @@ extension MCPToolAddress: Codable {
     }
 }
 
-/// Address matcher: exact, universal, trailing-`*`, or one mid-`*`.
+/// Address matcher: exact, universal, trailing-`*`, one substring mid-`*`
+/// (`singleMid`, legacy), or a segment-anchored Executor-grammar pattern
+/// (`segments`, canonical for every raw string `parse` accepts).
+///
+/// Pattern-story rule: the legacy cases (`exact`, `any`, `trailingPrefix`,
+/// `singleMid`) are frozen for stored rules and keep their behavior
+/// byte-for-byte. `singleMid` is substring-based — its middle may span
+/// segments — so it is NOT interchangeable with a mid-`*` in `segments`,
+/// where each `*` consumes exactly one whole segment. New rules parse raw
+/// strings via `parse`, which always yields `segments`; no raw string ever
+/// aliases a legacy case, and no lossy cross-conversion exists.
 public enum ToolPattern: Sendable, Equatable, Hashable, Codable {
     /// Matches one validated address.
     case exact(MCPToolAddress)
@@ -115,8 +125,16 @@ public enum ToolPattern: Sendable, Equatable, Hashable, Codable {
     /// prefix must consume the whole literal, end in a dot, or stop before a
     /// dot, so `…conn.read` never approves `…conn.readAdminKeys`.
     case trailingPrefix(String)
-    /// Matches literals starting with `prefix` and ending with `suffix` around a non-empty middle.
+    /// Legacy substring matcher: literals starting with `prefix` and ending
+    /// with `suffix` around a non-empty middle, which may span segments.
+    /// Retained for stored rules; unreachable from `parse`. New patterns use
+    /// `segments`, where mid-`*` is one whole segment.
     case singleMid(prefix: String, suffix: String)
+    /// Matches per Executor `matchPattern` over dot-separated segments: each
+    /// mid-`*` consumes exactly one segment and may repeat, trailing `*` is a
+    /// subtree. Canonical for new rules; `MCPPolicyStore.resolve` consumes it
+    /// through `matches` like every other case.
+    case segments(SegmentPattern)
 
     /// True when the address literal satisfies this pattern.
     public func matches(_ address: MCPToolAddress) -> Bool {
@@ -136,7 +154,21 @@ public enum ToolPattern: Sendable, Equatable, Hashable, Codable {
             return literal.count > prefix.count + suffix.count
                 && literal.hasPrefix(prefix)
                 && literal.hasSuffix(suffix)
+        case .segments(let pattern):
+            return pattern.matches(address)
         }
+    }
+
+    /// Parses a raw pattern string into the canonical segment-anchored form.
+    /// Accepts exactly what Executor `isValidPattern` accepts; every success
+    /// yields `segments`, so parsed patterns never alias the legacy cases.
+    public static func parse(_ raw: String) throws -> ToolPattern {
+        .segments(try SegmentPattern.parse(raw))
+    }
+
+    /// True exactly when `parse` succeeds.
+    public static func isValid(_ raw: String) -> Bool {
+        SegmentPattern.isValid(raw)
     }
 }
 
@@ -247,5 +279,200 @@ public struct FractionalIndex: Sendable, Equatable, Hashable, Comparable, Codabl
             throw DecodingError.dataCorruptedError(forKey: .value, in: container, debugDescription: "FractionalIndex value must not be NaN")
         }
         self.value = value
+    }
+}
+
+/// One dot-separated segment of a parsed `SegmentPattern`: a literal or a whole-segment wildcard.
+public enum PatternSegment: Sendable, Equatable, Hashable, Codable {
+    /// Matches exactly this segment text. Case-sensitive, like every Executor comparison.
+    case literal(String)
+    /// Matches exactly one segment of any text: one mid-pattern `*`.
+    case wildcard
+}
+
+/// Raw-string pattern grammar failures. Cases carry no payload, so a thrown
+/// error never echoes the rejected pattern.
+public enum ToolPatternError: Error, Sendable, Equatable {
+    /// The pattern is empty.
+    case emptyPattern
+    /// The pattern starts with a dot.
+    case leadingDot
+    /// The pattern ends with a dot.
+    case trailingDot
+    /// The pattern holds an empty segment (`..`).
+    case emptySegment
+    /// The pattern starts with `*` but is not the universal `*`.
+    case leadingWildcard
+    /// A `*` shares its segment with other text (`me*`).
+    case partialWildcard
+}
+
+/// Segment-anchored address pattern: the Executor `matchPattern` grammar
+/// (`policies.ts:86`) with mid-`*` matching exactly one segment and allowed to
+/// repeat (`vercel.*.*.dns.create`). Unlike `ToolPattern.singleMid`, which is
+/// substring-based, every wildcard here is one whole dot-separated segment and
+/// a trailing `*` is a subtree. `parse` accepts exactly what Executor
+/// `isValidPattern` (`policies.ts:106`) accepts, including the same check
+/// order, so a pattern valid in one engine is valid in the other; in
+/// particular there are no per-segment character or length checks, and a
+/// literal no valid address can contain simply never matches.
+public enum SegmentPattern: Sendable, Equatable, Hashable, Codable {
+    /// Matches every address: the universal `*`.
+    case any
+    /// Matches one dot-joined segment list exactly. No wildcards.
+    case exact(segments: [String])
+    /// Matches segment-wise: each `.wildcard` consumes exactly one address
+    /// segment; `subtree` (a trailing `*`) additionally matches the prefix
+    /// itself and anything deeper.
+    case wildcard(segments: [PatternSegment], subtree: Bool)
+
+    /// Canonical raw string. Round-trips: `parse(rawValue) == self` for every value `parse` produces.
+    public var rawValue: String {
+        switch self {
+        case .any:
+            return "*"
+        case .exact(let segments):
+            return segments.joined(separator: ".")
+        case .wildcard(let segments, let subtree):
+            let head = segments.map { segment -> String in
+                switch segment {
+                case .wildcard:
+                    return "*"
+                case .literal(let text):
+                    return text
+                }
+            }.joined(separator: ".")
+            if subtree {
+                return head + ".*"
+            }
+            return head
+        }
+    }
+
+    /// Parses a raw pattern string. Guards run in Executor `isValidPattern`
+    /// order, so the first failure wins identically in both engines.
+    public static func parse(_ raw: String) throws -> SegmentPattern {
+        guard raw.isEmpty == false else {
+            throw ToolPatternError.emptyPattern
+        }
+        if raw == "*" {
+            return .any
+        }
+        guard raw.hasPrefix(".") == false else {
+            throw ToolPatternError.leadingDot
+        }
+        guard raw.hasSuffix(".") == false else {
+            throw ToolPatternError.trailingDot
+        }
+        guard raw.contains("..") == false else {
+            throw ToolPatternError.emptySegment
+        }
+        guard raw.hasPrefix("*") == false else {
+            throw ToolPatternError.leadingWildcard
+        }
+        let parts = raw.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+        for part in parts {
+            guard part.contains("*") == false || part == "*" else {
+                throw ToolPatternError.partialWildcard
+            }
+        }
+        var head = parts
+        var subtree = false
+        if head.last == "*" {
+            subtree = true
+            head.removeLast()
+        }
+        let segments = head.map { part -> PatternSegment in
+            if part == "*" {
+                return .wildcard
+            }
+            return .literal(part)
+        }
+        if subtree == false && segments.contains(.wildcard) == false {
+            return .exact(segments: head)
+        }
+        return .wildcard(segments: segments, subtree: subtree)
+    }
+
+    /// True exactly when `parse` succeeds. Mirrors Executor `isValidPattern` accept/reject on every input.
+    public static func isValid(_ raw: String) -> Bool {
+        (try? parse(raw)) != nil
+    }
+
+    /// True when the address literal satisfies this pattern.
+    public func matches(_ address: MCPToolAddress) -> Bool {
+        matches(literal: address.literal)
+    }
+
+    /// Raw-string entry: Executor `matchPattern(pattern, toolId)` semantics
+    /// verbatim. The literal is split without validation, so Executor
+    /// fixtures without a `tools.` prefix evaluate here directly.
+    public func matches(literal toolId: String) -> Bool {
+        switch self {
+        case .any:
+            return true
+        case .exact(let segments):
+            return toolId.split(separator: ".", omittingEmptySubsequences: false).map(String.init) == segments
+        case .wildcard(let segments, let subtree):
+            let address = toolId.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+            for (index, segment) in segments.enumerated() {
+                switch segment {
+                case .wildcard:
+                    guard index < address.count else { return false }
+                case .literal(let expected):
+                    guard index < address.count, address[index] == expected else { return false }
+                }
+            }
+            if subtree {
+                return address.count >= segments.count
+            }
+            return address.count == segments.count
+        }
+    }
+
+    /// Specificity score: Executor `patternSpecificity` formula
+    /// (`policies.ts:195`): `*` is 0, otherwise the head-segment count —
+    /// mid-`*` counts as one segment, the trailing `*` is excluded — times
+    /// two, plus one unless trailing-`*`.
+    public var specificity: Int {
+        switch self {
+        case .any:
+            return 0
+        case .exact(let segments):
+            return segments.count * 2 + 1
+        case .wildcard(let segments, let subtree):
+            return segments.count * 2 + (subtree ? 0 : 1)
+        }
+    }
+
+    /// Default fractional position for a new rule among an owner's committed
+    /// rules: just below every more-specific rule and above everything equally
+    /// or less specific, so a fresh group rule never shadows a leaf rule.
+    /// Mirrors Executor `positionForNewPattern` (`policies.ts:213`): rows sort
+    /// by (position, id), the insertion index is the first row whose
+    /// specificity is at most the new score, and the key lands between its
+    /// neighbours via `FractionalIndex.between`. Double analogue of
+    /// `generateKeyBetween`: one step below the minimum (or above the
+    /// maximum) at the edges, `0` when there are no rows. Infinities saturate
+    /// like `between` (below `-inf`/above `+inf` is inexpressible in `Double`,
+    /// so the edge key ties the extreme row and id order breaks the tie);
+    /// this function never traps.
+    public static func positionForNewPattern(
+        _ pattern: SegmentPattern,
+        rows: [(id: String, pattern: SegmentPattern, position: FractionalIndex)]
+    ) -> FractionalIndex {
+        let committed = rows.sorted { ($0.position, $0.id) < ($1.position, $1.id) }
+        let score = pattern.specificity
+        let index = committed.firstIndex { $0.pattern.specificity <= score } ?? committed.count
+        if index == 0 {
+            guard let first = committed.first else {
+                return FractionalIndex(value: 0)
+            }
+            return FractionalIndex(value: first.position.value - 1)
+        }
+        if index == committed.count {
+            return FractionalIndex(value: committed[index - 1].position.value + 1)
+        }
+        return FractionalIndex.between(committed[index - 1].position, committed[index].position)
     }
 }
