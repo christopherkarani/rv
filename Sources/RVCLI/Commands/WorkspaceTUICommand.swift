@@ -1,8 +1,8 @@
 import ArgumentParser
 import Foundation
+import RVDomain
 #if os(macOS)
 import Darwin
-import RVDomain
 import RVIsolation
 import RVPolicy
 import RVWorkspaceTUI
@@ -26,7 +26,7 @@ public struct WorkspaceTUI: AsyncParsableCommand {
 enum WorkspaceTUICommand {
     static func run(_ raw: String?) async throws {
         #if !os(macOS)
-        throw ValidationError("contained workspace host is unavailable")
+        throw ValidationError(ContainedRuntimeRefusal.message)
         #else
         guard isatty(STDIN_FILENO) == 1, isatty(STDOUT_FILENO) == 1 else {
             throw ValidationError("workspace shell requires an interactive terminal")

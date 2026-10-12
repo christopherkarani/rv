@@ -37,9 +37,9 @@ enum HelpCatalog {
             HelpSection(
                 heading: "Get started",
                 rows: [
-                    HelpRow(name: "rv", description: "Open the workspace shell in the current project"),
-                    HelpRow(name: "opencode", description: "Launch OpenCode in a workspace sandbox"),
-                    HelpRow(name: "workspace", description: "Attach to the persistent workspace host"),
+                    HelpRow(name: "rv", description: "Open the workspace shell in the current project (contained runtime, macOS only)"),
+                    HelpRow(name: "opencode", description: "Launch OpenCode in a workspace sandbox (contained runtime, macOS only)"),
+                    HelpRow(name: "workspace", description: "Attach to the persistent workspace host (contained runtime, macOS only)"),
                     HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
                     HelpRow(name: "test", description: "Try a command before it runs"),
                     HelpRow(name: "doctor", description: "Check service, packs, and hosts"),
@@ -104,6 +104,7 @@ enum HelpCatalog {
                 HelpRow(name: "files", description: "Workspace read and write, plus the system locations needed to start programs. Children inherit those rules"),
                 HelpRow(name: "limits", description: "Public HTTPS through the RV proxy; loopback allowed. Direct public, LAN, and metadata connections denied, as are Unix-socket connections to host sockets. Signals outside the sandbox are denied. Linux refuses launch until it can enforce the same limits"),
                 HelpRow(name: "failure", description: "Sandbox initialization failure stops execution; no unrestricted fallback"),
+                HelpRow(name: "platform", description: "Contained runtime is macOS-only today. Hook guard (rv hook) works on Linux and macOS; on Linux this launch is refused instead of using a weaker sandbox. See docs/security/runtime-boundary.md for why"),
             ]),
         ],
         examples: ["rv opencode", "rv opencode --workspace /path/to/repo -- run 'describe this project'"]
@@ -129,6 +130,9 @@ enum HelpCatalog {
                 HelpRow(name: "--resource-profile", description: "Owner-authorized runtime resource profile ID"),
                 HelpRow(name: "--hook", description: "Hook protocol host; tags never stage credentials"),
                 HelpRow(name: "--expected-content-digest-sha256", description: "Lowercase SHA-256 digest for a custom Agent Definition"),
+            ]),
+            HelpSection(heading: "Platform", rows: [
+                HelpRow(name: "platform", description: "Contained runtime is macOS-only today. Hook guard (rv hook) works on Linux and macOS; on Linux the workspace host refuses instead of using a weaker sandbox. See docs/security/runtime-boundary.md for why"),
             ]),
         ],
         examples: ["rv workspace start", "rv workspace status"]
@@ -223,6 +227,9 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--host <host>", description: "Host codec: grok (default), pi, opencode, claude, openclaw, hermes, codex, cursor, antigravity"),
+            ]),
+            HelpSection(heading: "Platform", rows: [
+                HelpRow(name: "platform", description: "Hook guard works on Linux and macOS. Contained runtime (rv opencode / rv workspace) is macOS-only today; on Linux it refuses instead of using a weaker sandbox. See docs/security/runtime-boundary.md for why"),
             ]),
         ]
     )

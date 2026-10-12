@@ -84,7 +84,7 @@ struct OpenCode: AsyncParsableCommand {
             FileHandle.standardError.write(Data(OpenCodeRun.missingProfileWarning.utf8))
         }
         #if !os(macOS)
-        throw ValidationError("contained workspace host is unavailable")
+        throw ValidationError(ContainedRuntimeRefusal.message)
         #else
         try WorkspaceCommandRun.runInteractive(
             project: WorkspaceCommandRun.requireProject(

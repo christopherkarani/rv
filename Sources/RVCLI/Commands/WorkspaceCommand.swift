@@ -181,7 +181,7 @@ struct WorkspaceAbandon: AsyncParsableCommand {
 enum WorkspaceCommandRun {
     static func start(_ raw: String?) throws {
         #if !os(macOS)
-        throw ValidationError("contained workspace host is unavailable")
+        throw ValidationError(ContainedRuntimeRefusal.message)
         #else
         let project = try requireProject(raw)
         let before = WorkspaceHosts.inspect(project: project)
@@ -209,7 +209,7 @@ enum WorkspaceCommandRun {
 
     static func attach(_ raw: String?) throws {
         #if !os(macOS)
-        throw ValidationError("contained workspace host is unavailable")
+        throw ValidationError(ContainedRuntimeRefusal.message)
         #else
         let project = try requireProject(raw)
         guard case .live(let endpoint) = WorkspaceHosts.inspect(project: project) else {
@@ -235,7 +235,7 @@ enum WorkspaceCommandRun {
 
     static func status(_ raw: String?) throws {
         #if !os(macOS)
-        throw ValidationError("contained workspace host is unavailable")
+        throw ValidationError(ContainedRuntimeRefusal.message)
         #else
         let project = try requireProject(raw)
         let attachment = WorkspaceHosts.inspect(project: project)
@@ -260,7 +260,7 @@ enum WorkspaceCommandRun {
 
     static func close(_ raw: String?) throws {
         #if !os(macOS)
-        throw ValidationError("contained workspace host is unavailable")
+        throw ValidationError(ContainedRuntimeRefusal.message)
         #else
         let project = try requireProject(raw)
         guard case .live(let endpoint) = WorkspaceHosts.inspect(project: project) else {
@@ -289,7 +289,7 @@ enum WorkspaceCommandRun {
     /// implemented gate would report success while abandoning nothing.
     static func abandonBlockedWorkspace(_ raw: String?) throws {
         #if !os(macOS)
-        throw ValidationError("contained workspace host is unavailable")
+        throw ValidationError(ContainedRuntimeRefusal.message)
         #else
         let project = try requireProject(raw)
         switch WorkspaceHosts.abandon(project: project) {
@@ -308,7 +308,7 @@ enum WorkspaceCommandRun {
         resourceProfileID: String? = nil, hook: String? = nil
     ) throws {
         #if !os(macOS)
-        throw ValidationError("contained workspace host is unavailable")
+        throw ValidationError(ContainedRuntimeRefusal.message)
         #else
         guard let executable = command.first, executable.hasPrefix("/"), executable.contains("\0") == false else {
             throw ValidationError("executable must be an absolute path")
@@ -337,7 +337,7 @@ enum WorkspaceCommandRun {
         _ raw: String?, definitionID: String, arguments: [String], rows: Int?, columns: Int?
     ) throws {
         #if !os(macOS)
-        throw ValidationError("contained workspace host is unavailable")
+        throw ValidationError(ContainedRuntimeRefusal.message)
         #else
         guard AgentDefinitionID(validating: definitionID) != nil else {
             throw ValidationError("invalid Agent Definition ID")
@@ -357,7 +357,7 @@ enum WorkspaceCommandRun {
         rows: Int?, columns: Int?
     ) throws {
         #if !os(macOS)
-        throw ValidationError("contained workspace host is unavailable")
+        throw ValidationError(ContainedRuntimeRefusal.message)
         #else
         guard let executable = command.first, executable.hasPrefix("/"),
             executable.contains("\0") == false,
@@ -423,7 +423,7 @@ enum WorkspaceCommandRun {
             break
         }
         #if !os(macOS)
-        throw ValidationError("contained workspace host is unavailable")
+        throw ValidationError(ContainedRuntimeRefusal.message)
         #else
         let endpoint = try requireEndpoint(
             WorkspaceHosts.ensure(project: project, executable: try hostBinary())
@@ -649,7 +649,7 @@ enum WorkspaceCommandRun {
         case .staleEndpoint:
             "stale endpoint"
         case .unsupported:
-            "contained workspace host is unavailable"
+            ContainedRuntimeRefusal.message
         }
     }
 
@@ -671,7 +671,7 @@ enum WorkspaceCommandRun {
     static func text(_ error: WorkspaceHostFailure) -> String {
         switch error {
         case .unsupported:
-            "contained workspace host is unavailable"
+            ContainedRuntimeRefusal.message
         case .projectUnusable:
             "workspace path is unusable"
         case .homeDirectory:
