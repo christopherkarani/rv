@@ -69,8 +69,10 @@ import Testing
 ///   stdout before hanging, so partial-output-on-timeout is proven with a
 ///   dedicated script op, not the fake (see SpawnBehavior).
 /// - `hang` models a SIGTERM-killable hang only. A child ignoring SIGTERM
-///   would outlive the kill; the provider sends SIGTERM and never
-///   escalates, matching Foundation's `Process.terminate` vocabulary.
+///   is killed by the SIGKILL escalation past the grace (see
+///   `timeoutEscalatesPastSIGTERMAndLeavesNoneAlive`); `hang` stays
+///   SIGTERM-killable because the escalation shape needs trap-plus-exec,
+///   which only a dedicated script op provides.
 /// - Real `op` exit codes and stderr shapes are scripted per test from
 ///   observed CLI output (`[ERROR] ...`); unknown future shapes still
 ///   degrade safely because the provider only branches on exit status.
@@ -283,18 +285,52 @@ private func vaultsJSON(_ rows: [(id: String, name: String)]) throws -> String {
     return String(data: data, encoding: .utf8) ?? "[]"
 }
 
-/// True while `pid` names a live process.
+/// True while `pid` names a live process. Zombies count as dead: the
+/// process exited and only the parent's async reap is outstanding, which
+/// lags under parallel load.
 private func isAlive(_ pid: Int32) -> Bool {
-    kill(pid, 0) == 0
+    if kill(pid, 0) != 0 { return false }
+    return isZombie(pid) == false
 }
+
+#if canImport(Darwin)
+/// True when `pid` is an unreaped zombie (exited, awaiting the parent's
+/// wait). A zombie proves the kill landed; treating it as alive fails
+/// kill verification on reap lag alone.
+private func isZombie(_ pid: Int32) -> Bool {
+    var info = kinfo_proc()
+    var size = MemoryLayout<kinfo_proc>.size
+    var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+    guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return false }
+    return info.kp_proc.p_stat == SZOMB
+}
+#else
+/// Linux half of `isZombie`: the state field of `/proc/<pid>/stat` is
+/// `Z` for zombies. Unreadable stats read as not-zombie (a reaped PID
+/// fails the `kill` probe first anyway).
+private func isZombie(_ pid: Int32) -> Bool {
+    guard let text = try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8),
+        let close = text.lastIndex(of: ")")
+    else {
+        return false
+    }
+    let after = text[text.index(after: close)...].split(separator: " ", omittingEmptySubsequences: true)
+    return after.first == "Z"
+}
+#endif
 
 /// Polls until every PID is dead, failing the test on expiry. An empty
 /// PID set passes vacuously: a cancel that lands before the spawn leaves
-/// nothing to kill.
-private func expectDead(_ pids: [Int32], sourceLocation: SourceLocation = #_sourceLocation) async {
+/// nothing to kill. Each PID gets a fresh deadline (one shared budget
+/// would starve later PIDs under load); the poll exits early, so idle
+/// runs stay fast while loaded runs get room. The 60s budget rides out
+/// even pathological scheduling stalls; a genuine leak still fails loud.
+private func expectDead(
+    _ pids: [Int32], timeoutSeconds: Double = 60, sourceLocation: SourceLocation = #_sourceLocation
+) async {
     guard pids.isEmpty == false else { return }
-    let deadline = Date().addingTimeInterval(5)
     for pid in pids {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
         while isAlive(pid) && Date() < deadline {
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
@@ -1729,11 +1765,20 @@ private struct OnePasswordHealthTests {
 
     @Test func cancelledTask_isUnhealthy() async throws {
         let fake = try makeFakeOp()
-        try fake.write("delay", "5")
+        // Long natural horizon: the kill lands in milliseconds when
+        // cancellation works, so the delay only elapses on a genuinely
+        // broken kill (loud failure either way) — while a short delay
+        // would let natural success win under scheduling stalls.
+        try fake.write("delay", "30")
         try fake.write("vaults.json", "[]")
         let provider = makeProvider(fake, accounts: [serviceAccount()])
         let task = Task { await provider.health() }
-        _ = await awaitSpawn(fake)
+        // Generous spawn budget: under parallel load the spawn can queue
+        // behind the shared prompt gate for seconds, and cancelling before
+        // it launches would exercise the queued-cancel path instead of the
+        // kill path (still passing, but no longer this test). Early exit
+        // keeps idle runs fast.
+        _ = await awaitSpawn(fake, timeoutSeconds: 120)
         task.cancel()
         #expect(await task.value == ProviderHealth(ok: false))
         let pids = try fake.pids()
@@ -1770,6 +1815,33 @@ private struct OnePasswordSpawnBehaviorTests {
         // No argv assertion: under parallel load the timeout can fire before
         // the child is first scheduled. Argv shape is pinned elsewhere.
         let pids = try fake.pids()
+        await expectDead(pids)
+    }
+
+    @Test func timeoutEscalatesPastSIGTERMAndLeavesNoneAlive() async throws {
+        // A child ignoring SIGTERM must not survive its box: the kill
+        // escalates to SIGKILL past the grace. Three sequential timeouts
+        // prove no accumulation (SIGTERM-only, every child survived).
+        let script = try makeScriptOp(body: """
+            D="${FAKEOP_DIR:-$TMPDIR}"
+            echo "$$" >>"$D/pids.log"
+            trap '' TERM
+            exec sleep 300
+            """)
+        let provider = OnePasswordSecretsProvider(
+            accounts: [serviceAccount(
+                vaults: [OnePasswordVault(id: "vault-123", name: "Personal")]
+            )],
+            opCommand: script.opPath, timeoutSeconds: 1,
+            environment: { testEnvironment(script) }
+        )
+        for _ in 0..<3 {
+            await #expect(throws: SecretsError.timeout("onepassword")) {
+                try await provider.resolveQualified(item: "op://vault-123/item/password", field: nil)
+            }
+        }
+        let pids = try script.pids()
+        #expect(pids.count == 3)
         await expectDead(pids)
     }
 

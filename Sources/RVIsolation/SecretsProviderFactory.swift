@@ -294,6 +294,14 @@ private struct VaultEndpointDocument: Decodable {
 ///
 /// E1-A adds no production callers: E1-C wires `makeBroker` into the
 /// supervisor preparation path.
+///
+/// Provider init conventions diverge on purpose and stay that way: the
+/// encrypted provider's init throws (an empty key is a construction
+/// failure), the 1Password init cannot fail (pure config capture; every
+/// failure surfaces per call), and the Vault HTTP provider builds
+/// factory-internal only (its endpoint-plus-transport wiring has no
+/// meaningful direct-construction use). Aligning them would invent
+/// failures, hide them, or expose half-built clients.
 public enum SecretsProviderFactory {
     /// Builds the production provider set from `configDirectory`.
     ///
@@ -352,7 +360,10 @@ public enum SecretsProviderFactory {
         // key file fails the factory (never silent), and any init rejection
         // maps to the same case rather than a silent `try?` skip.
         // `defaultOwner` is `.org`: RV is single-tenant, so every broker
-        // resolve is org-level.
+        // resolve is org-level. The scrypt derivation below (N=16384) runs
+        // synchronously on this path whenever a key is present (~100ms
+        // launch cost, accepted: the supervisor needs the provider ready
+        // before serving, and laziness would only move the block).
         let masterKeyEnvironment = environment ?? ProcessInfo.processInfo.environment
         switch EncryptedSecretsProvider.loadMasterKey(
             environment: masterKeyEnvironment, keyFileDirectory: configDirectory
@@ -389,6 +400,9 @@ public enum SecretsProviderFactory {
         case .failure:
             throw SecretsProviderFactoryError.workosVaultConfigInvalid
         }
+        // X1-F deferred: no `onepassword` arm until the accounts-config
+        // ticket designs the config file plus key handling (the allowlist
+        // admits it meanwhile; refs deny providerDown fail-closed).
         return providers
     }
 

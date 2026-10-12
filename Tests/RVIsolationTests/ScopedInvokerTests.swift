@@ -1091,6 +1091,7 @@ private func t8AnswerParked(_ backend: InMemoryElicitationBackend, decision: MCP
         #expect(MCPTransportError.transportClosed.isRetryable == false)
         #expect(MCPTransportError.nonLoopbackTarget.isRetryable == false)
         #expect(MCPTransportError.lifecycleViolation.isRetryable == false)
+        #expect(MCPTransportError.exchangeOverloaded.isRetryable == false)
     }
 }
 

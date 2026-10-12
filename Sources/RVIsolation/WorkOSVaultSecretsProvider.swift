@@ -207,6 +207,10 @@ extension WorkOSVaultHTTPClient {
         }
     }
 
+    // A non-positive timeout is endpoint misconfiguration, rejected at
+    // load (the 1Password runner instead times out immediately on a
+    // non-positive budget — per-call budget there, endpoint config here,
+    // hence the differing posture).
     static func validate(timeoutSeconds: Double) throws(WorkOSVaultConfigurationError) {
         guard timeoutSeconds.isFinite, timeoutSeconds > 0, timeoutSeconds <= 60 else {
             throw WorkOSVaultConfigurationError.invalidTimeout
@@ -802,10 +806,9 @@ public enum WorkOSVaultObjectNaming: Sendable {
     /// project core (`RVDigest`). Total over all inputs.
     public static func sha256Base64URL(_ text: String) -> String {
         let bytes = hexBytes(RVDigest.sha256Hex(Array(text.utf8)))
-        return Data(bytes).base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
+        // The shared helper trims terminal padding where this used to
+        // strip every "=": equivalent, since base64 padding is terminal-only.
+        return MCPBase64URL.encode(Data(bytes))
     }
 
     /// Total hex decode: each pair of nibbles becomes one byte;

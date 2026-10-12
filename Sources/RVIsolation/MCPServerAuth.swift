@@ -88,12 +88,10 @@ public enum MCPServerAuth {
     // MARK: - Mint (auth.ts: mintToken = randomBytes(32).base64url)
 
     /// Base64url-encodes bytes with no padding, matching Node
-    /// `randomBytes(32).toString("base64url")`.
+    /// `randomBytes(32).toString("base64url")`. Delegates to the shared
+    /// `MCPBase64URL` helper.
     static func base64URLEncoded(_ bytes: Data) -> String {
-        bytes.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .trimmingCharacters(in: CharacterSet(charactersIn: "="))
+        MCPBase64URL.encode(bytes)
     }
 
     /// Mints a fresh 256-bit caller token. The value is 43 base64url chars
@@ -157,7 +155,8 @@ public enum MCPServerAuth {
     /// this folds the length difference into the accumulator and iterates
     /// to the longer length with no early exit, so all lengths take the
     /// same shape of work. Verified by shape tests only, never timing
-    /// asserts: `timingSafeEqual` must agree with `==` on every input.
+    /// asserts: `timingSafeEqual` must agree with UTF-8 byte equality on
+    /// every input.
     public static func timingSafeEqual(_ lhs: String, _ rhs: String) -> Bool {
         let a = Array(lhs.utf8)
         let b = Array(rhs.utf8)

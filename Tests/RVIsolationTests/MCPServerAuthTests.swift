@@ -11,6 +11,22 @@ import Testing
 
 // MARK: - Helpers
 
+/// Deterministic xorshift RNG for seeded fuzz (D's pattern): fixed seeds
+/// make every run replay the same inputs, so a failure reproduces by
+/// re-running the suite.
+private struct XorShift64: Sendable {
+    var state: UInt64
+
+    mutating func next() -> UInt64 {
+        var x = state
+        x ^= x << 13
+        x ^= x >> 7
+        x ^= x << 17
+        state = x
+        return x
+    }
+}
+
 private func makeAuthTempDir() throws -> URL {
     let url = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-auth-\(UUID().uuidString)")
@@ -285,18 +301,36 @@ struct MCPServerAuthTests {
         #expect(MCPServerAuth.bearerToken(fromAuthorizationHeader: "Bearer\u{2028}a") == "a")
     }
 
-    @Test func timingSafeEqualAgreesWithEqualsOnRandomPairs() {
-        var generator = SystemRandomNumberGenerator()
+    @Test func timingSafeEqualAgreesWithByteEqualityOnSeededPairs() {
+        // Seeded (XorShift64, D's pattern): the same 1,000 pairs every run.
+        // The oracle is UTF-8 byte equality — NOT `==`, which folds
+        // canonically-equal-but-byte-differing pairs the comparator must
+        // reject.
+        var rng = XorShift64(state: 0x51AB_3E77_90CD_42F1)
         let alphabet = Array("abcdefghij0123456789\u{E9}\u{301}-\t ")
         for _ in 0..<1_000 {
             let left = String(
-                (0..<Int.random(in: 0...24, using: &generator)).map { _ in
-                    alphabet.randomElement(using: &generator) ?? "q"
+                (0..<Int(rng.next() % 25)).map { _ in
+                    alphabet[Int(rng.next() % UInt64(alphabet.count))]
                 }
             )
-            let right = Bool.random(using: &generator) ? left : String(left.reversed())
-            #expect(MCPServerAuth.timingSafeEqual(left, right) == (left == right))
+            let right = rng.next() % 2 == 0 ? left : String(left.reversed())
+            #expect(
+                MCPServerAuth.timingSafeEqual(left, right)
+                    == (Array(left.utf8) == Array(right.utf8))
+            )
         }
+    }
+
+    @Test func timingSafeEqualIsByteEqualityNotCanonicalEquality() {
+        // "e\u{301}\u{E9}" reversed is canonically equal but byte-differing:
+        // `==` says true while the byte comparator must say false. The old
+        // `==` oracle asserted true here — wrong.
+        let left = "e\u{301}\u{E9}"
+        let right = String(left.reversed())
+        #expect(left == right)
+        #expect(Array(left.utf8) != Array(right.utf8))
+        #expect(MCPServerAuth.timingSafeEqual(left, right) == false)
     }
 
     // MARK: - isAuthorized / makeIsAuthorized (oracle hasBearerToken / makeIsAuthorized)
@@ -332,6 +366,9 @@ struct MCPServerAuthTests {
         #expect(verdict == .valid(MCPCallerToken(rawValue: "abc")))
     }
 
+    // Deliberate divergence: the oracle's `readToken` ignores unknown
+    // fields, but strict triage treats them as tampering and fails closed
+    // instead (see `MCPServerAuth.decode`).
     @Test func decodeRejectsUnknownFieldsAsInvalid() {
         #expect(MCPServerAuth.decode(Data("{\"token\":\"abc\",\"x\":1}".utf8)) == .invalid)
         #expect(MCPServerAuth.decode(Data("{\"x\":1}".utf8)) == .invalid)
@@ -409,6 +446,9 @@ struct MCPServerAuthTests {
         #expect(token.rawValue.isEmpty == false)
     }
 
+    // Deliberate divergence (same as `decodeRejectsUnknownFieldsAsInvalid`):
+    // the oracle reads through unknown fields while strict triage fails
+    // closed and preserves the file untouched.
     @Test func loadOrMintFailsClosedOnUnknownFieldsAndPreservesFile() throws {
         let dir = try makeAuthTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -725,13 +765,14 @@ struct MCPServerAuthTests {
         #expect(seen.contains(loaded.rawValue))
     }
 
-    @Test func bearerParserNeverCrashesOnRandomInput() {
-        var generator = SystemRandomNumberGenerator()
+    @Test func bearerParserNeverCrashesOnSeededInput() {
+        // Seeded (XorShift64): the same 500 inputs every run.
+        var rng = XorShift64(state: 0xBEA4_10CE_55ED_7A11)
         let alphabet = Array("Bearer \t\n\rabcxYZ019_-+=/.,:;\"'\\")
         for _ in 0..<500 {
             let input = String(
-                (0..<Int.random(in: 0...32, using: &generator)).map { _ in
-                    alphabet.randomElement(using: &generator) ?? "q"
+                (0..<Int(rng.next() % 33)).map { _ in
+                    alphabet[Int(rng.next() % UInt64(alphabet.count))]
                 }
             )
             let parsed = MCPServerAuth.bearerToken(fromAuthorizationHeader: input)

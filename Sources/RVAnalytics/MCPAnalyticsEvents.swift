@@ -706,6 +706,13 @@ public struct MCPAnalyticsInvokeWrapper: Sendable {
     /// Cancellation rethrows unrecorded. Oracle: `engine.test.ts` › "does
     /// not record a pause; records when the resume completes" + "resume of
     /// an unknown execution records nothing".
+    ///
+    /// The `.paused` arm is unreachable via `ScopedInvoker.invoke`, which
+    /// parks elicitation internally until terminal: no wave-1 path yields
+    /// `.paused` here. Wave-2 serving chooses the shape — block the caller
+    /// up to the elicitation TTL (then `recordCall` suffices and this API
+    /// stays pause-free), or add a non-blocking invoke whose pauses flow
+    /// through this arm — and records its choice here.
     public func recordResumable(
         operation: () async throws -> MCPInvokeTerminalOutcome?
     ) async throws -> MCPInvokeTerminalOutcome? {

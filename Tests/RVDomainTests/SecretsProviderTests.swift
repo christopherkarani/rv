@@ -144,20 +144,28 @@ struct SecretsProviderTests {
         #expect(SecretsError.invalidRef("x") == SecretsError.invalidRef("x"))
     }
 
-    @Test func error_descriptionsNeverEchoItemFieldOrValue() {
-        let cases: [SecretsError] = [
-            .invalidRef("file"), .notFound("keychain"), .denied("vault-http"),
-            .leaseExpired("env"), .providerDown("exec"), .oversized("file"),
-            .timeout("resolve"), .identityRequired, .policyDenied,
+    @Test func error_descriptionsPinStaticShape() {
+        // Static-shape pin: payloads echo by design (they are provider-id/op
+        // labels), so absence-of-literals asserts nothing — the test pins
+        // the exact rendering instead, and any echo change breaks it. One
+        // hostile-looking label rides a payload to prove the pin is
+        // non-vacuous (it CAN see injected content). Item/field/values can
+        // never appear because no constructor takes them: labels only, by
+        // construction at every call site.
+        let cases: [(SecretsError, String)] = [
+            (.invalidRef("file"), #"invalidRef("file")"#),
+            (.notFound("super-secret-item"), #"notFound("super-secret-item")"#),
+            (.denied("vault-http"), #"denied("vault-http")"#),
+            (.leaseExpired("env"), #"leaseExpired("env")"#),
+            (.providerDown("exec"), #"providerDown("exec")"#),
+            (.oversized("file"), #"oversized("file")"#),
+            (.timeout("resolve"), #"timeout("resolve")"#),
+            (.identityRequired, "identityRequired"),
+            (.policyDenied, "policyDenied"),
         ]
-        for error in cases {
-            let text = String(describing: error)
-            #expect(text.contains("super-secret-item") == false)
-            #expect(text.contains("password-field") == false)
-            #expect(text.contains("hunter2-value") == false)
+        for (error, expected) in cases {
+            #expect(String(describing: error) == expected, "\(error)")
         }
-        #expect(String(describing: SecretsError.providerDown("exec")).contains("exec"))
-        #expect(String(describing: SecretsError.timeout("resolve")).contains("resolve"))
     }
 
     @Test func error_bodilessCasesCarryNothing() {

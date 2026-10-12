@@ -46,6 +46,39 @@ private func expectMalformed(_ operation: () async throws -> Data) async {
     }
 }
 
+private func expectTimeout(_ operation: () async throws -> Data) async {
+    do {
+        _ = try await operation()
+        Issue.record("expected requestTimeout")
+    } catch let error as MCPTransportError {
+        #expect(error == .requestTimeout)
+    } catch {
+        Issue.record("wrong error: \(error)")
+    }
+}
+
+private func expectOverloaded(_ operation: () async throws -> Data) async {
+    do {
+        _ = try await operation()
+        Issue.record("expected exchangeOverloaded")
+    } catch let error as MCPTransportError {
+        #expect(error == .exchangeOverloaded)
+    } catch {
+        Issue.record("wrong error: \(error)")
+    }
+}
+
+private func expectCancellation(_ operation: () async throws -> Data) async {
+    do {
+        _ = try await operation()
+        Issue.record("expected CancellationError")
+    } catch is CancellationError {
+        // Expected.
+    } catch {
+        Issue.record("wrong error: \(error)")
+    }
+}
+
 private func waitUntilStopped(_ process: MCPStdioProcess) async {
     for _ in 0..<200 {
         if await process.isRunning == false { return }
@@ -188,13 +221,20 @@ struct MCPStdioProcessTests {
     @Test func defaultEnvironmentWithholdsDaemonVariables() async throws {
         setenv("RV_X1_STDIO_CANARY", "present", 1)
         defer { unsetenv("RV_X1_STDIO_CANARY") }
+        // Full-dict pin: absence of the canary plus exact presence of every
+        // minimal entry (PATH, LANG=C, LC_ALL=C) — the allowlist starts the
+        // child with nothing else.
         let process = try await shellProcess(
-            "read a; /usr/bin/env | grep -c RV_X1_STDIO_CANARY; read b; /usr/bin/env | grep -c '^PATH=/usr/bin:/bin$'"
+            "read a; /usr/bin/env | grep -c RV_X1_STDIO_CANARY; read b; /usr/bin/env | grep -c '^PATH=/usr/bin:/bin$'; read c; /usr/bin/env | grep -c '^LANG=C$'; read d; /usr/bin/env | grep -c '^LC_ALL=C$'"
         )
         let canary = try await process.send(Data("one".utf8))
         #expect(canary == Data("0".utf8))
         let path = try await process.send(Data("two".utf8))
         #expect(path == Data("1".utf8))
+        let lang = try await process.send(Data("three".utf8))
+        #expect(lang == Data("1".utf8))
+        let lcAll = try await process.send(Data("four".utf8))
+        #expect(lcAll == Data("1".utf8))
         await process.close()
     }
 
@@ -318,7 +358,11 @@ struct MCPStdioProcessTests {
         await process.close()
     }
 
-    @Test func closeDuringSendFailsTheSend() async throws {
+    // Sleep-ordered (150 ms), but the claim is deliberately weak: the
+    // outcome is identical if the ordering inverts (send-after-close also
+    // yields nil), so this proves only that no send succeeds around close,
+    // never in-flight failure specifically.
+    @Test func noSendSucceedsAroundClose() async throws {
         let process = try await shellProcess("sleep 5")
         async let first: Data? = try? await process.send(Data("x".utf8))
         async let second: Data? = try? await process.send(Data("y".utf8))
@@ -327,6 +371,192 @@ struct MCPStdioProcessTests {
         #expect(await first == nil)
         #expect(await second == nil)
         #expect(await process.isRunning == false)
+    }
+
+    // MARK: - Exchange timeout (per-exchange deadline)
+
+    @Test func exchangeTimeoutFailsClosed() async throws {
+        let process = try await shellProcess("sleep 5")
+        await expectTimeout { try await process.send(Data("x".utf8), timeoutSeconds: 0.2) }
+        // The transport failed closed: the child is gone and later sends refuse.
+        #expect(await process.isRunning == false)
+        await expectClosed { try await process.send(Data("y".utf8)) }
+        await process.close()
+    }
+
+    @Test func nonPositiveTimeoutFailsImmediately() async throws {
+        let process = try await catProcess()
+        for budget in [0.0, -1.0, Double.nan, Double.infinity] {
+            await expectTimeout { try await process.send(Data("x".utf8), timeoutSeconds: budget) }
+        }
+        // The budget failed before queueing: the handle is unharmed.
+        #expect(try await process.send(Data("alive".utf8)) == Data("alive".utf8))
+        await process.close()
+    }
+
+    @Test func cancelledWaiterWithdrawsFromLock() async throws {
+        let process = try await shellProcess("sleep 30")
+        let occupant = Task { try await process.send(Data("x".utf8), timeoutSeconds: 30) }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let waiter = Task { try await process.send(Data("y".utf8), timeoutSeconds: 30) }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        waiter.cancel()
+        await expectCancellation { try await waiter.value }
+        // The occupant still owns the exchange: closing fails it closed,
+        // and the withdrawn waiter never held the lock.
+        await process.close()
+        await expectClosed { try await occupant.value }
+        await process.close()
+    }
+
+    @Test func waiterQueueIsBounded() async throws {
+        let process = try await shellProcess("sleep 30")
+        // The occupant holds the lock with a self-limiting budget: even if
+        // scheduling slop leaves the queue short, the occupant times out
+        // (failing the parked sends closed) instead of hanging this test.
+        let occupant = Task { try? await process.send(Data("x".utf8), timeoutSeconds: 4) }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        var waiters: [Task<Data, Error>] = []
+        for _ in 0..<MCPStdioProcess.maximumExchangeWaiters {
+            waiters.append(Task { try await process.send(Data("y".utf8), timeoutSeconds: 30) })
+        }
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        // One more overflows instead of queueing.
+        await expectOverloaded { try await process.send(Data("z".utf8), timeoutSeconds: 30) }
+        // Tear down: every parked send fails closed, none hangs.
+        await process.close()
+        for waiter in waiters {
+            await expectClosed { try await waiter.value }
+        }
+        _ = await occupant.value
+        await process.close()
+    }
+
+    // MARK: - Framing resync (oversize never poisons pairing)
+
+    @Test func oversizedReplyDoesNotConfuseNextExchange() async throws {
+        // A's 100 KiB reply line exceeds the cap, and its tail is still in
+        // flight when the read throws: without the drain-to-newline resync,
+        // B would frame A's tail as its own (successful) reply.
+        let process = try await shellProcess(
+            "read a; head -c 100000 /dev/zero | tr \"\\0\" \"A\"; echo; read b; echo \"ok-$b\""
+        )
+        await expectMalformed { try await process.send(Data("first".utf8)) }
+        #expect(try await process.send(Data("second".utf8)) == Data("ok-second".utf8))
+        await process.close()
+    }
+
+    @Test func undrainedReplyFailsTransportClosed() async throws {
+        // Over-cap line with no trailing newline and a hung child: the
+        // drain cannot resync, so the transport fails closed instead of
+        // hanging (or pairing the next exchange onto a torn frame).
+        let process = try await shellProcess(
+            "read line; head -c 70000 /dev/zero | tr \"\\0\" \"A\"; exec sleep 30"
+        )
+        await expectMalformed { try await process.send(Data("go".utf8)) }
+        #expect(await process.isRunning == false)
+        await expectClosed { try await process.send(Data("x".utf8)) }
+        await process.close()
+    }
+
+    @Test func oversizedReplyAtEOFResyncsToEmpty() async throws {
+        // The child exits right after the fat line: the drain meets EOF and
+        // resyncs to empty, so the next send fails closed at EOF instead of
+        // reading stale framing.
+        let process = try await shellProcess("read line; head -c 70000 /dev/zero | tr \"\\0\" \"A\"")
+        await expectMalformed { try await process.send(Data("go".utf8)) }
+        await expectClosed { try await process.send(Data("x".utf8)) }
+        await process.close()
+    }
+
+    @Test func drainToNewlineResyncsFramingDirectly() async throws {
+        // Direct resync coverage: a broken fd fails the drain (false),
+        // EOF resyncs to empty (true), a newline resyncs to its tail (true).
+        let process = MCPStdioProcess()
+        #expect(await process.drainToNewline(fd: -1) == false)
+        let null = open("/dev/null", O_RDONLY)
+        #expect(null >= 0)
+        #expect(await process.drainToNewline(fd: null) == true)
+        close(null)
+        let pipe = Pipe()
+        try pipe.fileHandleForWriting.write(contentsOf: Data("abc\ndef".utf8))
+        try pipe.fileHandleForWriting.close()
+        #expect(
+            await process.drainToNewline(fd: pipe.fileHandleForReading.fileDescriptor) == true
+        )
+    }
+
+    @Test func closeDuringDrainFailsTheSendClosed() async throws {
+        // Close lands while the drain parks on a newline that never comes:
+        // the retired fd fails the drain, and the send still reports the
+        // original malformed reply (not the close underneath it).
+        let process = try await shellProcess(
+            "read line; head -c 70000 /dev/zero | tr \"\\0\" \"A\"; sleep 30"
+        )
+        let sender = Task { try await process.send(Data("go".utf8)) }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        await process.close()
+        await expectMalformed { try await sender.value }
+        await process.close()
+    }
+
+    @Test func closeDuringBlockedWriteFailsTheSend() async throws {
+        // A 64 KiB frame overfills the pipe against a child that never
+        // reads, so the write parks; close retires the pipes and kills the
+        // child underneath it, and the exchange fails closed.
+        let process = try await shellProcess("sleep 30")
+        let sender = Task {
+            try await process.send(Data(repeating: 0x58, count: 65_536), timeoutSeconds: 30)
+        }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        await process.close()
+        await expectClosed { try await sender.value }
+        await process.close()
+    }
+
+    @Test func cancelDuringReadFailsTheTransportClosed() async throws {
+        // Cancelling an in-flight exchange fails the transport closed: the
+        // reply that may already be in flight must never frame a later
+        // exchange, so no later exchange is allowed.
+        let process = try await shellProcess("sleep 30")
+        let reader = Task { try await process.send(Data("x".utf8), timeoutSeconds: 30) }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        reader.cancel()
+        await expectCancellation { try await reader.value }
+        #expect(await process.isRunning == false)
+        await expectClosed { try await process.send(Data("y".utf8)) }
+        await process.close()
+    }
+
+    @Test func sendInCancelledGroupFailsFast() async throws {
+        // A child of an already-cancelled group starts cancelled: the send
+        // fails before touching the pipe, and the handle is unharmed.
+        let process = try await catProcess()
+        await withThrowingTaskGroup(of: Void.self) { group in
+            group.cancelAll()
+            group.addTask {
+                await expectCancellation { try await process.send(Data("x".utf8)) }
+            }
+        }
+        #expect(try await process.send(Data("alive".utf8)) == Data("alive".utf8))
+        await process.close()
+    }
+
+    @Test func cancelledGroupChildNeverQueuesBehindOccupant() async throws {
+        // Same, behind a held lock: the cancelled waiter fails before
+        // queueing instead of parking, and the occupant is unaffected.
+        let process = try await shellProcess("sleep 30")
+        let occupant = Task { try? await process.send(Data("x".utf8), timeoutSeconds: 30) }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        await withThrowingTaskGroup(of: Void.self) { group in
+            group.cancelAll()
+            group.addTask {
+                await expectCancellation { try await process.send(Data("y".utf8), timeoutSeconds: 30) }
+            }
+        }
+        await process.close()
+        _ = await occupant.value
+        await process.close()
     }
 
     // MARK: - Close + waitForExit (oracle finally: always close)
@@ -763,6 +993,28 @@ struct MCPStdioProcessTests {
         await process.close()
     }
 
+    @Test func composedChannelCloseCascadesToProcess() async throws {
+        // The composed owner: channel.close() cascades to process.close(),
+        // so the child cannot leak when the owner drops the channel.
+        let process = MCPStdioProcess()
+        try await process.spawn(
+            MCPStdioProcessSpawn(executablePath: "/bin/sh", arguments: ["-c", "exec sleep 31337"])
+        )
+        let channel = MCPStdioChannel(session: try sessionForChannel(), process: process)
+        try await channel.start()
+        #expect(await process.isRunning == true)
+        await channel.close()
+        #expect(await channel.lifecycle == .closed)
+        #expect(await process.isRunning == false)
+        // Process accounting: no child survives the cascade.
+        let deadline = Date().addingTimeInterval(10)
+        while childCount(matching: "sleep 31337") != 0, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        #expect(childCount(matching: "sleep 31337") == 0)
+        await process.close()
+    }
+
     // MARK: - Stress
 
     @Test func fiftySequentialRoundtrips() async throws {
@@ -848,6 +1100,12 @@ struct MCPStdioProcessTests {
     }
 
     @Test func spawnCloseCyclesLeakNoFDs() async throws {
+        // Bounded slack plus a quiescence poll: parallel suites hold
+        // transient FDs (spawn pipes mid-flight), so the count settles
+        // within slack of `before` instead of matching it exactly after a
+        // fixed nap. Leak sensitivity holds: a real 4-fd/cycle leak floors
+        // at before+20, above the slack at every sample.
+        let slack = 4
         let warm = try await catProcess()
         await warm.close()
         let before = openFDCount()
@@ -857,8 +1115,13 @@ struct MCPStdioProcessTests {
             #expect(try await process.send(Data("ping".utf8)) == Data("ping".utf8))
             await process.close()
         }
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        #expect(openFDCount() == before)
+        let deadline = Date().addingTimeInterval(10)
+        var settled = openFDCount()
+        while settled > before + slack, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            settled = openFDCount()
+        }
+        #expect(settled <= before + slack)
     }
 
     @Test func noChildProcessesRemainAfterClose() async throws {
@@ -869,7 +1132,12 @@ struct MCPStdioProcessTests {
         await process.close()
         #expect(await process.isRunning == false)
         #expect(await process.waitForExit() != nil)
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        // Poll until reaped: close() guarantees exit, but the transient
+        // zombie window needs a deadline, not a fixed nap.
+        let deadline = Date().addingTimeInterval(10)
+        while childCount(matching: "sleep 31337") != 0, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
         #expect(childCount(matching: "sleep 31337") == 0)
     }
 

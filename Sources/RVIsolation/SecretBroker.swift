@@ -518,6 +518,16 @@ public actor SecretBroker {
     /// compromised or buggy provider must not misattribute its failures —
     /// or their audit causes — to another provider. Errors without a
     /// provider payload pass through: they name no provider to spoof.
+    ///
+    /// The collapse is INTENTIONAL and frozen: a Vault sub-cause
+    /// (endpoint, status) arrives here already folded into one of the
+    /// nine broker arms, and the broker re-tags the arm to the throwing
+    /// provider without preserving provider-internal sub-labels. The Vault
+    /// precedent stands (its direct-call diagnostics keep the detail where
+    /// the backend owns the vocabulary), and the broker contract is
+    /// E1-frozen: callers match on the nine arms, whose payloads are
+    /// calling-convention labels (provider ids, op names), never
+    /// backend-internal sub-causes.
     private static func thrownBy(_ error: SecretsError, provider: String) -> SecretsError {
         switch error {
         case .invalidRef:

@@ -112,14 +112,14 @@ struct SecretsProviderFactoryTests {
     @Test func missingDirectoryBuildsAlwaysOnProviders() throws {
         let missing = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-factory-missing-\(UUID().uuidString)")
-        let providers = try SecretsProviderFactory.makeProviders(configDirectory: missing)
+        let providers = try SecretsProviderFactory.makeProviders(configDirectory: missing, environment: [:])
         #expect(providers.map(\.id).sorted() == expectedAlwaysOnIDs())
     }
 
     @Test func emptyDirectoryBuildsAlwaysOnProviders() throws {
         let dir = try makeFactoryTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let providers = try SecretsProviderFactory.makeProviders(configDirectory: dir)
+        let providers = try SecretsProviderFactory.makeProviders(configDirectory: dir, environment: [:])
         #expect(providers.map(\.id).sorted() == expectedAlwaysOnIDs())
     }
 
@@ -136,7 +136,7 @@ struct SecretsProviderFactoryTests {
             at: dir, name: "secrets-file.json",
             json: #"{"version":1,"items":{"github/token":{"text":"file-value-1"}}}"#
         )
-        let providers = try SecretsProviderFactory.makeProviders(configDirectory: dir)
+        let providers = try SecretsProviderFactory.makeProviders(configDirectory: dir, environment: [:])
         #expect(providers.map(\.id).sorted() == expectedAlwaysOnIDs())
         #expect(providers.map(\.id).contains("vault-http") == false)
     }
@@ -150,7 +150,7 @@ struct SecretsProviderFactoryTests {
             at: dir, name: "secrets-providers.json",
             json: #"{"version":1,"bindings":[{"name":"db","provider":"vault-http","item":"db/creds"}]}"#
         )
-        let providers = try SecretsProviderFactory.makeProviders(configDirectory: dir)
+        let providers = try SecretsProviderFactory.makeProviders(configDirectory: dir, environment: [:])
         #expect(providers.map(\.id).sorted() == expectedAlwaysOnIDs())
         #expect(providers.map(\.id).contains("vault-http") == false)
     }
@@ -168,7 +168,7 @@ struct SecretsProviderFactoryTests {
         )
         try writeFactoryFile(at: dir, name: "vault-approle.json", json: approleJSON())
         let providers = try SecretsProviderFactory.makeProviders(
-            configDirectory: dir, transport: healthyFactoryStub()
+            configDirectory: dir, transport: healthyFactoryStub(), environment: [:]
         )
         #expect(
             providers.map(\.id).sorted() == (expectedAlwaysOnIDs() + ["vault-http"]).sorted()
@@ -314,7 +314,7 @@ struct SecretsProviderFactoryTests {
             at: dir, name: "workos-vault-apikey.json",
             json: #"{"version":1,"api_key":"factory-test-key"}"#
         )
-        let providers = try SecretsProviderFactory.makeProviders(configDirectory: dir)
+        let providers = try SecretsProviderFactory.makeProviders(configDirectory: dir, environment: [:])
         #expect(
             providers.map(\.id).sorted() == (expectedAlwaysOnIDs() + ["workos-vault"]).sorted()
         )
@@ -768,7 +768,8 @@ struct SecretsProviderFactoryTests {
         )
         let capture = FactoryAuditCapture()
         let broker = try SecretsProviderFactory.makeBroker(
-            configDirectory: dir, audit: capture.sink, liveness: .usableOnly
+            configDirectory: dir, audit: capture.sink, liveness: .usableOnly,
+            environment: [:]
         )
         #expect(await broker.providerIDs.sorted() == expectedAlwaysOnIDs())
         let ref = try SecretRef(provider: "file", item: "deploy/token")

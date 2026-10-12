@@ -161,18 +161,12 @@ public enum MCPToolPolicyFile {
 
     /// Maps a file-read failure onto the store outcome. Split out so every
     /// arm is directly testable: `.unreadable` has no filesystem trigger,
-    /// only a unit one (mirrors `MCPIntegrationStore.mapLoadFailure`).
+    /// only a unit one. Delegates to the shared `MCPLoadFailure.map`.
     static func mapLoadFailure(_ error: OwnerOnlyFileError) -> Result<[MCPFilePolicy], MCPToolPolicyFileError> {
-        switch error {
-        case .missing:
-            return .success([])
-        case .inaccessible, .unsafeLocation:
-            return .failure(.unsafeLocation)
-        case .unreadable:
-            return .failure(.unreadable)
-        case .oversized:
-            return .failure(.oversized)
-        }
+        MCPLoadFailure.map(
+            error, missing: [], unsafeLocation: .unsafeLocation,
+            unreadable: .unreadable, oversized: .oversized
+        )
     }
 
     /// Decodes one document. Fails closed on any shape or value violation.
@@ -250,7 +244,7 @@ public enum MCPToolPolicyFile {
     /// fields directly (wire shapes need their own labels), so both entries
     /// share `identifier` and the finiteness rule rather than one function.
     public static func validateModel(_ policy: MCPFilePolicy) -> String? {
-        guard identifier(policy.id, maxBytes: maximumIDBytes) else { return "id" }
+        guard mcpToolPolicyIdentifier(policy.id, maxBytes: maximumIDBytes) else { return "id" }
         guard policy.position.value.isFinite else { return "position" }
         return nil
     }
@@ -263,7 +257,7 @@ public enum MCPToolPolicyFile {
     /// Parses each field exactly once; `decode` takes the model, `validate`
     /// takes the reason.
     private static func resolveOutcome(_ dto: PolicyDTO) -> MCPFileResolveOutcome<MCPFilePolicy> {
-        guard identifier(dto.id, maxBytes: maximumIDBytes) else { return .invalid(reason: "id") }
+        guard mcpToolPolicyIdentifier(dto.id, maxBytes: maximumIDBytes) else { return .invalid(reason: "id") }
         guard let owner = PolicyOwner(rawValue: dto.owner) else { return .invalid(reason: "owner") }
         guard let pattern = try? SegmentPattern.parse(dto.pattern) else {
             return .invalid(reason: "pattern")
@@ -281,17 +275,6 @@ public enum MCPToolPolicyFile {
         )
     }
 
-    /// Short portable machine identifiers (rule ids), matching the sibling
-    /// stores' charset: ASCII letters, digits, `-`, `.`, `_`. Ids are
-    /// lookup keys and provenance labels, sometimes embedded in tooling
-    /// outside this file, and the allow-list keeps them out of every
-    /// adjacent namespace (paths, approvals fingerprints, shell words).
-    private static func identifier(_ value: String, maxBytes: Int) -> Bool {
-        !value.isEmpty && value.utf8.count <= maxBytes && value.utf8.allSatisfy {
-            ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122)
-                || ($0 >= 48 && $0 <= 57) || $0 == 45 || $0 == 46 || $0 == 95
-        }
-    }
 }
 
 /// Loads trusted operator toolkits from `mcp-toolkits.json`.
@@ -335,18 +318,12 @@ public enum MCPToolkitFile {
 
     /// Maps a file-read failure onto the store outcome. Split out so every
     /// arm is directly testable: `.unreadable` has no filesystem trigger,
-    /// only a unit one (mirrors `MCPIntegrationStore.mapLoadFailure`).
+    /// only a unit one. Delegates to the shared `MCPLoadFailure.map`.
     static func mapLoadFailure(_ error: OwnerOnlyFileError) -> Result<[MCPFileToolkit], MCPToolPolicyFileError> {
-        switch error {
-        case .missing:
-            return .success([])
-        case .inaccessible, .unsafeLocation:
-            return .failure(.unsafeLocation)
-        case .unreadable:
-            return .failure(.unreadable)
-        case .oversized:
-            return .failure(.oversized)
-        }
+        MCPLoadFailure.map(
+            error, missing: [], unsafeLocation: .unsafeLocation,
+            unreadable: .unreadable, oversized: .oversized
+        )
     }
 
     /// Decodes one document. Fails closed on any shape or value violation.
@@ -432,7 +409,7 @@ public enum MCPToolkitFile {
     /// uniqueness (ids, slugs across toolkits) stays with the callers, which
     /// see the whole document.
     public static func validateModel(_ toolkit: MCPFileToolkit) -> String? {
-        guard identifier(toolkit.id, maxBytes: maximumIDBytes) else { return "id" }
+        guard mcpToolPolicyIdentifier(toolkit.id, maxBytes: maximumIDBytes) else { return "id" }
         guard isValidSlug(toolkit.slug) else { return "slug" }
         guard boundedText(toolkit.name, maxBytes: maximumNameBytes) else { return "name" }
         guard toolkit.policies.count <= maximumPolicies else { return "policies" }
@@ -458,7 +435,7 @@ public enum MCPToolkitFile {
     }
 
     private static func validateRule(id: String, position: FractionalIndex) -> String? {
-        guard identifier(id, maxBytes: maximumIDBytes) else { return "id" }
+        guard mcpToolPolicyIdentifier(id, maxBytes: maximumIDBytes) else { return "id" }
         guard position.value.isFinite else { return "position" }
         return nil
     }
@@ -472,7 +449,7 @@ public enum MCPToolkitFile {
     /// takes the reason. Duplicate rule ids share one namespace per toolkit
     /// across policies and connections: the first repeat wins, policies first.
     private static func resolveOutcome(_ dto: ToolkitDTO) -> MCPFileResolveOutcome<MCPFileToolkit> {
-        guard identifier(dto.id, maxBytes: maximumIDBytes) else { return .invalid(reason: "id") }
+        guard mcpToolPolicyIdentifier(dto.id, maxBytes: maximumIDBytes) else { return .invalid(reason: "id") }
         guard let owner = PolicyOwner(rawValue: dto.owner) else { return .invalid(reason: "owner") }
         guard isValidSlug(dto.slug) else { return .invalid(reason: "slug") }
         guard boundedText(dto.name, maxBytes: maximumNameBytes) else { return .invalid(reason: "name") }
@@ -514,7 +491,7 @@ public enum MCPToolkitFile {
     }
 
     private static func resolvePolicy(_ dto: ToolkitPolicyDTO) -> MCPFileResolveOutcome<MCPFileToolkitPolicy> {
-        guard identifier(dto.id, maxBytes: maximumIDBytes) else { return .invalid(reason: "id") }
+        guard mcpToolPolicyIdentifier(dto.id, maxBytes: maximumIDBytes) else { return .invalid(reason: "id") }
         guard let pattern = try? SegmentPattern.parse(dto.pattern) else {
             return .invalid(reason: "pattern")
         }
@@ -531,7 +508,7 @@ public enum MCPToolkitFile {
     }
 
     private static func resolveConnection(_ dto: ToolkitConnectionDTO) -> MCPFileResolveOutcome<MCPFileToolkitConnection> {
-        guard identifier(dto.id, maxBytes: maximumIDBytes) else { return .invalid(reason: "id") }
+        guard mcpToolPolicyIdentifier(dto.id, maxBytes: maximumIDBytes) else { return .invalid(reason: "id") }
         guard let pattern = try? SegmentPattern.parse(dto.pattern) else {
             return .invalid(reason: "pattern")
         }
@@ -568,17 +545,19 @@ public enum MCPToolkitFile {
             && OperatorText.containsDisallowedTextScalar(value) == false
     }
 
-    /// Short portable machine identifiers (toolkit, rule, and grant ids),
-    /// matching the sibling stores' charset: ASCII letters, digits, `-`,
-    /// `.`, `_`. Display names stay with `boundedText`; ids are lookup
-    /// keys and provenance labels, sometimes embedded in tooling outside
-    /// this file, and the allow-list keeps them out of every adjacent
-    /// namespace (paths, approvals fingerprints, shell words).
-    private static func identifier(_ value: String, maxBytes: Int) -> Bool {
-        !value.isEmpty && value.utf8.count <= maxBytes && value.utf8.allSatisfy {
-            ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122)
-                || ($0 >= 48 && $0 <= 57) || $0 == 45 || $0 == 46 || $0 == 95
-        }
+}
+
+/// Short portable machine identifiers (rule, toolkit, and grant ids),
+/// matching the sibling stores' charset: ASCII letters, digits, `-`,
+/// `.`, `_`. Display names stay with `boundedText`; ids are lookup keys
+/// and provenance labels, sometimes embedded in tooling outside this
+/// file, and the allow-list keeps them out of every adjacent namespace
+/// (paths, approvals fingerprints, shell words). One copy serves both
+/// loaders in this file.
+private func mcpToolPolicyIdentifier(_ value: String, maxBytes: Int) -> Bool {
+    !value.isEmpty && value.utf8.count <= maxBytes && value.utf8.allSatisfy {
+        ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122)
+            || ($0 >= 48 && $0 <= 57) || $0 == 45 || $0 == 46 || $0 == 95
     }
 }
 

@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVDomain
 
@@ -841,6 +846,10 @@ final class OnePasswordSpawnBox: @unchecked Sendable {
             continuation.resume(returning: OnePasswordSpawnOutcome.cancelled)
             return
         }
+        // A non-positive per-call budget is already expired: time out
+        // immediately (the Vault HTTP provider instead rejects non-positive
+        // timeouts as endpoint-config errors at load — config there,
+        // per-call budget here, hence the differing posture).
         guard timeoutSeconds > 0 else {
             finish(kind: .timedOut)
             return
@@ -898,7 +907,9 @@ final class OnePasswordSpawnBox: @unchecked Sendable {
         }
         lock.withLock { launchedPID = process.processIdentifier }
         reapUntrackedLaunch(process)
-        armOrAbandon(limit: timeoutSeconds)?.terminate()
+        if let stray = armOrAbandon(limit: timeoutSeconds) {
+            Self.terminateEscalating(stray)
+        }
     }
 
     /// Reaps a just-launched child the box no longer tracks. A cancel that
@@ -911,7 +922,7 @@ final class OnePasswordSpawnBox: @unchecked Sendable {
     func reapUntrackedLaunch(_ process: Process) {
         let abandoned: Bool = lock.withLock { finished }
         if abandoned {
-            process.terminate()
+            Self.terminateEscalating(process)
         }
     }
 
@@ -1012,18 +1023,46 @@ final class OnePasswordSpawnBox: @unchecked Sendable {
         }
     }
 
+    /// Grace after SIGTERM before the SIGKILL escalation, mirroring the
+    /// stdio close's kill grace.
+    private static let killGraceNanoseconds: UInt64 = 500_000_000
+
+    /// Terminates the child, escalating to SIGKILL past the grace. A child
+    /// ignoring SIGTERM (stuck prompt, wedged IPC) would otherwise survive
+    /// its box, and repeated timeouts would accumulate live processes
+    /// while every finish path reports clean. The escalation task holds
+    /// only the process (never the box), lives at most the grace, and
+    /// no-ops when the child already exited; holding the object (rather
+    /// than the pid) keeps the liveness check free of pid reuse.
+    static func terminateEscalating(_ process: Process) {
+        guard process.isRunning else { return }
+        process.terminate()
+        Task.detached {
+            try? await Task.sleep(nanoseconds: Self.killGraceNanoseconds)
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+        }
+    }
+
     /// Terminates the child when launched and still running. The launch
     /// itself races cancellation: `begin` tracks the child before `run`,
     /// so a cancel landing in between must not terminate a never-launched
     /// task — Foundation raises `NSInvalidArgumentException` there and
     /// aborts the host. The `isRunning` gate makes that path a no-op;
     /// `reapUntrackedLaunch` terminates the child once launched instead.
-    /// Idempotent: terminating an exited child is a no-op.
+    /// Idempotent: terminating an exited child is a no-op. The kill itself
+    /// runs outside the lock (`Process.terminate` is thread-safe); a child
+    /// exiting between the gate and the kill makes the kill a no-op.
     private func terminate() {
-        lock.withLock {
+        let target: Process? = lock.withLock {
             if process?.isRunning == true {
-                process?.terminate()
+                return process
             }
+            return nil
+        }
+        if let target {
+            Self.terminateEscalating(target)
         }
     }
 

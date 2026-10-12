@@ -1,7 +1,10 @@
 import Foundation
 import RVDomain
 
-/// Default-policy hints a plugin attaches to a tool, enforced before the handler runs.
+/// Default-policy hints a plugin attaches to a tool. Advisory only: no wave-1
+/// consumer reads them (neither `ScopedInvoker` nor discovery consults
+/// `requiresApproval`), so a wave-2 consumer must wire `requiresApproval`
+/// into the invoke policy gate instead of trusting these as enforced.
 ///
 /// Field-for-field mirror of Executor `ToolAnnotations`
 /// (`packages/core/sdk/src/tool.ts:11-15`) as projected by `ToolAnnotationsView`
@@ -179,18 +182,27 @@ extension MCPRegistry {
     /// - Ranked search filters by fuzzy namespace prefix, scores every
     ///   surviving tool, and sorts score-descending, path-ascending.
     ///
+    /// Scoped surfaces post-filter through `isBlocked`: ranking is fuzzy
+    /// (token-prefix over normalized text) while toolkit scopes match exact
+    /// segments, so search can surface tools the scope then blocks. The
+    /// `isBlocked` parameter is required precisely so a scoped caller cannot
+    /// forget that filter; there is no exact-match search mode.
+    ///
     /// `limit` defaults to 12 (the Executor default); negative limits behave as
     /// zero and negative offsets clamp to zero (Executor `paginate`, same file
     /// :465-476 — the engine-validator rejection of negative offsets lives on
     /// the execution path, out of scope here). `isBlocked` hides
     /// policy-rejected tools from ranking, since Executor search reads through
-    /// `tools.list` with `includeBlocked` defaulting to false.
+    /// `tools.list` with `includeBlocked` defaulting to false. It is a
+    /// required parameter with no default, so wiring the policy verdict is a
+    /// compiler error to forget; genuinely unscoped surfaces pass
+    /// `{ _ in false }` explicitly.
     public func search(
         query: String,
         namespace: String? = nil,
         limit: Int = 12,
         offset: Int = 0,
-        isBlocked: (MCPToolAddress) -> Bool = { _ in false }
+        isBlocked: (MCPToolAddress) -> Bool
     ) -> MCPPage<MCPToolMatch> {
         let visible = handlers.values.filter { isBlocked($0.address) == false }
         if mcpNormalizeSearchText(query).isEmpty {
@@ -220,10 +232,12 @@ extension MCPRegistry {
     /// the filter's `includeAnnotations` is false. Results sort by literal for
     /// determinism. Blocked tools are omitted unless `includeBlocked` is set
     /// (`policies.test.ts`: "a blocked tool is omitted from tools.list" /
-    /// "includeBlocked surfaces blocked tools").
+    /// "includeBlocked surfaces blocked tools"). `isBlocked` is required
+    /// with no default, so wiring the policy verdict is a compiler error to
+    /// forget; genuinely unscoped surfaces pass `{ _ in false }` explicitly.
     public func list(
         filter: MCPToolListFilter = MCPToolListFilter(),
-        isBlocked: (MCPToolAddress) -> Bool = { _ in false }
+        isBlocked: (MCPToolAddress) -> Bool
     ) -> [MCPHandlerRecord] {
         handlers.values
             .filter { mcpMatchesFilter($0, filter: filter) }
@@ -238,12 +252,15 @@ extension MCPRegistry {
     /// filtering over the normalized identity text, single-pass counting, sort
     /// by id, and the shared paginate shape (default limit 50).
     /// Counts exclude blocked tools, as the Executor counts read through
-    /// `tools.list` with `includeBlocked` defaulting to false.
+    /// `tools.list` with `includeBlocked` defaulting to false. `isBlocked`
+    /// is required with no default, so wiring the policy verdict is a
+    /// compiler error to forget; genuinely unscoped surfaces pass
+    /// `{ _ in false }` explicitly.
     public func listIntegrations(
         query: String? = nil,
         limit: Int = 50,
         offset: Int = 0,
-        isBlocked: (MCPToolAddress) -> Bool = { _ in false }
+        isBlocked: (MCPToolAddress) -> Bool
     ) -> MCPPage<MCPIntegrationItem> {
         var counts: [String: Int] = [:]
         for record in handlers.values where isBlocked(record.address) == false {
@@ -269,16 +286,22 @@ extension MCPRegistry {
     /// `tool_not_found` error carrying up to five ranked suggestions — never a
     /// bare stub. Blocked tools read as not-found because Executor
     /// `tools.schema` returns null for them and describe mirrors that null.
+    /// `isBlocked` is required with no default, so wiring the policy verdict
+    /// is a compiler error to forget; genuinely unscoped surfaces pass
+    /// `{ _ in false }` explicitly.
     public func describe(
         path: String,
-        isBlocked: (MCPToolAddress) -> Bool = { _ in false }
+        isBlocked: (MCPToolAddress) -> Bool
     ) -> MCPDescribedTool {
+        // The queried path is attacker bytes of arbitrary length: bound the
+        // echo before it reaches served responses and logs.
+        let echoed = mcpSanitizeDescribeEcho(path)
         if let address = mcpResolveDescribeAddress(path),
             let record = handlers[address],
             isBlocked(address) == false
         {
             return MCPDescribedTool(
-                path: path,
+                path: echoed,
                 name: record.address.tool,
                 description: record.description,
                 inputSchemaJSON: record.inputSchemaJSON,
@@ -288,11 +311,11 @@ extension MCPRegistry {
         }
         let found = suggestions(for: path, isBlocked: isBlocked)
         return MCPDescribedTool(
-            path: path,
-            name: path,
+            path: echoed,
+            name: echoed,
             error: MCPDescribeError(
                 code: "tool_not_found",
-                message: "Tool not found: \(path)",
+                message: "Tool not found: \(echoed)",
                 suggestions: found.isEmpty ? nil : found
             )
         )
@@ -302,9 +325,12 @@ extension MCPRegistry {
     /// `TOOL_DESCRIBE_SUGGESTION_LIMIT`, tool-invoker.ts:24) candidate paths
     /// for an unknown tool path: a namespace-scoped leaf search first, falling
     /// back to a global leaf search when the scoped one is empty.
+    /// `isBlocked` is required with no default, so wiring the policy verdict
+    /// is a compiler error to forget; genuinely unscoped surfaces pass
+    /// `{ _ in false }` explicitly.
     public func suggestions(
         for path: String,
-        isBlocked: (MCPToolAddress) -> Bool = { _ in false },
+        isBlocked: (MCPToolAddress) -> Bool,
         limit: Int = 5
     ) -> [String] {
         let capped = max(limit, 0)
@@ -725,6 +751,20 @@ private func mcpVisibleAnnotations(_ annotations: MCPToolAnnotations?) -> MCPToo
         return nil
     }
     return annotations
+}
+
+/// Longest attacker-path echo served by describe (path, name, message).
+private let mcpDescribeEchoCharacters = 256
+
+/// Bounds the queried path before `describe` echoes it: control scalars
+/// (newlines, ANSI escapes, and the rest of Cc, which would inject log
+/// lines and terminal sequences into serving-layer sinks) are stripped,
+/// then the echo is cut to `mcpDescribeEchoCharacters` characters.
+/// Legitimate paths are short and control-free, so they pass through
+/// unchanged.
+private func mcpSanitizeDescribeEcho(_ path: String) -> String {
+    let clean = path.unicodeScalars.filter { $0.properties.generalCategory != .control }
+    return String(clean.map(Character.init).prefix(mcpDescribeEchoCharacters))
 }
 
 // MARK: - Catalog sync
@@ -1212,6 +1252,17 @@ public struct MCPDescribedTool: Sendable, Equatable, Hashable, Codable {
         self.outputSchemaJSON = outputSchemaJSON
         self.annotations = annotations
         self.error = error
+    }
+
+    /// Bridges a describe miss onto the invoke not-found shape, so serving
+    /// planes share one conversion instead of hand-mapping. Nil when the
+    /// tool resolved; otherwise `tool_not_found` with the echoed path and
+    /// the ranked suggestions, normalizing absent suggestions to empty
+    /// (describe omits the key when empty; the invoke shape always carries
+    /// the array).
+    public var toolError: MCPToolError? {
+        guard error != nil else { return nil }
+        return MCPToolError.toolNotFound(path: path, suggestions: error?.suggestions ?? [])
     }
 }
 

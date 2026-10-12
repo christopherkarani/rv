@@ -22,7 +22,10 @@ import Synchronization
 /// the child's stdin and reads one `\n`-terminated reply line from its
 /// stdout, capped at `MCPMessageEnvelope.maximumBytes` each way. An
 /// exchange lock serializes the write-plus-read as one unit so concurrent
-/// callers can never split reply bytes across readers.
+/// callers can never split reply bytes across readers; the lock wait is
+/// cancellation-aware and the waiter queue is bounded, and every exchange
+/// races a deadline so one hung child wedges neither the handle nor its
+/// callers.
 ///
 /// `SIGPIPE` is ignored process-wide (permanently, like all `SIGPIPE`
 /// discipline) so a dead child's closed pipes surface as errors, never as
@@ -36,6 +39,21 @@ public actor MCPStdioProcess {
     private static let killGraceMs = 500
     /// Poll step for exit waits.
     private static let pollStepNanoseconds: UInt64 = 5_000_000
+    /// Default per-exchange budget (write-plus-read) in seconds. Covers
+    /// slow tool backends behind the child; cancellation stays the fast
+    /// path for abandonment.
+    public static let defaultExchangeTimeoutSeconds = 30.0
+    /// Most callers parked on the exchange lock. Far above legitimate
+    /// per-handle bursts; only runaway queueing behind a wedged child
+    /// trips it.
+    static let maximumExchangeWaiters = 64
+    /// Budget to resync framing (drain to the next newline) after a
+    /// malformed reply. A responsive child resyncs in milliseconds; the
+    /// bound only bites a trickling attacker.
+    private static let drainGraceSeconds = 5.0
+    /// Largest honored budget in seconds (sleep-overflow clamp, mirroring
+    /// the op runner's cap).
+    private static let maximumTimeoutSeconds = 1_000_000.0
 
     /// Live child pipes. One optional: nil means never spawned or closed.
     private struct LivePipes {
@@ -52,7 +70,8 @@ public actor MCPStdioProcess {
     private var status: Int32?
     private var pending = Data()
     private var exchangeInFlight = false
-    private var exchangeWaiters: [CheckedContinuation<Void, Never>] = []
+    private var exchangeWaiters: [(id: UInt64, continuation: CheckedContinuation<Void, Error>)] = []
+    private var exchangeWaiterNextID: UInt64 = 0
 
     /// Creates an unspawned process handle.
     public init() {}
@@ -100,37 +119,86 @@ public actor MCPStdioProcess {
     /// Exchanges one frame with the child: writes the frame plus `\n`,
     /// reads one reply line. Backs `MCPStdioChannel`'s `send` seam.
     ///
+    /// The write-plus-read races `timeoutSeconds` (default
+    /// `defaultExchangeTimeoutSeconds`): on timeout the transport fails
+    /// closed and the exchange fails `.requestTimeout`, so one hung child
+    /// wedges neither the handle nor its callers. A non-positive or
+    /// non-finite budget times out immediately, before queueing.
+    ///
+    /// A malformed reply resyncs framing (drains to the next newline)
+    /// before the lock releases, so the next exchange never frames this
+    /// reply's tail as its own; when the drain itself fails, the transport
+    /// fails closed instead.
+    ///
     /// - Throws: `MCPTransportError.transportClosed` when unspawned,
-    ///   closed, exited, or EOF-terminated mid-exchange, or
+    ///   closed, exited, or EOF-terminated mid-exchange,
     ///   `malformedEnvelope` when a frame or reply exceeds the cap or a
-    ///   reply tears at EOF.
-    public func send(_ frame: Data) async throws -> Data {
+    ///   reply tears at EOF, `requestTimeout` when the budget expires,
+    ///   `exchangeOverloaded` when the waiter queue is full, or
+    ///   `CancellationError` when the caller cancels.
+    public func send(
+        _ frame: Data, timeoutSeconds: Double = MCPStdioProcess.defaultExchangeTimeoutSeconds
+    ) async throws -> Data {
+        if Task.isCancelled { throw CancellationError() }
         guard let live else { throw MCPTransportError.transportClosed }
         guard live.process.isRunning else { throw MCPTransportError.transportClosed }
         guard frame.count <= MCPMessageEnvelope.maximumBytes else { throw MCPTransportError.malformedEnvelope }
-        await lockExchange()
+        guard timeoutSeconds.isFinite, timeoutSeconds > 0 else { throw MCPTransportError.requestTimeout }
+        try await lockExchange()
         defer { unlockExchange() }
         guard let fresh = self.live, fresh.process.isRunning else { throw MCPTransportError.transportClosed }
         var request = frame
         request.append(0x0A)
+        // Captured before the first suspension: `fileDescriptor` throws an
+        // uncatchable NSException once `close` lands, while `read(2)` on the
+        // raw fd fails cleanly with EBADF.
+        let fd = fresh.stdoutRead.fileDescriptor
         do {
-            try fresh.stdinWrite.write(contentsOf: request)
-        } catch {
-            throw MCPTransportError.transportClosed
+            return try await exchangeWithDeadline(
+                stdin: fresh.stdinWrite, fd: fd, request: request,
+                seconds: min(timeoutSeconds, Self.maximumTimeoutSeconds)
+            )
+        } catch let error as MCPTransportError where error == .malformedEnvelope {
+            await resyncAfterMalformed(fd: fd)
+            throw error
         }
-        return try await readReplyLine(fresh.stdoutRead)
     }
 
     /// Takes the exchange lock, queueing behind an in-flight exchange.
     /// Actor isolation alone cannot pair requests with replies: `send`
     /// suspends mid-exchange, so without this lock concurrent sends would
-    /// split reply bytes across readers and strand them.
-    private func lockExchange() async {
+    /// split reply bytes across readers and strand them. The wait is
+    /// cancellation-aware (a cancelled waiter withdraws instead of
+    /// parking) and the queue is bounded at `maximumExchangeWaiters`.
+    private func lockExchange() async throws -> Void {
         if exchangeInFlight == false {
             exchangeInFlight = true
             return
         }
-        await withCheckedContinuation { exchangeWaiters.append($0) }
+        guard exchangeWaiters.count < Self.maximumExchangeWaiters else {
+            throw MCPTransportError.exchangeOverloaded
+        }
+        let id = exchangeWaiterNextID
+        exchangeWaiterNextID += 1
+        try await withTaskCancellationHandler {
+            // A cancel that landed before queueing (or an already-cancelled
+            // task, whose handler ran first) must never park: fail instead.
+            if Task.isCancelled { throw CancellationError() }
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                exchangeWaiters.append((id: id, continuation: continuation))
+            }
+        } onCancel: {
+            Task { await self.abandonWaiter(id) }
+        }
+    }
+
+    /// Withdraws one cancelled waiter, resuming it with
+    /// `CancellationError`. A grant that won the race already removed the
+    /// waiter: a no-op then.
+    private func abandonWaiter(_ id: UInt64) {
+        if let index = exchangeWaiters.firstIndex(where: { $0.id == id }) {
+            exchangeWaiters.remove(at: index).continuation.resume(throwing: CancellationError())
+        }
     }
 
     /// Releases the exchange lock to the next waiter, if any.
@@ -139,17 +207,140 @@ public actor MCPStdioProcess {
             exchangeInFlight = false
             return
         }
-        exchangeWaiters.removeFirst().resume()
+        exchangeWaiters.removeFirst().continuation.resume()
+    }
+
+    /// Writes one frame and reads one reply line within `seconds`. The
+    /// deadline races the whole write-plus-read as one unit. On timeout —
+    /// or when the caller cancels mid-exchange — the transport fails
+    /// closed: `close()` kills the child (so EPIPE unblocks a parked
+    /// write) and retires the read fd (so EBADF unblocks a parked read),
+    /// and the exchange fails `.requestTimeout` (`CancellationError` when
+    /// the caller cancelled). A reply that completed before the deadline
+    /// still returns, even under a late cancel: completed work wins.
+    private func exchangeWithDeadline(
+        stdin: FileHandle, fd: Int32, request: Data, seconds: Double
+    ) async throws -> Data {
+        try await withThrowingTaskGroup(of: Data.self) { group in
+            group.addTask {
+                do {
+                    try stdin.write(contentsOf: request)
+                } catch {
+                    throw MCPTransportError.transportClosed
+                }
+                return try await self.readReplyLine(fd: fd)
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw MCPTransportError.requestTimeout
+            }
+            let first = await group.nextResult()
+            switch first {
+            case .success(let reply):
+                group.cancelAll()
+                while await group.nextResult() != nil {}
+                return reply
+            case .failure(let error as MCPTransportError) where error == .requestTimeout:
+                await self.failClosed()
+                group.cancelAll()
+                while await group.nextResult() != nil {}
+                throw error
+            case .failure(let error):
+                if Task.isCancelled {
+                    await self.failClosed()
+                    group.cancelAll()
+                    while await group.nextResult() != nil {}
+                    throw CancellationError()
+                }
+                group.cancelAll()
+                while await group.nextResult() != nil {}
+                throw error
+            case .none:
+                // Unreachable: two children always yield a result. Fail closed.
+                group.cancelAll()
+                while await group.nextResult() != nil {}
+                if Task.isCancelled { throw CancellationError() }
+                throw MCPTransportError.transportClosed
+            }
+        }
+    }
+
+    /// Resyncs framing after a malformed reply: discards bytes through the
+    /// next newline (bounded by `drainGraceSeconds`), leaving post-newline
+    /// bytes in `pending` for the next exchange. EOF resyncs to empty (the
+    /// next read then fails closed at EOF, correctly). When the drain
+    /// itself fails — deadline, fd error, or cancellation — the transport
+    /// fails closed instead, which also unparks a still-draining reader so
+    /// the race below always terminates. A torn frame never outlives the
+    /// exchange.
+    private func resyncAfterMalformed(fd: Int32) async {
+        await withThrowingTaskGroup(of: Bool.self) { group in
+            group.addTask { await self.drainToNewline(fd: fd) }
+            group.addTask {
+                try? await Task.sleep(
+                    nanoseconds: UInt64(Self.drainGraceSeconds * 1_000_000_000)
+                )
+                return false
+            }
+            let first = await group.nextResult()
+            let drained: Bool
+            if case .success(true) = first {
+                drained = true
+            } else {
+                drained = false
+            }
+            if drained == false {
+                await self.failClosed()
+            }
+            group.cancelAll()
+            while await group.nextResult() != nil {}
+        }
+    }
+
+    /// Fails the transport closed from an exchange path. Hops through a
+    /// detached task so the kill graces keep real waits even when the
+    /// caller is cancelled: `Task.sleep` throws instantly in a cancelled
+    /// task, which would skip every grace and drop a still-running
+    /// `Process` (`NSConcreteTask` raises on dealloc while running).
+    private func failClosed() async {
+        await Task.detached { await self.close() }.value
+    }
+
+    /// Discards fd bytes through the next newline, leaving post-newline
+    /// bytes in `pending`. True when framing is whole again: either a
+    /// newline was found, or EOF arrived (pending emptied). False when the
+    /// fd broke mid-drain. Scanned bytes drop as they prove newline-free,
+    /// so the buffer never holds more than one chunk however much the child
+    /// streams. Internal (like `readFramedLine`) so the fd-error arm is
+    /// directly testable: no public path retires an fd mid-drain on
+    /// command.
+    func drainToNewline(fd: Int32) async -> Bool {
+        var buffer = Data()
+        while true {
+            if let newline = buffer.firstIndex(of: 0x0A) {
+                pending = Data(buffer[buffer.index(after: newline)...])
+                return true
+            }
+            buffer.removeAll(keepingCapacity: true)
+            let chunk: Data?
+            do {
+                chunk = try await Self.readChunk(fd: fd)
+            } catch {
+                return false
+            }
+            guard let chunk else {
+                pending = Data()
+                return true
+            }
+            buffer = chunk
+        }
     }
 
     /// Reads one `\n`-terminated reply line, carrying over-read bytes in
     /// `pending` for the next call. EOF with no pending bytes is a clean
-    /// close; EOF with a partial line is a torn frame.
-    private func readReplyLine(_ stdout: FileHandle) async throws -> Data {
-        // Captured before the first suspension: `fileDescriptor` throws an
-        // uncatchable NSException once `close` lands, while `read(2)` on the
-        // raw fd fails cleanly with EBADF.
-        let fd = stdout.fileDescriptor
+    /// close; EOF with a partial line is a torn frame. The fd arrives
+    /// captured (see `send`).
+    private func readReplyLine(fd: Int32) async throws -> Data {
         let framed = try await Self.readFramedLine(from: pending) {
             try await Self.readChunk(fd: fd)
         }
@@ -266,11 +457,14 @@ public actor MCPStdioProcess {
     /// and only then closed. A bare close would free the fd number while a
     /// detached `readChunk` is still parked on it; any concurrent `open`
     /// reusing that number would feed the parked read foreign bytes (or
-    /// park it forever on an unreadable fd). Stdin needs no such
-    /// treatment: writes run synchronously on the actor, so no write is
-    /// parked when `close` runs. The handle must be open and is retired
-    /// exactly once (`close` guarantees both). `nullPath` is injectable so
-    /// tests can cover the open-failure fallback, a plain close.
+    /// park it forever on an unreadable fd). Stdin needs no retire: writes
+    /// run in the exchange child task, so `close` can land mid-write, but
+    /// a parked `write(2)` holds its open file description (single syscall,
+    /// never re-issued), and the kill fails it with EPIPE while the read
+    /// end retires — the exchange then fails closed. The handle must be
+    /// open and is retired exactly once (`close` guarantees both).
+    /// `nullPath` is injectable so tests can cover the open-failure
+    /// fallback, a plain close.
     static func invalidateForReading(_ handle: FileHandle, nullPath: String = "/dev/null") {
         // `FileHandle` (not a raw `open`) so the actor's own `close()`
         // never shadows the fd cleanup below.

@@ -17,6 +17,12 @@ public struct MCPToolkitSlug: Sendable, Equatable, Hashable {
 
     /// Normalizes (trim + lowercase) then validates. Fails closed on any shape
     /// violation; the error never echoes the rejected input.
+    ///
+    /// Identifier validation comes in three styles across the codebase —
+    /// throwing parse (here), failable init (`MCPPluginKey`), and boolean
+    /// predicate (the policy-file `identifier`) — each fitting its use
+    /// (load-time errors, optional drops, predicate filters). New throwing
+    /// loads align on this style; the other two stay as they are.
     public static func parse(_ raw: String) throws(MCPToolkitError) -> MCPToolkitSlug {
         let slug = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard isValid(slug) else {
@@ -173,7 +179,8 @@ public struct MCPToolkit: Sendable, Equatable, Hashable {
     /// path rejects those before this runs, so a nil here means a
     /// hand-built record that never saw the loader. Patterns, actions, and
     /// positions are strong types shared with the loader, so no other check
-    /// can fail.
+    /// can fail. Wave-2 wiring must chain decode → validate → bridge in
+    /// that order and surface each stage's diagnostics, never a bare nil.
     public init?(file: MCPFileToolkit) {
         guard let slug = try? MCPToolkitSlug.parse(file.slug) else {
             return nil
@@ -414,6 +421,17 @@ public struct MCPDynamicToolScope: Sendable, Equatable, Hashable {
         return scopes.contains { $0.contains(address) }
     }
 
+    /// Builds the discovery `isBlocked` predicate for these scopes, so
+    /// toolkit scoping plugs into `MCPRegistry` search/list/describe
+    /// without hand-translation: nil scopes block nothing (unrestricted
+    /// read), an empty array blocks everything, otherwise an address is
+    /// blocked unless it sits under at least one prefix.
+    public static func blockedPredicate(
+        scopes: [MCPDynamicToolScope]?
+    ) -> @Sendable (MCPToolAddress) -> Bool {
+        { address in allows(address, scopes: scopes) == false }
+    }
+
     /// The prefix of dynamic tool ids a pattern can match, or nil when it can
     /// match none. Ports Executor `dynamicToolScopeForPattern`
     /// (`policies.ts:147-164`): a dynamic tool id has at least four
@@ -603,7 +621,8 @@ public struct MCPToolkitStore: Sendable, Equatable {
     /// Bridges validated file records. Fails when any record violates the
     /// loader's value rules, or when two records share an id or a slug
     /// (the file decode path rejects those before this runs, so a nil here
-    /// means hand-built records that never saw the loader).
+    /// means hand-built records that never saw the loader). Wave-2 wiring
+    /// must surface decode/validate diagnostics, never this bare nil.
     public init?(fileToolkits: [MCPFileToolkit]) {
         var bridged: [MCPToolkit] = []
         var seenIDs = Set<String>()
@@ -974,7 +993,8 @@ extension ToolPolicy {
     /// finite: the file decode path rejects those before this runs, so a
     /// nil here means a hand-built policy that never saw the loader. The
     /// pattern, owner, and action are strong types shared with the loader,
-    /// so no other check can fail.
+    /// so no other check can fail. Wave-2 wiring must surface
+    /// decode/validate diagnostics, never this bare nil.
     public init?(filePolicy: MCPFilePolicy) {
         guard MCPToolPolicyFile.validateModel(filePolicy) == nil else {
             return nil

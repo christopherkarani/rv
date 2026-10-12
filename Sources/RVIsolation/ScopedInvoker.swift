@@ -92,21 +92,6 @@ public struct MCPArgumentSchema: Hashable, Sendable, Equatable {
     }
 }
 
-/// Typed argument failures. Labels only; offending values never echo.
-public enum MCPArgumentValidationError: Error, Hashable, Sendable, Equatable {
-    /// The text is not a JSON object.
-    case malformed
-    /// The text exceeds the byte cap.
-    case oversized
-    /// The object holds too many keys.
-    case tooManyKeys
-    /// A key name is empty or overlong (label carries the index, not the key).
-    case badKey(index: Int)
-    /// A required key is missing or null (label carries the key name, which
-    /// is schema vocabulary, never a value).
-    case missingRequired(key: String)
-}
-
 /// Pure argument validator: per-address schemas with a default.
 ///
 /// Validation runs after policy resolve and before elicitation (REQ-012),
@@ -640,6 +625,35 @@ public enum ScopedInvokeError: Error, Sendable, Equatable {
             return true
         }
         return false
+    }
+
+    /// Projects one invoke error onto the serving-plane failure shape for
+    /// `MCPInvokeFailure.outcome(path:suggestions:)`. Total over every arm;
+    /// the opaque correlation payload is dropped here (it stays server-side
+    /// on the cause log and audit row, never in a served value).
+    public var invokeFailure: MCPInvokeFailure {
+        switch self {
+        case .principalRequired:
+            return .principalRequired
+        case .policyDenied(let matchedPolicyId):
+            return .policyDenied(matchedPolicyId: matchedPolicyId)
+        case .unknownTool:
+            return .unknownTool
+        case .crossResource:
+            return .crossResource
+        case .invalidArguments(let validation):
+            return .invalidArguments(validation)
+        case .elicitationTimeout:
+            return .elicitationTimeout
+        case .elicitationUnavailable:
+            return .elicitationUnavailable
+        case .credentialFailed(let cause):
+            return .credentialFailed(cause)
+        case .auditFailed:
+            return .auditFailed
+        case .internalError:
+            return .opaque
+        }
     }
 }
 

@@ -77,6 +77,16 @@ public enum SecretsError: Error, Sendable, Equatable {
 }
 
 /// One secret backend. Trait only; conformances live in RVIsolation and perform IO there.
+///
+/// The trait covers reads only (`resolve`/`health`); writable surfaces
+/// stay per-backend by design and are intentionally not aligned: the
+/// encrypted file provider is synchronous (`get`/`has`/`set`/`delete`
+/// over a local store), the Vault HTTP provider is async (`value` plus
+/// its own mutating calls over the network), and the 1Password CLI
+/// provider is read-only (the `op` CLI owns writes). Unifying them
+/// behind one mutating trait would force async-over-sync adapters and
+/// fake the read-only backend; operators needing writes use the backend
+/// whose durability they mean.
 public protocol SecretsProvider: Sendable {
     /// Provider id. Must be a member of `SecretRef.allowedProviders`.
     var id: String { get }

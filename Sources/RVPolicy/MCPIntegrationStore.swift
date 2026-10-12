@@ -425,16 +425,10 @@ public enum MCPIntegrationStore {
     /// than inlined like the siblings) so every arm is directly testable:
     /// `.unreadable` has no filesystem trigger, only a unit one.
     static func mapLoadFailure(_ error: OwnerOnlyFileError) -> Result<MCPIntegrationSet, MCPIntegrationStoreError> {
-        switch error {
-        case .missing:
-            return .success(.empty)
-        case .inaccessible, .unsafeLocation:
-            return .failure(.unsafeLocation)
-        case .unreadable:
-            return .failure(.unreadable)
-        case .oversized:
-            return .failure(.oversized)
-        }
+        MCPLoadFailure.map(
+            error, missing: .empty, unsafeLocation: .unsafeLocation,
+            unreadable: .unreadable, oversized: .oversized
+        )
     }
 
     public static func decode(_ data: Data) -> Result<MCPIntegrationSet, MCPIntegrationStoreError> {

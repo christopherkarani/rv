@@ -1365,7 +1365,12 @@ struct MCPAnalyticsBufferTests {
             weakBuffer = buffer
             await buffer.startCadence(every: 0.01)
         }
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        // Poll until the deinit lands: a fixed nap races the release under
+        // load, while a correct cadence always releases promptly.
+        let deadline = Date().addingTimeInterval(2)
+        while weakBuffer != nil, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
         #expect(weakBuffer == nil)
     }
 

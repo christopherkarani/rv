@@ -510,14 +510,19 @@ public enum MCPTransportError: Error, Hashable, Sendable, Equatable {
     case remoteFailed(status: Int)
     /// The roundtrip exceeded its budget.
     case requestTimeout
+    /// The exchange wait queue is full; the caller must back off before
+    /// retrying. Never from an idle handle: only runaway queueing behind
+    /// a wedged child trips it.
+    case exchangeOverloaded
     /// The channel is closed or was never started.
     case transportClosed
     /// The channel lifecycle rejects this transition (double start).
     case lifecycleViolation
 
     /// True for failures worth the single retry: timeouts and 5xx edges.
-    /// Auth, binding, envelope, and lifecycle failures never retry: a retry
-    /// would repeat a decision, not ride out a blip.
+    /// Auth, binding, envelope, lifecycle, and overload failures never
+    /// retry: a retry would repeat a decision (or re-overflow a queue),
+    /// not ride out a blip. Overload needs backoff, not an immediate retry.
     public var isRetryable: Bool {
         switch self {
         case .requestTimeout:
@@ -525,7 +530,8 @@ public enum MCPTransportError: Error, Hashable, Sendable, Equatable {
         case .remoteFailed(let status):
             return (500...599).contains(status)
         case .nonLoopbackTarget, .unknownSession, .unauthenticated,
-            .crossResource, .malformedEnvelope, .transportClosed, .lifecycleViolation:
+            .crossResource, .malformedEnvelope, .transportClosed, .lifecycleViolation,
+            .exchangeOverloaded:
             return false
         }
     }
@@ -580,7 +586,9 @@ public enum MCPStdioLifecycle: Hashable, Sendable, Equatable {
     case spawned
     /// Serving roundtrips.
     case ready
-    /// Draining: close requested, in-flight sends finish, new sends refused.
+    /// Draining: close requested, new sends refused. A transient marker,
+    /// not a waited phase: `close` passes through it synchronously, so no
+    /// in-flight send is awaited here and the state is never observed.
     case draining
     /// Terminal. Sends and restarts are refused.
     case closed
@@ -591,7 +599,9 @@ public enum MCPStdioLifecycle: Hashable, Sendable, Equatable {
 /// The `send` closure is the process-pipe seam: production passes a
 /// `Process`-backed stdin/stdout frame exchange (X1 wires full stdio
 /// server connections); tests pass an echo or scripted closure. The
-/// channel adds lifecycle plus session binding only.
+/// channel adds lifecycle plus session binding only. Prefer the
+/// process-owning init in production, so `close` cascades to the child
+/// and no composition can leak it.
 public actor MCPStdioChannel {
     /// Current lifecycle state.
     public private(set) var lifecycle: MCPStdioLifecycle
@@ -600,8 +610,11 @@ public actor MCPStdioChannel {
 
     private let send: @Sendable (Data) async throws -> Data
     private let log: MCPTransportLog
+    /// Owned child, set by the composing init. `close` cascades to it.
+    private let process: MCPStdioProcess?
 
     /// Binds a channel to one session over the pipe seam. Starts `spawned`.
+    /// Owns no process: the caller closes the child itself.
     public init(
         session: MCPTransportSession,
         send: @escaping @Sendable (Data) async throws -> Data,
@@ -611,6 +624,22 @@ public actor MCPStdioChannel {
         self.session = session
         self.send = send
         self.log = log
+        self.process = nil
+    }
+
+    /// Binds a channel to one session over one owned child process: the
+    /// composed stdio owner. Starts `spawned`; `close` cascades to the
+    /// process, so the child cannot outlive the channel.
+    public init(
+        session: MCPTransportSession,
+        process: MCPStdioProcess,
+        log: MCPTransportLog = .discarded
+    ) {
+        self.lifecycle = .spawned
+        self.session = session
+        self.send = process.exchange
+        self.log = log
+        self.process = process
     }
 
     /// Moves `spawned` to `ready`. Any other state throws `.lifecycleViolation`.
@@ -621,12 +650,18 @@ public actor MCPStdioChannel {
         lifecycle = .ready
     }
 
-    /// Moves to `closed` via `draining`. Idempotent: closing twice is a no-op.
-    public func close() {
+    /// Marks `closed` immediately (the `draining` state is a transient
+    /// marker, not a waited phase: in-flight sends are neither awaited nor
+    /// cancelled here), then closes the owned child process, if any, so it
+    /// cannot leak. Idempotent: closing twice is a no-op. With an owned
+    /// process, in-flight sends fail closed as the cascade retires the
+    /// pipes beneath them.
+    public func close() async {
         if lifecycle != .closed {
             lifecycle = .draining
         }
         lifecycle = .closed
+        await process?.close()
     }
 
     /// Sends one envelope and returns the raw reply. Refuses cross-resource
@@ -647,6 +682,11 @@ public actor MCPStdioChannel {
         } catch let error as MCPTransportError {
             throw error
         } catch {
+            // Non-transport failures from the seam — including a lazy spawn
+            // failure (`MCPStdioProcessError` is not a transport error) —
+            // collapse to status 0 by design: the seam owns its own
+            // diagnostics, and the channel reports only that the far end
+            // never answered.
             throw MCPTransportError.remoteFailed(status: 0)
         }
     }

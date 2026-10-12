@@ -827,19 +827,32 @@ struct MCPToolkitsTests {
         #expect(store2.remove(id: org.id, owner: .org).list().map(\.id) == [user.id])
     }
 
-    @Test func mutationsPreservePinsFallbackAndProvider() throws {
+    @Test func mutationsPreservePinsAndFallbackWithoutProvider() throws {
         let target = try address("tools.github.acme.main.read")
         let pin = StaticFqidPin(address: target, action: .approve)
-        let provider = ListOnlyProvider(rules: [])
-        let store = MCPPolicyStore(staticFqids: [pin], pluginDefault: .block, provider: provider)
+        let store = MCPPolicyStore(staticFqids: [pin], pluginDefault: .block)
         let (store2, created) = try store.create(owner: .user, pattern: "tools.a.*", action: .block).get()
-        // Pins survive the rebase.
+        // Pins survive the rebase and win on the providerless plane.
         #expect(store2.resolve(target).provenance == .staticPin(literal: target.literal))
-        // The provider still replaces the pattern tier (empty allowlist blocks).
-        #expect(store2.resolve(try address("tools.other.x.y.z")).action == .block)
+        #expect(store2.resolve(target).action == .approve)
         let (store3, _) = try store2.update(id: created.id, owner: .user, action: .approve).get()
         #expect(store3.resolve(target).provenance == .staticPin(literal: target.literal))
         #expect(store3.remove(id: created.id, owner: .user).resolve(target).action == .approve)
+        // The fallback still applies off-pin.
+        #expect(store3.resolve(try address("tools.other.x.y.z")).action == .block)
+    }
+
+    @Test func mutationsPreserveProvider() throws {
+        let provider = ListOnlyProvider(rules: [])
+        let store = MCPPolicyStore(pluginDefault: .block, provider: provider)
+        let (store2, created) = try store.create(owner: .user, pattern: "tools.a.*", action: .block).get()
+        // The provider still replaces the pattern tier after every mutation
+        // (empty allowlist blocks, even where the fresh row would match).
+        let fresh = try address("tools.a.b.c.d")
+        #expect(store2.resolve(fresh).action == .block)
+        let (store3, _) = try store2.update(id: created.id, owner: .user, action: .approve).get()
+        #expect(store3.resolve(fresh).action == .block)
+        #expect(store3.remove(id: created.id, owner: .user).resolve(fresh).action == .block)
     }
 
     @Test func resolveRanksBothOwnersWithoutProvider() throws {
@@ -899,9 +912,10 @@ struct MCPToolkitsTests {
     }
 
     @Test func providerDoublesServeEveryWitness() throws {
-        // Direct witness coverage: the precedence tests deliberately never
-        // reach these arms (prepared beats resolve beats list), so each
-        // double's witnesses are invoked directly.
+        // Helper smoke only: asserts the test doubles' own witnesses behave
+        // (the precedence tests deliberately never reach these arms, since
+        // prepared beats resolve beats list). Excluded from production-
+        // behavior coverage claims: it pins doubles, not the store.
         let rule = MCPToolPolicyProviderRule(
             id: "r", pattern: try segments("tools.a.*"),
             action: .block, position: FractionalIndex(value: 0), owner: .user
@@ -942,16 +956,47 @@ struct MCPToolkitsTests {
         #expect(prepared.dynamicScope?.isEmpty == false)
     }
 
-    @Test func pinsWinOverActiveProvider() throws {
-        let target = try address("tools.github.org.main.repos.list")
+    @Test func staticPinsDoNotPierceTheScopedPlane() throws {
+        // Ruling: when a provider is active, the static tier is skipped and
+        // the verdict depends only on the toolkit — pins neither grant nor
+        // deny scoped tools.
+        let admitted = try address("tools.github.org.main.repos.list")
+        let outside = try address("tools.slack.org.main.chat.post")
         let toolkits = try workspaceKit()
         let scoped = MCPPolicyStore(
-            staticFqids: [StaticFqidPin(address: target, action: .block)],
+            staticFqids: [
+                // A block pin on a toolkit-admitted tool is ignored.
+                StaticFqidPin(address: admitted, action: .block),
+                // An approve pin outside the access set is ignored: the
+                // boundary still blocks.
+                StaticFqidPin(address: outside, action: .approve),
+            ],
             pluginDefault: .approve,
             provider: MCPToolkitPolicyProvider(store: toolkits, slug: "workspace-kit")
         )
-        #expect(scoped.resolve(target).action == .block)
-        #expect(scoped.resolve(target).provenance == .staticPin(literal: target.literal))
+        let admittedVerdict = scoped.resolve(admitted)
+        #expect(admittedVerdict.action == .approve)
+        #expect(admittedVerdict.provenance != .staticPin(literal: admitted.literal))
+        let outsideVerdict = scoped.resolve(outside)
+        #expect(outsideVerdict.action == .block)
+        #expect(outsideVerdict.provenance != .staticPin(literal: outside.literal))
+    }
+
+    @Test func staticPinsWinOnTheProviderlessPlane() throws {
+        // Same pins, no provider: the static tier wins first, both directions.
+        let approved = try address("tools.github.org.main.repos.list")
+        let blocked = try address("tools.slack.org.main.chat.post")
+        let store = MCPPolicyStore(
+            staticFqids: [
+                StaticFqidPin(address: approved, action: .approve),
+                StaticFqidPin(address: blocked, action: .block),
+            ],
+            pluginDefault: .block
+        )
+        #expect(store.resolve(approved).action == .approve)
+        #expect(store.resolve(approved).provenance == .staticPin(literal: approved.literal))
+        #expect(store.resolve(blocked).action == .block)
+        #expect(store.resolve(blocked).provenance == .staticPin(literal: blocked.literal))
     }
 
     @Test func listFallbackFirstMatchesThenBlocksAtBoundary() throws {
@@ -1045,6 +1090,39 @@ struct MCPToolkitsTests {
         let batch = MCPPolicyStore(pluginDefault: .approve, provider: provider).prepared()
         #expect(batch.resolve(try address("tools.a.b.c.d")).action == .requireApproval)
         #expect(batch.resolve(try address("tools.z.z.z.z")).action == .block)
+    }
+
+    @Test func preparedPolicyExposesDynamicScope() throws {
+        // Providerless: nil (unrestricted read).
+        #expect(policyStore().prepared().dynamicScope == nil)
+        // A provider with no prepare snapshot: nil as well.
+        let listOnly = MCPPolicyStore(pluginDefault: .approve, provider: ListOnlyProvider(rules: []))
+        #expect(listOnly.prepared().dynamicScope == nil)
+        // A toolkit provider: the slug's prepared prefixes.
+        let toolkits = try workspaceKit()
+        let scoped = MCPPolicyStore(
+            pluginDefault: .approve,
+            provider: MCPToolkitPolicyProvider(store: toolkits, slug: "workspace-kit")
+        )
+        #expect(
+            scoped.prepared().dynamicScope
+                == toolkits.preparePolicyResolverForSlug("workspace-kit").dynamicScope
+        )
+        #expect(scoped.prepared().dynamicScope?.isEmpty == false)
+    }
+
+    @Test func blockedPredicateMirrorsAllows() throws {
+        let inside = try address("tools.github.org.main.deploy")
+        let outside = try address("tools.slack.org.main.post")
+        // Nil scopes block nothing; empty scopes block everything.
+        #expect(MCPDynamicToolScope.blockedPredicate(scopes: nil)(inside) == false)
+        #expect(MCPDynamicToolScope.blockedPredicate(scopes: [])(inside))
+        // Otherwise the predicate is the negation of allows().
+        let scopes: [MCPDynamicToolScope]? = [
+            MCPDynamicToolScope(integration: "github", owner: nil, connection: nil)
+        ]
+        #expect(MCPDynamicToolScope.blockedPredicate(scopes: scopes)(inside) == false)
+        #expect(MCPDynamicToolScope.blockedPredicate(scopes: scopes)(outside))
     }
 
     @Test func providerSnapshotFreezesStoreEdits() throws {

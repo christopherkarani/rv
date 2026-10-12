@@ -110,8 +110,14 @@ public struct StaticFqidPin: Sendable, Equatable, Hashable, Codable {
 ///    (`position`, `id`); the most restrictive contribution wins, with action ties
 ///    resolving to the higher-ranked owner (org over user). An active
 ///    `provider` replaces this tier wholesale with its own rules (allowlist
-///    semantics); the static tier still wins first.
+///    semantics).
 /// 3. Fallback: the init-injected `pluginDefault` with nil provenance.
+///
+/// Static pins do NOT pierce the scoped plane: when a provider is active,
+/// the static tier is skipped and the verdict depends only on the
+/// toolkit. A global pin therefore cannot grant (or deny) a tool the
+/// toolkit's access set never admitted; pins apply on the providerless
+/// plane only.
 ///
 /// Mutations return the next store plus the affected rule, so callers thread
 /// state functionally; pins stay fixed at init.
@@ -252,7 +258,10 @@ public struct MCPPolicyStore: Sendable {
         _ address: MCPToolAddress,
         prepared: MCPPreparedToolPolicy?
     ) -> EffectivePolicy {
-        if let pinned = staticActions[address] {
+        // Static pins serve the providerless plane only: an active provider
+        // means the scoped plane, where the verdict depends only on the
+        // toolkit and pins are skipped (never consulted, either direction).
+        if provider == nil, let pinned = staticActions[address] {
             return EffectivePolicy(action: pinned, provenance: .staticPin(literal: address.literal))
         }
         if let provider {
@@ -345,5 +354,14 @@ public struct MCPPreparedPolicy: Sendable {
     /// Resolves one address against the snapshot. Pure; no IO.
     public func resolve(_ address: MCPToolAddress) -> EffectivePolicy {
         store.resolveWithPrepared(address, prepared: prepared)
+    }
+
+    /// The snapshot's reachable dynamic-tool prefixes, for scope-narrowed
+    /// reads through the prepared handle (`MCPDynamicToolScope.allows`).
+    /// Nil when providerless, or when the provider implements no `prepare`
+    /// snapshot: both mean the source is not a known allowlist, so reads
+    /// stay unrestricted and per-tool `resolve` still gates.
+    public var dynamicScope: [MCPDynamicToolScope]? {
+        prepared?.dynamicScope
     }
 }
