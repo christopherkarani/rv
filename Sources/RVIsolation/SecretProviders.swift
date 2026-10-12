@@ -4,6 +4,9 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// A resolved secret. Never prints its contents.
 public struct SecretValue: Sendable, Equatable, CustomStringConvertible, CustomDebugStringConvertible {

@@ -19,12 +19,17 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 |---|---|---|---|
 | 0 Plan + reset | `plan/agent-governance` | [#394](https://github.com/christopherkarani/rv/pull/394) | in progress |
 | 1 Trustworthy sandbox | `governance/phase-1-sandbox` | [#395](https://github.com/christopherkarani/rv/pull/395) | agent items done; PR open |
-| 2 Secrets the agent can't leak | `governance/phase-2-secrets` | _not opened_ | in progress: engine + launch wiring done and tested (L1/L2/L4); CLI next |
+| 2 Secrets the agent can't leak | `governance/phase-2-secrets` | _PR pending_ | agent items done and tested (L1/L2/L4 + real binary); PR next |
 | 3 MCP governance | `governance/phase-3-mcp` | _not opened_ | not started |
 | 4 Enterprise client features | `governance/phase-4-enterprise` | _not opened_ | not started |
 | 5 Launch readiness | human-owned | n/a | not started |
 
-**Next action:** Phase 2.1 CLI: `rv secrets list|check|set|remove` (`Sources/RVCLI/Commands/SecretsCommand.swift`, registered in RV.swift, HelpDispatch, HelpCatalog, completions), then 2.3 `rv secrets scan`, then open the Phase 2 PR (base `governance/phase-1-sandbox`).
+**Next action:** if the Phase 2 PR is not open yet, open it (base `governance/phase-1-sandbox`) and watch its Linux CI job (the gateway was never compiled on Linux locally: Docker was down). Then Phase 3.1: branch `governance/phase-3-mcp` from `governance/phase-2-secrets`, start `rv mcp list`.
+
+Gotcha: never run the `rv` binary with a fake `HOME` on a path that writes to
+the Keychain (`rv secrets set`). macOS opens a SecurityAgent "keychain not
+found" dialog and the process hangs. In-process tests use an injected
+`SecretKeychainWriter`; the real Keychain is covered by `RV_LIVE_KEYCHAIN=1`.
 
 Branching rule: each phase branch starts from the previous phase branch (or
 `origin/main` if the previous phase merged). Each phase PR targets the previous
@@ -382,17 +387,34 @@ Profiles in `runtime-resources.json` gain `"secrets": ["STRIPE_SECRET_KEY"]`.
       source kind; tests inject fakes), 30 s timeout and 1 MiB cap on CLI
       providers, typed `SecretResolutionError`; `SecretValue` prints
       `<redacted>`: `Sources/RVIsolation/SecretProviders.swift`
-- [ ] `rv secrets list` (name, source kind, delivery, bound upstream, status;
-      never values), `rv secrets check` (resolve each, show fingerprint),
-      `rv secrets set NAME` (stdin, no echo, stores in Keychain `rv.secrets`),
-      `rv secrets remove NAME`
+- [x] `rv secrets list` (name, source locator, delivery, agents, profiles
+      using it; warns on profile refs to undefined secrets; never values),
+      `rv secrets check` (resolve each, show fingerprint, exit 1 on failure),
+      `rv secrets set NAME` (TTY no-echo prompt or stdin; stores in Keychain
+      service `rv.secrets`; `--gateway URL --base-url-env VAR
+      [--placeholder-prefix P]` or `--environment`; `--agent`, `--description`),
+      `rv secrets remove NAME` (drops definition + Keychain item). JSON via
+      `--json`. Code: `Sources/RVCLI/Commands/SecretsCommand.swift`; store
+      helpers (atomic 0600 write, Keychain writer, locators, leak scanner):
+      `Sources/RVIsolation/SecretStore.swift`. Registered in RV.swift,
+      HelpDispatch, HelpCatalog, bash/zsh/fish completions.
 - [x] Install key `~/.config/rv/audit.key` (32 random bytes, 0600, created
       lazily on first lease) and `SecretFingerprinter` = first 16 hex of
       HMAC-SHA256: `Sources/RVIsolation/SecretFingerprint.swift`
 - [x] Tests: decode/validation matrix (`SecretsConfigurationTests`), real
       Keychain read via the live resolver (`SecretKeychainLiveTests`,
       `RV_LIVE_KEYCHAIN=1`)
-- [ ] Tests: CLI output, Keychain round trip through the CLI (set → check → remove)
+- [x] Tests: `SecretsCommandTests` (list/check/set/remove/scan with an
+      injected Keychain writer + resolver, dangling profile warning, bad
+      flags), `SecretsCommandLiveKeychainTests` (`RV_LIVE_KEYCHAIN=1`: real
+      Keychain set → check → remove). Real `rv` binary run against a temp
+      HOME with a host-variable secret: list, check, scan, set errors,
+      remove, unsafe file mode refused.
+- [x] Linux portability: fingerprints are HMAC-SHA256 over the project's
+      pure-Swift `RVDigest.sha256` (RFC 4231 vectors in
+      `SecretLaunchBrokerTests`), not CryptoKit; `FoundationNetworking`
+      import; Glibc socket constants; `send` + `MSG_NOSIGNAL`. Verified only
+      by CI (no local Linux toolchain).
 
 ### 2.2 Placeholder gateway (boundary injection)
 - [x] `SecretGateway` loopback HTTP/1.1 listener per workspace host, started
@@ -433,8 +455,10 @@ Profiles in `runtime-resources.json` gain `"secrets": ["STRIPE_SECRET_KEY"]`.
       back scrubbed, 302 not followed)
 
 ### 2.3 Leak checks
-- [ ] `rv secrets scan [PATH]`: exact-match scan of a tree for any value rv
-      can resolve (reports file + line + secret name, never the value)
+- [x] `rv secrets scan [PATH]`: exact-match scan of a tree for any value rv
+      can resolve (reports file + line + secret name, never the value; skips
+      `.git`, `.build`, `node_modules`, `DerivedData`; ≤8 MiB per file,
+      ≤100k files; values under 8 bytes skipped; exit 1 on findings)
 
 ### 2.4 Later (not this phase)
 - Transparent mode (local CA + CONNECT termination) for SDKs without base-URL
@@ -444,6 +468,12 @@ Exit criteria: demo where an agent inside the cage calls a real API with a
 placeholder, the call succeeds, `env` inside the cage shows no real value,
 the response never contains it, and `rv audit tail --kind secret.use` shows
 the call with a fingerprint.
+
+Exit evidence: L2 `SecretGatewayCageTests` covers cage → gateway → upstream
+with the real key only on the wire and the `secret.use` record written via
+`AuditLog.append`; `AuditCommandTests` covers `rv audit tail` rendering a
+`secret.use` line from that schema. A live L3 demo through `rv workspace`
+still needs the owner's trust install.
 
 ---
 
@@ -555,6 +585,12 @@ Exit criteria: Cursor or Claude Code on this Mac lists tools through
   providers, fingerprints, gateway, broker, launch seam, credential-override
   fix. 28 secrets tests + live (network, keychain) pass. RVIsolation now
   depends on RVHistory (for `AuditLog`). Next: `rv secrets` CLI.
+- 2026-10-12: Phase 2 CLI + leak scan landed: `rv secrets
+  list|check|set|remove|scan`, Linux-portable HMAC fingerprints. Suites:
+  secrets 33 + CLI/Policy/Domain/isolation neighbors 1885, preflight 0
+  failures. A fake-HOME binary run of `rv secrets set` hung on a macOS
+  Keychain dialog (killed; login keychain untouched); see the gotcha under
+  Resume here.
 - 2026-10-13: Rereview of PR #394. Named each ledger writer (only `blocks`,
   `allow-once`, and `pending-approvals` are `FileLockedJSONLStore`). Seatbelt
   ground truth now says outbound connect is loopback TCP and the listen rule

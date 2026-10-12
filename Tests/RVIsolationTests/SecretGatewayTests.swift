@@ -54,7 +54,11 @@ struct GatewayExchange {
 
 /// One raw HTTP/1.1 exchange against 127.0.0.1:`port`; reads to EOF.
 func gatewayExchange(port: Int, _ request: String) throws -> GatewayExchange {
+    #if canImport(Darwin)
     let fd = socket(AF_INET, SOCK_STREAM, 0)
+    #else
+    let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+    #endif
     try #require(fd >= 0)
     defer { close(fd) }
     var timeout = timeval(tv_sec: 10, tv_usec: 0)

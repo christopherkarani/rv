@@ -25,6 +25,7 @@ enum HelpCatalog {
         case .safety: safety
         case .blocks: blocks
         case .audit: audit
+        case .secrets: secrets
         case .opencode: opencode
         case .workspace: workspace
         case .`operator`: operatorHelp
@@ -54,6 +55,7 @@ enum HelpCatalog {
                 HelpRow(name: "safety", description: "Show or set normal or strict"),
                 HelpRow(name: "blocks", description: "List recent denials"),
                 HelpRow(name: "audit", description: "Unified audit trail; export for SIEM"),
+                HelpRow(name: "secrets", description: "Secrets agents use through placeholders"),
                 HelpRow(name: "service", description: "Is rvd running, down, or skewed"),
             ]),
             HelpSection(heading: "Advanced", rows: [
@@ -375,6 +377,41 @@ enum HelpCatalog {
             "rv audit",
             "rv audit --kind egress --since 24h",
             "rv audit export --since 7d > rv-audit.jsonl",
+        ]
+    )
+
+    static let secrets = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv secrets [list] [--json]"),
+                HelpRow(name: "rv secrets check [<name>...] [--json]"),
+                HelpRow(name: "rv secrets set <name> [--gateway <url> --base-url-env <var> | --environment]"),
+                HelpRow(name: "rv secrets remove <name>"),
+                HelpRow(name: "rv secrets scan [<dir>] [--json]"),
+            ]),
+            HelpSection(heading: "Flags", rows: [
+                HelpRow(name: "--gateway", description: "https upstream the real value may be sent to"),
+                HelpRow(name: "--base-url-env", description: "Variable that receives the gateway base URL"),
+                HelpRow(name: "--placeholder-prefix", description: "Prefix kept on the placeholder, e.g. sk-"),
+                HelpRow(name: "--environment", description: "Real value in the cage env instead (weaker)"),
+                HelpRow(name: "--agent", description: "Only stage for this agent tag (repeatable)"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "config", description: "~/.config/rv/secrets.json; profiles list names in \"secrets\""),
+                HelpRow(
+                    name: "gateway",
+                    description: "Agents hold a per-launch placeholder; rv swaps in the value toward the upstream only"
+                ),
+                HelpRow(name: "sources", description: "keychain, hostEnvironment, onePassword, vault, awsSecretsManager"),
+                HelpRow(name: "audit", description: "rv audit --kind secret.use shows each use with a fingerprint"),
+            ]),
+        ],
+        examples: [
+            "rv secrets set OPENAI_API_KEY --gateway https://api.openai.com/v1 --base-url-env OPENAI_BASE_URL",
+            "rv secrets check",
+            "rv secrets scan .",
         ]
     )
 

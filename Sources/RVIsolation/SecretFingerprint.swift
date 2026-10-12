@@ -3,10 +3,8 @@ import Darwin
 #elseif canImport(Glibc)
 import Glibc
 #endif
-#if canImport(CryptoKit)
-import CryptoKit
-#endif
 import Foundation
+import RVDomain
 
 /// Correlates secret use without storing the value: the first 16 hex digits
 /// of HMAC-SHA256 under a per-install key (`~/.config/rv/audit.key`, 0600).
@@ -21,13 +19,17 @@ public struct SecretFingerprinter: Sendable {
         self.key = key
     }
 
-    func fingerprint(_ value: SecretValue) -> String? {
-        #if canImport(CryptoKit)
-        let mac = HMAC<SHA256>.authenticationCode(for: value.bytes, using: SymmetricKey(data: key))
-        return mac.prefix(8).map { String(format: "%02x", $0) }.joined()
-        #else
-        return nil
-        #endif
+    func fingerprint(_ value: SecretValue) -> String {
+        Self.hmacSHA256(key: key, message: value.bytes).prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// RFC 2104 over the project SHA-256, so fingerprints match on every platform.
+    static func hmacSHA256(key: [UInt8], message: [UInt8]) -> [UInt8] {
+        let blockSize = 64
+        var block = key.count > blockSize ? RVDigest.sha256(key) : key
+        block += [UInt8](repeating: 0, count: blockSize - block.count)
+        let inner = RVDigest.sha256(block.map { $0 ^ 0x36 } + message)
+        return RVDigest.sha256(block.map { $0 ^ 0x5c } + inner)
     }
 
     /// Loads the install key, creating it (32 random bytes, 0600) if absent.

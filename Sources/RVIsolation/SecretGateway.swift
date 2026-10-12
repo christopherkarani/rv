@@ -5,6 +5,9 @@ import Glibc
 #endif
 import Dispatch
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// What one gateway request did. Carries names and a fingerprint, never values.
 public struct SecretUseRecord: Sendable, Equatable {
@@ -133,7 +136,11 @@ public final class SecretGateway: @unchecked Sendable {
             return .success(boundPort)
         }
         lock.unlock()
+        #if canImport(Darwin)
         let fd = socket(AF_INET, SOCK_STREAM, 0)
+        #else
+        let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+        #endif
         guard fd >= 0 else { return .failure(.socketFailed(errno: errno)) }
         _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
         var one: Int32 = 1
@@ -191,7 +198,7 @@ public final class SecretGateway: @unchecked Sendable {
         entries.removeAll()
         lock.unlock()
         if fd >= 0 {
-            shutdown(fd, SHUT_RDWR)
+            shutdown(fd, Int32(SHUT_RDWR))
             close(fd)
         }
     }
@@ -395,17 +402,19 @@ final class GatewayResponseWriter: SecretResponseSink, @unchecked Sendable {
 }
 
 enum GatewaySocket {
+    #if canImport(Darwin)
+    static let sendFlags: Int32 = 0
+    #else
+    static let sendFlags = Int32(MSG_NOSIGNAL)
+    #endif
+
     @discardableResult
     static func writeAll(_ fd: Int32, _ bytes: [UInt8]) -> Bool {
         var written = 0
         while written < bytes.count {
             let n = bytes.withUnsafeBytes { raw -> Int in
                 guard let base = raw.baseAddress else { return -1 }
-                #if canImport(Darwin)
-                return write(fd, base + written, raw.count - written)
-                #else
-                return send(fd, base + written, raw.count - written, Int32(MSG_NOSIGNAL))
-                #endif
+                return send(fd, base + written, raw.count - written, sendFlags)
             }
             if n < 0, errno == EINTR { continue }
             guard n > 0 else { return false }
