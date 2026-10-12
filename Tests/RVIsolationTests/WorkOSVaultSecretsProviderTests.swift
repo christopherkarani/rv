@@ -381,6 +381,11 @@ private func makeTempWorkOSDir(prefix: String) throws -> URL {
 }
 
 #if canImport(SQLite3)
+private func workOSPosixPermissions(of url: URL) throws -> Int {
+    let raw = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
+    return try #require(raw) & 0o777
+}
+
 /// Runs raw SQL on a second connection to a store file, for sabotage tests.
 private func sabotageExec(path: String, sql: String) -> Int32 {
     var db: OpaquePointer?
@@ -768,6 +773,50 @@ struct WorkOSVaultNamingTests {
 
 @Suite("WorkOSVault HTTP client", .serialized)
 struct WorkOSVaultClientTests {
+    @Test func descriptionRedactsAPIKey() throws {
+        let client = try makeWorkOSClient(server: FakeVaultServer(), apiKey: "sk_live_secret_xyz")
+        for rendered in [String(describing: client), String(reflecting: client)] {
+            #expect(rendered.contains("sk_live_secret_xyz") == false)
+            #expect(rendered == "WorkOSVaultHTTPClient(<redacted>)")
+        }
+    }
+
+    @Test func slowTransportTimeoutMapsToTimeout() async throws {
+        // A slow server surfaces as the transport's timed-out outcome
+        // (what URLSession raises past `timeoutIntervalForRequest`); the
+        // client maps it to the timeout kind, and the provider to the
+        // typed timeout — never missing, never a silent nil.
+        let transport: WorkOSVaultTransport = { _ in
+            try await Task.sleep(nanoseconds: 50_000_000)
+            throw URLError(.timedOut)
+        }
+        let client = try WorkOSVaultHTTPClient(
+            endpoint: URL(string: "https://api.workos.com")!, apiKey: "k",
+            timeoutSeconds: 10, transport: transport
+        )
+        do {
+            _ = try await client.readObjectByName("executor/secrets/k")
+            Issue.record("expected timeout")
+        } catch let error as WorkOSVaultClientError {
+            #expect(error.kind == .timeout)
+        }
+        let store = try WorkOSVaultMetadataStore(path: ":memory:")
+        try await store.upsert(
+            WorkOSVaultMetadataRow(
+                id: "k", name: "k", purpose: nil,
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+            ),
+            tenant: "t", owner: .org, subject: nil
+        )
+        let provider = try WorkOSVaultSecretsProvider(
+            client: client, store: store,
+            binding: WorkOSVaultOwnerBinding(tenant: "t")
+        )
+        await #expect(throws: SecretsError.timeout("workos-vault")) {
+            _ = try await provider.value(forItem: "k")
+        }
+    }
+
     @Test func createRoundTrip() async throws {
         let server = FakeVaultServer()
         let client = try makeWorkOSClient(server: server)
@@ -1245,6 +1294,31 @@ struct WorkOSVaultRetryPolicyTests {
 
 @Suite("WorkOSVault metadata store", .serialized)
 struct WorkOSVaultMetadataStoreTests {
+    #if canImport(SQLite3)
+    @Test func databaseFileIsOwnerOnly() throws {
+        let dir = try makeTempWorkOSDir(prefix: "rv-workos-mode")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(WorkOSVaultMetadataStore.fileName)
+        _ = try WorkOSVaultMetadataStore(path: url.path)
+        #expect(try workOSPosixPermissions(of: url) == 0o600)
+        // A pre-existing lax file tightens on open.
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+        _ = try WorkOSVaultMetadataStore(path: url.path)
+        #expect(try workOSPosixPermissions(of: url) == 0o600)
+    }
+
+    @Test func databaseInMissingDirectoryFailsClosed() throws {
+        let dir = try makeTempWorkOSDir(prefix: "rv-workos-mode")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let missing = dir
+            .appendingPathComponent("no-such-dir")
+            .appendingPathComponent(WorkOSVaultMetadataStore.fileName)
+        #expect(throws: WorkOSVaultStoreError.storeFailure) {
+            _ = try WorkOSVaultMetadataStore(path: missing.path)
+        }
+    }
+    #endif
+
     @Test func crudRoundTrip() async throws {
         let store = try WorkOSVaultMetadataStore(path: ":memory:")
         let row = WorkOSVaultMetadataRow(
@@ -2477,6 +2551,50 @@ private actor FailAfterReadsMetadataStore: WorkOSVaultMetadata {
 
 @Suite("WorkOSVault resolve and health", .serialized)
 struct WorkOSVaultResolveTests {
+    @Test func automationDeniesUserScopedIds() async throws {
+        // Automation (subject-less) binding: user-partition ids fail
+        // closed on every mutating and read path, and the denied `set`
+        // leaves neither a Vault object nor a metadata row behind.
+        let harness = try await makeWorkOSProvider()
+        let id = "connection:user:notion:personal:token"
+        await #expect(throws: SecretsError.denied("workos-vault")) {
+            try await harness.provider.set(id, value: "orphan")
+        }
+        await #expect(throws: SecretsError.denied("workos-vault")) {
+            _ = try await harness.provider.value(forItem: id)
+        }
+        await #expect(throws: SecretsError.denied("workos-vault")) {
+            _ = try await harness.provider.has(id)
+        }
+        await #expect(throws: SecretsError.denied("workos-vault")) {
+            try await harness.provider.delete(id)
+        }
+        #expect(await harness.server.objectCount() == 0)
+        #expect(try await harness.provider.list().isEmpty)
+    }
+
+    @Test func automationStillServesOrgAndLegacyIds() async throws {
+        let harness = try await makeWorkOSProvider()
+        try await harness.provider.set("connection:org:exa:main:token", value: "o")
+        try await harness.provider.set("legacy-id", value: "l")
+        #expect(
+            try await harness.provider.value(forItem: "connection:org:exa:main:token") == "o"
+        )
+        #expect(try await harness.provider.value(forItem: "legacy-id") == "l")
+    }
+
+    @Test func emptySubjectRejectedAtInit() async throws {
+        let server = FakeVaultServer()
+        let client = try makeWorkOSClient(server: server)
+        let store = try WorkOSVaultMetadataStore(path: ":memory:")
+        #expect(throws: WorkOSVaultConfigurationError.emptySubject) {
+            _ = try WorkOSVaultSecretsProvider(
+                client: client, store: store,
+                binding: WorkOSVaultOwnerBinding(tenant: "t", subject: "")
+            )
+        }
+    }
+
     @Test func resolveRejectsForeignProvider() async throws {
         let harness = try await makeWorkOSProvider()
         let ref = try SecretRef(provider: "env", item: "whatever")
@@ -2485,12 +2603,8 @@ struct WorkOSVaultResolveTests {
         }
     }
 
-    // The three tests below construct `SecretRef(provider:
-    // "workos-vault")`, which throws until the parent merge adds the
-    // id to `SecretRef.allowedProviders`
-    // (Sources/RVDomain/SecretsProvider.swift:16-18). They fail at
-    // ref construction pre-merge and pass post-merge; the same
-    // behaviors are covered pre-merge through `value(forItem:)`.
+    // The tests below construct `SecretRef(provider: "workos-vault")`,
+    // admitted by `SecretRef.allowedProviders`.
 
     @Test func resolveRoundTrip() async throws {
         let harness = try await makeWorkOSProvider()
@@ -2809,14 +2923,20 @@ struct WorkOSVaultEdgeTests {
 
     @Test func concurrentSetsSameId() async throws {
         let harness = try await makeWorkOSProvider()
-        await withTaskGroup(of: Void.self) { group in
+        let completed = try await withThrowingTaskGroup(of: Void.self) { group in
             for index in 0..<10 {
                 group.addTask {
-                    try? await harness.provider.set("raced", value: "v\(index)")
+                    try await harness.provider.set("raced", value: "v\(index)")
                 }
             }
+            var count = 0
+            for try await _ in group {
+                count += 1
+            }
+            return count
         }
-        // Every write retried through the races; one value won.
+        // Every write retried through the races and succeeded; one value won.
+        #expect(completed == 10)
         let value = try await harness.provider.value(forItem: "raced")
         #expect(value?.hasPrefix("v") == true)
         #expect(try await harness.provider.list().count == 1)

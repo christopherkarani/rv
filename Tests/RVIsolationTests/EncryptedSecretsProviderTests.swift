@@ -560,7 +560,7 @@ struct EncryptedSecretsMasterKeyTests {
         let loaded = EncryptedSecretsProvider.loadMasterKey(
             environment: ["EXECUTOR_SECRET_KEY": "env-value"], keyFileDirectory: directory
         )
-        #expect(loaded == "env-value")
+        #expect(loaded == .success("env-value"))
     }
 
     @Test func loadMasterKeyTrimsEnv() throws {
@@ -568,7 +568,7 @@ struct EncryptedSecretsMasterKeyTests {
         let loaded = EncryptedSecretsProvider.loadMasterKey(
             environment: ["EXECUTOR_SECRET_KEY": "  padded\t\n"], keyFileDirectory: directory
         )
-        #expect(loaded == "padded")
+        #expect(loaded == .success("padded"))
     }
 
     @Test func loadMasterKeyBlankEnvFallsThroughToKeyFile() throws {
@@ -577,7 +577,7 @@ struct EncryptedSecretsMasterKeyTests {
         let loaded = EncryptedSecretsProvider.loadMasterKey(
             environment: ["EXECUTOR_SECRET_KEY": "  \t\n "], keyFileDirectory: directory
         )
-        #expect(loaded == "key-file-value")
+        #expect(loaded == .success("key-file-value"))
     }
 
     @Test func loadMasterKeyFallsBackToKeyFile() throws {
@@ -586,35 +586,69 @@ struct EncryptedSecretsMasterKeyTests {
         let loaded = EncryptedSecretsProvider.loadMasterKey(
             environment: [:], keyFileDirectory: directory
         )
-        #expect(loaded == "file-key")
+        #expect(loaded == .success("file-key"))
     }
 
-    @Test func loadMasterKeyNilWhenAbsent() throws {
+    @Test func loadMasterKeyAbsentWhenNoEnvAndNoKeyFile() throws {
         let directory = try makeEncryptedTempDir()
-        #expect(EncryptedSecretsProvider.loadMasterKey(environment: [:], keyFileDirectory: directory) == nil)
-        #expect(EncryptedSecretsProvider.loadMasterKey(environment: [:], keyFileDirectory: nil) == nil)
+        #expect(
+            EncryptedSecretsProvider.loadMasterKey(environment: [:], keyFileDirectory: directory)
+                == .success(nil)
+        )
+        #expect(
+            EncryptedSecretsProvider.loadMasterKey(environment: [:], keyFileDirectory: nil)
+                == .success(nil)
+        )
         let missing = directory.appendingPathComponent("missing-dir")
-        #expect(EncryptedSecretsProvider.loadMasterKey(environment: [:], keyFileDirectory: missing) == nil)
+        #expect(
+            EncryptedSecretsProvider.loadMasterKey(environment: [:], keyFileDirectory: missing)
+                == .success(nil)
+        )
     }
 
-    @Test func loadMasterKeyNilWhenKeyFileUnusable() throws {
+    @Test func loadMasterKeyFailsWhenKeyFileUnusable() throws {
         let directory = try makeEncryptedTempDir()
         try writeEncryptedString(at: directory, name: "secret.key", string: "k", mode: 0o644)
-        #expect(EncryptedSecretsProvider.loadMasterKey(environment: [:], keyFileDirectory: directory) == nil)
+        #expect(
+            EncryptedSecretsProvider.loadMasterKey(environment: [:], keyFileDirectory: directory)
+                == .failure(.keyUnusable)
+        )
         let oversized = try makeEncryptedTempDir()
         try writeEncryptedString(
             at: oversized, name: "secret.key", string: String(repeating: "k", count: 5000)
         )
-        #expect(EncryptedSecretsProvider.loadMasterKey(environment: [:], keyFileDirectory: oversized) == nil)
+        #expect(
+            EncryptedSecretsProvider.loadMasterKey(environment: [:], keyFileDirectory: oversized)
+                == .failure(.keyUnusable)
+        )
+        let symlinked = try makeEncryptedTempDir()
+        let target = symlinked.appendingPathComponent("secret-real.key")
+        try "real-key".write(to: target, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            at: symlinked.appendingPathComponent("secret.key"), withDestinationURL: target
+        )
+        #expect(
+            EncryptedSecretsProvider.loadMasterKey(environment: [:], keyFileDirectory: symlinked)
+                == .failure(.keyUnusable)
+        )
     }
 
-    @Test func loadMasterKeyNilWhenKeyFileBlankOrBinary() throws {
+    @Test func loadMasterKeyAbsentWhenKeyFileBlank() throws {
         let directory = try makeEncryptedTempDir()
         try writeEncryptedString(at: directory, name: "secret.key", string: " \n\t ")
-        #expect(EncryptedSecretsProvider.loadMasterKey(environment: [:], keyFileDirectory: directory) == nil)
+        #expect(
+            EncryptedSecretsProvider.loadMasterKey(environment: [:], keyFileDirectory: directory)
+                == .success(nil)
+        )
+    }
+
+    @Test func loadMasterKeyFailsWhenKeyFileBinary() throws {
         let binary = try makeEncryptedTempDir()
         try writeEncryptedBytes(at: binary, name: "secret.key", bytes: Data([0xFF, 0xFE, 0x00]))
-        #expect(EncryptedSecretsProvider.loadMasterKey(environment: [:], keyFileDirectory: binary) == nil)
+        #expect(
+            EncryptedSecretsProvider.loadMasterKey(environment: [:], keyFileDirectory: binary)
+                == .failure(.keyUnusable)
+        )
     }
 
     @Test func generateMasterKeyIs32RandomBytes() throws {
@@ -632,6 +666,19 @@ struct EncryptedSecretsMasterKeyTests {
 
 @Suite("EncryptedSecretsStore")
 struct EncryptedSecretsStoreTests {
+    @Test func descriptionRedactsKeyBytes() throws {
+        let directory = try makeEncryptedTempDir()
+        let provider = makeTestProvider(
+            directory: directory, keyBytes: [9, 8, 7, 6], defaultOwner: .user
+        )
+        for rendered in [String(describing: provider), String(reflecting: provider)] {
+            #expect(rendered.contains("9, 8, 7, 6") == false)
+            #expect(
+                rendered == "EncryptedSecretsProvider(id: \"encrypted\", defaultOwner: user)"
+            )
+        }
+    }
+
     @Test func providerIdentityIsPinned() throws {
         let directory = try makeEncryptedTempDir()
         let provider = makeTestProvider(directory: directory)
@@ -822,22 +869,31 @@ struct EncryptedSecretsStoreTests {
 
 @Suite("EncryptedSecretsBrokerSurface")
 struct EncryptedSecretsBrokerSurfaceTests {
-    // NOTE: these refs use provider "file" because the provider (like its
-    // siblings) routes by item and never inspects `ref.provider`, so they
-    // exercise `resolve` fully. The parent-wired `factoryRoutesEncryptedRefs`
-    // case below covers the "encrypted"-routed path end to end.
+    // NOTE: these refs use provider "encrypted" because `resolve` guards
+    // `ref.provider == id` like its siblings; the wrong-provider arm is
+    // pinned by `resolveWrongProviderIsInvalidRef` below.
+    @Test func resolveWrongProviderIsInvalidRef() async throws {
+        let directory = try makeEncryptedTempDir()
+        let provider = makeTestProvider(directory: directory)
+        try provider.set(item: "github", value: "ghp_xyz")
+        let foreign = try SecretRef(provider: "env", item: "github")
+        await #expect(throws: SecretsError.invalidRef("encrypted")) {
+            try await provider.resolve(foreign)
+        }
+    }
+
     @Test func resolveReturnsText() async throws {
         let directory = try makeEncryptedTempDir()
         let provider = makeTestProvider(directory: directory)
         try provider.set(item: "github", value: "ghp_xyz")
-        let ref = try SecretRef(provider: "file", item: "github")
+        let ref = try SecretRef(provider: "encrypted", item: "github")
         #expect(try await provider.resolve(ref) == .text("ghp_xyz"))
     }
 
     @Test func resolveMissingIsNotFound() async throws {
         let directory = try makeEncryptedTempDir()
         let provider = makeTestProvider(directory: directory)
-        let missing = try SecretRef(provider: "file", item: "absent")
+        let missing = try SecretRef(provider: "encrypted", item: "absent")
         await #expect(throws: SecretsError.notFound("encrypted")) {
             try await provider.resolve(missing)
         }
@@ -851,7 +907,7 @@ struct EncryptedSecretsBrokerSurfaceTests {
         let directory = try makeEncryptedTempDir()
         let provider = makeTestProvider(directory: directory)
         try provider.set(item: "github", value: "v")
-        let fielded = try SecretRef(provider: "file", item: "github", field: "token")
+        let fielded = try SecretRef(provider: "encrypted", item: "github", field: "token")
         await #expect(throws: SecretsError.notFound("encrypted")) {
             try await provider.resolve(fielded)
         }
@@ -869,7 +925,7 @@ struct EncryptedSecretsBrokerSurfaceTests {
         #expect(throws: EncryptedSecretsStoreError.decryptFailed) {
             try provider.get(item: "k")
         }
-        let ref = try SecretRef(provider: "file", item: "k")
+        let ref = try SecretRef(provider: "encrypted", item: "k")
         await #expect(throws: SecretsError.providerDown("encrypted")) {
             try await provider.resolve(ref)
         }
@@ -879,7 +935,7 @@ struct EncryptedSecretsBrokerSurfaceTests {
         let directory = try makeEncryptedTempDir()
         try makeTestProvider(directory: directory, keyBytes: testKeyBytes).set(item: "k", value: "v")
         let reader = makeTestProvider(directory: directory, keyBytes: otherKeyBytes)
-        let ref = try SecretRef(provider: "file", item: "k")
+        let ref = try SecretRef(provider: "encrypted", item: "k")
         await #expect(throws: SecretsError.providerDown("encrypted")) {
             try await reader.resolve(ref)
         }
@@ -889,7 +945,7 @@ struct EncryptedSecretsBrokerSurfaceTests {
         let directory = try makeEncryptedTempDir()
         try writeEncryptedString(at: directory, name: "secrets-encrypted.json", string: "{}", mode: 0o644)
         let provider = makeTestProvider(directory: directory)
-        let ref = try SecretRef(provider: "file", item: "k")
+        let ref = try SecretRef(provider: "encrypted", item: "k")
         await #expect(throws: SecretsError.providerDown("encrypted")) {
             try await provider.resolve(ref)
         }
@@ -914,16 +970,19 @@ struct EncryptedSecretsBrokerSurfaceTests {
         #expect(await makeTestProvider(directory: unsafe).health() == ProviderHealth(ok: false))
     }
 
-    // Parent-added registry routing (the NOTE at the top of this suite):
-    // a loadable master key appends the provider to the factory set and
-    // "encrypted" refs resolve through it end to end.
-    @Test func factoryRoutesEncryptedRefsWhenKeyPresent() async throws {
+    // Parent-added factory construction: a loadable master key appends
+    // the provider to the factory set with the org default owner. Routing
+    // through the broker is proven by
+    // `makeBrokerRoutesEncryptedRefsWhenKeyPresent` in
+    // SecretsProviderFactoryTests.
+    @Test func factoryIncludesEncryptedProviderWhenKeyPresent() async throws {
         let directory = try makeEncryptedTempDir()
         let providers = try SecretsProviderFactory.makeProviders(
             configDirectory: directory,
             environment: [EncryptedSecretsProvider.masterKeyEnvironmentVariable: "registry-route-key"]
         )
         let encrypted = try #require(providers.compactMap { $0 as? EncryptedSecretsProvider }.first)
+        #expect(encrypted.id == "encrypted")
         #expect(encrypted.defaultOwner == .org)
         try encrypted.set(item: "github", value: "ghp_registry")
         let ref = try SecretRef(provider: "encrypted", item: "github")

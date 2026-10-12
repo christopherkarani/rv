@@ -638,6 +638,7 @@ struct BrokerLaunchPreparationTests {
             (.vaultConfigInvalid, "broker vault configuration invalid"),
             (.vaultCredentialsInvalid, "broker vault credentials invalid"),
             (.vaultMisconfigured, "broker vault misconfigured"),
+            (.encryptedKeyInvalid, "broker encrypted key invalid"),
             (.workosVaultConfigInvalid, "broker workos-vault configuration invalid"),
             (.workosVaultCredentialsInvalid, "broker workos-vault credentials invalid"),
             (.workosVaultMisconfigured, "broker workos-vault misconfigured"),

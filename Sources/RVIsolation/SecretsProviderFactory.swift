@@ -85,6 +85,12 @@ public enum SecretsProviderFactoryError: Error, Sendable, Equatable {
     /// oversized, or failing endpoint validation). Mirrors the Vault
     /// rule: a half-understood config must not silently degrade.
     case workosVaultConfigInvalid
+    /// `secret.key` is present but unusable (unsafe, unreadable,
+    /// oversized, or non-UTF-8), or the encrypted provider init rejected
+    /// a loaded key. Mirrors the Vault rule: a half-understood key file
+    /// must not silently degrade to no provider. Absence (no env var and
+    /// no key file) skips instead — it is not this case.
+    case encryptedKeyInvalid
     /// `workos-vault.json` is valid but `workos-vault-apikey.json` is
     /// missing or unusable. The API key has no empty default.
     case workosVaultCredentialsInvalid
@@ -269,10 +275,11 @@ private struct VaultEndpointDocument: Decodable {
 
 /// Production provider construction (E1-A).
 ///
-/// Pure construction: the only IO is owner-only config loads, and every
-/// load error fails closed with zero providers plus a labels-only
-/// `SecretsProviderFactoryError` — secret material never flows into
-/// thrown errors.
+/// Pure construction: the only IO is owner-only config loads plus the
+/// owner-only (0600) WorkOS metadata database the WorkOS arm creates,
+/// and every load error fails closed with zero providers plus a
+/// labels-only `SecretsProviderFactoryError` — secret material never
+/// flows into thrown errors.
 ///
 /// Construction rule: file plus keychain plus env always (keychain via
 /// `currentPlatform`, so Linux omits it fail-closed per CON-003 with no
@@ -296,6 +303,8 @@ public enum SecretsProviderFactory {
     /// - `tracker`: lease tracker for stub-transport clients. Honored
     ///   only alongside an injected transport; live clients own a
     ///   default-policy tracker internally.
+    /// - `workosTransport`: stub HTTP round trip for the WorkOS Vault
+    ///   client, mirroring `transport`. Nil builds the live client.
     ///
     /// Throws the labels-only cause with zero providers on any config
     /// failure. Never throws secret material.
@@ -305,7 +314,10 @@ public enum SecretsProviderFactory {
             @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
         )? = nil,
         tracker: VaultLeaseTracker? = nil,
-        environment: [String: String]? = nil
+        environment: [String: String]? = nil,
+        workosTransport: (
+            @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
+        )? = nil
     ) throws(SecretsProviderFactoryError) -> [any SecretsProvider] {
         switch SecretsProviderStore.load(from: configDirectory) {
         case .success:
@@ -336,17 +348,30 @@ public enum SecretsProviderFactory {
         // X1-E: opt-in like Vault's absent-config skip. A loadable master
         // key (EXECUTOR_SECRET_KEY, else owner-only secret.key) appends the
         // encrypted provider; no key means no provider, and refs to it deny
-        // `.providerDown` fail-closed at the broker. `defaultOwner` is `.org`:
-        // RV is single-tenant, so every broker resolve is org-level.
+        // `.providerDown` fail-closed at the broker. A present-but-unusable
+        // key file fails the factory (never silent), and any init rejection
+        // maps to the same case rather than a silent `try?` skip.
+        // `defaultOwner` is `.org`: RV is single-tenant, so every broker
+        // resolve is org-level.
         let masterKeyEnvironment = environment ?? ProcessInfo.processInfo.environment
-        if let masterKey = EncryptedSecretsProvider.loadMasterKey(
+        switch EncryptedSecretsProvider.loadMasterKey(
             environment: masterKeyEnvironment, keyFileDirectory: configDirectory
-        ),
-            let encrypted = try? EncryptedSecretsProvider(
-                configDirectory: configDirectory, masterKey: masterKey, defaultOwner: .org
-            )
-        {
-            providers.append(encrypted)
+        ) {
+        case .success(nil):
+            break
+        case .success(let masterKey?):
+            do {
+                providers.append(
+                    try EncryptedSecretsProvider(
+                        configDirectory: configDirectory, masterKey: masterKey,
+                        defaultOwner: .org
+                    )
+                )
+            } catch {
+                throw SecretsProviderFactoryError.encryptedKeyInvalid
+            }
+        case .failure:
+            throw SecretsProviderFactoryError.encryptedKeyInvalid
         }
         // X1-G: Vault-shaped opt-in. Absent workos-vault.json skips;
         // present-but-unusable fails the factory (never silent), and a
@@ -356,7 +381,10 @@ public enum SecretsProviderFactory {
             break
         case .success(let config?):
             providers.append(
-                try workosVaultClient(config: config, configDirectory: configDirectory)
+                try workosVaultClient(
+                    config: config, configDirectory: configDirectory,
+                    transport: workosTransport
+                )
             )
         case .failure:
             throw SecretsProviderFactoryError.workosVaultConfigInvalid
@@ -381,11 +409,14 @@ public enum SecretsProviderFactory {
             @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
         )? = nil,
         tracker: VaultLeaseTracker? = nil,
-        environment: [String: String]? = nil
+        environment: [String: String]? = nil,
+        workosTransport: (
+            @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
+        )? = nil
     ) throws(SecretsProviderFactoryError) -> SecretBroker {
         let providers = try makeProviders(
             configDirectory: configDirectory, transport: transport, tracker: tracker,
-            environment: environment
+            environment: environment, workosTransport: workosTransport
         )
         return SecretBroker(
             providers: providers, audit: audit,
@@ -432,12 +463,15 @@ public enum SecretsProviderFactory {
     }
 
     /// Builds one WorkOS Vault provider: API key via the owner-only key
-    /// store, then the public live client init (the stub init is
-    /// internal/test-only and never used here), the file-backed metadata
-    /// store, and the provider with the config binding.
+    /// store, then the live client init (or the stub-transport init when
+    /// tests inject one), the file-backed metadata store, and the
+    /// provider with the config binding.
     private static func workosVaultClient(
         config: WorkOSVaultEndpointConfig,
-        configDirectory: URL
+        configDirectory: URL,
+        transport: (
+            @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
+        )?
     ) throws(SecretsProviderFactoryError) -> WorkOSVaultSecretsProvider {
         let apiKey: String
         switch WorkOSVaultAPIKeyStore.load(from: configDirectory) {
@@ -447,10 +481,18 @@ public enum SecretsProviderFactory {
             throw SecretsProviderFactoryError.workosVaultCredentialsInvalid
         }
         do {
-            let client = try WorkOSVaultHTTPClient(
-                endpoint: config.endpoint, apiKey: apiKey,
-                timeoutSeconds: config.timeoutSeconds
-            )
+            let client: WorkOSVaultHTTPClient
+            if let transport {
+                client = try WorkOSVaultHTTPClient(
+                    endpoint: config.endpoint, apiKey: apiKey,
+                    timeoutSeconds: config.timeoutSeconds, transport: transport
+                )
+            } else {
+                client = try WorkOSVaultHTTPClient(
+                    endpoint: config.endpoint, apiKey: apiKey,
+                    timeoutSeconds: config.timeoutSeconds
+                )
+            }
             let store = try WorkOSVaultMetadataStore(
                 path: configDirectory
                     .appendingPathComponent(WorkOSVaultMetadataStore.fileName).path

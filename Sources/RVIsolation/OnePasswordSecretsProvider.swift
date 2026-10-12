@@ -18,6 +18,61 @@ public enum OnePasswordAuth: Sendable, Equatable {
     case serviceAccount(token: String)
 }
 
+// MARK: - Redacted descriptions
+
+/// Token material never prints: the service-account token redacts in both
+/// `description` and `debugDescription`, so crash reports, debug logs, and
+/// test-failure output cannot carry it. The desktop-app account name
+/// survives (it addresses, never authenticates), matching the redacted
+/// projection below.
+extension OnePasswordAuth: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        switch self {
+        case .desktopApp(let accountName):
+            return "desktopApp(accountName: \"\(accountName)\")"
+        case .serviceAccount:
+            return "serviceAccount(<redacted>)"
+        }
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
+/// Account description through the redacted projection: ids, names,
+/// vaults, and the auth shape print; token material cannot.
+extension OnePasswordAccount: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        let redacted: OnePasswordRedactedAuth
+        switch auth {
+        case .desktopApp(let accountName):
+            redacted = .desktopApp(accountName: accountName)
+        case .serviceAccount:
+            redacted = .serviceAccount
+        }
+        return "OnePasswordAccount(id: \"\(id)\", name: \"\(name)\", auth: \(redacted), "
+            + "vaults: \(vaults))"
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
+/// Provider description carries the redacted accounts only: routing stays
+/// debuggable while token material cannot print.
+extension OnePasswordSecretsProvider: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "OnePasswordSecretsProvider(id: \"\(id)\", accounts: \(redactedAccounts), "
+            + "opCommand: \"\(opCommand)\")"
+    }
+
+    public var debugDescription: String {
+        description
+    }
+}
+
 /// One vault an account scopes operations to.
 ///
 /// Ports the executor's `Vault` row (`sdk/types.ts`): the id is globally
@@ -114,8 +169,10 @@ public struct OnePasswordRedactedAccount: Sendable, Equatable {
 /// Thrown errors are typed `SecretsError` and labels-only per the RV
 /// contract, so the executor's human-readable ambiguity and troubleshooting
 /// messages collapse onto cases: ambiguity (either shape) is
-/// `.denied("onepassword:ambiguous")`; backend RPC failures degrade to
-/// `.notFound("onepassword")` like the executor provider's degrade to null;
+/// `.denied("onepassword:ambiguous")`; backend RPC failures (a non-zero
+/// exit, undecodable output) are `.providerDown("onepassword")` —
+/// `notFound` means authoritative absence only (no match, unknown
+/// vault, malformed URI), matching the WorkOS Vault provider;
 /// killed-by-timeout spawns are `.timeout("onepassword")`; oversized CLI
 /// output is `.oversized("onepassword")`; a missing `op` is
 /// `.providerDown("onepassword:cli")`; zero accounts is
@@ -129,14 +186,14 @@ public struct OnePasswordRedactedAccount: Sendable, Equatable {
 /// the cached generation at the next lookup. Health probes always reach
 /// the backend.
 public struct OnePasswordSecretsProvider: SecretsProvider, Sendable {
-    /// Provider id. Admitted by the registry (parent-owned); until then the
-    /// internal init carries a stand-in so refs validate in tests.
-    public var id: String { providerID }
+    /// Provider id. Admitted by `SecretRef.allowedProviders`.
+    public var id: String { "onepassword" }
 
     /// Configured accounts, in routing order.
     public var accounts: [OnePasswordAccount]
     /// `op` command: an absolute path used directly, or a bare name resolved
-    /// through `PATH`.
+    /// through the pinned spawn `PATH` only — never the daemon's ambient
+    /// `PATH`, so a hijacked daemon entry cannot reroute the spawn.
     public var opCommand: String
     /// Per-spawn timeout in seconds. Non-positive budgets time out without
     /// spawning.
@@ -148,11 +205,10 @@ public struct OnePasswordSecretsProvider: SecretsProvider, Sendable {
     /// stick, and any config change drops the whole generation.
     public var cacheTTLSeconds: Double
     /// Base environment for spawns. Production reads the live process
-    /// environment; tests pass fixed maps.
+    /// environment; tests pass fixed maps. The child never inherits this
+    /// map: `spawnEnvironment` rebuilds from an allowlist, so daemon
+    /// secrets (notably `EXECUTOR_SECRET_KEY`) never reach `op`.
     public var environment: @Sendable () -> [String: String]
-
-    /// Provider id under test. Always `"onepassword"` in production.
-    internal let providerID: String
 
     /// Shared resolution cache. A reference, so every copy of this provider
     /// value serves one generation; the generation fingerprint is the
@@ -185,30 +241,11 @@ public struct OnePasswordSecretsProvider: SecretsProvider, Sendable {
             ProcessInfo.processInfo.environment
         }
     ) {
-        self.init(
-            accounts: accounts, opCommand: opCommand, timeoutSeconds: timeoutSeconds,
-            cacheTTLSeconds: cacheTTLSeconds,
-            environment: environment, providerID: "onepassword"
-        )
-    }
-
-    /// Assembles a provider carrying `providerID`. Tests pass an allowlisted
-    /// stand-in until the registry admits `"onepassword"`; production uses
-    /// the public init, which always carries `"onepassword"`.
-    internal init(
-        accounts: [OnePasswordAccount],
-        opCommand: String,
-        timeoutSeconds: Double,
-        cacheTTLSeconds: Double = defaultCacheTTLSeconds,
-        environment: @escaping @Sendable () -> [String: String],
-        providerID: String
-    ) {
         self.accounts = accounts
         self.opCommand = opCommand
         self.timeoutSeconds = timeoutSeconds
         self.cacheTTLSeconds = cacheTTLSeconds
         self.environment = environment
-        self.providerID = providerID
     }
 
     /// Redacted accounts for external exposure. Service-account tokens never
@@ -327,8 +364,8 @@ public struct OnePasswordSecretsProvider: SecretsProvider, Sendable {
     /// Resolves a bare item id or title: exactly one match across every
     /// account's vaults reads `op://vaultId/itemId/<field ?? credential>`;
     /// zero matches is not-found, several is ambiguity. Any listing backend
-    /// failure degrades to not-found, like the executor provider's degrade
-    /// to null — except timeouts, oversized output, and a missing CLI,
+    /// failure is provider-down — only a clean empty listing proves
+    /// absence — except timeouts, oversized output, and a missing CLI,
     /// which keep their types.
     internal func resolveBare(item: String, field: String?) async throws -> SecretValue {
         var matches: [OnePasswordMatch] = []
@@ -366,7 +403,7 @@ public struct OnePasswordSecretsProvider: SecretsProvider, Sendable {
             throw mapFailure(outcome)
         }
         guard let text = String(data: outcome.stdout, encoding: .utf8) else {
-            throw SecretsError.notFound(id)
+            throw SecretsError.providerDown(id)
         }
         return .text(text.replacingOccurrences(
             of: #"[\r\n]+$"#, with: "", options: .regularExpression
@@ -374,7 +411,8 @@ public struct OnePasswordSecretsProvider: SecretsProvider, Sendable {
     }
 
     /// Lists one vault's items through the CLI's JSON output. Unknown row
-    /// members are ignored; undecodable output degrades to not-found.
+    /// members are ignored; undecodable output is provider-down (the
+    /// backend answered, but not with a listing).
     private func listItems(vaultID: String, account: OnePasswordAccount) async throws -> [OnePasswordItemRow] {
         let outcome = await spawn(
             arguments: ["item", "list", "--vault", vaultID, "--format=json"], account: account
@@ -386,7 +424,7 @@ public struct OnePasswordSecretsProvider: SecretsProvider, Sendable {
         guard let rows = try? JSONDecoder().decode(
             [OnePasswordItemRow].self, from: outcome.stdout
         ) else {
-            throw SecretsError.notFound(id)
+            throw SecretsError.providerDown(id)
         }
         return rows
     }
@@ -421,15 +459,33 @@ public struct OnePasswordSecretsProvider: SecretsProvider, Sendable {
         )
     }
 
-    /// Per-spawn environment: an inherited token would override `--account`
-    /// and silently reroute a desktop-app call to the parent process's
-    /// service account, so the variable is always stripped first and set only
-    /// for service-account auth.
+    /// Child `PATH`: pinned search dirs for a bare `opCommand`, never the
+    /// daemon's. Mirrors N's `minimalEnvironment` precedent.
+    static let spawnPathValue = "/usr/bin:/bin"
+
+    /// Per-spawn environment, rebuilt from an allowlist: the pinned `PATH`
+    /// and `LANG`/`LC_ALL` (deterministic CLI diagnostics), the inherited
+    /// `HOME`/`TMPDIR` and `XDG_*` entries desktop-app auth needs, plus the
+    /// per-account token for service-account auth only. Everything else —
+    /// notably an inherited token (which would override `--account` and
+    /// silently reroute a desktop-app call) and every other daemon secret
+    /// such as `EXECUTOR_SECRET_KEY` — never reaches the child.
     static func spawnEnvironment(
         base: [String: String], auth: OnePasswordAuth
     ) -> [String: String] {
-        var env = base
-        env.removeValue(forKey: serviceAccountTokenVariable)
+        var env: [String: String] = [
+            "PATH": spawnPathValue,
+            "LANG": "C",
+            "LC_ALL": "C",
+        ]
+        for key in ["HOME", "TMPDIR"] {
+            if let value = base[key] {
+                env[key] = value
+            }
+        }
+        for (key, value) in base where key.hasPrefix("XDG_") {
+            env[key] = value
+        }
         if case .serviceAccount(let token) = auth {
             env[serviceAccountTokenVariable] = token
         }
@@ -437,8 +493,10 @@ public struct OnePasswordSecretsProvider: SecretsProvider, Sendable {
     }
 
     /// Maps a failed spawn onto its typed cause. Only CLI-missing, timeout,
-    /// and oversized keep their types; every other backend failure degrades
-    /// to not-found. Labels name the provider and cause only.
+    /// and oversized keep their types; every other backend failure is
+    /// provider-down — a non-zero exit masks auth, backend, and
+    /// missing-item failures alike, so it can never prove absence.
+    /// Labels name the provider and cause only.
     private func mapFailure(_ outcome: OnePasswordSpawnOutcome) -> SecretsError {
         if outcome.cliMissing {
             return SecretsError.providerDown("\(id):cli")
@@ -449,7 +507,7 @@ public struct OnePasswordSecretsProvider: SecretsProvider, Sendable {
         if outcome.oversized {
             return SecretsError.oversized(id)
         }
-        return SecretsError.notFound(id)
+        return SecretsError.providerDown(id)
     }
 }
 
@@ -676,7 +734,9 @@ enum OnePasswordCLIRunner {
     }
 
     /// Resolves `command` to a runnable path: a value containing `/` is used
-    /// directly, else each `PATH` segment is tried in order.
+    /// directly, else each `PATH` segment is tried in order. Production
+    /// always passes the allowlisted spawn environment's pinned `PATH`,
+    /// so a bare `op` resolves against allowlisted dirs only.
     static func resolveExecutable(
         command: String, pathValue: String?, isExecutable: (String) -> Bool
     ) -> String? {

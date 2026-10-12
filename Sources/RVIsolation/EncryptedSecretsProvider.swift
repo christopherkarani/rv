@@ -72,9 +72,9 @@ import RVFileStore
 /// explicitly with `generateMasterKey`), and the key file goes through
 /// the owner-only read discipline (Executor reads it plain).
 public struct EncryptedSecretsProvider: SecretsProvider, Sendable {
-    /// Provider id. The parent wires it into `SecretRef.allowedProviders`
-    /// plus the factory; until then refs route by item (this provider, like
-    /// its siblings, never inspects `ref.provider`).
+    /// Provider id. Admitted by `SecretRef.allowedProviders` and wired
+    /// into the factory; `resolve` guards `ref.provider == id`, like its
+    /// siblings.
     public var id: String { "encrypted" }
 
     /// Operator config directory holding `secrets-encrypted.json`.
@@ -142,37 +142,46 @@ public struct EncryptedSecretsProvider: SecretsProvider, Sendable {
     }
 
     /// Loads the master key: trimmed `EXECUTOR_SECRET_KEY` wins, else the
-    /// trimmed owner-only `secret.key` under `keyFileDirectory`. Returns nil
-    /// when absent or unusable (missing, unsafe, unreadable, oversized,
-    /// non-UTF-8, or blank after trimming) — every form fails closed to
-    /// "no key", and the caller throws `emptyMasterKey`.
+    /// trimmed owner-only `secret.key` under `keyFileDirectory`. Tri-state,
+    /// mirroring the Vault rule: `.success(key)` loads, `.success(nil)` is
+    /// absent (no env var and no key file — the factory skips the
+    /// provider), and `.failure` is present-but-unusable (unsafe,
+    /// unreadable, oversized, or non-UTF-8 — the factory fails loud, never
+    /// silently omitting a provider the operator believes is configured).
+    /// A blank env var falls through to the key file; a blank key file
+    /// carries no key and reads as absent.
     public static func loadMasterKey(
         environment: [String: String],
         keyFileDirectory: URL?
-    ) -> String? {
+    ) -> Result<String?, EncryptedSecretsKeyLoadError> {
         if let candidate = environment[masterKeyEnvironmentVariable] {
             let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty == false {
-                return trimmed
+                return .success(trimmed)
             }
         }
         guard let directory = keyFileDirectory else {
-            return nil
+            return .success(nil)
         }
-        guard case .success(let data) = OwnerOnlyFile.loadBytes(
+        switch OwnerOnlyFile.loadBytes(
             fileName: masterKeyFileName, from: directory,
             maximumBytes: masterKeyMaximumBytes
-        ) else {
-            return nil
+        ) {
+        case .success(let data):
+            guard let text = String(data: data, encoding: .utf8) else {
+                return .failure(.keyUnusable)
+            }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.isEmpty == false else {
+                return .success(nil)
+            }
+            return .success(trimmed)
+        case .failure(.missing):
+            return .success(nil)
+        case .failure(.inaccessible), .failure(.unsafeLocation),
+            .failure(.unreadable), .failure(.oversized):
+            return .failure(.keyUnusable)
         }
-        guard let text = String(data: data, encoding: .utf8) else {
-            return nil
-        }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty == false else {
-            return nil
-        }
-        return trimmed
     }
 
     /// Mints a fresh master key: 32 random bytes, base64. Explicit — the
@@ -181,13 +190,18 @@ public struct EncryptedSecretsProvider: SecretsProvider, Sendable {
         Data(MCPRandom.bytes(count: 32)).base64EncodedString()
     }
 
-    /// Resolves one encrypted-backed ref. A missing document is an empty
-    /// store (every ref is `.notFound`, never provider-down); unreadable
-    /// or corrupt stores, and values that fail authentication (wrong key
-    /// or tamper), are `.providerDown`. Encrypted values are whole
-    /// strings, so a field-carrying ref can never resolve and fails closed
-    /// as `.notFound`, mirroring the env provider's unknown-field mapping.
+    /// Resolves one encrypted-backed ref. Refs naming another provider
+    /// are `.invalidRef`, matching the 1Password and WorkOS Vault
+    /// providers. A missing document is an empty store (every ref is
+    /// `.notFound`, never provider-down); unreadable or corrupt stores,
+    /// and values that fail authentication (wrong key or tamper), are
+    /// `.providerDown`. Encrypted values are whole strings, so a
+    /// field-carrying ref can never resolve and fails closed as
+    /// `.notFound`, mirroring the env provider's unknown-field mapping.
     public func resolve(_ ref: SecretRef) async throws -> SecretValue {
+        guard ref.provider == id else {
+            throw SecretsError.invalidRef(id)
+        }
         guard ref.field == nil else {
             throw SecretsError.notFound(id)
         }
@@ -590,44 +604,27 @@ final class MCPEncryptedStoreLock: @unchecked Sendable {
     }
 }
 
-// MARK: - Owner partition
+// MARK: - Redacted description
 
-/// Storage partition: org-shared or user-private. Ports Executor
-/// `embeddedItemOwner`/`ownerForItemId` (`provider-item-owner.ts`).
-public enum MCPEncryptedSecretsOwner: String, Sendable, Equatable {
-    /// Shared partition (Executor `Owner "org"`).
-    case org
-    /// Private partition (Executor `Owner "user"`).
-    case user
-
-    /// The owner an item id embeds, or nil for ids that carry none. Reads
-    /// the second colon-segment of the owner-scoped prefixes
-    /// (`connection:`, `oauth:`, `oauth-client:`); the `:store-probe` tail
-    /// inherits its credential's owner by hanging off the same id.
-    public static func embeddedOwner(itemID: String) -> Self? {
-        let segments = itemID.split(separator: ":", omittingEmptySubsequences: false)
-        guard segments.count >= 2 else {
-            return nil
-        }
-        guard segments[0] == "connection" || segments[0] == "oauth"
-            || segments[0] == "oauth-client"
-        else {
-            return nil
-        }
-        guard segments[1] == "org" || segments[1] == "user" else {
-            return nil
-        }
-        return segments[1] == "org" ? .org : .user
+/// Key material never prints: the derived `keyBytes` stay out of both
+/// `description` and `debugDescription`, so crash reports, debug logs, and
+/// test-failure output cannot carry them.
+extension EncryptedSecretsProvider: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "EncryptedSecretsProvider(id: \"encrypted\", defaultOwner: \(defaultOwner))"
     }
 
-    /// The partition a credential belongs to: the id-embedded owner when
-    /// present, else the caller's binding (`defaultOwner`).
-    public static func ownerForItemID(
-        _ id: String, defaultOwner: Self
-    ) -> Self {
-        embeddedOwner(itemID: id) ?? defaultOwner
+    public var debugDescription: String {
+        description
     }
 }
+
+// MARK: - Owner partition
+
+/// Storage partition: org-shared or user-private. Alias for the shared
+/// `MCPSecretsOwner` (RVDomain); the encrypted and WorkOS Vault
+/// providers file under one partition type with one `embeddedOwner`.
+public typealias MCPEncryptedSecretsOwner = MCPSecretsOwner
 
 // MARK: - Errors and entries
 
@@ -636,6 +633,14 @@ public enum MCPEncryptedSecretsOwner: String, Sendable, Equatable {
 public enum EncryptedSecretsConfigError: Error, Sendable, Equatable {
     /// Empty master key: a secret store with no key is unsafe.
     case emptyMasterKey
+}
+
+/// Master-key load failure. Fixed labels only: the key file's bytes
+/// and path never appear.
+public enum EncryptedSecretsKeyLoadError: Error, Sendable, Equatable {
+    /// `secret.key` is present but unusable (unsafe, unreadable,
+    /// oversized, or non-UTF-8). Absence is `.success(nil)`, not this.
+    case keyUnusable
 }
 
 /// Store-operation failure. Fixed labels only: item names and values

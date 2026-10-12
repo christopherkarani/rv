@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -16,14 +21,10 @@ import RVFileStore
 
 /// Credential partition a provider item id embeds, if any.
 ///
-/// Org credentials are shared across a tenant's members; user
-/// credentials stay private to their subject. Mirrors executor `Owner`.
-public enum WorkOSVaultOwner: String, Sendable, Equatable {
-    /// Tenant-shared partition.
-    case org
-    /// Subject-private partition.
-    case user
-}
+/// Alias for the shared `MCPSecretsOwner` (RVDomain); the encrypted
+/// and WorkOS Vault providers file under one partition type with one
+/// `embeddedOwner`.
+public typealias WorkOSVaultOwner = MCPSecretsOwner
 
 /// Request binding: which tenant (and whose subject) an operation runs as.
 ///
@@ -45,39 +46,27 @@ public struct WorkOSVaultOwnerBinding: Sendable, Equatable {
 }
 
 /// Item-id prefixes whose second colon segment is the owning partition.
+///
+/// Binding-shaped projections over the shared `MCPSecretsOwner`: the
+/// partition rule lives in RVDomain; this namespace keeps the
+/// binding-fallback spelling (`embedded(in:)`/`ownerForItem(id:binding:)`)
+/// the provider and its tests call.
 public enum WorkOSVaultItemOwner: Sendable {
     /// Prefixes from provider-item-owner.ts, pinned verbatim.
-    public static let scopedPrefixes: Set<String> = [
-        "connection", "oauth", "oauth-client",
-    ]
+    public static let scopedPrefixes: Set<String> = MCPSecretsOwner.scopedPrefixes
 
     /// The owner a logical item id embeds, or nil for legacy ids.
-    ///
-    /// Reads the second colon segment of the scoped prefixes; anything
-    /// else (missing segment, unknown owner word, unknown prefix) is a
-    /// legacy id with no embedded owner. Ports `embeddedItemOwner`.
+    /// Delegates to the shared rule.
     public static func embedded(in id: String) -> WorkOSVaultOwner? {
-        let segments = id.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
-        guard segments.count >= 2, scopedPrefixes.contains(segments[0]) else {
-            return nil
-        }
-        switch segments[1] {
-        case "org":
-            return .org
-        case "user":
-            return .user
-        default:
-            return nil
-        }
+        MCPSecretsOwner.embeddedOwner(itemID: id)
     }
 
     /// The partition a credential belongs to: the credential's owner
     /// (embedded in the id), not the acting caller's binding. Ids without
     /// an embedded owner fall back to the caller binding: a bound subject
     /// writes the user's own partition, otherwise the org-shared one.
-    /// Ports `ownerForItemId`.
     public static func ownerForItem(id: String, binding: WorkOSVaultOwnerBinding) -> WorkOSVaultOwner {
-        embedded(in: id) ?? (binding.subject == nil ? .org : .user)
+        MCPSecretsOwner.embeddedOwner(itemID: id) ?? (binding.subject == nil ? .org : .user)
     }
 }
 
@@ -98,6 +87,9 @@ public enum WorkOSVaultConfigurationError: Error, Sendable, Equatable {
     case invalidPrefix
     /// Tenant binding is empty.
     case emptyTenant
+    /// Subject binding is present but empty. An empty subject would file
+    /// a phantom partition no binding ever reads.
+    case emptySubject
 }
 
 /// One HTTP round trip: request to response body plus status.
@@ -122,8 +114,9 @@ typealias WorkOSVaultTransport = @Sendable (URLRequest) async throws -> (Data, H
 public struct WorkOSVaultHTTPClient: Sendable {
     /// WorkOS API base URL (scheme, host, port only; no path).
     public let endpoint: URL
-    /// API key sent as `Authorization: Bearer`. Secret material, never logged.
-    public let apiKey: String
+    /// API key sent as `Authorization: Bearer`. Internal: only the request
+    /// builder reads it, so no caller can leak or log it.
+    let apiKey: String
     /// Per-request timeout in seconds.
     public let timeoutSeconds: Double
 
@@ -166,6 +159,21 @@ public struct WorkOSVaultHTTPClient: Sendable {
         self.apiKey = apiKey
         self.timeoutSeconds = timeoutSeconds
         self.transport = transport
+    }
+}
+
+// MARK: - Client redaction
+
+/// Key material never prints: a fixed placeholder in both `description`
+/// and `debugDescription`, so crash reports, debug logs, and test-failure
+/// output cannot carry the API key (the `MCPCallerToken` precedent).
+extension WorkOSVaultHTTPClient: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "WorkOSVaultHTTPClient(<redacted>)"
+    }
+
+    public var debugDescription: String {
+        description
     }
 }
 
@@ -739,7 +747,7 @@ public enum WorkOSVaultObjectNaming: Sendable {
     public static func scopeSegments(
         id: String, binding: WorkOSVaultOwnerBinding
     ) -> [String]? {
-        guard let owner = WorkOSVaultItemOwner.embedded(in: id) else {
+        guard let owner = MCPSecretsOwner.embeddedOwner(itemID: id) else {
             return nil
         }
         let tenant = encodeSegment(binding.tenant)
@@ -780,7 +788,7 @@ public enum WorkOSVaultObjectNaming: Sendable {
     public static func contextFor(
         id: String, binding: WorkOSVaultOwnerBinding
     ) -> [String: String] {
-        guard let owner = WorkOSVaultItemOwner.embedded(in: id) else {
+        guard let owner = MCPSecretsOwner.embeddedOwner(itemID: id) else {
             return ["app": "executor"]
         }
         var context = ["app": "executor", "organization_id": binding.tenant]
@@ -986,9 +994,16 @@ public actor WorkOSVaultMetadataStore: WorkOSVaultMetadata {
     #endif
 
     /// Opens (creating) the database at `path`, or an ephemeral store
-    /// for `:memory:`. Parent directories are the caller's job.
+    /// for `:memory:`. Parent directories are the caller's job. The file
+    /// is pre-created owner-only (0600) and pre-existing files are
+    /// tightened to 0600: the database carries secret ids, names, and
+    /// purposes, so it joins the owner-only discipline instead of
+    /// inheriting umask perms from `sqlite3_open(CREATE)`.
     public init(path: String) throws(WorkOSVaultStoreError) {
         #if canImport(SQLite3)
+        if path != ":memory:" {
+            try Self.ensureOwnerOnlyFile(path: path)
+        }
         var raw: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         let status = path.withCString { cPath in
@@ -1012,6 +1027,33 @@ public actor WorkOSVaultMetadataStore: WorkOSVaultMetadata {
         self.handle = WorkOSVaultDBHandle(opened)
         #endif
     }
+
+    #if canImport(SQLite3)
+    /// Pre-creates the database file at `path` with mode 0600
+    /// (`O_CREAT|O_EXCL`, so no umask-permissioned window exists) and
+    /// tightens any pre-existing regular file to 0600. Non-regular paths
+    /// (notably a directory squatting the path) skip tightening — the
+    /// `sqlite3_open` below fails closed on them anyway.
+    static func ensureOwnerOnlyFile(path: String) throws(WorkOSVaultStoreError) {
+        let created = path.withCString {
+            open($0, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
+        }
+        if created >= 0 {
+            close(created)
+            return
+        }
+        guard errno == EEXIST else {
+            throw WorkOSVaultStoreError.storeFailure
+        }
+        var status = stat()
+        guard stat(path, &status) == 0, (status.st_mode & S_IFMT) == S_IFREG else {
+            return
+        }
+        guard chmod(path, 0o600) == 0 else {
+            throw WorkOSVaultStoreError.storeFailure
+        }
+    }
+    #endif
 
     public func get(
         id: String, tenant: String, subject: String?
@@ -1383,8 +1425,7 @@ public struct WorkOSVaultSecretSummary: Sendable, Equatable {
 /// every version-checked attempt lost its race, exactly like
 /// executor). Task cancellation propagates unmapped.
 public struct WorkOSVaultSecretsProvider: SecretsProvider, Sendable {
-    /// Provider id. Always a member of `SecretRef.allowedProviders`
-    /// once the registry wires it (parent merge).
+    /// Provider id. Admitted by `SecretRef.allowedProviders`.
     public var id: String { "workos-vault" }
 
     private let client: WorkOSVaultHTTPClient
@@ -1411,6 +1452,9 @@ public struct WorkOSVaultSecretsProvider: SecretsProvider, Sendable {
     ) throws(WorkOSVaultConfigurationError) {
         guard binding.tenant.isEmpty == false else {
             throw WorkOSVaultConfigurationError.emptyTenant
+        }
+        if let subject = binding.subject, subject.isEmpty {
+            throw WorkOSVaultConfigurationError.emptySubject
         }
         try WorkOSVaultObjectNaming.validate(prefix: objectPrefix)
         self.client = client
@@ -1453,11 +1497,24 @@ public struct WorkOSVaultSecretsProvider: SecretsProvider, Sendable {
         }
     }
 
+    /// Rejects user-partition ids in automation (subject-less) contexts.
+    /// Without a subject there is no private partition to read or file:
+    /// writing would mint a tenant-global object under an empty-subject
+    /// name and a metadata row no binding ever reads (invisible and
+    /// undeletable through RV), so every user-scoped access fails closed
+    /// as denied instead of degrading to missing.
+    private func requireUserScopeVisible(for id: String) throws {
+        if binding.subject == nil, MCPSecretsOwner.embeddedOwner(itemID: id) == .user {
+            throw SecretsError.denied("workos-vault")
+        }
+    }
+
     /// Reads one value: nil when the metadata store knows nothing
     /// about the id, when Vault holds no object under its name, or
     /// when the object carries no (or an empty) value. Executor `get`
     /// parity, including the empty-value-reads-missing rule.
     public func value(forItem id: String) async throws -> String? {
+        try requireUserScopeVisible(for: id)
         let row = try await storedRow(forItem: id)
         guard row != nil else { return nil }
         let object = try await loadObject(nameFor(id: id))
@@ -1470,7 +1527,8 @@ public struct WorkOSVaultSecretsProvider: SecretsProvider, Sendable {
     /// Presence from the metadata store alone: Vault is not touched.
     /// Executor `has` parity.
     public func has(_ id: String) async throws -> Bool {
-        try await storedRow(forItem: id) != nil
+        try requireUserScopeVisible(for: id)
+        return try await storedRow(forItem: id) != nil
     }
 
     /// Lists visible secrets oldest first. Executor `list` parity.
@@ -1489,6 +1547,7 @@ public struct WorkOSVaultSecretsProvider: SecretsProvider, Sendable {
     /// an existing name, purpose, and creation time, or defaulting to
     /// the id, no purpose, and now. Executor `set` parity.
     public func set(_ id: String, value: String) async throws {
+        try requireUserScopeVisible(for: id)
         let existing = try await storedRow(forItem: id)
         try await upsertValue(
             name: nameFor(id: id), value: value,
@@ -1513,6 +1572,7 @@ public struct WorkOSVaultSecretsProvider: SecretsProvider, Sendable {
     /// Deletes one value from Vault and the metadata store. Absence
     /// is a no-op returning void; executor `delete` parity.
     public func delete(_ id: String) async throws {
+        try requireUserScopeVisible(for: id)
         let row = try await storedRow(forItem: id)
         guard row != nil else { return }
         _ = try await deleteValue(name: nameFor(id: id))
@@ -1922,6 +1982,9 @@ enum WorkOSVaultEndpointStore {
         try WorkOSVaultObjectNaming.validate(prefix: prefix)
         guard let tenant = document.tenant, tenant.isEmpty == false else {
             throw WorkOSVaultConfigurationError.emptyTenant
+        }
+        if let subject = document.subject, subject.isEmpty {
+            throw WorkOSVaultConfigurationError.emptySubject
         }
         return WorkOSVaultEndpointConfig(
             endpoint: endpoint, timeoutSeconds: timeout, objectPrefix: prefix,

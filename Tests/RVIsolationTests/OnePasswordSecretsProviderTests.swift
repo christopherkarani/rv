@@ -9,20 +9,32 @@ import Synchronization
 import Testing
 @testable import RVIsolation
 
-// MARK: - Stand-in provider id
-
-/// SecretRef allowlists provider ids and the registry (parent-owned) has not
-/// admitted `"onepassword"` yet, so top-level `resolve(_:)` dispatch tests
-/// carry this allowlisted stand-in via the provider's internal init. Flip to
-/// `"onepassword"` once the registry lands. Every other suite calls the
-/// internal resolution paths on a default-id provider and pins exact
-/// `"onepassword..."` labels.
-private let standInProviderID = "exec"
+// MARK: - Oracle map
+//
+// Executor oracle: `packages/plugins/onepassword/src/sdk/` — `plugin.ts`
+// (ref shapes, `CREDENTIAL_FIELD = "credential"` (:38), cache
+// `DEFAULT_SECRET_CACHE_TTL_MS = 60_000` / `SECRET_CACHE_CAPACITY = 256`
+// (:48-49), `DEFAULT_TIMEOUT_MS = 15_000` (:39)), `service.ts` (CLI argv:
+// `run(["read", uri])` (:267), `runJson(["vault", "list"])` (:272),
+// `runJson(["item", "list", "--vault", vaultId])` (:277) with
+// `--format=json` appended (:246); `--account=<name>` for desktop-app
+// auth (:200); token strip-then-set (:194-195)), `op-cli.ts` (async
+// spawn, timeout kill, byte cap), `service.test.ts` / `plugin.test.ts`
+// (argv, routing, redaction, ambiguity titles).
+//
+// Deliberate RV divergences, pinned as RV choices (not oracle drift):
+// the child env is an allowlist (the oracle strips only the token var);
+// there is no SDK fallback (a missing CLI fails closed); the output cap
+// is 1 MiB mirroring Vault (the oracle allows 16 MiB); backend RPC
+// failures are provider-down (the oracle provider degrades to null).
+// Each suite below cites the oracle lines it pins.
 
 // MARK: - Fake `op` harness
 
-/// Fake `op` scenario script. Behavior comes from files in `$FAKEOP_DIR` so
-/// each test scripts only what it needs:
+/// Fake `op` scenario script. Behavior comes from files in the scenario
+/// dir so each test scripts only what it needs. The dir travels to the
+/// child as `TMPDIR` (the spawn allowlist strips `FAKEOP_DIR`, so the
+/// script resolves `D="${FAKEOP_DIR:-$TMPDIR}"`):
 ///
 /// - `invocations.log` (written): one argv line per spawn, for exact-shape
 ///   and spawn-count assertions. Space-joined (`$*`), so it collapses
@@ -31,6 +43,8 @@ private let standInProviderID = "exec"
 ///   appended per spawn. Single-spawn tests parse the whole file as one
 ///   record (`singleArgv()`); multi-spawn tests must not parse it, since
 ///   concurrent appends can interleave.
+/// - `childenv.log` (written): the child's sorted `env` output per spawn,
+///   for allowlist containment assertions.
 /// - `env.log` (written): `set <len>` when the child sees
 ///   `OP_SERVICE_ACCOUNT_TOKEN`, else `unset`. The length proves
 ///   pass-through; the value is never logged.
@@ -62,29 +76,31 @@ private let standInProviderID = "exec"
 ///   degrade safely because the provider only branches on exit status.
 private let fakeOpScript = """
 #!/bin/bash
-printf '%s\\n' "$*" >>"$FAKEOP_DIR/invocations.log"
-printf '%s\\0' "$@" >>"$FAKEOP_DIR/argv.bin"
+D="${FAKEOP_DIR:-$TMPDIR}"
+env | sort >>"$D/childenv.log"
+printf '%s\\n' "$*" >>"$D/invocations.log"
+printf '%s\\0' "$@" >>"$D/argv.bin"
 if [ -n "${OP_SERVICE_ACCOUNT_TOKEN+x}" ]; then
-  echo "set ${#OP_SERVICE_ACCOUNT_TOKEN}" >>"$FAKEOP_DIR/env.log"
+  echo "set ${#OP_SERVICE_ACCOUNT_TOKEN}" >>"$D/env.log"
 else
-  echo "unset" >>"$FAKEOP_DIR/env.log"
+  echo "unset" >>"$D/env.log"
 fi
-echo "$$" >>"$FAKEOP_DIR/pids.log"
-if [ -f "$FAKEOP_DIR/hang" ]; then exec sleep 300; fi
-if [ -f "$FAKEOP_DIR/linger" ]; then sleep "$(cat "$FAKEOP_DIR/linger")" & fi
-if [ -f "$FAKEOP_DIR/delay" ]; then sleep "$(cat "$FAKEOP_DIR/delay")"; fi
+echo "$$" >>"$D/pids.log"
+if [ -f "$D/hang" ]; then exec sleep 300; fi
+if [ -f "$D/linger" ]; then sleep "$(cat "$D/linger")" & fi
+if [ -f "$D/delay" ]; then sleep "$(cat "$D/delay")"; fi
 if [ "$1" = "read" ]; then
-  if [ -f "$FAKEOP_DIR/read.stderr" ]; then cat "$FAKEOP_DIR/read.stderr" >&2; fi
-  if [ -f "$FAKEOP_DIR/read.stdout" ]; then cat "$FAKEOP_DIR/read.stdout"; fi
+  if [ -f "$D/read.stderr" ]; then cat "$D/read.stderr" >&2; fi
+  if [ -f "$D/read.stdout" ]; then cat "$D/read.stdout"; fi
   code=0
-  if [ -f "$FAKEOP_DIR/read.exit" ]; then code="$(cat "$FAKEOP_DIR/read.exit")"; fi
+  if [ -f "$D/read.exit" ]; then code="$(cat "$D/read.exit")"; fi
   exit "$code"
 fi
 if [ "$1" = "vault" ] && [ "$2" = "list" ]; then
-  if [ -f "$FAKEOP_DIR/vaults.stderr" ]; then cat "$FAKEOP_DIR/vaults.stderr" >&2; fi
-  if [ -f "$FAKEOP_DIR/vaults.json" ]; then cat "$FAKEOP_DIR/vaults.json"; fi
+  if [ -f "$D/vaults.stderr" ]; then cat "$D/vaults.stderr" >&2; fi
+  if [ -f "$D/vaults.json" ]; then cat "$D/vaults.json"; fi
   code=0
-  if [ -f "$FAKEOP_DIR/vaults.exit" ]; then code="$(cat "$FAKEOP_DIR/vaults.exit")"; fi
+  if [ -f "$D/vaults.exit" ]; then code="$(cat "$D/vaults.exit")"; fi
   exit "$code"
 fi
 if [ "$1" = "item" ] && [ "$2" = "list" ]; then
@@ -94,10 +110,10 @@ if [ "$1" = "item" ] && [ "$2" = "list" ]; then
     if [ "$prev" = "--vault" ]; then vault="$arg"; fi
     prev="$arg"
   done
-  if [ -f "$FAKEOP_DIR/items.$vault.stderr" ]; then cat "$FAKEOP_DIR/items.$vault.stderr" >&2; fi
-  if [ -f "$FAKEOP_DIR/items.$vault.json" ]; then cat "$FAKEOP_DIR/items.$vault.json"; fi
+  if [ -f "$D/items.$vault.stderr" ]; then cat "$D/items.$vault.stderr" >&2; fi
+  if [ -f "$D/items.$vault.json" ]; then cat "$D/items.$vault.json"; fi
   code=0
-  if [ -f "$FAKEOP_DIR/items.$vault.exit" ]; then code="$(cat "$FAKEOP_DIR/items.$vault.exit")"; fi
+  if [ -f "$D/items.$vault.exit" ]; then code="$(cat "$D/items.$vault.exit")"; fi
   exit "$code"
 fi
 echo "unknown op invocation: $*" >&2
@@ -106,7 +122,7 @@ exit 1
 
 /// One fake-`op` installation rooted at a fresh temp dir.
 private struct FakeOp: Sendable {
-    /// Scenario dir; also the child's `$FAKEOP_DIR`.
+    /// Scenario dir; also the child's `TMPDIR` (and the stripped `FAKEOP_DIR`).
     let dir: URL
 
     /// Fake `op` executable path.
@@ -142,6 +158,17 @@ private struct FakeOp: Sendable {
         try logLines("env.log")
     }
 
+    /// The child's dumped environment (`KEY=VALUE` lines, one `env` dump
+    /// per spawn). Single-spawn tests only; concurrent dumps interleave.
+    func childEnv() throws -> [String: String] {
+        var dumped: [String: String] = [:]
+        for line in try logLines("childenv.log") {
+            guard let cut = line.firstIndex(of: "=") else { continue }
+            dumped[String(line[..<cut])] = String(line[line.index(after: cut)...])
+        }
+        return dumped
+    }
+
     /// Logged child PIDs.
     func pids() throws -> [Int32] {
         try logLines("pids.log").compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
@@ -175,11 +202,16 @@ private func makeFakeOp() throws -> FakeOp {
     return FakeOp(dir: dir)
 }
 
-/// Deterministic spawn environment: a usable `PATH` plus the fake's
-/// scenario dir, nothing else. Tests needing an inherited token or a custom
-/// `PATH` extend this map.
+/// Deterministic spawn environment: a usable `PATH`, the fake's scenario
+/// dir as both `FAKEOP_DIR` and `TMPDIR` (the allowlist strips the former,
+/// so the script resolves its dir from the latter), nothing else. Tests
+/// needing an inherited token or a custom `PATH` extend this map.
 private func testEnvironment(_ fake: FakeOp, extra: [String: String] = [:]) -> [String: String] {
-    var env = ["PATH": "/usr/bin:/bin", "FAKEOP_DIR": fake.dir.path]
+    var env = [
+        "PATH": "/usr/bin:/bin",
+        "FAKEOP_DIR": fake.dir.path,
+        "TMPDIR": fake.dir.path,
+    ]
     for (key, value) in extra {
         env[key] = value
     }
@@ -191,28 +223,14 @@ private func makeProvider(
     _ fake: FakeOp,
     accounts: [OnePasswordAccount],
     timeoutSeconds: Double = 15,
+    cacheTTLSeconds: Double = OnePasswordSecretsProvider.defaultCacheTTLSeconds,
     environment: [String: String]? = nil
 ) -> OnePasswordSecretsProvider {
     let env = environment ?? testEnvironment(fake)
     return OnePasswordSecretsProvider(
         accounts: accounts, opCommand: fake.opPath,
-        timeoutSeconds: timeoutSeconds, environment: { env }
-    )
-}
-
-/// Stand-in-id provider for top-level `resolve(_:)` dispatch tests.
-private func makeStandInProvider(
-    _ fake: FakeOp,
-    accounts: [OnePasswordAccount],
-    timeoutSeconds: Double = 15,
-    cacheTTLSeconds: Double = OnePasswordSecretsProvider.defaultCacheTTLSeconds
-) -> OnePasswordSecretsProvider {
-    let env = testEnvironment(fake)
-    return OnePasswordSecretsProvider(
-        accounts: accounts, opCommand: fake.opPath,
         timeoutSeconds: timeoutSeconds, cacheTTLSeconds: cacheTTLSeconds,
-        environment: { env },
-        providerID: standInProviderID
+        environment: { env }
     )
 }
 
@@ -301,6 +319,7 @@ private func awaitSpawn(_ fake: FakeOp, timeoutSeconds: Double = 5) async -> Boo
 
 // MARK: - Identity and redacted shapes
 
+/// Oracle: `types.ts` RedactedOnePasswordAuth/Account/Config (:129-143).
 @Suite("OnePasswordIdentity")
 private struct OnePasswordIdentityTests {
     @Test func defaultInit_carriesOnePasswordIDAndDefaults() {
@@ -349,28 +368,46 @@ private struct OnePasswordIdentityTests {
 
 // MARK: - Spawn environment
 
+/// Oracle: `service.ts` token strip-then-set (:194-195) + `service.test.ts` token-visibility titles; RV builds an allowlist instead (see the header map).
 @Suite("OnePasswordSpawnEnvironment")
 private struct OnePasswordSpawnEnvironmentTests {
-    @Test func desktop_stripsInheritedTokenAndKeepsTheRest() {
+    @Test func desktop_rebuildsFromAllowlist() {
         let env = OnePasswordSecretsProvider.spawnEnvironment(
             base: [
-                "PATH": "/usr/bin:/bin",
+                "PATH": "/spoofed/bin:/usr/bin",
                 "OP_SERVICE_ACCOUNT_TOKEN": "ops_inherited_token",
+                "EXECUTOR_SECRET_KEY": "e-master-key",
+                "SOME_API_TOKEN": "canary",
                 "HOME": "/Users/test",
+                "TMPDIR": "/tmp/op",
+                "XDG_CONFIG_HOME": "/Users/test/.config",
+                "FAKEOP_DIR": "/tmp/scenario",
             ],
             auth: .desktopApp(accountName: "my.1password.com")
         )
-        #expect(env["OP_SERVICE_ACCOUNT_TOKEN"] == nil)
-        #expect(env["PATH"] == "/usr/bin:/bin")
-        #expect(env["HOME"] == "/Users/test")
+        #expect(
+            env == [
+                "PATH": OnePasswordSecretsProvider.spawnPathValue,
+                "LANG": "C",
+                "LC_ALL": "C",
+                "HOME": "/Users/test",
+                "TMPDIR": "/tmp/op",
+                "XDG_CONFIG_HOME": "/Users/test/.config",
+            ]
+        )
     }
 
     @Test func serviceAccount_setsTokenOverAnyInheritedValue() {
         let env = OnePasswordSecretsProvider.spawnEnvironment(
-            base: ["OP_SERVICE_ACCOUNT_TOKEN": "ops_inherited_token"],
+            base: [
+                "OP_SERVICE_ACCOUNT_TOKEN": "ops_inherited_token",
+                "EXECUTOR_SECRET_KEY": "e-master-key",
+            ],
             auth: .serviceAccount(token: "ops_explicit_token")
         )
         #expect(env["OP_SERVICE_ACCOUNT_TOKEN"] == "ops_explicit_token")
+        #expect(env["EXECUTOR_SECRET_KEY"] == nil)
+        #expect(env["PATH"] == OnePasswordSecretsProvider.spawnPathValue)
     }
 
     @Test func desktopWithoutInheritedToken_staysUnset() {
@@ -380,10 +417,40 @@ private struct OnePasswordSpawnEnvironmentTests {
         )
         #expect(env["OP_SERVICE_ACCOUNT_TOKEN"] == nil)
     }
+
+    @Test func daemonSecrets_neverReachTheChild() async throws {
+        let fake = try makeFakeOp()
+        try fake.write("read.stdout", "s3cr3t\n")
+        let provider = makeProvider(
+            fake, accounts: [desktopAccount()],
+            environment: testEnvironment(
+                fake,
+                extra: [
+                    "EXECUTOR_SECRET_KEY": "e-master-key-canary",
+                    "MY_SERVICE_TOKEN": "token-canary",
+                    "RV_SECRET_FOO": "secret-canary",
+                    "HOME": "/Users/test",
+                ]
+            )
+        )
+        _ = try await provider.resolveQualified(item: "op://vault-123/item/password", field: nil)
+        let child = try fake.childEnv()
+        #expect(child["EXECUTOR_SECRET_KEY"] == nil)
+        #expect(child["MY_SERVICE_TOKEN"] == nil)
+        #expect(child["RV_SECRET_FOO"] == nil)
+        #expect(child["FAKEOP_DIR"] == nil)
+        #expect(child["OP_SERVICE_ACCOUNT_TOKEN"] == nil)
+        #expect(child["PATH"] == OnePasswordSecretsProvider.spawnPathValue)
+        #expect(child["LANG"] == "C")
+        #expect(child["LC_ALL"] == "C")
+        #expect(child["HOME"] == "/Users/test")
+        #expect(child["TMPDIR"] == fake.dir.path)
+    }
 }
 
 // MARK: - Executable resolution
 
+/// RV-only seam: the oracle shells out; RV resolves absolute-or-pinned-PATH with no ambient lookup.
 @Suite("OnePasswordResolveExecutable")
 private struct OnePasswordResolveExecutableTests {
     @Test func absolutePresent_passesThroughWithoutPATH() {
@@ -451,6 +518,7 @@ private struct OnePasswordResolveExecutableTests {
 
 // MARK: - Vault-qualified resolution
 
+/// Oracle: `plugin.ts` `resolveConfiguredRef` titles (`plugin.test.ts` :364+) + `CREDENTIAL_FIELD` (:38); argv `service.ts` :267/:246.
 @Suite("OnePasswordQualifiedResolution")
 private struct OnePasswordQualifiedResolutionTests {
     @Test func fullyQualifiedURI_resolvesAsIsWithOneSpawn() async throws {
@@ -567,7 +635,7 @@ private struct OnePasswordQualifiedResolutionTests {
         #expect(try fake.invocations().isEmpty)
     }
 
-    @Test func signinExpiredStderr_degradesToNotFound() async throws {
+    @Test func signinExpiredStderr_isProviderDown() async throws {
         let fake = try makeFakeOp()
         try fake.write("read.exit", "1")
         try fake.write(
@@ -575,7 +643,7 @@ private struct OnePasswordQualifiedResolutionTests {
             "[ERROR] 2026/01/02 03:04:05 session expired, run `op signin` to authenticate\n"
         )
         let provider = makeProvider(fake, accounts: [desktopAccount()])
-        await #expect(throws: SecretsError.notFound("onepassword")) {
+        await #expect(throws: SecretsError.providerDown("onepassword")) {
             try await provider.resolveQualified(item: "op://vault-123/item/password", field: nil)
         }
     }
@@ -612,40 +680,40 @@ private struct OnePasswordQualifiedResolutionTests {
         #expect(invocations.allSatisfy { $0.hasPrefix("read ") })
     }
 
-    @Test func readFailure_degradesToNotFoundWithoutEcho() async throws {
+    @Test func readFailure_isProviderDownWithoutEcho() async throws {
         let fake = try makeFakeOp()
         try fake.write("read.exit", "1")
         try fake.write("read.stderr", "[ERROR] \"op://vault-123/item-abc/password\" is not found\n")
         let provider = makeProvider(fake, accounts: [desktopAccount()])
-        await #expect(throws: SecretsError.notFound("onepassword")) {
+        await #expect(throws: SecretsError.providerDown("onepassword")) {
             try await provider.resolveQualified(item: "op://vault-123/item-abc/password", field: nil)
         }
     }
 
-    @Test func readSilentFailure_isNotFound() async throws {
+    @Test func readSilentFailure_isProviderDown() async throws {
         let fake = try makeFakeOp()
         try fake.write("read.exit", "1")
         let provider = makeProvider(fake, accounts: [desktopAccount()])
-        await #expect(throws: SecretsError.notFound("onepassword")) {
+        await #expect(throws: SecretsError.providerDown("onepassword")) {
             try await provider.resolveQualified(item: "op://vault-123/item/password", field: nil)
         }
     }
 
-    @Test func readFailureWithInvalidUTF8Stderr_isNotFound() async throws {
+    @Test func readFailureWithInvalidUTF8Stderr_isProviderDown() async throws {
         let fake = try makeFakeOp()
         try fake.write("read.exit", "1")
         try fake.write("read.stderr", Data([0xFF, 0xFE, 0x0A]))
         let provider = makeProvider(fake, accounts: [desktopAccount()])
-        await #expect(throws: SecretsError.notFound("onepassword")) {
+        await #expect(throws: SecretsError.providerDown("onepassword")) {
             try await provider.resolveQualified(item: "op://vault-123/item/password", field: nil)
         }
     }
 
-    @Test func nonUTF8Stdout_isNotFound() async throws {
+    @Test func nonUTF8Stdout_isProviderDown() async throws {
         let fake = try makeFakeOp()
         try fake.write("read.stdout", Data([0xFF, 0xFE]))
         let provider = makeProvider(fake, accounts: [desktopAccount()])
-        await #expect(throws: SecretsError.notFound("onepassword")) {
+        await #expect(throws: SecretsError.providerDown("onepassword")) {
             try await provider.resolveQualified(item: "op://vault-123/item/password", field: nil)
         }
     }
@@ -723,6 +791,7 @@ private struct OnePasswordQualifiedResolutionTests {
 
 // MARK: - Bare resolution
 
+/// Oracle: `plugin.ts` bare match titles + `service.ts` `item list --vault` argv (:277/:246).
 @Suite("OnePasswordBareResolution")
 private struct OnePasswordBareResolutionTests {
     @Test func singleMatchAcrossAccounts_resolvesCredentialURI() async throws {
@@ -850,39 +919,39 @@ private struct OnePasswordBareResolutionTests {
         }
     }
 
-    @Test func listingFailure_degradesToNotFound() async throws {
+    @Test func listingFailure_isProviderDown() async throws {
         let fake = try makeFakeOp()
         try fake.write("items.vault-123.exit", "1")
         try fake.write("items.vault-123.stderr", "[ERROR] vault is gone\n")
         let provider = makeProvider(fake, accounts: [desktopAccount()])
-        await #expect(throws: SecretsError.notFound("onepassword")) {
+        await #expect(throws: SecretsError.providerDown("onepassword")) {
             try await provider.resolveBare(item: "GitHub Token", field: nil)
         }
     }
 
-    @Test func listingGarbageJSON_isNotFound() async throws {
+    @Test func listingGarbageJSON_isProviderDown() async throws {
         let fake = try makeFakeOp()
         try fake.write("items.vault-123.json", "not json at all{{{")
         let provider = makeProvider(fake, accounts: [desktopAccount()])
-        await #expect(throws: SecretsError.notFound("onepassword")) {
+        await #expect(throws: SecretsError.providerDown("onepassword")) {
             try await provider.resolveBare(item: "GitHub Token", field: nil)
         }
     }
 
-    @Test func listingWrongShapeJSON_isNotFound() async throws {
+    @Test func listingWrongShapeJSON_isProviderDown() async throws {
         let fake = try makeFakeOp()
         try fake.write("items.vault-123.json", "{\"id\":\"item-1\",\"title\":\"GitHub Token\"}")
         let provider = makeProvider(fake, accounts: [desktopAccount()])
-        await #expect(throws: SecretsError.notFound("onepassword")) {
+        await #expect(throws: SecretsError.providerDown("onepassword")) {
             try await provider.resolveBare(item: "GitHub Token", field: nil)
         }
     }
 
-    @Test func listingNonUTF8_isNotFound() async throws {
+    @Test func listingNonUTF8_isProviderDown() async throws {
         let fake = try makeFakeOp()
         try fake.write("items.vault-123.json", Data([0xFF, 0xFE]))
         let provider = makeProvider(fake, accounts: [desktopAccount()])
-        await #expect(throws: SecretsError.notFound("onepassword")) {
+        await #expect(throws: SecretsError.providerDown("onepassword")) {
             try await provider.resolveBare(item: "GitHub Token", field: nil)
         }
     }
@@ -970,12 +1039,12 @@ private struct OnePasswordBareResolutionTests {
         ])
     }
 
-    @Test func readAfterListingFailureShape_stillReads() async throws {
+    @Test func readFailureAfterListingMatch_isProviderDown() async throws {
         let fake = try makeFakeOp()
         try fake.write("items.vault-123.json", try itemsJSON([("item-1", "Deploy Key")]))
         try fake.write("read.exit", "1")
         let provider = makeProvider(fake, accounts: [desktopAccount()])
-        await #expect(throws: SecretsError.notFound("onepassword")) {
+        await #expect(throws: SecretsError.providerDown("onepassword")) {
             try await provider.resolveBare(item: "Deploy Key", field: nil)
         }
     }
@@ -998,6 +1067,7 @@ private struct OnePasswordBareResolutionTests {
 
 // MARK: - Top-level dispatch
 
+/// RV dispatch (cancel, provider check, configured check, cache, resolve); oracle case `status reports not-configured before configure` (`plugin.test.ts` :225).
 @Suite("OnePasswordResolveDispatch")
 private struct OnePasswordResolveDispatchTests {
     @Test func wrongProvider_isInvalidRef() async throws {
@@ -1010,11 +1080,24 @@ private struct OnePasswordResolveDispatchTests {
         #expect(try fake.invocations().isEmpty)
     }
 
+    @Test func realID_resolvesAndHealthChecks() async throws {
+        // The production dispatch path: a default-constructed provider
+        // serves a real `"onepassword"` ref and answers health.
+        let fake = try makeFakeOp()
+        try fake.write("read.stdout", "s3cr3t\n")
+        try fake.write("vaults.json", "[]")
+        let provider = makeProvider(fake, accounts: [desktopAccount()])
+        #expect(provider.id == "onepassword")
+        let ref = try SecretRef(provider: "onepassword", item: "op://vault-123/item-abc/password")
+        #expect(try await provider.resolve(ref) == .text("s3cr3t"))
+        #expect(await provider.health() == ProviderHealth(ok: true))
+    }
+
     @Test func unconfigured_isProviderDown() async throws {
         let fake = try makeFakeOp()
-        let provider = makeStandInProvider(fake, accounts: [])
-        let ref = try SecretRef(provider: standInProviderID, item: "op://vault-123/item/password")
-        await #expect(throws: SecretsError.providerDown(standInProviderID)) {
+        let provider = makeProvider(fake, accounts: [])
+        let ref = try SecretRef(provider: "onepassword", item: "op://vault-123/item/password")
+        await #expect(throws: SecretsError.providerDown("onepassword")) {
             try await provider.resolve(ref)
         }
         #expect(try fake.invocations().isEmpty)
@@ -1023,8 +1106,8 @@ private struct OnePasswordResolveDispatchTests {
     @Test func opItem_dispatchesToQualifiedResolution() async throws {
         let fake = try makeFakeOp()
         try fake.write("read.stdout", "s3cr3t\n")
-        let provider = makeStandInProvider(fake, accounts: [desktopAccount()])
-        let ref = try SecretRef(provider: standInProviderID, item: "op://vault-123/item-abc")
+        let provider = makeProvider(fake, accounts: [desktopAccount()])
+        let ref = try SecretRef(provider: "onepassword", item: "op://vault-123/item-abc")
         let value = try await provider.resolve(ref)
         #expect(value == .text("s3cr3t"))
         #expect(try fake.invocations() == ["read op://vault-123/item-abc/credential --account=my.1password.com"])
@@ -1034,8 +1117,8 @@ private struct OnePasswordResolveDispatchTests {
         let fake = try makeFakeOp()
         try fake.write("items.vault-123.json", try itemsJSON([("item-1", "Deploy Key")]))
         try fake.write("read.stdout", "s3cr3t\n")
-        let provider = makeStandInProvider(fake, accounts: [desktopAccount()])
-        let ref = try SecretRef(provider: standInProviderID, item: "Deploy Key")
+        let provider = makeProvider(fake, accounts: [desktopAccount()])
+        let ref = try SecretRef(provider: "onepassword", item: "Deploy Key")
         let value = try await provider.resolve(ref)
         #expect(value == .text("s3cr3t"))
         #expect(try fake.invocations().count == 2)
@@ -1045,8 +1128,8 @@ private struct OnePasswordResolveDispatchTests {
         let fake = try makeFakeOp()
         try fake.write("items.vault-123.json", try itemsJSON([("item-1", "Deploy Key")]))
         try fake.write("read.stdout", "s3cr3t\n")
-        let provider = makeStandInProvider(fake, accounts: [desktopAccount()])
-        let ref = try SecretRef(provider: standInProviderID, item: "Deploy Key", field: "username")
+        let provider = makeProvider(fake, accounts: [desktopAccount()])
+        let ref = try SecretRef(provider: "onepassword", item: "Deploy Key", field: "username")
         _ = try await provider.resolve(ref)
         #expect(try fake.invocations().last == "read op://vault-123/item-1/username --account=my.1password.com")
     }
@@ -1055,8 +1138,8 @@ private struct OnePasswordResolveDispatchTests {
         let fake = try makeFakeOp()
         try fake.write("items.vault-123.json", try itemsJSON([("item-1", "xop://y")]))
         try fake.write("read.stdout", "s3cr3t\n")
-        let provider = makeStandInProvider(fake, accounts: [desktopAccount()])
-        let ref = try SecretRef(provider: standInProviderID, item: "xop://y")
+        let provider = makeProvider(fake, accounts: [desktopAccount()])
+        let ref = try SecretRef(provider: "onepassword", item: "xop://y")
         let value = try await provider.resolve(ref)
         #expect(value == .text("s3cr3t"))
         #expect(try fake.invocations().last == "read op://vault-123/item-1/credential --account=my.1password.com")
@@ -1093,13 +1176,14 @@ private struct OnePasswordResolveDispatchTests {
 
 // MARK: - Cached ref resolver
 
+/// Oracle: `plugin.ts` `makeCachedRefResolver` (:432), TTL 60s + 256-entry cap (:48-49).
 @Suite("OnePasswordRefCache")
 private struct OnePasswordRefCacheTests {
     @Test func repeatedResolveWithinTTL_spawnsOnce() async throws {
         let fake = try makeFakeOp()
         try fake.write("read.stdout", "s3cr3t\n")
-        let provider = makeStandInProvider(fake, accounts: [desktopAccount()])
-        let ref = try SecretRef(provider: standInProviderID, item: "op://vault-123/item-abc/password")
+        let provider = makeProvider(fake, accounts: [desktopAccount()])
+        let ref = try SecretRef(provider: "onepassword", item: "op://vault-123/item-abc/password")
         let first = try await provider.resolve(ref)
         let second = try await provider.resolve(ref)
         #expect(first == .text("s3cr3t"))
@@ -1110,10 +1194,10 @@ private struct OnePasswordRefCacheTests {
     @Test func expiredTTL_asksBackendAgain() async throws {
         let fake = try makeFakeOp()
         try fake.write("read.stdout", "s3cr3t\n")
-        let provider = makeStandInProvider(
+        let provider = makeProvider(
             fake, accounts: [desktopAccount()], cacheTTLSeconds: 0.1
         )
-        let ref = try SecretRef(provider: standInProviderID, item: "op://vault-123/item-abc/password")
+        let ref = try SecretRef(provider: "onepassword", item: "op://vault-123/item-abc/password")
         _ = try await provider.resolve(ref)
         try await Task.sleep(nanoseconds: 300_000_000)
         try fake.write("read.stdout", "rotated\n")
@@ -1125,10 +1209,10 @@ private struct OnePasswordRefCacheTests {
     @Test func notFound_neverRetained() async throws {
         let fake = try makeFakeOp()
         try fake.write("items.vault-123.json", try itemsJSON([("item-1", "Deploy Key")]))
-        let provider = makeStandInProvider(fake, accounts: [desktopAccount()])
-        let ref = try SecretRef(provider: standInProviderID, item: "missing")
+        let provider = makeProvider(fake, accounts: [desktopAccount()])
+        let ref = try SecretRef(provider: "onepassword", item: "missing")
         for _ in 0..<2 {
-            await #expect(throws: SecretsError.notFound(standInProviderID)) {
+            await #expect(throws: SecretsError.notFound("onepassword")) {
                 try await provider.resolve(ref)
             }
         }
@@ -1139,13 +1223,13 @@ private struct OnePasswordRefCacheTests {
         let fake = try makeFakeOp()
         try fake.write("items.vault-123.json", try itemsJSON([("item-1", "Deploy Key")]))
         try fake.write("items.vault-456.json", try itemsJSON([("item-2", "Deploy Key")]))
-        let provider = makeStandInProvider(fake, accounts: [desktopAccount(vaults: [
+        let provider = makeProvider(fake, accounts: [desktopAccount(vaults: [
             OnePasswordVault(id: "vault-123", name: "Personal"),
             OnePasswordVault(id: "vault-456", name: "Work"),
         ])])
-        let ref = try SecretRef(provider: standInProviderID, item: "Deploy Key")
+        let ref = try SecretRef(provider: "onepassword", item: "Deploy Key")
         for _ in 0..<2 {
-            await #expect(throws: SecretsError.denied("\(standInProviderID):ambiguous")) {
+            await #expect(throws: SecretsError.denied("onepassword:ambiguous")) {
                 try await provider.resolve(ref)
             }
         }
@@ -1155,10 +1239,10 @@ private struct OnePasswordRefCacheTests {
     @Test func readFailure_neverRetained() async throws {
         let fake = try makeFakeOp()
         try fake.write("read.exit", "1")
-        let provider = makeStandInProvider(fake, accounts: [desktopAccount()])
-        let ref = try SecretRef(provider: standInProviderID, item: "op://vault-123/item-abc/password")
+        let provider = makeProvider(fake, accounts: [desktopAccount()])
+        let ref = try SecretRef(provider: "onepassword", item: "op://vault-123/item-abc/password")
         for _ in 0..<2 {
-            await #expect(throws: SecretsError.notFound(standInProviderID)) {
+            await #expect(throws: SecretsError.providerDown("onepassword")) {
                 try await provider.resolve(ref)
             }
         }
@@ -1168,8 +1252,8 @@ private struct OnePasswordRefCacheTests {
     @Test func configChange_dropsCachedSecrets() async throws {
         let fake = try makeFakeOp()
         try fake.write("read.stdout", "first\n")
-        var provider = makeStandInProvider(fake, accounts: [desktopAccount()])
-        let ref = try SecretRef(provider: standInProviderID, item: "op://vault-123/item-abc/password")
+        var provider = makeProvider(fake, accounts: [desktopAccount()])
+        let ref = try SecretRef(provider: "onepassword", item: "op://vault-123/item-abc/password")
         #expect(try await provider.resolve(ref) == .text("first"))
         // Same ref, edited config (one vault added): the cached generation
         // must not serve secrets the new config re-reads.
@@ -1187,11 +1271,11 @@ private struct OnePasswordRefCacheTests {
         try fake.write("read.stdout", "s3cr3t\n")
         let firstToken = "ops_first_token_aaa"
         let rotatedToken = "ops_rotated_token_bbb"
-        var provider = makeStandInProvider(fake, accounts: [serviceAccount(
+        var provider = makeProvider(fake, accounts: [serviceAccount(
             token: firstToken,
             vaults: [OnePasswordVault(id: "vault-123", name: "Personal")]
         )])
-        let ref = try SecretRef(provider: standInProviderID, item: "op://vault-123/item-abc/password")
+        let ref = try SecretRef(provider: "onepassword", item: "op://vault-123/item-abc/password")
         _ = try await provider.resolve(ref)
         provider.accounts = [serviceAccount(
             token: rotatedToken,
@@ -1206,11 +1290,11 @@ private struct OnePasswordRefCacheTests {
         for ttl in [0.0, -30.0] {
             let fake = try makeFakeOp()
             try fake.write("read.stdout", "s3cr3t\n")
-            let provider = makeStandInProvider(
+            let provider = makeProvider(
                 fake, accounts: [desktopAccount()], cacheTTLSeconds: ttl
             )
             let ref = try SecretRef(
-                provider: standInProviderID, item: "op://vault-123/item-abc/password"
+                provider: "onepassword", item: "op://vault-123/item-abc/password"
             )
             _ = try await provider.resolve(ref)
             _ = try await provider.resolve(ref)
@@ -1221,12 +1305,12 @@ private struct OnePasswordRefCacheTests {
     @Test func fieldDistinction_keepsSeparateEntries() async throws {
         let fake = try makeFakeOp()
         try fake.write("read.stdout", "s3cr3t\n")
-        let provider = makeStandInProvider(fake, accounts: [desktopAccount()])
+        let provider = makeProvider(fake, accounts: [desktopAccount()])
         let password = try SecretRef(
-            provider: standInProviderID, item: "op://vault-123/item-abc", field: "password"
+            provider: "onepassword", item: "op://vault-123/item-abc", field: "password"
         )
         let username = try SecretRef(
-            provider: standInProviderID, item: "op://vault-123/item-abc", field: "username"
+            provider: "onepassword", item: "op://vault-123/item-abc", field: "username"
         )
         _ = try await provider.resolve(password)
         _ = try await provider.resolve(username)
@@ -1240,8 +1324,8 @@ private struct OnePasswordRefCacheTests {
     @Test func cancelledResolve_neverServedFromCache() async throws {
         let fake = try makeFakeOp()
         try fake.write("read.stdout", "s3cr3t\n")
-        let provider = makeStandInProvider(fake, accounts: [desktopAccount()])
-        let ref = try SecretRef(provider: standInProviderID, item: "op://vault-123/item-abc/password")
+        let provider = makeProvider(fake, accounts: [desktopAccount()])
+        let ref = try SecretRef(provider: "onepassword", item: "op://vault-123/item-abc/password")
         #expect(try await provider.resolve(ref) == .text("s3cr3t"))
         let proceed = Mutex(false)
         let task = Task {
@@ -1290,8 +1374,8 @@ private struct OnePasswordRefCacheTests {
         // one generation instead of each paying backend reads.
         let fake = try makeFakeOp()
         try fake.write("read.stdout", "s3cr3t\n")
-        let provider = makeStandInProvider(fake, accounts: [desktopAccount()])
-        let ref = try SecretRef(provider: standInProviderID, item: "op://vault-123/item-abc/password")
+        let provider = makeProvider(fake, accounts: [desktopAccount()])
+        let ref = try SecretRef(provider: "onepassword", item: "op://vault-123/item-abc/password")
         _ = try await provider.resolve(ref)
         let copy = provider
         #expect(try await copy.resolve(ref) == .text("s3cr3t"))
@@ -1319,6 +1403,7 @@ private struct OnePasswordRefCacheTests {
 
 // MARK: - Command injection
 
+/// Oracle argv-single-element rule (`service.ts` run/runJson; `service.test.ts` argv titles).
 @Suite("OnePasswordCommandInjection")
 private struct OnePasswordCommandInjectionTests {
     @Test func qualifiedMetacharacters_passedAsSingleArgv() async throws {
@@ -1419,6 +1504,7 @@ private struct OnePasswordCommandInjectionTests {
 
 // MARK: - Redaction
 
+/// Oracle: `getConfig redacts every account's service-account token` (`plugin.test.ts` :144) + RV description redaction.
 @Suite("OnePasswordRedaction")
 private struct OnePasswordRedactionTests {
     @Test func qualifiedFailure_errorCarriesNoNamesOrSecrets() async throws {
@@ -1434,13 +1520,13 @@ private struct OnePasswordRedactionTests {
             _ = try await provider.resolveQualified(
                 item: "op://vault-123/\(secretItem)/password", field: nil
             )
-            Issue.record("expected notFound")
+            Issue.record("expected providerDown")
         } catch {
             let text = String(describing: error)
             #expect(text.contains(secretItem) == false)
             #expect(text.contains("vault-123") == false)
             #expect(text.contains("ops_leaked_token_xyz") == false)
-            #expect(error as? SecretsError == SecretsError.notFound("onepassword"))
+            #expect(error as? SecretsError == SecretsError.providerDown("onepassword"))
         }
     }
 
@@ -1454,12 +1540,12 @@ private struct OnePasswordRedactionTests {
         let provider = makeProvider(fake, accounts: [desktopAccount()])
         do {
             _ = try await provider.resolveBare(item: "My Secret Title", field: nil)
-            Issue.record("expected notFound")
+            Issue.record("expected providerDown")
         } catch {
             let text = String(describing: error)
             #expect(text.contains("My Secret Title") == false)
             #expect(text.contains("Top Secret Vault") == false)
-            #expect(error as? SecretsError == SecretsError.notFound("onepassword"))
+            #expect(error as? SecretsError == SecretsError.providerDown("onepassword"))
         }
     }
 
@@ -1483,6 +1569,41 @@ private struct OnePasswordRedactionTests {
         }
     }
 
+    @Test func descriptionsRedactServiceToken() {
+        let token = "ops_secret_token_xyz"
+        let auth = OnePasswordAuth.serviceAccount(token: token)
+        for rendered in [String(describing: auth), String(reflecting: auth)] {
+            #expect(rendered.contains(token) == false)
+            #expect(rendered.contains("<redacted>"))
+        }
+        let account = OnePasswordAccount(
+            id: "a", name: "Work", auth: auth,
+            vaults: [OnePasswordVault(id: "vault-123", name: "Personal")]
+        )
+        for rendered in [String(describing: account), String(reflecting: account)] {
+            #expect(rendered.contains(token) == false)
+            #expect(rendered.contains("Work"))
+        }
+        let provider = OnePasswordSecretsProvider(accounts: [account])
+        for rendered in [String(describing: provider), String(reflecting: provider)] {
+            #expect(rendered.contains(token) == false)
+            #expect(rendered.contains("onepassword"))
+        }
+    }
+
+    @Test func descriptionsKeepDesktopAccountName() {
+        let auth = OnePasswordAuth.desktopApp(accountName: "my.1password.com")
+        #expect(String(describing: auth).contains("my.1password.com"))
+        #expect(String(reflecting: auth).contains("my.1password.com"))
+        let account = OnePasswordAccount(
+            id: "a", name: "Personal", auth: auth,
+            vaults: [OnePasswordVault(id: "vault-123", name: "Personal")]
+        )
+        #expect(String(describing: account).contains("my.1password.com"))
+        let provider = OnePasswordSecretsProvider(accounts: [account])
+        #expect(String(describing: provider).contains("my.1password.com"))
+    }
+
     @Test func serviceToken_neverSurfacesInErrors() async throws {
         let fake = try makeFakeOp()
         let token = "ops_real_token_secret_1"
@@ -1493,16 +1614,17 @@ private struct OnePasswordRedactionTests {
         )])
         do {
             _ = try await provider.resolveQualified(item: "op://vault-123/item/password", field: nil)
-            Issue.record("expected notFound")
+            Issue.record("expected providerDown")
         } catch {
             #expect(String(describing: error).contains(token) == false)
-            #expect(error as? SecretsError == SecretsError.notFound("onepassword"))
+            #expect(error as? SecretsError == SecretsError.providerDown("onepassword"))
         }
     }
 }
 
 // MARK: - Health
 
+/// Oracle: `ConnectionStatus.connected` (`types.ts` :179-181); RV case: missing CLI unported (`falls back to the SDK...`, `service.test.ts` :181).
 @Suite("OnePasswordHealth")
 private struct OnePasswordHealthTests {
     @Test func healthySingleAccount_reportsReachable() async throws {
@@ -1633,6 +1755,7 @@ private struct OnePasswordHealthTests {
 
 // MARK: - Spawn behavior: timeouts, kills, limits, lookup
 
+/// Oracle: `op-cli.ts` async spawn + timeout kill + `maxBuffer: 16 MiB` (:62, RV: 1 MiB); timeout `DEFAULT_TIMEOUT_MS = 15_000` (`service.ts` :51).
 @Suite("OnePasswordSpawnBehavior")
 private struct OnePasswordSpawnBehaviorTests {
     @Test func timeoutKillsHungRead() async throws {
@@ -1682,7 +1805,8 @@ private struct OnePasswordSpawnBehaviorTests {
         // The fake cannot stream (whole-file cats only), so this shape
         // needs a dedicated script op: partial stdout, then a hang.
         let script = try makeScriptOp(body: """
-            echo "$$" >>"$FAKEOP_DIR/pids.log"
+            D="${FAKEOP_DIR:-$TMPDIR}"
+            echo "$$" >>"$D/pids.log"
             printf 'partial-secret-bytes'
             exec sleep 300
             """)
@@ -1710,8 +1834,9 @@ private struct OnePasswordSpawnBehaviorTests {
         // hangs forever (never a bounded delay), so even a late-firing
         // timeout still yields the timeout outcome, never success.
         let script = try makeScriptOp(body: """
-            echo "$$" >>"$FAKEOP_DIR/pids.log"
-            (sleep 60; touch "$FAKEOP_DIR/grandchild-done") & echo $! >"$FAKEOP_DIR/grandchild.pid"
+            D="${FAKEOP_DIR:-$TMPDIR}"
+            echo "$$" >>"$D/pids.log"
+            (sleep 60; touch "$D/grandchild-done") & echo $! >"$D/grandchild.pid"
             exec sleep 300
             """)
         let provider = OnePasswordSecretsProvider(
@@ -1846,7 +1971,11 @@ private struct OnePasswordSpawnBehaviorTests {
         }
     }
 
-    @Test func bareCommand_resolvesThroughPATH() async throws {
+    @Test func bareCommand_ignoresDaemonPATH() async throws {
+        // A planted `op` on the daemon PATH must never serve: bare names
+        // resolve against the pinned spawn PATH only. The fake dir leads
+        // the daemon PATH, so any ambient-PATH lookup would invoke the
+        // fake; the pinned lookup must not.
         let fake = try makeFakeOp()
         try fake.write("read.stdout", "s3cr3t\n")
         let provider = OnePasswordSecretsProvider(
@@ -1856,10 +1985,14 @@ private struct OnePasswordSpawnBehaviorTests {
             opCommand: "op", timeoutSeconds: 15,
             environment: { testEnvironment(fake, extra: ["PATH": "\(fake.dir.path):/usr/bin:/bin"]) }
         )
-        let value = try await provider.resolveQualified(
-            item: "op://vault-123/item/password", field: nil
-        )
-        #expect(value == .text("s3cr3t"))
+        do {
+            _ = try await provider.resolveQualified(
+                item: "op://vault-123/item/password", field: nil
+            )
+            Issue.record("expected a provider failure, not a planted-op read")
+        } catch is SecretsError {
+        }
+        #expect(try fake.invocations().isEmpty)
     }
 
     @Test func bareCommandMissingFromPATH_isProviderDown() async throws {
@@ -1873,9 +2006,11 @@ private struct OnePasswordSpawnBehaviorTests {
         }
     }
 
-    @Test func bareCommandWithoutPATH_isProviderDown() async throws {
+    @Test func bareCommandMissingFromPinnedPATH_isProviderDown() async throws {
+        // No daemon PATH at all: the pinned spawn PATH still applies, and
+        // the unknown name resolves nowhere.
         let provider = OnePasswordSecretsProvider(
-            accounts: [desktopAccount()], opCommand: "op",
+            accounts: [desktopAccount()], opCommand: "rv-no-such-op-xyz",
             timeoutSeconds: 15, environment: { [:] }
         )
         await #expect(throws: SecretsError.providerDown("onepassword:cli")) {
@@ -2016,6 +2151,7 @@ private struct OnePasswordSpawnBehaviorTests {
 
 // MARK: - Desktop spawn gate
 
+/// Oracle: `service.ts` `cliPromptLock` (:188/:236).
 @Suite("OnePasswordDesktopSpawnGate")
 private struct OnePasswordDesktopSpawnGateTests {
     @Test func singleBody_runsImmediately() async throws {
@@ -2101,6 +2237,7 @@ private struct OnePasswordDesktopSpawnGateTests {
 
 // MARK: - Spawn box
 
+/// Oracle: `op-cli.ts` `OpCliResult` outcome shape; RV lock-guarded port.
 @Suite("OnePasswordSpawnBox")
 private struct OnePasswordSpawnBoxTests {
     @Test func cliMissing_resumesOnceAndIgnoresLateFinishes() async {

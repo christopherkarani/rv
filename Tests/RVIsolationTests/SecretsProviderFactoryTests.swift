@@ -347,6 +347,90 @@ struct SecretsProviderFactoryTests {
         }
     }
 
+    @Test func unsafeWorkosConfigFailsClosed() throws {
+        let dir = try makeFactoryTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeFactoryFile(
+            at: dir, name: "workos-vault.json",
+            json: #"{"version":1,"tenant":"factory-tenant"}"#, mode: 0o644
+        )
+        try writeFactoryFile(
+            at: dir, name: "workos-vault-apikey.json",
+            json: #"{"version":1,"api_key":"factory-test-key"}"#
+        )
+        #expect(throws: SecretsProviderFactoryError.workosVaultConfigInvalid) {
+            try SecretsProviderFactory.makeProviders(configDirectory: dir)
+        }
+    }
+
+    @Test func symlinkedWorkosConfigFailsClosed() throws {
+        let dir = try makeFactoryTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let target = dir.appendingPathComponent("workos-vault-real.json")
+        try #"{"version":1,"tenant":"factory-tenant"}"#.write(
+            to: target, atomically: true, encoding: .utf8
+        )
+        try FileManager.default.createSymbolicLink(
+            at: dir.appendingPathComponent("workos-vault.json"),
+            withDestinationURL: target
+        )
+        try writeFactoryFile(
+            at: dir, name: "workos-vault-apikey.json",
+            json: #"{"version":1,"api_key":"factory-test-key"}"#
+        )
+        #expect(throws: SecretsProviderFactoryError.workosVaultConfigInvalid) {
+            try SecretsProviderFactory.makeProviders(configDirectory: dir)
+        }
+    }
+
+    @Test func oversizedWorkosConfigFailsClosed() throws {
+        let dir = try makeFactoryTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let padding = String(
+            repeating: "p", count: WorkOSVaultEndpointStore.maximumBytes
+        )
+        try writeFactoryFile(
+            at: dir, name: "workos-vault.json",
+            json: #"{"version":1,"tenant":"\#(padding)"}"#
+        )
+        try writeFactoryFile(
+            at: dir, name: "workos-vault-apikey.json",
+            json: #"{"version":1,"api_key":"factory-test-key"}"#
+        )
+        #expect(throws: SecretsProviderFactoryError.workosVaultConfigInvalid) {
+            try SecretsProviderFactory.makeProviders(configDirectory: dir)
+        }
+    }
+
+    @Test func corruptWorkosKeyFailsCredentials() throws {
+        let dir = try makeFactoryTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeFactoryFile(
+            at: dir, name: "workos-vault.json",
+            json: #"{"version":1,"tenant":"factory-tenant"}"#
+        )
+        try writeFactoryFile(at: dir, name: "workos-vault-apikey.json", json: "not-json{{{")
+        #expect(throws: SecretsProviderFactoryError.workosVaultCredentialsInvalid) {
+            try SecretsProviderFactory.makeProviders(configDirectory: dir)
+        }
+    }
+
+    @Test func emptySubjectWorkosConfigFailsClosed() throws {
+        let dir = try makeFactoryTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeFactoryFile(
+            at: dir, name: "workos-vault.json",
+            json: #"{"version":1,"tenant":"factory-tenant","subject":""}"#
+        )
+        try writeFactoryFile(
+            at: dir, name: "workos-vault-apikey.json",
+            json: #"{"version":1,"api_key":"factory-test-key"}"#
+        )
+        #expect(throws: SecretsProviderFactoryError.workosVaultConfigInvalid) {
+            try SecretsProviderFactory.makeProviders(configDirectory: dir)
+        }
+    }
+
     #if canImport(SQLite3)
     @Test func workosBlockedDatabaseFailsMisconfigured() throws {
         let dir = try makeFactoryTempDir()
@@ -368,6 +452,60 @@ struct SecretsProviderFactoryTests {
         }
     }
     #endif
+
+    // MARK: Matrix — encrypted iff master key (X1-E tri-state)
+
+    @Test func encryptedEnvKeyAddsProvider() throws {
+        let dir = try makeFactoryTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let providers = try SecretsProviderFactory.makeProviders(
+            configDirectory: dir,
+            environment: [EncryptedSecretsProvider.masterKeyEnvironmentVariable: "factory-e-key"]
+        )
+        #expect(
+            providers.map(\.id).sorted() == (expectedAlwaysOnIDs() + ["encrypted"]).sorted()
+        )
+    }
+
+    @Test func encryptedAbsentKeySkips() throws {
+        let dir = try makeFactoryTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let providers = try SecretsProviderFactory.makeProviders(
+            configDirectory: dir, environment: [:]
+        )
+        #expect(providers.map(\.id).sorted() == expectedAlwaysOnIDs())
+    }
+
+    @Test func encryptedBlankKeyFileSkips() throws {
+        let dir = try makeFactoryTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeFactoryFile(at: dir, name: "secret.key", json: "  \n\t ")
+        let providers = try SecretsProviderFactory.makeProviders(
+            configDirectory: dir, environment: [:]
+        )
+        #expect(providers.map(\.id).sorted() == expectedAlwaysOnIDs())
+    }
+
+    @Test func encryptedUnsafeKeyFileFailsClosed() throws {
+        let dir = try makeFactoryTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeFactoryFile(at: dir, name: "secret.key", json: "k", mode: 0o644)
+        #expect(throws: SecretsProviderFactoryError.encryptedKeyInvalid) {
+            try SecretsProviderFactory.makeProviders(configDirectory: dir, environment: [:])
+        }
+    }
+
+    @Test func encryptedOversizedKeyFileFailsClosed() throws {
+        let dir = try makeFactoryTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeFactoryFile(
+            at: dir, name: "secret.key",
+            json: String(repeating: "k", count: 5000)
+        )
+        #expect(throws: SecretsProviderFactoryError.encryptedKeyInvalid) {
+            try SecretsProviderFactory.makeProviders(configDirectory: dir, environment: [:])
+        }
+    }
 
     // MARK: Matrix — corrupt config fails closed
 
@@ -638,6 +776,85 @@ struct SecretsProviderFactoryTests {
         #expect(values[ref] == .text("factory-e2e-value"))
         #expect(capture.events.isEmpty == false)
     }
+
+    @Test func makeBrokerRoutesEncryptedRefsWhenKeyPresent() async throws {
+        let dir = try makeFactoryTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let environment = [
+            EncryptedSecretsProvider.masterKeyEnvironmentVariable: "broker-route-key"
+        ]
+        // Seed through the factory-built instance, then resolve through
+        // the broker: this proves routing under the "encrypted" id, not
+        // just construction.
+        let providers = try SecretsProviderFactory.makeProviders(
+            configDirectory: dir, environment: environment
+        )
+        let encrypted = try #require(
+            providers.compactMap { $0 as? EncryptedSecretsProvider }.first
+        )
+        try encrypted.set(item: "github", value: "[REDACTED]")
+        let capture = FactoryAuditCapture()
+        let broker = try SecretsProviderFactory.makeBroker(
+            configDirectory: dir, audit: capture.sink, liveness: .usableOnly,
+            environment: environment
+        )
+        #expect(await broker.providerIDs.contains("encrypted"))
+        let ref = try SecretRef(provider: "encrypted", item: "github")
+        let values = try await broker.resolve([ref], ctx: makeFactoryContext())
+        #expect(values[ref] == .text("[REDACTED]"))
+    }
+
+    #if canImport(SQLite3)
+    @Test func makeBrokerRoutesWorkOSRefsEndToEnd() async throws {
+        let dir = try makeFactoryTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writeFactoryFile(
+            at: dir, name: "workos-vault.json",
+            json: #"{"version":1,"endpoint":"https://api.workos.test","tenant":"factory-tenant"}"#
+        )
+        try writeFactoryFile(
+            at: dir, name: "workos-vault-apikey.json",
+            json: #"{"version":1,"api_key":"factory-test-key"}"#
+        )
+        let workosStub: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse) = {
+            request in
+            let url = request.url ?? URL(string: "https://api.workos.test/")!
+            let body: String
+            if url.path.contains("/name/") {
+                body = #"{"id":"secret_1","name":"executor/secrets/github","value":"ghp_e2e","metadata":{"version_id":"v1"}}"#
+            } else {
+                body = #"{"data":[]}"#
+            }
+            guard let response = HTTPURLResponse(
+                url: url, statusCode: 200, httpVersion: nil, headerFields: nil
+            ) else {
+                throw FactoryStubHTTPError()
+            }
+            return (Data(body.utf8), response)
+        }
+        let capture = FactoryAuditCapture()
+        let broker = try SecretsProviderFactory.makeBroker(
+            configDirectory: dir, audit: capture.sink, liveness: .usableOnly,
+            workosTransport: workosStub
+        )
+        #expect(await broker.providerIDs.contains("workos-vault"))
+        // Seed the factory-created metadata row through a second handle
+        // on the same file, then resolve through the broker.
+        let seed = try WorkOSVaultMetadataStore(
+            path: dir.appendingPathComponent(WorkOSVaultMetadataStore.fileName).path
+        )
+        try await seed.upsert(
+            WorkOSVaultMetadataRow(
+                id: "github", name: "github", purpose: nil,
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+            ),
+            tenant: "factory-tenant", owner: .org, subject: nil
+        )
+        let ref = try SecretRef(provider: "workos-vault", item: "github")
+        let values = try await broker.resolve([ref], ctx: makeFactoryContext())
+        #expect(values[ref] == .text("ghp_e2e"))
+    }
+    #endif
 
     @Test func makeBrokerFailsClosedOnCorruptConfig() throws {
         let dir = try makeFactoryTempDir()
