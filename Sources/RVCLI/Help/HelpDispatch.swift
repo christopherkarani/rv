@@ -27,6 +27,7 @@ public enum HelpTopic: Equatable, Sendable {
     case allowlist
     case safety
     case blocks
+    case audit
     case opencode
     case workspace
     case `operator`
@@ -132,6 +133,8 @@ public enum HelpDispatch {
             return rest.allSatisfy(isSafetyToken) ? .safety : nil
         case "blocks":
             return rest.allSatisfy(isFormatFlag) ? .blocks : nil
+        case "audit":
+            return .audit
         case "operator":
             return .`operator`
         case "help":
@@ -170,7 +173,7 @@ public enum HelpDispatch {
             let token = tokens[index]
             if token == "start" || token == "attach" || token == "status" || token == "close"
                 || token == "run" || token == "agent" || token == "custom"
-                || token == "tui" || token == "abandon"
+                || token == "tui" || token == "abandon" || token == "leftovers"
             {
                 index = tokens.index(after: index)
                 continue

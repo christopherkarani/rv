@@ -19,6 +19,7 @@ _rv() {
     'doctor:Read-only health'
     'safety:Show or set normal or strict'
     'blocks:List recent denials'
+    'audit:Unified audit trail'
     'operator:Propose and poll identity launches'
   )
   _arguments '1: :->cmds' '*:: :->args'

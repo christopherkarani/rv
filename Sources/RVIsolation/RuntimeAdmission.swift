@@ -35,7 +35,9 @@ public final class RuntimeAdmissionEvidence: Sendable {
     public func record(_ event: RuntimeAdmissionEvent) {
         events.withLock { $0.append(event) }
         if let file {
-            appendAdmissionEvent(event, to: file)
+            var stamped = event
+            stamped.recordedAt = Date().timeIntervalSince1970
+            appendAdmissionEvent(stamped, to: file)
         }
     }
 

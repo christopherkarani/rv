@@ -1,6 +1,30 @@
 # RV runtime release-gating acceptance audit
 
-Last updated: 2026-09-21. Base: `main` at `854e69103333a65e86deacac853f915adc450868`; results apply to the subsequent working-tree hardening changes, not that commit alone. Host: macOS 27 arm64, Swift 6.4. **Overall verdict: NOT SATISFIED — RELEASE BLOCKED.**
+## Current status: 2026-10-12
+
+Base: `origin/main` 04b4740c plus the governance Phase 1 branch
+(`docs/plans/agent-governance/PLAN.md`). Host: macOS 27 arm64, Swift 6.4.
+**Verdict: still NOT SATISFIED as a release gate**, for the reasons in the
+OPEN rows below. Everything after this section is the 2026-09-21 audit,
+kept as evidence. Where it disagrees with this table, this table wins.
+
+| Property | Status | Evidence |
+|---|---|---|
+| Writes outside the workspace | DENIED | RA `concurrentWorkspacesCannotAcquireEachOthersWriteAuthority`, Seatbelt `(deny default)` |
+| Reading home secrets outside the workspace (SSH, AWS, `.env`, keychain DB, rv policy) | DENIED | RA `syntheticCredentialsOutsideTheWorkspaceCanBeNeitherReadNorOverwritten` (renamed from a stale `knownGap` name; passes on a real cage) |
+| Signalling unrelated processes | DENIED | RA `cannotSignalAnUnrelatedProcess` (renamed from a stale `knownGap` name) |
+| Network | Deny by default. Only loopback and the per-host egress proxy (public unicast, ports 80/443) are reachable | `EgressProxy`, `SeatbeltLoopbackTests` |
+| mach-lookup | CLOSED | Phase 1 gap audit |
+| Workspace control files (`.git/hooks`, `.rv/`, `.config/rv/`, `.zshrc` inside the workspace) | **OPEN**: writable by the agent | RA `knownGapWorkspaceGitHooksAndRVConfigurationRemainWritable` (passes, so the gap is still real) |
+| Runtime identity | PARTIAL: the identity launch path issues an Agent Instance, but the default `rv opencode` / TUI door is still legacy | `AgentInstanceJournal`, plan item 1.6 |
+| Audit trail | PARTIAL: `rv audit tail/export` joins every ledger into `rv.audit.v1`, and admission lines now carry `recordedAt`. Writers are still separate files, not tamper-evident | `AuditLedgerTests`, `AuditCommandTests` |
+| Crash leftovers | PARTIAL: the same project recovers on its next start. `rv workspace leftovers` now reports unfinished sessions, stranded images and unattached image files across all projects. Nothing is cleaned automatically | `WorkspaceLeftoversTests`. Observed on a development Mac: 133 stranded images and 484 unattached image files, all from test runs |
+| End-to-end host tests | **OPEN**: 55 tests disabled as `TRANSITIONAL-PEER-AUTH`, because test binaries carry no component role | plan item 1.3 |
+| Contained mode on a stock install | **OPEN**: release binaries aren't signed or notarized, so the workspace host refuses them unless an administrator installs peer trust | `ProtectedPeerTrustConfiguration`, `Scripts/phase2a-development-trust.sh` |
+| Linux | **OPEN**: contained launch refuses (`containedGuaranteesUnsupported`) | — |
+| Listening on LAN interfaces | Seatbelt limit: accepted residual | — |
+
+Last updated (historical audit below): 2026-09-21. Base: `main` at `854e69103333a65e86deacac853f915adc450868`; results apply to the subsequent working-tree hardening changes, not that commit alone. Host: macOS 27 arm64, Swift 6.4. **Overall verdict: NOT SATISFIED — RELEASE BLOCKED.**
 
 `rv opencode` launches through `launchContainedHost`. On macOS the contained plan is now workspace-scoped: `(deny default)`, not `(allow default)`. A native client under that profile was denied TCP/UDP to loopback, TCP to `::1`, TCP to `1.1.1.1:443`, a Unix socket, and DNS, including through `/bin/sh`. Synthetic files outside the workspace could not be read or written. `kill` of a test-owned process returned `Operation not permitted` and the process stayed alive. A workspace that already contains a hard link is refused before launch. Linux contained launch returns `containedGuaranteesUnsupported` and does not execute, because the helper still cannot enforce the same read, network, and signal limits. There is still no runtime-issued identity, no mandatory audit event, and no proof that a child loses authority when the supervisor exits. **Overall verdict remains NOT SATISFIED.**
 

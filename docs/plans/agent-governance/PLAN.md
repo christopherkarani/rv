@@ -18,15 +18,16 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | Phase | Branch | PR | Status |
 |---|---|---|---|
 | 0 Plan + reset | `plan/agent-governance` | [#394](https://github.com/christopherkarani/rv/pull/394) | in progress |
-| 1 Trustworthy sandbox | `governance/phase-1-sandbox` | _not opened_ | not started |
+| 1 Trustworthy sandbox | `governance/phase-1-sandbox` | [#395](https://github.com/christopherkarani/rv/pull/395) | agent items done; PR open |
 | 2 Secrets the agent can't leak | `governance/phase-2-secrets` | _not opened_ | not started |
 | 3 MCP governance | `governance/phase-3-mcp` | _not opened_ | not started |
 | 4 Enterprise client features | `governance/phase-4-enterprise` | _not opened_ | not started |
 | 5 Launch readiness | human-owned | n/a | not started |
 
-**Next action:** Phase 0 checklist is done. Stay in progress until
-[PR #394](https://github.com/christopherkarani/rv/pull/394) merges, then start
-Phase 1. Do not reopen this PR or re-close #393.
+**Next action:** Phase 1 agent items are on `governance/phase-1-sandbox`
+([#395](https://github.com/christopherkarani/rv/pull/395)). Phase 0 stays in
+progress until [PR #394](https://github.com/christopherkarani/rv/pull/394)
+merges. Do not reopen that PR or re-close #393.
 
 Branching rule: each phase branch starts from the previous phase branch (or
 `origin/main` if the previous phase merged). Each phase PR targets the previous
@@ -232,6 +233,7 @@ grammar, durable MCP approvals idea, JSON-RPC depth bound.
 | D10 | Avoid editing files the owner has in flight on `impro-ref` unless required; keep such edits minimal seams and note them in the phase PR | Avoid merge pain; see Coordination |
 | D11 | One PR per phase; split a phase into a stacked series if it exceeds ~5k changed lines | Reviewable units |
 | D12 | Unified audit starts read-side (`rv audit` joins existing ledgers into one schema) before any writer changes | Delivers value without touching hot writers; Phase 2/3 writers emit the same schema natively |
+| D13 | _Open, owner decides:_ how to restore the 55 disabled host E2E tests (CI with dev trust vs owner-run L3) | No safe in-code test seam exists |
 
 ### Coordination with `impro-ref` (owner's uncommitted work)
 
@@ -254,7 +256,7 @@ Exit: this plan merged-or-open as a PR; PR #393 closed with a pointer.
 
 - [x] Map secrets/network, CLI/launch, and sandbox gaps (three exploration passes)
 - [x] Write this plan
-- [x] Commit + push `plan/agent-governance`, open PR
+- [x] Commit + push `plan/agent-governance`, open PR ([#394](https://github.com/christopherkarani/rv/pull/394))
 - [x] Comment on and close PR #393 linking the plan PR (keep branch)
 
 ---
@@ -265,39 +267,59 @@ Goal: an enterprise security reviewer can see what the cage blocked, trust it
 cleans up after crashes, and read an accurate acceptance matrix.
 
 ### 1.1 Unified audit, read side: `rv audit`
-- [ ] `RVAuditEvent` value type (schema `rv.audit.v1`): `time`, `kind`
-      (`launch|exit|egress.denied|admission|secret.use|mcp.call|approval|policy`),
-      `workspace`, `runtime`, `agent`, `decision`, `subject`, `reason`,
-      `source` (ledger file), `detail` (flat string map, no secrets)
-- [ ] Readers that map each existing ledger line to `RVAuditEvent`
-      (egress-denials, runtime-admission, workspace-sessions, runtime-sessions,
-      agent-instances, blocks, allow-once); tolerate unknown/old lines
-- [ ] `rv audit tail [-n N] [--since DUR] [--kind K] [--json]` merged by time
-- [ ] `rv audit export --since DUR --format jsonl` (stdout) for SIEM ingest
-- [ ] Tests: mapping per ledger from fixture lines, merge ordering, filters,
-      robot document shape, malformed-line tolerance
-- [ ] L2 evidence: run a contained child that hits a denied host, then
-      `rv audit tail --kind egress.denied` shows it
+- [x] `AuditEvent` (schema `rv.audit.v1`) in `Sources/RVHistory/AuditEvent.swift`:
+      `time`, open `kind` vocabulary (prefix filters), `decision`, `subject`,
+      `reason`, `workspace`, `runtime`, `agent`, `source`, `detail`
+- [x] `AuditLedger` (`Sources/RVHistory/AuditLedger.swift`) maps blocks,
+      egress-denials, runtime-admission, workspace-sessions, runtime-sessions,
+      agent-instances, plus native `audit.jsonl`; skips unreadable lines; reads
+      at most the newest 16 MiB per file. (`allow-once.jsonl` and
+      `pending-approvals.jsonl` are rewritten tables, not event logs: skipped)
+- [x] `AuditLog.append` native writer (0600, O_APPEND + flock) for Phase 2/3
+- [x] Admission lines now carry `recordedAt` (stamped on the file copy only)
+- [x] `rv audit [tail] [-n N] [--since 30m|24h|7d] [--kind K]... [--json]`
+- [x] `rv audit export [--since] [--kind]` → JSON Lines
+- [x] Tests: `AuditLedgerTests` (12), `AuditCommandTests` (13)
+- [x] Real-binary evidence: `rv audit` on this Mac shows today's real hook
+      denials (`core.git:reset-hard`) and lifecycle events; export emitted
+      13,508 events for 7 days
+- [ ] L3 evidence of an `egress.denied` line from a real cage (needs owner trust install)
 
 ### 1.2 Crash safety: no leftovers after host death
-- [ ] Global leftover scan: on any workspace open/doctor, find orphaned rv
-      volumes/process groups from dead hosts across **all** projects (today
-      only the same project recovers)
-- [ ] `rv doctor` reports leftovers; `rv workspace recover --all` cleans them
-- [ ] Tests: synthetic stale session records → detection + cleanup plan
+- [x] `WorkspaceHosts.leftovers()`: unclosed sessions across all projects
+      with no live host (`Sources/RVIsolation/WorkspaceLeftovers.swift`)
+- [x] `WorkspaceHosts.diskLeftovers()`: attached `rv-inode-*.sparseimage`
+      images with no live host (hdiutil plist + kernel mount table, 15 s
+      timeout), and image files nothing has attached
+- [x] `rv workspace leftovers` report with safe next steps (never auto-deletes:
+      stranded volumes can hold unpublished work)
+- [x] Tests: `WorkspaceLeftoversTests` (6). Real run on this Mac found 1
+      orphaned session, 133 stranded images (100 mounted), 484 unattached
+      image files (~15 GB), all from test runs
+- [ ] `rv doctor` line summarizing leftovers
+- [ ] Test hygiene: RVIsolation tests write lifecycle/runtime records to the
+      developer's real `~/.config/rv` (32 `WorkspaceSessionSupervisor.open`
+      call sites use `.production`) and leak volumes. Touches
+      `WorkspaceSessionSupervisor` (owner's in-flight file): do after
+      `impro-ref` lands
 
 ### 1.3 Re-enable disabled end-to-end coverage
-- [ ] Investigate a test-only peer-trust seam that cannot be reached by
-      production binaries (dependency injection into `WorkspaceHostServer`
-      in-process; no env var or user file may grant a role)
-- [ ] Re-enable the in-process subset of the 55 `TRANSITIONAL-PEER-AUTH` tests;
-      document why subprocess ones stay L3-only
-- [ ] Rename stale `knownGap…` tests to what they actually assert
+- [x] Investigated. The disabled tests spawn the real `rv-workspace-host`
+      binary and connect from the test runner, which isn't hardened and so can
+      never hold a component role. There's no safe in-code seam: anything a
+      test can flip, an attacker can flip. **Owner decision needed (D13).**
+- [ ] D13 option A: rewrite them to drive the pinned `rv` CLI as a subprocess,
+      in a macOS CI job that installs dev peer trust with sudo (runners
+      have passwordless sudo)
+- [ ] D13 option B: keep them as an owner-run L3 checklist
+- [x] Renamed stale `knownGap…` tests:
+      `syntheticCredentialsOutsideTheWorkspaceCanBeNeitherReadNorOverwritten`,
+      `cannotSignalAnUnrelatedProcess` (both pass on a real cage); updated
+      `docs/security/adversarial-inventory.md`
 
 ### 1.4 Accurate security docs
-- [ ] Refresh `docs/security/runtime-acceptance.md` against current code
-      (closed: mach-lookup; accepted residual: /Users metadata read; open:
-      control-plane paths writable, Linux; Seatbelt limit: LAN listen)
+- [x] Added a dated "Current status: 2026-10-12" table at the top of
+      `docs/security/runtime-acceptance.md`; historical audit kept below
 
 ### 1.5 Protected control-plane paths (coordinate: touches `SeatbeltProfile`)
 - [ ] Deny cage writes to workspace `.git/hooks`, `.rv/**`, and rv config;
@@ -310,8 +332,9 @@ cleans up after crashes, and read an accurate acceptance matrix.
       `WorkspaceSessionSupervisor`)
 - [ ] Linux enforcement (backlog, XL)
 
-Exit criteria: `rv audit tail` shows real denials from a real cage (L2);
-leftover scan proven by test; docs match code; CI green.
+Exit criteria: `rv audit tail` shows real denials (met with hook denials;
+cage egress denial pending L3); leftover scan proven by test and real run
+(met); docs match code (met); CI green (check on the PR).
 
 ---
 
@@ -497,9 +520,20 @@ Exit criteria: Cursor or Claude Code on this Mac lists tools through
   OK (~127 s). Three exploration passes done (findings in Ground truth).
   Found 55 `TRANSITIONAL-PEER-AUTH` disabled tests and confirmed L3 needs
   the owner to reinstall dev peer trust with sudo. Plan written.
+- 2026-10-12: Phase 1 agent items landed on `governance/phase-1-sandbox`:
+  `rv audit` (tail/export, 7 sources), admission `recordedAt`,
+  `rv workspace leftovers` (sessions + disk images), stale knownGap renames,
+  acceptance doc status table. Tests: AuditLedgerTests 12, AuditCommandTests
+  13, WorkspaceLeftoversTests 6, the 3 adversarial cage tests, help and
+  completions suites: all pass. Found: tests leak volumes and write to the
+  real `~/.config/rv` (logged as a 1.2 item). D13 opened for the disabled
+  E2E tests.
 - 2026-10-13: Rereview of PR #394. Named each ledger writer (only `blocks`,
   `allow-once`, and `pending-approvals` are `FileLockedJSONLStore`). Seatbelt
   ground truth now says outbound connect is loopback TCP and the listen rule
   also permits LAN bind/listen/accept. Phase 2.2 matches D5: the gateway
   refuses upstream redirects. Phase 0 open-PR and close-#393 boxes checked.
   Docs only. Next: merge #394, then start Phase 1.
+- 2026-10-13: Merged that rereview into `governance/phase-1-sandbox`. Phase 0
+  stays in progress until #394 merges. Phase 1 agent items stay on this
+  branch (#395).

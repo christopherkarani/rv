@@ -24,6 +24,7 @@ enum HelpCatalog {
         case .allowlist: allowlist
         case .safety: safety
         case .blocks: blocks
+        case .audit: audit
         case .opencode: opencode
         case .workspace: workspace
         case .`operator`: operatorHelp
@@ -52,6 +53,7 @@ enum HelpCatalog {
                 HelpRow(name: "scan", description: "Session forensics for deny-only findings"),
                 HelpRow(name: "safety", description: "Show or set normal or strict"),
                 HelpRow(name: "blocks", description: "List recent denials"),
+                HelpRow(name: "audit", description: "Unified audit trail; export for SIEM"),
                 HelpRow(name: "service", description: "Is rvd running, down, or skewed"),
             ]),
             HelpSection(heading: "Advanced", rows: [
@@ -123,6 +125,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv workspace custom [--workspace <absolute-path>] [--rows N] [--columns N] --expected-content-digest-sha256 <digest> -- <absolute-executable> [args...]", description: "Launch an ad-hoc definition (not yet available); executable image verification is deferred"),
                 HelpRow(name: "rv workspace tui [--workspace <project-path>]", description: "Interactive terminal workspace for contained runtimes"),
                 HelpRow(name: "rv workspace abandon [--workspace <absolute-path>]", description: "Discard a blocked workspace's unpublished volume and restore the saved tree (not yet available)"),
+                HelpRow(name: "rv workspace leftovers", description: "List workspaces a dead host left behind, across all projects"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--workspace", description: "Project path; default is the current directory"),
@@ -343,6 +346,35 @@ enum HelpCatalog {
         examples: [
             "rv blocks",
             "rv blocks --json",
+        ]
+    )
+
+    static let audit = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv audit [tail] [-n <count>] [--since <duration>] [--kind <kind>]... [--json]"),
+                HelpRow(name: "rv audit export [--since <duration>] [--kind <kind>]..."),
+            ]),
+            HelpSection(heading: "Flags", rows: [
+                HelpRow(name: "-n, --limit", description: "Newest events to show (default 50)"),
+                HelpRow(name: "--since", description: "Only events newer than 30m, 24h, 7d"),
+                HelpRow(name: "--kind", description: "Kind or prefix: egress, admission, runtime, workspace, agent"),
+                HelpRow(name: "--json", description: "JSON array on stdout"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(
+                    name: "sources",
+                    description: "Joins every rv ledger in ~/.config/rv into one rv.audit.v1 stream"
+                ),
+                HelpRow(name: "export", description: "JSON Lines, oldest first, for SIEM ingest"),
+            ]),
+        ],
+        examples: [
+            "rv audit",
+            "rv audit --kind egress --since 24h",
+            "rv audit export --since 7d > rv-audit.jsonl",
         ]
     )
 
