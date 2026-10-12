@@ -120,23 +120,55 @@ func installAdmissionDescriptors(
 
 private let admissionAppendLock = Mutex<Void>(())
 
-func appendAdmissionEvent(_ event: RuntimeAdmissionEvent, to url: URL) {
+/// Appends one admission audit event. Returns true only when the line is
+/// persisted. Every failure path reports through `diagnose` (stderr by
+/// default) instead of dropping the audit row silently: the admission
+/// decision is already made and stays fail-closed either way; only the
+/// audit persistence can fail.
+@discardableResult
+func appendAdmissionEvent(
+    _ event: RuntimeAdmissionEvent,
+    to url: URL,
+    diagnose: (String) -> Void = { message in
+        FileHandle.standardError.write(Data((message + "\n").utf8))
+    }
+) -> Bool {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
-    guard var data = try? encoder.encode(event) else { return }
+    guard var data = try? encoder.encode(event) else {
+        diagnose("rv.admission: audit encode failed session=\(event.session ?? "none")")
+        return false
+    }
     data.append(UInt8(ascii: "\n"))
     let directory = url.deletingLastPathComponent()
-    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    do {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    } catch {
+        diagnose("rv.admission: audit directory failed path=\(url.path) error=\(error.localizedDescription)")
+        return false
+    }
+    var persisted = false
     admissionAppendLock.withLock { _ in
         let fd = url.path.withCString { path in
             open(path, O_CREAT | O_APPEND | O_WRONLY | O_CLOEXEC, 0o600)
         }
-        guard fd >= 0 else { return }
+        guard fd >= 0 else {
+            diagnose("rv.admission: audit open failed path=\(url.path) errno=\(errno)")
+            return
+        }
         defer { close(fd) }
-        guard flock(fd, LOCK_EX) == 0 else { return }
+        guard flock(fd, LOCK_EX) == 0 else {
+            diagnose("rv.admission: audit lock failed path=\(url.path) errno=\(errno)")
+            return
+        }
         defer { _ = flock(fd, LOCK_UN) }
-        _ = admissionWriteAll(fd, data)
+        guard admissionWriteAll(fd, data) else {
+            diagnose("rv.admission: audit write failed path=\(url.path) errno=\(errno)")
+            return
+        }
+        persisted = true
     }
+    return persisted
 }
 
 func admissionClose(_ fd: Int32) {

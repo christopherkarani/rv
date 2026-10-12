@@ -151,6 +151,36 @@ struct RuntimeAdmissionIsolationTests {
         #expect(text.contains("\"result\":\"exit:0\""))
     }
 
+    @Test func admissionAuditAppendSurfacesFailure() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-admission-audit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let event = RuntimeAdmissionEvent(
+            session: UUID().uuidString,
+            requestID: nil,
+            fingerprint: nil,
+            authorization: .allowed,
+            executionAttempted: true,
+            result: "exit:0"
+        )
+        let diagnostics = AdmissionDiagnosticCollector()
+        let url = directory.appendingPathComponent("runtime-admission.jsonl")
+        #expect(appendAdmissionEvent(event, to: url, diagnose: diagnostics.record))
+        #expect(diagnostics.all.isEmpty)
+        #expect(try String(contentsOf: url, encoding: .utf8).contains("\"authorization\":\"allowed\""))
+
+        // Fault injection: the log parent is a regular file. Appending must
+        // report failure visibly (and return false) instead of dropping the
+        // audit row through `try?`. The admission decision itself is already
+        // made; only the audit persistence fails.
+        let blocker = directory.appendingPathComponent("blocker")
+        try Data("file".utf8).write(to: blocker)
+        let badURL = blocker.appendingPathComponent("runtime-admission.jsonl")
+        #expect(appendAdmissionEvent(event, to: badURL, diagnose: diagnostics.record) == false)
+        #expect(diagnostics.all.isEmpty == false)
+    }
+
     @Test func seatbeltProfileGainsNoNetworkAllow() throws {
         let workspace = try #require(WorkingDirectory(validating: "/tmp/rv-admission-profile"))
         let plan = try compileIsolationPlan(
@@ -330,6 +360,23 @@ struct RuntimeAdmissionIsolationTests {
         #expect(FileManager.default.fileExists(atPath: escaped.path) == false)
     }
     #endif
+}
+
+private final class AdmissionDiagnosticCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+
+    func record(_ line: String) {
+        lock.lock()
+        lines.append(line)
+        lock.unlock()
+    }
+
+    var all: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return lines
+    }
 }
 
 private final class AdmissionEffect: Sendable {
