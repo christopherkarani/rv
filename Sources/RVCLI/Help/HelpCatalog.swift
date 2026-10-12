@@ -1,3 +1,4 @@
+import RVPolicy
 import RVPresentation
 
 /// Static help copy for every CLI surface that can show `--help` / `rv help`.
@@ -27,6 +28,8 @@ enum HelpCatalog {
         case .audit: audit
         case .secrets: secrets
         case .mcp: mcp
+        case .managed: managed
+        case .report: report
         case .opencode: opencode
         case .workspace: workspace
         case .`operator`: operatorHelp
@@ -67,6 +70,8 @@ enum HelpCatalog {
                 HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor / Antigravity)"),
                 HelpRow(name: "uninstall", description: "Remove rv-owned hooks, config, and LaunchAgent"),
                 HelpRow(name: "operator", description: "Propose and poll identity launches (review required)"),
+                HelpRow(name: "managed", description: "Organization policy: status, verify, keygen, sign"),
+                HelpRow(name: "report", description: "Governance posture of this machine (MDM, --json)"),
             ]),
         ],
         examples: [
@@ -459,6 +464,50 @@ enum HelpCatalog {
             "rv mcp import --host cursor --dry-run",
             "rv mcp setup --host cursor",
             "rv mcp check",
+        ]
+    )
+
+    static let managed = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv managed [status] [--json]"),
+                HelpRow(name: "rv managed verify <dir> [--json]"),
+                HelpRow(name: "rv managed keygen --out <dir>"),
+                HelpRow(name: "rv managed sign <policy.json> --key <org-key.private> [--out <file>]"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "location", description: "\(ManagedPolicyLocation.installedDirectory) (root-owned)"),
+                HelpRow(name: "files", description: "policy.json; org-key.pub pins a key, then policy.json.sig is required"),
+                HelpRow(name: "restrict-only", description: "Org rules only tighten mcp.json and secrets.json; deny > ask > allow"),
+                HelpRow(name: "invalid", description: "A bad owner, mode, signature, or key disables MCP and secret staging"),
+            ]),
+        ],
+        examples: [
+            "rv managed keygen --out ./org-keys",
+            "rv managed sign ./bundle/policy.json --key ./org-keys/org-key.private",
+            "rv managed verify ./bundle",
+            "rv managed status",
+        ]
+    )
+
+    static let report = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv report [--json] [--strict]"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "schema", description: "rv.report.v1: version, org policy, config hashes, MCP, secrets, audit"),
+                HelpRow(name: "secrets", description: "Names, source kinds, and delivery only; values are never read"),
+                HelpRow(name: "--strict", description: "Exit 1 when the machine is not compliant"),
+            ]),
+        ],
+        examples: [
+            "rv report",
+            "rv report --json",
         ]
     )
 

@@ -1,10 +1,19 @@
 import Foundation
 import RVIsolation
+import RVPolicy
 
 public enum MCPToolDecision: String, Sendable, Equatable, CaseIterable {
     case allow
     case ask
     case deny
+
+    var strictness: Int {
+        switch self {
+        case .allow: 0
+        case .ask: 1
+        case .deny: 2
+        }
+    }
 }
 
 /// deny glob > ask glob > allow glob > `default` > the file's `defaultDecision`.
@@ -97,6 +106,8 @@ public struct MCPConfiguration: Sendable, Equatable {
     public var servers: [MCPServerDefinition]
     public var direct: [String]
     public var blocked: [String]
+    /// Organization restrictions layered over this file; never encoded.
+    public var managed: ManagedPolicy?
 
     public init(
         defaultDecision: MCPToolDecision = .ask,
@@ -114,8 +125,23 @@ public struct MCPConfiguration: Sendable, Equatable {
         servers.first { $0.name == name }
     }
 
+    /// The stricter of the user's rules and the organization's.
     public func decision(server: MCPServerDefinition, tool: String) -> MCPToolDecision {
-        server.tools.decision(for: tool, fallback: defaultDecision)
+        let user = server.tools.decision(for: tool, fallback: defaultDecision)
+        guard let organization = organizationDecision(server: server.name, tool: tool) else { return user }
+        return [user, organization].max { $0.strictness < $1.strictness } ?? user
+    }
+
+    public func organizationDecision(server: String, tool: String) -> MCPToolDecision? {
+        managed.flatMap { MCPToolDecision(rawValue: $0.mcpDecision(server: server, tool: tool).rawValue) }
+    }
+
+    public func isBlocked(_ server: String) -> Bool {
+        blocked.contains(server) || managed?.isServerBlocked(server) == true
+    }
+
+    public func isDirect(_ server: String) -> Bool {
+        managed?.mcp.allowDirect != false && direct.contains(server)
     }
 
     public static func fileURL(configDirectory: URL) -> URL {

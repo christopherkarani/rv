@@ -690,17 +690,29 @@ so no prompts), audit counts for the last 24 h by kind/decision, sandbox
 health from the doctor checks that need no root.
 
 ### 4.1 `rv report`
-- [ ] `ReportBuilder` (pure over injected inputs) + `rv report [--json]`
-- [ ] Tests + real-binary run on this Mac
+- [x] `ReportRun.build` (pure over injected inputs) + `rv report [--json] [--strict]`:
+      `Sources/RVCLI/Commands/ReportCommand.swift`; `compliant` = org policy not invalid, MCP check
+      passes, no secret policy violations
+- [x] Tests (`ManagedCommandTests.reportSummarizesPostureWithoutSecretValues`) + real binary on this
+      Mac: NOT compliant (21 unreviewed MCP entries, 2 plaintext credentials), 14k audit events/24 h
 
 ### 4.2 Managed policy
-- [ ] Model + strict decode + trust checks + signature verify (RVPolicy)
-- [ ] MCP merge (inventory, serve, approve --always) and secrets enforcement
-- [ ] `rv managed status|verify|keygen|sign`
-- [ ] Tests: decode, trust (injected owner), signature good/bad/missing,
-      restrict-only merge, approve refusal; E2E keygen → sign → verify →
-      tamper → verify fails with the real binary. L3 (root-owned install) is
-      an owner item: needs sudo.
+- [x] Model + strict decode + trust checks (every ancestor root-owned, no group/world write, no
+      allow ACLs on macOS, O_NOFOLLOW) + Ed25519 verify: `Sources/RVPolicy/ManagedPolicy.swift`
+- [x] MCP merge (`MCPConfiguration.managed`: decision = stricter of user and org, `isBlocked`,
+      `isDirect`, planner `requireSandbox` + secret source check; `approve --always` refuses when the
+      org says ask/deny; invalid policy fails `MCPRun.configuration` closed). Secrets:
+      `SecretOrganizationRules` in the launch broker (checked for every secret before any is
+      resolved; `secret.use staged` audit now written only when the whole lease succeeds),
+      `rv secrets set/check`, `rv mcp import`
+- [x] `rv managed status|verify|keygen|sign` (`Sources/RVCLI/Commands/ManagedCommand.swift`), help,
+      completions
+- [x] Tests: `ManagedPolicyTests` + `ManagedPolicyLocationTests` (8), `MCPManagedPolicyTests` (3),
+      broker org test, `ManagedCommandTests` (4). E2E real binary: keygen → verify refuses missing
+      sig → sign → verify active+signed → one-byte edit → "does not verify".
+- [ ] Owner L3 (sudo): `sudo mkdir -p "/Library/Application Support/RV/managed" && sudo cp
+      bundle/* there && sudo chown -R root:wheel …`, then `rv managed status` shows active and
+      `rv mcp serve --server <blocked>` refuses; `sudo chmod g+w` the file → status invalid
 
 ### 4.3 Audit export OCSF + forward
 - [ ] OCSF mapping + `--format ocsf`

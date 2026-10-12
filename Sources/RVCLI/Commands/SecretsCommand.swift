@@ -14,12 +14,14 @@ struct SecretsEnvironment: Sendable {
     var configDirectory: URL
     var resolver: SecretResolver
     var keychain: SecretKeychainWriter
+    var managed: ManagedPolicyState = .none
 
     static func live(home: HomeDirectory) -> SecretsEnvironment {
         SecretsEnvironment(
             configDirectory: RVPolicyPaths.configDirectory(home: home),
             resolver: .live(home: home.rawValue),
-            keychain: .live
+            keychain: .live,
+            managed: ManagedPolicyLocation.installed.load()
         )
     }
 }
@@ -134,6 +136,13 @@ enum SecretsRun {
         }
         let fingerprinter = SecretFingerprinter.load(configDirectory: environment.configDirectory)
         return .success(selected.map { secret in
+            if let reason = environment.managed.invalidReason
+                ?? SecretOrganizationRules.violation(secret, policy: environment.managed.policy)
+            {
+                return CheckRow(
+                    name: secret.name, source: secret.source.locator, ok: false, fingerprint: nil,
+                    error: "organization policy: \(reason)")
+            }
             switch environment.resolver.resolve(secret.source) {
             case .success(let value):
                 return CheckRow(
@@ -203,6 +212,14 @@ enum SecretsRun {
             case .failure(let error): return .failure(CommandFailure(error.message))
             case .success(let normalized): updated = normalized
             }
+        }
+        if let reason = environment.managed.invalidReason {
+            return .failure(CommandFailure("organization policy is invalid: \(reason)"))
+        }
+        if let definition = updated.secret(named: name),
+            let reason = SecretOrganizationRules.violation(definition, policy: environment.managed.policy)
+        {
+            return .failure(CommandFailure("organization policy: \(reason)"))
         }
         guard environment.keychain.store(SecretKeychain.service, name, value) else {
             return .failure("could not store \(name) in the Keychain")

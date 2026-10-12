@@ -1,5 +1,6 @@
 import Foundation
 import RVHistory
+import RVPolicy
 
 /// The environment one launch receives for its profile's secrets, plus the
 /// placeholders to revoke when the runtime ends.
@@ -16,6 +17,7 @@ enum SecretLeaseError: Error, Sendable, Equatable {
     case resolution(secret: String, SecretResolutionError)
     case gatewayUnavailable
     case environmentValueUnusable(String)
+    case organizationPolicy(String)
 
     var message: String {
         switch self {
@@ -25,6 +27,7 @@ enum SecretLeaseError: Error, Sendable, Equatable {
         case .gatewayUnavailable: "secret gateway could not start"
         case .environmentValueUnusable(let name):
             "secret \(name) cannot be delivered as an environment variable (not UTF-8 text or over 8 KiB)"
+        case .organizationPolicy(let reason): "organization policy: \(reason)"
         }
     }
 }
@@ -38,6 +41,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
     private let resolver: SecretResolver
     private let gateway: SecretGateway
     private let workspace: String?
+    private let managed: @Sendable () -> ManagedPolicyState
     private let lock = NSLock()
     private var fingerprinter: SecretFingerprinter??
     private var byRuntime: [String: [SecretPlaceholder]] = [:]
@@ -46,11 +50,13 @@ final class SecretLaunchBroker: @unchecked Sendable {
         configDirectory: URL,
         resolver: SecretResolver,
         transport: SecretUpstreamTransport = .urlSession,
-        workspace: String?
+        workspace: String?,
+        managed: @escaping @Sendable () -> ManagedPolicyState = { ManagedPolicyLocation.installed.load() }
     ) {
         self.configDirectory = configDirectory
         self.resolver = resolver
         self.workspace = workspace
+        self.managed = managed
         let directory = configDirectory
         gateway = SecretGateway(transport: transport) { record in
             _ = AuditLog.append(Self.auditEvent(record, workspace: workspace), configDirectory: directory)
@@ -84,15 +90,30 @@ final class SecretLaunchBroker: @unchecked Sendable {
         case .failure(let error): return .failure(.configuration(error))
         case .success(let loaded): configuration = loaded
         }
+        let organization: ManagedPolicy?
+        switch managed() {
+        case .invalid(let reason): return .failure(.organizationPolicy("invalid, so secrets are not staged: \(reason)"))
+        case .none: organization = nil
+        case .active(let bundle): organization = bundle.policy
+        }
+        var definitions: [SecretDefinition] = []
+        for name in names {
+            guard let definition = configuration.secret(named: name) else { return .failure(.unknownSecret(name)) }
+            guard definition.stages(forAgent: agent) else { continue }
+            if let reason = SecretOrganizationRules.violation(definition, policy: organization) {
+                return .failure(.organizationPolicy(reason))
+            }
+            definitions.append(definition)
+        }
         var placeholders: [SecretPlaceholder] = []
         var environment: [(name: String, value: String)] = []
+        var staged: [AuditEvent] = []
         func fail(_ error: SecretLeaseError) -> Result<SecretLease, SecretLeaseError> {
             gateway.revoke(placeholders)
             return .failure(error)
         }
-        for name in names {
-            guard let definition = configuration.secret(named: name) else { return fail(.unknownSecret(name)) }
-            guard definition.stages(forAgent: agent) else { continue }
+        for definition in definitions {
+            let name = definition.name
             let value: SecretValue
             switch resolver.resolve(definition.source) {
             case .failure(let error): return fail(.resolution(secret: name, error))
@@ -117,18 +138,17 @@ final class SecretLaunchBroker: @unchecked Sendable {
                 environment.append((name, placeholder.text))
                 environment.append((binding.baseURLEnv, baseURL))
             }
-            _ = AuditLog.append(
-                AuditEvent(
-                    time: Date(), kind: .secretUse, decision: .info, subject: name,
-                    reason: "staged for launch", workspace: workspace, agent: agent, source: "secret-broker",
-                    detail: Self.compact([
-                        "event": "staged",
-                        "delivery": definition.delivery.kind,
-                        "provider": definition.source.kind,
-                        "fingerprint": fingerprint,
-                    ])),
-                configDirectory: configDirectory)
+            staged.append(AuditEvent(
+                time: Date(), kind: .secretUse, decision: .info, subject: name,
+                reason: "staged for launch", workspace: workspace, agent: agent, source: "secret-broker",
+                detail: Self.compact([
+                    "event": "staged",
+                    "delivery": definition.delivery.kind,
+                    "provider": definition.source.kind,
+                    "fingerprint": fingerprint,
+                ])))
         }
+        for event in staged { _ = AuditLog.append(event, configDirectory: configDirectory) }
         return .success(SecretLease(placeholders: placeholders, environment: environment))
     }
 
@@ -197,10 +217,24 @@ final class SecretLaunchBroker: @unchecked Sendable {
 }
 
 extension SecretDelivery {
-    var kind: String {
+    public var kind: String {
         switch self {
         case .gateway: "gateway"
         case .environment: "environment"
         }
+    }
+}
+
+/// What a managed policy forbids for one secret definition.
+public enum SecretOrganizationRules {
+    public static func violation(_ definition: SecretDefinition, policy: ManagedPolicy?) -> String? {
+        guard let policy else { return nil }
+        if policy.allowsSecretSource(definition.source.kind) == false {
+            return "\(definition.name) uses a \(definition.source.kind) source, which is not allowed"
+        }
+        if case .environment = definition.delivery, policy.secrets.allowEnvironmentDelivery == false {
+            return "\(definition.name) is delivered as an environment variable, which is not allowed; use the gateway"
+        }
+        return nil
     }
 }
