@@ -57,8 +57,8 @@ enum SecretsRun {
         case environment
     }
 
-    static func configuration(_ environment: SecretsEnvironment) -> Result<SecretsConfiguration, SecretsFailure> {
-        SecretsConfiguration.load(configDirectory: environment.configDirectory).mapError { SecretsFailure($0.message) }
+    static func configuration(_ environment: SecretsEnvironment) -> Result<SecretsConfiguration, CommandFailure> {
+        SecretsConfiguration.load(configDirectory: environment.configDirectory).mapError { CommandFailure($0.message) }
     }
 
     static func profiles(_ environment: SecretsEnvironment) -> [RuntimeResourceProfile] {
@@ -118,7 +118,7 @@ enum SecretsRun {
 
     static func check(
         _ configuration: SecretsConfiguration, names: [String], environment: SecretsEnvironment
-    ) -> Result<[CheckRow], SecretsFailure> {
+    ) -> Result<[CheckRow], CommandFailure> {
         let selected: [SecretDefinition]
         if names.isEmpty {
             selected = configuration.secrets
@@ -164,7 +164,7 @@ enum SecretsRun {
     static func set(
         name: String, value: Data, definition: Definition?, agents: [String], description: String?,
         environment: SecretsEnvironment
-    ) -> Result<String, SecretsFailure> {
+    ) -> Result<String, CommandFailure> {
         guard value.isEmpty == false, value.count <= SecretValue.maximumBytes, value.contains(0) == false else {
             return .failure("the value must be 1 byte to 16 KiB with no NUL bytes")
         }
@@ -177,7 +177,7 @@ enum SecretsRun {
         var updated = current
         if let existing = current.secret(named: name) {
             guard existing.source == source else {
-                return .failure(SecretsFailure(
+                return .failure(CommandFailure(
                     "\(name) reads from \(existing.source.locator); rv secrets set only stores values it reads "
                         + "from \(SecretKeychain.service)"))
             }
@@ -200,7 +200,7 @@ enum SecretsRun {
                 name: name, description: description, agents: agents.isEmpty ? nil : agents,
                 source: source, delivery: delivery))
             switch SecretsConfiguration.decode(updated.encoded()) {
-            case .failure(let error): return .failure(SecretsFailure(error.message))
+            case .failure(let error): return .failure(CommandFailure(error.message))
             case .success(let normalized): updated = normalized
             }
         }
@@ -208,7 +208,7 @@ enum SecretsRun {
             return .failure("could not store \(name) in the Keychain")
         }
         if updated != current, case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
-            return .failure(SecretsFailure(error.message))
+            return .failure(CommandFailure(error.message))
         }
         guard let secret = updated.secret(named: name) else { return .failure("\(name) was not saved") }
         var text = "Stored \(name) in the Keychain (\(SecretKeychain.service)). Delivery: \(secret.delivery.summary).\n"
@@ -221,7 +221,7 @@ enum SecretsRun {
         return .success(text)
     }
 
-    static func remove(name: String, environment: SecretsEnvironment) -> Result<String, SecretsFailure> {
+    static func remove(name: String, environment: SecretsEnvironment) -> Result<String, CommandFailure> {
         let current: SecretsConfiguration
         switch configuration(environment) {
         case .failure(let failure): return .failure(failure)
@@ -242,7 +242,7 @@ enum SecretsRun {
             var updated = current
             updated.secrets.removeAll { $0.name == name }
             if case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
-                return .failure(SecretsFailure(error.message))
+                return .failure(CommandFailure(error.message))
             }
             lines.append("Removed \(name) from secrets.json.")
         }
@@ -456,7 +456,7 @@ struct SecretsScan: AsyncParsableCommand {
     }
 }
 
-struct SecretsFailure: Error, Equatable, ExpressibleByStringInterpolation {
+struct CommandFailure: Error, Equatable, ExpressibleByStringInterpolation {
     let message: String
 
     init(_ message: String) {

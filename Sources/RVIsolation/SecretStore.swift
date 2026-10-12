@@ -138,27 +138,7 @@ extension SecretsConfiguration {
     public func write(configDirectory: URL) -> Result<Void, SecretsConfigurationError> {
         let data = encoded()
         if case .failure(let error) = Self.decode(data) { return .failure(error) }
-        do {
-            try FileManager.default.createDirectory(
-                at: configDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        } catch {
-            return .failure(.unreadable)
-        }
-        let target = Self.fileURL(configDirectory: configDirectory)
-        let temporary = configDirectory.appendingPathComponent(".secrets.json.\(UUID().uuidString)")
-        let fd = open(temporary.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard fd >= 0 else { return .failure(.unreadable) }
-        let written = data.withUnsafeBytes { raw -> Int in
-            #if canImport(Darwin)
-            Darwin.write(fd, raw.baseAddress, raw.count)
-            #else
-            Glibc.write(fd, raw.baseAddress, raw.count)
-            #endif
-        }
-        let synced = fsync(fd) == 0
-        close(fd)
-        guard written == data.count, synced, rename(temporary.path, target.path) == 0 else {
-            unlink(temporary.path)
+        guard OwnerOnlyFile.write(data, to: Self.fileURL(configDirectory: configDirectory)) else {
             return .failure(.unreadable)
         }
         return .success(())

@@ -26,6 +26,7 @@ enum HelpCatalog {
         case .blocks: blocks
         case .audit: audit
         case .secrets: secrets
+        case .mcp: mcp
         case .opencode: opencode
         case .workspace: workspace
         case .`operator`: operatorHelp
@@ -56,6 +57,7 @@ enum HelpCatalog {
                 HelpRow(name: "blocks", description: "List recent denials"),
                 HelpRow(name: "audit", description: "Unified audit trail; export for SIEM"),
                 HelpRow(name: "secrets", description: "Secrets agents use through placeholders"),
+                HelpRow(name: "mcp", description: "Find, review, and govern MCP servers"),
                 HelpRow(name: "service", description: "Is rvd running, down, or skewed"),
             ]),
             HelpSection(heading: "Advanced", rows: [
@@ -412,6 +414,36 @@ enum HelpCatalog {
             "rv secrets set OPENAI_API_KEY --gateway https://api.openai.com/v1 --base-url-env OPENAI_BASE_URL",
             "rv secrets check",
             "rv secrets scan .",
+        ]
+    )
+
+    static let mcp = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv mcp [list] [--project <dir>] [--json]"),
+                HelpRow(name: "rv mcp check [--project <dir>] [--json]"),
+            ]),
+            HelpSection(heading: "Statuses", rows: [
+                HelpRow(name: "governed", description: "Host runs it through `rv mcp serve`"),
+                HelpRow(name: "direct", description: "Allowed outside rv by mcp.json \"direct\""),
+                HelpRow(name: "bypass", description: "rv has a definition; the host runs it directly"),
+                HelpRow(name: "unreviewed", description: "rv has never reviewed it"),
+                HelpRow(name: "blocked", description: "Listed in mcp.json \"blocked\""),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "config", description: "~/.config/rv/mcp.json (owner-only)"),
+                HelpRow(
+                    name: "hosts",
+                    description: "Claude Code, Claude Desktop, Cursor, Codex, OpenCode, Gemini, Antigravity, VS Code, Windsurf"
+                ),
+                HelpRow(name: "redaction", description: "Env and header values never shown; credential-like args masked"),
+            ]),
+        ],
+        examples: [
+            "rv mcp list",
+            "rv mcp check",
         ]
     )
 

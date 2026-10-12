@@ -104,6 +104,7 @@ let coreLibraryTargets: [Target] = [
     .target(name: "RVIPC", dependencies: ["RVDomain"]),
     .target(name: "RVHistory", dependencies: ["RVDomain", "RVFileStore"]),
     .target(name: "RVAnalytics", dependencies: ["RVDomain"]),
+    .target(name: "RVMCP", dependencies: ["RVDomain", "RVHistory", "RVIsolation"]),
     .target(name: "RVPresentation", dependencies: ["RVDomain", "RVTheme"]),
     .target(name: "RVTUI", dependencies: ["RVTheme", "RVPresentation"]),
     .target(
@@ -133,6 +134,7 @@ let coreProducts: [Product] = [
     .library(name: "RVWorkspaceTUI", targets: ["RVWorkspaceTUI"]),
     .library(name: "RVHistory", targets: ["RVHistory"]),
     .library(name: "RVAnalytics", targets: ["RVAnalytics"]),
+    .library(name: "RVMCP", targets: ["RVMCP"]),
 ]
 
 let coreTestTargets: [Target] = [
@@ -171,6 +173,7 @@ let coreTestTargets: [Target] = [
     ),
     .testTarget(name: "RVHistoryTests", dependencies: ["RVHistory"]),
     .testTarget(name: "RVAnalyticsTests", dependencies: ["RVAnalytics"]),
+    .testTarget(name: "RVMCPTests", dependencies: ["RVMCP"]),
     .testTarget(
         name: "RVCorpusTests",
         dependencies: ["RVDomain", "RVEngine", "RVPacks"],
@@ -237,7 +240,7 @@ let cliTargets: [Target] = [
         dependencies: [
             "RVDomain", "RVEngine", "RVPolicy", "RVHooks", "RVIPC",
             "RVPresentation", "RVScan", "RVTheme", "RVTUI", "RVWorkspaceTUI", "RVService", "RVHistory",
-            "RVAnalytics", "RVIsolation",
+            "RVAnalytics", "RVIsolation", "RVMCP",
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ],
         resources: [

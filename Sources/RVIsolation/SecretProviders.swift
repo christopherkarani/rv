@@ -29,6 +29,9 @@ public struct SecretValue: Sendable, Equatable, CustomStringConvertible, CustomD
         String(bytes: bytes, encoding: .utf8)
     }
 
+    /// The raw value, only for a trusted child process's environment or a scrubber.
+    public func revealed() -> [UInt8] { bytes }
+
     public var description: String { "<redacted>" }
     public var debugDescription: String { "<redacted>" }
 }

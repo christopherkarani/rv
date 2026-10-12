@@ -24,7 +24,7 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 4 Enterprise client features | `governance/phase-4-enterprise` | _not opened_ | not started |
 | 5 Launch readiness | human-owned | n/a | not started |
 
-**Next action:** Phase 3.1 on `governance/phase-3-mcp` (design is written in the Phase 3 section). Also check the Linux CI job on #413 (the gateway was never compiled on Linux locally: Docker was down). Then Phase 3.1: branch `governance/phase-3-mcp` from `governance/phase-2-secrets`, start `rv mcp list`.
+**Next action:** Phase 3.2 gateway on `governance/phase-3-mcp` (design in the Phase 3 section). Linux CI passed on #395 and #413. (the gateway was never compiled on Linux locally: Docker was down). Then Phase 3.1: branch `governance/phase-3-mcp` from `governance/phase-2-secrets`, start `rv mcp list`.
 
 Gotcha: never run the `rv` binary with a fake `HOME` on a path that writes to
 the Keychain (`rv secrets set`). macOS opens a SecurityAgent "keychain not
@@ -550,17 +550,17 @@ move them into rv secrets with `rv mcp import`.
   duration ms, argument keys only, isError, approval id).
 
 ### 3.1 Inventory: `rv mcp list`, `rv mcp check`
-- [ ] `MCPConfiguration` (mcp.json model, strict decode, atomic 0600 write)
-- [ ] Readers: Claude Code (`~/.claude.json` `mcpServers` + `projects[dir].mcpServers`,
+- [x] `MCPConfiguration` (mcp.json model, strict decode, atomic 0600 write via the shared `OwnerOnlyFile` in RVIsolation): `Sources/RVMCP/MCPConfiguration.swift`; order-keeping `JSONValue` (strict + JSONC): `JSONValue.swift`
+- [x] Readers (`Sources/RVMCP/MCPInventory.swift`, TOML in `MiniTOML.swift`): Claude Code (`~/.claude.json` `mcpServers` + `projects[dir].mcpServers`,
       project `.mcp.json`), Claude Desktop, Cursor (`~/.cursor/mcp.json`,
       project `.cursor/mcp.json`), Codex (`~/.codex/config.toml`
       `[mcp_servers.*]`, minimal TOML reader), OpenCode (`opencode.json` `mcp`),
       Gemini (`~/.gemini/settings.json`), Antigravity
       (`~/.gemini/antigravity/mcp_config.json`), VS Code (`mcp.json` `servers`),
       Windsurf (`~/.codeium/windsurf/mcp_config.json`)
-- [ ] Redaction + plaintext-credential detection
-- [ ] Status per entry; `rv mcp check` exits 1 on bypass/unreviewed/blocked
-- [ ] Tests: fixture configs per host, TOML reader, redaction, status
+- [x] Redaction + plaintext-credential detection: `MCPRedaction.swift`
+- [x] Status per entry (+ `dangling`: routes through rv to an undefined server; `disabled`); `rv mcp list|check` in `Sources/RVCLI/Commands/MCPCommand.swift` (check also fails on unreadable host files)
+- [x] Tests: `Tests/RVMCPTests` (JSONValue, MiniTOML, MCPConfiguration, MCPRedaction, MCPInventory: 23). Real binary on this Mac: 23 entries in 7 host files, Codex `--api-key` masked, 2 plaintext credentials flagged
 
 ### 3.2 Gateway: `rv mcp serve`, approvals
 - [ ] `JSONValue` + framing with bounds; pure gateway core (state machine:
@@ -663,6 +663,10 @@ Exit criteria: Cursor or Claude Code on this Mac lists tools through
   failures. A fake-HOME binary run of `rv secrets set` hung on a macOS
   Keychain dialog (killed; login keychain untouched); see the gotcha under
   Resume here.
+- 2026-10-12: Linux CI caught `WorkspaceLeftovers.swift` using macOS-only
+  `WorkspaceAttachment`; gated on Phase 1, merged forward into Phase 2.
+  Linux `swift test` then passed on both PRs (gateway included). Phase 3.1
+  inventory landed: new `RVMCP` target, `rv mcp list|check`.
 - 2026-10-13: Rereview of PR #394. Named each ledger writer (only `blocks`,
   `allow-once`, and `pending-approvals` are `FileLockedJSONLStore`). Seatbelt
   ground truth now says outbound connect is loopback TCP and the listen rule

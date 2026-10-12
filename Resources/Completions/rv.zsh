@@ -21,6 +21,7 @@ _rv() {
     'blocks:List recent denials'
     'audit:Unified audit trail'
     'secrets:Secrets agents use through placeholders'
+    'mcp:Find, review, and govern MCP servers'
     'operator:Propose and poll identity launches'
   )
   _arguments '1: :->cmds' '*:: :->args'
