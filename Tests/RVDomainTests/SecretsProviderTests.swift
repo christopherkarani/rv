@@ -95,9 +95,9 @@ struct SecretsProviderTests {
         #expect(ref.item == "../etc/passwd\0\n injection")
     }
 
-    @Test func allowedProviders_containsExactlyFiveIds() {
+    @Test func allowedProviders_containsExactlySixIds() {
         #expect(
-            SecretRef.allowedProviders == ["file", "keychain", "vault-http", "env", "exec"]
+            SecretRef.allowedProviders == ["file", "keychain", "vault-http", "env", "exec", "encrypted"]
         )
     }
 

@@ -14,7 +14,7 @@ public struct SecretRef: Hashable, Sendable {
 
     /// Provider ids the broker accepts. Unknown ids fail closed.
     public static let allowedProviders: Set<String> = [
-        defaultProvider, "keychain", "vault-http", "env", "exec",
+        defaultProvider, "keychain", "vault-http", "env", "exec", "encrypted",
     ]
 
     /// Validates provider (non-empty, allowlisted) and item (non-empty). Field passes through.

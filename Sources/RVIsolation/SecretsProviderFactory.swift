@@ -294,7 +294,8 @@ public enum SecretsProviderFactory {
         transport: (
             @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
         )? = nil,
-        tracker: VaultLeaseTracker? = nil
+        tracker: VaultLeaseTracker? = nil,
+        environment: [String: String]? = nil
     ) throws(SecretsProviderFactoryError) -> [any SecretsProvider] {
         switch SecretsProviderStore.load(from: configDirectory) {
         case .success:
@@ -322,6 +323,21 @@ public enum SecretsProviderFactory {
         case .failure(let error):
             throw error
         }
+        // X1-E: opt-in like Vault's absent-config skip. A loadable master
+        // key (EXECUTOR_SECRET_KEY, else owner-only secret.key) appends the
+        // encrypted provider; no key means no provider, and refs to it deny
+        // `.providerDown` fail-closed at the broker. `defaultOwner` is `.org`:
+        // RV is single-tenant, so every broker resolve is org-level.
+        let masterKeyEnvironment = environment ?? ProcessInfo.processInfo.environment
+        if let masterKey = EncryptedSecretsProvider.loadMasterKey(
+            environment: masterKeyEnvironment, keyFileDirectory: configDirectory
+        ),
+            let encrypted = try? EncryptedSecretsProvider(
+                configDirectory: configDirectory, masterKey: masterKey, defaultOwner: .org
+            )
+        {
+            providers.append(encrypted)
+        }
         return providers
     }
 
@@ -341,10 +357,12 @@ public enum SecretsProviderFactory {
         transport: (
             @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
         )? = nil,
-        tracker: VaultLeaseTracker? = nil
+        tracker: VaultLeaseTracker? = nil,
+        environment: [String: String]? = nil
     ) throws(SecretsProviderFactoryError) -> SecretBroker {
         let providers = try makeProviders(
-            configDirectory: configDirectory, transport: transport, tracker: tracker
+            configDirectory: configDirectory, transport: transport, tracker: tracker,
+            environment: environment
         )
         return SecretBroker(
             providers: providers, audit: audit,
