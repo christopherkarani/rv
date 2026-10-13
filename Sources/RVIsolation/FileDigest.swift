@@ -13,8 +13,8 @@ import RVDomain
 /// refuses after one over-read chunk instead of stalling the
 /// supervisor state lock. Nil (default) keeps unbounded hashing
 /// for callers with no prior size.
-enum RVFileDigest {
-    static func sha256HexOfFile(atPath path: String, maxBytes: UInt64? = nil) -> String? {
+public enum RVFileDigest {
+    public static func sha256HexOfFile(atPath path: String, maxBytes: UInt64? = nil) -> String? {
         guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? handle.close() }
         var hash = RVSHA256Digest()

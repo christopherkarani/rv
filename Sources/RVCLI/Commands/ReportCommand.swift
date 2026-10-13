@@ -114,7 +114,7 @@ enum ReportRun {
             RVPolicyPaths.runtimeResourcesFile(inConfigDir: directory),
         ]
         let config = files.map { url in
-            let hash = RVDigest.sha256HexOfFile(atPath: url.path, maxBytes: 16 * 1024 * 1024)
+            let hash = RVFileDigest.sha256HexOfFile(atPath: url.path, maxBytes: 16 * 1024 * 1024)
             return Report.ConfigFile(file: url.lastPathComponent, present: hash != nil, sha256: hash)
         }
         return Report(
