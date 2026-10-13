@@ -33,7 +33,7 @@ public enum AuditLog {
             return false
         }
         let url = fileURL(configDirectory: configDirectory)
-        return AppendLock.shared.withLock {
+        return AppendLock.withLock {
             let fd = open(url.path, O_CREAT | O_APPEND | O_WRONLY | O_CLOEXEC | O_NOFOLLOW, 0o600)
             guard fd >= 0 else { return false }
             defer { close(fd) }
@@ -45,11 +45,11 @@ public enum AuditLog {
     }
 
     /// Threads in this process. macOS `flock` does not exclude them.
-    private final class AppendLock: Sendable {
-        static let shared = AppendLock()
-        private let mutex = Mutex<Void>(())
+    /// An enum, not a class: RVHistory is outside the preflight reference-type allowlist.
+    private enum AppendLock {
+        private static let mutex = Mutex<Void>(())
 
-        func withLock<T: Sendable>(_ body: () -> T) -> T {
+        static func withLock<T: Sendable>(_ body: () -> T) -> T {
             mutex.withLock { _ in body() }
         }
     }
