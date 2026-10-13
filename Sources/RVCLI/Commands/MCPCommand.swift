@@ -12,13 +12,15 @@ struct MCPEnvironment: Sendable {
     var home: URL
     var processEnvironment: [String: String]
     var keychain: SecretKeychainWriter
+    var managed: ManagedPolicyState = .none
 
     static func live(home: HomeDirectory) -> MCPEnvironment {
         MCPEnvironment(
             configDirectory: RVPolicyPaths.configDirectory(home: home),
             home: URL(fileURLWithPath: home.rawValue, isDirectory: true),
             processEnvironment: ProcessInfo.processInfo.environment,
-            keychain: .live
+            keychain: .live,
+            managed: ManagedPolicyLocation.installed.load()
         )
     }
 }
@@ -56,8 +58,18 @@ enum MCPRun {
         var passes: Bool { failing.isEmpty && problems.isEmpty }
     }
 
+    /// mcp.json with organization policy applied. An invalid managed policy fails closed.
     static func configuration(_ environment: MCPEnvironment) -> Result<MCPConfiguration, CommandFailure> {
-        MCPConfiguration.load(configDirectory: environment.configDirectory).mapError { CommandFailure($0.message) }
+        if let reason = environment.managed.invalidReason {
+            return .failure(CommandFailure("organization policy is invalid, so MCP is disabled: \(reason)"))
+        }
+        return MCPConfiguration.load(configDirectory: environment.configDirectory)
+            .map { configuration in
+                var configuration = configuration
+                configuration.managed = environment.managed.policy
+                return configuration
+            }
+            .mapError { CommandFailure($0.message) }
     }
 
     static func report(
@@ -213,6 +225,11 @@ enum MCPRun {
             tools.ask.removeAll { $0 == request.tool }
             if tools.allow.contains(request.tool) == false { tools.allow.append(request.tool) }
             configuration.servers[index].tools = tools
+            if let organization = configuration.organizationDecision(server: request.server, tool: request.tool),
+                organization != .allow
+            {
+                return .failure("organization policy says \(organization.rawValue) for \(request.server)/\(request.tool); approve it once instead")
+            }
             if configuration.decision(server: configuration.servers[index], tool: request.tool) != .allow {
                 return .failure("\(request.tool) still matches an ask or deny rule in mcp.json; edit that rule instead")
             }
@@ -266,6 +283,11 @@ enum MCPRun {
             return .success((lines + ["nothing to import"]).joined(separator: "\n") + "\n")
         }
         if dryRun { return .success((lines + ["dry run: nothing written"]).joined(separator: "\n") + "\n") }
+        if let definition = plan.secrets.first?.definition,
+            let reason = SecretOrganizationRules.violation(definition, policy: environment.managed.policy)
+        {
+            return .failure(CommandFailure("organization policy: \(reason); nothing imported"))
+        }
 
         for secret in plan.secrets where SecretValue(secret.value) == nil {
             return .failure(CommandFailure(

@@ -26,6 +26,8 @@ public struct RV: AsyncParsableCommand {
             Audit.self,
             Secrets.self,
             MCP.self,
+            Managed.self,
+            ReportCommand.self,
             Operator.self,
         ]
     )

@@ -21,10 +21,10 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 1 Trustworthy sandbox | `governance/phase-1-sandbox` | [#395](https://github.com/christopherkarani/rv/pull/395) | agent items done; PR open |
 | 2 Secrets the agent can't leak | `governance/phase-2-secrets` | [#413](https://github.com/christopherkarani/rv/pull/413) | agent items done (PR open); L3 demo needs owner trust |
 | 3 MCP governance | `governance/phase-3-mcp` | [#414](https://github.com/christopherkarani/rv/pull/414) | agent items done (PR open) |
-| 4 Enterprise client features | `governance/phase-4-enterprise` | _not opened_ | not started |
+| 4 Enterprise client features | `governance/phase-4-enterprise` | [#415](https://github.com/christopherkarani/rv/pull/415) | agent items done (PR open) |
 | 5 Launch readiness | human-owned | n/a | not started |
 
-**Next action:** Phase 4 on `governance/phase-4-enterprise` (branch from `governance/phase-3-mcp`): start with `rv report --json`, then managed restrict-only policy. Check the Phase 3 PR's Linux CI first.
+**Next action:** All agent-ownable items are done. Watch Linux CI on #394, #395, #413, #414, #415 and fix any failure on the owning branch, then merge forward. Remaining work is owner-only: L3 sudo items (peer trust reinstall, managed-dir install in 4.2), D13, signing/notarization, and Phase 5.
 
 Gotcha: never run the `rv` binary with a fake `HOME` on a path that writes to
 the Keychain (`rv secrets set`). macOS opens a SecurityAgent "keychain not
@@ -623,16 +623,115 @@ Exit criteria: Cursor or Claude Code on this Mac lists tools through
 
 ## Phase 4: Enterprise client features
 
-- [ ] Managed policy: root-owned `/Library/Application Support/RV/managed/`
-      (`secrets.json`, `mcp.json`, egress additions) merged restrict-only over
-      user files: org blocks win, users can't approve what org blocks
-- [ ] Optional signed bundles: org public key pinned in managed dir;
-      unsigned or bad-signature bundles refused
-- [ ] `rv audit export --format ocsf` and `rv audit forward --to URL`
-      (batched HTTPS POST, at-least-once with a cursor file)
-- [ ] `rv report --json`: version, policy hashes, MCP inventory status,
-      secret binding names, sandbox health; suitable for MDM collection
-- [ ] Control plane (SSO/SCIM/dashboard/approval routing): spec doc only
+Branch `governance/phase-4-enterprise` from `governance/phase-3-mcp`; PR base
+`governance/phase-3-mcp`.
+
+### Design (decided 2026-10-12)
+
+**Managed policy** lives in RVPolicy (`Sources/RVPolicy/ManagedPolicy.swift`)
+because RVPolicy already has Ed25519 on both platforms (CryptoKit on Darwin,
+swift-crypto on Linux) and both RVIsolation (secrets) and RVMCP sit above it.
+
+- Location (fixed, no env override: an override would be a bypass):
+  macOS `/Library/Application Support/RV/managed/`, Linux `/etc/rv/managed/`.
+- Files: `policy.json`; optional `org-key.pub` (base64 raw 32-byte Ed25519
+  key); `policy.json.sig` (base64 signature over the exact file bytes).
+- Trust: directory and files owned by root, not group/world writable, no
+  symlinks. Tests inject the required owner uid; the binary always uses 0.
+- States: `none` (no directory or no policy.json), `active`, `invalid(reason)`.
+  When `org-key.pub` exists the signature is required. `invalid` fails closed:
+  `rv mcp serve` refuses, `rv mcp check` fails, secret staging refuses.
+- Schema (strict keys, unknown keys rejected so a typo cannot weaken policy):
+  ```json
+  {"version": 1, "organization": "Acme", "serial": 7,
+   "mcp": {"blocked": ["shell-*"], "allowDirect": false, "requireSandbox": false,
+           "deny": ["*/delete_*"], "ask": ["github/create_*"], "allow": [],
+           "defaultDecision": "allow"},
+   "secrets": {"allowedSources": ["keychain", "vault"], "allowEnvironmentDelivery": false},
+   "audit": {"forward": {"url": "https://siem.example.com/rv",
+                         "headers": {"Authorization": "${secret:SIEM_TOKEN}"}}}}
+  ```
+- Restrict-only merge: MCP tool decision = stricter(user decision, org
+  decision) with deny > ask > allow; org decision for `server/tool` = deny glob
+  > ask glob > allow glob > org `defaultDecision` (default allow). Org-blocked
+  servers are `blocked` in the inventory and refused by `serve`. With
+  `allowDirect: false` the user's `direct` list is ignored. `requireSandbox`
+  refuses to serve servers without `sandbox`. `rv mcp approve --always`
+  refuses when the org decision is not allow. Secrets: sources outside
+  `allowedSources` refuse to resolve; `allowEnvironmentDelivery: false`
+  refuses environment delivery to agents (MCP upstreams always get env).
+- Admin CLI: `rv managed status` (installed state), `rv managed verify <dir>`
+  (pre-deploy check of a candidate bundle, no ownership check),
+  `rv managed keygen --out <dir>`, `rv managed sign <policy.json> --key <file>`.
+- Not in Phase 4: org additions to the cage egress policy. The owner's
+  uncommitted `impro-ref` work rewrites the egress files (D10 conflict risk);
+  follow-up once that lands.
+
+**Audit export / forward** (RVHistory + RVCLI):
+- `rv audit export --format ocsf`: OCSF 1.3.0 mapping. `mcp.call`,
+  `secret.use` → API Activity (6003); `egress.denied` → Network Activity
+  (4001); `command.denied` → Process Activity (1007); everything else →
+  Application Lifecycle (6002, activity Other). `disposition_id`
+  Allowed/Blocked, `status_id`, `severity_id`, `metadata.product`,
+  `metadata.log_name` = source ledger, rv fields under `unmapped`.
+- `rv audit forward [--to URL] [--format ocsf|rv] [--header K=V]`: one pass
+  (cron/launchd friendly). Reads each ledger from a per-source byte offset
+  (cursor `audit-forward/<sha256(url)>.json`: offset + inode per source; size
+  < offset or new inode → restart at 0), POSTs JSON-array batches (≤ 500
+  events), advances the cursor only after a 2xx: at-least-once. HTTPS only
+  (http allowed for loopback). Header values may be `${secret:NAME}`. With no
+  `--to`, uses the managed `audit.forward`.
+
+**`rv report [--json]`** (MDM collection, schema `rv.report.v1`): rv version,
+host/user, managed policy state (org, serial, sha256, signed), config file
+hashes (mcp.json, secrets.json, policy files), MCP inventory counts + failing
+entries, secret names with source kind and delivery (never resolves values,
+so no prompts), audit counts for the last 24 h by kind/decision, sandbox
+health from the doctor checks that need no root.
+
+### 4.1 `rv report`
+- [x] `ReportRun.build` (pure over injected inputs) + `rv report [--json] [--strict]`:
+      `Sources/RVCLI/Commands/ReportCommand.swift`; `compliant` = org policy not invalid, MCP check
+      passes, no secret policy violations
+- [x] Tests (`ManagedCommandTests.reportSummarizesPostureWithoutSecretValues`) + real binary on this
+      Mac: NOT compliant (21 unreviewed MCP entries, 2 plaintext credentials), 14k audit events/24 h
+
+### 4.2 Managed policy
+- [x] Model + strict decode + trust checks (every ancestor root-owned, no group/world write, no
+      allow ACLs on macOS, O_NOFOLLOW) + Ed25519 verify: `Sources/RVPolicy/ManagedPolicy.swift`
+- [x] MCP merge (`MCPConfiguration.managed`: decision = stricter of user and org, `isBlocked`,
+      `isDirect`, planner `requireSandbox` + secret source check; `approve --always` refuses when the
+      org says ask/deny; invalid policy fails `MCPRun.configuration` closed). Secrets:
+      `SecretOrganizationRules` in the launch broker (checked for every secret before any is
+      resolved; `secret.use staged` audit now written only when the whole lease succeeds),
+      `rv secrets set/check`, `rv mcp import`
+- [x] `rv managed status|verify|keygen|sign` (`Sources/RVCLI/Commands/ManagedCommand.swift`), help,
+      completions
+- [x] Tests: `ManagedPolicyTests` + `ManagedPolicyLocationTests` (8), `MCPManagedPolicyTests` (3),
+      broker org test, `ManagedCommandTests` (4). E2E real binary: keygen → verify refuses missing
+      sig → sign → verify active+signed → one-byte edit → "does not verify".
+- [ ] Owner L3 (sudo): `sudo mkdir -p "/Library/Application Support/RV/managed" && sudo cp
+      bundle/* there && sudo chown -R root:wheel …`, then `rv managed status` shows active and
+      `rv mcp serve --server <blocked>` refuses; `sudo chmod g+w` the file → status invalid
+
+### 4.3 Audit export OCSF + forward
+- [x] OCSF mapping + `--format ocsf` (`Sources/RVHistory/AuditOCSF.swift`: mcp.call/secret.use →
+      6003 API Activity, egress → 4001 Network Activity, command.denied → 1007, lifecycle → 6002;
+      `metadata.uid` = sha256 of the event for SIEM dedupe; rv fields under `unmapped`)
+- [x] Offset cursor reader in `AuditLedger` (`Sources/RVHistory/AuditCursor.swift`: per-source
+      byte offset + inode, complete lines only, restart on rotation/truncation) and
+      `rv audit forward` (`Sources/RVCLI/Commands/AuditForward.swift`: https or loopback http,
+      `--header` with `${secret:NAME}`, default URL from org policy `audit.forward`, flock so two
+      forwarders never overlap, cursor 0600 under `audit-forward/`, committed per 2xx batch)
+- [x] Tests: `AuditCursorTests` 3, `AuditOCSFTests` 2, `AuditForwardTests` 4. E2E real binary →
+      python receiver failing the 2nd POST: pass 1 "sent 2 events, then HTTP 500" exit 1, pass 2
+      "forwarded 4 events in 2 batches", pass 3 "nothing new"; receiver got all 6 events exactly
+      once with the Authorization header resolved from an rv secret; http to a non-loopback
+      host refused
+
+### 4.4 Control plane spec
+- [x] `docs/plans/agent-governance/control-plane-spec.md`: SSO/SCIM,
+      dashboard, approval routing, policy distribution; spec only
 
 ---
 
@@ -693,6 +792,20 @@ Exit criteria: Cursor or Claude Code on this Mac lists tools through
   failures (allowlisted `MCPGatewayRuntime.swift` as a process supervisor).
   E2E evidence under 3.2/3.3. Linux not compiled locally (no container
   running); relying on CI.
+- 2026-10-12: Phase 4 agent items landed on `governance/phase-4-enterprise`:
+  `rv report` (rv.report.v1), managed restrict-only org policy with Ed25519
+  signing (`rv managed status|verify|keygen|sign`, MCP + secrets merge,
+  fails closed when invalid), OCSF export + `rv audit forward`
+  (at-least-once, cursor per destination), control plane spec. Suites:
+  RVCLITests 827, RVPolicyTests 406, RVMCPTests 52, RVHistoryTests 34,
+  secret broker/gateway + help/completions all pass; preflight 0 failures.
+  Real-binary E2E evidence under 4.1-4.3. Remaining: owner L3 managed-dir
+  install (sudo) and Phase 5 (human-owned).
+- 2026-10-12: Linux CI on #415 caught the audit cursor missing a replaced
+  ledger: ext4 reuses the inode at once, so delete + recreate looked like the
+  same file. The cursor now also stores an FNV-1a hash of the first 64 bytes
+  and restarts at 0 when it changes. New test rewrites in place (same inode
+  on every OS) and fails without the fix.
 - 2026-10-13: Rereview of PR #394. Named each ledger writer (only `blocks`,
   `allow-once`, and `pending-approvals` are `FileLockedJSONLStore`). Seatbelt
   ground truth now says outbound connect is loopback TCP and the listen rule

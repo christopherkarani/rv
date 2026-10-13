@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVPolicy
 import Synchronization
 import Testing
 @testable import RVIsolation
@@ -160,5 +161,38 @@ struct SecretLaunchBrokerTests {
         #expect(throws: SecretLeaseError.configuration(.unsafeFile("group or world writable"))) {
             try broker.lease(names: ["GH_TOKEN"], agent: nil).get()
         }
+    }
+
+    @Test func organizationPolicyRefusesForbiddenSourcesDeliveryAndInvalidBundles() throws {
+        let fixture = try SecretsFixture(SecretsFixture.standard)
+        defer { fixture.tearDown() }
+        func broker(_ state: ManagedPolicyState) -> SecretLaunchBroker {
+            SecretLaunchBroker(
+                configDirectory: fixture.directory, resolver: fakeResolver,
+                transport: RecordingUpstream().transport, workspace: nil, managed: { state })
+        }
+        var policy = ManagedPolicy()
+        policy.secrets.allowEnvironmentDelivery = false
+        let gatewayOnly = broker(.active(ManagedPolicyBundle(policy: policy, sha256: "", isSigned: false, directory: "")))
+        defer { gatewayOnly.stop() }
+        #expect(throws: SecretLeaseError.organizationPolicy(
+            "GH_TOKEN is delivered as an environment variable, which is not allowed; use the gateway")) {
+            try gatewayOnly.lease(names: ["OPENAI_API_KEY", "GH_TOKEN"], agent: "codex").get()
+        }
+        #expect(gatewayOnly.liveCount == 0)
+
+        policy = ManagedPolicy()
+        policy.secrets.allowedSources = ["keychain"]
+        let keychainOnly = broker(.active(ManagedPolicyBundle(policy: policy, sha256: "", isSigned: false, directory: "")))
+        #expect(throws: SecretLeaseError.organizationPolicy(
+            "OPENAI_API_KEY uses a hostEnvironment source, which is not allowed")) {
+            try keychainOnly.lease(names: ["OPENAI_API_KEY"], agent: "codex").get()
+        }
+
+        let invalid = broker(.invalid("bad signature"))
+        #expect(throws: SecretLeaseError.organizationPolicy("invalid, so secrets are not staged: bad signature")) {
+            try invalid.lease(names: ["GH_TOKEN"], agent: nil).get()
+        }
+        #expect(fixture.auditText.contains("staged") == false)
     }
 }

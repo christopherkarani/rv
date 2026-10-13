@@ -493,12 +493,12 @@ public struct MCPInventoryRow: Sendable, Equatable {
         _ entry: MCPHostEntry, configuration: MCPConfiguration, rvExecutable: String
     ) -> MCPEntryStatus {
         if let server = entry.governedServer, entry.launches(rvExecutable) {
-            if configuration.blocked.contains(server) { return .blocked }
+            if configuration.isBlocked(server) { return .blocked }
             return configuration.server(named: server) == nil ? .dangling : .governed
         }
-        if configuration.blocked.contains(entry.name) { return .blocked }
+        if configuration.isBlocked(entry.name) { return .blocked }
         if entry.isDisabled { return .disabled }
-        if configuration.direct.contains(entry.name) { return .direct }
+        if configuration.isDirect(entry.name) { return .direct }
         if configuration.server(named: entry.name) != nil { return .bypass }
         return .unreviewed
     }

@@ -34,7 +34,7 @@ public enum MCPLaunchError: Error, Sendable, Equatable {
     public var message: String {
         switch self {
         case .unknownServer(let name): "mcp.json has no server named \(name)"
-        case .blocked(let name): "\(name) is blocked by mcp.json"
+        case .blocked(let name): "\(name) is blocked by mcp.json or organization policy"
         case .secretUndefined(let server, let secret): "\(server) uses secret \(secret), which secrets.json does not define"
         case .secretUnavailable(let server, let secret, let reason): "\(server) could not read secret \(secret): \(reason)"
         case .sandbox(let reason): "sandbox: \(reason)"
@@ -57,8 +57,11 @@ public enum MCPLaunchPlanner {
     ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamLaunch)], MCPLaunchError> {
         var planned: [(MCPGatewayCore.Upstream, MCPUpstreamLaunch)] = []
         for name in names {
-            if configuration.blocked.contains(name) { return .failure(.blocked(name)) }
+            if configuration.isBlocked(name) { return .failure(.blocked(name)) }
             guard let definition = configuration.server(named: name) else { return .failure(.unknownServer(name)) }
+            if configuration.managed?.mcp.requireSandbox == true, definition.sandbox == nil {
+                return .failure(.sandbox("organization policy requires a sandbox for \(name); add \"sandbox\" to its mcp.json entry"))
+            }
             var environment = definition.sandbox == nil ? baseEnvironment : sandboxEnvironment(baseEnvironment)
             for (key, value) in definition.environment { environment[key] = value }
             var resolved: [String: String] = [:]
@@ -66,6 +69,11 @@ public enum MCPLaunchPlanner {
             for secretName in referenced.sorted() {
                 guard let secret = secrets.secret(named: secretName) else {
                     return .failure(.secretUndefined(server: name, secret: secretName))
+                }
+                if configuration.managed?.allowsSecretSource(secret.source.kind) == false {
+                    return .failure(.secretUnavailable(
+                        server: name, secret: secretName,
+                        reason: "organization policy does not allow \(secret.source.kind) secrets"))
                 }
                 switch resolver.resolve(secret.source) {
                 case .failure(let error):
