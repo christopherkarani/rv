@@ -4,9 +4,13 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import Synchronization
 
-/// Native writer for `audit.jsonl`: one `AuditEvent` per line, owner-only,
-/// appended under an exclusive lock so concurrent writers never interleave.
+/// Native writer for `audit.jsonl`: one `AuditEvent` per line, owner-only.
+///
+/// An in-process lock is taken before `flock` because macOS `flock` does not
+/// exclude another thread in this process. The line is `fsync`ed before
+/// success, so a crash cannot drop an append that already returned true.
 public enum AuditLog {
     public static func fileURL(configDirectory: URL) -> URL {
         configDirectory.appendingPathComponent(AuditLedger.Source.audit.rawValue, isDirectory: false)
@@ -28,13 +32,43 @@ public enum AuditLog {
         } catch {
             return false
         }
-        let fd = open(fileURL(configDirectory: configDirectory).path,
-                      O_CREAT | O_APPEND | O_WRONLY | O_CLOEXEC | O_NOFOLLOW, 0o600)
-        guard fd >= 0 else { return false }
-        defer { close(fd) }
-        guard flock(fd, LOCK_EX) == 0 else { return false }
-        defer { _ = flock(fd, LOCK_UN) }
-        return data.withUnsafeBytes { raw -> Bool in
+        let url = fileURL(configDirectory: configDirectory)
+        return AppendLock.shared.withLock {
+            let fd = open(url.path, O_CREAT | O_APPEND | O_WRONLY | O_CLOEXEC | O_NOFOLLOW, 0o600)
+            guard fd >= 0 else { return false }
+            defer { close(fd) }
+            guard lock(fd) else { return false }
+            defer { _ = flock(fd, LOCK_UN) }
+            guard writeAll(fd, data) else { return false }
+            return sync(fd)
+        }
+    }
+
+    /// Threads in this process. macOS `flock` does not exclude them.
+    private final class AppendLock: Sendable {
+        static let shared = AppendLock()
+        private let mutex = Mutex<Void>(())
+
+        func withLock<T: Sendable>(_ body: () -> T) -> T {
+            mutex.withLock { _ in body() }
+        }
+    }
+
+    /// Excludes other processes. Callers already hold `AppendLock`.
+    private static func lock(_ fd: Int32) -> Bool {
+        for _ in 0..<16 {
+            if flock(fd, LOCK_EX) == 0 {
+                return true
+            }
+            if errno != EINTR {
+                return false
+            }
+        }
+        return false
+    }
+
+    private static func writeAll(_ fd: Int32, _ data: Data) -> Bool {
+        data.withUnsafeBytes { raw -> Bool in
             guard let base = raw.baseAddress else { return false }
             var written = 0
             while written < raw.count {
@@ -45,5 +79,17 @@ public enum AuditLog {
             }
             return true
         }
+    }
+
+    private static func sync(_ fd: Int32) -> Bool {
+        for _ in 0..<16 {
+            if fsync(fd) == 0 {
+                return true
+            }
+            if errno != EINTR {
+                return false
+            }
+        }
+        return false
     }
 }

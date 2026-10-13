@@ -133,10 +133,172 @@ struct WorkspaceLeftoversTests {
             inspect: { $0 == "/p/live" ? .starting(UUID()) : .absent }
         )
         #expect(report.attachedCount == 3)
+        #expect(report.attachedKnown)
         #expect(report.stranded.map(\.imagePath) == [
             "/var/T/rv-inode-BBBB.sparseimage", "/var/T/rv-inode-CCCC.sparseimage",
         ])
+        #expect(report.retained.isEmpty)
         #expect(report.detachedImageFiles == ["/var/T/rv-inode-DDDD.sparseimage"])
+    }
+
+    @Test func recoveringAndStaleMountsAreOwned() throws {
+        let images = try #require(AttachedWorkspaceImage.parse(
+            hdiutilInfo: Self.hdiutilInfo,
+            mounts: ["/dev/disk61s1": "/p/recovering", "/dev/disk62s1": "/p/stale"]
+        ))
+        let report = WorkspaceHosts.diskLeftovers(
+            images: images,
+            temporaryDirectory: "/var/T",
+            temporaryFiles: [],
+            inspect: { mount in
+                if mount == "/p/recovering" { return .recovering(UUID()) }
+                if mount == "/p/stale" { return .staleEndpoint }
+                return .absent
+            }
+        )
+        #expect(report.stranded.map(\.imagePath) == ["/var/T/rv-inode-CCCC.sparseimage"])
+    }
+
+    @Test func startingIdentityOwnsAnImageBeforeItIsMounted() throws {
+        let images = try #require(AttachedWorkspaceImage.parse(
+            hdiutilInfo: Self.hdiutilInfo,
+            mounts: ["/dev/disk61s1": "/p/live", "/dev/disk62s1": "/tmp/dead"]
+        ))
+        let report = WorkspaceHosts.diskLeftovers(
+            images: images,
+            temporaryDirectory: "/var/T",
+            temporaryFiles: [],
+            inspect: { $0 == "/p/live" ? .starting(UUID()) : .absent },
+            openImages: [
+                OpenWorkspaceImage(
+                    imagePath: "/var/T/rv-inode-CCCC.sparseimage",
+                    attachment: .starting(UUID())
+                ),
+            ]
+        )
+        #expect(report.stranded.map(\.imagePath) == ["/var/T/rv-inode-BBBB.sparseimage"])
+        #expect(report.retained.isEmpty)
+    }
+
+    @Test func orphanedAndBlockedMountsStayStrandedButAreNotDetached() throws {
+        let images = try #require(AttachedWorkspaceImage.parse(
+            hdiutilInfo: Self.hdiutilInfo,
+            mounts: ["/dev/disk61s1": "/p/orphan", "/dev/disk62s1": "/p/blocked"]
+        ))
+        let orphan = UUID()
+        let block = WorkspaceRecoveryBlock(workspace: UUID(), reason: .corrupt)
+        let report = WorkspaceHosts.diskLeftovers(
+            images: images,
+            temporaryDirectory: "/var/T",
+            temporaryFiles: ["rv-inode-DDDD.sparseimage"],
+            inspect: { mount in
+                if mount == "/p/orphan" { return .orphaned(orphan) }
+                if mount == "/p/blocked" { return .blocked(block) }
+                return .unsupported
+            },
+            openImages: [
+                OpenWorkspaceImage(
+                    imagePath: "/var/T/rv-inode-CCCC.sparseimage",
+                    attachment: .orphaned(orphan)
+                ),
+            ]
+        )
+        #expect(report.stranded.map(\.imagePath) == [
+            "/var/T/rv-inode-BBBB.sparseimage",
+            "/var/T/rv-inode-AAAA.sparseimage",
+            "/var/T/rv-inode-CCCC.sparseimage",
+        ])
+        #expect(report.retained.map(\.imagePath) == report.stranded.map(\.imagePath))
+        #expect(report.detachedImageFiles == ["/var/T/rv-inode-DDDD.sparseimage"])
+    }
+
+    @Test func unsupportedMountsStayDetachable() {
+        let image = AttachedWorkspaceImage(
+            imagePath: "/var/T/rv-inode-UUUU.sparseimage",
+            device: "/dev/disk9",
+            mountPoint: "/tmp/nope"
+        )
+        let report = WorkspaceHosts.diskLeftovers(
+            images: [image],
+            temporaryDirectory: "/var/T",
+            temporaryFiles: [],
+            inspect: { _ in .unsupported }
+        )
+        #expect(report.stranded == [image])
+        #expect(report.retained.isEmpty)
+    }
+
+    @Test func unknownAttachmentListStillListsImageFiles() {
+        let report = WorkspaceHosts.diskLeftovers(
+            images: [],
+            temporaryDirectory: "/var/T",
+            temporaryFiles: ["rv-inode-DDDD.sparseimage", "other.sparseimage"],
+            inspect: { _ in .absent },
+            attachedKnown: false
+        )
+        #expect(report.attachedKnown == false)
+        #expect(report.attachedCount == 0)
+        #expect(report.stranded.isEmpty)
+        #expect(report.detachedImageFiles == ["/var/T/rv-inode-DDDD.sparseimage"])
+    }
+
+    @Test func openWorkspaceImagesSkipClosedWorkspaces() throws {
+        let open = UUID()
+        let closed = UUID()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-leftovers-identity-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: url) }
+        for record in [
+            identityRecord(open, "/p/open", "/var/T/rv-inode-OPEN.sparseimage", at: 1),
+            identityRecord(closed, "/p/closed", "/var/T/rv-inode-CLOSED.sparseimage", at: 2),
+            record(.closed, closed, "/p/closed", at: 3),
+        ] {
+            guard case .success = WorkspaceLifecycleLog.append(record, to: url) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+        }
+        let named = WorkspaceHosts.openWorkspaceImages(lifecycleLog: url) { project in
+            project == "/p/open" ? .starting(open) : .absent
+        }
+        #expect(named.map(\.imagePath) == ["/var/T/rv-inode-OPEN.sparseimage"])
+        #expect(named.map(\.attachment) == [.starting(open)])
+    }
+
+    private func identityRecord(
+        _ workspace: UUID,
+        _ path: String,
+        _ imagePath: String,
+        at seconds: TimeInterval
+    ) -> WorkspaceLifecycleRecord {
+        WorkspaceLifecycleRecord(
+            kind: .created,
+            workspace: workspace,
+            originalPath: path,
+            protectedPath: path,
+            volumeDevice: 1,
+            disk: "/dev/disk99s1",
+            runtime: nil,
+            recordedAt: Date(timeIntervalSince1970: seconds),
+            identity: WorkspaceDurableIdentity(
+                savedPath: path,
+                savedDevice: 1,
+                savedInode: 2,
+                quarantinePath: path + ".saved",
+                volumeDevice: 3,
+                disk: "/dev/disk99s1",
+                mountSource: "/dev/disk99s1",
+                imagePath: imagePath,
+                imageDevice: 4,
+                imageInode: 5,
+                lockPath: path + ".lock",
+                lockDevice: 6,
+                lockInode: 7,
+                ownerToken: UUID(),
+                snapshotPath: path + ".snap",
+                snapshotDevice: 8,
+                snapshotInode: 9
+            )
+        )
     }
 
     @Test func liveMountTableResolvesTheRootVolume() {

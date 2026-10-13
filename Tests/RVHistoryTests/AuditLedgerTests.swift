@@ -170,6 +170,37 @@ struct AuditLedgerTests {
         #expect(mode.intValue & 0o777 == 0o600)
     }
 
+    @Test func concurrentAppendsStayWholeLines() async throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let count = 32
+        let wrote = await withTaskGroup(of: Bool.self) { group in
+            for index in 0..<count {
+                group.addTask {
+                    AuditLog.append(
+                        AuditEvent(
+                            time: Date(timeIntervalSince1970: TimeInterval(1_791_900_000 + index)),
+                            kind: .secretUse,
+                            decision: .allowed,
+                            subject: "KEY_\(index)",
+                            source: AuditLedger.Source.audit.rawValue
+                        ),
+                        configDirectory: dir
+                    )
+                }
+            }
+            var successes = 0
+            for await ok in group where ok {
+                successes += 1
+            }
+            return successes
+        }
+        #expect(wrote == count)
+        let read = AuditLedger(configDirectory: dir).events(AuditFilter(kinds: ["secret"]))
+        #expect(read.count == count)
+        #expect(Set(read.map(\.subject)) == Set((0..<count).map { "KEY_\($0)" }))
+    }
+
     @Test func oversizedLedgerKeepsOnlyCompleteNewestLines() throws {
         let dir = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }

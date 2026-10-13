@@ -298,13 +298,12 @@ enum WorkspaceCommandRun {
         throw ValidationError("contained workspace host is unavailable")
         #else
         let found = WorkspaceHosts.leftovers()
-        let disk = WorkspaceHosts.diskLeftovers()
-        emit(leftoverReport(sessions: found, disk: disk))
+        emit(leftoverReport(sessions: found, disk: WorkspaceHosts.diskLeftovers()))
         #endif
     }
 
     #if os(macOS)
-    static func leftoverReport(sessions: [WorkspaceLeftover], disk: WorkspaceDiskLeftovers?) -> String {
+    static func leftoverReport(sessions: [WorkspaceLeftover], disk: WorkspaceDiskLeftovers) -> String {
         var lines: [String] = []
         if sessions.isEmpty {
             lines.append("no unfinished workspace sessions")
@@ -313,24 +312,46 @@ enum WorkspaceCommandRun {
             lines += sessions.map { "  " + leftoverLine($0) }
             lines.append("  start the project to recover it, or `rv workspace abandon --workspace <path>` when blocked")
         }
-        guard let disk else {
+        if disk.attachedKnown == false {
             lines.append("attached workspace images: unknown (hdiutil info failed)")
-            return lines.joined(separator: "\n")
-        }
-        let mounted = disk.stranded.filter { $0.mountPoint != nil }
-        let unmounted = disk.stranded.count - mounted.count
-        if disk.stranded.isEmpty {
-            lines.append("no stranded workspace images (\(disk.attachedCount) attached, all owned by live hosts)")
         } else {
-            lines.append(
-                "stranded workspace images: \(disk.stranded.count) of \(disk.attachedCount) attached"
-                    + " (\(mounted.count) mounted, \(unmounted) attached without a mount)"
-            )
-            lines += mounted.prefix(20).map { image in
-                "  \(image.mountPoint ?? "-")  \(image.device ?? "-")"
+            let mounted = disk.stranded.filter { $0.mountPoint != nil }
+            let unmounted = disk.stranded.count - mounted.count
+            if disk.stranded.isEmpty {
+                lines.append("no stranded workspace images (\(disk.attachedCount) attached, all owned by live hosts)")
+            } else {
+                lines.append(
+                    "stranded workspace images: \(disk.stranded.count) of \(disk.attachedCount) attached"
+                        + " (\(mounted.count) mounted, \(unmounted) attached without a mount)"
+                )
+                let retainedPaths = Set(disk.retained.map(\.imagePath))
+                let retainedMounted = mounted.filter { retainedPaths.contains($0.imagePath) }
+                let detachableMounted = mounted.filter { retainedPaths.contains($0.imagePath) == false }
+                lines += retainedMounted.prefix(20).map { image in
+                    "  \(image.mountPoint ?? "-")  \(image.device ?? "-")"
+                }
+                if retainedMounted.count > 20 {
+                    lines.append("  … \(retainedMounted.count - 20) more mounted")
+                }
+                lines += detachableMounted.prefix(20).map { image in
+                    "  \(image.mountPoint ?? "-")  \(image.device ?? "-")"
+                }
+                if detachableMounted.count > 20 {
+                    lines.append("  … \(detachableMounted.count - 20) more mounted")
+                }
+                let detachable = disk.stranded.filter { retainedPaths.contains($0.imagePath) == false }
+                if detachable.isEmpty == false {
+                    if disk.retained.isEmpty {
+                        lines.append("  copy out anything you need, then `hdiutil detach <device>` for each")
+                    } else {
+                        let targets = detachable.map { $0.device ?? $0.imagePath }
+                        lines.append(
+                            "  copy out anything you need, then `hdiutil detach` "
+                                + targets.prefix(20).joined(separator: " ")
+                        )
+                    }
+                }
             }
-            if mounted.count > 20 { lines.append("  … \(mounted.count - 20) more mounted") }
-            lines.append("  copy out anything you need, then `hdiutil detach <device>` for each")
         }
         if disk.detachedImageFiles.isEmpty == false {
             lines.append("unattached workspace image files: \(disk.detachedImageFiles.count) in the temporary directory")
