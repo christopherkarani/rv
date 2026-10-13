@@ -265,6 +265,15 @@ public enum RVDigest {
         hash.update(bytes)
         return hash.digest()
     }
+
+    /// RFC 2104 HMAC over this SHA-256, so MACs match on every platform.
+    public static func hmacSHA256(key: [UInt8], message: [UInt8]) -> [UInt8] {
+        let blockSize = 64
+        var block = key.count > blockSize ? sha256(key) : key
+        block += [UInt8](repeating: 0, count: blockSize - block.count)
+        let inner = sha256(block.map { $0 ^ 0x36 } + message)
+        return sha256(block.map { $0 ^ 0x5c } + inner)
+    }
 }
 
 enum HTTPDigest {
