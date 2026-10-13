@@ -29,6 +29,7 @@ public enum HelpTopic: Equatable, Sendable {
     case blocks
     case audit
     case secrets
+    case mcp
     case opencode
     case workspace
     case `operator`
@@ -138,6 +139,8 @@ public enum HelpDispatch {
             return .audit
         case "secrets":
             return .secrets
+        case "mcp":
+            return .mcp
         case "operator":
             return .`operator`
         case "help":

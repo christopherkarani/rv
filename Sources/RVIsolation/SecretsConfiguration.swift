@@ -119,37 +119,21 @@ extension SecretsConfiguration {
         configDirectory.appendingPathComponent(fileName, isDirectory: false)
     }
 
+    /// The environment variable grammar secret names and exported variables use.
+    public static func isVariableName(_ name: String) -> Bool {
+        SecretsDecoding.variable(name)
+    }
+
     /// A missing file is an empty configuration. Anything else that is not a
     /// regular, owner-owned, non-group/world-writable file is refused.
     public static func load(configDirectory: URL) -> Result<SecretsConfiguration, SecretsConfigurationError> {
-        let path = fileURL(configDirectory: configDirectory).path
-        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
-        if fd < 0 {
-            if errno == ENOENT { return .success(.empty) }
-            if errno == ELOOP { return .failure(.unsafeFile("symlink")) }
-            return .failure(.unreadable)
+        switch OwnerOnlyFile.read(fileURL(configDirectory: configDirectory), maximumBytes: maximumBytes) {
+        case .success(let data?): return decode(data)
+        case .success(nil): return .success(.empty)
+        case .failure(.unsafe(let reason)): return .failure(.unsafeFile(reason))
+        case .failure(.oversized): return .failure(.oversized)
+        case .failure(.unreadable): return .failure(.unreadable)
         }
-        defer { close(fd) }
-        var info = stat()
-        guard fstat(fd, &info) == 0 else { return .failure(.unreadable) }
-        guard (info.st_mode & S_IFMT) == S_IFREG else { return .failure(.unsafeFile("not a regular file")) }
-        guard info.st_uid == getuid() else { return .failure(.unsafeFile("owned by another user")) }
-        guard (info.st_mode & 0o022) == 0 else { return .failure(.unsafeFile("group or world writable")) }
-        guard info.st_size <= maximumBytes else { return .failure(.oversized) }
-        var bytes = [UInt8](repeating: 0, count: Int(info.st_size) + 1)
-        var count = 0
-        while count < bytes.count {
-            let n = bytes.withUnsafeMutableBytes { raw -> Int in
-                guard let base = raw.baseAddress else { return -1 }
-                return read(fd, base + count, raw.count - count)
-            }
-            if n < 0, errno == EINTR { continue }
-            guard n >= 0 else { return .failure(.unreadable) }
-            if n == 0 { break }
-            count += n
-        }
-        guard count <= maximumBytes else { return .failure(.oversized) }
-        return decode(Data(bytes.prefix(count)))
     }
 
     public static func decode(_ data: Data) -> Result<SecretsConfiguration, SecretsConfigurationError> {

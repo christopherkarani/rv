@@ -14,20 +14,23 @@ public struct SecretValue: Sendable, Equatable, CustomStringConvertible, CustomD
 
     let bytes: [UInt8]
 
-    init?(_ bytes: [UInt8]) {
+    public init?(_ bytes: [UInt8]) {
         guard bytes.isEmpty == false, bytes.count <= Self.maximumBytes, bytes.contains(0) == false else {
             return nil
         }
         self.bytes = bytes
     }
 
-    init?(_ text: String) {
+    public init?(_ text: String) {
         self.init(Array(text.utf8))
     }
 
     var text: String? {
         String(bytes: bytes, encoding: .utf8)
     }
+
+    /// The raw value, only for a trusted child process's environment or a scrubber.
+    public func revealed() -> [UInt8] { bytes }
 
     public var description: String { "<redacted>" }
     public var debugDescription: String { "<redacted>" }

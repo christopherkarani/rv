@@ -26,6 +26,7 @@ enum HelpCatalog {
         case .blocks: blocks
         case .audit: audit
         case .secrets: secrets
+        case .mcp: mcp
         case .opencode: opencode
         case .workspace: workspace
         case .`operator`: operatorHelp
@@ -56,6 +57,7 @@ enum HelpCatalog {
                 HelpRow(name: "blocks", description: "List recent denials"),
                 HelpRow(name: "audit", description: "Unified audit trail; export for SIEM"),
                 HelpRow(name: "secrets", description: "Secrets agents use through placeholders"),
+                HelpRow(name: "mcp", description: "Find, review, and govern MCP servers"),
                 HelpRow(name: "service", description: "Is rvd running, down, or skewed"),
             ]),
             HelpSection(heading: "Advanced", rows: [
@@ -419,6 +421,51 @@ enum HelpCatalog {
             "rv secrets set OPENAI_API_KEY --gateway https://api.openai.com/v1 --base-url-env OPENAI_BASE_URL",
             "rv secrets check",
             "rv secrets scan .",
+        ]
+    )
+
+    static let mcp = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv mcp [list] [--project <dir>] [--json]"),
+                HelpRow(name: "rv mcp check [--project <dir>] [--json]"),
+                HelpRow(name: "rv mcp import --host <host> [--server <name>...] [--allow-tools] [--dry-run]"),
+                HelpRow(name: "rv mcp setup --host <host> [--server <name>...] [--rv-path <path>] [--undo]"),
+                HelpRow(name: "rv mcp serve --server <name> [--server <name>...]"),
+                HelpRow(name: "rv mcp pending | approve <id> [--always] | deny <id>"),
+            ]),
+            HelpSection(heading: "Tool policy", rows: [
+                HelpRow(name: "order", description: "deny glob > ask glob > allow glob > server default > defaultDecision"),
+                HelpRow(name: "deny", description: "Hidden from the agent; calls fail"),
+                HelpRow(name: "ask", description: "Paused until `rv mcp approve`; a grant covers one identical call"),
+                HelpRow(name: "secrets", description: "\"secrets\": {\"VAR\": \"NAME\"} or ${secret:NAME} in args; values scrubbed"),
+                HelpRow(name: "sandbox", description: "\"sandbox\": {\"network\": false} cages the server (macOS)"),
+            ]),
+            HelpSection(heading: "Statuses", rows: [
+                HelpRow(name: "governed", description: "Host runs it through `rv mcp serve`"),
+                HelpRow(name: "direct", description: "Allowed outside rv by mcp.json \"direct\""),
+                HelpRow(name: "bypass", description: "rv has a definition; the host runs it directly"),
+                HelpRow(name: "unreviewed", description: "rv has never reviewed it"),
+                HelpRow(name: "blocked", description: "Listed in mcp.json \"blocked\""),
+                HelpRow(name: "dangling", description: "Routed through rv, but mcp.json has no such server"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "config", description: "~/.config/rv/mcp.json (owner-only)"),
+                HelpRow(
+                    name: "hosts",
+                    description: "Claude Code, Claude Desktop, Cursor, Codex, OpenCode, Gemini, Antigravity, VS Code, Windsurf"
+                ),
+                HelpRow(name: "redaction", description: "Env and header values never shown; credential-like args masked"),
+                HelpRow(name: "audit", description: "rv audit tail --kind mcp.call shows every tool call"),
+            ]),
+        ],
+        examples: [
+            "rv mcp list",
+            "rv mcp import --host cursor --dry-run",
+            "rv mcp setup --host cursor",
+            "rv mcp check",
         ]
     )
 
