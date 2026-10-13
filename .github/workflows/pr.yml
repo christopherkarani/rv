@@ -394,3 +394,63 @@ jobs:
 
       - name: C units on the Sequoia clang
         run: Sources/rv-c/tests/run.sh
+
+  # D13 option A draft (PLAN 6.4). One switch: repo variable
+  # RV_CI_PEER_TRUST=1. Installs development peer trust with the runner's
+  # passwordless sudo, runs the 55 TRANSITIONAL-PEER-AUTH tests, and always
+  # removes the trust. Non-blocking while the tests still connect from the
+  # unhardened test runner (no component role); the D13 rewrite drives the
+  # installed, pinned rv CLI instead.
+  macos-peer-trust:
+    name: macos peer trust (draft)
+    if: vars.RV_CI_PEER_TRUST == '1'
+    runs-on: macos-26
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Swift toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Toolchains/swift-6.4-RELEASE.xctoolchain
+            ~/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain
+          key: swift-6.4-RELEASE-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Swift 6.4
+        run: Scripts/install-official-swift-macos.sh
+
+      - name: Cache SwiftPM packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build products and tests
+        run: Scripts/swift-6.4 build --build-tests
+
+      - name: Install development peer trust
+        run: |
+          set -euo pipefail
+          bin="$(Scripts/swift-6.4 build --show-bin-path)"
+          sudo Scripts/phase2a-development-trust.sh install \
+            --host "$bin/rv-workspace-host" --service "$bin/rvd" --cli "$bin/rv"
+
+      - name: TRANSITIONAL-PEER-AUTH tests
+        env:
+          RV_PEER_TRUST_CI: "1"
+        run: >-
+          Scripts/swift-6.4 test --skip-build --filter
+          'WorkspaceHostTests|RuntimeTerminalTests|RuntimeResourceAdversarialTests|LocalTerminalRestoreTests|WorkspaceTUIIntegrationTests|OpenCodeCommandTests'
+
+      - name: Remove development peer trust
+        if: always()
+        run: |
+          if [ -e "/Library/Application Support/RV/peer-trust.json" ]; then
+            sudo Scripts/phase2a-development-trust.sh uninstall
+          fi
