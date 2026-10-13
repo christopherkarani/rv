@@ -140,7 +140,10 @@ struct ServiceRuntimeEvaluateTests {
     }
 
     @Test func dispatchEvaluate_grantHonorsOnceForCwd() async throws {
-        let runtime = ServiceRuntime(allowOnceDirectory: try isolatedAllowOnceDirectory())
+        let homeURL = try isolatedHomeDirectory()
+        defer { try? FileManager.default.removeItem(at: homeURL) }
+        let home = try #require(HomeDirectory(validating: homeURL.path))
+        let runtime = ServiceRuntime(home: home, allowOnceDirectory: try isolatedAllowOnceDirectory())
         try await runtime.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
         let request = EvaluationRequest(
             command: ShellCommand(rawValue: "git reset --hard"),

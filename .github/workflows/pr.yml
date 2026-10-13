@@ -96,8 +96,22 @@ jobs:
               ;;
           esac
 
+      # Tests must not touch the developer's real rv config. `workspaces/` is
+      # the one known leak (IsolationApply resolves the workspace home from
+      # the process HOME; injecting it waits on impro-ref, PLAN 6.5).
+      - name: Fingerprint ~/.config/rv before tests
+        run: python3 Scripts/config-dir-fingerprint.py "$HOME/.config/rv" --ignore workspaces > "$RUNNER_TEMP/config-rv.before"
+
       - name: Swift tests
         run: swift test
+
+      - name: ~/.config/rv untouched by swift test
+        run: |
+          python3 Scripts/config-dir-fingerprint.py "$HOME/.config/rv" --ignore workspaces > "$RUNNER_TEMP/config-rv.after"
+          if ! diff -u "$RUNNER_TEMP/config-rv.before" "$RUNNER_TEMP/config-rv.after"; then
+            echo "::error::swift test changed ~/.config/rv (diff above)"
+            exit 1
+          fi
 
       - name: C hook units
         run: Sources/rv-c/tests/run.sh
