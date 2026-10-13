@@ -289,3 +289,41 @@ private let doctorRendererFixture = DoctorViewModel(
     #expect(output.contains("═") == false)
     #expect(output.contains("│") == false)
 }
+
+@Test func doctorRenderer_leftoversSectionSummarizesAndPointsAtTheReport() {
+    var fixture = doctorRendererFixture
+    fixture.hosts = [DoctorHostView(host: .grok, state: .wired)]
+    fixture.leftovers = .summary(DoctorLeftoversSummary(sessions: 1, strandedImages: 2, unattachedImageFiles: 3))
+
+    let lines = DoctorRenderer().render(fixture, palette: colorOffPalette)
+
+    #expect(Array(lines.suffix(5)) == [
+        "  Workspaces",
+        "    1 unfinished session · 2 stranded images · 3 unattached image files",
+        "",
+        "  Next",
+        "  →  rv workspace leftovers    Review unfinished sessions and stranded images",
+    ])
+}
+
+@Test func doctorRenderer_leftoversSectionStates() {
+    var fixture = doctorRendererFixture
+    fixture.hosts = [DoctorHostView(host: .grok, state: .wired)]
+
+    fixture.leftovers = nil
+    #expect(DoctorRenderer().render(fixture, palette: colorOffPalette).contains("  Workspaces") == false)
+
+    fixture.leftovers = .summary(DoctorLeftoversSummary(sessions: 0, strandedImages: 0, unattachedImageFiles: 0))
+    let clean = DoctorRenderer().render(fixture, palette: colorOffPalette)
+    #expect(clean.contains("    no leftovers"))
+    #expect(clean.contains("  Next") == false)
+
+    fixture.leftovers = .summary(DoctorLeftoversSummary(sessions: 2, strandedImages: nil, unattachedImageFiles: 1))
+    let unknown = DoctorRenderer().render(fixture, palette: colorOffPalette)
+    #expect(unknown.contains("    2 unfinished sessions · stranded images unknown · 1 unattached image file"))
+
+    fixture.leftovers = .notApplicable
+    let linux = DoctorRenderer().render(fixture, palette: colorOffPalette)
+    #expect(linux.contains("    not applicable (macOS workspaces only)"))
+    #expect(linux.contains("  Next") == false)
+}

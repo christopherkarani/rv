@@ -6,12 +6,16 @@ import RVPolicy
 import RVPresentation
 import RVService
 import RVTUI
+#if os(macOS)
+import RVIsolation
+#endif
 
 struct DoctorEnvironment {
     var home: HomeDirectory
     var pathEntries: [String]
     var fileManager: FileManager
     var launchAgentLoaded: Bool
+    var leftovers: DoctorLeftoversView? = nil
 
     static func live(
         environment: [String: String] = CLIProcess.environment()
@@ -21,9 +25,37 @@ struct DoctorEnvironment {
             home: home,
             pathEntries: (environment["PATH"] ?? "").split(separator: ":").map(String.init),
             fileManager: .default,
-            launchAgentLoaded: LaunchAgentProbe.isLoaded(label: SetupRun.launchAgentLabel)
+            launchAgentLoaded: LaunchAgentProbe.isLoaded(label: SetupRun.launchAgentLabel),
+            leftovers: liveLeftovers()
         )
     }
+
+    #if os(macOS)
+    /// The same read-only scans as `rv workspace leftovers`.
+    struct LeftoversProbe {
+        var sessions: () -> Int = { WorkspaceHosts.leftovers().count }
+        /// Stranded images (nil when unknown) and unattached image files.
+        var disk: () -> (Int?, Int) = {
+            let disk = WorkspaceHosts.diskLeftovers()
+            return (disk.attachedKnown ? disk.stranded.count : nil, disk.detachedImageFiles.count)
+        }
+    }
+
+    static func liveLeftovers(probe: LeftoversProbe = LeftoversProbe()) -> DoctorLeftoversView {
+        let (stranded, unattached) = probe.disk()
+        return .summary(
+            DoctorLeftoversSummary(
+                sessions: probe.sessions(),
+                strandedImages: stranded,
+                unattachedImageFiles: unattached
+            )
+        )
+    }
+    #else
+    static func liveLeftovers() -> DoctorLeftoversView {
+        .notApplicable
+    }
+    #endif
 }
 
 struct DoctorOutcome: Equatable, Sendable {
@@ -120,7 +152,8 @@ enum DoctorRun {
             ),
             blocksEnabled: DenialLedgerPreferences.isEnabled(
                 inConfigDirectory: URL(fileURLWithPath: paths.configDirectory, isDirectory: true)
-            )
+            ),
+            leftovers: environment.leftovers
         )
     }
 

@@ -16,6 +16,10 @@ public struct DoctorRenderer: FrameRenderer {
         lines.append(contentsOf: packsSection(model.packs, palette: palette))
         lines.append("")
         lines.append(contentsOf: configSection(model, palette: palette))
+        if let leftovers = model.leftovers {
+            lines.append("")
+            lines.append(contentsOf: leftoversSection(leftovers, palette: palette))
+        }
         if let next = nextSection(model, palette: palette) {
             lines.append("")
             lines.append(contentsOf: next)
@@ -126,6 +130,29 @@ public struct DoctorRenderer: FrameRenderer {
         ]
     }
 
+    private func leftoversSection(_ leftovers: DoctorLeftoversView, palette: Palette) -> [String] {
+        let body: String
+        switch leftovers {
+        case .notApplicable:
+            body = paint("not applicable (macOS workspaces only)", slot: palette.silver, reset: palette.reset)
+        case .summary(let summary) where summary.isEmpty:
+            body = paint("no leftovers", slot: palette.fact, reset: palette.reset)
+        case .summary(let summary):
+            let stranded = summary.strandedImages.map { counted($0, "stranded image") } ?? "stranded images unknown"
+            let text = [
+                counted(summary.sessions, "unfinished session"),
+                stranded,
+                counted(summary.unattachedImageFiles, "unattached image file"),
+            ].joined(separator: " · ")
+            body = paint(text, slot: palette.mark, reset: palette.reset)
+        }
+        return [heading("Workspaces", palette: palette), "  \(body)"]
+    }
+
+    private func counted(_ count: Int, _ noun: String) -> String {
+        "\(count) \(noun)\(count == 1 ? "" : "s")"
+    }
+
     private func nextSection(_ model: DoctorViewModel, palette: Palette) -> [String]? {
         let actions = nextActions(for: model)
         guard actions.isEmpty == false else { return nil }
@@ -156,6 +183,9 @@ public struct DoctorRenderer: FrameRenderer {
             actions.append("rv setup --force    Replace occupied \(occupiedNames)")
         case (false, false):
             actions.append("rv setup --force    Wire \(fixNames); replace occupied \(occupiedNames)")
+        }
+        if case .summary(let summary) = model.leftovers, summary.isEmpty == false {
+            actions.append("rv workspace leftovers    Review unfinished sessions and stranded images")
         }
         return actions
     }
