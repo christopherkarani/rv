@@ -28,7 +28,9 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | _not opened yet_ | not started |
 
 **Next action:** Phase 7 on `governance/phase-7-enterprise-hardening` (from
-phase 6), in the order in the Phase 7 section; 7.2, 7.5, 7.6 and 7.3 are done, 7.1 is next. Phase 6 agent items are done except
+phase 6), in the order in the Phase 7 section; 7.2, 7.5, 7.6, 7.3 and 7.1 are done, 7.4 is next
+(7.4 uses `EgressProxy` through its public `init`/`start()` and edits only
+`MCPSandbox`'s own profile, so it does not touch impro-ref-owned files). Phase 6 agent items are done except
 the impro-ref-blocked ones (6.2 cage denies, 6.5 injected config dir, 6.6
 watchdog). Owner items for phase 6: signing secrets + certificate (6.3),
 flip `signed_releases`/`release_team_id` in `install.sh` and set
@@ -1175,24 +1177,77 @@ Design: the gateway core is unchanged (it already speaks JSON-RPC by
 request id); `MCPGatewayRuntime` gains a remote upstream beside processes.
 Any HTTP failure becomes a JSON-RPC error for that request id, so the core's
 existing initialize/list/call paths handle it. URL rules in D22.
-- [ ] mcp.json server with `"url"` (instead of `command`) and `"headers"`
+- [x] mcp.json server with `"url"` (instead of `command`) and `"headers"`
       (values may hold `${secret:NAME}`); `"transport": "http"` (streamable
       HTTP, default) or `"sse"` (legacy). `url` excludes `command`, `args`,
       `env`, `secrets`, `sandbox`; rv-managed headers (`Mcp-Session-Id`,
-      `MCP-Protocol-Version`, `Host`, `Content-*`, …) are refused
-- [ ] Gateway transport: POST JSON-RPC, JSON or SSE replies,
-      `Mcp-Session-Id`, `MCP-Protocol-Version`; legacy SSE endpoint event.
-      Header secrets and OAuth tokens are scrubbed from replies like
-      process secrets. The optional streamable-HTTP GET stream (server
-      pushes) is not opened: the gateway only forwards `list_changed`
-- [ ] `rv mcp connect <server>`: OAuth 2.1 + PKCE (S256), protected-resource
-      and authorization-server metadata discovery, dynamic client
-      registration, loopback redirect, `resource` indicator; tokens in the
-      Keychain (`rv.mcp.oauth`, Linux owner-only file), refreshed on expiry
-- [ ] `rv mcp import` converts host `url` entries (headers → secrets)
-- [ ] Org `allowDirect: false` covers remote entries: a host `url` entry
-      must be governed, not direct
-- [ ] E2E: python fixture (streamable HTTP + SSE + OAuth server)
+      `MCP-Protocol-Version`, `Host`, `Content-*`, …) are refused. `rv mcp
+      trust` shows URL, transport and header names with their secret names,
+      never values; a URL whose path or query looks like a credential is
+      shown as `scheme://host/… (credential-like part hidden)`. Tests:
+      `remoteServersDecodeAndRoundTrip`, remote refusals in
+      `MCPConfigurationTests`, `trustReviewShowsRemoteOriginsAndHeaderNamesButNoValues`
+- [x] Gateway transport: POST JSON-RPC, JSON or SSE replies,
+      `Mcp-Session-Id`, `MCP-Protocol-Version`, best-effort `DELETE` on
+      exit; legacy SSE `endpoint` event must be same-origin; redirects are
+      never followed. Header secrets and OAuth tokens are scrubbed from
+      replies like process secrets. The optional streamable-HTTP GET stream
+      (server pushes) is not opened: the gateway only forwards `list_changed`.
+      Tests: `MCPRemoteTransportTests` (incremental SSE parser: BOM, CR/LF/
+      CRLF, comments, multi-line data, size cap), `MCPRemoteRuntimeTests`
+      against `Scripts/mcp-remote-fixture.py`
+- [x] `rv mcp connect <server> [--client-id] [--scope] [--no-browser]
+      [--forget]`: OAuth 2.1 + PKCE (S256), RFC 9728 protected-resource and
+      RFC 8414 authorization-server metadata discovery, RFC 7591 dynamic
+      client registration, 127.0.0.1 one-shot redirect listener with state
+      check, RFC 8707 `resource` indicator; refuses a local server, a server
+      that already sends `Authorization`, a blocked server, and an untrusted
+      mcp.json (`--forget` still works). Tokens in the Keychain
+      (`rv.mcp.oauth`, account = server) on macOS, `mcp-oauth/<server>.json`
+      (0600) on Linux. `rv mcp serve` sends the token, refreshes it 60 s
+      before expiry or after a 401 (one refresh at a time), saves rotated
+      tokens, and scrubs every token it has seen. Audit: `mcp.approval`
+      "OAuth connected" / "OAuth tokens deleted" with resource, scope,
+      client. Tests: `MCPOAuthTests` (challenge parsing, metadata URLs, PKCE
+      cross-checked against Python hashlib, token parsing, store 0600, spec
+      refusals: no 401, foreign resource, no S256, http token endpoint, no
+      registration, forged state, refused sign-in),
+      `connectThenServeRefreshesAfterA401AndScrubsEveryToken`,
+      `connectSignsInToARemoteServerAndForgetDeletesTheTokens`.
+      _Unverified on macOS_: the Keychain token store and `open` for the
+      browser
+- [x] `rv mcp import` converts host `url` entries: Cursor/Claude/VS Code
+      `"type": "sse"`, Gemini `url` (SSE) vs `httpUrl` become `"transport"`;
+      credential headers move to rv secrets with the auth scheme kept literal
+      (`Bearer ${secret:LINEAR_AUTHORIZATION}`); headers that point at host
+      variables or that rv owns are dropped with a note; non-https and
+      credential-in-URL entries are skipped with the reason. `rv mcp setup`
+      already rewrites remote host entries to `rv mcp serve`. Tests:
+      `remoteEntriesImportWithHeaderCredentialsAsSecrets`,
+      `hostRemoteEntriesCarryTheirTransport`
+- [x] Org `allowDirect: false` covers remote entries: a host `url` entry
+      listed in `direct` is `unreviewed` under the org policy
+      (`blockedAndDirectFollowTheOrganization`)
+- [x] E2E (Linux, 2026-10-13): `Scripts/mcp-phase7-proof.py` 57/57 (7.1
+      section 29 steps on the real binary): streamable HTTP and legacy SSE
+      upstreams with `Authorization: Bearer ${secret:…}` from a
+      hostEnvironment secret; whoami replies come back
+      `[redacted:FIXTURE_TOKEN]`; deny hides a remote tool, ask pauses one;
+      `DELETE` ends the session; audit names `web/whoami` etc. and holds no
+      token; a wrong token lists no tools from those servers. Import dry run
+      converts `url` entries and names `KEYED_AUTHORIZATION`; the real import
+      of the keyed entry refuses on Linux (no Keychain) with nothing written
+      or printed; hosted + legacy import; setup rewrites the host entry;
+      list shows `governed`. OAuth fixture: `rv mcp connect acme
+      --no-browser` prints the PKCE S256 sign-in URL, the token file is 0600,
+      no token in output or audit; `rv mcp serve` sends it; after
+      `/auth/expire` the gateway refreshes, retries and saves rotated tokens;
+      `--forget` deletes the file.
+      Owner (macOS): run the proof with `RV_LIVE_KEYCHAIN=1` to cover the
+      Keychain token store (it writes `rv.mcp.oauth` / `acme`; delete it
+      after) and import of a keyed entry.
+      Not done: `${secret:NAME}` inside a URL (servers that put a key in the
+      path, e.g. Zapier) — import skips them; a follow-up if wanted
 
 ### 7.4 Strict profile and per-server egress
 - [ ] `"profile": "strict"`: unlisted tools deny, every server needs a
@@ -1335,3 +1390,10 @@ when the phase starts (items 8.1-8.4 from the 2026-10-13 brief).
 - 2026-10-13: Phase 7.3: `"toolMode": "search"` with `rv_search_tools` and
   `rv_call_tool` through the normal policy path. Linux: RVMCP 80, RVCLI
   841 green, preflight 0 failures, proof 28/28. Next: 7.1.
+- 2026-10-13: Phase 7.1: remote MCP servers (`url`, `headers`,
+  `transport`), streamable HTTP + legacy SSE upstreams, `rv mcp connect`
+  (OAuth 2.1, PKCE S256, discovery, registration, refresh), import of host
+  `url` entries, D22 URL rules. Linux: RVMCP + RVCLI 937 tests green,
+  preflight 0 failures (URLSession delegates exempted in
+  `MCPRemoteUpstream.swift`), proof 57/57. Owner (macOS): Keychain token
+  store via the proof with `RV_LIVE_KEYCHAIN=1`. Next: 7.4.
