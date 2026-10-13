@@ -153,6 +153,12 @@ public enum RuntimeResourcePolicyStore {
                     else { return false }
                 }
             }
+            guard profile.secrets.count <= 16 else { return false }
+            for name in profile.secrets {
+                guard environmentName(name), !reservedEnvironmentNames.contains(name),
+                    variables.insert(name).inserted
+                else { return false }
+            }
         }
         if let defaultID = document.defaultProfile {
             guard identifier(defaultID), ids.contains(defaultID) else { return false }

@@ -135,6 +135,23 @@ import Testing
     }
 }
 
+@Test func stagedCredentialsReplaceAmbientHostValuesButNotRuntimeNames() {
+    let values = containedRuntimeEnvironment(
+        workspace: "/tmp/ws", io: .discard, egressProxyPort: 39321,
+        hostEnvironment: ["OPENAI_BASE_URL": "https://api.openai.com/v1", "SHELL": "/bin/zsh"],
+        keychain: [
+            ("OPENAI_BASE_URL", "http://127.0.0.1:4000/s/OPENAI_API_KEY"),
+            ("OPENAI_BASE_URL", "http://shadowed"),
+            ("PWD", "/elsewhere"),
+            ("HTTPS_PROXY", "http://evil:1"),
+        ]
+    )
+    #expect(values.filter { $0.hasPrefix("OPENAI_BASE_URL=") }
+        == ["OPENAI_BASE_URL=http://127.0.0.1:4000/s/OPENAI_API_KEY"])
+    #expect(values.filter { $0.hasPrefix("PWD=") } == ["PWD=/tmp/ws"])
+    #expect(values.filter { $0.hasPrefix("HTTPS_PROXY=") } == ["HTTPS_PROXY=http://127.0.0.1:39321"])
+}
+
 @Test func terminalEnvironmentKeepsColorAndBoundedLoopbackProxy() {
     let values = containedRuntimeEnvironment(
         workspace: "/tmp/ws", io: .pseudoTerminal(rows: 24, columns: 80),

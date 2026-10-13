@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import Testing
 import RVDomain
@@ -141,22 +146,48 @@ func withCLIProcess<T>(
 
 func writeExecutableScript(at url: URL, source: String) throws {
     let files = FileManager.default
-    try files.createDirectory(
-        at: url.deletingLastPathComponent(),
-        withIntermediateDirectories: true
-    )
-    // Linux ETXTBSY: do not atomically replace a path that may still be mapped
-    // from a just-finished Process. Stage, chmod, unlink dest, then rename.
-    let staged = url.appendingPathExtension("new")
-    if files.fileExists(atPath: staged.path) {
-        try files.removeItem(at: staged)
+    let directory = url.deletingLastPathComponent()
+    try files.createDirectory(at: directory, withIntermediateDirectories: true)
+    // Publish a closed inode. Writing the destination in place, or renaming a
+    // file that is still open for write, makes the following exec return ETXTBSY.
+    let staged = directory.appendingPathComponent(".\(url.lastPathComponent)-\(UUID().uuidString).new")
+    let fd = staged.path.withCString { open($0, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644) }
+    guard fd >= 0 else { throw posixError(errno, path: staged.path) }
+    var closed = false
+    defer {
+        if !closed { close(fd) }
+        if files.fileExists(atPath: staged.path) {
+            try? files.removeItem(at: staged)
+        }
     }
-    try Data(source.utf8).write(to: staged, options: .withoutOverwriting)
-    try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staged.path)
+    let bytes = Array(source.utf8)
+    var offset = 0
+    while offset < bytes.count {
+        let count = bytes.withUnsafeBytes { raw -> Int in
+            guard let base = raw.baseAddress else { return -1 }
+            return write(fd, base.advanced(by: offset), raw.count - offset)
+        }
+        if count < 0 {
+            if errno == EINTR { continue }
+            throw posixError(errno, path: staged.path)
+        }
+        offset += count
+    }
+    if fchmod(fd, 0o755) != 0 || fsync(fd) != 0 {
+        throw posixError(errno, path: staged.path)
+    }
+    if close(fd) != 0 {
+        throw posixError(errno, path: staged.path)
+    }
+    closed = true
     if files.fileExists(atPath: url.path) {
         try files.removeItem(at: url)
     }
     try files.moveItem(at: staged, to: url)
+}
+
+private func posixError(_ code: Int32, path: String) -> NSError {
+    NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [NSFilePathErrorKey: path])
 }
 
 func fakeProcessTool(exit status: Int32) throws -> URL {

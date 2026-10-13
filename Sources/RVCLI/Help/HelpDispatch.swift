@@ -28,6 +28,7 @@ public enum HelpTopic: Equatable, Sendable {
     case safety
     case blocks
     case audit
+    case secrets
     case opencode
     case workspace
     case `operator`
@@ -135,6 +136,8 @@ public enum HelpDispatch {
             return rest.allSatisfy(isFormatFlag) ? .blocks : nil
         case "audit":
             return .audit
+        case "secrets":
+            return .secrets
         case "operator":
             return .`operator`
         case "help":

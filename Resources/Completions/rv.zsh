@@ -20,6 +20,7 @@ _rv() {
     'safety:Show or set normal or strict'
     'blocks:List recent denials'
     'audit:Unified audit trail'
+    'secrets:Secrets agents use through placeholders'
     'operator:Propose and poll identity launches'
   )
   _arguments '1: :->cmds' '*:: :->args'

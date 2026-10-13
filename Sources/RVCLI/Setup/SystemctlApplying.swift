@@ -40,7 +40,7 @@ struct ProcessSystemctl: SystemctlApplying {
         process.arguments = ["--user"] + arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        try process.run()
+        try runExecutable(process)
         process.waitUntilExit()
         let status = process.terminationStatus
         guard okStatuses.contains(status) else {

@@ -257,9 +257,13 @@ extension HTTPAddressClass {
 /// instead of inventing a hash scheme.
 public enum RVDigest {
     public static func sha256Hex(_ bytes: [UInt8]) -> String {
+        sha256(bytes).map { String(format: "%02x", $0) }.joined()
+    }
+
+    public static func sha256(_ bytes: [UInt8]) -> [UInt8] {
         var hash = RVSHA256Digest()
         hash.update(bytes)
-        return hash.digest().map { String(format: "%02x", $0) }.joined()
+        return hash.digest()
     }
 }
 

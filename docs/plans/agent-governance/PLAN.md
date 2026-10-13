@@ -19,15 +19,17 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 |---|---|---|---|
 | 0 Plan + reset | `plan/agent-governance` | [#394](https://github.com/christopherkarani/rv/pull/394) | in progress |
 | 1 Trustworthy sandbox | `governance/phase-1-sandbox` | [#395](https://github.com/christopherkarani/rv/pull/395) | agent items done; PR open |
-| 2 Secrets the agent can't leak | `governance/phase-2-secrets` | _not opened_ | not started |
+| 2 Secrets the agent can't leak | `governance/phase-2-secrets` | [#413](https://github.com/christopherkarani/rv/pull/413) | agent items done (PR open); L3 demo needs owner trust |
 | 3 MCP governance | `governance/phase-3-mcp` | _not opened_ | not started |
 | 4 Enterprise client features | `governance/phase-4-enterprise` | _not opened_ | not started |
 | 5 Launch readiness | human-owned | n/a | not started |
 
-**Next action:** Phase 1 agent items are on `governance/phase-1-sandbox`
-([#395](https://github.com/christopherkarani/rv/pull/395)). Phase 0 stays in
-progress until [PR #394](https://github.com/christopherkarani/rv/pull/394)
-merges. Do not reopen that PR or re-close #393.
+**Next action:** check the Linux CI job on #413 (the gateway was never compiled on Linux locally: Docker was down). Then Phase 3.1: branch `governance/phase-3-mcp` from `governance/phase-2-secrets`, start `rv mcp list`.
+
+Gotcha: never run the `rv` binary with a fake `HOME` on a path that writes to
+the Keychain (`rv secrets set`). macOS opens a SecurityAgent "keychain not
+found" dialog and the process hangs. In-process tests use an injected
+`SecretKeychainWriter`; the real Keychain is covered by `RV_LIVE_KEYCHAIN=1`.
 
 Branching rule: each phase branch starts from the previous phase branch (or
 `origin/main` if the previous phase merged). Each phase PR targets the previous
@@ -378,40 +380,85 @@ Sources: `keychain`, `hostEnvironment`, `onePassword` (`op read`),
 Profiles in `runtime-resources.json` gain `"secrets": ["STRIPE_SECRET_KEY"]`.
 
 ### 2.1 Schema, providers, CLI
-- [ ] `SecretsConfiguration` model + strict loader (owner-only file checks,
-      duplicate names, env-name grammar, https upstream only, ≤32 secrets)
-- [ ] Providers behind `SecretValueProvider` protocol, each with timeout and
-      typed errors; never log values
-- [ ] `rv secrets list` (name, source kind, delivery, bound upstream, status;
-      never values), `rv secrets check` (resolve each, show fingerprint),
-      `rv secrets set NAME` (stdin, no echo, stores in Keychain `rv.secrets`),
-      `rv secrets remove NAME`
-- [ ] Install key `~/.config/rv/audit.key` (32 random bytes, 0600) and
-      `SecretFingerprint` = first 16 hex of HMAC-SHA256
-- [ ] Tests: decode/validation matrix, provider stubs, CLI output, real
-      Keychain round trip (set → check → remove) on macOS
+- [x] `SecretsConfiguration` model + strict loader (owner-only file checks,
+      duplicate names, env-name grammar, https upstream only, ≤64 secrets,
+      no two secrets exporting the same variable): `Sources/RVIsolation/SecretsConfiguration.swift`
+- [x] Providers as one `SecretResolver` closure struct (`.live` dispatches by
+      source kind; tests inject fakes), 30 s timeout and 1 MiB cap on CLI
+      providers, typed `SecretResolutionError`; `SecretValue` prints
+      `<redacted>`: `Sources/RVIsolation/SecretProviders.swift`
+- [x] `rv secrets list` (name, source locator, delivery, agents, profiles
+      using it; warns on profile refs to undefined secrets; never values),
+      `rv secrets check` (resolve each, show fingerprint, exit 1 on failure),
+      `rv secrets set NAME` (TTY no-echo prompt or stdin; stores in Keychain
+      service `rv.secrets`; `--gateway URL --base-url-env VAR
+      [--placeholder-prefix P]` or `--environment`; `--agent`, `--description`),
+      `rv secrets remove NAME` (drops definition + Keychain item). JSON via
+      `--json`. Code: `Sources/RVCLI/Commands/SecretsCommand.swift`; store
+      helpers (atomic 0600 write, Keychain writer, locators, leak scanner):
+      `Sources/RVIsolation/SecretStore.swift`. Registered in RV.swift,
+      HelpDispatch, HelpCatalog, bash/zsh/fish completions.
+- [x] Install key `~/.config/rv/audit.key` (32 random bytes, 0600, created
+      lazily on first lease) and `SecretFingerprinter` = first 16 hex of
+      HMAC-SHA256: `Sources/RVIsolation/SecretFingerprint.swift`
+- [x] Tests: decode/validation matrix (`SecretsConfigurationTests`), real
+      Keychain read via the live resolver (`SecretKeychainLiveTests`,
+      `RV_LIVE_KEYCHAIN=1`)
+- [x] Tests: `SecretsCommandTests` (list/check/set/remove/scan with an
+      injected Keychain writer + resolver, dangling profile warning, bad
+      flags), `SecretsCommandLiveKeychainTests` (`RV_LIVE_KEYCHAIN=1`: real
+      Keychain set → check → remove). Real `rv` binary run against a temp
+      HOME with a host-variable secret: list, check, scan, set errors,
+      remove, unsafe file mode refused.
+- [x] Linux portability: fingerprints are HMAC-SHA256 over the project's
+      pure-Swift `RVDigest.sha256` (RFC 4231 vectors in
+      `SecretLaunchBrokerTests`), not CryptoKit; `FoundationNetworking`
+      import; Glibc socket constants; `send` + `MSG_NOSIGNAL`. Verified only
+      by CI (no local Linux toolchain).
 
 ### 2.2 Placeholder gateway (boundary injection)
-- [ ] `SecretGateway` loopback HTTP/1.1 listener per workspace host;
-      routes `/s/<binding>/<path>` to the binding's upstream origin
-- [ ] Per-runtime placeholder minting; substitution only of placeholders
-      minted for that runtime + binding, in headers and query; request
-      without a valid placeholder is rejected (no open relay)
-- [ ] Upstream via URLSession (ephemeral, no cookies/cache/proxy; the gateway
-      refuses upstream redirects); streaming responses (SSE)
-- [ ] Response scrubbing of the real value across chunk boundaries
-- [ ] Audit each request as `secret.use` (`secrets-audit.jsonl`): secret name,
-      upstream host, method, path (no query), status, bytes, fingerprint
-- [ ] Wire into launch: profile `secrets` → placeholders + base-URL env in
-      the cage env (minimal seam in the env builder)
-- [ ] Tests: L1 parser/substitution/scrub; L2 real cage `curl`s the gateway
-      with only the placeholder and a local upstream sees the real value;
-      L4 live `postman-echo.com` echo proves swap + scrub; negative tests
-      (wrong runtime token, other host, redirect, oversize headers)
+- [x] `SecretGateway` loopback HTTP/1.1 listener per workspace host, started
+      lazily on the first gateway lease; routes `/s/<NAME>/<path>` to the
+      secret's upstream origin: `Sources/RVIsolation/SecretGateway.swift`,
+      pure logic in `SecretGatewayProtocol.swift`
+- [x] Per-launch placeholder minting (`<prefix>rvph_<32 hex>`); substitution
+      only of placeholders live for that secret, in target and header values
+      (body untouched); no placeholder → 401, unknown/revoked → 403, other
+      secret's placeholder → 403 (no open relay)
+- [x] Upstream via URLSession (ephemeral, no cookies/cache, redirects returned
+      to the client, not followed); streaming chunked responses; client
+      `Accept-Encoding` stripped so scrubbing sees plaintext
+- [x] Response scrubbing of the real value across chunk boundaries (body and
+      header values)
+- [x] Audit each request as `secret.use` into the unified `audit.jsonl`
+      (`AuditLog.append`, so `rv audit tail --kind secret.use` shows it):
+      secret, runtime, upstream host, method, path (no query), status, bytes,
+      fingerprint. Leases also record a `staged` event with delivery + provider.
+- [x] Wire into launch: `SecretLaunchBroker` (per workspace supervisor)
+      leases profile `secrets` in `WorkspaceSessionSupervisor.spawn` before
+      the state lock, binds the lease to the runtime ID inside the lock,
+      revokes in `noteRuntimeEnded` and on spawn failure; entries ride the
+      existing keychain env list. Identity path (`KeychainReader.denied`,
+      `allowsSecrets=false`) refuses profiles that list secrets.
+- [x] Fix found while wiring: profile credentials now replace an ambient host
+      variable of the same name in the cage env (`addingKeychainEnvironment`);
+      before, a host `OPENAI_BASE_URL`/passthrough key silently won.
+      Runtime-owned and `*_PROXY` names are never replaced.
+- [x] Tests: L1 `SecretGatewayProtocolTests` (parser, routing, substitution
+      refusals, scrub at every split), `SecretGatewayTests` (real sockets +
+      recording upstream: swap, scrub, chunked, Expect, HEAD, 413, revoked),
+      `SecretLaunchBrokerTests`; L2 `SecretGatewayCageTests` (real Seatbelt
+      cage `curl`s the gateway; upstream sees the real key; cage env, reply
+      and audit never do; lease revoked at runtime end; undefined secret and
+      denied path fail before spawn); L4 `SecretGatewayLiveTests`
+      (`RV_LIVE_NETWORK=1`, postman-echo: wire carries real value, echo comes
+      back scrubbed, 302 not followed)
 
 ### 2.3 Leak checks
-- [ ] `rv secrets scan [PATH]`: exact-match scan of a tree for any value rv
-      can resolve (reports file + line + secret name, never the value)
+- [x] `rv secrets scan [PATH]`: exact-match scan of a tree for any value rv
+      can resolve (reports file + line + secret name, never the value; skips
+      `.git`, `.build`, `node_modules`, `DerivedData`; ≤8 MiB per file,
+      ≤100k files; values under 8 bytes skipped; exit 1 on findings)
 
 ### 2.4 Later (not this phase)
 - Transparent mode (local CA + CONNECT termination) for SDKs without base-URL
@@ -421,6 +468,12 @@ Exit criteria: demo where an agent inside the cage calls a real API with a
 placeholder, the call succeeds, `env` inside the cage shows no real value,
 the response never contains it, and `rv audit tail --kind secret.use` shows
 the call with a fingerprint.
+
+Exit evidence: L2 `SecretGatewayCageTests` covers cage → gateway → upstream
+with the real key only on the wire and the `secret.use` record written via
+`AuditLog.append`; `AuditCommandTests` covers `rv audit tail` rendering a
+`secret.use` line from that schema. A live L3 demo through `rv workspace`
+still needs the owner's trust install.
 
 ---
 
@@ -528,6 +581,16 @@ Exit criteria: Cursor or Claude Code on this Mac lists tools through
   completions suites: all pass. Found: tests leak volumes and write to the
   real `~/.config/rv` (logged as a 1.2 item). D13 opened for the disabled
   E2E tests.
+- 2026-10-12: Phase 2 engine landed on `governance/phase-2-secrets`: config,
+  providers, fingerprints, gateway, broker, launch seam, credential-override
+  fix. 28 secrets tests + live (network, keychain) pass. RVIsolation now
+  depends on RVHistory (for `AuditLog`). Next: `rv secrets` CLI.
+- 2026-10-12: Phase 2 CLI + leak scan landed: `rv secrets
+  list|check|set|remove|scan`, Linux-portable HMAC fingerprints. Suites:
+  secrets 33 + CLI/Policy/Domain/isolation neighbors 1885, preflight 0
+  failures. A fake-HOME binary run of `rv secrets set` hung on a macOS
+  Keychain dialog (killed; login keychain untouched); see the gotcha under
+  Resume here.
 - 2026-10-13: Rereview of PR #394. Named each ledger writer (only `blocks`,
   `allow-once`, and `pending-approvals` are `FileLockedJSONLStore`). Seatbelt
   ground truth now says outbound connect is loopback TCP and the listen rule

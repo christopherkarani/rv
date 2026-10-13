@@ -136,6 +136,9 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
     public var credentials: [Credential]
     public var environment: [Environment]
     public var keychain: [KeychainEntry]
+    /// Names of entries in `~/.config/rv/secrets.json` this profile stages.
+    /// Gateway-delivered secrets reach the cage only as placeholders.
+    public var secrets: [String]
 
     public init(
         id: String,
@@ -147,7 +150,8 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
         writeTrees: [String] = [],
         credentials: [Credential] = [],
         environment: [Environment] = [],
-        keychain: [KeychainEntry] = []
+        keychain: [KeychainEntry] = [],
+        secrets: [String] = []
     ) {
         self.id = id
         self.projects = projects
@@ -159,11 +163,12 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
         self.credentials = credentials
         self.environment = environment
         self.keychain = keychain
+        self.secrets = secrets
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, projects, agents, executableLinks, readFiles, readTrees
-        case writeTrees, credentials, environment, keychain
+        case writeTrees, credentials, environment, keychain, secrets
     }
 
     /// Backward compatible: documents written before `agents` existed decode
@@ -181,6 +186,7 @@ public struct RuntimeResourceProfile: Codable, Sendable, Equatable {
         credentials = try container.decode([Credential].self, forKey: .credentials)
         environment = try container.decode([Environment].self, forKey: .environment)
         keychain = try container.decodeIfPresent([KeychainEntry].self, forKey: .keychain) ?? []
+        secrets = try container.decodeIfPresent([String].self, forKey: .secrets) ?? []
     }
 }
 

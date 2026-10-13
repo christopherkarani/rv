@@ -36,6 +36,30 @@ enum LaunchctlError: Error, Equatable {
     case nonZeroExit(Int32)
 }
 
+/// `posix_spawn` returns ETXTBSY when a just-written script is still open for
+/// write. The process did not start, so the same `Process` can be launched again.
+func runExecutable(_ process: Process) throws {
+    for _ in 0..<50 {
+        do {
+            try process.run()
+            return
+        } catch {
+            guard isTextFileBusy(error) else { throw error }
+            Thread.sleep(forTimeInterval: 0.002)
+        }
+    }
+    try process.run()
+}
+
+private func isTextFileBusy(_ error: Error) -> Bool {
+    let ns = error as NSError
+    guard ns.domain == NSCocoaErrorDomain,
+        let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError,
+        underlying.domain == NSPOSIXErrorDomain
+    else { return false }
+    return underlying.code == Int(POSIXErrorCode.ETXTBSY.rawValue)
+}
+
 struct ProcessLaunchctl: LaunchctlApplying {
     var executableURL: URL
 
@@ -70,7 +94,7 @@ struct ProcessLaunchctl: LaunchctlApplying {
         process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        try process.run()
+        try runExecutable(process)
         process.waitUntilExit()
         let status = process.terminationStatus
         guard okStatuses.contains(status) else {
