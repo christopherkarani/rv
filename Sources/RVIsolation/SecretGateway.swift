@@ -72,10 +72,14 @@ public final class SecretGateway: @unchecked Sendable {
     private let audit: @Sendable (SecretUseRecord) -> Void
     private let lock = NSLock()
     private var entries: [String: Entry] = [:]
-    private var listenFD: Int32 = -1
+    /// Every listener `start` handed to an accept loop. `stop` closes all of them.
+    private var listenFDs: [Int32] = []
     private var boundPort: Int?
     private let slots = DispatchSemaphore(value: SecretGateway.maximumConnections)
     private let acceptQueue = DispatchQueue(label: "rv.secret-gateway.accept", qos: .userInitiated)
+    /// Test seam, nil in production. Runs after the fast-path check and before
+    /// the listener is published, so two `start` calls can overlap that window.
+    var beforeListenerPublish: (@Sendable () -> Void)?
 
     public init(
         transport: SecretUpstreamTransport = .urlSession,
@@ -135,7 +139,9 @@ public final class SecretGateway: @unchecked Sendable {
             lock.unlock()
             return .success(boundPort)
         }
+        let overlap = beforeListenerPublish
         lock.unlock()
+        overlap?()
         #if canImport(Darwin)
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         #else
@@ -183,21 +189,28 @@ public final class SecretGateway: @unchecked Sendable {
         }
         let port = Int(UInt16(bigEndian: actual.sin_port))
         lock.lock()
-        listenFD = fd
+        // Another start published while this socket was binding. Close the
+        // extra listener; callers must use the port that was already published.
+        if let published = boundPort {
+            lock.unlock()
+            close(fd)
+            return .success(published)
+        }
+        listenFDs.append(fd)
         boundPort = port
-        lock.unlock()
         acceptQueue.async { [weak self] in self?.acceptLoop(fd) }
+        lock.unlock()
         return .success(port)
     }
 
     public func stop() {
         lock.lock()
-        let fd = listenFD
-        listenFD = -1
+        let fds = listenFDs
+        listenFDs.removeAll()
         boundPort = nil
         entries.removeAll()
         lock.unlock()
-        if fd >= 0 {
+        for fd in fds where fd >= 0 {
             shutdown(fd, Int32(SHUT_RDWR))
             close(fd)
         }
@@ -504,8 +517,10 @@ enum GatewaySocket {
                     }
                     return nil
                 }
-                guard body.count + size <= limit, let chunk = readExactly(size), readExactly(2) == Data([13, 10])
-                else { return nil }
+                // `body.count + size` traps when size is Int.max. Reject first.
+                guard size <= limit else { return nil }
+                guard body.count <= limit - size else { return nil }
+                guard let chunk = readExactly(size), readExactly(2) == Data([13, 10]) else { return nil }
                 body.append(chunk)
             }
         }
