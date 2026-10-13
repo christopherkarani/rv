@@ -1278,11 +1278,13 @@ final class WorkspaceSessionSupervisor: Sendable {
             return state.children[runtime]
         }
         guard let child else { return .failure(.unknownRuntime(runtime)) }
+        // Claim cancelled before stop or SIGKILL. The watch claims teardown
+        // the moment it sees the leader gone, and that claim is once-only.
+        // Signalling first lets it journal runtimeEnded for a cancel that is
+        // still in progress. An already-dead runtime keeps its reason.
+        _ = agentInstances.finishRuntime(runtime, reason: .cancelled)
         child.stop.request()
         _ = stopOwnedSession(leader: child.live.pid, reap: false)
-        // Authority dies on cancel, before the reap completes. A lingering
-        // process group keeps no usable principal.
-        _ = agentInstances.finishRuntime(runtime, reason: .cancelled)
         guard waitForChildren([child], seconds: 45) else {
             return .failure(.childTeardownFailed)
         }
@@ -1738,12 +1740,16 @@ final class WorkspaceSessionSupervisor: Sendable {
     private func performFinish(publish: Bool) -> Result<Void, WorkspaceSessionError> {
         let children = state.withLock { Array($0.children.values) }
         for child in children {
+            // Claim cancelled before stop or SIGKILL, mirroring cancel().
+            // The watch claims teardown the moment it sees the leader gone
+            // (noteDeathObserved) or finishes the reap (noteRuntimeEnded),
+            // and that claim is once-only. Signalling first lets the watch
+            // journal runtimeEnded for a close that is still in progress.
+            // An already-dead runtime keeps the reason the watch recorded;
+            // the watch still reaps the process group.
+            _ = agentInstances.finishRuntime(child.live.session.id, reason: .cancelled)
             child.stop.request()
             _ = stopOwnedSession(leader: child.live.pid, reap: false)
-            // Authority dies on close before the reap completes, mirroring
-            // cancel(): already-dead runtimes observe their terminal state,
-            // and the watch still owns teardown and reports ended().
-            _ = agentInstances.finishRuntime(child.live.session.id, reason: .cancelled)
         }
         guard waitForChildren(children, seconds: 45) else {
             return .failure(.childTeardownFailed)
