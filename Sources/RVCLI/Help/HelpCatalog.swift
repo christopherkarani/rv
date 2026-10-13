@@ -447,7 +447,12 @@ enum HelpCatalog {
                 HelpRow(name: "rv mcp trust"),
             ]),
             HelpSection(heading: "Tool policy", rows: [
-                HelpRow(name: "order", description: "deny glob > ask glob > allow glob > server default > defaultDecision"),
+                HelpRow(name: "order", description: "Strictest matching glob or rule (deny > ask > allow), else default"),
+                HelpRow(
+                    name: "rules",
+                    description: "{\"tool\": \"query\", \"when\": {\"/db\": {\"==\": \"prod\"}}}; ops == != < > in glob"
+                ),
+                HelpRow(name: "missing", description: "A rule never matches an argument the call left out; keep a non-allow default"),
                 HelpRow(name: "deny", description: "Hidden from the agent; calls fail"),
                 HelpRow(name: "ask", description: "Approved in the host's prompt, or `rv mcp approve`; one identical call"),
                 HelpRow(name: "approve", description: "Needs you present: Touch ID/password, or the code `rv mcp serve` printed"),

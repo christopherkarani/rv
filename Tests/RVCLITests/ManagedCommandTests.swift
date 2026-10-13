@@ -86,6 +86,16 @@ struct ManagedCommandTests {
             == "organization policy says ask for github/create_issue; approve it once instead")
         #expect(try await MCPRun.approve(id: id, always: false, environment: environment).get().contains("once"))
 
+        environment.managed = try active(#"""
+            {"version": 1, "mcp": {"deny": [{"tool": "github/merge_*", "when": {"/branch": {"==": "main"}}}]}}
+            """#)
+        let merge = try #require(
+            environment.approvals.request(server: "github", tool: "merge_pr", argumentsHash: "h", argumentKeys: [])?.id)
+        #expect(failure(await MCPRun.approve(id: merge, always: true, environment: environment))?
+            .contains("has argument rules") == true)
+        #expect(ManagedRun.restrictions(try #require(environment.managed.policy))
+            == [#"mcp deny: github/merge_* when /branch == "main""#])
+
         try scratch.write("home/.cursor/mcp.json", """
             {"mcpServers": {"svc": {"command": "svc", "env": {"API_TOKEN": "tok_live_abcdefghijklmnopqrstu"}}}}
             """)

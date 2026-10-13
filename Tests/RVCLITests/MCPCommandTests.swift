@@ -2,6 +2,7 @@ import Foundation
 import RVHistory
 import RVIsolation
 import RVMCP
+import RVPolicy
 import Synchronization
 import Testing
 @testable import RVCLI
@@ -194,6 +195,22 @@ struct MCPCommandTests {
         #expect(events.map(\.decision) == [.allowed, .allowed])
         #expect(events.first?.detail["method"] == "test")
         #expect(events.last?.detail["always"] == "true")
+    }
+
+    @Test func alwaysRefusesToolsWithArgumentRules() async throws {
+        let fixture = Fixture()
+        let environment = fixture.environment()
+        let rule = try ToolArgumentRule.decode(.object([
+            "tool": .string("query"), "when": .object(["/database": .object(["==": .string("prod")])]),
+        ]))
+        try signedConfiguration(fixture, MCPConfiguration(servers: [
+            MCPServerDefinition(name: "db", command: "db-mcp", tools: MCPToolPolicy(rules: [.init(decision: .ask, rule: rule)]))
+        ]))
+        let id = try #require(environment.approvals.request(server: "db", tool: "query", argumentsHash: "h", argumentKeys: [])?.id)
+        let always = await MCPRun.approve(id: id, always: true, environment: environment)
+        #expect(always.failureMessage?.contains("has argument rules") == true)
+        #expect(try MCPRun.configuration(environment).get().server(named: "db")?.tools.allow.isEmpty == true)
+        #expect(MCPRun.trustReview(try MCPRun.configuration(environment).get()).contains(#"ask query when /database == "prod""#))
     }
 
     @Test func approvingNeedsThePersonAndTheCodeTheGatewayPrinted() async throws {

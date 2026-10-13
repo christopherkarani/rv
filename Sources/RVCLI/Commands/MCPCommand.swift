@@ -291,6 +291,9 @@ enum MCPRun {
         guard let index = configuration.servers.firstIndex(where: { $0.name == request.server }) else {
             return .failure("mcp.json no longer defines \(request.server)")
         }
+        if configuration.hasArgumentRules(server: configuration.servers[index], tool: request.tool) {
+            return .failure("\(request.tool) has argument rules, so allowing it always would not cover every call; approve it once or edit the rule")
+        }
         var tools = configuration.servers[index].tools
         tools.ask.removeAll { $0 == request.tool }
         if tools.allow.contains(request.tool) == false { tools.allow.append(request.tool) }
@@ -371,6 +374,7 @@ enum MCPRun {
             if tools.allow.isEmpty == false { rules.append("allow " + capped(tools.allow)) }
             if tools.ask.isEmpty == false { rules.append("ask " + capped(tools.ask)) }
             if tools.deny.isEmpty == false { rules.append("deny " + capped(tools.deny)) }
+            for ruled in tools.rules { rules.append("\(ruled.decision.rawValue) \(ruled.rule.summary)") }
             if let fallback = tools.defaultDecision { rules.append("other tools \(fallback.rawValue)") }
             if server.sandbox == nil { rules.append("no sandbox") }
             if rules.isEmpty == false { lines.append("    " + rules.joined(separator: " · ")) }
