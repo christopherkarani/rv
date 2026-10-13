@@ -73,11 +73,38 @@ enum AuditRun {
     }
 }
 
+enum AuditVerifyRun {
+    static func check(_ url: URL) -> Result<AuditChainReport, CommandFailure> {
+        AuditChain.verify(fileURL: url).mapError { CommandFailure($0.message) }
+    }
+
+    static func json(_ report: AuditChainReport) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return (try? encoder.encode(report)).map { String(decoding: $0, as: UTF8.self) + "\n" } ?? "{}\n"
+    }
+
+    static func text(_ report: AuditChainReport, path: String) -> String {
+        guard report.lines > 0 else { return "no audit lines yet (\(path))\n" }
+        if let broken = report.firstBreak {
+            let scope = broken.line == 1
+                ? "  the file was changed at its start"
+                : "  lines 1-\(broken.line - 1) are intact; line \(broken.line) or the one before it was edited, removed, inserted, or reordered"
+            return "audit chain BROKEN at line \(broken.line) of \(path): \(broken.reason)\n\(scope)\n"
+        }
+        var text = "audit chain intact: \(report.lines) lines, head \(report.head)\n"
+        if report.unchained > 0 {
+            text += "  the first \(report.unchained) line\(report.unchained == 1 ? "" : "s") predate the chain and are not covered\n"
+        }
+        return text
+    }
+}
+
 struct Audit: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "audit",
         abstract: "Show the unified audit trail.",
-        subcommands: [AuditTail.self, AuditExport.self, AuditForward.self],
+        subcommands: [AuditTail.self, AuditExport.self, AuditForward.self, AuditVerify.self],
         defaultSubcommand: AuditTail.self
     )
 }
@@ -106,6 +133,29 @@ struct AuditTail: AsyncParsableCommand {
         let filter = try AuditRun.filter(since: since, kinds: kind, limit: max(0, limit), now: Date())
         let events = AuditRun.events(home: home, filter: filter)
         ctx.writeStdout(ctx.explicitRobot ? AuditRun.jsonArray(events) : AuditRun.pretty(events))
+    }
+}
+
+struct AuditVerify: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "verify",
+        abstract: "Check the audit.jsonl hash chain and report the first break."
+    )
+
+    @OptionGroup
+    var format: FormatFlags
+
+    func run() throws {
+        let ctx = CommandContext.current(command: "audit verify", format: format)
+        let home = try ctx.requireHome()
+        let url = AuditLog.fileURL(configDirectory: RVPolicyPaths.configDirectory(home: home))
+        let report: AuditChainReport
+        switch AuditVerifyRun.check(url) {
+        case .failure(let failure): try ctx.fail("rv audit verify: \(failure.message)\n")
+        case .success(let checked): report = checked
+        }
+        ctx.writeStdout(ctx.explicitRobot ? AuditVerifyRun.json(report) : AuditVerifyRun.text(report, path: url.path))
+        if report.isIntact == false { throw ExitCode(1) }
     }
 }
 
