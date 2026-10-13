@@ -217,6 +217,31 @@ else:
 i = rv("audit", "forward", "--install", "--to", "https://siem.example.com/rv", "--header", "Authorization=Bearer plain-token-value")
 step("7.6 --install refuses a literal header", i.returncode == 1 and "${secret:NAME}" in i.stderr and "plain-token-value" not in i.stderr + i.stdout)
 
+# 7.3 search tool mode (two servers, so names carry the server prefix)
+out = write_and_trust({"version": 1, "toolMode": "search", "servers": [
+    server(tools={"default": "allow", "deny": ["tables"]}),
+    {**server(tools={"default": "allow", "ask": ["query"]}), "name": "wh"},
+]}, "7.3 search")
+step("7.3 trust review names the mode", "tool mode search" in out)
+g = Gateway()
+step("7.3 listing holds only the two rv tools", [t["name"] for t in g.tools] == ["rv_search_tools", "rv_call_tool"])
+reply = g.call(10, "rv_search_tools", {"query": "sql"})
+found = sorted(t["name"] for t in reply["result"]["structuredContent"]["tools"])
+step("7.3 search finds tools on both servers", found == ["db__query", "wh__query"], ", ".join(found))
+reply = g.call(11, "rv_search_tools", {})
+found = [t["name"] for t in reply["result"]["structuredContent"]["tools"]]
+step("7.3 a denied tool is not searchable", "db__tables" not in found and "wh__tables" in found, ", ".join(found))
+reply = g.call(12, "rv_call_tool", {"name": "db__query", "arguments": {"sql": "SELECT 2"}})
+step("7.3 rv_call_tool runs an allowed tool", text_of(reply) == 'ran query {"sql": "SELECT 2"}', text_of(reply))
+reply = g.call(13, "rv_call_tool", {"name": "wh__query", "arguments": {"sql": "SELECT 3"}})
+step("7.3 rv_call_tool still asks", "rv paused this call: wh tool query" in text_of(reply), text_of(reply)[:50])
+reply = g.call(14, "rv_call_tool", {"name": "db__tables"})
+step("7.3 rv_call_tool still denies", "rv policy denies db tool tables" in text_of(reply))
+g.close()
+calls = [json.loads(l) for l in open(AUDIT)][-3:]
+step("7.3 audit names the real tools", [(c["subject"], c["detail"].get("policy")) for c in calls]
+     == [("db/query", "allow"), ("wh/query", "ask"), ("db/tables", "deny")], str([c["subject"] for c in calls]))
+
 failed = [n for n, ok in STEPS if not ok]
 print(f"\n{len(STEPS) - len(failed)}/{len(STEPS)} passed")
 if not failed:
