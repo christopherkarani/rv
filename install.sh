@@ -4,6 +4,7 @@
 # Tests must set HOME to a temp directory.
 # Unset RV_INSTALL_BIN downloads the latest GitHub release trio into a temp
 # dir, then uses the same atomic stage+setup path as a local stage.
+# Downloaded macOS files are signature-checked before anything is staged.
 # TTY download UI matches SetupRenderer: "Downloading" + 24× ━/─ bar, driven by
 # real Content-Length weights (and mid-file byte growth while each curl runs).
 set -eu
@@ -43,6 +44,10 @@ bin="$HOME/.local/bin"
 mkdir -p "$bin"
 
 release_base="https://github.com/christopherkarani/rv/releases/latest/download"
+# Flip to 1 and pin the Team ID once releases are Developer ID signed: from
+# then on an unsigned download is refused unless RV_INSTALL_ALLOW_UNSIGNED=1.
+signed_releases=0
+release_team_id=""
 tmp_fetch=""
 tmp_rv=""
 tmp_cli=""
@@ -257,6 +262,77 @@ fetch_pack_bundles() {
   exit 1
 }
 
+# Downloaded macOS release files must carry a valid, notarized Developer ID
+# signature from the pinned team. A broken or foreign signature always
+# refuses. Unsigned files follow signed_releases; a mix never installs.
+verify_release_signatures() {
+  dir="$1"
+  shift
+  team="${RV_INSTALL_TEAM_ID:-$release_team_id}"
+  signed=""
+  unsigned=""
+  for name in "$@"; do
+    file="$dir/$name"
+    [ -f "$file" ] || continue
+    if ! command -v codesign >/dev/null 2>&1; then
+      unsigned="$unsigned $name"
+      continue
+    fi
+    details="$(codesign -dvv "$file" 2>&1 || true)"
+    case "$details" in
+      *"not signed at all"*)
+        unsigned="$unsigned $name"
+        continue
+        ;;
+    esac
+    if ! codesign --verify --strict "$file" >/dev/null 2>&1; then
+      echo "rv: refusing to install: $name has an invalid code signature" >&2
+      exit 1
+    fi
+    case "$details" in
+      *"Authority=Developer ID Application:"*) ;;
+      *)
+        echo "rv: refusing to install: $name is not signed with a Developer ID Application certificate" >&2
+        exit 1
+        ;;
+    esac
+    if [ -n "$team" ]; then
+      case "$details" in
+        *"TeamIdentifier=$team"*) ;;
+        *)
+          echo "rv: refusing to install: $name is not signed by team $team" >&2
+          exit 1
+          ;;
+      esac
+    fi
+    case "$name" in
+      *.dylib) ;;
+      *)
+        verdict="$(spctl -a -t open --context context:primary-signature -vv "$file" 2>&1 || true)"
+        case "$verdict" in
+          *"source=Notarized Developer ID"*) ;;
+          *)
+            echo "rv: refusing to install: Gatekeeper does not accept $name as notarized" >&2
+            exit 1
+            ;;
+        esac
+        ;;
+    esac
+    signed="$signed $name"
+  done
+  if [ -n "$signed" ] && [ -n "$unsigned" ]; then
+    echo "rv: refusing to install: some release files are signed and some are not:$unsigned" >&2
+    exit 1
+  fi
+  [ -n "$unsigned" ] || return 0
+  if [ "$signed_releases" = "1" ] && [ "${RV_INSTALL_ALLOW_UNSIGNED:-}" != "1" ]; then
+    echo "rv: refusing to install unsigned release files:$unsigned" >&2
+    echo "rv: set RV_INSTALL_ALLOW_UNSIGNED=1 to install them anyway" >&2
+    exit 1
+  fi
+  echo "rv: warning: release files are not code-signed:$unsigned" >&2
+}
+
 if [ -n "${RV_INSTALL_BIN:-}" ]; then
   src="$RV_INSTALL_BIN"
   [ -x "$src/rv" ] && [ -x "$src/rv-cli" ] && [ -x "$src/rvd" ] && [ -x "$src/rv-workspace-host" ] || {
@@ -272,11 +348,13 @@ else
   size_host="$(normalize_size "$(content_length "$release_base/rv-workspace-host")")"
   size_packs="$(normalize_size "$(content_length "$release_base/rv_RVPacks.bundle.tar.gz")")"
   size_span=0
+  size_claim=0
   if [ "$os" = "Darwin" ]; then
     size_span="$(normalize_size "$(content_length "$release_base/libswiftCompatibilitySpan.dylib")")"
+    size_claim="$(normalize_size "$(content_length "$release_base/rv-pty-claim")")"
   fi
 
-  progress_total=$((size_rv + size_cli + size_rvd + size_host + size_packs + size_span))
+  progress_total=$((size_rv + size_cli + size_rvd + size_host + size_packs + size_span + size_claim))
   size_isolation=0
   if [ "$os" = "Linux" ]; then
     size_isolation="$(normalize_size "$(content_length "$release_base/rv-isolation-exec")")"
@@ -295,6 +373,10 @@ else
     download_release_asset "$tmp_fetch" "libswiftCompatibilitySpan.dylib" "$size_span"
     chmod 755 "$tmp_fetch/libswiftCompatibilitySpan.dylib"
   fi
+  if [ "$os" = "Darwin" ] && [ "$size_claim" -gt 0 ]; then
+    download_release_asset "$tmp_fetch" "rv-pty-claim" "$size_claim"
+    chmod 755 "$tmp_fetch/rv-pty-claim"
+  fi
   if [ "$os" = "Linux" ]; then
     download_release_asset "$tmp_fetch" "rv-isolation-exec" "$size_isolation"
     chmod 755 "$tmp_fetch/rv-isolation-exec"
@@ -307,6 +389,10 @@ else
     echo "rv: download did not produce executable rv, rv-cli, rvd, and rv-workspace-host" >&2
     exit 1
   }
+  if [ "$os" = "Darwin" ]; then
+    verify_release_signatures "$src" libswiftCompatibilitySpan.dylib \
+      rv rv-cli rvd rv-workspace-host rv-pty-claim
+  fi
 fi
 
 if [ "$os" = "Linux" ] && [ ! -x "$src/rv-isolation-exec" ]; then

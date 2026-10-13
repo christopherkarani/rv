@@ -72,12 +72,7 @@ private func installScriptURL() -> URL {
 }
 
 private func writeExecutable(_ url: URL, contents: String) throws {
-    try FileManager.default.createDirectory(
-        at: url.deletingLastPathComponent(),
-        withIntermediateDirectories: true
-    )
-    try contents.write(to: url, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    try writeExecutableScript(at: url, source: contents)
 }
 
 private func writeLinuxShims(in shim: URL, arch: String = "x86_64") throws {
@@ -689,7 +684,7 @@ private func writeCurlShim(
               out="$2"
               shift 2
               ;;
-            -I|--head)
+            -I|--head|-*I*)
               head=1
               shift
               ;;
@@ -899,4 +894,295 @@ private func writeCurlShim(
         let dest = destBin.appendingPathComponent(name)
         #expect(try String(contentsOf: dest, encoding: .utf8).contains("installed-v1"))
     }
+}
+
+// MARK: - Release signature verification (downloaded macOS releases)
+
+private func writeReleaseAssets(in assets: URL, withSpanRuntime: Bool = true, withPTYClaim: Bool = true) throws {
+    try writeExecutable(
+        assets.appendingPathComponent("rv"),
+        contents: "#!/bin/sh\nexec \"$(dirname \"$0\")/rv-cli\" \"$@\"\n"
+    )
+    try writeExecutable(
+        assets.appendingPathComponent("rv-cli"),
+        contents: "#!/bin/sh\nprintf 'from_install=%s argv=%s\\n' \"${RV_FROM_INSTALL-}\" \"$*\" > \"$HOME/.rv-setup-marker\"\nexit 0\n"
+    )
+    try writeExecutable(assets.appendingPathComponent("rvd"), contents: "#!/bin/sh\n# release-rvd\nexit 0\n")
+    try writeExecutable(assets.appendingPathComponent("rv-workspace-host"), contents: "#!/bin/sh\nexit 0\n")
+    if withSpanRuntime {
+        try writeExecutable(assets.appendingPathComponent("libswiftCompatibilitySpan.dylib"), contents: "span\n")
+    }
+    if withPTYClaim {
+        try writeExecutable(assets.appendingPathComponent("rv-pty-claim"), contents: "#!/bin/sh\n# release-claim\nexit 0\n")
+    }
+}
+
+/// `codesign` and `spctl` stand-ins driven by RV_TEST_* variables; every call
+/// is appended to RV_TEST_TOOL_LOG.
+private func writeSignatureShims(in shim: URL) throws {
+    try writeExecutable(
+        shim.appendingPathComponent("codesign"),
+        contents: """
+        #!/bin/sh
+        printf 'codesign %s\\n' "$*" >> "$RV_TEST_TOOL_LOG"
+        file=""
+        for arg in "$@"; do file="$arg"; done
+        name="${file##*/}"
+        mode="${RV_TEST_CODESIGN:-signed}"
+        [ "$name" = "${RV_TEST_CODESIGN_UNSIGNED:-}" ] && mode=unsigned
+        case "$1" in
+          -dvv)
+            case "$mode" in
+              unsigned) echo "$file: code object is not signed at all" >&2; exit 1 ;;
+              adhoc) printf 'Executable=%s\\nSignature=adhoc\\nTeamIdentifier=not set\\n' "$file" >&2; exit 0 ;;
+              *) printf 'Executable=%s\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nAuthority=Developer ID Certification Authority\\nTeamIdentifier=TEAMRV1234\\n' "$file" >&2; exit 0 ;;
+            esac
+            ;;
+          --verify)
+            if [ "$mode" = unsigned ]; then echo "$file: code object is not signed at all" >&2; exit 1; fi
+            if [ "$name" = "${RV_TEST_CODESIGN_TAMPERED:-}" ]; then
+              echo "$file: invalid signature (code or signature have been modified)" >&2
+              exit 1
+            fi
+            exit 0
+            ;;
+        esac
+        exit 0
+        """
+    )
+    try writeExecutable(
+        shim.appendingPathComponent("spctl"),
+        contents: """
+        #!/bin/sh
+        printf 'spctl %s\\n' "$*" >> "$RV_TEST_TOOL_LOG"
+        file=""
+        for arg in "$@"; do file="$arg"; done
+        if [ "${RV_TEST_SPCTL:-accept}" = accept ]; then
+          printf '%s: accepted\\nsource=Notarized Developer ID\\n' "$file" >&2
+          exit 0
+        fi
+        printf '%s: rejected\\nsource=Unnotarized Developer ID\\n' "$file" >&2
+        exit 3
+        """
+    )
+}
+
+private struct SignedInstallRun {
+    let status: Int32
+    let stderr: String
+    let toolLog: String
+    let home: URL
+    var destBin: URL { home.appendingPathComponent(".local/bin") }
+}
+
+private func runSignedDownloadInstall(
+    environment: [String: String] = [:],
+    script: URL? = nil,
+    withSpanRuntime: Bool = true,
+    withPTYClaim: Bool = true,
+    previousInstall: Bool = false
+) throws -> SignedInstallRun {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-signed-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let home = root.appendingPathComponent("home", isDirectory: true)
+    let destBin = home.appendingPathComponent(".local/bin", isDirectory: true)
+    try FileManager.default.createDirectory(at: destBin, withIntermediateDirectories: true)
+    if previousInstall {
+        for name in ["rv", "rv-cli", "rvd"] {
+            try writeExecutable(destBin.appendingPathComponent(name), contents: "#!/bin/sh\n# installed-v1\n")
+        }
+    }
+    let assets = root.appendingPathComponent("assets", isDirectory: true)
+    try writeReleaseAssets(in: assets, withSpanRuntime: withSpanRuntime, withPTYClaim: withPTYClaim)
+    let shim = root.appendingPathComponent("shim", isDirectory: true)
+    try writeDarwinShims(in: shim)
+    try writeCurlShim(in: shim, assets: assets)
+    try writeSignatureShims(in: shim)
+    let log = root.appendingPathComponent("tools.log")
+    try Data().write(to: log)
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = [(script ?? installScriptURL()).path]
+    process.environment = [
+        "HOME": home.path,
+        "PATH": shim.path + ":/usr/bin:/bin",
+        "RV_TEST_TOOL_LOG": log.path,
+    ].merging(environment) { $1 }
+    let stderr = Pipe()
+    process.standardError = stderr
+    process.standardOutput = Pipe()
+    try process.run()
+    let err = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    process.waitUntilExit()
+    return SignedInstallRun(
+        status: process.terminationStatus,
+        stderr: err,
+        toolLog: (try? String(contentsOf: log, encoding: .utf8)) ?? "",
+        home: home
+    )
+}
+
+private func expectPreviousInstallKept(_ run: SignedInstallRun) throws {
+    for name in ["rv", "rv-cli", "rvd"] {
+        let body = try String(contentsOf: run.destBin.appendingPathComponent(name), encoding: .utf8)
+        #expect(body.contains("installed-v1"), "\(name) was replaced")
+    }
+    #expect(FileManager.default.fileExists(atPath: run.destBin.appendingPathComponent("rv-workspace-host").path) == false)
+}
+
+private func removeTemporaryRoot(of run: SignedInstallRun) {
+    try? FileManager.default.removeItem(at: run.home.deletingLastPathComponent())
+}
+
+@Test func installSh_signedNotarizedReleaseInstallsWithoutWarning() throws {
+    let run = try runSignedDownloadInstall()
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.stderr.contains("warning") == false)
+    let toolLines = run.toolLog.split(separator: "\n").map(String.init)
+    for name in ["rv", "rv-cli", "rvd", "rv-workspace-host", "rv-pty-claim", "libswiftCompatibilitySpan.dylib"] {
+        #expect(toolLines.contains { $0.hasPrefix("codesign -dvv ") && $0.hasSuffix("/\(name)") }, "\(name) not read")
+        #expect(
+            toolLines.contains { $0.hasPrefix("codesign --verify --strict ") && $0.hasSuffix("/\(name)") },
+            "\(name) not verified"
+        )
+    }
+    let spctlLines = toolLines.filter { $0.hasPrefix("spctl ") }
+    #expect(spctlLines.count == 5)
+    #expect(spctlLines.allSatisfy { $0.contains("-a -t open --context context:primary-signature") })
+    #expect(spctlLines.contains { $0.hasSuffix(".dylib") } == false)
+}
+
+@Test func installSh_downloadsAndInstallsPTYClaimWhenReleased() throws {
+    let run = try runSignedDownloadInstall()
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 0, "\(run.stderr)")
+    let claim = run.destBin.appendingPathComponent("rv-pty-claim")
+    #expect(FileManager.default.isExecutableFile(atPath: claim.path))
+    #expect(try String(contentsOf: claim, encoding: .utf8).contains("release-claim"))
+}
+
+@Test func installSh_unsignedReleaseWarnsWhileSignedReleasesIsOff() throws {
+    let run = try runSignedDownloadInstall(environment: ["RV_TEST_CODESIGN": "unsigned"])
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 0, "\(run.stderr)")
+    #expect(run.stderr.contains("warning: release files are not code-signed"))
+    #expect(run.toolLog.contains("spctl") == false)
+    #expect(FileManager.default.isExecutableFile(atPath: run.destBin.appendingPathComponent("rv").path))
+}
+
+@Test func installSh_tamperedSignatureRefusesAndKeepsPreviousInstall() throws {
+    let run = try runSignedDownloadInstall(
+        environment: ["RV_TEST_CODESIGN_TAMPERED": "rvd", "RV_INSTALL_ALLOW_UNSIGNED": "1"],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("rvd has an invalid code signature"))
+    try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_adHocSignatureIsNotDeveloperID() throws {
+    let run = try runSignedDownloadInstall(environment: ["RV_TEST_CODESIGN": "adhoc"], previousInstall: true)
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("not signed with a Developer ID Application certificate"))
+    try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_foreignTeamRefuses() throws {
+    let pinned = try runSignedDownloadInstall(environment: ["RV_INSTALL_TEAM_ID": "TEAMRV1234"])
+    defer { removeTemporaryRoot(of: pinned) }
+    let foreign = try runSignedDownloadInstall(environment: ["RV_INSTALL_TEAM_ID": "OTHERTEAM9"], previousInstall: true)
+    defer { removeTemporaryRoot(of: foreign) }
+
+    #expect(pinned.status == 0, "\(pinned.stderr)")
+    #expect(foreign.status == 1)
+    #expect(foreign.stderr.contains("is not signed by team OTHERTEAM9"))
+    try expectPreviousInstallKept(foreign)
+}
+
+@Test func installSh_unnotarizedReleaseRefuses() throws {
+    let run = try runSignedDownloadInstall(environment: ["RV_TEST_SPCTL": "reject"], previousInstall: true)
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("Gatekeeper does not accept rv as notarized"))
+    try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_mixedSignedAndUnsignedRefuses() throws {
+    let run = try runSignedDownloadInstall(
+        environment: ["RV_TEST_CODESIGN_UNSIGNED": "rvd", "RV_INSTALL_ALLOW_UNSIGNED": "1"],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("some release files are signed and some are not: rvd"))
+    try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_signedReleasesSwitchRefusesUnsignedUnlessAllowed() throws {
+    let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
+    #expect(text.contains("\nsigned_releases=0\n"))
+    let flippedText = text.replacingOccurrences(of: "\nsigned_releases=0\n", with: "\nsigned_releases=1\n")
+    try #require(flippedText != text)
+    let flipped = FileManager.default.temporaryDirectory.appendingPathComponent("rv-install-flipped-\(UUID().uuidString).sh")
+    try flippedText.write(to: flipped, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: flipped) }
+
+    let refused = try runSignedDownloadInstall(
+        environment: ["RV_TEST_CODESIGN": "unsigned"], script: flipped, previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: refused) }
+    let allowed = try runSignedDownloadInstall(
+        environment: ["RV_TEST_CODESIGN": "unsigned", "RV_INSTALL_ALLOW_UNSIGNED": "1"], script: flipped
+    )
+    defer { removeTemporaryRoot(of: allowed) }
+
+    #expect(refused.status == 1)
+    #expect(refused.stderr.contains("refusing to install unsigned release files"))
+    #expect(refused.stderr.contains("RV_INSTALL_ALLOW_UNSIGNED=1"))
+    try expectPreviousInstallKept(refused)
+    #expect(allowed.status == 0, "\(allowed.stderr)")
+    #expect(allowed.stderr.contains("warning: release files are not code-signed"))
+}
+
+@Test func installSh_localStageIsNotSignatureChecked() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-local-unsigned-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let src = root.appendingPathComponent("src")
+    try writeDummyTrio(in: src)
+    let shim = root.appendingPathComponent("shim")
+    try writeDarwinShims(in: shim)
+    try writeSignatureShims(in: shim)
+    let home = root.appendingPathComponent("home")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = [installScriptURL().path]
+    process.environment = [
+        "HOME": home.path,
+        "PATH": shim.path + ":/usr/bin:/bin",
+        "RV_INSTALL_BIN": src.path,
+        "RV_TEST_TOOL_LOG": root.appendingPathComponent("tools.log").path,
+        "RV_TEST_CODESIGN_TAMPERED": "rvd",
+    ]
+    process.standardError = Pipe()
+    process.standardOutput = Pipe()
+    try process.run()
+    process.waitUntilExit()
+
+    #expect(process.terminationStatus == 0)
+    #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("tools.log").path) == false)
 }
