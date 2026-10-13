@@ -211,6 +211,9 @@ struct MCPCommandTests {
         #expect(always.failureMessage?.contains("has argument rules") == true)
         #expect(try MCPRun.configuration(environment).get().server(named: "db")?.tools.allow.isEmpty == true)
         #expect(MCPRun.trustReview(try MCPRun.configuration(environment).get()).contains(#"ask query when /database == "prod""#))
+        var searching = try MCPRun.configuration(environment).get()
+        searching.toolMode = .search
+        #expect(MCPRun.trustReview(searching).contains("tool mode search: clients see only rv_search_tools and rv_call_tool"))
     }
 
     @Test func approvingNeedsThePersonAndTheCodeTheGatewayPrinted() async throws {

@@ -367,6 +367,9 @@ enum MCPRun {
 
     static func trustReview(_ configuration: MCPConfiguration) -> String {
         var lines = ["mcp.json: default \(configuration.defaultDecision.rawValue) for tools without a rule"]
+        if configuration.toolMode == .search {
+            lines.append("  tool mode search: clients see only rv_search_tools and rv_call_tool")
+        }
         for server in configuration.servers {
             lines.append("  \(server.name): \(([server.command] + server.args).joined(separator: " "))")
             let tools = server.tools

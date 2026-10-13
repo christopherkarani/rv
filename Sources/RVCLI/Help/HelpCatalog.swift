@@ -466,6 +466,7 @@ enum HelpCatalog {
                 HelpRow(name: "approve", description: "Needs you present: Touch ID/password, or the code `rv mcp serve` printed"),
                 HelpRow(name: "secrets", description: "\"secrets\": {\"VAR\": \"NAME\"} or ${secret:NAME} in args; values scrubbed"),
                 HelpRow(name: "sandbox", description: "\"sandbox\": {\"network\": false} cages the server (macOS)"),
+                HelpRow(name: "toolMode", description: "\"search\" lists only rv_search_tools and rv_call_tool; same policy per call"),
             ]),
             HelpSection(heading: "Statuses", rows: [
                 HelpRow(name: "governed", description: "Host runs it through `rv mcp serve`"),
