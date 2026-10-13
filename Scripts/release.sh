@@ -24,7 +24,10 @@ Usage: Scripts/release.sh
     into .build/release-stage (override with RV_RELEASE_STAGE)
 
 RV_RELEASE_SKIP_C_UNITS=1 skips the C unit run (CI runs it separately).
-Does not codesign. Does not write $HOME/.local/bin.
+RV_RELEASE_SIGN=1 runs Scripts/sign-macos.sh on the Darwin stage (Developer
+ID identity from the login keychain; see its --help for the environment);
+RV_RELEASE_SIGN=dry-run prints its commands. Unset leaves the stage unsigned.
+Does not write $HOME/.local/bin.
 C is not an SPM product. SPM product rv stays the Swift operator (rv-cli).
 EOF
 }
@@ -42,6 +45,14 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+case "${RV_RELEASE_SIGN:-}" in
+  ""|1|dry-run) ;;
+  *)
+    printf 'release: RV_RELEASE_SIGN must be 1 or dry-run, not %s\n' "$RV_RELEASE_SIGN" >&2
+    exit 2
+    ;;
+esac
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -313,6 +324,18 @@ if [[ "$OS" == "Darwin" ]]; then
   if nm -u "$STAGE/rv-cli" | grep -q '_swift_initBorrow'; then
     printf 'release: rv-cli references _swift_initBorrow, unavailable on macOS 26\n' >&2
     exit 1
+  fi
+fi
+
+# Signing is the last write to the stage: strip and install_name_tool above
+# would invalidate a signature.
+if [[ -n "${RV_RELEASE_SIGN:-}" ]]; then
+  if [[ "$OS" != "Darwin" ]]; then
+    printf 'release: RV_RELEASE_SIGN applies to macOS stages only; leaving %s unsigned\n' "$STAGE" >&2
+  elif [[ "$RV_RELEASE_SIGN" == "dry-run" ]]; then
+    bash "$ROOT/Scripts/sign-macos.sh" --dry-run "$STAGE"
+  else
+    bash "$ROOT/Scripts/sign-macos.sh" "$STAGE"
   fi
 fi
 
