@@ -691,21 +691,36 @@ public final class EgressProxy: @unchecked Sendable {
     private static func productionDenialLog() -> @Sendable (EgressProxyDenial) -> Void {
         { denial in
             denialLogLock.withLock { _ in
-                writeDenial(denial)
+                recordDenial(denial)
             }
         }
     }
 
-    private static func writeDenial(_ denial: EgressProxyDenial) {
+    private static func recordDenial(_ denial: EgressProxyDenial) {
         guard let home = ProcessInfo.processInfo.environment["HOME"],
             home.hasPrefix("/"), home.contains("\0") == false
         else {
+            complain("rv.egress: denial log skipped (HOME unavailable) host=\(denial.host) reason=\(denial.reason.rawValue)")
             return
         }
         let url = URL(fileURLWithPath: home, isDirectory: true)
             .appendingPathComponent(".config", isDirectory: true)
             .appendingPathComponent("rv", isDirectory: true)
             .appendingPathComponent("egress-denials.jsonl", isDirectory: false)
+        _ = writeDenial(denial, to: url, diagnose: complain)
+    }
+
+    /// Appends one denial line to `url`. Returns true only when the line is
+    /// persisted. Every failure path reports through `diagnose` (stderr in
+    /// production) instead of dropping the record silently: the CONNECT was
+    /// already denied either way, so enforcement stays fail-closed and only
+    /// the audit persistence can fail.
+    @discardableResult
+    static func writeDenial(
+        _ denial: EgressProxyDenial,
+        to url: URL,
+        diagnose: (String) -> Void
+    ) -> Bool {
         let record = [
             "host": denial.host,
             "port": String(denial.port),
@@ -715,14 +730,40 @@ public final class EgressProxy: @unchecked Sendable {
         guard let data = try? JSONSerialization.data(withJSONObject: record),
             let line = String(data: data, encoding: .utf8)
         else {
-            return
+            diagnose("rv.egress: denial log encode failed host=\(denial.host) reason=\(denial.reason.rawValue)")
+            return false
+        }
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+        } catch {
+            diagnose("rv.egress: denial log directory failed path=\(url.path) error=\(error.localizedDescription)")
+            return false
         }
         guard let handle = try? FileHandle(forWritingTo: url) else {
-            try? (line + "\n").write(to: url, atomically: true, encoding: .utf8)
-            return
+            do {
+                try (line + "\n").write(to: url, atomically: true, encoding: .utf8)
+                return true
+            } catch {
+                diagnose("rv.egress: denial log create failed path=\(url.path) error=\(error.localizedDescription)")
+                return false
+            }
         }
-        defer { try? handle.close() }
-        _ = try? handle.seekToEnd()
-        try? handle.write(contentsOf: Data((line + "\n").utf8))
+        do {
+            _ = try handle.seekToEnd()
+            try handle.write(contentsOf: Data((line + "\n").utf8))
+        } catch {
+            diagnose("rv.egress: denial log append failed path=\(url.path) error=\(error.localizedDescription)")
+            try? handle.close()
+            return false
+        }
+        do {
+            try handle.close()
+        } catch {
+            diagnose("rv.egress: denial log close failed path=\(url.path) error=\(error.localizedDescription)")
+            return false
+        }
+        return true
     }
 }

@@ -57,11 +57,11 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
 
     public var schemaVersion: Int
     public var lifecycle: AllowOnceLifecycle
-    public var codeHash: String
+    public var codeHash: CodeHash
     /// Grant fingerprint (`grantFingerprint`, B1): the view digest folded
     /// with the invocation-prefix digest. The name and wire key predate
     /// the folding and are kept for row compatibility.
-    public var commandFingerprint: String
+    public var commandFingerprint: GrantFingerprint
     public var commandRedacted: String
     public var cwd: WorkingDirectory
     public var ruleID: RuleID?
@@ -71,7 +71,7 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
     /// mints without exact text. The redeem TOCTOU binds it, and TTY
     /// attestation carries it so the daemon plants a bound grant.
     /// Never exact segments.
-    public var payloadDigest: String?
+    public var payloadDigest: ContentPayloadDigest?
     /// Display-safe invocation-prefix tag (`"sudo"`, `"FOO=… sudo"`), or
     /// nil for bare commands and legacy rows. Names and basenames only —
     /// never secret values. Shown in `list` and the LA prompt so the
@@ -99,14 +99,14 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
     public init(
         schemaVersion: Int,
         lifecycle: AllowOnceLifecycle,
-        codeHash: String,
-        commandFingerprint: String,
+        codeHash: CodeHash,
+        commandFingerprint: GrantFingerprint,
         commandRedacted: String,
         cwd: WorkingDirectory,
         ruleID: RuleID?,
         createdAt: Date,
         expiresAt: Date,
-        payloadDigest: String? = nil,
+        payloadDigest: ContentPayloadDigest? = nil,
         invocationDisplay: String? = nil
     ) {
         self.schemaVersion = schemaVersion
@@ -159,14 +159,14 @@ public struct AllowOnceRecord: Sendable, Equatable, Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
         let kind = try container.decode(Kind.self, forKey: .kind)
-        codeHash = try container.decode(String.self, forKey: .codeHash)
-        commandFingerprint = try container.decode(String.self, forKey: .commandFingerprint)
+        codeHash = try container.decode(CodeHash.self, forKey: .codeHash)
+        commandFingerprint = try container.decode(GrantFingerprint.self, forKey: .commandFingerprint)
         commandRedacted = try container.decode(String.self, forKey: .commandRedacted)
         cwd = try container.decode(WorkingDirectory.self, forKey: .cwd)
         ruleID = try container.decodeIfPresent(RuleID.self, forKey: .ruleID)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         expiresAt = try container.decode(Date.self, forKey: .expiresAt)
-        payloadDigest = try container.decodeIfPresent(String.self, forKey: .payloadDigest)
+        payloadDigest = try container.decodeIfPresent(ContentPayloadDigest.self, forKey: .payloadDigest)
         invocationDisplay = try container.decodeIfPresent(String.self, forKey: .invocationDisplay)
         let stamp = try container.decodeIfPresent(Date.self, forKey: .consumedAt)
         switch kind {
@@ -217,6 +217,8 @@ public struct AllowOnceListRow: Sendable, Equatable {
     public var invocationDisplay: String? = nil
 }
 
+/// Unfolded view digest: the pre-B1 intermediate `grantFingerprint` folds
+/// with the invocation prefix. Stays a plain string: it is never stored.
 public func commandFingerprint(_ matchingView: MatchingView) -> String {
     sha256Hex(matchingView.rawValue)
 }
@@ -231,8 +233,12 @@ public func commandFingerprint(_ matchingView: MatchingView) -> String {
 /// `[]` binds the bare invocation. Callers without exact text (legacy
 /// mint ports) bind `[]`: a wrapped spend then mismatches and fails
 /// closed, exactly like an unbound M-07 payload.
-public func grantFingerprint(_ matchingView: MatchingView, invocationPrefix: [String]) -> String {
-    sha256Hex(commandFingerprint(matchingView) + ":" + maskedPayloadContentDigest(invocationPrefix))
+public func grantFingerprint(_ matchingView: MatchingView, invocationPrefix: [String]) -> GrantFingerprint {
+    GrantFingerprint(
+        rawValue: sha256Hex(
+            commandFingerprint(matchingView) + ":" + maskedPayloadContentDigest(invocationPrefix).rawValue
+        )
+    )
 }
 
 public func sha256Hex(_ text: String) -> String {

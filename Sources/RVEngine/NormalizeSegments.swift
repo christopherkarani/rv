@@ -65,84 +65,10 @@ func splitMidWordRedirects(_ tokens: [CommandToken]) -> [CommandToken] {
         else {
             return [token]
         }
-        return splitRedirectPieces(token.decoded).map {
+        return RedirectOperatorLexer.splitPieces(token.decoded).map {
             CommandToken(decoded: $0, wasQuoted: false)
         }
     }
-}
-
-private func splitRedirectPieces(_ word: String) -> [String] {
-    let chars = Array(word)
-    var pieces: [String] = []
-    var index = 0
-    var wordStart = 0
-    while index < chars.count {
-        if chars[index] == "\\" {
-            index += 2
-            continue
-        }
-        if chars[index] == ">" || chars[index] == "<" {
-            let runEnd = redirectRunEnd(chars, from: index)
-            // A digit run immediately before the operator is its fd (`a2>b`
-            // redirects fd 2, word `a`), maximal like the shell's own read.
-            var fdStart = index
-            while fdStart > wordStart, chars[fdStart - 1].isASCII, chars[fdStart - 1].isNumber {
-                fdStart -= 1
-            }
-            if wordStart < fdStart {
-                pieces.append(String(chars[wordStart..<fdStart]))
-            }
-            pieces.append(String(chars[fdStart..<runEnd]))
-            index = runEnd
-            wordStart = runEnd
-            continue
-        }
-        index += 1
-    }
-    if wordStart < chars.count {
-        pieces.append(String(chars[wordStart...]))
-    }
-    return pieces.isEmpty ? [word] : pieces
-}
-
-/// End index of the redirect operator run starting at `from`: `>>`, `>|`,
-/// `>&`, `<<`, `<<<`, `<<-`, `<>`, `<&`, each with its fd glued on the left
-/// by the caller and dup/close targets (`>&1`, `<&-`) glued on the right.
-private func redirectRunEnd(_ chars: [Character], from: Int) -> Int {
-    var runEnd = from + 1
-    guard runEnd < chars.count else {
-        return runEnd
-    }
-    let next = chars[runEnd]
-    if chars[from] == ">", next == ">" || next == "|" || next == "&" {
-        runEnd += 1
-    } else if chars[from] == "<", next == "<" || next == ">" || next == "&" {
-        runEnd += 1
-        if next == "<", runEnd < chars.count {
-            if chars[runEnd] == "<" || chars[runEnd] == "-" {
-                runEnd += 1
-            }
-        }
-    }
-    if runEnd - from == 2,
-        (chars[from] == ">" || chars[from] == "<"), chars[from + 1] == "&"
-    {
-        // Dup/close targets glue only to end of token: `>&1` is a dup, but
-        // `>&1b` duplicates to the FILE `1b`, so the `1b` must split off.
-        var digitsEnd = runEnd
-        while digitsEnd < chars.count, chars[digitsEnd].isASCII, chars[digitsEnd].isNumber {
-            digitsEnd += 1
-        }
-        if digitsEnd == chars.count {
-            return digitsEnd
-        }
-        if digitsEnd == runEnd, digitsEnd < chars.count, chars[digitsEnd] == "-",
-            digitsEnd + 1 == chars.count
-        {
-            return digitsEnd + 1
-        }
-    }
-    return runEnd
 }
 
 /// The single effective segment, or nil when the view holds more than one

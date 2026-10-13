@@ -362,6 +362,18 @@ public struct SeatbeltProfile: Sendable, Equatable {
         return SeatbeltProfile(source: source + additions, workspacePath: workspacePath, isContainedCompilerOutput: isContainedCompilerOutput)
     }
 
+    /// Workspace control paths stay unwritable (ISO-06). Appended last by
+    /// the request compiler so the deny wins over every workspace write
+    /// allow, including operator write-tree grants. Reads and execution
+    /// stay allowed; only writes are denied.
+    func denyingWorkspaceControlPaths() -> SeatbeltProfile {
+        SeatbeltProfile(
+            source: source + "\n" + workspaceControlDenies(workspacePath: workspacePath),
+            workspacePath: workspacePath,
+            isContainedCompilerOutput: isContainedCompilerOutput
+        )
+    }
+
     /// The granted executable may live outside the workspace. Allow reading
     /// and mapping that one file, including its realpath when the caller path
     /// and the kernel path differ (`/var` versus `/private/var`). This does
@@ -1018,6 +1030,7 @@ func compileFirstSliceProfile(
     ;; there; write-data on this one literal cannot exfiltrate or persist.
     (allow file-write-data
         (literal "/dev/null"))
+    \(workspaceControlDenies(workspacePath: resolved))
     """
     return .success(
         SeatbeltProfile(source: source, workspacePath: resolved, isContainedCompilerOutput: true)
@@ -1040,6 +1053,47 @@ func isResolvedPath(_ path: String, atOrBeneath ancestor: String) -> Bool {
     }
     let prefix = ancestor.hasSuffix("/") ? ancestor : ancestor + "/"
     return path.hasPrefix(prefix)
+}
+
+/// SBPL denying contained writes to workspace control paths (ISO-06).
+///
+/// Hooks and RV policy inside the workspace are consumed host-side after
+/// the run, so the cage must not plant or replace them. Inside `.git` the
+/// deny is the hooks subpath, the `config` file, and the `.git` entry
+/// itself. Index, objects, and refs stay writable so git keeps working.
+/// `.git/config` is a literal: `core.hooksPath`, `core.fsmonitor`, and
+/// `core.sshCommand` are how a contained process plants a hook the host
+/// later runs, and a subpath would also freeze the rest of `.git`. The
+/// `.rv` and `.config/rv` control dirs are denied whole.
+///
+/// A subpath deny alone is bypassable by renaming the parent directory
+/// aside, writing under the staged name, and renaming it back. Denying
+/// create/unlink of the `.git` and `.config` directory entries themselves
+/// closes that rename: an existing `.git` cannot move, and a staged tree
+/// cannot be renamed into place when `.git` is absent. `file-write-data`
+/// on the `.git` literal covers a worktree gitfile: create/unlink do not,
+/// and an in-place rewrite of the `gitdir:` line points the host at a
+/// tree the cage planted. Creating `.git` or `.config` at the workspace
+/// root inside the cage (`git init`) is denied as a consequence; the host
+/// can still init outside the cage.
+func workspaceControlDenies(workspacePath: String) -> String {
+    let hooks = escapeSeatbeltSubpath(workspacePath + "/.git/hooks")
+    let rv = escapeSeatbeltSubpath(workspacePath + "/.rv")
+    let configRV = escapeSeatbeltSubpath(workspacePath + "/.config/rv")
+    let gitConfig = escapeSeatbeltSubpath(workspacePath + "/.git/config")
+    let git = escapeSeatbeltSubpath(workspacePath + "/.git")
+    let config = escapeSeatbeltSubpath(workspacePath + "/.config")
+    return """
+    (deny file-write*
+        (subpath "\(hooks)")
+        (subpath "\(rv)")
+        (subpath "\(configRV)")
+        (literal "\(gitConfig)"))
+    (deny file-write-data file-write-unlink file-write-create
+        (literal "\(git)"))
+    (deny file-write-unlink file-write-create
+        (literal "\(config)"))
+    """
 }
 
 func escapeSeatbeltSubpath(_ path: String) -> String {

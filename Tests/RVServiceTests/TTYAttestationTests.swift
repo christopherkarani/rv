@@ -124,6 +124,32 @@ struct TTYAttestationTests {
         }
     }
 
+    @Test func attestWireMalformedHexFailsDecode() throws {
+        // 64-hex validation lives at the decode boundary: malformed
+        // wire bytes never reach dispatch (the frame path answers
+        // decodeFailed), while valid rows round-trip unchanged.
+        let valid = attestParams(command: "git reset --hard", code: "abcdef")
+        let roundTripped = try IPCJSON.decode(
+            IPCRequest.self,
+            from: IPCJSON.encode(IPCRequest(method: .attestTTYRedemption(valid)))
+        )
+        guard case .attestTTYRedemption(let params) = roundTripped.method else {
+            Issue.record("valid attest must decode")
+            return
+        }
+        #expect(params == valid)
+
+        let encoded = try IPCJSON.encode(IPCRequest(method: .attestTTYRedemption(valid)))
+        guard var text = String(data: encoded, encoding: .utf8) else {
+            Issue.record("attest frame must be UTF-8")
+            return
+        }
+        text = text.replacingOccurrences(of: valid.fingerprint.rawValue, with: "short")
+        #expect(throws: DecodingError.self) {
+            try IPCJSON.decode(IPCRequest.self, from: Data(text.utf8))
+        }
+    }
+
     @Test func doubleAttestPlantsOnce() async throws {
         let runtime = try makeRuntime()
         let params = attestParams(command: "git reset --hard", code: "abcdef")
@@ -305,12 +331,14 @@ struct TTYAttestationTests {
         codeHash: String? = nil
     ) -> AttestTTYRedemptionParams {
         AttestTTYRedemptionParams(
-            fingerprint: fingerprint ?? grantFingerprint(
-                Normalize.matchingView(of: command),
-                invocationPrefix: Normalize.invocationPrefix(of: command)
+            fingerprint: GrantFingerprint(
+                rawValue: fingerprint ?? grantFingerprint(
+                    Normalize.matchingView(of: command),
+                    invocationPrefix: Normalize.invocationPrefix(of: command)
+                ).rawValue
             ),
             cwd: wd("/tmp/ws"),
-            codeHash: codeHash ?? sha256Hex(code),
+            codeHash: CodeHash(rawValue: codeHash ?? sha256Hex(code)),
             clientSemver: ProtocolVersion.serviceSemver
         )
     }

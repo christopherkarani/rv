@@ -47,6 +47,38 @@ struct WorkspacePaneRenderPlan: Equatable, Sendable {
     }
 }
 
+/// Short text beside every colour/glyph status indicator, so runtime and
+/// focus state are never signalled by colour alone (UX-07).
+enum WorkspaceStatusLabel {
+    static func header(connection: ConnectionState, terminalNeedsAttention: Bool, phase: String, protected: Bool) -> String {
+        if connection == .disconnected { return "disconnected" }
+        if terminalNeedsAttention { return "attention" }
+        if phase == "active", protected { return "running" }
+        return "idle"
+    }
+
+    // Seven letters or fewer. "● "/"╭ " plus the word is then at most 9 cells,
+    // so a 22-cell leaf (PaneTree.minimumOuterSize) still has a title character
+    // beside a status column of at least 10 and the closing corner.
+    static func focus(focused: Bool) -> String { focused ? "focused" : "unfocus" }
+
+    static func paneIndicator(focused: Bool) -> String {
+        "\(focused ? "●" : "╭") \(focus(focused: focused))"
+    }
+
+    static func paneStatusWidth(outerWidth: Int) -> Int {
+        min(20, max(10, outerWidth / 3))
+    }
+
+    /// Title frame on the pane's top row, including the leading space before the title.
+    /// Two cells is the minimum that still shows one title character.
+    static func paneTitleWidth(outerWidth: Int, focused: Bool) -> Int {
+        let indicatorWidth = paneIndicator(focused: focused).count
+        let statusWidth = paneStatusWidth(outerWidth: outerWidth)
+        return max(0, outerWidth - indicatorWidth - 1 - statusWidth)
+    }
+}
+
 enum WorkspacePaneChrome {
     static func title(_ pane: WorkspacePane, terminal: WorkspaceTerminalState?) -> String {
         safe(pane.userTitle) ?? safe(terminal?.title) ?? "terminal"

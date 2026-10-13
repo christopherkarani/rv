@@ -639,6 +639,9 @@ func compileSeatbeltRequest(
         profile = profile.allowingAgentBin(agentBin)
     }
     profile = profile.allowingProductiveWorkspace(facts.productive)
+    // Last on purpose: SBPL is last-match, so the control-path deny must
+    // follow every write allow above (ISO-06).
+    profile = profile.denyingWorkspaceControlPaths()
     guard profile.workspacePath == facts.resolvedWorkspace else {
         return .failure(.workspacePathUnresolvable)
     }

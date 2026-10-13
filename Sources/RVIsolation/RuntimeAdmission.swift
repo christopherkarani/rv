@@ -8,8 +8,9 @@ import RVDomain
 import RVIPC
 import Synchronization
 
-/// In-memory admission evidence. A failed record is not represented: appending
-/// here cannot fail, and the shell records the final outcome before it returns.
+/// In-memory admission evidence. The shell records the final outcome before
+/// it returns, so the snapshot always holds the event; a failed file append
+/// is diagnosed on stderr by `appendAdmissionEvent` instead of vanishing.
 public final class RuntimeAdmissionEvidence: Sendable {
     private let events = Mutex<[RuntimeAdmissionEvent]>([])
     private let file: URL?
@@ -1108,6 +1109,14 @@ private func admissionResponse(
         }
         return .httpFailed(failure)
     }
+}
+
+/// Polled by name lookup while `getaddrinfo` runs on another thread.
+///
+/// The session loop sets this around normalize. A stuck resolver then cannot
+/// keep the contained process group alive after the leader exits.
+enum RuntimeAdmissionStop {
+    @TaskLocal static var shouldStop: @Sendable () -> Bool = { false }
 }
 
 /// Resolves a name without blocking the session reaper.

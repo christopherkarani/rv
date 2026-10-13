@@ -251,46 +251,14 @@ extension HTTPAddressClass {
 /// Project-approved SHA-256 over raw bytes, as lowercase hex.
 ///
 /// Pure Swift, cross-platform, no new dependency. This is the same audited
-/// core (`SHA256Hash`) that `AgentDefinitionRevision` and
+/// core (`RVSHA256Digest`) that `AgentDefinitionRevision` and
 /// `WorkspaceLaunchIntent` digest through; cross-module consumers (such as
 /// the host-prepared launch environment snapshot) use this entry point
 /// instead of inventing a hash scheme.
 public enum RVDigest {
     public static func sha256Hex(_ bytes: [UInt8]) -> String {
-        var hash = SHA256Hash()
+        var hash = RVSHA256Digest()
         hash.update(bytes)
-        return hash.digest().map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// Chunked SHA-256 over file bytes, as lowercase hex. Nil when the
-    /// file cannot be opened or read to end (missing, directory,
-    /// permission, mid-read IO failure). Follows symlinks exactly like
-    /// the exec path that consumes the measurement, so a swapped link
-    /// measures its new target. M4: custom-launch executable binding.
-    ///
-    /// `maxBytes` caps the read: a file longer than the cap refuses
-    /// with nil instead of hashing to EOF. The spawn-commit caller
-    /// passes the dispatch-captured size, so a swapped-in huge file
-    /// refuses after one over-read chunk instead of stalling the
-    /// supervisor state lock. Nil (default) keeps unbounded hashing
-    /// for callers with no prior size.
-    public static func sha256HexOfFile(atPath path: String, maxBytes: UInt64? = nil) -> String? {
-        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
-        defer { try? handle.close() }
-        var hash = SHA256Hash()
-        var total: UInt64 = 0
-        while true {
-            let chunk: Data?
-            do {
-                chunk = try handle.read(upToCount: 64 * 1024)
-            } catch {
-                return nil
-            }
-            guard let chunk, chunk.isEmpty == false else { break }
-            total += UInt64(chunk.count)
-            guard maxBytes.map({ total <= $0 }) ?? true else { return nil }
-            hash.update([UInt8](chunk))
-        }
         return hash.digest().map { String(format: "%02x", $0) }.joined()
     }
 }
@@ -301,7 +269,11 @@ enum HTTPDigest {
     }
 }
 
-private struct SHA256Hash {
+/// Incremental SHA-256 over raw bytes. Pure value semantics; the shell
+/// (`RVIsolation`'s file digest) drives this over file chunks.
+public struct RVSHA256Digest: Sendable {
+    public init() {}
+
     private static let k: [UInt32] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
         0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -320,7 +292,7 @@ private struct SHA256Hash {
     private var buffer: [UInt8] = []
     private var bitCount: UInt64 = 0
 
-    mutating func update(_ bytes: [UInt8]) {
+    public mutating func update(_ bytes: [UInt8]) {
         buffer.append(contentsOf: bytes)
         bitCount &+= UInt64(bytes.count) &* 8
         while buffer.count >= 64 {
@@ -329,7 +301,7 @@ private struct SHA256Hash {
         }
     }
 
-    mutating func digest() -> [UInt8] {
+    public func digest() -> [UInt8] {
         var copy = self
         let length = copy.bitCount
         copy.buffer.append(0x80)

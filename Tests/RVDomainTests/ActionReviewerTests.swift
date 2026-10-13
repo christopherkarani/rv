@@ -472,12 +472,6 @@ struct ActionReviewerTests {
                     kind: .read,
                     path: FileToolPath(rawValue: "/tmp/ghp_exampletoken/.env")
                 ),
-                effects: ActionEffects(),
-                resources: .filesystem(
-                    path: "/tmp/ghp_exampletoken/.env",
-                    scope: .unknown,
-                    kind: .unknown
-                ),
                 scope: ActionScope(
                     workingDirectory: WorkingDirectory(validating: "/tmp/ghp_exampletoken")
                 )

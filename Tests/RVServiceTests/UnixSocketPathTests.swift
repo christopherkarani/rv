@@ -27,6 +27,7 @@ struct UnixSocketPathTests {
         }
     }
 
+    #if os(Linux)
     @Test func productionReadsInjectedXDGNotTmpFallback() throws {
         let previous = liveXDG()
         let injected = shortRuntimeDir("i")
@@ -60,6 +61,63 @@ struct UnixSocketPathTests {
             try UnixSocketPath.production()
         }
     }
+    #else
+    @Test func injectedHomeResolvesUnderConfigRV() throws {
+        let socket = try UnixSocketPath.resolve(homeDirectory: "/Users/x")
+        #expect(socket.path == "/Users/x/.config/rv/evaluate.sock")
+        let trimmed = try UnixSocketPath.resolve(homeDirectory: "  /Users/x\n")
+        #expect(trimmed.path == "/Users/x/.config/rv/evaluate.sock")
+    }
+
+    @Test func unsetAndEmptyHomeFailClosed() {
+        #expect(throws: UnixSocketPathError.runtimeDirectoryMissing) {
+            try UnixSocketPath.resolve(homeDirectory: nil)
+        }
+        #expect(throws: UnixSocketPathError.runtimeDirectoryMissing) {
+            try UnixSocketPath.resolve(homeDirectory: "")
+        }
+        #expect(throws: UnixSocketPathError.runtimeDirectoryMissing) {
+            try UnixSocketPath.resolve(homeDirectory: "   ")
+        }
+    }
+
+    @Test func homePathTooLongFailsClosed() {
+        #expect(throws: UnixSocketPathError.pathTooLong) {
+            _ = try UnixSocketPath.resolve(homeDirectory: "/" + String(repeating: "x", count: 90))
+        }
+    }
+
+    @Test func productionReadsInjectedHome() throws {
+        let previous = liveHome()
+        let injected = shortRuntimeDir("h")
+        setenv("HOME", injected.path, 1)
+        defer { restoreHome(previous) }
+
+        let socket = try UnixSocketPath.production()
+        #expect(socket.path == injected.path + "/.config/rv/evaluate.sock")
+        #expect(socket.lastPathComponent == UnixSocketPath.socketFileName)
+    }
+
+    @Test func productionUnsetHomeThrows() throws {
+        let previous = liveHome()
+        unsetenv("HOME")
+        defer { restoreHome(previous) }
+
+        #expect(throws: UnixSocketPathError.runtimeDirectoryMissing) {
+            try UnixSocketPath.production()
+        }
+    }
+
+    @Test func productionEmptyHomeThrows() throws {
+        let previous = liveHome()
+        setenv("HOME", "", 1)
+        defer { restoreHome(previous) }
+
+        #expect(throws: UnixSocketPathError.runtimeDirectoryMissing) {
+            try UnixSocketPath.production()
+        }
+    }
+    #endif
 
     @Test func prepareRuntimeCreatesOwnerOnlyDirs() throws {
         let xdg = shortRuntimeDir("p")
@@ -70,6 +128,54 @@ struct UnixSocketPathTests {
         #expect(try UnixSocketPath.posixMode(of: xdg) & 0o777 == 0o700)
         #expect(try UnixSocketPath.posixMode(of: socket.deletingLastPathComponent()) & 0o777 == 0o700)
         #expect(FileManager.default.fileExists(atPath: socket.path) == false)
+    }
+
+    @Test func prepareRuntimeTightensSafePreexistingBaseToOwnerOnly() throws {
+        let base = shortRuntimeDir("b")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: base.path
+        )
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let socket = try UnixSocketPath.resolve(xdgRuntimeDir: base.path)
+        try UnixSocketPath.prepareRuntime(for: socket)
+
+        #expect(try UnixSocketPath.posixMode(of: base) & 0o777 == 0o700)
+        #expect(try UnixSocketPath.posixMode(of: socket.deletingLastPathComponent()) & 0o777 == 0o700)
+    }
+
+    @Test func prepareRuntimeRejectsGroupOrWorldWritableBase() throws {
+        for mode in [0o770, 0o707] {
+            let base = shortRuntimeDir("w")
+            try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: base) }
+            try FileManager.default.setAttributes(
+                [.posixPermissions: mode],
+                ofItemAtPath: base.path
+            )
+
+            let socket = try UnixSocketPath.resolve(xdgRuntimeDir: base.path)
+            #expect(throws: UnixSocketPathError.permission) {
+                try UnixSocketPath.prepareRuntime(for: socket)
+            }
+            #expect(try UnixSocketPath.posixMode(of: base) & 0o777 == mode)
+            #expect(FileManager.default.fileExists(atPath: socket.deletingLastPathComponent().path) == false)
+        }
+    }
+
+    @Test func xdgResolveUsesPlatformPathBudget() throws {
+        // 106 bytes + NUL: fits the Linux 108 budget, exceeds Darwin's 104.
+        let base = "/" + String(repeating: "y", count: 89 - 1)
+        #if os(Linux)
+        let socket = try UnixSocketPath.resolve(xdgRuntimeDir: base)
+        #expect(socket.path.hasSuffix("/rv/evaluate.sock"))
+        #else
+        #expect(throws: UnixSocketPathError.pathTooLong) {
+            _ = try UnixSocketPath.resolve(xdgRuntimeDir: base)
+        }
+        #endif
     }
 }
 
@@ -89,5 +195,17 @@ private func restoreXDG(_ previous: String?) {
         setenv("XDG_RUNTIME_DIR", previous, 1)
     } else {
         unsetenv("XDG_RUNTIME_DIR")
+    }
+}
+
+private func liveHome() -> String? {
+    getenv("HOME").map { String(cString: $0) }
+}
+
+private func restoreHome(_ previous: String?) {
+    if let previous {
+        setenv("HOME", previous, 1)
+    } else {
+        unsetenv("HOME")
     }
 }

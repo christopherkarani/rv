@@ -192,4 +192,58 @@ struct CommandContextTests {
         }
         #expect(found == home)
     }
+
+    @Test func requested_plainIsPrettyAndRobotWins() {
+        #expect(CommandContext.requested(json: false, robot: false, plain: true) == .pretty)
+        #expect(CommandContext.requested(json: true, robot: false, plain: true) == .robot)
+        #expect(CommandContext.requested(json: false, robot: true, plain: true) == .robot)
+        #expect(CommandContext.requested(json: false, robot: false, plain: false) == .automatic)
+    }
+
+    @Test func current_plainPipedIsPrettyNotRobot() throws {
+        let ctx = try withCLIProcess(environment: [:], stdinIsTTY: false, stdoutIsTTY: false) {
+            CommandContext.current(command: "test", json: false, robot: false, plain: true, noColor: false)
+        }
+        #expect(ctx.requested == .pretty)
+        #expect(ctx.explicitRobot == false)
+        #expect(ctx.isRobot == false)
+        #expect(ctx.appearance == .pretty(colorOffPalette))
+    }
+
+    @Test func current_plainBeatsCI() throws {
+        let ctx = try withCLIProcess(environment: ["CI": "1"], stdinIsTTY: false, stdoutIsTTY: false) {
+            CommandContext.current(command: "doctor", json: false, robot: false, plain: true, noColor: false)
+        }
+        #expect(ctx.requested == .pretty)
+        #expect(ctx.isRobot == false)
+        #expect(ctx.appearance == .pretty(colorOffPalette))
+    }
+
+    @Test func current_plainViaFormatFlagsPipedIsPretty() throws {
+        let format = try FormatFlags.parse(["--plain"])
+        let ctx = try withCLIProcess(environment: [:], stdinIsTTY: false, stdoutIsTTY: false) {
+            CommandContext.current(command: "explain", format: format)
+        }
+        #expect(ctx.requested == .pretty)
+        #expect(ctx.isRobot == false)
+        #expect(ctx.appearance == .pretty(colorOffPalette))
+    }
+
+    @Test func current_jsonBeatsPlainEvenPiped() throws {
+        let ctx = try withCLIProcess(environment: [:], stdinIsTTY: false, stdoutIsTTY: false) {
+            CommandContext.current(command: "doctor", json: true, robot: false, plain: true, noColor: false)
+        }
+        #expect(ctx.requested == .robot)
+        #expect(ctx.explicitRobot)
+        #expect(ctx.appearance == .robot)
+    }
+
+    @Test func resolveAppearance_plainPipedIsPretty() throws {
+        try withCLIProcess(environment: [:], stdinIsTTY: false, stdoutIsTTY: false) {
+            #expect(
+                CommandContext.resolveAppearance(json: false, robot: false, plain: true, noColor: false)
+                    == .pretty(colorOffPalette)
+            )
+        }
+    }
 }

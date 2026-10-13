@@ -8,8 +8,9 @@ import RVDomain
 /// `hook --host claude` is outdated rv: setup rewrites without `--force`.
 ///
 /// Round-trip, strip/insert/uninstall, and locate delegate to
-/// `HostHooksMergeEngine` via `wiringDescriptor`; inspection (occupancy,
-/// stale-legacy, matcher coverage) stays here over the engine's locate.
+/// `HostHooksMergeEngine` via `wiringDescriptor`; merge/inspect policy
+/// delegates to `SettingsMergePolicy` via `mergeDescriptor`, with the
+/// stale-legacy arm as descriptor data.
 enum ClaudeSettingsMerge {
     static let settingsFileName = "settings.json"
     static let hooksRootKey = "hooks"
@@ -33,103 +34,68 @@ enum ClaudeSettingsMerge {
         }
     )
 
+    static let mergeDescriptor = SettingsMergeDescriptor(
+        wiring: wiringDescriptor,
+        matchers: matchers,
+        fileMatchers: fileMatchers,
+        hookType: hookType,
+        timeout: timeout,
+        fingerprint: fingerprint,
+        legacyFingerprint: fingerprintLegacy
+    )
+
     static func adapterPath(settingsPath: String) -> String {
-        (settingsPath as NSString).deletingLastPathComponent + "/hooks/rv-guard.py"
+        SettingsMergePolicy.adapterPath(configPath: settingsPath, descriptor: mergeDescriptor)
     }
 
     static func hookCommand(rvPath: String, adapterPath: String) -> String {
-        "RV_BINARY=\(rvPath) python3 \(adapterPath)"
+        SettingsMergePolicy.hookCommand(rvPath: rvPath, adapterPath: adapterPath)
     }
 
     static func isFingerprinted(command: String) -> Bool {
-        command.contains(fingerprintLegacy) || command.contains(fingerprint)
+        SettingsMergePolicy.isFingerprinted(command: command, descriptor: mergeDescriptor)
     }
 
     static func adapterPath(in command: String) -> String? {
-        let marker = " python3 "
-        if let range = command.range(of: marker) {
-            let path = String(command[range.upperBound...])
-            return path.hasPrefix("/") ? path : nil
-        }
-        let prefix = "python3 "
-        guard command.hasPrefix(prefix) else { return nil }
-        let path = String(command.dropFirst(prefix.count))
-        return path.hasPrefix("/") ? path : nil
+        SettingsMergePolicy.adapterPath(in: command)
     }
 
     static func bakedRvPath(in command: String) -> String? {
-        let envPrefix = "RV_BINARY="
-        if command.hasPrefix(envPrefix) {
-            let rest = command.dropFirst(envPrefix.count)
-            guard let space = rest.firstIndex(of: " ") else { return nil }
-            let path = String(rest[..<space])
-            return path.hasPrefix("/") && path.isEmpty == false ? path : nil
-        }
-        let suffix = " \(fingerprintLegacy)"
-        guard command.hasSuffix(suffix) else { return nil }
-        let path = String(command.dropLast(suffix.count))
-        guard path.hasPrefix("python3 ") == false, path.contains(" python3 ") == false else {
-            return nil
-        }
-        return path.hasPrefix("/") && path.isEmpty == false ? path : nil
+        SettingsMergePolicy.bakedRvPath(in: command, descriptor: mergeDescriptor)
     }
 
     static func matchesCurrentHook(_ hook: JSONValue) -> Bool {
-        guard let type = hook["type"]?.string, type == hookType,
-              let command = hook["command"]?.string,
-              let path = bakedRvPath(in: command),
-              path.hasPrefix("/"),
-              let adapter = adapterPath(in: command),
-              adapter.hasPrefix("/"),
-              adapter.hasSuffix("/hooks/rv-guard.py"),
-              hook["timeout"]?.int == timeout
-        else {
-            return false
-        }
-        return command == hookCommand(rvPath: path, adapterPath: adapter)
+        SettingsMergePolicy.matchesCurrentHook(hook, descriptor: mergeDescriptor)
     }
 
     static func isFingerprintedHook(_ hook: JSONValue) -> Bool {
-        HostHooksMergeEngine.isFingerprintedHook(hook, descriptor: wiringDescriptor)
+        SettingsMergePolicy.isFingerprintedHook(hook, descriptor: mergeDescriptor)
     }
 
     /// v1 `…/rv hook --host claude` is our stale command, not a foreign guard.
     static func isStaleLegacyHook(_ hook: JSONValue) -> Bool {
-        guard let type = hook["type"]?.string, type == hookType,
-              let command = hook["command"]?.string
-        else {
-            return false
-        }
-        return command.contains(fingerprintLegacy) && command.contains(fingerprint) == false
+        SettingsMergePolicy.isStaleLegacyHook(hook, descriptor: mergeDescriptor)
     }
 
     static func hookEntry(rvPath: String, adapterPath: String) -> HookEntry {
-        HookEntry(
-            command: hookCommand(rvPath: rvPath, adapterPath: adapterPath),
-            timeout: timeout,
-            type: hookType,
-            failClosed: nil,
-            statusMessage: nil
+        SettingsMergePolicy.hookEntry(
+            rvPath: rvPath,
+            adapterPath: adapterPath,
+            descriptor: mergeDescriptor
         )
     }
 
     static func rvEntry(rvPath: String, adapterPath: String, matcher: String) -> JSONValue {
-        .object([
-            "matcher": .string(matcher),
-            "hooks": .array([
-                HostHooksMergeEngine.hookValue(
-                    hookEntry(rvPath: rvPath, adapterPath: adapterPath)
-                ),
-            ]),
-        ])
+        SettingsMergePolicy.rvEntry(
+            rvPath: rvPath,
+            adapterPath: adapterPath,
+            matcher: matcher,
+            descriptor: mergeDescriptor
+        )
     }
 
     static func hasFileToolMatchers(in root: [String: JSONValue]) -> Bool {
-        let present = Set(
-            HostHooksMergeEngine.locateFingerprintedHooks(in: root, descriptor: wiringDescriptor)
-                .compactMap { $0.matcher }
-        )
-        return Set(fileMatchers).isSubset(of: present)
+        SettingsMergePolicy.hasFileToolMatchers(in: root, descriptor: mergeDescriptor)
     }
 
     /// Returns merged settings bytes and whether content changed.
@@ -141,18 +107,15 @@ enum ClaudeSettingsMerge {
         force: Bool
     ) throws -> (data: Data, wrote: Bool) {
         do {
-            return try HostHooksMergeEngine.merge(
+            return try SettingsMergePolicy.merge(
                 existingData: existingData,
-                descriptor: wiringDescriptor,
-                context: HookCommandContext(rvPath: rvPath, adapterPath: adapterPath),
-                willMerge: { root in
-                    if force == false, inspectionState(of: root) == .occupied {
-                        throw ClaudeSettingsMergeError.occupiedWithoutForce
-                    }
-                }
+                descriptor: mergeDescriptor,
+                rvPath: rvPath,
+                adapterPath: adapterPath,
+                force: force
             )
-        } catch let error as ClaudeSettingsMergeError {
-            throw error
+        } catch SettingsMergeError.occupiedWithoutForce {
+            throw ClaudeSettingsMergeError.occupiedWithoutForce
         } catch {
             throw ClaudeSettingsMergeError.unreadable
         }
@@ -161,9 +124,9 @@ enum ClaudeSettingsMerge {
     /// Strips rv-fingerprinted hooks. Returns `nil` when the file should be removed.
     static func uninstall(existingData: Data) throws -> Data? {
         do {
-            return try HostHooksMergeEngine.uninstall(
+            return try SettingsMergePolicy.uninstall(
                 existingData: existingData,
-                descriptor: wiringDescriptor
+                descriptor: mergeDescriptor
             )
         } catch {
             throw ClaudeSettingsMergeError.unreadable
@@ -176,61 +139,28 @@ enum ClaudeSettingsMerge {
         /// Our v1 `hook --host claude` command. Setup rewrites without `--force`.
         case outdated
         case wired(bakedPath: String)
+
+        init(_ shared: SettingsMergePolicy.InspectionState) {
+            switch shared {
+            case .absentFile:
+                self = .absentFile
+            case .occupied:
+                self = .occupied
+            case .outdated:
+                self = .outdated
+            case .wired(let bakedPath):
+                self = .wired(bakedPath: bakedPath)
+            }
+        }
     }
 
     static func inspectionState(of data: Data?) -> InspectionState {
-        guard let data else { return .absentFile }
-        guard let root = try? HostHooksMergeEngine.parseRoot(data) else { return .occupied }
-        return inspectionState(of: root)
+        InspectionState(SettingsMergePolicy.inspectionState(of: data, descriptor: mergeDescriptor))
     }
 
     static func inspectionState(of root: [String: JSONValue]) -> InspectionState {
-        let located = HostHooksMergeEngine.locateFingerprintedHooks(
-            in: root,
-            descriptor: wiringDescriptor
-        )
-        guard located.isEmpty == false else { return .absentFile }
-
-        var allCurrent = true
-        var hasStaleLegacy = false
-        var hasNonCurrentGuard = false
-        for item in located {
-            if let itemMatcher = item.matcher,
-               matchers.contains(itemMatcher),
-               matchesCurrentHook(item.hook)
-            {
-                continue
-            }
-            allCurrent = false
-            if isStaleLegacyHook(item.hook) {
-                hasStaleLegacy = true
-            } else {
-                hasNonCurrentGuard = true
-            }
-        }
-
-        if allCurrent {
-            guard let bakedPath = located.compactMap({
-                bakedRvPath(in: $0.hook["command"]?.string ?? "")
-            }).first
-            else {
-                return .occupied
-            }
-            let present = Set(located.compactMap { $0.matcher })
-            if Set(matchers).isSubset(of: present) {
-                return .wired(bakedPath: bakedPath)
-            }
-            return .outdated
-        }
-        if hasNonCurrentGuard {
-            return .occupied
-        }
-        if hasStaleLegacy {
-            return .outdated
-        }
-        return .occupied
+        InspectionState(SettingsMergePolicy.inspectionState(of: root, descriptor: mergeDescriptor))
     }
-
 }
 
 enum ClaudeSettingsMergeError: Error, Sendable, Equatable {

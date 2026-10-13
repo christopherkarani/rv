@@ -1,4 +1,5 @@
 import Foundation
+import OrderedCollections
 import RVDomain
 
 /// Step 8B.1 sole authority for allow-once grants: service-held, ephemeral,
@@ -23,38 +24,34 @@ import RVDomain
 /// M-07: the fingerprint covers the masked view only, so same-view commands
 /// with different hidden payloads would share authority. Bound grants also
 /// carry a payload digest of the exact masked segments; spend recomputes
-/// and requires equality. Hook-ceremony plants bind `payloadBinding`, a
-/// digest under a per-table random salt. TTY attestation plants bind
-/// `payloadContentBinding`, the unsalted content digest the genuine CLI
-/// reviewed (the daemon never sees exact text there, so no salted digest
-/// is computable). Unbound grants (legacy rows without a digest) keep
-/// legacy behavior for known-unmasked spends and fail closed on masked
-/// spends. The salt and the segments never leave this actor.
+/// and requires equality. Hook-ceremony plants bind `.salted`, a digest
+/// under a per-table random salt. TTY attestation plants bind `.content`,
+/// the unsalted content digest the genuine CLI reviewed (the daemon never
+/// sees exact text there, so no salted digest is computable). `.unbound`
+/// grants (legacy rows without a digest) keep legacy behavior for
+/// known-unmasked spends and fail closed on masked spends. The salt and
+/// the segments never leave this actor.
 public actor EphemeralAllowOnceTable {
     public struct Grant: Sendable, Equatable {
-        public let fingerprint: String
+        public let fingerprint: GrantFingerprint
         public let cwd: WorkingDirectory
-        public let codeHash: String
-        public let pendingID: String?
+        public let codeHash: CodeHash
+        public let pendingID: ApprovalID?
         public let createdAt: Date
         public let expiresAt: Date
-        /// Salted masked-payload digest, or nil for unbound (legacy) plants.
-        public let payloadBinding: String?
-        /// Unsalted content digest from TTY attestation, when the reviewed
-        /// row carried one. Mutually exclusive with `payloadBinding` in
-        /// practice: hook plants set the salted form, attest plants the
-        /// content form, legacy plants neither.
-        public let payloadContentBinding: String?
+        /// The grant's one payload binding: unbound (legacy), salted
+        /// (hook ceremony), or content (TTY attestation). Exactly one by
+        /// construction; a both-bound grant does not compile.
+        public let binding: PayloadBinding
 
         public init(
-            fingerprint: String,
+            fingerprint: GrantFingerprint,
             cwd: WorkingDirectory,
-            codeHash: String,
-            pendingID: String? = nil,
+            codeHash: CodeHash,
+            pendingID: ApprovalID? = nil,
             createdAt: Date,
             expiresAt: Date,
-            payloadBinding: String? = nil,
-            payloadContentBinding: String? = nil
+            binding: PayloadBinding = .unbound
         ) {
             self.fingerprint = fingerprint
             self.cwd = cwd
@@ -62,8 +59,7 @@ public actor EphemeralAllowOnceTable {
             self.pendingID = pendingID
             self.createdAt = createdAt
             self.expiresAt = expiresAt
-            self.payloadBinding = payloadBinding
-            self.payloadContentBinding = payloadContentBinding
+            self.binding = binding
         }
     }
 
@@ -101,11 +97,8 @@ public actor EphemeralAllowOnceTable {
     /// (audit only — never an expiry). Retained for the table lifetime
     /// and evicted FIFO past `maxRedeemedCodes`, never pruned by grant
     /// expiry: expiry-pruning let a replayed attestation re-plant.
-    private var redeemedCodes: [String: Date] = [:]
-    /// Record order for FIFO eviction. Codes leave the map only in
-    /// `evictRedeemedCodesIfNeeded`, which pops this array in step, so
-    /// the order always mirrors the map exactly.
-    private var redeemedOrder: [String] = []
+    /// One ordered store: insertion order is the eviction order.
+    private var redeemedCodes: OrderedDictionary<CodeHash, Date> = [:]
     /// M-07 per-table random salt for payload bindings. Fresh per init, so
     /// per daemon boot in production; bindings never verify across tables.
     private let payloadSalt: [UInt8]
@@ -140,14 +133,20 @@ public actor EphemeralAllowOnceTable {
         invocationPrefix: [String] = []
     ) -> PlantResult {
         guard matchingView.rawValue.isEmpty == false else { return .refused }
-        return plant(
+        let binding: PayloadBinding
+        if let maskedSegments {
+            binding = .salted(maskedPayloadSaltedDigest(maskedSegments, salt: payloadSalt))
+        } else {
+            binding = .unbound
+        }
+        return plantCore(
             fingerprint: grantFingerprint(matchingView, invocationPrefix: invocationPrefix),
             cwd: cwd,
-            codeHash: codeHash,
-            pendingID: pendingID,
+            codeHash: CodeHash(rawValue: codeHash),
+            pendingID: pendingID.map(ApprovalID.init(rawValue:)),
             now: now,
             ttl: ttl,
-            maskedSegments: maskedSegments
+            binding: binding
         )
     }
 
@@ -160,19 +159,45 @@ public actor EphemeralAllowOnceTable {
     /// M-07: `payloadContentDigest` binds the grant to the reviewed row's
     /// payload digest (a digest only — exact segments never cross IPC).
     /// Nil plants unbound (legacy rows); spend then fails closed on
-    /// masked commands.
+    /// masked commands. This entry takes no masked segments, so a
+    /// both-bound plant does not compile.
     public func plant(
-        fingerprint: String,
+        fingerprint: GrantFingerprint,
         cwd: WorkingDirectory,
-        codeHash: String,
-        pendingID: String? = nil,
+        codeHash: CodeHash,
+        pendingID: ApprovalID? = nil,
         now: Date,
         ttl: TimeInterval = EphemeralAllowOnceTable.maxTTL,
-        maskedSegments: [String]? = nil,
-        payloadContentDigest: String? = nil
+        payloadContentDigest: ContentPayloadDigest? = nil
     ) -> PlantResult {
-        guard fingerprint.isEmpty == false else { return .refused }
-        guard codeHash.isEmpty == false else { return .refused }
+        let binding: PayloadBinding
+        if let payloadContentDigest {
+            binding = .content(payloadContentDigest)
+        } else {
+            binding = .unbound
+        }
+        return plantCore(
+            fingerprint: fingerprint,
+            cwd: cwd,
+            codeHash: codeHash,
+            pendingID: pendingID,
+            now: now,
+            ttl: ttl,
+            binding: binding
+        )
+    }
+
+    private func plantCore(
+        fingerprint: GrantFingerprint,
+        cwd: WorkingDirectory,
+        codeHash: CodeHash,
+        pendingID: ApprovalID?,
+        now: Date,
+        ttl: TimeInterval,
+        binding: PayloadBinding
+    ) -> PlantResult {
+        guard fingerprint.rawValue.isEmpty == false else { return .refused }
+        guard codeHash.rawValue.isEmpty == false else { return .refused }
         prune(now: now)
         guard redeemedCodes[codeHash] == nil else { return .alreadyRedeemed }
         guard grants.count < Self.maxGrants else { return .refused }
@@ -184,11 +209,9 @@ public actor EphemeralAllowOnceTable {
             pendingID: pendingID,
             createdAt: now,
             expiresAt: now.addingTimeInterval(clampedTTL),
-            payloadBinding: maskedSegments.map { maskedPayloadSaltedDigest($0, salt: payloadSalt) },
-            payloadContentBinding: payloadContentDigest
+            binding: binding
         )
         redeemedCodes[codeHash] = now
-        redeemedOrder.append(codeHash)
         evictRedeemedCodesIfNeeded()
         grants[UUID()] = grant
         return .planted
@@ -238,16 +261,17 @@ public actor EphemeralAllowOnceTable {
     /// spends and fail closed when the spend hides a payload the grant
     /// cannot vouch for.
     private func payloadMatches(grant: Grant, spend: [String]?) -> Bool {
-        if let binding = grant.payloadBinding {
+        switch grant.binding {
+        case .salted(let binding):
             guard let spend else { return false }
             return maskedPayloadSaltedDigest(spend, salt: payloadSalt) == binding
-        }
-        if let content = grant.payloadContentBinding {
+        case .content(let content):
             guard let spend else { return false }
             return maskedPayloadContentDigest(spend) == content
+        case .unbound:
+            guard let spend else { return true }
+            return spend.isEmpty
         }
-        guard let spend else { return true }
-        return spend.isEmpty
     }
 
     private func prune(now: Date) {
@@ -256,11 +280,10 @@ public actor EphemeralAllowOnceTable {
     }
 
     /// FIFO eviction past `maxRedeemedCodes`. Codes are only ever
-    /// removed here, so the order array always mirrors the map.
+    /// removed here, from the front of the ordered store.
     private func evictRedeemedCodesIfNeeded() {
-        while redeemedCodes.count > Self.maxRedeemedCodes, redeemedOrder.isEmpty == false {
-            let oldest = redeemedOrder.removeFirst()
-            redeemedCodes.removeValue(forKey: oldest)
+        while redeemedCodes.count > Self.maxRedeemedCodes, redeemedCodes.isEmpty == false {
+            redeemedCodes.removeFirst()
         }
     }
 }

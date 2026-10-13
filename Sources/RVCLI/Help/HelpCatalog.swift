@@ -102,7 +102,7 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Isolation", rows: [
                 HelpRow(name: "files", description: "Workspace read and write, plus the system locations needed to start programs. Children inherit those rules"),
-                HelpRow(name: "limits", description: "Public HTTPS through the RV proxy; loopback allowed. Direct public, LAN, and metadata connections denied, as are Unix-socket connections to host sockets. Signals outside the sandbox are denied. Linux refuses launch until it can enforce the same limits"),
+                HelpRow(name: "limits", description: "Public HTTPS through the RV proxy; loopback allowed. Direct public, LAN, and metadata connections denied, as are Unix-socket connections to host sockets. Signals outside the sandbox are denied. Linux refuses launch until it can enforce the same limits. Limits: \(AcceptedRuntimeLimits.line)"),
                 HelpRow(name: "failure", description: "Sandbox initialization failure stops execution; no unrestricted fallback"),
             ]),
         ],
@@ -119,10 +119,10 @@ enum HelpCatalog {
                 HelpRow(name: "rv workspace status [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace close [--workspace <absolute-path>]"),
                 HelpRow(name: "rv workspace run [--rows N] [--columns N] [--resource-profile <id>] [--hook <tag>] -- <absolute-executable> [args...]"),
-                HelpRow(name: "rv workspace agent [--workspace <absolute-path>] [--rows N] [--columns N] <definition-id> -- [args...]", description: "Launch a trusted operator-configured Agent Definition"),
-                HelpRow(name: "rv workspace custom [--workspace <absolute-path>] [--rows N] [--columns N] --expected-content-digest-sha256 <digest> -- <absolute-executable> [args...]", description: "Launch an ad-hoc definition; executable image verification is deferred"),
+                HelpRow(name: "rv workspace agent [--workspace <absolute-path>] [--rows N] [--columns N] <definition-id> -- [args...]", description: "Launch a trusted operator-configured Agent Definition (not yet available)"),
+                HelpRow(name: "rv workspace custom [--workspace <absolute-path>] [--rows N] [--columns N] --expected-content-digest-sha256 <digest> -- <absolute-executable> [args...]", description: "Launch an ad-hoc definition (not yet available); executable image verification is deferred"),
                 HelpRow(name: "rv workspace tui [--workspace <project-path>]", description: "Interactive terminal workspace for contained runtimes"),
-                HelpRow(name: "rv workspace abandon [--workspace <absolute-path>]", description: "Discard a blocked workspace's unpublished volume and restore the saved tree"),
+                HelpRow(name: "rv workspace abandon [--workspace <absolute-path>]", description: "Discard a blocked workspace's unpublished volume and restore the saved tree (not yet available)"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--workspace", description: "Project path; default is the current directory"),
@@ -145,8 +145,12 @@ enum HelpCatalog {
                 HelpRow(name: "--explain", description: "Print explain steps"),
                 HelpRow(name: "--json", description: "Robot JSON on stdout"),
                 HelpRow(name: "--robot", description: "Robot JSON on stdout"),
-                HelpRow(name: "--plain", description: "Disable browse and color"),
+                HelpRow(name: "--plain", description: "Plain human output without color, even when piped"),
                 HelpRow(name: "--no-color", description: "Disable color"),
+            ]),
+            HelpSection(heading: "Exit codes", rows: [
+                HelpRow(name: "0", description: "Allow"),
+                HelpRow(name: "1", description: "Deny (or incomplete evaluation)"),
             ]),
         ],
         examples: [
@@ -165,7 +169,7 @@ enum HelpCatalog {
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--json", description: "Robot JSON on stdout"),
                 HelpRow(name: "--robot", description: "Robot JSON on stdout"),
-                HelpRow(name: "--plain", description: "Disable browse and color"),
+                HelpRow(name: "--plain", description: "Plain human output without color, even when piped"),
                 HelpRow(name: "--no-color", description: "Disable color"),
             ]),
         ],
@@ -280,7 +284,7 @@ enum HelpCatalog {
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--json", description: "Robot JSON on stdout"),
                 HelpRow(name: "--robot", description: "Robot JSON on stdout"),
-                HelpRow(name: "--plain", description: "Disable browse and color"),
+                HelpRow(name: "--plain", description: "Plain human output without color, even when piped"),
                 HelpRow(name: "--no-color", description: "Disable color"),
             ]),
         ],

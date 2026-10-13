@@ -400,11 +400,7 @@ func stripWriterRedirectWords(_ args: [String]) -> [String] {
             }
             continue
         }
-        if writerInputSeparators.contains(word) {
-            args.formIndex(after: &index)
-            continue
-        }
-        if stripWriterAttachedWord(word) {
+        if RedirectOperatorLexer.isAttachedRedirectWord(word) {
             args.formIndex(after: &index)
             continue
         }
@@ -412,30 +408,6 @@ func stripWriterRedirectWords(_ args: [String]) -> [String] {
         args.formIndex(after: &index)
     }
     return clean
-}
-
-private let writerInputSeparators: Set<String> = [
-    "<", "<<", "<<-", "<<<", "0<", "1<",
-]
-
-private func stripWriterAttachedWord(_ word: String) -> Bool {
-    if word.contains(">&") || word.contains("<&") {
-        return true
-    }
-    if word.hasPrefix(">") || word.hasPrefix("<") || word.hasPrefix("&>") {
-        return true
-    }
-    var digits = word.startIndex
-    while digits < word.endIndex, word[digits].isNumber {
-        word.formIndex(after: &digits)
-    }
-    if digits > word.startIndex, digits < word.endIndex {
-        let next = word[digits]
-        if next == ">" || next == "<" {
-            return true
-        }
-    }
-    return false
 }
 
 private func writerParsed(
