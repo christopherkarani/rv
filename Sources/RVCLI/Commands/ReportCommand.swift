@@ -260,7 +260,7 @@ struct ReportCommand: AsyncParsableCommand {
             configDirectory: configDirectory,
             home: URL(fileURLWithPath: home.rawValue, isDirectory: true),
             processEnvironment: ProcessInfo.processInfo.environment,
-            managed: ManagedPolicyLocation.installed.load(),
+            managed: ManagedRun.installed(home: home),
             managedDirectory: ManagedPolicyLocation.installedDirectory,
             now: Date(),
             hostName: ProcessInfo.processInfo.hostName,

@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import RVIsolation
 import RVPolicy
 
 /// `rv managed`: inspect, prepare, and sign the organization policy bundle.
@@ -12,7 +13,14 @@ enum ManagedRun {
         var serial: Int?
         var sha256: String?
         var signed: Bool?
+        var signingKey: Int?
+        var highestSerial: Int?
         var restrictions: [String]?
+    }
+
+    /// The installed policy after the anti-rollback check against the user's serial record.
+    static func installed(home: HomeDirectory) -> ManagedPolicyState {
+        ManagedPolicyLocation.installed.load(serialsIn: RVPolicyPaths.configDirectory(home: home))
     }
 
     static func status(_ state: ManagedPolicyState, directory: String) -> Status {
@@ -25,6 +33,7 @@ enum ManagedRun {
             return Status(
                 state: "active", directory: bundle.directory, organization: bundle.policy.organization,
                 serial: bundle.policy.serial, sha256: bundle.sha256, signed: bundle.isSigned,
+                signingKey: bundle.signingKey, highestSerial: bundle.highestSerial,
                 restrictions: restrictions(bundle.policy))
         }
     }
@@ -37,11 +46,17 @@ enum ManagedRun {
             return "organization policy INVALID: \(status.reason ?? "unknown")\n"
                 + "MCP and secret staging are disabled until it is fixed (\(status.directory))\n"
         default:
+            let signature = switch (status.signed, status.signingKey) {
+            case (true, let key?): "signed by key \(key) in \(ManagedPolicyLocation.publicKeyFile)"
+            case (true, nil): "signed (\(ManagedPolicyLocation.publicKeyFile) pinned)"
+            default: "unsigned"
+            }
             var lines = [
                 "organization policy active: \(status.organization ?? "unnamed")"
                     + (status.serial.map { " serial \($0)" } ?? ""),
-                "  \(status.signed == true ? "signed (org-key.pub pinned)" : "unsigned") sha256 \(status.sha256 ?? "")",
+                "  \(signature) sha256 \(status.sha256 ?? "")",
             ]
+            if let highest = status.highestSerial { lines.append("  anti-rollback: highest serial accepted here is \(highest)") }
             let rules = status.restrictions ?? []
             lines += rules.isEmpty ? ["  no restrictions"] : rules.map { "  " + $0 }
             return lines.joined(separator: "\n") + "\n"
@@ -144,7 +159,8 @@ struct ManagedStatus: AsyncParsableCommand {
     func run() throws {
         let ctx = CommandContext.current(command: "managed status", format: format)
         let status = ManagedRun.status(
-            ManagedPolicyLocation.installed.load(), directory: ManagedPolicyLocation.installedDirectory)
+            ctx.home.map { ManagedRun.installed(home: $0) } ?? ManagedPolicyLocation.installed.load(),
+            directory: ManagedPolicyLocation.installedDirectory)
         if ctx.explicitRobot {
             ctx.writeStdout(jsonText(status))
         } else {

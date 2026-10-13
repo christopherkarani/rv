@@ -500,6 +500,8 @@ enum HelpCatalog {
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "location", description: "\(ManagedPolicyLocation.installedDirectory) (root-owned)"),
                 HelpRow(name: "files", description: "policy.json; org-key.pub pins a key, then policy.json.sig is required"),
+                HelpRow(name: "rotation", description: "org-key.pub may list several keys, one per line (# comments); any one verifies"),
+                HelpRow(name: "serial", description: "A serial lower than one already accepted is a rollback and makes the policy invalid"),
                 HelpRow(name: "restrict-only", description: "Org rules only tighten mcp.json and secrets.json; deny > ask > allow"),
                 HelpRow(name: "invalid", description: "A bad owner, mode, signature, or key disables MCP and secret staging"),
             ]),

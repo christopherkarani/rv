@@ -23,7 +23,7 @@ struct MCPEnvironment: Sendable {
             home: URL(fileURLWithPath: home.rawValue, isDirectory: true),
             processEnvironment: ProcessInfo.processInfo.environment,
             keychain: .live,
-            managed: ManagedPolicyLocation.installed.load(),
+            managed: ManagedRun.installed(home: home),
             approvalKeys: .live(configDirectory: configDirectory, home: home.rawValue),
             presence: .live
         )

@@ -234,7 +234,7 @@ struct AuditForward: AsyncParsableCommand {
         let home = try ctx.requireHome()
         let configDirectory = RVPolicyPaths.configDirectory(home: home)
         guard (1...5_000).contains(batchSize) else { try ctx.fail("rv audit forward: --batch-size must be 1-5000\n") }
-        let managed = ManagedPolicyLocation.installed.load()
+        let managed = ManagedRun.installed(home: home)
         if let reason = managed.invalidReason, to == nil {
             try ctx.fail("rv audit forward: organization policy is invalid: \(reason)\n")
         }

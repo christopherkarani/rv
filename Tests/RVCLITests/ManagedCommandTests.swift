@@ -66,6 +66,25 @@ struct ManagedCommandTests {
             output: nil))?.contains("not signed") == true)
     }
 
+    @Test func statusNamesTheSigningKeyAndTheHighestSerial() throws {
+        let policy = try ManagedPolicy.decode(Data(#"{"version": 1, "organization": "Acme", "serial": 8}"#.utf8)).get()
+        let status = ManagedRun.status(
+            .active(ManagedPolicyBundle(
+                policy: policy, sha256: "abc", isSigned: true, directory: "/managed", signingKey: 2, highestSerial: 8)),
+            directory: "/managed")
+        #expect(status.signingKey == 2)
+        #expect(status.highestSerial == 8)
+        let text = ManagedRun.statusText(status)
+        #expect(text.contains("organization policy active: Acme serial 8\n"))
+        #expect(text.contains("  signed by key 2 in org-key.pub sha256 abc\n"))
+        #expect(text.contains("  anti-rollback: highest serial accepted here is 8\n"))
+
+        let rollback = ManagedRun.statusText(ManagedRun.status(
+            .invalid("rollback: policy.json serial 2 is lower than serial 8 already accepted from /managed"),
+            directory: "/managed"))
+        #expect(rollback.hasPrefix("organization policy INVALID: rollback: policy.json serial 2"))
+    }
+
     @Test func mcpCommandsFollowTheOrganization() async throws {
         let scratch = Scratch()
         var environment = MCPEnvironment(

@@ -21,7 +21,7 @@ struct SecretsEnvironment: Sendable {
             configDirectory: RVPolicyPaths.configDirectory(home: home),
             resolver: .live(home: home.rawValue),
             keychain: .live,
-            managed: ManagedPolicyLocation.installed.load()
+            managed: ManagedRun.installed(home: home)
         )
     }
 }
