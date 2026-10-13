@@ -7,16 +7,9 @@ import RVDomain
 public struct CursorStoreAdapter: SessionStoreAdapter {
     public var host: ScanHostID { .cursor }
 
-    private static let shellTools: Set<String> = [
-        "Shell",
-        "Bash",
-        "shell",
-        "bash",
-    ]
-
     private static let profile = ScanJSONLProfile(
-        sessionKeys: ["conversation_id", "session_id", "sessionId"],
-        timestampKeys: ["timestamp", "ts"],
+        sessionKeys: CursorWireKeys.sessionKeys,
+        timestampKeys: CursorWireKeys.timestampKeys,
         allowEpochTimestamp: false,
         commands: Self.commands(in:)
     )
@@ -52,15 +45,19 @@ public struct CursorStoreAdapter: SessionStoreAdapter {
     }
 
     private static func hookCommand(in value: JSONValue) -> String? {
-        let event = value["hook_event_name"]?.string ?? value["hookEventName"]?.string
-        if event == "beforeShellExecution" || event == nil {
+        // A missing event opens both paths; each present event routes to exactly
+        // one path, so the gates compare vocabulary cases rather than the
+        // shared looseMatch boolean.
+        let event = (value["hook_event_name"]?.string ?? value["hookEventName"]?.string)
+            .map(CursorEventName.init(wireValue:))
+        if event == nil || event == .beforeShellExecution {
             if let command = value["command"]?.string, command.isEmpty == false {
                 return command
             }
         }
-        if event == nil || event == "preToolUse" || event == "PreToolUse" {
+        if event == nil || event == .preToolUse || event == .preToolUseCapitalized {
             let name = value["tool_name"]?.string ?? value["toolName"]?.string
-            guard let name, shellTools.contains(name) else { return nil }
+            guard let name, CursorToolName(wireValue: name).looseMatch == .shell else { return nil }
             return commandText(in: value["tool_input"] ?? value["toolInput"])
         }
         return nil

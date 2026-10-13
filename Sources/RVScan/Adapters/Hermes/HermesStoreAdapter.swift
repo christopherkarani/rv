@@ -91,8 +91,8 @@ public struct HermesStoreAdapter: SessionStoreAdapter {
     }
 
     private static func isTerminal(_ value: JSONValue) -> Bool {
-        let name = value["name"]?.string ?? value["toolName"]?.string
-        return name == "terminal"
+        guard let name = value["name"]?.string ?? value["toolName"]?.string else { return false }
+        return HermesToolName(wireValue: name).looseMatch == .shell
     }
 
     private static func commandText(in value: JSONValue?) -> String? {

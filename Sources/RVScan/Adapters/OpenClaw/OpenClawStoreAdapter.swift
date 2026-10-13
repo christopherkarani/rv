@@ -94,7 +94,7 @@ public struct OpenClawStoreAdapter: SessionStoreAdapter {
 
     private static func execCommand(in value: JSONValue) -> String? {
         let name = value["name"]?.string ?? value["toolName"]?.string
-        guard name == "exec" else { return nil }
+        guard let name, OpenClawToolName(wireValue: name).looseMatch == .shell else { return nil }
         return commandText(in: value["arguments"])
             ?? commandText(in: value["params"])
             ?? commandText(in: value["input"])
