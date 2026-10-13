@@ -446,15 +446,17 @@ final class WorkspaceInodeBoundary: Sendable {
     }
 
     private func detachVolume() {
-        // Unmount directly first: arbitration-mediated unmounts wedge when
-        // the daemon is unresponsive, and then every detach below fails
-        // "Resource busy" while the mount leaks.
-        unmountDirect(workspacePath, onlySource: disk)
         if blockingWorkIsCancelled() {
-            // One detach. `honorCancellation` would SIGTERM hdiutil on the
-            // first poll, the mount would stay, and teardown would replace
-            // the child's `.cancelled` with `workspaceInodeBoundaryFailed`.
-            // Five seconds stays inside the caller's 8-second bound.
+            // Unmount directly first: arbitration-mediated unmounts wedge
+            // when the daemon is unresponsive, and then every detach below
+            // fails "Resource busy" while the mount leaks. One detach.
+            // `honorCancellation` would SIGTERM hdiutil on the first poll,
+            // the mount would stay, and teardown would replace the child's
+            // `.cancelled` with `workspaceInodeBoundaryFailed`. Five seconds
+            // stays inside the caller's 8-second bound. The diskimage lock
+            // yields to this caller, so that budget is not spent waiting
+            // for another suite's helper.
+            unmountDirect(workspacePath, onlySource: disk)
             _ = runTool(
                 ["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk],
                 honorCancellation: false,
@@ -462,6 +464,10 @@ final class WorkspaceInodeBoundary: Sendable {
             )
             return
         }
+        // Unmount directly first: arbitration-mediated unmounts wedge when
+        // the daemon is unresponsive, and then every detach below fails
+        // "Resource busy" while the mount leaks.
+        unmountDirect(workspacePath, onlySource: disk)
         for _ in 0..<8 {
             let result = runTool(
                 ["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk],
@@ -1449,16 +1455,58 @@ private struct ToolOutput {
     }
 }
 
+private enum DiskImageAttempt {
+    case done(ToolOutput)
+    case yielded
+}
+
 /// One diskimage helper at a time. Parallel `hdiutil`/`mount_hfs` calls
 /// pile onto diskimagesd until it stops answering; each waiter then sits
 /// through its deadline and the F-M shard hits the job cap. The lock is
 /// only around the helper, not the contained command.
+///
+/// A cancelled teardown does not sit out that wait. The 5-second detach
+/// budget starts only after the lock is acquired, so waiting for another
+/// suite's helper pushes `executor.run` past the 8-second cancellation
+/// bound even when the detach itself succeeds. Non-urgent holders abort
+/// and release the lock; the cancelled caller is urgent and keeps the
+/// critical section. Helpers stay serialized either way.
 private enum DiskImageToolSerialization {
     static let lock = Mutex<UInt8>(0)
+    private static let priority = Mutex<DiskImagePriority>(DiskImagePriority())
 
     static func contains(_ path: String) -> Bool {
         path == "/usr/bin/hdiutil" || path == "/sbin/mount_hfs" || path == "/sbin/umount"
     }
+
+    static func notePriorityWaiter() {
+        priority.withLock { $0.waiters += 1 }
+    }
+
+    static func endPriorityWaiter() {
+        priority.withLock { state in
+            if state.waiters > 0 { state.waiters -= 1 }
+        }
+    }
+
+    static func beginHolding(urgent: Bool) {
+        priority.withLock { $0.urgent = urgent }
+    }
+
+    static func endHolding() {
+        priority.withLock { $0.urgent = false }
+    }
+
+    /// True when a cancelled teardown is queued and this holder is not
+    /// that teardown. Urgent holders keep running.
+    static func hasPriorityWaiter() -> Bool {
+        priority.withLock { $0.urgent == false && $0.waiters > 0 }
+    }
+}
+
+private struct DiskImagePriority: Sendable {
+    var waiters = 0
+    var urgent = false
 }
 
 private func diskDevice(in text: String) -> String? {
@@ -1530,6 +1578,8 @@ private func unmountDirect(_ mountPoint: String, onlySource disk: String) {
 /// it created. Diskimage helpers take `DiskImageToolSerialization.lock`
 /// for the whole call, including the deadline wait, so a second test cannot
 /// start another `hdiutil` while the first is still inside diskimagesd.
+/// A cancelled teardown is the exception: the holder aborts and the
+/// teardown acquires the lock inside its own deadline.
 private func runTool(
     _ arguments: [String],
     honorCancellation: Bool = false,
@@ -1538,21 +1588,86 @@ private func runTool(
     guard let executable = arguments.first else {
         return ToolOutput(status: 1, stdout: "", stderr: "missing executable")
     }
-    if DiskImageToolSerialization.contains(executable) {
-        return DiskImageToolSerialization.lock.withLock { _ in
-            runToolBody(arguments, honorCancellation: honorCancellation, deadline: deadline)
+    guard DiskImageToolSerialization.contains(executable) else {
+        return runToolBody(
+            arguments,
+            honorCancellation: honorCancellation,
+            deadline: deadline,
+            yieldToPriorityWaiter: false
+        ).output
+    }
+    // A yield has no caller-visible failure. Before spawn, nothing ran.
+    // Mid-flight, the helper was killed so this same teardown can take
+    // the lock; retrying here keeps the caller's own retry for a real
+    // diskimagesd failure. A killed `hdiutil create` can leave a partial
+    // sparseimage that the retry would refuse, so that file is removed
+    // first.
+    let yieldBudget = Date().addingTimeInterval(deadline ?? 45)
+    while true {
+        let cancelled = blockingWorkIsCancelled()
+        if cancelled {
+            DiskImageToolSerialization.notePriorityWaiter()
+        }
+        let attempt = DiskImageToolSerialization.lock.withLock { () -> DiskImageAttempt in
+            if cancelled {
+                DiskImageToolSerialization.endPriorityWaiter()
+            }
+            DiskImageToolSerialization.beginHolding(urgent: cancelled)
+            if cancelled == false, DiskImageToolSerialization.hasPriorityWaiter() {
+                DiskImageToolSerialization.endHolding()
+                return .yielded
+            }
+            let ran = runToolBody(
+                arguments,
+                honorCancellation: honorCancellation,
+                deadline: deadline,
+                yieldToPriorityWaiter: cancelled == false
+            )
+            DiskImageToolSerialization.endHolding()
+            // Mid-flight abort is retried here. Returning it would spend
+            // the caller's one retry and the next attempt can be aborted
+            // again by this same teardown.
+            if ran.preempted {
+                return .yielded
+            }
+            return .done(ran.output)
+        }
+        switch attempt {
+        case .done(let output):
+            return output
+        case .yielded:
+            if Date() >= yieldBudget {
+                return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
+            }
+            discardPreemptedSparseImage(arguments)
+            usleep(20_000)
         }
     }
-    return runToolBody(arguments, honorCancellation: honorCancellation, deadline: deadline)
+}
+
+private struct HelperRun {
+    var output: ToolOutput
+    var preempted = false
+}
+
+private func discardPreemptedSparseImage(_ arguments: [String]) {
+    guard arguments.count >= 3,
+        arguments[0] == "/usr/bin/hdiutil",
+        arguments[1] == "create"
+    else { return }
+    let image = arguments[arguments.count - 1]
+    guard image.contains("rv-inode-"), image.hasSuffix(".sparseimage") else { return }
+    unlink(image)
 }
 
 private func runToolBody(
     _ arguments: [String],
     honorCancellation: Bool,
-    deadline: TimeInterval?
-) -> ToolOutput {
+    deadline: TimeInterval?,
+    yieldToPriorityWaiter: Bool
+) -> HelperRun {
     guard let executable = arguments.first else {
-        return ToolOutput(status: 1, stdout: "", stderr: "missing executable")
+        return HelperRun(output: ToolOutput(status: 1, stdout: "", stderr: "missing executable"))
     }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
@@ -1565,23 +1680,34 @@ private func runToolBody(
     let outFD = output.fileHandleForReading.fileDescriptor
     let errFD = errors.fileHandleForReading.fileDescriptor
     guard setToolNonblocking(outFD), setToolNonblocking(errFD) else {
-        return ToolOutput(status: 1, stdout: "", stderr: "pipe flags")
+        return HelperRun(output: ToolOutput(status: 1, stdout: "", stderr: "pipe flags"))
     }
     do {
         try process.run()
     } catch {
-        return ToolOutput(status: 1, stdout: "", stderr: String(describing: error))
+        return HelperRun(output: ToolOutput(status: 1, stdout: "", stderr: String(describing: error)))
     }
     var stdout = Data()
     var stderr = Data()
     let limit = deadline.map { Date().addingTimeInterval($0) }
     var interrupted = false
     var timedOut = false
+    var preempted = false
     while process.isRunning {
         stdout.append(readToolPipe(outFD))
         stderr.append(readToolPipe(errFD))
         let cancelled = honorCancellation && blockingWorkIsCancelled()
         let expired = limit.map { Date() >= $0 } ?? false
+        // A cancelled teardown is waiting on the serialization lock.
+        // Kill this helper immediately so that teardown can acquire the
+        // lock inside its own deadline. `runTool` retries afterwards.
+        // This is not a diskimagesd timeout.
+        preempted = yieldToPriorityWaiter && DiskImageToolSerialization.hasPriorityWaiter()
+        if preempted {
+            interrupted = true
+            kill(process.processIdentifier, SIGKILL)
+            break
+        }
         if cancelled || expired {
             interrupted = true
             timedOut = expired
@@ -1619,11 +1745,14 @@ private func runToolBody(
     try? output.fileHandleForReading.close()
     try? errors.fileHandleForReading.close()
     let status: Int32 = interrupted ? -1 : process.terminationStatus
-    return ToolOutput(
-        status: status,
-        stdout: String(data: stdout, encoding: .utf8) ?? "",
-        stderr: String(data: stderr, encoding: .utf8) ?? "",
-        timedOut: timedOut
+    return HelperRun(
+        output: ToolOutput(
+            status: status,
+            stdout: String(data: stdout, encoding: .utf8) ?? "",
+            stderr: String(data: stderr, encoding: .utf8) ?? "",
+            timedOut: timedOut
+        ),
+        preempted: preempted
     )
 }
 
