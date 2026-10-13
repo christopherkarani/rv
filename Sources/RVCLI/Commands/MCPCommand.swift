@@ -376,7 +376,9 @@ enum MCPRun {
             var rules: [String] = []
             if let remote = server.remote {
                 let transport = remote.transport == .sse ? "legacy SSE" : "streamable HTTP"
-                lines.append("  \(server.name): \(remote.url.absoluteString) (remote, \(transport))")
+                let redacted = MCPRedaction.url(remote.url.absoluteString)
+                let shown = redacted.leaked ? "\(redacted.display) (credential-like part hidden)" : remote.url.absoluteString
+                lines.append("  \(server.name): \(shown) (remote, \(transport))")
                 if remote.headers.isEmpty == false {
                     rules.append("headers " + remote.headers.keys.sorted().map { name in
                         let secrets = MCPSecretReference.names(in: remote.headers[name] ?? "") ?? []

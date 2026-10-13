@@ -228,6 +228,11 @@ struct MCPCommandTests {
         #expect(review.contains("headers Authorization (secret GH_PAT), X-Team (literal)"), "\(review)")
         #expect(review.contains("literal-value-9") == false)
         #expect(review.contains("no sandbox") == false)
+
+        let keyed = MCPRemoteServer(url: try #require(URL(string: "https://mcp.example.com/s/zk_8f3a9c2b7d1e4f60a5b3c9d2e7f1/mcp")))
+        let hidden = MCPRun.trustReview(MCPConfiguration(servers: [MCPServerDefinition(name: "z", remote: keyed)]))
+        #expect(hidden.contains("  z: https://mcp.example.com/… (credential-like part hidden) (remote, streamable HTTP)"), "\(hidden)")
+        #expect(hidden.contains("zk_8f3a") == false)
     }
 
     @Test func approvingNeedsThePersonAndTheCodeTheGatewayPrinted() async throws {

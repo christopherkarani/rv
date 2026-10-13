@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real-binary proof of the Phase 7 MCP gateway features.
+"""Real-binary proof of the Phase 7 MCP gateway features (7.1, 7.2, 7.3, 7.6).
 
 Usage: Scripts/mcp-phase7-proof.py <path-to-rv>
 
@@ -97,8 +97,8 @@ for line in sys.stdin:
 
 
 class Gateway:
-    def __init__(self, elicitation=False):
-        self.p = subprocess.Popen([RV, "mcp", "serve"], env=ENV, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    def __init__(self, elicitation=False, env=None):
+        self.p = subprocess.Popen([RV, "mcp", "serve"], env=env or ENV, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=open(f"{ROOT}/serve-{time.time_ns()}.err", "w+"), text=True, bufsize=1)
         caps = {"elicitation": {}} if elicitation else {}
         self.send({"jsonrpc": "2.0", "id": 0, "method": "initialize",
@@ -241,6 +241,135 @@ g.close()
 calls = [json.loads(l) for l in open(AUDIT)][-3:]
 step("7.3 audit names the real tools", [(c["subject"], c["detail"].get("policy")) for c in calls]
      == [("db/query", "allow"), ("wh/query", "ask"), ("db/tables", "deny")], str([c["subject"] for c in calls]))
+
+# 7.1 remote servers: streamable HTTP, legacy SSE, header secrets, import, setup, OAuth
+import atexit, secrets as pysecrets, urllib.request
+REMOTE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp-remote-fixture.py")
+
+
+def remote_fixture(*args):
+    log = open(f"{ROOT}/remote-{time.time_ns()}.log", "w+")
+    p = subprocess.Popen(["/usr/bin/python3", "-u", REMOTE, *args], stdout=subprocess.PIPE, stderr=log, text=True)
+    atexit.register(p.kill)
+    return p, int(p.stdout.readline().split()[1]), log
+
+
+TOKEN = "fx" + pysecrets.token_hex(16)
+fx, port, fx_log = remote_fixture("--token", TOKEN)
+base = f"http://127.0.0.1:{port}"
+with open(f"{CONFIG}/secrets.json", "w") as f:
+    json.dump({"version": 1, "secrets": [{"name": "FIXTURE_TOKEN", "source": {"hostEnvironment": {"variable": "RV_PROOF_TOKEN"}},
+                                          "delivery": {"environment": {}}}]}, f)
+os.chmod(f"{CONFIG}/secrets.json", 0o600)
+ENV_T = {**ENV, "RV_PROOF_TOKEN": TOKEN}
+auth = {"Authorization": "Bearer ${secret:FIXTURE_TOKEN}"}
+out = write_and_trust({"version": 1, "servers": [
+    {"name": "web", "url": f"{base}/mcp", "headers": {**auth, "X-Team": "eng"}, "tools": {"default": "allow", "deny": ["delete_all"]}},
+    {"name": "old", "url": f"{base}/sse", "transport": "sse", "headers": auth, "tools": {"default": "allow", "ask": ["delete_all"]}},
+]}, "7.1 remote")
+step("7.1 trust review shows URL, transport and header names, never the token",
+     f"web: {base}/mcp (remote, streamable HTTP)" in out and "old: " in out and "legacy SSE" in out
+     and "Authorization (secret FIXTURE_TOKEN)" in out and TOKEN not in out)
+g = Gateway(env=ENV_T)
+names = sorted(t["name"] for t in g.tools)
+step("7.1 tools from both transports; deny hides web delete_all",
+     {"web__echo", "web__whoami", "old__echo", "old__delete_all"} <= set(names) and "web__delete_all" not in names, ", ".join(names))
+reply = g.call(20, "web__whoami", {})
+step("7.1 streamable HTTP: header secret sent, scrubbed from the reply",
+     text_of(reply) == "authorization=Bearer [redacted:FIXTURE_TOKEN] team=eng", text_of(reply))
+reply = g.call(21, "old__echo", {"text": "over sse"})
+step("7.1 legacy SSE: call answered", "over sse" in text_of(reply), text_of(reply))
+reply = g.call(22, "old__whoami", {})
+step("7.1 legacy SSE: token scrubbed", "[redacted:FIXTURE_TOKEN]" in text_of(reply) and TOKEN not in json.dumps(reply), text_of(reply))
+reply = g.call(23, "old__delete_all", {})
+step("7.1 remote tools keep rv policy (ask)", "rv paused this call: old tool delete_all" in text_of(reply), text_of(reply)[:50])
+g.close()
+time.sleep(0.3)
+fx_log.seek(0)
+requests = fx_log.read()
+step("7.1 gateway ends the HTTP session on exit (DELETE)", re.search(r"^DELETE sess-\S+ ok$", requests, re.M) is not None, requests.strip().splitlines()[-1] if requests else "")
+calls = [json.loads(l) for l in open(AUDIT)][-4:]
+step("7.1 audit records remote calls by server/tool", [c["subject"] for c in calls] == ["web/whoami", "old/echo", "old/whoami", "old/delete_all"],
+     str([c["subject"] for c in calls]))
+step("7.1 audit holds no token", TOKEN not in open(AUDIT).read())
+
+broken = dict(ENV_T, RV_PROOF_TOKEN="wrong-token")
+g = Gateway(env=broken)
+step("7.1 a rejected credential lists no tools from that server", not any(t["name"].startswith(("web__", "old__")) for t in g.tools),
+     ", ".join(t["name"] for t in g.tools))
+g.close()
+
+os.makedirs(f"{HOME}/.cursor", exist_ok=True)
+with open(f"{HOME}/.cursor/mcp.json", "w") as f:
+    json.dump({"mcpServers": {
+        "hosted": {"url": f"{base}/mcp", "headers": {"X-Team": "eng"}},
+        "keyed": {"url": f"{base}/mcp", "headers": {"Authorization": "Bearer " + TOKEN}},
+        "legacy": {"url": f"{base}/sse", "type": "sse"},
+        "plain": {"url": "http://example.com/mcp"},
+    }}, f)
+r = rv("mcp", "import", "--host", "cursor", "--dry-run")
+step("7.1 import dry run: url entries, header credential becomes a secret, plain http refused",
+     f"import hosted: {base}/… (http)" in r.stdout and "import keyed:" in r.stdout and "(credentials → rv secrets KEYED_AUTHORIZATION)" in r.stdout
+     and "import legacy:" in r.stdout and "(sse)" in r.stdout and "skip plain: url must be https" in r.stdout and TOKEN not in r.stdout + r.stderr,
+     r.stdout.strip().replace("\n", " | ")[:160])
+if sys.platform != "darwin":
+    r = rv("mcp", "import", "--host", "cursor", "--server", "keyed")
+    step("7.1 import keyed on Linux: no Keychain, nothing imported, nothing leaked",
+         r.returncode != 0 and "could not store KEYED_AUTHORIZATION in the Keychain; nothing imported" in r.stderr
+         and TOKEN not in r.stdout + r.stderr + open(f"{CONFIG}/mcp.json").read(), r.stderr.strip())
+r = rv("mcp", "import", "--host", "cursor", "--server", "hosted", "--server", "legacy", "--allow-tools")
+step("7.1 import hosted and legacy", r.returncode == 0 and "wrote mcp.json" in r.stdout, r.stdout.strip().splitlines()[-1] if r.stdout else r.stderr)
+imported = {s["name"]: s for s in json.load(open(f"{CONFIG}/mcp.json"))["servers"]}
+step("7.1 imported definitions", imported["hosted"].get("url") == f"{base}/mcp" and imported["hosted"].get("headers") == {"X-Team": "eng"}
+     and imported["legacy"].get("transport") == "sse" and "command" not in imported["hosted"], json.dumps(imported.get("legacy")))
+r = rv("mcp", "setup", "--host", "cursor", "--server", "hosted")
+host = json.load(open(f"{HOME}/.cursor/mcp.json"))["mcpServers"]["hosted"]
+step("7.1 setup routes the remote host entry through rv", r.returncode == 0 and host == {"command": RV, "args": ["mcp", "serve", "--server", "hosted"]},
+     json.dumps(host))
+rows = {row["name"]: row["status"] for row in json.loads(rv("mcp", "list", "--json").stdout)["rows"]}
+step("7.1 list: hosted governed, keyed unreviewed", rows.get("hosted") == "governed" and rows.get("keyed") == "unreviewed", json.dumps(rows))
+fx.kill()
+
+ofx, oport, ofx_log = remote_fixture("--oauth")
+obase = f"http://127.0.0.1:{oport}"
+write_and_trust({"version": 1, "servers": [{"name": "acme", "url": f"{obase}/mcp", "tools": {"default": "allow"}}]}, "7.1 oauth")
+connect = subprocess.Popen([RV, "mcp", "connect", "acme", "--no-browser"], env=ENV, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+prompt = connect.stderr.readline() + connect.stderr.readline()
+sign_in = prompt.strip().splitlines()[-1].strip() if prompt.strip() else ""
+step("7.1 connect prints the sign-in URL (PKCE S256, resource)", sign_in.startswith(f"{obase}/auth/authorize?") and "code_challenge_method=S256" in sign_in
+     and "resource=" in sign_in, prompt.strip().splitlines()[0] if prompt.strip() else "")
+try:
+    urllib.request.urlopen(sign_in, timeout=10).read()
+except Exception as error:
+    print("  browser leg:", error)
+stdout, stderr = connect.communicate(timeout=30)
+step("7.1 connect stores the tokens", connect.returncode == 0 and stdout.startswith("connected acme; tokens stored in "), (stdout + stderr).strip()[:120])
+store = f"{CONFIG}/mcp-oauth/acme.json"
+if sys.platform != "darwin":
+    step("7.1 Linux token file is 0600", os.path.exists(store) and oct(os.stat(store).st_mode & 0o777) == "0o600")
+    first = json.load(open(store))
+    step("7.1 connect output holds no token", first["accessToken"] not in stdout + stderr and first["refreshToken"] not in stdout + stderr)
+g = Gateway()
+reply = g.call(30, "whoami", {})
+step("7.1 serve sends the OAuth token, scrubbed", text_of(reply) == "authorization=Bearer [redacted:OAUTH_ACCESS_TOKEN] team=none", text_of(reply))
+urllib.request.urlopen(urllib.request.Request(f"{obase}/auth/expire", method="POST"), timeout=5).read()
+reply = g.call(31, "whoami", {})
+step("7.1 after the server revokes the token, serve refreshes and retries", text_of(reply) == "authorization=Bearer [redacted:OAUTH_ACCESS_TOKEN] team=none",
+     text_of(reply))
+g.close()
+if sys.platform != "darwin":
+    second = json.load(open(store))
+    step("7.1 refreshed (rotated) tokens saved", second["accessToken"] != first["accessToken"] and second["refreshToken"] != first["refreshToken"])
+    step("7.1 audit holds no OAuth token", all(t not in open(AUDIT).read() for t in
+                                              (first["accessToken"], first["refreshToken"], second["accessToken"], second["refreshToken"])))
+events = [json.loads(l) for l in open(AUDIT) if '"rv mcp connect"' in l]
+step("7.1 audit records the sign-in", any(e["reason"] == "OAuth connected" and e["subject"] == "acme" for e in events))
+r = rv("mcp", "connect", "acme", "--forget")
+step("7.1 --forget deletes the tokens", r.returncode == 0 and "deleted the OAuth tokens rv stored for acme" in r.stdout
+     and (sys.platform == "darwin" or not os.path.exists(store)), r.stdout.strip())
+r = rv("mcp", "connect", "nope")
+step("7.1 connect refuses an unknown server", r.returncode != 0 and "mcp.json has no server named nope" in r.stderr, r.stderr.strip())
+ofx.kill()
 
 failed = [n for n, ok in STEPS if not ok]
 print(f"\n{len(STEPS) - len(failed)}/{len(STEPS)} passed")
