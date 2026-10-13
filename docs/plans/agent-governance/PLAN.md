@@ -28,7 +28,7 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | _not opened yet_ | not started |
 
 **Next action:** Phase 7 on `governance/phase-7-enterprise-hardening` (from
-phase 6), in the order in the Phase 7 section; 7.2 and 7.5 are done, 7.6 is next. Phase 6 agent items are done except
+phase 6), in the order in the Phase 7 section; 7.2, 7.5 and 7.6 are done, 7.3 is next. Phase 6 agent items are done except
 the impro-ref-blocked ones (6.2 cage denies, 6.5 injected config dir, 6.6
 watchdog). Owner items for phase 6: signing secrets + certificate (6.3),
 flip `signed_releases`/`release_team_id` in `install.sh` and set
@@ -1117,11 +1117,38 @@ allowlist build on them). Nothing here edits an impro-ref file: 7.4 uses
       ~/.config/rv/managed-state.json`
 
 ### 7.6 Tamper-evident audit
-- [ ] Each audit line carries `prev` = SHA-256 of the previous line's bytes
-      (first line: 64 zeros); `rv audit verify` reports the first break
-- [ ] OCSF forward includes the chain head (`unmapped.rv_chain_head`)
-- [ ] `rv audit forward --install`: user LaunchAgent (every 5 min) written
-      and printed; LaunchDaemon template printed only (root installs it)
+- [x] Each audit line carries `prev` = SHA-256 of the previous line's bytes
+      (first line: 64 zeros); `rv audit verify` reports the first break.
+      `AuditLog.append` reads the last line under its existing lock; a torn
+      last line is closed with a newline first so it stays one bad line.
+      Lines written before the chain are counted as "predate the chain".
+      Scope: `audit.jsonl` only (the other ledgers have their own writers,
+      some in impro-ref files). Truncating the end is not detectable locally;
+      the forwarded head covers that. Tests: `AuditChainTests` (6, incl. a
+      table for edit/delete/insert/reorder), `AuditVerifyTests` (2)
+- [x] OCSF forward includes the chain head (`unmapped.rv_chain_head`, the
+      hash of that event's own line) and `unmapped.rv_prev`, so a SIEM can
+      check continuity across batches
+- [x] `rv audit forward --install`: user LaunchAgent (every 5 min,
+      `~/Library/LaunchAgents/dev.rv.audit-forward.plist`, owner-only) written
+      and printed with the `launchctl bootstrap gui/<uid>` line; LaunchDaemon
+      template (`UserName`, `HOME`) printed only, with the `sudo install` +
+      `launchctl bootstrap system` lines. Header values must be
+      `${secret:NAME}` (the plist holds no credential). On Linux it exits 1
+      with a crontab line. Plist content tested on Linux
+      (`AuditForwardInstallTests`, 3); loading it with launchctl is
+      **unverified on macOS**
+- [x] E2E (Linux, 2026-10-13): `Scripts/mcp-phase7-proof.py .build/debug/rv`
+      19/19 — the 7.2 run's 6 real audit lines are linked, `rv audit verify`
+      intact (text and `--json`), `rv audit forward` to a local receiver sends
+      `rv_prev`/`rv_chain_head` that chain and end at the verify head, an
+      edited line → "BROKEN at line 5 … prev does not match line 4" (exit 1),
+      a deleted line → "BROKEN at line 2", restored → intact, `--install`
+      prints the cron line on Linux, a literal header is refused without
+      echoing it
+- [ ] Owner (macOS): `rv audit forward --install --to <https url>`, run the
+      printed `launchctl bootstrap` line, and check
+      `~/.config/rv/audit-forward/launchd.log` after 5 minutes
 
 ### 7.3 Search tool mode
 - [ ] `"toolMode": "search"` (top level): `tools/list` returns only
@@ -1269,3 +1296,9 @@ when the phase starts (items 8.1-8.4 from the 2026-10-13 brief).
   tests green, preflight 0 failures; real-binary `rv managed verify`
   multi-key run recorded under 7.5. Owner L3: the installed-directory
   rollback run (needs sudo). Next: 7.6.
+- 2026-10-13: Phase 7.6: `audit.jsonl` hash chain (`prev`), `rv audit
+  verify`, `rv_prev`/`rv_chain_head` in OCSF forward, `rv audit forward
+  --install` (LaunchAgent + printed LaunchDaemon template; cron line on
+  Linux). Linux: full `swift test` green (RVHistory 43, RVCLI 841),
+  preflight 0 failures, proof 19/19. Owner: load the LaunchAgent on macOS.
+  Next: 7.3.
