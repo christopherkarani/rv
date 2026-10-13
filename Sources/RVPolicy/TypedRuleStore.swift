@@ -236,7 +236,9 @@ public struct TypedRuleStore: Sendable {
         // the sealed `recorded_at_ms`, so two mints would brick the
         // cross-check.
         try withFileLock(at: machineLogLockURL) {
-            let records = try loadVerifiedLogForAppend()
+            let records = try reconcileInterruptedSave(
+                verified: try loadVerifiedLogForAppend()
+            )
             let recordedAtMs = Self.nowMs()
             try save(
                 document,
@@ -257,22 +259,17 @@ public struct TypedRuleStore: Sendable {
     /// Verified machine history, oldest first. Empty only when neither
     /// `policy.toml` nor a log exists yet. Throws `logMissing` when the
     /// policy file exists without its log, and `logCorrupted` on any
-    /// forgery, reorder, or truncation. Every read re-verifies the chain.
-    /// Timestamps are the sealed record times, not read time, so history
-    /// output is stable across reads and matches the display log.
+    /// forgery, reorder, or truncation. Every read re-verifies the chain
+    /// and cross-checks the display log against it.
+    ///
+    /// One public numbering: revisions are generations (the display
+    /// sequence). Identical re-saves seal duplicate internal records
+    /// without minting a generation, so internal sealed record numbers
+    /// run ahead and are never exposed — a revision number from here,
+    /// `listMachineRevisions()`, or `rv policy list` names the same
+    /// generation in every rollback entry point.
     public func machineHistory() throws -> [PolicyRevision] {
-        try withFileLock(at: machineLogLockURL) {
-            try loadVerifiedLogForRead().map { verified in
-                PolicyRevision(
-                    revision: verified.revision,
-                    hash: PolicyRevisionIdentity.hash(verified.document),
-                    ruleCount: verified.document.rules.count,
-                    recordedAt: Self.date(ms: verified.recordedAtMs),
-                    toml: verified.toml,
-                    document: verified.document
-                )
-            }
-        }
+        try listMachineRevisions()
     }
 
     /// Restore machine `policy.toml` to the exact bytes of a verified
@@ -280,31 +277,44 @@ public struct TypedRuleStore: Sendable {
     /// unverifiable targets (`logCorrupted`) and unknown revisions
     /// (`revisionNotFound`) without touching `policy.toml`, so attacker
     /// TOML smuggled into a tampered log can never go live via rollback.
-    /// Restoring a revision that relaxes a rule the current head still
-    /// enforces is refused (`blockedByFindings`) before anything is
-    /// written. Returns the new head revision carrying the restored bytes.
+    /// Restoring a revision that relaxes a surviving predicate's verdict,
+    /// downgrades the safety level, or widens secret exemptions is
+    /// refused (`blockedByFindings`) before anything is written;
+    /// predicate-set change itself passes (see `refuseRelaxingRollback`). Returns the new head revision carrying the restored bytes.
     @discardableResult
     public func rollbackMachine(toRevision target: Int) throws -> PolicyRevision {
         try withFileLock(at: machineLogLockURL) {
-            let records = try loadVerifiedLogForRead()
+            let records = try reconcileInterruptedSave(
+                verified: try loadVerifiedLogForRead()
+            )
+            // Public revisions are generations: compress duplicate sealed
+            // records (identical re-saves) exactly like the cross-check,
+            // so `target` names the same generation `machineHistory()`
+            // and `rv policy list` print.
+            let generations = Self.compressedGenerations(records)
             guard
-                let match = records.first(where: { $0.revision == target }),
+                target >= 1, target <= generations.count,
                 let current = records.last
             else {
                 throw TypedRuleStoreError.revisionNotFound
             }
-            try Self.refuseRelaxingRollback(existing: current.document, incoming: match.document)
+            let match = generations[target - 1]
             guard let data = match.toml.data(using: .utf8) else {
                 throw TypedRuleStoreError.logCorrupted
             }
             let recordedAtMs = Self.nowMs()
+            var newHeadRevision = generations.count
             try withFileLock(at: machineLockURL) {
                 try prepareDirectory(machineFileURL.deletingLastPathComponent())
                 // Cross-check under the held file lock: the display bytes
                 // checked here are exactly the append base below, so a
                 // forged display log refuses before anything is written.
+                // Corruption outranks the risk gate: a truncated display
+                // log must report logCorrupted, never a risk verdict
+                // computed against history that failed verification.
                 let display = try readRevisions(from: machineRevisionsURL)
                 try Self.checkJsonlMatchesSealed(entries: display, sealed: records)
+                try Self.refuseRelaxingRollback(existing: current.document, incoming: match.document)
                 let pending = try preparedRevisionLine(
                     document: match.document,
                     text: match.toml,
@@ -314,13 +324,14 @@ public struct TypedRuleStore: Sendable {
                 try writeFileBytes(data, to: machineFileURL)
                 if let pending {
                     try appendRevisionLine(pending, to: machineRevisionsURL)
+                    newHeadRevision = display.count + 1
                 }
             }
             let head = try appendLogRecord(
                 toml: match.toml, after: records, recordedAtMs: recordedAtMs
             )
             return PolicyRevision(
-                revision: head.revision,
+                revision: newHeadRevision,
                 hash: PolicyRevisionIdentity.hash(head.document),
                 ruleCount: head.document.rules.count,
                 recordedAt: Self.date(ms: head.recordedAtMs),
@@ -487,34 +498,28 @@ public struct TypedRuleStore: Sendable {
 
     /// Rollback re-submits an earlier revision's document as a new head
     /// revision. The log is append-only: earlier lines are never rewritten.
-    /// Restoring a revision that relaxes a rule the current head still
-    /// enforces is refused (`blockedByFindings`) before anything is
-    /// written. Returns the new head.
+    /// Restoring a revision that relaxes a surviving predicate's verdict,
+    /// downgrades the safety level, or widens secret exemptions is
+    /// refused (`blockedByFindings`) before anything is written;
+    /// predicate-set change itself passes (see `refuseRelaxingRollback`). Returns the new head.
     public func rollbackMachine(to revision: Int) throws -> PolicyRevision {
-        // Single locked snapshot: the relax-gate baseline is the sealed
-        // head, never the display list, so truncation cannot move it.
-        let (entries, sealed) = try lockedMachineSnapshot()
-        guard
-            let target = entries.first(where: { $0.revision == revision }),
-            let head = sealed.last
-        else {
+        // One implementation: the sealed, byte-exact, single-lock path.
+        // Public revisions are generations in both spellings (see
+        // `machineHistory()`), so this is a forwarder, not a second
+        // rollback with its own numbering and lock discipline.
+        do {
+            return try rollbackMachine(toRevision: revision)
+        } catch TypedRuleStoreError.revisionNotFound {
             throw TypedRuleStoreError.unknownRevision
         }
-        let targetDocument = try revisionDocument(target)
-        try Self.refuseRelaxingRollback(existing: head.document, incoming: targetDocument)
-        try saveMachine(targetDocument)
-        let newHead = try listMachineRevisions().last
-        guard let newHead else {
-            throw TypedRuleStoreError.invalidFile
-        }
-        return newHead
     }
 
     /// Rollback re-submits an earlier revision's document as a new head
     /// revision. The log is append-only: earlier lines are never rewritten.
-    /// Restoring a revision that relaxes a rule the current head still
-    /// enforces is refused (`blockedByFindings`) before anything is
-    /// written. Returns the new head.
+    /// Restoring a revision that relaxes a surviving predicate's verdict,
+    /// downgrades the safety level, or widens secret exemptions is
+    /// refused (`blockedByFindings`) before anything is written;
+    /// predicate-set change itself passes (see `refuseRelaxingRollback`). Returns the new head.
     public func rollbackRepo(to revision: Int, workspace: URL) throws -> PolicyRevision {
         let entries = try listRepoRevisions(workspace: workspace)
         guard
@@ -534,16 +539,47 @@ public struct TypedRuleStore: Sendable {
     }
 
     /// Seam gate: a rollback restoring `incoming` over the current `existing`
-    /// head refuses when the restored document relaxes a verdict the head
-    /// still enforces. Share semantics, like `policy apply`: the restored
-    /// document is the incoming share, so a rollback that merely drops a
-    /// rule reads as an omission rather than a widening, and only explicit
-    /// relaxations on surviving predicates refuse.
+    /// head refuses when the restore would relax posture the head enforces
+    /// on dimensions other than the predicate set itself:
+    ///
+    /// - an explicit verdict relaxation on a surviving predicate
+    ///   (deny → ask/allow), via share semantics;
+    /// - a safety-level downgrade (`strict` → anything else);
+    /// - a widening of secret `allowPaths` beyond the head's exemptions.
+    ///
+    /// Predicate-set change is the rollback operation itself — restoring
+    /// an earlier generation necessarily drops predicates the head added
+    /// and revives ones it removed — so added/removed predicates do not
+    /// refuse. (Full-replacement diffing would block nearly every real
+    /// rollback; share semantics alone would silently pass the safety and
+    /// exemption widenings above, which `evaluateShare` does not evaluate.)
     private static func refuseRelaxingRollback(
         existing: PolicyDocument,
         incoming: PolicyDocument
     ) throws {
-        let report = PolicyDiffRisk.evaluateShare(existing: existing, incoming: incoming)
+        var findings = PolicyDiffRisk.evaluateShare(
+            existing: existing,
+            incoming: incoming
+        ).findings
+        if existing.safetyLevel == .strict, incoming.safetyLevel != .strict {
+            findings.append(
+                PolicyDiffRiskFinding(
+                    kind: .safetyDowngrade,
+                    severity: .blocking,
+                    detail: "strict -> \(incoming.safetyLevel?.rawValue ?? "unset")"
+                )
+            )
+        }
+        for added in Set(incoming.allowPaths).subtracting(Set(existing.allowPaths)).sorted() {
+            findings.append(
+                PolicyDiffRiskFinding(
+                    kind: .newSecretExemption,
+                    severity: .blocking,
+                    detail: added
+                )
+            )
+        }
+        let report = PolicyDiffRiskReport(findings: findings)
         if report.hasBlockingFindings {
             throw PolicyDiffRiskError.blockedByFindings(report)
         }
@@ -749,13 +785,12 @@ public struct TypedRuleStore: Sendable {
     /// forgery, reorder, truncation, or timestamp edit fails
     /// `logCorrupted`, and an empty display list against non-empty sealed
     /// history (deleted `.jsonl`) fails `logMissing`.
-    private static func checkJsonlMatchesSealed(entries: [PolicyRevision], sealed: [VerifiedLogRecord]) throws {
-        if entries.isEmpty {
-            if sealed.isEmpty {
-                return
-            }
-            throw TypedRuleStoreError.logMissing
-        }
+    /// Generation sequence of a sealed chain: consecutive records whose
+    /// documents hash identically (identical re-saves) compress to the
+    /// first. Public revision N is generation N (1-based).
+    private static func compressedGenerations(
+        _ sealed: [VerifiedLogRecord]
+    ) -> [VerifiedLogRecord] {
         var generations: [VerifiedLogRecord] = []
         generations.reserveCapacity(sealed.count)
         var previousHash: String? = nil
@@ -766,6 +801,17 @@ public struct TypedRuleStore: Sendable {
                 previousHash = hash
             }
         }
+        return generations
+    }
+
+    private static func checkJsonlMatchesSealed(entries: [PolicyRevision], sealed: [VerifiedLogRecord]) throws {
+        if entries.isEmpty {
+            if sealed.isEmpty {
+                return
+            }
+            throw TypedRuleStoreError.logMissing
+        }
+        let generations = compressedGenerations(sealed)
         guard generations.count == entries.count else {
             throw TypedRuleStoreError.logCorrupted
         }
@@ -1067,6 +1113,49 @@ public struct TypedRuleStore: Sendable {
         return verified
     }
 
+    /// Completes one interrupted dual-write, if that is unambiguously what
+    /// happened. `saveMachine` moves `policy.toml` + display log first and
+    /// seals second (both under the log lock); a crash or write failure
+    /// between the two left enforcement live on the new document while
+    /// every later cross-checked operation threw `logCorrupted` until
+    /// operator recovery destroyed history. When the display log is
+    /// exactly the sealed generations plus one tail line whose TOML still
+    /// equals the live `policy.toml` bytes, the missing seal is appended
+    /// now and the completed chain returned. Any other shape is returned
+    /// untouched for the normal cross-check to judge. Caller holds the
+    /// log lock (which serializes all machine saves, so the display/doc
+    /// snapshot cannot race another save).
+    private func reconcileInterruptedSave(
+        verified records: [VerifiedLogRecord]
+    ) throws -> [VerifiedLogRecord] {
+        let entries = (try? readRevisions(from: machineRevisionsURL)) ?? []
+        let generations = Self.compressedGenerations(records)
+        guard entries.count == generations.count + 1,
+            let tail = entries.last
+        else {
+            return records
+        }
+        for (entry, record) in zip(entries, generations) {
+            guard entry.toml == record.toml,
+                entry.hash == PolicyRevisionIdentity.hash(record.document),
+                Self.ms(of: entry.recordedAt) == record.recordedAtMs
+            else {
+                return records
+            }
+        }
+        guard let liveText = try? String(contentsOf: machineFileURL, encoding: .utf8),
+            liveText == tail.toml
+        else {
+            return records
+        }
+        let sealed = try appendLogRecord(
+            toml: tail.toml,
+            after: records,
+            recordedAtMs: Self.ms(of: tail.recordedAt)
+        )
+        return records + [sealed]
+    }
+
     /// Seals `toml` as the next head record after already-verified `records`
     /// and reseals the tip. Mints the key only for the first record of a
     /// fresh log; a key is never minted over an existing log.
@@ -1095,25 +1184,21 @@ public struct TypedRuleStore: Sendable {
         guard let document = try? PolicyDocumentTOML.parse(toml) else {
             throw TypedRuleStoreError.logCorrupted
         }
-        var encoded = records.map { verified in
-            RevisionLogRecord(
-                revision: verified.revision,
-                prev: verified.prev,
-                tomlBase64: Data(verified.toml.utf8).base64EncodedString(),
-                recordedAtMs: verified.recordedAtMs,
-                mac: verified.mac
-            )
-        }
-        encoded.append(
-            RevisionLogRecord(
-                revision: revision,
-                prev: prev,
-                tomlBase64: tomlData.base64EncodedString(),
-                recordedAtMs: recordedAtMs,
-                mac: mac
-            )
+        let record = RevisionLogRecord(
+            revision: revision,
+            prev: prev,
+            tomlBase64: tomlData.base64EncodedString(),
+            recordedAtMs: recordedAtMs,
+            mac: mac
         )
-        try writeLogRecords(encoded)
+        // Append one line under the caller's log lock; the full rewrite
+        // remains only for minting the first record. Re-encoding the whole
+        // history per save made total work quadratic in saves.
+        if records.isEmpty {
+            try writeLogRecords([record])
+        } else {
+            try appendLogLine(record)
+        }
         let tipMAC = Self.tipMAC(revision: revision, tip: mac, key: key)
         try writeLogTip(RevisionLogTip(revision: revision, tip: mac, mac: tipMAC))
         return VerifiedLogRecord(
@@ -1168,10 +1253,35 @@ public struct TypedRuleStore: Sendable {
         guard let data = (lines.joined(separator: "\n") + "\n").data(using: .utf8) else {
             throw TypedRuleStoreError.invalidFile
         }
+        // Write failures are I/O, not tamper: `invalidFile` propagates so a
+        // full disk never reads as forgery (whose documented recovery
+        // destroys history). Verification failures stay `logCorrupted`.
+        try writeFileBytes(data, to: machineLogFileURL)
+    }
+
+    /// Appends one sealed record line under the caller's log lock.
+    private func appendLogLine(_ record: RevisionLogRecord) throws {
+        try prepareDirectory(baseDirectory)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let encoded = try? encoder.encode(record),
+            var line = String(data: encoded, encoding: .utf8)
+        else {
+            throw TypedRuleStoreError.invalidFile
+        }
+        line.append("\n")
+        guard let lineData = line.data(using: .utf8) else {
+            throw TypedRuleStoreError.invalidFile
+        }
+        guard let handle = try? FileHandle(forWritingTo: machineLogFileURL) else {
+            throw TypedRuleStoreError.invalidFile
+        }
         do {
-            try writeFileBytes(data, to: machineLogFileURL)
-        } catch TypedRuleStoreError.invalidFile {
-            throw TypedRuleStoreError.logCorrupted
+            try handle.seekToEnd()
+            try handle.write(contentsOf: lineData)
+            try handle.close()
+        } catch {
+            throw TypedRuleStoreError.invalidFile
         }
     }
 
@@ -1182,11 +1292,7 @@ public struct TypedRuleStore: Sendable {
         guard let data = try? encoder.encode(tip) else {
             throw TypedRuleStoreError.invalidFile
         }
-        do {
-            try writeFileBytes(data, to: machineLogTipFileURL)
-        } catch TypedRuleStoreError.invalidFile {
-            throw TypedRuleStoreError.logCorrupted
-        }
+        try writeFileBytes(data, to: machineLogTipFileURL)
     }
 
     private static func recordMAC(

@@ -7,9 +7,54 @@
 #endif
 
 #include <fcntl.h>
-#include <linux/landlock.h>
-#include <linux/openat2.h>
 #include <stdint.h>
+/*
+ * Header-independent fallbacks: pre-Landlock libc headers must degrade to
+ * the runtime ABI probe failing closed (the trampoline exits 125), not to
+ * a build failure. Values are the stable kernel UAPI assignments; the
+ * ruleset attr is passed at sizeof(handled_access_fs), which every ABI
+ * accepts, so the one-field fallback struct is layout-sufficient.
+ */
+#if defined(__has_include) && __has_include(<linux/landlock.h>)
+#include <linux/landlock.h>
+#else
+struct landlock_ruleset_attr {
+    uint64_t handled_access_fs;
+};
+struct landlock_path_beneath_attr {
+    uint64_t allowed_access;
+    int32_t parent_fd;
+} __attribute__((packed));
+#define LANDLOCK_CREATE_RULESET_VERSION (1U << 0)
+#define LANDLOCK_RULE_PATH_BENEATH 1
+#define LANDLOCK_ACCESS_FS_EXECUTE (1ULL << 0)
+#define LANDLOCK_ACCESS_FS_WRITE_FILE (1ULL << 1)
+#define LANDLOCK_ACCESS_FS_READ_FILE (1ULL << 2)
+#define LANDLOCK_ACCESS_FS_READ_DIR (1ULL << 3)
+#define LANDLOCK_ACCESS_FS_REMOVE_DIR (1ULL << 4)
+#define LANDLOCK_ACCESS_FS_REMOVE_FILE (1ULL << 5)
+#define LANDLOCK_ACCESS_FS_MAKE_CHAR (1ULL << 6)
+#define LANDLOCK_ACCESS_FS_MAKE_DIR (1ULL << 7)
+#define LANDLOCK_ACCESS_FS_MAKE_REG (1ULL << 8)
+#define LANDLOCK_ACCESS_FS_MAKE_SOCK (1ULL << 9)
+#define LANDLOCK_ACCESS_FS_MAKE_FIFO (1ULL << 10)
+#define LANDLOCK_ACCESS_FS_MAKE_BLOCK (1ULL << 11)
+#define LANDLOCK_ACCESS_FS_MAKE_SYM (1ULL << 12)
+#endif
+#if defined(__has_include) && __has_include(<linux/openat2.h>)
+#include <linux/openat2.h>
+#else
+struct open_how {
+    uint64_t flags;
+    uint64_t mode;
+    uint64_t resolve;
+};
+#define RESOLVE_NO_MAGICLINKS 0x02
+#define RESOLVE_NO_SYMLINKS 0x04
+#endif
+#ifndef SYS_openat2
+#define SYS_openat2 437
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
@@ -32,6 +77,10 @@
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
+#endif
+
+#ifndef LANDLOCK_ACCESS_FS_REFER
+#define LANDLOCK_ACCESS_FS_REFER (1ULL << 13)
 #endif
 
 #ifndef LANDLOCK_ACCESS_FS_TRUNCATE

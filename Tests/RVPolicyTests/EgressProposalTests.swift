@@ -48,6 +48,23 @@ struct EgressProposalTests {
         #expect(EgressProposal.parse(fingerprint) == rule)
     }
 
+    @Test func liveRuleDecodingRevalidates() throws {
+        // The Codable boundary is a trust boundary: decoding must carry
+        // the same invariant as construction (canonical host, bounded
+        // port), never materialize an unrepresentable rule.
+        let wild = Data(#"{"host":"*","port":99999}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(LiveNetworkRule.self, from: wild)
+        }
+        let loud = Data(#"{"host":"API.Example.COM.","port":443}"#.utf8)
+        let decoded = try JSONDecoder().decode(LiveNetworkRule.self, from: loud)
+        #expect(decoded.host == "api.example.com")
+        #expect(decoded.port == 443)
+        // Non-canonical port spellings never parse as proposals.
+        #expect(EgressProposal.parse(ActionFingerprint(rawValue: "egress:api.example.com:+443")) == nil)
+        #expect(EgressProposal.parse(ActionFingerprint(rawValue: "egress:api.example.com:0443")) == nil)
+    }
+
     @Test func parseRejectsDrift() {
         #expect(EgressProposal.parse(ActionFingerprint(rawValue: "egress:api.example.com")) == nil)
         #expect(EgressProposal.parse(ActionFingerprint(rawValue: "egress::443")) == nil)

@@ -54,7 +54,7 @@ _rv() {
           ;;
         policy)
           local -a po
-          po=('show:List rules' 'draft:Compile English' 'validate:Validate' 'export:Export' 'apply:Apply')
+          po=('show:List rules' 'list:List policy revisions' 'draft:Compile English' 'validate:Validate' 'export:Export' 'apply:Apply')
           _describe -t commands 'policy' po
           ;;
         scan)

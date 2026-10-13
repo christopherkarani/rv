@@ -159,6 +159,111 @@ struct EgressReviewTests {
                 == "Deny network egress to a.example.com:443.")
     }
 
+    @Test func approveCeremonyResolvesAllowOnce() async throws {
+        // The production verb stays boundary-refused, but the ceremony
+        // itself must execute somewhere: dark security code would meet
+        // its latent bugs for the first time in production.
+        let store = PendingApprovalStore(baseDirectory: try egressCLITempConfig())
+        let created = try await egressCLIProposal(store: store)
+        let now = Date()
+        let view = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+            try await EgressReviewRun.approve(
+                id: created.id,
+                tty: TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false),
+                robot: false,
+                store: store,
+                now: now,
+                refreshedNow: { now }
+            )
+        }
+        // The returned view reflects the resolved row, not the pre-auth one.
+        #expect(view.state == "resolved-allowOnce")
+        let loaded = try await store.load(id: created.id, now: now)
+        guard case .resolved(let resolution) = loaded.state else {
+            Issue.record("expected resolved state, got \(loaded.state)")
+            return
+        }
+        #expect(resolution.decision == .allowOnce)
+    }
+
+    @Test func denyCeremonyPersistsCanonicalReason() async throws {
+        let store = PendingApprovalStore(baseDirectory: try egressCLITempConfig())
+        let created = try await egressCLIProposal(store: store)
+        let now = Date()
+        let view = try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+            try await EgressReviewRun.deny(
+                id: created.id,
+                reason: "  Tracker Domain  ",
+                tty: TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false),
+                robot: false,
+                store: store,
+                now: now,
+                refreshedNow: { now }
+            )
+        }
+        #expect(view.state == "resolved-deny")
+        // Canonical form is the trimmed text (control scalars refused).
+        #expect(await store.rejectionReason(for: created.id) == "Tracker Domain")
+    }
+
+    @Test func approveCeremonyFailsClosedWhenRobotOrNotTTY() async throws {
+        let store = PendingApprovalStore(baseDirectory: try egressCLITempConfig())
+        let created = try await egressCLIProposal(store: store)
+        await #expect(throws: AllowOnceError.robotRefused) {
+            try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+                try await EgressReviewRun.approve(
+                    id: created.id,
+                    tty: TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false),
+                    robot: true,
+                    store: store,
+                    now: Date()
+                )
+            }
+        }
+        await #expect(throws: AllowOnceError.ttyRequired) {
+            try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+                try await EgressReviewRun.approve(
+                    id: created.id,
+                    tty: TTYCapability(stdinIsTTY: false, stdoutIsTTY: true, ci: false),
+                    robot: false,
+                    store: store,
+                    now: Date()
+                )
+            }
+        }
+        // Nothing resolved behind the refusals.
+        let loaded = try await store.load(id: created.id, now: Date())
+        guard case .awaitingHuman = loaded.state else {
+            Issue.record("expected awaitingHuman, got \(loaded.state)")
+            return
+        }
+    }
+
+    @Test func approveCeremonyReportsProposalChangedWhenResolvedUnderneath() async throws {
+        let store = PendingApprovalStore(baseDirectory: try egressCLITempConfig())
+        let created = try await egressCLIProposal(store: store)
+        let now = Date()
+        _ = try await store.resolve(
+            id: created.id,
+            decision: .deny,
+            fingerprint: created.fingerprint,
+            identity: created.identity,
+            now: now
+        )
+        await #expect(throws: EgressReviewError.notAwaiting("resolved-deny")) {
+            try await withCLIProcess(ownerAuthOutcome: .authenticated) {
+                try await EgressReviewRun.approve(
+                    id: created.id,
+                    tty: TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false),
+                    robot: false,
+                    store: store,
+                    now: now,
+                    refreshedNow: { now }
+                )
+            }
+        }
+    }
+
     @Test func approveIsBoundaryRefused() async throws {
         let command = try EgressApprove.parse(["some-id"])
         await #expect(throws: ValidationError.self) {

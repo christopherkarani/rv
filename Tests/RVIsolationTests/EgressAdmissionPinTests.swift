@@ -1,6 +1,7 @@
 import Foundation
 import Testing
-@testable import RVDomain
+import RVDomain
+@testable import RVIsolation
 
 /// T1: admission-time pins and policy-authored expected hashes (Item 1).
 ///
@@ -89,6 +90,25 @@ struct EgressAdmissionPinTests {
             cache.verifyAdmitted(canonicalPath: Self.path)
                 == .mismatch(expected: authored, observed: String(repeating: "cd", count: 32))
         )
+    }
+
+    @Test func expectedHashRefusesBytesThatDoNotMatchAuthoredDigest() {
+        // Regression: pinExpected once stored (authoredDigest, current
+        // fingerprint) without hashing, so the fingerprint fast path then
+        // admitted whatever binary was already in place. The authored
+        // digest must be checked against the bytes at pin time.
+        let authored = String(repeating: "ab", count: 32)
+        let script = AdmissionPinScript(
+            fingerprint: Self.print(inode: 7),
+            digest: String(repeating: "cd", count: 32)
+        )
+        let cache = EgressBinaryPinCache(
+            fingerprint: { script.capture($0) },
+            hashFile: { script.hash($0) }
+        )
+        #expect(cache.pinExpected(canonicalPath: Self.path, sha256Hex: authored) == false)
+        // Nothing was pinned: the strict entry point still denies.
+        #expect(cache.verifyAdmitted(canonicalPath: Self.path) == .unreadable)
     }
 
     @Test func expectedHashRejectsMalformedAndNeverOverwrites() {

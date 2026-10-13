@@ -195,11 +195,11 @@ struct RuntimeAdmissionBrokerInjectionTests {
     }
 
     @Test func credentialGuardMustScanBytesNotCharacters() {
-        // CRLF is a single Swift grapheme: Character-element contains()
-        // matches neither half of it. The credential guard therefore scans
-        // UTF-8 bytes; this pins the trap so nobody "simplifies" it back.
-        #expect("secret\r\nInjected: yes".contains("\r") == false)
-        #expect("secret\r\nInjected: yes".contains("\n") == false)
+        // The credential guard scans UTF-8 bytes, never Characters: CR and
+        // LF must be visible to it as individual bytes even inside a CRLF
+        // pair, whatever the platform's grapheme segmentation does. The
+        // end-to-end proof is exchangeFailsClosedOnMalformedCredential
+        // below: a CRLF-bearing credential writes zero bytes.
         #expect("secret\r\nInjected: yes".utf8.contains(0x0D))
         #expect("secret\r\nInjected: yes".utf8.contains(0x0A))
     }

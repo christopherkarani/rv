@@ -56,13 +56,17 @@ struct Policy: AsyncParsableCommand {
                 do {
                     switch (snapshot, effectiveRules) {
                     case (let baseSnapshot?, let rules?):
-                        text = try PolicyShowRun.robotCombined(baseSnapshot, effective: rules)
+                        text = try PolicyShowRun.robotCombined(
+                            baseSnapshot, effective: rules, exemptions: exemptions)
                     case (nil, let rules?):
                         text = try PolicyShowRun.robotEffective(rules)
                     case (let baseSnapshot?, nil):
                         text = try PolicyShowRun.robot(baseSnapshot, exemptions: exemptions)
                     case (nil, nil):
-                        text = try PolicyShowRun.robotEffective([])
+                        // Unreachable (`showBase` covers `!effective`): a
+                        // logic error must fail loudly, never emit a
+                        // fake-empty success document.
+                        try ctx.fail("rv policy show: encode failed\n")
                     }
                 } catch {
                     try ctx.fail("rv policy show: encode failed\n")
@@ -282,18 +286,48 @@ struct SecretExemptionsView: Equatable, Sendable, Codable {
     var effective: [String]
     var droppedRepoLiterals: [String]
     var blessPaths: [String]
+    var documentLoadFailed: Bool = false
 
     static let empty = SecretExemptionsView(effective: [], droppedRepoLiterals: [], blessPaths: [])
 }
 
 /// Robot document for `policy show`: the three rule origins plus the
-/// exemption view. The `secretAllowPaths` key is purely additive; the legacy
-/// shape still decodes.
+/// exemption view. The `secretAllowPaths` key is purely additive; payloads
+/// written before it existed still decode (missing key reads as empty).
 struct PolicyShowRobotDocument: Equatable, Sendable, Codable {
     var builtin: [TypedRule]
     var machine: [TypedRule]
     var repo: [TypedRule]
     var secretAllowPaths: SecretExemptionsView
+
+    init(
+        builtin: [TypedRule],
+        machine: [TypedRule],
+        repo: [TypedRule],
+        secretAllowPaths: SecretExemptionsView
+    ) {
+        self.builtin = builtin
+        self.machine = machine
+        self.repo = repo
+        self.secretAllowPaths = secretAllowPaths
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case builtin
+        case machine
+        case repo
+        case secretAllowPaths
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.builtin = try container.decode([TypedRule].self, forKey: .builtin)
+        self.machine = try container.decode([TypedRule].self, forKey: .machine)
+        self.repo = try container.decode([TypedRule].self, forKey: .repo)
+        self.secretAllowPaths =
+            try container.decodeIfPresent(SecretExemptionsView.self, forKey: .secretAllowPaths)
+            ?? .empty
+    }
 }
 
 enum PolicyShowRun {
@@ -321,7 +355,8 @@ enum PolicyShowRun {
         return SecretExemptionsView(
             effective: detailed.effective.literals,
             droppedRepoLiterals: detailed.droppedRepoLiterals,
-            blessPaths: SecretAllowPaths.loadBlessPaths(from: configFile)
+            blessPaths: SecretAllowPaths.loadBlessPaths(from: configFile),
+            documentLoadFailed: detailed.documentLoadFailed
         )
     }
 
@@ -342,12 +377,16 @@ enum PolicyShowRun {
         func row(_ values: [String]) -> String {
             values.isEmpty ? "(none)" : values.joined(separator: ", ")
         }
-        return [
+        var lines = [
             "secret.allow_paths",
             "  effective: \(row(view.effective))",
             "  dropped: \(row(view.droppedRepoLiterals))",
             "  bless_paths: \(row(view.blessPaths))",
-        ].joined(separator: "\n")
+        ]
+        if view.documentLoadFailed {
+            lines.append("  load: failed (a policy file could not be parsed; its exemptions were not evaluated)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     static func prettyEffective(_ rules: [TypedRule]) -> String {
@@ -389,7 +428,8 @@ enum PolicyShowRun {
 
     static func robotCombined(
         _ snapshot: PolicyShowSnapshot,
-        effective: [TypedRule]
+        effective: [TypedRule],
+        exemptions: SecretExemptionsView
     ) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
@@ -398,7 +438,8 @@ enum PolicyShowRun {
                 builtin: snapshot.builtin,
                 machine: snapshot.machine,
                 repo: snapshot.repo,
-                effective: effective
+                effective: effective,
+                secretAllowPaths: exemptions
             )
         )
         return String(decoding: data, as: UTF8.self)
@@ -414,6 +455,7 @@ struct PolicyShowCombinedSnapshot: Sendable, Equatable, Codable {
     var machine: [TypedRule]
     var repo: [TypedRule]
     var effective: [TypedRule]
+    var secretAllowPaths: SecretExemptionsView
 }
 
 enum PolicyListRun {
@@ -506,12 +548,20 @@ enum PolicyValidateRun {
     static func exemptionNotes(_ target: Target, workspace: URL?) -> [String] {
         switch target {
         case .machine(let home):
-            return SecretAllowPaths.loadEffectiveDetailed(home: home, workspace: workspace)
-                .droppedRepoLiterals
-                .map {
-                    "rv policy validate: dropped unblessed repo literal '\($0)'"
-                        + " (add to secret.bless_paths to allow)"
-                }
+            let detailed = SecretAllowPaths.loadEffectiveDetailed(
+                home: home, workspace: workspace)
+            var notes = detailed.droppedRepoLiterals.map {
+                "rv policy validate: dropped unblessed repo literal '\($0)'"
+                    + " (add to secret.bless_paths to allow)"
+            }
+            if detailed.documentLoadFailed {
+                notes.insert(
+                    "rv policy validate: a policy file could not be parsed; "
+                        + "its secret.allow_paths were not evaluated",
+                    at: 0
+                )
+            }
+            return notes
         case .file(let url, _):
             guard FileManager.default.fileExists(atPath: url.path) else {
                 return []

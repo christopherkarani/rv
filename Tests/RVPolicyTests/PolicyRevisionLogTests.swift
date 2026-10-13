@@ -180,7 +180,9 @@ struct PolicyRevisionLogTests {
         #expect(history.map(\.revision) == [1])
         #expect(history.map(\.document) == [document])
         try store.saveMachine(document)
-        #expect(try store.machineHistory().map(\.revision) == [1, 2])
+        // Identical re-save seals an internal duplicate but mints no new
+        // generation, so public history stays at [1].
+        #expect(try store.machineHistory().map(\.revision) == [1])
     }
 
     @Test func missingKeyFailsClosedWithoutMinting() throws {
@@ -247,6 +249,49 @@ struct PolicyRevisionLogTests {
         }
         #expect(try String(contentsOf: store.machineFileURL, encoding: .utf8) == before)
         #expect(try store.machineHistory().map(\.revision) == [1])
+    }
+
+    @Test func interruptedSaveReconcilesOnNextSaveInsteadOfBricking() throws {
+        // Regression: saveMachine moves policy.toml + display log, then
+        // seals. A crash between the two used to brick every later
+        // cross-checked operation with logCorrupted until operator
+        // recovery destroyed history. Simulate that exact state (live
+        // file + display tail present, seal missing), then save again.
+        let root = try isolatedRevisionLogDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TypedRuleStore(baseDirectory: root)
+        let first = PolicyDocument(rules: [denyRule(pattern: "v1", branch: "main")])
+        let second = PolicyDocument(rules: [denyRule(pattern: "v2", branch: "develop")])
+        let third = PolicyDocument(rules: [denyRule(pattern: "v3", branch: "release")])
+        try store.saveMachine(first)
+
+        let secondText = PolicyDocumentTOML.render(second)
+        try secondText.write(to: store.machineFileURL, atomically: true, encoding: .utf8)
+        let tail = PolicyRevision(
+            revision: 2,
+            hash: PolicyRevisionIdentity.hash(second),
+            ruleCount: second.rules.count,
+            recordedAt: Date(),
+            toml: secondText,
+            document: second
+        )
+        let line = try JSONEncoder().encode(tail)
+        let handle = try FileHandle(forWritingTo: store.machineRevisionsURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: line + Data("\n".utf8))
+        try handle.close()
+
+        // Reads stay strict: the unsealed tail is not history yet.
+        #expect(throws: TypedRuleStoreError.logCorrupted) {
+            try store.listMachineRevisions()
+        }
+        // The next save completes the interrupted seal, then proceeds.
+        try store.saveMachine(third)
+        let history = try store.machineHistory()
+        #expect(history.map(\.revision) == [1, 2, 3])
+        #expect(history[1].document == second)
+        #expect(history[2].document == third)
+        #expect(try store.loadMachineDocument() == third)
     }
 
     @Test func logArtifactsAreOwnerOnly() throws {

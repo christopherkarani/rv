@@ -1318,7 +1318,13 @@ struct SeatbeltPhase7ResidualTests {
         #expect(probe.contains("PROC listpids-count="), "probe output:\n\(probe)")
         #expect(probe.contains("PROC pidinfo-1 errno=1"), "probe output:\n\(probe)")
         #expect(probe.contains("PROC self-args size="), "probe output:\n\(probe)")
-        #expect(probe.contains("PROC pid1-args errno="), "probe output:\n\(probe)")
+        // Denied either at the size query (`pid1-args errno=`) or at the
+        // read (`pid1-args read errno=`); which step refuses pid 1 varies
+        // by OS build. The security property is denial plus no size line.
+        #expect(
+            probe.contains("PROC pid1-args errno=")
+                || probe.contains("PROC pid1-args read errno="),
+            "probe output:\n\(probe)")
         #expect(probe.contains("PROC pid1-args size=") == false, "probe output:\n\(probe)")
         // Strict-open pin of the documented hole (this test runs the
         // production coarse profile): same-user host argv+env READS BACK.

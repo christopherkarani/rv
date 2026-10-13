@@ -323,7 +323,9 @@ public struct ContainedCredentialBroker: Sendable, Equatable {
 /// encoded, never logged, never sent over the pipes. Public so
 /// supervisor-side transports in other modules can consume it; the cage
 /// is a separate process and cannot reach host-side Swift state at all.
-public struct BrokeredCredentialInjection: Sendable, Equatable {
+public struct BrokeredCredentialInjection: Sendable, Equatable, CustomStringConvertible,
+    CustomDebugStringConvertible
+{
     public var credentialName: String
     public var host: String
     public var value: String
@@ -333,6 +335,14 @@ public struct BrokeredCredentialInjection: Sendable, Equatable {
         self.host = host
         self.value = value
     }
+
+    /// Redacted by construction: interpolating an injection into a log
+    /// line can never carry the secret value with it.
+    public var description: String {
+        "BrokeredCredentialInjection(credentialName: \(credentialName), host: \(host), value: <redacted>)"
+    }
+
+    public var debugDescription: String { description }
 }
 
 /// Why the broker withheld an injection. Names-only audit vocabulary.

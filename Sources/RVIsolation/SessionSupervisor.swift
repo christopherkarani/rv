@@ -915,8 +915,14 @@ func containedRuntimeEnvironment(
 /// userinfo as Basic `Proxy-Authorization`, which the credentialed proxy
 /// authenticates against that runtime's grant alone
 /// (`EgressProxy.proxyCredentialToken`); a sibling runtime holds a
-/// different token and is judged against its own grant, so one runtime
-/// can never ride another's approval. A missing or non-userinfo-safe
+/// different token and is judged against its own grant. This is
+/// credential separation, not secrecy: the token rides the process
+/// environment, and the production (coarse sysctl-read) profile lets a
+/// same-uid sibling read it via KERN_PROCARGS2. Today every grant is
+/// the same `.publicHTTPS` policy, so harvesting a token grants no
+/// wider egress — but per-runtime policy differentiation must not ship
+/// until the per-MIB/pidinfo posture (or a dedicated uid) makes the
+/// token unreadable across cages. A missing or non-userinfo-safe
 /// credential stamps the port-only shape instead: open-mode proxies keep
 /// working unchanged, while credentialed proxies answer 407
 /// (`denied-credential`, fail closed) rather than admitting.

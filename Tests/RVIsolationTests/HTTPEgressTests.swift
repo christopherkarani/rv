@@ -422,7 +422,8 @@ private func loopbackAction() throws -> HTTPAction {
 struct BinaryEgressAdmissionTests {
     @Test func rulePathsAreStrictlyCanonical() {
         #expect(EgressBinaryRule(canonicalPath: "/opt/rv/bin/agent")?.path == "/opt/rv/bin/agent")
-        #expect(EgressBinaryRule(canonicalPath: "/")?.path == "/")
+        // Root is a directory, not a binary: unrepresentable, not a dead rule.
+        #expect(EgressBinaryRule(canonicalPath: "/") == nil)
         #expect(EgressBinaryRule(canonicalPath: "relative/bin") == nil)
         #expect(EgressBinaryRule(canonicalPath: "") == nil)
         #expect(EgressBinaryRule(canonicalPath: "/opt//bin") == nil)

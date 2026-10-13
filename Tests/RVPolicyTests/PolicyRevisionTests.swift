@@ -294,6 +294,23 @@ struct PolicyRevisionTests {
         #expect(try session.listRevisions(layer: .machine).count == 3)
     }
 
+    @Test func repoRevisionOpsRefuseWithoutMachineDirectory() throws {
+        // The repo revision log must live in the machine config dir, not
+        // inside the workspace a caged writer controls. With no machine
+        // directory, revision operations refuse instead of falling back
+        // to a workspace-local (forgeable) log; document reads still work.
+        let workspace = try isolatedRevisionDirectory()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let session = PolicyWorkspace(home: nil, workspace: workspace)
+        #expect(throws: PolicyWorkspaceError.missingLayer(.machine)) {
+            _ = try session.listRevisions(layer: .repo)
+        }
+        #expect(throws: PolicyWorkspaceError.missingLayer(.machine)) {
+            _ = try session.rollback(layer: .repo, to: 1)
+        }
+        #expect(try session.loadRepoDocument() == PolicyDocument())
+    }
+
     @Test func workspaceRevisionReadsWithoutLayerThrow() {
         let session = PolicyWorkspace(home: nil, workspace: nil)
         #expect(throws: PolicyWorkspaceError.missingLayer(.machine)) {
@@ -465,7 +482,9 @@ struct PolicyRevisionTests {
         let again = try store.rollbackMachine(to: 4)
         #expect(again.revision == 4)
         #expect(try store.listMachineRevisions().map(\.revision) == [1, 2, 3, 4])
-        #expect(try store.machineHistory().map(\.revision) == [1, 2, 3, 4, 5])
+        // One public numbering: history reports generations, so the
+        // duplicate sealed tail record does not mint a revision 5.
+        #expect(try store.machineHistory().map(\.revision) == [1, 2, 3, 4])
     }
 
     @Test func identicalResaveThenDistinctSaveKeepsReadsWorking() throws {
@@ -482,7 +501,9 @@ struct PolicyRevisionTests {
         try store.saveMachine(second)
 
         #expect(try store.listMachineRevisions().map(\.revision) == [1, 2])
-        #expect(try store.machineHistory().map(\.revision) == [1, 2, 3])
+        // One public numbering: the identical re-save sealed an internal
+        // duplicate but minted no generation, so history agrees with list.
+        #expect(try store.machineHistory().map(\.revision) == [1, 2])
         let head = try store.rollbackMachine(to: 1)
         #expect(head.revision == 3)
         #expect(try store.listMachineRevisions().map(\.revision) == [1, 2, 3])

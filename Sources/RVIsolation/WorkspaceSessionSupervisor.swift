@@ -174,7 +174,9 @@ final class WorkspaceSessionSupervisor: Sendable {
         self.state = Mutex(State(lifecycle: .creating))
         // No shared CONNECT proxy: each runtime gets its own credentialed
         // instance at the spawn seam (REQ-2-1), so no open loopback proxy
-        // survives as a cross-runtime authority (SEC-2-2). Denial intake
+        // survives as a cross-runtime authority (SEC-2-2, separation —
+        // not cross-cage secrecy on the coarse profile; see
+        // `egressProxyURL`). Denial intake
         // still feeds the review queue ahead of the production denial log,
         // per proxy (see makeRuntimeEgress).
         self.reviewQueue = reviewConfigDirectory.map(NetworkReviewQueue.init(configDirectory:))
@@ -388,8 +390,6 @@ final class WorkspaceSessionSupervisor: Sendable {
     /// a missed cancel still ends at deallocation.
     func beginLiveReview() {
         guard reviewQueue != nil else { return }
-        let already = state.withLock { $0.reviewTask != nil }
-        guard already == false else { return }
         let task = Task { [weak self] in
             while true {
                 guard let self else { break }
@@ -398,7 +398,16 @@ final class WorkspaceSessionSupervisor: Sendable {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
         }
-        state.withLock { $0.reviewTask = task }
+        // Atomic claim: exactly one caller's task survives; a racing
+        // duplicate is cancelled instead of leaking a second poller.
+        let installed = state.withLock { state -> Bool in
+            guard state.reviewTask == nil else { return false }
+            state.reviewTask = task
+            return true
+        }
+        if installed == false {
+            task.cancel()
+        }
     }
 
     /// One approval sweep: newly-approved rules move from the review queue
@@ -409,16 +418,22 @@ final class WorkspaceSessionSupervisor: Sendable {
         guard let queue = reviewQueue else { return }
         let proxies = state.withLock { $0.children.values.map(\.egressProxy) }
         guard proxies.isEmpty == false else { return }
+        // Credentialed instances ignore instance-wide rules by design
+        // (EgressProxy.supplementAdmits): per-runtime grant updates arrive
+        // with per-runtime review identity (T4 seam). Until then, when no
+        // live proxy enforces the supplement the sweep consumes nothing —
+        // approvals stay pending instead of being applied to a channel
+        // nothing enforces and recorded as loaded.
+        guard proxies.contains(where: \.enforcesSupplement) else { return }
         guard let push = await queue.applyResolved(now: now) else { return }
-        // Record only what the proxies enforce: a refused (stale) push
-        // must not present as loaded. Pushes carry the full live set, so
-        // every instance accepting the generation means exactly this set
-        // is live on each. Credentialed instances ignore instance-wide
-        // rules by design (EgressProxy.supplementAdmits): per-runtime grant
-        // updates arrive with per-runtime review identity (T4 seam), and
-        // until then the generation advances but enforcement stays with
-        // each runtime's grant.
-        let accepted = proxies.map { $0.updateSupplement(push.rules, generation: push.generation) }.min()
+        // Record only what enforcing proxies accepted: a refused (stale)
+        // push must not present as loaded. Pushes carry the full live
+        // set, so every enforcing instance accepting the generation means
+        // exactly this set is live on each of them.
+        let accepted = proxies
+            .filter(\.enforcesSupplement)
+            .map { $0.updateSupplement(push.rules, generation: push.generation) }
+            .min()
         if let accepted, accepted >= push.generation {
             await queue.recordLoaded(
                 rules: push.rules, generation: accepted,
@@ -1424,7 +1439,9 @@ final class WorkspaceSessionSupervisor: Sendable {
     /// (REQ-2-1): the supervisor mints a fresh credential and maps it to
     /// that runtime's grant alone, so a sibling runtime holds a different
     /// token and is judged against its own grant. No shared open instance
-    /// survives for co-tenants to inherit (SEC-2-2). Borrowed shape:
+    /// survives for co-tenants to inherit (SEC-2-2, separation — not
+    /// cross-cage secrecy on the coarse profile; see `egressProxyURL`).
+    /// Borrowed shape:
     /// OpenShell's workload-without-network plus supervisor-owned upstream
     /// (https://raw.githubusercontent.com/NVIDIA/OpenShell/main/crates/openshell-driver-docker/README.md).
     ///

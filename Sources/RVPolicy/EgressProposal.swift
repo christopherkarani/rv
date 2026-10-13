@@ -15,14 +15,39 @@ import RVDomain
 /// `EgressHostPolicy.allows` semantics plus the public-unicast dial
 /// filter, so an invalid rule is inert even if one were constructed.
 public struct LiveNetworkRule: Sendable, Hashable, Equatable, Codable {
-    public var host: String
-    public var port: Int
+    public private(set) var host: String
+    public private(set) var port: Int
 
     public init?(host: String, port: Int) {
         guard (1...65535).contains(port) else { return nil }
         guard let canonical = LiveNetworkRule.canonical(host) else { return nil }
         self.host = canonical
         self.port = port
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case host
+        case port
+    }
+
+    /// Decoding re-canonicalizes: a decoded rule carries the same
+    /// invariant as a constructed one, so `{"host":"*","port":99999}`
+    /// throws instead of materializing an unrepresentable rule.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let rawHost = try container.decode(String.self, forKey: .host)
+        let rawPort = try container.decode(Int.self, forKey: .port)
+        guard (1...65535).contains(rawPort),
+            let canonical = LiveNetworkRule.canonical(rawHost)
+        else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .host,
+                in: container,
+                debugDescription: "non-canonical live network rule"
+            )
+        }
+        self.host = canonical
+        self.port = rawPort
     }
 
     private static func canonical(_ raw: String) -> String? {
@@ -89,8 +114,8 @@ public struct EgressLoadedSnapshot: Sendable, Equatable, Codable {
             decoded.schemaVersion == currentSchemaVersion
         else { return nil }
         var snapshot = decoded
-        snapshot.rules = decoded.rules.filter {
-            LiveNetworkRule(host: $0.host, port: $0.port) != nil
+        snapshot.rules = decoded.rules.compactMap {
+            LiveNetworkRule(host: $0.host, port: $0.port)
         }
         return snapshot
     }
@@ -203,7 +228,10 @@ public enum EgressProposal: Sendable {
         let rest = String(raw.dropFirst(fingerprintPrefix.count))
         guard let colon = rest.lastIndex(of: ":") else { return nil }
         let host = String(rest[..<colon])
-        guard let port = Int(rest[rest.index(after: colon)...]) else { return nil }
+        let portText = String(rest[rest.index(after: colon)...])
+        // Canonical port spelling only: `Int` also accepts `+443`/`0443`,
+        // which no fingerprint this code mints ever contains.
+        guard let port = Int(portText), String(port) == portText else { return nil }
         return LiveNetworkRule(host: host, port: port)
     }
 

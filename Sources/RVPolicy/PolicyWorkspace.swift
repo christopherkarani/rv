@@ -116,14 +116,16 @@ public struct PolicyWorkspace: Sendable {
             guard let workspace else {
                 throw PolicyWorkspaceError.missingLayer(.repo)
             }
-            return try repoStore(workspace: workspace).listRepoRevisions(workspace: workspace)
+            return try revisionRepoStore(workspace: workspace)
+                .listRepoRevisions(workspace: workspace)
         }
     }
 
     /// Rollback re-submits an earlier revision's document as a new head.
     /// The log is append-only: earlier lines are never rewritten. Restores
-    /// that relax a rule the current head still enforces refuse with
-    /// `blockedByFindings` before anything is written.
+    /// that relax a surviving predicate's verdict, downgrade the safety
+    /// level, or widen secret exemptions refuse with `blockedByFindings`
+    /// before anything is written; predicate-set change itself passes.
     public func rollback(layer: PolicyDocumentLayer, to revision: Int) throws -> PolicyRevision {
         switch layer {
         case .machine:
@@ -135,7 +137,8 @@ public struct PolicyWorkspace: Sendable {
             guard let workspace else {
                 throw PolicyWorkspaceError.missingLayer(.repo)
             }
-            return try repoStore(workspace: workspace).rollbackRepo(to: revision, workspace: workspace)
+            return try revisionRepoStore(workspace: workspace)
+                .rollbackRepo(to: revision, workspace: workspace)
         }
     }
 
@@ -167,6 +170,21 @@ public struct PolicyWorkspace: Sendable {
         TypedRuleStore(baseDirectory: machineDirectory ?? workspace)
     }
 
+    /// Store for repo revision-log operations. The repo log's only
+    /// integrity beyond its unkeyed hashes is its location in the machine
+    /// config directory, outside the workspace a caged writer controls.
+    /// Without a machine directory the fallback would place
+    /// `repo-revisions-*.jsonl` inside that workspace, where rollback
+    /// targets are forgeable by construction — refuse instead. Plain
+    /// document reads keep the `repoStore` fallback: they never touch
+    /// the log.
+    private func revisionRepoStore(workspace: URL) throws -> TypedRuleStore {
+        guard let directory = machineDirectory else {
+            throw PolicyWorkspaceError.missingLayer(.machine)
+        }
+        return TypedRuleStore(baseDirectory: directory)
+    }
+
     private func loadWritableDocument(_ layer: PolicyDocumentLayer) throws -> PolicyDocument {
         switch layer {
         case .machine:
@@ -193,7 +211,7 @@ public struct PolicyWorkspace: Sendable {
             guard let workspace else {
                 throw PolicyWorkspaceError.missingLayer(.repo)
             }
-            try repoStore(workspace: workspace).saveRepo(document, workspace: workspace)
+            try revisionRepoStore(workspace: workspace).saveRepo(document, workspace: workspace)
         }
     }
 }

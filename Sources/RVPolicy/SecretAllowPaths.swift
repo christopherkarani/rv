@@ -22,10 +22,20 @@ public enum SecretAllowPaths {
     public struct EffectiveAllowPaths: Sendable, Equatable {
         public var effective: SecretAllowPathSet
         public var droppedRepoLiterals: [String]
+        /// A policy document existed but failed to load/parse. Its
+        /// literals contribute nothing (fail closed), but the failure is
+        /// surfaced so a corrupt file never reads as "no exemptions
+        /// requested" in exemption accounting.
+        public var documentLoadFailed: Bool
 
-        public init(effective: SecretAllowPathSet, droppedRepoLiterals: [String]) {
+        public init(
+            effective: SecretAllowPathSet,
+            droppedRepoLiterals: [String],
+            documentLoadFailed: Bool = false
+        ) {
             self.effective = effective
             self.droppedRepoLiterals = droppedRepoLiterals
+            self.documentLoadFailed = documentLoadFailed
         }
     }
 
@@ -125,9 +135,24 @@ public enum SecretAllowPaths {
             bless.append(contentsOf: loadBlessPaths(from: configFile))
         }
         let session = PolicyWorkspace(home: home, workspace: workspace)
-        let machineDoc = (try? session.loadMachineDocument())?.allowPaths ?? []
-        let repoDoc = (try? session.loadRepoDocument())?.allowPaths ?? []
-        return merge(machine: machine + machineDoc, repo: repoDoc, blessPaths: bless)
+        var loadFailed = false
+        let machineDoc: [String]
+        do {
+            machineDoc = try session.loadMachineDocument().allowPaths
+        } catch {
+            machineDoc = []
+            loadFailed = true
+        }
+        let repoDoc: [String]
+        do {
+            repoDoc = try session.loadRepoDocument().allowPaths
+        } catch {
+            repoDoc = []
+            loadFailed = true
+        }
+        var detailed = merge(machine: machine + machineDoc, repo: repoDoc, blessPaths: bless)
+        detailed.documentLoadFailed = loadFailed
+        return detailed
     }
 
     public static func loadEffective(home: HomeDirectory?, workspace: URL?) -> SecretAllowPathSet {

@@ -700,6 +700,13 @@ struct RuntimeCredentialBrokerTests {
             "SSH_AUTH_SOCK", "KUBECONFIG", "AWS_SHARED_CREDENTIALS_FILE",
             "GPG_AGENT_INFO", "GIT_ASKPASS", "OCTO_COOKIE", "TOTP_SEED",
             "LICENSE_KEY", "NETRC_FILE", "MY_CREDENTIALS",
+            // Concatenated and suffix spellings of the same concepts:
+            // classification is by meaning, not separator placement.
+            "ANTHROPIC_APIKEY", "PRIVATEKEY", "ACCESSTOKEN", "MYSECRET",
+            "GITHUB_PAT", "apiKey", "accessToken", "CLIENTSECRET",
+            "SUPERTOKEN", "SERVICE_PASSWORD", "AUTH_JWT",
+            // The git-identity allowlist must not smuggle credentials.
+            "GIT_AUTHOR_TOKEN", "GIT_COMMITTER_APIKEY",
         ] {
             #expect(ContainedEnvironmentPolicy.isCredentialClass(name), "credential class: \(name)")
             #expect(
@@ -726,6 +733,18 @@ struct RuntimeCredentialBrokerTests {
         ])
         #expect(projected.contains { $0.0 == "GH_TOKEN" } == false)
         #expect(projected.contains { $0.0 == "ANTHROPIC_API_KEY" } == false)
+        // Git identity fields pass; credential names under the same
+        // prefixes do not.
+        let identity = ContainedEnvironmentPolicy.project(host: [
+            "GIT_AUTHOR_NAME": "A U Thor",
+            "GIT_AUTHOR_EMAIL": "a@example.com",
+            "GIT_AUTHOR_TOKEN": "test-fake-secret",
+            "ANTHROPIC_APIKEY": "test-fake-secret",
+        ])
+        #expect(identity.contains { $0 == ("GIT_AUTHOR_NAME", "A U Thor") })
+        #expect(identity.contains { $0 == ("GIT_AUTHOR_EMAIL", "a@example.com") })
+        #expect(identity.contains { $0.0 == "GIT_AUTHOR_TOKEN" } == false)
+        #expect(identity.contains { $0.0 == "ANTHROPIC_APIKEY" } == false)
         #expect(projected.contains { $0 == ("RUSTUP_TOOLCHAIN", "stable") })
         #expect(projected.contains { $0 == ("TOKENIZERS_PARALLELISM", "false") })
         #expect(projected.allSatisfy { $0.1.contains("test-fake-secret") == false })

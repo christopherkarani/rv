@@ -595,6 +595,15 @@ private func egressIsPublicUnicast(family: Int32, _ text: String) -> Bool? {
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "::10.0.0.1")) == false)
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "2002:808:808::1")))
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "2002:a00:1::1")) == false)
+    // NAT64 embeddings recurse into the v4 verdict; special ranges deny.
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b::808:808")))
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b::a9fe:a9fe")) == false)
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b:1:808:808::")))
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b:1:a00:1::")) == false)
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "2001::1")) == false)
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "2001:20::1")) == false)
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "2001:2::1")) == false)
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "100::1")) == false)
 
     #expect(EgressProxy.isPublicUnicast(nil) == false)
     var zero = sockaddr_storage()
@@ -1078,6 +1087,14 @@ private func egressScopedCache(
         EgressProxy.dial(
             host: "127.0.0.1", port: 9, external: false, resolve: { _, _ in [loopback] }
         ) == .connectFailed
+    )
+    // A loopback name resolving to a non-loopback candidate is filtered:
+    // the bypass verifies candidates, it does not trust the resolver.
+    #expect(
+        EgressProxy.dial(
+            host: "localhost", port: 443, external: false,
+            resolve: { _, _ in [publicCandidate] }
+        ) == .addressFiltered
     )
 }
 

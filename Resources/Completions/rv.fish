@@ -45,6 +45,7 @@ complete -c rv -n "__fish_seen_subcommand_from packs" -a "enable" -d "Enable a p
 complete -c rv -n "__fish_seen_subcommand_from packs" -a "disable" -d "Disable a pack"
 complete -c rv -n "__fish_seen_subcommand_from packs" -a "info" -d "Pack details"
 complete -c rv -n "__fish_seen_subcommand_from policy" -a "show" -d "List rules"
+complete -c rv -n "__fish_seen_subcommand_from policy" -a "list" -d "List policy revisions"
 complete -c rv -n "__fish_seen_subcommand_from policy" -a "draft" -d "Compile English"
 complete -c rv -n "__fish_seen_subcommand_from policy" -a "validate" -d "Validate"
 complete -c rv -n "__fish_seen_subcommand_from policy" -a "export" -d "Export"

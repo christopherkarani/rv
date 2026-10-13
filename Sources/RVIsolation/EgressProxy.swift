@@ -250,6 +250,12 @@ public final class EgressProxy: @unchecked Sendable {
         return supplementGeneration
     }
 
+    /// Whether live supplement rules are enforced by this instance.
+    /// Credentialed instances judge every request against the presenting
+    /// grant alone (see `supplementAdmits`), so a supplement push loads
+    /// but never admits there; supervisors must not record it as loaded.
+    public var enforcesSupplement: Bool { grants == nil }
+
     /// Load a live rule set. Applies only when `generation` is newer than
     /// the enforced one (OpenShell generation guard): stale or reordered
     /// pushes are ignored, so enforcement only ever moves forward.
@@ -273,13 +279,16 @@ public final class EgressProxy: @unchecked Sendable {
     /// (fail closed: without a proxy the cage has no route out at all).
     /// Starting a running proxy returns the bound port again.
     public func start() -> Result<Int, EgressStartError> {
+        // The lock is held through bind/listen (numeric loopback only, so
+        // no resolver wait): start and stop are atomic against each other,
+        // concurrent starts cannot leak a listen fd or double the accept
+        // loop, and a stop during the bind window cannot be undone when
+        // start publishes `running`.
         lock.lock()
+        defer { lock.unlock() }
         if running {
-            let port = boundPort
-            lock.unlock()
-            return .success(port)
+            return .success(boundPort)
         }
-        lock.unlock()
         var hints = addrinfo()
         memset(&hints, 0, MemoryLayout<addrinfo>.size)
         hints.ai_family = AF_INET
@@ -325,12 +334,10 @@ public final class EgressProxy: @unchecked Sendable {
             close(fd)
             return .failure(.addressFailed(errno: savedErrno))
         }
-        lock.lock()
         listenFD = fd
         boundPort = bound
         running = true
-        lock.unlock()
-        acceptQueue.async { [weak self] in self?.acceptLoop() }
+        acceptQueue.async { [weak self] in self?.acceptLoop(listen: fd) }
         return .success(bound)
     }
 
@@ -360,33 +367,49 @@ public final class EgressProxy: @unchecked Sendable {
         return running
     }
 
-    private func acceptLoop() {
+    /// Serves exactly the listen fd `start` bound. The fd is passed by
+    /// value and never re-read from shared state: re-reading after a
+    /// concurrent `stop()` closed the number could accept on a reused fd
+    /// belonging to a sibling runtime's listener and serve that client
+    /// under this proxy's grant. Ownership: `stop()` owns closing
+    /// `listen`; this loop owns every accepted fd until `serve` takes it.
+    private func acceptLoop(listen: Int32) {
         while isRunning() {
             var peer = sockaddr_storage()
             var peerLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
             var acceptError: Int32 = 0
             let fd: Int32 = withUnsafeMutablePointer(to: &peer) { pointer in
                 pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { address in
-                    lock.lock()
-                    let listen = listenFD
-                    lock.unlock()
-                    guard listen >= 0 else { return Int32(-1) }
                     let accepted = accept(listen, address, &peerLength)
                     if accepted < 0 { acceptError = errno }
                     return accepted
                 }
             }
+            // stop() may have run while blocked in accept (its shutdown
+            // wakes us). If the fd number was already reused, a successful
+            // accept may hold a sibling's client: close it unserved.
+            lock.lock()
+            let stillMine = running && listenFD == listen
+            lock.unlock()
+            guard stillMine else {
+                if fd >= 0 { close(fd) }
+                return
+            }
             guard fd >= 0 else {
-                if isRunning() {
-                    // Accept failures are abnormal; surface the errno instead
-                    // of spinning silently (under load these would otherwise
-                    // surface only as client-side timeouts).
-                    Self.complain("rv.egress: accept failed errno=\(acceptError)")
-                    usleep(50_000)
-                }
+                // Accept failures are abnormal; surface the errno instead
+                // of spinning silently (under load these would otherwise
+                // surface only as client-side timeouts).
+                Self.complain("rv.egress: accept failed errno=\(acceptError)")
+                usleep(50_000)
                 continue
             }
-            relayQueue.async { [weak self] in self?.serve(client: fd) }
+            relayQueue.async { [weak self] in
+                guard let self else {
+                    close(fd)
+                    return
+                }
+                self.serve(client: fd)
+            }
         }
     }
 
@@ -407,15 +430,19 @@ public final class EgressProxy: @unchecked Sendable {
 
     private func serveRequest(client: Int32, header: String, leftover: [UInt8]) {
         if let target = EgressProxy.parseCONNECT(header: header) {
-            if let gate = binaryGate() {
-                deny(client: client, host: target.host, port: target.port, reason: gate.reason, binaryPath: gate.binaryPath)
-                return
-            }
+            // Authenticate before the binary gate: an unauthenticated
+            // caller must not trigger per-request rehashing (up to the
+            // 256 MiB bound on the mismatch path) or learn binary state
+            // from a 403-vs-407 distinction.
             guard
                 let effective = authenticatedPolicy(
                     header: header, host: target.host, port: target.port, client: client
                 )
             else {
+                return
+            }
+            if let gate = binaryGate() {
+                deny(client: client, host: target.host, port: target.port, reason: gate.reason, binaryPath: gate.binaryPath)
                 return
             }
             let external = effective.allows(host: target.host, port: target.port)
@@ -457,15 +484,16 @@ public final class EgressProxy: @unchecked Sendable {
         // no new capability) plus public port-80 traffic under the same
         // policy and public-unicast dial filter as CONNECT. Tunneling
         // plaintext grants no capability that tunneling TLS does not.
-        if let gate = binaryGate() {
-            deny(client: client, host: target.host, port: target.port, reason: gate.reason, binaryPath: gate.binaryPath)
-            return
-        }
+        // Authenticate first, mirroring the CONNECT branch.
         guard
             let effective = authenticatedPolicy(
                 header: header, host: target.host, port: target.port, client: client
             )
         else {
+            return
+        }
+        if let gate = binaryGate() {
+            deny(client: client, host: target.host, port: target.port, reason: gate.reason, binaryPath: gate.binaryPath)
             return
         }
         let external = effective.allows(host: target.host, port: target.port)
@@ -762,7 +790,7 @@ public final class EgressProxy: @unchecked Sendable {
     /// (loopback gateways, MCP servers) speak this instead of CONNECT.
     /// Strict: http scheme only, ASCII-uppercase method, no userinfo or
     /// brackets, explicit or default (:80) port, HTTP/1.x. Policy decides
-    /// relay vs deny; external targets parse but are never relayed.
+    /// relay vs deny in `serveRequest` (loopback plus filtered public).
     static func parseAbsoluteHTTP(header: String) -> (host: String, port: Int)? {
         guard let lineEnd = header.range(of: "\r\n") else { return nil }
         let parts = header[..<lineEnd.lowerBound].split(separator: " ", omittingEmptySubsequences: false)
@@ -894,11 +922,11 @@ public final class EgressProxy: @unchecked Sendable {
         dial(host: host, port: port, external: external, resolve: resolveDialCandidates)
     }
 
-    /// Dial one relay upstream. `external == false` skips the
-    /// public-unicast filter entirely, so it is only valid for hosts the
-    /// policy already admitted via `allowsLoopbackTarget`; passing an
-    /// unadmitted host here would let a DNS-rebinding attacker reach
-    /// loopback, LAN, or metadata endpoints.
+    /// Dial one relay upstream. `external == false` replaces the
+    /// public-unicast filter with a loopback-only candidate check, so it
+    /// is only valid for hosts the policy already admitted via
+    /// `allowsLoopbackTarget`; both directions verify every resolved
+    /// candidate, never just the name.
     ///
     /// The external verdict is consensus over the whole answer set, mirroring
     /// the admission GET door (`selectHTTPAddresses`): when any resolved
@@ -927,6 +955,20 @@ public final class EgressProxy: @unchecked Sendable {
                     return .addressFiltered
                 }
             }
+        } else {
+            // Loopback dials verify the candidates, not just the name:
+            // a resolver that answers `localhost` with a non-loopback
+            // address (search-domain expansion, misconfiguration) must
+            // not turn the name check into an unfiltered dial.
+            for candidate in candidates {
+                var storage = candidate.address
+                let loopback = withUnsafePointer(to: &storage) { pointer in
+                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1, isLoopbackAddress)
+                }
+                if loopback == false {
+                    return .addressFiltered
+                }
+            }
         }
         for candidate in candidates {
             let fd = socket(candidate.family, candidate.socktype, candidate.proto)
@@ -946,6 +988,34 @@ public final class EgressProxy: @unchecked Sendable {
             }
         }
         return .connectFailed
+    }
+
+    /// True when `address` is loopback: 127.0.0.0/8, ::1, or an
+    /// IPv4-mapped loopback. Unknown families fail closed.
+    static func isLoopbackAddress(_ address: UnsafePointer<sockaddr>?) -> Bool {
+        guard let address else { return false }
+        switch Int32(address.pointee.sa_family) {
+        case AF_INET:
+            return address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { socket in
+                UInt32(bigEndian: socket.pointee.sin_addr.s_addr) & 0xFF00_0000 == 0x7F00_0000
+            }
+        case AF_INET6:
+            return address.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { socket in
+                withUnsafeBytes(of: socket.pointee.sin6_addr) { raw in
+                    guard raw.count == 16 else { return false }
+                    let bytes = (0..<16).map { raw[$0] }
+                    if bytes.prefix(15).allSatisfy({ $0 == 0 }), bytes[15] == 1 {
+                        return true
+                    }
+                    if Array(bytes.prefix(12)) == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF] {
+                        return bytes[12] == 127
+                    }
+                    return false
+                }
+            }
+        default:
+            return false
+        }
     }
 
     /// True when `address` is a globally routable unicast destination.
@@ -1011,6 +1081,32 @@ public final class EgressProxy: @unchecked Sendable {
         }
         if bytes[0] == 0x20, bytes[1] == 0x02 { // 2002::/16 6to4
             return isPublicIPv4(v4(bytes[2], bytes[3], bytes[4], bytes[5]))
+        }
+        if bytes[0] == 0x00, bytes[1] == 0x64, bytes[2] == 0xFF, bytes[3] == 0x9B {
+            // NAT64: 64:ff9b::/96 embeds the IPv4 in the last 32 bits;
+            // the 64:ff9b:1::/48 local-use form embeds it at bits 48-79.
+            // On a NAT64/CLAT host the dial reaches the embedded address,
+            // so it must pass the same public-unicast verdict.
+            if bytes[4] == 0x00, bytes[5] == 0x01 {
+                return isPublicIPv4(v4(bytes[6], bytes[7], bytes[8], bytes[9]))
+            }
+            return isPublicIPv4(v4(bytes[12], bytes[13], bytes[14], bytes[15]))
+        }
+        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x00, bytes[3] == 0x00 {
+            return false // 2001::/32 Teredo (encapsulates an IPv4 peer)
+        }
+        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x00, bytes[3] & 0xF0 == 0x20 {
+            return false // 2001:20::/28 ORCHIDv2
+        }
+        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x00, bytes[3] == 0x02,
+            bytes[4] == 0x00, bytes[5] == 0x00
+        {
+            return false // 2001:2::/48 benchmarking
+        }
+        if bytes[0] == 0x01, bytes[1] == 0x00, bytes[2] == 0x00, bytes[3] == 0x00,
+            bytes[4] == 0x00, bytes[5] == 0x00, bytes[6] == 0x00, bytes[7] == 0x00
+        {
+            return false // 100::/64 discard-only
         }
         return true
     }

@@ -213,7 +213,7 @@ let serviceLibraryAndDaemon: [Target] = [
         name: "RVService",
         dependencies: [
             "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVHooks", "RVIPC", "RVHistory",
-            "RVAnalytics", "RVIsolation",
+            "RVAnalytics", "RVIsolation", "RVFileStore",
         ]
     ),
     .executableTarget(

@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVEngine
+import RVFileStore
 import RVHistory
 import RVPolicy
 
@@ -503,8 +504,8 @@ extension GatedEvaluate {
     static let exemptionDropsFileName = "exemption-drops.jsonl"
 
     static func exemptionDropsFileURL(home: HomeDirectory) -> URL {
-        RVPolicyPaths.configDirectory(home: home)
-            .appendingPathComponent(exemptionDropsFileName, isDirectory: false)
+        RVPolicyPaths.exemptionDropsFile(
+            inConfigDir: RVPolicyPaths.configDirectory(home: home))
     }
 
     /// Best-effort post-evaluation audit write: lock, I/O, or encode failures
@@ -513,6 +514,14 @@ extension GatedEvaluate {
     /// dropped set writes nothing. Rows prune to `RVHistory.maxRows`, newest
     /// last. The row describes repo policy state observed at evaluation, not
     /// the decision, so peek audits the same as apply.
+    ///
+    /// Backed by `FileLockedJSONLStore` (cross-process `LOCK_EX` around
+    /// load-modify-save): rvd, hook processes, and CLI fallback evaluate
+    /// concurrently, and the previous in-process-lock rewrite lost rows to
+    /// last-writer-wins between processes. A row identical in dropped set
+    /// and workspace to the newest row is suppressed, so repeated hook
+    /// checks against one unblessed repo cannot churn the cap and evict
+    /// other workspaces' history.
     static func auditDroppedRepoLiterals(
         _ dropped: [String],
         home: HomeDirectory?,
@@ -520,22 +529,17 @@ extension GatedEvaluate {
         now: Date
     ) {
         guard dropped.isEmpty == false, let home else { return }
-        auditLock.withLock { _ in
-            let url = exemptionDropsFileURL(home: home)
-            try? FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            var rows: [ExemptionDropRecord] = []
-            if let text = try? String(contentsOf: url, encoding: .utf8) {
-                for line in text.split(separator: "\n") {
-                    if let row = try? JSONDecoder().decode(
-                        ExemptionDropRecord.self,
-                        from: Data(line.utf8)
-                    ) {
-                        rows.append(row)
-                    }
-                }
+        let store = FileLockedJSONLStore<ExemptionDropRecord>(
+            baseDirectory: RVPolicyPaths.configDirectory(home: home),
+            fileName: exemptionDropsFileName
+        )
+        _ = try? store.withLock {
+            var rows = store.load()
+            if let last = rows.last,
+                last.dropped == dropped,
+                last.workspace == workspace?.path
+            {
+                return
             }
             rows.append(
                 ExemptionDropRecord(
@@ -544,17 +548,7 @@ extension GatedEvaluate {
                     recordedAt: now.timeIntervalSince1970
                 )
             )
-            let lines = Array(rows.suffix(RVHistory.maxRows)).compactMap { row -> String? in
-                guard let data = try? JSONEncoder().encode(row) else { return nil }
-                return String(data: data, encoding: .utf8)
-            }
-            try? (lines.joined(separator: "\n") + "\n").write(
-                to: url,
-                atomically: true,
-                encoding: .utf8
-            )
+            try store.save(Array(rows.suffix(RVHistory.maxRows)))
         }
     }
-
-    private static let auditLock = UnfairLock(())
 }

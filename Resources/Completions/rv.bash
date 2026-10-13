@@ -19,7 +19,7 @@ _rv() {
       COMPREPLY=( $(compgen -W "enable disable info" -- "$cur") )
       ;;
     policy)
-      COMPREPLY=( $(compgen -W "show draft validate export apply" -- "$cur") )
+      COMPREPLY=( $(compgen -W "show list draft validate export apply" -- "$cur") )
       ;;
     scan)
       COMPREPLY=( $(compgen -W "sessions" -- "$cur") )

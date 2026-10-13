@@ -1,6 +1,7 @@
 import Foundation
 import Testing
-@testable import RVDomain
+import RVDomain
+@testable import RVIsolation
 
 /// T2: stat/hash window close (SEC-1-3) + bounded hash (CON-1-5) on the T1 core.
 ///

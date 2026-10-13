@@ -286,7 +286,11 @@ public struct SeatbeltProfile: Sendable, Equatable {
     /// Productive workspace grants: the RV-managed home/cache/tmp roots
     /// (read/write/execute), toolchain and PATH-implied trees
     /// (read/execute), developer-configuration reads, and explicit denies
-    /// for sensitive paths that take precedence over every allow.
+    /// for sensitive paths. SBPL is last-match: the sensitive denies are
+    /// ordered after the broad toolchain/home allows they must override,
+    /// but the confstr tmp grant emits after the denies, so a sensitive
+    /// path under the per-user tmp dir would be re-allowed (accepted R3
+    /// posture, pinned by SeatbeltR3TmpPostureTests).
     func allowingProductiveWorkspace(_ resolution: ProductiveWorkspaceResolution) -> SeatbeltProfile {
         var additions = ""
         if let home = resolution.developerHome {

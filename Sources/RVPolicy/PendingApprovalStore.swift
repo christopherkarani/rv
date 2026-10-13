@@ -303,13 +303,11 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
     private static let maxRejectionReasons = 1024
 
     private static func rejectionReasonsFile(inConfigDir configDir: URL) -> URL {
-        configDir.appendingPathComponent(
-            "pending-rejection-reasons.jsonl", isDirectory: false)
+        RVPolicyPaths.pendingRejectionReasonsFile(inConfigDir: configDir)
     }
 
     private static func rejectionReasonsLockFile(inConfigDir configDir: URL) -> URL {
-        configDir.appendingPathComponent(
-            ".pending-rejection-reasons.lock", isDirectory: false)
+        RVPolicyPaths.pendingRejectionReasonsLockFile(inConfigDir: configDir)
     }
 
     private func recordRejectionReason(

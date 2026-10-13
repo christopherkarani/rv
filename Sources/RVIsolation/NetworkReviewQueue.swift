@@ -163,7 +163,16 @@ public actor NetworkReviewQueue {
             case .alreadyRedeemed, .refused:
                 continue
             }
-            _ = channel.append(rule)
+            // A refused (full-channel) append must not burn the approval:
+            // only an appended or already-present rule counts as applied.
+            // The ceremony plant already spent, so a later epoch is what
+            // retries — but this sweep must not report it as loaded.
+            switch channel.append(rule) {
+            case .appended, .duplicate:
+                break
+            case .refusedFull:
+                continue
+            }
             appliedIDs.insert(idValue)
             newlyApplied.append(idValue)
         }

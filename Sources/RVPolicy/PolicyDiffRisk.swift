@@ -242,6 +242,12 @@ public enum PolicyDiffRisk {
             guard let close = text.firstIndex(of: "]") else { return nil }
             let inner = String(text[text.index(after: text.startIndex)..<close])
             guard inner.isEmpty == false else { return nil }
+            // Anything after the bracket must be a canonical port suffix;
+            // trailing junk is not an address literal.
+            let rest = text[text.index(after: close)...]
+            if rest.isEmpty == false {
+                guard rest.hasPrefix(":"), validPortText(rest.dropFirst()) else { return nil }
+            }
             text = inner
         }
         if let zone = text.firstIndex(of: "%") {
@@ -634,9 +640,7 @@ public enum PolicyDiffRisk {
             host = String(authority[authority.index(after: authority.startIndex)..<close])
             let rest = authority[authority.index(after: close)...]
             if rest.isEmpty == false {
-                guard rest.hasPrefix(":") else { return nil }
-                let port = rest.dropFirst()
-                guard port.isEmpty == false, port.allSatisfy(\.isNumber) else { return nil }
+                guard rest.hasPrefix(":"), validPortText(rest.dropFirst()) else { return nil }
             }
         } else {
             let colons = authority.filter { $0 == ":" }.count
@@ -644,7 +648,7 @@ public enum PolicyDiffRisk {
                 host = authority
             } else if colons == 1, let colon = authority.firstIndex(of: ":") {
                 let port = authority[authority.index(after: colon)...]
-                guard port.isEmpty == false, port.allSatisfy(\.isNumber) else { return nil }
+                guard validPortText(port) else { return nil }
                 host = String(authority[..<colon])
             } else {
                 host = authority
@@ -658,8 +662,24 @@ public enum PolicyDiffRisk {
         return ParsedDestination(host: canonical, hasCredentials: hasCredentials)
     }
 
+    /// Canonical port text: ASCII digits only, value in 1...65535.
+    /// (`Character.isNumber` also accepts non-ASCII digits.)
+    private static func validPortText(_ port: Substring) -> Bool {
+        guard port.isEmpty == false,
+            port.allSatisfy({ $0.asciiValue.map { $0 >= 48 && $0 <= 57 } ?? false }),
+            let value = Int(port), (1...65535).contains(value)
+        else { return false }
+        return true
+    }
+
     private static func redactedDestination(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Findings name scheme + authority only: path/query/fragment can
+        // carry tokens (webhook URLs), and userinfo is masked below.
+        var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let authorityStart = trimmed.range(of: "://").map(\.upperBound) ?? trimmed.startIndex
+        if let cut = trimmed[authorityStart...].firstIndex(where: { "/?#".contains($0) }) {
+            trimmed = String(trimmed[..<cut])
+        }
         guard let at = trimmed.lastIndex(of: "@") else {
             return trimmed.isEmpty ? "empty entry" : trimmed
         }

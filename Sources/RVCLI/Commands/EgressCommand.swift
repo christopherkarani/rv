@@ -212,14 +212,30 @@ enum EgressReviewRun {
     /// Parse `egress-denials.jsonl` text into views, newest last. Corrupt
     /// lines drop (the log is display, never authority).
     static func parseDenialsLog(_ text: String) -> [EgressDenialView] {
+        // String-or-number tolerant: the writer stringifies port/at today,
+        // but a future numeric emission must not drop every line into
+        // "no denials recorded".
+        func stringField(_ json: [String: Any], _ key: String) -> String? {
+            json[key] as? String
+        }
+        func intField(_ json: [String: Any], _ key: String) -> Int? {
+            if let number = json[key] as? NSNumber { return number.intValue }
+            if let string = json[key] as? String { return Int(string) }
+            return nil
+        }
+        func doubleField(_ json: [String: Any], _ key: String) -> Double? {
+            if let number = json[key] as? NSNumber { return number.doubleValue }
+            if let string = json[key] as? String { return Double(string) }
+            return nil
+        }
         var views: [EgressDenialView] = []
         for line in text.split(separator: "\n") {
             guard let data = String(line).data(using: .utf8),
-                let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
-                let host = json["host"],
-                let portText = json["port"], let port = Int(portText),
-                let reason = json["reason"],
-                let atText = json["recordedAt"], let at = Double(atText)
+                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let host = stringField(json, "host"),
+                let port = intField(json, "port"),
+                let reason = stringField(json, "reason"),
+                let at = doubleField(json, "recordedAt")
             else {
                 continue
             }
@@ -253,25 +269,52 @@ enum EgressReviewRun {
 
     /// Device-owner prompt naming the exact grant. The host plus port
     /// alone fully specify a network approval (no hidden payload).
+    /// Non-web ports are flagged in the prompt: a live rule may name any
+    /// port, and approving SSH/SMTP-shaped egress should never read like
+    /// approving ordinary HTTPS.
     static func approveReason(host: String, port: Int) -> String {
-        "Allow network egress to \(host):\(port)."
+        let marker = (port == 80 || port == 443) ? "" : " (non-web port)"
+        return "Allow network egress to \(host):\(port)\(marker)."
     }
 
     static func denyReason(host: String, port: Int) -> String {
         "Deny network egress to \(host):\(port)."
     }
 
-    /// TOCTOU bind: the re-read row must still await the same human for
-    /// the same fingerprint and identity. Any drift fails closed.
+    /// TOCTOU bind: the re-read row must equal the reviewed row in full
+    /// (terms included — expiry, continuation, timeout policy), not just
+    /// identity fields, and still await a human. Any drift fails closed.
     static func reviewUnchanged(before: PendingApproval, after: PendingApproval) -> Bool {
-        guard before.id == after.id,
-            before.fingerprint == after.fingerprint,
-            before.identity == after.identity
-        else {
-            return false
-        }
+        guard before == after else { return false }
         guard case .awaitingHuman = after.state else { return false }
         return true
+    }
+
+    /// Reserve from the shared LA-prompt budget (same file the allow-once
+    /// ceremony spends from) so a pty agent cannot spam Touch ID through
+    /// egress review either. Exhaustion fails closed as `.throttled`.
+    static func reserveLAPrompt(store: PendingApprovalStore, now: Date) async throws {
+        let budget = AllowOnceStore(baseDirectory: store.baseDirectory)
+        guard await budget.reserveLAPrompt(now: now) else {
+            throw AllowOnceAuthError.throttled
+        }
+    }
+
+    /// Map a resolve-CAS failure: binding/state losses mean the proposal
+    /// changed under review (retry), never a store outage.
+    static func mapResolveError(_ error: Error) -> Error {
+        guard let pending = error as? PendingApprovalError else {
+            return EgressReviewError.storeUnavailable
+        }
+        switch pending {
+        case .fingerprintMismatch, .identityMismatch, .continuationMismatch,
+            .alreadyResolved, .alreadyConsumed, .expired, .canceled, .timedOut,
+            .notFound:
+            return AllowOnceError.redemptionChanged
+        case .invalidRequest, .duplicateID, .notResolved, .encodeFailed,
+            .lockFailed, .storeFull:
+            return EgressReviewError.storeUnavailable
+        }
     }
 
     /// Approve ceremony. Order mirrors the allow-once redeem tripwire:
@@ -282,7 +325,8 @@ enum EgressReviewRun {
         tty: TTYCapability,
         robot: Bool,
         store: PendingApprovalStore,
-        now: Date
+        now: Date,
+        refreshedNow: @Sendable () -> Date = { Date() }
     ) async throws -> EgressProposalView {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
@@ -290,30 +334,35 @@ enum EgressReviewRun {
         guard let rule = EgressProposal.rule(for: before) else {
             throw EgressReviewError.notNetworkProposal
         }
+        try await reserveLAPrompt(store: store, now: now)
         try await CLIOwnerAuth.requireAuthenticated(
             reason: approveReason(host: rule.host, port: rule.port)
         )
+        // Fresh stamp after the prompt: expiry/sweep on re-read and
+        // resolve must judge the row as of now, not as of command start.
+        let afterNow = refreshedNow()
         let after: PendingApproval
         do {
-            after = try await store.load(id: id, now: now)
+            after = try await store.load(id: id, now: afterNow)
         } catch {
             throw EgressReviewError.storeUnavailable
         }
         guard reviewUnchanged(before: before, after: after) else {
             throw AllowOnceError.redemptionChanged
         }
+        let resolved: PendingApproval
         do {
-            _ = try await store.resolve(
+            resolved = try await store.resolve(
                 id: id,
                 decision: .allowOnce,
                 fingerprint: after.fingerprint,
                 identity: after.identity,
-                now: now
+                now: afterNow
             )
         } catch {
-            throw EgressReviewError.storeUnavailable
+            throw mapResolveError(error)
         }
-        guard let view = view(for: after) else {
+        guard let view = view(for: resolved) else {
             throw EgressReviewError.notNetworkProposal
         }
         return view
@@ -327,7 +376,8 @@ enum EgressReviewRun {
         tty: TTYCapability,
         robot: Bool,
         store: PendingApprovalStore,
-        now: Date
+        now: Date,
+        refreshedNow: @Sendable () -> Date = { Date() }
     ) async throws -> EgressProposalView {
         guard allowsInteractiveAllowOnce(tty) else { throw AllowOnceError.ttyRequired }
         guard robot == false else { throw AllowOnceError.robotRefused }
@@ -338,12 +388,14 @@ enum EgressReviewRun {
         guard let rule = EgressProposal.rule(for: before) else {
             throw EgressReviewError.notNetworkProposal
         }
+        try await reserveLAPrompt(store: store, now: now)
         try await CLIOwnerAuth.requireAuthenticated(
             reason: denyReason(host: rule.host, port: rule.port)
         )
+        let afterNow = refreshedNow()
         let after: PendingApproval
         do {
-            after = try await store.load(id: id, now: now)
+            after = try await store.load(id: id, now: afterNow)
         } catch {
             throw EgressReviewError.storeUnavailable
         }
@@ -358,12 +410,12 @@ enum EgressReviewRun {
                 fingerprint: after.fingerprint,
                 identity: after.identity,
                 reason: reason,
-                now: now
+                now: afterNow
             )
         } catch PendingApprovalError.invalidRequest {
             throw EgressReviewError.reasonRequired
         } catch {
-            throw EgressReviewError.storeUnavailable
+            throw mapResolveError(error)
         }
         guard let view = view(for: resolved) else {
             throw EgressReviewError.notNetworkProposal
@@ -447,8 +499,10 @@ struct EgressShow: AsyncParsableCommand {
         let record: PendingApproval
         do {
             record = try await store.load(id: ApprovalID(rawValue: id), now: Date())
-        } catch {
+        } catch PendingApprovalError.notFound {
             try ctx.fail("rv egress show: unknown proposal\n", exitCode: 2)
+        } catch {
+            try ctx.fail("rv egress show: store unavailable\n", exitCode: 2)
         }
         guard let view = EgressReviewRun.view(for: record) else {
             try ctx.fail("rv egress show: not a network proposal\n", exitCode: 2)
@@ -475,7 +529,7 @@ struct EgressShow: AsyncParsableCommand {
 struct EgressApprove: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "approve",
-        abstract: "Approve one network proposal; the rule loads live."
+        abstract: "Approve one network proposal (refused until authenticated service routes land)."
     )
 
     @Argument(help: "Proposal id from rv egress pending.")

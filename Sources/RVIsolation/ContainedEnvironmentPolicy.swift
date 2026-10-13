@@ -38,9 +38,15 @@ public enum ContainedEnvironmentPolicy {
     }
 
     /// Known-safe names that pass before denylist rules. Commit identity is
-    /// recorded in every commit and must survive the `AUTH` token rule.
+    /// recorded in every commit and must survive the `AUTH` token rule —
+    /// but only the identity fields themselves: the bare prefix once let
+    /// `GIT_AUTHOR_TOKEN` cross ahead of the credential gate.
     public static func isAlwaysAllowed(_ name: String) -> Bool {
-        name.hasPrefix("GIT_AUTHOR_") || name.hasPrefix("GIT_COMMITTER_")
+        for prefix in ["GIT_AUTHOR_", "GIT_COMMITTER_"] where name.hasPrefix(prefix) {
+            let field = name.dropFirst(prefix.count)
+            return field == "NAME" || field == "EMAIL" || field == "DATE"
+        }
+        return false
     }
 
     /// Whether `name` must be stripped. Case-insensitive: `npm_config_cache`
@@ -55,7 +61,24 @@ public enum ContainedEnvironmentPolicy {
             if folded.contains(infixString) { return true }
         }
         for token in folded.split(separator: "_") {
-            if deniedTokens.contains(String(token)) { return true }
+            if matchesCredentialToken(String(token)) { return true }
+        }
+        return false
+    }
+
+    /// One `_`-separated token (uppercased) against the credential class.
+    /// Exact tokens first, then concatenated spellings and credential
+    /// suffixes: real credentials routinely arrive as `ANTHROPIC_APIKEY`,
+    /// `ACCESSTOKEN`, or `MYSECRET`, none of which tokenizes onto the
+    /// underscored forms. Suffix matching deliberately excludes `KEY`
+    /// (MONKEY, TURKEY are not credentials); `*KEY` compounds enter via
+    /// the explicit concatenated list. `TOKENIZER(S)` and `KEYNOTE` stay
+    /// clear: they neither equal nor end with a credential token.
+    static func matchesCredentialToken(_ token: String) -> Bool {
+        if deniedTokens.contains(token) { return true }
+        if concatenatedCredentialTokens.contains(token) { return true }
+        for suffix in credentialTokenSuffixes where token.count > suffix.count {
+            if token.hasSuffix(suffix) { return true }
         }
         return false
     }
@@ -122,6 +145,13 @@ public enum ContainedEnvironmentPolicy {
 /// sandbox profile. Each flag restores one pre-F2 legacy behavior only
 /// when the operator explicitly selects it in the launch configuration;
 /// nothing reads ambient host state to enable them.
+///
+/// Wiring status: no production launch path selects `.legacyOptIn` yet
+/// (only tests do), so contained launches are unconditionally `.closed`
+/// today — key-based agents rely on the broker path or policy-selected
+/// entries below. Threading an operator-facing selection (config or
+/// launch flag) through `prepareSeatbelt` is follow-up work; until then
+/// this type is the seam, not a reachable escape hatch.
 ///
 /// Policy-selected keychain and credential entries
 /// (`RuntimeResourceProfile`) are separate: listing them in the operator's
@@ -216,6 +246,30 @@ extension ContainedEnvironmentPolicy {
         "OTP", "TOTP",
         "LICENSE",
         "NETRC",
+        "PAT",
+        "JWT",
+    ]
+
+    /// Concatenated credential spellings (uppercased single tokens) that
+    /// never cross: the same concepts as `deniedTokens` written without
+    /// the separator, including camelCase names once uppercased
+    /// (`apiKey` → `APIKEY`, `accessToken` → `ACCESSTOKEN`).
+    static let concatenatedCredentialTokens: Set<String> = [
+        "APIKEY", "APIKEYS",
+        "PRIVATEKEY", "SECRETKEY", "ACCESSKEY", "SIGNINGKEY", "MASTERKEY",
+        "LICENSEKEY", "SSHKEY", "GPGKEY", "PGPKEY", "ENCRYPTIONKEY",
+        "ACCESSTOKEN", "REFRESHTOKEN", "IDTOKEN", "AUTHTOKEN",
+        "SESSIONTOKEN", "BEARERTOKEN",
+        "CLIENTSECRET", "APPSECRET",
+    ]
+
+    /// Credential suffixes for single tokens (`MYSECRET`, `SUPERTOKEN`).
+    /// No `KEY`: see `matchesCredentialToken`.
+    static let credentialTokenSuffixes: [String] = [
+        "CREDENTIALS", "CREDENTIAL",
+        "PASSPHRASE", "PASSWORDS", "PASSWORD",
+        "SECRETS", "SECRET",
+        "TOKENS", "TOKEN",
     ]
 }
 
@@ -659,11 +713,15 @@ extension ContainedEnvironmentPolicy {
     /// secret material. Secret values stay in the supervisor and resolve
     /// only for approved endpoints over the admission pipes.
     ///
-    /// Detection stays token-based (not substring-based) on purpose:
+    /// Detection stays token-based (not free-substring) on purpose:
     /// `TOKENIZERS_PARALLELISM` and `KEYNOTE` are toolchain/productivity
-    /// names, not credentials, and must keep passing. The class mirrors the
-    /// credential-bearing legacy rules exactly, so every credential-class
-    /// name is also denied by `isBlockedVariableName`.
+    /// names, not credentials, and must keep passing. Within a token,
+    /// concatenated spellings and credential suffixes count too (see
+    /// `matchesCredentialToken`): classification is by the name's meaning,
+    /// so an unlisted spelling of a credential concept still fails closed.
+    /// The class mirrors the credential-bearing legacy rules exactly, so
+    /// every credential-class name is also denied by
+    /// `isBlockedVariableName`.
     public static func isCredentialClass(_ name: String) -> Bool {
         let folded = name.uppercased()
         if credentialExactNames.contains(folded) { return true }
@@ -671,7 +729,7 @@ extension ContainedEnvironmentPolicy {
             if folded.contains(infixString) { return true }
         }
         for token in folded.split(separator: "_") {
-            if deniedTokens.contains(String(token)) { return true }
+            if matchesCredentialToken(String(token)) { return true }
         }
         return false
     }

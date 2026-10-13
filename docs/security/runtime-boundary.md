@@ -57,7 +57,7 @@ Seatbelt still authorizes the path used in the syscall. On the tested Mac, a har
 
 **Seatbelt enforcement:** `SeatbeltProfile.swift` generates `(deny default)`. It allows `process-exec`, `process-fork`, `signal` inside the same sandbox, `sysctl-read`, `mach-lookup` denied by default with a narrow allow for `com.apple.bsd.dirhelper` only (proven necessary for SwiftPM linking; see `SeatbeltMachPolicy`), `file-read-data` of the root inode, `file-read-metadata` on `/private`, `/tmp`, `/var`, and `/Users`, and file read/map/ioctl on `/usr`, `/bin`, `/System`, `/Library`, `/dev`, plus read/write of the canonical workspace. It denies `setpgid` (syscall 82), `setsid` (147), and `posix_spawn` (244) so a descendant cannot leave the process group RV owns. `fork` and `execve` stay allowed. The granted executable is an extra literal read/map allow, including its realpath. Actual macOS tests deny ordinary outside reads and writes, symlink reads and writes, relative traversal, interpreter and shell wrappers, non-loopback TCP connect (LAN, public, metadata/link-local), UDP, Unix sockets, and DNS. Loopback TCP (127.0.0.1/::1) connect, bind, listen, and accept are allowed so contained processes can run ordinary localhost dev servers. `kill` of another test-owned process is denied. One deliberate hole: the confstr per-user temp dir is granted read-write because SwiftBuild backend tasks drop TMPDIR/TEMP/TMP and fall back to it (link temp files, test-bundle plist temp dirs); macOS isolates that dir per-user only, and outside-fence probes live under `/tmp` instead. Quotes and backslashes in profile paths are escaped; NUL, newline, and root paths fail validation. A workspace regular file with link count greater than one refuses launch. The profile also denies `file-link` and `file-clone`. The separate volume, not the scan, is what blocks a hard link created after preflight. `mach-lookup` and `mach-register` are denied by default, which also blocks XPC to host credential/security services (securityd, SecurityServer, trustd, pasteboard, and others); the cage has no ambient Keychain access. Linux does not apply this profile.
 
-**Landlock enforcement:** the C shim handles read-class (`READ_FILE`, `READ_DIR`) plus write-class filesystem bits, including `REFER` and `TRUNCATE`, and requires ABI 3. It sets `no_new_privs`, resolves the canonical workspace with `openat2(RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS)`, then applies `landlock_restrict_self` before `execve`. Helper startup closes descriptors above 2 using `close_range`, failing closed if that fails. No execute/network rules, namespaces, seccomp, cgroups or PID controls are installed by RV. Docker's namespaces/seccomp/network restrictions in the audit fixture belong to Docker and are not RV guarantees. Actual Landlock enforcement was **not available** on the tested Linux kernel; only unsupported-kernel fail-closed behavior and separately labeled C setup tests were observed.
+**Landlock enforcement:** none in production today — the Swift layer refuses contained launches on Linux before exec, so the C shim compiles but is never applied on a launch path. If wired, the shim would handle read-class (`READ_FILE`, `READ_DIR`) plus write-class filesystem bits, including `REFER` and `TRUNCATE`, and requires ABI 3. It sets `no_new_privs`, resolves the canonical workspace with `openat2(RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS)`, then applies `landlock_restrict_self` before `execve`. Helper startup closes descriptors above 2 using `close_range`, failing closed if that fails. No execute/network rules, namespaces, seccomp, cgroups or PID controls are installed by RV. Docker's namespaces/seccomp/network restrictions in the audit fixture belong to Docker and are not RV guarantees. Actual Landlock enforcement was **not available** on the tested Linux kernel; only unsupported-kernel fail-closed behavior and separately labeled C setup tests were observed.
 
 The [Linux kernel Landlock API documentation](https://docs.kernel.org/userspace-api/landlock.html) describes inherited restrictions and limitations for descriptors opened before sandboxing. It is platform background, not evidence that RV applied those controls on a supported kernel.
 
@@ -281,14 +281,15 @@ both the new reasons and the new key.
 
 #### Explicitly not done (follow-up, out of phase-3 surfaces)
 
-- Supervisor wiring: `WorkspaceSessionSupervisor` still constructs one
-  shared `EgressProxy(record:)` per workspace host (production denial log
-  chained with review-queue intake) with no binary scope. Moving
-  to one bound instance per runtime (resolve at admission, bind
-  `EgressRuntimeAttribution`, pass the runtime's `EgressBinaryPolicy`)
-  is a separate change in supervisor sources this phase does not make.
-  Until then, binary scope is enforced only where a caller constructs a
-  bound proxy; existing tests prove the shared instance is unaffected.
+- Supervisor wiring (updated by the per-runtime proxy work in this same
+  change): `WorkspaceSessionSupervisor` now mints one credentialed
+  `EgressProxy` per runtime at the spawn seam, each carrying that
+  runtime's own grant. What remains unwired is binary scope: production
+  construction passes no `EgressBinaryPolicy`/`EgressRuntimeAttribution`,
+  so pin verification is enforced only where a caller constructs a bound
+  proxy (tests do). Note the live-approval supplement is likewise not
+  enforced on credentialed instances yet (see the Phase 4 addendum and
+  `EgressProxy.supplementAdmits`); approvals pend rather than load.
 - No per-connection PID or executable attribution exists and none is
   planned: TCP loopback offers no credential path, and opening Unix
   domain egress to the cage would expose every host socket.

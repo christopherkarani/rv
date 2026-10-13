@@ -92,6 +92,32 @@ public enum RVPolicyPaths: Sendable {
         configDir.appendingPathComponent("egress-loaded.json", isDirectory: false)
     }
 
+    public static func egressDenialsFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("egress-denials.jsonl", isDirectory: false)
+    }
+
+    public static func pendingRejectionReasonsFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent(
+            "pending-rejection-reasons.jsonl", isDirectory: false)
+    }
+
+    public static func pendingRejectionReasonsLockFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent(
+            ".pending-rejection-reasons.lock", isDirectory: false)
+    }
+
+    public static func exemptionDropsFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("exemption-drops.jsonl", isDirectory: false)
+    }
+
+    public static func exemptionDropsLockFile(inConfigDir configDir: URL) -> URL {
+        exemptionDropsFile(inConfigDir: configDir).appendingPathExtension("lock")
+    }
+
+    public static func exemptionDropsTempFile(inConfigDir configDir: URL) -> URL {
+        exemptionDropsFile(inConfigDir: configDir).appendingPathExtension("tmp")
+    }
+
     /// Append-only repo revision log for one workspace. Lives in the machine
     /// config dir — never in the workspace `.rv/` dir a caged writer
     /// controls — under a name derived from the workspace path, so rollback
@@ -137,6 +163,12 @@ public enum RVPolicyPaths: Sendable {
             pendingApprovalsFile(inConfigDir: configDir),
             pendingApprovalsLockFile(inConfigDir: configDir),
             egressLoadedSnapshotFile(inConfigDir: configDir),
+            egressDenialsFile(inConfigDir: configDir),
+            pendingRejectionReasonsFile(inConfigDir: configDir),
+            pendingRejectionReasonsLockFile(inConfigDir: configDir),
+            exemptionDropsFile(inConfigDir: configDir),
+            exemptionDropsLockFile(inConfigDir: configDir),
+            exemptionDropsTempFile(inConfigDir: configDir),
             typedRulesFile(inConfigDir: configDir),
             typedRulesLockFile(inConfigDir: configDir),
             policyFile(inConfigDir: configDir),

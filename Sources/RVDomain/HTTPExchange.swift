@@ -138,7 +138,11 @@ enum HTTPRequestMessage {
             // Character-element `contains` would miss a CRLF injection.
             // Header values must not carry control bytes at all, and
             // provisioned credentials never legitimately contain them.
+            // 8 KiB bounds the framed header: real bearer values are far
+            // smaller, and a misprovisioned multi-MB value must fail
+            // closed here instead of being framed whole.
             guard credential.isEmpty == false,
+                credential.utf8.count <= 8192,
                 credential.utf8.contains(where: { $0 < 0x20 || $0 == 0x7F }) == false
             else {
                 return nil

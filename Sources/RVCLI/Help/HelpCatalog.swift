@@ -67,7 +67,7 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Advanced", rows: [
                 HelpRow(name: "packs", description: "List and enable or disable packs"),
-                HelpRow(name: "policy", description: "Show, draft, or share typed rules"),
+                HelpRow(name: "policy", description: "Show, list, draft, or share typed rules"),
                 HelpRow(name: "allowlist", description: "Permanent user-layer exceptions"),
                 HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor / Antigravity)"),
                 HelpRow(name: "uninstall", description: "Remove rv-owned hooks, config, and LaunchAgent"),
@@ -644,7 +644,7 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv policy show"),
+                HelpRow(name: "rv policy show [--base] [--effective]"),
                 HelpRow(name: "rv policy list [--repo]"),
                 HelpRow(name: "rv policy draft --english <text> [--save]"),
                 HelpRow(name: "rv policy validate"),
