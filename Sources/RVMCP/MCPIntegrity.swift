@@ -46,12 +46,17 @@ public enum MCPIntegrity {
     }
 
     public static func status(configDirectory: URL, keys: MCPApprovalKeyStore) -> MCPIntegrityStatus {
-        let data: Data
         switch OwnerOnlyFile.read(MCPConfiguration.fileURL(configDirectory: configDirectory), maximumBytes: MCPConfiguration.maximumBytes) {
-        case .success(nil): return .noConfiguration
-        case .success(let bytes?): data = bytes
+        case .success(let data): return status(of: data, configDirectory: configDirectory, keys: keys)
         case .failure: return .untrusted("unreadable")
         }
+    }
+
+    /// Judges `data` (nil when mcp.json is absent). Those bytes are not read
+    /// again, so a keychain prompt inside `keys.load` cannot swap which
+    /// configuration this result describes.
+    public static func status(of data: Data?, configDirectory: URL, keys: MCPApprovalKeyStore) -> MCPIntegrityStatus {
+        guard let data else { return .noConfiguration }
         guard let signer = keys.load() else { return .untrusted("rv has no approvals key to check it with") }
         guard case .success(let stored?) = OwnerOnlyFile.read(url(configDirectory), maximumBytes: 4096),
             let mac = (try? JSONValue.parse(stored))?["mcpJSON"]?.stringValue

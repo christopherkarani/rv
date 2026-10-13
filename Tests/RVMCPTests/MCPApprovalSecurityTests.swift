@@ -174,6 +174,48 @@ struct MCPIntegrityTests {
         #expect(ApprovalKeyProtection.allowsSilentCopy == false)
     }
 
+    @Test func plantedApprovalItemWithoutUserPresenceIsNotAdopted() {
+        #expect(ApprovalKeyAccess.requiresUserPresence(nil) == false)
+        #expect(ApprovalKeyAccess.requiresUserPresence([:]) == false)
+        #expect(ApprovalKeyAccess.requiresUserPresence(["dacl": "default"]) == false)
+        #expect(ApprovalKeyAccess.requiresUserPresence(["od": ["cup": true]]) == false)
+        #expect(ApprovalKeyAccess.requiresUserPresence(["od": ["cpo": true]]))
+        #expect(ApprovalKeyAccess.requiresUserPresence(["cpo": true]))
+        let parsed = ApprovalKeyAccess.stringKeyed(["od": ["cpo": true]] as NSDictionary)
+        #expect(ApprovalKeyAccess.requiresUserPresence(parsed))
+        let passcodeOnly = ApprovalKeyAccess.stringKeyed(["od": ["cup": true]] as NSDictionary)
+        #expect(ApprovalKeyAccess.requiresUserPresence(passcodeOnly) == false)
+        #expect(ApprovalKeyAccess.adoption(.absent) == .absent)
+        #expect(ApprovalKeyAccess.adoption(.unreadable) == .rejectKeep)
+        #expect(ApprovalKeyAccess.adoption(.noAccessControl) == .rejectAndDelete)
+        #expect(ApprovalKeyAccess.adoption(.constraints(userPresence: false)) == .rejectAndDelete)
+        #expect(ApprovalKeyAccess.adoption(.constraints(userPresence: true)) == .accept)
+    }
+
+    @Test func integrityJudgesTheBytesItWasGivenWhenTheFileChangesDuringKeyLoad() throws {
+        let directory = MCPApprovalSecurityTests.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let keys = MCPApprovalKeyStore.file(configDirectory: directory)
+        let signer = try #require(keys.loadOrCreate())
+        let configuration = MCPConfiguration(servers: [MCPServerDefinition(name: "fs", command: "fs-mcp")])
+        _ = try configuration.write(configDirectory: directory, signer: signer).get()
+        let url = MCPConfiguration.fileURL(configDirectory: directory)
+        let trusted = try Data(contentsOf: url)
+        let evil = Data(String(decoding: trusted, as: UTF8.self).replacingOccurrences(of: "fs-mcp", with: "evil-binary").utf8)
+        try evil.write(to: url, options: .atomic)
+        chmod(url.path, 0o600)
+        let swapping = MCPApprovalKeyStore(
+            load: {
+                try? trusted.write(to: url, options: .atomic)
+                chmod(url.path, 0o600)
+                return keys.load()
+            },
+            loadOrCreate: { keys.loadOrCreate() })
+        #expect(MCPIntegrity.status(of: evil, configDirectory: directory, keys: swapping)
+            == .untrusted("contents differ from rv's signature"))
+        #expect(MCPIntegrity.status(configDirectory: directory, keys: keys) == .trusted)
+    }
+
     #if os(macOS)
     @Test func approvalKeychainQueryRequiresUserPresence() throws {
         let secret = Data("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".utf8)
@@ -191,6 +233,12 @@ struct MCPIntegrityTests {
         #expect(live[kSecUseAuthenticationUI as String] == nil)
         #expect(live[kSecUseDataProtectionKeychain as String] as? Bool == true)
         #expect(live[kSecReturnData as String] as? Bool == true)
+        let read = ApprovalKeychain.readQuery()
+        #expect(read[kSecUseAuthenticationUI as String] == nil)
+        #expect(read[kSecUseDataProtectionKeychain as String] as? Bool == true)
+        #expect(read[kSecReturnData as String] as? Bool == true)
+        #expect(read[kSecReturnAttributes as String] as? Bool == true)
+        #expect(read[kSecMatchLimit as String] as? String == kSecMatchLimitOne as String)
     }
     #endif
 

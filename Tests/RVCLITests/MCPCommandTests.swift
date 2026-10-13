@@ -16,11 +16,12 @@ struct MCPCommandTests {
         var config: URL { home.appendingPathComponent(".config/rv") }
 
         func environment(
-            keychain writer: SecretKeychainWriter? = nil, presence: UserPresence = MCPCommandTests.present
+            keychain writer: SecretKeychainWriter? = nil, presence: UserPresence = MCPCommandTests.present,
+            approvalKeys: MCPApprovalKeyStore? = nil
         ) -> MCPEnvironment {
             MCPEnvironment(
                 configDirectory: config, home: home, processEnvironment: [:], keychain: writer ?? keychain.writer,
-                approvalKeys: .file(configDirectory: config), presence: presence)
+                approvalKeys: approvalKeys ?? .file(configDirectory: config), presence: presence)
         }
 
         func approvalEvents() -> [AuditEvent] {
@@ -434,11 +435,208 @@ struct MCPCommandTests {
         #expect(planned.first?.1.arguments.contains("evil-binary") == false)
     }
 
+    @Test func launchUsesTheBytesVerifiedDuringTheKeyPrompt() throws {
+        let fixture = Fixture()
+        try signedConfiguration(fixture, MCPConfiguration(servers: [
+            MCPServerDefinition(name: "fs", command: "fs-mcp", secrets: ["TOKEN": "GH"])
+        ]))
+        let url = MCPConfiguration.fileURL(configDirectory: fixture.config)
+        let trusted = try Data(contentsOf: url)
+        try plant(trustedReplacing("fs-mcp", with: "evil-binary", in: trusted), at: url)
+        let calls = Mutex(0)
+        let resolver = SecretResolver { _ in
+            calls.withLock { $0 += 1 }
+            guard let value = SecretValue("resolved-value") else { return .failure(.invalidValue("test secret")) }
+            return .success(value)
+        }
+        let secrets = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "GH", source: .hostEnvironment(variable: "GH"), delivery: .environment)
+        ])
+
+        let early = try MCPRun.configuration(fixture.environment()).get()
+        #expect(early.server(named: "fs")?.command == "evil-binary")
+        let restoredDuringPrompt = keysReplacing(fixture, with: trusted, onCall: 1)
+        let duringPrompt = MCPRun.upstreamLaunches(
+            names: ["fs"], configuration: early, environment: fixture.environment(approvalKeys: restoredDuringPrompt),
+            secrets: secrets, resolver: resolver)
+        #expect(duringPrompt.failureMessage?.contains("edited outside rv") == true)
+        #expect(duringPrompt.failureMessage?.contains("not launching MCP servers") == true)
+        #expect(calls.withLock { $0 } == 0)
+
+        try plant(trustedReplacing("fs-mcp", with: "evil-binary", in: trusted), at: url)
+        let swapping = keysReplacing(fixture, with: trusted, onCall: 1)
+        let captured = try MCPRun.configuration(fixture.environment(approvalKeys: swapping)).get()
+        #expect(captured.server(named: "fs")?.command == "evil-binary")
+        let later = MCPRun.upstreamLaunches(
+            names: ["fs"], configuration: captured, environment: fixture.environment(approvalKeys: swapping),
+            secrets: secrets, resolver: resolver)
+        #expect(later.failureMessage?.contains("changed while it was being checked") == true)
+        #expect(later.failureMessage?.contains("not launching MCP servers") == true)
+        #expect(calls.withLock { $0 } == 0)
+        #expect(later.failureMessage?.contains("evil-binary") == false)
+    }
+
+    @Test func approveAlwaysSignsTheConfigurationReadBeforeTheKeyPrompt() async throws {
+        let fixture = Fixture()
+        try signedConfiguration(fixture, MCPConfiguration(servers: [
+            MCPServerDefinition(name: "fs", command: "fs-mcp", tools: MCPToolPolicy(ask: ["write_file"]))
+        ]))
+        let url = MCPConfiguration.fileURL(configDirectory: fixture.config)
+        let trusted = try Data(contentsOf: url)
+        let evil = trustedReplacing("fs-mcp", with: "evil-binary", in: trusted)
+        let id = try #require(fixture.environment().approvals.request(
+            server: "fs", tool: "write_file", argumentsHash: "h2", argumentKeys: [])?.id)
+        let swapping = keysReplacing(fixture, with: evil, onCall: 1)
+        let approved = try await MCPRun.approve(
+            id: id, always: true, environment: fixture.environment(approvalKeys: swapping)
+        ).get()
+        #expect(approved.contains("always"))
+        let text = fixture.text(".config/rv/mcp.json")
+        #expect(text.contains("fs-mcp"))
+        #expect(text.contains("evil-binary") == false)
+        let loaded = try MCPRun.configuration(fixture.environment()).get()
+        let fs = try #require(loaded.server(named: "fs"))
+        #expect(fs.command == "fs-mcp")
+        #expect(fs.tools.allow == ["write_file"])
+        #expect(fixture.environment().integrity == .trusted)
+
+        try plant(evil, at: url)
+        let again = try #require(fixture.environment().approvals.request(
+            server: "fs", tool: "write_file", argumentsHash: "h3", argumentKeys: [])?.id)
+        let restoring = keysReplacing(fixture, with: trusted, onCall: 1)
+        let refused = await MCPRun.approve(
+            id: again, always: true, environment: fixture.environment(approvalKeys: restoring))
+        #expect(refused.failureMessage?.contains("edited outside rv") == true)
+        let after = try MCPRun.configuration(fixture.environment()).get()
+        #expect(after.server(named: "fs")?.command == "fs-mcp")
+        #expect(fixture.text(".config/rv/mcp.json").contains("evil-binary") == false)
+    }
+
+    @Test func importSignsTheSnapshotVerifiedBeforeTheKeyPrompt() async throws {
+        let fixture = Fixture()
+        try signedConfiguration(fixture, MCPConfiguration(servers: [
+            MCPServerDefinition(name: "kept", command: "safe-bin")
+        ]))
+        try fixture.write(".cursor/mcp.json", Self.cursorConfig)
+        let url = MCPConfiguration.fileURL(configDirectory: fixture.config)
+        let trusted = try Data(contentsOf: url)
+        let evil = trustedReplacing("safe-bin", with: "evil-binary", in: trusted)
+        let swapping = keysReplacing(fixture, with: evil, onCall: 1)
+        let imported = try await MCPRun.importServers(
+            host: .cursor, names: ["seq"], project: nil, allowTools: false, dryRun: false,
+            environment: fixture.environment(approvalKeys: swapping)
+        ).get()
+        #expect(imported.contains("wrote mcp.json"))
+        let text = fixture.text(".config/rv/mcp.json")
+        #expect(text.contains("safe-bin"))
+        #expect(text.contains("evil-binary") == false)
+        #expect(text.contains("\"seq\""))
+        #expect(fixture.environment().integrity == .trusted)
+
+        try signedConfiguration(fixture, MCPConfiguration(servers: [
+            MCPServerDefinition(name: "kept", command: "safe-bin")
+        ]))
+        try plant(trustedReplacing("safe-bin", with: "evil-binary", in: try Data(contentsOf: url)), at: url)
+        let restoring = keysReplacing(fixture, with: trusted, onCall: 1)
+        let refused = await MCPRun.importServers(
+            host: .cursor, names: ["github"], project: nil, allowTools: false, dryRun: false,
+            environment: fixture.environment(approvalKeys: restoring))
+        #expect(refused.failureMessage?.contains("edited outside rv") == true)
+        #expect(refused.failureMessage?.contains("nothing imported") == true)
+        #expect(fixture.text(".config/rv/mcp.json").contains("\"github\"") == false)
+        #expect(fixture.text(".config/rv/mcp.json").contains("evil-binary") == false)
+        let kept = try MCPRun.configuration(fixture.environment()).get().server(named: "kept")
+        #expect(kept?.command == "safe-bin")
+    }
+
+    @Test func importPresenceListsEveryServerBeforeConfirm() async throws {
+        let fixture = Fixture()
+        let long = String(repeating: "A", count: 300)
+        try fixture.write(".cursor/mcp.json", """
+            {"mcpServers": {
+              "first": {"command": "long-cmd", "args": ["\(long)"]},
+              "second": {"command": "hidden-cmd", "args": ["--flag"]}
+            }}
+            """)
+        let shown = Mutex("")
+        let reasonAtPrompt = Mutex("")
+        let shownBeforePrompt = Mutex(false)
+        let watching = UserPresence { reason, challenge in
+            guard case .deviceOwner = challenge else { return .refused("not device owner") }
+            let already = shown.withLock { $0 }
+            shownBeforePrompt.withLock { $0 = already.contains("second:") && already.contains("hidden-cmd") }
+            reasonAtPrompt.withLock { $0 = reason }
+            return .confirmed(method: "device owner authentication")
+        }
+        let imported = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: true, dryRun: false,
+            environment: fixture.environment(presence: watching),
+            show: { text in shown.withLock { $0 = text } }
+        ).get()
+        let reason = reasonAtPrompt.withLock { $0 }
+        let review = shown.withLock { $0 }
+        #expect(shownBeforePrompt.withLock { $0 })
+        #expect(review.contains("tools: allow every tool"))
+        #expect(review.contains("first: long-cmd \(long)"))
+        #expect(review.contains("second: hidden-cmd --flag"))
+        #expect(reason.contains("tools: allow every tool"))
+        #expect(reason.contains("first: long-cmd \(long)"))
+        #expect(reason.contains("second: hidden-cmd --flag"))
+        #expect(reason.contains("ask before every tool") == false)
+        #expect(reason.count > 240)
+        #expect(reason.hasSuffix("…") == false)
+        let parts = review.components(separatedBy: "\nsha256 ")
+        let body = parts.first ?? ""
+        let expected = RVDigest.sha256Hex(Array(body.utf8))
+        #expect(parts.count == 2)
+        #expect(parts.dropFirst().first?.hasPrefix(expected) == true)
+        #expect(reason.contains("sha256 \(expected)"))
+        #expect(reason.contains(body))
+        #expect(imported.contains("wrote mcp.json"))
+        let loaded = try MCPRun.configuration(fixture.environment()).get()
+        #expect(loaded.server(named: "first")?.command == "long-cmd")
+        #expect(loaded.server(named: "second")?.command == "hidden-cmd")
+        #expect(loaded.server(named: "second")?.tools.defaultDecision == .allow)
+    }
+
     @Test func rvPathIsAbsoluteAndFoundOnPath() throws {
         #expect(MCPRun.rvExecutablePath(arguments: ["/usr/local/bin/rv"], environment: [:]) == "/usr/local/bin/rv")
         #expect(MCPRun.rvExecutablePath(arguments: ["sh"], environment: ["PATH": "/nope:/bin"]) == "/bin/sh")
         let relative = MCPRun.rvExecutablePath(arguments: ["./rv"], environment: [:])
         #expect(relative.hasPrefix("/") && relative.hasSuffix("/rv") && relative.contains("./") == false)
+    }
+
+    private func keysReplacing(_ fixture: Fixture, with replacement: Data, onCall call: Int) -> MCPApprovalKeyStore {
+        let backing = MCPApprovalKeyStore.file(configDirectory: fixture.config)
+        let url = MCPConfiguration.fileURL(configDirectory: fixture.config)
+        let seen = Mutex(0)
+        let swap: @Sendable () -> Void = {
+            let n = seen.withLock { count -> Int in
+                count += 1
+                return count
+            }
+            guard n == call else { return }
+            try? replacement.write(to: url, options: .atomic)
+            chmod(url.path, 0o600)
+        }
+        return MCPApprovalKeyStore(
+            load: {
+                swap()
+                return backing.load()
+            },
+            loadOrCreate: {
+                swap()
+                return backing.loadOrCreate()
+            })
+    }
+
+    private func plant(_ data: Data, at url: URL) throws {
+        try data.write(to: url, options: .atomic)
+        chmod(url.path, 0o600)
+    }
+
+    private func trustedReplacing(_ name: String, with command: String, in data: Data) -> Data {
+        Data(String(decoding: data, as: UTF8.self).replacingOccurrences(of: name, with: command).utf8)
     }
 }
 

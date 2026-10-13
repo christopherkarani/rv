@@ -128,19 +128,122 @@ enum ApprovalKeyProtection {
     static let allowsSilentCopy = false
 }
 
+/// Whether a data-protection keychain item may be used as rv's approvals key.
+/// `SecAccessControlGetConstraints` records `kSecAccessControlUserPresence` as
+/// `cpo`, nested under `od`. An item with no such constraint is not adopted.
+enum ApprovalKeyAccess {
+    static let userPresenceConstraint = "cpo"
+
+    enum Item: Equatable {
+        case absent
+        case unreadable
+        case noAccessControl
+        case constraints(userPresence: Bool)
+    }
+
+    enum Adoption: Equatable {
+        case absent
+        case accept
+        /// Not rv's key. Delete it so a later create can store one that requires user presence.
+        case rejectAndDelete
+        /// Do not adopt the secret. Leave the item in place.
+        case rejectKeep
+    }
+
+    static func requiresUserPresence(_ constraints: [String: Any]?) -> Bool {
+        guard let constraints else { return false }
+        if constraints[userPresenceConstraint] != nil { return true }
+        guard let operation = constraints["od"] as? [String: Any] else { return false }
+        return operation[userPresenceConstraint] != nil
+    }
+
+    static func adoption(_ item: Item) -> Adoption {
+        switch item {
+        case .absent: .absent
+        case .unreadable: .rejectKeep
+        case .noAccessControl: .rejectAndDelete
+        case .constraints(let userPresence): userPresence ? .accept : .rejectAndDelete
+        }
+    }
+
+    /// Flattens one level of a keychain constraint dictionary. Non-dictionaries yield [:].
+    static func stringKeyed(_ value: Any?) -> [String: Any] {
+        guard let dictionary = value as? NSDictionary else { return [:] }
+        var parsed: [String: Any] = [:]
+        for case let key as String in dictionary.allKeys {
+            if let nested = dictionary[key] as? NSDictionary {
+                var inner: [String: Any] = [:]
+                for case let child as String in nested.allKeys {
+                    if let nestedValue = nested[child] { inner[child] = nestedValue }
+                }
+                parsed[key] = inner
+            } else if let stored = dictionary[key] {
+                parsed[key] = stored
+            }
+        }
+        return parsed
+    }
+}
+
 #if os(macOS)
 /// Keychain item for `rv.approvals` / `hmac-key`. Creating it sets a
 /// user-presence access control on the data-protection keychain, so another
-/// process cannot copy the key without the user authenticating.
+/// process cannot copy the key without the user authenticating. A planted
+/// data-protection item with the same service and account is not adopted
+/// unless its access control requires user presence.
 enum ApprovalKeychain {
     static func read() -> MCPSigner? {
         deleteUnprotectedItem()
         guard protectedStoreEnabled else { return nil }
+        switch copyProtectedItem() {
+        case .absent, .failed:
+            return nil
+        case .item(let data, let inspection):
+            switch ApprovalKeyAccess.adoption(inspection) {
+            case .accept:
+                guard let text = String(data: data, encoding: .utf8) else { return nil }
+                return MCPHex.decode(Array(text.utf8)).flatMap(MCPSigner.init(key:))
+            case .rejectAndDelete:
+                deleteProtectedItem()
+                return nil
+            case .absent, .rejectKeep:
+                return nil
+            }
+        }
+    }
+
+    private enum ProtectedCopy {
+        case absent
+        case failed
+        case item(Data, ApprovalKeyAccess.Item)
+    }
+
+    /// One copy returns the secret and the access-control attributes together.
+    /// The secret is discarded unless those attributes require user presence.
+    private static func copyProtectedItem() -> ProtectedCopy {
         var result: AnyObject?
-        guard SecItemCopyMatching(copyQuery(silent: false) as CFDictionary, &result) == errSecSuccess,
-            let data = result as? Data, let text = String(data: data, encoding: .utf8)
-        else { return nil }
-        return MCPHex.decode(Array(text.utf8)).flatMap(MCPSigner.init(key:))
+        let status = SecItemCopyMatching(readQuery() as CFDictionary, &result)
+        if status == errSecItemNotFound { return .absent }
+        guard status == errSecSuccess, let result else { return .failed }
+        let attributes: [String: Any]
+        if let dict = result as? [String: Any] {
+            attributes = dict
+        } else if let dictionary = result as? NSDictionary {
+            attributes = ApprovalKeyAccess.stringKeyed(dictionary)
+        } else {
+            return .failed
+        }
+        guard let data = attributes[kSecValueData as String] as? Data else { return .failed }
+        return .item(data, inspection(of: attributes))
+    }
+
+    private static func inspection(of attributes: [String: Any]) -> ApprovalKeyAccess.Item {
+        guard let object = attributes[kSecAttrAccessControl as String] else { return .noAccessControl }
+        guard let control = object as? SecAccessControl else { return .unreadable }
+        guard let constraints = SecAccessControlGetConstraints(control) else { return .unreadable }
+        let parsed = ApprovalKeyAccess.stringKeyed(constraints)
+        guard parsed.isEmpty == false else { return .unreadable }
+        return .constraints(userPresence: ApprovalKeyAccess.requiresUserPresence(parsed))
     }
 
     static func create() -> MCPSigner? {
@@ -190,6 +293,16 @@ enum ApprovalKeychain {
         return query
     }
 
+    /// Live read. Attributes travel with the secret so the user-presence ACL
+    /// is judged on the same item that would be adopted. Authentication UI
+    /// stays at its default, which prompts.
+    static func readQuery() -> [String: Any] {
+        var query = copyQuery(silent: false)
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        return query
+    }
+
     /// Removes a pre-presence item from the file-based login keychain. Delete
     /// does not return the secret. The data-protection item is a different store.
     static func deleteUnprotectedItem() {
@@ -197,6 +310,17 @@ enum ApprovalKeychain {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: MCPApprovalKeyStore.keychainService,
             kSecAttrAccount as String: MCPApprovalKeyStore.keychainAccount,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
+    /// Removes a data-protection item that is not rv's user-presence key.
+    static func deleteProtectedItem() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: MCPApprovalKeyStore.keychainService,
+            kSecAttrAccount as String: MCPApprovalKeyStore.keychainAccount,
+            kSecUseDataProtectionKeychain as String: true,
         ]
         SecItemDelete(query as CFDictionary)
     }
