@@ -24,11 +24,11 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 4 Enterprise client features | `governance/phase-4-enterprise` | [#415](https://github.com/christopherkarani/rv/pull/415) | merged |
 | 5 Launch readiness | human-owned | n/a | not started |
 | 6 Security blockers | `governance/phase-6-hardening` (from `main`) | [#417](https://github.com/christopherkarani/rv/pull/417) (draft) | in progress |
-| 7 Enterprise hardening | `governance/phase-7-enterprise-hardening` (from phase 6) | _not opened yet_ | in progress |
+| 7 Enterprise hardening | `governance/phase-7-enterprise-hardening` (from phase 6) | [#418](https://github.com/christopherkarani/rv/pull/418) (draft) | in progress |
 | 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | _not opened yet_ | not started |
 
 **Next action:** Phase 7 on `governance/phase-7-enterprise-hardening` (from
-phase 6), in the order in the Phase 7 section; 7.2 is done, 7.5 is next. Phase 6 agent items are done except
+phase 6), in the order in the Phase 7 section; 7.2 and 7.5 are done, 7.6 is next. Phase 6 agent items are done except
 the impro-ref-blocked ones (6.2 cage denies, 6.5 injected config dir, 6.6
 watchdog). Owner items for phase 6: signing secrets + certificate (6.3),
 flip `signed_releases`/`release_team_id` in `install.sh` and set
@@ -1083,11 +1083,38 @@ allowlist build on them). Nothing here edits an impro-ref file: 7.4 uses
       the default, `--always` refused, audit records the denial
 
 ### 7.5 Org keys and anti-rollback
-- [ ] `org-key.pub` holds one or more base64 Ed25519 keys (one per line,
-      `#` comments); any key verifies the signature (rotation)
-- [ ] Highest accepted `serial` remembered per policy directory in
-      `~/.config/rv/managed-state.json` (owner-only); a lower serial is
-      invalid ("rollback"), shown by `rv managed status` and `rv report`
+- [x] `org-key.pub` holds one or more base64 Ed25519 keys (one per line,
+      `#` comments, at most 16); any key verifies the signature (rotation).
+      Status names the key ("signed by key 2 in org-key.pub", robot
+      `signingKey`). Real binary (Linux, 2026-10-13): two keygens, a
+      commented two-key `org-key.pub`; `rv managed verify` is active when
+      signed by either key (key 1 / key 2), exit 1 with "does not verify
+      against any key in org-key.pub" for a third key and "org-key.pub line 5
+      is not a base64 Ed25519 public key" for a bad line
+- [x] Highest accepted `serial` remembered per policy directory in
+      `~/.config/rv/managed-state.json` (owner-only, 0600); a lower serial,
+      or no serial after one was accepted, is invalid ("rollback: …"), so
+      MCP and secret staging fail closed and `rv report` is not compliant.
+      An unreadable or unsafe record also fails closed. Status shows
+      "anti-rollback: highest serial accepted here is N" (robot
+      `highestSerial`). Every live loader uses it (`rv mcp`, `rv secrets`,
+      `rv report`, `rv managed status`, `rv audit forward`, the secret launch
+      broker). Tests: `ManagedSerialRecordTests` (3),
+      `ManagedSerialStoreTests` (2, real signed bundle in a temp dir:
+      3 accepted → 2 rollback → unnumbered rollback → 4 accepted; garbage and
+      0666 record fail closed), `statusNamesTheSigningKeyAndTheHighestSerial`.
+      `rv managed status` with no installed policy writes nothing
+- [ ] Owner L3 (sudo, macOS): install a signed bundle with `"serial": 5`
+      (`sudo mkdir -p "/Library/Application Support/RV/managed" && sudo cp
+      bundle/{policy.json,policy.json.sig,org-key.pub} "/Library/Application
+      Support/RV/managed/" && sudo chown -R root:wheel "/Library/Application
+      Support/RV/managed"`), run `rv managed status` (expect "anti-rollback:
+      highest serial accepted here is 5"), re-sign the same policy with
+      `"serial": 4`, copy it in the same way, run `rv managed status` (expect
+      exit 1, "rollback: policy.json serial 4 is lower than serial 5") and
+      `rv report` (not compliant). Clean up with `sudo rm -rf
+      "/Library/Application Support/RV/managed"` and `rm
+      ~/.config/rv/managed-state.json`
 
 ### 7.6 Tamper-evident audit
 - [ ] Each audit line carries `prev` = SHA-256 of the previous line's bytes
@@ -1235,3 +1262,10 @@ when the phase starts (items 8.1-8.4 from the 2026-10-13 brief).
   tools; help rows for rules and missing arguments. Linux: RVMCP/RVPolicy/
   RVCLI 835 tests green, preflight 0 failures,
   `Scripts/mcp-phase7-proof.py` 10/10. Next: 7.5.
+- 2026-10-13: Phase 7.5: several keys in `org-key.pub` (rotation) and serial
+  anti-rollback in `~/.config/rv/managed-state.json` (D21), applied by every
+  live policy loader; status/report show the signing key and the highest
+  serial. Linux: RVPolicy 423, RVIsolation 325, RVCLI 836 tests green, help
+  tests green, preflight 0 failures; real-binary `rv managed verify`
+  multi-key run recorded under 7.5. Owner L3: the installed-directory
+  rollback run (needs sudo). Next: 7.6.
