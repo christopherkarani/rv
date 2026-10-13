@@ -287,7 +287,7 @@ public struct MCPGatewayCore {
         }
         let arguments = params?["arguments"] ?? .object([:])
         let keys = arguments.objectValue?.keys.sorted() ?? []
-        let decision = configuration.decision(server: upstream.definition, tool: tool)
+        let decision = configuration.decision(server: upstream.definition, tool: tool, arguments: arguments)
         if decision == .deny {
             let reason = "rv policy denies \(server) tool \(tool)"
             return [
@@ -493,17 +493,20 @@ public struct MCPGatewayCore {
         return outputs + [.toClient(Self.result(id: state.client, .object(["tools": .array(state.tools)])))]
     }
 
-    /// Denied tools are hidden; `ask` tools say so in their description.
+    /// Denied tools are hidden; `ask` tools say so in their description, and
+    /// so do tools whose arguments can change the decision.
     func exposedTool(_ tool: JSONValue, upstream: Upstream) -> JSONValue? {
         guard var object = scrub(tool, for: upstream.definition.name).objectValue, let name = object["name"]?.stringValue else {
             return nil
         }
+        let description = object["description"]?.stringValue ?? ""
         switch configuration.decision(server: upstream.definition, tool: name) {
         case .deny:
             return nil
         case .ask:
-            let description = object["description"]?.stringValue ?? ""
             object["description"] = .string("[rv: needs the user's approval] " + description)
+        case .allow where configuration.hasArgumentRules(server: upstream.definition, tool: name):
+            object["description"] = .string("[rv: some arguments need the user's approval or are refused] " + description)
         case .allow:
             break
         }

@@ -53,6 +53,58 @@ struct MCPConfigurationTests {
         #expect(overlap.decision(for: "read", fallback: .deny) == .allow)
     }
 
+    static let ruled = #"""
+        {"version": 1, "servers": [{"name": "db", "command": "db-mcp", "tools": {"default": "allow",
+          "ask": [{"tool": "query", "when": {"/database": {"==": "prod"}}}],
+          "deny": ["drop_*", {"tool": "query", "when": {"/sql": {"glob": "DROP *"}}}]}}]}
+        """#
+
+    @Test func argumentRulesDecideByTheCallsArguments() throws {
+        let configuration = try decode(Self.ruled).get()
+        let db = try #require(configuration.server(named: "db"))
+        func args(_ text: String) throws -> JSONValue { try JSONValue.parse(Data(text.utf8)) }
+        #expect(db.tools.deny == ["drop_*"])
+        #expect(db.tools.rules.map(\.decision) == [.ask, .deny])
+        #expect(configuration.decision(server: db, tool: "query", arguments: try args(#"{"database":"test"}"#)) == .allow)
+        #expect(configuration.decision(server: db, tool: "query", arguments: try args(#"{"database":"prod"}"#)) == .ask)
+        #expect(configuration.decision(
+            server: db, tool: "query", arguments: try args(#"{"database":"test","sql":"DROP TABLE t"}"#)) == .deny)
+        #expect(configuration.decision(server: db, tool: "query") == .allow)
+        #expect(configuration.decision(server: db, tool: "drop_table", arguments: try args("{}")) == .deny)
+        #expect(configuration.hasArgumentRules(server: db, tool: "query"))
+        #expect(configuration.hasArgumentRules(server: db, tool: "list") == false)
+
+        var untrusted = configuration
+        untrusted.untrusted = true
+        #expect(untrusted.decision(server: db, tool: "query", arguments: try args(#"{"database":"test"}"#)) == .ask)
+    }
+
+    @Test func argumentRulesRoundTripAndRejectMistakes() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configuration = try decode(Self.ruled).get()
+        let signer = try #require(MCPApprovalKeyStore.file(configDirectory: directory).loadOrCreate())
+        _ = try configuration.write(configDirectory: directory, signer: signer).get()
+        #expect(try MCPConfiguration.load(configDirectory: directory).get() == configuration)
+        #expect(configuration.encoded().compactText.contains(#""deny":["drop_*",{"tool":"query","when":{"/sql":{"glob":"DROP *"}}}]"#))
+
+        guard case .failure(let error) = decode(
+            #"{"version":1,"servers":[{"name":"db","command":"x","tools":{"ask":[{"tool":"q"}]}}]}"#)
+        else {
+            Issue.record("accepted a rule without when")
+            return
+        }
+        #expect(error.message.contains("server db tools.ask: tool rule for q needs a non-empty"), "\(error.message)")
+    }
+
+    @Test func largeIntegersCompareExactly() throws {
+        let big = try JSONValue.parse(Data("9007199254740993".utf8))
+        #expect(big.domainValue == .string("9007199254740993"))
+        #expect(try JSONValue.parse(Data("12.5".utf8)).domainValue == .number(12.5))
+        #expect(try JSONValue.parse(Data(#"{"a":[true,null]}"#.utf8)).domainValue
+            == .object(["a": .array([.bool(true), .null])]))
+    }
+
     @Test func globs() {
         #expect(MCPGlob.matches("delete_*", "delete_repo"))
         #expect(MCPGlob.matches("*", ""))

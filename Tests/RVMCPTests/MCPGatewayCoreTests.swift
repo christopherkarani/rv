@@ -152,6 +152,36 @@ struct MCPGatewayCoreTests {
         #expect(record?.durationMilliseconds != nil)
     }
 
+    @Test func argumentRulesDecideEachCall() throws {
+        let configuration = try MCPConfiguration.decode(Data(#"""
+            {"version": 1, "servers": [{"name": "db", "command": "db-mcp", "tools": {"default": "allow",
+              "ask": [{"tool": "query", "when": {"/database": {"==": "prod"}}}],
+              "deny": [{"tool": "query", "when": {"/sql": {"glob": "DROP *"}}}]}}]}
+            """#.utf8)).get()
+        var harness = GatewayHarness(configuration)
+        _ = harness.ready()
+
+        let list = harness.client(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+        let listID = list.toUpstream[0].1["id"]?.intValue ?? -1
+        let tools = harness.upstream("db", #"{"jsonrpc":"2.0","id":\#(listID),"result":{"tools":[{"name":"query","description":"Run SQL"},{"name":"tables"}]}}"#)
+            .toClient.first?["result"]?["tools"]?.arrayValue ?? []
+        #expect(tools.map { $0["name"] } == [.string("query"), .string("tables")])
+        #expect(tools[0]["description"] == .string("[rv: some arguments need the user's approval or are refused] Run SQL"))
+        #expect(tools[1]["description"] == nil)
+
+        let allowed = harness.client(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query","arguments":{"database":"test","sql":"SELECT 1"}}}"#)
+        #expect(allowed.toUpstream.count == 1)
+
+        let asked = harness.client(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"query","arguments":{"database":"prod","sql":"SELECT 1"}}}"#)
+        #expect(asked.toUpstream.isEmpty)
+        #expect(asked.audits.first?.decision == .ask)
+
+        let denied = harness.client(#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"query","arguments":{"database":"test","sql":"DROP TABLE users"}}}"#)
+        #expect(denied.toUpstream.isEmpty)
+        #expect(denied.audits.first?.decision == .deny)
+        #expect(denied.toClient.first?["result"]?["isError"] == .bool(true))
+    }
+
     @Test func deniedCallNeverReachesTheUpstream() {
         var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
         _ = harness.ready()

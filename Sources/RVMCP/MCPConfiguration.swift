@@ -16,25 +16,51 @@ public enum MCPToolDecision: String, Sendable, Equatable, CaseIterable {
     }
 }
 
-/// deny glob > ask glob > allow glob > `default` > the file's `defaultDecision`.
+/// The strictest matching glob or argument rule (deny > ask > allow), else
+/// `default`, else the file's `defaultDecision`.
 public struct MCPToolPolicy: Sendable, Equatable {
     public var defaultDecision: MCPToolDecision?
     public var allow: [String]
     public var ask: [String]
     public var deny: [String]
+    /// Rule objects from the allow/ask/deny lists, in that order.
+    public var rules: [ToolArgumentRule.Decided]
 
-    public init(defaultDecision: MCPToolDecision? = nil, allow: [String] = [], ask: [String] = [], deny: [String] = []) {
+    public init(
+        defaultDecision: MCPToolDecision? = nil, allow: [String] = [], ask: [String] = [], deny: [String] = [],
+        rules: [ToolArgumentRule.Decided] = []
+    ) {
         self.defaultDecision = defaultDecision
         self.allow = allow
         self.ask = ask
         self.deny = deny
+        self.rules = rules
     }
 
-    public func decision(for tool: String, fallback: MCPToolDecision) -> MCPToolDecision {
-        if deny.contains(where: { MCPGlob.matches($0, tool) }) { return .deny }
-        if ask.contains(where: { MCPGlob.matches($0, tool) }) { return .ask }
-        if allow.contains(where: { MCPGlob.matches($0, tool) }) { return .allow }
-        return defaultDecision ?? fallback
+    /// Without arguments (a listing), only plain globs apply.
+    public func decision(for tool: String, arguments: JSONValue? = nil, fallback: MCPToolDecision) -> MCPToolDecision {
+        var matched: [MCPToolDecision] = []
+        if deny.contains(where: { MCPGlob.matches($0, tool) }) { matched.append(.deny) }
+        if ask.contains(where: { MCPGlob.matches($0, tool) }) { matched.append(.ask) }
+        if allow.contains(where: { MCPGlob.matches($0, tool) }) { matched.append(.allow) }
+        if let arguments, let ruled = ToolArgumentRule.strictest(rules, tool: tool, arguments: arguments.domainValue) {
+            matched.append(MCPToolDecision(ruled))
+        }
+        return matched.max { $0.strictness < $1.strictness } ?? defaultDecision ?? fallback
+    }
+
+    public func hasArgumentRules(for tool: String) -> Bool {
+        rules.contains { $0.rule.namesTool(tool) }
+    }
+}
+
+extension MCPToolDecision {
+    init(_ decision: ManagedPolicy.Decision) {
+        switch decision {
+        case .allow: self = .allow
+        case .ask: self = .ask
+        case .deny: self = .deny
+        }
     }
 }
 
@@ -128,16 +154,24 @@ public struct MCPConfiguration: Sendable, Equatable {
         servers.first { $0.name == name }
     }
 
-    /// The stricter of the user's rules and the organization's.
-    public func decision(server: MCPServerDefinition, tool: String) -> MCPToolDecision {
-        var user = server.tools.decision(for: tool, fallback: defaultDecision)
+    /// The stricter of the user's rules and the organization's. Without
+    /// arguments (a listing), argument rules do not apply.
+    public func decision(server: MCPServerDefinition, tool: String, arguments: JSONValue? = nil) -> MCPToolDecision {
+        var user = server.tools.decision(for: tool, arguments: arguments, fallback: defaultDecision)
         if untrusted, user == .allow { user = .ask }
-        guard let organization = organizationDecision(server: server.name, tool: tool) else { return user }
+        guard let organization = organizationDecision(server: server.name, tool: tool, arguments: arguments) else {
+            return user
+        }
         return [user, organization].max { $0.strictness < $1.strictness } ?? user
     }
 
-    public func organizationDecision(server: String, tool: String) -> MCPToolDecision? {
-        managed.flatMap { MCPToolDecision(rawValue: $0.mcpDecision(server: server, tool: tool).rawValue) }
+    public func organizationDecision(server: String, tool: String, arguments: JSONValue? = nil) -> MCPToolDecision? {
+        managed.map { MCPToolDecision($0.mcpDecision(server: server, tool: tool, arguments: arguments?.domainValue)) }
+    }
+
+    /// Whether some call to this tool could be decided differently by its arguments.
+    public func hasArgumentRules(server: MCPServerDefinition, tool: String) -> Bool {
+        server.tools.hasArgumentRules(for: tool) || managed?.mcpHasArgumentRules(server: server.name, tool: tool) == true
     }
 
     public func isBlocked(_ server: String) -> Bool {
@@ -212,9 +246,13 @@ public struct MCPConfiguration: Sendable, Equatable {
         if server.secrets.isEmpty == false { object["secrets"] = stringMap(server.secrets) }
         var tools = JSONObject()
         if let decision = server.tools.defaultDecision { tools["default"] = .string(decision.rawValue) }
-        if server.tools.allow.isEmpty == false { tools["allow"] = .array(server.tools.allow.map(JSONValue.string)) }
-        if server.tools.ask.isEmpty == false { tools["ask"] = .array(server.tools.ask.map(JSONValue.string)) }
-        if server.tools.deny.isEmpty == false { tools["deny"] = .array(server.tools.deny.map(JSONValue.string)) }
+        for (key, globs, decision) in [
+            ("allow", server.tools.allow, ManagedPolicy.Decision.allow), ("ask", server.tools.ask, .ask),
+            ("deny", server.tools.deny, .deny),
+        ] {
+            let rules = server.tools.rules.filter { $0.decision == decision }.map { JSONValue(domain: $0.rule.encoded) }
+            if globs.isEmpty == false || rules.isEmpty == false { tools[key] = .array(globs.map(JSONValue.string) + rules) }
+        }
         if tools.isEmpty == false { object["tools"] = .object(tools) }
         if let sandbox = server.sandbox {
             var value = JSONObject()
@@ -309,10 +347,39 @@ enum MCPConfigurationDecoding {
         try allowOnly(object, ["default", "allow", "ask", "deny"], "\(context) tools")
         var policy = MCPToolPolicy()
         if let raw = object["default"] { policy.defaultDecision = try decision(raw, "\(context) tools.default") }
-        policy.allow = try globs(object["allow"], "\(context) tools.allow")
-        policy.ask = try globs(object["ask"], "\(context) tools.ask")
-        policy.deny = try globs(object["deny"], "\(context) tools.deny")
+        for decision in [ManagedPolicy.Decision.allow, .ask, .deny] {
+            let (globs, rules) = try toolRules(object[decision.rawValue], decision: decision, "\(context) tools.\(decision.rawValue)")
+            switch decision {
+            case .allow: policy.allow = globs
+            case .ask: policy.ask = globs
+            case .deny: policy.deny = globs
+            }
+            policy.rules += rules
+        }
         return policy
+    }
+
+    private static func toolRules(
+        _ value: JSONValue?, decision: ManagedPolicy.Decision, _ context: String
+    ) throws -> ([String], [ToolArgumentRule.Decided]) {
+        guard let value else { return ([], []) }
+        guard let items = value.arrayValue else { throw MCPConfigurationError.invalid("\(context) must be an array") }
+        var globs: [String] = []
+        var rules: [ToolArgumentRule.Decided] = []
+        for item in items {
+            if let glob = item.stringValue, glob.isEmpty == false, glob.count <= 256 {
+                globs.append(glob)
+            } else if item.objectValue != nil {
+                do {
+                    rules.append(.init(decision: decision, rule: try ToolArgumentRule.decode(item.domainValue)))
+                } catch let error as ToolArgumentRuleError {
+                    throw MCPConfigurationError.invalid("\(context): \(error.message)")
+                }
+            } else {
+                throw MCPConfigurationError.invalid("\(context) must hold non-empty strings or rule objects")
+            }
+        }
+        return (globs, rules)
     }
 
     private static func sandbox(_ value: JSONValue, _ context: String) throws -> MCPSandboxPolicy {
@@ -339,14 +406,6 @@ enum MCPConfigurationDecoding {
             throw MCPConfigurationError.invalid("\(context) must be allow, ask or deny")
         }
         return decision
-    }
-
-    private static func globs(_ value: JSONValue?, _ context: String) throws -> [String] {
-        guard let value else { return [] }
-        guard let items = value.stringArray, items.allSatisfy({ $0.isEmpty == false && $0.count <= 256 }) else {
-            throw MCPConfigurationError.invalid("\(context) must be non-empty strings")
-        }
-        return items
     }
 
     private static func names(_ value: JSONValue?, _ context: String) throws -> [String] {
