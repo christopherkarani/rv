@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import Testing
 @testable import RVMCP
@@ -51,6 +56,14 @@ struct MCPInventoryTests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-home-\(UUID().uuidString)")
         var home: URL { root.appendingPathComponent("home") }
         var project: URL { root.appendingPathComponent("project") }
+        var rv: URL { home.appendingPathComponent("bin/rv") }
+
+        func makeRV() throws {
+            try FileManager.default.createDirectory(at: rv.deletingLastPathComponent(), withIntermediateDirectories: true)
+            guard FileManager.default.createFile(atPath: rv.path, contents: Data()) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+        }
 
         func write(_ relative: String, under base: URL? = nil, _ text: String) throws {
             let url = (base ?? home).appendingPathComponent(relative)
@@ -63,12 +76,13 @@ struct MCPInventoryTests {
 
     private func populated() throws -> FakeHome {
         let fake = FakeHome()
+        try fake.makeRV()
         let projectPath = fake.project.standardizedFileURL.path
         try fake.write(".claude.json", """
             {"numStartups": 3, "mcpServers": {"wax": {"type": "stdio", "command": "wax-mcp", "args": [], "env": {"WAX_TOKEN": "secretvalue"}}},
              "projects": {"\(projectPath)": {"mcpServers": {"local-one": {"command": "node", "args": ["x.js"]}}}}}
             """)
-        try fake.write(".cursor/mcp.json", #"{"mcpServers": {"github": {"command": "/usr/local/bin/rv", "args": ["mcp", "serve", "--server", "github"]}}}"#)
+        try fake.write(".cursor/mcp.json", #"{"mcpServers": {"github": {"command": "\#(fake.rv.path)", "args": ["mcp", "serve", "--server", "github"]}}}"#)
         try fake.write(".codex/config.toml", MiniTOMLTests.codexLike)
         try fake.write(".config/opencode/opencode.json", """
             // opencode allows comments
@@ -120,7 +134,7 @@ struct MCPInventoryTests {
             servers: [MCPServerDefinition(name: "github", command: "npx"), MCPServerDefinition(name: "team", command: "uvx")],
             direct: ["hosted", "stripe"],
             blocked: ["filesystem"])
-        let rows = MCPInventoryRow.rows(inventory, configuration: configuration)
+        let rows = MCPInventoryRow.rows(inventory, configuration: configuration, rvExecutable: fake.rv.path)
         func row(_ name: String) throws -> MCPInventoryRow { try #require(rows.first { $0.entry.name == name }) }
 
         #expect(try row("github").status == .governed)
@@ -145,9 +159,88 @@ struct MCPInventoryTests {
 
         let dangling = MCPHostEntry(
             host: .cursor, scope: .user, configPath: "/x", name: "gone",
-            transport: .stdio(command: "rv", args: ["mcp", "serve", "--server=gone"]))
-        #expect(MCPInventoryRow.status(dangling, configuration: configuration) == .dangling)
+            transport: .stdio(command: fake.rv.path, args: ["mcp", "serve", "--server=gone"]))
+        #expect(MCPInventoryRow.status(dangling, configuration: configuration, rvExecutable: fake.rv.path) == .dangling)
         #expect(MCPEntryStatus.dangling.isAcceptable == false)
         #expect(MCPEntryStatus.governed.isAcceptable)
+
+        let relative = MCPHostEntry(
+            host: .cursor, scope: .user, configPath: "/x", name: "github",
+            transport: .stdio(command: "rv", args: ["mcp", "serve", "--server", "github"]))
+        #expect(MCPInventoryRow.status(relative, configuration: configuration, rvExecutable: fake.rv.path) == .bypass)
+        let dotted = MCPHostEntry(
+            host: .cursor, scope: .user, configPath: "/x", name: "github",
+            transport: .stdio(command: "./rv", args: ["mcp", "serve", "--server", "github"]))
+        #expect(MCPInventoryRow.status(dotted, configuration: configuration, rvExecutable: fake.rv.path) == .bypass)
+
+        let other = fake.home.appendingPathComponent("bin/not-rv")
+        #expect(FileManager.default.createFile(atPath: other.path, contents: Data()))
+        let imposter = MCPHostEntry(
+            host: .cursor, scope: .user, configPath: "/x", name: "github",
+            transport: .stdio(command: other.path, args: ["mcp", "serve", "--server", "github"]))
+        #expect(MCPInventoryRow.status(imposter, configuration: configuration, rvExecutable: fake.rv.path) == .bypass)
+
+        let extra = MCPHostEntry(
+            host: .cursor, scope: .user, configPath: "/x", name: "github",
+            transport: .stdio(command: fake.rv.path, args: ["mcp", "serve", "--server", "github", "--server", "other"]))
+        #expect(MCPInventoryRow.status(extra, configuration: configuration, rvExecutable: fake.rv.path) == .bypass)
+        let equals = MCPHostEntry(
+            host: .cursor, scope: .user, configPath: "/x", name: "github",
+            transport: .stdio(command: fake.rv.path, args: ["mcp", "serve", "--server=github"]))
+        #expect(MCPInventoryRow.status(equals, configuration: configuration, rvExecutable: fake.rv.path) == .governed)
+    }
+
+    @Test func unreadableAndOversizedHostFilesFailTheInventory() throws {
+        let fake = FakeHome()
+        try fake.write(".cursor/mcp.json", #"{"mcpServers": {"x": {"command": "x"}}}"#)
+        let denied = fake.home.appendingPathComponent(".cursor/mcp.json")
+        #expect(chmod(denied.path, 0o000) == 0)
+        defer { _ = chmod(denied.path, 0o600) }
+        let deniedInventory = MCPInventory.discover(home: fake.home, project: nil, environment: [:])
+        #expect(deniedInventory.entries.isEmpty)
+        #expect(deniedInventory.problems.contains { $0.path == denied.path && $0.message == "permission denied" })
+
+        let huge = fake.home.appendingPathComponent(".claude.json")
+        let fd = open(huge.path, O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0o600)
+        #expect(fd >= 0)
+        #expect(ftruncate(fd, off_t(MCPInventory.maximumFileBytes + 1)) == 0)
+        #expect(close(fd) == 0)
+        let hugeInventory = MCPInventory.discover(home: fake.home, project: nil, environment: [:])
+        #expect(hugeInventory.problems.contains { $0.path == huge.path && $0.message.contains("larger than") })
+        #expect(hugeInventory.entries.contains { $0.name == "x" } == false)
+
+        try FileManager.default.createDirectory(at: fake.home.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: fake.home.appendingPathComponent(".codex/config.toml"), withIntermediateDirectories: true)
+        let directoryInventory = MCPInventory.discover(home: fake.home, project: nil, environment: [:])
+        let directory = fake.home.appendingPathComponent(".codex/config.toml").path
+        #expect(directoryInventory.problems.contains { $0.path == directory && $0.message == "not a regular file" })
+
+        let missing = MCPInventory.discover(home: fake.root.appendingPathComponent("empty-home"), project: nil, environment: [:])
+        #expect(missing.problems.isEmpty)
+        #expect(missing.entries.isEmpty)
+    }
+
+    @Test func claudeProjectKeysMatchCanonicalPaths() throws {
+        let fake = FakeHome()
+        try FileManager.default.createDirectory(at: fake.project, withIntermediateDirectories: true)
+        let link = fake.root.appendingPathComponent("linked-project")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: fake.project)
+        let real = MCPInventory.canonicalProjectPath(fake.project.path)
+        let viaLink = link.path
+        let viaDots = fake.project.appendingPathComponent("../\(fake.project.lastPathComponent)").path
+        try fake.write(".claude.json", """
+            {"projects": {
+              "\(viaLink)/": {"mcpServers": {"from-link": {"command": "node", "args": ["a.js"]}}},
+              "\(viaDots)": {"mcpServers": {"from-dots": {"command": "node", "args": ["b.js"]}}},
+              "/not/the/project": {"mcpServers": {"hidden": {"command": "node", "args": ["c.js"]}}}
+            }}
+            """)
+        let inventory = MCPInventory.discover(home: fake.home, project: fake.project, environment: [:])
+        let names = Set(inventory.entries.map(\.name))
+        #expect(names.contains("from-link"))
+        #expect(names.contains("from-dots"))
+        #expect(names.contains("hidden") == false)
+        #expect(MCPInventory.canonicalProjectPath(viaLink) == real)
+        #expect(MCPInventory.canonicalProjectPath(viaDots) == real)
     }
 }

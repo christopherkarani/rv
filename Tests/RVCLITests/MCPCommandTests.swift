@@ -1,6 +1,7 @@
 import Foundation
 import RVIsolation
 import RVMCP
+import Synchronization
 import Testing
 @testable import RVCLI
 
@@ -39,10 +40,10 @@ struct MCPCommandTests {
         }}
         """
 
-    private func report(_ fixture: Fixture) throws -> MCPRun.Report {
+    private func report(_ fixture: Fixture, rvExecutable: String = "") throws -> MCPRun.Report {
         let environment = fixture.environment()
         let configuration = try MCPRun.configuration(environment).get()
-        return MCPRun.report(environment, project: nil, configuration: configuration)
+        return MCPRun.report(environment, project: nil, configuration: configuration, rvExecutable: rvExecutable)
     }
 
     @Test func importThenSetupTakesCheckFromFailingToPassing() throws {
@@ -62,18 +63,23 @@ struct MCPCommandTests {
         #expect(fixture.text(".config/rv/secrets.json").contains("ghp_") == false)
         #expect(fixture.text(".config/rv/secrets.json").contains("GITHUB_PERSONAL_ACCESS_TOKEN"))
 
+        let rv = fixture.home.appendingPathComponent("bin/rv")
+        try FileManager.default.createDirectory(at: rv.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: rv.path, contents: Data())
         let setup = try MCPRun.setup(
-            host: .cursor, names: [], project: nil, undo: false, rvPath: "/opt/rv", environment: fixture.environment()
+            host: .cursor, names: [], project: nil, undo: false, rvPath: rv.path, environment: fixture.environment()
         ).get()
         #expect(setup.contains("routed through rv: github"))
         #expect(fixture.text(".cursor/mcp.json").contains("ghp_") == false)
 
-        let after = try report(fixture)
+        let after = try report(fixture, rvExecutable: rv.path)
         #expect(after.passes)
         #expect(MCPRun.listText(after, home: fixture.home).contains("governed"))
+        let relative = try report(fixture, rvExecutable: "")
+        #expect(relative.rows.contains { $0.name == "github" && $0.status == "governed" } == false)
 
         let undone = try MCPRun.setup(
-            host: .cursor, names: [], project: nil, undo: true, rvPath: "/opt/rv", environment: fixture.environment()
+            host: .cursor, names: [], project: nil, undo: true, rvPath: rv.path, environment: fixture.environment()
         ).get()
         #expect(undone.contains("restored github"))
         #expect(fixture.text(".cursor/mcp.json").contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"))
@@ -99,6 +105,32 @@ struct MCPCommandTests {
         let unknown = MCPRun.importServers(
             host: .cursor, names: ["nope"], project: nil, allowTools: false, dryRun: false, environment: fixture.environment())
         #expect(unknown.failureMessage == "cursor has no MCP server named nope")
+
+        let huge = String(repeating: "a1", count: (SecretValue.maximumBytes / 2) + 1)
+        try fixture.write(".cursor/mcp.json", #"{"mcpServers": {"gh": {"command": "npx", "env": {"GITHUB_TOKEN": "\#(huge)"}}}}"#)
+        let rejected = MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false, environment: fixture.environment())
+        #expect(rejected.failureMessage?.contains("nothing imported") == true)
+        #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
+
+        let stored = Mutex(0)
+        let partial = SecretKeychainWriter(
+            store: { _, _, _ in
+                stored.withLock { count in
+                    count += 1
+                    return count == 1
+                }
+            },
+            delete: { _, _ in false })
+        try fixture.write(".cursor/mcp.json", """
+            {"mcpServers": {"gh": {"command": "npx", "env": {"GITHUB_TOKEN": "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "API_KEY": "sk-abcdefghijklmnopqrst"}}}}
+            """)
+        let failedSecond = MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: fixture.environment(keychain: partial))
+        #expect(failedSecond.failureMessage?.contains("nothing imported") == false)
+        #expect(failedSecond.failureMessage?.contains("already stored") == true)
+        #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
     }
 
     @Test func approveOnceGrantsAndAlwaysEditsTheAllowList() throws {

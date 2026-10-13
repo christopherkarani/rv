@@ -59,7 +59,7 @@ public enum MCPLaunchPlanner {
         for name in names {
             if configuration.blocked.contains(name) { return .failure(.blocked(name)) }
             guard let definition = configuration.server(named: name) else { return .failure(.unknownServer(name)) }
-            var environment = baseEnvironment
+            var environment = definition.sandbox == nil ? baseEnvironment : sandboxEnvironment(baseEnvironment)
             for (key, value) in definition.environment { environment[key] = value }
             var resolved: [String: String] = [:]
             let referenced = Set(definition.secrets.values).union(definition.args.flatMap { MCPSecretReference.names(in: $0) ?? [] })
@@ -88,6 +88,16 @@ public enum MCPLaunchPlanner {
             }
         }
         return .success(planned)
+    }
+
+    /// Host environment a sandboxed upstream may see. Credentials the host
+    /// already exported (`AWS_*`, `GITHUB_TOKEN`, …) are not copied.
+    static func sandboxEnvironment(_ base: [String: String]) -> [String: String] {
+        var kept: [String: String] = [:]
+        for (key, value) in base where key == "PATH" || key == "HOME" || key == "TMPDIR" || key == "LANG" || key.hasPrefix("LC_") {
+            kept[key] = value
+        }
+        return kept
     }
 }
 

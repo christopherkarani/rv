@@ -60,10 +60,12 @@ enum MCPRun {
         MCPConfiguration.load(configDirectory: environment.configDirectory).mapError { CommandFailure($0.message) }
     }
 
-    static func report(_ environment: MCPEnvironment, project: URL?, configuration: MCPConfiguration) -> Report {
+    static func report(
+        _ environment: MCPEnvironment, project: URL?, configuration: MCPConfiguration, rvExecutable: String
+    ) -> Report {
         let inventory = MCPInventory.discover(
             home: environment.home, project: project, environment: environment.processEnvironment)
-        let rows = MCPInventoryRow.rows(inventory, configuration: configuration).map { row in
+        let rows = MCPInventoryRow.rows(inventory, configuration: configuration, rvExecutable: rvExecutable).map { row in
             Row(
                 host: row.entry.host.rawValue,
                 scope: row.entry.scope.label,
@@ -265,22 +267,52 @@ enum MCPRun {
         }
         if dryRun { return .success((lines + ["dry run: nothing written"]).joined(separator: "\n") + "\n") }
 
+        for secret in plan.secrets where SecretValue(secret.value) == nil {
+            return .failure(CommandFailure(
+                "\(secret.definition.name) is empty, contains NUL, or is over \(SecretValue.maximumBytes) bytes; nothing imported"))
+        }
+        var stored: [String] = []
+        func rollback() -> Bool {
+            stored.allSatisfy { environment.keychain.delete(SecretKeychain.service, $0) }
+        }
+        func keychainFailure(_ name: String) -> CommandFailure {
+            let cleared = rollback()
+            let tail = cleared
+                ? "nothing imported"
+                : "could not remove secrets this import already stored in the Keychain"
+            return CommandFailure("could not store \(name) in the Keychain; \(tail)")
+        }
         for secret in plan.secrets {
             guard environment.keychain.store(SecretKeychain.service, secret.definition.name, Data(secret.value.utf8)) else {
-                return .failure(CommandFailure("could not store \(secret.definition.name) in the Keychain; nothing imported"))
+                return .failure(keychainFailure(secret.definition.name))
             }
+            stored.append(secret.definition.name)
         }
         if plan.secrets.isEmpty == false {
             var updatedSecrets = secrets
             updatedSecrets.secrets += plan.secrets.map(\.definition)
             if case .failure(let error) = updatedSecrets.write(configDirectory: environment.configDirectory) {
-                return .failure(CommandFailure(error.message))
+                let cleared = rollback()
+                let message = cleared ? error.message : "\(error.message); could not remove secrets this import already stored in the Keychain"
+                return .failure(CommandFailure(message))
             }
         }
         var updated = configuration
         updated.servers += plan.servers
         if case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
-            return .failure(CommandFailure(error.message))
+            let restoredSecrets: Bool
+            if plan.secrets.isEmpty {
+                restoredSecrets = true
+            } else if case .success = secrets.write(configDirectory: environment.configDirectory) {
+                restoredSecrets = true
+            } else {
+                restoredSecrets = false
+            }
+            let cleared = rollback()
+            let message = restoredSecrets && cleared
+                ? error.message
+                : "\(error.message); could not remove secrets this import already stored"
+            return .failure(CommandFailure(message))
         }
         lines.append("wrote mcp.json\(plan.secrets.isEmpty ? "" : " and secrets.json (values in the Keychain, service \(SecretKeychain.service))")")
         if allowTools == false {
@@ -371,7 +403,9 @@ struct MCPList: AsyncParsableCommand {
         case .failure(let failure):
             try ctx.fail("rv mcp list: \(failure.message)\n")
         case .success(let configuration):
-            let report = MCPRun.report(environment, project: MCPRun.projectURL(project), configuration: configuration)
+            let report = MCPRun.report(
+                environment, project: MCPRun.projectURL(project), configuration: configuration,
+                rvExecutable: MCPExecutable.currentPath())
             ctx.writeStdout(ctx.explicitRobot ? SecretsRun.json(report) : MCPRun.listText(report, home: environment.home))
         }
     }
@@ -392,7 +426,9 @@ struct MCPCheck: AsyncParsableCommand {
         case .failure(let failure):
             try ctx.fail("rv mcp check: \(failure.message)\n")
         case .success(let configuration):
-            let report = MCPRun.report(environment, project: MCPRun.projectURL(project), configuration: configuration)
+            let report = MCPRun.report(
+                environment, project: MCPRun.projectURL(project), configuration: configuration,
+                rvExecutable: MCPExecutable.currentPath())
             let text = ctx.explicitRobot ? SecretsRun.json(report) : MCPRun.checkText(report, home: environment.home)
             if report.passes {
                 ctx.writeStdout(text)

@@ -92,7 +92,13 @@ public struct MCPApprovalStore: Sendable {
                 id: Self.newID(), server: server, tool: tool, argumentsHash: argumentsHash,
                 argumentKeys: argumentKeys, requestedAt: clock(), state: .pending)
             requests.append(request)
-            if requests.count > Self.maximumRequests { requests.removeFirst(requests.count - Self.maximumRequests) }
+            while requests.count > Self.maximumRequests {
+                guard let index = requests.firstIndex(where: { $0.state == .pending && $0.id != request.id }) else {
+                    requests.removeAll { $0.id == request.id }
+                    return nil
+                }
+                requests.remove(at: index)
+            }
             return request.id
         } ?? nil
     }

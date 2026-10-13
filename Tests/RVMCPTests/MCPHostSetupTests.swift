@@ -26,6 +26,7 @@ struct MCPImportTests {
                     transport: .stdio(command: "npx", args: ["-y", "@upstash/context7-mcp", "--api-key", "ctx7sk-11112222333344445555"]),
                     environment: ["GITHUB_TOKEN": "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "LOG_LEVEL": "info", "PROXY": "${PROXY}"]),
                 entry("bare", transport: .stdio(command: "srv", args: ["sk-proj-abcdefghijklmnop1234", "--port=8080"])),
+                entry("db", transport: .stdio(command: "psql", args: ["postgres://user:secret@db.example/app"])),
             ],
             configuration: MCPConfiguration(), secrets: SecretsConfiguration(), allowTools: false)
 
@@ -40,13 +41,16 @@ struct MCPImportTests {
         let bare = try #require(plan.servers.first { $0.name == "bare" })
         #expect(bare.args == ["${secret:BARE_ARG_1}", "--port=8080"])
 
-        #expect(plan.secrets.map(\.definition.name).sorted() == ["BARE_ARG_1", "CONTEXT7_API_KEY", "GITHUB_TOKEN"])
+        let db = try #require(plan.servers.first { $0.name == "db" })
+        #expect(db.args == ["${secret:DB_ARG_1}"])
+        #expect(plan.secrets.map(\.definition.name).sorted() == ["BARE_ARG_1", "CONTEXT7_API_KEY", "DB_ARG_1", "GITHUB_TOKEN"])
         #expect(plan.secrets.allSatisfy {
             $0.definition.source == .keychain(service: SecretKeychain.service, account: $0.definition.name)
         })
         let encoded = MCPConfiguration(servers: plan.servers).encoded().prettyText
         #expect(encoded.contains("ctx7sk") == false && encoded.contains("ghp_") == false && encoded.contains("sk-proj") == false)
-        #expect(try MCPConfiguration.decode(Data(encoded.utf8)).get().servers.count == 2)
+        #expect(encoded.contains("secret@") == false)
+        #expect(try MCPConfiguration.decode(Data(encoded.utf8)).get().servers.count == 3)
     }
 
     @Test func skipsGovernedRemoteExistingAndAvoidsSecretNameCollisions() {
@@ -100,6 +104,44 @@ struct MCPImportTests {
         } else {
             Issue.record("undefined arg secret must refuse to launch")
         }
+    }
+
+    @Test func sandboxedLaunchDropsHostCredentialsButKeepsSecrets() throws {
+        var definition = MCPServerDefinition(
+            name: "s", command: "srv", environment: ["LOG_LEVEL": "info"], secrets: ["TOKEN": "S_KEY"])
+        definition.sandbox = MCPSandboxPolicy(network: false)
+        let secrets = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "S_KEY", source: .hostEnvironment(variable: "UNUSED"), delivery: .environment)
+        ])
+        let resolver = SecretResolver { _ in .success(SecretValue("injected-secret")!) }
+        let base = [
+            "PATH": "/usr/bin", "HOME": "/home/me", "TMPDIR": "/tmp", "LANG": "en_US.UTF-8", "LC_ALL": "C",
+            "AWS_SECRET_ACCESS_KEY": "aws-secret", "GITHUB_TOKEN": "ghp_from_host",
+        ]
+        let planned = try MCPLaunchPlanner.plan(
+            servers: ["s"], configuration: MCPConfiguration(servers: [definition]), secrets: secrets, resolver: resolver,
+            baseEnvironment: base
+        ).get()
+        let environment = planned[0].1.environment
+        #expect(environment["PATH"] == "/usr/bin")
+        #expect(environment["HOME"] == "/home/me")
+        #expect(environment["TMPDIR"] == "/tmp")
+        #expect(environment["LANG"] == "en_US.UTF-8")
+        #expect(environment["LC_ALL"] == "C")
+        #expect(environment["LOG_LEVEL"] == "info")
+        #expect(environment["TOKEN"] == "injected-secret")
+        #expect(environment["AWS_SECRET_ACCESS_KEY"] == nil)
+        #expect(environment["GITHUB_TOKEN"] == nil)
+        #expect(planned[0].0.secretValues.map(\.name) == ["S_KEY"])
+        #expect(planned[0].0.secretValues.map(\.value) == ["injected-secret"])
+
+        var plain = definition
+        plain.sandbox = nil
+        let inherited = try MCPLaunchPlanner.plan(
+            servers: ["s"], configuration: MCPConfiguration(servers: [plain]), secrets: secrets, resolver: resolver,
+            baseEnvironment: base
+        ).get()
+        #expect(inherited[0].1.environment["AWS_SECRET_ACCESS_KEY"] == "aws-secret")
     }
 }
 
@@ -215,7 +257,14 @@ struct MCPHostSetupTests {
             files: box.files(.codex), configuration: configuration, servers: nil, rvPath: "/opt/rv",
             configDirectory: box.config
         ).get()
-        #expect(codex.manualSteps == ["codex mcp remove wax && codex mcp add wax -- /opt/rv mcp serve --server wax"])
+        #expect(codex.manualSteps == ["codex mcp remove 'wax' && codex mcp add 'wax' -- '/opt/rv' mcp serve --server 'wax'"])
+        let quoted = try MCPHostSetup.setup(
+            files: box.files(.codex), configuration: configuration, servers: nil, rvPath: "/opt/my rv/o'reilly",
+            configDirectory: box.config
+        ).get()
+        #expect(quoted.manualSteps == [
+            "codex mcp remove 'wax' && codex mcp add 'wax' -- '/opt/my rv/o'\\''reilly' mcp serve --server 'wax'",
+        ])
         #expect(codex.changed.isEmpty)
     }
 }

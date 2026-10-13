@@ -202,48 +202,40 @@ public struct MCPGatewayCore {
         }
         let arguments = params?["arguments"] ?? .object([:])
         let keys = arguments.objectValue?.keys.sorted() ?? []
-        var approval: String?
-        switch configuration.decision(server: upstream.definition, tool: tool) {
-        case .deny:
+        let decision = configuration.decision(server: upstream.definition, tool: tool)
+        if decision == .deny {
             let reason = "rv policy denies \(server) tool \(tool)"
             return [
                 .audit(MCPCallRecord(server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true, reason: reason)),
                 .toClient(Self.toolError(id: client, "\(reason). Do not retry; ask the user if you need it.")),
             ]
-        case .ask:
+        }
+        guard phases[server] == .ready else {
+            return unavailable(client: client, server: server, tool: tool, decision: decision, keys: keys)
+        }
+        var approval: String?
+        if decision == .ask {
             let hash = arguments.canonicalHash
             if let granted = approvals.consumeGrant(server, tool, hash) {
                 approval = granted
-                break
-            }
-            guard let id = approvals.request(server, tool, hash, keys) else {
-                let reason = "rv could not record an approval request"
+            } else {
+                guard let id = approvals.request(server, tool, hash, keys) else {
+                    let reason = "rv could not record an approval request"
+                    return [
+                        .audit(MCPCallRecord(server: server, tool: tool, decision: .ask, argumentKeys: keys, isError: true, reason: reason)),
+                        .toClient(Self.toolError(id: client, reason)),
+                    ]
+                }
+                let text = "rv paused this call: \(server) tool \(tool) needs the user's approval. "
+                    + "Ask the user to run `rv mcp approve \(id)` (or `rv mcp approve \(id) --always`), "
+                    + "then call the tool again with the same arguments."
                 return [
-                    .audit(MCPCallRecord(server: server, tool: tool, decision: .ask, argumentKeys: keys, isError: true, reason: reason)),
-                    .toClient(Self.toolError(id: client, reason)),
+                    .audit(MCPCallRecord(
+                        server: server, tool: tool, decision: .ask, approvalID: id, argumentKeys: keys, isError: true,
+                        reason: "awaiting approval")),
+                    .toClient(Self.toolError(id: client, text)),
                 ]
             }
-            let text = "rv paused this call: \(server) tool \(tool) needs the user's approval. "
-                + "Ask the user to run `rv mcp approve \(id)` (or `rv mcp approve \(id) --always`), "
-                + "then call the tool again with the same arguments."
-            return [
-                .audit(MCPCallRecord(
-                    server: server, tool: tool, decision: .ask, approvalID: id, argumentKeys: keys, isError: true,
-                    reason: "awaiting approval")),
-                .toClient(Self.toolError(id: client, text)),
-            ]
-        case .allow:
-            break
-        }
-        guard phases[server] == .ready else {
-            let reason: String
-            if case .failed(let why)? = phases[server] { reason = why } else { reason = "not ready" }
-            return [
-                .audit(MCPCallRecord(
-                    server: server, tool: tool, decision: approval == nil ? .allow : .ask, approvalID: approval,
-                    argumentKeys: keys, isError: true, reason: "upstream unavailable: \(reason)")),
-                .toClient(Self.error(id: client, code: -32603, message: "MCP server \(server) is unavailable: \(reason)")),
-            ]
         }
         var forwarded = params?.objectValue ?? JSONObject()
         forwarded["name"] = .string(tool)
@@ -251,13 +243,34 @@ public struct MCPGatewayCore {
         return [.toUpstream(server: server, message: Self.request(id: .int(id), method: "tools/call", params: .object(forwarded)))]
     }
 
+    func unavailable(
+        client: JSONValue, server: String, tool: String, decision: MCPToolDecision, keys: [String]
+    ) -> [MCPGatewayOutput] {
+        let reason: String
+        if case .failed(let why)? = phases[server] { reason = why } else { reason = "not ready" }
+        return [
+            .audit(MCPCallRecord(
+                server: server, tool: tool, decision: decision == .ask ? .ask : .allow, argumentKeys: keys, isError: true,
+                reason: "upstream unavailable: \(reason)")),
+            .toClient(Self.error(id: client, code: -32603, message: "MCP server \(server) is unavailable: \(reason)")),
+        ]
+    }
+
+    /// Longest configured `<server>__` prefix. A tie (two exposed names that
+    /// cannot be told apart) or no match is an unknown tool.
     func route(_ exposed: String) -> (server: String, tool: String)? {
         guard prefixesTools else { return order.first.map { ($0, exposed) } }
-        guard let range = exposed.range(of: Self.separator) else { return nil }
-        let server = String(exposed[..<range.lowerBound])
-        let tool = String(exposed[range.upperBound...])
-        guard upstreams[server] != nil, tool.isEmpty == false else { return nil }
-        return (server, tool)
+        let matches: [(server: String, tool: String)] = order.compactMap { server in
+            let prefix = server + Self.separator
+            guard exposed.hasPrefix(prefix) else { return nil }
+            let tool = String(exposed.dropFirst(prefix.count))
+            guard tool.isEmpty == false, upstreams[server] != nil else { return nil }
+            return (server, tool)
+        }
+        guard let longest = matches.map(\.server.count).max() else { return nil }
+        let best = matches.filter { $0.server.count == longest }
+        guard best.count == 1 else { return nil }
+        return best[0]
     }
 
     // MARK: Upstream side
@@ -288,7 +301,8 @@ public struct MCPGatewayCore {
                 return [.toUpstream(server: server, message: Self.notification("notifications/initialized", nil))]
                     + releaseWaiting()
             }
-            let reason = message["error"]?["message"]?.stringValue ?? "initialize failed"
+            let raw = message["error"]?["message"]?.stringValue ?? "initialize failed"
+            let reason = scrubText(raw, for: server)
             phases[server] = .failed(reason)
             return [.log("MCP server \(server) failed to initialize: \(reason)")] + releaseWaiting()
         case .list(let fanout, _):
@@ -346,7 +360,13 @@ public struct MCPGatewayCore {
         case .allow:
             break
         }
-        if prefixesTools { object["name"] = .string(upstream.definition.name + Self.separator + name) }
+        if prefixesTools {
+            let exposedName = upstream.definition.name + Self.separator + name
+            // A shorter server's tool must not be listed under a name the
+            // longest matching server owns; that call would not reach it.
+            guard route(exposedName)?.server == upstream.definition.name else { return nil }
+            object["name"] = .string(exposedName)
+        }
         return .object(object)
     }
 
@@ -397,13 +417,15 @@ public struct MCPGatewayCore {
         return Self.scrub(value, secrets: secrets)
     }
 
+    func scrubText(_ text: String, for server: String) -> String {
+        guard let secrets = upstreams[server]?.secretValues, secrets.isEmpty == false else { return text }
+        return Self.scrubText(text, secrets: secrets)
+    }
+
     static func scrub(_ value: JSONValue, secrets: [(name: String, value: String)]) -> JSONValue {
         switch value {
-        case .string(var text):
-            for secret in secrets where secret.value.count >= 4 && text.contains(secret.value) {
-                text = text.replacingOccurrences(of: secret.value, with: "[redacted:\(secret.name)]")
-            }
-            return .string(text)
+        case .string(let text):
+            return .string(scrubText(text, secrets: secrets))
         case .array(let items):
             return .array(items.map { scrub($0, secrets: secrets) })
         case .object(let object):
@@ -413,6 +435,27 @@ public struct MCPGatewayCore {
         default:
             return value
         }
+    }
+
+    /// Longer secrets first, so a short value that is a prefix of a longer one
+    /// cannot leave the tail. Raw and JSON-escaped spellings are both removed,
+    /// including values shorter than 4 characters. Empty values are skipped.
+    static func scrubText(_ text: String, secrets: [(name: String, value: String)]) -> String {
+        let ordered = secrets.filter { $0.value.isEmpty == false }.sorted { lhs, rhs in
+            if lhs.value.count != rhs.value.count { return lhs.value.count > rhs.value.count }
+            return lhs.name < rhs.name
+        }
+        var text = text
+        for secret in ordered {
+            let raw = secret.value
+            let escaped = JSONValue.escapedContent(raw)
+            let forms = escaped == raw ? [raw] : [escaped, raw].sorted { $0.count > $1.count }
+            let replacement = "[redacted:\(secret.name)]"
+            for form in forms where text.contains(form) {
+                text = text.replacingOccurrences(of: form, with: replacement)
+            }
+        }
+        return text
     }
 
     static func request(id: JSONValue, method: String, params: JSONValue?) -> JSONValue {

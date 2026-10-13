@@ -152,8 +152,9 @@ extension JSONValue {
         output += "\n" + String(repeating: indent, count: level)
     }
 
-    private static func writeString(_ text: String, into output: inout String) {
-        output += "\""
+    /// JSON string contents (no surrounding quotes), matching `compactText`.
+    static func escapedContent(_ text: String) -> String {
+        var output = ""
         for scalar in text.unicodeScalars {
             switch scalar {
             case "\"": output += "\\\""
@@ -173,6 +174,12 @@ extension JSONValue {
                 }
             }
         }
+        return output
+    }
+
+    private static func writeString(_ text: String, into output: inout String) {
+        output += "\""
+        output += escapedContent(text)
         output += "\""
     }
 }

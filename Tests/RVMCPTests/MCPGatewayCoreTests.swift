@@ -238,6 +238,85 @@ struct MCPGatewayCoreTests {
         let released = harness.core.handle(.upstreamExited(server: "github"))
         #expect(released.toUpstream.contains { $0.0 == "notes" && $0.1["method"] == .string("tools/list") })
     }
+
+    @Test func serverNamesContainingSeparatorUseTheLongestPrefix() {
+        let payments = MCPServerDefinition(name: "payments", command: "pay", tools: MCPToolPolicy(defaultDecision: .allow))
+        let v2 = MCPServerDefinition(name: "payments__v2", command: "pay2", tools: MCPToolPolicy(defaultDecision: .allow))
+        var harness = GatewayHarness(MCPConfiguration(servers: [payments, v2]))
+        _ = harness.ready()
+        let fanout = harness.client(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).toUpstream
+        let paymentsID = fanout.first { $0.0 == "payments" }?.1["id"]?.intValue ?? -1
+        let v2ID = fanout.first { $0.0 == "payments__v2" }?.1["id"]?.intValue ?? -1
+        _ = harness.upstream("payments", #"{"jsonrpc":"2.0","id":\#(paymentsID),"result":{"tools":[{"name":"v2__refund"},{"name":"charge"}]}}"#)
+        let listed = harness.upstream("payments__v2", #"{"jsonrpc":"2.0","id":\#(v2ID),"result":{"tools":[{"name":"refund"}]}}"#)
+        let names = listed.toClient.first?["result"]?["tools"]?.arrayValue?.compactMap { $0["name"]?.stringValue } ?? []
+        #expect(names.contains("payments__charge"))
+        #expect(names.filter { $0 == "payments__v2__refund" }.count == 1)
+
+        let refund = harness.client(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"payments__v2__refund"}}"#)
+        #expect(refund.toUpstream.first?.0 == "payments__v2")
+        #expect(refund.toUpstream.first?.1["params"]?["name"] == .string("refund"))
+
+        let charge = harness.client(#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"payments__charge"}}"#)
+        #expect(charge.toUpstream.first?.0 == "payments")
+        #expect(charge.toUpstream.first?.1["params"]?["name"] == .string("charge"))
+
+        let unknown = harness.client(#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"no_such"}}"#)
+        #expect(unknown.toClient.first?["error"]?["message"]?.stringValue?.contains("Unknown tool") == true)
+        #expect(unknown.toUpstream.isEmpty)
+
+        let deniedV2 = MCPServerDefinition(
+            name: "payments__v2", command: "pay2", tools: MCPToolPolicy(defaultDecision: .allow, deny: ["refund"]))
+        var denied = GatewayHarness(MCPConfiguration(servers: [payments, deniedV2]))
+        _ = denied.ready()
+        let blocked = denied.client(#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"payments__v2__refund"}}"#)
+        #expect(blocked.toUpstream.isEmpty)
+        #expect(blocked.audits.first?.server == "payments__v2")
+        #expect(blocked.audits.first?.tool == "refund")
+        #expect(blocked.audits.first?.decision == .deny)
+    }
+
+    @Test func scrubReplacesShortValuesJSONEscapesAndLongerSecretsFirst() {
+        let scrubbed = MCPGatewayCore.scrub(
+            .string("pin=x tail sk-abcdefghijklmnopqrst and a\\\"b"),
+            secrets: [("PIN", "x"), ("API_KEY", "sk-abc"), ("TOKEN", "sk-abcdefghijklmnopqrst"), ("Q", "a\"b")])
+        #expect(scrubbed == .string("pin=[redacted:PIN] tail [redacted:TOKEN] and [redacted:Q]"))
+        let raw = MCPGatewayCore.scrub(.string("a\"b"), secrets: [("Q", "a\"b")])
+        #expect(raw == .string("[redacted:Q]"))
+    }
+
+    @Test func initializeErrorsAreScrubbedBeforeTheyAreLogged() {
+        var harness = GatewayHarness(
+            MCPConfiguration(servers: [Self.github]), secrets: ["github": [("TOKEN", "sekret")]])
+        let started = harness.core.start().toUpstream
+        let id = started[0].1["id"] ?? .null
+        let failed = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": id,
+            "error": .object(["code": .int(-1), "message": .string("bad sekret")]),
+        ])))
+        let logs = failed.compactMap { output -> String? in
+            if case .log(let text) = output { return text }
+            return nil
+        }
+        #expect(logs == ["MCP server github failed to initialize: bad [redacted:TOKEN]"])
+        let later = harness.client(#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"list_issues"}}"#)
+        #expect(later.toClient.first?.compactText.contains("sekret") == false)
+    }
+
+    @Test func grantIsKeptWhenTheUpstreamIsNotReady() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        _ = harness.core.start()
+        _ = harness.core.handle(.upstreamExited(server: "github"))
+        let call = #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_issue","arguments":{"title":"t"}}}"#
+        let hash = JSONValue.object(["title": .string("t")]).canonicalHash
+        let key = "github/create_issue/\(hash)"
+        _ = harness.approvals.granted.withLock { $0.insert(key) }
+        let reply = harness.client(call)
+        #expect(reply.toUpstream.isEmpty)
+        #expect(reply.toClient.first?["error"]?["code"] == .int(-32603))
+        #expect(harness.approvals.granted.withLock { $0.contains(key) })
+        #expect(harness.approvals.requested.withLock { $0 }.isEmpty)
+    }
 }
 
 @Suite("MCPApprovalStore")
@@ -266,6 +345,34 @@ struct MCPApprovalStoreTests {
             .request(server: "gh", tool: "x", argumentsHash: "h", argumentKeys: [])
         let later = MCPApprovalStore(configDirectory: directory, clock: { then.addingTimeInterval(25 * 3600) })
         #expect(later.pending().isEmpty)
+    }
+
+    @Test func capDropsPendingRequestsAndRefusesToEvictGrants() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-approvals-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MCPApprovalStore(configDirectory: directory)
+        let grant = try #require(store.request(server: "gh", tool: "keep", argumentsHash: "grant", argumentKeys: []))
+        #expect(store.grant(id: grant) != nil)
+        var oldestPending: String?
+        for index in 0..<(MCPApprovalStore.maximumRequests - 1) {
+            let id = try #require(store.request(server: "gh", tool: "t", argumentsHash: "p\(index)", argumentKeys: []))
+            if oldestPending == nil { oldestPending = id }
+        }
+        #expect(store.pending().count == MCPApprovalStore.maximumRequests - 1)
+        let newest = try #require(store.request(server: "gh", tool: "t", argumentsHash: "newest", argumentKeys: []))
+        #expect(store.pending().map(\.id).contains(oldestPending) == false)
+        #expect(store.pending().map(\.id).contains(newest))
+        #expect(store.consumeGrant(server: "gh", tool: "keep", argumentsHash: "grant") == grant)
+
+        let grants = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-approvals-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: grants) }
+        let full = MCPApprovalStore(configDirectory: grants)
+        for index in 0..<MCPApprovalStore.maximumRequests {
+            let id = try #require(full.request(server: "gh", tool: "g", argumentsHash: "g\(index)", argumentKeys: []))
+            #expect(full.grant(id: id) != nil)
+        }
+        #expect(full.request(server: "gh", tool: "g", argumentsHash: "overflow", argumentKeys: []) == nil)
+        #expect(full.consumeGrant(server: "gh", tool: "g", argumentsHash: "g0") != nil)
     }
 
     @Test func canonicalHashIgnoresKeyOrder() throws {

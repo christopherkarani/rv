@@ -114,8 +114,9 @@ public enum MCPImport {
                 }
                 output.append(arg)
             } else if arg.contains("://"), MCPRedaction.url(arg).leaked {
-                plan.notes.append("\(entry.name): argument \(index + 1) is a URL with credentials; copied as-is, move it yourself")
-                output.append(arg)
+                let name = secretName("\(entry.name)_ARG_\(index + 1)", entry.name)
+                plan.secrets.append(.init(definition: secretDefinition(name, entry), value: arg))
+                output.append("${secret:\(name)}")
             } else if MCPRedaction.looksLikeToken(arg) {
                 let name = secretName("\(entry.name)_ARG_\(index + 1)", entry.name)
                 plan.secrets.append(.init(definition: secretDefinition(name, entry), value: arg))
@@ -203,20 +204,22 @@ public enum MCPHostSetup {
         servers filter: Set<String>?,
         rvPath: String,
         configDirectory: URL,
-        read: (URL) -> Data? = MCPInventory.readFile
+        read: (URL) -> MCPInventory.HostFile = MCPInventory.readFile
     ) -> Result<MCPSetupResult, MCPSetupError> {
         var result = MCPSetupResult()
         var records = loadManifest(configDirectory)
         for file in files {
-            guard let data = read(file.path) else { continue }
+            guard case .data(let data) = read(file.path) else { continue }
             switch file.format {
             case .codexTOML:
                 let entries = (try? MCPInventory.entries(in: data, file: file).get()) ?? []
                 for entry in entries where wanted(entry.name, filter) && entry.governedServer == nil
                     && configuration.server(named: entry.name) != nil
                 {
+                    let name = shellQuote(entry.name)
+                    let rv = shellQuote(rvPath)
                     result.manualSteps.append(
-                        "codex mcp remove \(entry.name) && codex mcp add \(entry.name) -- \(rvPath) mcp serve --server \(entry.name)")
+                        "codex mcp remove \(name) && codex mcp add \(name) -- \(rv) mcp serve --server \(name)")
                 }
             case .json(let keyPath, _, let opencode):
                 guard let root = try? JSONValue.parse(data, maximumDepth: 128, lenient: true) else {
@@ -266,7 +269,7 @@ public enum MCPHostSetup {
         host: MCPHost?,
         servers filter: Set<String>?,
         configDirectory: URL,
-        read: (URL) -> Data? = MCPInventory.readFile
+        read: (URL) -> MCPInventory.HostFile = MCPInventory.readFile
     ) -> Result<MCPSetupResult, MCPSetupError> {
         var result = MCPSetupResult()
         var records = loadManifest(configDirectory)
@@ -277,7 +280,7 @@ public enum MCPHostSetup {
         for path in Set(selected.map { records[$0].configPath }).sorted() {
             let url = URL(fileURLWithPath: path)
             let mine = selected.filter { records[$0].configPath == path }
-            guard let data = read(url), var root = try? JSONValue.parse(data, maximumDepth: 128) else {
+            guard case .data(let data) = read(url), var root = try? JSONValue.parse(data, maximumDepth: 128) else {
                 result.skipped += mine.map { "\(records[$0].name): \(path) is missing or unreadable" }
                 done.formUnion(mine)
                 continue
@@ -305,6 +308,11 @@ public enum MCPHostSetup {
         records = records.indices.filter { done.contains($0) == false }.map { records[$0] }
         guard saveManifest(records, configDirectory) else { return .failure(.manifest("could not save")) }
         return .success(result)
+    }
+
+    /// Single quotes, with an embedded `'` written as `'\''`.
+    static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     static func wanted(_ name: String, _ filter: Set<String>?) -> Bool {

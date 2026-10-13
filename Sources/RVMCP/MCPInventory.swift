@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 
 public enum MCPHost: String, CaseIterable, Sendable, Equatable {
@@ -61,17 +66,66 @@ public struct MCPHostEntry: Sendable, Equatable {
         self.isDisabled = isDisabled
     }
 
-    /// The rv server this entry routes through, when it runs `rv mcp serve --server NAME`.
+    /// Server name when `command` is absolute and the arguments are exactly
+    /// `mcp serve --server NAME` (or `--server=NAME`). Extra arguments,
+    /// including a second `--server`, are not a gateway launch.
     public var governedServer: String? {
-        guard case .stdio(let command, let args) = transport,
-            (command as NSString).lastPathComponent == "rv",
-            args.count >= 2, args[0] == "mcp", args[1] == "serve"
-        else { return nil }
-        for (index, arg) in args.enumerated() {
-            if arg == "--server", index + 1 < args.count { return args[index + 1] }
-            if arg.hasPrefix("--server=") { return String(arg.dropFirst("--server=".count)) }
+        guard case .stdio(let command, let args) = transport, command.hasPrefix("/") else { return nil }
+        return Self.gatewayServerName(args)
+    }
+
+    /// True when this entry's command is the same file as `rvExecutable`.
+    public func launches(_ rvExecutable: String) -> Bool {
+        guard case .stdio(let command, _) = transport else { return false }
+        return MCPFileIdentity.sameFile(command, rvExecutable)
+    }
+
+    static func gatewayServerName(_ args: [String]) -> String? {
+        if args.count == 4, args[0] == "mcp", args[1] == "serve", args[2] == "--server" {
+            return serverToken(args[3])
+        }
+        if args.count == 3, args[0] == "mcp", args[1] == "serve", args[2].hasPrefix("--server=") {
+            return serverToken(String(args[2].dropFirst("--server=".count)))
         }
         return nil
+    }
+
+    static func serverToken(_ name: String) -> String? {
+        guard name.isEmpty == false, name.hasPrefix("-") == false else { return nil }
+        return name
+    }
+}
+
+/// Same-file checks for the rv binary `rv mcp check` is running.
+enum MCPFileIdentity {
+    static func sameFile(_ lhs: String, _ rhs: String) -> Bool {
+        guard lhs.hasPrefix("/"), rhs.hasPrefix("/"), let left = realPath(lhs), let right = realPath(rhs) else {
+            return false
+        }
+        return left == right
+    }
+
+    static func realPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+}
+
+/// Path of the process answering `rv mcp list` / `rv mcp check`.
+public enum MCPExecutable {
+    public static func currentPath() -> String {
+        #if os(Linux)
+        if let path = MCPFileIdentity.realPath("/proc/self/exe") { return path }
+        #endif
+        #if canImport(Darwin)
+        var size = UInt32(1024)
+        var buffer = [CChar](repeating: 0, count: Int(size))
+        if _NSGetExecutablePath(&buffer, &size) == 0 { return String(cString: buffer) }
+        buffer = [CChar](repeating: 0, count: Int(size))
+        if _NSGetExecutablePath(&buffer, &size) == 0 { return String(cString: buffer) }
+        #endif
+        return Bundle.main.executableURL?.path ?? ""
     }
 }
 
@@ -155,6 +209,12 @@ public struct MCPInventoryProblem: Error, Sendable, Equatable {
 public struct MCPInventory: Sendable, Equatable {
     public static let maximumFileBytes = 32 * 1024 * 1024
 
+    public enum HostFile: Sendable, Equatable {
+        case missing
+        case data(Data)
+        case unreadable(String)
+    }
+
     public var entries: [MCPHostEntry]
     public var problems: [MCPInventoryProblem]
     /// Host config files that exist (read or not).
@@ -164,25 +224,80 @@ public struct MCPInventory: Sendable, Equatable {
         home: URL,
         project: URL?,
         environment: [String: String],
-        read: (URL) -> Data? = MCPInventory.readFile
+        read: (URL) -> HostFile = MCPInventory.readFile
     ) -> MCPInventory {
         var inventory = MCPInventory(entries: [], problems: [], filesSeen: [])
         for file in MCPHostFile.all(home: home, project: project, environment: environment) {
-            guard let data = read(file.path) else { continue }
-            if inventory.filesSeen.contains(file.path.path) == false { inventory.filesSeen.append(file.path.path) }
-            switch entries(in: data, file: file) {
-            case .success(let found): inventory.entries += found
-            case .failure(let problem): inventory.problems.append(problem)
+            switch read(file.path) {
+            case .missing:
+                continue
+            case .unreadable(let message):
+                let path = file.path.path
+                if inventory.filesSeen.contains(path) == false { inventory.filesSeen.append(path) }
+                if inventory.problems.contains(where: { $0.path == path }) == false {
+                    inventory.problems.append(MCPInventoryProblem(path: path, message: message))
+                }
+            case .data(let data):
+                if inventory.filesSeen.contains(file.path.path) == false { inventory.filesSeen.append(file.path.path) }
+                switch entries(in: data, file: file) {
+                case .success(let found): inventory.entries += found
+                case .failure(let problem): inventory.problems.append(problem)
+                }
             }
         }
         return inventory
     }
 
-    public static func readFile(_ url: URL) -> Data? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-            let size = attributes[.size] as? Int, size <= maximumFileBytes
-        else { return nil }
-        return try? Data(contentsOf: url)
+    /// Missing files (`ENOENT`) are `.missing`. Anything that exists but cannot
+    /// be read, including a directory or a file over `maximumFileBytes`, is
+    /// `.unreadable`.
+    public static func readFile(_ url: URL) -> HostFile {
+        var info = stat()
+        if stat(url.path, &info) != 0 {
+            return errno == ENOENT ? .missing : .unreadable(readFailure(errno))
+        }
+        guard info.st_mode & S_IFMT == S_IFREG else { return .unreadable("not a regular file") }
+        guard info.st_size >= 0, info.st_size <= Int64(maximumFileBytes) else {
+            return .unreadable("larger than \(maximumFileBytes) bytes")
+        }
+        let fd = open(url.path, O_RDONLY | O_CLOEXEC)
+        guard fd >= 0 else { return .unreadable(readFailure(errno)) }
+        defer { close(fd) }
+        var bytes = [UInt8](repeating: 0, count: Int(info.st_size))
+        var count = 0
+        while count < bytes.count {
+            let n = bytes.withUnsafeMutableBytes { raw -> Int in
+                guard let base = raw.baseAddress else { return -1 }
+                return read(fd, base + count, raw.count - count)
+            }
+            if n < 0, errno == EINTR { continue }
+            guard n > 0 else { break }
+            count += n
+        }
+        guard count == bytes.count else { return .unreadable("could not be read") }
+        return .data(Data(bytes))
+    }
+
+    static func readFailure(_ code: Int32) -> String {
+        switch code {
+        case EACCES, EPERM: "permission denied"
+        default: "could not be read"
+        }
+    }
+
+    /// Resolve `..`, symlinks, and a trailing slash. A path that is not on
+    /// disk falls back to the lexical form, so two missing spellings still compare.
+    static func canonicalProjectPath(_ path: String) -> String {
+        var trimmed = path
+        while trimmed.count > 1, trimmed.hasSuffix("/") { trimmed.removeLast() }
+        if let resolved = MCPFileIdentity.realPath(trimmed) {
+            var text = resolved
+            while text.count > 1, text.hasSuffix("/") { text.removeLast() }
+            return text
+        }
+        var lexical = URL(fileURLWithPath: trimmed, isDirectory: true).standardizedFileURL.path
+        while lexical.count > 1, lexical.hasSuffix("/") { lexical.removeLast() }
+        return lexical
     }
 
     public static func entries(in data: Data, file: MCPHostFile) -> Result<[MCPHostEntry], MCPInventoryProblem> {
@@ -208,6 +323,9 @@ public struct MCPInventory: Sendable, Equatable {
             } catch {
                 return problem("could not parse JSON")
             }
+            if file.host == .claudeCode, case .project(let projectPath) = file.scope, keyPath.first == "projects" {
+                return .success(claudeProjectEntries(root: root, projectPath: projectPath, file: file))
+            }
             var node: JSONValue? = root
             for key in keyPath { node = node?[key] }
             guard let servers = node?.objectValue else { return .success([]) }
@@ -218,6 +336,24 @@ public struct MCPInventory: Sendable, Equatable {
                     : standardEntry(name: name, object: object, file: file)
             })
         }
+    }
+
+    /// Every `projects` key whose canonical path is the requested project.
+    /// Other projects are left unread.
+    static func claudeProjectEntries(root: JSONValue, projectPath: String, file: MCPHostFile) -> [MCPHostEntry] {
+        guard let projects = root["projects"]?.objectValue else { return [] }
+        let wanted = canonicalProjectPath(projectPath)
+        var found: [MCPHostEntry] = []
+        for (key, value) in projects.entries {
+            guard canonicalProjectPath(key) == wanted, let servers = value["mcpServers"]?.objectValue else { continue }
+            for (name, server) in servers.entries {
+                guard let object = server.objectValue, let entry = standardEntry(name: name, object: object, file: file) else {
+                    continue
+                }
+                found.append(entry)
+            }
+        }
+        return found
     }
 
     static func standardEntry(name: String, object: JSONObject, file: MCPHostFile) -> MCPHostEntry? {
@@ -319,11 +455,15 @@ public struct MCPInventoryRow: Sendable, Equatable {
     /// Names (env vars, headers, flags, arg positions) that hold literal credentials.
     public var plaintextCredentials: [String]
 
-    public static func rows(_ inventory: MCPInventory, configuration: MCPConfiguration) -> [MCPInventoryRow] {
-        inventory.entries.map { row($0, configuration: configuration) }
+    public static func rows(
+        _ inventory: MCPInventory, configuration: MCPConfiguration, rvExecutable: String
+    ) -> [MCPInventoryRow] {
+        inventory.entries.map { row($0, configuration: configuration, rvExecutable: rvExecutable) }
     }
 
-    public static func row(_ entry: MCPHostEntry, configuration: MCPConfiguration) -> MCPInventoryRow {
+    public static func row(
+        _ entry: MCPHostEntry, configuration: MCPConfiguration, rvExecutable: String
+    ) -> MCPInventoryRow {
         let display: String
         var credentials: [String] = []
         switch entry.transport {
@@ -340,15 +480,19 @@ public struct MCPInventoryRow: Sendable, Equatable {
         credentials += MCPRedaction.literalCredentials(entry.headers).map { "header \($0)" }
         return MCPInventoryRow(
             entry: entry,
-            status: status(entry, configuration: configuration),
+            status: status(entry, configuration: configuration, rvExecutable: rvExecutable),
             display: display,
             environmentNames: entry.environment.keys.sorted(),
             headerNames: entry.headers.keys.sorted(),
             plaintextCredentials: credentials)
     }
 
-    public static func status(_ entry: MCPHostEntry, configuration: MCPConfiguration) -> MCPEntryStatus {
-        if let server = entry.governedServer {
+    /// Governed only when the command is an absolute gateway launch of this
+    /// `rvExecutable` (same file) for a server mcp.json defines.
+    public static func status(
+        _ entry: MCPHostEntry, configuration: MCPConfiguration, rvExecutable: String
+    ) -> MCPEntryStatus {
+        if let server = entry.governedServer, entry.launches(rvExecutable) {
             if configuration.blocked.contains(server) { return .blocked }
             return configuration.server(named: server) == nil ? .dangling : .governed
         }
