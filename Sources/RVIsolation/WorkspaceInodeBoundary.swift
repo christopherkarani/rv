@@ -1608,7 +1608,7 @@ private func runTool(
         if cancelled {
             DiskImageToolSerialization.notePriorityWaiter()
         }
-        let attempt = DiskImageToolSerialization.lock.withLock { () -> DiskImageAttempt in
+        let attempt = DiskImageToolSerialization.lock.withLock { _ -> DiskImageAttempt in
             if cancelled {
                 DiskImageToolSerialization.endPriorityWaiter()
             }
