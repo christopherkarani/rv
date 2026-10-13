@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import RVHistory
 import RVIsolation
 import RVMCP
@@ -20,7 +23,7 @@ struct MCPCommandTests {
         ) -> MCPEnvironment {
             MCPEnvironment(
                 configDirectory: config, home: home, processEnvironment: [:], keychain: writer ?? keychain.writer,
-                approvalKeys: .file(configDirectory: config), presence: presence)
+                approvalKeys: .file(configDirectory: config), presence: presence, oauthTokens: .file(configDirectory: config))
         }
 
         func approvalEvents() -> [AuditEvent] {
@@ -310,6 +313,75 @@ struct MCPCommandTests {
         let invalid = await MCPRun.trust(environment: fixture.environment(), show: { _ in })
         #expect(invalid.failureMessage?.contains("not valid JSON") == true)
     }
+
+    @Test func connectSignsInToARemoteServerAndForgetDeletesTheTokens() async throws {
+        let fixture = Fixture()
+        try fixture.write(".config/rv/mcp.json", #"""
+            {"version": 1, "servers": [
+              {"name": "linear", "url": "https://mcp.linear.app/mcp"},
+              {"name": "gh", "url": "https://api.githubcopilot.com/mcp/", "headers": {"Authorization": "Bearer x"}},
+              {"name": "local", "command": "fs-mcp"}
+            ], "blocked": ["gone"]}
+            """#)
+        chmod(fixture.home.appendingPathComponent(".config/rv/mcp.json").path, 0o600)
+        chmod(fixture.config.path, 0o700)
+        let environment = fixture.environment()
+        let resolver = SecretResolver { _ in .failure(.notFound("no secrets in this test")) }
+        let flow = MCPOAuthFlow(
+            http: { request in Self.oauthAnswers[request.url?.path ?? ""] },
+            present: { url in
+                let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                let value = { (name: String) in items.first { $0.name == name }?.value ?? "" }
+                let redirect = URL(string: value("redirect_uri") + "?code=c0de&state=" + value("state"))!
+                Thread.detachNewThread {
+                    let done = DispatchSemaphore(value: 0)
+                    URLSession(configuration: .ephemeral).dataTask(with: redirect) { _, _, _ in done.signal() }.resume()
+                    _ = done.wait(timeout: .now() + 10)
+                }
+            }, timeout: 10)
+        func connect(_ server: String, forget: Bool = false) -> Result<String, CommandFailure> {
+            MCPRun.connect(
+                server: server, clientID: nil, scope: nil, forget: forget, resolver: resolver, flow: flow, environment: environment)
+        }
+
+        #expect(connect("linear").failureMessage?.contains("edited outside rv") == true)
+        _ = try await MCPRun.trust(environment: environment, show: { _ in }).get()
+        #expect(connect("nope").failureMessage == "mcp.json has no server named nope")
+        #expect(connect("local").failureMessage == "local runs a local command; only remote (url) servers sign in with OAuth")
+        #expect(connect("gh").failureMessage?.contains("already sends an Authorization header") == true)
+
+        let text = try connect("linear").get()
+        #expect(text.contains("connected linear; tokens stored in "))
+        #expect(text.contains("at-secret") == false && text.contains("rt-secret") == false)
+        let stored = try #require(environment.oauthTokens.load("linear"))
+        #expect(stored.accessToken == "at-secret" && stored.refreshToken == "rt-secret")
+        #expect(stored.resource == "https://mcp.linear.app/mcp" && stored.clientID == "c-1")
+        let connected = fixture.approvalEvents().last
+        #expect(connected?.source == "rv mcp connect" && connected?.reason == "OAuth connected")
+        #expect(connected?.detail["resource"] == "https://mcp.linear.app/mcp")
+        let ledger = (try? String(contentsOf: fixture.config.appendingPathComponent("audit.jsonl"), encoding: .utf8)) ?? ""
+        #expect(ledger.contains("at-secret") == false)
+
+        #expect(try connect("linear", forget: true).get() == "deleted the OAuth tokens rv stored for linear\n")
+        #expect(environment.oauthTokens.load("linear") == nil)
+        #expect(fixture.approvalEvents().last?.reason == "OAuth tokens deleted")
+    }
+
+    private static let oauthAnswers: [String: MCPHTTPResponse] = [
+        "/mcp": MCPHTTPResponse(
+            status: 401,
+            headers: ["WWW-Authenticate": #"Bearer resource_metadata="https://mcp.linear.app/.well-known/oauth-protected-resource/mcp""#]),
+        "/.well-known/oauth-protected-resource/mcp": MCPHTTPResponse(
+            status: 200,
+            body: Data(#"{"resource":"https://mcp.linear.app/mcp","authorization_servers":["https://auth.example"]}"#.utf8)),
+        "/.well-known/oauth-authorization-server": MCPHTTPResponse(
+            status: 200,
+            body: Data(#"{"issuer":"https://auth.example","authorization_endpoint":"https://auth.example/authorize","token_endpoint":"https://auth.example/token","registration_endpoint":"https://auth.example/register","code_challenge_methods_supported":["S256"]}"#.utf8)),
+        "/register": MCPHTTPResponse(status: 201, body: Data(#"{"client_id":"c-1"}"#.utf8)),
+        "/token": MCPHTTPResponse(
+            status: 200,
+            body: Data(#"{"access_token":"at-secret","token_type":"Bearer","expires_in":3600,"refresh_token":"rt-secret"}"#.utf8)),
+    ]
 
     @Test func rvPathIsAbsoluteAndFoundOnPath() throws {
         #expect(MCPRun.rvExecutablePath(arguments: ["/usr/local/bin/rv"], environment: [:]) == "/usr/local/bin/rv")

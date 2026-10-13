@@ -453,6 +453,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv mcp serve --server <name> [--server <name>...]"),
                 HelpRow(name: "rv mcp pending | approve <id> [--always] | deny <id>"),
                 HelpRow(name: "rv mcp trust"),
+                HelpRow(name: "rv mcp connect <server> [--client-id <id>] [--scope <s>] [--no-browser] [--forget]"),
             ]),
             HelpSection(heading: "Tool policy", rows: [
                 HelpRow(name: "order", description: "Strictest matching glob or rule (deny > ask > allow), else default"),
@@ -467,6 +468,8 @@ enum HelpCatalog {
                 HelpRow(name: "secrets", description: "\"secrets\": {\"VAR\": \"NAME\"} or ${secret:NAME} in args; values scrubbed"),
                 HelpRow(name: "sandbox", description: "\"sandbox\": {\"network\": false} cages the server (macOS)"),
                 HelpRow(name: "toolMode", description: "\"search\" lists only rv_search_tools and rv_call_tool; same policy per call"),
+                HelpRow(name: "remote", description: "\"url\": https://… (\"transport\": http|sse, \"headers\" with ${secret:NAME}); no sandbox"),
+                HelpRow(name: "oauth", description: "`rv mcp connect <server>` signs in once; rv stores, sends and refreshes the token"),
             ]),
             HelpSection(heading: "Statuses", rows: [
                 HelpRow(name: "governed", description: "Host runs it through `rv mcp serve`"),

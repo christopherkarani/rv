@@ -15,6 +15,7 @@ struct MCPEnvironment: Sendable {
     var managed: ManagedPolicyState = .none
     var approvalKeys: MCPApprovalKeyStore = .unavailable
     var presence = UserPresence { _, _ in .refused("no user presence available") }
+    var oauthTokens: MCPOAuthTokenStore = .none
 
     static func live(home: HomeDirectory) -> MCPEnvironment {
         let configDirectory = RVPolicyPaths.configDirectory(home: home)
@@ -25,7 +26,8 @@ struct MCPEnvironment: Sendable {
             keychain: .live,
             managed: ManagedRun.installed(home: home),
             approvalKeys: .live(configDirectory: configDirectory, home: home.rawValue),
-            presence: .live
+            presence: .live,
+            oauthTokens: .live(configDirectory: configDirectory, home: home.rawValue)
         )
     }
 
@@ -398,6 +400,79 @@ enum MCPRun {
         return lines.joined(separator: "\n")
     }
 
+    static func connect(
+        server name: String, clientID: String?, scope: String?, forget: Bool, resolver: SecretResolver, flow: MCPOAuthFlow,
+        environment: MCPEnvironment
+    ) -> Result<String, CommandFailure> {
+        let configuration: MCPConfiguration
+        switch self.configuration(environment) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let loaded): configuration = loaded
+        }
+        guard let definition = configuration.server(named: name) else {
+            return .failure(CommandFailure("mcp.json has no server named \(name)"))
+        }
+        guard let remote = definition.remote else {
+            return .failure(CommandFailure("\(name) runs a local command; only remote (url) servers sign in with OAuth"))
+        }
+        func audit(_ reason: String, _ detail: [String: String]) {
+            _ = AuditLog.append(
+                AuditEvent(
+                    time: Date(), kind: .mcpApproval, decision: .allowed, subject: name, reason: reason, source: "rv mcp connect",
+                    detail: detail),
+                configDirectory: environment.configDirectory)
+        }
+        if forget {
+            guard environment.oauthTokens.remove(name) else {
+                return .failure(CommandFailure("could not delete the stored OAuth tokens for \(name)"))
+            }
+            audit("OAuth tokens deleted", [:])
+            return .success("deleted the OAuth tokens rv stored for \(name)\n")
+        }
+        if let problem = environment.integrity.problem { return .failure(CommandFailure(problem)) }
+        guard configuration.isBlocked(name) == false else {
+            return .failure(CommandFailure("\(name) is blocked by mcp.json or organization policy"))
+        }
+        guard remote.headers.keys.contains(where: { $0.lowercased() == "authorization" }) == false else {
+            return .failure(CommandFailure("\(name) already sends an Authorization header from mcp.json; remove it to sign in with OAuth"))
+        }
+        let secrets: SecretsConfiguration
+        switch SecretsConfiguration.load(configDirectory: environment.configDirectory) {
+        case .failure(let error): return .failure(CommandFailure(error.message))
+        case .success(let loaded): secrets = loaded
+        }
+        let launch: MCPRemoteLaunch
+        switch MCPLaunchPlanner.plan(
+            servers: [name], configuration: configuration, secrets: secrets, resolver: resolver, baseEnvironment: [:])
+        {
+        case .failure(let error): return .failure(CommandFailure(error.message))
+        case .success(let planned):
+            guard let found = planned.first?.1.remote else { return .failure(CommandFailure("\(name) is not a remote server")) }
+            launch = found
+        }
+        let tokens: MCPOAuthTokens
+        switch flow.connect(server: name, launch: launch, clientID: clientID, scope: scope) {
+        case .failure(let error): return .failure(CommandFailure("\(name): \(error.message)"))
+        case .success(let issued): tokens = issued
+        }
+        guard environment.oauthTokens.save(name, tokens) else {
+            return .failure(CommandFailure("could not store the OAuth tokens for \(name) (\(oauthStoreLabel(name, environment)))"))
+        }
+        audit("OAuth connected", ["resource": tokens.resource, "scope": tokens.scope ?? "", "client": tokens.clientID])
+        var lines = ["connected \(name); tokens stored in \(oauthStoreLabel(name, environment))"]
+        if let granted = tokens.scope { lines.append("scope: \(granted)") }
+        lines.append("`rv mcp serve` sends the token and refreshes it; `rv mcp connect \(name) --forget` deletes it")
+        return .success(lines.joined(separator: "\n") + "\n")
+    }
+
+    static func oauthStoreLabel(_ server: String, _ environment: MCPEnvironment) -> String {
+        #if os(macOS)
+        "the Keychain (service \(MCPOAuthTokenStore.keychainService), account \(server))"
+        #else
+        environment.configDirectory.appendingPathComponent("\(MCPOAuthTokenStore.directoryName)/\(server).json").path + " (0600)"
+        #endif
+    }
+
     static func auditRecord(_ record: MCPCallRecord, configDirectory: URL) {
         _ = AuditLog.append(record.auditEvent(), configDirectory: configDirectory)
     }
@@ -567,7 +642,7 @@ struct MCP: AsyncParsableCommand {
         abstract: "Find, review, and govern the MCP servers your agents use.",
         subcommands: [
             MCPList.self, MCPCheck.self, MCPImportCommand.self, MCPSetupCommand.self, MCPServe.self, MCPPending.self,
-            MCPApprove.self, MCPDeny.self, MCPTrust.self,
+            MCPApprove.self, MCPDeny.self, MCPTrust.self, MCPConnect.self,
         ],
         defaultSubcommand: MCPList.self
     )
@@ -654,6 +729,7 @@ struct MCPServe: AsyncParsableCommand {
         switch MCPLaunchPlanner.plan(
             servers: names, configuration: configuration, secrets: secrets,
             resolver: .live(home: home.rawValue), baseEnvironment: environment.processEnvironment,
+            oauthTokens: environment.oauthTokens.load,
             sandbox: MCPSandbox.apply(configDirectory: environment.configDirectory, home: environment.home))
         {
         case .failure(let error): try fail(error.message)
@@ -678,6 +754,7 @@ struct MCPServe: AsyncParsableCommand {
         let runtime = MCPGatewayRuntime(
             core: core,
             connections: planned.map { $0.1 },
+            oauthStore: environment.oauthTokens,
             audit: { MCPRun.auditRecord($0, configDirectory: configDirectory) },
             event: { _ = AuditLog.append($0, configDirectory: configDirectory) },
             log: log)
@@ -743,6 +820,51 @@ struct MCPTrust: AsyncParsableCommand {
         case .failure(let failure): try ctx.fail("rv mcp trust: \(failure.message)\n")
         case .success(let text): ctx.writeStdout(text)
         }
+    }
+}
+
+struct MCPConnect: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "connect", abstract: "Sign in to a remote MCP server with OAuth; rv keeps and refreshes the tokens.")
+
+    @Argument(help: "Remote (url) server from mcp.json.") var server: String
+    @Option(help: "OAuth client id, for servers without client registration.") var clientID: String?
+    @Option(help: "Scopes to request (space-separated). Default: what the server asks for.") var scope: String?
+    @Flag(help: "Print the sign-in URL without opening a browser.") var noBrowser = false
+    @Flag(help: "Delete the tokens rv stored for this server.") var forget = false
+
+    func run() throws {
+        let ctx = CommandContext.current(command: "mcp connect", json: false, robot: false, plain: true, noColor: true)
+        let home = try ctx.requireHome()
+        let environment = MCPEnvironment.live(home: home)
+        let name = server
+        let openBrowser = noBrowser == false
+        let flow = MCPOAuthFlow(present: { url in
+            FileHandle.standardError.write(Data("rv: open this URL to sign in to \(name):\n  \(url.absoluteString)\n".utf8))
+            if openBrowser { MCPConnect.open(url) }
+        })
+        switch MCPRun.connect(
+            server: server, clientID: clientID, scope: scope, forget: forget, resolver: .live(home: home.rawValue), flow: flow,
+            environment: environment)
+        {
+        case .failure(let failure): try ctx.fail("rv mcp connect: \(failure.message)\n")
+        case .success(let text): ctx.writeStdout(text)
+        }
+    }
+
+    static func open(_ url: URL) {
+        #if os(macOS)
+        let opener = "/usr/bin/open"
+        #else
+        let opener = "/usr/bin/xdg-open"
+        #endif
+        guard FileManager.default.isExecutableFile(atPath: opener) else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: opener)
+        process.arguments = [url.absoluteString]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
     }
 }
 
