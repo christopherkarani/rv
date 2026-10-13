@@ -356,6 +356,82 @@ struct IsolationApplyTests {
         }
     }
 
+    @Test func compileSeatbeltProfile_contained_deniesWorkspaceControlWrites() throws {
+        let workspace = try requireWorkspace("/workspace")
+        let plan = try requirePlan(
+            IsolationCompileRequest(requested: .contained, workspace: workspace)
+        )
+        let resolved = resolvedWorkspacePath(workspace)
+        let escaped = escapeSBPL(resolved)
+        switch compileSeatbeltProfile(plan) {
+        case .success(let profile):
+            #expect(profile.source.contains("(deny file-write*"))
+            #expect(profile.source.contains("(subpath \"\(escaped)/.git/hooks\")"))
+            #expect(profile.source.contains("(subpath \"\(escaped)/.rv\")"))
+            #expect(profile.source.contains("(subpath \"\(escaped)/.config/rv\")"))
+            #expect(profile.source.contains("(literal \"\(escaped)/.git/config\")"))
+            #expect(profile.source.contains("(literal \"\(escaped)/.git\")"))
+            #expect(profile.source.contains("(literal \"\(escaped)/.config\")"))
+            #expect(profile.source.contains(
+                "(deny file-write-data file-write-unlink file-write-create"
+            ))
+            // `.git/config` sits in the file-write* deny. A literal, so
+            // index, objects, and refs stay writable.
+            let configLiteral = "(literal \"\(escaped)/.git/config\")"
+            if let literal = profile.source.range(of: configLiteral),
+                let deny = profile.source.range(
+                    of: "(deny file-write*",
+                    options: .backwards,
+                    range: profile.source.startIndex..<literal.lowerBound
+                )
+            {
+                let between = profile.source[deny.upperBound..<literal.lowerBound]
+                #expect(between.contains("(deny ") == false)
+            } else {
+                Issue.record(".git/config literal must sit in the file-write* deny")
+            }
+            #expect(profile.source.contains("(subpath \"\(escaped)/.git\")") == false)
+            #expect(profile.source.contains("(subpath \"\(escaped)/.git/config\")") == false)
+        case .failure(let error):
+            recordUnexpectedApplyError(error, expected: "control-path deny in contained profile")
+        }
+    }
+
+    @Test func compileSeatbeltRequest_controlDenyFollowsWorkspaceWriteTree() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let workspace = tree.workspaceURL.path
+        var facts = cannedFacts(workspacePath: workspace)
+        facts.resources = RuntimeResourceManifest(
+            RuntimeResourceProfile(id: "workspace-write", projects: [workspace], writeTrees: [workspace])
+        )
+        facts.canonical.writeTrees = [workspace]
+        let request = try compileSeatbeltRequest(
+            plan: tree.contained, command: trueCommand, facts: facts
+        ).get()
+        let source = try #require(request.seatbeltProfile).source
+        let escaped = escapeSBPL(workspace)
+        let allow = "(allow file-read* file-write*\n    (subpath \"\(escaped)\"))"
+        guard let allowRange = source.range(of: allow) else {
+            Issue.record("workspace write-tree allow missing from compiled request")
+            return
+        }
+        let tail = source[allowRange.upperBound...]
+        let deny = """
+        (deny file-write*
+            (subpath \"\(escaped)/.git/hooks\")
+            (subpath \"\(escaped)/.rv\")
+            (subpath \"\(escaped)/.config/rv\")
+            (literal \"\(escaped)/.git/config\"))
+        """
+        guard let denyRange = tail.range(of: deny) else {
+            Issue.record("control-path deny must follow the workspace write-tree allow")
+            return
+        }
+        let afterDeny = tail[denyRange.upperBound...]
+        #expect(afterDeny.contains("file-write*") == false)
+    }
+
     @Test func compileSeatbeltProfile_observedAndMediated_returnsProfileNotApplicable() throws {
         let workspace = try requireWorkspace("/workspace")
         let observed = try requirePlan(
