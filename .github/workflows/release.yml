@@ -17,7 +17,9 @@ jobs:
   gate:
     if: github.event_name != 'pull_request'
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 60
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
     steps:
       - uses: actions/checkout@v4
 
@@ -55,6 +57,36 @@ jobs:
 
       - name: Stage release binaries
         run: Scripts/release.sh
+
+      # Before the proofs, so they run the hardened, signed binaries.
+      # Without the secrets the stage stays unsigned and the dry run shows
+      # what would run; repo variable RV_REQUIRE_SIGNED_RELEASE=1 makes
+      # missing secrets fail instead.
+      - name: Sign and notarize
+        id: sign
+        env:
+          DEVELOPER_ID_APP: ${{ secrets.DEVELOPER_ID_APP }}
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          REQUIRE_SIGNED: ${{ vars.RV_REQUIRE_SIGNED_RELEASE }}
+        run: |
+          set -euo pipefail
+          stage="$GITHUB_WORKSPACE/.build/release-stage"
+          if [ -n "$DEVELOPER_ID_APP" ] && [ -n "$MACOS_CERT_P12" ] && [ -n "$MACOS_CERT_PASSWORD" ] \
+            && [ -n "$NOTARY_KEY_ID" ] && [ -n "$NOTARY_ISSUER_ID" ] && [ -n "$NOTARY_KEY_P8" ]; then
+            Scripts/sign-macos.sh --keychain-from-env "$stage"
+            echo "signed=1" >> "$GITHUB_OUTPUT"
+          elif [ "$REQUIRE_SIGNED" = "1" ]; then
+            echo "::error::RV_REQUIRE_SIGNED_RELEASE=1 but signing secrets are missing"
+            exit 1
+          else
+            echo "::warning::signing secrets are not configured; this release stage is unsigned"
+            Scripts/sign-macos.sh --dry-run "$stage"
+            echo "signed=0" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: C hook process proof
         env:
@@ -98,6 +130,27 @@ jobs:
               exit 1
             }
           done
+
+      - name: Signature verifies on Sequoia
+        if: needs.gate.outputs.signed == '1'
+        run: |
+          set -euo pipefail
+          for bin in stage/rv stage/rv-cli stage/rvd stage/rv-workspace-host stage/rv-pty-claim; do
+            codesign --verify --strict --verbose=2 "$bin"
+            details="$(codesign -dvv "$bin" 2>&1)"
+            case "$details" in
+              *"Authority=Developer ID Application:"*"(runtime)"*|*"(runtime)"*"Authority=Developer ID Application:"*) ;;
+              *) printf 'sequoia: %s is not hardened Developer ID code\n' "$bin" >&2; exit 1 ;;
+            esac
+            verdict="$(spctl -a -t open --context context:primary-signature -vv "$bin" 2>&1 || true)"
+            case "$verdict" in
+              *"source=Notarized Developer ID"*) ;;
+              *) printf 'sequoia: Gatekeeper rejects %s\n%s\n' "$bin" "$verdict" >&2; exit 1 ;;
+            esac
+          done
+          if [ -f stage/libswiftCompatibilitySpan.dylib ]; then
+            codesign --verify --strict --verbose=2 stage/libswiftCompatibilitySpan.dylib
+          fi
 
       - name: Swift binaries load on Sequoia
         run: |

@@ -299,6 +299,7 @@ jobs:
       - name: Stage release binaries
         env:
           RV_RELEASE_SKIP_C_UNITS: "1"
+          RV_RELEASE_SIGN: dry-run
         run: Scripts/release.sh
 
       - name: C hook process proof
