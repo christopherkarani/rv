@@ -101,13 +101,13 @@ struct SystemctlApplyingTests {
         try writeExecutableScript(at: url, source: "#!/bin/sh\nexit 0\n")
         let first = Process()
         first.executableURL = url
-        try first.run()
+        try runExecutable(first)
         first.waitUntilExit()
         #expect(first.terminationStatus == 0)
         try writeExecutableScript(at: url, source: "#!/bin/sh\nexit 3\n")
         let second = Process()
         second.executableURL = url
-        try second.run()
+        try runExecutable(second)
         second.waitUntilExit()
         #expect(second.terminationStatus == 3)
     }
