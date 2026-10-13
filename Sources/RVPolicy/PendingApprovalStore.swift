@@ -7,6 +7,7 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
     nonisolated public let baseDirectory: URL
 
     private let store: FileLockedJSONLStore<PendingApprovalRecord>
+    private let reasons: FileLockedJSONLStore<RejectionReasonRecord>
     private var subscribers: [UUID: AsyncStream<PendingApprovalEvent>.Continuation] = [:]
 
     public init(baseDirectory: URL) {
@@ -14,6 +15,11 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         self.store = FileLockedJSONLStore(
             fileURL: RVPolicyPaths.pendingApprovalsFile(inConfigDir: baseDirectory),
             lockURL: RVPolicyPaths.pendingApprovalsLockFile(inConfigDir: baseDirectory),
+            directoryURL: baseDirectory
+        )
+        self.reasons = FileLockedJSONLStore(
+            fileURL: Self.rejectionReasonsFile(inConfigDir: baseDirectory),
+            lockURL: Self.rejectionReasonsLockFile(inConfigDir: baseDirectory),
             directoryURL: baseDirectory
         )
     }
@@ -67,6 +73,82 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
             )
             return Mutation(record: record, records: next, event: .resolved(record))
         }
+    }
+
+    /// Resolve with a human-supplied reason. Phase 4: every rejection
+    /// carries its reason; approvals carry none (a reason on an approval
+    /// is a caller error, not an annotation).
+    ///
+    /// The reason is validated before the resolve CAS, and recorded after
+    /// it wins: a lost CAS records nothing, and a won CAS whose reason
+    /// write fails still stands resolved (the error reports the reason
+    /// gap; the decision is already terminal and authoritative).
+    public func resolveWithReason(
+        id: ApprovalID,
+        decision: ApprovalDecision,
+        fingerprint: ActionFingerprint,
+        identity: ApprovalIdentity,
+        reason: String?,
+        now: Date
+    ) async throws(PendingApprovalError) -> PendingApproval {
+        let canonical: String?
+        switch decision {
+        case .deny:
+            guard let text = Self.canonicalRejectionReason(reason) else {
+                throw PendingApprovalError.invalidRequest
+            }
+            canonical = text
+        case .allowOnce, .createRule:
+            guard reason == nil else {
+                throw PendingApprovalError.invalidRequest
+            }
+            canonical = nil
+        }
+        let resolved = try await resolve(
+            id: id,
+            decision: decision,
+            fingerprint: fingerprint,
+            identity: identity,
+            now: now
+        )
+        if let canonical {
+            try recordRejectionReason(id: id, reason: canonical, now: now)
+        }
+        return resolved
+    }
+
+    /// The recorded rejection reason for a denied row, if one landed.
+    /// Nil for approvals, for rows resolved without this call, and for
+    /// unknown ids. Display only: never authority.
+    public func rejectionReason(for id: ApprovalID) -> String? {
+        let loaded: [RejectionReasonRecord]
+        do {
+            loaded = try reasons.withLock(nonBlocking: false) {
+                reasons.load().filter { $0.schemaVersion == 1 }
+            }
+        } catch {
+            return nil
+        }
+        return loaded.first(where: { $0.id == id.rawValue })?.reason
+    }
+
+    /// Single-line, trimmed, bounded reason text. Rejects empties,
+    /// over-long text, and control characters (fail closed: the human
+    /// retypes instead of landing a confusing record).
+    public static func canonicalRejectionReason(_ reason: String?) -> String? {
+        guard let trimmed = reason?.trimmingCharacters(in: .whitespacesAndNewlines),
+            trimmed.isEmpty == false,
+            trimmed.count <= 500
+        else {
+            return nil
+        }
+        for scalar in trimmed.unicodeScalars {
+            let value = scalar.value
+            if value < 0x20 || value == 0x7F || (value >= 0x80 && value <= 0x9F) {
+                return nil
+            }
+        }
+        return trimmed
     }
 
     public func expire(id: ApprovalID, now: Date) async throws(PendingApprovalError) -> PendingApproval {
@@ -216,6 +298,57 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
         }
     }
 
+    /// Maximum retained rejection reasons. Past the cap the oldest
+    /// records evict; the terminal decisions they annotated stand.
+    private static let maxRejectionReasons = 1024
+
+    private static func rejectionReasonsFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent(
+            "pending-rejection-reasons.jsonl", isDirectory: false)
+    }
+
+    private static func rejectionReasonsLockFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent(
+            ".pending-rejection-reasons.lock", isDirectory: false)
+    }
+
+    private func recordRejectionReason(
+        id: ApprovalID,
+        reason: String,
+        now: Date
+    ) throws(PendingApprovalError) {
+        do {
+            try reasons.withLock(nonBlocking: false) {
+                var loaded = reasons.load().filter { $0.schemaVersion == 1 }
+                loaded.removeAll(where: { $0.id == id.rawValue })
+                loaded.append(
+                    RejectionReasonRecord(
+                        schemaVersion: 1,
+                        id: id.rawValue,
+                        reason: reason,
+                        decidedAt: now
+                    )
+                )
+                if loaded.count > Self.maxRejectionReasons {
+                    loaded.sort(by: { $0.decidedAt < $1.decidedAt })
+                    loaded.removeFirst(loaded.count - Self.maxRejectionReasons)
+                }
+                try reasons.save(loaded)
+            }
+        } catch let error as PendingApprovalError {
+            throw error
+        } catch let error as FileLockedJSONLStoreError {
+            switch error {
+            case .lockFailed:
+                throw PendingApprovalError.lockFailed
+            case .encodeFailed, .ioFailed:
+                throw PendingApprovalError.encodeFailed
+            }
+        } catch {
+            throw PendingApprovalError.encodeFailed
+        }
+    }
+
     private func withFileLock<T>(_ body: () throws -> T) throws -> T {
         do {
             return try store.withLock(nonBlocking: false, body)
@@ -232,6 +365,16 @@ public actor PendingApprovalStore: PendingApprovalCoordinating {
             }
         }
     }
+}
+
+/// Human-supplied rejection reason, keyed by approval id. An annotation
+/// on the terminal decision, never authority: enforcement reads the
+/// resolved row, reviewers read this for the why.
+private struct RejectionReasonRecord: Codable, Sendable {
+    var schemaVersion: Int
+    var id: String
+    var reason: String
+    var decidedAt: Date
 }
 
 private struct PendingApprovalRecord: Codable, Sendable {

@@ -125,6 +125,11 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
     let resources: RuntimeResourceManifest?
     /// Only explicit legacy launches may inherit ambient agent integration.
     let legacyAgentIntegration: Bool
+    /// F2 default closed: host keys and credential files reach the cage
+    /// only under explicit opt-in. Non-secret agent integration (bin dir on
+    /// PATH, compat flags, gateway routing) still follows
+    /// `legacyAgentIntegration` above.
+    let credentialDelivery: ContainedCredentialDelivery
     /// Test-only. Production launches leave this nil. A fault fails the
     /// launch before the payload is reported running.
     let spawnFault: RuntimeSpawnFault?
@@ -171,7 +176,8 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         resources: RuntimeResourceManifest? = nil,
         spawnFault: RuntimeSpawnFault? = nil,
         productive: ProductiveWorkspaceResolution? = nil,
-        legacyAgentIntegration: Bool = true
+        legacyAgentIntegration: Bool = true,
+        credentialDelivery: ContainedCredentialDelivery = .closed
     ) {
         switch (launch, plan.mode) {
         case (.seatbelt, .contained):
@@ -193,6 +199,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         self.spawnFault = spawnFault
         self.productive = productive
         self.legacyAgentIntegration = legacyAgentIntegration
+        self.credentialDelivery = credentialDelivery
     }
 
     func withIO(_ io: IsolatedIO) -> IsolatedLaunchRequest {
@@ -217,6 +224,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         self.spawnFault = spawnFault
         self.productive = request.productive
         self.legacyAgentIntegration = request.legacyAgentIntegration
+        self.credentialDelivery = request.credentialDelivery
     }
 
     public static func == (lhs: IsolatedLaunchRequest, rhs: IsolatedLaunchRequest) -> Bool {
@@ -229,6 +237,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
             && lhs.spawnFault == rhs.spawnFault
             && lhs.productive == rhs.productive
             && lhs.legacyAgentIntegration == rhs.legacyAgentIntegration
+            && lhs.credentialDelivery == rhs.credentialDelivery
     }
 
     /// Executable `run` will start. Observed / mediated never use a helper.
@@ -484,7 +493,8 @@ func prepareSeatbelt(
     _ command: IsolatedCommand,
     resourceProfile: RuntimeResourceProfile? = nil,
     legacyAgentIntegration: Bool = true,
-    gitIdentity: (@Sendable (String) -> (name: String?, email: String?))? = nil
+    gitIdentity: (@Sendable (String) -> (name: String?, email: String?))? = nil,
+    credentialDelivery: ContainedCredentialDelivery = .closed
 ) -> Result<IsolatedLaunchRequest, IsolationApplyError> {
     // Pure gate first: non-contained modes refuse with zero filesystem work.
     guard case .contained = plan.mode else {
@@ -494,11 +504,13 @@ func prepareSeatbelt(
         plan, command,
         resourceProfile: resourceProfile,
         legacyAgentIntegration: legacyAgentIntegration,
-        gitIdentity: gitIdentity
+        gitIdentity: gitIdentity,
+        credentialDelivery: credentialDelivery
     ).flatMap {
         compileSeatbeltRequest(
             plan: plan, command: command, facts: $0,
-            legacyAgentIntegration: legacyAgentIntegration
+            legacyAgentIntegration: legacyAgentIntegration,
+            credentialDelivery: credentialDelivery
         )
     }
 }
@@ -547,7 +559,8 @@ func resolveSeatbeltFacts(
     _ command: IsolatedCommand,
     resourceProfile: RuntimeResourceProfile? = nil,
     legacyAgentIntegration: Bool = true,
-    gitIdentity: (@Sendable (String) -> (name: String?, email: String?))? = nil
+    gitIdentity: (@Sendable (String) -> (name: String?, email: String?))? = nil,
+    credentialDelivery: ContainedCredentialDelivery = .closed
 ) -> Result<SeatbeltLaunchFacts, IsolationApplyError> {
     let base: SeatbeltProfile
     switch compileSeatbeltProfile(plan) {
@@ -563,7 +576,9 @@ func resolveSeatbeltFacts(
     if let directory = agentBinDirectory,
         let home = ProcessInfo.processInfo.environment["HOME"]
     {
-        agentBin = AgentBin.resolve(binDirectory: directory, home: home)
+        agentBin = AgentBin.resolve(
+            binDirectory: directory, home: home, credentialDelivery: credentialDelivery
+        )
     } else {
         agentBin = nil
     }
@@ -591,7 +606,8 @@ func resolveSeatbeltFacts(
     let productive = resolveProductiveWorkspace(
         workspacePath: resolved,
         agentBin: agentBinDirectory,
-        gitIdentity: gitIdentity
+        gitIdentity: gitIdentity,
+        credentialDelivery: credentialDelivery
     )
     let profile = resources?.profile
     let canonical = CanonicalResources(
@@ -620,7 +636,8 @@ func compileSeatbeltRequest(
     plan: IsolationPlan,
     command: IsolatedCommand,
     facts: SeatbeltLaunchFacts,
-    legacyAgentIntegration: Bool = true
+    legacyAgentIntegration: Bool = true,
+    credentialDelivery: ContainedCredentialDelivery = .closed
 ) -> Result<IsolatedLaunchRequest, IsolationApplyError> {
     var profile = facts.base
         .allowingExecutable(callerPath: command.executable, realPath: facts.executableRealpath)
@@ -652,7 +669,8 @@ func compileSeatbeltRequest(
             launch: .seatbelt(profile),
             resources: facts.resources,
             productive: facts.productive,
-            legacyAgentIntegration: legacyAgentIntegration
+            legacyAgentIntegration: legacyAgentIntegration,
+            credentialDelivery: credentialDelivery
         )
     else {
         // The init fails only on mode/launch mismatch.

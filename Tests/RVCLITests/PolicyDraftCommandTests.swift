@@ -319,9 +319,12 @@ struct PolicyDocumentCommandTests {
     }
 
     @Test func validate_missingFile_isOK() throws {
+        let home = try isolatedHome()
+        let homeURL = URL(fileURLWithPath: home.rawValue, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: homeURL) }
         let missing = URL(fileURLWithPath: "/tmp/rv-missing-policy-\(UUID().uuidString).toml")
         #expect(FileManager.default.fileExists(atPath: missing.path) == false)
-        try PolicyValidateRun.validate(.file(missing))
+        try PolicyValidateRun.validate(.file(missing, home))
     }
 
     @Test func validate_defaultPath_invalidLegacyJSON_failsClosed() throws {
@@ -354,6 +357,92 @@ struct PolicyDocumentCommandTests {
         #expect(throws: TypedRuleStoreError.invalidFile) {
             try PolicyValidateRun.validate(.machine(home))
         }
+    }
+
+    @Test func validate_shareAskingRelaxation_blocks() throws {
+        let home = try isolatedHome()
+        let homeURL = URL(fileURLWithPath: home.rawValue, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: homeURL) }
+        let store = TypedRuleStore(
+            baseDirectory: RVPolicyPaths.configDirectory(home: home)
+        )
+        let predicate = PolicyPredicate.gitPush(force: .exactly(.force), branch: "main")
+        try store.saveMachine(
+            PolicyDocument(
+                rules: [
+                    PolicyDocumentRule(
+                        id: RuleID(pack: .coreGit, pattern: "force-push-main"),
+                        verdict: .deny,
+                        predicate: predicate
+                    )
+                ]
+            )
+        )
+        let share = homeURL.appendingPathComponent("share.toml")
+        try PolicyDocumentTOML.render(
+            PolicyDocument(
+                rules: [
+                    PolicyDocumentRule(
+                        id: RuleID(pack: .typedGit, pattern: "share-allow"),
+                        verdict: .allow,
+                        predicate: predicate
+                    )
+                ]
+            )
+        ).write(to: share, atomically: true, encoding: .utf8)
+
+        let report = try PolicyValidateRun.riskReport(.file(share, home))
+        #expect(report.hasBlockingFindings)
+        #expect(
+            report.findings == [
+                PolicyDiffRiskFinding(
+                    kind: .verdictRelaxed,
+                    severity: .blocking,
+                    detail: "typed.git:share-allow deny->allow"
+                )
+            ]
+        )
+        #expect(throws: PolicyDiffRiskError.blockedByFindings(report)) {
+            try PolicyValidateRun.validate(.file(share, home))
+        }
+    }
+
+    @Test func validate_partialShareOmittingMachineRules_isClean() throws {
+        let home = try isolatedHome()
+        let homeURL = URL(fileURLWithPath: home.rawValue, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: homeURL) }
+        let store = TypedRuleStore(
+            baseDirectory: RVPolicyPaths.configDirectory(home: home)
+        )
+        try store.saveMachine(
+            PolicyDocument(
+                rules: [
+                    PolicyDocumentRule(
+                        id: RuleID(pack: .coreGit, pattern: "force-push-main"),
+                        verdict: .deny,
+                        predicate: .gitPush(force: .exactly(.force), branch: "main")
+                    )
+                ]
+            )
+        )
+        // A share that never mentions the machine deny omits it; the merge
+        // preserves it, so validation must not read a removal.
+        let share = homeURL.appendingPathComponent("share.toml")
+        try PolicyDocumentTOML.render(
+            PolicyDocument(
+                rules: [
+                    PolicyDocumentRule(
+                        id: RuleID(pack: .typedGit, pattern: "tighten"),
+                        verdict: .deny,
+                        predicate: .gitDiscardWorktree(pathspec: nil)
+                    )
+                ]
+            )
+        ).write(to: share, atomically: true, encoding: .utf8)
+
+        let report = try PolicyValidateRun.riskReport(.file(share, home))
+        #expect(report.findings.isEmpty)
+        try PolicyValidateRun.validate(.file(share, home))
     }
 }
 

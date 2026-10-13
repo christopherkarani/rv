@@ -215,6 +215,45 @@ private func egressReadUntil403(_ fd: Int32, tries: Int = 6) -> String {
     return response
 }
 
+private func egressReadUntil407(_ fd: Int32, tries: Int = 6) -> String {
+    var response = ""
+    for _ in 0..<tries {
+        response += egressRead(fd)
+        if response.contains("HTTP/1.1 407") { break }
+    }
+    return response
+}
+
+private func egressCandidateV4(_ text: String, port: Int) -> EgressDialCandidate? {
+    var addr = sockaddr_in()
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_port = in_port_t(UInt16(port)).bigEndian
+    let parsed: Int32 = text.withCString { cString in
+        inet_pton(AF_INET, cString, &addr.sin_addr)
+    }
+    guard parsed == 1 else { return nil }
+    var storage = sockaddr_storage()
+    withUnsafeBytes(of: &addr) { raw in
+        withUnsafeMutableBytes(of: &storage) { target in
+            target.copyMemory(from: raw)
+        }
+    }
+    #if canImport(Darwin)
+    let socktype: Int32 = SOCK_STREAM
+    let proto: Int32 = IPPROTO_TCP
+    #else
+    let socktype: Int32 = Int32(SOCK_STREAM.rawValue)
+    let proto: Int32 = Int32(IPPROTO_TCP)
+    #endif
+    return EgressDialCandidate(
+        family: AF_INET,
+        socktype: socktype,
+        proto: proto,
+        address: storage,
+        length: socklen_t(MemoryLayout<sockaddr_in>.size)
+    )
+}
+
 /// Denials are recorded on the proxy's relay queue after the reply is
 /// written; wait for the callback to land instead of asserting immediately.
 private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, tries: Int = 100) {
@@ -478,15 +517,21 @@ private final class AuditDiagnosticCollector: @unchecked Sendable {
     // these spellings, so adding a reason is a log-format change. The full
     // set is pinned here: `dial-failed` narrowed to connect-only failures,
     // while DNS and filter refusals record as the newer `dns-failed` and
-    // `address-filtered` values.
+    // `address-filtered` values. Binary scope adds `binary-mismatch`
+    // (bound binary not admitted or TOFU pin broken) and
+    // `unattributed-peer` (binary-scoped policy on an unbound instance),
+    // and credentialed-mode auth failures record as `denied-credential`.
     #expect(
         EgressDenialReason.allCases.map(\.rawValue).sorted() == [
             "address-filtered",
+            "binary-mismatch",
+            "denied-credential",
             "denied-policy",
             "dial-failed",
             "dns-failed",
             "header-too-large",
             "malformed",
+            "unattributed-peer",
         ]
     )
 }
@@ -557,4 +602,567 @@ private func egressIsPublicUnicast(family: Int32, _ text: String) -> Bool? {
         pointer.withMemoryRebound(to: sockaddr.self, capacity: 1, EgressProxy.isPublicUnicast)
     }
     #expect(unknownFamily == false)
+}
+
+/// Scripted `stat`/hash backend for binary-gate tests: no filesystem,
+/// deterministic TOFU transitions driven by the test.
+private final class EgressPinScript: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fingerprint: EgressBinaryFingerprint?
+    private var digest: String?
+    private(set) var hashCalls = 0
+
+    init(fingerprint: EgressBinaryFingerprint?, digest: String?) {
+        self.fingerprint = fingerprint
+        self.digest = digest
+    }
+
+    func retarget(fingerprint: EgressBinaryFingerprint?, digest: String?) {
+        lock.lock()
+        self.fingerprint = fingerprint
+        self.digest = digest
+        lock.unlock()
+    }
+
+    func capture(_ path: String) -> EgressBinaryFingerprint? {
+        lock.lock()
+        defer { lock.unlock() }
+        return fingerprint
+    }
+
+    func hash(_ path: String) -> String? {
+        lock.lock()
+        hashCalls += 1
+        let digest = digest
+        lock.unlock()
+        return digest
+    }
+
+    var calls: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return hashCalls
+    }
+}
+
+private func egressFingerprint(size: UInt64 = 128, inode: UInt64 = 7) -> EgressBinaryFingerprint {
+    EgressBinaryFingerprint(
+        size: size,
+        mtimeSeconds: 1_700_000_000,
+        mtimeNanoseconds: 0,
+        ctimeSeconds: 1_700_000_000,
+        ctimeNanoseconds: 0,
+        device: 1,
+        inode: inode
+    )
+}
+
+private func egressScopedCache(
+    _ script: EgressPinScript,
+    path: String = "/opt/rv/bin/agent"
+) -> (EgressBinaryPolicy, EgressRuntimeAttribution, EgressBinaryPinCache) {
+    let policy = EgressBinaryPolicy(canonicalPaths: [path])
+    let attribution = EgressRuntimeAttribution(binaryPath: path)
+    let pins = EgressBinaryPinCache(
+        fingerprint: { script.capture($0) },
+        hashFile: { script.hash($0) }
+    )
+    return (policy, attribution, pins)
+}
+
+@Test func egressProxyRelaysWhenBinaryScopeMatches() throws {
+    let stub = try #require(EgressStubServer(reply: "PONG\n"))
+    let script = EgressPinScript(fingerprint: egressFingerprint(), digest: "golden")
+    let (binaryPolicy, attribution, pins) = egressScopedCache(script)
+    let collector = EgressDenialCollector()
+    let proxy = EgressProxy(
+        binaryPolicy: binaryPolicy,
+        attribution: attribution,
+        pins: pins,
+        record: { collector.record($0) }
+    )
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let client = try #require(egressConnect(port: port))
+    defer { close(client) }
+    #expect(egressSend(client, text: "CONNECT 127.0.0.1:\(stub.port) HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"))
+    #expect(egressSend(client, text: "PING\n"))
+    var response = ""
+    for _ in 0..<10 {
+        response += egressRead(client)
+        if response.contains("PONG") { break }
+    }
+    #expect(response.contains("HTTP/1.1 200"))
+    #expect(response.contains("PONG"))
+    #expect(collector.all.isEmpty)
+    #expect(script.calls == 1)
+}
+
+@Test func egressProxyDeniesUnattributedPeerUnderBinaryScope() throws {
+    let stub = try #require(EgressStubServer(reply: "PONG\n"))
+    let collector = EgressDenialCollector()
+    let proxy = EgressProxy(
+        binaryPolicy: EgressBinaryPolicy(canonicalPaths: ["/opt/rv/bin/agent"]),
+        record: { collector.record($0) }
+    )
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let client = try #require(egressConnect(port: port))
+    defer { close(client) }
+    #expect(egressSend(client, text: "CONNECT 127.0.0.1:\(stub.port) HTTP/1.1\r\n\r\n"))
+    let response = egressReadUntil403(client)
+    #expect(response.contains("HTTP/1.1 403"))
+    egressAwaitDenials(collector, count: 1)
+    #expect(collector.all.count == 1)
+    #expect(collector.all.first?.reason == .unattributedPeer)
+    #expect(collector.all.first?.binaryPath == nil)
+    #expect(collector.all.first?.host == "127.0.0.1")
+}
+
+@Test func egressProxyDeniesBinaryMismatch() throws {
+    let stub = try #require(EgressStubServer(reply: "PONG\n"))
+    let script = EgressPinScript(fingerprint: egressFingerprint(), digest: "golden")
+    let pins = EgressBinaryPinCache(
+        fingerprint: { script.capture($0) },
+        hashFile: { script.hash($0) }
+    )
+    let collector = EgressDenialCollector()
+    let proxy = EgressProxy(
+        binaryPolicy: EgressBinaryPolicy(canonicalPaths: ["/opt/rv/bin/agent"]),
+        attribution: EgressRuntimeAttribution(binaryPath: "/opt/rv/bin/other"),
+        pins: pins,
+        record: { collector.record($0) }
+    )
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let client = try #require(egressConnect(port: port))
+    defer { close(client) }
+    #expect(egressSend(client, text: "CONNECT 127.0.0.1:\(stub.port) HTTP/1.1\r\n\r\n"))
+    let response = egressReadUntil403(client)
+    #expect(response.contains("HTTP/1.1 403"))
+    egressAwaitDenials(collector, count: 1)
+    #expect(collector.all.count == 1)
+    #expect(collector.all.first?.reason == .binaryMismatch)
+    #expect(collector.all.first?.binaryPath == "/opt/rv/bin/other")
+    // Policy mismatch denies before any `stat`/hash: nothing to pin.
+    #expect(script.calls == 0)
+}
+
+@Test func egressProxyDeniesPinMismatchMidRuntime() throws {
+    let stub = try #require(EgressStubServer(reply: "PONG\n"))
+    let script = EgressPinScript(fingerprint: egressFingerprint(), digest: "golden")
+    let (binaryPolicy, attribution, pins) = egressScopedCache(script)
+    let collector = EgressDenialCollector()
+    let proxy = EgressProxy(
+        binaryPolicy: binaryPolicy,
+        attribution: attribution,
+        pins: pins,
+        record: { collector.record($0) }
+    )
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let first = try #require(egressConnect(port: port))
+    #expect(egressSend(first, text: "CONNECT 127.0.0.1:\(stub.port) HTTP/1.1\r\n\r\n"))
+    #expect(egressSend(first, text: "PING\n"))
+    var relayed = ""
+    for _ in 0..<10 {
+        relayed += egressRead(first)
+        if relayed.contains("PONG") { break }
+    }
+    close(first)
+    #expect(relayed.contains("HTTP/1.1 200"))
+    // Binary swapped mid-runtime: new fingerprint, new hash.
+    script.retarget(fingerprint: egressFingerprint(inode: 9), digest: "tampered")
+    let second = try #require(egressConnect(port: port))
+    defer { close(second) }
+    #expect(egressSend(second, text: "CONNECT 127.0.0.1:\(stub.port) HTTP/1.1\r\n\r\n"))
+    let response = egressReadUntil403(second)
+    #expect(response.contains("HTTP/1.1 403"))
+    egressAwaitDenials(collector, count: 1)
+    #expect(collector.all.count == 1)
+    #expect(collector.all.first?.reason == .binaryMismatch)
+    #expect(collector.all.first?.binaryPath == "/opt/rv/bin/agent")
+}
+
+@Test func egressProxyBinaryGateAppliesToAbsoluteHTTP() throws {
+    let stub = try #require(EgressStubServer(reply: "PONG\n"))
+    let collector = EgressDenialCollector()
+    let proxy = EgressProxy(
+        binaryPolicy: EgressBinaryPolicy(canonicalPaths: ["/opt/rv/bin/agent"]),
+        record: { collector.record($0) }
+    )
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let client = try #require(egressConnect(port: port))
+    defer { close(client) }
+    #expect(egressSend(client, text: "POST http://127.0.0.1:\(stub.port)/v1/x HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n"))
+    let response = egressReadUntil403(client)
+    #expect(response.contains("HTTP/1.1 403"))
+    egressAwaitDenials(collector, count: 1)
+    #expect(collector.all.first?.reason == .unattributedPeer)
+}
+
+@Test func egressProxyIgnoresAttributionWithoutBinaryScope() throws {
+    // Host-level rules only: bound or not, the endpoint policy decides
+    // exactly as before (the legacy shared instance keeps working).
+    let stub = try #require(EgressStubServer(reply: "PONG\n"))
+    let collector = EgressDenialCollector()
+    let proxy = EgressProxy(
+        attribution: EgressRuntimeAttribution(binaryPath: "/opt/rv/bin/agent"),
+        record: { collector.record($0) }
+    )
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let client = try #require(egressConnect(port: port))
+    defer { close(client) }
+    #expect(egressSend(client, text: "CONNECT 127.0.0.1:\(stub.port) HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"))
+    #expect(egressSend(client, text: "PING\n"))
+    var response = ""
+    for _ in 0..<10 {
+        response += egressRead(client)
+        if response.contains("PONG") { break }
+    }
+    #expect(response.contains("HTTP/1.1 200"))
+    #expect(response.contains("PONG"))
+    #expect(collector.all.isEmpty)
+}
+
+@Test func egressProxyCredentialMintsUniqueTokens() {
+    let first = EgressProxyCredential()
+    let second = EgressProxyCredential()
+    #expect(first.rawValue.count == 64)
+    #expect(first.rawValue.allSatisfy { $0.isHexDigit })
+    #expect(first != second)
+    #expect(first == EgressProxyCredential(rawValue: first.rawValue))
+    #expect(first == first)
+    #expect(EgressProxyCredential(rawValue: "short") != first)
+}
+
+@Test func egressProxyParsesProxyAuthorization() {
+    let header = { (fields: String) in "CONNECT example.com:443 HTTP/1.1\r\n\(fields)\r\n" }
+    #expect(
+        EgressProxy.proxyCredentialToken(header: header("Proxy-Authorization: Bearer abc123"))
+            == "abc123"
+    )
+    #expect(
+        EgressProxy.proxyCredentialToken(header: header("proxy-authorization: bearer abc123"))
+            == "abc123"
+    )
+    #expect(
+        EgressProxy.proxyCredentialToken(header: header("PROXY-AUTHORIZATION:   Bearer abc123  "))
+            == "abc123"
+    )
+    // Stock clients send `*_PROXY` URL userinfo as Basic: the username
+    // carries the token.
+    let basic = Data("tok-1:".utf8).base64EncodedString()
+    #expect(
+        EgressProxy.proxyCredentialToken(header: header("Proxy-Authorization: Basic \(basic)"))
+            == "tok-1"
+    )
+    let basicPassword = Data("tok-1:ignored".utf8).base64EncodedString()
+    #expect(
+        EgressProxy.proxyCredentialToken(header: header("Proxy-Authorization: Basic \(basicPassword)"))
+            == "tok-1"
+    )
+    #expect(EgressProxy.proxyCredentialToken(header: header("")) == nil)
+    #expect(EgressProxy.proxyCredentialToken(header: header("Proxy-Authorization:")) == nil)
+    #expect(EgressProxy.proxyCredentialToken(header: header("Proxy-Authorization: Bearer")) == nil)
+    #expect(
+        EgressProxy.proxyCredentialToken(header: header("Proxy-Authorization: Bearer a b")) == nil
+    )
+    #expect(
+        EgressProxy.proxyCredentialToken(header: header("Proxy-Authorization: Digest xyz")) == nil
+    )
+    #expect(
+        EgressProxy.proxyCredentialToken(header: header("Proxy-Authorization: Basic !!!")) == nil
+    )
+    let noColon = Data("tok-1".utf8).base64EncodedString()
+    #expect(
+        EgressProxy.proxyCredentialToken(header: header("Proxy-Authorization: Basic \(noColon)"))
+            == nil
+    )
+}
+
+@Test func egressProxyCredentialedModeRelaysWithBearer() throws {
+    let stub = try #require(EgressStubServer(reply: "PONG\n"))
+    let collector = EgressDenialCollector()
+    let credential = EgressProxyCredential()
+    let proxy = EgressProxy(
+        grants: [credential: EgressGrant(principal: EgressPrincipal(rawValue: "runtime-a"), policy: .publicHTTPS)],
+        record: { collector.record($0) }
+    )
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let client = try #require(egressConnect(port: port))
+    defer { close(client) }
+    #expect(
+        egressSend(
+            client,
+            text:
+                "CONNECT 127.0.0.1:\(stub.port) HTTP/1.1\r\nProxy-Authorization: Bearer \(credential.rawValue)\r\n\r\n"
+        )
+    )
+    #expect(egressSend(client, text: "PING\n"))
+    var response = ""
+    for _ in 0..<10 {
+        response += egressRead(client)
+        if response.contains("PONG") { break }
+    }
+    #expect(response.contains("HTTP/1.1 200"))
+    #expect(response.contains("PONG"))
+    #expect(collector.all.isEmpty)
+}
+
+@Test func egressProxyCredentialedModeDeniesUnauthenticated() throws {
+    let collector = EgressDenialCollector()
+    let credential = EgressProxyCredential()
+    let proxy = EgressProxy(
+        grants: [credential: EgressGrant(principal: EgressPrincipal(rawValue: "runtime-a"), policy: .publicHTTPS)],
+        record: { collector.record($0) }
+    )
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    for request in [
+        "CONNECT denied.example:443 HTTP/1.1\r\n\r\n",
+        "CONNECT denied.example:443 HTTP/1.1\r\nProxy-Authorization: Bearer wrong-token\r\n\r\n",
+        "CONNECT denied.example:443 HTTP/1.1\r\nProxy-Authorization: Bearer\r\n\r\n",
+    ] {
+        let client = try #require(egressConnect(port: port))
+        #expect(egressSend(client, text: request))
+        let response = egressReadUntil407(client)
+        close(client)
+        #expect(response.contains("HTTP/1.1 407"))
+    }
+    egressAwaitDenials(collector, count: 3)
+    #expect(collector.all.count == 3)
+    #expect(collector.all.allSatisfy { $0.reason == .deniedCredential })
+    #expect(collector.all.allSatisfy { $0.host == "denied.example" && $0.port == 443 })
+}
+
+@Test func egressProxyCredentialedModeBindsSiblingGrants() throws {
+    // One instance, two sibling credentials, different rights: the narrow
+    // sibling cannot ride the wide sibling's grant.
+    let collector = EgressDenialCollector()
+    let wide = EgressProxyCredential()
+    let narrow = EgressProxyCredential()
+    let proxy = EgressProxy(
+        grants: [
+            wide: EgressGrant(principal: EgressPrincipal(rawValue: "runtime-a"), policy: .publicHTTPS),
+            narrow: EgressGrant(
+                principal: EgressPrincipal(rawValue: "runtime-b"),
+                policy: EgressHostPolicy(allowedHosts: ["api.anthropic.com"])
+            ),
+        ],
+        record: { collector.record($0) }
+    )
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    // Narrow sibling asks for a name outside its allowlist: judged against
+    // its own grant (policy deny), not the wide sibling's.
+    let denied = try #require(egressConnect(port: port))
+    #expect(
+        egressSend(
+            denied,
+            text:
+                "CONNECT no-such-host.invalid:443 HTTP/1.1\r\nProxy-Authorization: Bearer \(narrow.rawValue)\r\n\r\n"
+        )
+    )
+    #expect(egressReadUntil403(denied).contains("HTTP/1.1 403"))
+    close(denied)
+    // Wide sibling asks for the same name: admitted by policy (valid public
+    // name), then refused at dial because `.invalid` never resolves.
+    let admitted = try #require(egressConnect(port: port))
+    #expect(
+        egressSend(
+            admitted,
+            text:
+                "CONNECT no-such-host.invalid:443 HTTP/1.1\r\nProxy-Authorization: Bearer \(wide.rawValue)\r\n\r\n"
+        )
+    )
+    #expect(egressReadUntil403(admitted).contains("HTTP/1.1 403"))
+    close(admitted)
+    egressAwaitDenials(collector, count: 2)
+    #expect(collector.all.count == 2)
+    let reasons = Set(collector.all.map(\.reason))
+    #expect(reasons == [.deniedPolicy, .dnsFailed])
+}
+
+@Test func egressProxyCredentialedModeRequiresAuthOnAbsoluteHTTP() throws {
+    let stub = try #require(EgressStubServer(reply: "PONG\n"))
+    let collector = EgressDenialCollector()
+    let credential = EgressProxyCredential()
+    let proxy = EgressProxy(
+        grants: [credential: EgressGrant(principal: EgressPrincipal(rawValue: "runtime-a"), policy: .publicHTTPS)],
+        record: { collector.record($0) }
+    )
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let denied = try #require(egressConnect(port: port))
+    #expect(egressSend(denied, text: "POST http://127.0.0.1:\(stub.port)/v1/x HTTP/1.1\r\n\r\n"))
+    #expect(egressReadUntil407(denied).contains("HTTP/1.1 407"))
+    close(denied)
+    // Basic userinfo form relays, like Bearer.
+    let basic = Data("\(credential.rawValue):".utf8).base64EncodedString()
+    let allowed = try #require(egressConnect(port: port))
+    defer { close(allowed) }
+    #expect(
+        egressSend(
+            allowed,
+            text:
+                "POST http://127.0.0.1:\(stub.port)/v1/x HTTP/1.1\r\nProxy-Authorization: Basic \(basic)\r\nContent-Length: 0\r\n\r\n"
+        )
+    )
+    var response = ""
+    for _ in 0..<10 {
+        response += egressRead(allowed)
+        if response.contains("PONG") { break }
+    }
+    #expect(response.contains("PONG"))
+    egressAwaitDenials(collector, count: 1)
+    #expect(collector.all.count == 1)
+    #expect(collector.all.first?.reason == .deniedCredential)
+}
+
+@Test func egressProxyCredentialedEmptyGrantsDenyAll() throws {
+    let collector = EgressDenialCollector()
+    let proxy = EgressProxy(grants: [:], record: { collector.record($0) })
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let client = try #require(egressConnect(port: port))
+    defer { close(client) }
+    #expect(
+        egressSend(
+            client,
+            text:
+                "CONNECT 127.0.0.1:80 HTTP/1.1\r\nProxy-Authorization: Bearer \(EgressProxyCredential().rawValue)\r\n\r\n"
+        )
+    )
+    #expect(egressReadUntil407(client).contains("HTTP/1.1 407"))
+    egressAwaitDenials(collector, count: 1)
+    #expect(collector.all.first?.reason == .deniedCredential)
+}
+
+@Test func egressDialRefusesMixedAnswerSetsWithoutDialing() throws {
+    let loopback = try #require(egressCandidateV4("127.0.0.1", port: 9))
+    let linkLocal = try #require(egressCandidateV4("169.254.169.254", port: 443))
+    let publicCandidate = try #require(egressCandidateV4("8.8.8.8", port: 443))
+    // Mixed public + non-public: refused without dialing either.
+    #expect(
+        EgressProxy.dial(
+            host: "mixed.example", port: 443, external: true,
+            resolve: { _, _ in [publicCandidate, linkLocal] }
+        ) == .addressFiltered
+    )
+    #expect(
+        EgressProxy.dial(
+            host: "mixed.example", port: 443, external: true,
+            resolve: { _, _ in [linkLocal, publicCandidate] }
+        ) == .addressFiltered
+    )
+    // All non-public: filtered, as before.
+    #expect(
+        EgressProxy.dial(
+            host: "loopback.example", port: 9, external: true,
+            resolve: { _, _ in [loopback] }
+        ) == .addressFiltered
+    )
+    // Empty resolution: DNS failure, as before.
+    #expect(
+        EgressProxy.dial(host: "empty.example", port: 443, external: true, resolve: { _, _ in [] })
+            == .dnsFailed
+    )
+    // Same loopback candidate with the loopback bypass still dials (and is
+    // refused by the closed port): the injected candidates reach the dial
+    // loop, so the verdict above gates rather than shadows it.
+    #expect(
+        EgressProxy.dial(
+            host: "127.0.0.1", port: 9, external: false, resolve: { _, _ in [loopback] }
+        ) == .connectFailed
+    )
+}
+
+@Test func egressDialAttemptsPurePublicAnswerSets() throws {
+    // A purely public answer set proceeds to dial: either the connection
+    // succeeds or the refusal records as a connect failure, never as a
+    // filter or DNS refusal.
+    let publicCandidate = try #require(egressCandidateV4("8.8.8.8", port: 443))
+    switch EgressProxy.dial(
+        host: "dns.example", port: 443, external: true, resolve: { _, _ in [publicCandidate] }
+    ) {
+    case .connected(let fd):
+        close(fd)
+    case .connectFailed:
+        break
+    case .dnsFailed, .addressFiltered:
+        Issue.record("pure-public answer set must be attempted, not filtered")
+    }
+}
+
+@Test func egressProxyStripsProxyAuthorizationOnAbsoluteHTTPForward() throws {
+    // LEAK-1 (2026-10-10): Proxy-Authorization is hop-by-hop (RFC 7235).
+    // The proxy consumes it for grant lookup and must never forward it
+    // upstream, where a loopback gateway could harvest and replay it.
+    let stub = try #require(EgressStubServer(reply: "PONG\n"))
+    let collector = EgressDenialCollector()
+    let credential = EgressProxyCredential()
+    let proxy = EgressProxy(
+        grants: [credential: EgressGrant(principal: EgressPrincipal(rawValue: "runtime-a"), policy: .publicHTTPS)],
+        record: { collector.record($0) }
+    )
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let client = try #require(egressConnect(port: port))
+    defer { close(client) }
+    #expect(
+        egressSend(
+            client,
+            text:
+                "POST http://127.0.0.1:\(stub.port)/v1/x HTTP/1.1\r\nHost: 127.0.0.1\r\nProxy-Authorization: Bearer \(credential.rawValue)\r\nContent-Length: 0\r\n\r\n"
+        )
+    )
+    var response = ""
+    for _ in 0..<10 {
+        response += egressRead(client)
+        if response.contains("PONG") { break }
+    }
+    #expect(response.contains("PONG"))
+    for _ in 0..<50 {
+        if stub.received.contains("POST http://127.0.0.1:") { break }
+        usleep(100_000)
+    }
+    #expect(stub.received.contains("POST http://127.0.0.1:"))
+    #expect(stub.received.contains("Proxy-Authorization") == false)
+    #expect(stub.received.contains(credential.rawValue) == false)
+    #expect(collector.all.isEmpty)
+}
+
+@Test func egressProxyStripProxyAuthorizationUnitShapes() {
+    // Absent: byte-identical round-trip, framing preserved.
+    let plain = "POST http://127.0.0.1:9/x HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n"
+    #expect(EgressProxy.stripProxyAuthorization(header: plain) == plain)
+    // Present, mixed case + surrounding spaces: dropped, rest intact.
+    let mixed =
+        "POST http://127.0.0.1:9/x HTTP/1.1\r\nHost: 127.0.0.1\r\n  pRoXy-AuThOrIzAtIoN : Bearer abc123 \r\nContent-Length: 0\r\n\r\n"
+    #expect(
+        EgressProxy.stripProxyAuthorization(header: mixed)
+            == "POST http://127.0.0.1:9/x HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n"
+    )
+    // Multiple fields and obs-fold continuations: all dropped.
+    let folded =
+        "GET http://127.0.0.1:9/ HTTP/1.1\r\nProxy-Authorization: Bearer one\r\n Proxy-Authorization: Bearer two\r\n\tBearer three\r\nHost: h\r\n\r\n"
+    #expect(
+        EgressProxy.stripProxyAuthorization(header: folded)
+            == "GET http://127.0.0.1:9/ HTTP/1.1\r\nHost: h\r\n\r\n"
+    )
+    // Similarly-named fields are not proxy credentials: kept.
+    let similar =
+        "GET http://127.0.0.1:9/ HTTP/1.1\r\nX-Proxy-Authorization: keep\r\nProxy-Authorization-Extra: keep\r\nProxy-Authenticate: keep\r\n\r\n"
+    #expect(EgressProxy.stripProxyAuthorization(header: similar) == similar)
+    // Colon-less malformed lines starting with the field name: dropped.
+    let malformed =
+        "GET http://127.0.0.1:9/ HTTP/1.1\r\nProxy-Authorization Bearer abc123\r\nHost: h\r\n\r\n"
+    #expect(
+        EgressProxy.stripProxyAuthorization(header: malformed)
+            == "GET http://127.0.0.1:9/ HTTP/1.1\r\nHost: h\r\n\r\n"
+    )
 }

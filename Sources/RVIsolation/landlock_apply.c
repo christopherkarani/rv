@@ -39,8 +39,13 @@
 #endif
 
 /*
- * Write-class FS bits only. Keep in sync with LandlockAccessFS.writeClass.
- * Do not handle READ_*, EXECUTE, or net. TRUNCATE is required (ABI 3).
+ * Handled FS bits. Keep in sync with LandlockAccessFS.writeClass,
+ * LandlockAccessFS.readClass, and LandlockAccessFS.handledFS.
+ * Do not handle EXECUTE or net. TRUNCATE is required (ABI 3).
+ * Phase 6 grants read+write beneath the workspace. The system
+ * read-only layer an inner program needs (/usr, /lib, loader) is
+ * not granted here, and no network/process controls are installed,
+ * so Swift still refuses contained before exec.
  */
 #define RV_LANDLOCK_WRITE_CLASS                                        \
     (LANDLOCK_ACCESS_FS_WRITE_FILE | LANDLOCK_ACCESS_FS_REMOVE_DIR     \
@@ -49,6 +54,11 @@
         | LANDLOCK_ACCESS_FS_MAKE_SOCK | LANDLOCK_ACCESS_FS_MAKE_FIFO   \
         | LANDLOCK_ACCESS_FS_MAKE_BLOCK | LANDLOCK_ACCESS_FS_MAKE_SYM   \
         | LANDLOCK_ACCESS_FS_REFER | LANDLOCK_ACCESS_FS_TRUNCATE)
+
+#define RV_LANDLOCK_READ_CLASS \
+    (LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR)
+
+#define RV_LANDLOCK_HANDLED_FS (RV_LANDLOCK_WRITE_CLASS | RV_LANDLOCK_READ_CLASS)
 
 static int rv_sys_landlock_create_ruleset(
     const struct landlock_ruleset_attr *attr,
@@ -106,11 +116,13 @@ int rv_landlock_restrict_self_to_workspace(const char *workspace) {
         return -1;
     }
 
-    handled = RV_LANDLOCK_WRITE_CLASS;
+    handled = RV_LANDLOCK_HANDLED_FS;
 
     /*
      * Pass only handled_access_fs. Network stays unrestricted
-     * (handled_access_net is not supplied).
+     * (handled_access_net is not supplied): the target host-proxy
+     * egress model needs net rules (ABI 4+) or a net namespace,
+     * neither of which is installed here.
      */
     memset(&attr, 0, sizeof(attr));
     attr.handled_access_fs = handled;

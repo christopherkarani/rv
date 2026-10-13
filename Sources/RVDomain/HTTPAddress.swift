@@ -265,6 +265,28 @@ public enum RVDigest {
         hash.update(bytes)
         return hash.digest()
     }
+
+    /// Chunked SHA-256 over file bytes. Nil when the file cannot be read.
+    /// `maxBytes` refuses a file that grows past the cap instead of hashing to EOF.
+    public static func sha256HexOfFile(atPath path: String, maxBytes: UInt64? = nil) -> String? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        var hash = RVSHA256Digest()
+        var total: UInt64 = 0
+        while true {
+            let chunk: Data?
+            do {
+                chunk = try handle.read(upToCount: 64 * 1024)
+            } catch {
+                return nil
+            }
+            guard let chunk, chunk.isEmpty == false else { break }
+            total += UInt64(chunk.count)
+            guard maxBytes.map({ total <= $0 }) ?? true else { return nil }
+            hash.update([UInt8](chunk))
+        }
+        return hash.digest().map { String(format: "%02x", $0) }.joined()
+    }
 }
 
 enum HTTPDigest {

@@ -104,6 +104,41 @@ public struct PolicyWorkspace: Sendable {
         return SecretAllowPaths.merge(machine: machine, repo: repo)
     }
 
+    /// Revision log for one layer, oldest first. Missing log is empty.
+    public func listRevisions(layer: PolicyDocumentLayer) throws -> [PolicyRevision] {
+        switch layer {
+        case .machine:
+            guard let directory = machineDirectory else {
+                throw PolicyWorkspaceError.missingLayer(.machine)
+            }
+            return try TypedRuleStore(baseDirectory: directory).listMachineRevisions()
+        case .repo:
+            guard let workspace else {
+                throw PolicyWorkspaceError.missingLayer(.repo)
+            }
+            return try repoStore(workspace: workspace).listRepoRevisions(workspace: workspace)
+        }
+    }
+
+    /// Rollback re-submits an earlier revision's document as a new head.
+    /// The log is append-only: earlier lines are never rewritten. Restores
+    /// that relax a rule the current head still enforces refuse with
+    /// `blockedByFindings` before anything is written.
+    public func rollback(layer: PolicyDocumentLayer, to revision: Int) throws -> PolicyRevision {
+        switch layer {
+        case .machine:
+            guard let directory = machineDirectory else {
+                throw PolicyWorkspaceError.missingLayer(.machine)
+            }
+            return try TypedRuleStore(baseDirectory: directory).rollbackMachine(to: revision)
+        case .repo:
+            guard let workspace else {
+                throw PolicyWorkspaceError.missingLayer(.repo)
+            }
+            return try repoStore(workspace: workspace).rollbackRepo(to: revision, workspace: workspace)
+        }
+    }
+
     public func upsert(_ rule: PolicyDocumentRule, layer: PolicyDocumentLayer) throws {
         _ = try mergeIncoming(PolicyDocument(rules: [rule]), layer: layer, save: true)
     }

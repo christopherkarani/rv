@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 
 public enum RVPolicyPaths: Sendable {
     public static func allowlistFile(inConfigDir configDir: URL) -> URL {
@@ -57,6 +58,63 @@ public enum RVPolicyPaths: Sendable {
         configDir.appendingPathComponent(".policy.lock", isDirectory: false)
     }
 
+    /// Append-only machine revision log. Every `policy.toml` save appends one
+    /// JSON line; rollback appends a new head, never rewrites.
+    public static func policyRevisionsFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("policy-revisions.jsonl", isDirectory: false)
+    }
+
+    /// F1: HMAC-chained machine revision log (JSONL, one record per line).
+    /// Machine layer only.
+    public static func policyRevisionLogFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("policy-revisions.log", isDirectory: false)
+    }
+
+    /// F1: 32-byte log key, owner-only. Minted on first sealed save.
+    public static func policyRevisionLogKeyFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent(".policy-revisions.key", isDirectory: false)
+    }
+
+    /// F1: MAC-sealed tip (`{"revision","tip","mac"}`). Makes truncation
+    /// detectable: a shortened chain no longer matches the sealed tip.
+    public static func policyRevisionLogTipFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent(".policy-revisions.tip", isDirectory: false)
+    }
+
+    public static func policyRevisionLogLockFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent(".policy-revisions.lock", isDirectory: false)
+    }
+
+    /// F5: last proxy-accepted live rule set, written by the supervisor
+    /// after each accepted push. Display status for `rv egress`; the
+    /// proxy never reads it back.
+    public static func egressLoadedSnapshotFile(inConfigDir configDir: URL) -> URL {
+        configDir.appendingPathComponent("egress-loaded.json", isDirectory: false)
+    }
+
+    /// Append-only repo revision log for one workspace. Lives in the machine
+    /// config dir — never in the workspace `.rv/` dir a caged writer
+    /// controls — under a name derived from the workspace path, so rollback
+    /// targets are not forgeable by the writer they constrain. One file per
+    /// workspace; the JSONL line format matches the machine log.
+    public static func repoRevisionsFile(inConfigDir configDir: URL, workspace: URL) -> URL {
+        let digest = RVDigest.sha256Hex(Array(workspace.path.utf8))
+        return configDir.appendingPathComponent(
+            "repo-revisions-\(digest.prefix(16)).jsonl", isDirectory: false
+        )
+    }
+
+    /// Repo revision logs present in the config dir, for uninstall.
+    /// Best-effort: names are dynamic per workspace.
+    public static func repoRevisionLogs(inConfigDir configDir: URL) -> [URL] {
+        let names =
+            (try? FileManager.default.contentsOfDirectory(atPath: configDir.path)) ?? []
+        return names
+            .filter { $0.hasPrefix("repo-revisions-") && $0.hasSuffix(".jsonl") }
+            .sorted()
+            .map { configDir.appendingPathComponent($0, isDirectory: false) }
+    }
+
     public static func runtimeResourcesFile(inConfigDir configDir: URL) -> URL {
         configDir.appendingPathComponent("runtime-resources.json", isDirectory: false)
     }
@@ -78,10 +136,16 @@ public enum RVPolicyPaths: Sendable {
             denylistLockFile(inConfigDir: configDir),
             pendingApprovalsFile(inConfigDir: configDir),
             pendingApprovalsLockFile(inConfigDir: configDir),
+            egressLoadedSnapshotFile(inConfigDir: configDir),
             typedRulesFile(inConfigDir: configDir),
             typedRulesLockFile(inConfigDir: configDir),
             policyFile(inConfigDir: configDir),
             policyLockFile(inConfigDir: configDir),
+            policyRevisionsFile(inConfigDir: configDir),
+            policyRevisionLogFile(inConfigDir: configDir),
+            policyRevisionLogKeyFile(inConfigDir: configDir),
+            policyRevisionLogTipFile(inConfigDir: configDir),
+            policyRevisionLogLockFile(inConfigDir: configDir),
             runtimeResourcesFile(inConfigDir: configDir),
             agentDefinitionsFile(inConfigDir: configDir),
         ]

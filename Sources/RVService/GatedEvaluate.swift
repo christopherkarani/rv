@@ -76,13 +76,17 @@ public struct GatedEvaluate: Sendable {
         host: LedgerHost = .tty,
         now: Date = Date()
     ) -> EvaluationResult {
-        let allowPaths = SecretAllowPaths.loadEffective(
+        let workspace = Self.workspaceURL(cwd: cwd)
+        let detailed = SecretAllowPaths.loadEffectiveDetailed(home: home, workspace: workspace)
+        Self.auditDroppedRepoLiterals(
+            detailed.droppedRepoLiterals,
             home: home,
-            workspace: Self.workspaceURL(cwd: cwd)
+            workspace: workspace,
+            now: now
         )
         let result = evaluateFileTool(
             action,
-            allowPaths: allowPaths,
+            allowPaths: detailed.effective,
             home: home
         )
         recordDenialIfNeeded(
@@ -254,7 +258,7 @@ public struct GatedEvaluate: Sendable {
         host: LedgerHost,
         tool: LedgerTool
     ) async -> EvaluationResult {
-        let result = evaluateWithSemantics(request, cwd: cwd, home: home)
+        let result = evaluateWithSemantics(request, cwd: cwd, home: home, now: now)
         // Fast path: allow/indeterminate never touch PolicyGate or the
         // allowlist loader; PolicyGate returns them unchanged anyway.
         let finished: EvaluationResult
@@ -346,9 +350,17 @@ public struct GatedEvaluate: Sendable {
     private func evaluateWithSemantics(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
-        home: HomeDirectory? = nil
+        home: HomeDirectory? = nil,
+        now: Date = Date()
     ) -> EvaluationResult {
         let workspace = Self.workspaceURL(cwd: cwd)
+        let detailed = SecretAllowPaths.loadEffectiveDetailed(home: home, workspace: workspace)
+        Self.auditDroppedRepoLiterals(
+            detailed.droppedRepoLiterals,
+            home: home,
+            workspace: workspace,
+            now: now
+        )
         let policy: EffectiveActionPolicy
         do {
             policy = EffectiveActionPolicy(rules: try Self.loadTypedRules(cwd: cwd, home: home))
@@ -370,7 +382,7 @@ public struct GatedEvaluate: Sendable {
         return resolvedSession().evaluateWithSemantics(
             request,
             safety: SafetyStore.loadEffective(home: home, workspace: workspace),
-            allowPaths: SecretAllowPaths.loadEffective(home: home, workspace: workspace),
+            allowPaths: detailed.effective,
             home: home,
             workingDirectory: cwd,
             gitProbe: { unwrapped in
@@ -472,4 +484,77 @@ public struct GatedEvaluate: Sendable {
             now: now
         )
     }
+}
+
+extension GatedEvaluate {
+    /// One JSONL row in `exemption-drops.jsonl`: repo-layer literals dropped
+    /// for lack of machine blessing at one evaluation. Dropped literals are
+    /// exemption patterns from `policy.toml`, never secret values.
+    ///
+    /// The boundary-check audit is borrowed from OpenShell: a candidate that
+    /// allows beyond the boundary is reported, not applied.
+    /// https://docs.nvidia.com/openshell/latest/how-it-works/policies/prover
+    struct ExemptionDropRecord: Sendable, Equatable, Codable {
+        var dropped: [String]
+        var workspace: String?
+        var recordedAt: TimeInterval
+    }
+
+    static let exemptionDropsFileName = "exemption-drops.jsonl"
+
+    static func exemptionDropsFileURL(home: HomeDirectory) -> URL {
+        RVPolicyPaths.configDirectory(home: home)
+            .appendingPathComponent(exemptionDropsFileName, isDirectory: false)
+    }
+
+    /// Best-effort post-evaluation audit write: lock, I/O, or encode failures
+    /// drop the row silently. Enforcement is unaffected — the effective set
+    /// stands whether or not the audit row persists. Nil home or an empty
+    /// dropped set writes nothing. Rows prune to `RVHistory.maxRows`, newest
+    /// last. The row describes repo policy state observed at evaluation, not
+    /// the decision, so peek audits the same as apply.
+    static func auditDroppedRepoLiterals(
+        _ dropped: [String],
+        home: HomeDirectory?,
+        workspace: URL?,
+        now: Date
+    ) {
+        guard dropped.isEmpty == false, let home else { return }
+        auditLock.withLock { _ in
+            let url = exemptionDropsFileURL(home: home)
+            try? FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            var rows: [ExemptionDropRecord] = []
+            if let text = try? String(contentsOf: url, encoding: .utf8) {
+                for line in text.split(separator: "\n") {
+                    if let row = try? JSONDecoder().decode(
+                        ExemptionDropRecord.self,
+                        from: Data(line.utf8)
+                    ) {
+                        rows.append(row)
+                    }
+                }
+            }
+            rows.append(
+                ExemptionDropRecord(
+                    dropped: dropped,
+                    workspace: workspace?.path,
+                    recordedAt: now.timeIntervalSince1970
+                )
+            )
+            let lines = Array(rows.suffix(RVHistory.maxRows)).compactMap { row -> String? in
+                guard let data = try? JSONEncoder().encode(row) else { return nil }
+                return String(data: data, encoding: .utf8)
+            }
+            try? (lines.joined(separator: "\n") + "\n").write(
+                to: url,
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+    }
+
+    private static let auditLock = UnfairLock(())
 }

@@ -410,6 +410,143 @@ private func lq(_ value: String) -> String {
     "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
 
+/// Phase-7 process-visibility probe: raw sysctl KERN_PROC_ALL plus the
+/// libproc path (proc_listpids/proc_pidinfo) in one binary, so a single
+/// caged run shows exactly which listing channel is open. Prints facts;
+/// the R4 test asserts the locked-in outcome.
+private let phase7ProcProbeSource = #"""
+#include <errno.h>
+#include <libproc.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/sysctl.h>
+#include <unistd.h>
+
+int main(void) {
+    alarm(60);
+    setvbuf(stdout, NULL, _IONBF, 0);
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
+    size_t size = 0;
+    if (sysctl(mib, 4, NULL, &size, NULL, 0) != 0) {
+        printf("PROC sysctl-size errno=%d\n", errno);
+    } else {
+        printf("PROC sysctl-size=%zu\n", size);
+        char *buffer = (char *)malloc(size ? size : 1);
+        if (!buffer) {
+            printf("PROC malloc-fail\n");
+        } else if (sysctl(mib, 4, buffer, &size, NULL, 0) != 0) {
+            printf("PROC sysctl-list errno=%d\n", errno);
+        } else {
+            size_t count = size / sizeof(struct kinfo_proc);
+            printf("PROC sysctl-count=%zu\n", count);
+            struct kinfo_proc *list = (struct kinfo_proc *)buffer;
+            int sawPid1 = 0;
+            for (size_t i = 0; i < count; i++) {
+                if (list[i].kp_proc.p_pid == 1) {
+                    sawPid1 = 1;
+                    printf("PROC sysctl-pid1 comm=%s\n", list[i].kp_proc.p_comm);
+                }
+            }
+            printf("PROC sysctl-saw-pid1=%d\n", sawPid1);
+        }
+        free(buffer);
+    }
+    int listed = proc_listpids(PROC_ALL_PIDS, 0, NULL, 0);
+    if (listed <= 0) {
+        printf("PROC listpids errno=%d\n", errno);
+    } else {
+        printf("PROC listpids-count=%d\n", listed);
+    }
+    struct proc_bsdinfo info;
+    memset(&info, 0, sizeof(info));
+    int rc = proc_pidinfo(1, PROC_PIDTBSDINFO, 0, &info, sizeof(info));
+    if (rc <= 0) {
+        printf("PROC pidinfo-1 errno=%d\n", errno);
+    } else {
+        printf("PROC pidinfo-1 comm=%s\n", info.pbi_comm);
+    }
+    int selfmib[3] = { CTL_KERN, KERN_PROCARGS2, getpid() };
+    size_t selfsize = 0;
+    if (sysctl(selfmib, 3, NULL, &selfsize, NULL, 0) != 0) {
+        printf("PROC self-args errno=%d\n", errno);
+    } else {
+        printf("PROC self-args size=%zu\n", selfsize);
+    }
+    FILE *pidfile = fopen("hostpid.txt", "r");
+    int hostpid = -1;
+    if (pidfile) {
+        if (fscanf(pidfile, "%d", &hostpid) != 1) hostpid = -1;
+        fclose(pidfile);
+    }
+    if (hostpid <= 0) {
+        printf("PROC hostpid-parse-fail\n");
+    } else {
+        int hpmib[3] = { CTL_KERN, KERN_PROCARGS2, hostpid };
+        size_t hpsize = 0;
+        if (sysctl(hpmib, 3, NULL, &hpsize, NULL, 0) != 0) {
+            printf("PROC hostpid-args errno=%d\n", errno);
+        } else {
+            char *hb = (char *)malloc(hpsize ? hpsize : 1);
+            if (!hb) {
+                printf("PROC hostpid-args malloc-fail\n");
+            } else if (sysctl(hpmib, 3, hb, &hpsize, NULL, 0) != 0) {
+                printf("PROC hostpid-args read errno=%d\n", errno);
+            } else {
+                printf("PROC hostpid-args read bytes=%zu\n", hpsize);
+            }
+            if (hb) {
+                memset(hb, 0, hpsize);
+                free(hb);
+            }
+        }
+    }
+    int hostmib[3] = { CTL_KERN, KERN_PROCARGS2, 1 };
+    size_t hostsize = 0;
+    if (sysctl(hostmib, 3, NULL, &hostsize, NULL, 0) != 0) {
+        printf("PROC pid1-args errno=%d\n", errno);
+    } else {
+        char *ab = (char *)malloc(hostsize ? hostsize : 1);
+        if (!ab) {
+            printf("PROC pid1-args malloc-fail\n");
+        } else if (sysctl(hostmib, 3, ab, &hostsize, NULL, 0) != 0) {
+            printf("PROC pid1-args read errno=%d\n", errno);
+        } else {
+            int pargc = 0;
+            size_t envBytes = 0;
+            if (hostsize >= sizeof(int)) {
+                memcpy(&pargc, ab, sizeof(int));
+                size_t off = sizeof(int);
+                while (off < hostsize && ab[off] != '\0') off++;
+                off++;
+                for (int a = 0; a < pargc && off < hostsize; a++) {
+                    while (off < hostsize && ab[off] != '\0') off++;
+                    off++;
+                }
+                if (off < hostsize) envBytes = hostsize - off;
+            }
+            printf("PROC pid1-args size=%zu env-bytes=%zu\n", hostsize, envBytes);
+        }
+        free(ab);
+    }
+    return 0;
+}
+"""#
+
+private func compilePhase7ProcProbe(in directory: URL) throws {
+    let source = directory.appendingPathComponent("procprobe.c")
+    let binary = directory.appendingPathComponent("procprobe")
+    try Data(phase7ProcProbeSource.utf8).write(to: source)
+    let compile = Process()
+    compile.executableURL = URL(fileURLWithPath: "/usr/bin/clang")
+    compile.arguments = ["-O2", "-o", binary.path, source.path]
+    compile.standardOutput = FileHandle.nullDevice
+    compile.standardError = FileHandle.nullDevice
+    try compile.run()
+    compile.waitUntilExit()
+    try #require(compile.terminationStatus == 0)
+}
+
 private func compileLoopbackProbe(in directory: URL) throws {
     let source = directory.appendingPathComponent("loopback.c")
     let binary = directory.appendingPathComponent("loopback")
@@ -1071,6 +1208,133 @@ int main(int argc, char **argv) {
     #expect(loopbackHostFetch(host: "127.0.0.1", port: 65_536, message: "x") == nil)
     #expect(loopbackHostCanBind(host: "127.0.0.1", port: -1) == false)
     #expect(loopbackHostCanBind(host: "127.0.0.1", port: 70_000) == false)
+}
+
+/// Phase-7 residual lock-ins (R3/R4). The loopback residuals (R1/R2) are
+/// locked in by `SeatbeltLoopbackTests` above; these cover the two
+/// remaining measured residuals the same way: a live contained child, so
+/// a future platform or profile change flips a test instead of silently
+/// changing the boundary. See the "Phase 7 residuals" section in
+/// docs/security/runtime-boundary.md.
+@Suite("SeatbeltPhase7Residuals", .serialized)
+struct SeatbeltPhase7ResidualTests {
+    /// R3 positive: a contained child reads a file planted by another
+    /// same-user process in the confstr per-user temp dir. The grant is
+    /// `(allow file-read* file-write* (subpath systemTmp))` in
+    /// `SeatbeltProfile.allowingProductiveWorkspace`, required because
+    /// SwiftBuild backend tasks drop TMPDIR and fall back to confstr.
+    @Test func containedChildReadsPlantedPerUserTmpFile() async throws {
+        let systemTmp = try #require(productiveSystemTemporaryDirectory())
+        let marker = "rv-phase7-tmp-\(UUID().uuidString)"
+        let planted = URL(fileURLWithPath: systemTmp)
+            .appendingPathComponent("rv-phase7-probe-\(UUID().uuidString).txt")
+        try Data(marker.utf8).write(to: planted)
+        defer { try? FileManager.default.removeItem(at: planted) }
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let run = try await runLoopbackShell(
+            tree, script: "cat \(lq(planted.path)) >tmpread.out 2>tmpread.err; echo EXIT=$? >tmpread.exit"
+        ).get()
+        #expect(run.exitStatus == 0)
+        let exitText = try readLoopbackFile(tree.workspaceURL.appendingPathComponent("tmpread.exit"))
+        #expect(exitText.contains("EXIT=0"))
+        let text = try readLoopbackFile(tree.workspaceURL.appendingPathComponent("tmpread.out"))
+        #expect(text.contains(marker))
+    }
+
+    /// R3 scope control: the grant covers the confstr dir only. A file
+    /// under the shared `/tmp` root but outside the workspace stays
+    /// content-denied (metadata-only), which is why outside-fence probes
+    /// live there (see `ContainmentTree`).
+    @Test func siblingTmpOutsideWorkspaceStaysContentDenied() async throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let marker = "rv-phase7-sibling-\(UUID().uuidString)"
+        let outside = tree.siblingURL.appendingPathComponent("probe.txt")
+        try Data(marker.utf8).write(to: outside)
+        let run = try await runLoopbackShell(
+            tree, script: "cat \(lq(outside.path)) >sibread.out 2>sibread.err; echo EXIT=$? >sibread.exit"
+        ).get()
+        #expect(run.exitStatus == 0)
+        let exitText = try readLoopbackFile(tree.workspaceURL.appendingPathComponent("sibread.exit"))
+        #expect(exitText.contains("EXIT="))
+        #expect(exitText.contains("EXIT=0") == false)
+        let text = try readLoopbackFile(tree.workspaceURL.appendingPathComponent("sibread.out"))
+        #expect(text.contains(marker) == false)
+    }
+
+    /// R4: the sysctl process-table channel is OPEN (coarse
+    /// sysctl-read): raw sysctl KERN_PROC_ALL in the cage returns
+    /// the host table, and same-user host argv+env reads back.
+    /// T9cutover productionized per-MIB and was REVERTED the same
+    /// day (caged ld/zsh/xargs breakage; SHIP-BLOCKED until the
+    /// toolchain leaves are identified) — the default is coarse
+    /// again and this test pins the measured widening (byte counts
+    /// only, content never printed), while proc_listpids still
+    /// enumerates host pids (pid only, no comm: there is no
+    /// per-sandbox PID namespace); proc_pidinfo on pid 1 fails
+    /// with EPERM, and `kill -0 1` fails under the same-sandbox
+    /// signal allow.
+    ///
+    /// `/bin/ps` incidentally fails (exit 126, EPERM) only because the
+    /// binary is setuid root and setuid exec is refused in the sandbox,
+    /// not because of table visibility; `pgrep` finds nothing because
+    /// it needs per-pid detail across processes it cannot fully
+    /// inspect. Do not treat either tool failure as a hiding
+    /// property: the sysctl assertions below are the real ones. If a
+    /// future macOS or profile change alters a channel, this test
+    /// flips and the threat model must be updated.
+    @Test func containedProcessListSeesHostButCannotSignalIt() async throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        try compilePhase7ProcProbe(in: tree.workspaceURL)
+        try Data("\(ProcessInfo.processInfo.processIdentifier)\n".utf8).write(
+            to: tree.workspaceURL.appendingPathComponent("hostpid.txt"))
+        let run = try await runLoopbackShell(
+            tree, script: """
+            ./procprobe >proc.out 2>&1; echo PROBE-EXIT=$? >proc.exit
+            /bin/ps -p 1 -o comm= >ps.out 2>ps.err; echo PS-EXIT=$? >ps.exit
+            kill -0 1 >kill.out 2>kill.err; echo KILL-EXIT=$? >kill.exit
+            """
+        ).get()
+        #expect(run.exitStatus == 0)
+        let probeExit = try readLoopbackFile(tree.workspaceURL.appendingPathComponent("proc.exit"))
+        #expect(probeExit.contains("PROBE-EXIT=0"))
+        let probe = try readLoopbackFile(tree.workspaceURL.appendingPathComponent("proc.out"))
+        // OPEN HOLE (R4, coarse sysctl-read): the host table reads back
+        // (measured 614952 size-query bytes / 944 fetched entries on
+        // 2026-10-10 — separate sysctl calls, so table churn between
+        // them legitimately differs) and same-user
+        // host argv+env reads back (measured 9164 bytes). T9cutover flipped
+        // this block deny-only but was REVERTED the same day: the per-MIB
+        // default breaks ld (linker assertion), zsh (fatal at launch), and
+        // xargs (sentinel never created). SHIP-BLOCKED until the toolchain
+        // leaves are identified (needs root dtruss or Apple docs) and added
+        // under the host-denial gate. Content is never printed.
+        #expect(probe.contains("PROC sysctl-size="), "probe output:\n\(probe)")
+        #expect(probe.contains("PROC sysctl-size errno=") == false, "probe output:\n\(probe)")
+        #expect(probe.contains("PROC sysctl-saw-pid1=1"), "probe output:\n\(probe)")
+        #expect(probe.contains("PROC sysctl-pid1 comm="), "probe output:\n\(probe)")
+        #expect(probe.contains("PROC listpids-count="), "probe output:\n\(probe)")
+        #expect(probe.contains("PROC pidinfo-1 errno=1"), "probe output:\n\(probe)")
+        #expect(probe.contains("PROC self-args size="), "probe output:\n\(probe)")
+        #expect(probe.contains("PROC pid1-args errno="), "probe output:\n\(probe)")
+        #expect(probe.contains("PROC pid1-args size=") == false, "probe output:\n\(probe)")
+        // Strict-open pin of the documented hole (this test runs the
+        // production coarse profile): same-user host argv+env READS BACK.
+        // Either direction of drift fails — a deny here means the profile
+        // changed under the test (update deliberately at per-MIB re-land),
+        // and a missing read line means the probe regressed. The
+        // experiment arm pins the deny side separately.
+        #expect(probe.contains("PROC hostpid-args read bytes="), "probe output:\n\(probe)")
+        #expect(probe.contains("PROC hostpid-args errno=") == false, "probe output:\n\(probe)")
+        let psExit = try readLoopbackFile(tree.workspaceURL.appendingPathComponent("ps.exit"))
+        #expect(psExit.contains("PS-EXIT="))
+        #expect(psExit.contains("PS-EXIT=0") == false)
+        let killExit = try readLoopbackFile(tree.workspaceURL.appendingPathComponent("kill.exit"))
+        #expect(killExit.contains("KILL-EXIT="))
+        #expect(killExit.contains("KILL-EXIT=0") == false)
+    }
 }
 #endif
 

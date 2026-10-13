@@ -52,6 +52,7 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             binutils \
+            gcc \
             git \
             gnupg2 \
             libc6-dev \
@@ -95,6 +96,63 @@ jobs:
               exit 1
               ;;
           esac
+
+      # T8 ABI gate (Item 5): measure the runner kernel's Landlock ABI with
+      # the same VERSION probe the C shim uses
+      # (`Sources/RVIsolation/landlock_apply.c:104`), then run the suite on
+      # the measured kernel. OpenShell requires ABI v3+ in either startup
+      # mode and fails to start under `hard_requirement`
+      # (https://docs.nvidia.com/openshell/latest/how-it-works/policies/schema);
+      # rv pins that fail-to-start shape per ABI regime in
+      # LandlockContainmentTests instead of assuming one ABI. The probe is
+      # header-independent (numeric __NR 444 + flags 1, the same fallback
+      # `landlock_apply.c` carries), so a missing <linux/landlock.h> cannot
+      # silently unmeasure the run; its presence is recorded for diagnostics
+      # only. Fail closed: an unbuildable, unrunnable, or unparseable probe
+      # stops the job before `swift test`.
+      - name: Probe Landlock ABI
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/rv-landlock-abi-probe.c" <<'EOF'
+          #include <errno.h>
+          #include <stddef.h>
+          #include <stdio.h>
+          #include <sys/syscall.h>
+          #include <unistd.h>
+          #ifndef SYS_landlock_create_ruleset
+          #define SYS_landlock_create_ruleset 444
+          #endif
+          #define RV_ABI_VERSION 1u
+          int main(void) {
+              long abi;
+              errno = 0;
+              abi = syscall(SYS_landlock_create_ruleset, NULL, (size_t)0, RV_ABI_VERSION);
+              printf("abi=%ld errno=%d\n", abi, abi < 0 ? errno : 0);
+              return 0;
+          }
+          EOF
+          cc -O2 -Wall -Wextra -Werror "$RUNNER_TEMP/rv-landlock-abi-probe.c" \
+              -o "$RUNNER_TEMP/rv-landlock-abi-probe"
+          probe="$("$RUNNER_TEMP/rv-landlock-abi-probe")"
+          echo "landlock probe: $probe"
+          abi="${probe%% errno=*}"
+          abi="${abi#abi=}"
+          case "$abi" in
+            ''|*[!0-9-]*) echo "probe printed unparseable abi: $probe" >&2; exit 1 ;;
+          esac
+          echo "RV_LANDLOCK_ABI=$abi" >> "$GITHUB_ENV"
+          if echo '#include <linux/landlock.h>' | cc -E - > /dev/null 2>&1; then
+            header=present
+          else
+            header=absent
+          fi
+          {
+            echo "### Landlock ABI gate (T8)"
+            echo ""
+            echo "- kernel: \`$(uname -r)\` (\`$(uname -m)\`)"
+            echo "- measured: \`$probe\`"
+            echo "- linux/landlock.h: \`$header\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Swift tests
         run: swift test

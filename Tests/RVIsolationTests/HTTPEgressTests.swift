@@ -418,6 +418,180 @@ private func loopbackAction() throws -> HTTPAction {
     )
 }
 
+@Suite("Binary-scoped egress admission")
+struct BinaryEgressAdmissionTests {
+    @Test func rulePathsAreStrictlyCanonical() {
+        #expect(EgressBinaryRule(canonicalPath: "/opt/rv/bin/agent")?.path == "/opt/rv/bin/agent")
+        #expect(EgressBinaryRule(canonicalPath: "/")?.path == "/")
+        #expect(EgressBinaryRule(canonicalPath: "relative/bin") == nil)
+        #expect(EgressBinaryRule(canonicalPath: "") == nil)
+        #expect(EgressBinaryRule(canonicalPath: "/opt//bin") == nil)
+        #expect(EgressBinaryRule(canonicalPath: "/opt/./bin") == nil)
+        #expect(EgressBinaryRule(canonicalPath: "/opt/../bin") == nil)
+        #expect(EgressBinaryRule(canonicalPath: "/opt/bin/") == nil)
+        #expect(EgressBinaryRule(canonicalPath: "/opt/bin\0x") == nil)
+        // Case is preserved: matching is byte-exact.
+        #expect(EgressBinaryRule(canonicalPath: "/Opt/Bin")?.path == "/Opt/Bin")
+    }
+
+    @Test func policyMatchesDeterministically() {
+        let policy = EgressBinaryPolicy(canonicalPaths: [
+            "/opt/rv/bin/b",
+            "/opt/rv/bin/a",
+            "relative/dropped",
+            "/opt/../dropped",
+        ])
+        #expect(policy.isBinaryScoped)
+        #expect(policy.sortedRules.map(\.path) == ["/opt/rv/bin/a", "/opt/rv/bin/b"])
+        #expect(policy.match(forBinaryPath: "/opt/rv/bin/a")?.path == "/opt/rv/bin/a")
+        #expect(policy.match(forBinaryPath: "/opt/rv/bin/other") == nil)
+        #expect(policy.match(forBinaryPath: nil) == nil)
+        #expect(policy.match(forBinaryPath: "relative") == nil)
+        #expect(policy.allows(binaryPath: "/opt/rv/bin/b"))
+        #expect(policy.allows(binaryPath: nil) == false)
+        // Host-level only: no scope, no constraint.
+        #expect(EgressBinaryPolicy().isBinaryScoped == false)
+        #expect(EgressBinaryPolicy().allows(binaryPath: nil))
+        #expect(EgressBinaryPolicy().allows(binaryPath: "/anything"))
+    }
+
+    @Test func admissionResolvesSymlinksOnce() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-egress-binary-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("agent")
+        try Data("binary".utf8).write(to: target)
+        let link = root.appendingPathComponent("agent-link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let expected = target.resolvingSymlinksInPath().path
+        #expect(EgressBinaryAdmission.resolve(path: link.path) == expected)
+        #expect(EgressBinaryAdmission.resolve(path: target.path) == expected)
+        #expect(EgressBinaryAdmission.resolve(path: "relative/agent") == nil)
+        #expect(EgressBinaryAdmission.resolve(path: "") == nil)
+        #expect(EgressBinaryAdmission.resolve(path: "/opt/bin\0x") == nil)
+    }
+
+    @Test func fingerprintCapturesRealFiles() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-egress-fp-\(UUID().uuidString)")
+        try Data("12345678".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let captured = EgressBinaryFingerprint.capture(path: file.path)
+        #expect(captured?.size == 8)
+        #expect(captured?.mtimeSeconds ?? 0 > 0)
+        #expect(EgressBinaryFingerprint.capture(path: file.path + ".missing") == nil)
+    }
+
+    @Test func pinCacheIsTrustOnFirstUse() {
+        let script = BinaryPinScript(
+            fingerprint: BinaryEgressAdmissionTests.print(inode: 7),
+            digest: "golden"
+        )
+        let cache = EgressBinaryPinCache(
+            fingerprint: { script.capture($0) },
+            hashFile: { script.hash($0) }
+        )
+        #expect(cache.verify(canonicalPath: "/opt/rv/bin/agent") == .pinned)
+        // Unchanged fingerprint skips the hash entirely.
+        #expect(cache.verify(canonicalPath: "/opt/rv/bin/agent") == .match)
+        #expect(script.calls == 1)
+        // Rewritten with identical content: rehashes, matches, refreshes.
+        script.retarget(fingerprint: BinaryEgressAdmissionTests.print(inode: 8), digest: "golden")
+        #expect(cache.verify(canonicalPath: "/opt/rv/bin/agent") == .match)
+        #expect(script.calls == 2)
+        // Changed hash: denies, and the golden pin is unchanged.
+        script.retarget(fingerprint: BinaryEgressAdmissionTests.print(inode: 9), digest: "tampered")
+        #expect(
+            cache.verify(canonicalPath: "/opt/rv/bin/agent")
+                == .mismatch(expected: "golden", observed: "tampered")
+        )
+        // Restored content matches the still-golden pin.
+        script.retarget(fingerprint: BinaryEgressAdmissionTests.print(inode: 10), digest: "golden")
+        #expect(cache.verify(canonicalPath: "/opt/rv/bin/agent") == .match)
+    }
+
+    @Test func pinCacheFailsClosed() {
+        let script = BinaryPinScript(
+            fingerprint: BinaryEgressAdmissionTests.print(inode: 7),
+            digest: "golden"
+        )
+        let cache = EgressBinaryPinCache(
+            fingerprint: { script.capture($0) },
+            hashFile: { script.hash($0) }
+        )
+        script.retarget(fingerprint: nil, digest: "golden")
+        #expect(cache.verify(canonicalPath: "/opt/rv/bin/agent") == .unreadable)
+        script.retarget(fingerprint: BinaryEgressAdmissionTests.print(inode: 7), digest: nil)
+        #expect(cache.verify(canonicalPath: "/opt/rv/bin/agent") == .unreadable)
+    }
+
+    @Test func pinCacheRefusesPastCapacity() {
+        let cache = EgressBinaryPinCache(
+            fingerprint: { _ in BinaryEgressAdmissionTests.print(inode: 7) },
+            hashFile: { _ in "golden" }
+        )
+        for index in 0..<EgressBinaryPinCache.maxEntries {
+            #expect(cache.verify(canonicalPath: "/bin/agent-\(index)") == .pinned)
+        }
+        #expect(cache.verify(canonicalPath: "/bin/agent-overflow") == .unreadable)
+        // The full cache still serves its pinned entries.
+        #expect(cache.verify(canonicalPath: "/bin/agent-0") == .match)
+    }
+
+    private static func print(inode: UInt64) -> EgressBinaryFingerprint {
+        EgressBinaryFingerprint(
+            size: 128,
+            mtimeSeconds: 1_700_000_000,
+            mtimeNanoseconds: 0,
+            ctimeSeconds: 1_700_000_000,
+            ctimeNanoseconds: 0,
+            device: 1,
+            inode: inode
+        )
+    }
+}
+
+/// Scripted `stat`/hash backend for pin-cache tests.
+private final class BinaryPinScript: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fingerprint: EgressBinaryFingerprint?
+    private var digest: String?
+    private var hashCalls = 0
+
+    init(fingerprint: EgressBinaryFingerprint?, digest: String?) {
+        self.fingerprint = fingerprint
+        self.digest = digest
+    }
+
+    func retarget(fingerprint: EgressBinaryFingerprint?, digest: String?) {
+        lock.lock()
+        self.fingerprint = fingerprint
+        self.digest = digest
+        lock.unlock()
+    }
+
+    func capture(_ path: String) -> EgressBinaryFingerprint? {
+        lock.lock()
+        defer { lock.unlock() }
+        return fingerprint
+    }
+
+    func hash(_ path: String) -> String? {
+        lock.lock()
+        hashCalls += 1
+        let digest = digest
+        lock.unlock()
+        return digest
+    }
+
+    var calls: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return hashCalls
+    }
+}
+
 private final class BoundListener {
     let fd: Int32
     let port: UInt16

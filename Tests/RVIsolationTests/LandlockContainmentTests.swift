@@ -153,6 +153,42 @@ struct LandlockContainmentTests {
         }
     }
 
+    @Test func landlock_readOutsideWorkspace_refusedBeforeExec() async throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+
+        let outside = tree.siblingURL.appendingPathComponent("secret.txt").path
+        try "outside-secret\n".write(toFile: outside, atomically: true, encoding: .utf8)
+        let result = await IsolationBackends.applyOffPool(
+            tree.contained,
+            command: IsolatedCommand(executable: "/bin/cat", arguments: [outside])!
+        )
+        switch result {
+        case .success:
+            Issue.record("strict plan must not launch a read outside the workspace")
+        case .failure(let error):
+            expectContainedRefused(error)
+        }
+    }
+
+    @Test func landlock_readInsideWorkspace_refusedBeforeExec() async throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+
+        let inside = tree.workspaceURL.appendingPathComponent("note.txt").path
+        try "inside-note\n".write(toFile: inside, atomically: true, encoding: .utf8)
+        let result = await IsolationBackends.applyOffPool(
+            tree.contained,
+            command: IsolatedCommand(executable: "/bin/cat", arguments: [inside])!
+        )
+        switch result {
+        case .success:
+            Issue.record("strict plan must not launch even a workspace-scoped read")
+        case .failure(let error):
+            expectContainedRefused(error)
+        }
+    }
+
     @Test func trampoline_argvLock_exits125_andDoesNotExec() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
@@ -175,6 +211,16 @@ struct LandlockContainmentTests {
         }
     }
 
+    /// Missing-inner exit follows the measured Landlock ABI. On ABI >= 3
+    /// the helper applies the write slice, then `execve` fails (126); below
+    /// 3 the shim probe fails closed and the helper exits 125 without exec
+    /// (`Sources/RVIsolation/landlock_apply.c:104`,
+    /// `Sources/rv-isolation-exec/main.c:54`). Neither exit mints
+    /// establishment (`Sources/RVIsolation/LandlockApply.swift:80`). This is
+    /// the `hard_requirement` shape — fail to start when the kernel cannot
+    /// apply the rules — pinned per ABI regime instead of assumed (OpenShell
+    /// `landlock.compatibility` with its ABI v3 floor:
+    /// https://docs.nvidia.com/openshell/latest/how-it-works/policies/schema).
     @Test func trampoline_missingInnerAfterApply_exits126() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
@@ -184,7 +230,24 @@ struct LandlockContainmentTests {
             exec,
             arguments: ["--workspace", tree.workspaceURL.path, "--", missingInner]
         )
-        #expect(status == IsolationBackends.isolationExecExecFailedExit)
+        #expect(status == expectedMissingInnerExit(forABI: measuredLandlockABI()))
+    }
+
+    /// AC-5 compile pin: every valid contained plan refuses at compile time
+    /// with `containedGuaranteesUnsupported`, on any ABI regime. Compile is
+    /// syscall-free (`Sources/RVIsolation/LandlockRuleset.swift:4`), so even
+    /// an ABI >= 3 kernel must not flip this suite toward enforcement.
+    @Test func compileContainedPlan_refusesRegardlessOfABI() throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        for plan in [tree.contained, tree.containedDifferingRoot] {
+            switch compileLandlockRuleset(plan) {
+            case .success:
+                Issue.record("valid contained plan must not compile a Landlock ruleset")
+            case .failure(let error):
+                expectContainedRefused(error)
+            }
+        }
     }
 
     @Test func landlock_overrideTrue_doesNotEstablishContained() async throws {
@@ -252,6 +315,75 @@ private func python3Executable() -> String {
     }
     Issue.record("python3 is required to prove outside truncate is denied")
     return "/usr/bin/python3"
+}
+
+/// Helper exit for a valid invocation whose inner command is missing,
+/// selected by measured Landlock ABI: 126 when ABI >= 3 lets the helper
+/// reach `execve`, 125 when the shim probe fails closed below 3.
+private func expectedMissingInnerExit(forABI abi: Int) -> Int32 {
+    if abi >= 3 {
+        return IsolationBackends.isolationExecExecFailedExit
+    }
+    return IsolationBackends.isolationExecCouldNotEstablishExit
+}
+
+/// Live Landlock ABI of the test kernel. Cross-checks the CI gate's
+/// `RV_LANDLOCK_ABI` by regime when set: a disagreement means the gate
+/// measured a different kernel than the suite runs on.
+private func measuredLandlockABI(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+) -> Int {
+    let live = liveLandlockABI()
+    if let raw = environment["RV_LANDLOCK_ABI"] {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let ci = Int(trimmed) {
+            if (ci >= 3) != (live >= 3) {
+                Issue.record(
+                    "CI-measured Landlock ABI \(ci) disagrees with live probe \(live)"
+                )
+            }
+        } else {
+            Issue.record("RV_LANDLOCK_ABI is not an integer: \(raw)")
+        }
+    }
+    return live
+}
+
+/// VERSION probe of the running kernel via the same call the C shim
+/// uses: `landlock_create_ruleset(NULL, 0, VERSION)` as raw syscall 444
+/// with flags 1 (`Sources/RVIsolation/landlock_apply.c:104`; ctypes form
+/// at `Scripts/isolation-linux-adversarial.py:161`). Returns the ABI
+/// version, or -1 when the kernel does not implement Landlock (ENOSYS).
+private func liveLandlockABI() -> Int {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: python3Executable())
+    process.arguments = [
+        "-c",
+        "import ctypes; print(ctypes.CDLL(None, use_errno=True).syscall(444, 0, 0, 1))",
+    ]
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+    } catch {
+        Issue.record("Landlock ABI probe failed to launch: \(error)")
+        return -1
+    }
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        Issue.record("Landlock ABI probe exited \(process.terminationStatus)")
+        return -1
+    }
+    let output = String(
+        data: pipe.fileHandleForReading.readDataToEndOfFile(),
+        encoding: .utf8
+    )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if let abi = Int(output) {
+        return abi
+    }
+    Issue.record("Landlock ABI probe printed unparseable output: \(output)")
+    return -1
 }
 
 private func runIsolationExec(_ exec: URL, arguments: [String]) throws -> Int32 {

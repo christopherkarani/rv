@@ -25,6 +25,7 @@ _rv() {
     'managed:Organization policy: status, verify, keygen, sign'
     'report:Governance posture of this machine (MDM, --json)'
     'operator:Propose and poll identity launches'
+    'egress:Review blocked network egress'
   )
   _arguments '1: :->cmds' '*:: :->args'
   case $state in
@@ -70,6 +71,11 @@ _rv() {
           local -a op
           op=('propose:Propose one identity launch' 'proposal-status:Poll one proposal status')
           _describe -t commands 'operator' op
+          ;;
+        egress)
+          local -a eg
+          eg=('pending:List network proposals awaiting a human' 'show:Show one network proposal' 'approve:Approve one network proposal' 'deny:Deny one network proposal' 'denials:Show recent proxy denials')
+          _describe -t commands 'egress' eg
           ;;
       esac
       ;;

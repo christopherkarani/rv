@@ -81,8 +81,32 @@ public enum RuntimeHTTPExecutor: Sendable {
             HTTPAction, HTTPCancellation, @escaping @Sendable () -> Bool
         ) -> Result<HTTPExecutionReceipt, HTTPEgressFailure>
     )
+    /// Caller-supplied transfer receiving the broker's granted injection as
+    /// an argument. Invoked only after authorization, like `.effect`; the
+    /// injection rides with the exact action being performed, so the
+    /// transfer correlates without a request-ID lookup. Nil whenever the
+    /// broker is unconfigured or withholds.
+    case effectWithCredential(
+        @Sendable (
+            HTTPAction, BrokeredCredentialInjection?, HTTPCancellation,
+            @escaping @Sendable () -> Bool
+        ) -> Result<HTTPExecutionReceipt, HTTPEgressFailure>
+    )
     /// Dial the pinned public address from RV, with no proxy and no cookies.
     case direct
+}
+
+extension RuntimeHTTPExecutor {
+    /// Transports that receive a granted injection as an argument rather
+    /// than through the legacy delivery hook.
+    var deliversCredentialAsArgument: Bool {
+        switch self {
+        case .direct, .effectWithCredential:
+            return true
+        case .refuse, .effect:
+            return false
+        }
+    }
 }
 
 public struct RuntimeAdmissionConfiguration: Sendable {
@@ -103,6 +127,20 @@ public struct RuntimeAdmissionConfiguration: Sendable {
     /// set, the session parks pending ASKs for a human decision and resumes
     /// the exact parked continuation at most once.
     public var askBackend: (any ActionApprovalAsking)?
+    /// Phase 5 supervisor-side credential broker. Nil (the default) keeps
+    /// the pre-broker behavior: no consultation, no broker audit events.
+    /// When set, each authorized HTTP action consults the broker for an
+    /// approved-endpoint injection; the value resolves in host memory only
+    /// and is passed as an argument to the performing transport, never to
+    /// the cage.
+    public var credentialBroker: ContainedCredentialBroker?
+    /// Supervisor-side delivery for a granted injection on transports that
+    /// do not take it as an argument (legacy `.effect`, `.refuse`), and an
+    /// observer tap otherwise. Nil (the default) drops the grant
+    /// fail-closed with a `credentialUnwired` audit event on hook-delivered
+    /// transports; `.direct` and `.effectWithCredential` receive the
+    /// injection as a return-value argument whether or not a hook is set.
+    public var credentialDelivery: (@Sendable (BrokeredCredentialInjection) -> Void)?
 
     public init(
         normalize: @escaping @Sendable (RuntimeAdmissionSubject, RuntimeRequestedAction) -> Result<
@@ -115,7 +153,9 @@ public struct RuntimeAdmissionConfiguration: Sendable {
         >?,
         policy: @escaping @Sendable (RuntimeSession) -> EffectiveActionPolicy,
         evidence: RuntimeAdmissionEvidence,
-        askBackend: (any ActionApprovalAsking)? = nil
+        askBackend: (any ActionApprovalAsking)? = nil,
+        credentialBroker: ContainedCredentialBroker? = nil,
+        credentialDelivery: (@Sendable (BrokeredCredentialInjection) -> Void)? = nil
     ) {
         self.normalize = normalize
         self.executor = executor
@@ -124,6 +164,8 @@ public struct RuntimeAdmissionConfiguration: Sendable {
         self.policy = policy
         self.evidence = evidence
         self.askBackend = askBackend
+        self.credentialBroker = credentialBroker
+        self.credentialDelivery = credentialDelivery
     }
 
     public static var failClosed: RuntimeAdmissionConfiguration {
@@ -136,6 +178,173 @@ public struct RuntimeAdmissionConfiguration: Sendable {
             evidence: RuntimeAdmissionEvidence()
         )
     }
+}
+
+// MARK: - Phase 5 credential broker
+
+/// Supervisor-side credential broker. OpenShell `provider_credentials`
+/// mirror: the SecretResolver stays in the supervisor; secret values live
+/// in host memory and resolve only for approved (credential, endpoint)
+/// pairs. Only non-secret prepared entries cross into the cage
+/// environment; secret values are delivered only to supervisor-side
+/// injection points, never over the pipes, never into logs.
+///
+/// The cage cannot address credentials at all: there is no credential wire
+/// type. A grant is exercised when the cage's ordinary HTTP request rides
+/// the existing admission pipes — capability binding and replay protection
+/// are the gate's, unchanged — and the session consults the broker for the
+/// authorized destination before performing it. Denied, pending, and
+/// non-HTTP actions never consult the broker, so an unauthenticated cage
+/// learns nothing about broker configuration.
+public struct ContainedCredentialBroker: Sendable, Equatable {
+    /// Whether the value may be injected supervisor-side or may cross as a
+    /// non-secret prepared entry. Never both.
+    public enum ValueKind: Sendable, Equatable {
+        /// Injected supervisor-side at approved endpoints only. Never
+        /// crosses into the cage environment.
+        case secret
+        /// Non-secret pointer (profile name, key id). May cross as a
+        /// prepared entry; never resolved as an injection.
+        case selector
+    }
+
+    public struct Credential: Sendable, Equatable {
+        public var value: String
+        public var kind: ValueKind
+        public var approvedHosts: Set<String>
+        /// Secrets only: mint a non-secret `rv-brokered:` placeholder entry
+        /// so cage tools select key auth. Default false: even the
+        /// placeholder is deny-by-default.
+        public var placeholder: Bool
+
+        public init(
+            value: String,
+            kind: ValueKind,
+            approvedHosts: Set<String>,
+            placeholder: Bool = false
+        ) {
+            self.value = value
+            self.kind = kind
+            self.approvedHosts = Set(approvedHosts.map { $0.lowercased() })
+            self.placeholder = placeholder
+        }
+    }
+
+    /// Audit generation correlating grants, placeholders, and evidence.
+    /// Audit-only in Phase 5: no rotation logic reads it.
+    public var revision: UInt64
+    var credentials: [String: Credential]
+    /// Endpoint routing: lowercased host to credential name.
+    var grants: [String: String]
+
+    public init(
+        credentials: [String: Credential],
+        grants: [String: String],
+        revision: UInt64 = 0
+    ) {
+        self.revision = revision
+        self.credentials = credentials
+        var folded: [String: String] = [:]
+        for (host, name) in grants {
+            folded[host.lowercased()] = name
+        }
+        self.grants = folded
+    }
+
+    /// Names-only audit surface. Values are never enumerated.
+    public var credentialNames: [String] {
+        credentials.keys.sorted()
+    }
+
+    /// Non-secret entries the supervisor may apply after the environment
+    /// strip. Selectors cross with their value; secrets cross only as a
+    /// `rv-brokered:<name>@<revision>` marker when they opt into a
+    /// placeholder — the marker carries the name and revision only.
+    /// Malformed names, insane values, and non-credential-class names are
+    /// dropped fail-closed. Sorted by name.
+    public func preparedEntries() -> [BrokerPreparedEntry] {
+        var entries: [BrokerPreparedEntry] = []
+        for name in credentials.keys.sorted() {
+            guard let credential = credentials[name],
+                ContainedEnvironmentPolicy.isCredentialClass(name)
+            else {
+                continue
+            }
+            switch credential.kind {
+            case .selector:
+                guard ContainedEnvironmentPolicy.isValidName(name),
+                    ContainedEnvironmentPolicy.isSaneValue(credential.value)
+                else {
+                    continue
+                }
+                entries.append(BrokerPreparedEntry(name: name, value: credential.value))
+            case .secret:
+                guard credential.placeholder else { continue }
+                let marker = "rv-brokered:\(name)@\(revision)"
+                guard ContainedEnvironmentPolicy.isValidName(name),
+                    ContainedEnvironmentPolicy.isSaneValue(marker)
+                else {
+                    continue
+                }
+                entries.append(BrokerPreparedEntry(name: name, value: marker))
+            }
+        }
+        return entries
+    }
+
+    /// Resolves a supervisor-side injection for one authorized destination
+    /// host. Grants only when the endpoint routing names a credential AND
+    /// that credential approves the host; either side missing withholds.
+    /// Host comparison is case-insensitive; destinations here are already
+    /// canonicalized lowercase by the HTTP layer.
+    func resolve(host: String) -> BrokerResolution {
+        let key = host.lowercased()
+        guard let name = grants[key] else {
+            return .withheld(.endpointNotApproved)
+        }
+        guard let credential = credentials[name] else {
+            return .withheld(.credentialMissing)
+        }
+        guard credential.kind == .secret else {
+            return .withheld(.credentialNotSecret)
+        }
+        guard credential.approvedHosts.contains(key) else {
+            return .withheld(.endpointNotApproved)
+        }
+        return .granted(
+            BrokeredCredentialInjection(credentialName: name, host: key, value: credential.value)
+        )
+    }
+}
+
+/// Supervisor-side injection resolved for one authorized HTTP action.
+/// Host memory only: passed as an argument to the performing transport
+/// (and to the legacy `credentialDelivery` tap when one is set), never
+/// encoded, never logged, never sent over the pipes. Public so
+/// supervisor-side transports in other modules can consume it; the cage
+/// is a separate process and cannot reach host-side Swift state at all.
+public struct BrokeredCredentialInjection: Sendable, Equatable {
+    public var credentialName: String
+    public var host: String
+    public var value: String
+
+    public init(credentialName: String, host: String, value: String) {
+        self.credentialName = credentialName
+        self.host = host
+        self.value = value
+    }
+}
+
+/// Why the broker withheld an injection. Names-only audit vocabulary.
+enum BrokerWithheldReason: String, Sendable, Equatable {
+    case endpointNotApproved
+    case credentialMissing
+    case credentialNotSecret
+}
+
+enum BrokerResolution: Sendable, Equatable {
+    case granted(BrokeredCredentialInjection)
+    case withheld(BrokerWithheldReason)
 }
 
 /// Plan and profile RV already compiled for this launch.
@@ -432,7 +641,11 @@ final class RuntimeAdmissionSession: Sendable {
             configuration.evidence.record(decision.event)
             return decision
         }
-        let performed = perform(allowed)
+        let consult = consultCredentialBroker(for: allowed, base: decision.event)
+        if let brokerEvent = consult.event {
+            configuration.evidence.record(brokerEvent)
+        }
+        let performed = perform(allowed, credential: consult.injection)
         var event = decision.event
         let response = admissionResponse(performed, event: &event)
         configuration.evidence.record(event)
@@ -734,7 +947,15 @@ final class RuntimeAdmissionSession: Sendable {
             }
             // Outside the lock: perform spawns and blocks like the submit
             // path.
-            let performed = perform(allowed)
+            var brokerBase = baseEvent(
+                binding: plan.binding, park: plan.park,
+                authorization: .allowed, result: "authorized")
+            stamp(&brokerBase, agent: plan.park.approval.subject.agent, binding: plan.binding)
+            let consult = consultCredentialBroker(for: allowed, base: brokerBase)
+            if let brokerEvent = consult.event {
+                configuration.evidence.record(brokerEvent)
+            }
+            let performed = perform(allowed, credential: consult.injection)
             var event = baseEvent(
                 binding: plan.binding, park: plan.park,
                 authorization: .allowed, result: "authorized")
@@ -984,7 +1205,72 @@ final class RuntimeAdmissionSession: Sendable {
         _ = admissionWriteAll(fd, frame)
     }
 
-    private func perform(_ allowed: AllowedAction) -> AdmissionPerformResult {
+    /// Resolves a supervisor-side credential injection for one authorized
+    /// HTTP action. The event is nil without a broker or for non-HTTP
+    /// actions (pre-broker behavior: no consultation, no event). Otherwise
+    /// resolves in host memory and returns the names-only audit event for
+    /// the caller to record plus the injection for the caller to pass as
+    /// an argument to the performing transport: `credentialGranted:<name>`,
+    /// `credentialUnwired:<name>` (granted but no delivery reaches a
+    /// hook-delivered transport: the grant is dropped fail-closed), or
+    /// `credentialWithheld:<reason>`. The value never enters the event.
+    /// Consultation runs only for gate-authorized actions, so binding and
+    /// replay protection are the gate's, unchanged; the broker never
+    /// widens or narrows the action's own allow/deny.
+    private func consultCredentialBroker(
+        for allowed: AllowedAction,
+        base: RuntimeAdmissionEvent
+    ) -> (event: RuntimeAdmissionEvent?, injection: BrokeredCredentialInjection?) {
+        guard let broker = configuration.credentialBroker,
+            case .http(let http) = allowed.action
+        else {
+            return (nil, nil)
+        }
+        let outcome: (RuntimeAdmissionAuthorization, String)
+        let injection: BrokeredCredentialInjection?
+        switch broker.resolve(host: http.destination.host) {
+        case .granted(let granted):
+            if let deliver = configuration.credentialDelivery {
+                deliver(granted)
+                outcome = (.allowed, "credentialGranted:\(granted.credentialName)")
+                injection = granted
+            } else if configuration.http.deliversCredentialAsArgument {
+                // Wired by construction: the transport receives the
+                // injection as an argument, so no hook is needed.
+                outcome = (.allowed, "credentialGranted:\(granted.credentialName)")
+                injection = granted
+            } else {
+                outcome = (.executorFailed, "credentialUnwired:\(granted.credentialName)")
+                injection = nil
+            }
+        case .withheld(let reason):
+            outcome = (.denied, "credentialWithheld:\(reason.rawValue)")
+            injection = nil
+        }
+        return (
+            RuntimeAdmissionEvent(
+                session: base.session,
+                requestID: base.requestID,
+                fingerprint: base.fingerprint,
+                authorization: outcome.0,
+                executionAttempted: false,
+                result: outcome.1,
+                httpMethod: base.httpMethod,
+                httpDestination: base.httpDestination,
+                httpAddress: base.httpAddress,
+                httpQueryPresent: base.httpQueryPresent,
+                workspace: base.workspace,
+                agentInstance: base.agentInstance,
+                agentDefinition: base.agentDefinition
+            ),
+            injection
+        )
+    }
+
+    private func perform(
+        _ allowed: AllowedAction,
+        credential: BrokeredCredentialInjection?
+    ) -> AdmissionPerformResult {
         switch allowed.action {
         case .file:
             return .shell(.failure(.compileFailed))
@@ -1017,10 +1303,13 @@ final class RuntimeAdmissionSession: Sendable {
                 return .http(.failure(.notOpened(.unavailable)))
             case .effect(let body):
                 return .http(body(http, token, shouldStop))
+            case .effectWithCredential(let body):
+                return .http(body(http, credential, token, shouldStop))
             case .direct:
                 return .http(
                     HTTPDirectExecutor.perform(
                         http,
+                        credential: credential,
                         cancellation: token,
                         shouldStop: shouldStop
                     )
