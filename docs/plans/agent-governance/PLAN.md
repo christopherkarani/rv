@@ -28,7 +28,7 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | _not opened yet_ | not started |
 
 **Next action:** Phase 7 on `governance/phase-7-enterprise-hardening` (from
-phase 6), in the order in the Phase 7 section; 7.2, 7.5 and 7.6 are done, 7.3 is next. Phase 6 agent items are done except
+phase 6), in the order in the Phase 7 section; 7.2, 7.5, 7.6 and 7.3 are done, 7.1 is next. Phase 6 agent items are done except
 the impro-ref-blocked ones (6.2 cage denies, 6.5 injected config dir, 6.6
 watchdog). Owner items for phase 6: signing secrets + certificate (6.3),
 flip `signed_releases`/`release_team_id` in `install.sh` and set
@@ -1151,9 +1151,23 @@ allowlist build on them). Nothing here edits an impro-ref file: 7.4 uses
       `~/.config/rv/audit-forward/launchd.log` after 5 minutes
 
 ### 7.3 Search tool mode
-- [ ] `"toolMode": "search"` (top level): `tools/list` returns only
+- [x] `"toolMode": "search"` (top level): `tools/list` returns only
       `rv_search_tools` and `rv_call_tool`; calls route through the same
-      policy, approvals, and audit as direct calls
+      policy, approvals, and audit as direct calls. `rv_search_tools`
+      (`query`, `limit` 1-50, default 10) lists the upstreams on demand and
+      returns matches (every term in name or description, name matches
+      first) with their schemas and rv markers in `structuredContent`; denied
+      tools never appear. `rv_call_tool` (`name`, `arguments`) unwraps to the
+      normal call path, so audit and approvals name the real server/tool.
+      `rv mcp trust` names the mode; help row `toolMode`. Tests:
+      `searchModeListsTwoToolsAndRoutesCallsThroughTheSamePolicy`,
+      `toolModeRoundTripsAndDefaultsToDirect`, trust review
+- [x] E2E (Linux, 2026-10-13): `Scripts/mcp-phase7-proof.py` 28/28; the
+      7.3 section uses two fixture servers: only the two rv tools listed,
+      search finds `db__query` and `wh__query`, a denied tool is not
+      searchable, `rv_call_tool` runs an allowed call, pauses an `ask` call,
+      refuses a denied one, and the audit log names `db/query`, `wh/query`,
+      `db/tables`
 
 ### 7.1 Remote MCP servers
 - [ ] mcp.json server with `"url"` (instead of `command`) and `"headers"`
@@ -1301,4 +1315,13 @@ when the phase starts (items 8.1-8.4 from the 2026-10-13 brief).
   --install` (LaunchAgent + printed LaunchDaemon template; cron line on
   Linux). Linux: full `swift test` green (RVHistory 43, RVCLI 841),
   preflight 0 failures, proof 19/19. Owner: load the LaunchAgent on macOS.
-  Next: 7.3.
+  Next: 7.3. CI note: on #417 and #418 the macOS "isolation (A-E)" shard
+  failed in untouched supervisor suites (#417 hung until cancelled in
+  `ActionApprovalPark`/`AgentInstanceRegistry` tests; #418 got
+  `revoked:runtimeEnded` instead of `revoked:cancelled` in
+  `supervisorLaunchMintsActivatesAndFinishesInstance`). Neither branch
+  changes those sources; Linux `swift test` passed on both. Treated as
+  macOS runner flakes in impro-ref-owned code; rerun before merging.
+- 2026-10-13: Phase 7.3: `"toolMode": "search"` with `rv_search_tools` and
+  `rv_call_tool` through the normal policy path. Linux: RVMCP 80, RVCLI
+  841 green, preflight 0 failures, proof 28/28. Next: 7.1.
