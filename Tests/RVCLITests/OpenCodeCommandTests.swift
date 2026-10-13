@@ -84,14 +84,29 @@ struct OpenCodeCommandTests {
     }
 
     @Test func bannerAndHelpDiscloseAcceptedLimits() {
-        // R1/R2: caged loopback servers are LAN-visible and reachable from
-        // other local processes. R3: same-user temp files are readable.
-        #expect(OpenCodeRun.isolationNotice.contains(AcceptedRuntimeLimits.line))
-        #expect(AcceptedRuntimeLimits.line.contains("LAN-visible"))
-        #expect(AcceptedRuntimeLimits.line.contains("other local processes"))
-        #expect(AcceptedRuntimeLimits.line.contains("Same-user temp files are readable"))
+        // R1: Seatbelt cannot scope bind/listen to loopback, so the cage can
+        // bind, listen, and accept on 0.0.0.0, ::, and LAN addresses. RV
+        // cannot prevent that. Outbound LAN connect stays denied, and a
+        // server that actually binds 127.0.0.1 or ::1 is not LAN-reachable.
+        // R2: host loopback is shared, so another workspace or the
+        // unsandboxed host can connect to a caged server's port.
+        // R3: the cage is granted read-write on the host per-user temp
+        // directory, which other same-user processes can also read and write.
+        let line = AcceptedRuntimeLimits.line
+        #expect(OpenCodeRun.isolationNotice.contains(line))
+        #expect(line.contains("bind, listen, and accept on 0.0.0.0, ::, and LAN addresses"))
+        #expect(line.contains("RV cannot prevent that"))
+        #expect(line.contains("Outbound connect to the LAN stays denied"))
+        #expect(line.contains("actually binds 127.0.0.1 or ::1 is not reachable from the LAN"))
+        #expect(line.contains("another workspace or the unsandboxed host can connect to a caged server's port"))
+        #expect(line.contains("A caged loopback server is reachable from the LAN") == false)
+        #expect(line.contains("LAN-visible") == false)
+        #expect(line.contains("read-write on the host per-user temp directory"))
+        #expect(line.contains("confstr _CS_DARWIN_USER_TEMP_DIR, outside the workspace"))
+        #expect(line.contains("other processes running as the same user can read and write that directory"))
+        #expect(line.contains("Same-user temp files are readable") == false)
         let help = HelpDispatch.text(.opencode, palette: colorOffPalette)
-        #expect(help.contains(AcceptedRuntimeLimits.line))
+        #expect(help.contains(line))
     }
 
     @Test func resolve_explicitRelativeExecutableRejected() {
