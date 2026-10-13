@@ -67,6 +67,14 @@ public struct AuditEvent: Sendable, Equatable, Codable {
     /// Ledger file the event came from.
     public var source: String
     public var detail: [String: String]
+    /// SHA-256 of the previous `audit.jsonl` line; set by `AuditLog.append`.
+    public var prev: String?
+    /// SHA-256 of this event's own `audit.jsonl` line, when read from it. Not stored.
+    public var chainHead: String? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case schema, time, kind, decision, subject, reason, workspace, runtime, agent, source, detail, prev
+    }
 
     public init(
         time: Date,

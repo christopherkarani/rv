@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVDomain
 
 /// Read-side join of every append-only rv ledger into `AuditEvent`s.
 ///
@@ -52,7 +53,9 @@ public struct AuditLedger: Sendable {
     public static func event(fromLine line: Substring, source: Source) -> AuditEvent? {
         guard let data = line.data(using: .utf8), data.isEmpty == false else { return nil }
         if source == .audit {
-            return try? decoder.decode(AuditEvent.self, from: data)
+            var event = try? decoder.decode(AuditEvent.self, from: data)
+            event?.chainHead = RVDigest.sha256Hex([UInt8](data))
+            return event
         }
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil

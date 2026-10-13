@@ -162,7 +162,9 @@ struct AuditLedgerTests {
         #expect(AuditLog.append(event, configDirectory: dir))
         #expect(AuditLog.append(event, configDirectory: dir))
         let read = AuditLedger(configDirectory: dir).events(AuditFilter(kinds: ["secret"]))
-        #expect(read == [event, event])
+        #expect(read.map { var plain = $0; plain.prev = nil; plain.chainHead = nil; return plain } == [event, event])
+        #expect(read.first?.prev == AuditChain.genesis)
+        #expect(read.last?.prev == read.first?.chainHead)
 
         let attributes = try FileManager.default.attributesOfItem(
             atPath: AuditLog.fileURL(configDirectory: dir).path)
