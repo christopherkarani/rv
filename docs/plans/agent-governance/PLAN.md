@@ -28,7 +28,7 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | _not opened yet_ | not started |
 
 **Next action:** Phase 7 on `governance/phase-7-enterprise-hardening` (from
-phase 6), in the order in the Phase 7 section (7.2 first). Phase 6 agent items are done except
+phase 6), in the order in the Phase 7 section; 7.2 is done, 7.5 is next. Phase 6 agent items are done except
 the impro-ref-blocked ones (6.2 cage denies, 6.5 injected config dir, 6.6
 watchdog). Owner items for phase 6: signing secrets + certificate (6.3),
 flip `signed_releases`/`release_team_id` in `install.sh` and set
@@ -1058,18 +1058,29 @@ allowlist build on them). Nothing here edits an impro-ref file: 7.4 uses
 `EgressProxy`/`EgressHostPolicy` as they are and its own `MCPSandbox` profile.
 
 ### 7.2 Argument-aware rules
-- [ ] `ToolArgumentRule` (RVPolicy): `{"tool": "<glob>", "when": {"<JSON
+- [x] `ToolArgumentRule` (RVPolicy): `{"tool": "<glob>", "when": {"<JSON
       pointer>": {"<op>": value, ...}, ...}}`; ops `==` `!=` `<` `>` `in`
       `glob`; every condition must hold; a missing path never matches.
-      Table-driven tests
-- [ ] mcp.json `tools.allow|ask|deny` accept rule objects next to globs;
+      Table-driven tests (`ToolArgumentRuleTests`: match/invalid tables, round
+      trip, summary, strictest). Limits: 16 conditions, 256 `in` items, 256
+      chars per glob. Integers beyond 2^53 compare as exact digit strings
+- [x] mcp.json `tools.allow|ask|deny` accept rule objects next to globs;
       strictest matching rule wins (deny > ask > allow), then `default`, then
       `defaultDecision`. `tools/list` hides only on an unconditional deny and
-      marks tools with conditional rules
-- [ ] Org policy `mcp.deny|ask|allow` accept the same objects (`tool` is a
-      `server/tool` glob); `rv managed status` and `rv mcp list` show them
-- [ ] E2E: gateway fixture, same tool allowed for one argument value, asked
-      for another, denied for a third
+      marks allowed tools with conditional rules (`[rv: some arguments need
+      the user's approval or are refused]`). `rv mcp approve --always` refuses
+      a tool with argument rules (an allow entry would not cover every call)
+- [x] Org policy `mcp.deny|ask|allow` accept the same objects (`tool` is a
+      `server/tool` glob); `rv managed status` lists them (`mcp deny:
+      github/merge_* when /branch == "main"`) and `rv mcp trust` shows the
+      mcp.json ones in its review. `rv mcp list` stays a host inventory (it
+      never showed tool policy)
+- [x] E2E: gateway fixture, same tool allowed for one argument value, asked
+      for another, denied for a third. `Scripts/mcp-phase7-proof.py
+      .build/debug/rv` (Linux, 2026-10-13): 10/10 — trust on a pty, review
+      lists rules, listing marks the tool, `database:test` runs, `prod` asks,
+      `DROP` denied, `limit > 1000` denied, missing `database` falls through to
+      the default, `--always` refused, audit records the denial
 
 ### 7.5 Org keys and anti-rollback
 - [ ] `org-key.pub` holds one or more base64 Ed25519 keys (one per line,
@@ -1217,3 +1228,10 @@ when the phase starts (items 8.1-8.4 from the 2026-10-13 brief).
   `swift test` 4846 tests / 19 bundles green, config untouched, preflight 0
   failures, shellcheck + actionlint clean. Blocked on impro-ref: 6.5 injected
   config dir, 6.6 watchdog. Next: Phase 7.
+- 2026-10-13: Phase 7.2 on `governance/phase-7-enterprise-hardening`:
+  `ToolArgumentRule` (JSON pointer conditions, six operators) in mcp.json
+  server tool lists and org `mcp.*` lists; strictest match wins (D19);
+  gateway decides each call by its arguments; `--always` refused for ruled
+  tools; help rows for rules and missing arguments. Linux: RVMCP/RVPolicy/
+  RVCLI 835 tests green, preflight 0 failures,
+  `Scripts/mcp-phase7-proof.py` 10/10. Next: 7.5.
