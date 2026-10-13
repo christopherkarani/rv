@@ -53,7 +53,7 @@ enum WorkspaceTUICommand {
             described = inventoried.summary
         case .failure:
             session.close()
-            throw ValidationError(WorkspaceCommandRun.hostNotReachableText)
+            throw ValidationError(WorkspaceCommandRun.workspaceSessionFailedText)
         }
         let openedLayout: WorkspaceLayoutOpenResult
         do {
@@ -98,7 +98,7 @@ enum WorkspaceTUICommand {
             model.launchDefaultRuntimeIfEmpty()
         case .failure:
             session.close()
-            throw ValidationError(WorkspaceCommandRun.hostNotReachableText)
+            throw ValidationError(WorkspaceCommandRun.workspaceSessionFailedText)
         }
         let savePump = WorkspaceLayoutSavePump(model: model, layout: openedLayout.session) { message in
             model.reportNotice(message)
