@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import RVDomain
 import RVIsolation
 import RVTheme
 import Testing
@@ -72,7 +73,7 @@ struct OpenCodeCommandTests {
         } catch let error as ExitCode {
             #expect(error.rawValue == 37)
         } catch let error as ValidationError {
-            #expect(String(describing: error).contains("contained workspace host is unavailable"))
+            #expect(String(describing: error).contains(ContainedRuntimeRefusal.message))
         }
         #endif
     }
@@ -326,7 +327,7 @@ struct OpenCodeFrontendTests {
             environment: ["HOME": home.path, "PATH": "/usr/bin:/bin"]
         )
         #expect(launched.status != 0)
-        #expect(launched.stderr.contains("contained workspace host is unavailable"))
+        #expect(launched.stderr.contains(ContainedRuntimeRefusal.message))
     }
 }
 #endif
@@ -386,7 +387,7 @@ private func launchedOrRefusedOnLinux(
         #endif
     } catch let error as ValidationError {
         #if os(Linux)
-        #expect(String(describing: error).contains("contained workspace host is unavailable"))
+        #expect(String(describing: error).contains(ContainedRuntimeRefusal.message))
         for url in absent {
             #expect(FileManager.default.fileExists(atPath: url.path) == false)
         }

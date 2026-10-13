@@ -218,3 +218,19 @@ import RVTheme
     #expect(HelpDispatch.topic(arguments: ["help", "operator"]) == .`operator`)
     #expect(HelpDispatch.topic(arguments: ["operator", "propose", "--help"]) == .`operator`)
 }
+
+@Test func helpText_scopesPlatformByFeature() {
+    let root = HelpDispatch.text(.root, palette: colorOffPalette)
+    #expect(root.contains("macOS only"), "root must scope contained runtime to macOS")
+    let opencode = HelpDispatch.text(.opencode, palette: colorOffPalette)
+    #expect(opencode.contains("macOS-only") || opencode.contains("macOS only"))
+    #expect(opencode.contains("Hook guard"))
+    #expect(opencode.contains("Linux"))
+    let workspace = HelpDispatch.text(.workspace, palette: colorOffPalette)
+    #expect(workspace.contains("macOS-only") || workspace.contains("macOS only"))
+    #expect(workspace.contains("Hook guard"))
+    #expect(workspace.contains("docs/security/runtime-boundary.md"))
+    let hook = HelpDispatch.text(.hook, palette: colorOffPalette)
+    #expect(hook.contains("works on Linux"))
+    #expect(hook.contains("macOS-only") || hook.contains("macOS only"))
+}

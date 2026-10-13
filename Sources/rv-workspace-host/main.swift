@@ -3,6 +3,7 @@
 #endif
 
 import Foundation
+import RVDomain
 
 #if os(macOS)
 import Darwin
@@ -28,7 +29,7 @@ enum WorkspaceHostMain {
     static func main() {
         #if !os(macOS)
         FileHandle.standardError.write(
-            Data("rv-workspace-host: contained workspace host is unavailable\n".utf8)
+            Data("rv-workspace-host: \(ContainedRuntimeRefusal.message)\n".utf8)
         )
         Foundation.exit(2)
         #else

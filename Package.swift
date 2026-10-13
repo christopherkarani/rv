@@ -219,7 +219,7 @@ let serviceLibraryAndDaemon: [Target] = [
     ),
     .executableTarget(
         name: "rv-workspace-host",
-        dependencies: ["RVIsolation", "RVEngine", "RVService"]
+        dependencies: ["RVDomain", "RVIsolation", "RVEngine", "RVService"]
     ),
 ] + macOSOperatorUITargets
 let serviceProducts: [Product] = [
