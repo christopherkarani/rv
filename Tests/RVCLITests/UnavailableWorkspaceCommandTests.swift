@@ -19,6 +19,17 @@ struct UnavailableWorkspaceCommandTests {
                 "\(command) help row must be marked (not yet available)"
             )
         }
+        let custom = lines.first { $0.contains("rv workspace custom") }
+        #expect(
+            custom?.contains(
+                "Launch an ad-hoc definition (not yet available); executable image verification is deferred"
+            ) == true,
+            "custom help must mark the launch unavailable, before image verification"
+        )
+        #expect(
+            custom?.contains("deferred (not yet available)") == false,
+            "a suffix on deferred must not satisfy the custom help marker"
+        )
     }
 
     @Test func workspaceParserAbstractsMarkUnavailableCommands() {
