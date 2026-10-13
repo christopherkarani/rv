@@ -88,7 +88,10 @@ public enum AuditChain {
         private var firstBreak: AuditChainReport.Break?
 
         var report: AuditChainReport {
-            AuditChainReport(lines: lines, unchained: unchained, head: previous, firstBreak: firstBreak)
+            let stripped = lines > 0 && started == false && firstBreak == nil
+                ? AuditChainReport.Break(line: 1, reason: "no prev on any line")
+                : firstBreak
+            return AuditChainReport(lines: lines, unchained: unchained, head: previous, firstBreak: stripped)
         }
 
         mutating func consume(_ line: Data) {

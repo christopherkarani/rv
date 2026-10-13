@@ -224,6 +224,22 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     }
 }
 
+@Test func egressProxyRefusesLoopbackWhenTheCageCannotDialIt() throws {
+    let collector = EgressDenialCollector()
+    let proxy = EgressProxy(
+        policy: EgressHostPolicy(allowedHosts: ["api.example.com"], relaysLoopback: false), record: { collector.record($0) })
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let client = try #require(egressConnect(port: port))
+    defer { close(client) }
+    #expect(egressSend(client, text: "CONNECT 127.0.0.1:9 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"))
+    let response = egressReadUntil403(client)
+    #expect(response.contains("HTTP/1.1 403"))
+    egressAwaitDenials(collector, count: 1)
+    #expect(collector.all.first?.reason == .deniedPolicy)
+    #expect(collector.all.first?.host == "127.0.0.1")
+}
+
 @Test func egressProxyRelaysLoopbackTargets() throws {
     let stub = try #require(EgressStubServer(reply: "PONG\n"))
     let collector = EgressDenialCollector()

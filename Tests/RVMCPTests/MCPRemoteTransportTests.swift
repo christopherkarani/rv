@@ -66,6 +66,13 @@ struct MCPRemoteTransportTests {
         #expect(origin("http://127.0.0.1:9/sse", "http://127.0.0.1:10/m") == false)
         #expect(origin("https://a.example/sse", "http://a.example/m") == false)
         #expect(origin("https://a.example/sse", "https://b.example/m") == false)
+        let base = try #require(URL(string: "https://a.example/sse"))
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://a.example/messages", relativeTo: base) == nil)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://user:pw@a.example/messages", relativeTo: base)?
+            .contains("without credentials") == true)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://a.example/messages?api_key=zzz", relativeTo: base)?
+            .contains("secret in its query") == true)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://b.example/messages", relativeTo: base) == "on another origin")
     }
 
     @Test func plannerResolvesHeaderSecretsAndSkipsTheSandboxRuleForRemoteServers() throws {

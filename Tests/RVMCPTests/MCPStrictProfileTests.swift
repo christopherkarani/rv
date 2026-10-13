@@ -88,7 +88,8 @@ struct MCPStrictProfileTests {
         let policy = MCPSandboxPolicy(network: false, hosts: ["api.example.com"])
         let proxied = MCPSandbox.profile(
             policy: policy, scratch: "/s", home: "/h", configDirectory: "/h/.config/rv", temporaryDirectory: "/t", proxyPort: 4321)
-        #expect(proxied.contains("(deny network*)\n(allow network-outbound (remote tcp \"localhost:4321\"))"))
+        #expect(proxied.contains("(deny network*)\n(allow network-outbound (remote tcp \"127.0.0.1:4321\"))"))
+        #expect(proxied.contains("localhost:") == false)
         let closed = MCPSandbox.profile(
             policy: MCPSandboxPolicy(network: false), scratch: "/s", home: "/h", configDirectory: "/h/.config/rv",
             temporaryDirectory: "/t")

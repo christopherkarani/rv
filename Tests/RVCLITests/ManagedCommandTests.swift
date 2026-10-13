@@ -85,6 +85,11 @@ struct ManagedCommandTests {
         #expect(rollback.hasPrefix("organization policy INVALID: rollback: policy.json serial 2"))
     }
 
+    @Test func requireSandboxSaysRemoteServersAreExempt() throws {
+        let policy = try ManagedPolicy.decode(Data(#"{"version":1,"mcp":{"requireSandbox":true}}"#.utf8)).get()
+        #expect(ManagedRun.restrictions(policy) == ["mcp: every local server must be sandboxed (remote servers are exempt)"])
+    }
+
     @Test func mcpCommandsFollowTheOrganization() async throws {
         let scratch = Scratch()
         var environment = MCPEnvironment(

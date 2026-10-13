@@ -278,6 +278,27 @@ struct ManagedSerialRecordTests {
         #expect(ManagedPolicyState.invalid("x").checkedForRollback(against: record).state == .invalid("x"))
     }
 
+    @Test func serialsAboveTwoToTheFiftyThreeStayExact() throws {
+        let high = 9_007_199_254_740_995
+        let low = 9_007_199_254_740_994
+        let decoded = try ManagedPolicy.decode(Data(#"{"version": 1, "serial": \#(high)}"#.utf8)).get()
+        #expect(decoded.serial == high)
+        #expect(throws: (any Error).self) { try ManagedPolicy.decode(Data(#"{"version": 1, "serial": 1.5}"#.utf8)).get() }
+        #expect(throws: (any Error).self) { try ManagedPolicy.decode(Data(#"{"version": 1, "serial": 1e2}"#.utf8)).get() }
+        #expect(throws: (any Error).self) { try ManagedPolicy.decode(Data(#"{"version": 1, "serial": "5"}"#.utf8)).get() }
+
+        let remembered = ManagedSerialRecord(highest: ["/etc/rv/managed": low])
+        let newer = try active(serial: high).checkedForRollback(against: remembered)
+        #expect(newer.raised == ManagedSerialRecord(highest: ["/etc/rv/managed": high]))
+        let older = try active(serial: low).checkedForRollback(against: ManagedSerialRecord(highest: ["/etc/rv/managed": high]))
+        #expect(older.state.invalidReason?.contains("serial \(low) is lower than serial \(high)") == true)
+
+        let record = ManagedSerialRecord(highest: ["/etc/rv/managed": high])
+        #expect(try ManagedSerialRecord.decode(record.encoded()).get() == record)
+        let legacy = Data(#"{"version":1,"highest":{"/etc/rv/managed":\#(low)}}"#.utf8)
+        #expect(try ManagedSerialRecord.decode(legacy).get().highest["/etc/rv/managed"] == low)
+    }
+
     @Test func recordRoundTripsAndRejectsGarbage() throws {
         let record = ManagedSerialRecord(highest: ["/etc/rv/managed": 12])
         #expect(try ManagedSerialRecord.decode(record.encoded()).get() == record)

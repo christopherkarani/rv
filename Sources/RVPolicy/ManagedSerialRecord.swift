@@ -13,22 +13,33 @@ public struct ManagedSerialRecord: Sendable, Equatable {
         self.highest = highest
     }
 
-    private struct File: Codable {
-        var version: Int
-        var highest: [String: Int]
-    }
-
+    /// Serials are decimal strings. A JSON number would round above 2^53, and
+    /// the rounded value can replace a higher exact serial.
     public func encoded() -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return (try? encoder.encode(File(version: 1, highest: highest))) ?? Data()
+        let pairs = highest.keys.sorted().compactMap { key -> String? in
+            guard let serial = highest[key] else { return nil }
+            return "\(JSONLiteral.quoted(key)): \(JSONLiteral.quoted(String(serial)))"
+        }
+        return Data("{\"version\": 1, \"highest\": {\(pairs.joined(separator: ", "))}}\n".utf8)
     }
 
     public static func decode(_ data: Data) -> Result<ManagedSerialRecord, ManagedPolicyError> {
-        guard let file = try? JSONDecoder().decode(File.self, from: data), file.version == 1,
-            file.highest.values.allSatisfy({ $0 >= 0 })
+        guard let root = JSONLiteral.parse(data)?.object, case .number(let version) = root["version"], version == "1",
+            let highest = root["highest"]?.object
         else { return .failure(ManagedPolicyError("\(fileName) is not a valid rv serial record")) }
-        return .success(ManagedSerialRecord(highest: file.highest))
+        var map: [String: Int] = [:]
+        for (key, value) in highest {
+            let token: String?
+            switch value {
+            case .number(let spelling), .string(let spelling): token = spelling
+            default: token = nil
+            }
+            guard let token, let exact = JSONLiteral.nonNegativeInteger(token) else {
+                return .failure(ManagedPolicyError("\(fileName) is not a valid rv serial record"))
+            }
+            map[key] = exact
+        }
+        return .success(ManagedSerialRecord(highest: map))
     }
 }
 

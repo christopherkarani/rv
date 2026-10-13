@@ -48,7 +48,8 @@ public enum MCPSandbox {
             if policy.hosts.isEmpty == false {
                 let server = definition.name
                 let proxy = EgressProxy(
-                    policy: EgressHostPolicy(allowedHosts: Set(policy.hosts)), record: { denied(server, $0) })
+                    policy: EgressHostPolicy(allowedHosts: Set(policy.hosts), relaysLoopback: false),
+                    record: { denied(server, $0) })
                 guard case .success(let port) = proxy.start() else {
                     return .failure(.sandbox("could not start the egress proxy for \(server)"))
                 }
@@ -104,7 +105,7 @@ public enum MCPSandbox {
         ]
         if policy.network == false {
             lines.append("(deny network*)")
-            if let proxyPort { lines.append("(allow network-outbound (remote tcp \"localhost:\(proxyPort)\"))") }
+            if let proxyPort { lines.append("(allow network-outbound (remote tcp \"127.0.0.1:\(proxyPort)\"))") }
         }
         return lines.joined(separator: "\n")
     }

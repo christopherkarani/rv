@@ -172,4 +172,43 @@ struct MCPGatewayRuntimeTests {
         #expect(plan("b") == .blocked("b"))
         #expect(plan("a") == .secretUndefined(server: "a", secret: "MISSING"))
     }
+
+    @Test func untrustedConfigurationDoesNotOpenARemoteServer() throws {
+        let remote = MCPServerDefinition(
+            name: "remote",
+            remote: MCPRemoteServer(
+                url: try #require(URL(string: "https://a.example/mcp")),
+                headers: ["Authorization": "Bearer ${secret:TOKEN}"]))
+        var configuration = MCPConfiguration(servers: [remote, MCPServerDefinition(name: "local", command: "echo")])
+        configuration.untrusted = true
+        let secrets = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "TOKEN", source: .hostEnvironment(variable: "TOKEN"), delivery: .environment),
+        ])
+        final class Calls: @unchecked Sendable { var count = 0 }
+        let calls = Calls()
+        let resolver = SecretResolver { _ in
+            calls.count += 1
+            return .success(SecretValue("super-secret-token")!)
+        }
+        var askedForToken = false
+        let failed = MCPLaunchPlanner.plan(
+            servers: ["remote", "local"], configuration: configuration, secrets: secrets, resolver: resolver,
+            baseEnvironment: [:], oauthTokens: { _ in
+                askedForToken = true
+                return MCPOAuthTokens(
+                    accessToken: "at", tokenEndpoint: URL(string: "https://auth.example/token")!, clientID: "c",
+                    resource: "https://a.example/mcp")
+            })
+        guard case .failure(.untrustedRemote("remote")) = failed else {
+            Issue.record("untrusted mcp.json planned a remote server")
+            return
+        }
+        #expect(calls.count == 0)
+        #expect(askedForToken == false)
+        let local = try MCPLaunchPlanner.plan(
+            servers: ["local"], configuration: configuration, secrets: SecretsConfiguration(),
+            resolver: SecretResolver { _ in .failure(.notFound("x")) }, baseEnvironment: [:]).get()
+        #expect(local.count == 1)
+        #expect(local[0].1.process != nil)
+    }
 }

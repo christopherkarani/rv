@@ -310,9 +310,10 @@ struct AuditForwardInstallTests {
         #expect(stat(agentURL.path, &info) == 0 && info.st_mode & 0o022 == 0)
 
         #expect(text.contains("wrote \(agentURL.path)"))
-        #expect(text.contains("launchctl bootstrap gui/501 \(agentURL.path)"))
+        #expect(text.contains("launchctl bootstrap gui/501 \(AuditForwardInstall.shellQuote(agentURL.path))"))
         #expect(text.contains("<key>UserName</key>\n\t<string>alice</string>"))
-        #expect(text.contains("sudo launchctl bootstrap system /Library/LaunchDaemons/dev.rv.audit-forward.alice.plist"))
+        #expect(text.contains(
+            "sudo launchctl bootstrap system \(AuditForwardInstall.shellQuote("/Library/LaunchDaemons/dev.rv.audit-forward.alice.plist"))"))
 
         let daemon = try plist(AuditForwardInstall.daemonPlist(plan))
         #expect(daemon["Label"] as? String == "dev.rv.audit-forward.alice")
@@ -331,6 +332,21 @@ struct AuditForwardInstallTests {
         #expect(failure.message.contains("${secret:NAME}"))
         #expect(failure.message.contains("abc123") == false)
         #expect(FileManager.default.fileExists(atPath: home.url.appendingPathComponent("Library").path) == false)
+    }
+
+    @Test func shellMetacharactersInTheAccountNameAreQuoted() throws {
+        let home = Home()
+        var hostile = plan(["--to", "https://siem.example.com/rv"], home: home)
+        hostile.userName = "alice';touch /tmp/pwned"
+        let text = try AuditForwardInstall.install(hostile).get()
+        let path = "/Library/LaunchDaemons/dev.rv.audit-forward.alice';touch /tmp/pwned.plist"
+        #expect(text.contains("sudo launchctl bootstrap system \(AuditForwardInstall.shellQuote(path))"))
+        #expect(text.contains("sudo launchctl bootstrap system \(path)") == false)
+        let saved = ProcessInfo.processInfo.environment["USER"]
+        setenv("USER", "alice;rm -rf /", 1)
+        defer { if let saved { setenv("USER", saved, 1) } else { unsetenv("USER") } }
+        #expect(AuditForwardInstall.accountName() != "alice;rm -rf /")
+        #expect(AuditForwardInstall.accountName()?.isEmpty == false)
     }
 
     @Test func linuxGetsACronLineInsteadOfAnInstall() {

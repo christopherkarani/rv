@@ -325,7 +325,7 @@ public struct MCPOAuthFlow: Sendable {
         case .success(let found): resourceMetadata = found
         }
         let metadata: ServerMetadata
-        switch authorizationServer(resourceMetadata.issuer) {
+        switch authorizationServer(resourceMetadata.issuer, server: launch.url) {
         case .failure(let error): return .failure(error)
         case .success(let found): metadata = found
         }
@@ -399,9 +399,17 @@ public struct MCPOAuthFlow: Sendable {
     }
 
     func protectedResource(server: URL, hinted: URL?) -> Result<(resource: String, issuer: URL, scopes: String?), MCPOAuthError> {
+        if let hinted {
+            if let problem = MCPRemoteServer.endpointProblem(hinted) {
+                return .failure(MCPOAuthError("resource metadata URL \(problem)"))
+            }
+            guard MCPHTTPExchange.sameOrigin(hinted, server) else {
+                return .failure(MCPOAuthError("resource metadata URL is not the MCP server's origin"))
+            }
+        }
         let candidates = hinted.map { [$0] } ?? MCPOAuth.protectedResourceMetadataURLs(for: server)
         for url in candidates {
-            if let problem = MCPRemoteServer.endpointProblem(url) {
+            if hinted == nil, let problem = MCPRemoteServer.endpointProblem(url) {
                 return .failure(MCPOAuthError("resource metadata URL \(problem)"))
             }
             guard let response = http(MCPOAuth.jsonRequest(url)), response.status == 200,
@@ -411,6 +419,9 @@ public struct MCPOAuthFlow: Sendable {
             let resource = json["resource"]?.stringValue ?? server.absoluteString
             guard let resourceURL = URL(string: resource), MCPHTTPExchange.sameOrigin(resourceURL, server) else {
                 return .failure(MCPOAuthError("resource metadata names a resource on another origin (\(resource))"))
+            }
+            if let problem = Self.endpointBindingProblem(issuer, issuer: issuer, server: server) {
+                return .failure(MCPOAuthError("authorization server \(problem)"))
             }
             return .success((resource, issuer, json["scopes_supported"]?.stringArray?.joined(separator: " ")))
         }
@@ -423,8 +434,8 @@ public struct MCPOAuthFlow: Sendable {
         return .success((server.absoluteString, issuer, nil))
     }
 
-    func authorizationServer(_ issuer: URL) -> Result<ServerMetadata, MCPOAuthError> {
-        if let problem = MCPRemoteServer.endpointProblem(issuer) {
+    func authorizationServer(_ issuer: URL, server: URL) -> Result<ServerMetadata, MCPOAuthError> {
+        if let problem = Self.endpointBindingProblem(issuer, issuer: issuer, server: server) {
             return .failure(MCPOAuthError("authorization server \(problem)"))
         }
         for url in MCPOAuth.authorizationServerMetadataURLs(issuer: issuer) {
@@ -443,9 +454,40 @@ public struct MCPOAuthFlow: Sendable {
             guard json["code_challenge_methods_supported"]?.stringArray?.contains("S256") == true else {
                 return .failure(MCPOAuthError("the authorization server does not offer PKCE S256; rv will not sign in without it"))
             }
+            guard let declared = json["issuer"]?.stringValue.flatMap(URL.init(string:)),
+                Self.sameIdentifier(declared, issuer)
+            else {
+                return .failure(MCPOAuthError(
+                    "authorization server metadata issuer does not match \(issuer.absoluteString)"))
+            }
+            for (label, endpoint) in [("authorization", authorize), ("token", token)] + (registration.map { [("registration", $0)] } ?? []) {
+                if let problem = Self.endpointBindingProblem(endpoint, issuer: issuer, server: server) {
+                    return .failure(MCPOAuthError("\(label) endpoint \(problem)"))
+                }
+            }
             return .success(ServerMetadata(authorizationEndpoint: authorize, tokenEndpoint: token, registrationEndpoint: registration))
         }
         return .failure(MCPOAuthError("no authorization server metadata at \(issuer.absoluteString)"))
+    }
+
+    /// The discovery URL and the metadata `issuer` name the same identifier.
+    static func sameIdentifier(_ lhs: URL, _ rhs: URL) -> Bool {
+        MCPHTTPExchange.sameOrigin(lhs, rhs) && MCPOAuth.trimmedPath(lhs) == MCPOAuth.trimmedPath(rhs)
+    }
+
+    /// `endpointProblem`, plus the endpoint's origin is the issuer's, and
+    /// loopback HTTP only when the MCP server itself is loopback.
+    static func endpointBindingProblem(_ endpoint: URL, issuer: URL, server: URL) -> String? {
+        if let problem = MCPRemoteServer.endpointProblem(endpoint) { return problem }
+        guard MCPHTTPExchange.sameOrigin(endpoint, issuer) else {
+            return "is not on the authorization server's origin"
+        }
+        let endpointIsLoopback = endpoint.host.map(MCPRemoteServer.isLoopback) ?? false
+        let serverIsLoopback = server.host.map(MCPRemoteServer.isLoopback) ?? false
+        if endpointIsLoopback, serverIsLoopback == false {
+            return "is loopback but the MCP server is not"
+        }
+        return nil
     }
 
     func register(_ endpoint: URL?, redirectURI: String) -> Result<(id: String, secret: String?), MCPOAuthError> {

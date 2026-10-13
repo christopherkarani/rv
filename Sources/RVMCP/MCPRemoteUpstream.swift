@@ -324,14 +324,16 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         }
     }
 
-    /// Legacy SSE: the stream names where to POST. It must be same-origin,
-    /// or headers and tokens would go to a host the user never reviewed.
+    /// Legacy SSE: the stream names where to POST. It must be same-origin
+    /// and pass the same URL checks as `mcp.json`, or headers and tokens
+    /// would go to a host, userinfo, or query secret the user never reviewed.
     private func useEndpoint(_ text: String, stream: URLSessionDataTask) {
-        guard let url = URL(string: text.trimmingCharacters(in: .whitespaces), relativeTo: launch.url)?.absoluteURL,
-            MCPHTTPExchange.sameOrigin(url, launch.url)
-        else {
-            log("MCP server \(name) named a message endpoint on another origin; refused")
+        if let problem = Self.messageEndpointRefusal(text, relativeTo: launch.url) {
+            log("MCP server \(name) named a message endpoint \(problem); refused")
             stream.cancel()
+            return
+        }
+        guard let url = URL(string: text.trimmingCharacters(in: .whitespaces), relativeTo: launch.url)?.absoluteURL else {
             return
         }
         let flushed: [JSONValue] = locked {
@@ -341,6 +343,19 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
             return held
         }
         for message in flushed { post(message, to: url, retried: false) }
+    }
+
+    /// Nil when `text` may receive the bearer token. The refusal is a phrase
+    /// that finishes "named a message endpoint …".
+    static func messageEndpointRefusal(_ text: String, relativeTo base: URL) -> String? {
+        guard let url = URL(string: text.trimmingCharacters(in: .whitespaces), relativeTo: base)?.absoluteURL else {
+            return "that is not a URL"
+        }
+        // Origin first: a foreign URL is refused even when it also fails the
+        // https check, which is the log the legacy SSE stream already emits.
+        if MCPHTTPExchange.sameOrigin(url, base) == false { return "on another origin" }
+        if let problem = MCPRemoteServer.endpointProblem(url) { return "that \(problem)" }
+        return nil
     }
 }
 

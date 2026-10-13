@@ -129,6 +129,14 @@ public struct MCPRemoteServer: Sendable, Equatable {
             return "must be given without credentials (send them as headers with ${secret:NAME})"
         }
         if components.fragment != nil { return "must not have a fragment" }
+        let items = components.queryItems ?? []
+        if items.contains(where: { MCPRedaction.isSecretName($0.name) || MCPRedaction.looksLikeToken($0.value ?? "") }) {
+            return "must not carry a secret in its query (send it as a header with ${secret:NAME})"
+        }
+        let path = components.percentEncodedPath.removingPercentEncoding ?? components.percentEncodedPath
+        if path.split(separator: "/").contains(where: { MCPRedaction.looksLikeToken(String($0)) }) {
+            return "must not carry a secret in its path (send it as a header with ${secret:NAME})"
+        }
         return nil
     }
 

@@ -76,4 +76,16 @@ struct ManagedSerialStoreTests {
         chmod(fixture.state.path, 0o666)
         #expect(fixture.load().invalidReason?.contains("cannot be checked for rollback") == true)
     }
+
+    @Test func aFailedWatermarkWriteDoesNotAcceptThePolicy() throws {
+        let fixture = try Fixture()
+        try fixture.install(serial: 3)
+        #expect(fixture.load().policy?.serial == 3)
+        chmod(fixture.config.path, 0o555)
+        try fixture.install(serial: 4)
+        #expect(fixture.load().invalidReason?.contains("cannot be checked for rollback") == true)
+        chmod(fixture.config.path, 0o755)
+        #expect(try ManagedSerialRecord.decode(Data(contentsOf: fixture.state)).get().highest[fixture.managed.path] == 3)
+        #expect(fixture.load().policy?.serial == 4)
+    }
 }

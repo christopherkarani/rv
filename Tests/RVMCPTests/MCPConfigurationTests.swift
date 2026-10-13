@@ -151,6 +151,9 @@ struct MCPConfigurationTests {
             (server(#""url":"ftp://a.example""#), "url must be https"),
             (server(#""url":"not a url""#), "url must be https"),
             (server(#""url":"https://a.example/#frag""#), "fragment"),
+            (server(#""url":"https://a.example/mcp?api_key=zzz""#), "secret in its query"),
+            (server(#""url":"https://a.example/mcp?x=0123456789abcdefghijklmnop""#), "secret in its query"),
+            (server(#""url":"https://a.example/sk-1234567890abcdefghijklmnop/mcp""#), "secret in its path"),
             (server(#""url":"https://a.example","transport":"ws""#), #"transport must be "http" or "sse""#),
             (server(#""url":"https://a.example","headers":{"Mcp-Session-Id":"x"}"#), "rv sets Mcp-Session-Id"),
             (server(#""url":"https://a.example","headers":{"host":"x"}"#), "rv sets host"),
@@ -170,6 +173,7 @@ struct MCPConfigurationTests {
         for loopback in ["http://localhost:9/mcp", "http://127.0.0.1/mcp", "http://[::1]:8080/sse"] {
             #expect((try? decode(server(#""url":"\#(loopback)""#)).get()) != nil, "\(loopback)")
         }
+        #expect((try? decode(server(#""url":"https://a.example/mcp?v=1""#)).get()) != nil)
     }
 
     @Test func largeIntegersCompareExactly() throws {

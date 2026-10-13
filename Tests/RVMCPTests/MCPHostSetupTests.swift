@@ -102,7 +102,7 @@ struct MCPImportTests {
         #expect(plan.secrets.map(\.definition.name).sorted() == ["LEGACY_X_API_KEY", "LINEAR_AUTHORIZATION"])
         #expect(plan.secrets.first { $0.definition.name == "LINEAR_AUTHORIZATION" }?.value == "lin_api_abcdefghijklmnopqrstuvwx")
 
-        #expect(plan.skipped.first { $0.name == "leaky" }?.reason.contains("URL carries a credential") == true)
+        #expect(plan.skipped.first { $0.name == "leaky" }?.reason.contains("secret in its query") == true)
         #expect(plan.skipped.first { $0.name == "plain" }?.reason == "url must be https (http only to localhost)")
         let encoded = MCPConfiguration(servers: plan.servers).encoded().prettyText
         #expect(encoded.contains("lin_api_") == false && encoded.contains("k_0123") == false)

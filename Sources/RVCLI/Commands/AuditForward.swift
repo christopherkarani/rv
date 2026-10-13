@@ -266,10 +266,12 @@ struct AuditForward: AsyncParsableCommand {
         var options = AuditForwardRun.Options(url: url, format: format, batchSize: batchSize)
         if install {
             if fromNow { try ctx.fail("rv audit forward: --install and --from-now cannot be combined; run --from-now once first\n") }
+            guard let userName = AuditForwardInstall.accountName() else {
+                try ctx.fail("rv audit forward: could not read the account name from the passwd entry\n")
+            }
             let plan = AuditForwardInstall.Plan(
                 home: URL(fileURLWithPath: home.rawValue, isDirectory: true), rvExecutable: MCPExecutable.currentPath(),
-                userID: getuid(), userName: ProcessInfo.processInfo.environment["USER"] ?? NSUserName(),
-                forwardArguments: scheduledArguments)
+                userID: getuid(), userName: userName, forwardArguments: scheduledArguments)
             #if os(macOS)
             switch AuditForwardInstall.install(plan) {
             case .failure(let failure): try ctx.fail("rv audit forward: \(failure.message)\n")

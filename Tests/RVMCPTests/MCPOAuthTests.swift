@@ -144,17 +144,37 @@ struct MCPOAuthTests {
         #expect(connect(flow(answers))?.contains("resource on another origin") == true)
 
         answers = protected
-        answers["/.well-known/oauth-authorization-server"] = json(200, #"{"authorization_endpoint":"https://auth.example/authorize","token_endpoint":"https://auth.example/token","registration_endpoint":"https://auth.example/register"}"#)
+        answers["/.well-known/oauth-authorization-server"] = json(200, #"{"issuer":"https://auth.example","authorization_endpoint":"https://auth.example/authorize","token_endpoint":"https://auth.example/token","registration_endpoint":"https://auth.example/register"}"#)
         #expect(connect(flow(answers))?.contains("does not offer PKCE S256") == true)
 
         answers = protected
-        answers["/.well-known/oauth-authorization-server"] = json(200, #"{"authorization_endpoint":"https://auth.example/authorize","token_endpoint":"http://auth.example/token","code_challenge_methods_supported":["S256"]}"#)
+        answers["/.well-known/oauth-authorization-server"] = json(200, #"{"issuer":"https://auth.example","authorization_endpoint":"https://auth.example/authorize","token_endpoint":"http://auth.example/token","code_challenge_methods_supported":["S256"]}"#)
         #expect(connect(flow(answers))?.contains("token endpoint must be https") == true)
 
         answers = protected
         answers["/register"] = nil
-        answers["/.well-known/oauth-authorization-server"] = json(200, #"{"authorization_endpoint":"https://auth.example/authorize","token_endpoint":"https://auth.example/token","code_challenge_methods_supported":["S256"]}"#)
+        answers["/.well-known/oauth-authorization-server"] = json(200, #"{"issuer":"https://auth.example","authorization_endpoint":"https://auth.example/authorize","token_endpoint":"https://auth.example/token","code_challenge_methods_supported":["S256"]}"#)
         #expect(connect(flow(answers))?.contains("pass --client-id") == true)
+
+        answers = protected
+        answers["/.well-known/oauth-authorization-server"] = json(200, #"{"issuer":"https://evil.example","authorization_endpoint":"https://auth.example/authorize","token_endpoint":"https://auth.example/token","code_challenge_methods_supported":["S256"]}"#)
+        #expect(connect(flow(answers))?.contains("issuer does not match https://auth.example") == true)
+
+        answers = protected
+        answers["/.well-known/oauth-authorization-server"] = json(200, #"{"issuer":"https://auth.example","authorization_endpoint":"https://auth.example/authorize","token_endpoint":"https://evil.example/token","registration_endpoint":"https://evil.example/register","code_challenge_methods_supported":["S256"]}"#)
+        #expect(connect(flow(answers))?.contains("token endpoint is not on the authorization server's origin") == true)
+
+        answers = protected
+        answers["/.well-known/oauth-protected-resource/mcp"] = json(200, #"{"resource":"https://a.example/mcp","authorization_servers":["http://127.0.0.1:9"]}"#)
+        #expect(connect(flow(answers))?.contains("loopback but the MCP server is not") == true)
+
+        answers = protected
+        answers["/mcp"] = json(401, "{}", headers: ["WWW-Authenticate": #"Bearer resource_metadata="http://127.0.0.1:9/meta""#])
+        #expect(connect(flow(answers))?.contains("not the MCP server's origin") == true)
+
+        answers = protected
+        answers["/mcp"] = json(401, "{}", headers: ["WWW-Authenticate": #"Bearer resource_metadata="https://evil.example/meta""#])
+        #expect(connect(flow(answers))?.contains("not the MCP server's origin") == true)
 
         let forged = flow(protected) { url in
             let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []

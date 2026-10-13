@@ -90,6 +90,15 @@ struct AuditChainTests {
         #expect(report.isIntact == false)
     }
 
+    @Test func strippingPrevFromEveryLineIsNotIntact() {
+        let line = #"{"decision":"allowed","detail":{},"kind":"mcp.call","schema":"rv.audit.v1","source":"audit.jsonl","subject":"a","time":"2026-10-13T00:00:00Z"}"#
+        let stripped = AuditChain.verify(Data((line + "\n" + line + "\n").utf8))
+        #expect(stripped.isIntact == false)
+        #expect(stripped.firstBreak == AuditChainReport.Break(line: 1, reason: "no prev on any line"))
+        let nulled = #"{"prev":null,"decision":"allowed","kind":"mcp.call","subject":"a"}"#
+        #expect(AuditChain.verify(Data((nulled + "\n").utf8)).isIntact == false)
+    }
+
     @Test func emptyOrMissingFileIsIntact() throws {
         #expect(AuditChain.verify(Data()) == AuditChainReport(lines: 0, unchained: 0, head: AuditChain.genesis, firstBreak: nil))
         let missing = FileManager.default.temporaryDirectory.appendingPathComponent("rv-none-\(UUID().uuidString).jsonl")

@@ -145,7 +145,14 @@ extension ManagedPolicy {
             return .failure(.init("policy.json is not a JSON object"))
         }
         do {
-            return .success(try policy(object))
+            var decoded = try policy(object)
+            if object["serial"] != nil {
+                guard case .number(let token)? = JSONLiteral.parse(data)?.object?["serial"],
+                    let exact = JSONLiteral.nonNegativeInteger(token)
+                else { return .failure(.init("\"serial\" must be a non-negative integer")) }
+                decoded.serial = exact
+            }
+            return .success(decoded)
         } catch let error as ManagedPolicyError {
             return .failure(error)
         } catch {
@@ -160,12 +167,9 @@ extension ManagedPolicy {
         }
         var policy = ManagedPolicy()
         policy.organization = try optionalString(object["organization"], "organization")
-        if let raw = object["serial"] {
-            guard case .number(let serial) = raw, serial >= 0, serial == serial.rounded(), serial < 1e15 else {
-                throw ManagedPolicyError("\"serial\" must be a non-negative integer")
-            }
-            policy.serial = Int(serial)
-        }
+        // `serial` is read from the source spelling in `decode`. A `Double`
+        // cannot hold every integer, and a rounded one can look newer than
+        // the exact serial already accepted.
         if let raw = object["mcp"] {
             guard case .object(let mcp) = raw else { throw ManagedPolicyError("\"mcp\" must be an object") }
             try keys(mcp, allowed: ["blocked", "allowDirect", "requireSandbox", "deny", "ask", "allow", "defaultDecision"], context: "mcp")

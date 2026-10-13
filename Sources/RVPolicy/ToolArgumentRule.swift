@@ -73,8 +73,12 @@ public struct ToolArgumentRule: Sendable, Equatable {
     }
 
     /// The strictest decision among rules that match, or nil when none do.
+    /// A `<` or `>` whose value is present but not an exact number denies:
+    /// a non-match would reveal the weaker decision, and an upstream may coerce the value.
     public static func strictest(_ rules: [Decided], tool: String, arguments: JSONValue) -> ManagedPolicy.Decision? {
-        rules.filter { $0.rule.matches(tool: tool, arguments: arguments) }.map(\.decision).max()
+        let named = rules.filter { $0.rule.namesTool(tool) }
+        if named.contains(where: { $0.rule.refusesIncomparable(arguments) }) { return .deny }
+        return named.filter { $0.rule.matches(tool: tool, arguments: arguments) }.map(\.decision).max()
     }
 
     /// `pay when /amount > 100, /currency in ["usd"]`
@@ -132,7 +136,7 @@ public struct ToolArgumentRule: Sendable, Equatable {
         case .equal, .notEqual:
             return
         case .less, .greater:
-            guard value.double != nil else { throw ToolArgumentRuleError("\"\(op.rawValue)\" needs a number (\(at))") }
+            guard exactQuantity(value) != nil else { throw ToolArgumentRuleError("\"\(op.rawValue)\" needs a number (\(at))") }
         case .oneOf:
             guard let items = value.asArray, items.count <= maximumListItems else {
                 throw ToolArgumentRuleError("\"in\" needs an array of at most \(maximumListItems) values (\(at))")
@@ -150,18 +154,126 @@ public struct ToolArgumentRule: Sendable, Equatable {
             return actual == expected
         case .notEqual:
             return actual != expected
-        case .less:
-            guard let lhs = actual.double, let rhs = expected.double else { return false }
-            return lhs < rhs
-        case .greater:
-            guard let lhs = actual.double, let rhs = expected.double else { return false }
-            return lhs > rhs
+        case .less, .greater:
+            guard let lhs = exactQuantity(actual), let rhs = exactQuantity(expected),
+                let order = compareQuantities(lhs, rhs)
+            else { return false }
+            return op == .less ? order == .orderedAscending : order == .orderedDescending
         case .oneOf:
             return expected.asArray?.contains(actual) == true
         case .glob:
             guard let text = actual.string, let pattern = expected.string else { return false }
             return ManagedPolicy.glob(pattern, text)
         }
+    }
+
+    /// A `<` or `>` points at a value that is present and not an exact number,
+    /// or at two quantities that cannot be compared without rounding.
+    func refusesIncomparable(_ arguments: JSONValue) -> Bool {
+        conditions.contains { condition in
+            guard condition.op == .less || condition.op == .greater else { return false }
+            guard let actual = Self.resolve(condition.pointer, in: arguments) else { return false }
+            guard let lhs = Self.exactQuantity(actual), let rhs = Self.exactQuantity(condition.value),
+                Self.compareQuantities(lhs, rhs) != nil
+            else { return true }
+            return false
+        }
+    }
+
+    /// An integer's decimal digits, or a finite non-integer. Digit strings
+    /// compare exactly, including integers a `Double` cannot hold.
+    private enum Quantity {
+        case integer(DigitInteger)
+        case real(Double)
+    }
+
+    private struct DigitInteger {
+        var negative: Bool
+        var digits: String
+    }
+
+    private static func exactQuantity(_ value: JSONValue) -> Quantity? {
+        switch value {
+        case .number(let number):
+            guard number.isFinite else { return nil }
+            if let whole = Int64(exactly: number) {
+                return .integer(DigitInteger(negative: whole < 0, digits: whole == 0 ? "0" : String(whole.magnitude)))
+            }
+            return .real(number)
+        case .string(let text):
+            return digitInteger(text).map(Quantity.integer)
+        default:
+            return nil
+        }
+    }
+
+    /// `0`, `-0`, or a decimal integer with no leading zero and an optional sign.
+    private static func digitInteger(_ text: String) -> DigitInteger? {
+        var rest = text
+        var negative = false
+        if rest.first == "-" {
+            negative = true
+            rest.removeFirst()
+        }
+        guard rest == "0" || (rest.first != "0" && rest.allSatisfy(isDigit) && rest.isEmpty == false) else { return nil }
+        if rest == "0" { negative = false }
+        return DigitInteger(negative: negative, digits: rest)
+    }
+
+    private static func isDigit(_ character: Character) -> Bool {
+        guard let ascii = character.asciiValue else { return false }
+        return ascii >= UInt8(ascii: "0") && ascii <= UInt8(ascii: "9")
+    }
+
+    private static func compareQuantities(_ lhs: Quantity, _ rhs: Quantity) -> ComparisonResult? {
+        switch (lhs, rhs) {
+        case let (.integer(left), .integer(right)):
+            return compareIntegers(left, right)
+        case let (.real(left), .real(right)):
+            if left < right { return .orderedAscending }
+            if left > right { return .orderedDescending }
+            return .orderedSame
+        case let (.integer(integer), .real(real)):
+            return compareInteger(integer, to: real)
+        case let (.real(real), .integer(integer)):
+            guard let order = compareInteger(integer, to: real) else { return nil }
+            if order == .orderedSame { return .orderedSame }
+            return order == .orderedAscending ? .orderedDescending : .orderedAscending
+        }
+    }
+
+    private static func compareIntegers(_ lhs: DigitInteger, _ rhs: DigitInteger) -> ComparisonResult {
+        if lhs.negative != rhs.negative {
+            if lhs.digits == "0", rhs.digits == "0" { return .orderedSame }
+            return lhs.negative ? .orderedAscending : .orderedDescending
+        }
+        let magnitude = compareMagnitudes(lhs.digits, rhs.digits)
+        guard lhs.negative else { return magnitude }
+        if magnitude == .orderedAscending { return .orderedDescending }
+        if magnitude == .orderedDescending { return .orderedAscending }
+        return .orderedSame
+    }
+
+    private static func compareMagnitudes(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        if lhs.count != rhs.count { return lhs.count < rhs.count ? .orderedAscending : .orderedDescending }
+        if lhs == rhs { return .orderedSame }
+        return lhs < rhs ? .orderedAscending : .orderedDescending
+    }
+
+    /// Nil when the integer is outside the range `Double` holds exactly and
+    /// `real` is too large to order against it without rounding.
+    private static func compareInteger(_ integer: DigitInteger, to real: Double) -> ComparisonResult? {
+        guard real.isFinite else { return nil }
+        if let asDouble = Double(integer.digits), let whole = Int64(exactly: asDouble), String(whole) == integer.digits {
+            let value = integer.negative ? -asDouble : asDouble
+            if value < real { return .orderedAscending }
+            if value > real { return .orderedDescending }
+            return .orderedSame
+        }
+        let exactLimit = 9_007_199_254_740_992.0
+        guard real < exactLimit, real > -exactLimit else { return nil }
+        if integer.negative || integer.digits == "0" { return .orderedAscending }
+        return .orderedDescending
     }
 
     /// RFC 6901. Array indexes are decimal without leading zeros.

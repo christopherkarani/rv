@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVIsolation
 import RVMCP
@@ -66,22 +71,37 @@ enum AuditForwardInstall {
         guard OwnerOnlyFile.write(agentPlist(plan), to: plan.agentURL) else {
             return .failure(CommandFailure("could not write \(plan.agentURL.path)"))
         }
-        let agent = plan.agentURL.path
+        let agent = shellQuote(plan.agentURL.path)
+        let source = shellQuote("\(label).\(plan.userName).plist")
+        let daemonPath = shellQuote(plan.daemonPath)
         let daemon = String(decoding: daemonPlist(plan), as: UTF8.self)
         return .success("""
-            wrote \(agent) (runs `rv audit forward` every \(interval / 60) minutes; log \(plan.logPath))
+            wrote \(plan.agentURL.path) (runs `rv audit forward` every \(interval / 60) minutes; log \(plan.logPath))
             load it now:
               launchctl bootout gui/\(plan.userID)/\(label) 2>/dev/null; launchctl bootstrap gui/\(plan.userID) \(agent)
             remove it:
               launchctl bootout gui/\(plan.userID)/\(label); rm \(agent)
 
             To forward even when \(plan.userName) is logged out, root can install this LaunchDaemon instead
-            (save it as \(label).\(plan.userName).plist, then):
-              sudo install -o root -g wheel -m 644 \(label).\(plan.userName).plist \(plan.daemonPath)
-              sudo launchctl bootstrap system \(plan.daemonPath)
+            (save it as \(source), then):
+              sudo install -o root -g wheel -m 644 \(source) \(daemonPath)
+              sudo launchctl bootstrap system \(daemonPath)
 
             \(daemon)
             """ + (daemon.hasSuffix("\n") ? "" : "\n"))
+    }
+
+    /// The login name from the passwd entry. `USER` is caller-controlled.
+    static func accountName() -> String? {
+        guard let entry = getpwuid(getuid()), let pointer = entry.pointee.pw_name else { return nil }
+        let name = String(cString: pointer)
+        guard name.isEmpty == false else { return nil }
+        return name
+    }
+
+    /// Single quotes, with an embedded `'` written as `'\''`.
+    static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// launchd is macOS only; elsewhere print the equivalent crontab line.

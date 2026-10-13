@@ -68,7 +68,9 @@ enum ManagedRun {
         let mcp = policy.mcp
         if mcp.blocked.isEmpty == false { lines.append("mcp blocked servers: " + mcp.blocked.joined(separator: ", ")) }
         if mcp.allowDirect == false { lines.append("mcp: servers may not run outside rv (direct ignored)") }
-        if mcp.requireSandbox { lines.append("mcp: every served server must be sandboxed") }
+        if mcp.requireSandbox {
+            lines.append("mcp: every local server must be sandboxed (remote servers are exempt)")
+        }
         if mcp.deny.isEmpty == false { lines.append("mcp deny: " + mcp.deny.joined(separator: ", ")) }
         if mcp.ask.isEmpty == false { lines.append("mcp ask: " + mcp.ask.joined(separator: ", ")) }
         if mcp.allow.isEmpty == false { lines.append("mcp allow: " + mcp.allow.joined(separator: ", ")) }
@@ -158,9 +160,9 @@ struct ManagedStatus: AsyncParsableCommand {
 
     func run() throws {
         let ctx = CommandContext.current(command: "managed status", format: format)
+        let home = try ctx.requireHome()
         let status = ManagedRun.status(
-            ctx.home.map { ManagedRun.installed(home: $0) } ?? ManagedPolicyLocation.installed.load(),
-            directory: ManagedPolicyLocation.installedDirectory)
+            ManagedRun.installed(home: home), directory: ManagedPolicyLocation.installedDirectory)
         if ctx.explicitRobot {
             ctx.writeStdout(jsonText(status))
         } else {

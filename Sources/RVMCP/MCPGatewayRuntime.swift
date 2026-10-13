@@ -31,6 +31,9 @@ public enum MCPLaunchError: Error, Sendable, Equatable {
     case secretUndefined(server: String, secret: String)
     case secretUnavailable(server: String, secret: String, reason: String)
     case sandbox(String)
+    /// mcp.json was not written by rv. A remote entry would send stored
+    /// tokens and header secrets to whatever URL the file now names.
+    case untrustedRemote(String)
 
     public var message: String {
         switch self {
@@ -39,6 +42,8 @@ public enum MCPLaunchError: Error, Sendable, Equatable {
         case .secretUndefined(let server, let secret): "\(server) uses secret \(secret), which secrets.json does not define"
         case .secretUnavailable(let server, let secret, let reason): "\(server) could not read secret \(secret): \(reason)"
         case .sandbox(let reason): "sandbox: \(reason)"
+        case .untrustedRemote(let name):
+            "\(name) is remote and mcp.json is untrusted, so rv will not open it or send its tokens or header secrets"
         }
     }
 }
@@ -62,6 +67,7 @@ public enum MCPLaunchPlanner {
             if configuration.isBlocked(name) { return .failure(.blocked(name)) }
             guard let definition = configuration.server(named: name) else { return .failure(.unknownServer(name)) }
             if let remote = definition.remote {
+                if configuration.untrusted { return .failure(.untrustedRemote(name)) }
                 let resolved: [String: String]
                 switch resolve(
                     remote.secretNames, server: name, configuration: configuration, secrets: secrets, resolver: resolver,
