@@ -24,7 +24,7 @@ public struct MCPApprovalRequest: Sendable, Equatable {
     public var state: State
     /// Written by `rv mcp approve`; a grant without a valid MAC is forged.
     public var grantMAC: String?
-    /// MAC of the confirmation code the gateway printed on its stderr.
+    /// MAC of the confirmation code, bound to this call. The gateway does not print the code.
     public var codeMAC: String?
 
     public init(
@@ -118,7 +118,8 @@ public struct MCPApprovalStore: Sendable {
             let code = signer.map { _ in MCPConfirmationCode.generate() }
             func codeMAC(_ id: String) -> String? {
                 guard let signer, let code else { return nil }
-                return signer.mac("code", [id, MCPConfirmationCode.normalize(code)])
+                return signer.mac(
+                    "code", Self.codeFields(id: id, server: server, tool: tool, argumentsHash: argumentsHash, code: code))
             }
             if let index = requests.firstIndex(where: {
                 $0.server == server && $0.tool == tool && $0.argumentsHash == argumentsHash && $0.state == .pending
@@ -156,27 +157,40 @@ public struct MCPApprovalStore: Sendable {
         } ?? MCPGrantLookup.none
     }
 
-    /// Whether `typed` is the code the gateway printed for this pending request.
+    /// Whether `typed` is the code for this pending request as it stands now.
+    /// Server, tool, and arguments are part of the MAC, so a rewrite fails.
     public func verifyCode(id: String, typed: String) -> Bool {
         guard let signer = keys.load() else { return false }
         let request = withLockedRequests { requests in requests.first { $0.id == id && $0.state == .pending } } ?? nil
         guard let request else { return false }
-        return signer.verify(request.codeMAC, "code", [id, MCPConfirmationCode.normalize(typed)])
+        return signer.verify(request.codeMAC, "code", Self.codeFields(
+            id: request.id, server: request.server, tool: request.tool, argumentsHash: request.argumentsHash, code: typed))
     }
 
     public func hasCode(id: String) -> Bool {
         (withLockedRequests { requests in requests.first { $0.id == id }?.codeMAC } ?? nil) != nil
     }
 
-    /// Pending → granted, signed. Nil when no pending request has this id or no key can be made.
-    public func grant(id: String) -> MCPApprovalRequest? {
+    /// Pending → granted, signed for this exact call. Nil when no pending
+    /// request has this id, the row no longer matches, or no key can be made.
+    /// The check and the write happen in one locked read of the file. A row
+    /// that changed after the user was shown `server`/`tool`/`argumentsHash`
+    /// is left pending and unsigned.
+    public func grant(id: String, server: String, tool: String, argumentsHash: String) -> MCPApprovalRequest? {
         guard let signer = keys.loadOrCreate() else { return nil }
         return withLockedRequests { requests in
             guard let index = requests.firstIndex(where: { $0.id == id && $0.state == .pending }) else { return nil }
+            guard requests[index].server == server, requests[index].tool == tool,
+                requests[index].argumentsHash == argumentsHash
+            else { return nil }
             requests[index].state = .granted
             requests[index].grantMAC = signer.mac("grant", requests[index].grantFields)
             return requests[index]
         } ?? nil
+    }
+
+    static func codeFields(id: String, server: String, tool: String, argumentsHash: String, code: String) -> [String] {
+        [id, server, tool, argumentsHash, MCPConfirmationCode.normalize(code)]
     }
 
     /// Removes a request in any state.

@@ -450,7 +450,7 @@ enum HelpCatalog {
                 HelpRow(name: "order", description: "deny glob > ask glob > allow glob > server default > defaultDecision"),
                 HelpRow(name: "deny", description: "Hidden from the agent; calls fail"),
                 HelpRow(name: "ask", description: "Approved in the host's prompt, or `rv mcp approve`; one identical call"),
-                HelpRow(name: "approve", description: "Needs you present: Touch ID/password, or the code `rv mcp serve` printed"),
+                HelpRow(name: "approve", description: "Needs Touch ID or your password. A pseudo-terminal cannot approve"),
                 HelpRow(name: "secrets", description: "\"secrets\": {\"VAR\": \"NAME\"} or ${secret:NAME} in args; values scrubbed"),
                 HelpRow(name: "sandbox", description: "\"sandbox\": {\"network\": false} cages the server (macOS)"),
             ]),
@@ -464,7 +464,8 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "config", description: "~/.config/rv/mcp.json (owner-only)"),
-                HelpRow(name: "integrity", description: "rv signs mcp.json; after an outside edit allow acts as ask until `rv mcp trust`"),
+                HelpRow(name: "integrity", description: "An outside edit does not launch until `rv mcp trust` (needs you present)"),
+                HelpRow(name: "import", description: "Copying a host command into mcp.json needs you present"),
                 HelpRow(name: "limits", description: "A process running as you can still edit or delete ~/.config/rv; rv flags it"),
                 HelpRow(
                     name: "hosts",

@@ -342,12 +342,12 @@ struct MCPApprovalStoreTests {
         #expect(store.request(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"])?.id == id)
         #expect(store.pending().map(\.id) == [id])
         #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == .none)
-        #expect(store.grant(id: id)?.state == .granted)
+        #expect(store.grant(id: id, server: "gh", tool: "create", argumentsHash: "h1")?.state == .granted)
         #expect(store.pending().isEmpty)
         #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "other") == .none)
         #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == .granted(id: id))
         #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == .none)
-        #expect(store.grant(id: "missing") == nil)
+        #expect(store.grant(id: "missing", server: "gh", tool: "create", argumentsHash: "h1") == nil)
     }
 
     @Test func oldRequestsExpire() throws {
@@ -365,7 +365,7 @@ struct MCPApprovalStoreTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = Self.store(directory)
         let grant = try #require(store.request(server: "gh", tool: "keep", argumentsHash: "grant", argumentKeys: [])?.id)
-        #expect(store.grant(id: grant) != nil)
+        #expect(store.grant(id: grant, server: "gh", tool: "keep", argumentsHash: "grant") != nil)
         var oldestPending: String?
         for index in 0..<(MCPApprovalStore.maximumRequests - 1) {
             let id = try #require(store.request(server: "gh", tool: "t", argumentsHash: "p\(index)", argumentKeys: [])?.id)
@@ -382,7 +382,7 @@ struct MCPApprovalStoreTests {
         let full = Self.store(grants)
         for index in 0..<MCPApprovalStore.maximumRequests {
             let id = try #require(full.request(server: "gh", tool: "g", argumentsHash: "g\(index)", argumentKeys: [])?.id)
-            #expect(full.grant(id: id) != nil)
+            #expect(full.grant(id: id, server: "gh", tool: "g", argumentsHash: "g\(index)") != nil)
         }
         #expect(full.request(server: "gh", tool: "g", argumentsHash: "overflow", argumentKeys: []) == nil)
         #expect(full.consumeGrant(server: "gh", tool: "g", argumentsHash: "g0") != .none)

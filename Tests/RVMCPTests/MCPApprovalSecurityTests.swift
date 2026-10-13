@@ -4,6 +4,9 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+#if canImport(Security)
+import Security
+#endif
 import Testing
 @testable import RVMCP
 
@@ -95,21 +98,38 @@ struct MCPApprovalSecurityTests {
         #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h1") == .none)
 
         let rebound = try #require(store.request(server: "gh", tool: "push", argumentsHash: "h2", argumentKeys: [])?.id)
-        #expect(store.grant(id: rebound) != nil)
+        #expect(store.grant(id: rebound, server: "gh", tool: "push", argumentsHash: "h2") != nil)
         try rewrite(fileURL) { $0.replacingOccurrences(of: "\"h2\"", with: "\"h3\"") }
         #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h3") == .forged(id: rebound))
 
         let otherKey = MCPApprovalStore(
             configDirectory: directory, keys: MCPApprovalKeyStore(load: { MCPSigner(key: Self.key) }, loadOrCreate: { MCPSigner(key: Self.key) }))
         let signedElsewhere = try #require(otherKey.request(server: "gh", tool: "push", argumentsHash: "h4", argumentKeys: [])?.id)
-        #expect(otherKey.grant(id: signedElsewhere) != nil)
+        #expect(otherKey.grant(id: signedElsewhere, server: "gh", tool: "push", argumentsHash: "h4") != nil)
         #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h4") == .forged(id: signedElsewhere))
 
         let keyless = MCPApprovalStore(configDirectory: directory, keys: .unavailable)
         let lost = try #require(store.request(server: "gh", tool: "push", argumentsHash: "h5", argumentKeys: [])?.id)
-        #expect(store.grant(id: lost) != nil)
+        #expect(store.grant(id: lost, server: "gh", tool: "push", argumentsHash: "h5") != nil)
         #expect(keyless.consumeGrant(server: "gh", tool: "push", argumentsHash: "h5") == .forged(id: lost))
-        #expect(keyless.grant(id: "any") == nil)
+        #expect(keyless.grant(id: "any", server: "gh", tool: "push", argumentsHash: "h5") == nil)
+    }
+
+    @Test func rewrittenPendingRowIsNotSigned() throws {
+        let directory = Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MCPApprovalStore(configDirectory: directory, keys: .file(configDirectory: directory))
+        let ticket = try #require(store.request(server: "gh", tool: "push", argumentsHash: "h1", argumentKeys: ["branch"]))
+        let code = try #require(ticket.code)
+        let fileURL = directory.appendingPathComponent(MCPApprovalStore.fileName)
+        try rewrite(fileURL) { $0.replacingOccurrences(of: "\"push\"", with: "\"steal\"") }
+
+        #expect(store.verifyCode(id: ticket.id, typed: code) == false)
+        #expect(store.grant(id: ticket.id, server: "gh", tool: "push", argumentsHash: "h1") == nil)
+        #expect(store.pending().map(\.tool) == ["steal"])
+        #expect(store.pending().allSatisfy { $0.state == .pending && $0.grantMAC == nil })
+        #expect(store.consumeGrant(server: "gh", tool: "steal", argumentsHash: "h1") == .none)
+        #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h1") == .none)
     }
 
     private func rewrite(_ url: URL, _ change: (String) -> String) throws {
@@ -147,6 +167,32 @@ struct MCPIntegrityTests {
         try FileManager.default.removeItem(at: directory.appendingPathComponent(MCPIntegrity.fileName))
         #expect(MCPIntegrity.status(configDirectory: directory, keys: keys) == .untrusted("no rv signature"))
     }
+
+    @Test func approvalKeyRequiresUserPresenceAndRejectsSilentCopy() {
+        #expect(ApprovalKeyProtection.requiresUserPresence)
+        #expect(ApprovalKeyProtection.usesDataProtectionKeychain)
+        #expect(ApprovalKeyProtection.allowsSilentCopy == false)
+    }
+
+    #if os(macOS)
+    @Test func approvalKeychainQueryRequiresUserPresence() throws {
+        let secret = Data("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".utf8)
+        let add = try #require(ApprovalKeychain.addQuery(value: secret))
+        #expect(add[kSecAttrAccessControl as String] != nil)
+        #expect(add[kSecUseDataProtectionKeychain as String] as? Bool == true)
+        #expect(add[kSecAttrAccessible as String] == nil)
+        #expect(ApprovalKeychain.liveUsesSilentCopy == false)
+        #expect(ApprovalKeychain.protectedStoreEnabled)
+
+        let silent = ApprovalKeychain.copyQuery(silent: true)
+        #expect(silent[kSecUseAuthenticationUI as String] as? String == kSecUseAuthenticationUIFail as String)
+        #expect(silent[kSecUseDataProtectionKeychain as String] as? Bool == true)
+        let live = ApprovalKeychain.copyQuery(silent: false)
+        #expect(live[kSecUseAuthenticationUI as String] == nil)
+        #expect(live[kSecUseDataProtectionKeychain as String] as? Bool == true)
+        #expect(live[kSecReturnData as String] as? Bool == true)
+    }
+    #endif
 
     @Test func untrustedConfigurationTurnsAllowIntoAskOnly() {
         let server = MCPServerDefinition(

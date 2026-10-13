@@ -90,7 +90,7 @@ struct ManagedCommandTests {
             {"mcpServers": {"svc": {"command": "svc", "env": {"API_TOKEN": "tok_live_abcdefghijklmnopqrstu"}}}}
             """)
         environment.managed = try active(#"{"version": 1, "secrets": {"allowedSources": ["vault"]}}"#)
-        #expect(failure(MCPRun.importServers(
+        #expect(failure(await MCPRun.importServers(
             host: .cursor, names: [], project: nil, allowTools: false, dryRun: false, environment: environment))?
             .contains("keychain source, which is not allowed") == true)
     }

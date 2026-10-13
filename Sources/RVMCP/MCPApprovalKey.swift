@@ -4,6 +4,9 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+#if canImport(Security)
+import Security
+#endif
 import RVDomain
 import RVIsolation
 
@@ -56,24 +59,18 @@ public struct MCPApprovalKeyStore: Sendable {
 
     public static let unavailable = MCPApprovalKeyStore(load: { nil }, loadOrCreate: { nil })
 
-    /// macOS keeps the key in the login Keychain. Linux has no OS secret
-    /// store, so the key is a 0600 file in the rv config directory, which a
-    /// process running as the same user can read.
+    /// macOS keeps the key in the data-protection keychain and requires the
+    /// user to be present for every read. Linux has no OS secret store, so
+    /// the key is a 0600 file in the rv config directory, which a process
+    /// running as the same user can read.
     public static func live(configDirectory: URL, home: String) -> MCPApprovalKeyStore {
         #if os(macOS)
-        let resolver = SecretResolver.live(environment: [:], home: home)
-        let writer = SecretKeychainWriter.live
-        let read: @Sendable () -> MCPSigner? = {
-            guard case .success(let value) = resolver.resolve(.keychain(service: keychainService, account: keychainAccount))
-            else { return nil }
-            return MCPHex.decode(value.revealed()).flatMap(MCPSigner.init(key:))
-        }
-        return MCPApprovalKeyStore(load: read, loadOrCreate: {
-            if let existing = read() { return existing }
-            _ = writer.store(keychainService, keychainAccount, Data(MCPHex.encode(newKey()).utf8))
-            return read()
-        })
+        _ = home
+        return MCPApprovalKeyStore(
+            load: { ApprovalKeychain.read() },
+            loadOrCreate: { ApprovalKeychain.read() ?? ApprovalKeychain.create() })
         #else
+        _ = home
         return file(configDirectory: configDirectory)
         #endif
     }
@@ -123,7 +120,90 @@ public struct MCPApprovalKeyStore: Sendable {
     }
 }
 
-/// One-time code the gateway prints on stderr for an out-of-band approval.
+/// How the macOS approvals key is stored. A silent `SecItemCopyMatching`
+/// (authentication UI fail) is not a successful read. Linux does not use this.
+enum ApprovalKeyProtection {
+    static let requiresUserPresence = true
+    static let usesDataProtectionKeychain = true
+    static let allowsSilentCopy = false
+}
+
+#if os(macOS)
+/// Keychain item for `rv.approvals` / `hmac-key`. Creating it sets a
+/// user-presence access control on the data-protection keychain, so another
+/// process cannot copy the key without the user authenticating.
+enum ApprovalKeychain {
+    static func read() -> MCPSigner? {
+        deleteUnprotectedItem()
+        guard protectedStoreEnabled else { return nil }
+        var result: AnyObject?
+        guard SecItemCopyMatching(copyQuery(silent: false) as CFDictionary, &result) == errSecSuccess,
+            let data = result as? Data, let text = String(data: data, encoding: .utf8)
+        else { return nil }
+        return MCPHex.decode(Array(text.utf8)).flatMap(MCPSigner.init(key:))
+    }
+
+    static func create() -> MCPSigner? {
+        deleteUnprotectedItem()
+        let raw = MCPApprovalKeyStore.newKey()
+        guard protectedStoreEnabled, let query = addQuery(value: Data(MCPHex.encode(raw).utf8)),
+            SecItemAdd(query as CFDictionary, nil) == errSecSuccess
+        else { return nil }
+        return read()
+    }
+
+    static var protectedStoreEnabled: Bool {
+        ApprovalKeyProtection.requiresUserPresence && ApprovalKeyProtection.usesDataProtectionKeychain
+            && ApprovalKeyProtection.allowsSilentCopy == false
+    }
+
+    static var liveUsesSilentCopy: Bool { ApprovalKeyProtection.allowsSilentCopy }
+
+    static func addQuery(value: Data) -> [String: Any]? {
+        guard protectedStoreEnabled else { return nil }
+        var error: Unmanaged<CFError>?
+        guard let control = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlocked, .userPresence, &error)
+        else { return nil }
+        return [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: MCPApprovalKeyStore.keychainService,
+            kSecAttrAccount as String: MCPApprovalKeyStore.keychainAccount,
+            kSecValueData as String: value,
+            kSecAttrAccessControl as String: control,
+            kSecUseDataProtectionKeychain as String: true,
+        ]
+    }
+
+    /// `silent` is the second-process copy that must not succeed. The live
+    /// read leaves authentication UI at its default, which prompts.
+    static func copyQuery(silent: Bool) -> [String: Any] {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: MCPApprovalKeyStore.keychainService,
+            kSecAttrAccount as String: MCPApprovalKeyStore.keychainAccount,
+            kSecReturnData as String: true,
+            kSecUseDataProtectionKeychain as String: true,
+        ]
+        if silent {
+            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        }
+        return query
+    }
+
+    /// Removes a pre-presence item from the file-based login keychain. Delete
+    /// does not return the secret. The data-protection item is a different store.
+    static func deleteUnprotectedItem() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: MCPApprovalKeyStore.keychainService,
+            kSecAttrAccount as String: MCPApprovalKeyStore.keychainAccount,
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+}
+#endif
+
+/// One-time code bound to one pending call. It is not written to the gateway log.
 /// 10 symbols from a 32-letter alphabet without look-alikes: 50 bits.
 public enum MCPConfirmationCode {
     static let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")

@@ -263,8 +263,10 @@ fetch_pack_bundles() {
 }
 
 # Downloaded macOS release files must carry a valid, notarized Developer ID
-# signature from the pinned team. A broken or foreign signature always
-# refuses. Unsigned files follow signed_releases; a mix never installs.
+# signature from the pinned team. A broken, foreign, or unpinned signature
+# always refuses, including libswiftCompatibilitySpan.dylib. Unsigned files
+# follow signed_releases; a mix never installs. An empty team id does not
+# accept "any notarized Developer ID".
 verify_release_signatures() {
   dir="$1"
   shift
@@ -296,15 +298,17 @@ verify_release_signatures() {
         exit 1
         ;;
     esac
-    if [ -n "$team" ]; then
-      case "$details" in
-        *"TeamIdentifier=$team"*) ;;
-        *)
-          echo "rv: refusing to install: $name is not signed by team $team" >&2
-          exit 1
-          ;;
-      esac
+    if [ -z "$team" ]; then
+      echo "rv: refusing to install: $name is signed, but no Developer ID team is pinned (release_team_id)" >&2
+      exit 1
     fi
+    case "$details" in
+      *"TeamIdentifier=$team"*) ;;
+      *)
+        echo "rv: refusing to install: $name is not signed by team $team" >&2
+        exit 1
+        ;;
+    esac
     case "$name" in
       *.dylib) ;;
       *)

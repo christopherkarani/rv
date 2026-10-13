@@ -208,6 +208,17 @@ public struct MCPGatewayCore {
         }
     }
 
+    /// Accept only when `action` is `accept` and `content.approve` is a JSON
+    /// boolean true, or is absent (the schema default). A present non-boolean
+    /// (`"false"`, `0`, `null`) is a decline. The held call's arguments are
+    /// what runs; the client's content is not forwarded.
+    static func elicitationAccepts(_ result: JSONValue?) -> Bool {
+        guard result?["action"]?.stringValue == "accept" else { return false }
+        guard let approve = result?["content"]?["approve"] else { return true }
+        guard case .bool(let value) = approve else { return false }
+        return value
+    }
+
     /// An empty `elicitation` object means form mode (2025-06-18); later
     /// revisions list the modes, and rv needs `form`.
     static func supportsFormElicitation(_ capability: JSONValue?) -> Bool {
@@ -222,8 +233,7 @@ public struct MCPGatewayCore {
             return outOfBand(
                 client: call.client, server: call.server, tool: call.tool, arguments: call.arguments, keys: call.keys)
         }
-        let result = message["result"]
-        let accepted = result?["action"]?.stringValue == "accept" && result?["content"]?["approve"]?.boolValue != false
+        let accepted = Self.elicitationAccepts(message["result"])
         guard accepted else {
             let reason = "declined by the user"
             return [
@@ -375,10 +385,8 @@ public struct MCPGatewayCore {
                 reason: "awaiting approval")),
             .toClient(Self.toolError(id: client, text)),
         ]
-        if let code = ticket.code {
-            outputs.append(.log(
-                "approval \(ticket.id) for \(server) tool \(tool): confirmation code \(code) "
-                    + "(type it when `rv mcp approve \(ticket.id)` asks)"))
+        if ticket.code != nil {
+            outputs.append(.log("approval \(ticket.id) for \(server) tool \(tool) is waiting for the user"))
         }
         return outputs
     }

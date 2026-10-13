@@ -1037,7 +1037,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
 }
 
 @Test func installSh_signedNotarizedReleaseInstallsWithoutWarning() throws {
-    let run = try runSignedDownloadInstall()
+    let run = try runSignedDownloadInstall(environment: ["RV_INSTALL_TEAM_ID": "TEAMRV1234"])
     defer { removeTemporaryRoot(of: run) }
 
     #expect(run.status == 0, "\(run.stderr)")
@@ -1057,7 +1057,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
 }
 
 @Test func installSh_downloadsAndInstallsPTYClaimWhenReleased() throws {
-    let run = try runSignedDownloadInstall()
+    let run = try runSignedDownloadInstall(environment: ["RV_INSTALL_TEAM_ID": "TEAMRV1234"])
     defer { removeTemporaryRoot(of: run) }
 
     #expect(run.status == 0, "\(run.stderr)")
@@ -1078,7 +1078,9 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
 
 @Test func installSh_tamperedSignatureRefusesAndKeepsPreviousInstall() throws {
     let run = try runSignedDownloadInstall(
-        environment: ["RV_TEST_CODESIGN_TAMPERED": "rvd", "RV_INSTALL_ALLOW_UNSIGNED": "1"],
+        environment: [
+            "RV_TEST_CODESIGN_TAMPERED": "rvd", "RV_INSTALL_ALLOW_UNSIGNED": "1", "RV_INSTALL_TEAM_ID": "TEAMRV1234",
+        ],
         previousInstall: true
     )
     defer { removeTemporaryRoot(of: run) }
@@ -1097,6 +1099,16 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
+@Test func installSh_signedReleaseWithoutPinnedTeamRefuses() throws {
+    let run = try runSignedDownloadInstall(previousInstall: true)
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("libswiftCompatibilitySpan.dylib is signed, but no Developer ID team is pinned"))
+    #expect(run.stderr.contains("warning") == false)
+    try expectPreviousInstallKept(run)
+}
+
 @Test func installSh_foreignTeamRefuses() throws {
     let pinned = try runSignedDownloadInstall(environment: ["RV_INSTALL_TEAM_ID": "TEAMRV1234"])
     defer { removeTemporaryRoot(of: pinned) }
@@ -1110,7 +1122,8 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
 }
 
 @Test func installSh_unnotarizedReleaseRefuses() throws {
-    let run = try runSignedDownloadInstall(environment: ["RV_TEST_SPCTL": "reject"], previousInstall: true)
+    let run = try runSignedDownloadInstall(
+        environment: ["RV_TEST_SPCTL": "reject", "RV_INSTALL_TEAM_ID": "TEAMRV1234"], previousInstall: true)
     defer { removeTemporaryRoot(of: run) }
 
     #expect(run.status == 1)
@@ -1120,7 +1133,9 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
 
 @Test func installSh_mixedSignedAndUnsignedRefuses() throws {
     let run = try runSignedDownloadInstall(
-        environment: ["RV_TEST_CODESIGN_UNSIGNED": "rvd", "RV_INSTALL_ALLOW_UNSIGNED": "1"],
+        environment: [
+            "RV_TEST_CODESIGN_UNSIGNED": "rvd", "RV_INSTALL_ALLOW_UNSIGNED": "1", "RV_INSTALL_TEAM_ID": "TEAMRV1234",
+        ],
         previousInstall: true
     )
     defer { removeTemporaryRoot(of: run) }

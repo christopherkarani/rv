@@ -234,7 +234,7 @@ enum MCPRun {
         }
         return (lines + [
             "approve in your own terminal with `rv mcp approve <id>` (once) or `--always`; refuse with `rv mcp deny <id>`",
-            "approving needs you present: Touch ID or your password on macOS, otherwise the code `rv mcp serve` printed",
+            "approving needs you present: Touch ID or your password. A pseudo-terminal cannot approve",
         ])
             .joined(separator: "\n") + "\n"
     }
@@ -253,7 +253,8 @@ enum MCPRun {
             case .success(let result): allowed = result
             }
         }
-        let reason = "rv: approve \(request.server) tool \(request.tool) \(always ? "always" : "once")"
+        let reason = "rv: approve \(request.server) tool \(request.tool) arguments \(request.argumentsHash) "
+            + (always ? "always" : "once")
         let outcome = await environment.presence.confirm(reason, .printedCode { store.verifyCode(id: id, typed: $0) })
         guard case .confirmed(let method) = outcome else {
             let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
@@ -261,12 +262,19 @@ enum MCPRun {
                   always: always, configDirectory: environment.configDirectory)
             return .failure(CommandFailure("not approved: \(refusal)"))
         }
+        guard store.grant(
+            id: id, server: request.server, tool: request.tool, argumentsHash: request.argumentsHash
+        ) != nil else {
+            audit(request, decision: .denied, reason: "approval changed before it was signed", method: method,
+                  always: always, configDirectory: environment.configDirectory)
+            return .failure("the approval changed while you reviewed it; nothing was signed")
+        }
         if case let (configuration, signer)? = allowed,
             case .failure(let error) = configuration.write(configDirectory: environment.configDirectory, signer: signer)
         {
+            _ = store.remove(id: id)
             return .failure(CommandFailure(error.message))
         }
-        guard store.grant(id: id) != nil else { return .failure("could not record the approval") }
         audit(request, decision: .allowed, reason: nil, method: method, always: always,
               configDirectory: environment.configDirectory)
         return .success(always
@@ -338,8 +346,9 @@ enum MCPRun {
         if environment.integrity == .trusted {
             return .success("mcp.json already matches rv's signature; nothing to trust\n")
         }
-        show(trustReview(configuration) + "\n")
-        let outcome = await environment.presence.confirm("rv: trust mcp.json as shown", .echoCode)
+        let digest = RVDigest.sha256Hex([UInt8](data))
+        show(trustReview(configuration) + "\nsha256 \(digest)\n")
+        let outcome = await environment.presence.confirm("rv: trust mcp.json sha256 \(digest)", .deviceOwner)
         guard case .confirmed(let method) = outcome else {
             let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
             return .failure(CommandFailure("not trusted: \(refusal)"))
@@ -384,9 +393,35 @@ enum MCPRun {
         _ = AuditLog.append(record.auditEvent(), configDirectory: configDirectory)
     }
 
+    /// Plans upstream processes. An untrusted mcp.json is refused before any
+    /// command, argument, sandbox, or secret is resolved into a launch.
+    static func upstreamLaunches(
+        names: [String], configuration: MCPConfiguration, environment: MCPEnvironment, secrets: SecretsConfiguration,
+        resolver: SecretResolver,
+        sandbox: @escaping (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { _, launch in
+            .success(launch)
+        }
+    ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamLaunch)], CommandFailure> {
+        if let problem = environment.integrity.problem {
+            _ = AuditLog.append(
+                AuditEvent(
+                    time: Date(), kind: .mcpApproval, decision: .info, subject: MCPConfiguration.fileName,
+                    reason: problem, source: "rv mcp serve", detail: ["integrity": "untrusted"]),
+                configDirectory: environment.configDirectory)
+            return .failure(CommandFailure("\(problem); not launching MCP servers"))
+        }
+        switch MCPLaunchPlanner.plan(
+            servers: names, configuration: configuration, secrets: secrets, resolver: resolver,
+            baseEnvironment: environment.processEnvironment, sandbox: sandbox)
+        {
+        case .failure(let error): return .failure(CommandFailure(error.message))
+        case .success(let planned): return .success(planned)
+        }
+    }
+
     static func importServers(
         host: MCPHost, names: [String], project: URL?, allowTools: Bool, dryRun: Bool, environment: MCPEnvironment
-    ) -> Result<String, CommandFailure> {
+    ) async -> Result<String, CommandFailure> {
         let configuration: MCPConfiguration
         switch self.configuration(environment) {
         case .failure(let failure): return .failure(failure)
@@ -426,6 +461,15 @@ enum MCPRun {
         switch signerForWrite(environment) {
         case .failure(let failure): return .failure(CommandFailure("\(failure.message); nothing imported"))
         case .success(let loaded): signer = loaded
+        }
+        let summary = plan.servers.map { server in
+            ([server.name + ":", server.command] + server.args).joined(separator: " ")
+        }.joined(separator: "; ")
+        let clipped = summary.count > 240 ? String(summary.prefix(240)) + "…" : summary
+        let outcome = await environment.presence.confirm("rv: import \(clipped)", .deviceOwner)
+        guard case .confirmed = outcome else {
+            let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
+            return .failure(CommandFailure("not imported: \(refusal); nothing imported"))
         }
         if let definition = plan.secrets.first?.definition,
             let reason = SecretOrganizationRules.violation(definition, policy: environment.managed.policy)
@@ -633,25 +677,17 @@ struct MCPServe: AsyncParsableCommand {
         case .success(let loaded): secrets = loaded
         }
         let planned: [(MCPGatewayCore.Upstream, MCPUpstreamLaunch)]
-        switch MCPLaunchPlanner.plan(
-            servers: names, configuration: configuration, secrets: secrets,
-            resolver: .live(home: home.rawValue), baseEnvironment: environment.processEnvironment,
+        switch MCPRun.upstreamLaunches(
+            names: names, configuration: configuration, environment: environment, secrets: secrets,
+            resolver: .live(home: home.rawValue),
             sandbox: MCPSandbox.apply(configDirectory: environment.configDirectory, home: environment.home))
         {
-        case .failure(let error): try fail(error.message)
+        case .failure(let failure): try fail(failure.message)
         case .success(let result): planned = result
         }
         let configDirectory = environment.configDirectory
         let log: @Sendable (String) -> Void = { message in
             FileHandle.standardError.write(Data("rv mcp: \(message)\n".utf8))
-        }
-        if let problem = environment.integrity.problem {
-            log("\(problem); every allowed tool asks until then")
-            _ = AuditLog.append(
-                AuditEvent(
-                    time: Date(), kind: .mcpApproval, decision: .info, subject: MCPConfiguration.fileName,
-                    reason: problem, source: "rv mcp serve", detail: ["integrity": "untrusted"]),
-                configDirectory: configDirectory)
         }
         let core = MCPGatewayCore(
             configuration: configuration,
@@ -741,10 +777,10 @@ struct MCPImportCommand: AsyncParsableCommand {
     @Flag(help: "Allow every tool of the imported servers instead of asking.") var allowTools = false
     @Flag(help: "Show what would change; write nothing.") var dryRun = false
 
-    func run() throws {
+    func run() async throws {
         let ctx = CommandContext.current(command: "mcp import", json: false, robot: false, plain: true, noColor: true)
         let environment = MCPEnvironment.live(home: try ctx.requireHome())
-        switch MCPRun.importServers(
+        switch await MCPRun.importServers(
             host: host, names: servers, project: MCPRun.projectURL(project), allowTools: allowTools, dryRun: dryRun,
             environment: environment)
         {

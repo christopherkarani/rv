@@ -62,6 +62,10 @@ struct MCPGatewayElicitationTests {
         for result in [
             #"{"action":"decline"}"#, #"{"action":"cancel"}"#, #"{"action":"accept","content":{"approve":false}}"#,
             #"{"action":"bogus"}"#,
+            #"{"action":"accept","content":{"approve":"false"}}"#,
+            #"{"action":"accept","content":{"approve":0}}"#,
+            #"{"action":"accept","content":{"approve":null}}"#,
+            #"{"action":"accept","content":{"approve":{"nested":true}}}"#,
         ] {
             var harness = Self.harness(elicitation: "{}")
             let id = harness.client(Self.createCall).toClient.first?["id"]?.stringValue ?? ""
@@ -75,13 +79,27 @@ struct MCPGatewayElicitationTests {
         }
     }
 
+    @Test func missingApproveUsesTheSchemaDefault() {
+        var harness = Self.harness(elicitation: "{}")
+        let id = harness.client(Self.createCall).toClient.first?["id"]?.stringValue ?? ""
+        let accepted = harness.client(Self.answer(id, #"{"action":"accept"}"#))
+        #expect(accepted.toUpstream.first?.1["params"]?["name"] == .string("create_issue"))
+
+        var emptyContent = Self.harness(elicitation: "{}")
+        let other = emptyContent.client(Self.createCall).toClient.first?["id"]?.stringValue ?? ""
+        let also = emptyContent.client(Self.answer(other, #"{"action":"accept","content":{}}"#))
+        #expect(also.toUpstream.first?.1["params"]?["arguments"] == .object(["title": .string("t"), "body": .string("b")]))
+    }
+
     @Test func elicitationErrorFallsBackToOutOfBandApproval() {
         var harness = Self.harness(elicitation: "{}")
         let id = harness.client(Self.createCall).toClient.first?["id"]?.stringValue ?? ""
         let fallback = harness.client(#"{"jsonrpc":"2.0","id":"\#(id)","error":{"code":-32601,"message":"no"}}"#)
         #expect(fallback.toUpstream.isEmpty)
         #expect(fallback.toClient.first?.compactText.contains("rv mcp approve req1") == true)
-        #expect(fallback.logs.first?.contains("confirmation code ABCDE-FGHJK") == true)
+        #expect(fallback.logs.first == "approval req1 for github tool create_issue is waiting for the user")
+        #expect(fallback.logs.joined().contains("ABCDE-FGHJK") == false)
+        #expect(fallback.logs.joined().contains("confirmation code") == false)
         #expect(harness.approvals.requested.withLock { $0 } == ["github/create_issue"])
     }
 
@@ -99,9 +117,9 @@ struct MCPGatewayElicitationTests {
         let paused = harness.client(Self.createCall)
         #expect(paused.toClient.first?["method"] == nil)
         #expect(paused.toClient.first?.compactText.contains("in their own terminal") == true)
-        #expect(paused.logs == [
-            "approval req1 for github tool create_issue: confirmation code ABCDE-FGHJK (type it when `rv mcp approve req1` asks)"
-        ])
+        #expect(paused.logs == ["approval req1 for github tool create_issue is waiting for the user"])
+        #expect(paused.logs.joined().contains("ABCDE-FGHJK") == false)
+        #expect(paused.logs.joined().contains("confirmation code") == false)
         var urlOnly = Self.harness(elicitation: #"{"url":{}}"#)
         #expect(urlOnly.client(Self.createCall).toClient.first?["method"] == nil)
     }

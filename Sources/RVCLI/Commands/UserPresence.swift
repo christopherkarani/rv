@@ -8,14 +8,13 @@ import Foundation
 import LocalAuthentication
 #endif
 
-/// What the person at the keyboard must prove on a terminal when the OS
-/// cannot ask them itself.
+/// What the person at the keyboard must prove when rv is about to sign.
 enum PresenceChallenge: Sendable {
-    /// Type the code `rv mcp serve` printed on its stderr.
+    /// Type a code that was not printed by this process. A pseudo-terminal
+    /// cannot complete this: the caller could read and write the same pty.
     case printedCode(@Sendable (String) -> Bool)
-    /// rv shows a fresh code on the terminal and asks for it back. Stops
-    /// piped input; a process that drives its own pseudo-terminal can read it.
-    case echoCode
+    /// Touch ID or the login password. A code on this terminal is not accepted.
+    case deviceOwner
 }
 
 enum PresenceOutcome: Sendable, Equatable {
@@ -24,10 +23,16 @@ enum PresenceOutcome: Sendable, Equatable {
 }
 
 /// Proof that a person, not an agent, is approving. macOS asks for Touch ID
-/// or the login password; otherwise the controlling terminal answers a
-/// challenge. A caller with neither (an agent's shell) is refused.
+/// or the login password. A controlling terminal is not that proof: the
+/// agent can allocate a pseudo-terminal, read it, and answer it.
 struct UserPresence: Sendable {
     var confirm: @Sendable (_ reason: String, _ challenge: PresenceChallenge) async -> PresenceOutcome
+
+    static let deviceOwnerRefusal =
+        "this needs device owner authentication (Touch ID or your password); a terminal is not enough"
+    static let pseudoTerminalRefusal = "a pseudo-terminal is not proof you are present"
+    static let noTerminalRefusal =
+        "this needs you present: run it yourself in a terminal (this process has no terminal)"
 
     static let live = UserPresence { reason, challenge in
         #if canImport(LocalAuthentication)
@@ -38,6 +43,7 @@ struct UserPresence: Sendable {
 
     #if canImport(LocalAuthentication)
     /// Nil when LocalAuthentication cannot prompt here (no passcode, no GUI session).
+    /// A cancelled prompt is a refusal and does not fall through.
     static func deviceOwner(_ reason: String) async -> PresenceOutcome? {
         let context = LAContext()
         var unavailable: NSError?
@@ -55,24 +61,44 @@ struct UserPresence: Sendable {
     }
     #endif
 
+    /// Device-owner challenges stop here. A printed code is read only from a
+    /// terminal the caller does not own; the expected code is never written.
     static func terminal(_ reason: String, _ challenge: PresenceChallenge) -> PresenceOutcome {
-        let fd = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC)
-        guard fd >= 0 else {
-            return .refused("this needs you present: run it yourself in a terminal (this process has no terminal)")
-        }
-        defer { close(fd) }
-        guard isatty(fd) == 1 else { return .refused("this needs you present: /dev/tty is not a terminal") }
         switch challenge {
+        case .deviceOwner:
+            return .refused(deviceOwnerRefusal)
         case .printedCode(let check):
-            put(fd, "\(reason)\nType the confirmation code `rv mcp serve` printed for this request: ")
+            let fd = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC)
+            guard fd >= 0 else { return .refused(noTerminalRefusal) }
+            defer { close(fd) }
+            guard isatty(fd) == 1 else { return .refused("this needs you present: /dev/tty is not a terminal") }
+            if let refused = refusalForPrintedCode(ttyPath: ttyPath(fd)) { return refused }
+            put(fd, "\(reason)\nType the confirmation code: ")
             guard let typed = line(fd), check(typed) else { return .refused("wrong confirmation code") }
             return .confirmed(method: "terminal confirmation code")
-        case .echoCode:
-            let code = String(MCPCodeAlphabet.symbols.shuffled().prefix(6))
-            put(fd, "\(reason)\nType \(code) to confirm: ")
-            guard let typed = line(fd), typed.uppercased() == code else { return .refused("confirmation did not match") }
-            return .confirmed(method: "terminal confirmation")
         }
+    }
+
+    /// Nil when this path may ask for an out-of-band code. A missing path and
+    /// any pseudo-terminal refuse before a single byte is read.
+    static func refusalForPrintedCode(ttyPath: String?) -> PresenceOutcome? {
+        guard let ttyPath, ttyPath.isEmpty == false else { return .refused(noTerminalRefusal) }
+        if isCallerControlledTerminal(ttyPath) { return .refused(pseudoTerminalRefusal) }
+        return nil
+    }
+
+    /// Paths a same-user process can allocate and then read back.
+    static func isCallerControlledTerminal(_ path: String) -> Bool {
+        if path == "/dev/tty" { return true }
+        if path.hasPrefix("/dev/pts/") { return true }
+        if path.hasPrefix("/dev/ttys") { return true }
+        if path.hasPrefix("/dev/pty") { return true }
+        return false
+    }
+
+    private static func ttyPath(_ fd: Int32) -> String? {
+        guard let name = ttyname(fd) else { return nil }
+        return String(cString: name)
     }
 
     private static func put(_ fd: Int32, _ text: String) {
