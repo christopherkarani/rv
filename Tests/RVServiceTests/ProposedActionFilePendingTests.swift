@@ -25,8 +25,6 @@ func pendingList_emptyEffectsFile_usesLedgerNameFile(
                     rawValue: "file:claude:sess:/tmp/ws:\(kind.rawValue):/tmp/a.md"
                 ),
                 file: FileToolAction(kind: kind, path: FileToolPath(rawValue: "/tmp/a.md")),
-                effects: ActionEffects(),
-                resources: ActionResources(path: "/tmp/a.md"),
                 scope: ActionScope(workingDirectory: wd("/tmp/ws"))
             )
         ),

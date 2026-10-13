@@ -108,7 +108,7 @@ public protocol HostCodec: Sendable {
 /// One switch for production codecs. Step 8B: every host is deny/allow
 /// on the wire; human approval arrives via RVOperatorUI or TTY allow-once
 /// plus agent retry, never via host-native spend.
-func productionHostCodec(_ host: HookHost) -> any HostCodec {
+public func productionHostCodec(_ host: HookHost) -> any HostCodec {
     switch host {
     case .pi: PiHostCodec()
     case .opencode: OpenCodeHostCodec()
@@ -157,8 +157,6 @@ extension HostCodec {
                         file: file
                     ),
                     file: file,
-                    effects: ActionEffects(),
-                    resources: ActionResources(path: file.path.rawValue),
                     scope: ActionScope(workingDirectory: cwd)
                 )
             )
