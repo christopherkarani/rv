@@ -128,7 +128,7 @@ public struct MCPGatewayCore {
     static let maximumHeld = 64
 
     let configuration: MCPConfiguration
-    let upstreams: [String: Upstream]
+    var upstreams: [String: Upstream]
     let order: [String]
     let approvals: MCPApprovalGate
     let clock: () -> Date
@@ -155,6 +155,17 @@ public struct MCPGatewayCore {
         self.approvals = approvals
         self.clock = clock
         self.version = version
+    }
+
+    /// A value the upstream holds from now on (a refreshed OAuth token), scrubbed like the rest.
+    public mutating func addSecret(server: String, name: String, value: String) {
+        guard value.isEmpty == false, upstreams[server]?.secretValues.contains(where: { $0.value == value }) == false else { return }
+        upstreams[server]?.secretValues.append((name: name, value: value))
+    }
+
+    static func oauthSecrets(_ tokens: MCPOAuthTokens) -> [(name: String, value: String)] {
+        [(name: "OAUTH_ACCESS_TOKEN", value: tokens.accessToken)]
+            + (tokens.refreshToken.map { [(name: "OAUTH_REFRESH_TOKEN", value: $0)] } ?? [])
     }
 
     var prefixesTools: Bool { order.count > 1 }

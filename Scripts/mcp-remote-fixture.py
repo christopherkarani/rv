@@ -8,15 +8,21 @@ on stderr. Routes:
   GET /sse, POST /messages   legacy HTTP+SSE
   GET /sse-foreign       legacy stream whose endpoint is on another origin
 With --token T every MCP request needs "Authorization: Bearer T".
+With --oauth it is also its own OAuth 2.1 authorization server (RFC 9728
+metadata, RFC 8414 metadata, RFC 7591 registration, PKCE S256, refresh
+rotation); MCP requests need a token it issued. POST /auth/expire revokes
+every access token so the next call must refresh.
 """
 import argparse
+import base64
+import hashlib
 import json
 import queue
 import sys
 import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 TOOLS = [
     {"name": "echo", "description": "Echo text", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}}},
@@ -24,7 +30,8 @@ TOOLS = [
     {"name": "delete_all", "description": "Dangerous", "inputSchema": {"type": "object"}},
 ]
 
-STATE = {"sessions": {}, "legacy": {}, "lock": threading.Lock()}
+STATE = {"sessions": {}, "legacy": {}, "lock": threading.Lock(),
+         "clients": {}, "codes": {}, "access": set(), "refresh": set()}
 
 
 def log(text):
@@ -52,9 +59,17 @@ def answer(msg, headers):
     return {"jsonrpc": "2.0", "id": mid, "result": result}
 
 
+def challenge(verifier):
+    return base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     token = None
+    oauth = False
+
+    def origin(self):
+        return "http://" + self.headers.get("Host")
 
     def log_message(self, *args):
         pass
@@ -70,10 +85,18 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def authorized(self):
-        if self.token is None or self.headers.get("Authorization") == "Bearer " + self.token:
+        given = self.headers.get("Authorization", "")
+        if self.oauth:
+            with STATE["lock"]:
+                ok = given.startswith("Bearer ") and given[7:] in STATE["access"]
+        else:
+            ok = self.token is None or given == "Bearer " + self.token
+        if ok:
             return True
-        meta = "http://%s/.well-known/oauth-protected-resource/mcp" % self.headers.get("Host")
-        self.send(401, b'{"error":"unauthorized"}', extra={"WWW-Authenticate": 'Bearer resource_metadata="%s"' % meta})
+        meta = self.origin() + "/.well-known/oauth-protected-resource/mcp"
+        challenge_header = 'Bearer resource_metadata="%s", scope="mcp:tools"' % meta
+        self.close_connection = True
+        self.send(401, b'{"error":"unauthorized"}', extra={"WWW-Authenticate": challenge_header, "Connection": "close"})
         log("REQ %s %s -> 401" % (self.command, self.path))
         return False
 
@@ -81,8 +104,88 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         return json.loads(self.rfile.read(length))
 
+    def send_json(self, status, value, extra=None):
+        self.send(status, json.dumps(value).encode(), extra=extra)
+
+    def read_form(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        return {k: v[0] for k, v in parse_qs(self.rfile.read(length).decode()).items()}
+
+    def oauth_get(self, path, query):
+        origin = self.origin()
+        if path == "/.well-known/oauth-protected-resource/mcp":
+            return self.send_json(200, {"resource": origin + "/mcp", "authorization_servers": [origin + "/auth"],
+                                        "scopes_supported": ["mcp:tools"]})
+        if path == "/.well-known/oauth-authorization-server/auth":
+            return self.send_json(200, {
+                "issuer": origin + "/auth", "authorization_endpoint": origin + "/auth/authorize",
+                "token_endpoint": origin + "/auth/token", "registration_endpoint": origin + "/auth/register",
+                "code_challenge_methods_supported": ["S256"], "response_types_supported": ["code"]})
+        if path == "/auth/authorize":
+            q = {k: v[0] for k, v in query.items()}
+            with STATE["lock"]:
+                client = STATE["clients"].get(q.get("client_id"))
+            problems = []
+            if client is None or q.get("redirect_uri") not in client:
+                problems.append("client/redirect")
+            if q.get("response_type") != "code" or q.get("code_challenge_method") != "S256" or not q.get("code_challenge"):
+                problems.append("pkce")
+            if q.get("resource") != origin + "/mcp":
+                problems.append("resource")
+            if problems:
+                log("OAUTH authorize refused %s" % ",".join(problems))
+                return self.send(400, b"bad request", content_type="text/plain")
+            code = "code-" + uuid.uuid4().hex[:12]
+            with STATE["lock"]:
+                STATE["codes"][code] = (q["client_id"], q["redirect_uri"], q["code_challenge"], q["resource"])
+            log("OAUTH authorize ok scope=%s" % q.get("scope"))
+            location = q["redirect_uri"] + "?" + urlencode({"code": code, "state": q.get("state", "")})
+            return self.send(302, b"", content_type="text/plain", extra={"Location": location})
+        return self.send(404)
+
+    def oauth_post(self, path):
+        origin = self.origin()
+        if path == "/auth/register":
+            body = self.read_json()
+            client = "client-" + uuid.uuid4().hex[:8]
+            with STATE["lock"]:
+                STATE["clients"][client] = body.get("redirect_uris", [])
+            log("OAUTH register %s auth=%s" % (client, body.get("token_endpoint_auth_method")))
+            return self.send_json(201, {"client_id": client, "redirect_uris": body.get("redirect_uris", [])})
+        if path == "/auth/expire":
+            with STATE["lock"]:
+                STATE["access"].clear()
+            log("OAUTH expired every access token")
+            return self.send_json(200, {})
+        if path != "/auth/token":
+            return self.send(404)
+        form = self.read_form()
+        grant = form.get("grant_type")
+        with STATE["lock"]:
+            if grant == "authorization_code":
+                entry = STATE["codes"].pop(form.get("code"), None)
+                ok = (entry is not None and entry[0] == form.get("client_id") and entry[1] == form.get("redirect_uri")
+                      and entry[2] == challenge(form.get("code_verifier", "")) and entry[3] == form.get("resource"))
+            elif grant == "refresh_token":
+                ok = form.get("refresh_token") in STATE["refresh"] and form.get("resource") == origin + "/mcp"
+                if ok:
+                    STATE["refresh"].discard(form.get("refresh_token"))
+            else:
+                ok = False
+            if ok:
+                access, refresh = "at-" + uuid.uuid4().hex, "rt-" + uuid.uuid4().hex
+                STATE["access"].add(access)
+                STATE["refresh"].add(refresh)
+        log("OAUTH token %s %s" % (grant, "ok" if ok else "refused"))
+        if not ok:
+            return self.send_json(400, {"error": "invalid_grant", "error_description": "secret-ish detail"})
+        self.send_json(200, {"access_token": access, "token_type": "Bearer", "expires_in": 3600,
+                             "refresh_token": refresh, "scope": "mcp:tools"})
+
     def do_POST(self):
         path = urlparse(self.path)
+        if self.oauth and (path.path.startswith("/auth/")):
+            return self.oauth_post(path.path)
         if path.path == "/mcp":
             return self.streamable()
         if path.path == "/messages":
@@ -99,7 +202,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200 if known else 404)
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if self.oauth and (path.startswith("/.well-known/") or path.startswith("/auth/")):
+            return self.oauth_get(path, parse_qs(parsed.query))
         if path in ("/sse", "/sse-foreign"):
             return self.legacy_stream(foreign=path == "/sse-foreign")
         if path == "/mcp":
@@ -187,8 +293,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--token")
     parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--oauth", action="store_true")
     options = parser.parse_args()
     Handler.token = options.token
+    Handler.oauth = options.oauth
     server = ThreadingHTTPServer(("127.0.0.1", options.port), Handler)
     server.daemon_threads = True
     print("PORT %d" % server.server_address[1], flush=True)

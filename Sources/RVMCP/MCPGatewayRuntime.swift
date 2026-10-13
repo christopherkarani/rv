@@ -54,6 +54,7 @@ public enum MCPLaunchPlanner {
         secrets: SecretsConfiguration,
         resolver: SecretResolver,
         baseEnvironment: [String: String],
+        oauthTokens: (String) -> MCPOAuthTokens? = { _ in nil },
         sandbox: (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { .success($1) }
     ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], MCPLaunchError> {
         var planned: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)] = []
@@ -70,8 +71,11 @@ public enum MCPLaunchPlanner {
                 case .success(let values): resolved = values
                 }
                 let headers = remote.headers.mapValues { MCPSecretReference.substitute($0, values: resolved) }
-                let launch = MCPRemoteLaunch(server: name, url: remote.url, headers: headers, transport: remote.transport)
-                planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: named(resolved)), .remote(launch)))
+                let tokens = remote.headers.keys.contains { $0.lowercased() == "authorization" } ? nil : oauthTokens(name)
+                let launch = MCPRemoteLaunch(
+                    server: name, url: remote.url, headers: headers, transport: remote.transport, oauth: tokens)
+                let scrubbed = named(resolved) + (tokens.map(MCPGatewayCore.oauthSecrets) ?? [])
+                planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: scrubbed), .remote(launch)))
                 continue
             }
             if configuration.managed?.mcp.requireSandbox == true, definition.sandbox == nil {
@@ -151,7 +155,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
 
     private var core: MCPGatewayCore
     private let connections: [MCPUpstreamConnection]
-    private let authorizers: [String: MCPRemoteAuthorizer]
+    private let oauthStore: MCPOAuthTokenStore
     private let input: Int32
     private let output: Int32
     private let audit: @Sendable (MCPCallRecord) -> Void
@@ -167,7 +171,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     public init(
         core: MCPGatewayCore,
         connections: [MCPUpstreamConnection],
-        authorizers: [String: MCPRemoteAuthorizer] = [:],
+        oauthStore: MCPOAuthTokenStore = .none,
         input: Int32 = STDIN_FILENO,
         output: Int32 = STDOUT_FILENO,
         audit: @escaping @Sendable (MCPCallRecord) -> Void,
@@ -176,7 +180,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     ) {
         self.core = core
         self.connections = connections
-        self.authorizers = authorizers
+        self.oauthStore = oauthStore
         self.input = input
         self.output = output
         self.audit = audit
@@ -252,8 +256,19 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
 
     private func connect(_ launch: MCPRemoteLaunch) {
         let server = launch.server
+        let authorizer = launch.oauth.map { tokens in
+            MCPRemoteAuthorizer.oauth(
+                server: server, tokens: tokens, store: oauthStore, log: log,
+                refreshed: { [self] next in
+                    queue.async {
+                        for (name, value) in MCPGatewayCore.oauthSecrets(next) {
+                            self.core.addSecret(server: server, name: name, value: value)
+                        }
+                    }
+                })
+        }
         let remote = MCPRemoteUpstream(
-            launch: launch, authorizer: authorizers[server],
+            launch: launch, authorizer: authorizer,
             deliver: { [self] message in
                 queue.async { self.perform(self.core.handle(.upstream(server: server, message: message))) }
             },

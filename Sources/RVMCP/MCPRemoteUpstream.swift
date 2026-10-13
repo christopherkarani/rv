@@ -9,12 +9,18 @@ public struct MCPRemoteLaunch: Sendable, Equatable {
     public var url: URL
     public var headers: [String: String]
     public var transport: MCPRemoteTransport
+    /// From `rv mcp connect`; only for servers without an Authorization header.
+    public var oauth: MCPOAuthTokens?
 
-    public init(server: String, url: URL, headers: [String: String] = [:], transport: MCPRemoteTransport = .http) {
+    public init(
+        server: String, url: URL, headers: [String: String] = [:], transport: MCPRemoteTransport = .http,
+        oauth: MCPOAuthTokens? = nil
+    ) {
         self.server = server
         self.url = url
         self.headers = headers
         self.transport = transport
+        self.oauth = oauth
     }
 }
 
@@ -40,13 +46,14 @@ public enum MCPUpstreamConnection: Sendable, Equatable {
     }
 }
 
-/// Bearer tokens for a remote upstream (OAuth). `refresh` runs after a 401
-/// or when the token is about to expire; true when a new token is ready.
+/// Bearer tokens for a remote upstream (OAuth). `refresh` gets the token a
+/// 401 rejected and is true when a newer one is ready (refreshed now, or
+/// already by another request).
 public struct MCPRemoteAuthorizer: Sendable {
     public var token: @Sendable () -> String?
-    public var refresh: @Sendable () -> Bool
+    public var refresh: @Sendable (_ rejected: String?) -> Bool
 
-    public init(token: @escaping @Sendable () -> String?, refresh: @escaping @Sendable () -> Bool) {
+    public init(token: @escaping @Sendable () -> String?, refresh: @escaping @Sendable (_ rejected: String?) -> Bool) {
         self.token = token
         self.refresh = refresh
     }
@@ -69,6 +76,7 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         var body = Data()
         var events = MCPEventStream()
         var answered = false
+        var token: String?
     }
 
     let launch: MCPRemoteLaunch
@@ -122,7 +130,7 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         locked { self.session = session }
         guard launch.transport == .sse else { return }
         var request = MCPHTTPExchange.request(
-            url: launch.url, method: "GET", headers: headers(), sessionID: nil, protocolVersion: nil, body: nil)
+            url: launch.url, method: "GET", headers: headers().headers, sessionID: nil, protocolVersion: nil, body: nil)
         request.timeoutInterval = 24 * 60 * 60
         let task = session.dataTask(with: request)
         locked { exchanges[task.taskIdentifier] = Exchange(kind: .stream) }
@@ -150,7 +158,7 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         guard let session else { return }
         if let closing {
             let request = MCPHTTPExchange.request(
-                url: launch.url, method: "DELETE", headers: headers(), sessionID: closing, protocolVersion: protocolVersionNow(),
+                url: launch.url, method: "DELETE", headers: headers().headers, sessionID: closing, protocolVersion: protocolVersionNow(),
                 body: nil)
             let done = DispatchSemaphore(value: 0)
             session.dataTask(with: request) { _, _, _ in done.signal() }.resume()
@@ -161,10 +169,11 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
 
     private func protocolVersionNow() -> String? { locked { protocolVersion } }
 
-    private func headers() -> [String: String] {
+    private func headers() -> (headers: [String: String], token: String?) {
         var headers = launch.headers
-        if let token = authorizer?.token() { headers["Authorization"] = "Bearer \(token)" }
-        return headers
+        let token = authorizer?.token()
+        if let token { headers["Authorization"] = "Bearer \(token)" }
+        return (headers, token)
     }
 
     private func post(_ message: JSONValue, to url: URL, retried: Bool) {
@@ -172,11 +181,12 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
             (stopped ? nil : self.session, launch.transport == .http ? self.sessionID : nil, protocolVersion)
         }
         guard let session else { return }
+        let (sent, token) = headers()
         let request = MCPHTTPExchange.request(
-            url: url, method: "POST", headers: headers(), sessionID: sessionID, protocolVersion: version,
+            url: url, method: "POST", headers: sent, sessionID: sessionID, protocolVersion: version,
             body: Data(message.compactText.utf8))
         let task = session.dataTask(with: request)
-        locked { exchanges[task.taskIdentifier] = Exchange(kind: .post(message, retried: retried)) }
+        locked { exchanges[task.taskIdentifier] = Exchange(kind: .post(message, retried: retried), token: token) }
         task.resume()
     }
 
@@ -271,7 +281,7 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
             return
         }
         let status = exchange.status
-        if status == 401, retried == false, let authorizer, authorizer.refresh() {
+        if status == 401, retried == false, let authorizer, authorizer.refresh(exchange.token) {
             if let target = locked({ launch.transport == .sse ? endpoint : launch.url }) {
                 post(message, to: target, retried: true)
             }
