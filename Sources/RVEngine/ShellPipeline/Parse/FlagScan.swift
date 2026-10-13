@@ -170,17 +170,24 @@ public struct FlagValueSpec: Sendable, Hashable {
     /// `checkout` (`-b`/`-B`/`--branch`/`--orphan`) and `switch`
     /// (`-c`/`-C`/`--create`/`--force-create`).
     public var rejectsDashValues: Bool
+    /// Cluster letters that take an attached value only (`cp -S`, `sed -i`):
+    /// a conflicted short consumes the rest of its own cluster when
+    /// non-empty, but never the next word. Empty by default, so existing
+    /// specs keep their exact reading.
+    public var attachedOnlyShorts: Set<Character>
 
     public init(
         valueShorts: Set<Character> = [],
         valueLongs: Set<String> = [],
         knownLongs: Set<String> = [],
-        rejectsDashValues: Bool = false
+        rejectsDashValues: Bool = false,
+        attachedOnlyShorts: Set<Character> = []
     ) {
         self.valueShorts = valueShorts
         self.valueLongs = valueLongs
         self.knownLongs = knownLongs
         self.rejectsDashValues = rejectsDashValues
+        self.attachedOnlyShorts = attachedOnlyShorts
     }
 
     /// No flag takes a value; every word classifies structurally.
@@ -222,8 +229,27 @@ public struct FlagValueSpec: Sendable, Hashable {
 
     /// Splits `letters` at the first value-taking short, mirroring getopt's
     /// left-to-right walk: the first taker consumes everything after it.
+    /// An attached-only short takes only with a non-empty rest after it
+    /// (a bare `-S` stays bare); with `attachedOnlyShorts` empty this is
+    /// exactly the first-`valueShorts` split.
     public func splitShortValue(_ letters: [Character]) -> ShortSplit? {
-        guard let taker = letters.firstIndex(where: valueShorts.contains) else {
+        var cursor = letters.startIndex
+        var taker: Array<Character>.Index?
+        while cursor < letters.endIndex {
+            let letter = letters[cursor]
+            if valueShorts.contains(letter) {
+                taker = cursor
+                break
+            }
+            if attachedOnlyShorts.contains(letter),
+                letters.index(after: cursor) < letters.endIndex
+            {
+                taker = cursor
+                break
+            }
+            letters.formIndex(after: &cursor)
+        }
+        guard let taker else {
             return nil
         }
         let after = letters.index(after: taker)
@@ -235,11 +261,14 @@ public struct FlagValueSpec: Sendable, Hashable {
 
     /// Reads a `-name=value` word: the first value-taking short in `name`
     /// consumes the rest of the name plus `=value` (getopt reads `-t=x` as
-    /// value `=x`). Nil when no letter takes a value — the tool errors on
+    /// value `=x`). Attached-only shorts take here too — the `=` rest is
+    /// never empty. Nil when no letter takes a value — the tool errors on
     /// the `=`, so callers keep the word flag-like and parsers reject it.
     public func shortEqualsValue(name: String, value: String) -> FlagToken? {
         let letters = Array(name)
-        guard let taker = letters.firstIndex(where: valueShorts.contains) else {
+        guard let taker = letters.firstIndex(where: {
+            valueShorts.contains($0) || attachedOnlyShorts.contains($0)
+        }) else {
             return nil
         }
         let after = letters.index(after: taker)
