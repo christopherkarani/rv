@@ -503,8 +503,12 @@ enum MCPRun {
         var lines: [String] = []
         for server in plan.servers {
             var detail = "import \(server.name): \(server.command)"
-            if server.secrets.isEmpty == false || server.args.contains(where: { $0.contains("${secret:") }) {
-                let names = Set(server.secrets.values).union(server.args.flatMap { MCPSecretReference.names(in: $0) ?? [] })
+            var names = Set(server.secrets.values).union(server.args.flatMap { MCPSecretReference.names(in: $0) ?? [] })
+            if let remote = server.remote {
+                detail = "import \(server.name): \(MCPRedaction.url(remote.url.absoluteString).display) (\(remote.transport.rawValue))"
+                names.formUnion(remote.secretNames)
+            }
+            if names.isEmpty == false {
                 detail += " (credentials → rv secrets " + names.sorted().joined(separator: ", ") + ")"
             }
             lines.append(detail)

@@ -39,8 +39,13 @@ struct MCPManagedPolicyTests {
         }
         #expect(MCPInventoryRow.status(entry("shell-exec"), configuration: configuration, rvExecutable: "/usr/bin/rv") == .blocked)
         #expect(MCPInventoryRow.status(entry("hosted"), configuration: configuration, rvExecutable: "/usr/bin/rv") == .unreviewed)
+        let remote = MCPHostEntry(
+            host: .cursor, scope: .user, configPath: "~/.cursor/mcp.json", name: "hosted",
+            transport: .remote(url: "https://mcp.example.com/mcp"))
+        #expect(MCPInventoryRow.status(remote, configuration: configuration, rvExecutable: "/usr/bin/rv") == .unreviewed)
         configuration.managed = nil
         #expect(MCPInventoryRow.status(entry("hosted"), configuration: configuration, rvExecutable: "/usr/bin/rv") == .direct)
+        #expect(MCPInventoryRow.status(remote, configuration: configuration, rvExecutable: "/usr/bin/rv") == .direct)
     }
 
     @Test func plannerRefusesWhatTheOrganizationForbids() throws {

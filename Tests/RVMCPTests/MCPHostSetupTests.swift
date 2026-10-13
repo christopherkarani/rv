@@ -11,11 +11,14 @@ import Testing
 @Suite("MCPImport")
 struct MCPImportTests {
     private func entry(
-        _ name: String, host: MCPHost = .cursor, transport: MCPTransport, environment: [String: String] = [:]
+        _ name: String, host: MCPHost = .cursor, transport: MCPTransport, environment: [String: String] = [:],
+        headers: [String: String] = [:], remoteTransport: MCPRemoteTransport? = nil
     ) -> MCPHostEntry {
-        MCPHostEntry(
+        var entry = MCPHostEntry(
             host: host, scope: .user, configPath: "~/.cursor/mcp.json", name: name, transport: transport,
-            environment: environment)
+            environment: environment, headers: headers)
+        entry.remoteTransport = remoteTransport
+        return entry
     }
 
     @Test func credentialsBecomeKeychainSecretsAndReferences() throws {
@@ -61,7 +64,7 @@ struct MCPImportTests {
         let plan = MCPImport.plan(
             entries: [
                 entry("governed", transport: .stdio(command: "/usr/local/bin/rv", args: ["mcp", "serve", "--server", "governed"])),
-                entry("remote", transport: .remote(url: "https://mcp.example.com")),
+                entry("remote", transport: .remote(url: "http://mcp.example.com")),
                 entry("existing", transport: .stdio(command: "x", args: [])),
                 entry("svc", transport: .stdio(command: "svc", args: []), environment: ["API_TOKEN": "tok_live_abcdefghijklmnop"]),
             ],
@@ -70,6 +73,55 @@ struct MCPImportTests {
         #expect(plan.servers.map(\.name) == ["svc"])
         #expect(plan.servers.first?.secrets == ["API_TOKEN": "SVC_API_TOKEN"])
         #expect(plan.servers.first?.tools.defaultDecision == .allow)
+    }
+
+    @Test func remoteEntriesImportWithHeaderCredentialsAsSecrets() throws {
+        let plan = MCPImport.plan(
+            entries: [
+                entry(
+                    "linear", transport: .remote(url: "https://mcp.linear.app/mcp"),
+                    headers: [
+                        "Authorization": "Bearer lin_api_abcdefghijklmnopqrstuvwx", "X-Team": "eng", "X-Env": "${LINEAR_ENV}",
+                        "Mcp-Session-Id": "abc",
+                    ]),
+                entry(
+                    "legacy", transport: .remote(url: "https://legacy.example/sse"),
+                    headers: ["X-API-Key": "k_0123456789abcdefghijklmnop"], remoteTransport: .sse),
+                entry("leaky", transport: .remote(url: "https://a.example/mcp?api_key=0123456789abcdefghijklmnop")),
+                entry("plain", transport: .remote(url: "http://a.example/mcp")),
+            ],
+            configuration: MCPConfiguration(), secrets: SecretsConfiguration(), allowTools: false)
+
+        let linear = try #require(plan.servers.first { $0.name == "linear" }?.remote)
+        #expect(linear.url.absoluteString == "https://mcp.linear.app/mcp" && linear.transport == .http)
+        #expect(linear.headers == ["Authorization": "Bearer ${secret:LINEAR_AUTHORIZATION}", "X-Team": "eng"])
+        #expect(plan.notes.contains { $0.contains("linear: header X-Env referenced ${LINEAR_ENV}") })
+        #expect(plan.notes.contains { $0.contains("linear: dropped header Mcp-Session-Id") })
+        let legacy = try #require(plan.servers.first { $0.name == "legacy" }?.remote)
+        #expect(legacy.transport == .sse && legacy.headers == ["X-API-Key": "${secret:LEGACY_X_API_KEY}"])
+        #expect(plan.secrets.map(\.definition.name).sorted() == ["LEGACY_X_API_KEY", "LINEAR_AUTHORIZATION"])
+        #expect(plan.secrets.first { $0.definition.name == "LINEAR_AUTHORIZATION" }?.value == "lin_api_abcdefghijklmnopqrstuvwx")
+
+        #expect(plan.skipped.first { $0.name == "leaky" }?.reason.contains("URL carries a credential") == true)
+        #expect(plan.skipped.first { $0.name == "plain" }?.reason == "url must be https (http only to localhost)")
+        let encoded = MCPConfiguration(servers: plan.servers).encoded().prettyText
+        #expect(encoded.contains("lin_api_") == false && encoded.contains("k_0123") == false)
+        #expect(try MCPConfiguration.decode(Data(encoded.utf8)).get().servers.count == 2)
+    }
+
+    @Test func hostRemoteEntriesCarryTheirTransport() throws {
+        func remote(_ host: MCPHost, _ fields: [String: String]) -> MCPRemoteTransport? {
+            var object = JSONObject()
+            for (key, value) in fields { object[key] = .string(value) }
+            let file = MCPHostFile(
+                host: host, scope: .user, path: URL(fileURLWithPath: "/x.json"), format: .json(keyPath: ["mcpServers"], lenient: true, opencode: false))
+            return MCPInventory.standardEntry(name: "s", object: object, file: file)?.remoteTransport
+        }
+        #expect(remote(.cursor, ["url": "https://a.example/sse", "type": "sse"]) == .sse)
+        #expect(remote(.vscode, ["url": "https://a.example/mcp", "type": "http"]) == .http)
+        #expect(remote(.claudeCode, ["url": "https://a.example/mcp"]) == nil)
+        #expect(remote(.gemini, ["url": "https://a.example/sse"]) == .sse)
+        #expect(remote(.gemini, ["httpUrl": "https://a.example/mcp"]) == .http)
     }
 
     @Test func secretReferencesParseAndValidate() throws {

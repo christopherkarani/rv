@@ -45,6 +45,8 @@ public struct MCPHostEntry: Sendable, Equatable {
     public var environment: [String: String]
     public var headers: [String: String]
     public var isDisabled: Bool
+    /// What the host said about a remote entry's transport; nil when it did not say.
+    public var remoteTransport: MCPRemoteTransport?
 
     public init(
         host: MCPHost,
@@ -368,9 +370,21 @@ public struct MCPInventory: Sendable, Equatable {
             return nil
         }
         let disabled = object["disabled"]?.boolValue == true || object["enabled"]?.boolValue == false
-        return MCPHostEntry(
+        var entry = MCPHostEntry(
             host: file.host, scope: file.scope, configPath: file.path.path, name: name, transport: transport,
             environment: stringMap(object["env"]), headers: stringMap(object["headers"]), isDisabled: disabled)
+        if case .remote = transport { entry.remoteTransport = remoteTransport(object, host: file.host) }
+        return entry
+    }
+
+    /// Gemini CLI: `url` is SSE, `httpUrl` streamable HTTP. Others say `"type"`.
+    static func remoteTransport(_ object: JSONObject, host: MCPHost) -> MCPRemoteTransport? {
+        if object["httpUrl"] != nil { return .http }
+        switch object["type"]?.stringValue?.lowercased() {
+        case "sse": return .sse
+        case "http", "streamable-http", "streamablehttp": return .http
+        default: return host == .gemini && object["url"] != nil ? .sse : nil
+        }
     }
 
     static func opencodeEntry(name: String, object: JSONObject, file: MCPHostFile) -> MCPHostEntry? {

@@ -51,13 +51,20 @@ public enum MCPImport {
                 plan.skipped.append((entry.name, "mcp.json already defines it"))
                 continue
             }
+            let description = "imported from \(entry.host.rawValue) (\(entry.configPath))"
             guard case .stdio(let command, let args) = entry.transport else {
-                plan.skipped.append((entry.name, "remote server; add it to \"direct\" in mcp.json to allow it"))
+                guard case .remote(let raw) = entry.transport else { continue }
+                switch remoteServer(entry, url: raw, plan: &plan, secretName: secretName) {
+                case .failure(let skip): plan.skipped.append((entry.name, skip.reason))
+                case .success(let remote):
+                    var definition = MCPServerDefinition(name: entry.name, description: description, remote: remote)
+                    if allowTools { definition.tools.defaultDecision = .allow }
+                    plan.servers.append(definition)
+                    takenServers.insert(entry.name)
+                }
                 continue
             }
-            var definition = MCPServerDefinition(
-                name: entry.name, description: "imported from \(entry.host.rawValue) (\(entry.configPath))",
-                command: command)
+            var definition = MCPServerDefinition(name: entry.name, description: description, command: command)
             if allowTools { definition.tools.defaultDecision = .allow }
             let credentials = Set(MCPRedaction.literalCredentials(entry.environment))
             for (variable, value) in entry.environment.sorted(by: { $0.key < $1.key }) {
@@ -81,6 +88,54 @@ public enum MCPImport {
             takenServers.insert(entry.name)
         }
         return plan
+    }
+
+    struct Skip: Error { var reason: String }
+
+    /// Credential header values become `${secret:NAME}` (an auth scheme such
+    /// as `Bearer ` stays literal); headers that point at host variables or
+    /// that rv's transport owns are dropped with a note.
+    static func remoteServer(
+        _ entry: MCPHostEntry, url raw: String, plan: inout MCPImportPlan, secretName: (String, String) -> String
+    ) -> Result<MCPRemoteServer, Skip> {
+        guard let url = URL(string: raw) else { return .failure(Skip(reason: "url does not parse")) }
+        if let problem = MCPRemoteServer.endpointProblem(url) { return .failure(Skip(reason: "url \(problem)")) }
+        if MCPRedaction.url(raw).leaked {
+            return .failure(Skip(reason: "the URL carries a credential; move it into a header, then import"))
+        }
+        guard entry.headers.count <= MCPRemoteServer.maximumHeaders else {
+            return .failure(Skip(reason: "more than \(MCPRemoteServer.maximumHeaders) headers"))
+        }
+        var remote = MCPRemoteServer(url: url, transport: entry.remoteTransport ?? .http)
+        for (header, value) in entry.headers.sorted(by: { $0.key < $1.key }) {
+            if MCPConfigurationDecoding.isHeaderName(header) == false
+                || MCPRemoteServer.managedHeaders.contains(header.lowercased())
+                || value.unicodeScalars.contains(where: { $0 == "\r" || $0 == "\n" || $0 == "\0" })
+                || value.contains("${secret:")
+            {
+                plan.notes.append("\(entry.name): dropped header \(header) (rv sets it, or rv cannot carry its value)")
+                continue
+            }
+            if MCPRedaction.isReference(value) {
+                plan.notes.append(
+                    "\(entry.name): header \(header) referenced \(value) in the host; store it with `rv secrets set` and use ${secret:NAME}")
+                continue
+            }
+            var scheme = ""
+            var credential = value
+            if let space = value.firstIndex(of: " "), value[..<space].allSatisfy(\.isLetter) {
+                scheme = String(value[...space])
+                credential = value[value.index(after: space)...].trimmingCharacters(in: .whitespaces)
+            }
+            guard credential.isEmpty == false, MCPRedaction.isSecretName(header) || MCPRedaction.looksLikeToken(credential) else {
+                remote.headers[header] = value
+                continue
+            }
+            let name = secretName("\(entry.name)_\(header)", entry.name)
+            plan.secrets.append(.init(definition: secretDefinition(name, entry), value: credential))
+            remote.headers[header] = scheme + "${secret:\(name)}"
+        }
+        return .success(remote)
     }
 
     /// Credential flag values and bare tokens become `${secret:NAME}`.
