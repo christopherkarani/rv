@@ -195,9 +195,95 @@ struct ManagedPolicyLocationTests {
         #expect(bundle.location().load().invalidReason?.contains("not a base64 Ed25519 public key") == true)
     }
 
+    @Test func anyPinnedKeyVerifiesSoKeysCanRotate() throws {
+        let bundle = try Bundle()
+        let old = ManagedPolicyVerifier.generateKeyPair()
+        let new = ManagedPolicyVerifier.generateKeyPair()
+        try bundle.write("policy.json", policy)
+        try bundle.write("org-key.pub", Data("# Acme policy keys\n\(old.publicKey)\n\n# next\n  \(new.publicKey)  \n".utf8))
+        let signature = try #require(ManagedPolicyVerifier.sign(policy, privateKey: Data(new.privateKey.utf8)))
+        try bundle.write("policy.json.sig", Data(signature.utf8))
+        guard case .active(let active) = bundle.location().load() else {
+            Issue.record("a policy signed by the second pinned key must be active")
+            return
+        }
+        #expect(active.isSigned)
+        #expect(active.signingKey == 2)
+
+        let stranger = ManagedPolicyVerifier.generateKeyPair()
+        let foreign = try #require(ManagedPolicyVerifier.sign(policy, privateKey: Data(stranger.privateKey.utf8)))
+        try bundle.write("policy.json.sig", Data(foreign.utf8))
+        #expect(bundle.location().load().invalidReason == "policy.json.sig does not verify against any key in org-key.pub")
+
+        try bundle.write("org-key.pub", Data("\(old.publicKey)\n# comment\nnot-a-key\n".utf8))
+        #expect(bundle.location().load().invalidReason == "org-key.pub line 3 is not a base64 Ed25519 public key")
+        try bundle.write("org-key.pub", Data("# no keys yet\n\n".utf8))
+        #expect(bundle.location().load().invalidReason == "org-key.pub holds no key")
+        let many = (0...ManagedPolicyVerifier.maximumKeys).map { _ in ManagedPolicyVerifier.generateKeyPair().publicKey }
+        try bundle.write("org-key.pub", Data(many.joined(separator: "\n").utf8))
+        #expect(bundle.location().load().invalidReason
+            == "org-key.pub holds more than \(ManagedPolicyVerifier.maximumKeys) keys")
+    }
+
     @Test func malformedPolicyIsInvalidNotIgnored() throws {
         let bundle = try Bundle()
         try bundle.write("policy.json", Data(#"{"version": 1, "mcp": {"block": ["x"]}}"#.utf8))
         #expect(bundle.location().load() == .invalid("unknown key \"block\" in mcp"))
+    }
+}
+
+@Suite("ManagedSerialRecord")
+struct ManagedSerialRecordTests {
+    func active(serial: Int?, directory: String = "/etc/rv/managed") throws -> ManagedPolicyState {
+        var policy = try ManagedPolicy.decode(Data(#"{"version": 1}"#.utf8)).get()
+        policy.serial = serial
+        return .active(ManagedPolicyBundle(policy: policy, sha256: "x", isSigned: true, directory: directory))
+    }
+
+    @Test func aHigherSerialIsRememberedAndALowerOneIsARollback() throws {
+        let first = try active(serial: 5).checkedForRollback(against: ManagedSerialRecord())
+        #expect(first.raised == ManagedSerialRecord(highest: ["/etc/rv/managed": 5]))
+        guard case .active(let bundle) = first.state else {
+            Issue.record("the first serial must be accepted")
+            return
+        }
+        #expect(bundle.highestSerial == 5)
+        let record = try #require(first.raised)
+
+        let same = try active(serial: 5).checkedForRollback(against: record)
+        #expect(same.raised == nil)
+        #expect(same.state.policy != nil)
+
+        let newer = try active(serial: 9).checkedForRollback(against: record)
+        #expect(newer.raised == ManagedSerialRecord(highest: ["/etc/rv/managed": 9]))
+
+        let older = try active(serial: 4).checkedForRollback(against: record)
+        #expect(older.raised == nil)
+        #expect(older.state.invalidReason
+            == "rollback: policy.json serial 4 is lower than serial 5 already accepted from /etc/rv/managed")
+
+        let unnumbered = try active(serial: nil).checkedForRollback(against: record)
+        #expect(unnumbered.state.invalidReason
+            == "rollback: policy.json has no serial but serial 5 was already accepted from /etc/rv/managed")
+    }
+
+    @Test func directoriesAreTrackedSeparatelyAndOtherStatesPassThrough() throws {
+        let record = ManagedSerialRecord(highest: ["/etc/rv/managed": 5])
+        let elsewhere = try active(serial: 1, directory: "/other").checkedForRollback(against: record)
+        #expect(elsewhere.raised == ManagedSerialRecord(highest: ["/etc/rv/managed": 5, "/other": 1]))
+        let unnumbered = try active(serial: nil, directory: "/fresh").checkedForRollback(against: record)
+        #expect(unnumbered.raised == nil)
+        #expect(unnumbered.state.policy != nil)
+        #expect(ManagedPolicyState.none.checkedForRollback(against: record).state == .none)
+        #expect(ManagedPolicyState.invalid("x").checkedForRollback(against: record).state == .invalid("x"))
+    }
+
+    @Test func recordRoundTripsAndRejectsGarbage() throws {
+        let record = ManagedSerialRecord(highest: ["/etc/rv/managed": 12])
+        #expect(try ManagedSerialRecord.decode(record.encoded()).get() == record)
+        #expect(throws: (any Error).self) { try ManagedSerialRecord.decode(Data("[]".utf8)).get() }
+        #expect(throws: (any Error).self) {
+            try ManagedSerialRecord.decode(Data(#"{"version": 1, "highest": {"/a": -1}}"#.utf8)).get()
+        }
     }
 }

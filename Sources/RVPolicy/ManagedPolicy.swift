@@ -292,12 +292,21 @@ public struct ManagedPolicyBundle: Sendable, Equatable {
     public var sha256: String
     public var isSigned: Bool
     public var directory: String
+    /// 1-based position among the keys in `org-key.pub` of the key that verified.
+    public var signingKey: Int?
+    /// Highest serial accepted from `directory`, once the rollback check has run.
+    public var highestSerial: Int?
 
-    public init(policy: ManagedPolicy, sha256: String, isSigned: Bool, directory: String) {
+    public init(
+        policy: ManagedPolicy, sha256: String, isSigned: Bool, directory: String, signingKey: Int? = nil,
+        highestSerial: Int? = nil
+    ) {
         self.policy = policy
         self.sha256 = sha256
         self.isSigned = isSigned
         self.directory = directory
+        self.signingKey = signingKey
+        self.highestSerial = highestSerial
     }
 }
 
@@ -456,28 +465,57 @@ public struct ManagedPolicyLocation: Sendable {
 }
 
 /// Ed25519 over the exact policy bytes. Keys and signatures are base64 text.
+/// `org-key.pub` may pin several keys (one per line, `#` comments) so an
+/// organization can rotate: any pinned key verifies.
 public enum ManagedPolicyVerifier {
+    public static let maximumKeys = 16
+
     public static func verify(policy data: Data, signature: Data?, publicKey: Data?, directory: String) -> ManagedPolicyState {
-        var signed = false
+        var signingKey: Int?
         if let publicKey {
-            guard let keyBytes = base64(publicKey), let key = try? Curve25519.Signing.PublicKey(rawRepresentation: keyBytes) else {
-                return .invalid("\(ManagedPolicyLocation.publicKeyFile) is not a base64 Ed25519 public key")
+            let keys: [Curve25519.Signing.PublicKey]
+            switch publicKeys(publicKey) {
+            case .failure(let error): return .invalid(error.message)
+            case .success(let parsed): keys = parsed
             }
             guard let signature else {
                 return .invalid("\(ManagedPolicyLocation.publicKeyFile) is pinned but \(ManagedPolicyLocation.signatureFile) is missing")
             }
-            guard let signatureBytes = base64(signature), key.isValidSignature(signatureBytes, for: data) else {
-                return .invalid("\(ManagedPolicyLocation.signatureFile) does not verify against \(ManagedPolicyLocation.publicKeyFile)")
+            guard let signatureBytes = base64(signature),
+                let index = keys.firstIndex(where: { $0.isValidSignature(signatureBytes, for: data) })
+            else {
+                let target = keys.count == 1 ? ManagedPolicyLocation.publicKeyFile : "any key in \(ManagedPolicyLocation.publicKeyFile)"
+                return .invalid("\(ManagedPolicyLocation.signatureFile) does not verify against \(target)")
             }
-            signed = true
+            signingKey = index + 1
         }
         switch ManagedPolicy.decode(data) {
         case .failure(let error):
             return .invalid(error.message)
         case .success(let policy):
             let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-            return .active(ManagedPolicyBundle(policy: policy, sha256: digest, isSigned: signed, directory: directory))
+            return .active(ManagedPolicyBundle(
+                policy: policy, sha256: digest, isSigned: signingKey != nil, directory: directory, signingKey: signingKey))
         }
+    }
+
+    static func publicKeys(_ data: Data) -> Result<[Curve25519.Signing.PublicKey], ManagedPolicyError> {
+        let file = ManagedPolicyLocation.publicKeyFile
+        var keys: [Curve25519.Signing.PublicKey] = []
+        for (number, line) in String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
+            .enumerated()
+        {
+            let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.isEmpty || text.hasPrefix("#") { continue }
+            guard let bytes = Data(base64Encoded: text), let key = try? Curve25519.Signing.PublicKey(rawRepresentation: bytes) else {
+                return .failure(ManagedPolicyError("\(file) line \(number + 1) is not a base64 Ed25519 public key"))
+            }
+            guard keys.count < maximumKeys else {
+                return .failure(ManagedPolicyError("\(file) holds more than \(maximumKeys) keys"))
+            }
+            keys.append(key)
+        }
+        return keys.isEmpty ? .failure(ManagedPolicyError("\(file) holds no key")) : .success(keys)
     }
 
     /// (public, private) as base64 raw representations.
