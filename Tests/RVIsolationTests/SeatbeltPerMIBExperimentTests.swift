@@ -109,9 +109,11 @@ struct SeatbeltPerMIBExperimentTests {
         try Data(source.utf8).write(to: profileURL)
 
         // swift and node are hard rows: exit 0 and the marker. A
-        // LowLevelAlloc abort is a failure. The experiment rules stay as
-        // they are; this profile is not what `compileSeatbeltProfile`
-        // emits (that compiler keeps `.coarse`).
+        // LowLevelAlloc abort is a failure. Node reaches that abort
+        // when sysconf(_SC_PAGESIZE) is EPERM; the experiment allowlist
+        // names hw.pagesize_compat for that numeric MIB. This profile
+        // is not what `compileSeatbeltProfile` emits (that compiler
+        // keeps `.coarse`).
         var tools: [(path: String, arguments: [String], marker: String)] = [
             ("/bin/sh", ["-c", "echo t9-sh-ok"], "t9-sh-ok"),
             ("/usr/bin/git", ["--version"], "git version"),

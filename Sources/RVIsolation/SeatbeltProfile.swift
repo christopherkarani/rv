@@ -128,6 +128,15 @@ enum SeatbeltSysctlExperiment {
     /// hw.machine join the kern.ostype/kern.osrelease base.
     /// hw.ncpu/hw.memsize: parallelism and memory topology every build
     /// system queries; verified not to reopen host procargs.
+    /// hw.pagesize_compat: getpagesize(3) and therefore
+    /// sysconf(_SC_PAGESIZE) issue the numeric MIB
+    /// {CTL_HW, HW_PAGESIZE}. That OID is the int node
+    /// `hw.pagesize_compat`, not the quad `hw.pagesize` (OID_AUTO).
+    /// Node's abseil LowLevelAlloc casts a failed sysconf to
+    /// `(size_t)-1` and aborts in CheckedAdd (`sum >= a`). Allowing
+    /// the quad name leaves the numeric query EPERM. The compat leaf
+    /// is still a named leaf, so it does not reopen nameless
+    /// KERN_PROCARGS2.
     static let allowlistedNames: [String] = [
         "kern.ostype",
         "kern.osrelease",
@@ -136,6 +145,7 @@ enum SeatbeltSysctlExperiment {
         "hw.machine",
         "hw.ncpu",
         "hw.memsize",
+        "hw.pagesize_compat",
     ]
 
     /// SBPL fragment for the sysctl posture. The coarse arm is the
