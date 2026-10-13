@@ -511,11 +511,11 @@ private func connectedState(
         readOnly.terminal?.state.lease = .readOnly
         let held = WorkspaceTUIReducer.reduce(readOnly, .sendDue(runtime: runtimeA, bytes: Data("a".utf8)))
         #expect(held.effects == [])
-        #expect(held.state.pendingInput[paneID]?.binding == binding(runtimeA))
-        #expect(held.state.pendingInput[paneID]?.bytes == Data("a".utf8))
+        #expect(held.state.panes[paneID]?.input?.binding == binding(runtimeA))
+        #expect(held.state.panes[paneID]?.input?.bytes == Data("a".utf8))
         let heldMore = WorkspaceTUIReducer.reduce(held.state, .sendDue(runtime: runtimeA, bytes: Data("b".utf8)))
         #expect(heldMore.effects == [])
-        #expect(heldMore.state.pendingInput[paneID]?.bytes == Data("ab".utf8))
+        #expect(heldMore.state.panes[paneID]?.input?.bytes == Data("ab".utf8))
     }
 
     @Test func leaseGrantFlushesQueuedTypeahead() {
@@ -527,7 +527,7 @@ private func connectedState(
             held.state, .attachCompleted(runtime: runtimeA, context: .launch, outcome: .owned)
         )
         #expect(attached.effects == [.write(runtime: runtimeA, bytes: Data("ab".utf8))])
-        #expect(attached.state.pendingInput[paneID] == nil)
+        #expect(attached.state.panes[paneID]?.input == nil)
     }
 
     @Test func acquireGrantFlushesQueuedTypeahead() {
@@ -539,7 +539,7 @@ private func connectedState(
             held.state, .acquireCompleted(runtime: runtimeA, outcome: .ok)
         )
         #expect(acquired.effects == [.write(runtime: runtimeA, bytes: Data("z".utf8))])
-        #expect(acquired.state.pendingInput[paneID] == nil)
+        #expect(acquired.state.panes[paneID]?.input == nil)
     }
 
     @Test func typeaheadNeverFlushesIntoAStaleBinding() {
@@ -549,7 +549,7 @@ private func connectedState(
         let held = WorkspaceTUIReducer.reduce(readOnly, .sendDue(runtime: runtimeA, bytes: Data("stale".utf8)))
         var rebound = held.state
         rebound.terminal = attachedTerminal(runtime: runtimeB)
-        #expect(rebound.pendingInput[paneID] == nil)
+        #expect(rebound.panes[paneID]?.input == nil)
         let attached = WorkspaceTUIReducer.reduce(
             rebound, .attachCompleted(runtime: runtimeB, context: .launch, outcome: .owned)
         )
@@ -565,9 +565,9 @@ private func connectedState(
         let over = WorkspaceTUIReducer.reduce(
             held.state, .sendDue(runtime: runtimeA, bytes: Data(repeating: 0x62, count: 100))
         )
-        #expect(over.state.pendingInput[paneID]?.bytes.count == 4096)
-        #expect(over.state.pendingInput[paneID]?.bytes.prefix(4000) == big)
-        #expect(over.state.pendingInput[paneID]?.bytes.suffix(96) == Data(repeating: 0x62, count: 96))
+        #expect(over.state.panes[paneID]?.input?.bytes.count == 4096)
+        #expect(over.state.panes[paneID]?.input?.bytes.prefix(4000) == big)
+        #expect(over.state.panes[paneID]?.input?.bytes.suffix(96) == Data(repeating: 0x62, count: 96))
     }
 
     @Test func detachDropsQueuedTypeahead() {
@@ -575,9 +575,9 @@ private func connectedState(
         readOnly.leasedRuntime = nil
         readOnly.terminal?.state.lease = .readOnly
         let held = WorkspaceTUIReducer.reduce(readOnly, .sendDue(runtime: runtimeA, bytes: Data("q".utf8)))
-        #expect(held.state.pendingInput[paneID] != nil)
+        #expect(held.state.panes[paneID]?.input != nil)
         let detached = WorkspaceTUIReducer.reduce(held.state, .detachRequested)
-        #expect(detached.state.pendingInput.isEmpty)
+        #expect(detached.state.panes.values.allSatisfy { $0.input == nil })
     }
 
     @Test func sendDueRequiresTheOwnedLease() {
@@ -614,11 +614,19 @@ private func connectedState(
             .launchQuery(target: boundTarget, choice: shellChoice, rows: 24, columns: 80),
         ])
         var pending = running
-        pending.pendingLaunches[paneID] = WorkspaceTUIState.PendingLaunch(
-            binding: binding(runtimeB),
-            terminal: attachedTerminal(runtime: runtimeB)
-        )
-        #expect(WorkspaceTUIReducer.reduce(pending, .launchDue(choice: shellChoice)).effects == [])
+        let previous = pending.panes[paneID]?.terminal
+        pending.panes[paneID]?.phase = .launching(LaunchDetail(
+            previous: previous,
+            candidate: WorkspaceTUIState.PendingLaunch(
+                binding: binding(runtimeB),
+                terminal: attachedTerminal(runtime: runtimeB)
+            )
+        ))
+        // A bound target matches the live binding, so only the in-flight
+        // candidate can be responsible for the drop.
+        #expect(WorkspaceTUIReducer.reduce(
+            pending, .launchDue(target: boundTarget, choice: shellChoice)
+        ).effects == [])
     }
 
     @Test func launchSucceededAttachesAndRotatesSubscription() {
@@ -630,7 +638,7 @@ private func connectedState(
             .launchQuerySucceeded(choice: opencodeChoice, runtime: runtime, rows: 24, columns: 80)
         )
         #expect(transition.state.terminal?.state.runtime == runtimeA)
-        #expect(transition.state.pendingLaunches[paneID]?.binding.runtime == runtimeB)
+        #expect(transition.state.panes[paneID]?.phase.candidate?.binding.runtime == runtimeB)
         #expect(transition.state.mode == .terminal)
         #expect(transition.effects == [.attach(runtime: runtimeB, context: .launch)])
         let attached = WorkspaceTUIReducer.reduce(
@@ -658,7 +666,7 @@ private func connectedState(
             .launchQuerySucceeded(choice: shellChoice, runtime: runtime, rows: 24, columns: 80)
         )
         #expect(transition.state.terminal?.state.runtime == runtimeA)
-        #expect(transition.state.pendingLaunches[paneID]?.binding.runtime == runtimeB)
+        #expect(transition.state.panes[paneID]?.phase.candidate?.binding.runtime == runtimeB)
         #expect(transition.effects == [.attach(runtime: runtimeB, context: .launch)])
     }
 
@@ -751,8 +759,8 @@ private func connectedState(
         let before = connectedState()
         let transition = WorkspaceTUIReducer.reduce(before, .hostEvents([.overflow(runtime: runtimeA)]))
         #expect(transition.effects == [.attach(runtime: runtimeA, context: .resubscribe)])
-        #expect(transition.state.terminals[paneID]?.state.overflowed == true)
-        #expect(transition.state.terminals[paneID]?.state.subscribed == false)
+        #expect(transition.state.terminal(for: paneID)?.state.overflowed == true)
+        #expect(transition.state.terminal(for: paneID)?.state.subscribed == false)
         #expect(transition.state.presentationRevision == before.presentationRevision + 1)
     }
 
@@ -765,55 +773,63 @@ private func connectedState(
 
     @Test func resubscribeSuccessClearsOverflowAndRestoresLease() {
         var before = connectedState(leasedRuntime: nil)
-        before.terminals[paneID]?.state.overflowed = true
-        before.terminals[paneID]?.state.subscribed = false
+        before.updateTerminal(paneID) {
+            $0.state.overflowed = true
+            $0.state.subscribed = false
+        }
         let transition = WorkspaceTUIReducer.reduce(
             before, .attachCompleted(runtime: runtimeA, context: .resubscribe, outcome: .owned)
         )
-        #expect(transition.state.terminals[paneID]?.state.overflowed == false)
-        #expect(transition.state.terminals[paneID]?.state.subscribed == true)
-        #expect(transition.state.terminals[paneID]?.state.lease == .owned)
+        #expect(transition.state.terminal(for: paneID)?.state.overflowed == false)
+        #expect(transition.state.terminal(for: paneID)?.state.subscribed == true)
+        #expect(transition.state.terminal(for: paneID)?.state.lease == .owned)
         #expect(transition.state.leasedRuntime == runtimeA)
     }
 
     @Test func resubscribeContendedClearsOverflowStaysReadOnly() {
         var before = connectedState(leasedRuntime: nil)
-        before.terminals[paneID]?.state.overflowed = true
-        before.terminals[paneID]?.state.subscribed = false
-        before.terminals[paneID]?.state.lease = .readOnly
+        before.updateTerminal(paneID) {
+            $0.state.overflowed = true
+            $0.state.subscribed = false
+            $0.state.lease = .readOnly
+        }
         let transition = WorkspaceTUIReducer.reduce(
             before, .attachCompleted(runtime: runtimeA, context: .resubscribe, outcome: .readOnly)
         )
-        #expect(transition.state.terminals[paneID]?.state.overflowed == false)
-        #expect(transition.state.terminals[paneID]?.state.subscribed == true)
-        #expect(transition.state.terminals[paneID]?.state.lease == .readOnly)
+        #expect(transition.state.terminal(for: paneID)?.state.overflowed == false)
+        #expect(transition.state.terminal(for: paneID)?.state.subscribed == true)
+        #expect(transition.state.terminal(for: paneID)?.state.lease == .readOnly)
         #expect(transition.state.leasedRuntime == nil)
     }
 
     @Test func resubscribeFailureRetriesOnTick() {
         var before = connectedState()
-        before.terminals[paneID]?.state.overflowed = true
-        before.terminals[paneID]?.state.subscribed = false
+        before.updateTerminal(paneID) {
+            $0.state.overflowed = true
+            $0.state.subscribed = false
+        }
         let failed = WorkspaceTUIReducer.reduce(
             before, .attachCompleted(runtime: runtimeA, context: .resubscribe, outcome: .unavailable)
         )
-        #expect(failed.state.retrySubscribePanes.contains(paneID))
-        #expect(failed.state.terminals[paneID]?.state.subscribed == false)
+        #expect(failed.state.panes[paneID]?.retries.contains(.subscribe) == true)
+        #expect(failed.state.terminal(for: paneID)?.state.subscribed == false)
         let retried = WorkspaceTUIReducer.reduce(failed.state, .tick(now: Date()))
         #expect(retried.effects == [.attach(runtime: runtimeA, context: .resubscribeRetry)])
-        #expect(retried.state.retrySubscribePanes.isEmpty)
+        #expect(retried.state.panes.values.allSatisfy { $0.retries.contains(.subscribe) == false })
     }
 
     @Test func resubscribeRetryFailureStaysQuiet() {
         // The tick retry is one-shot: a repeat failure means the runtime
         // is gone, so it must not re-arm and RPC-spam the tick.
         var before = connectedState()
-        before.terminals[paneID]?.state.overflowed = true
-        before.terminals[paneID]?.state.subscribed = false
+        before.updateTerminal(paneID) {
+            $0.state.overflowed = true
+            $0.state.subscribed = false
+        }
         let failed = WorkspaceTUIReducer.reduce(
             before, .attachCompleted(runtime: runtimeA, context: .resubscribeRetry, outcome: .unavailable)
         )
-        #expect(failed.state.retrySubscribePanes.isEmpty)
+        #expect(failed.state.panes.values.allSatisfy { $0.retries.contains(.subscribe) == false })
         #expect(failed.effects == [])
     }
 
@@ -939,7 +955,7 @@ private func connectedState(
         #expect(idle.effects == [])
         var unsubscribed = connectedState()
         unsubscribed.lastSubscriptionProbeAt = now.addingTimeInterval(-6)
-        unsubscribed.terminals[paneID]?.state.subscribed = false
+        unsubscribed.updateTerminal(paneID) { $0.state.subscribed = false }
         let skipped = WorkspaceTUIReducer.reduce(unsubscribed, .tick(now: now))
         #expect(skipped.effects == [])
     }
@@ -953,7 +969,7 @@ private func connectedState(
             before, .attachCompleted(runtime: runtimeA, context: .probe, outcome: .readOnly)
         )
         #expect(transition.state.terminal?.state.lease == .owned)
-        #expect(transition.state.retryAcquirePanes.contains(paneID))
+        #expect(transition.state.panes[paneID]?.retries.contains(.acquire) == true)
         #expect(transition.effects == [])
     }
 
@@ -964,7 +980,7 @@ private func connectedState(
             before, .attachCompleted(runtime: runtimeA, context: .probe, outcome: .readOnly)
         )
         #expect(transition.effects == [])
-        #expect(transition.state.retryAcquirePanes.isEmpty)
+        #expect(transition.state.panes.values.allSatisfy { $0.retries.contains(.acquire) == false })
     }
 
     @Test func probeFailureIsHealthyNoOp() {
@@ -993,12 +1009,12 @@ private func connectedState(
         // quiet. Unsubscribed panes skip it; the subscribe loop owns them.
         var before = connectedState()
         let refused = WorkspaceTUIReducer.reduce(before, .writeCompleted(runtime: runtimeA, outcome: .busy))
-        #expect(refused.state.retryAcquirePanes.contains(paneID))
+        #expect(refused.state.panes[paneID]?.retries.contains(.acquire) == true)
         let ticked = WorkspaceTUIReducer.reduce(refused.state, .tick(now: Date()))
         #expect(ticked.effects == [.acquire(runtime: runtimeA)])
-        before.terminals[paneID]?.state.subscribed = false
+        before.updateTerminal(paneID) { $0.state.subscribed = false }
         let quiet = WorkspaceTUIReducer.reduce(before, .writeCompleted(runtime: runtimeA, outcome: .busy))
-        #expect(quiet.state.retryAcquirePanes.isEmpty)
+        #expect(quiet.state.panes.values.allSatisfy { $0.retries.contains(.acquire) == false })
     }
 
     @Test func refusedWriteRequeuesForNextGrant() {
@@ -1009,12 +1025,12 @@ private func connectedState(
         let refused = WorkspaceTUIReducer.reduce(
             before, .writeCompleted(runtime: runtimeA, bytes: Data("z".utf8), outcome: .busy)
         )
-        #expect(refused.state.pendingInput[paneID]?.bytes == Data("z".utf8))
+        #expect(refused.state.panes[paneID]?.input?.bytes == Data("z".utf8))
         let granted = WorkspaceTUIReducer.reduce(
             refused.state, .acquireCompleted(runtime: runtimeA, outcome: .ok)
         )
         #expect(granted.effects == [.write(runtime: runtimeA, bytes: Data("z".utf8))])
-        #expect(granted.state.pendingInput[paneID] == nil)
+        #expect(granted.state.panes[paneID]?.input == nil)
     }
 
     @Test func rejectedWriteSurfacesFeedback() {
@@ -1037,13 +1053,13 @@ private func connectedState(
 
     @Test func unavailableWriteWarnsOnlyWhileRunning() {
         var running = connectedState()
-        running.terminals[paneID]?.state.running = true
+        running.updateTerminal(paneID) { $0.state.running = true }
         let warned = WorkspaceTUIReducer.reduce(
             running, .writeCompleted(runtime: runtimeA, bytes: Data("z".utf8), outcome: .unavailable)
         )
         #expect(warned.state.feedback == "Terminal unavailable; input dropped")
         var exited = connectedState()
-        exited.terminals[paneID]?.state.running = false
+        exited.updateTerminal(paneID) { $0.state.running = false }
         let quiet = WorkspaceTUIReducer.reduce(
             exited, .writeCompleted(runtime: runtimeA, bytes: Data("z".utf8), outcome: .unavailable)
         )
@@ -1058,7 +1074,7 @@ private func connectedState(
         let big = Data(repeating: 0x61, count: 5000)
         let held = WorkspaceTUIReducer.reduce(readOnly, .sendDue(runtime: runtimeA, bytes: big))
         #expect(held.effects == [])
-        #expect(held.state.pendingInput[paneID]?.bytes.count == 4096)
+        #expect(held.state.panes[paneID]?.input?.bytes.count == 4096)
         #expect(held.state.feedback?.hasPrefix("Typeahead full; dropped ") == true)
         #expect(held.state.feedbackTicks == 60)
     }
@@ -1143,8 +1159,8 @@ private func connectedState(
             let before = connectedState()
             let transition = WorkspaceTUIReducer.reduce(before, .acquireCompleted(runtime: runtimeA, outcome: outcome))
             #expect(transition.effects == [.attach(runtime: runtimeA, context: .resubscribe)])
-            #expect(transition.state.terminals[paneID]?.state.subscribed == false)
-            #expect(transition.state.terminals[paneID]?.state.lease == .readOnly)
+            #expect(transition.state.terminal(for: paneID)?.state.subscribed == false)
+            #expect(transition.state.terminal(for: paneID)?.state.lease == .readOnly)
         }
     }
 
@@ -1152,10 +1168,10 @@ private func connectedState(
         // No duplicate resubscribe: the subscribe-retry loop owns recovery
         // once the pane already knows it is unsubscribed.
         var before = connectedState()
-        before.terminals[paneID]?.state.subscribed = false
+        before.updateTerminal(paneID) { $0.state.subscribed = false }
         let transition = WorkspaceTUIReducer.reduce(before, .acquireCompleted(runtime: runtimeA, outcome: .unavailable))
         #expect(transition.effects == [])
-        #expect(transition.state.terminals[paneID]?.state.lease == .readOnly)
+        #expect(transition.state.terminal(for: paneID)?.state.lease == .readOnly)
     }
 
     @Test func resizeUnavailableExitsTheTerminal() {
