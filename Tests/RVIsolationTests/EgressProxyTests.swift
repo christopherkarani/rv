@@ -429,6 +429,50 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     #expect(collector.all.first?.reason == .headerTooLarge)
 }
 
+private final class AuditDiagnosticCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+
+    func record(_ line: String) {
+        lock.lock()
+        lines.append(line)
+        lock.unlock()
+    }
+
+    var all: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return lines
+    }
+}
+
+@Test func egressDenialAppendPersistsAndSurfacesFailure() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-egress-log-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let denial = EgressProxyDenial(
+        host: "denied.example", port: 443, reason: .deniedPolicy,
+        recordedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let diagnostics = AuditDiagnosticCollector()
+    let url = directory.appendingPathComponent("egress-denials.jsonl")
+    #expect(EgressProxy.writeDenial(denial, to: url, diagnose: diagnostics.record))
+    #expect(diagnostics.all.isEmpty)
+    let text = try String(contentsOf: url, encoding: .utf8)
+    #expect(text.contains("denied.example"))
+    #expect(text.contains("denied-policy"))
+
+    // Fault injection: the log parent is a regular file, so neither the
+    // append nor the fallback create can persist. The failure must surface
+    // as a diagnostic instead of vanishing through `try?`.
+    let blocker = directory.appendingPathComponent("blocker")
+    try Data("file".utf8).write(to: blocker)
+    let badURL = blocker.appendingPathComponent("egress-denials.jsonl")
+    #expect(EgressProxy.writeDenial(denial, to: badURL, diagnose: diagnostics.record) == false)
+    #expect(diagnostics.all.isEmpty == false)
+}
+
 @Test func egressDenialReasonsPinLogSpellings() {
     // `egress-denials.jsonl` readers (including out-of-repo ones) match on
     // these spellings, so adding a reason is a log-format change. The full

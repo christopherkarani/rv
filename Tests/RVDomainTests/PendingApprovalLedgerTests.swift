@@ -709,28 +709,28 @@ struct PendingApprovalLedgerTests {
         // M6: the first payload must not win a shared wait.
         let (_, firstRecords) = try PendingApprovalLedger.create(
             records: [],
-            request: Self.request(id: "ask-1", payloadDigest: "digest-a"),
+            request: Self.request(id: "ask-1", payloadDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
             now: Self.now
         )
         let (second, records) = try PendingApprovalLedger.create(
             records: firstRecords,
-            request: Self.request(id: "ask-2", payloadDigest: "digest-b"),
+            request: Self.request(id: "ask-2", payloadDigest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
             now: Self.now
         )
         #expect(records.count == 2)
         #expect(second.id.rawValue == "ask-2")
-        #expect(second.payloadDigest == "digest-b")
+        #expect(second.payloadDigest?.rawValue == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     }
 
     @Test func sameViewSamePayloadReusesWait() throws {
         let (firstRecord, firstRecords) = try PendingApprovalLedger.create(
             records: [],
-            request: Self.request(id: "ask-1", payloadDigest: "digest-a"),
+            request: Self.request(id: "ask-1", payloadDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
             now: Self.now
         )
         let (second, records) = try PendingApprovalLedger.create(
             records: firstRecords,
-            request: Self.request(id: "ask-2", payloadDigest: "digest-a"),
+            request: Self.request(id: "ask-2", payloadDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
             now: Self.now
         )
         #expect(records.map(\.id) == [firstRecord.id])
@@ -740,7 +740,7 @@ struct PendingApprovalLedgerTests {
     @Test func payloadDigestRoundTripsThroughCodable() throws {
         let (record, _) = try PendingApprovalLedger.create(
             records: [],
-            request: Self.request(id: "ask-1", payloadDigest: "digest-a"),
+            request: Self.request(id: "ask-1", payloadDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
             now: Self.now
         )
         let decoded = try JSONDecoder().decode(
@@ -748,7 +748,7 @@ struct PendingApprovalLedgerTests {
             from: JSONEncoder().encode(record)
         )
         #expect(decoded == record)
-        #expect(decoded.payloadDigest == "digest-a")
+        #expect(decoded.payloadDigest?.rawValue == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     }
 }
 
@@ -791,7 +791,7 @@ private extension PendingApprovalLedgerTests {
             continuation: continuation,
             timeoutPolicy: timeoutPolicy,
             ttl: ttl,
-            payloadDigest: payloadDigest
+            payloadDigest: payloadDigest.map(ContentPayloadDigest.init(rawValue:))
         )
     }
 

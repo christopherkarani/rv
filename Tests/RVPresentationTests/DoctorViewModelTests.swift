@@ -48,6 +48,27 @@ private let missingHosts = HookHost.setupSlotOrder.map {
     #expect(model.isHealthy == false)
 }
 
+@Test func doctorViewModel_serviceDownIsUnhealthyEvenWithReadyFallback() {
+    for state: DoctorServiceState in [.down, .notInstalled, .skew] {
+        let service = DoctorServiceView(
+            state: state,
+            protocolName: "rv.ipc.v1",
+            serviceSemver: "1.0.0" as String?,
+            label: "dev.rv.evaluate",
+            fallback: .ready,
+            launchAgent: .loaded
+        )
+        let model = DoctorViewModel(
+            service: service,
+            packs: readyPacks,
+            hosts: missingHosts,
+            config: .readable
+        )
+        #expect(model.isHealthy == false, "service \(state.rawValue) must grade ok false")
+        #expect(doctorRobotPayload(from: model).isHealthy == false)
+    }
+}
+
 @Test func doctorViewModel_unreadableConfigIsUnhealthy() {
     let model = DoctorViewModel(
         service: readyService,

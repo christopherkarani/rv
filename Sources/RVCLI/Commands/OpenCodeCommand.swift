@@ -8,7 +8,7 @@ enum OpenCodeRun {
     /// persistent workspace host for the project, and streams one
     /// host-owned terminal until the runtime exits.
     static let isolationNotice =
-        "rv opencode: runs on the persistent workspace host. Writes stay in the workspace. Reads include that workspace and the system locations needed to start programs. Public HTTPS goes through the RV proxy; direct public and LAN connections are denied. Signals to processes outside the sandbox are denied. On Linux this launch is refused until the kernel backend enforces those limits.\n"
+        "rv opencode: runs on the persistent workspace host. Writes stay in the workspace. Reads include that workspace and the system locations needed to start programs. Public HTTPS goes through the RV proxy; direct public and LAN connections are denied. Signals to processes outside the sandbox are denied. On Linux this launch is refused until the kernel backend enforces those limits. Limits: \(AcceptedRuntimeLimits.line)\n"
 
     /// No profile is implicit: without one the host stages no credentials
     /// and provider auth fails inside the cage. Warn instead of failing so

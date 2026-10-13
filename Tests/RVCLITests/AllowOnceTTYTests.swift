@@ -345,11 +345,11 @@ struct AllowOnceTTYTests {
                 == grantFingerprint(
                     Normalize.matchingView(of: command),
                     invocationPrefix: Normalize.invocationPrefix(of: command)
-                )
+                ).rawValue
         )
         #expect(
             peeked.fingerprint
-                != grantFingerprint(Normalize.matchingView(of: command), invocationPrefix: [])
+                != grantFingerprint(Normalize.matchingView(of: command), invocationPrefix: []).rawValue
         )
     }
 

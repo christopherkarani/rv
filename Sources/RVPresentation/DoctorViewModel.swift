@@ -188,8 +188,15 @@ public struct DoctorViewModel: Equatable, Sendable {
         self.blocksEnabled = blocksEnabled
     }
 
-    /// Whether doctor should return a successful exit code.
+    /// Whether doctor should return a successful exit code. Graded from
+    /// the worst component: the service must be running (down, skew, and
+    /// not-installed all fail even when the local fallback is ready), the
+    /// fallback must be ready, packs must be ready, and config readable.
+    /// Host wiring alone does not grade health (setup is the remedy).
     public var isHealthy: Bool {
-        config == .readable && packs.areDayOnePacksReady && service.fallback == .ready
+        service.state == .running
+            && service.fallback == .ready
+            && config == .readable
+            && packs.areDayOnePacksReady
     }
 }

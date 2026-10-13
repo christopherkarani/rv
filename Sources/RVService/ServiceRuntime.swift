@@ -173,7 +173,8 @@ public actor ServiceRuntime {
         _ body: Data,
         handshakeOK: Bool,
         stdinOverlay: Data? = nil,
-        context: AuthenticatedRequestContext = .unauthenticated
+        context: AuthenticatedRequestContext = .unauthenticated,
+        sameUIDSocket: Bool = false
     ) async -> IncomingReply {
         if let hello = try? IPCJSON.decode(Hello.self, from: body), hello.clientSemver.isEmpty == false {
             let ack = acknowledge(hello)
@@ -186,11 +187,12 @@ public actor ServiceRuntime {
             }
         }
         if handshakeOK == false {
-            return await handleUnreadyIncoming(body, stdinOverlay: stdinOverlay, context: context)
+            return await handleUnreadyIncoming(
+                body, stdinOverlay: stdinOverlay, context: context, sameUIDSocket: sameUIDSocket)
         }
         do {
             let request = try decodeRequest(body, stdinOverlay: stdinOverlay)
-            let response = await dispatch(request, context: context)
+            let response = await dispatch(request, context: context, sameUIDSocket: sameUIDSocket)
             return IncomingReply(
                 frame: (try? IPCJSON.encode(response)) ?? Data(),
                 handshakeAccepted: true
@@ -206,7 +208,10 @@ public actor ServiceRuntime {
 
     /// Implicit hello on first evaluate when `clientSemver` is set. Old clients Hello first.
     private func handleUnreadyIncoming(
-        _ body: Data, stdinOverlay: Data?, context: AuthenticatedRequestContext
+        _ body: Data,
+        stdinOverlay: Data?,
+        context: AuthenticatedRequestContext,
+        sameUIDSocket: Bool
     ) async -> IncomingReply {
         guard let request = try? IPCJSON.decode(IPCRequest.self, from: body) else {
             let response = IPCResponse(
@@ -233,7 +238,8 @@ public actor ServiceRuntime {
             let ack = acknowledge(hello)
             switch ack.status {
             case .ok:
-                let response = await dispatch(overlaid, context: context)
+                let response = await dispatch(
+                    overlaid, context: context, sameUIDSocket: sameUIDSocket)
                 return IncomingReply(
                     frame: (try? IPCJSON.encode(response)) ?? Data(),
                     handshakeAccepted: true
@@ -249,8 +255,10 @@ public actor ServiceRuntime {
                 )
             }
         }
+        // Echo the decoded id so clients can always correlate handshakeRequired
+        // with the call that triggered it (undecodable bodies keep a fresh id).
         let response = IPCResponse(
-            id: UUID(),
+            id: request.id,
             result: .error(.protocolSkew(.handshakeRequired))
         )
         let data = (try? IPCJSON.encode(response)) ?? Data()
@@ -300,7 +308,8 @@ public actor ServiceRuntime {
 
     public func dispatch(
         _ request: IPCRequest,
-        context: AuthenticatedRequestContext = .unauthenticated
+        context: AuthenticatedRequestContext = .unauthenticated,
+        sameUIDSocket: Bool = false
     ) async -> IPCResponse {
         if request.protocolName != ProtocolVersion.name {
             return IPCResponse(id: request.id, result: .error(.protocolSkew(.protocolSkew)))
@@ -310,7 +319,9 @@ public actor ServiceRuntime {
         if Self.isMajorSkewed(implicitHelloSemver(request.method)) {
             return IPCResponse(id: request.id, result: .error(.protocolSkew(.majorVersion)))
         }
-        guard ServiceMethodAuthorization.permits(request.method, context: context) else {
+        let allowed = Self.sameUIDSocketSession(request.method, enabled: sameUIDSocket)
+            || ServiceMethodAuthorization.permits(request.method, context: context)
+        guard allowed else {
             return IPCResponse(id: request.id, result: .error(.authorizationDenied))
         }
         let started = DispatchTime.now()
@@ -389,6 +400,20 @@ public actor ServiceRuntime {
         return IPCResponse(id: request.id, result: result)
     }
 
+    /// The production SDK socket has already attested a same-UID peer.
+    /// Generic dispatch keeps the role matrix (evaluate, control reads, and
+    /// owner mutations stay denied for a role-less context). TTY attestation
+    /// and launch proposals stay on that matrix even for this session.
+    private static func sameUIDSocketSession(_ method: IPCMethod, enabled: Bool) -> Bool {
+        guard enabled else { return false }
+        switch ServiceMethodAuthorization.requirement(for: method) {
+        case .ttyAttestation, .launchProposal:
+            return false
+        case .diagnostic, .agent, .hookConsult, .controlRead, .ownerMutation:
+            return true
+        }
+    }
+
     private static func ceremonyError(_ error: WorkspaceOperatorCeremonyError) -> IPCError {
         switch error {
         case .invalidProposal:
@@ -431,29 +456,23 @@ public actor ServiceRuntime {
     /// own). Double-attests report planted:false and create no second grant.
     private func attestTTYRedemption(_ params: AttestTTYRedemptionParams) async -> IPCResult {
         func denied() -> IPCResult { .error(.authorizationDenied) }
-        guard params.fingerprint.count == 64,
-            params.fingerprint.allSatisfy(\.isHexDigit),
-            params.fingerprint == params.fingerprint.lowercased()
-        else {
+        // Shape re-checks for in-process callers: wire bytes already
+        // passed validating decode, but a constructed value can carry
+        // any raw string. Same rule, same refusal as before.
+        guard GrantFingerprint(validatingHex: params.fingerprint.rawValue) != nil else {
             return denied()
         }
         // params.cwd decoded through WorkingDirectory.init(from:), which
         // already applies the validating initializer; undecodable paths
         // never reach dispatch.
-        guard params.codeHash.count == 64,
-            params.codeHash.allSatisfy(\.isHexDigit),
-            params.codeHash == params.codeHash.lowercased()
-        else {
+        guard isLowercaseHex64(params.codeHash.rawValue) else {
             return denied()
         }
         // M-07: the attested payload digest binds the planted grant. Shape
         // only — the daemon never sees exact text, so the genuine-CLI
         // ceremony (same trust as the fingerprint) vouches the value.
         if let digest = params.payloadDigest {
-            guard digest.count == 64,
-                digest.allSatisfy(\.isHexDigit),
-                digest == digest.lowercased()
-            else {
+            guard ContentPayloadDigest(validatingHex: digest.rawValue) != nil else {
                 return denied()
             }
         }
@@ -461,7 +480,7 @@ public actor ServiceRuntime {
         switch await grants.plant(
             fingerprint: params.fingerprint,
             cwd: params.cwd,
-            codeHash: "tty:\(params.codeHash)",
+            codeHash: CodeHash(rawValue: "tty:\(params.codeHash.rawValue)"),
             now: now,
             payloadContentDigest: params.payloadDigest
         ) {

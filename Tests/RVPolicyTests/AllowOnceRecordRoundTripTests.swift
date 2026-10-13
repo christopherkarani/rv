@@ -5,7 +5,7 @@ import RVDomain
 
 @Test func allowOnceRecord_decodesLegacyStringRuleID() throws {
     let legacy = """
-    {"schema_version":1,"kind":"pending","code_hash":"abc123","command_fingerprint":"f","command_redacted":"git …","cwd":"/tmp/ws","rule_id":"core.git:reset-hard","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z","consumed_at":null}
+    {"schema_version":1,"kind":"pending","code_hash":"abc123","command_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","command_redacted":"git …","cwd":"/tmp/ws","rule_id":"core.git:reset-hard","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z","consumed_at":null}
     """
     let record = try JSONDecoder.allowOnce.decode(AllowOnceRecord.self, from: Data(legacy.utf8))
     #expect(record.ruleID == RuleID(rawValue: "core.git:reset-hard"))
@@ -20,8 +20,8 @@ import RVDomain
     let record = AllowOnceRecord(
         schemaVersion: 1,
         lifecycle: .pending,
-        codeHash: "abc123",
-        commandFingerprint: "f",
+        codeHash: CodeHash(rawValue: "abc123"),
+        commandFingerprint: GrantFingerprint(rawValue: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         commandRedacted: "git …",
         cwd: wd("/tmp/ws"),
         ruleID: RuleID(pack: .coreGit, pattern: "reset-hard"),
@@ -37,10 +37,10 @@ import RVDomain
 }
 
 @Test(arguments: [
-    #"{"schema_version":1,"kind":"granted","code_hash":"def456","command_fingerprint":"f","command_redacted":"[redacted]","cwd":"/tmp/ws","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z","consumed_at":"2026-01-01T12:00:00Z"}"#,
-    #"{"schema_version":1,"kind":"pending","code_hash":"abc123","command_fingerprint":"f","command_redacted":"git …","cwd":"/tmp/ws","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z","consumed_at":"2026-01-01T12:00:00Z"}"#,
-    #"{"schema_version":1,"kind":"consumed","code_hash":"ghi789","command_fingerprint":"f","command_redacted":"[redacted]","cwd":"/tmp/ws","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z"}"#,
-    #"{"schema_version":1,"kind":"consumed","code_hash":"ghi789","command_fingerprint":"f","command_redacted":"[redacted]","cwd":"/tmp/ws","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z","consumed_at":null}"#,
+    #"{"schema_version":1,"kind":"granted","code_hash":"def456","command_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","command_redacted":"[redacted]","cwd":"/tmp/ws","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z","consumed_at":"2026-01-01T12:00:00Z"}"#,
+    #"{"schema_version":1,"kind":"pending","code_hash":"abc123","command_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","command_redacted":"git …","cwd":"/tmp/ws","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z","consumed_at":"2026-01-01T12:00:00Z"}"#,
+    #"{"schema_version":1,"kind":"consumed","code_hash":"ghi789","command_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","command_redacted":"[redacted]","cwd":"/tmp/ws","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z"}"#,
+    #"{"schema_version":1,"kind":"consumed","code_hash":"ghi789","command_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","command_redacted":"[redacted]","cwd":"/tmp/ws","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z","consumed_at":null}"#,
 ])
 func allowOnceRecord_illegalLifecycleThrows(json: String) {
     #expect(throws: DecodingError.self) {
@@ -53,8 +53,8 @@ func allowOnceRecord_illegalLifecycleThrows(json: String) {
     let record = AllowOnceRecord(
         schemaVersion: 1,
         lifecycle: .consumed(at: at),
-        codeHash: "ghi789",
-        commandFingerprint: "f",
+        codeHash: CodeHash(rawValue: "ghi789"),
+        commandFingerprint: GrantFingerprint(rawValue: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         commandRedacted: "[redacted]",
         cwd: wd("/tmp/ws"),
         ruleID: nil,
@@ -77,8 +77,8 @@ func allowOnceRecord_illegalLifecycleThrows(json: String) {
     let pending = AllowOnceRecord(
         schemaVersion: 1,
         lifecycle: .pending,
-        codeHash: "abc123",
-        commandFingerprint: "f",
+        codeHash: CodeHash(rawValue: "abc123"),
+        commandFingerprint: GrantFingerprint(rawValue: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         commandRedacted: "git …",
         cwd: wd("/tmp/ws"),
         ruleID: nil,
@@ -88,8 +88,8 @@ func allowOnceRecord_illegalLifecycleThrows(json: String) {
     let granted = AllowOnceRecord(
         schemaVersion: 1,
         lifecycle: .granted,
-        codeHash: "def456",
-        commandFingerprint: "f",
+        codeHash: CodeHash(rawValue: "def456"),
+        commandFingerprint: GrantFingerprint(rawValue: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         commandRedacted: "[redacted]",
         cwd: wd("/tmp/ws"),
         ruleID: nil,
@@ -104,7 +104,7 @@ func allowOnceRecord_illegalLifecycleThrows(json: String) {
 
 @Test func allowOnceRecord_nilRuleIDRoundTrips() throws {
     let legacyWithoutKey = """
-    {"schema_version":1,"kind":"granted","code_hash":"def456","command_fingerprint":"f","command_redacted":"[redacted]","cwd":"/tmp/ws","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z"}
+    {"schema_version":1,"kind":"granted","code_hash":"def456","command_fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","command_redacted":"[redacted]","cwd":"/tmp/ws","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-02T00:00:00Z"}
     """
     let decodedLegacy = try JSONDecoder.allowOnce.decode(
         AllowOnceRecord.self,
@@ -118,8 +118,8 @@ func allowOnceRecord_illegalLifecycleThrows(json: String) {
     let record = AllowOnceRecord(
         schemaVersion: 1,
         lifecycle: .granted,
-        codeHash: "def456",
-        commandFingerprint: "f",
+        codeHash: CodeHash(rawValue: "def456"),
+        commandFingerprint: GrantFingerprint(rawValue: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         commandRedacted: "[redacted]",
         cwd: wd("/tmp/ws"),
         ruleID: nil,

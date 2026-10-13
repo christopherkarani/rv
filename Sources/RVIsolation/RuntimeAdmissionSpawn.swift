@@ -72,18 +72,10 @@ struct RuntimeAdmissionPipes {
     }
 
     private mutating func relocate(atLeast floor: Int32) -> Bool {
-        relocate(&requestRead, floor) && relocate(&requestWrite, floor)
-            && relocate(&responseRead, floor) && relocate(&responseWrite, floor)
-    }
-
-    private func relocate(_ fd: inout Int32, _ floor: Int32) -> Bool {
-        guard fd >= 0 else { return false }
-        if fd >= floor { return true }
-        let moved = fcntl(fd, F_DUPFD_CLOEXEC, floor)
-        guard moved >= 0 else { return false }
-        close(fd)
-        fd = moved
-        return true
+        relocateDescriptor(&requestRead, above: floor)
+            && relocateDescriptor(&requestWrite, above: floor)
+            && relocateDescriptor(&responseRead, above: floor)
+            && relocateDescriptor(&responseWrite, above: floor)
     }
 }
 
@@ -120,23 +112,55 @@ func installAdmissionDescriptors(
 
 private let admissionAppendLock = Mutex<Void>(())
 
-func appendAdmissionEvent(_ event: RuntimeAdmissionEvent, to url: URL) {
+/// Appends one admission audit event. Returns true only when the line is
+/// persisted. Every failure path reports through `diagnose` (stderr by
+/// default) instead of dropping the audit row silently: the admission
+/// decision is already made and stays fail-closed either way; only the
+/// audit persistence can fail.
+@discardableResult
+func appendAdmissionEvent(
+    _ event: RuntimeAdmissionEvent,
+    to url: URL,
+    diagnose: (String) -> Void = { message in
+        FileHandle.standardError.write(Data((message + "\n").utf8))
+    }
+) -> Bool {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
-    guard var data = try? encoder.encode(event) else { return }
+    guard var data = try? encoder.encode(event) else {
+        diagnose("rv.admission: audit encode failed session=\(event.session ?? "none")")
+        return false
+    }
     data.append(UInt8(ascii: "\n"))
     let directory = url.deletingLastPathComponent()
-    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    do {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    } catch {
+        diagnose("rv.admission: audit directory failed path=\(url.path) error=\(error.localizedDescription)")
+        return false
+    }
+    var persisted = false
     admissionAppendLock.withLock { _ in
         let fd = url.path.withCString { path in
             open(path, O_CREAT | O_APPEND | O_WRONLY | O_CLOEXEC, 0o600)
         }
-        guard fd >= 0 else { return }
+        guard fd >= 0 else {
+            diagnose("rv.admission: audit open failed path=\(url.path) errno=\(errno)")
+            return
+        }
         defer { close(fd) }
-        guard flock(fd, LOCK_EX) == 0 else { return }
+        guard flock(fd, LOCK_EX) == 0 else {
+            diagnose("rv.admission: audit lock failed path=\(url.path) errno=\(errno)")
+            return
+        }
         defer { _ = flock(fd, LOCK_UN) }
-        _ = admissionWriteAll(fd, data)
+        guard admissionWriteAll(fd, data) else {
+            diagnose("rv.admission: audit write failed path=\(url.path) errno=\(errno)")
+            return
+        }
+        persisted = true
     }
+    return persisted
 }
 
 func admissionClose(_ fd: Int32) {
@@ -214,9 +238,6 @@ func runAdmittedSeatbeltCommand(
 }
 
 #if os(macOS)
-private let admittedHandshakeScript =
-    "printf %s \"$1\" >&3 || exit 127; exec 3>&- || exit 127; shift; exec \"$@\""
-
 private func spawnAdmittedCommand(
     _ command: IsolatedCommand,
     launch: AdmittedLaunchContext
@@ -238,15 +259,15 @@ private func spawnAdmittedCommand(
     }
     guard fcntl(readEnd, F_SETFD, FD_CLOEXEC) >= 0,
         fcntl(writeEnd, F_SETFD, FD_CLOEXEC) >= 0,
-        moveAdmittedDescriptor(&readEnd, floor: 8),
-        moveAdmittedDescriptor(&writeEnd, floor: 8)
+        relocateDescriptor(&readEnd, above: 8),
+        relocateDescriptor(&writeEnd, above: 8)
     else {
         return .failure(.spawnFailed)
     }
     let openedNull = open("/dev/null", O_RDWR | O_CLOEXEC)
     guard openedNull >= 0 else { return .failure(.spawnFailed) }
     nullFD = openedNull
-    guard moveAdmittedDescriptor(&nullFD, floor: 8) else { return .failure(.spawnFailed) }
+    guard relocateDescriptor(&nullFD, above: 8) else { return .failure(.spawnFailed) }
 
     var attributes: posix_spawnattr_t?
     guard posix_spawnattr_init(&attributes) == 0 else { return .failure(.spawnFailed) }
@@ -286,7 +307,7 @@ private func spawnAdmittedCommand(
         launch.profileSource,
         "/bin/sh",
         "-c",
-        admittedHandshakeScript,
+        spawnHandshakeScript,
         "rv-admit",
         nonce,
         command.executable,
@@ -299,8 +320,8 @@ private func spawnAdmittedCommand(
         egressProxyPort: launch.egressProxyPort,
         productive: launch.productive
     )
-    let argv = AdmissionSpawnPointers(arguments)
-    let envp = AdmissionSpawnPointers(environment)
+    let argv = SpawnPointers(arguments)
+    let envp = SpawnPointers(environment)
     defer {
         argv.release()
         envp.release()
@@ -342,31 +363,19 @@ private func spawnAdmittedCommand(
     )
 }
 
-private func moveAdmittedDescriptor(_ fd: inout Int32, floor: Int32) -> Bool {
-    guard fd >= 0 else { return false }
-    if fd >= floor { return true }
-    let moved = fcntl(fd, F_DUPFD_CLOEXEC, floor)
-    guard moved >= 0 else { return false }
-    close(fd)
-    fd = moved
-    return true
-}
-
 private func waitForAdmittedPayload(
     root: pid_t,
     readEnd: Int32,
     nonce: String,
     sessionLeader: pid_t
 ) -> Result<Int32, RuntimeAdmissionExecutorError> {
-    let expected = Data(nonce.utf8)
-    var handshake = Data()
+    var matcher = HandshakePrefixMatcher(expected: Data(nonce.utf8))
     var established = false
     var status: Int32?
     while true {
         let cancel = blockingWorkIsCancelled()
         if established == false {
-            handshake.append(admissionReadAvailable(readEnd))
-            if handshake.starts(with: expected), handshake.count >= expected.count {
+            if matcher.append(admissionReadAvailable(readEnd)) {
                 established = true
             }
         }
@@ -380,8 +389,7 @@ private func waitForAdmittedPayload(
         let rootGone = status != nil || (kill(root, 0) == -1 && errno == ESRCH)
         if cancel || rootGone {
             if established == false {
-                handshake.append(admissionReadAvailable(readEnd))
-                if handshake.starts(with: expected), handshake.count >= expected.count {
+                if matcher.append(admissionReadAvailable(readEnd)) {
                     established = true
                 }
             }
@@ -445,32 +453,4 @@ private func admittedExitStatus(_ status: Int32) -> Int32 {
     return status
 }
 
-private struct AdmissionSpawnPointers {
-    private var storage: [UnsafeMutablePointer<CChar>?]
-
-    init(_ values: [String]) {
-        storage = values.map { value in
-            value.withCString { strdup($0) }
-        }
-        storage.append(nil)
-    }
-
-    /// Runs `body` with the vector base pointer. Nil only when the vector is
-    /// empty, which construction forbids (init always appends the terminator).
-    func withPointers<T>(
-        _ body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> T
-    ) -> T? {
-        var values = storage
-        return values.withUnsafeMutableBufferPointer { buffer in
-            guard let base = buffer.baseAddress else {
-                return nil
-            }
-            return body(base)
-        }
-    }
-
-    func release() {
-        for pointer in storage { free(pointer) }
-    }
-}
 #endif

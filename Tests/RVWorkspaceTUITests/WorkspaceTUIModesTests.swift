@@ -157,6 +157,10 @@ private func modesPress(_ state: WorkspaceTUIState, _ keys: TUIKey...) -> Worksp
     return last
 }
 
+private func modesScrollAnchor(_ state: WorkspaceTUIState, _ pane: PaneID) -> Int? {
+    state.panes[pane]?.scroll?.anchor
+}
+
 private func modesSplit() -> WorkspaceTUIState {
     var state = modesState()
     let rect = CellRect(x: 0, y: 0, width: 100, height: 40)
@@ -213,20 +217,21 @@ private func modesSplit() -> WorkspaceTUIState {
             return
         }
         let pane = state.activePaneID!
-        #expect(transition.state.scrollAnchors[pane] == 0)
+        #expect(modesScrollAnchor(transition.state, pane) == 0)
         transition = modesPress(transition.state, .character("k"))
-        #expect(transition.state.scrollAnchors[pane] == 1)
+        #expect(modesScrollAnchor(transition.state, pane) == 1)
         transition = modesPress(transition.state, .character("j"))
-        #expect(transition.state.scrollAnchors[pane] == 0)
+        #expect(modesScrollAnchor(transition.state, pane) == 0)
         transition = modesPress(transition.state, .character("j"))
-        #expect(transition.state.scrollAnchors[pane] == 0)
+        #expect(modesScrollAnchor(transition.state, pane) == 0)
         transition = modesPress(transition.state, .character("g"))
-        #expect(transition.state.scrollAnchors[pane] == WorkspaceTUIReducer.scrollTopSentinel)
+        #expect(modesScrollAnchor(transition.state, pane) == WorkspaceTUIReducer.scrollTopSentinel)
         transition = modesPress(transition.state, .character("G"))
-        #expect(transition.state.scrollAnchors[pane] == 0)
+        #expect(modesScrollAnchor(transition.state, pane) == 0)
         transition = modesPress(transition.state, .character("q"))
         #expect(transition.state.mode == .terminal)
-        #expect(transition.state.scrollAnchors[pane] == 0)
+        // Exiting clears the scroll record, which reads as anchor 0.
+        #expect(modesScrollAnchor(transition.state, pane) == nil)
     }
 
     @Test func scrollPageUsesViewportHeight() {
@@ -236,9 +241,9 @@ private func modesSplit() -> WorkspaceTUIState {
         let pane = state.activePaneID!
         transition = modesPress(transition.state, .pageUp)
         // 40-row viewport, one-cell border top and bottom: 38 content rows.
-        #expect(transition.state.scrollAnchors[pane] == 38)
+        #expect(modesScrollAnchor(transition.state, pane) == 38)
         transition = modesPress(transition.state, .pageDown)
-        #expect(transition.state.scrollAnchors[pane] == 0)
+        #expect(modesScrollAnchor(transition.state, pane) == 0)
     }
 
     @Test func scrollEnterRequiresBoundPane() {
@@ -264,7 +269,7 @@ private func modesSplit() -> WorkspaceTUIState {
     @Test func navigatorListsTabsThenUnplacedRuntimes() {
         var state = modesState()
         state.terminal = modesAttached()
-        state.leasedBindings = [state.activeBindingKey!]
+        state.leasedRuntime = modesRuntimeA
         state.knownRuntimes = [
             ListedRuntime(id: modesRuntimeB, hook: nil, running: true, terminal: true),
             ListedRuntime(id: modesRuntimeA, hook: nil, running: true, terminal: true),
@@ -416,7 +421,7 @@ private func modesSplit() -> WorkspaceTUIState {
         var state = modesState()
         state.terminal = modesAttached()
         let binding = state.activeBindingKey!
-        state.leasedBindings = [binding]
+        state.leasedRuntime = modesRuntimeA
         let transition = modesPress(state, .enter)
         #expect(transition.effects == [.queueKey(binding: binding, key: .enter)])
     }
@@ -434,7 +439,7 @@ private func modesSplit() -> WorkspaceTUIState {
         var state = modesState()
         state.terminal = modesAttached()
         let binding = state.activeBindingKey!
-        state.leasedBindings = [binding]
+        state.leasedRuntime = modesRuntimeA
         var transition = modesPress(state, .control("b"), .character("w"))
         #expect(transition.state.navigatorItems.first == .releaseInput)
         transition = modesPress(transition.state, .enter)
@@ -445,11 +450,12 @@ private func modesSplit() -> WorkspaceTUIState {
         var state = modesState()
         state.terminal = modesAttached()
         let binding = state.activeBindingKey!
-        state.leasedBindings = [binding]
+        let pane = state.activePaneID!
+        state.leasedRuntime = modesRuntimeA
         var transition = WorkspaceTUIReducer.reduce(state, .hostDisconnected)
         #expect(transition.state.lifecycle == .disconnected)
-        #expect(transition.state.preDisconnectLeases == [binding])
-        #expect(transition.state.leasedBindings == [])
+        #expect(transition.state.panes[pane]?.preDisconnectLease == binding)
+        #expect(transition.state.panes[pane]?.leaseClaim == nil)
         let now = Date()
         transition = WorkspaceTUIReducer.reduce(transition.state, .tick(now: now))
         #expect(transition.effects == [])
@@ -490,22 +496,23 @@ private func modesSplit() -> WorkspaceTUIState {
         var state = modesState()
         state.terminal = modesAttached()
         let binding = state.activeBindingKey!
-        state.leasedBindings = [binding]
+        let pane = state.activePaneID!
+        state.leasedRuntime = modesRuntimeA
         var transition = WorkspaceTUIReducer.reduce(state, .hostDisconnected)
-        #expect(transition.state.view.panes[state.activePaneID!]!.lifecycle == .disconnected)
+        #expect(transition.state.view.panes[pane]!.lifecycle == .disconnected)
         transition = WorkspaceTUIReducer.reduce(transition.state, .reconnectSucceeded(terminals: [
             ListedRuntime(id: modesRuntimeA, hook: nil, running: true, terminal: true),
         ]))
         #expect(transition.state.lifecycle == .connected)
         #expect(transition.effects == [.attach(binding: binding, context: .reconnect), .restartEvents])
-        #expect(transition.state.view.panes[state.activePaneID!]!.lifecycle == .attaching)
-        #expect(transition.state.preDisconnectLeases == [])
+        #expect(transition.state.view.panes[pane]!.lifecycle == .attaching)
+        #expect(transition.state.panes[pane]?.preDisconnectLease == nil)
     }
 
     @Test func reconnectMarksMissingAndClearsAmbiguousLaunches() {
         var state = modesState()
         state.terminal = modesAttached()
-        state.leasedBindings = [state.activeBindingKey!]
+        state.leasedRuntime = modesRuntimeA
         var transition = WorkspaceTUIReducer.reduce(state, .hostDisconnected)
         transition = WorkspaceTUIReducer.reduce(transition.state, .reconnectSucceeded(terminals: []))
         #expect(transition.state.view.panes[state.activePaneID!]!.lifecycle == .missing)
@@ -630,10 +637,14 @@ private func modesSplit() -> WorkspaceTUIState {
         state.terminal = modesAttached()
         let pane = state.activePaneID!
         let binding = state.activeBindingKey!
-        state.pendingLaunches[pane] = WorkspaceTUIState.PendingLaunch(
-            binding: PaneBindingKey(pane: pane, runtime: modesRuntimeB, generation: 2),
-            terminal: modesAttached(runtime: modesRuntimeB)
-        )
+        let previous = state.panes[pane]?.terminal
+        state.panes[pane]?.phase = .launching(LaunchDetail(
+            previous: previous,
+            candidate: WorkspaceTUIState.PendingLaunch(
+                binding: PaneBindingKey(pane: pane, runtime: modesRuntimeB, generation: 2),
+                terminal: modesAttached(runtime: modesRuntimeB)
+            )
+        ))
         let target = PrefixTarget(pane: pane, generation: binding.generation)
         let transition = WorkspaceTUIReducer.reduce(
             state, .launchDue(target: target, choice: modesShell)
@@ -657,8 +668,8 @@ private func modesSplit() -> WorkspaceTUIState {
             )
         )
         // Old terminal untouched; the replacement waits for its attach.
-        #expect(transition.state.terminals[pane]?.state.runtime == modesRuntimeA)
-        #expect(transition.state.pendingLaunches[pane]?.binding.runtime == modesRuntimeB)
+        #expect(transition.state.terminal(for: pane)?.state.runtime == modesRuntimeA)
+        #expect(transition.state.panes[pane]?.phase.candidate?.binding.runtime == modesRuntimeB)
         guard case .attach = transition.effects.first else {
             Issue.record("expected a replacement attach, got \(transition.effects)")
             return
@@ -680,14 +691,13 @@ private func modesSplit() -> WorkspaceTUIState {
             )
         )
         #expect(transition.effects == [])
-        #expect(transition.state.pendingLaunches[pane] == nil)
+        #expect(transition.state.panes[pane]?.phase.candidate == nil)
     }
 
     @Test func windowNoticeResizesObserverEmulatorOnly() {
         var owned = modesState()
         owned.terminal = modesAttached()
-        let ownedBinding = owned.activeBindingKey!
-        owned.leasedBindings = [ownedBinding]
+        owned.leasedRuntime = modesRuntimeA
         let ownerTransition = WorkspaceTUIReducer.reduce(
             owned, .hostEvents([.window(runtime: modesRuntimeA, rows: 17, columns: 53)])
         )

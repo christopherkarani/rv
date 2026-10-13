@@ -146,20 +146,20 @@ struct EphemeralAllowOnceTableTests {
         for index in 0...cap {
             let at = now.addingTimeInterval(TimeInterval(index * 2))
             #expect(await table.plant(
-                fingerprint: "fp-\(index)", cwd: wd("/tmp/ws"),
-                codeHash: "code-\(index)", now: at, ttl: 1
+                fingerprint: GrantFingerprint(rawValue: "fp-\(index)"), cwd: wd("/tmp/ws"),
+                codeHash: CodeHash(rawValue: "code-\(index)"), now: at, ttl: 1
             ) == .planted)
         }
         let end = now.addingTimeInterval(TimeInterval((cap + 1) * 2))
         // A retained code still refuses to re-plant ...
         #expect(await table.plant(
-            fingerprint: "fp-1", cwd: wd("/tmp/ws"),
-            codeHash: "code-1", now: end, ttl: 1
+            fingerprint: GrantFingerprint(rawValue: "fp-1"), cwd: wd("/tmp/ws"),
+            codeHash: CodeHash(rawValue: "code-1"), now: end, ttl: 1
         ) == .alreadyRedeemed)
         // ... while the single evicted oldest marker re-plants.
         #expect(await table.plant(
-            fingerprint: "fp-0", cwd: wd("/tmp/ws"),
-            codeHash: "code-0", now: end, ttl: 1
+            fingerprint: GrantFingerprint(rawValue: "fp-0"), cwd: wd("/tmp/ws"),
+            codeHash: CodeHash(rawValue: "code-0"), now: end, ttl: 1
         ) == .planted)
     }
 

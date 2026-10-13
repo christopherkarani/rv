@@ -1290,6 +1290,21 @@ final class WorkspaceSessionSupervisor: Sendable {
         return finish(publish: true)
     }
 
+    /// Moves an active workspace to `.closing` without stopping children.
+    /// Close publishes that phase before teardown, and `runtimeFacts()`
+    /// still reports the live terminal for the whole teardown. A later
+    /// `close()` still leads the real teardown. Not a client operation.
+    func testingBeginClose() -> Bool {
+        state.withLock { state in
+            guard let closing = state.lifecycle.transition(.beginClose) else {
+                return false
+            }
+            state.lifecycle = closing
+            state.closeAccepted = true
+            return true
+        }
+    }
+
     func savedFile(_ relative: String) -> Data? {
         boundary.savedFileData(relative)
     }

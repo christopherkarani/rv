@@ -145,28 +145,64 @@ public enum HTTPResolutionError: Error, Sendable, Equatable {
 }
 
 /// One admitted HTTPS GET. The fingerprint does not contain the query text.
+///
+/// `effects` and `resources` are computed from the subject (FileAction
+/// pattern): policy judges `method` + `destination`, never bags. `scope`
+/// stays stored: it is request context, not an HTTP fact.
 public struct HTTPAction: Sendable, Equatable, Codable {
     public var fingerprint: ActionFingerprint
     public var method: HTTPMethod
     public var destination: HTTPDestination
     public var scope: ActionScope
-    public var effects: ActionEffects
-    public var resources: ActionResources
+
+    /// HTTP policy judges the destination, not typed effects.
+    public var effects: ActionEffects { ActionEffects() }
+
+    /// HTTP targets project no resource scope.
+    public var resources: ActionResources { ActionResources() }
 
     package init(
         fingerprint: ActionFingerprint,
         method: HTTPMethod,
         destination: HTTPDestination,
-        scope: ActionScope,
-        effects: ActionEffects = ActionEffects(),
-        resources: ActionResources = ActionResources()
+        scope: ActionScope
     ) {
         self.fingerprint = fingerprint
         self.method = method
         self.destination = destination
         self.scope = scope
-        self.effects = effects
-        self.resources = resources
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case fingerprint
+        case method
+        case destination
+        case scope
+        case effects
+        case resources
+    }
+
+    /// Legacy keys decode tolerantly: stored bags are ignored in favor
+    /// of the subject projection. Disagreeing bags resolve to derived
+    /// values. Encode keeps the legacy keys so wire bytes are unchanged.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fingerprint = try container.decode(ActionFingerprint.self, forKey: .fingerprint)
+        method = try container.decode(HTTPMethod.self, forKey: .method)
+        destination = try container.decode(HTTPDestination.self, forKey: .destination)
+        scope = try container.decodeIfPresent(ActionScope.self, forKey: .scope) ?? ActionScope()
+        _ = try container.decodeIfPresent(ActionEffects.self, forKey: .effects)
+        _ = try container.decodeIfPresent(ActionResources.self, forKey: .resources)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(fingerprint, forKey: .fingerprint)
+        try container.encode(method, forKey: .method)
+        try container.encode(destination, forKey: .destination)
+        try container.encode(scope, forKey: .scope)
+        try container.encode(effects, forKey: .effects)
+        try container.encode(resources, forKey: .resources)
     }
 
     public func redactingQuery() -> HTTPAction {
@@ -174,9 +210,7 @@ public struct HTTPAction: Sendable, Equatable, Codable {
             fingerprint: fingerprint,
             method: method,
             destination: destination.droppingQuery(),
-            scope: scope,
-            effects: effects,
-            resources: resources
+            scope: scope
         )
     }
 }

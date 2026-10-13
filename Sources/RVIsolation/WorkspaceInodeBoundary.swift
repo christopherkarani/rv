@@ -196,7 +196,8 @@ final class WorkspaceInodeBoundary: Sendable {
     /// them into a runtime.
     func relocateHeldDescriptors(atLeast floor: Int32) -> Bool {
         mutable.withLock { state in
-            moveDescriptor(&state.volumeFD, floor) && moveDescriptor(&state.savedFD, floor)
+            relocateDescriptor(&state.volumeFD, above: floor)
+                && relocateDescriptor(&state.savedFD, above: floor)
         }
     }
 
@@ -224,16 +225,6 @@ final class WorkspaceInodeBoundary: Sendable {
             if errno == EINTR { continue }
             return nil
         }
-    }
-
-    private func moveDescriptor(_ fd: inout Int32, _ floor: Int32) -> Bool {
-        guard fd >= 0 else { return false }
-        if fd >= floor { return true }
-        let moved = fcntl(fd, F_DUPFD_CLOEXEC, floor)
-        guard moved >= 0 else { return false }
-        close(fd)
-        fd = moved
-        return true
     }
 
     /// Remove host-staged agent credential links and the cage dir from the
