@@ -27,18 +27,38 @@ struct AuditForwardTransport: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("rv/\(ProductVersion.semver)", forHTTPHeaderField: "User-Agent")
         for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil
+        configuration.urlCache = nil
+        configuration.httpShouldSetCookies = false
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        let delegate = AuditForwardNoRedirects()
+        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
         let done = DispatchSemaphore(value: 0)
         let outcome = Mutex<Result<Int, CommandFailure>>(.failure("no response"))
-        URLSession.shared.dataTask(with: request) { _, response, error in
-            if let error {
-                outcome.withLock { $0 = .failure(CommandFailure(error.localizedDescription)) }
-            } else if let http = response as? HTTPURLResponse {
+        session.dataTask(with: request) { _, response, error in
+            if let http = response as? HTTPURLResponse {
                 outcome.withLock { $0 = .success(http.statusCode) }
+            } else if let error {
+                outcome.withLock { $0 = .failure(CommandFailure(error.localizedDescription)) }
             }
             done.signal()
         }.resume()
         done.wait()
         return outcome.withLock { $0 }
+    }
+}
+
+/// Refuses redirects so a 307/308 cannot move the batch to another host.
+private final class AuditForwardNoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }
 
@@ -149,6 +169,8 @@ enum AuditForwardRun {
             case .failure(let failure):
                 return .failure(CommandFailure(
                     "sent \(sent) events, then: \(failure.message); the cursor is kept, rerun to retry"))
+            // 3xx is a failed batch. The live transport does not follow
+            // redirects, so the cursor stays put instead of committing a hop.
             case .success(let status) where (200..<300).contains(status) == false:
                 return .failure(CommandFailure(
                     "sent \(sent) events, then HTTP \(status); the cursor is kept, rerun to retry"))

@@ -86,6 +86,54 @@ struct AuditCursorTests {
         #expect(after.events.map(\.subject) == ["replacement.example:443", "second.example:443"])
     }
 
+    @Test func sameInodeRewriteWithSharedPrefixAndNewTimeRestarts() throws {
+        let ledgers = try Ledgers()
+        let ledger = AuditLedger(configDirectory: ledgers.directory)
+        let original = try Self.mcpLine(time: 1_791_826_700, subject: "github/create_issue")
+        let rewritten = try Self.mcpLine(time: 1_791_900_000, subject: "github/create_issue")
+            + Self.mcpLine(time: 1_791_900_001, subject: "github/list_issues")
+        try ledgers.append("audit.jsonl", original)
+        let first = ledger.events(after: AuditCursor(), limit: 10)
+        #expect(first.events.map(\.subject) == ["github/create_issue"])
+        let cursor = try #require(first.next.positions["audit.jsonl"]?.offset)
+
+        let originalBytes = Data(original.utf8)
+        let rewrittenBytes = Data(rewritten.utf8)
+        #expect(originalBytes.prefix(64) == rewrittenBytes.prefix(64))
+        #expect(String(decoding: originalBytes.prefix(64), as: UTF8.self)
+            == #"{"decision":"allowed","detail":{"argumentKeys":"","isError":"fal"#)
+        let timeAt = try #require(original.range(of: "\"time\":")?.lowerBound)
+        #expect(original.distance(from: original.startIndex, to: timeAt) > 64)
+        #expect(rewrittenBytes.count >= Int(cursor))
+
+        let url = ledgers.directory.appendingPathComponent("audit.jsonl")
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: rewrittenBytes)
+        try handle.close()
+
+        let after = ledger.events(after: first.next, limit: 10)
+        #expect(after.events.map(\.subject) == ["github/create_issue", "github/list_issues"])
+        #expect(after.events.map(\.time) == [
+            Date(timeIntervalSince1970: 1_791_900_000),
+            Date(timeIntervalSince1970: 1_791_900_001),
+        ])
+    }
+
+    private static func mcpLine(time: TimeInterval, subject: String) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let event = AuditEvent(
+            time: Date(timeIntervalSince1970: time), kind: .mcpCall, decision: .allowed, subject: subject,
+            source: "mcp-gateway",
+            detail: [
+                "argumentKeys": "", "isError": "false", "policy": "allow",
+                "server": "github", "tool": "create_issue",
+            ])
+        return String(decoding: try encoder.encode(event), as: UTF8.self) + "\n"
+    }
+
     @Test func endCursorSkipsHistory() throws {
         let ledgers = try Ledgers()
         try ledgers.append("egress-denials.jsonl", ledgers.egress("old.example", at: 100))

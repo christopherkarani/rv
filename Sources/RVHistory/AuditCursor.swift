@@ -8,7 +8,7 @@ import Foundation
 /// How far a consumer (`rv audit forward`) has read each ledger, by byte
 /// offset. A file that shrank or was replaced restarts at 0: duplicates are
 /// possible, loss is not. Linux reuses inodes right away, so a replaced file
-/// is also caught by a hash of its first bytes.
+/// is also caught by a hash of its first line, which includes `time`.
 public struct AuditCursor: Sendable, Equatable, Codable {
     public struct Position: Sendable, Equatable, Codable {
         public var offset: UInt64
@@ -82,8 +82,10 @@ extension AuditLedger {
         var bytes: [UInt8]
     }
 
-    /// Bytes hashed to tell a replaced file from the one the cursor saw.
-    static let headBytes = 64
+    /// Cap for the first-line fingerprint. The hashed span is that line,
+    /// through its newline, so per-event fields such as `time` are included.
+    /// This only bounds a line that never ends.
+    static let headBytes = cursorChunkBytes
 
     static func chunk(_ url: URL, after position: AuditCursor.Position?) -> Chunk? {
         guard let file = openLedger(url) else { return nil }
@@ -111,11 +113,30 @@ extension AuditLedger {
             return nil
         }
         let size = UInt64(info.st_size)
-        let head = readBytes(fd, at: 0, count: Int(min(UInt64(headBytes), size)))
+        let head = readHead(fd, size: size)
         return OpenFile(fd: fd, size: size, inode: UInt64(info.st_ino), head: head)
     }
 
-    /// FNV-1a over the first `min(offset, headBytes)` bytes; nil at offset 0.
+    /// First ledger line, including its newline. A replaced file that keeps
+    /// the shared JSON prefix but changes `time` still hashes differently.
+    private static func readHead(_ fd: Int32, size: UInt64) -> [UInt8] {
+        let limit = Int(min(UInt64(headBytes), size))
+        guard limit > 0 else { return [] }
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(min(limit, 512))
+        while bytes.count < limit {
+            let slice = readBytes(fd, at: UInt64(bytes.count), count: min(4096, limit - bytes.count))
+            if slice.isEmpty { break }
+            if let newline = slice.firstIndex(of: UInt8(ascii: "\n")) {
+                bytes.append(contentsOf: slice[...newline])
+                return bytes
+            }
+            bytes.append(contentsOf: slice)
+        }
+        return bytes
+    }
+
+    /// FNV-1a over the first line, limited to bytes already consumed. Nil at offset 0.
     static func fingerprint(_ head: [UInt8], upTo offset: UInt64) -> UInt64? {
         let count = Int(min(offset, UInt64(head.count)))
         guard count > 0 else { return nil }
