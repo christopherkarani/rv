@@ -928,14 +928,15 @@ The seam wires the F1 rollback paths through the F3 gate and reconciles
 the two revision-log designs that grew in parallel:
 
 - **Rollback gate.** All three store rollbacks (`rollbackMachine(to:)`,
-  `rollbackMachine(toRevision:)`, `rollbackRepo`) evaluate
-  `PolicyDiffRisk.evaluateShare(existing: head, incoming: target)` and
-  throw `blockedByFindings` before writing anything. Share semantics,
-  like `policy apply`: only explicit relaxations on surviving
-  predicates refuse; a rollback that merely drops a rule succeeds.
-  `PolicyWorkspace.rollback` inherits the gate. The CLI merge path was
-  already gated; `mergeIncoming`/`upsert` stay ungated by design
-  (tighten-only neutralize semantics are test-pinned).
+  `rollbackMachine(toRevision:)`, `rollbackRepo`) compare the live
+  policy file enforcement loads with the restored document and throw
+  `blockedByFindings` before writing anything. Replacement semantics:
+  a vanished deny or ask, an explicit verdict relaxation on a surviving
+  predicate, a safety downgrade, or a new secret exemption refuses.
+  Dropping an allow still succeeds. `PolicyWorkspace.rollback` inherits
+  the gate. The CLI merge path stays on `evaluateShare` (a partial share
+  omits rules it does not delete); `mergeIncoming`/`upsert` stay ungated
+  by design (tighten-only neutralize semantics are test-pinned).
 - **Dual-write machine history.** `saveMachine` verifies both logs,
   then writes the document, the JSONL line (deduped on identical
   head), and the HMAC record (always appended). The JSONL log serves

@@ -565,9 +565,10 @@ public enum PolicyDiffRisk {
     /// Replacement direction: a protective rule (deny or ask) whose predicate
     /// vanishes from the new side no longer constrains anything, which widens
     /// exactly like a relaxation to allow. Removed allows are narrowing and
-    /// stay silent. Only `evaluate` (full-document replacement) uses this;
-    /// `evaluateShare` must not treat a partial share's omissions as deletes.
-    private static func removedRuleFindings(
+    /// stay silent. Full-document `evaluate` and rollback
+    /// (`refuseRelaxingRollback`) use this. `evaluateShare` must not treat a
+    /// partial share's omissions as deletes.
+    static func removedRuleFindings(
         old: [PolicyDocumentRule],
         new: [PolicyDocumentRule]
     ) -> [PolicyDiffRiskFinding] {

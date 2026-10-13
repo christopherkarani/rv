@@ -277,10 +277,13 @@ public struct TypedRuleStore: Sendable {
     /// unverifiable targets (`logCorrupted`) and unknown revisions
     /// (`revisionNotFound`) without touching `policy.toml`, so attacker
     /// TOML smuggled into a tampered log can never go live via rollback.
-    /// Restoring a revision that relaxes a surviving predicate's verdict,
-    /// downgrades the safety level, or widens secret exemptions is
-    /// refused (`blockedByFindings`) before anything is written;
-    /// predicate-set change itself passes (see `refuseRelaxingRollback`). Returns the new head revision carrying the restored bytes.
+    /// Restoring a revision that drops a deny or ask from the live file,
+    /// relaxes a surviving predicate's verdict, downgrades the safety
+    /// level, or widens secret exemptions is refused
+    /// (`blockedByFindings`) before anything is written. The gate compares
+    /// the live file enforcement loads with the restored document
+    /// (see `refuseRelaxingRollback`). Dropping an allow still succeeds.
+    /// Returns the new head revision carrying the restored bytes.
     @discardableResult
     public func rollbackMachine(toRevision target: Int) throws -> PolicyRevision {
         try withFileLock(at: machineLogLockURL) {
@@ -294,7 +297,7 @@ public struct TypedRuleStore: Sendable {
             let generations = Self.compressedGenerations(records)
             guard
                 target >= 1, target <= generations.count,
-                let current = records.last
+                records.last != nil
             else {
                 throw TypedRuleStoreError.revisionNotFound
             }
@@ -314,7 +317,12 @@ public struct TypedRuleStore: Sendable {
                 // computed against history that failed verification.
                 let display = try readRevisions(from: machineRevisionsURL)
                 try Self.checkJsonlMatchesSealed(entries: display, sealed: records)
-                try Self.refuseRelaxingRollback(existing: current.document, incoming: match.document)
+                // Enforcement reads policy.toml and ignores the sealed log.
+                // A deny edited into the live file is part of the posture
+                // this restore would replace, even when the sealed
+                // predicate set is unchanged.
+                let live = try loadMachineDocument()
+                try Self.refuseRelaxingRollback(existing: live, incoming: match.document)
                 let pending = try preparedRevisionLine(
                     document: match.document,
                     text: match.toml,
@@ -498,10 +506,12 @@ public struct TypedRuleStore: Sendable {
 
     /// Rollback re-submits an earlier revision's document as a new head
     /// revision. The log is append-only: earlier lines are never rewritten.
-    /// Restoring a revision that relaxes a surviving predicate's verdict,
-    /// downgrades the safety level, or widens secret exemptions is
-    /// refused (`blockedByFindings`) before anything is written;
-    /// predicate-set change itself passes (see `refuseRelaxingRollback`). Returns the new head.
+    /// Restoring a revision that drops a deny or ask from the live file,
+    /// relaxes a surviving predicate's verdict, downgrades the safety
+    /// level, or widens secret exemptions is refused
+    /// (`blockedByFindings`) before anything is written
+    /// (see `refuseRelaxingRollback`). Dropping an allow still succeeds.
+    /// Returns the new head.
     public func rollbackMachine(to revision: Int) throws -> PolicyRevision {
         // One implementation: the sealed, byte-exact, single-lock path.
         // Public revisions are generations in both spellings (see
@@ -516,20 +526,24 @@ public struct TypedRuleStore: Sendable {
 
     /// Rollback re-submits an earlier revision's document as a new head
     /// revision. The log is append-only: earlier lines are never rewritten.
-    /// Restoring a revision that relaxes a surviving predicate's verdict,
-    /// downgrades the safety level, or widens secret exemptions is
-    /// refused (`blockedByFindings`) before anything is written;
-    /// predicate-set change itself passes (see `refuseRelaxingRollback`). Returns the new head.
+    /// Restoring a revision that drops a deny or ask from the live file,
+    /// relaxes a surviving predicate's verdict, downgrades the safety
+    /// level, or widens secret exemptions is refused
+    /// (`blockedByFindings`) before anything is written
+    /// (see `refuseRelaxingRollback`). Dropping an allow still succeeds.
+    /// Returns the new head.
     public func rollbackRepo(to revision: Int, workspace: URL) throws -> PolicyRevision {
         let entries = try listRepoRevisions(workspace: workspace)
         guard
             let target = entries.first(where: { $0.revision == revision }),
-            let head = entries.last
+            entries.last != nil
         else {
             throw TypedRuleStoreError.unknownRevision
         }
         let targetDocument = try revisionDocument(target)
-        try Self.refuseRelaxingRollback(existing: head.document, incoming: targetDocument)
+        // Enforcement reads `.rv/policy.toml` and ignores the JSONL tail.
+        let live = try loadRepoDocument(workspace: workspace)
+        try Self.refuseRelaxingRollback(existing: live, incoming: targetDocument)
         try saveRepo(targetDocument, workspace: workspace)
         let newHead = try listRepoRevisions(workspace: workspace).last
         guard let newHead else {
@@ -538,21 +552,21 @@ public struct TypedRuleStore: Sendable {
         return newHead
     }
 
-    /// Seam gate: a rollback restoring `incoming` over the current `existing`
-    /// head refuses when the restore would relax posture the head enforces
-    /// on dimensions other than the predicate set itself:
+    /// Seam gate: a rollback restoring `incoming` over the live `existing`
+    /// document (the file enforcement loads) refuses when that replacement
+    /// would widen what enforcement is applying now:
     ///
+    /// - a deny or ask whose predicate is absent from the restored document
+    ///   (`removedRuleFindings`);
     /// - an explicit verdict relaxation on a surviving predicate
     ///   (deny → ask/allow), via share semantics;
     /// - a safety-level downgrade (`strict` → anything else);
-    /// - a widening of secret `allowPaths` beyond the head's exemptions.
+    /// - a widening of secret `allowPaths` beyond the live exemptions.
     ///
-    /// Predicate-set change is the rollback operation itself — restoring
-    /// an earlier generation necessarily drops predicates the head added
-    /// and revives ones it removed — so added/removed predicates do not
-    /// refuse. (Full-replacement diffing would block nearly every real
-    /// rollback; share semantics alone would silently pass the safety and
-    /// exemption widenings above, which `evaluateShare` does not evaluate.)
+    /// Dropping an allow is narrowing and does not refuse. Reviving a
+    /// predicate the live file no longer has is not a widening of
+    /// enforcement. `existing` must be the live file, not the sealed log
+    /// or the JSONL tail: those can omit a deny the file still enforces.
     private static func refuseRelaxingRollback(
         existing: PolicyDocument,
         incoming: PolicyDocument
@@ -561,6 +575,10 @@ public struct TypedRuleStore: Sendable {
             existing: existing,
             incoming: incoming
         ).findings
+        findings += PolicyDiffRisk.removedRuleFindings(
+            old: existing.rules,
+            new: incoming.rules
+        )
         if existing.safetyLevel == .strict, incoming.safetyLevel != .strict {
             findings.append(
                 PolicyDiffRiskFinding(

@@ -43,7 +43,9 @@ struct PolicyRevisionTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = TypedRuleStore(baseDirectory: root)
         let first = [forcePushMainDeny()]
-        let second = [discardAsk()]
+        // The added rule is an allow. Rollback may drop an allow; it must
+        // not drop the deny that generation 1 and generation 2 share.
+        let second = [forcePushMainDeny(), discardAllow()]
 
         try store.saveMachine(first)
         try store.saveMachine(second)
@@ -282,8 +284,8 @@ struct PolicyRevisionTests {
 
         try session.upsert(
             PolicyDocumentRule(
-                id: RuleID(pack: .typedGit, pattern: "discard"),
-                verdict: .ask,
+                id: RuleID(pack: .typedGit, pattern: "discard-allow"),
+                verdict: .allow,
                 predicate: .gitDiscardWorktree(pathspec: nil)
             ),
             layer: .machine
@@ -464,7 +466,7 @@ struct PolicyRevisionTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = TypedRuleStore(baseDirectory: root)
         let first = PolicyDocument(rules: [denyRule(pattern: "v1", branch: "main")])
-        let second = PolicyDocument(rules: [denyRule(pattern: "v2", branch: "develop")])
+        let second = PolicyDocument(rules: [denyRule(pattern: "v1", branch: "main"), allowDiscardRule()])
         try store.saveMachine(first)
         try store.saveMachine(second)
 
@@ -495,7 +497,7 @@ struct PolicyRevisionTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = TypedRuleStore(baseDirectory: root)
         let first = PolicyDocument(rules: [denyRule(pattern: "v1", branch: "main")])
-        let second = PolicyDocument(rules: [denyRule(pattern: "v2", branch: "develop")])
+        let second = PolicyDocument(rules: [denyRule(pattern: "v1", branch: "main"), allowDiscardRule()])
         try store.saveMachine(first)
         try store.saveMachine(first)
         try store.saveMachine(second)
@@ -643,6 +645,15 @@ private func forcePushMainAllow() -> TypedRule {
         predicate: .gitPush(force: .exactly(.force), branch: "main"),
         verdict: .allow,
         origin: .repo
+    )
+}
+
+private func discardAllow() -> TypedRule {
+    TypedRule(
+        id: RuleID(pack: .typedGit, pattern: "discard-allow"),
+        predicate: .gitDiscardWorktree(pathspec: nil),
+        verdict: .allow,
+        origin: .machine
     )
 }
 
