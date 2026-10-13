@@ -17,14 +17,16 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 
 | Phase | Branch | PR | Status |
 |---|---|---|---|
-| 0 Plan + reset | `plan/agent-governance` | _pending_ | in progress |
+| 0 Plan + reset | `plan/agent-governance` | [#394](https://github.com/christopherkarani/rv/pull/394) | in progress |
 | 1 Trustworthy sandbox | `governance/phase-1-sandbox` | _not opened_ | not started |
 | 2 Secrets the agent can't leak | `governance/phase-2-secrets` | _not opened_ | not started |
 | 3 MCP governance | `governance/phase-3-mcp` | _not opened_ | not started |
 | 4 Enterprise client features | `governance/phase-4-enterprise` | _not opened_ | not started |
 | 5 Launch readiness | human-owned | n/a | not started |
 
-**Next action:** finish Phase 0 checklist below.
+**Next action:** Phase 0 checklist is done. Stay in progress until
+[PR #394](https://github.com/christopherkarani/rv/pull/394) merges, then start
+Phase 1. Do not reopen this PR or re-close #393.
 
 Branching rule: each phase branch starts from the previous phase branch (or
 `origin/main` if the previous phase merged). Each phase PR targets the previous
@@ -152,7 +154,8 @@ workspace host; CONNECT is an opaque TLS relay, absolute-URI `http://` is
 forwarded; policy `EgressHostPolicy.publicHTTPS` (ports 80/443, public-unicast,
 loopback allowed). No TLS termination, no local CA. Cage env gets
 `HTTPS_PROXY/HTTP_PROXY=http://127.0.0.1:<port>`, `NO_PROXY=localhost,127.0.0.1,::1`.
-Seatbelt allows loopback TCP only.
+Seatbelt outbound connect is loopback TCP only. The loopback listen rule
+(`allowingLoopbackBind`) also permits LAN bind, listen, and accept.
 
 **Admission.** fd3 handshake, fd4 requests, fd5 responses; 4-byte BE length +
 JSON. HTTP admission is GET + https only, no headers/body, executed host-side by
@@ -172,10 +175,13 @@ identity/prepared launch path forbids credentials and keychain.
 used in places on Darwin. swift-crypto is a Linux-only dependency. No NIO,
 no swift-certificates.
 
-**Ledgers** (`~/.config/rv/`): `egress-denials.jsonl`, `runtime-admission.jsonl`,
-`workspace-sessions.jsonl`, `runtime-sessions.jsonl`, `agent-instances.jsonl`,
-`blocks.jsonl`, `allow-once.jsonl`, `pending-approvals.jsonl`
-(`FileLockedJSONLStore`). No unified event type.
+**Ledgers** (`~/.config/rv/`). No unified event type. `blocks.jsonl`,
+`allow-once.jsonl`, and `pending-approvals.jsonl` are `FileLockedJSONLStore`.
+`runtime-admission.jsonl` is `appendAdmissionEvent` (flock + `O_APPEND`).
+`workspace-sessions.jsonl`, `runtime-sessions.jsonl`, and
+`agent-instances.jsonl` go through `RuntimeSessionLog.appendExclusiveLine`.
+`egress-denials.jsonl` is an unlocked `FileHandle` append in
+`EgressProxy.writeDenial` (no flock).
 
 **Launch.** Contained: `rv opencode`, `rv workspace run`, TUI launchers
 (claude/codex/opencode/muse, `RuntimeAgentEntries.known`); legacy path, no
@@ -248,8 +254,8 @@ Exit: this plan merged-or-open as a PR; PR #393 closed with a pointer.
 
 - [x] Map secrets/network, CLI/launch, and sandbox gaps (three exploration passes)
 - [x] Write this plan
-- [ ] Commit + push `plan/agent-governance`, open PR
-- [ ] Comment on and close PR #393 linking the plan PR (keep branch)
+- [x] Commit + push `plan/agent-governance`, open PR
+- [x] Comment on and close PR #393 linking the plan PR (keep branch)
 
 ---
 
@@ -368,8 +374,8 @@ Profiles in `runtime-resources.json` gain `"secrets": ["STRIPE_SECRET_KEY"]`.
 - [ ] Per-runtime placeholder minting; substitution only of placeholders
       minted for that runtime + binding, in headers and query; request
       without a valid placeholder is rejected (no open relay)
-- [ ] Upstream via URLSession (ephemeral, no cookies/cache/proxy, redirects
-      returned to the client, not followed); streaming responses (SSE)
+- [ ] Upstream via URLSession (ephemeral, no cookies/cache/proxy; the gateway
+      refuses upstream redirects); streaming responses (SSE)
 - [ ] Response scrubbing of the real value across chunk boundaries
 - [ ] Audit each request as `secret.use` (`secrets-audit.jsonl`): secret name,
       upstream host, method, path (no query), status, bytes, fingerprint
@@ -491,3 +497,9 @@ Exit criteria: Cursor or Claude Code on this Mac lists tools through
   OK (~127 s). Three exploration passes done (findings in Ground truth).
   Found 55 `TRANSITIONAL-PEER-AUTH` disabled tests and confirmed L3 needs
   the owner to reinstall dev peer trust with sudo. Plan written.
+- 2026-10-13: Rereview of PR #394. Named each ledger writer (only `blocks`,
+  `allow-once`, and `pending-approvals` are `FileLockedJSONLStore`). Seatbelt
+  ground truth now says outbound connect is loopback TCP and the listen rule
+  also permits LAN bind/listen/accept. Phase 2.2 matches D5: the gateway
+  refuses upstream redirects. Phase 0 open-PR and close-#393 boxes checked.
+  Docs only. Next: merge #394, then start Phase 1.
