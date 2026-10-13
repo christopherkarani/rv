@@ -28,9 +28,9 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | _not opened yet_ | not started |
 
 **Next action:** Phase 7 on `governance/phase-7-enterprise-hardening` (from
-phase 6), in the order in the Phase 7 section; 7.2, 7.5, 7.6, 7.3 and 7.1 are done, 7.4 is next
-(7.4 uses `EgressProxy` through its public `init`/`start()` and edits only
-`MCPSandbox`'s own profile, so it does not touch impro-ref-owned files). Phase 6 agent items are done except
+phase 6). 7.2, 7.5, 7.6, 7.3, 7.1 and 7.4 are done. 7.7 stays blocked on
+impro-ref. Next is Phase 8 on `governance/phase-8-secrets-ux` (from phase 7);
+its checklist is filled in when that phase starts. Phase 6 agent items are done except
 the impro-ref-blocked ones (6.2 cage denies, 6.5 injected config dir, 6.6
 watchdog). Owner items for phase 6: signing secrets + certificate (6.3),
 flip `signed_releases`/`release_team_id` in `install.sh` and set
@@ -1250,11 +1250,41 @@ existing initialize/list/call paths handle it. URL rules in D22.
       path, e.g. Zapier) — import skips them; a follow-up if wanted
 
 ### 7.4 Strict profile and per-server egress
-- [ ] `"profile": "strict"`: unlisted tools deny, every server needs a
-      sandbox, network off unless `sandbox.hosts` lists hosts
-- [ ] `sandbox.hosts`: the gateway starts an `EgressProxy` in allowlist mode
-      per server, sets `HTTPS_PROXY`/`HTTP_PROXY`, and the cage allows only
-      that loopback port
+- [x] `"profile": "strict"`: a tool no list names is denied (the server's
+      own default becomes deny; an explicit allow, ask or deny still wins,
+      strictest match as in D19). A local server needs `"sandbox"`, and that
+      sandbox cannot set `"network": true`; name hosts in `sandbox.hosts`
+      instead. A remote (`url`) server has no process to cage, so strict
+      does not ask it for a sandbox. `rv mcp trust` says "profile strict"
+      and "other tools deny". Help row `profile`. Tests:
+      `strictProfileAndHostsRoundTripAndUnlistedToolsDeny`,
+      `plannerHoldsStrictServersToASandboxWithoutOpenNetwork`, the strict
+      case in `alwaysRefusesToolsWithArgumentRules`
+- [x] `sandbox.hosts`: exact DNS names (no scheme, port, wildcard or IP; at
+      most 32; lowercased, duplicates dropped). `"network": true` beside
+      `hosts` is invalid. For each such server `rv mcp serve` starts one
+      `EgressProxy` (`EgressHostPolicy` allowlist, port 443 — the proxy's
+      allowlist admits one port, and 443 is its default), sets
+      `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and their lowercase twins to
+      `http://127.0.0.1:<port>`, sets `NODE_USE_ENV_PROXY=1`, and drops
+      `NO_PROXY`. The Seatbelt profile denies the network and then allows
+      only `(remote tcp "localhost:<port>")`. A refused CONNECT is audited
+      as `egress.denied` (subject `host:port`, detail `server`). Uses
+      `EgressProxy`'s public `init`/`start()`; no impro-ref file changes.
+      Help row `sandbox`. Tests: `refusesBadProfilesAndHosts`,
+      `profileTextLetsTheCageReachOnlyItsProxy`,
+      `proxyEnvironmentPointsEveryClientAtTheProxy`. The live cage test
+      `cagedServerReachesItsProxyButNothingElse` is **unverified on macOS**
+- [x] E2E (Linux, 2026-10-13): `Scripts/mcp-phase7-proof.py` 66/66. The 7.4
+      section trusts a strict file (review names the profile and
+      `api.example.com`), serves the remote server (unlisted `delete_all`
+      is hidden and a call is denied, `echo` runs, `whoami` asks), refuses
+      a local server with no sandbox, refuses `"network": true`, and
+      refuses `sandbox.hosts` on Linux because the cage is macOS-only. On
+      macOS that last step launches the proxied server instead.
+      Owner (macOS): run `Scripts/mcp-phase7-proof.py` (the 7.4 section
+      writes no Keychain items) so the live cage test and the proxied
+      launch run
 
 ### 7.7 Identity on the default launch door
 - [ ] _blocked: impro-ref (`RuntimeAdmission*`, `WorkspaceSessionSupervisor`)_
@@ -1397,3 +1427,10 @@ when the phase starts (items 8.1-8.4 from the 2026-10-13 brief).
   preflight 0 failures (URLSession delegates exempted in
   `MCPRemoteUpstream.swift`), proof 57/57. Owner (macOS): Keychain token
   store via the proof with `RV_LIVE_KEYCHAIN=1`. Next: 7.4.
+- 2026-10-13: Phase 7.4: `"profile": "strict"` (unlisted tools deny, local
+  servers need a sandbox, no open network) and `sandbox.hosts` (per-server
+  `EgressProxy` allowlist on port 443, proxy env, Seatbelt limited to that
+  loopback port, denials audited as `egress.denied`). Remote servers are
+  exempt from the sandbox requirement. Linux: RVMCP + RVCLI tests for the
+  new suites green, proof 66/66. The live cage test is unverified on macOS.
+  7.7 stays blocked on impro-ref. Next: Phase 8.
