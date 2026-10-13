@@ -1184,21 +1184,31 @@ public struct TypedRuleStore: Sendable {
         guard let document = try? PolicyDocumentTOML.parse(toml) else {
             throw TypedRuleStoreError.logCorrupted
         }
-        let record = RevisionLogRecord(
-            revision: revision,
-            prev: prev,
-            tomlBase64: tomlData.base64EncodedString(),
-            recordedAtMs: recordedAtMs,
-            mac: mac
-        )
-        // Append one line under the caller's log lock; the full rewrite
-        // remains only for minting the first record. Re-encoding the whole
-        // history per save made total work quadratic in saves.
-        if records.isEmpty {
-            try writeLogRecords([record])
-        } else {
-            try appendLogLine(record)
+        // Full rewrite via writeFileBytes (atomic tmp + rename) on every
+        // seal. An append-one-line variant was considered and rejected:
+        // a torn final line after a crash would make the whole chain
+        // fail verification, while the rename keeps the on-disk log
+        // always complete. Saves are human-paced, so re-encoding the
+        // history costs nothing that matters.
+        var encoded = records.map { verified in
+            RevisionLogRecord(
+                revision: verified.revision,
+                prev: verified.prev,
+                tomlBase64: Data(verified.toml.utf8).base64EncodedString(),
+                recordedAtMs: verified.recordedAtMs,
+                mac: verified.mac
+            )
         }
+        encoded.append(
+            RevisionLogRecord(
+                revision: revision,
+                prev: prev,
+                tomlBase64: tomlData.base64EncodedString(),
+                recordedAtMs: recordedAtMs,
+                mac: mac
+            )
+        )
+        try writeLogRecords(encoded)
         let tipMAC = Self.tipMAC(revision: revision, tip: mac, key: key)
         try writeLogTip(RevisionLogTip(revision: revision, tip: mac, mac: tipMAC))
         return VerifiedLogRecord(
@@ -1257,32 +1267,6 @@ public struct TypedRuleStore: Sendable {
         // full disk never reads as forgery (whose documented recovery
         // destroys history). Verification failures stay `logCorrupted`.
         try writeFileBytes(data, to: machineLogFileURL)
-    }
-
-    /// Appends one sealed record line under the caller's log lock.
-    private func appendLogLine(_ record: RevisionLogRecord) throws {
-        try prepareDirectory(baseDirectory)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        guard let encoded = try? encoder.encode(record),
-            var line = String(data: encoded, encoding: .utf8)
-        else {
-            throw TypedRuleStoreError.invalidFile
-        }
-        line.append("\n")
-        guard let lineData = line.data(using: .utf8) else {
-            throw TypedRuleStoreError.invalidFile
-        }
-        guard let handle = try? FileHandle(forWritingTo: machineLogFileURL) else {
-            throw TypedRuleStoreError.invalidFile
-        }
-        do {
-            try handle.seekToEnd()
-            try handle.write(contentsOf: lineData)
-            try handle.close()
-        } catch {
-            throw TypedRuleStoreError.invalidFile
-        }
     }
 
     private func writeLogTip(_ tip: RevisionLogTip) throws {
