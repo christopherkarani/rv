@@ -99,7 +99,18 @@ public struct MCPGatewayCore {
         var client: JSONValue
         var remaining: Set<String>
         var tools: [JSONValue]
+        /// Set when the listing answers `rv_search_tools` instead of `tools/list`.
+        var search: Search?
     }
+
+    struct Search {
+        var terms: [String]
+        var limit: Int
+    }
+
+    static let searchToolName = "rv_search_tools"
+    static let callToolName = "rv_call_tool"
+    static let searchLimits = (default: 10, maximum: 50)
 
     /// An `ask` call waiting for the user's answer to an elicitation. The
     /// exact params are kept, so the answer applies to these arguments only.
@@ -147,6 +158,7 @@ public struct MCPGatewayCore {
     }
 
     var prefixesTools: Bool { order.count > 1 }
+    var searchMode: Bool { configuration.toolMode == .search }
 
     var allSettled: Bool { phases.values.allSatisfy { $0 != .starting } }
 
@@ -265,13 +277,20 @@ public struct MCPGatewayCore {
     }
 
     mutating func listTools(client: JSONValue) -> [MCPGatewayOutput] {
+        if searchMode { return [.toClient(Self.result(id: client, .object(["tools": .array(Self.metaTools)])))] }
+        return fanOutList(client: client, search: nil)
+    }
+
+    mutating func fanOutList(client: JSONValue, search: Search?) -> [MCPGatewayOutput] {
         let ready = order.filter { phases[$0] == .ready }
         guard ready.isEmpty == false else {
-            return [.toClient(Self.result(id: client, .object(["tools": .array([])])))]
+            let empty = JSONValue.array([])
+            return [.toClient(search.map { Self.searchResult(id: client, tools: [], search: $0) }
+                ?? Self.result(id: client, .object(["tools": empty])))]
         }
         let fanout = nextID
         nextID += 1
-        fanouts[fanout] = ListFanout(client: client, remaining: Set(ready), tools: [])
+        fanouts[fanout] = ListFanout(client: client, remaining: Set(ready), tools: [], search: search)
         return ready.map { server in
             let id = allocate(.list(fanout: fanout, server: server))
             return .toUpstream(server: server, message: Self.request(id: .int(id), method: "tools/list", params: nil))
@@ -281,6 +300,26 @@ public struct MCPGatewayCore {
     mutating func callTool(client: JSONValue, params: JSONValue?) -> [MCPGatewayOutput] {
         guard let exposed = params?["name"]?.stringValue else {
             return [.toClient(Self.error(id: client, code: -32602, message: "tools/call needs a name"))]
+        }
+        if searchMode, exposed == Self.searchToolName {
+            let arguments = params?["arguments"]
+            let terms = (arguments?["query"]?.stringValue ?? "").lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
+            let limit = min(max(arguments?["limit"]?.intValue ?? Self.searchLimits.default, 1), Self.searchLimits.maximum)
+            return fanOutList(client: client, search: Search(terms: terms, limit: limit))
+        }
+        if searchMode, exposed == Self.callToolName {
+            let wrapped = params?["arguments"]
+            guard let target = wrapped?["name"]?.stringValue, target != Self.callToolName, target != Self.searchToolName else {
+                return [.toClient(Self.toolError(id: client, "rv_call_tool needs the name of a tool from rv_search_tools"))]
+            }
+            let arguments = wrapped?["arguments"] ?? .object([:])
+            guard arguments.objectValue != nil else {
+                return [.toClient(Self.toolError(id: client, "rv_call_tool arguments must be an object"))]
+            }
+            var unwrapped = params?.objectValue ?? JSONObject()
+            unwrapped["name"] = .string(target)
+            unwrapped["arguments"] = arguments
+            return callTool(client: client, params: .object(unwrapped))
         }
         guard let (server, tool) = route(exposed), let upstream = upstreams[server] else {
             return [.toClient(Self.error(id: client, code: -32602, message: "Unknown tool: \(exposed)"))]
@@ -490,8 +529,67 @@ public struct MCPGatewayCore {
             return outputs
         }
         fanouts[fanout] = nil
+        if let search = state.search {
+            return outputs + [.toClient(Self.searchResult(id: state.client, tools: state.tools, search: search))]
+        }
         return outputs + [.toClient(Self.result(id: state.client, .object(["tools": .array(state.tools)])))]
     }
+
+    /// Tools whose name or description holds every term; name matches first.
+    static func searchResult(id: JSONValue, tools: [JSONValue], search: Search) -> JSONValue {
+        func holdsAll(_ text: String) -> Bool {
+            let lowered = text.lowercased()
+            return search.terms.allSatisfy { lowered.contains($0) }
+        }
+        let matches = tools.filter {
+            holdsAll(($0["name"]?.stringValue ?? "") + " " + ($0["description"]?.stringValue ?? ""))
+        }
+        let byName = matches.filter { holdsAll($0["name"]?.stringValue ?? "") }
+        let rest = matches.filter { holdsAll($0["name"]?.stringValue ?? "") == false }
+        let found = JSONValue.object([
+            "tools": .array(Array((byName + rest).prefix(search.limit))),
+            "total": .int(matches.count),
+        ])
+        return result(id: id, .object([
+            "content": .array([.object(["type": .string("text"), "text": .string(found.compactText)])]),
+            "structuredContent": found,
+        ]))
+    }
+
+    static let metaTools: [JSONValue] = [
+        .object([
+            "name": .string(searchToolName),
+            "description": .string(
+                "Search the tools rv serves by words in their names and descriptions. Returns each match with its "
+                    + "input schema; call one with rv_call_tool."),
+            "inputSchema": .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "query": .object([
+                        "type": .string("string"),
+                        "description": .string("Words every match must contain; empty lists every tool"),
+                    ]),
+                    "limit": .object([
+                        "type": .string("integer"), "minimum": .int(1), "maximum": .int(searchLimits.maximum),
+                        "default": .int(searchLimits.default),
+                    ]),
+                ]),
+            ]),
+        ]),
+        .object([
+            "name": .string(callToolName),
+            "description": .string(
+                "Call a tool found with rv_search_tools. rv applies the same policy and approvals as a direct call."),
+            "inputSchema": .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "name": .object(["type": .string("string"), "description": .string("Tool name from rv_search_tools")]),
+                    "arguments": .object(["type": .string("object"), "description": .string("The tool's arguments")]),
+                ]),
+                "required": .array([.string("name")]),
+            ]),
+        ]),
+    ]
 
     /// Denied tools are hidden; `ask` tools say so in their description, and
     /// so do tools whose arguments can change the decision.

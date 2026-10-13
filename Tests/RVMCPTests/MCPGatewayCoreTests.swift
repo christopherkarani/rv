@@ -182,6 +182,65 @@ struct MCPGatewayCoreTests {
         #expect(denied.toClient.first?["result"]?["isError"] == .bool(true))
     }
 
+    @Test func searchModeListsTwoToolsAndRoutesCallsThroughTheSamePolicy() throws {
+        let configuration = try MCPConfiguration.decode(Data(#"""
+            {"version": 1, "toolMode": "search", "servers": [{"name": "db", "command": "db-mcp",
+              "tools": {"default": "allow", "ask": ["write"], "deny": ["drop"]}}]}
+            """#.utf8)).get()
+        var harness = GatewayHarness(configuration)
+        _ = harness.ready()
+
+        let list = harness.client(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+        #expect(list.toUpstream.isEmpty)
+        let meta = list.toClient.first?["result"]?["tools"]?.arrayValue ?? []
+        #expect(meta.map { $0["name"] } == [.string("rv_search_tools"), .string("rv_call_tool")])
+        #expect(meta[1]["inputSchema"]?["required"] == .array([.string("name")]))
+
+        let upstreamTools = #"[{"name":"query","description":"Run SQL","inputSchema":{"type":"object"}},{"name":"write","description":"Write SQL rows"},{"name":"drop","description":"Drop a SQL table"},{"name":"tables","description":"List tables"}]"#
+        func search(_ id: Int, _ arguments: String) -> JSONValue? {
+            let asked = harness.client(#"{"jsonrpc":"2.0","id":\#(id),"method":"tools/call","params":{"name":"rv_search_tools","arguments":\#(arguments)}}"#)
+            let listID = asked.toUpstream.first?.1["id"]?.intValue ?? -1
+            #expect(asked.toUpstream.first?.1["method"] == .string("tools/list"))
+            return harness.upstream("db", #"{"jsonrpc":"2.0","id":\#(listID),"result":{"tools":\#(upstreamTools)}}"#)
+                .toClient.first?["result"]
+        }
+        let sql = try #require(search(2, #"{"query":"SQL"}"#))
+        let found = sql["structuredContent"]?["tools"]?.arrayValue ?? []
+        #expect(found.map { $0["name"] } == [.string("query"), .string("write")])
+        #expect(found[1]["description"] == .string("[rv: needs the user's approval] Write SQL rows"))
+        #expect(sql["structuredContent"]?["total"]?.intValue == 2)
+        #expect(sql["content"]?.arrayValue?.first?["text"]?.stringValue?.contains(#""name":"query""#) == true)
+        let everything = try #require(search(3, #"{}"#))
+        #expect(everything["structuredContent"]?["tools"]?.arrayValue?.map { $0["name"] }
+            == [.string("query"), .string("write"), .string("tables")])
+        let byName = try #require(search(4, #"{"query":"table","limit":1}"#))
+        #expect(byName["structuredContent"]?["tools"]?.arrayValue?.map { $0["name"] } == [.string("tables")])
+        #expect(byName["structuredContent"]?["total"]?.intValue == 1)
+
+        let run = harness.client(#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"rv_call_tool","arguments":{"name":"query","arguments":{"sql":"SELECT 1"}}}}"#)
+        let forwarded = try #require(run.toUpstream.first?.1)
+        #expect(forwarded["params"]?["name"] == .string("query"))
+        #expect(forwarded["params"]?["arguments"] == .object(["sql": .string("SELECT 1")]))
+        let done = harness.upstream("db", #"{"jsonrpc":"2.0","id":\#(forwarded["id"]?.intValue ?? -1),"result":{"content":[{"type":"text","text":"1"}]}}"#)
+        #expect(done.toClient.first?["id"] == .int(5))
+        #expect(done.audits.first.map { ($0.server, $0.tool, $0.decision) } ?? ("", "", .deny) == ("db", "query", .allow))
+
+        let asked = harness.client(#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"rv_call_tool","arguments":{"name":"write","arguments":{"row":1}}}}"#)
+        #expect(asked.toUpstream.isEmpty)
+        #expect(asked.audits.first?.decision == .ask)
+        #expect(asked.audits.first?.tool == "write")
+
+        let denied = harness.client(#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"rv_call_tool","arguments":{"name":"drop","arguments":{}}}}"#)
+        #expect(denied.toUpstream.isEmpty)
+        #expect(denied.audits.first?.decision == .deny)
+
+        for bad in [#"{}"#, #"{"name":"query","arguments":[1]}"#, #"{"name":"rv_call_tool"}"#] {
+            let refused = harness.client(#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"rv_call_tool","arguments":\#(bad)}}"#)
+            #expect(refused.toUpstream.isEmpty)
+            #expect(refused.toClient.first?["result"]?["isError"] == .bool(true))
+        }
+    }
+
     @Test func deniedCallNeverReachesTheUpstream() {
         var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
         _ = harness.ready()

@@ -123,6 +123,13 @@ public enum MCPConfigurationError: Error, Sendable, Equatable {
     }
 }
 
+/// `search` lists only `rv_search_tools` and `rv_call_tool`, so a client
+/// with many servers does not load every tool schema up front.
+public enum MCPToolMode: String, Sendable, Equatable {
+    case direct
+    case search
+}
+
 public struct MCPConfiguration: Sendable, Equatable {
     public static let fileName = "mcp.json"
     public static let maximumBytes = 1024 * 1024
@@ -132,6 +139,7 @@ public struct MCPConfiguration: Sendable, Equatable {
     public var servers: [MCPServerDefinition]
     public var direct: [String]
     public var blocked: [String]
+    public var toolMode: MCPToolMode = .direct
     /// Organization restrictions layered over this file; never encoded.
     public var managed: ManagedPolicy?
     /// The file was not written or trusted through rv; never encoded. Its
@@ -230,6 +238,7 @@ public struct MCPConfiguration: Sendable, Equatable {
         var root = JSONObject()
         root["version"] = .int(1)
         root["defaultDecision"] = .string(defaultDecision.rawValue)
+        if toolMode != .direct { root["toolMode"] = .string(toolMode.rawValue) }
         root["servers"] = .array(servers.map(Self.encode))
         if direct.isEmpty == false { root["direct"] = .array(direct.map(JSONValue.string)) }
         if blocked.isEmpty == false { root["blocked"] = .array(blocked.map(JSONValue.string)) }
@@ -273,11 +282,17 @@ public struct MCPConfiguration: Sendable, Equatable {
 enum MCPConfigurationDecoding {
     static func configuration(_ root: JSONValue) throws -> MCPConfiguration {
         let object = try objectValue(root, "top level")
-        try allowOnly(object, ["version", "defaultDecision", "servers", "direct", "blocked"], "top level")
+        try allowOnly(object, ["version", "defaultDecision", "toolMode", "servers", "direct", "blocked"], "top level")
         guard object["version"]?.intValue == 1 else { throw MCPConfigurationError.invalid("version must be 1") }
         var configuration = MCPConfiguration()
         if let raw = object["defaultDecision"] {
             configuration.defaultDecision = try decision(raw, "defaultDecision")
+        }
+        if let raw = object["toolMode"] {
+            guard let mode = raw.stringValue.flatMap(MCPToolMode.init(rawValue:)) else {
+                throw MCPConfigurationError.invalid(#"toolMode must be "direct" or "search""#)
+            }
+            configuration.toolMode = mode
         }
         let servers = try object["servers"].map { value -> [JSONValue] in
             guard let items = value.arrayValue else { throw MCPConfigurationError.invalid("servers must be an array") }

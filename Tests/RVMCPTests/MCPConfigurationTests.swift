@@ -97,6 +97,19 @@ struct MCPConfigurationTests {
         #expect(error.message.contains("server db tools.ask: tool rule for q needs a non-empty"), "\(error.message)")
     }
 
+    @Test func toolModeRoundTripsAndDefaultsToDirect() throws {
+        #expect(try decode(#"{"version":1}"#).get().toolMode == .direct)
+        let search = try decode(#"{"version":1,"toolMode":"search"}"#).get()
+        #expect(search.toolMode == .search)
+        #expect(try MCPConfiguration.decode(Data(search.encoded().compactText.utf8)).get() == search)
+        #expect(MCPConfiguration().encoded().compactText.contains("toolMode") == false)
+        guard case .failure(let error) = decode(#"{"version":1,"toolMode":"lazy"}"#) else {
+            Issue.record("accepted an unknown tool mode")
+            return
+        }
+        #expect(error.message == #"mcp.json is invalid: toolMode must be "direct" or "search""#)
+    }
+
     @Test func largeIntegersCompareExactly() throws {
         let big = try JSONValue.parse(Data("9007199254740993".utf8))
         #expect(big.domainValue == .string("9007199254740993"))
