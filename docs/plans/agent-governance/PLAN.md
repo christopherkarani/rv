@@ -25,12 +25,11 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 5 Launch readiness | human-owned | n/a | not started |
 | 6 Security blockers | `governance/phase-6-hardening` (from `main`) | [#417](https://github.com/christopherkarani/rv/pull/417) (draft) | in progress |
 | 7 Enterprise hardening | `governance/phase-7-enterprise-hardening` (from phase 6) | [#418](https://github.com/christopherkarani/rv/pull/418) (draft) | in progress |
-| 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | _not opened yet_ | not started |
+| 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | _opening_ | in progress |
 
-**Next action:** Phase 7 on `governance/phase-7-enterprise-hardening` (from
-phase 6). 7.2, 7.5, 7.6, 7.3, 7.1 and 7.4 are done. 7.7 stays blocked on
-impro-ref. Next is Phase 8 on `governance/phase-8-secrets-ux` (from phase 7);
-its checklist is filled in when that phase starts. Phase 6 agent items are done except
+**Next action:** Phase 8 agent items are done on `governance/phase-8-secrets-ux`.
+8.4's TLS termination stays blocked on impro-ref (`EgressProxy.swift`). 7.7
+stays blocked on impro-ref. Phase 6 agent items are done except
 the impro-ref-blocked ones (6.2 cage denies, 6.5 injected config dir, 6.6
 watchdog). Owner items for phase 6: signing secrets + certificate (6.3),
 flip `signed_releases`/`release_team_id` in `install.sh` and set
@@ -1293,8 +1292,48 @@ existing initialize/list/call paths handle it. URL rules in D22.
 
 ## Phase 8: Secrets UX parity
 
-Branch `governance/phase-8-secrets-ux` from phase 7. Checklist is filled in
-when the phase starts (items 8.1-8.4 from the 2026-10-13 brief).
+Branch `governance/phase-8-secrets-ux` from phase 7. Items from the
+2026-10-13 brief.
+- [x] 8.1 `rv secrets import --varlock <.env.schema>` reads Varlock
+      decorators. `@sensitive` (and the file's `@defaultSensitive`, including
+      `inferFromPrefix`) decides what is a secret. `@type` is stored.
+      Provider calls become sources: `op()`, a bare `op://`, `infisical()`,
+      `bitwarden()`, `gsm()`, `azureSecret()`, `vaultSecret()`,
+      `awsSecretsManager()`. Init decorators (`@initInfisical`, `@initGsm`,
+      `@initAzure`) fill project, environment, and vault. A literal value is
+      never copied. Delivery is `environment` (no upstream is known).
+      `rv secrets describe [--json]` prints name, description, type,
+      delivery, and source kind. No values and no provider locators.
+      Tests: `VarlockSchemaTests`, `describeAndVarlockImportNeverCarryAValue`
+- [x] 8.2 Providers through their CLIs, same 30 s deadline and 1 MiB output
+      cap as the other command providers, then the existing 16 KiB value
+      limit. A non-zero exit or a bad shape is a typed error and the output
+      is not copied into it. `infisical secrets get NAME --plain --silent`,
+      `bws secret get UUID` (JSON `value`), `gcloud secrets versions access`,
+      `az keyvault secret show --query value -o tsv`. Arguments that start
+      with `-` are rejected at decode. Fake-CLI tests:
+      `SecretCommandProviderTests`. Live reads are behind
+      `RV_LIVE_INFISICAL`, `RV_LIVE_BWS`, `RV_LIVE_GCP`, `RV_LIVE_AZURE`
+      (plus the name/id variables in `LiveSecretProviderTests`) and were not
+      run here
+- [x] 8.3 `rv secrets hook install|uninstall`. The pre-commit hook runs
+      `rv secrets hook run`, which scans the git index (not the worktree)
+      with the same value scanner and prints `file:line:name`. A hook that
+      was already there is moved to `pre-commit.rv-saved` and chained;
+      install again refreshes rv's script and leaves the saved hook alone;
+      uninstall puts it back. Tests: `hookInstallIsIdempotentAndScansTheIndex`
+- [x] 8.4 Design and spike: `docs/plans/agent-governance/transparent-https.md`
+      and `TransparentHTTPS.decision`. Terminate only an exact gateway
+      upstream host; everything else stays a blind tunnel, and only after
+      the existing egress filter allows the CONNECT. A second proxy was
+      rejected because it would copy that filter and could weaken it.
+      Implementing termination means editing `EgressProxy.swift`, which
+      stays untouched until `impro-ref` lands. Tests: `TransparentHTTPSTests`.
+      _blocked: impro-ref_ for the CA, the handshake, and the header swap
+- [x] E2E (Linux, 2026-10-13): `Scripts/secrets-phase8-proof.py` 9/9 on the
+      real binary in a throwaway HOME. Dry run and import, describe text
+      and JSON, infisical check (fingerprint, value absent), missing `op`
+      exits 1, hook install/run/uninstall. No Keychain writes
 
 ---
 
@@ -1434,3 +1473,9 @@ when the phase starts (items 8.1-8.4 from the 2026-10-13 brief).
   exempt from the sandbox requirement. Linux: RVMCP + RVCLI tests for the
   new suites green, proof 66/66. The live cage test is unverified on macOS.
   7.7 stays blocked on impro-ref. Next: Phase 8.
+- 2026-10-13: Phase 8 on `governance/phase-8-secrets-ux`: Varlock import and
+  `rv secrets describe`, Infisical/Bitwarden/GCP/Azure CLI providers, git
+  pre-commit hook, transparent-HTTPS design and host-match spike. Linux:
+  new suites green, preflight 0 failures, `Scripts/secrets-phase8-proof.py`
+  9/9. Live provider CLIs not run (env flags). TLS termination blocked on
+  impro-ref. Next: owner items, or 7.7/8.4 when impro-ref lands.
