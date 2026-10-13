@@ -25,7 +25,7 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 5 Launch readiness | human-owned | n/a | not started |
 | 6 Security blockers | `governance/phase-6-hardening` (from `main`) | [#417](https://github.com/christopherkarani/rv/pull/417) (draft) | in progress |
 | 7 Enterprise hardening | `governance/phase-7-enterprise-hardening` (from phase 6) | [#418](https://github.com/christopherkarani/rv/pull/418) (draft) | in progress |
-| 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | _opening_ | in progress |
+| 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | [#419](https://github.com/christopherkarani/rv/pull/419) (draft) | in progress |
 
 **Next action:** Phase 8 agent items are done on `governance/phase-8-secrets-ux`.
 8.4's TLS termination stays blocked on impro-ref (`EgressProxy.swift`). 7.7
