@@ -73,13 +73,26 @@ import Testing
 
 @Test func statusLabelPaneIndicatorPairsGlyphWithWord() {
     #expect(WorkspaceStatusLabel.paneIndicator(focused: true) == "● focused")
-    #expect(WorkspaceStatusLabel.paneIndicator(focused: false) == "╭ unfocused")
+    #expect(WorkspaceStatusLabel.paneIndicator(focused: false) == "╭ unfocus")
     #expect(WorkspaceStatusLabel.focus(focused: true) == "focused")
-    #expect(WorkspaceStatusLabel.focus(focused: false) == "unfocused")
+    #expect(WorkspaceStatusLabel.focus(focused: false) == "unfocus")
     // Pane runtime status is already a word; it must stay non-empty for every lifecycle.
     let pane = PaneID()
     for lifecycle in [WorkspacePaneLifecycle.empty, .launching, .attaching, .running, .exited, .launchFailed, .disconnected, .missing] {
         #expect(WorkspacePaneChrome.status(WorkspacePane(id: pane, lifecycle: lifecycle), terminal: nil).isEmpty == false)
+    }
+}
+
+@Test func statusLabelLeavesTitleCellAtMinimumPaneWidth() {
+    // titleWidth includes the leading space, so 2 is one visible title cell.
+    let width = PaneTree.leaf(PaneID()).minimumOuterSize.width
+    #expect(width == 22)
+    for focused in [true, false] {
+        let indicator = WorkspaceStatusLabel.paneIndicator(focused: focused)
+        let titleWidth = WorkspaceStatusLabel.paneTitleWidth(outerWidth: width, focused: focused)
+        let statusWidth = WorkspaceStatusLabel.paneStatusWidth(outerWidth: width)
+        #expect(titleWidth >= 2)
+        #expect(indicator.count + titleWidth + statusWidth + 1 == width)
     }
 }
 

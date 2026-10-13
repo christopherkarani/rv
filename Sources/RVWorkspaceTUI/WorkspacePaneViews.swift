@@ -124,8 +124,8 @@ struct WorkspacePanePanel: View {
             : WorkspacePaneChrome.status(pane, terminal: terminal,
                                          recentOutputOnly: recentOutputOnly)
         let indicator = WorkspaceStatusLabel.paneIndicator(focused: focused)
-        let statusWidth = min(20, max(10, width / 3))
-        let titleWidth = max(0, width - indicator.count - 1 - statusWidth)
+        let statusWidth = WorkspaceStatusLabel.paneStatusWidth(outerWidth: width)
+        let titleWidth = WorkspaceStatusLabel.paneTitleWidth(outerWidth: width, focused: focused)
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 Text(indicator).foregroundStyle(border)

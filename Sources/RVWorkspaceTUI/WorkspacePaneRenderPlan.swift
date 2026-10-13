@@ -57,9 +57,26 @@ enum WorkspaceStatusLabel {
         return "idle"
     }
 
-    static func focus(focused: Bool) -> String { focused ? "focused" : "unfocused" }
+    // Seven letters or fewer. "● "/"╭ " plus the word is then at most 9 cells,
+    // so a 22-cell leaf (PaneTree.minimumOuterSize) still has a title character
+    // beside a status column of at least 10 and the closing corner.
+    static func focus(focused: Bool) -> String { focused ? "focused" : "unfocus" }
 
-    static func paneIndicator(focused: Bool) -> String { focused ? "● focused" : "╭ unfocused" }
+    static func paneIndicator(focused: Bool) -> String {
+        "\(focused ? "●" : "╭") \(focus(focused: focused))"
+    }
+
+    static func paneStatusWidth(outerWidth: Int) -> Int {
+        min(20, max(10, outerWidth / 3))
+    }
+
+    /// Title frame on the pane's top row, including the leading space before the title.
+    /// Two cells is the minimum that still shows one title character.
+    static func paneTitleWidth(outerWidth: Int, focused: Bool) -> Int {
+        let indicatorWidth = paneIndicator(focused: focused).count
+        let statusWidth = paneStatusWidth(outerWidth: outerWidth)
+        return max(0, outerWidth - indicatorWidth - 1 - statusWidth)
+    }
 }
 
 enum WorkspacePaneChrome {

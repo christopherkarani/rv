@@ -108,9 +108,16 @@ struct WorkspaceShellView: View {
             connection: snapshot.connection, terminalNeedsAttention: terminalNeedsAttention,
             phase: snapshot.phase, protected: snapshot.protected)
         HStack(spacing: 1) {
-            Text("RV  \(name)").bold()
+            Text("RV  \(name)")
+                .bold()
+                .lineLimit(1)
+                .truncationMode(.tail)
             Spacer(minLength: 0)
-            Text("● \(headerLabel)").foregroundStyle(indicatorColor)
+            Text("● \(headerLabel)")
+                .foregroundStyle(indicatorColor)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
         }
         .frame(maxWidth: .infinity)
     }
