@@ -23,7 +23,7 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 3 MCP governance | `governance/phase-3-mcp` | [#414](https://github.com/christopherkarani/rv/pull/414) | merged |
 | 4 Enterprise client features | `governance/phase-4-enterprise` | [#415](https://github.com/christopherkarani/rv/pull/415) | merged |
 | 5 Launch readiness | human-owned | n/a | not started |
-| 6 Security blockers | `governance/phase-6-hardening` (from `main`) | _not opened yet_ | in progress |
+| 6 Security blockers | `governance/phase-6-hardening` (from `main`) | [#417](https://github.com/christopherkarani/rv/pull/417) (draft) | in progress |
 | 7 Enterprise hardening | `governance/phase-7-enterprise-hardening` (from phase 6) | _not opened yet_ | not started |
 | 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | _not opened yet_ | not started |
 
@@ -258,6 +258,7 @@ grammar, durable MCP approvals idea, JSON-RPC depth bound.
 | D15 | Out-of-band approvals (`rv mcp approve`) need user presence: LocalAuthentication on macOS, else `/dev/tty` + a code the gateway prints on stderr; otherwise refuse | An agent's shell has no TTY and never sees the code; refusing beats a silent bypass |
 | D16 | One HMAC key signs grants and rv's own mcp.json writes: Keychain service `rv.approvals` on macOS, `approvals.key` (0600) on Linux. Verifiers never create the key | A same-user process can edit files but cannot mint MACs without the key; read-only verification never triggers a Keychain write |
 | D17 | An mcp.json not signed by rv is **untrusted**: `rv mcp check` fails ("edited outside rv"), the gateway turns every user `allow` into `ask`, and rv refuses to sign over it (`import`, `approve --always`) until `rv mcp trust` | Tampering can only tighten policy; rv never launders an outside edit |
+| D18 | Release binaries ship as bare Mach-O files: hardened runtime, no entitlements, identifier `dev.rv.<binary>`, notarized but not stapled (stapling needs a bundle, dmg, or pkg). `install.sh` pins the Team ID and requires `spctl` "Notarized Developer ID", which looks the ticket up online | Same files as today, no packaging change; offline first-run Gatekeeper checks don't apply because `curl` downloads carry no quarantine flag |
 
 ### Coordination with `impro-ref` (owner's uncommitted work)
 
@@ -856,11 +857,13 @@ Checklist:
       `MCPCommandTests`, `ManagedCommandTests.reportIsNotCompliantWhileMCPJSONIsUntrusted`
 - [x] L2 test written: `RuntimeAdversarialTests.rvControlPlaneFilesCannotBeReadOrRewritten`
       (`mcp.json`, `mcp-approvals.json`, `mcp-integrity.json`, `secrets.json`,
-      `audit.key`, `approvals.key`: read, overwrite, create). **Unverified on
-      macOS** (Linux cannot compile the Seatbelt suite); owner item below
+      `audit.key`, `approvals.key`: read, overwrite, create). **Passed on
+      macOS CI** (pr run 38401908672, `macos isolation`, macos-26):
+      `adversarial technique=rv-control-plane-files verdict=READ-WRITE-DENIED`
 - [x] E2E (real binary, Linux): `Scripts/mcp-approvals-proof.py` (42 steps),
-      evidence below
-- [ ] Owner L2: `Scripts/swift-6.4 test --filter RuntimeAdversarialTests` on a Mac
+      evidence below. Same CI run: Darwin `RVCLITests` 603/603 (hook grade),
+      Linux `swift test` green
+- [x] ~~Owner L2: `RuntimeAdversarialTests` on a Mac~~: covered by macOS CI above
 - [ ] Owner L4: elicitation through MCP Inspector (UI mode) or Claude Code /
       Cursor; Touch ID prompt for `rv mcp approve` on a Mac; first run after
       upgrade asks for `rv mcp trust` once; check for a Keychain prompt on
@@ -906,7 +909,9 @@ E2E evidence (2026-10-13, Linux, `.build/debug/rv`, throwaway HOME under
 - [x] Enforcing test written: `RuntimeAdversarialTests.gitConfigCannotPlantHooksPathOrFsmonitor`
       (`git config core.hooksPath|core.fsmonitor|core.sshCommand|include.path`
       inside the cage fail, `.git/config` unchanged; NOT-TESTED when git can't
-      run in the cage). **Unverified on macOS**; runs with the owner L2 item
+      run in the cage). **Passed on macOS CI** (pr run 38401908672):
+      `adversarial technique=git-config verdict=WRITE-DENIED` (git ran in
+      the cage; not the NOT-TESTED branch)
 - [ ] _blocked: impro-ref (`SeatbeltProfile`)_: finding: `.git/config.worktree`
       is not denied. In a repo where the host already set
       `extensions.worktreeConfig`, `git config --worktree core.fsmonitor …`
@@ -919,36 +924,104 @@ E2E evidence (2026-10-13, Linux, `.build/debug/rv`, throwaway HOME under
       `.gitmodules`, and denying it breaks submodule edits
 
 ### 6.3 Release signing
-- [ ] `Scripts/release.sh`: `codesign --options runtime --timestamp` with
-      `DEVELOPER_ID_APP`, `notarytool submit --wait` (API key), `stapler`
-      where applicable; `RV_RELEASE_SIGN=dry-run` prints the exact commands
-      without secrets; unsigned stays the default locally
-- [ ] `.github/workflows/release.yml`: import the p12 into a temporary
+Design:
+- `Scripts/sign-macos.sh [--dry-run] [--keychain-from-env] STAGE` signs the
+  staged Mach-O files: `libswiftCompatibilitySpan.dylib` first (library
+  validation under the hardened runtime needs it signed by the same team),
+  then `rv`, `rv-cli`, `rvd`, `rv-workspace-host`, `rv-pty-claim` with
+  `codesign --force --options runtime --timestamp --identifier dev.rv.<name>`.
+  No entitlements: the production peer-trust path
+  (`ProtectedPeerTrustConfiguration`) refuses hardened code carrying
+  injection entitlements and matches `identifier` + Team ID. `rv-agent-bin`
+  symlinks and pack bundles are not code and are not signed.
+- Notarization: zip of the signed files → `xcrun notarytool submit --wait`
+  with the App Store Connect API key; anything but `Accepted` fetches the log
+  and fails. Bare Mach-O files cannot be stapled, so Gatekeeper looks the
+  ticket up online; `spctl -a -t open --context context:primary-signature`
+  is the assessment that works for a bare binary (`-t exec` answers "not an
+  app").
+- `--dry-run` runs anywhere (Linux CI included), needs no secrets, and prints
+  the exact commands with `<DEVELOPER_ID_APP>`-style placeholders. Real runs
+  check that every required variable is set (names only) before anything else.
+- `install.sh` (downloaded release on macOS) checks every downloaded Mach-O
+  before staging: a signature that is present must pass `codesign --verify
+  --strict`, carry `Authority=Developer ID Application`, match the pinned
+  Team ID (`release_team_id`, empty until the owner's first signed release),
+  and pass `spctl` as `Notarized Developer ID`; otherwise refuse and keep the
+  previous install. Unsigned builds only warn while `signed_releases=0`; the
+  owner flips it after the first signed release, after which unsigned needs
+  `RV_INSTALL_ALLOW_UNSIGNED=1`. `RV_INSTALL_BIN` (local stage) is not checked.
+
+- [x] `Scripts/sign-macos.sh` + `Scripts/release.sh` hook
+      (`RV_RELEASE_SIGN=1|dry-run`, validated before the build; unsigned
+      stays the default locally). `pr.yml` hook-grade stages with
+      `RV_RELEASE_SIGN=dry-run`. Tests: `ReleaseSigningScriptTests` (12)
+- [x] `.github/workflows/release.yml`: import the p12 into a temporary
       keychain from repo secrets, sign + notarize when secrets exist, dry run
-      otherwise
-- [ ] `install.sh`: on macOS verify `codesign --verify --strict` and
-      `spctl -a -t install`/`-t exec`; refuse a bad signature, warn on an
-      unsigned build unless `RV_INSTALL_ALLOW_UNSIGNED=1`
+      otherwise (`vars.RV_REQUIRE_SIGNED_RELEASE == '1'` makes missing secrets
+      fail); proofs run on the signed stage; macOS 15 smoke verifies the
+      signature when the gate signed. actionlint clean
+- [x] `install.sh`: signature verification described above; the download
+      path now also fetches `rv-pty-claim` when the release has it (it was
+      never downloaded, so contained PTY launches failed closed on a
+      downloaded install). Tests: 10 new `installSh_*` cases with
+      `codesign`/`spctl` shims (signed, unsigned warn, tampered, ad hoc,
+      foreign team, unnotarized, mixed, switch flipped ± allow, local stage
+      unchecked). `InstallScriptTests` now writes fixtures through
+      `writeExecutableScript` (closed inode): a parallel run hit ETXTBSY once
+- [ ] Owner L4 (macOS, after the secrets exist): push a `v*` tag (or run the
+      workflow) and confirm `Sign and notarize` says `Notarization accepted`,
+      the proofs pass on the hardened binaries, and `macos 15 smoke` runs
+      `Signature verifies on Sequoia`. Then set `signed_releases=1` and
+      `release_team_id="<TEAMID>"` in `install.sh`, set repo variable
+      `RV_REQUIRE_SIGNED_RELEASE=1`, and install once with
+      `curl -fsSL …/install.sh | sh` to see no warning
+- [ ] Owner, after the first signed release: Keychain items written by the
+      old ad hoc builds (`rv secrets`, `rv.approvals`) are tied to the old
+      signature; expect one "allow access" prompt per item, then
+      "Always Allow". Production peer trust uses
+      `requiredIdentifier` `dev.rv.<binary>` + the Team ID
 - [ ] Owner: Developer ID Application certificate (p12 + password), App Store
       Connect API key; repo secrets `DEVELOPER_ID_APP`, `MACOS_CERT_P12`,
       `MACOS_CERT_PASSWORD`, `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID`, `NOTARY_KEY_P8`
 
 ### 6.4 Test coverage on macOS CI
-- [ ] Findings: the `macos-26`/`macos-15` labels are valid and do get runners;
-      jobs wait in the queue for hours (run 38368220402: created 08:17, `macos
-      isolation (A-E)` started 12:03) because each PR run asks for 5 macOS jobs
-      and the account's macOS concurrency is small. Documented with options
-- [ ] D13 option A draft: `macos-peer-trust` job in `pr.yml`, off unless the
-      repo variable `RV_CI_PEER_TRUST` is `1` (one switch); installs dev peer
-      trust with the runner's passwordless sudo and runs the
-      TRANSITIONAL-PEER-AUTH suites through the pinned CLI
+- [x] Findings (documented, no workflow fix needed): the `macos-26`/`macos-15`
+      labels are valid and get runners. With an idle queue a macOS job starts
+      in ~10 s (pr run 38401908672, all jobs green). The multi-hour waits
+      (run 38368220402: created 08:17, `macos isolation (A-E)` started 12:03)
+      came from ~8 branches pushing within 10 minutes, each PR run asking for
+      5 macOS jobs against the account's small macOS concurrency.
+      `pr.yml` already cancels superseded runs per ref (`cancel-in-progress`).
+      Mitigation is operational: push phase branches one at a time, or mark
+      older PRs draft-without-push while a new one runs
+- [x] D13 option A draft: `macos-peer-trust` job in `pr.yml`, off unless the
+      repo variable `RV_CI_PEER_TRUST` is `1` (one switch,
+      `continue-on-error: true`); installs dev peer trust with the runner's
+      passwordless sudo, runs the 53 TRANSITIONAL-PEER-AUTH tests (gated by
+      `RV_PEER_TRUST_CI=1` in `Tests/*/PeerTrustCI.swift`; unset they stay
+      skipped exactly as before), then uninstalls trust in an always-run step.
+      **Unverified**: never run (the variable is unset; turning it on is part
+      of the D13 decision, an owner item)
 
 ### 6.5 Test hygiene
-- [ ] CI check that `~/.config/rv` is untouched by `swift test` (Linux job:
-      hash the tree before and after)
-- [ ] _blocked: impro-ref (`WorkspaceSessionSupervisor`)_: injected config dir
-      instead of `.production` in RVIsolation tests; detach every attached
-      image in a `defer`
+- [x] CI check that `~/.config/rv` is untouched by `swift test`: the Linux
+      job fingerprints the tree with `Scripts/config-dir-fingerprint.py`
+      (kind, mode, relative path, SHA-256 or link target per entry) before and
+      after and fails on any diff. Found and fixed one writer:
+      `ServiceRuntimeEvaluateTests.dispatchEvaluate_grantHonorsOnceForCwd`
+      wrote the real `blocks.jsonl`/`blocks.lock` (now an isolated home).
+      E2E: full `swift test` on Linux, 19 bundles green, `diff exit=0`
+- [ ] _blocked: impro-ref (`SeatbeltProfile`, `WorkspaceSessionSupervisor`)_:
+      `workspaces/` is the one known leak, so the check ignores it.
+      `IsolationApply.resolveSeatbeltFacts` calls `resolveProductiveWorkspace`
+      (SeatbeltProfile.swift) with the process HOME, creating
+      `~/.config/rv/workspaces/<slug>-<fnv1a>` from IsolationApplyTests,
+      IsolationApplyLandlockTests and RuntimeResourceAdversarialTests.
+      Fix: thread an injected config dir through both; then drop
+      `--ignore workspaces`. Same dependency: injected config dir instead of
+      `.production` in RVIsolation tests; detach every attached image in a
+      `defer`
 
 ### 6.6 Leftovers and crash watchdog
 - [ ] `rv doctor` line summarizing `rv workspace leftovers` (macOS; Linux says
