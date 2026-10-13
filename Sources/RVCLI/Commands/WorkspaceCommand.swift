@@ -13,7 +13,7 @@ struct Workspace: AsyncParsableCommand {
         subcommands: [
             WorkspaceStart.self, WorkspaceAttach.self, WorkspaceStatus.self, WorkspaceClose.self,
             WorkspaceRun.self, WorkspaceAgent.self, WorkspaceCustom.self,
-            WorkspaceTUI.self, WorkspaceAbandon.self,
+            WorkspaceTUI.self, WorkspaceAbandon.self, WorkspaceLeftoversCommand.self,
         ]
     )
 }
@@ -59,6 +59,17 @@ struct WorkspaceStatus: AsyncParsableCommand {
 
     func run() throws {
         try WorkspaceCommandRun.status(path.workspace)
+    }
+}
+
+struct WorkspaceLeftoversCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "leftovers",
+        abstract: "List workspaces left behind by a dead host, across all projects."
+    )
+
+    func run() throws {
+        try WorkspaceCommandRun.leftovers()
     }
 }
 
@@ -281,6 +292,88 @@ enum WorkspaceCommandRun {
         }
         #endif
     }
+
+    static func leftovers() throws {
+        #if !os(macOS)
+        throw ValidationError("contained workspace host is unavailable")
+        #else
+        let found = WorkspaceHosts.leftovers()
+        emit(leftoverReport(sessions: found, disk: WorkspaceHosts.diskLeftovers()))
+        #endif
+    }
+
+    #if os(macOS)
+    static func leftoverReport(sessions: [WorkspaceLeftover], disk: WorkspaceDiskLeftovers) -> String {
+        var lines: [String] = []
+        if sessions.isEmpty {
+            lines.append("no unfinished workspace sessions")
+        } else {
+            lines.append("unfinished workspace sessions: \(sessions.count)")
+            lines += sessions.map { "  " + leftoverLine($0) }
+            lines.append("  start the project to recover it, or `rv workspace abandon --workspace <path>` when blocked")
+        }
+        if disk.attachedKnown == false {
+            lines.append("attached workspace images: unknown (hdiutil info failed)")
+        } else {
+            let mounted = disk.stranded.filter { $0.mountPoint != nil }
+            let unmounted = disk.stranded.count - mounted.count
+            if disk.stranded.isEmpty {
+                lines.append("no stranded workspace images (\(disk.attachedCount) attached, all owned by live hosts)")
+            } else {
+                lines.append(
+                    "stranded workspace images: \(disk.stranded.count) of \(disk.attachedCount) attached"
+                        + " (\(mounted.count) mounted, \(unmounted) attached without a mount)"
+                )
+                let retainedPaths = Set(disk.retained.map(\.imagePath))
+                let retainedMounted = mounted.filter { retainedPaths.contains($0.imagePath) }
+                let detachableMounted = mounted.filter { retainedPaths.contains($0.imagePath) == false }
+                lines += retainedMounted.prefix(20).map { image in
+                    "  \(image.mountPoint ?? "-")  \(image.device ?? "-")"
+                }
+                if retainedMounted.count > 20 {
+                    lines.append("  … \(retainedMounted.count - 20) more mounted")
+                }
+                lines += detachableMounted.prefix(20).map { image in
+                    "  \(image.mountPoint ?? "-")  \(image.device ?? "-")"
+                }
+                if detachableMounted.count > 20 {
+                    lines.append("  … \(detachableMounted.count - 20) more mounted")
+                }
+                let detachable = disk.stranded.filter { retainedPaths.contains($0.imagePath) == false }
+                if detachable.isEmpty == false {
+                    if disk.retained.isEmpty {
+                        lines.append("  copy out anything you need, then `hdiutil detach <device>` for each")
+                    } else {
+                        let targets = detachable.prefix(20).map { image in
+                            "`hdiutil detach \(image.device ?? image.imagePath)`"
+                        }
+                        lines.append(
+                            "  copy out anything you need, then " + targets.joined(separator: " ")
+                        )
+                    }
+                }
+            }
+        }
+        if disk.detachedImageFiles.isEmpty == false {
+            lines.append("unattached workspace image files: \(disk.detachedImageFiles.count) in the temporary directory")
+            lines.append("  nothing has them attached; delete them while no workspace is starting, e.g.")
+            lines.append("  rm \(disk.detachedImageFiles.first ?? "")")
+        }
+        return lines.joined(separator: "\n")
+    }
+    #endif
+
+    #if os(macOS)
+    static func leftoverLine(_ leftover: WorkspaceLeftover) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return [
+            leftover.project,
+            text(leftover.attachment),
+            "last \(leftover.lastEvent) at \(formatter.string(from: leftover.recordedAt))",
+        ].joined(separator: "  ")
+    }
+    #endif
 
     static func close(_ raw: String?) throws {
         #if !os(macOS)

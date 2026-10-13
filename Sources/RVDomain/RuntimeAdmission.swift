@@ -244,6 +244,8 @@ public struct RuntimeAdmissionEvent: Sendable, Equatable, Codable {
     public var agentInstance: String?
     /// Agent Definition of the presented trusted context, when any.
     public var agentDefinition: String?
+    /// Unix seconds, stamped by the file writer so in-memory evidence stays comparable.
+    public var recordedAt: Double?
 
     public init(
         session: String?,
