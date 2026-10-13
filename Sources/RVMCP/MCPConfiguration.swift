@@ -65,13 +65,26 @@ extension MCPToolDecision {
 }
 
 public struct MCPSandboxPolicy: Sendable, Equatable {
+    public static let maximumHosts = 32
+
     public var network: Bool
     public var writable: [String]
+    /// Exact DNS names reached through a per-server allowlist proxy; the
+    /// cage itself can dial only that proxy.
+    public var hosts: [String]
 
-    public init(network: Bool = true, writable: [String] = []) {
+    public init(network: Bool = true, writable: [String] = [], hosts: [String] = []) {
         self.network = network
         self.writable = writable
+        self.hosts = hosts
     }
+}
+
+/// `strict`: tools no list names are denied, local servers need a sandbox,
+/// and a sandbox reaches the network only through `sandbox.hosts`.
+public enum MCPProfile: String, Sendable, Equatable {
+    case standard
+    case strict
 }
 
 public enum MCPRemoteTransport: String, Sendable, Equatable {
@@ -198,6 +211,7 @@ public struct MCPConfiguration: Sendable, Equatable {
     public var direct: [String]
     public var blocked: [String]
     public var toolMode: MCPToolMode = .direct
+    public var profile: MCPProfile = .standard
     /// Organization restrictions layered over this file; never encoded.
     public var managed: ManagedPolicy?
     /// The file was not written or trusted through rv; never encoded. Its
@@ -223,7 +237,9 @@ public struct MCPConfiguration: Sendable, Equatable {
     /// The stricter of the user's rules and the organization's. Without
     /// arguments (a listing), argument rules do not apply.
     public func decision(server: MCPServerDefinition, tool: String, arguments: JSONValue? = nil) -> MCPToolDecision {
-        var user = server.tools.decision(for: tool, arguments: arguments, fallback: defaultDecision)
+        var tools = server.tools
+        if profile == .strict { tools.defaultDecision = .deny }
+        var user = tools.decision(for: tool, arguments: arguments, fallback: profile == .strict ? .deny : defaultDecision)
         if untrusted, user == .allow { user = .ask }
         guard let organization = organizationDecision(server: server.name, tool: tool, arguments: arguments) else {
             return user
@@ -297,6 +313,7 @@ public struct MCPConfiguration: Sendable, Equatable {
         root["version"] = .int(1)
         root["defaultDecision"] = .string(defaultDecision.rawValue)
         if toolMode != .direct { root["toolMode"] = .string(toolMode.rawValue) }
+        if profile != .standard { root["profile"] = .string(profile.rawValue) }
         root["servers"] = .array(servers.map(Self.encode))
         if direct.isEmpty == false { root["direct"] = .array(direct.map(JSONValue.string)) }
         if blocked.isEmpty == false { root["blocked"] = .array(blocked.map(JSONValue.string)) }
@@ -331,6 +348,7 @@ public struct MCPConfiguration: Sendable, Equatable {
             var value = JSONObject()
             value["network"] = .bool(sandbox.network)
             if sandbox.writable.isEmpty == false { value["writable"] = .array(sandbox.writable.map(JSONValue.string)) }
+            if sandbox.hosts.isEmpty == false { value["hosts"] = .array(sandbox.hosts.map(JSONValue.string)) }
             object["sandbox"] = .object(value)
         }
         return .object(object)
@@ -346,7 +364,7 @@ public struct MCPConfiguration: Sendable, Equatable {
 enum MCPConfigurationDecoding {
     static func configuration(_ root: JSONValue) throws -> MCPConfiguration {
         let object = try objectValue(root, "top level")
-        try allowOnly(object, ["version", "defaultDecision", "toolMode", "servers", "direct", "blocked"], "top level")
+        try allowOnly(object, ["version", "defaultDecision", "toolMode", "profile", "servers", "direct", "blocked"], "top level")
         guard object["version"]?.intValue == 1 else { throw MCPConfigurationError.invalid("version must be 1") }
         var configuration = MCPConfiguration()
         if let raw = object["defaultDecision"] {
@@ -357,6 +375,12 @@ enum MCPConfigurationDecoding {
                 throw MCPConfigurationError.invalid(#"toolMode must be "direct" or "search""#)
             }
             configuration.toolMode = mode
+        }
+        if let raw = object["profile"] {
+            guard let profile = raw.stringValue.flatMap(MCPProfile.init(rawValue:)) else {
+                throw MCPConfigurationError.invalid(#"profile must be "standard" or "strict""#)
+            }
+            configuration.profile = profile
         }
         let servers = try object["servers"].map { value -> [JSONValue] in
             guard let items = value.arrayValue else { throw MCPConfigurationError.invalid("servers must be an array") }
@@ -522,7 +546,7 @@ enum MCPConfigurationDecoding {
 
     private static func sandbox(_ value: JSONValue, _ context: String) throws -> MCPSandboxPolicy {
         let object = try objectValue(value, "\(context) sandbox")
-        try allowOnly(object, ["network", "writable"], "\(context) sandbox")
+        try allowOnly(object, ["network", "writable", "hosts"], "\(context) sandbox")
         var policy = MCPSandboxPolicy()
         if let raw = object["network"] {
             guard let flag = raw.boolValue else { throw MCPConfigurationError.invalid("\(context) sandbox.network must be true or false") }
@@ -536,7 +560,37 @@ enum MCPConfigurationDecoding {
             }
             policy.writable = paths
         }
+        if let raw = object["hosts"] {
+            guard let hosts = raw.stringArray else {
+                throw MCPConfigurationError.invalid("\(context) sandbox.hosts must be an array of host names")
+            }
+            guard hosts.count <= MCPSandboxPolicy.maximumHosts else {
+                throw MCPConfigurationError.invalid("\(context) sandbox.hosts has more than \(MCPSandboxPolicy.maximumHosts) hosts")
+            }
+            for host in hosts where isHostName(host.lowercased()) == false {
+                throw MCPConfigurationError.invalid(
+                    "\(context) sandbox.hosts: \(host) is not a host name (exact DNS names; no scheme, port, wildcard or IP)")
+            }
+            if hosts.isEmpty == false {
+                if object["network"]?.boolValue == true {
+                    throw MCPConfigurationError.invalid("\(context) sandbox.hosts already limits the network; drop network: true")
+                }
+                policy.network = false
+            }
+            var seen = Set<String>()
+            policy.hosts = hosts.map { $0.lowercased() }.filter { seen.insert($0).inserted }
+        }
         return policy
+    }
+
+    /// Two or more LDH labels, the last not numeric: no IPs, no `localhost`.
+    static func isHostName(_ name: String) -> Bool {
+        let labels = name.split(separator: ".", omittingEmptySubsequences: false)
+        guard name.utf8.count <= 253, labels.count >= 2, labels.last?.allSatisfy(\.isNumber) == false else { return false }
+        return labels.allSatisfy { label in
+            (1...63).contains(label.count) && label.first != "-" && label.last != "-"
+                && label.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
+        }
     }
 
     private static func decision(_ value: JSONValue, _ context: String) throws -> MCPToolDecision {

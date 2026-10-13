@@ -466,7 +466,14 @@ enum HelpCatalog {
                 HelpRow(name: "ask", description: "Approved in the host's prompt, or `rv mcp approve`; one identical call"),
                 HelpRow(name: "approve", description: "Needs you present: Touch ID/password, or the code `rv mcp serve` printed"),
                 HelpRow(name: "secrets", description: "\"secrets\": {\"VAR\": \"NAME\"} or ${secret:NAME} in args; values scrubbed"),
-                HelpRow(name: "sandbox", description: "\"sandbox\": {\"network\": false} cages the server (macOS)"),
+                HelpRow(
+                    name: "sandbox",
+                    description: "\"sandbox\" cages the server (macOS); \"hosts\" allows those names on port 443 through a proxy"
+                ),
+                HelpRow(
+                    name: "profile",
+                    description: "\"strict\": unlisted tools deny, local servers need a sandbox, network only via sandbox.hosts"
+                ),
                 HelpRow(name: "toolMode", description: "\"search\" lists only rv_search_tools and rv_call_tool; same policy per call"),
                 HelpRow(name: "remote", description: "\"url\": https://… (\"transport\": http|sse, \"headers\" with ${secret:NAME}); no sandbox"),
                 HelpRow(name: "oauth", description: "`rv mcp connect <server>` signs in once; rv stores, sends and refreshes the token"),

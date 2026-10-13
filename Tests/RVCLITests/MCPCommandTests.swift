@@ -217,6 +217,18 @@ struct MCPCommandTests {
         var searching = try MCPRun.configuration(environment).get()
         searching.toolMode = .search
         #expect(MCPRun.trustReview(searching).contains("tool mode search: clients see only rv_search_tools and rv_call_tool"))
+
+        var strict = MCPConfiguration(defaultDecision: .allow, servers: [
+            MCPServerDefinition(
+                name: "gh", command: "gh-mcp", tools: MCPToolPolicy(defaultDecision: .allow, allow: ["get_*"]),
+                sandbox: MCPSandboxPolicy(network: false, hosts: ["api.github.com"])),
+            MCPServerDefinition(name: "calc", command: "calc", sandbox: MCPSandboxPolicy(network: false)),
+        ])
+        strict.profile = .strict
+        let review = MCPRun.trustReview(strict)
+        #expect(review.hasPrefix("mcp.json: default deny for tools without a rule\n  profile strict: unlisted tools deny"), "\(review)")
+        #expect(review.contains("allow get_* · other tools deny · network only to api.github.com"), "\(review)")
+        #expect(review.contains(" · no network"), "\(review)")
     }
 
     @Test func trustReviewShowsRemoteOriginsAndHeaderNamesButNoValues() throws {

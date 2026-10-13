@@ -97,8 +97,8 @@ for line in sys.stdin:
 
 
 class Gateway:
-    def __init__(self, elicitation=False, env=None):
-        self.p = subprocess.Popen([RV, "mcp", "serve"], env=env or ENV, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    def __init__(self, elicitation=False, env=None, args=None):
+        self.p = subprocess.Popen([RV, "mcp", "serve", *(args or [])], env=env or ENV, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=open(f"{ROOT}/serve-{time.time_ns()}.err", "w+"), text=True, bufsize=1)
         caps = {"elicitation": {}} if elicitation else {}
         self.send({"jsonrpc": "2.0", "id": 0, "method": "initialize",
@@ -370,6 +370,44 @@ step("7.1 --forget deletes the tokens", r.returncode == 0 and "deleted the OAuth
 r = rv("mcp", "connect", "nope")
 step("7.1 connect refuses an unknown server", r.returncode != 0 and "mcp.json has no server named nope" in r.stderr, r.stderr.strip())
 ofx.kill()
+
+# 7.4 strict profile: unlisted tools deny; local servers need a sandbox; open network is refused
+fx4, port4, _ = remote_fixture()
+base4 = f"http://127.0.0.1:{port4}"
+out = write_and_trust({"version": 1, "profile": "strict", "defaultDecision": "allow", "servers": [
+    {"name": "web", "url": f"{base4}/mcp", "tools": {"allow": ["echo"], "ask": ["whoami"]}},
+    {"name": "open", "command": "/usr/bin/python3", "args": ["-u", FIXTURE], "sandbox": {"network": True}},
+    {"name": "proxied", "command": "/usr/bin/python3", "args": ["-u", FIXTURE], "sandbox": {"hosts": ["api.example.com"]}},
+    {"name": "bare", "command": "/usr/bin/python3", "args": ["-u", FIXTURE]},
+]}, "7.4 strict")
+step("7.4 trust review names the profile, the denials and the allowlist",
+     out.startswith("mcp.json: default deny") and "profile strict: unlisted tools deny" in out
+     and "network only to api.example.com" in out and "no network" not in out.split("proxied")[0])
+g = Gateway(args=["--server", "web"])
+step("7.4 strict hides tools no list names", sorted(t["name"] for t in g.tools) == ["echo", "whoami"],
+     ", ".join(t["name"] for t in g.tools))
+reply = g.call(40, "echo", {"text": "strict-ok"})
+step("7.4 an allowed tool runs", text_of(reply) == "strict-ok", text_of(reply))
+reply = g.call(41, "whoami", {})
+step("7.4 an ask tool still asks", "rv paused this call: web tool whoami" in text_of(reply), text_of(reply)[:60])
+reply = g.call(42, "delete_all", {})
+step("7.4 an unlisted tool is denied", "rv policy denies web tool delete_all" in text_of(reply), text_of(reply)[:70])
+g.close()
+r = rv("mcp", "serve", "--server", "bare")
+step("7.4 a local server without a sandbox is refused", r.returncode != 0 and "profile strict requires a sandbox for bare" in r.stderr,
+     r.stderr.strip()[:140])
+r = rv("mcp", "serve", "--server", "open")
+step("7.4 open network is refused", r.returncode != 0 and "keeps open off the network" in r.stderr, r.stderr.strip()[:140])
+if sys.platform == "darwin":
+    g = Gateway(args=["--server", "proxied"])
+    reply = g.call(43, "echo", {"text": "caged"})
+    step("7.4 a hosts sandbox launches on macOS", text_of(reply) == "caged", text_of(reply))
+    g.close()
+else:
+    r = rv("mcp", "serve", "--server", "proxied")
+    step("7.4 sandbox.hosts is refused on Linux (the cage is macOS)", r.returncode != 0 and "only on macOS" in r.stderr,
+         r.stderr.strip()[:140])
+fx4.kill()
 
 failed = [n for n, ok in STEPS if not ok]
 print(f"\n{len(STEPS) - len(failed)}/{len(STEPS)} passed")

@@ -4,6 +4,9 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVDomain
+import RVIsolation
+import Synchronization
 
 /// Seatbelt cage for upstream MCP servers that set `sandbox` in mcp.json.
 /// Allow-default (so npx/uvx/node work) with writes confined to a scratch
@@ -22,9 +25,13 @@ public enum MCPSandbox {
         "~/Library/Application Support/Claude", "~/.netrc", "~/.npmrc", "~/.pypirc",
     ]
 
+    /// Allowlist proxies for `sandbox.hosts`; they live as long as `rv mcp serve`.
+    static let proxies = Mutex<[EgressProxy]>([])
+
     /// The planner hook `rv mcp serve` passes to `MCPLaunchPlanner.plan`.
+    /// `denied` hears each CONNECT a `sandbox.hosts` proxy refuses.
     public static func apply(
-        configDirectory: URL, home: URL
+        configDirectory: URL, home: URL, denied: @escaping @Sendable (String, EgressProxyDenial) -> Void = { _, _ in }
     ) -> (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
         { definition, launch in
             guard let policy = definition.sandbox else { return .success(launch) }
@@ -36,10 +43,24 @@ public enum MCPSandbox {
             } catch {
                 return .failure(.sandbox("could not create \(scratch.path)"))
             }
+            var environment = launch.environment
+            var proxyPort: Int?
+            if policy.hosts.isEmpty == false {
+                let server = definition.name
+                let proxy = EgressProxy(
+                    policy: EgressHostPolicy(allowedHosts: Set(policy.hosts)), record: { denied(server, $0) })
+                guard case .success(let port) = proxy.start() else {
+                    return .failure(.sandbox("could not start the egress proxy for \(server)"))
+                }
+                proxies.withLock { $0.append(proxy) }
+                proxyPort = port
+                environment = proxyEnvironment(environment, port: port)
+            }
             let profile = profile(
                 policy: policy, scratch: scratch.path, home: home.path, configDirectory: configDirectory.path,
-                temporaryDirectory: launch.environment["TMPDIR"] ?? NSTemporaryDirectory())
+                temporaryDirectory: launch.environment["TMPDIR"] ?? NSTemporaryDirectory(), proxyPort: proxyPort)
             var caged = launch
+            caged.environment = environment
             caged.executable = sandboxExec
             caged.arguments = ["-p", profile, launch.executable] + launch.arguments
             caged.workingDirectory = scratch.path
@@ -50,8 +71,23 @@ public enum MCPSandbox {
         }
     }
 
+    /// Points HTTP clients at the proxy; Node's fetch needs `NODE_USE_ENV_PROXY`.
+    public static func proxyEnvironment(_ base: [String: String], port: Int) -> [String: String] {
+        var environment = base
+        let url = "http://127.0.0.1:\(port)"
+        for key in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
+            environment[key] = url
+            environment[key.lowercased()] = url
+        }
+        environment["NODE_USE_ENV_PROXY"] = "1"
+        environment["NO_PROXY"] = nil
+        environment["no_proxy"] = nil
+        return environment
+    }
+
     public static func profile(
-        policy: MCPSandboxPolicy, scratch: String, home: String, configDirectory: String, temporaryDirectory: String
+        policy: MCPSandboxPolicy, scratch: String, home: String, configDirectory: String, temporaryDirectory: String,
+        proxyPort: Int? = nil
     ) -> String {
         func expand(_ path: String) -> String {
             path.hasPrefix("~/") ? home + path.dropFirst(1) : path
@@ -68,6 +104,7 @@ public enum MCPSandbox {
         ]
         if policy.network == false {
             lines.append("(deny network*)")
+            if let proxyPort { lines.append("(allow network-outbound (remote tcp \"localhost:\(proxyPort)\"))") }
         }
         return lines.joined(separator: "\n")
     }

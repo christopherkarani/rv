@@ -78,6 +78,14 @@ public enum MCPLaunchPlanner {
                 planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: scrubbed), .remote(launch)))
                 continue
             }
+            if configuration.profile == .strict {
+                guard let policy = definition.sandbox else {
+                    return .failure(.sandbox("profile strict requires a sandbox for \(name); add \"sandbox\" to its mcp.json entry"))
+                }
+                if policy.network {
+                    return .failure(.sandbox("profile strict keeps \(name) off the network; list the hosts it needs in sandbox.hosts"))
+                }
+            }
             if configuration.managed?.mcp.requireSandbox == true, definition.sandbox == nil {
                 return .failure(.sandbox("organization policy requires a sandbox for \(name); add \"sandbox\" to its mcp.json entry"))
             }

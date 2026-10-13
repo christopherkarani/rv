@@ -368,7 +368,11 @@ enum MCPRun {
     }
 
     static func trustReview(_ configuration: MCPConfiguration) -> String {
-        var lines = ["mcp.json: default \(configuration.defaultDecision.rawValue) for tools without a rule"]
+        let strict = configuration.profile == .strict
+        var lines = ["mcp.json: default \(strict ? "deny" : configuration.defaultDecision.rawValue) for tools without a rule"]
+        if strict {
+            lines.append("  profile strict: unlisted tools deny; local servers need a sandbox; network only through sandbox.hosts")
+        }
         if configuration.toolMode == .search {
             lines.append("  tool mode search: clients see only rv_search_tools and rv_call_tool")
         }
@@ -393,8 +397,20 @@ enum MCPRun {
             if tools.ask.isEmpty == false { rules.append("ask " + capped(tools.ask)) }
             if tools.deny.isEmpty == false { rules.append("deny " + capped(tools.deny)) }
             for ruled in tools.rules { rules.append("\(ruled.decision.rawValue) \(ruled.rule.summary)") }
-            if let fallback = tools.defaultDecision { rules.append("other tools \(fallback.rawValue)") }
-            if server.sandbox == nil, server.remote == nil { rules.append("no sandbox") }
+            if strict {
+                rules.append("other tools deny")
+            } else if let fallback = tools.defaultDecision {
+                rules.append("other tools \(fallback.rawValue)")
+            }
+            if let sandbox = server.sandbox {
+                if sandbox.hosts.isEmpty == false {
+                    rules.append("network only to " + capped(sandbox.hosts))
+                } else if sandbox.network == false {
+                    rules.append("no network")
+                }
+            } else if server.remote == nil {
+                rules.append("no sandbox")
+            }
             if rules.isEmpty == false { lines.append("    " + rules.joined(separator: " · ")) }
         }
         if configuration.direct.isEmpty == false { lines.append("  direct: " + configuration.direct.joined(separator: ", ")) }
@@ -736,7 +752,15 @@ struct MCPServe: AsyncParsableCommand {
             servers: names, configuration: configuration, secrets: secrets,
             resolver: .live(home: home.rawValue), baseEnvironment: environment.processEnvironment,
             oauthTokens: environment.oauthTokens.load,
-            sandbox: MCPSandbox.apply(configDirectory: environment.configDirectory, home: environment.home))
+            sandbox: MCPSandbox.apply(
+                configDirectory: environment.configDirectory, home: environment.home,
+                denied: { [configDirectory = environment.configDirectory] server, denial in
+                    _ = AuditLog.append(
+                        AuditEvent(
+                            time: denial.recordedAt, kind: .egressDenied, decision: .denied, subject: "\(denial.host):\(denial.port)",
+                            reason: denial.reason.rawValue, source: "rv mcp serve", detail: ["server": server]),
+                        configDirectory: configDirectory)
+                }))
         {
         case .failure(let error): try fail(error.message)
         case .success(let result): planned = result
