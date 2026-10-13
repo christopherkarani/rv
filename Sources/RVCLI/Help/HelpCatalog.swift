@@ -373,6 +373,8 @@ enum HelpCatalog {
                 HelpRow(name: "rv audit [tail] [-n <count>] [--since <duration>] [--kind <kind>]... [--json]"),
                 HelpRow(name: "rv audit export [--since <duration>] [--kind <kind>]... [--format rv|ocsf]"),
                 HelpRow(name: "rv audit forward [--to <url>] [--header NAME=VALUE]... [--format ocsf|rv] [--from-now]"),
+                HelpRow(name: "rv audit forward --install [--to <url>] [--header NAME=${secret:X}]..."),
+                HelpRow(name: "rv audit verify [--json]"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "-n, --limit", description: "Newest events to show (default 50)"),
@@ -388,6 +390,10 @@ enum HelpCatalog {
                 HelpRow(name: "export", description: "JSON Lines, oldest first, for SIEM ingest (OCSF 1.3.0 with --format ocsf)"),
                 HelpRow(name: "forward", description: "POSTs new events in batches; cursor advances only on 2xx (at-least-once)"),
                 HelpRow(name: "forward --to", description: "https, or http to localhost; default is the org policy audit.forward"),
+                HelpRow(name: "--install", description: "macOS LaunchAgent every 5 min; prints a LaunchDaemon template for root"),
+                HelpRow(name: "chain", description: "Each audit.jsonl line holds prev, the SHA-256 of the line before it"),
+                HelpRow(name: "verify", description: "Finds edits, deletions, and reordering; exit 1 at the first break"),
+                HelpRow(name: "head", description: "Forwarded events carry rv_chain_head, so cutting the end shows up in the SIEM"),
             ]),
         ],
         examples: [
@@ -395,6 +401,8 @@ enum HelpCatalog {
             "rv audit --kind egress --since 24h",
             "rv audit export --since 7d > rv-audit.jsonl",
             "rv audit forward --to https://siem.example.com/rv --header 'Authorization=Bearer ${secret:SIEM_TOKEN}'",
+            "rv audit forward --install",
+            "rv audit verify",
         ]
     )
 

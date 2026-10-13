@@ -228,6 +228,18 @@ struct AuditForward: AsyncParsableCommand {
     @Option(help: "Payload: ocsf or rv.") var format: AuditForwardRun.Format = .ocsf
     @Option(help: "Events per POST (1-5000).") var batchSize = 500
     @Flag(help: "Start from the current end of the audit trail instead of sending history.") var fromNow = false
+    @Flag(help: "Write a user LaunchAgent that runs this forward every 5 minutes, and print a LaunchDaemon template.")
+    var install = false
+
+    /// These options again, for the scheduled run.
+    var scheduledArguments: [String] {
+        var arguments: [String] = []
+        if let to { arguments += ["--to", to] }
+        for header in headers { arguments += ["--header", header] }
+        if format != .ocsf { arguments += ["--format", format.rawValue] }
+        if batchSize != 500 { arguments += ["--batch-size", String(batchSize)] }
+        return arguments
+    }
 
     func run() throws {
         let ctx = CommandContext.current(command: "audit forward", json: false, robot: false, plain: true, noColor: true)
@@ -252,6 +264,25 @@ struct AuditForward: AsyncParsableCommand {
         case .success(let parsed): url = parsed
         }
         var options = AuditForwardRun.Options(url: url, format: format, batchSize: batchSize)
+        if install {
+            if fromNow { try ctx.fail("rv audit forward: --install and --from-now cannot be combined; run --from-now once first\n") }
+            let plan = AuditForwardInstall.Plan(
+                home: URL(fileURLWithPath: home.rawValue, isDirectory: true), rvExecutable: MCPExecutable.currentPath(),
+                userID: getuid(), userName: ProcessInfo.processInfo.environment["USER"] ?? NSUserName(),
+                forwardArguments: scheduledArguments)
+            #if os(macOS)
+            switch AuditForwardInstall.install(plan) {
+            case .failure(let failure): try ctx.fail("rv audit forward: \(failure.message)\n")
+            case .success(let text): ctx.writeStdout(text)
+            }
+            return
+            #else
+            if let header = AuditForwardInstall.plaintextHeader(plan.forwardArguments) {
+                try ctx.fail("rv audit forward: header \(header) must use ${secret:NAME} in a scheduled command\n")
+            }
+            try ctx.fail("rv audit forward: " + AuditForwardInstall.cronHint(plan))
+            #endif
+        }
         if fromNow {
             switch AuditForwardRun.startFromNow(options: options, configDirectory: configDirectory) {
             case .failure(let failure): try ctx.fail("rv audit forward: \(failure.message)\n")

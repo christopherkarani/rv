@@ -62,6 +62,9 @@ struct AuditForwardTests {
         #expect(receiver.bodies.map(\.count) == [2, 2, 1])
         let firstEvent = receiver.bodies.first?.first as? [String: Any]
         #expect(firstEvent?["class_uid"] as? Int == 6003)
+        let lastUnmapped = (receiver.bodies.last?.last as? [String: Any])?["unmapped"] as? [String: Any]
+        #expect(lastUnmapped?["rv_chain_head"] as? String
+            == AuditChain.head(fileURL: AuditLog.fileURL(configDirectory: config.directory)))
 
         #expect(try AuditForwardRun.forward(
             options: options(), configDirectory: config.directory, hostName: "h", transport: receiver.transport
@@ -271,3 +274,67 @@ private final class RedirectSink: @unchecked Sendable {
 }
 
 private struct RedirectSinkError: Error {}
+
+@Suite("rv audit forward --install")
+struct AuditForwardInstallTests {
+    final class Home {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rv-install-\(UUID().uuidString)")
+        deinit { try? FileManager.default.removeItem(at: url) }
+    }
+
+    private func plan(_ arguments: [String] = [], home: Home) -> AuditForwardInstall.Plan {
+        AuditForwardInstall.Plan(
+            home: home.url, rvExecutable: "/usr/local/bin/rv", userID: 501, userName: "alice", forwardArguments: arguments)
+    }
+
+    private func plist(_ data: Data) throws -> [String: Any] {
+        try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+    }
+
+    @Test func writesAUserAgentEveryFiveMinutesAndPrintsTheDaemonTemplate() throws {
+        let home = Home()
+        let plan = plan(["--to", "https://siem.example.com/rv", "--header", "Authorization=Bearer ${secret:SIEM}"], home: home)
+        let text = try AuditForwardInstall.install(plan).get()
+
+        let agentURL = home.url.appendingPathComponent("Library/LaunchAgents/dev.rv.audit-forward.plist")
+        let agent = try plist(try Data(contentsOf: agentURL))
+        #expect(agent["Label"] as? String == "dev.rv.audit-forward")
+        #expect(agent["StartInterval"] as? Int == 300)
+        #expect(agent["RunAtLoad"] as? Bool == true)
+        #expect(agent["ProgramArguments"] as? [String] == [
+            "/usr/local/bin/rv", "audit", "forward", "--to", "https://siem.example.com/rv",
+            "--header", "Authorization=Bearer ${secret:SIEM}",
+        ])
+        #expect(agent["StandardErrorPath"] as? String == home.url.path + "/.config/rv/audit-forward/launchd.log")
+        var info = stat()
+        #expect(stat(agentURL.path, &info) == 0 && info.st_mode & 0o022 == 0)
+
+        #expect(text.contains("wrote \(agentURL.path)"))
+        #expect(text.contains("launchctl bootstrap gui/501 \(agentURL.path)"))
+        #expect(text.contains("<key>UserName</key>\n\t<string>alice</string>"))
+        #expect(text.contains("sudo launchctl bootstrap system /Library/LaunchDaemons/dev.rv.audit-forward.alice.plist"))
+
+        let daemon = try plist(AuditForwardInstall.daemonPlist(plan))
+        #expect(daemon["Label"] as? String == "dev.rv.audit-forward.alice")
+        #expect(daemon["UserName"] as? String == "alice")
+        #expect((daemon["EnvironmentVariables"] as? [String: String])?["HOME"] == home.url.path)
+        #expect(daemon["ProgramArguments"] as? [String] == agent["ProgramArguments"] as? [String])
+    }
+
+    @Test func refusesPlaintextHeadersSoThePlistHoldsNoCredential() {
+        let home = Home()
+        let result = AuditForwardInstall.install(plan(["--header", "Authorization=Bearer abc123"], home: home))
+        guard case .failure(let failure) = result else {
+            Issue.record("a plaintext header must be refused")
+            return
+        }
+        #expect(failure.message.contains("${secret:NAME}"))
+        #expect(failure.message.contains("abc123") == false)
+        #expect(FileManager.default.fileExists(atPath: home.url.appendingPathComponent("Library").path) == false)
+    }
+
+    @Test func linuxGetsACronLineInsteadOfAnInstall() {
+        let text = AuditForwardInstall.cronHint(plan(["--to", "https://siem.example.com/rv"], home: Home()))
+        #expect(text.contains("*/5 * * * * '/usr/local/bin/rv' 'audit' 'forward' '--to' 'https://siem.example.com/rv'"))
+    }
+}
