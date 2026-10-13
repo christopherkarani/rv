@@ -69,8 +69,13 @@ proxying model traffic, replacing the SIEM.
   bundles, version skew.
 
 ### Approval routing
-Today an `ask` call creates a local pending request that the same user
-approves with `rv mcp approve`. For enterprise:
+Today an `ask` call is approved in the MCP client's own prompt (elicitation)
+or by the user with `rv mcp approve`, which needs Touch ID / the login
+password or the code `rv mcp serve` printed. Grants and mcp.json are signed
+with a per-user key, so editing the files approves nothing. That is local
+assurance only: a process running as the user, outside the cage, can still
+delete or replace `~/.config/rv` and can read the gateway's stderr in host
+logs. For enterprise:
 
 - Policy gains `"approvals": {"route": "https://<cp>/v1/approvals", "localApproval": false}`.
 - `rv mcp serve` posts `{id, device, user, server, tool, argumentKeys,
