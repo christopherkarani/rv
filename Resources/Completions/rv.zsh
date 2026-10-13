@@ -71,6 +71,11 @@ _rv() {
           op=('propose:Propose one identity launch' 'proposal-status:Poll one proposal status')
           _describe -t commands 'operator' op
           ;;
+        secrets)
+          local -a se
+          se=('list:List secrets' 'check:Resolve and fingerprint' 'set:Store a value' 'remove:Delete' 'scan:Scan a tree' 'describe:Metadata only' 'import:Import a Varlock schema' 'hook:Git pre-commit hook')
+          _describe -t commands 'secrets' se
+          ;;
       esac
       ;;
   esac

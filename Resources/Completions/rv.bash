@@ -30,6 +30,9 @@ _rv() {
     operator)
       COMPREPLY=( $(compgen -W "propose proposal-status" -- "$cur") )
       ;;
+    secrets)
+      COMPREPLY=( $(compgen -W "list check set remove scan describe import hook" -- "$cur") )
+      ;;
   esac
 }
 complete -F _rv rv

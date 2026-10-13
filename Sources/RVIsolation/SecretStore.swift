@@ -19,6 +19,13 @@ extension SecretSource {
             "vault \(address.map { "\($0.host ?? "")/" } ?? "")\(path)#\(field)"
         case .awsSecretsManager(let secretID, let field, let region):
             "aws \(region.map { "\($0):" } ?? "")\(secretID)\(field.map { "#\($0)" } ?? "")"
+        case .infisical(let name, let project, let environment, let path):
+            "infisical \(project.map { "\($0)/" } ?? "")\(environment.map { "\($0):" } ?? "")\(name)\(path.map { " \($0)" } ?? "")"
+        case .bitwarden(let id): "bitwarden \(id)"
+        case .gcp(let secret, let project, let version):
+            "gcp \(project.map { "\($0)/" } ?? "")\(secret)@\(version)"
+        case .azure(let vault, let name, let version):
+            "azure \(vault)/\(name)\(version.map { "@\($0)" } ?? "")"
         }
     }
 }
@@ -98,6 +105,7 @@ extension SecretsConfiguration {
         let entries: [[String: Any]] = secrets.map { secret in
             var entry: [String: Any] = ["name": secret.name]
             if let description = secret.description { entry["description"] = description }
+            if let type = secret.type { entry["type"] = type }
             if let agents = secret.agents { entry["agents"] = agents }
             switch secret.source {
             case .keychain(let service, let account):
@@ -115,6 +123,22 @@ extension SecretsConfiguration {
                 if let field { fields["field"] = field }
                 if let region { fields["region"] = region }
                 entry["source"] = ["awsSecretsManager": fields]
+            case .infisical(let name, let project, let environment, let path):
+                var fields: [String: Any] = ["name": name]
+                if let project { fields["project"] = project }
+                if let environment { fields["environment"] = environment }
+                if let path { fields["path"] = path }
+                entry["source"] = ["infisical": fields]
+            case .bitwarden(let id):
+                entry["source"] = ["bitwarden": ["id": id]]
+            case .gcp(let secret, let project, let version):
+                var fields: [String: Any] = ["secret": secret, "version": version]
+                if let project { fields["project"] = project }
+                entry["source"] = ["gcp": fields]
+            case .azure(let vault, let name, let version):
+                var fields: [String: Any] = ["vault": vault, "name": name]
+                if let version { fields["version"] = version }
+                entry["source"] = ["azure": fields]
             }
             switch secret.delivery {
             case .environment:

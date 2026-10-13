@@ -86,6 +86,15 @@ public struct SecretResolver: Sendable {
             case .awsSecretsManager(let secretID, let field, let region):
                 return SecretCommandProviders.aws(
                     secretID: secretID, field: field, region: region, environment: environment)
+            case .infisical(let name, let project, let environmentName, let path):
+                return SecretCommandProviders.infisical(
+                    name: name, project: project, environmentName: environmentName, path: path, environment: environment)
+            case .bitwarden(let id):
+                return SecretCommandProviders.bitwarden(id: id, environment: environment)
+            case .gcp(let secret, let project, let version):
+                return SecretCommandProviders.gcp(secret: secret, project: project, version: version, environment: environment)
+            case .azure(let vault, let name, let version):
+                return SecretCommandProviders.azure(vault: vault, name: name, version: version, environment: environment)
             }
         }
     }
@@ -142,6 +151,76 @@ enum SecretCommandProviders {
             let picked = object[field] as? String
         else { return .failure(.notFound("field \(field) in \(secretID)")) }
         return SecretResolver.value(Array(picked.utf8), from: "\(secretID).\(field)")
+    }
+
+    static func infisical(
+        name: String, project: String?, environmentName: String?, path: String?, environment: [String: String]
+    ) -> Result<SecretValue, SecretResolutionError> {
+        guard let binary = executable("infisical", environment: environment) else {
+            return .failure(.providerUnavailable("Infisical CLI `infisical` is not installed"))
+        }
+        var arguments = ["secrets", "get", name, "--plain", "--silent"]
+        if let project { arguments += ["--projectId", project] }
+        if let environmentName { arguments += ["--env", environmentName] }
+        if let path { arguments += ["--path", path] }
+        return command(binary, arguments, environment: environment, label: "infisical \(name)") { $0 }
+    }
+
+    static func bitwarden(id: String, environment: [String: String]) -> Result<SecretValue, SecretResolutionError> {
+        guard let binary = executable("bws", environment: environment) else {
+            return .failure(.providerUnavailable("Bitwarden Secrets Manager CLI `bws` is not installed"))
+        }
+        return command(binary, ["secret", "get", id], environment: environment, label: "bws \(id)") { stdout in
+            guard let object = try? JSONSerialization.jsonObject(with: Data(stdout)) as? [String: Any],
+                let value = object["value"] as? String
+            else { return nil }
+            return Array(value.utf8)
+        }
+    }
+
+    static func gcp(
+        secret: String, project: String?, version: String, environment: [String: String]
+    ) -> Result<SecretValue, SecretResolutionError> {
+        guard let binary = executable("gcloud", environment: environment) else {
+            return .failure(.providerUnavailable("Google Cloud CLI `gcloud` is not installed"))
+        }
+        var arguments = ["secrets", "versions", "access", version, "--secret", secret]
+        if let project { arguments += ["--project", project] }
+        return command(binary, arguments, environment: environment, label: "gcloud \(secret)") { $0 }
+    }
+
+    static func azure(
+        vault: String, name: String, version: String?, environment: [String: String]
+    ) -> Result<SecretValue, SecretResolutionError> {
+        guard let binary = executable("az", environment: environment) else {
+            return .failure(.providerUnavailable("Azure CLI `az` is not installed"))
+        }
+        var arguments = [
+            "keyvault", "secret", "show", "--vault-name", vault, "--name", name, "--query", "value", "-o", "tsv",
+        ]
+        if let version { arguments += ["--version", version] }
+        return command(binary, arguments, environment: environment, label: "az \(vault)/\(name)") { $0 }
+    }
+
+    /// Runs a provider CLI. `extract` returns the secret bytes, or nil when the
+    /// output is the wrong shape. The raw output is never put in an error.
+    static func command(
+        _ executable: String, _ arguments: [String], environment: [String: String], label: String,
+        extract: ([UInt8]) -> [UInt8]?
+    ) -> Result<SecretValue, SecretResolutionError> {
+        guard let run = BoundedProcess.run(executable, arguments, environment: environment) else {
+            return .failure(.timedOut("\(label) did not finish within 30 seconds"))
+        }
+        guard run.status == 0 else {
+            return .failure(.failed("\(label) exited \(run.status)"))
+        }
+        guard run.stdout.count < 1_048_576 else {
+            return .failure(.invalidValue("\(label) returned 1 MiB or more"))
+        }
+        guard let bytes = extract(run.stdout) else {
+            return .failure(.failed("\(label) did not return a usable value"))
+        }
+        return SecretResolver.value(bytes, from: label)
     }
 
     static func executable(_ name: String, environment: [String: String]) -> String? {

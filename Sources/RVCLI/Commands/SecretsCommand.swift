@@ -296,6 +296,121 @@ enum SecretsRun {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    struct DescribeRow: Encodable, Equatable {
+        var name: String
+        var description: String?
+        var type: String?
+        var delivery: String
+        var source: String
+    }
+
+    struct DescribeReport: Encodable, Equatable {
+        var secrets: [DescribeRow]
+    }
+
+    /// Names, descriptions, types, and delivery. No values and no provider locators.
+    static func describe(_ configuration: SecretsConfiguration) -> DescribeReport {
+        DescribeReport(secrets: configuration.secrets.map { secret in
+            DescribeRow(
+                name: secret.name, description: secret.description, type: secret.type,
+                delivery: secret.delivery == .environment ? "environment" : "gateway",
+                source: secret.source.kind)
+        })
+    }
+
+    static func describeText(_ report: DescribeReport) -> String {
+        guard report.secrets.isEmpty == false else { return "No secrets configured.\n" }
+        return report.secrets.map { row in
+            var lines = ["\(row.name)  \(row.source)  \(row.delivery)"]
+            if let type = row.type { lines.append("  type: \(type)") }
+            if let description = row.description { lines.append("  \(description)") }
+            return lines.joined(separator: "\n")
+        }.joined(separator: "\n") + "\n"
+    }
+
+    static func importVarlock(
+        path: URL, dryRun: Bool, environment: SecretsEnvironment
+    ) -> Result<String, CommandFailure> {
+        guard let data = try? Data(contentsOf: path), data.count <= VarlockSchema.maximumBytes else {
+            return .failure("could not read \(path.path) (limit 1 MiB)")
+        }
+        guard let text = String(data: data, encoding: .utf8) else { return .failure("\(path.path) is not UTF-8") }
+        let imported: VarlockImportPlan
+        switch VarlockSchema.plan(text) {
+        case .failure(let error): return .failure(CommandFailure(error.message))
+        case .success(let plan): imported = plan
+        }
+        let current: SecretsConfiguration
+        switch configuration(environment) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let loaded): current = loaded
+        }
+        var lines = imported.notes.map { $0 }
+        let fresh = imported.secrets.filter { secret in
+            if current.secret(named: secret.name) != nil {
+                lines.append("skip \(secret.name): secrets.json already defines it")
+                return false
+            }
+            lines.append("import \(secret.name): \(secret.source.kind)\(secret.type.map { " (type \($0))" } ?? "")")
+            return true
+        }
+        guard fresh.isEmpty == false else {
+            return .success((lines + ["nothing to import"]).joined(separator: "\n") + "\n")
+        }
+        if dryRun { return .success((lines + ["dry run: nothing written"]).joined(separator: "\n") + "\n") }
+        var updated = current
+        updated.secrets += fresh
+        if let reason = environment.managed.invalidReason {
+            return .failure("organization policy is invalid: \(reason); nothing imported")
+        }
+        for secret in fresh {
+            if let reason = SecretOrganizationRules.violation(secret, policy: environment.managed.policy) {
+                return .failure("organization policy: \(reason); nothing imported")
+            }
+        }
+        switch updated.write(configDirectory: environment.configDirectory) {
+        case .failure(let error): return .failure(CommandFailure(error.message))
+        case .success:
+            lines.append("wrote secrets.json (\(fresh.count) \(fresh.count == 1 ? "secret" : "secrets"); delivery environment)")
+            return .success(lines.joined(separator: "\n") + "\n")
+        }
+    }
+
+    static func hookRun(workTree: URL, environment: SecretsEnvironment) -> Result<(text: String, failed: Bool), CommandFailure> {
+        let configuration: SecretsConfiguration
+        switch self.configuration(environment) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let loaded): configuration = loaded
+        }
+        var values: [(name: String, value: SecretValue)] = []
+        var skipped: [String] = []
+        for secret in configuration.secrets {
+            switch environment.resolver.resolve(secret.source) {
+            case .success(let value): values.append((secret.name, value))
+            case .failure(let error): skipped.append("could not check \(secret.name): \(error.message)")
+            }
+        }
+        let findings: [SecretLeakFinding]
+        switch SecretGitHook.scan(workTree: workTree, secrets: values) {
+        case .failure(let reason): return .failure(CommandFailure(reason.message))
+        case .success(let found): findings = found
+        }
+        var lines = findings.map { "\($0.path):\($0.line):\($0.secret)" }
+        if findings.isEmpty { lines.append("No secret values in staged files.") }
+        lines += skipped
+        return .success((lines.joined(separator: "\n") + "\n", findings.isEmpty == false))
+    }
+
+    static func rvPath() -> String {
+        let invoked = CommandLine.arguments.first ?? "rv"
+        if invoked.contains("/") { return URL(fileURLWithPath: invoked).standardizedFileURL.path }
+        for directory in (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":") {
+            let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent(invoked).path
+            if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
+        }
+        return invoked
+    }
+
     static func json<T: Encodable>(_ value: T) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes, .prettyPrinted]
@@ -328,7 +443,10 @@ struct Secrets: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "secrets",
         abstract: "Manage secrets agents use through placeholders.",
-        subcommands: [SecretsList.self, SecretsCheck.self, SecretsSet.self, SecretsRemove.self, SecretsScan.self],
+        subcommands: [
+            SecretsList.self, SecretsCheck.self, SecretsSet.self, SecretsRemove.self, SecretsScan.self,
+            SecretsDescribe.self, SecretsImport.self, SecretsHook.self,
+        ],
         defaultSubcommand: SecretsList.self
     )
 }
@@ -469,6 +587,96 @@ struct SecretsScan: AsyncParsableCommand {
             ctx.writeStdout(text)
         } else {
             try ctx.emit(stdout: text, exitCode: 1)
+        }
+    }
+}
+
+struct SecretsDescribe: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "describe",
+        abstract: "Show secret names, descriptions, types, and delivery. Never values.")
+
+    @OptionGroup var format: FormatFlags
+
+    func run() throws {
+        let ctx = CommandContext.current(command: "secrets describe", format: format)
+        let environment = SecretsEnvironment.live(home: try ctx.requireHome())
+        switch SecretsRun.configuration(environment) {
+        case .failure(let failure): try ctx.fail("rv secrets describe: \(failure.message)\n")
+        case .success(let configuration):
+            let report = SecretsRun.describe(configuration)
+            ctx.writeStdout(ctx.explicitRobot ? SecretsRun.json(report) : SecretsRun.describeText(report))
+        }
+    }
+}
+
+struct SecretsImport: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "import",
+        abstract: "Add secrets from a Varlock .env.schema. Literal values are not copied.")
+
+    @Option(name: .customLong("varlock"), help: "Path to a .env.schema file.") var varlock: String
+    @Flag(name: .customLong("dry-run"), help: "Show what would be imported.") var dryRun = false
+
+    func run() throws {
+        let ctx = CommandContext.current(command: "secrets import", json: false, robot: false, plain: true, noColor: true)
+        let environment = SecretsEnvironment.live(home: try ctx.requireHome())
+        let path = URL(fileURLWithPath: varlock).standardizedFileURL
+        switch SecretsRun.importVarlock(path: path, dryRun: dryRun, environment: environment) {
+        case .failure(let failure): try ctx.fail("rv secrets import: \(failure.message)\n")
+        case .success(let text): ctx.writeStdout(text)
+        }
+    }
+}
+
+struct SecretsHook: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "hook",
+        abstract: "Git pre-commit hook that scans staged content for secret values.",
+        subcommands: [SecretsHookInstall.self, SecretsHookUninstall.self, SecretsHookRun.self])
+}
+
+struct SecretsHookInstall: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "install", abstract: "Install the pre-commit hook in this repository. Safe to run again.")
+
+    func run() throws {
+        let ctx = CommandContext.current(command: "secrets hook install", json: false, robot: false, plain: true, noColor: true)
+        let workTree = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        switch SecretGitHook.install(workTree: workTree, rvPath: SecretsRun.rvPath()) {
+        case .failure(let error): try ctx.fail("rv secrets hook install: \(error.message)\n")
+        case .success(let text): ctx.writeStdout(text)
+        }
+    }
+}
+
+struct SecretsHookUninstall: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "uninstall", abstract: "Remove rv's pre-commit hook and restore the previous one.")
+
+    func run() throws {
+        let ctx = CommandContext.current(command: "secrets hook uninstall", json: false, robot: false, plain: true, noColor: true)
+        let workTree = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        switch SecretGitHook.uninstall(workTree: workTree) {
+        case .failure(let error): try ctx.fail("rv secrets hook uninstall: \(error.message)\n")
+        case .success(let text): ctx.writeStdout(text)
+        }
+    }
+}
+
+struct SecretsHookRun: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "run", abstract: "Scan staged files. The installed hook runs this.")
+
+    func run() throws {
+        let ctx = CommandContext.current(command: "secrets hook run", json: false, robot: false, plain: true, noColor: true)
+        let environment = SecretsEnvironment.live(home: try ctx.requireHome())
+        let workTree = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        switch SecretsRun.hookRun(workTree: workTree, environment: environment) {
+        case .failure(let failure): try ctx.fail("rv secrets hook run: \(failure.message)\n")
+        case .success(let result):
+            if result.failed { try ctx.emit(stdout: result.text, exitCode: 1) }
+            else { ctx.writeStdout(result.text) }
         }
     }
 }
