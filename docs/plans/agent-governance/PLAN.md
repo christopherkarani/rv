@@ -27,8 +27,13 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 7 Enterprise hardening | `governance/phase-7-enterprise-hardening` (from phase 6) | _not opened yet_ | not started |
 | 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | _not opened yet_ | not started |
 
-**Next action:** Phase 6.3 (release signing) on `governance/phase-6-hardening`;
-6.1 and the 6.2 test are done (macOS L2 runs are owner items).
+**Next action:** Phase 7 on `governance/phase-7-enterprise-hardening` (from
+phase 6): 7.1 remote MCP servers first. Phase 6 agent items are done except
+the impro-ref-blocked ones (6.2 cage denies, 6.5 injected config dir, 6.6
+watchdog). Owner items for phase 6: signing secrets + certificate (6.3),
+flip `signed_releases`/`release_team_id` in `install.sh` and set
+`RV_REQUIRE_SIGNED_RELEASE=1` after the first signed release, and the D13
+decision (`RV_CI_PEER_TRUST=1` turns on the drafted job).
 
 Environment note (2026-10-13): Phases 6-8 were started by a cloud agent on a
 Linux VM (Ubuntu 24.04, official Swift 6.4 tarball via
@@ -1024,8 +1029,18 @@ Design:
       `defer`
 
 ### 6.6 Leftovers and crash watchdog
-- [ ] `rv doctor` line summarizing `rv workspace leftovers` (macOS; Linux says
-      not applicable)
+- [x] `rv doctor` line summarizing `rv workspace leftovers` (macOS; Linux says
+      not applicable). New "Workspaces" section after Config:
+      `N unfinished sessions · N stranded images · N unattached image files`
+      (`stranded images unknown` when `hdiutil info` fails, `no leftovers`
+      when all zero) and a Next action `rv workspace leftovers`. Robot JSON
+      gains an optional `leftovers` object (`applicable`, counts). Never
+      changes the exit code. macOS reuses the read-only
+      `WorkspaceHosts.leftovers()`/`diskLeftovers()` scans (process HOME, like
+      `rv workspace leftovers`); the macOS rendering is **unverified on a
+      Mac** (Linux CI covers the injected probe only). E2E on Linux: real
+      `rv doctor` under a pty prints `Workspaces / not applicable (macOS
+      workspaces only)`; `rv doctor --robot` has `"leftovers":{"applicable":false}`
 - [ ] _blocked: impro-ref (`WorkspaceSessionSupervisor`)_: rvd kqueue
       `NOTE_EXIT` watchdog on workspace hosts
 
@@ -1125,3 +1140,16 @@ when the phase starts (items 8.1-8.4 from the 2026-10-13 brief).
   74, RVCLITests 807, RVHistory/secret broker/HMAC pass; preflight 0
   failures. `Scripts/mcp-approvals-proof.py` 42/42. macOS-only code paths
   (LAContext, Seatbelt tests) are unverified here.
+- 2026-10-13: Phase 6.3-6.6 on `governance/phase-6-hardening`. 6.1/6.2 cage
+  tests passed on macOS CI (pr run 38401908672). 6.3: `Scripts/sign-macos.sh`
+  (hardened runtime, timestamp, notarytool; dry-run prints the plan without
+  secret values), `RV_RELEASE_SIGN=1|dry-run` in `release.sh`, release.yml
+  signs when the six secrets exist and verifies on macOS 15, `install.sh`
+  verifies signatures (switch `signed_releases`, off until the first signed
+  release). 6.4: queue waits explained (burst of pushes, not labels); D13
+  option A job drafted behind `RV_CI_PEER_TRUST`. 6.5: CI fails if
+  `swift test` touches `~/.config/rv`; fixed one writer; `workspaces/` leak
+  blocked on impro-ref. 6.6: `rv doctor` Workspaces line. Linux: full
+  `swift test` 4846 tests / 19 bundles green, config untouched, preflight 0
+  failures, shellcheck + actionlint clean. Blocked on impro-ref: 6.5 injected
+  config dir, 6.6 watchdog. Next: Phase 7.
