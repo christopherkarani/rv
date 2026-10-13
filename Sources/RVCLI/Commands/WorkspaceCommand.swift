@@ -344,10 +344,11 @@ enum WorkspaceCommandRun {
                     if disk.retained.isEmpty {
                         lines.append("  copy out anything you need, then `hdiutil detach <device>` for each")
                     } else {
-                        let targets = detachable.map { $0.device ?? $0.imagePath }
+                        let targets = detachable.prefix(20).map { image in
+                            "`hdiutil detach \(image.device ?? image.imagePath)`"
+                        }
                         lines.append(
-                            "  copy out anything you need, then `hdiutil detach` "
-                                + targets.prefix(20).joined(separator: " ")
+                            "  copy out anything you need, then " + targets.joined(separator: " ")
                         )
                     }
                 }
