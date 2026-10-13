@@ -26,6 +26,7 @@ from .errors import (
     MajorVersionSkew,
     ProtocolSkew,
     RuntimeNotFound,
+    TransportError,
 )
 from .raw import RawClient
 from .transports import DEFAULT_CALL_TIMEOUT, Transport, UnixSocketTransport
@@ -257,16 +258,38 @@ class Client:
         if self._service_semver is None:
             raise ConnectionFailed("client is not connected (use `with Client()` or .connect())")
         request = protocol.WireRequest(id=uuid.uuid4(), method=method, params=params)
-        reply = self._transport.round_trip(
-            request.encode(), self._timeout if timeout is None else timeout
-        )
+        try:
+            reply = self._transport.round_trip(
+                request.encode(), self._timeout if timeout is None else timeout
+            )
+        except TransportError:
+            # Timeout or a short read leaves unread bytes on this stream.
+            # Drop it so a later call cannot parse the leftover frame.
+            self.close()
+            raise
         payload = protocol.decode_response(reply, request_id=request.id, method=method)
-        advertised = payload.get("serviceSemver")
-        if advertised is not None:
-            if not isinstance(advertised, str):
-                raise DecodeError("reply serviceSemver is not a string")
-            versions.check_compatible(versions.SDK_IPC_SEMVER, advertised)
+        _gate_reply_semver(method, payload)
         return payload
+
+
+def _gate_reply_semver(method: str, payload: dict[str, Any]) -> None:
+    """Major-gate ``serviceSemver`` when a reply carries it.
+
+    ``evaluate`` must carry a string. A missing key or JSON ``null`` proves
+    nothing (``sdk/WIRE.md`` §4.1, ``sdk/VERSIONING.md`` §2). Methods that
+    never carry the field (``listPacks``, ``explain``) stay ungated.
+    """
+    advertised = payload.get("serviceSemver")
+    if method == "evaluate":
+        if not isinstance(advertised, str):
+            raise DecodeError("evaluate reply serviceSemver is missing or not a string")
+        versions.check_compatible(versions.SDK_IPC_SEMVER, advertised)
+        return
+    if advertised is None:
+        return
+    if not isinstance(advertised, str):
+        raise DecodeError("reply serviceSemver is not a string")
+    versions.check_compatible(versions.SDK_IPC_SEMVER, advertised)
 
 
 def _skew_error(ack: protocol.HelloAck) -> Exception:

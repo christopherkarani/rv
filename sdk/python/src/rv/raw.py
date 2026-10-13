@@ -14,10 +14,12 @@ class RawClient:
     """Verbatim ``rv.ipc.v1`` access, reached via ``Client.raw``.
 
     Connection integrity still applies (id/protocol echo, ``IPCError`` mapped
-    to typed exceptions, ``serviceSemver`` major gate when a reply carries
-    one), but payloads return as plain dicts with no semantic validation: no
-    ``via`` check, no outcome algebra, no curated models. New methods and
-    fields are visible here without an SDK update.
+    to typed exceptions, ``serviceSemver`` major gate). ``evaluate`` must
+    carry ``serviceSemver``; a missing or null value is a decode error.
+    Other methods are gated only when the field is present. Payloads return
+    as plain dicts with no semantic validation: no ``via`` check, no outcome
+    algebra, no curated models. New methods and fields are visible here
+    without an SDK update.
     """
 
     def __init__(self, client: Client) -> None:

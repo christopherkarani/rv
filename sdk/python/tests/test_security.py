@@ -139,6 +139,46 @@ def test_version_downgrade_is_hard_error_not_compat():
             client.connect()
 
 
+def _evaluate_reply(request: dict, service_semver: object) -> bytes:
+    evaluate: dict = {
+        "result": {"decision": {"decision": "allow"}},
+        "via": "xpc",
+    }
+    if service_semver is not _ABSENT:
+        evaluate["serviceSemver"] = service_semver
+    return json.dumps(
+        {
+            "id": request["id"],
+            "protocol": "rv.ipc.v1",
+            "result": {"evaluate": evaluate},
+        }
+    ).encode()
+
+
+_ABSENT = object()
+
+
+def test_evaluate_without_service_semver_is_rejected():
+    """Missing and JSON null both prove nothing and must not return allow."""
+    packs = test_client.respond(test_client.test_vectors.RESPONSES["listPacks"])
+    for semver in (_ABSENT, None):
+
+        def reply(request, semver=semver):
+            return _evaluate_reply(request, semver)
+
+        client, _ = test_client._connected(reply, packs, reply)
+        with pytest.raises(DecodeError, match="serviceSemver"):
+            client.evaluate("echo hi")
+        # A complete frame that fails the semver gate stays on this connection.
+        assert client.service_semver == "1.0.0"
+        assert client.list_packs().total_count == 1
+        with pytest.raises(DecodeError, match="serviceSemver"):
+            client.raw.call("evaluate", {"request": {"command": "echo hi", "enabledPacks": []}})
+    client, _ = test_client._connected(lambda request: _evaluate_reply(request, ""))
+    with pytest.raises(MajorVersionSkew):
+        client.evaluate("echo hi")
+
+
 def test_reply_downgrade_is_hard_error():
     def _reply(request: dict) -> bytes:
         return json.dumps(

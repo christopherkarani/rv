@@ -17,7 +17,7 @@ import stat
 import sys
 
 from . import frames
-from .errors import ConnectionFailed, RuntimeNotFound, SocketPathTooLong, Timeout
+from .errors import ConnectionFailed, FrameError, RuntimeNotFound, SocketPathTooLong, Timeout
 
 CONNECT_TIMEOUT = 0.2
 DEFAULT_CALL_TIMEOUT = 0.7
@@ -209,13 +209,24 @@ class UnixSocketTransport(Transport):
             header = _recv_exact(sock, 4)
             length = frames.body_count(header)
             payload = _recv_exact(sock, length)
+            return frames.decode_split(header, payload)
         except TimeoutError as exc:
-            # socket.timeout is TimeoutError since 3.10.
+            # socket.timeout is TimeoutError (an OSError) since 3.10.
+            # A mid-frame timeout has already pulled some bytes; drop the
+            # socket so the rest cannot be parsed as the next call.
+            self.close()
             raise Timeout(f"rvd call exceeded {timeout}s", timeout=timeout) from exc
+        except ConnectionFailed:
+            # EOF before a full frame is a short read. The stream is done.
+            self.close()
+            raise
+        except FrameError:
+            # A bad length prefix was consumed. The stream is desynchronized.
+            self.close()
+            raise
         except OSError as exc:
+            self.close()
             raise ConnectionFailed(f"rvd connection failed: {exc}") from exc
-        # FrameError (an RvError, not OSError) propagates untouched.
-        return frames.decode_split(header, payload)
 
     def __enter__(self) -> UnixSocketTransport:
         self.connect()

@@ -247,8 +247,105 @@ def test_round_trip_timeout(socket_path):
             with pytest.raises(Timeout) as info:
                 transport.round_trip(b"{}", timeout=0.1)
             assert info.value.timeout == 0.1
+            # The late frame must not become the next call's reply.
+            assert transport.path is None
+            with pytest.raises(ConnectionFailed, match="not connected"):
+                transport.round_trip(b"{}", timeout=1)
         finally:
             transport.close()
+
+
+def _serve_partial(
+    path: str, first: bytes, rest: bytes, release: threading.Event
+) -> threading.Thread:
+    """Read one request, send ``first``, then ``rest`` after ``release``."""
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(path)
+    os.chmod(path, 0o600)
+    listener.listen(1)
+
+    def serve() -> None:
+        try:
+            conn, _ = listener.accept()
+        except OSError:
+            listener.close()
+            return
+        with conn:
+            try:
+                header = _read_exact(conn, 4)
+                (length,) = struct.unpack(">I", header)
+                _read_exact(conn, length)
+                if first:
+                    conn.sendall(first)
+                if not release.wait(2):
+                    return
+                if rest:
+                    conn.sendall(rest)
+            except OSError:
+                return
+        listener.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    return thread
+
+
+def test_mid_frame_timeout_drops_unread_bytes(socket_path):
+    path = socket_path
+    body = b'{"ok":true,"stolen":true}'
+    frame = _frame(body)
+    release = threading.Event()
+    thread = _serve_partial(path, frame[:2], frame[2:], release)
+    transport = transports.UnixSocketTransport(socket_path=path)
+    try:
+        transport.connect()
+        with pytest.raises(Timeout):
+            transport.round_trip(b"{}", timeout=0.3)
+        assert transport.path is None
+        release.set()
+        with pytest.raises(ConnectionFailed, match="not connected"):
+            transport.round_trip(b"{}", timeout=1)
+    finally:
+        release.set()
+        transport.close()
+        thread.join(timeout=5)
+
+
+def test_short_read_drops_the_socket(socket_path):
+    path = socket_path
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(path)
+    os.chmod(path, 0o600)
+    listener.listen(1)
+
+    def serve() -> None:
+        try:
+            conn, _ = listener.accept()
+        except OSError:
+            return
+        with conn:
+            try:
+                header = _read_exact(conn, 4)
+                (length,) = struct.unpack(">I", header)
+                _read_exact(conn, length)
+                conn.sendall(b"\x00\x01")
+            except OSError:
+                return
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    transport = transports.UnixSocketTransport(socket_path=path)
+    try:
+        transport.connect()
+        with pytest.raises(ConnectionFailed):
+            transport.round_trip(b"{}", timeout=2)
+        assert transport.path is None
+        with pytest.raises(ConnectionFailed, match="not connected"):
+            transport.round_trip(b"{}", timeout=1)
+    finally:
+        transport.close()
+        listener.close()
+        thread.join(timeout=5)
 
 
 def test_round_trip_eof_is_connection_failed(socket_path):
@@ -259,6 +356,9 @@ def test_round_trip_eof_is_connection_failed(socket_path):
         try:
             with pytest.raises(ConnectionFailed):
                 transport.round_trip(b"{}", timeout=5)
+            assert transport.path is None
+            with pytest.raises(ConnectionFailed, match="not connected"):
+                transport.round_trip(b"{}", timeout=1)
         finally:
             transport.close()
 

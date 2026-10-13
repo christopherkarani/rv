@@ -171,6 +171,26 @@ def test_call_without_connect_fails():
         client.list_packs()
 
 
+def test_call_timeout_drops_the_client():
+    class _TimeoutAfterHello(FakeTransport):
+        def round_trip(self, body, timeout=0.7):
+            if self.received:
+                self.received.append(body)
+                raise Timeout("rvd call exceeded", timeout=timeout)
+            return super().round_trip(body, timeout)
+
+    transport = _TimeoutAfterHello([ACK_OK, ACK_OK])
+    client = Client(transport=transport)
+    client.connect()
+    assert client.service_semver == "1.0.0"
+    with pytest.raises(Timeout):
+        client.list_packs()
+    assert client.service_semver is None
+    assert transport.closed
+    with pytest.raises(ConnectionFailed, match="not connected"):
+        client.list_packs()
+
+
 # ---------------------------------------------------------------------------
 # Curated operations against goldens.
 # ---------------------------------------------------------------------------
