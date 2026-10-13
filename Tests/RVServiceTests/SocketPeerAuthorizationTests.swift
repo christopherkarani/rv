@@ -20,9 +20,9 @@ struct SocketPeerAuthorizationTests {
 
     private func attestMethod() -> IPCMethod {
         .attestTTYRedemption(AttestTTYRedemptionParams(
-            fingerprint: String(repeating: "0", count: 64),
+            fingerprint: GrantFingerprint(rawValue: String(repeating: "0", count: 64)),
             cwd: wd("/tmp/ws"),
-            codeHash: String(repeating: "1", count: 64),
+            codeHash: CodeHash(rawValue: String(repeating: "1", count: 64)),
             clientSemver: ProtocolVersion.serviceSemver
         ))
     }

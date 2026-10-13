@@ -13,19 +13,19 @@ public struct AllowlistEntry: Equatable, Sendable {
     public var expiresAt: Date?
     /// M-07 content digest of the masked payload for `.exactCommand`
     /// entries. Nil for rule entries and legacy rows; see `matches`.
-    public var maskedPayloadDigest: String?
+    public var maskedPayloadDigest: ContentPayloadDigest?
     /// B1 content digest of the erased invocation prefix (wrappers,
     /// assignments, argv0 path) for `.exactCommand` entries. Nil for rule
     /// entries and legacy rows; see `matches`.
-    public var invocationDigest: String?
+    public var invocationDigest: ContentPayloadDigest?
 
     public init(
         selector: AllowlistSelector,
         reason: String,
         addedAt: Date,
         expiresAt: Date? = nil,
-        maskedPayloadDigest: String? = nil,
-        invocationDigest: String? = nil
+        maskedPayloadDigest: ContentPayloadDigest? = nil,
+        invocationDigest: ContentPayloadDigest? = nil
     ) {
         self.selector = selector
         self.reason = reason
@@ -151,10 +151,10 @@ public enum AllowlistTOML {
                 lines.append("exact_command = \"\(escapeTOMLString(command.rawValue))\"")
             }
             if let digest = entry.maskedPayloadDigest {
-                lines.append("payload_digest = \"\(escapeTOMLString(digest))\"")
+                lines.append("payload_digest = \"\(escapeTOMLString(digest.rawValue))\"")
             }
             if let digest = entry.invocationDigest {
-                lines.append("invocation_digest = \"\(escapeTOMLString(digest))\"")
+                lines.append("invocation_digest = \"\(escapeTOMLString(digest.rawValue))\"")
             }
             lines.append("reason = \"\(escapeTOMLString(entry.reason))\"")
             lines.append("added_at = \"\(formatter.string(from: entry.addedAt))\"")
@@ -258,8 +258,8 @@ public enum AllowlistTOML {
             reason: trimmedReason,
             addedAt: addedAt,
             expiresAt: expiresAt,
-            maskedPayloadDigest: payloadDigest,
-            invocationDigest: invocationDigest
+            maskedPayloadDigest: payloadDigest.map(ContentPayloadDigest.init(rawValue:)),
+            invocationDigest: invocationDigest.map(ContentPayloadDigest.init(rawValue:))
         )
     }
 }

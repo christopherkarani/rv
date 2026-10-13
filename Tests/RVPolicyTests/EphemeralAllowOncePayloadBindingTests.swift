@@ -85,7 +85,7 @@ struct EphemeralAllowOncePayloadBindingTests {
         #expect(
             await table.plant(
                 fingerprint: grantFingerprint(Self.maskedView, invocationPrefix: []), cwd: wd("/tmp/ws"),
-                codeHash: "m7-tty", now: Self.now
+                codeHash: CodeHash(rawValue: "m7-tty"), now: Self.now
             ) == .planted
         )
         #expect(
@@ -99,7 +99,7 @@ struct EphemeralAllowOncePayloadBindingTests {
         #expect(
             await table.plant(
                 fingerprint: grantFingerprint("git reset --hard", invocationPrefix: []), cwd: wd("/tmp/ws"),
-                codeHash: "m7-tty-plain", now: Self.now
+                codeHash: CodeHash(rawValue: "m7-tty-plain"), now: Self.now
             ) == .planted
         )
         #expect(

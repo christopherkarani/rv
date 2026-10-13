@@ -40,7 +40,7 @@ enum AllowOnceLedger {
         }
         if updated.contains(where: { record in
             guard case .pending = record.lifecycle else { return false }
-            return record.codeHash == codeHash && record.expiresAt > now
+            return record.codeHash.rawValue == codeHash && record.expiresAt > now
         }) {
             throw AllowOnceError.collision
         }
@@ -49,14 +49,14 @@ enum AllowOnceLedger {
             AllowOnceRecord(
                 schemaVersion: 1,
                 lifecycle: .pending,
-                codeHash: codeHash,
-                commandFingerprint: fingerprint,
+                codeHash: CodeHash(rawValue: codeHash),
+                commandFingerprint: GrantFingerprint(rawValue: fingerprint),
                 commandRedacted: redacted,
                 cwd: cwd,
                 ruleID: ruleID,
                 createdAt: now,
                 expiresAt: now.addingTimeInterval(ttl),
-                payloadDigest: payloadDigest,
+                payloadDigest: payloadDigest.map(ContentPayloadDigest.init(rawValue:)),
                 invocationDisplay: invocationDisplay
             )
         )
@@ -88,9 +88,9 @@ enum AllowOnceLedger {
             // shared row and steal the human's approval for an
             // identical-looking victim row. Nil (legacy/no-text) rows
             // reuse only with nil.
-            return record.commandFingerprint == fingerprint
+            return record.commandFingerprint.rawValue == fingerprint
                 && record.cwd == cwd
-                && record.payloadDigest == payloadDigest
+                && record.payloadDigest?.rawValue == payloadDigest
         }
     }
 
@@ -104,7 +104,7 @@ enum AllowOnceLedger {
     ) -> AllowOnceRecord? {
         records.first { record in
             guard case .pending = record.lifecycle else { return false }
-            guard record.codeHash == codeHash else { return false }
+            guard record.codeHash.rawValue == codeHash else { return false }
             return record.expiresAt > now
         }
     }
@@ -118,12 +118,12 @@ enum AllowOnceLedger {
     ) throws(AllowOnceError) -> RedeemOutcome {
         guard let index = records.firstIndex(where: { record in
             guard case .pending = record.lifecycle else { return false }
-            return record.codeHash == codeHash
+            return record.codeHash.rawValue == codeHash
         }) else {
             if records.contains(where: { record in
                 switch record.lifecycle {
                 case .granted, .consumed:
-                    return record.codeHash == codeHash
+                    return record.codeHash.rawValue == codeHash
                 case .pending:
                     return false
                 }
@@ -138,10 +138,10 @@ enum AllowOnceLedger {
             updated.remove(at: index)
             return .expired(records: updated)
         }
-        if let expectedFingerprint, pending.commandFingerprint != expectedFingerprint {
+        if let expectedFingerprint, pending.commandFingerprint.rawValue != expectedFingerprint {
             throw AllowOnceError.redemptionChanged
         }
-        if let expectedPayloadDigest, pending.payloadDigest != expectedPayloadDigest {
+        if let expectedPayloadDigest, pending.payloadDigest?.rawValue != expectedPayloadDigest {
             throw AllowOnceError.redemptionChanged
         }
         pending.lifecycle = .granted
@@ -200,7 +200,7 @@ enum AllowOnceLedger {
     private static func row(_ record: AllowOnceRecord) -> AllowOnceListRow {
         AllowOnceListRow(
             kind: record.kind,
-            codeHash: record.codeHash,
+            codeHash: record.codeHash.rawValue,
             commandRedacted: record.commandRedacted,
             cwd: record.cwd,
             createdAt: record.createdAt,
