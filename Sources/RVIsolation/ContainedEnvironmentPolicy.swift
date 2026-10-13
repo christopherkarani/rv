@@ -38,9 +38,15 @@ public enum ContainedEnvironmentPolicy {
     }
 
     /// Known-safe names that pass before denylist rules. Commit identity is
-    /// recorded in every commit and must survive the `AUTH` token rule.
+    /// recorded in every commit and must survive the `AUTH` token rule —
+    /// but only the identity fields themselves: the bare prefix once let
+    /// `GIT_AUTHOR_TOKEN` cross ahead of the credential gate.
     public static func isAlwaysAllowed(_ name: String) -> Bool {
-        name.hasPrefix("GIT_AUTHOR_") || name.hasPrefix("GIT_COMMITTER_")
+        for prefix in ["GIT_AUTHOR_", "GIT_COMMITTER_"] where name.hasPrefix(prefix) {
+            let field = name.dropFirst(prefix.count)
+            return field == "NAME" || field == "EMAIL" || field == "DATE"
+        }
+        return false
     }
 
     /// Whether `name` must be stripped. Case-insensitive: `npm_config_cache`
@@ -55,7 +61,24 @@ public enum ContainedEnvironmentPolicy {
             if folded.contains(infixString) { return true }
         }
         for token in folded.split(separator: "_") {
-            if deniedTokens.contains(String(token)) { return true }
+            if matchesCredentialToken(String(token)) { return true }
+        }
+        return false
+    }
+
+    /// One `_`-separated token (uppercased) against the credential class.
+    /// Exact tokens first, then concatenated spellings and credential
+    /// suffixes: real credentials routinely arrive as `ANTHROPIC_APIKEY`,
+    /// `ACCESSTOKEN`, or `MYSECRET`, none of which tokenizes onto the
+    /// underscored forms. Suffix matching deliberately excludes `KEY`
+    /// (MONKEY, TURKEY are not credentials); `*KEY` compounds enter via
+    /// the explicit concatenated list. `TOKENIZER(S)` and `KEYNOTE` stay
+    /// clear: they neither equal nor end with a credential token.
+    static func matchesCredentialToken(_ token: String) -> Bool {
+        if deniedTokens.contains(token) { return true }
+        if concatenatedCredentialTokens.contains(token) { return true }
+        for suffix in credentialTokenSuffixes where token.count > suffix.count {
+            if token.hasSuffix(suffix) { return true }
         }
         return false
     }
@@ -71,6 +94,10 @@ public enum ContainedEnvironmentPolicy {
                 kept.append((name, value))
                 continue
             }
+            // Broker-owned class first: the named deny-by-default gate. Every
+            // credential-class name is also denied by the legacy denylist
+            // below, so the deny survives either table drifting.
+            if isCredentialClass(name) { continue }
             if isBlockedVariableName(name) { continue }
             kept.append((name, value))
         }
@@ -109,6 +136,48 @@ public enum ContainedEnvironmentPolicy {
             return false
         }
     }
+}
+
+/// Operator opt-in for legacy credential delivery into the cage.
+///
+/// Default `.closed`: no host API keys enter the cage environment and no
+/// host credential files are staged into the cage home or granted to the
+/// sandbox profile. Each flag restores one pre-F2 legacy behavior only
+/// when the operator explicitly selects it in the launch configuration;
+/// nothing reads ambient host state to enable them.
+///
+/// Wiring status: no production launch path selects `.legacyOptIn` yet
+/// (only tests do), so contained launches are unconditionally `.closed`
+/// today — key-based agents rely on the broker path or policy-selected
+/// entries below. Threading an operator-facing selection (config or
+/// launch flag) through `prepareSeatbelt` is follow-up work; until then
+/// this type is the seam, not a reachable escape hatch.
+///
+/// Policy-selected keychain and credential entries
+/// (`RuntimeResourceProfile`) are separate: listing them in the operator's
+/// machine policy is itself the explicit opt-in, and they flow regardless
+/// of these flags.
+public struct ContainedCredentialDelivery: Sendable, Equatable {
+    /// Re-inject `AgentHomeStaging.apiKeyPassthrough` host values into the
+    /// cage environment after the generic policy strip.
+    public var legacyAPIKeys: Bool
+    /// Symlink `AgentHomeStaging.credentialLinks` host originals into the
+    /// cage home, grant the sandbox read access to them, and lift the
+    /// sensitive-path denies covering them.
+    public var legacyCredentialFiles: Bool
+
+    public init(legacyAPIKeys: Bool = false, legacyCredentialFiles: Bool = false) {
+        self.legacyAPIKeys = legacyAPIKeys
+        self.legacyCredentialFiles = legacyCredentialFiles
+    }
+
+    /// Default: the cage receives no host keys and no host credential files.
+    public static let closed = ContainedCredentialDelivery()
+
+    /// Explicit operator opt-in restoring pre-F2 legacy delivery.
+    public static let legacyOptIn = ContainedCredentialDelivery(
+        legacyAPIKeys: true, legacyCredentialFiles: true
+    )
 }
 
 extension ContainedEnvironmentPolicy {
@@ -177,6 +246,30 @@ extension ContainedEnvironmentPolicy {
         "OTP", "TOTP",
         "LICENSE",
         "NETRC",
+        "PAT",
+        "JWT",
+    ]
+
+    /// Concatenated credential spellings (uppercased single tokens) that
+    /// never cross: the same concepts as `deniedTokens` written without
+    /// the separator, including camelCase names once uppercased
+    /// (`apiKey` → `APIKEY`, `accessToken` → `ACCESSTOKEN`).
+    static let concatenatedCredentialTokens: Set<String> = [
+        "APIKEY", "APIKEYS",
+        "PRIVATEKEY", "SECRETKEY", "ACCESSKEY", "SIGNINGKEY", "MASTERKEY",
+        "LICENSEKEY", "SSHKEY", "GPGKEY", "PGPKEY", "ENCRYPTIONKEY",
+        "ACCESSTOKEN", "REFRESHTOKEN", "IDTOKEN", "AUTHTOKEN",
+        "SESSIONTOKEN", "BEARERTOKEN",
+        "CLIENTSECRET", "APPSECRET",
+    ]
+
+    /// Credential suffixes for single tokens (`MYSECRET`, `SUPERTOKEN`).
+    /// No `KEY`: see `matchesCredentialToken`.
+    static let credentialTokenSuffixes: [String] = [
+        "CREDENTIALS", "CREDENTIAL",
+        "PASSPHRASE", "PASSWORDS", "PASSWORD",
+        "SECRETS", "SECRET",
+        "TOKENS", "TOKEN",
     ]
 }
 
@@ -525,10 +618,10 @@ public enum ContainedToolchainRoots {
 ///
 /// The day-one catalog is the single source: home-relative sensitive paths
 /// veto PATH admission and expansion, and become explicit Seatbelt denies
-/// under granted trees. Temporary agent-auth compatibility paths are
-/// excluded from denies so already-working agent logins keep working; that
-/// exclusion is the only overlap between the generic boundary and the
-/// pre-secret-broker compatibility behavior.
+/// under granted trees. Legacy agent-auth compatibility paths are excluded
+/// from denies only under explicit credential-files opt-in; that
+/// conditional exclusion is the only overlap between the generic boundary
+/// and the pre-secret-broker compatibility behavior.
 public enum ContainedSensitivePaths {
     /// Home-relative sensitive paths from the catalog (`homeSuffix` and
     /// `hostAuth` kinds), e.g. `.ssh`, `.config/gh`. Computed once: the
@@ -581,20 +674,113 @@ public enum ContainedSensitivePaths {
         return false
     }
 
-    /// Absolute Seatbelt deny paths for one host home, minus the temporary
-    /// agent-auth compatibility paths. Both files and directories are
-    /// denied as subpaths (a subpath rule covers the path itself).
-    public static func denyPaths(hostHome: String, excluding: Set<String>) -> [String] {
+    /// Absolute Seatbelt deny paths for one host home. Both files and
+    /// directories are denied as subpaths (a subpath rule covers the path
+    /// itself). F2 default closed: the legacy agent-auth compatibility
+    /// paths stay denied unless the operator explicitly opts credential
+    /// files in. Without the opt-in the cage holds no grant covering them
+    /// either, so the deny is belt-and-braces against broader overlapping
+    /// grants.
+    public static func denyPaths(
+        hostHome: String,
+        excluding: Set<String>,
+        credentialDelivery: ContainedCredentialDelivery = .closed
+    ) -> [String] {
         guard isUsableAbsolutePath(hostHome) else { return [] }
         var paths = catalogRelatives.map { "\(hostHome)/\($0)" }
         // Registry credentials live inside the granted cargo tree.
         paths.append("\(hostHome)/.cargo/credentials.toml")
         paths.append("\(hostHome)/.cargo/credentials")
-        let excluded = excluding.union(compatCredentialPaths(hostHome: hostHome))
+        var excluded = excluding
+        if credentialDelivery.legacyCredentialFiles {
+            excluded.formUnion(compatCredentialPaths(hostHome: hostHome))
+        }
         return paths.filter { excluded.contains($0) == false }.sorted()
     }
 
     static func compatCredentialPaths(hostHome: String) -> Set<String> {
         Set(AgentHomeStaging.credentialLinks.map { "\(hostHome)/\($0.source)" })
+    }
+}
+
+// MARK: - Phase 5 credential class
+
+extension ContainedEnvironmentPolicy {
+    /// Broker-owned credential-bearing names. Deny-by-default: the projection
+    /// never passes one, and the only way a value appears under such a name
+    /// in the cage is a supervisor-minted `BrokerPreparedEntry` applied after
+    /// the strip — carrying a non-secret selector or placeholder, never
+    /// secret material. Secret values stay in the supervisor and resolve
+    /// only for approved endpoints over the admission pipes.
+    ///
+    /// Detection stays token-based (not free-substring) on purpose:
+    /// `TOKENIZERS_PARALLELISM` and `KEYNOTE` are toolchain/productivity
+    /// names, not credentials, and must keep passing. Within a token,
+    /// concatenated spellings and credential suffixes count too (see
+    /// `matchesCredentialToken`): classification is by the name's meaning,
+    /// so an unlisted spelling of a credential concept still fails closed.
+    /// The class mirrors the credential-bearing legacy rules exactly, so
+    /// every credential-class name is also denied by
+    /// `isBlockedVariableName`.
+    public static func isCredentialClass(_ name: String) -> Bool {
+        let folded = name.uppercased()
+        if credentialExactNames.contains(folded) { return true }
+        for infixString in deniedInfixes {
+            if folded.contains(infixString) { return true }
+        }
+        for token in folded.split(separator: "_") {
+            if matchesCredentialToken(String(token)) { return true }
+        }
+        return false
+    }
+
+    /// Project a host environment, then apply supervisor-minted broker
+    /// entries. The prepared path serves the credential class only: entries
+    /// under any other name, with malformed names or insane values, or
+    /// duplicating an earlier entry are dropped fail-closed. Sorted by name
+    /// like the base projection.
+    public static func project(
+        host: [String: String],
+        brokerPrepared: [BrokerPreparedEntry]
+    ) -> [(String, String)] {
+        var kept = project(host: host)
+        var present = Set(kept.map(\.0))
+        for entry in brokerPrepared {
+            guard isCredentialClass(entry.name) else { continue }
+            guard isValidName(entry.name), isSaneValue(entry.value) else { continue }
+            guard present.insert(entry.name).inserted else { continue }
+            kept.append((entry.name, entry.value))
+        }
+        kept.sort { $0.0 < $1.0 }
+        return kept
+    }
+
+    /// Exact credential-bearing names (uppercased): agent sockets and
+    /// credential-file pointers. A subset of `deniedExactNames` by
+    /// construction; transport commands, proxies, loaders, interpreter
+    /// hooks, trust redirects, and host-path state stay under the generic
+    /// denylist only.
+    static let credentialExactNames: Set<String> = [
+        "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GPG_AGENT_INFO",
+        "GIT_ASKPASS",
+        "KUBECONFIG", "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "AWS_CREDENTIAL_FILE",
+    ]
+}
+
+/// One supervisor-minted environment entry for a broker-granted name.
+///
+/// Only the credential broker mints these (internal init): nothing the cage
+/// sends can request or forge one. Values are non-secret by construction —
+/// selectors (profile names) or placeholders — never secret material.
+/// Shape (name, value, class, duplicates) is validated again at apply time;
+/// secrecy holds because the broker never mints a secret value, pinned by
+/// no-leak tests over broker-minted entries.
+public struct BrokerPreparedEntry: Sendable, Equatable {
+    public var name: String
+    public var value: String
+
+    init(name: String, value: String) {
+        self.name = name
+        self.value = value
     }
 }

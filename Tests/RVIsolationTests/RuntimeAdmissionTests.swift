@@ -362,6 +362,471 @@ struct RuntimeAdmissionIsolationTests {
     #endif
 }
 
+/// Phase 5 credential broker: supervisor-side grants injected at approved
+/// endpoints over the capability-bound admission pipes. Binding and replay
+/// protection are the gate's, unchanged; values never reach the cage, the
+/// pipes, or the logs. Presence assertions use names only.
+@Suite("RuntimeCredentialBroker")
+struct RuntimeCredentialBrokerTests {
+    @Test func brokerDeliversForApprovedEndpointOnly() throws {
+        let transport = BrokerHTTPTransport()
+        let delivery = BrokerDeliveryCapture()
+        let harness = try AdmissionHarness(
+            normalize: brokerCombinedNormalize,
+            http: .effect(transport.run),
+            broker: brokerFixture(),
+            delivery: delivery.deliver
+        )
+        defer { harness.cleanup() }
+
+        let granted = harness.session.submitLegacy(
+            .success(harness.httpFrame("https://approved.example.com/v1/models", id: UUID()))
+        )
+        guard case .http(let receipt) = granted.response else {
+            Issue.record("approved endpoint must execute, got \(granted.response)")
+            return
+        }
+        #expect(receipt.status == 200)
+        #expect(transport.runs == 1)
+        #expect(delivery.all.count == 1)
+        #expect(delivery.all.first?.credentialName == "API_KEY")
+        #expect(delivery.all.first?.host == "approved.example.com")
+        #expect(delivery.all.first?.value == brokerSecretValue)
+        let grantedEvents = harness.evidence.snapshot().filter {
+            $0.result.hasPrefix("credential")
+        }
+        #expect(grantedEvents.count == 1)
+        #expect(grantedEvents.first?.result == "credentialGranted:API_KEY")
+        #expect(grantedEvents.first?.authorization == .allowed)
+        #expect(grantedEvents.first?.executionAttempted == false)
+
+        // Authorized request, unapproved endpoint: executes without injection.
+        let other = harness.session.submitLegacy(
+            .success(harness.httpFrame("https://other.example.net/x", id: UUID()))
+        )
+        guard case .http = other.response else {
+            Issue.record("unapproved endpoint request must still execute, got \(other.response)")
+            return
+        }
+        #expect(transport.runs == 2)
+        #expect(delivery.all.count == 1)
+        #expect(
+            harness.evidence.snapshot().contains {
+                $0.result == "credentialWithheld:endpointNotApproved" && $0.authorization == .denied
+            }
+        )
+
+        // Values never in the evidence structs.
+        let encoded = try JSONEncoder().encode(harness.evidence.snapshot())
+        #expect(String(decoding: encoded, as: UTF8.self).contains(brokerSecretValue) == false)
+    }
+
+    @Test func brokeredRequestsHonorBindingAndReplay() throws {
+        let transport = BrokerHTTPTransport()
+        let delivery = BrokerDeliveryCapture()
+        let harness = try AdmissionHarness(
+            normalize: brokerCombinedNormalize,
+            http: .effect(transport.run),
+            broker: brokerFixture(),
+            delivery: delivery.deliver
+        )
+        defer { harness.cleanup() }
+        let url = "https://approved.example.com/v1/models"
+
+        let first = harness.session.submitLegacy(.success(harness.httpFrame(url, id: UUID())))
+        guard case .http = first.response else {
+            Issue.record("first brokered request must execute, got \(first.response)")
+            return
+        }
+        #expect(delivery.all.count == 1)
+
+        // Same request id: replay, no second delivery.
+        let sameID = harness.session.submitLegacy(
+            .success(harness.httpFrame(url, id: first.event.requestID.flatMap { UUID(uuidString: $0) } ?? UUID()))
+        )
+        #expect(sameID.response == .rejected(.replay))
+        #expect(delivery.all.count == 1)
+
+        // Same URL, fresh id: fingerprint replay, no second delivery.
+        let sameURL = harness.session.submitLegacy(.success(harness.httpFrame(url, id: UUID())))
+        #expect(sameURL.response == .rejected(.replay))
+        #expect(delivery.all.count == 1)
+
+        // Forged capability and session claim: rejected before the broker.
+        let badCap = harness.session.submitLegacy(
+            .success(harness.httpFrame(
+                "https://other.example.net/y", capability: RuntimeCapability(), id: UUID()))
+        )
+        #expect(badCap.response == .rejected(.invalidCapability))
+        let impersonated = harness.session.submitLegacy(
+            .success(harness.httpFrame("https://other.example.net/z", claim: UUID(), id: UUID()))
+        )
+        #expect(impersonated.response == .rejected(.impersonation))
+        #expect(delivery.all.count == 1)
+        #expect(transport.runs == 1)
+        #expect(
+            harness.evidence.snapshot().filter { $0.result.hasPrefix("credential") }.count == 1
+        )
+    }
+
+    @Test func unauthorizedActionsNeverConsultBroker() throws {
+        let transport = BrokerHTTPTransport()
+        let delivery = BrokerDeliveryCapture()
+        let harness = try AdmissionHarness(
+            normalize: brokerCombinedNormalize,
+            http: .effect(transport.run),
+            broker: brokerFixture(),
+            delivery: delivery.deliver
+        )
+        defer { harness.cleanup() }
+
+        // Allowed shell: executes, no broker event (the broker serves HTTP).
+        let shell = harness.session.submitLegacy(.success(harness.frame("touch marker")))
+        #expect(shell.response == .executed(exitStatus: 0))
+
+        // Denied shell and failed evaluations: no consultation.
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-broker-outside-\(UUID().uuidString)")
+        let denied = harness.session.submitLegacy(
+            .success(harness.frame("touch \(outside.path)", id: UUID()))
+        )
+        guard case .denied = denied.response else {
+            Issue.record("outside touch must be denied, got \(denied.response)")
+            return
+        }
+        let unsupported = harness.session.submitLegacy(
+            .success(harness.httpFrame("http://approved.example.com/x", id: UUID()))
+        )
+        #expect(unsupported.response == .evaluationFailed)
+        let blocked = harness.session.submitLegacy(
+            .success(harness.httpFrame("https://localhost/x", id: UUID()))
+        )
+        if case .http = blocked.response {
+            Issue.record("blocked host must not execute, got \(blocked.response)")
+        }
+
+        #expect(delivery.all.isEmpty)
+        #expect(transport.runs == 0)
+        #expect(
+            harness.evidence.snapshot().allSatisfy { $0.result.hasPrefix("credential") == false }
+        )
+    }
+
+    @Test func pipeBytesCarryNoSecret() throws {
+        let transport = BrokerHTTPTransport()
+        let delivery = BrokerDeliveryCapture()
+        let harness = try AdmissionHarness(
+            normalize: brokerCombinedNormalize,
+            http: .effect(transport.run),
+            broker: brokerFixture(),
+            delivery: delivery.deliver
+        )
+        defer { harness.cleanup() }
+
+        // Real pipe on the response side: the session writes actual bytes.
+        var pipes = RuntimeAdmissionPipes()
+        let pipesOpened = pipes.open()
+        try #require(pipesOpened)
+        defer { pipes.closeRemaining() }
+        let evidence = RuntimeAdmissionEvidence()
+        let workspace = try #require(WorkingDirectory(validating: harness.root.path))
+        let session = RuntimeAdmissionSession(
+            binding: RuntimeChannelBinding(session: harness.runtime, capability: harness.capability),
+            configuration: RuntimeAdmissionConfiguration(
+                normalize: brokerCombinedNormalize,
+                executor: .effect(harness.effect.run),
+                http: .effect(transport.run),
+                approval: { _, _ in nil },
+                policy: { _ in .empty },
+                evidence: evidence,
+                credentialBroker: brokerFixture(),
+                credentialDelivery: delivery.deliver
+            ),
+            launch: AdmittedLaunchContext(
+                plan: compileContainedPlan(workspace: workspace),
+                profileSource: "(deny file-link)",
+                profileIsContainedCompilerOutput: true,
+                workspacePath: workspace.rawValue
+            ),
+            requestRead: -1,
+            responseWrite: pipes.responseWrite
+        )
+        pipes.responseWrite = -1
+
+        // Request bytes exactly as the codec frames them for the pipe.
+        let requestBytes = try RuntimeAdmissionCodec.encodeRequest(
+            harness.httpFrame("https://approved.example.com/v1/models", id: UUID())
+        ).get()
+        #expect(String(decoding: requestBytes, as: UTF8.self).contains(brokerSecretValue) == false)
+        let grantBytes = try RuntimeAdmissionCodec.encodeGrant(
+            capability: harness.capability, session: harness.runtime.id.rawValue
+        ).get()
+        #expect(String(decoding: grantBytes, as: UTF8.self).contains(brokerSecretValue) == false)
+
+        let decisions = session.accept(requestBytes)
+        #expect(decisions.count == 1)
+        guard case .http = decisions.first?.response else {
+            Issue.record("piped brokered request must execute, got \(String(describing: decisions.first?.response))")
+            session.finish()
+            return
+        }
+        session.finish()
+        let responseBytes = admissionReadAvailable(pipes.responseRead)
+        let responseText = String(decoding: responseBytes, as: UTF8.self)
+        #expect(responseText.contains("\"status\":\"http\""))
+        #expect(responseText.contains(brokerSecretValue) == false)
+
+        // Host-side only: the value resolved, but never crossed.
+        #expect(delivery.all.count == 1)
+        #expect(delivery.all.first?.value == brokerSecretValue)
+    }
+
+    @Test func evidenceLogCarriesNamesNotValues() throws {
+        let log = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-broker-log-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: log) }
+        let transport = BrokerHTTPTransport()
+        let delivery = BrokerDeliveryCapture()
+        let harness = try AdmissionHarness(
+            evidenceFile: log,
+            normalize: brokerCombinedNormalize,
+            http: .effect(transport.run),
+            broker: brokerFixture(),
+            delivery: delivery.deliver
+        )
+        defer { harness.cleanup() }
+        _ = harness.session.submitLegacy(
+            .success(harness.httpFrame("https://approved.example.com/v1/models", id: UUID()))
+        )
+        _ = harness.session.submitLegacy(
+            .success(harness.httpFrame("https://other.example.net/x", id: UUID()))
+        )
+        #expect(delivery.all.count == 1)
+        let text = try String(contentsOf: log, encoding: .utf8)
+        #expect(text.contains("credentialGranted:API_KEY"))
+        #expect(text.contains("credentialWithheld:endpointNotApproved"))
+        #expect(text.contains("API_KEY"))
+        #expect(text.contains(brokerSecretValue) == false)
+    }
+
+    @Test func unwiredBrokerDropsGrantFailClosed() throws {
+        let transport = BrokerHTTPTransport()
+        let harness = try AdmissionHarness(
+            normalize: brokerCombinedNormalize,
+            http: .effect(transport.run),
+            broker: brokerFixture(),
+            delivery: nil
+        )
+        defer { harness.cleanup() }
+        let decision = harness.session.submitLegacy(
+            .success(harness.httpFrame("https://approved.example.com/v1/models", id: UUID()))
+        )
+        // The broker never breaks the request: it executes unauthenticated.
+        guard case .http = decision.response else {
+            Issue.record("unwired broker must not break the request, got \(decision.response)")
+            return
+        }
+        let brokerEvents = harness.evidence.snapshot().filter {
+            $0.result.hasPrefix("credential")
+        }
+        #expect(brokerEvents.count == 1)
+        #expect(brokerEvents.first?.result == "credentialUnwired:API_KEY")
+        #expect(brokerEvents.first?.authorization == .executorFailed)
+        #expect(brokerEvents.first?.executionAttempted == false)
+    }
+
+    @Test func resolveRequiresGrantAndHostApproval() {
+        let broker = ContainedCredentialBroker(
+            credentials: [
+                "API_KEY": ContainedCredentialBroker.Credential(
+                    value: brokerSecretValue, kind: .secret,
+                    approvedHosts: ["approved.example.com"])
+            ],
+            grants: [
+                "approved.example.com": "API_KEY",
+                "rogue.example": "API_KEY",
+                "ghost.example": "MISSING",
+            ]
+        )
+        #expect(
+            broker.resolve(host: "approved.example.com")
+                == .granted(BrokeredCredentialInjection(
+                    credentialName: "API_KEY", host: "approved.example.com",
+                    value: brokerSecretValue))
+        )
+        #expect(
+            broker.resolve(host: "APPROVED.EXAMPLE.COM")
+                == .granted(BrokeredCredentialInjection(
+                    credentialName: "API_KEY", host: "approved.example.com",
+                    value: brokerSecretValue))
+        )
+        // Routing without host approval withholds.
+        #expect(broker.resolve(host: "rogue.example") == .withheld(.endpointNotApproved))
+        // Routing to a missing credential withholds.
+        #expect(broker.resolve(host: "ghost.example") == .withheld(.credentialMissing))
+        // Host approval without routing withholds.
+        let unrouted = ContainedCredentialBroker(
+            credentials: [
+                "API_KEY": ContainedCredentialBroker.Credential(
+                    value: brokerSecretValue, kind: .secret,
+                    approvedHosts: ["lonely.example"])
+            ],
+            grants: [:]
+        )
+        #expect(unrouted.resolve(host: "lonely.example") == .withheld(.endpointNotApproved))
+        // Unknown host withholds.
+        #expect(broker.resolve(host: "unknown.example") == .withheld(.endpointNotApproved))
+    }
+
+    @Test func selectorsCrossAsPreparedEntriesButNeverInject() {
+        let broker = ContainedCredentialBroker(
+            credentials: [
+                "AWS_CREDENTIAL_PROFILE": ContainedCredentialBroker.Credential(
+                    value: "prod-profile", kind: .selector,
+                    approvedHosts: ["approved.example.com"])
+            ],
+            grants: ["approved.example.com": "AWS_CREDENTIAL_PROFILE"]
+        )
+        #expect(broker.resolve(host: "approved.example.com") == .withheld(.credentialNotSecret))
+        #expect(broker.preparedEntries() == [
+            BrokerPreparedEntry(name: "AWS_CREDENTIAL_PROFILE", value: "prod-profile")
+        ])
+    }
+
+    @Test func credentialClassDeniesByDefault() {
+        for name in [
+            "GH_TOKEN", "MY_API_KEY", "db_password", "AWS_SECRET_ACCESS_KEY",
+            "BEARER_TOKEN", "SESSION_AUTH", "PRIVATE_KEY_FILE", "MY_AUTHORIZATION",
+            "SSH_AUTH_SOCK", "KUBECONFIG", "AWS_SHARED_CREDENTIALS_FILE",
+            "GPG_AGENT_INFO", "GIT_ASKPASS", "OCTO_COOKIE", "TOTP_SEED",
+            "LICENSE_KEY", "NETRC_FILE", "MY_CREDENTIALS",
+            // Concatenated and suffix spellings of the same concepts:
+            // classification is by meaning, not separator placement.
+            "ANTHROPIC_APIKEY", "PRIVATEKEY", "ACCESSTOKEN", "MYSECRET",
+            "GITHUB_PAT", "apiKey", "accessToken", "CLIENTSECRET",
+            "SUPERTOKEN", "SERVICE_PASSWORD", "AUTH_JWT",
+            // The git-identity allowlist must not smuggle credentials.
+            "GIT_AUTHOR_TOKEN", "GIT_COMMITTER_APIKEY",
+        ] {
+            #expect(ContainedEnvironmentPolicy.isCredentialClass(name), "credential class: \(name)")
+            #expect(
+                ContainedEnvironmentPolicy.isBlockedVariableName(name),
+                "class implies blocked: \(name)"
+            )
+        }
+        for name in [
+            "RUSTUP_TOOLCHAIN", "PYENV_VERSION", "TOKENIZERS_PARALLELISM",
+            "KEYNOTE", "MY_TOKENIZER", "ANTHROPIC_BASE_URL", "PATH", "LANG",
+            "NVM_DIR", "JAVA_HOME",
+        ] {
+            #expect(
+                ContainedEnvironmentPolicy.isCredentialClass(name) == false,
+                "not credential class: \(name)"
+            )
+        }
+        // Deny-by-default in the projection, including adversarial host values.
+        let projected = ContainedEnvironmentPolicy.project(host: [
+            "GH_TOKEN": "test-fake-secret",
+            "ANTHROPIC_API_KEY": "test-fake-secret",
+            "RUSTUP_TOOLCHAIN": "stable",
+            "TOKENIZERS_PARALLELISM": "false",
+        ])
+        #expect(projected.contains { $0.0 == "GH_TOKEN" } == false)
+        #expect(projected.contains { $0.0 == "ANTHROPIC_API_KEY" } == false)
+        // Git identity fields pass; credential names under the same
+        // prefixes do not.
+        let identity = ContainedEnvironmentPolicy.project(host: [
+            "GIT_AUTHOR_NAME": "A U Thor",
+            "GIT_AUTHOR_EMAIL": "a@example.com",
+            "GIT_AUTHOR_TOKEN": "test-fake-secret",
+            "ANTHROPIC_APIKEY": "test-fake-secret",
+        ])
+        #expect(identity.contains { $0 == ("GIT_AUTHOR_NAME", "A U Thor") })
+        #expect(identity.contains { $0 == ("GIT_AUTHOR_EMAIL", "a@example.com") })
+        #expect(identity.contains { $0.0 == "GIT_AUTHOR_TOKEN" } == false)
+        #expect(identity.contains { $0.0 == "ANTHROPIC_APIKEY" } == false)
+        #expect(projected.contains { $0 == ("RUSTUP_TOOLCHAIN", "stable") })
+        #expect(projected.contains { $0 == ("TOKENIZERS_PARALLELISM", "false") })
+        #expect(projected.allSatisfy { $0.1.contains("test-fake-secret") == false })
+    }
+
+    @Test func toolchainNamesPassProjection() {
+        let toolchain = [
+            "RUSTUP_TOOLCHAIN": "stable-aarch64-apple-darwin",
+            "RUSTUP_HOME": "/Users/test/.rustup",
+            "CARGO_HOME": "/Users/test/.cargo",
+            "PYENV_VERSION": "3.12.1",
+            "PYENV_ROOT": "/Users/test/.pyenv",
+            "NODE_VERSION": "20.11.0",
+            "NVM_DIR": "/Users/test/.nvm",
+            "GOENV_VERSION": "1.22.0",
+            "JAVA_HOME": "/Library/Java/Home",
+            "SDKMAN_DIR": "/Users/test/.sdkman",
+            "CONDA_PREFIX": "/Users/test/miniconda3",
+            "VOLTA_HOME": "/Users/test/.volta",
+            "DENO_DIR": "/Users/test/.deno",
+            "BUN_INSTALL": "/Users/test/.bun",
+            "MISE_DATA_DIR": "/Users/test/.mise",
+            "ASDF_DIR": "/Users/test/.asdf",
+            "SWIFTLY_HOME": "/Users/test/.swiftly",
+            "PYTHON_VERSION": "3.12",
+            "RUBY_VERSION": "3.3",
+            "TOKENIZERS_PARALLELISM": "false",
+            "HF_HUB_OFFLINE": "1",
+        ]
+        let projected = ContainedEnvironmentPolicy.project(host: toolchain)
+        for name in toolchain.keys {
+            #expect(ContainedEnvironmentPolicy.isCredentialClass(name) == false)
+            #expect(
+                ContainedEnvironmentPolicy.isBlockedVariableName(name) == false,
+                "toolchain survives denylist: \(name)"
+            )
+            #expect(projected.contains { $0.0 == name }, "toolchain survives: \(name)")
+        }
+    }
+
+    @Test func brokerPreparedEntriesApplyAfterStrip() {
+        let entries = brokerFixture().preparedEntries()
+        // Secret values are never minted; placeholders carry name+revision only.
+        #expect(entries.contains { $0.name == "API_KEY" && $0.value == "rv-brokered:API_KEY@7" })
+        #expect(entries.contains {
+            $0.name == "AWS_CREDENTIAL_PROFILE" && $0.value == "prod-profile"
+        })
+        #expect(entries.allSatisfy { $0.value.contains(brokerSecretValue) == false })
+        // Secrets without the placeholder opt-in leave no trace.
+        let bare = ContainedCredentialBroker(
+            credentials: [
+                "GH_TOKEN": ContainedCredentialBroker.Credential(
+                    value: "test-fake-bare", kind: .secret, approvedHosts: [])
+            ],
+            grants: [:]
+        )
+        #expect(bare.preparedEntries().isEmpty)
+        // The strip wins over hostile host values; broker entries apply after.
+        let projected = ContainedEnvironmentPolicy.project(
+            host: ["API_KEY": "host-injected-fake", "RUSTUP_TOOLCHAIN": "stable"],
+            brokerPrepared: entries
+        )
+        #expect(projected.contains { $0 == ("API_KEY", "rv-brokered:API_KEY@7") })
+        #expect(projected.contains { $0 == ("AWS_CREDENTIAL_PROFILE", "prod-profile") })
+        #expect(projected.contains { $0.0 == "RUSTUP_TOOLCHAIN" })
+        #expect(projected.allSatisfy { $0.1.contains("host-injected-fake") == false })
+        // Adversarial prepared entries are dropped fail-closed.
+        let hostile = ContainedEnvironmentPolicy.project(
+            host: [:],
+            brokerPrepared: [
+                BrokerPreparedEntry(name: "RUSTUP_TOOLCHAIN", value: "x"),
+                BrokerPreparedEntry(name: "9BAD", value: "x"),
+                BrokerPreparedEntry(name: "GH_TOKEN", value: "a\nb"),
+                BrokerPreparedEntry(name: "GH_TOKEN", value: "first"),
+                BrokerPreparedEntry(name: "GH_TOKEN", value: "second"),
+            ]
+        )
+        #expect(hostile.count == 1)
+        #expect(hostile.first?.0 == "GH_TOKEN" && hostile.first?.1 == "first")
+    }
+}
+
 private final class AdmissionDiagnosticCollector: @unchecked Sendable {
     private let lock = NSLock()
     private var lines: [String] = []
@@ -413,11 +878,18 @@ private struct AdmissionHarness {
     let capability: RuntimeCapability
     let requestID: UUID
     let effect: AdmissionEffect
+    let evidence: RuntimeAdmissionEvidence
     let session: RuntimeAdmissionSession
 
     init(
         approval: @escaping @Sendable (RuntimeActionRequestID, PendingAuthorization) -> Result<ApprovalDecision, AgentApprovalError>? = { _, _ in nil },
-        evidenceFile: URL? = nil
+        evidenceFile: URL? = nil,
+        normalize: @escaping @Sendable (RuntimeAdmissionSubject, RuntimeRequestedAction) -> Result<
+            ProposedAction, RuntimeAdmissionEvaluationError
+        > = isolationAdmissionNormalize,
+        http: RuntimeHTTPExecutor = .refuse,
+        broker: ContainedCredentialBroker? = nil,
+        delivery: (@Sendable (BrokeredCredentialInjection) -> Void)? = nil
     ) throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-admission-\(UUID().uuidString)", isDirectory: true)
@@ -437,17 +909,21 @@ private struct AdmissionHarness {
         let effect = AdmissionEffect()
         let evidence = RuntimeAdmissionEvidence(appendingTo: evidenceFile)
         let configuration = RuntimeAdmissionConfiguration(
-            normalize: isolationAdmissionNormalize,
+            normalize: normalize,
             executor: .effect(effect.run),
+            http: http,
             approval: approval,
             policy: { _ in .empty },
-            evidence: evidence
+            evidence: evidence,
+            credentialBroker: broker,
+            credentialDelivery: delivery
         )
         self.root = root
         self.runtime = runtime
         self.capability = capability
         self.requestID = UUID()
         self.effect = effect
+        self.evidence = evidence
         session = RuntimeAdmissionSession(
             binding: RuntimeChannelBinding(session: runtime, capability: capability),
             configuration: configuration,
@@ -474,6 +950,22 @@ private struct AdmissionHarness {
             capability: capability ?? self.capability,
             claimedSession: RuntimeSessionClaim(validating: (claim ?? runtime.id.rawValue).uuidString)!,
             action: .shell(ShellCommand(rawValue: command))
+        )
+    }
+
+    func httpFrame(
+        _ url: String,
+        method: String = "GET",
+        capability: RuntimeCapability? = nil,
+        claim: UUID? = nil,
+        id: UUID? = nil
+    ) -> RuntimeActionFrame {
+        RuntimeActionFrame(
+            version: 1,
+            requestID: RuntimeActionRequestID(validating: (id ?? requestID).uuidString)!,
+            capability: capability ?? self.capability,
+            claimedSession: RuntimeSessionClaim(validating: (claim ?? runtime.id.rawValue).uuidString)!,
+            action: .http(method: method, url: url)
         )
     }
 
@@ -544,6 +1036,81 @@ private func isolationAdmissionNormalize(
             )
         )
     )
+}
+
+/// Distinctive broker secret. Leak-surface assertions check for its absence;
+/// presence assertions use credential and host names only, never this value.
+private let brokerSecretValue = "test-broker-secret-AAA111"
+
+private func brokerFixture(revision: UInt64 = 7) -> ContainedCredentialBroker {
+    ContainedCredentialBroker(
+        credentials: [
+            "API_KEY": ContainedCredentialBroker.Credential(
+                value: brokerSecretValue,
+                kind: .secret,
+                approvedHosts: ["approved.example.com"],
+                placeholder: true
+            ),
+            "AWS_CREDENTIAL_PROFILE": ContainedCredentialBroker.Credential(
+                value: "prod-profile",
+                kind: .selector,
+                approvedHosts: []
+            ),
+        ],
+        grants: ["approved.example.com": "API_KEY"],
+        revision: revision
+    )
+}
+
+private final class BrokerHTTPTransport: Sendable {
+    private let runsBox = Mutex(0)
+
+    var runs: Int { runsBox.withLock { $0 } }
+
+    func run(
+        _ action: HTTPAction,
+        _: HTTPCancellation,
+        _: @escaping @Sendable () -> Bool
+    ) -> Result<HTTPExecutionReceipt, HTTPEgressFailure> {
+        runsBox.withLock { $0 += 1 }
+        return .success(
+            HTTPExecutionReceipt(
+                status: 200,
+                destination: action.destination.auditedResource,
+                headers: [],
+                body: Data("ok".utf8)
+            )
+        )
+    }
+}
+
+private final class BrokerDeliveryCapture: Sendable {
+    private let box = Mutex<[BrokeredCredentialInjection]>([])
+
+    var all: [BrokeredCredentialInjection] { box.withLock { $0 } }
+
+    func deliver(_ injection: BrokeredCredentialInjection) {
+        box.withLock { $0.append(injection) }
+    }
+}
+
+/// Shell rules plus stub-resolved HTTPS GETs: two public hosts so an
+/// authorized request can still hit an unapproved endpoint.
+private func brokerCombinedNormalize(
+    subject: RuntimeAdmissionSubject,
+    action: RuntimeRequestedAction
+) -> Result<ProposedAction, RuntimeAdmissionEvaluationError> {
+    guard case .http(let method, let url) = action else {
+        return isolationAdmissionNormalize(subject: subject, action: action)
+    }
+    return normalizeRuntimeHTTP(subject: subject, method: method, url: url) { host in
+        switch host {
+        case "approved.example.com", "other.example.net":
+            return .success([HTTPIPAddress(ipv4: [1, 1, 1, 1])!])
+        default:
+            return .failure(.failed)
+        }
+    }
 }
 
 /// Shell rules plus one public HTTPS GET, so a PTY payload can use fds 4 and 5

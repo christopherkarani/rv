@@ -304,6 +304,7 @@ func spawnSeatbeltProcess(
     started: RuntimeSession,
     admission: RuntimeAdmissionConfiguration,
     egressProxyPort: Int? = nil,
+    egressProxyCredential: EgressProxyCredential? = nil,
     host: HookHost? = nil,
     stagingAgent: DefinitionStagingTag? = nil,
     keychain: [(name: String, value: String)] = [],
@@ -318,6 +319,7 @@ func spawnSeatbeltProcess(
         started: started,
         admission: admission,
         egressProxyPort: egressProxyPort,
+        egressProxyCredential: egressProxyCredential,
         host: host,
         stagingAgent: stagingAgent,
         keychain: keychain,
@@ -340,6 +342,7 @@ func spawnSeatbeltProcess(
         started: started,
         admission: admission,
         egressProxyPort: egressProxyPort,
+        egressProxyCredential: egressProxyCredential,
         host: host,
         stagingAgent: stagingAgent,
         keychain: keychain,
@@ -373,6 +376,7 @@ func spawnSeatbeltProcessBody(
     started: RuntimeSession,
     admission: RuntimeAdmissionConfiguration,
     egressProxyPort: Int? = nil,
+    egressProxyCredential: EgressProxyCredential? = nil,
     host: HookHost? = nil,
     stagingAgent: DefinitionStagingTag? = nil,
     keychain: [(name: String, value: String)] = [],
@@ -568,27 +572,43 @@ func spawnSeatbeltProcessBody(
         request.productive
         ?? resolveProductiveWorkspace(
             workspacePath: workspace,
-            agentBin: agentBin
+            agentBin: agentBin,
+            credentialDelivery: request.credentialDelivery
         )
     if request.legacyAgentIntegration, case .pseudoTerminal = request.io {
         // Stage into the RV-managed home; the degraded workspace home
-        // keeps staging working when no managed home exists.
-        stageAgentHomes(cageHome: productive.developerHome?.home ?? workspace)
+        // keeps staging working when no managed home exists. Credential
+        // symlinks additionally require explicit opt-in on the request.
+        stageAgentHomes(
+            cageHome: productive.developerHome?.home ?? workspace,
+            credentialDelivery: request.credentialDelivery
+        )
     }
     // A retained prepared environment bypasses recomputation entirely:
-    // dispatch executes exactly what preparation froze, byte for byte. Nil
-    // preserves the legacy behavior of resolving live at spawn.
-    let environment =
-        preparedEnvironment
-        ?? containedRuntimeEnvironment(
+    // dispatch executes exactly what preparation froze, byte for byte —
+    // except the proxy binding, which never freezes: preparation mints
+    // no runtime, so it mints no proxy either, and the live per-runtime
+    // port (plus credential) is substituted at dispatch instead
+    // (`restampEgressProxyVariables`, GUD-2-6). Nil preserves the legacy
+    // behavior of resolving live at spawn.
+    let environment: [String]
+    if let frozen = preparedEnvironment {
+        environment = restampEgressProxyVariables(
+            frozen, port: egressProxyPort, credential: egressProxyCredential
+        )
+    } else {
+        environment = containedRuntimeEnvironment(
             workspace: workspace,
             io: request.io,
             agentBin: agentBin,
             resources: request.resources,
             egressProxyPort: egressProxyPort,
+            egressProxyCredential: egressProxyCredential,
             keychain: keychain,
-            productive: productive
+            productive: productive,
+            credentialDelivery: request.credentialDelivery
         )
+    }
     let argv = SpawnPointers(arguments)
     let envp = SpawnPointers(environment)
     defer {
@@ -758,10 +778,12 @@ func containedRuntimeEnvironment(
     agentBin: String? = nil,
     resources: RuntimeResourceManifest? = nil,
     egressProxyPort: Int? = nil,
+    egressProxyCredential: EgressProxyCredential? = nil,
     hostEnvironment: [String: String]? = nil,
     keychain: [(name: String, value: String)] = [],
     productive: ProductiveWorkspaceResolution? = nil,
-    probe: ContainedPATHProbe = .live
+    probe: ContainedPATHProbe = .live,
+    credentialDelivery: ContainedCredentialDelivery = .closed
 ) -> [String] {
     let host = hostEnvironment ?? ProcessInfo.processInfo.environment
     let context =
@@ -770,7 +792,8 @@ func containedRuntimeEnvironment(
             workspacePath: workspace,
             hostEnvironment: host,
             agentBin: agentBin,
-            probe: probe
+            probe: probe,
+            credentialDelivery: credentialDelivery
         )
     let cageHome = context.developerHome?.home ?? workspace
     let cageTmp = context.developerHome.map { $0.tmp + "/" } ?? workspace
@@ -832,25 +855,38 @@ func containedRuntimeEnvironment(
         let owned: Set<String> = [
             "OCX_SHIM_BYPASS", "MUSE_NO_AUTO_UPDATE", "DISABLE_AUTOUPDATER",
         ]
-        let compat = Set(AgentHomeStaging.gatewayPassthrough + AgentHomeStaging.apiKeyPassthrough)
-        values.removeAll { owned.contains($0.0) || compat.contains($0.0) }
+        values.removeAll { owned.contains($0.0) }
         values.append(("OCX_SHIM_BYPASS", "1"))
         values.append(("MUSE_NO_AUTO_UPDATE", "1"))
         values.append(("DISABLE_AUTOUPDATER", "1"))
-        // Temporary pre-secret-broker compatibility: re-injected after the
-        // generic policy strip, never widened. The generic runtime does not
-        // depend on these.
-        for name in AgentHomeStaging.gatewayPassthrough + AgentHomeStaging.apiKeyPassthrough {
-            if let value = host[name], value.contains("\0") == false {
-                values.append((name, value))
+        // F2 default closed: host API keys stay stripped unless the
+        // operator explicitly opts legacy keys in. Gateway routing needs
+        // no re-injection: no gatewayPassthrough name matches a denied
+        // token, infix, prefix, or exact rule, so the projection above is
+        // its single delivery path — a second, weaker check can no longer
+        // smuggle through a value the projection refused.
+        if credentialDelivery.legacyAPIKeys {
+            for name in AgentHomeStaging.apiKeyPassthrough {
+                if let value = host[name],
+                    ContainedEnvironmentPolicy.isSaneValue(value)
+                {
+                    values.append((name, value))
+                }
             }
         }
+        // Public constant, never a live key: gateway-routed runs work with
+        // no host key configured, and direct-endpoint runs with it fail
+        // closed at the provider (401), same as having no key.
         if values.allSatisfy({ $0.0 != "ANTHROPIC_API_KEY" }) {
             values.append(("ANTHROPIC_API_KEY", AgentHomeStaging.anthropicGatewayPlaceholder))
         }
     }
+    // Per-runtime proxy binding (CON-2-3, PAT-2-5): this runtime's
+    // loopback port, plus its supervisor-minted credential as URL
+    // userinfo when one was minted. Omitted on a bad or nil port: without
+    // a proxy the cage has no route out at all (fail closed).
     if let port = egressProxyPort, (1...65535).contains(port) {
-        let proxy = "http://127.0.0.1:\(port)"
+        let proxy = egressProxyURL(port: port, credential: egressProxyCredential)
         values.append(("HTTPS_PROXY", proxy))
         values.append(("HTTP_PROXY", proxy))
         values.append(("https_proxy", proxy))
@@ -872,6 +908,96 @@ func containedRuntimeEnvironment(
         keychain: keychain
     ).map { "\($0.0)=\($0.1)" }
 }
+
+/// Per-runtime proxy URL for one cage environment: the runtime's
+/// loopback port plus, when the supervisor minted one for this runtime,
+/// the credential as URL userinfo. Stock HTTP clients send `*_PROXY`
+/// userinfo as Basic `Proxy-Authorization`, which the credentialed proxy
+/// authenticates against that runtime's grant alone
+/// (`EgressProxy.proxyCredentialToken`); a sibling runtime holds a
+/// different token and is judged against its own grant. This is
+/// credential separation, not secrecy: the token rides the process
+/// environment, and the production (coarse sysctl-read) profile lets a
+/// same-uid sibling read it via KERN_PROCARGS2. Today every grant is
+/// the same `.publicHTTPS` policy, so harvesting a token grants no
+/// wider egress — but per-runtime policy differentiation must not ship
+/// until the per-MIB/pidinfo posture (or a dedicated uid) makes the
+/// token unreadable across cages. A missing or non-userinfo-safe
+/// credential stamps the port-only shape instead: open-mode proxies keep
+/// working unchanged, while credentialed proxies answer 407
+/// (`denied-credential`, fail closed) rather than admitting.
+private func egressProxyURL(port: Int, credential: EgressProxyCredential?) -> String {
+    guard let raw = credential?.rawValue, isEmbeddableProxyCredential(raw) else {
+        return "http://127.0.0.1:\(port)"
+    }
+    return "http://\(raw)@127.0.0.1:\(port)"
+}
+
+/// Tokens safe to embed as proxy-URL userinfo verbatim: non-empty,
+/// short, RFC 3986 unreserved characters only. Minted credentials are
+/// lowercase hex and always pass. Anything else — notably `@`, `/`,
+/// `:`, `?`, `#`, `%`, whitespace, or non-ASCII — would rewrite the URL
+/// authority or smuggle a second field, so it falls back to the
+/// port-only shape instead of percent-encoding: there is no decode gap
+/// because the proxy compares the exact presented token.
+private func isEmbeddableProxyCredential(_ raw: String) -> Bool {
+    guard raw.isEmpty == false, raw.utf8.count <= 256 else { return false }
+    return raw.allSatisfy { character in
+        guard let ascii = character.asciiValue else { return false }
+        return ascii.isEmbeddableProxyCredentialByte
+    }
+}
+
+private extension UInt8 {
+    var isEmbeddableProxyCredentialByte: Bool {
+        switch self {
+        case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x2D, 0x2E, 0x5F, 0x7E:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+/// GUD-2-6 re-stamp rule: substitute the live per-runtime proxy binding
+/// into a retained (frozen) environment at dispatch.
+///
+/// Preparation freezes with no proxy (`egressProxyPort: nil`: no
+/// runtime exists yet, so no proxy is minted), and dispatch executes
+/// what preparation froze — except the proxy binding, which belongs to
+/// the live runtime, not the frozen bytes. Rotation mid-preparation is
+/// safe by construction: frozen proxy entries (a stale port, a stale
+/// credential, a future prepare change) are stripped and the live
+/// values stamped. A nil or invalid port stamps nothing: without a
+/// proxy the cage has no route out at all (fail closed). Non-proxy
+/// entries pass through byte for byte, in order.
+func restampEgressProxyVariables(
+    _ frozen: [String],
+    port: Int?,
+    credential: EgressProxyCredential? = nil
+) -> [String] {
+    var kept = frozen.filter { entry in
+        guard let mark = entry.firstIndex(of: "=") else { return true }
+        return restampedProxyNames.contains(String(entry[..<mark]).uppercased()) == false
+    }
+    guard let port, (1...65535).contains(port) else { return kept }
+    let proxy = egressProxyURL(port: port, credential: credential)
+    kept.append("HTTPS_PROXY=\(proxy)")
+    kept.append("HTTP_PROXY=\(proxy)")
+    kept.append("https_proxy=\(proxy)")
+    kept.append("http_proxy=\(proxy)")
+    kept.append("NO_PROXY=localhost,127.0.0.1,::1")
+    kept.append("no_proxy=localhost,127.0.0.1,::1")
+    return kept
+}
+
+/// Proxy-variable names the re-stamp owns (uppercased for a
+/// case-insensitive match): the six the live path stamps, plus
+/// `ALL_PROXY`, which the live path never emits but a stale or foreign
+/// frozen entry must not smuggle past dispatch as a second route.
+private let restampedProxyNames: Set<String> = [
+    "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY",
+]
 
 private func addingResourceEnvironment(
     _ values: [(String, String)],
@@ -931,13 +1057,24 @@ private func addingKeychainEnvironment(
     let present = Set(values.map(\.0))
     var staged = Set<String>()
     for entry in keychain {
-        guard !entry.value.contains("\0"), entry.value.utf8.count <= 8_192,
+        // Cage-bound hardening: keychain entries are operator opt-in — the
+        // only production caller reads them from the selected resource
+        // profile (`WorkspaceSessionSupervisor.spawn`, via
+        // `keychainEnvironment(forAgent:reader:)`), and an empty profile
+        // section injects nothing — but they still cannot claim
+        // runtime-managed names, invalid names, or insane values.
+        // Secret-shaped names (`*_KEY`, `*_TOKEN`, ...) stay allowed: the
+        // generic projection never sees this path, and delivering them is
+        // the feature's purpose. A staged name replaces an ambient host
+        // value of the same name so the cage receives the staged secret.
+        guard ContainedEnvironmentPolicy.isValidName(entry.name),
+            ContainedEnvironmentPolicy.isSaneValue(entry.value),
+            entry.value.utf8.count <= 8_192,
+            ContainedEnvironmentPolicy.isManagedByRuntime(entry.name) == false,
+            entry.name.uppercased().hasSuffix("_PROXY") == false,
             staged.insert(entry.name).inserted
         else { continue }
         if present.contains(entry.name) {
-            guard ContainedEnvironmentPolicy.isManagedByRuntime(entry.name) == false,
-                entry.name.uppercased().hasSuffix("_PROXY") == false
-            else { continue }
             values.removeAll { $0.0 == entry.name }
         }
         values.append((entry.name, entry.value))

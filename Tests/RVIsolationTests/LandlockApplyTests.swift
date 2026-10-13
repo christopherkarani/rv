@@ -24,6 +24,14 @@ import Testing
 /// 19. `spawn` of `/usr/bin/true`, a workspace-local helper, or an
 ///     identity-valid helper does not mint contained+landlock. A valid helper
 ///     is refused before it executes.
+/// 20. Phase 6: `readClass` pins the UAPI read bits, stays disjoint from
+///     `writeClass`, and `handledFS` is exactly their union (EXECUTE excluded)
+/// 21. Phase 6: `compileFirstSliceLandlock` carries read grants + `.denied`
+///     egress for a real directory, while `compileLandlockRuleset` of the
+///     same workspace still refuses with `containedGuaranteesUnsupported`
+/// 22. Phase 6: `LandlockEgress.validatedHostProxy` accepts only dialable
+///     ports; the `.hostProxy` case carries a loopback port only, so a LAN
+///     or public dial is unrepresentable and each runtime gets its own proxy
 @Suite("IsolationApply")
 struct IsolationApplyLandlockTests {
     @Test func compileLandlockRuleset_contained_writeRootIsResolvedWorkspaceNotRepositoryRoot()
@@ -588,6 +596,73 @@ struct IsolationApplyLandlockTests {
                 because: "runSeatbelt of a landlock request"
             )
         }
+    }
+
+    @Test func landlockAccessFS_readClass_pinsUAPIValues() {
+        #expect(LandlockAccessFS.readFile == 1 << 2)
+        #expect(LandlockAccessFS.readDir == 1 << 3)
+        #expect(LandlockAccessFS.readClass == (1 << 2) | (1 << 3))
+        #expect(LandlockAccessFS.readClass == 12)
+        #expect(LandlockAccessFS.writeClass == 32754)
+        #expect(LandlockAccessFS.writeClass & LandlockAccessFS.readClass == 0)
+        #expect(LandlockAccessFS.handledFS == LandlockAccessFS.writeClass | LandlockAccessFS.readClass)
+        #expect(LandlockAccessFS.handledFS == 32766)
+        #expect(LandlockAccessFS.handledFS & LandlockAccessFS.execute == 0)
+        #expect(LandlockAccessFS.writeClass & LandlockAccessFS.refer != 0)
+        #expect(LandlockAccessFS.writeClass & LandlockAccessFS.truncate != 0)
+    }
+
+    @Test func compileFirstSliceLandlock_carriesReadGrantsAndDeniedEgress() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-landlock-read-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try requireWorkspace(root.resolvingSymlinksInPath().path)
+        switch compileFirstSliceLandlock(workspace: workspace) {
+        case .success(let ruleset):
+            #expect(ruleset.handledWriteAccess == LandlockAccessFS.writeClass)
+            #expect(ruleset.handledReadAccess == LandlockAccessFS.readClass)
+            #expect(ruleset.egress == .denied)
+        case .failure(let error):
+            recordUnexpectedApplyError(error, expected: "first-slice compile of a real directory")
+        }
+    }
+
+    @Test func compileLandlockRuleset_contained_compilesReadsYetStillRefuses() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-landlock-still-refuses-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try requireWorkspace(root.resolvingSymlinksInPath().path)
+        let plan = try requirePlan(
+            IsolationCompileRequest(requested: .contained, workspace: workspace)
+        )
+        switch compileFirstSliceLandlock(workspace: workspace) {
+        case .success(let ruleset):
+            #expect(ruleset.handledReadAccess == LandlockAccessFS.readClass)
+            #expect(ruleset.egress == .denied)
+        case .failure(let error):
+            recordUnexpectedApplyError(error, expected: "first-slice compile of a real directory")
+        }
+        expectApplyFailure(
+            compileLandlockRuleset(plan),
+            .containedGuaranteesUnsupported,
+            because: "phase-6 contained compile with read grants modeled"
+        )
+    }
+
+    @Test func landlockEgress_validatedHostProxy_acceptsOnlyDialablePorts() {
+        #expect(LandlockEgress.validatedHostProxy(port: 0) == nil)
+        #expect(LandlockEgress.validatedHostProxy(port: -1) == nil)
+        #expect(LandlockEgress.validatedHostProxy(port: 65536) == nil)
+        #expect(LandlockEgress.validatedHostProxy(port: 1) == .hostProxy(loopbackPort: 1))
+        #expect(LandlockEgress.validatedHostProxy(port: 8080) == .hostProxy(loopbackPort: 8080))
+        #expect(LandlockEgress.validatedHostProxy(port: 65535) == .hostProxy(loopbackPort: 65535))
+        #expect(LandlockEgress.denied != .hostProxy(loopbackPort: 8080))
+        #expect(
+            LandlockEgress.hostProxy(loopbackPort: 8080)
+                != LandlockEgress.hostProxy(loopbackPort: 8081)
+        )
     }
 
     @Test func landlock_prepare_contained_regularFileWorkspace_returnsWorkspaceDoesNotExist() throws {

@@ -108,6 +108,7 @@ final class WorkspaceSessionSupervisor: Sendable {
         var finishedClose: Result<Void, WorkspaceSessionError>?
         var recordError: IsolationApplyError?
         var abandoned = false
+        var reviewTask: Task<Void, Never>?
     }
 
     private enum CloseRole {
@@ -132,8 +133,19 @@ final class WorkspaceSessionSupervisor: Sendable {
     /// store) so the two can neither deadlock nor resurrect entries.
     private let preparedLaunches = PreparedLaunchStore()
     private let state: Mutex<State>
-    private let egressProxy: EgressProxy?
-    private let egressPort: Int?
+    /// Test seam: observes each per-runtime egress proxy at construction
+    /// (mirrors `redeemPreparedLaunch`'s `preAcceptHook`). Production leaves
+    /// it nil; wiring tests use it to capture proxies that never register
+    /// (retired children). Boxed: the spawn path reads it off the test thread.
+    private let egressConstructionHookBox = Mutex<(@Sendable (EgressProxy) -> Void)?>(nil)
+    /// Phase 4 review queue: denial intake plus live approval loading.
+    /// Nil when the review config directory is unavailable (fail closed:
+    /// denials still log, static policy still stands, no live updates).
+    let reviewQueue: NetworkReviewQueue?
+    /// Test seam: replaces the production denial log in every per-runtime
+    /// record closure, so wiring tests capture denials in memory instead of
+    /// touching the real `~/.config`. Production leaves it nil.
+    private let denialRecorder: (@Sendable (EgressProxyDenial) -> Void)?
     /// Leases profile `secrets` per launch; the gateway starts on first use.
     private let secretBroker: SecretLaunchBroker?
 
@@ -146,7 +158,9 @@ final class WorkspaceSessionSupervisor: Sendable {
         lifecycleLog: WorkspaceLifecycleStore,
         ownerLock: WorkspaceOwnerLock,
         instanceJournal: AgentInstanceJournalStore,
-        secretBroker: SecretLaunchBroker?
+        secretBroker: SecretLaunchBroker?,
+        reviewConfigDirectory: URL?,
+        denialRecorder: (@Sendable (EgressProxyDenial) -> Void)? = nil
     ) {
         self.secretBroker = secretBroker ?? SecretLaunchBroker.production(workspace: id.rawValue.uuidString)
         self.id = id
@@ -158,22 +172,15 @@ final class WorkspaceSessionSupervisor: Sendable {
         self.ownerLock = ownerLock
         self.agentInstances = AgentInstanceRegistry(journal: instanceJournal)
         self.state = Mutex(State(lifecycle: .creating))
-        // One CONNECT proxy per workspace host. A bind failure leaves the
-        // port nil and contained spawns omit proxy variables (fail closed:
-        // without a proxy the cage has no route out at all).
-        let proxy = EgressProxy()
-        switch proxy.start() {
-        case .success(let port):
-            self.egressProxy = proxy
-            self.egressPort = port
-        case .failure(let error):
-            // Fail closed (no proxy, no route out), but say so: without
-            // this line a bind failure is indistinguishable from any
-            // other "contained agent has no network" cause.
-            complain("rv: egress proxy unavailable: \(error)")
-            self.egressProxy = nil
-            self.egressPort = nil
-        }
+        // No shared CONNECT proxy: each runtime gets its own credentialed
+        // instance at the spawn seam (REQ-2-1), so no open loopback proxy
+        // survives as a cross-runtime authority (SEC-2-2, separation —
+        // not cross-cage secrecy on the coarse profile; see
+        // `egressProxyURL`). Denial intake
+        // still feeds the review queue ahead of the production denial log,
+        // per proxy (see makeRuntimeEgress).
+        self.reviewQueue = reviewConfigDirectory.map(NetworkReviewQueue.init(configDirectory:))
+        self.denialRecorder = denialRecorder
     }
 
     #endif
@@ -198,7 +205,11 @@ final class WorkspaceSessionSupervisor: Sendable {
         lifecycleLog: WorkspaceLifecycleStore,
         runtimeLog: URL? = nil,
         instanceJournal: AgentInstanceJournalStore = .production,
-        secretBroker: SecretLaunchBroker? = nil
+        secretBroker: SecretLaunchBroker? = nil,
+        reviewConfigDirectory: URL? = HomeDirectory.process().map {
+            RVPolicyPaths.configDirectory(home: $0)
+        },
+        denialRecorder: (@Sendable (EgressProxyDenial) -> Void)? = nil
     ) -> Result<WorkspaceSessionSupervisor, WorkspaceSessionError> {
         let resolved: String
         switch existingResolvedWorkspacePath(workspace) {
@@ -338,7 +349,9 @@ final class WorkspaceSessionSupervisor: Sendable {
             lifecycleLog: lifecycleLog,
             ownerLock: ownerLock,
             instanceJournal: instanceJournal,
-            secretBroker: secretBroker
+            secretBroker: secretBroker,
+            reviewConfigDirectory: reviewConfigDirectory,
+            denialRecorder: denialRecorder
         )
         let activated = supervisor.state.withLock { state -> Bool in
             guard let active = state.lifecycle.transition(.becameActive) else { return false }
@@ -367,7 +380,72 @@ final class WorkspaceSessionSupervisor: Sendable {
             releaseAdmission(owner: id.rawValue)
             return .failure(.apply(.workspaceInodeBoundaryFailed))
         }
+        supervisor.beginLiveReview()
         return .success(supervisor)
+    }
+
+    /// Start the live-approval applier: approved network rules load into
+    /// every live per-runtime proxy within one interval, no restart. No-op
+    /// without a review queue (fail closed). The loop holds self weakly, so
+    /// a missed cancel still ends at deallocation.
+    func beginLiveReview() {
+        guard reviewQueue != nil else { return }
+        let task = Task { [weak self] in
+            while true {
+                guard let self else { break }
+                if Task.isCancelled { break }
+                await self.applyLiveNetworkApprovals()
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
+        // Atomic claim: exactly one caller's task survives; a racing
+        // duplicate is cancelled instead of leaking a second poller.
+        let installed = state.withLock { state -> Bool in
+            guard state.reviewTask == nil else { return false }
+            state.reviewTask = task
+            return true
+        }
+        if installed == false {
+            task.cancel()
+        }
+    }
+
+    /// One approval sweep: newly-approved rules move from the review queue
+    /// to every live per-runtime proxy. Idempotent; safe to call directly
+    /// (tests do). With no live runtime the sweep consumes nothing, so
+    /// approvals pend until a runtime exists to receive them.
+    func applyLiveNetworkApprovals(now: Date = Date()) async {
+        guard let queue = reviewQueue else { return }
+        let proxies = state.withLock { $0.children.values.map(\.egressProxy) }
+        guard proxies.isEmpty == false else { return }
+        // Credentialed instances ignore instance-wide rules by design
+        // (EgressProxy.supplementAdmits): per-runtime grant updates arrive
+        // with per-runtime review identity (T4 seam). Until then, when no
+        // live proxy enforces the supplement the sweep consumes nothing —
+        // approvals stay pending instead of being applied to a channel
+        // nothing enforces and recorded as loaded.
+        guard proxies.contains(where: \.enforcesSupplement) else { return }
+        guard let push = await queue.applyResolved(now: now) else { return }
+        // Record only what enforcing proxies accepted: a refused (stale)
+        // push must not present as loaded. Pushes carry the full live
+        // set, so every enforcing instance accepting the generation means
+        // exactly this set is live on each of them.
+        let accepted = proxies
+            .filter(\.enforcesSupplement)
+            .map { $0.updateSupplement(push.rules, generation: push.generation) }
+            .min()
+        if let accepted, accepted >= push.generation {
+            await queue.recordLoaded(
+                rules: push.rules, generation: accepted,
+                approvalIDs: push.approvalIDs, now: now)
+        }
+    }
+
+    private func cancelLiveReview() {
+        state.withLock {
+            $0.reviewTask?.cancel()
+            $0.reviewTask = nil
+        }
     }
 
     /// Drop the kernel lock without publishing. Tests use this to simulate process death.
@@ -378,8 +456,11 @@ final class WorkspaceSessionSupervisor: Sendable {
     }
 
     deinit {
-        egressProxy?.stop()
+        cancelLiveReview()
         secretBroker?.stop()
+        for child in state.withLock({ Array($0.children.values) }) {
+            child.egressProxy.stop()
+        }
         let abandoned = state.withLock { $0.abandoned }
         if abandoned {
             let children = state.withLock { Array($0.children.values) }
@@ -603,7 +684,11 @@ final class WorkspaceSessionSupervisor: Sendable {
             io: io,
             agentBin: nil,
             resources: compiled.resources,
-            egressProxyPort: egressPort,
+            // No shared proxy (REQ-2-1): preparation mints no runtime, so it
+            // mints no proxy either, and the frozen environment omits proxy
+            // variables (fail closed) until T4 substitutes the per-runtime
+            // port at dispatch.
+            egressProxyPort: nil,
             hostEnvironment: frozenHost,
             keychain: [],
             productive: productive
@@ -641,7 +726,9 @@ final class WorkspaceSessionSupervisor: Sendable {
             environment: environment,
             productive: productive,
             launchRequest: compiled,
-            egressProxyPort: egressPort,
+            // Prepare-time value (nil: no runtime, no proxy); the spawn
+            // body's live read is the per-runtime port.
+            egressProxyPort: nil,
             hook: selection.resolved.definition.hookHost,
             stagingAgent: DefinitionStagingTag(selection.resolved.definition)
         )
@@ -672,9 +759,10 @@ final class WorkspaceSessionSupervisor: Sendable {
     /// parsing, no environment resolution. Only runtime instance data is
     /// generated here (session, capability, instance, process group,
     /// admission descriptors), which cannot substitute launch semantics.
-    /// (The egress port is a supervisor-lifetime immutable `let`, so the
-    /// spawn body's live read provably equals the retained copy; the copy
-    /// exists for audit completeness and future redemption checks.)
+    /// (The retained egress port is the prepare-time value (nil); the spawn
+    /// body's live read is the per-runtime port, which T4 substitutes into
+    /// the frozen environment at dispatch. The retained copy exists for
+    /// audit completeness and future redemption checks.)
     ///
     /// Internal and unreachable from any product request: identity
     /// operations stay denied at the authorization layer, so only tests
@@ -1255,6 +1343,9 @@ final class WorkspaceSessionSupervisor: Sendable {
             )
         case .success(let child):
             let mounted = watchSeatbeltProcess(child.live, stop: child.stop)
+            // Unregistered by design: stop the runtime's own proxy here,
+            // since noteRuntimeEnded only reaches registered children.
+            child.egressProxy.stop()
             noteRuntimeEnded(child.live.session)
             return mounted
         }
@@ -1283,6 +1374,9 @@ final class WorkspaceSessionSupervisor: Sendable {
         // Signalling first lets it journal runtimeEnded for a cancel that is
         // still in progress. An already-dead runtime keeps its reason.
         _ = agentInstances.finishRuntime(runtime, reason: .cancelled)
+        // Its own proxy stops with the claim (CON-2-4): a lingering group
+        // keeps no route out either. Siblings are untouched.
+        child.egressProxy.stop()
         child.stop.request()
         _ = stopOwnedSession(leader: child.live.pid, reap: false)
         guard waitForChildren([child], seconds: 45) else {
@@ -1339,6 +1433,91 @@ final class WorkspaceSessionSupervisor: Sendable {
             return child.live.admission.submitLegacy(.success(frame))
         }
         return child.live.submitLegacy(frame)
+    }
+
+    /// One credentialed proxy per runtime, constructed at the spawn seam
+    /// (REQ-2-1): the supervisor mints a fresh credential and maps it to
+    /// that runtime's grant alone, so a sibling runtime holds a different
+    /// token and is judged against its own grant. No shared open instance
+    /// survives for co-tenants to inherit (SEC-2-2, separation — not
+    /// cross-cage secrecy on the coarse profile; see `egressProxyURL`).
+    /// Borrowed shape:
+    /// OpenShell's workload-without-network plus supervisor-owned upstream
+    /// (https://raw.githubusercontent.com/NVIDIA/OpenShell/main/crates/openshell-driver-docker/README.md).
+    ///
+    /// The grant policy is the static workspace policy: which endpoints are
+    /// allowed does not change here, only who may use them. The principal is
+    /// per-runtime (`egress:<runtime-uuid>`), replacing the workspace-scoped
+    /// proposal identity for enforcement (PAT-2-5 direction).
+    ///
+    /// A bind failure returns a nil port and the contained spawn omits proxy
+    /// variables (fail closed: without a proxy the cage has no route out
+    /// at all).
+    private func makeRuntimeEgress(session: RuntimeSessionID) -> RuntimeEgress {
+        let credential = EgressProxyCredential()
+        let proxy = EgressProxy(
+            grants: [
+                credential: EgressGrant(
+                    principal: EgressPrincipal(
+                        rawValue: "egress:" + session.rawValue.uuidString.lowercased()
+                    ),
+                    policy: .publicHTTPS
+                )
+            ],
+            record: makeEgressRecord()
+        )
+        switch proxy.start() {
+        case .success(let port):
+            return RuntimeEgress(proxy: proxy, credential: credential, port: port)
+        case .failure(let error):
+            // Fail closed (no proxy, no route out), but say so: without
+            // this line a bind failure is indistinguishable from any
+            // other "contained agent has no network" cause.
+            complain("rv: egress proxy unavailable: \(error)")
+            return RuntimeEgress(proxy: proxy, credential: credential, port: nil)
+        }
+    }
+
+    /// Denial intake for one per-runtime proxy: the production denial log
+    /// (or the injected test recorder), chained ahead of the review queue,
+    /// which is never replaced.
+    private func makeEgressRecord() -> @Sendable (EgressProxyDenial) -> Void {
+        let logDenial = denialRecorder ?? EgressProxy.productionDenialLog()
+        let queue = reviewQueue
+        let workspaceID = id
+        let workspaceDirectory = original
+        return { denial in
+            logDenial(denial)
+            if let queue {
+                Task {
+                    await queue.noteDenial(
+                        denial,
+                        workspace: workspaceID,
+                        workspaceDirectory: workspaceDirectory,
+                        now: Date()
+                    )
+                }
+            }
+        }
+    }
+
+    /// The egress proxy serving one runtime, if it is still registered.
+    /// Wiring tests use this to address each runtime's instance.
+    func egressProxy(for runtime: RuntimeSessionID) -> EgressProxy? {
+        state.withLock { $0.children[runtime]?.egressProxy }
+    }
+
+    /// The supervisor-minted credential for one runtime, if it is still
+    /// registered. Wiring tests present it; production delivery to the cage
+    /// arrives with the per-runtime environment (T4 seam).
+    func egressCredential(for runtime: RuntimeSessionID) -> EgressProxyCredential? {
+        state.withLock { $0.children[runtime]?.egressCredential }
+    }
+
+    /// Test seam: observes each per-runtime proxy at construction (see
+    /// `egressConstructionHookBox`). Nil disables.
+    func setEgressConstructionHook(_ hook: (@Sendable (EgressProxy) -> Void)?) {
+        egressConstructionHookBox.withLock { $0 = hook }
     }
 
     private func spawn(
@@ -1398,6 +1577,16 @@ final class WorkspaceSessionSupervisor: Sendable {
                 keychain += leased.environment
             }
         }
+        // Per-runtime egress, minted before the commit lock: the port must
+        // be known to freeze into the child's environment, and a socket bind
+        // must not run under the supervisor lock. On every failure below the
+        // proxy is stopped (fail closed, no leak); on success it attaches to
+        // the child and dies with it (CON-2-4).
+        let sessionID = RuntimeSessionID()
+        let runtimeEgress = makeRuntimeEgress(session: sessionID)
+        if let hook = egressConstructionHookBox.withLock({ $0 }) {
+            hook(runtimeEgress.proxy)
+        }
         var slot = WorkspaceChildSlot()
         let result: Result<Void, WorkspaceSessionError> = state.withLock { state in
             guard state.closeAccepted == false, state.lifecycle.acceptsRuntime else {
@@ -1432,7 +1621,7 @@ final class WorkspaceSessionSupervisor: Sendable {
                 }
             }
             let session = RuntimeSession(
-                id: RuntimeSessionID(),
+                id: sessionID,
                 workspaceSessionID: id,
                 host: host,
                 workspace: original,
@@ -1479,7 +1668,12 @@ final class WorkspaceSessionSupervisor: Sendable {
                 boundary: boundary,
                 started: session,
                 admission: admission,
-                egressProxyPort: egressPort,
+                egressProxyPort: runtimeEgress.port,
+                // T3c+T4 wiring: the owning runtime's credential rides its
+                // own proxy URL userinfo (PAT-2-5). Without it the
+                // credentialed proxy 407s every request; a nil port still
+                // omits proxy variables entirely (fail closed).
+                egressProxyCredential: runtimeEgress.credential,
                 host: host,
                 stagingAgent: stagingAgent,
                 keychain: keychain,
@@ -1489,7 +1683,11 @@ final class WorkspaceSessionSupervisor: Sendable {
             case .failure(let error):
                 return .failure(.apply(error))
             case .success(let live):
-                let child = WorkspaceChild(live: live)
+                let child = WorkspaceChild(
+                    live: live,
+                    egressProxy: runtimeEgress.proxy,
+                    egressCredential: runtimeEgress.credential
+                )
                 if register {
                     state.children[live.session.id] = child
                 }
@@ -1500,6 +1698,10 @@ final class WorkspaceSessionSupervisor: Sendable {
         switch result {
         case .failure(let error):
             secretBroker?.revoke(lease)
+            // Commit failed: the proxy never attached to a child, so stop it
+            // here. Attached children retire through retireUnrecorded, which
+            // stops their own.
+            runtimeEgress.proxy.stop()
             if slot.child == nil, let session = slot.logged {
                 noteRuntimeEnded(session, reason: .spawnFailed)
             }
@@ -1616,6 +1818,8 @@ final class WorkspaceSessionSupervisor: Sendable {
     }
 
     private func retireUnrecorded(_ child: WorkspaceChild) {
+        // Cut egress first: the never-established child keeps no proxy.
+        child.egressProxy.stop()
         let session = child.live.session
         let pid = child.live.pid
         state.withLock { state in
@@ -1748,13 +1952,15 @@ final class WorkspaceSessionSupervisor: Sendable {
             // An already-dead runtime keeps the reason the watch recorded;
             // the watch still reaps the process group.
             _ = agentInstances.finishRuntime(child.live.session.id, reason: .cancelled)
+            // Each runtime's own proxy stops with the claim (CON-2-4).
+            child.egressProxy.stop()
             child.stop.request()
             _ = stopOwnedSession(leader: child.live.pid, reap: false)
         }
         guard waitForChildren(children, seconds: 45) else {
             return .failure(.childTeardownFailed)
         }
-        egressProxy?.stop()
+        cancelLiveReview()
         secretBroker?.stop()
         if publish {
             state.withLock { $0.publishCount += 1 }
@@ -1843,12 +2049,20 @@ final class WorkspaceSessionSupervisor: Sendable {
     /// Runs on the watch thread; unknown runtimes are a no-op.
     func noteDeathObserved(_ session: RuntimeSession) {
         _ = agentInstances.finishRuntime(session.id, reason: .runtimeEnded)
+        // Cut egress with authority, mirroring cancel(): surviving group
+        // members keep no route out under a dead principal while the reap
+        // drains. noteRuntimeEnded stops again (idempotent).
+        state.withLock { $0.children[session.id]?.egressProxy }?.stop()
     }
 
     private func noteRuntimeEnded(
         _ session: RuntimeSession,
         reason: AgentRevokeReason = .runtimeEnded
     ) {
+        // The watch owns this call when a runtime ends: its proxy stops with
+        // it (CON-2-4). Unregistered paths (single runtimes, spawn failures,
+        // retired children) find nothing and skip; they stop their own.
+        state.withLock { $0.children[session.id]?.egressProxy }?.stop()
         _ = agentInstances.finishRuntime(session.id, reason: reason)
         secretBroker?.revoke(runtime: session.id.rawValue.uuidString)
         let recorded = lifecycleLog.append(
@@ -2066,6 +2280,15 @@ private struct WorkspaceChildSlot {
     var logged: RuntimeSession?
 }
 
+/// Per-runtime egress bundle minted at the spawn seam: the proxy instance,
+/// the credential the supervisor mapped to that runtime's grant, and the
+/// bound port (nil when the bind failed closed).
+private struct RuntimeEgress: Sendable {
+    var proxy: EgressProxy
+    var credential: EgressProxyCredential
+    var port: Int?
+}
+
 private func removeSnapshot(_ path: String, device: UInt64, inode: UInt64) -> Bool {
     var status = stat()
     guard path.withCString({ lstat($0, &status) == 0 }) else { return true }
@@ -2101,6 +2324,11 @@ struct RuntimeRetention: Equatable {
 
 private final class WorkspaceChild: Sendable {
     let live: LiveSeatbeltChild
+    /// This runtime's own credentialed proxy plus the credential the
+    /// supervisor mapped to its grant. Stopped with the child (CON-2-4);
+    /// never shared, never inherited.
+    let egressProxy: EgressProxy
+    let egressCredential: EgressProxyCredential
     let stop = RuntimeCancellation()
     /// Start time captured before the group is recorded. Absent when the
     /// kernel identity could not be proved, in which case nothing is signalled.
@@ -2113,8 +2341,14 @@ private final class WorkspaceChild: Sendable {
         set { provenGroupBox.withLock { $0 = newValue } }
     }
 
-    init(live: LiveSeatbeltChild) {
+    init(
+        live: LiveSeatbeltChild,
+        egressProxy: EgressProxy,
+        egressCredential: EgressProxyCredential
+    ) {
         self.live = live
+        self.egressProxy = egressProxy
+        self.egressCredential = egressCredential
     }
 
     var watchFinished: Bool {

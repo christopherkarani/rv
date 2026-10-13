@@ -238,6 +238,31 @@ func runAdmittedSeatbeltCommand(
 }
 
 #if os(macOS)
+/// Cage environment for one admitted one-shot command: the owning
+/// runtime's productive facts and proxy port, but never the runtime's
+/// proxy credential (narrower-grant decision, spec §9: the one-shot
+/// shares the owning runtime's proxy address — loopback the seatbelt
+/// rule already admits, so no new route — while the credentialed proxy
+/// 407s its CONNECTs; loopback-direct keeps working). One-shots execute
+/// single gate-allowed shell effects; they must not borrow the owning
+/// runtime's network grant. Shaped like OpenShell's workload half of
+/// the two-container model: the supervisor holds the upstream grant,
+/// and only the runtime's own requests present it
+/// (https://raw.githubusercontent.com/NVIDIA/OpenShell/main/crates/openshell-driver-docker/README.md).
+func admittedOneShotEnvironment(
+    launch: AdmittedLaunchContext,
+    hostEnvironment: [String: String]? = nil
+) -> [String] {
+    containedRuntimeEnvironment(
+        workspace: launch.workspacePath,
+        io: .discard,
+        agentBin: AgentBin.installedDirectory(),
+        egressProxyPort: launch.egressProxyPort,
+        hostEnvironment: hostEnvironment,
+        productive: launch.productive
+    )
+}
+
 private func spawnAdmittedCommand(
     _ command: IsolatedCommand,
     launch: AdmittedLaunchContext
@@ -313,13 +338,7 @@ private func spawnAdmittedCommand(
         command.executable,
     ]
     arguments.append(contentsOf: command.arguments)
-    let environment = containedRuntimeEnvironment(
-        workspace: launch.workspacePath,
-        io: .discard,
-        agentBin: AgentBin.installedDirectory(),
-        egressProxyPort: launch.egressProxyPort,
-        productive: launch.productive
-    )
+    let environment = admittedOneShotEnvironment(launch: launch)
     let argv = SpawnPointers(arguments)
     let envp = SpawnPointers(environment)
     defer {
