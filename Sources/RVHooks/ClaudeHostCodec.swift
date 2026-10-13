@@ -12,12 +12,15 @@ public struct ClaudeHostCodec: HostCodec {
         else {
             return .malformed(.unreadable)
         }
-        guard envelope.hookEventName == "PreToolUse" else {
+        guard let eventName = envelope.hookEventName,
+              ClaudeEventName(wireValue: eventName).strictMatch
+        else {
             return .foreign
         }
         let cwd = envelope.cwd.flatMap { WorkingDirectory(validating: $0) }
         let session = firstNonEmpty(envelope.sessionId).flatMap { SessionID(validating: $0) }
-        if envelope.toolName == "Bash" {
+        if let toolName = envelope.toolName,
+           ClaudeToolName(wireValue: toolName).strictMatch == .shell {
             return HookRequest.decoded(
                 host: .claude,
                 command: envelope.toolInput?.command,
@@ -184,13 +187,4 @@ private struct ClaudeToolInput: Decodable {
         case targetFile = "target_file"
         case target
     }
-}
-
-private func firstNonEmpty(_ values: String?...) -> String? {
-    for value in values {
-        if let value, value.isEmpty == false {
-            return value
-        }
-    }
-    return nil
 }
