@@ -61,7 +61,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
             appearance: .pretty(colorOffPalette)
         )
 
-        #expect(outcome.exitCode == 0)
+        #expect(outcome.exitCode == 1)
         #expect(outcome.stdout.contains("not installed"))
         #expect(outcome.stdout.contains("Grok") && outcome.stdout.contains("missing"))
         #expect(outcome.stdout.contains("Pi") && outcome.stdout.contains("missing"))
@@ -92,7 +92,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
         let outcome = DoctorRun.run(
             environment: environment,
-            diagnostics: localReady,
+            diagnostics: .xpc(snapshot: runningDoctorSnapshot(), localCorePacksReady: true),
             appearance: .pretty(colorOffPalette)
         )
 
@@ -122,7 +122,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
         let outcome = DoctorRun.run(
             environment: environment,
-            diagnostics: localReady,
+            diagnostics: .xpc(snapshot: runningDoctorSnapshot(), localCorePacksReady: true),
             appearance: .pretty(colorOffPalette)
         )
 
@@ -155,7 +155,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
         let outcome = DoctorRun.run(
             environment: environment,
-            diagnostics: localReady,
+            diagnostics: .xpc(snapshot: runningDoctorSnapshot(), localCorePacksReady: true),
             appearance: .pretty(colorOffPalette)
         )
 
@@ -195,7 +195,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
         let outcome = DoctorRun.run(
             environment: environment,
-            diagnostics: localReady,
+            diagnostics: .xpc(snapshot: runningDoctorSnapshot(), localCorePacksReady: true),
             appearance: .pretty(colorOffPalette)
         )
 
@@ -224,7 +224,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
         let outcome = DoctorRun.run(
             environment: environment,
-            diagnostics: localReady,
+            diagnostics: .xpc(snapshot: runningDoctorSnapshot(), localCorePacksReady: true),
             appearance: .pretty(colorOffPalette)
         )
 
@@ -260,7 +260,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
         let outcome = DoctorRun.run(
             environment: environment,
-            diagnostics: localReady,
+            diagnostics: .xpc(snapshot: runningDoctorSnapshot(), localCorePacksReady: true),
             appearance: .pretty(colorOffPalette)
         )
 
@@ -295,7 +295,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
         let outcome = DoctorRun.run(
             environment: environment,
-            diagnostics: localReady,
+            diagnostics: .xpc(snapshot: runningDoctorSnapshot(), localCorePacksReady: true),
             appearance: .pretty(colorOffPalette)
         )
 
@@ -330,7 +330,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
         let outcome = DoctorRun.run(
             environment: environment,
-            diagnostics: localReady,
+            diagnostics: .xpc(snapshot: runningDoctorSnapshot(), localCorePacksReady: true),
             appearance: .pretty(colorOffPalette)
         )
 
@@ -356,7 +356,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
         let outcome = DoctorRun.run(
             environment: environment,
-            diagnostics: localReady,
+            diagnostics: .xpc(snapshot: runningDoctorSnapshot(), localCorePacksReady: true),
             appearance: .pretty(colorOffPalette)
         )
 
@@ -428,7 +428,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
         let outcome = DoctorRun.run(
             environment: environment,
-            diagnostics: localReady,
+            diagnostics: .xpc(snapshot: runningDoctorSnapshot(), localCorePacksReady: true),
             appearance: .pretty(colorOffPalette)
         )
 
@@ -451,7 +451,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
         let outcome = DoctorRun.run(
             environment: environment,
-            diagnostics: localReady,
+            diagnostics: .xpc(snapshot: runningDoctorSnapshot(), localCorePacksReady: true),
             appearance: .pretty(colorOffPalette)
         )
 
@@ -586,7 +586,7 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
 
         let outcome = DoctorRun.run(
             environment: environment,
-            diagnostics: localReady,
+            diagnostics: .xpc(snapshot: runningDoctorSnapshot(), localCorePacksReady: true),
             appearance: .pretty(colorOffPalette)
         )
 
@@ -989,6 +989,31 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
         #expect(outcome.stdout.contains("running       ") == false)
         #expect(outcome.stdout.contains("service reported an error"))
         #expect(outcome.stdout.contains("peer supplied detail") == false)
+    }
+}
+
+@Test func doctor_serviceDown_robotOkIsFalseAndExitsOne() throws {
+    try withDoctorHome { _, _, environment in
+        let snapshot = DoctorSnapshotReply(
+            serviceSemver: "1.0.0",
+            state: .down,
+            idleExitSeconds: 300,
+            packsEnabled: dayOnePackIDs,
+            checks: [DoctorCheck(id: .packs, status: .ok, message: "ready")]
+        )
+        let outcome = DoctorRun.run(
+            environment: environment,
+            diagnostics: .xpc(snapshot: snapshot, localCorePacksReady: true),
+            appearance: .robot
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: Data(outcome.stdout.utf8)) as? [String: Any]
+        )
+        let service = try #require(object["service"] as? [String: Any])
+        #expect(service["state"] as? String == "down")
+        #expect(service["fallback_ready"] as? Bool == true)
+        #expect(object["ok"] as? Bool == false)
+        #expect(outcome.exitCode == 1)
     }
 }
 
