@@ -110,6 +110,68 @@ struct MCPConfigurationTests {
         #expect(error.message == #"mcp.json is invalid: toolMode must be "direct" or "search""#)
     }
 
+    static let remote = #"""
+        {"version": 1, "servers": [
+          {"name": "linear", "url": "https://mcp.linear.app/mcp", "tools": {"default": "allow"}},
+          {"name": "gh", "url": "https://api.githubcopilot.com/mcp/", "transport": "http",
+           "headers": {"Authorization": "Bearer ${secret:GITHUB_PAT}", "X-MCP-Toolsets": "repos"}},
+          {"name": "local", "url": "http://127.0.0.1:8931/sse", "transport": "sse"}
+        ]}
+        """#
+
+    @Test func remoteServersDecodeAndRoundTrip() throws {
+        let configuration = try decode(Self.remote).get()
+        let linear = try #require(configuration.server(named: "linear")?.remote)
+        #expect(linear == MCPRemoteServer(url: try #require(URL(string: "https://mcp.linear.app/mcp"))))
+        #expect(linear.transport == .http)
+        let gh = try #require(configuration.server(named: "gh")?.remote)
+        #expect(gh.headers == ["Authorization": "Bearer ${secret:GITHUB_PAT}", "X-MCP-Toolsets": "repos"])
+        #expect(gh.secretNames == ["GITHUB_PAT"])
+        #expect(configuration.server(named: "local")?.remote?.transport == .sse)
+        #expect(configuration.server(named: "local")?.command == "")
+
+        let text = configuration.encoded().compactText
+        #expect(text.contains("command") == false)
+        #expect(text.contains(#""transport":"sse""#))
+        #expect(text.contains(#""transport":"http""#) == false)
+        #expect(try MCPConfiguration.decode(Data(text.utf8)).get() == configuration)
+    }
+
+    @Test func remoteServersRefuseLocalKeysUnsafeURLsAndManagedHeaders() {
+        func server(_ body: String) -> String { #"{"version":1,"servers":[{"name":"r",\#(body)}]}"# }
+        let cases: [(String, String)] = [
+            (server(#""url":"https://a.example","command":"x""#), "both command and url"),
+            (server(#""url":"https://a.example","args":["x"]"#), "unknown key args"),
+            (server(#""url":"https://a.example","env":{"K":"v"}"#), "unknown key env"),
+            (server(#""url":"https://a.example","secrets":{"K":"S"}"#), "unknown key secrets"),
+            (server(#""url":"https://a.example","sandbox":{}"#), "unknown key sandbox"),
+            (server(#""command":"x","headers":{"A":"b"}"#), "unknown key headers"),
+            (server(#""url":"http://a.example/mcp""#), "url must be https"),
+            (server(#""url":"https://user:pw@a.example/mcp""#), "without credentials"),
+            (server(#""url":"ftp://a.example""#), "url must be https"),
+            (server(#""url":"not a url""#), "url must be https"),
+            (server(#""url":"https://a.example/#frag""#), "fragment"),
+            (server(#""url":"https://a.example","transport":"ws""#), #"transport must be "http" or "sse""#),
+            (server(#""url":"https://a.example","headers":{"Mcp-Session-Id":"x"}"#), "rv sets Mcp-Session-Id"),
+            (server(#""url":"https://a.example","headers":{"host":"x"}"#), "rv sets host"),
+            (server(#""url":"https://a.example","headers":{"Content-Type":"x"}"#), "rv sets Content-Type"),
+            (server(#""url":"https://a.example","headers":{"Bad Name":"x"}"#), "header name"),
+            (server(#""url":"https://a.example","headers":{"A":"x\ny"}"#), "line break"),
+            (server(#""url":"https://a.example","headers":{"A":"${secret:}"}"#), "malformed ${secret:NAME}"),
+            (server(#""url":"https://a.example","headers":{"A":1}"#), "must be a string"),
+        ]
+        for (text, fragment) in cases {
+            guard case .failure(let error) = decode(text) else {
+                Issue.record("accepted \(text)")
+                continue
+            }
+            #expect(error.message.contains(fragment), "\(text) -> \(error.message)")
+        }
+        for loopback in ["http://localhost:9/mcp", "http://127.0.0.1/mcp", "http://[::1]:8080/sse"] {
+            #expect((try? decode(server(#""url":"\#(loopback)""#)).get()) != nil, "\(loopback)")
+        }
+    }
+
     @Test func largeIntegersCompareExactly() throws {
         let big = try JSONValue.parse(Data("9007199254740993".utf8))
         #expect(big.domainValue == .string("9007199254740993"))

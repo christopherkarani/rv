@@ -267,6 +267,7 @@ grammar, durable MCP approvals idea, JSON-RPC depth bound.
 | D19 | Argument rules match only arguments that are present; the strictest matching rule wins. A deny rule keyed on an argument the agent can omit needs a non-allow `default` behind it (documented in `rv mcp --help`) | Inventing values for missing arguments would guess the upstream's defaults; strictest-wins keeps one ordering for globs and rules |
 | D20 | Remote servers run behind the gateway, which holds headers and OAuth tokens; the agent's host config only ever names `rv mcp serve` | Tokens never reach the agent's process or its config files |
 | D21 | Org anti-rollback state lives in the user's config (`managed-state.json`), so it stops replay of an older signed policy by anyone who can write the root-owned directory but not by the user themselves | Only root can install policy files; the user can already delete their own config, so this is the strongest user-space check |
+| D22 | A remote server's URL must be https (http only to loopback, for local servers and tests) with no credentials in it; rv never follows redirects for it, and a legacy SSE `endpoint` must be same-origin. OAuth endpoints follow the same rule. `sandbox`/`requireSandbox` do not apply to remote entries (no local process) | Headers and bearer tokens go only to the origin the user reviewed in `rv mcp trust` |
 
 ### Coordination with `impro-ref` (owner's uncommitted work)
 
@@ -1170,11 +1171,20 @@ allowlist build on them). Nothing here edits an impro-ref file: 7.4 uses
       `db/tables`
 
 ### 7.1 Remote MCP servers
+Design: the gateway core is unchanged (it already speaks JSON-RPC by
+request id); `MCPGatewayRuntime` gains a remote upstream beside processes.
+Any HTTP failure becomes a JSON-RPC error for that request id, so the core's
+existing initialize/list/call paths handle it. URL rules in D22.
 - [ ] mcp.json server with `"url"` (instead of `command`) and `"headers"`
       (values may hold `${secret:NAME}`); `"transport": "http"` (streamable
-      HTTP, default) or `"sse"` (legacy)
+      HTTP, default) or `"sse"` (legacy). `url` excludes `command`, `args`,
+      `env`, `secrets`, `sandbox`; rv-managed headers (`Mcp-Session-Id`,
+      `MCP-Protocol-Version`, `Host`, `Content-*`, …) are refused
 - [ ] Gateway transport: POST JSON-RPC, JSON or SSE replies,
-      `Mcp-Session-Id`, `MCP-Protocol-Version`; legacy SSE endpoint event
+      `Mcp-Session-Id`, `MCP-Protocol-Version`; legacy SSE endpoint event.
+      Header secrets and OAuth tokens are scrubbed from replies like
+      process secrets. The optional streamable-HTTP GET stream (server
+      pushes) is not opened: the gateway only forwards `list_changed`
 - [ ] `rv mcp connect <server>`: OAuth 2.1 + PKCE (S256), protected-resource
       and authorization-server metadata discovery, dynamic client
       registration, loopback redirect, `resource` indicator; tokens in the

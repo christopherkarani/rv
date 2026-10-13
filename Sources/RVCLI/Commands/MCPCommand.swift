@@ -371,15 +371,26 @@ enum MCPRun {
             lines.append("  tool mode search: clients see only rv_search_tools and rv_call_tool")
         }
         for server in configuration.servers {
-            lines.append("  \(server.name): \(([server.command] + server.args).joined(separator: " "))")
-            let tools = server.tools
             var rules: [String] = []
+            if let remote = server.remote {
+                let transport = remote.transport == .sse ? "legacy SSE" : "streamable HTTP"
+                lines.append("  \(server.name): \(remote.url.absoluteString) (remote, \(transport))")
+                if remote.headers.isEmpty == false {
+                    rules.append("headers " + remote.headers.keys.sorted().map { name in
+                        let secrets = MCPSecretReference.names(in: remote.headers[name] ?? "") ?? []
+                        return secrets.isEmpty ? "\(name) (literal)" : "\(name) (secret \(secrets.joined(separator: ", ")))"
+                    }.joined(separator: ", "))
+                }
+            } else {
+                lines.append("  \(server.name): \(([server.command] + server.args).joined(separator: " "))")
+            }
+            let tools = server.tools
             if tools.allow.isEmpty == false { rules.append("allow " + capped(tools.allow)) }
             if tools.ask.isEmpty == false { rules.append("ask " + capped(tools.ask)) }
             if tools.deny.isEmpty == false { rules.append("deny " + capped(tools.deny)) }
             for ruled in tools.rules { rules.append("\(ruled.decision.rawValue) \(ruled.rule.summary)") }
             if let fallback = tools.defaultDecision { rules.append("other tools \(fallback.rawValue)") }
-            if server.sandbox == nil { rules.append("no sandbox") }
+            if server.sandbox == nil, server.remote == nil { rules.append("no sandbox") }
             if rules.isEmpty == false { lines.append("    " + rules.joined(separator: " · ")) }
         }
         if configuration.direct.isEmpty == false { lines.append("  direct: " + configuration.direct.joined(separator: ", ")) }

@@ -74,9 +74,60 @@ public struct MCPSandboxPolicy: Sendable, Equatable {
     }
 }
 
+public enum MCPRemoteTransport: String, Sendable, Equatable {
+    /// Streamable HTTP (MCP 2025-03-26 and later).
+    case http
+    /// The 2024-11-05 HTTP+SSE transport.
+    case sse
+}
+
+/// A server reached over HTTP. The gateway holds the headers (and any OAuth
+/// token), so the agent's host config never sees them.
+public struct MCPRemoteServer: Sendable, Equatable {
+    public var url: URL
+    /// Values may hold `${secret:NAME}`.
+    public var headers: [String: String]
+    public var transport: MCPRemoteTransport
+
+    public init(url: URL, headers: [String: String] = [:], transport: MCPRemoteTransport = .http) {
+        self.url = url
+        self.headers = headers
+        self.transport = transport
+    }
+
+    public var secretNames: [String] {
+        Set(headers.values.flatMap { MCPSecretReference.names(in: $0) ?? [] }).sorted()
+    }
+
+    /// Headers the transport or URLSession owns.
+    static let managedHeaders: Set<String> = [
+        "mcp-session-id", "mcp-protocol-version", "host", "content-length", "content-type", "transfer-encoding",
+        "connection", "accept", "last-event-id",
+    ]
+    static let maximumHeaders = 32
+
+    /// https anywhere, http only to loopback; no credentials or fragment.
+    public static func endpointProblem(_ url: URL) -> String? {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+            let scheme = components.scheme?.lowercased(), let host = components.host, host.isEmpty == false
+        else { return "must be https (http only to localhost)" }
+        guard scheme == "https" || (scheme == "http" && isLoopback(host)) else { return "must be https (http only to localhost)" }
+        if components.user != nil || components.password != nil {
+            return "must be given without credentials (send them as headers with ${secret:NAME})"
+        }
+        if components.fragment != nil { return "must not have a fragment" }
+        return nil
+    }
+
+    static func isLoopback(_ host: String) -> Bool {
+        ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host.lowercased())
+    }
+}
+
 public struct MCPServerDefinition: Sendable, Equatable {
     public var name: String
     public var description: String?
+    /// Empty for a remote server.
     public var command: String
     public var args: [String]
     /// Literal, non-secret values for the upstream's environment.
@@ -85,6 +136,13 @@ public struct MCPServerDefinition: Sendable, Equatable {
     public var secrets: [String: String]
     public var tools: MCPToolPolicy
     public var sandbox: MCPSandboxPolicy?
+    /// Set instead of `command`; the decoder refuses process keys beside it.
+    public var remote: MCPRemoteServer?
+
+    public init(name: String, description: String? = nil, remote: MCPRemoteServer, tools: MCPToolPolicy = MCPToolPolicy()) {
+        self.init(name: name, description: description, command: "", tools: tools)
+        self.remote = remote
+    }
 
     public init(
         name: String,
@@ -249,7 +307,13 @@ public struct MCPConfiguration: Sendable, Equatable {
         var object = JSONObject()
         object["name"] = .string(server.name)
         if let description = server.description { object["description"] = .string(description) }
-        object["command"] = .string(server.command)
+        if let remote = server.remote {
+            object["url"] = .string(remote.url.absoluteString)
+            if remote.headers.isEmpty == false { object["headers"] = stringMap(remote.headers) }
+            if remote.transport != .http { object["transport"] = .string(remote.transport.rawValue) }
+        } else {
+            object["command"] = .string(server.command)
+        }
         if server.args.isEmpty == false { object["args"] = .array(server.args.map(JSONValue.string)) }
         if server.environment.isEmpty == false { object["env"] = stringMap(server.environment) }
         if server.secrets.isEmpty == false { object["secrets"] = stringMap(server.secrets) }
@@ -324,15 +388,20 @@ enum MCPConfigurationDecoding {
             throw MCPConfigurationError.invalid("server name must be 1-64 of A-Z a-z 0-9 . _ -")
         }
         let context = "server \(name)"
+        if object["url"] != nil {
+            guard object["command"] == nil else { throw MCPConfigurationError.invalid("\(context) has both command and url") }
+            try allowOnly(object, ["name", "description", "url", "headers", "transport", "tools"], context)
+            var definition = MCPServerDefinition(name: name, remote: try remote(object, context))
+            definition.description = try description(object, context)
+            if let raw = object["tools"] { definition.tools = try tools(raw, context) }
+            return definition
+        }
         try allowOnly(object, ["name", "description", "command", "args", "env", "secrets", "tools", "sandbox"], context)
         guard let command = object["command"]?.stringValue, command.isEmpty == false, command.contains("\0") == false else {
             throw MCPConfigurationError.invalid("\(context) needs a command")
         }
         var definition = MCPServerDefinition(name: name, command: command)
-        if let raw = object["description"] {
-            guard let text = raw.stringValue else { throw MCPConfigurationError.invalid("\(context) description must be a string") }
-            definition.description = text
-        }
+        definition.description = try description(object, context)
         if let raw = object["args"] {
             guard let args = raw.stringArray else { throw MCPConfigurationError.invalid("\(context) args must be strings") }
             for arg in args {
@@ -355,6 +424,60 @@ enum MCPConfigurationDecoding {
         if let raw = object["tools"] { definition.tools = try tools(raw, context) }
         if let raw = object["sandbox"] { definition.sandbox = try sandbox(raw, context) }
         return definition
+    }
+
+    private static func description(_ object: JSONObject, _ context: String) throws -> String? {
+        guard let raw = object["description"] else { return nil }
+        guard let text = raw.stringValue else { throw MCPConfigurationError.invalid("\(context) description must be a string") }
+        return text
+    }
+
+    private static func remote(_ object: JSONObject, _ context: String) throws -> MCPRemoteServer {
+        guard let text = object["url"]?.stringValue, let url = URL(string: text) else {
+            throw MCPConfigurationError.invalid("\(context) url must be https (http only to localhost)")
+        }
+        if let problem = MCPRemoteServer.endpointProblem(url) {
+            throw MCPConfigurationError.invalid("\(context) url \(problem)")
+        }
+        var remote = MCPRemoteServer(url: url)
+        if let raw = object["transport"] {
+            guard let transport = raw.stringValue.flatMap(MCPRemoteTransport.init(rawValue:)) else {
+                throw MCPConfigurationError.invalid(#"\#(context) transport must be "http" or "sse""#)
+            }
+            remote.transport = transport
+        }
+        guard let raw = object["headers"] else { return remote }
+        guard let headers = raw.objectValue else { throw MCPConfigurationError.invalid("\(context) headers must be an object") }
+        guard headers.keys.count <= MCPRemoteServer.maximumHeaders else {
+            throw MCPConfigurationError.invalid("\(context) has more than \(MCPRemoteServer.maximumHeaders) headers")
+        }
+        for (name, value) in headers.entries {
+            guard isHeaderName(name) else {
+                throw MCPConfigurationError.invalid("\(context) header name \(name) is not a valid HTTP header name")
+            }
+            guard MCPRemoteServer.managedHeaders.contains(name.lowercased()) == false else {
+                throw MCPConfigurationError.invalid("\(context) headers: rv sets \(name) itself")
+            }
+            guard let text = value.stringValue else {
+                throw MCPConfigurationError.invalid("\(context) header \(name) must be a string")
+            }
+            guard text.unicodeScalars.allSatisfy({ $0 != "\r" && $0 != "\n" && $0 != "\0" }) else {
+                throw MCPConfigurationError.invalid("\(context) header \(name) holds a line break or NUL")
+            }
+            guard let names = MCPSecretReference.names(in: text), names.allSatisfy(SecretsConfiguration.isVariableName) else {
+                throw MCPConfigurationError.invalid("\(context) header \(name) has a malformed ${secret:NAME}")
+            }
+            remote.headers[name] = text
+        }
+        return remote
+    }
+
+    /// RFC 9110 token characters.
+    static func isHeaderName(_ name: String) -> Bool {
+        (1...128).contains(name.utf8.count)
+            && name.unicodeScalars.allSatisfy { scalar in
+                scalar.isASCII && (CharacterSet.alphanumerics.contains(scalar) || "!#$%&'*+-.^_`|~".unicodeScalars.contains(scalar))
+            }
     }
 
     private static func tools(_ value: JSONValue, _ context: String) throws -> MCPToolPolicy {

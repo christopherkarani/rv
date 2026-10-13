@@ -216,6 +216,17 @@ struct MCPCommandTests {
         #expect(MCPRun.trustReview(searching).contains("tool mode search: clients see only rv_search_tools and rv_call_tool"))
     }
 
+    @Test func trustReviewShowsRemoteOriginsAndHeaderNamesButNoValues() throws {
+        let remote = MCPRemoteServer(
+            url: try #require(URL(string: "https://api.example.com/mcp")),
+            headers: ["Authorization": "Bearer ${secret:GH_PAT}", "X-Team": "literal-value-9"], transport: .sse)
+        let review = MCPRun.trustReview(MCPConfiguration(servers: [MCPServerDefinition(name: "gh", remote: remote)]))
+        #expect(review.contains("  gh: https://api.example.com/mcp (remote, legacy SSE)"), "\(review)")
+        #expect(review.contains("headers Authorization (secret GH_PAT), X-Team (literal)"), "\(review)")
+        #expect(review.contains("literal-value-9") == false)
+        #expect(review.contains("no sandbox") == false)
+    }
+
     @Test func approvingNeedsThePersonAndTheCodeTheGatewayPrinted() async throws {
         let fixture = Fixture()
         let probe = fixture.environment()
