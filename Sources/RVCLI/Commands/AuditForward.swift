@@ -13,7 +13,6 @@ import RVHistory
 import RVIsolation
 import RVMCP
 import RVPolicy
-import Synchronization
 
 /// HTTP seam for `rv audit forward`.
 struct AuditForwardTransport: Sendable {
@@ -27,38 +26,10 @@ struct AuditForwardTransport: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("rv/\(ProductVersion.semver)", forHTTPHeaderField: "User-Agent")
         for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.httpCookieStorage = nil
-        configuration.urlCache = nil
-        configuration.httpShouldSetCookies = false
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        let delegate = AuditForwardNoRedirects()
-        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
-        defer { session.invalidateAndCancel() }
-        let done = DispatchSemaphore(value: 0)
-        let outcome = Mutex<Result<Int, CommandFailure>>(.failure("no response"))
-        session.dataTask(with: request) { _, response, error in
-            if let http = response as? HTTPURLResponse {
-                outcome.withLock { $0 = .success(http.statusCode) }
-            } else if let error {
-                outcome.withLock { $0 = .failure(CommandFailure(error.localizedDescription)) }
-            }
-            done.signal()
-        }.resume()
-        done.wait()
-        return outcome.withLock { $0 }
-    }
-}
-
-/// Refuses redirects so a 307/308 cannot move the batch to another host.
-private final class AuditForwardNoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    func urlSession(
-        _ session: URLSession, task: URLSessionTask,
-        willPerformHTTPRedirection response: HTTPURLResponse,
-        newRequest request: URLRequest,
-        completionHandler: @escaping (URLRequest?) -> Void
-    ) {
-        completionHandler(nil)
+        switch DirectHTTP.send(request) {
+        case .status(let status): return .success(status)
+        case .failed(let message): return .failure(CommandFailure(message))
+        }
     }
 }
 
