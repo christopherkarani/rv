@@ -98,7 +98,7 @@ public enum MCPOAuthHTTP {
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.urlCache = nil
-        let delegate = NoRedirects()
+        let delegate = MCPNoRedirects()
         let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         let done = DispatchSemaphore(value: 0)
@@ -118,14 +118,6 @@ public enum MCPOAuthHTTP {
         return result.withLock { $0 }
     }
 
-    private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-        func urlSession(
-            _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-            newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
-        ) {
-            completionHandler(nil)
-        }
-    }
 }
 
 /// OAuth 2.1 pieces the MCP authorization spec uses: protected-resource
@@ -474,7 +466,7 @@ public struct MCPOAuthFlow: Sendable {
 }
 
 /// One-shot HTTP listener on 127.0.0.1 for the OAuth redirect.
-final class MCPLoopbackRedirect {
+struct MCPLoopbackRedirect: ~Copyable {
     let fd: Int32
     let port: Int
 

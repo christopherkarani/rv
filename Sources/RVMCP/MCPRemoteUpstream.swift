@@ -343,3 +343,13 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         for message in flushed { post(message, to: url, retried: false) }
     }
 }
+
+/// Refuses every redirect (D22) for one-shot OAuth requests.
+final class MCPNoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
