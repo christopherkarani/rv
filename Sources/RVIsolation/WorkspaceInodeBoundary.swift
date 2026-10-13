@@ -468,7 +468,11 @@ final class WorkspaceInodeBoundary: Sendable {
                 honorCancellation: false,
                 deadline: 8
             )
-            if result.status == 0 { return }
+            // A deadline means diskimagesd is wedged. Further detaches wait
+            // out the same wedge and hold the isolation shard until the job
+            // cap. A fast nonzero exit is the transient failure the retry is
+            // for.
+            if result.status == 0 || result.timedOut { return }
             usleep(40_000)
         }
     }
@@ -1012,24 +1016,23 @@ private func createMountedDisk(
     token: String
 ) -> Result<MountedDisk, IsolationApplyError> {
     let first = createMountedDiskBody(byteCount: byteCount, mountPoint: mountPoint, token: token)
-    guard case .failure(.workspaceInodeBoundaryFailed) = first else { return first }
-    if blockingWorkIsCancelled() { return first }
-    // One retry: diskimagesd/DiskArbitration pressure fails a create,
-    // attach, or mount a few times per suite run, and the next attempt
-    // succeeds. Deterministic failures fail twice with the same error.
-    // The attempt cleans its image up; unlink again in case that raced.
+    guard case .failure(.workspaceInodeBoundaryFailed) = first.result else { return first.result }
+    // A timed-out helper was killed because diskimagesd stopped answering.
+    // Retrying it stacks another full deadline onto the shard. A helper
+    // that exited nonzero is the transient failure the retry is for.
+    if blockingWorkIsCancelled() || first.timedOut { return first.result }
     usleep(100_000)
     let image = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-inode-\(token).sparseimage").path
     unlink(image)
-    return createMountedDiskBody(byteCount: byteCount, mountPoint: mountPoint, token: token)
+    return createMountedDiskBody(byteCount: byteCount, mountPoint: mountPoint, token: token).result
 }
 
 private func createMountedDiskBody(
     byteCount: UInt64,
     mountPoint: String,
     token: String
-) -> Result<MountedDisk, IsolationApplyError> {
+) -> MountedDiskAttempt {
     // Productive builds need headroom the project itself does not predict:
     // `.build`, `node_modules`, and `target` routinely exceed the source
     // tree by orders of magnitude. A sparse image makes the ceiling cheap
@@ -1043,6 +1046,10 @@ private func createMountedDiskBody(
     let image = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-inode-\(token).sparseimage").path
     let megabytes = max(Int(bytes / (1024 * 1024)) + 1, 32)
+    var timedOut = false
+    func finish(_ result: Result<MountedDisk, IsolationApplyError>) -> MountedDiskAttempt {
+        MountedDiskAttempt(result: result, timedOut: timedOut)
+    }
     let created = runTool(
         [
             "/usr/bin/hdiutil", "create", "-size", "\(megabytes)m",
@@ -1051,7 +1058,11 @@ private func createMountedDiskBody(
         ],
         honorCancellation: true
     )
-    guard created.status == 0 else { return .failure(.workspaceInodeBoundaryFailed) }
+    timedOut = created.timedOut
+    guard created.status == 0 else {
+        unlink(image)
+        return finish(.failure(.workspaceInodeBoundaryFailed))
+    }
     // `-nomount` plus a direct mount_hfs of the HFS slice: attaching
     // with a mountpoint asks DiskArbitration to mount, which wedges when
     // the daemon is unresponsive. Owners stay honored, matching the old
@@ -1060,35 +1071,42 @@ private func createMountedDiskBody(
         ["/usr/bin/hdiutil", "attach", "-nomount", "-plist", image],
         honorCancellation: true
     )
+    timedOut = timedOut || attached.timedOut
     guard attached.status == 0 else {
         unlink(image)
-        return .failure(.workspaceInodeBoundaryFailed)
+        return finish(.failure(.workspaceInodeBoundaryFailed))
     }
     guard let disk = diskDevice(inPlist: attached.stdout) else {
         _ = runTool(["/usr/bin/hdiutil", "detach", "-force", "-quiet", mountPoint])
         unlink(image)
-        return .failure(.workspaceInodeBoundaryFailed)
+        return finish(.failure(.workspaceInodeBoundaryFailed))
     }
     guard let slice = hfsSliceDevice(inPlist: attached.stdout) else {
         detachWorkspaceDisk(disk, mountPoint: nil)
         unlink(image)
-        return .failure(.workspaceInodeBoundaryFailed)
+        return finish(.failure(.workspaceInodeBoundaryFailed))
     }
     if blockingWorkIsCancelled() {
         detachWorkspaceDisk(disk, mountPoint: nil)
         unlink(image)
-        return .failure(.cancelled)
+        return finish(.failure(.cancelled))
     }
     let mounted = runTool(
         ["/sbin/mount_hfs", "-o", "nobrowse,nodev,nosuid", slice, mountPoint],
         honorCancellation: true
     )
+    timedOut = timedOut || mounted.timedOut
     guard mounted.status == 0 else {
         detachWorkspaceDisk(disk, mountPoint: mountPoint)
         unlink(image)
-        return .failure(.workspaceInodeBoundaryFailed)
+        return finish(.failure(.workspaceInodeBoundaryFailed))
     }
-    return .success(MountedDisk(disk: disk, imagePath: image))
+    return finish(.success(MountedDisk(disk: disk, imagePath: image)))
+}
+
+private struct MountedDiskAttempt {
+    var result: Result<MountedDisk, IsolationApplyError>
+    var timedOut: Bool
 }
 
 /// `system-entities` from `hdiutil attach -plist` output as typed values.
@@ -1421,6 +1439,26 @@ private struct ToolOutput {
     var status: Int32
     var stdout: String
     var stderr: String
+    var timedOut = false
+
+    init(status: Int32, stdout: String, stderr: String, timedOut: Bool = false) {
+        self.status = status
+        self.stdout = stdout
+        self.stderr = stderr
+        self.timedOut = timedOut
+    }
+}
+
+/// One diskimage helper at a time. Parallel `hdiutil`/`mount_hfs` calls
+/// pile onto diskimagesd until it stops answering; each waiter then sits
+/// through its deadline and the F-M shard hits the job cap. The lock is
+/// only around the helper, not the contained command.
+private enum DiskImageToolSerialization {
+    static let lock = Mutex<UInt8>(0)
+
+    static func contains(_ path: String) -> Bool {
+        path == "/usr/bin/hdiutil" || path == "/sbin/mount_hfs" || path == "/sbin/umount"
+    }
 }
 
 private func diskDevice(in text: String) -> String? {
@@ -1489,11 +1527,29 @@ private func unmountDirect(_ mountPoint: String, onlySource disk: String) {
 /// The executor runs this on `rv-executor-apply`; the poll sees that thread's
 /// flag as well as `Task.isCancelled`. Cleanup calls pass
 /// `honorCancellation: false` so a cancelled task can still detach the disk
-/// it created.
+/// it created. Diskimage helpers take `DiskImageToolSerialization.lock`
+/// for the whole call, including the deadline wait, so a second test cannot
+/// start another `hdiutil` while the first is still inside diskimagesd.
 private func runTool(
     _ arguments: [String],
     honorCancellation: Bool = false,
     deadline: TimeInterval? = 45
+) -> ToolOutput {
+    guard let executable = arguments.first else {
+        return ToolOutput(status: 1, stdout: "", stderr: "missing executable")
+    }
+    if DiskImageToolSerialization.contains(executable) {
+        return DiskImageToolSerialization.lock.withLock { _ in
+            runToolBody(arguments, honorCancellation: honorCancellation, deadline: deadline)
+        }
+    }
+    return runToolBody(arguments, honorCancellation: honorCancellation, deadline: deadline)
+}
+
+private func runToolBody(
+    _ arguments: [String],
+    honorCancellation: Bool,
+    deadline: TimeInterval?
 ) -> ToolOutput {
     guard let executable = arguments.first else {
         return ToolOutput(status: 1, stdout: "", stderr: "missing executable")
@@ -1520,6 +1576,7 @@ private func runTool(
     var stderr = Data()
     let limit = deadline.map { Date().addingTimeInterval($0) }
     var interrupted = false
+    var timedOut = false
     while process.isRunning {
         stdout.append(readToolPipe(outFD))
         stderr.append(readToolPipe(errFD))
@@ -1527,6 +1584,7 @@ private func runTool(
         let expired = limit.map { Date() >= $0 } ?? false
         if cancelled || expired {
             interrupted = true
+            timedOut = expired
             process.terminate()
             let killAfter = Date().addingTimeInterval(0.5)
             while process.isRunning, Date() < killAfter {
@@ -1564,7 +1622,8 @@ private func runTool(
     return ToolOutput(
         status: status,
         stdout: String(data: stdout, encoding: .utf8) ?? "",
-        stderr: String(data: stderr, encoding: .utf8) ?? ""
+        stderr: String(data: stderr, encoding: .utf8) ?? "",
+        timedOut: timedOut
     )
 }
 
@@ -1594,6 +1653,10 @@ private func readToolPipe(_ fd: Int32) -> Data {
             return bytes
         }
         if ready == 0 { return bytes }
+        // `poll` also reports POLLHUP/POLLERR. `O_NONBLOCK` does not stick
+        // on a Foundation pipe, so a `read` without POLLIN blocks and the
+        // deadline above never runs. That is the isolation-job hang.
+        if state.revents & Int16(POLLIN) == 0 { return bytes }
         let count = buffer.withUnsafeMutableBytes { raw -> Int in
             guard let base = raw.baseAddress else { return -1 }
             return read(fd, base, raw.count)

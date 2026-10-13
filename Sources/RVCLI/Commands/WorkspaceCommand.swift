@@ -190,6 +190,13 @@ struct WorkspaceAbandon: AsyncParsableCommand {
 }
 
 enum WorkspaceCommandRun {
+    /// Mirror of the `rv opencode` warning for `rv workspace run`: without a
+    /// profile the host stages no credentials. Warn instead of failing so
+    /// keyless runs (local models, `--help`) keep working. No CLI command
+    /// lists profiles, so the remedy names the file that defines the IDs.
+    static let missingProfileWarning =
+        "rv workspace run: no --resource-profile selected; provider credentials are unstaged and agent auth will fail. Pass --resource-profile <id> to stage them (profile IDs are defined in ~/.config/rv/runtime-resources.json).\n"
+
     /// Failed connect after `WorkspaceHosts.ensure` (`start`, `run`, and the
     /// workspace shell's first connect). Ensure may already have published
     /// or restored, so this text does not claim the workspace was untouched.
@@ -442,6 +449,9 @@ enum WorkspaceCommandRun {
             throw ValidationError("hook must be an agent tag of 1-32 letters, digits, '-', '.', or '_'")
         }
         let project = try requireProject(raw)
+        if resourceProfileID == nil {
+            FileHandle.standardError.write(Data(missingProfileWarning.utf8))
+        }
         try runInteractive(
             project: project,
             executable: executable,
