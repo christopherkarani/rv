@@ -7,7 +7,8 @@ import RVIsolation
 
 // UX-05: workspace lifecycle refusals must state the workspace state, whether
 // work is safe, and the next command to run — and must not overclaim either.
-#if os(macOS)
+// The two tests below use only the shared strings, so Linux CI runs them.
+// Inspect and refusal copy needs the macOS workspace types.
 @Test func hostNotReachablePreservationIsOnlyForAttachAndClose() {
     let preserved = WorkspaceCommandRun.hostNotReachablePreservedText
     #expect(preserved.contains("workspace host is not reachable"))
@@ -32,13 +33,19 @@ import RVIsolation
 }
 
 @Test func staleEndpointTextStatesSafetyAndNextAction() {
+    let text = WorkspaceCommandRun.staleEndpointText
+    #expect(text.contains("stale endpoint"))
+    #expect(text.contains("saved endpoint could not be used"))
+    #expect(text.contains("did not change the volume or saved tree"))
+    #expect(text.contains("rv workspace status"))
+    #expect(text.contains("rv doctor"))
+    #expect(text.contains("did not answer") == false)
+}
+
+#if os(macOS)
+@Test func staleEndpointSurfacesShareOneText() {
     let fromInspect = WorkspaceCommandRun.text(WorkspaceAttachment.staleEndpoint)
-    #expect(fromInspect.contains("stale endpoint"))
-    #expect(fromInspect.contains("saved endpoint could not be used"))
-    #expect(fromInspect.contains("did not change the volume or saved tree"))
-    #expect(fromInspect.contains("rv workspace status"))
-    #expect(fromInspect.contains("rv doctor"))
-    #expect(fromInspect.contains("did not answer") == false)
+    #expect(fromInspect == WorkspaceCommandRun.staleEndpointText)
     #expect(WorkspaceCommandRun.text(WorkspaceClientFailure.staleEndpoint) == fromInspect)
 }
 
