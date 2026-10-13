@@ -14,6 +14,9 @@ public struct ToolArgumentRuleError: Error, Sendable, Equatable {
 /// Every condition must hold. A pointer that resolves to nothing never
 /// matches, whatever the operator.
 public struct ToolArgumentRule: Sendable, Equatable {
+    /// RVDomain's JSON, named so modules with their own `JSONValue` can reach it.
+    public typealias Value = JSONValue
+
     public enum Operator: String, Sendable, Equatable, CaseIterable {
         case equal = "=="
         case notEqual = "!="

@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVDomain
 import Testing
 @testable import RVPolicy
 
@@ -63,6 +64,36 @@ struct ManagedPolicyTests {
         #expect(policy.isServerBlocked("github") == false)
         #expect(policy.allowsSecretSource("keychain"))
         #expect(policy.allowsSecretSource("hostEnvironment") == false)
+    }
+
+    @Test func argumentRulesSitBesideGlobsAndTheStrictestWins() throws {
+        let text = """
+            {"version": 1, "mcp": {
+              "allow": ["db/*"],
+              "ask": [{"tool": "db/query", "when": {"/database": {"==": "prod"}}}],
+              "deny": [{"tool": "*/query", "when": {"/sql": {"glob": "DROP *"}}}]}}
+            """
+        let policy = try ManagedPolicy.decode(Data(text.utf8)).get()
+        func args(_ json: String) throws -> JSONValue {
+            try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
+        }
+        #expect(policy.mcp.allow == ["db/*"])
+        #expect(policy.mcp.rules.map(\.decision) == [.ask, .deny])
+        #expect(policy.mcpDecision(server: "db", tool: "query", arguments: try args(#"{"database":"test"}"#)) == .allow)
+        #expect(policy.mcpDecision(server: "db", tool: "query", arguments: try args(#"{"database":"prod"}"#)) == .ask)
+        #expect(policy.mcpDecision(
+            server: "db", tool: "query", arguments: try args(#"{"database":"test","sql":"DROP TABLE x"}"#)) == .deny)
+        #expect(policy.mcpDecision(server: "db", tool: "query") == .allow)
+        #expect(policy.mcpHasArgumentRules(server: "db", tool: "query"))
+        #expect(policy.mcpHasArgumentRules(server: "db", tool: "list") == false)
+
+        func message(_ json: String) -> String? {
+            if case .failure(let error) = ManagedPolicy.decode(Data(json.utf8)) { return error.message }
+            return nil
+        }
+        #expect(message(#"{"version": 1, "mcp": {"deny": [{"tool": "x/y", "when": {"/a": {"~": 1}}}]}}"#)?
+            .hasPrefix("mcp.deny: unknown operator") == true)
+        #expect(message(#"{"version": 1, "mcp": {"deny": [3]}}"#) == "\"mcp.deny\" must hold non-empty strings or rule objects")
     }
 }
 

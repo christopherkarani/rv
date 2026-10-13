@@ -40,6 +40,8 @@ public struct ManagedPolicy: Sendable, Equatable {
         public var deny: [String] = []
         public var ask: [String] = []
         public var allow: [String] = []
+        /// Rule objects from the same three lists; `tool` is a `server/tool` glob.
+        public var rules: [ToolArgumentRule.Decided] = []
         public var defaultDecision: Decision = .allow
 
         public init() {}
@@ -78,12 +80,22 @@ public struct ManagedPolicy: Sendable, Equatable {
         mcp.blocked.contains { Self.glob($0, server) }
     }
 
-    public func mcpDecision(server: String, tool: String) -> Decision {
+    /// The strictest matching glob or rule, else `defaultDecision`. Without
+    /// arguments (a listing), only plain globs apply.
+    public func mcpDecision(server: String, tool: String, arguments: JSONValue? = nil) -> Decision {
         let subject = "\(server)/\(tool)"
-        if mcp.deny.contains(where: { Self.glob($0, subject) }) { return .deny }
-        if mcp.ask.contains(where: { Self.glob($0, subject) }) { return .ask }
-        if mcp.allow.contains(where: { Self.glob($0, subject) }) { return .allow }
-        return mcp.defaultDecision
+        var matched: [Decision] = []
+        if mcp.deny.contains(where: { Self.glob($0, subject) }) { matched.append(.deny) }
+        if mcp.ask.contains(where: { Self.glob($0, subject) }) { matched.append(.ask) }
+        if mcp.allow.contains(where: { Self.glob($0, subject) }) { matched.append(.allow) }
+        if let arguments, let ruled = ToolArgumentRule.strictest(mcp.rules, tool: subject, arguments: arguments) {
+            matched.append(ruled)
+        }
+        return matched.max() ?? mcp.defaultDecision
+    }
+
+    public func mcpHasArgumentRules(server: String, tool: String) -> Bool {
+        mcp.rules.contains { $0.rule.namesTool("\(server)/\(tool)") }
     }
 
     public func allowsSecretSource(_ kind: String) -> Bool {
@@ -160,9 +172,15 @@ extension ManagedPolicy {
             policy.mcp.blocked = try strings(mcp["blocked"], "mcp.blocked")
             policy.mcp.allowDirect = try bool(mcp["allowDirect"], "mcp.allowDirect") ?? true
             policy.mcp.requireSandbox = try bool(mcp["requireSandbox"], "mcp.requireSandbox") ?? false
-            policy.mcp.deny = try strings(mcp["deny"], "mcp.deny")
-            policy.mcp.ask = try strings(mcp["ask"], "mcp.ask")
-            policy.mcp.allow = try strings(mcp["allow"], "mcp.allow")
+            for decision in [Decision.allow, .ask, .deny] {
+                let (globs, rules) = try toolRules(mcp[decision.rawValue], decision: decision, "mcp.\(decision.rawValue)")
+                switch decision {
+                case .deny: policy.mcp.deny = globs
+                case .ask: policy.mcp.ask = globs
+                case .allow: policy.mcp.allow = globs
+                }
+                policy.mcp.rules += rules
+            }
             if let text = try optionalString(mcp["defaultDecision"], "mcp.defaultDecision") {
                 guard let decision = Decision(rawValue: text) else {
                     throw ManagedPolicyError("\"mcp.defaultDecision\" must be allow, ask, or deny")
@@ -228,6 +246,32 @@ extension ManagedPolicy {
         guard let value else { return nil }
         guard case .bool(let flag) = value else { throw ManagedPolicyError("\"\(name)\" must be true or false") }
         return flag
+    }
+
+    private static func toolRules(
+        _ value: JSONValue?, decision: Decision, _ name: String
+    ) throws -> ([String], [ToolArgumentRule.Decided]) {
+        guard let value else { return ([], []) }
+        guard case .array(let items) = value else {
+            throw ManagedPolicyError("\"\(name)\" must hold non-empty strings or rule objects")
+        }
+        var globs: [String] = []
+        var rules: [ToolArgumentRule.Decided] = []
+        for item in items {
+            switch item {
+            case .string(let text) where text.isEmpty == false:
+                globs.append(text)
+            case .object:
+                do {
+                    rules.append(.init(decision: decision, rule: try ToolArgumentRule.decode(item)))
+                } catch let error as ToolArgumentRuleError {
+                    throw ManagedPolicyError("\(name): \(error.message)")
+                }
+            default:
+                throw ManagedPolicyError("\"\(name)\" must hold non-empty strings or rule objects")
+            }
+        }
+        return (globs, rules)
     }
 
     private static func strings(_ value: JSONValue?, _ name: String) throws -> [String] {
