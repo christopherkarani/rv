@@ -24,11 +24,11 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 4 Enterprise client features | `governance/phase-4-enterprise` | [#415](https://github.com/christopherkarani/rv/pull/415) | merged |
 | 5 Launch readiness | human-owned | n/a | not started |
 | 6 Security blockers | `governance/phase-6-hardening` (from `main`) | [#417](https://github.com/christopherkarani/rv/pull/417) (draft) | in progress |
-| 7 Enterprise hardening | `governance/phase-7-enterprise-hardening` (from phase 6) | _not opened yet_ | not started |
+| 7 Enterprise hardening | `governance/phase-7-enterprise-hardening` (from phase 6) | _not opened yet_ | in progress |
 | 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | _not opened yet_ | not started |
 
 **Next action:** Phase 7 on `governance/phase-7-enterprise-hardening` (from
-phase 6): 7.1 remote MCP servers first. Phase 6 agent items are done except
+phase 6), in the order in the Phase 7 section (7.2 first). Phase 6 agent items are done except
 the impro-ref-blocked ones (6.2 cage denies, 6.5 injected config dir, 6.6
 watchdog). Owner items for phase 6: signing secrets + certificate (6.3),
 flip `signed_releases`/`release_team_id` in `install.sh` and set
@@ -264,6 +264,9 @@ grammar, durable MCP approvals idea, JSON-RPC depth bound.
 | D16 | One HMAC key signs grants and rv's own mcp.json writes: Keychain service `rv.approvals` on macOS, `approvals.key` (0600) on Linux. Verifiers never create the key | A same-user process can edit files but cannot mint MACs without the key; read-only verification never triggers a Keychain write |
 | D17 | An mcp.json not signed by rv is **untrusted**: `rv mcp check` fails ("edited outside rv"), the gateway turns every user `allow` into `ask`, and rv refuses to sign over it (`import`, `approve --always`) until `rv mcp trust` | Tampering can only tighten policy; rv never launders an outside edit |
 | D18 | Release binaries ship as bare Mach-O files: hardened runtime, no entitlements, identifier `dev.rv.<binary>`, notarized but not stapled (stapling needs a bundle, dmg, or pkg). `install.sh` pins the Team ID and requires `spctl` "Notarized Developer ID", which looks the ticket up online | Same files as today, no packaging change; offline first-run Gatekeeper checks don't apply because `curl` downloads carry no quarantine flag |
+| D19 | Argument rules match only arguments that are present; the strictest matching rule wins. A deny rule keyed on an argument the agent can omit needs a non-allow `default` behind it (documented in `rv mcp --help`) | Inventing values for missing arguments would guess the upstream's defaults; strictest-wins keeps one ordering for globs and rules |
+| D20 | Remote servers run behind the gateway, which holds headers and OAuth tokens; the agent's host config only ever names `rv mcp serve` | Tokens never reach the agent's process or its config files |
+| D21 | Org anti-rollback state lives in the user's config (`managed-state.json`), so it stops replay of an older signed policy by anyone who can write the root-owned directory but not by the user themselves | Only root can install policy files; the user can already delete their own config, so this is the strongest user-space check |
 
 ### Coordination with `impro-ref` (owner's uncommitted work)
 
@@ -1048,8 +1051,69 @@ Design:
 
 ## Phase 7: Enterprise hardening
 
-Branch `governance/phase-7-enterprise-hardening` from phase 6. Checklist is
-filled in when the phase starts (items 7.1-7.7 from the 2026-10-13 brief).
+Branch `governance/phase-7-enterprise-hardening` from phase 6 (PR targets
+`governance/phase-6-hardening` until #417 merges). Work order: 7.2, 7.5, 7.6,
+7.3, 7.1, 7.4 (small policy pieces first; remote transport and the egress
+allowlist build on them). Nothing here edits an impro-ref file: 7.4 uses
+`EgressProxy`/`EgressHostPolicy` as they are and its own `MCPSandbox` profile.
+
+### 7.2 Argument-aware rules
+- [ ] `ToolArgumentRule` (RVPolicy): `{"tool": "<glob>", "when": {"<JSON
+      pointer>": {"<op>": value, ...}, ...}}`; ops `==` `!=` `<` `>` `in`
+      `glob`; every condition must hold; a missing path never matches.
+      Table-driven tests
+- [ ] mcp.json `tools.allow|ask|deny` accept rule objects next to globs;
+      strictest matching rule wins (deny > ask > allow), then `default`, then
+      `defaultDecision`. `tools/list` hides only on an unconditional deny and
+      marks tools with conditional rules
+- [ ] Org policy `mcp.deny|ask|allow` accept the same objects (`tool` is a
+      `server/tool` glob); `rv managed status` and `rv mcp list` show them
+- [ ] E2E: gateway fixture, same tool allowed for one argument value, asked
+      for another, denied for a third
+
+### 7.5 Org keys and anti-rollback
+- [ ] `org-key.pub` holds one or more base64 Ed25519 keys (one per line,
+      `#` comments); any key verifies the signature (rotation)
+- [ ] Highest accepted `serial` remembered per policy directory in
+      `~/.config/rv/managed-state.json` (owner-only); a lower serial is
+      invalid ("rollback"), shown by `rv managed status` and `rv report`
+
+### 7.6 Tamper-evident audit
+- [ ] Each audit line carries `prev` = SHA-256 of the previous line's bytes
+      (first line: 64 zeros); `rv audit verify` reports the first break
+- [ ] OCSF forward includes the chain head (`unmapped.rv_chain_head`)
+- [ ] `rv audit forward --install`: user LaunchAgent (every 5 min) written
+      and printed; LaunchDaemon template printed only (root installs it)
+
+### 7.3 Search tool mode
+- [ ] `"toolMode": "search"` (top level): `tools/list` returns only
+      `rv_search_tools` and `rv_call_tool`; calls route through the same
+      policy, approvals, and audit as direct calls
+
+### 7.1 Remote MCP servers
+- [ ] mcp.json server with `"url"` (instead of `command`) and `"headers"`
+      (values may hold `${secret:NAME}`); `"transport": "http"` (streamable
+      HTTP, default) or `"sse"` (legacy)
+- [ ] Gateway transport: POST JSON-RPC, JSON or SSE replies,
+      `Mcp-Session-Id`, `MCP-Protocol-Version`; legacy SSE endpoint event
+- [ ] `rv mcp connect <server>`: OAuth 2.1 + PKCE (S256), protected-resource
+      and authorization-server metadata discovery, dynamic client
+      registration, loopback redirect, `resource` indicator; tokens in the
+      Keychain (`rv.mcp.oauth`, Linux owner-only file), refreshed on expiry
+- [ ] `rv mcp import` converts host `url` entries (headers → secrets)
+- [ ] Org `allowDirect: false` covers remote entries: a host `url` entry
+      must be governed, not direct
+- [ ] E2E: python fixture (streamable HTTP + SSE + OAuth server)
+
+### 7.4 Strict profile and per-server egress
+- [ ] `"profile": "strict"`: unlisted tools deny, every server needs a
+      sandbox, network off unless `sandbox.hosts` lists hosts
+- [ ] `sandbox.hosts`: the gateway starts an `EgressProxy` in allowlist mode
+      per server, sets `HTTPS_PROXY`/`HTTP_PROXY`, and the cage allows only
+      that loopback port
+
+### 7.7 Identity on the default launch door
+- [ ] _blocked: impro-ref (`RuntimeAdmission*`, `WorkspaceSessionSupervisor`)_
 
 ---
 
