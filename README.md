@@ -51,8 +51,9 @@ RV searches absolute `PATH` directories for OpenCode, or accepts `--executable /
 | Allow once | Redeem the code from a block; the next matching call in this working directory runs once |
 | Explain | `rv explain` shows which pack would fire |
 | Hosts | Grok, Pi, OpenCode, Claude, OpenClaw, Hermes, Codex, Cursor. `rv setup` writes a host only when that host is already on the machine. |
-| Platform (hook guard) | `rv hook` hook guard: macOS 15 or newer (Apple Silicon) and Linux aarch64/x86_64. Foundation Models on macOS 26 or newer. |
-| Platform (contained runtime) | `rv opencode` / `rv workspace` contained runtime: macOS 15 or newer (Apple Silicon) only today. Linux refuses the launch instead of using a weaker sandbox — see [why](docs/security/runtime-boundary.md). PR CI builds Swift on macos-26 and smokes the binaries on macos-15. Linux PR CI is ubuntu-24.04 x86_64; aarch64 is a supported install, not a PR job. |
+| Platform (hook guard) | `rv hook` hook guard: macOS 15 or newer (Apple Silicon) and Linux aarch64/x86_64. |
+| Platform (contained runtime) | `rv opencode` / `rv workspace` contained runtime: macOS 15 or newer (Apple Silicon) only today. Linux refuses the launch instead of using a weaker sandbox — see [why](docs/security/runtime-boundary.md). |
+| Platform | Foundation Models on macOS 26 or newer. PR CI builds Swift on macos-26 and smokes the binaries on macos-15. Linux PR CI is ubuntu-24.04 x86_64; aarch64 is a supported install, not a PR job. |
 
 ## Supported hosts
 
