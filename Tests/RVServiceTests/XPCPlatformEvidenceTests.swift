@@ -11,7 +11,7 @@ import Testing
 /// Uses kernel-delivered anonymous-endpoint traffic, without an installed Mach
 /// service or a trust manifest. Both endpoints are deliberately this process:
 /// this proves the message evidence API, not distinct-process role assignment.
-@Test func anonymousXPCMessagesAndRepliesCarryLiveCodeEvidence() throws {
+@Test func anonymousXPCMessagesAndRepliesCarryLiveCodeEvidence() async throws {
     let requestID = UUID()
     let replyID = UUID()
     let received = Mutex<Result<AuthenticatedPeer, any Error>?>(nil)
@@ -36,7 +36,9 @@ import Testing
             received.withLock { $0 = captured }
             if case .success(let peer) = captured {
                 let context = AuthenticatedRequestContext.captured(peer: peer, connectionID: requestID)
-                Task {
+                // Detached: the test suspends instead of blocking the
+                // cooperative pool, so this hop can actually run.
+                Task.detached {
                     crossedTask.withLock { $0 = context }
                     taskDone.signal()
                 }
@@ -77,9 +79,9 @@ import Testing
         }
         replyDone.signal()
     }
-    try #require(replyDone.wait(timeout: .now() + 10) == .success,
+    try #require(await waitOffPool(replyDone, seconds: 10) == .success,
         "Real XPC endpoint reply timed out")
-    try #require(taskDone.wait(timeout: .now() + 10) == .success,
+    try #require(await waitOffPool(taskDone, seconds: 10) == .success,
         "Captured XPC context did not cross the Task boundary")
     let serverPeer = try #require(received.withLock { $0 }).get()
     let clientPeer = try #require(replied.withLock { $0 }).get()
@@ -102,5 +104,17 @@ import Testing
     #expect(context.peer == serverPeer)
     #expect(context.componentRole == nil)
     #expect(context.agent == nil)
+}
+
+/// Semaphore waits block the calling thread. Park that wait on libdispatch so
+/// an async test does not pin the cooperative pool the `Task` hop needs.
+private func waitOffPool(
+    _ semaphore: DispatchSemaphore, seconds: Double
+) async -> DispatchTimeoutResult {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.global(qos: .userInitiated).async {
+            continuation.resume(returning: semaphore.wait(timeout: .now() + seconds))
+        }
+    }
 }
 #endif
