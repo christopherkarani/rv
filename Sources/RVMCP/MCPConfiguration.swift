@@ -108,6 +108,9 @@ public struct MCPConfiguration: Sendable, Equatable {
     public var blocked: [String]
     /// Organization restrictions layered over this file; never encoded.
     public var managed: ManagedPolicy?
+    /// The file was not written or trusted through rv; never encoded. Its
+    /// `allow` decisions become `ask`, so an outside edit can only tighten.
+    public var untrusted = false
 
     public init(
         defaultDecision: MCPToolDecision = .ask,
@@ -127,7 +130,8 @@ public struct MCPConfiguration: Sendable, Equatable {
 
     /// The stricter of the user's rules and the organization's.
     public func decision(server: MCPServerDefinition, tool: String) -> MCPToolDecision {
-        let user = server.tools.decision(for: tool, fallback: defaultDecision)
+        var user = server.tools.decision(for: tool, fallback: defaultDecision)
+        if untrusted, user == .allow { user = .ask }
         guard let organization = organizationDecision(server: server.name, tool: tool) else { return user }
         return [user, organization].max { $0.strictness < $1.strictness } ?? user
     }
@@ -159,10 +163,13 @@ public struct MCPConfiguration: Sendable, Equatable {
         }
     }
 
-    public func write(configDirectory: URL) -> Result<Void, MCPConfigurationError> {
+    /// Writes and signs mcp.json (`MCPIntegrity`), so `rv mcp check` knows rv wrote it.
+    public func write(configDirectory: URL, signer: MCPSigner) -> Result<Void, MCPConfigurationError> {
         let data = Data(encoded().prettyText.utf8)
         if case .failure(let error) = Self.decode(data) { return .failure(error) }
-        guard OwnerOnlyFile.write(data, to: Self.fileURL(configDirectory: configDirectory)) else {
+        guard OwnerOnlyFile.write(data, to: Self.fileURL(configDirectory: configDirectory)),
+            MCPIntegrity.sign(data, configDirectory: configDirectory, signer: signer)
+        else {
             return .failure(.unreadable)
         }
         return .success(())

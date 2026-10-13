@@ -5,16 +5,20 @@ import Testing
 
 final class FakeApprovals: Sendable {
     let granted = Mutex<Set<String>>([])
+    let forged = Mutex<Set<String>>([])
     let requested = Mutex<[String]>([])
 
     var gate: MCPApprovalGate {
         MCPApprovalGate(
             consumeGrant: { server, tool, hash in
-                self.granted.withLock { $0.remove("\(server)/\(tool)/\(hash)") }.map { _ in "grant1" }
+                let key = "\(server)/\(tool)/\(hash)"
+                if self.granted.withLock({ $0.remove(key) }) != nil { return .granted(id: "grant1") }
+                if self.forged.withLock({ $0.remove(key) }) != nil { return .forged(id: "forged1") }
+                return .none
             },
             request: { server, tool, _, _ in
                 self.requested.withLock { $0.append("\(server)/\(tool)") }
-                return "req1"
+                return MCPApprovalTicket(id: "req1", code: "ABCDE-FGHJK")
             })
     }
 }
@@ -56,6 +60,7 @@ extension [MCPGatewayOutput] {
     var toClient: [JSONValue] { compactMap { if case .toClient(let m) = $0 { m } else { nil } } }
     var toUpstream: [(String, JSONValue)] { compactMap { if case .toUpstream(let s, let m) = $0 { (s, m) } else { nil } } }
     var audits: [MCPCallRecord] { compactMap { if case .audit(let r) = $0 { r } else { nil } } }
+    var logs: [String] { compactMap { if case .log(let l) = $0 { l } else { nil } } }
 }
 
 @Suite("MCPGatewayCore")
@@ -321,58 +326,66 @@ struct MCPGatewayCoreTests {
 
 @Suite("MCPApprovalStore")
 struct MCPApprovalStoreTests {
+    static func scratch() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-approvals-\(UUID().uuidString)")
+    }
+
+    static func store(_ directory: URL, clock: @escaping @Sendable () -> Date = { Date() }) -> MCPApprovalStore {
+        MCPApprovalStore(configDirectory: directory, keys: .file(configDirectory: directory), clock: clock)
+    }
+
     @Test func requestGrantConsumeLifecycle() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-approvals-\(UUID().uuidString)")
+        let directory = Self.scratch()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let store = MCPApprovalStore(configDirectory: directory)
-        let id = try #require(store.request(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"]))
-        #expect(store.request(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"]) == id)
+        let store = Self.store(directory)
+        let id = try #require(store.request(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"])?.id)
+        #expect(store.request(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"])?.id == id)
         #expect(store.pending().map(\.id) == [id])
-        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == nil)
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == .none)
         #expect(store.grant(id: id)?.state == .granted)
         #expect(store.pending().isEmpty)
-        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "other") == nil)
-        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == id)
-        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == nil)
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "other") == .none)
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == .granted(id: id))
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == .none)
         #expect(store.grant(id: "missing") == nil)
     }
 
     @Test func oldRequestsExpire() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-approvals-\(UUID().uuidString)")
+        let directory = Self.scratch()
         defer { try? FileManager.default.removeItem(at: directory) }
         let then = Date(timeIntervalSince1970: 1_000_000)
-        _ = MCPApprovalStore(configDirectory: directory, clock: { then })
+        _ = Self.store(directory, clock: { then })
             .request(server: "gh", tool: "x", argumentsHash: "h", argumentKeys: [])
-        let later = MCPApprovalStore(configDirectory: directory, clock: { then.addingTimeInterval(25 * 3600) })
+        let later = Self.store(directory, clock: { then.addingTimeInterval(25 * 3600) })
         #expect(later.pending().isEmpty)
     }
 
     @Test func capDropsPendingRequestsAndRefusesToEvictGrants() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-approvals-\(UUID().uuidString)")
+        let directory = Self.scratch()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let store = MCPApprovalStore(configDirectory: directory)
-        let grant = try #require(store.request(server: "gh", tool: "keep", argumentsHash: "grant", argumentKeys: []))
+        let store = Self.store(directory)
+        let grant = try #require(store.request(server: "gh", tool: "keep", argumentsHash: "grant", argumentKeys: [])?.id)
         #expect(store.grant(id: grant) != nil)
         var oldestPending: String?
         for index in 0..<(MCPApprovalStore.maximumRequests - 1) {
-            let id = try #require(store.request(server: "gh", tool: "t", argumentsHash: "p\(index)", argumentKeys: []))
+            let id = try #require(store.request(server: "gh", tool: "t", argumentsHash: "p\(index)", argumentKeys: [])?.id)
             if oldestPending == nil { oldestPending = id }
         }
         #expect(store.pending().count == MCPApprovalStore.maximumRequests - 1)
-        let newest = try #require(store.request(server: "gh", tool: "t", argumentsHash: "newest", argumentKeys: []))
+        let newest = try #require(store.request(server: "gh", tool: "t", argumentsHash: "newest", argumentKeys: [])?.id)
         #expect(store.pending().map(\.id).contains(oldestPending) == false)
         #expect(store.pending().map(\.id).contains(newest))
-        #expect(store.consumeGrant(server: "gh", tool: "keep", argumentsHash: "grant") == grant)
+        #expect(store.consumeGrant(server: "gh", tool: "keep", argumentsHash: "grant") == .granted(id: grant))
 
-        let grants = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-approvals-\(UUID().uuidString)")
+        let grants = Self.scratch()
         defer { try? FileManager.default.removeItem(at: grants) }
-        let full = MCPApprovalStore(configDirectory: grants)
+        let full = Self.store(grants)
         for index in 0..<MCPApprovalStore.maximumRequests {
-            let id = try #require(full.request(server: "gh", tool: "g", argumentsHash: "g\(index)", argumentKeys: []))
+            let id = try #require(full.request(server: "gh", tool: "g", argumentsHash: "g\(index)", argumentKeys: [])?.id)
             #expect(full.grant(id: id) != nil)
         }
         #expect(full.request(server: "gh", tool: "g", argumentsHash: "overflow", argumentKeys: []) == nil)
-        #expect(full.consumeGrant(server: "gh", tool: "g", argumentsHash: "g0") != nil)
+        #expect(full.consumeGrant(server: "gh", tool: "g", argumentsHash: "g0") != .none)
     }
 
     @Test func canonicalHashIgnoresKeyOrder() throws {

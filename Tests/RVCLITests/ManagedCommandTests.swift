@@ -66,23 +66,25 @@ struct ManagedCommandTests {
             output: nil))?.contains("not signed") == true)
     }
 
-    @Test func mcpCommandsFollowTheOrganization() throws {
+    @Test func mcpCommandsFollowTheOrganization() async throws {
         let scratch = Scratch()
         var environment = MCPEnvironment(
-            configDirectory: scratch.config, home: scratch.home, processEnvironment: [:], keychain: FakeKeychain().writer)
+            configDirectory: scratch.config, home: scratch.home, processEnvironment: [:], keychain: FakeKeychain().writer,
+            approvalKeys: .file(configDirectory: scratch.config), presence: UserPresence { _, _ in .confirmed(method: "test") })
+        let signer = try #require(environment.approvalKeys.loadOrCreate())
         _ = MCPConfiguration(servers: [MCPServerDefinition(name: "github", command: "gh-mcp")])
-            .write(configDirectory: scratch.config)
+            .write(configDirectory: scratch.config, signer: signer)
 
         environment.managed = .invalid("bad signature")
         #expect(failure(MCPRun.configuration(environment))
             == "organization policy is invalid, so MCP is disabled: bad signature")
 
         environment.managed = try active(#"{"version": 1, "mcp": {"ask": ["github/create_*"]}}"#)
-        let store = MCPApprovalStore(configDirectory: scratch.config)
-        let id = try #require(store.request(server: "github", tool: "create_issue", argumentsHash: "h", argumentKeys: []))
-        #expect(failure(MCPRun.approve(id: id, always: true, environment: environment))
+        let id = try #require(
+            environment.approvals.request(server: "github", tool: "create_issue", argumentsHash: "h", argumentKeys: [])?.id)
+        #expect(failure(await MCPRun.approve(id: id, always: true, environment: environment))
             == "organization policy says ask for github/create_issue; approve it once instead")
-        #expect(try MCPRun.approve(id: id, always: false, environment: environment).get().contains("once"))
+        #expect(try await MCPRun.approve(id: id, always: false, environment: environment).get().contains("once"))
 
         try scratch.write("home/.cursor/mcp.json", """
             {"mcpServers": {"svc": {"command": "svc", "env": {"API_TOKEN": "tok_live_abcdefghijklmnopqrstu"}}}}
@@ -104,6 +106,28 @@ struct ManagedCommandTests {
         #expect(failure(refused)?.contains("environment variable, which is not allowed") == true)
         #expect(fixture.keychain.items.withLock { $0.isEmpty })
         #expect(FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("secrets.json").path) == false)
+    }
+
+    @Test func reportIsNotCompliantWhileMCPJSONIsUntrusted() throws {
+        let scratch = Scratch()
+        let mcp = try scratch.write("home/.config/rv/mcp.json", #"{"version":1,"servers":[]}"#)
+        chmod(mcp.path, 0o600)
+        chmod(scratch.config.path, 0o700)
+        let keys = MCPApprovalKeyStore.file(configDirectory: scratch.config)
+        func build() -> ReportRun.Report {
+            ReportRun.build(ReportRun.Inputs(
+                configDirectory: scratch.config, home: scratch.home, processEnvironment: [:], managed: .none,
+                managedDirectory: "/managed", now: Date(), hostName: "h", userName: "dev", userID: 501,
+                fileExists: { _ in false }, approvalKeys: keys))
+        }
+        let untrusted = build()
+        #expect(untrusted.compliant == false)
+        #expect(untrusted.mcp.error?.contains("edited outside rv") == true)
+        #expect(ReportRun.text(untrusted).contains("edited outside rv"))
+
+        let signer = try #require(keys.loadOrCreate())
+        #expect(MCPIntegrity.signCurrent(configDirectory: scratch.config, signer: signer))
+        #expect(build().compliant)
     }
 
     @Test func reportSummarizesPostureWithoutSecretValues() throws {

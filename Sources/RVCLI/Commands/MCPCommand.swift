@@ -13,15 +13,28 @@ struct MCPEnvironment: Sendable {
     var processEnvironment: [String: String]
     var keychain: SecretKeychainWriter
     var managed: ManagedPolicyState = .none
+    var approvalKeys: MCPApprovalKeyStore = .unavailable
+    var presence = UserPresence { _, _ in .refused("no user presence available") }
 
     static func live(home: HomeDirectory) -> MCPEnvironment {
-        MCPEnvironment(
-            configDirectory: RVPolicyPaths.configDirectory(home: home),
+        let configDirectory = RVPolicyPaths.configDirectory(home: home)
+        return MCPEnvironment(
+            configDirectory: configDirectory,
             home: URL(fileURLWithPath: home.rawValue, isDirectory: true),
             processEnvironment: ProcessInfo.processInfo.environment,
             keychain: .live,
-            managed: ManagedPolicyLocation.installed.load()
+            managed: ManagedPolicyLocation.installed.load(),
+            approvalKeys: .live(configDirectory: configDirectory, home: home.rawValue),
+            presence: .live
         )
+    }
+
+    var approvals: MCPApprovalStore {
+        MCPApprovalStore(configDirectory: configDirectory, keys: approvalKeys)
+    }
+
+    var integrity: MCPIntegrityStatus {
+        MCPIntegrity.status(configDirectory: configDirectory, keys: approvalKeys)
     }
 }
 
@@ -48,6 +61,9 @@ enum MCPRun {
         var servers: Int
         var direct: Int
         var blocked: Int
+        /// `none`, `trusted`, or `untrusted` (mcp.json changed outside rv).
+        var integrity: String
+        var integrityProblem: String?
         var rows: [Row]
         var problems: [Problem]
 
@@ -55,7 +71,7 @@ enum MCPRun {
             rows.filter { MCPEntryStatus(rawValue: $0.status)?.isAcceptable == false }
         }
 
-        var passes: Bool { failing.isEmpty && problems.isEmpty }
+        var passes: Bool { failing.isEmpty && problems.isEmpty && integrityProblem == nil }
     }
 
     /// mcp.json with organization policy applied. An invalid managed policy fails closed.
@@ -67,9 +83,20 @@ enum MCPRun {
             .map { configuration in
                 var configuration = configuration
                 configuration.managed = environment.managed.policy
+                configuration.untrusted = environment.integrity.isTrusted == false
                 return configuration
             }
             .mapError { CommandFailure($0.message) }
+    }
+
+    /// rv signs mcp.json on every write; refusing over an outside edit keeps
+    /// rv from laundering it into a trusted file.
+    static func signerForWrite(_ environment: MCPEnvironment) -> Result<MCPSigner, CommandFailure> {
+        if let problem = environment.integrity.problem { return .failure(CommandFailure(problem)) }
+        guard let signer = environment.approvalKeys.loadOrCreate() else {
+            return .failure("could not create rv's approvals key (\(MCPApprovalKeyStore.keychainService))")
+        }
+        return .success(signer)
     }
 
     static func report(
@@ -90,10 +117,13 @@ enum MCPRun {
                 plaintextCredentials: row.plaintextCredentials,
                 governedServer: row.entry.governedServer)
         }
+        let integrity = environment.integrity
         return Report(
             servers: configuration.servers.count,
             direct: configuration.direct.count,
             blocked: configuration.blocked.count,
+            integrity: integrity.label,
+            integrityProblem: integrity.problem,
             rows: rows,
             problems: inventory.problems.map { Problem(path: $0.path, message: $0.message) })
     }
@@ -128,6 +158,7 @@ enum MCPRun {
         lines.append("")
         lines.append(summary(report))
         lines += problemLines(report, home: home)
+        if let problem = report.integrityProblem { lines.append("warning: " + problem) }
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -136,6 +167,7 @@ enum MCPRun {
         if report.passes {
             lines.append("ok: every MCP server is governed by rv, allowed direct, or disabled (\(report.rows.count) checked)")
         } else {
+            if let problem = report.integrityProblem { lines.append("untrusted  " + problem) }
             for row in report.failing {
                 let status = MCPEntryStatus(rawValue: row.status)
                 lines.append("\(row.status)  \(row.name)  \(row.host) \(abbreviate(row.configPath, home: home))")
@@ -200,45 +232,152 @@ enum MCPRun {
             let keys = row.argumentKeys.isEmpty ? "no arguments" : "arguments " + row.argumentKeys.joined(separator: ", ")
             return "\(row.id)  \(row.server) \(row.tool)  \(keys)  \(formatter.string(from: row.requestedAt))"
         }
-        return (lines + ["approve with `rv mcp approve <id>` (once) or `--always`; refuse with `rv mcp deny <id>`"])
+        return (lines + [
+            "approve in your own terminal with `rv mcp approve <id>` (once) or `--always`; refuse with `rv mcp deny <id>`",
+            "approving needs you present: Touch ID or your password on macOS, otherwise the code `rv mcp serve` printed",
+        ])
             .joined(separator: "\n") + "\n"
     }
 
     /// Grants one pending call; `always` also adds the tool to the server's allow list.
-    static func approve(id: String, always: Bool, environment: MCPEnvironment) -> Result<String, CommandFailure> {
-        let store = MCPApprovalStore(configDirectory: environment.configDirectory)
+    /// The person approving must prove presence first, so an agent's shell cannot approve.
+    static func approve(id: String, always: Bool, environment: MCPEnvironment) async -> Result<String, CommandFailure> {
+        let store = environment.approvals
         guard let request = store.pending().first(where: { $0.id == id }) else {
             return .failure("no pending MCP approval has id \(id) (see `rv mcp pending`)")
         }
-        guard always else {
-            guard store.grant(id: id) != nil else { return .failure("could not record the approval") }
-            return .success("approved \(request.server) \(request.tool) once; the agent can retry the same call\n")
+        var allowed: (MCPConfiguration, MCPSigner)?
+        if always {
+            switch allowListed(request, environment: environment) {
+            case .failure(let failure): return .failure(failure)
+            case .success(let result): allowed = result
+            }
         }
-        switch configuration(environment) {
-        case .failure(let failure):
-            return .failure(failure)
-        case .success(var configuration):
-            guard let index = configuration.servers.firstIndex(where: { $0.name == request.server }) else {
-                return .failure("mcp.json no longer defines \(request.server)")
-            }
-            var tools = configuration.servers[index].tools
-            tools.ask.removeAll { $0 == request.tool }
-            if tools.allow.contains(request.tool) == false { tools.allow.append(request.tool) }
-            configuration.servers[index].tools = tools
-            if let organization = configuration.organizationDecision(server: request.server, tool: request.tool),
-                organization != .allow
-            {
-                return .failure("organization policy says \(organization.rawValue) for \(request.server)/\(request.tool); approve it once instead")
-            }
-            if configuration.decision(server: configuration.servers[index], tool: request.tool) != .allow {
-                return .failure("\(request.tool) still matches an ask or deny rule in mcp.json; edit that rule instead")
-            }
-            if case .failure(let error) = configuration.write(configDirectory: environment.configDirectory) {
-                return .failure(CommandFailure(error.message))
-            }
-            _ = store.grant(id: id)
-            return .success("approved \(request.server) \(request.tool) always (added to its allow list in mcp.json)\n")
+        let reason = "rv: approve \(request.server) tool \(request.tool) \(always ? "always" : "once")"
+        let outcome = await environment.presence.confirm(reason, .printedCode { store.verifyCode(id: id, typed: $0) })
+        guard case .confirmed(let method) = outcome else {
+            let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
+            audit(request, decision: .denied, reason: "user presence not confirmed: \(refusal)", method: nil,
+                  always: always, configDirectory: environment.configDirectory)
+            return .failure(CommandFailure("not approved: \(refusal)"))
         }
+        if case let (configuration, signer)? = allowed,
+            case .failure(let error) = configuration.write(configDirectory: environment.configDirectory, signer: signer)
+        {
+            return .failure(CommandFailure(error.message))
+        }
+        guard store.grant(id: id) != nil else { return .failure("could not record the approval") }
+        audit(request, decision: .allowed, reason: nil, method: method, always: always,
+              configDirectory: environment.configDirectory)
+        return .success(always
+            ? "approved \(request.server) \(request.tool) always (added to its allow list in mcp.json)\n"
+            : "approved \(request.server) \(request.tool) once; the agent can retry the same call\n")
+    }
+
+    /// mcp.json with the request's tool moved to the allow list, and the signer to write it with.
+    static func allowListed(
+        _ request: MCPApprovalRequest, environment: MCPEnvironment
+    ) -> Result<(MCPConfiguration, MCPSigner), CommandFailure> {
+        let signer: MCPSigner
+        switch signerForWrite(environment) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let loaded): signer = loaded
+        }
+        var configuration: MCPConfiguration
+        switch self.configuration(environment) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let loaded): configuration = loaded
+        }
+        guard let index = configuration.servers.firstIndex(where: { $0.name == request.server }) else {
+            return .failure("mcp.json no longer defines \(request.server)")
+        }
+        var tools = configuration.servers[index].tools
+        tools.ask.removeAll { $0 == request.tool }
+        if tools.allow.contains(request.tool) == false { tools.allow.append(request.tool) }
+        configuration.servers[index].tools = tools
+        if let organization = configuration.organizationDecision(server: request.server, tool: request.tool),
+            organization != .allow
+        {
+            return .failure("organization policy says \(organization.rawValue) for \(request.server)/\(request.tool); approve it once instead")
+        }
+        if configuration.decision(server: configuration.servers[index], tool: request.tool) != .allow {
+            return .failure("\(request.tool) still matches an ask or deny rule in mcp.json; edit that rule instead")
+        }
+        return .success((configuration, signer))
+    }
+
+    static func audit(
+        _ request: MCPApprovalRequest, decision: AuditDecision, reason: String?, method: String?, always: Bool,
+        configDirectory: URL
+    ) {
+        var detail = ["approval": request.id, "always": always ? "true" : "false"]
+        if let method { detail["method"] = method }
+        _ = AuditLog.append(
+            AuditEvent(
+                time: Date(), kind: .mcpApproval, decision: decision, subject: "\(request.server)/\(request.tool)",
+                reason: reason, source: "rv mcp approve", detail: detail),
+            configDirectory: configDirectory)
+    }
+
+    /// Signs mcp.json as it is now, after showing what it allows and confirming presence.
+    static func trust(
+        environment: MCPEnvironment, show: @Sendable (String) -> Void
+    ) async -> Result<String, CommandFailure> {
+        let url = MCPConfiguration.fileURL(configDirectory: environment.configDirectory)
+        let data: Data
+        switch OwnerOnlyFile.read(url, maximumBytes: MCPConfiguration.maximumBytes) {
+        case .success(nil): return .failure("there is no mcp.json to trust")
+        case .success(let bytes?): data = bytes
+        case .failure: return .failure("mcp.json is unreadable or unsafe")
+        }
+        let configuration: MCPConfiguration
+        switch MCPConfiguration.decode(data) {
+        case .failure(let error): return .failure(CommandFailure(error.message))
+        case .success(let decoded): configuration = decoded
+        }
+        if environment.integrity == .trusted {
+            return .success("mcp.json already matches rv's signature; nothing to trust\n")
+        }
+        show(trustReview(configuration) + "\n")
+        let outcome = await environment.presence.confirm("rv: trust mcp.json as shown", .echoCode)
+        guard case .confirmed(let method) = outcome else {
+            let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
+            return .failure(CommandFailure("not trusted: \(refusal)"))
+        }
+        guard let signer = environment.approvalKeys.loadOrCreate() else {
+            return .failure("could not create rv's approvals key (\(MCPApprovalKeyStore.keychainService))")
+        }
+        guard MCPIntegrity.sign(data, configDirectory: environment.configDirectory, signer: signer) else {
+            return .failure("could not write \(MCPIntegrity.fileName)")
+        }
+        guard environment.integrity == .trusted else {
+            return .failure("mcp.json changed while you reviewed it; run `rv mcp trust` again")
+        }
+        _ = AuditLog.append(
+            AuditEvent(
+                time: Date(), kind: .mcpApproval, decision: .allowed, subject: MCPConfiguration.fileName,
+                reason: "mcp.json trusted", source: "rv mcp trust",
+                detail: ["method": method, "sha256": RVDigest.sha256Hex([UInt8](data))]),
+            configDirectory: environment.configDirectory)
+        return .success("trusted mcp.json; rv signs it again on every change it makes\n")
+    }
+
+    static func trustReview(_ configuration: MCPConfiguration) -> String {
+        var lines = ["mcp.json: default \(configuration.defaultDecision.rawValue) for tools without a rule"]
+        for server in configuration.servers {
+            lines.append("  \(server.name): \(([server.command] + server.args).joined(separator: " "))")
+            let tools = server.tools
+            var rules: [String] = []
+            if tools.allow.isEmpty == false { rules.append("allow " + capped(tools.allow)) }
+            if tools.ask.isEmpty == false { rules.append("ask " + capped(tools.ask)) }
+            if tools.deny.isEmpty == false { rules.append("deny " + capped(tools.deny)) }
+            if let fallback = tools.defaultDecision { rules.append("other tools \(fallback.rawValue)") }
+            if server.sandbox == nil { rules.append("no sandbox") }
+            if rules.isEmpty == false { lines.append("    " + rules.joined(separator: " · ")) }
+        }
+        if configuration.direct.isEmpty == false { lines.append("  direct: " + configuration.direct.joined(separator: ", ")) }
+        if configuration.blocked.isEmpty == false { lines.append("  blocked: " + configuration.blocked.joined(separator: ", ")) }
+        return lines.joined(separator: "\n")
     }
 
     static func auditRecord(_ record: MCPCallRecord, configDirectory: URL) {
@@ -283,6 +422,11 @@ enum MCPRun {
             return .success((lines + ["nothing to import"]).joined(separator: "\n") + "\n")
         }
         if dryRun { return .success((lines + ["dry run: nothing written"]).joined(separator: "\n") + "\n") }
+        let signer: MCPSigner
+        switch signerForWrite(environment) {
+        case .failure(let failure): return .failure(CommandFailure("\(failure.message); nothing imported"))
+        case .success(let loaded): signer = loaded
+        }
         if let definition = plan.secrets.first?.definition,
             let reason = SecretOrganizationRules.violation(definition, policy: environment.managed.policy)
         {
@@ -321,7 +465,7 @@ enum MCPRun {
         }
         var updated = configuration
         updated.servers += plan.servers
-        if case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
+        if case .failure(let error) = updated.write(configDirectory: environment.configDirectory, signer: signer) {
             let restoredSecrets: Bool
             if plan.secrets.isEmpty {
                 restoredSecrets = true
@@ -405,7 +549,7 @@ struct MCP: AsyncParsableCommand {
         abstract: "Find, review, and govern the MCP servers your agents use.",
         subcommands: [
             MCPList.self, MCPCheck.self, MCPImportCommand.self, MCPSetupCommand.self, MCPServe.self, MCPPending.self,
-            MCPApprove.self, MCPDeny.self,
+            MCPApprove.self, MCPDeny.self, MCPTrust.self,
         ],
         defaultSubcommand: MCPList.self
     )
@@ -498,15 +642,27 @@ struct MCPServe: AsyncParsableCommand {
         case .success(let result): planned = result
         }
         let configDirectory = environment.configDirectory
+        let log: @Sendable (String) -> Void = { message in
+            FileHandle.standardError.write(Data("rv mcp: \(message)\n".utf8))
+        }
+        if let problem = environment.integrity.problem {
+            log("\(problem); every allowed tool asks until then")
+            _ = AuditLog.append(
+                AuditEvent(
+                    time: Date(), kind: .mcpApproval, decision: .info, subject: MCPConfiguration.fileName,
+                    reason: problem, source: "rv mcp serve", detail: ["integrity": "untrusted"]),
+                configDirectory: configDirectory)
+        }
         let core = MCPGatewayCore(
             configuration: configuration,
             upstreams: planned.map { $0.0 },
-            approvals: .store(MCPApprovalStore(configDirectory: configDirectory)))
+            approvals: .store(environment.approvals))
         let runtime = MCPGatewayRuntime(
             core: core,
             launches: planned.map { $0.1 },
             audit: { MCPRun.auditRecord($0, configDirectory: configDirectory) },
-            log: { message in FileHandle.standardError.write(Data("rv mcp: \(message)\n".utf8)) })
+            event: { _ = AuditLog.append($0, configDirectory: configDirectory) },
+            log: log)
         runtime.run()
     }
 }
@@ -520,7 +676,7 @@ struct MCPPending: AsyncParsableCommand {
     func run() throws {
         let ctx = CommandContext.current(command: "mcp pending", format: format)
         let environment = MCPEnvironment.live(home: try ctx.requireHome())
-        let rows = MCPRun.pendingRows(MCPApprovalStore(configDirectory: environment.configDirectory))
+        let rows = MCPRun.pendingRows(environment.approvals)
         ctx.writeStdout(ctx.explicitRobot ? SecretsRun.json(rows) : MCPRun.pendingText(rows))
     }
 }
@@ -532,10 +688,10 @@ struct MCPApprove: AsyncParsableCommand {
     @Argument(help: "Approval id from the tool error or `rv mcp pending`.") var id: String
     @Flag(help: "Add the tool to the server's allow list in mcp.json.") var always = false
 
-    func run() throws {
+    func run() async throws {
         let ctx = CommandContext.current(command: "mcp approve", json: false, robot: false, plain: true, noColor: true)
         let environment = MCPEnvironment.live(home: try ctx.requireHome())
-        switch MCPRun.approve(id: id, always: always, environment: environment) {
+        switch await MCPRun.approve(id: id, always: always, environment: environment) {
         case .failure(let failure): try ctx.fail("rv mcp approve: \(failure.message)\n")
         case .success(let text): ctx.writeStdout(text)
         }
@@ -551,10 +707,24 @@ struct MCPDeny: AsyncParsableCommand {
     func run() throws {
         let ctx = CommandContext.current(command: "mcp deny", json: false, robot: false, plain: true, noColor: true)
         let environment = MCPEnvironment.live(home: try ctx.requireHome())
-        guard let request = MCPApprovalStore(configDirectory: environment.configDirectory).remove(id: id) else {
+        guard let request = environment.approvals.remove(id: id) else {
             try ctx.fail("rv mcp deny: no MCP approval has id \(id)\n")
         }
         ctx.writeStdout("refused \(request.server) \(request.tool)\n")
+    }
+}
+
+struct MCPTrust: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "trust", abstract: "Accept mcp.json after an edit made outside rv (needs you present).")
+
+    func run() async throws {
+        let ctx = CommandContext.current(command: "mcp trust", json: false, robot: false, plain: true, noColor: true)
+        let environment = MCPEnvironment.live(home: try ctx.requireHome())
+        switch await MCPRun.trust(environment: environment, show: { ctx.writeStdout($0) }) {
+        case .failure(let failure): try ctx.fail("rv mcp trust: \(failure.message)\n")
+        case .success(let text): ctx.writeStdout(text)
+        }
     }
 }
 

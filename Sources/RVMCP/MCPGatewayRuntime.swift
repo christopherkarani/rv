@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Dispatch
 import Foundation
+import RVHistory
 import RVIsolation
 
 /// How to start one upstream server process.
@@ -120,6 +121,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     private let input: Int32
     private let output: Int32
     private let audit: @Sendable (MCPCallRecord) -> Void
+    private let event: @Sendable (AuditEvent) -> Void
     private let log: @Sendable (String) -> Void
     private let queue = DispatchQueue(label: "rv.mcp.gateway")
     private var processes: [String: Process] = [:]
@@ -133,6 +135,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         input: Int32 = STDIN_FILENO,
         output: Int32 = STDOUT_FILENO,
         audit: @escaping @Sendable (MCPCallRecord) -> Void,
+        event: @escaping @Sendable (AuditEvent) -> Void = { _ in },
         log: @escaping @Sendable (String) -> Void
     ) {
         self.core = core
@@ -140,6 +143,7 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         self.input = input
         self.output = output
         self.audit = audit
+        self.event = event
         self.log = log
     }
 
@@ -213,6 +217,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
                 if let handle = upstreamInputs[server] { Self.writeLine(handle.fileDescriptor, message) }
             case .audit(let record):
                 audit(record)
+            case .event(let item):
+                event(item)
             case .log(let text):
                 log(text)
             }

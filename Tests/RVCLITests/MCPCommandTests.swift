@@ -1,4 +1,5 @@
 import Foundation
+import RVHistory
 import RVIsolation
 import RVMCP
 import Synchronization
@@ -13,8 +14,16 @@ struct MCPCommandTests {
         var home: URL { root.appendingPathComponent("home") }
         var config: URL { home.appendingPathComponent(".config/rv") }
 
-        func environment(keychain writer: SecretKeychainWriter? = nil) -> MCPEnvironment {
-            MCPEnvironment(configDirectory: config, home: home, processEnvironment: [:], keychain: writer ?? keychain.writer)
+        func environment(
+            keychain writer: SecretKeychainWriter? = nil, presence: UserPresence = MCPCommandTests.present
+        ) -> MCPEnvironment {
+            MCPEnvironment(
+                configDirectory: config, home: home, processEnvironment: [:], keychain: writer ?? keychain.writer,
+                approvalKeys: .file(configDirectory: config), presence: presence)
+        }
+
+        func approvalEvents() -> [AuditEvent] {
+            AuditLedger(configDirectory: config).events(AuditFilter(kinds: [AuditEventKind.mcpApproval.rawValue]))
         }
 
         @discardableResult
@@ -133,32 +142,142 @@ struct MCPCommandTests {
         #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
     }
 
-    @Test func approveOnceGrantsAndAlwaysEditsTheAllowList() throws {
+    static let present = UserPresence { _, _ in .confirmed(method: "test") }
+    static let absent = UserPresence { _, _ in .refused("this process has no terminal") }
+
+    /// Answers the terminal challenge with whatever `typed` returns.
+    static func typing(_ typed: @escaping @Sendable () -> String?) -> UserPresence {
+        UserPresence { _, challenge in
+            switch challenge {
+            case .printedCode(let check):
+                guard let code = typed(), check(code) else { return .refused("wrong confirmation code") }
+                return .confirmed(method: "terminal confirmation code")
+            case .echoCode:
+                return .confirmed(method: "terminal confirmation")
+            }
+        }
+    }
+
+    private func signedConfiguration(_ fixture: Fixture, _ configuration: MCPConfiguration) throws {
+        let signer = try #require(MCPApprovalKeyStore.file(configDirectory: fixture.config).loadOrCreate())
+        _ = try configuration.write(configDirectory: fixture.config, signer: signer).get()
+    }
+
+    @Test func approveOnceGrantsAndAlwaysEditsTheAllowList() async throws {
         let fixture = Fixture()
         let environment = fixture.environment()
-        let configuration = MCPConfiguration(servers: [
+        try signedConfiguration(fixture, MCPConfiguration(servers: [
             MCPServerDefinition(name: "fs", command: "fs-mcp", tools: MCPToolPolicy(ask: ["write_file"]))
-        ])
-        _ = configuration.write(configDirectory: fixture.config)
-        let store = MCPApprovalStore(configDirectory: fixture.config)
-        let once = try #require(store.request(server: "fs", tool: "read_file", argumentsHash: "h1", argumentKeys: ["path"]))
-        let always = try #require(store.request(server: "fs", tool: "write_file", argumentsHash: "h2", argumentKeys: []))
+        ]))
+        let store = environment.approvals
+        let once = try #require(store.request(server: "fs", tool: "read_file", argumentsHash: "h1", argumentKeys: ["path"])?.id)
+        let always = try #require(store.request(server: "fs", tool: "write_file", argumentsHash: "h2", argumentKeys: [])?.id)
 
         let pending = MCPRun.pendingText(MCPRun.pendingRows(store))
         #expect(pending.contains(once) && pending.contains("fs read_file") && pending.contains("path"))
 
-        #expect(try MCPRun.approve(id: once, always: false, environment: environment).get().contains("once"))
-        #expect(store.consumeGrant(server: "fs", tool: "read_file", argumentsHash: "h1") == once)
-        #expect(store.consumeGrant(server: "fs", tool: "read_file", argumentsHash: "h1") == nil)
+        #expect(try await MCPRun.approve(id: once, always: false, environment: environment).get().contains("once"))
+        #expect(store.consumeGrant(server: "fs", tool: "read_file", argumentsHash: "h1") == .granted(id: once))
+        #expect(store.consumeGrant(server: "fs", tool: "read_file", argumentsHash: "h1") == .none)
 
-        #expect(try MCPRun.approve(id: always, always: true, environment: environment).get().contains("always"))
+        #expect(try await MCPRun.approve(id: always, always: true, environment: environment).get().contains("always"))
         let updated = try MCPRun.configuration(environment).get()
         let fs = try #require(updated.server(named: "fs"))
         #expect(fs.tools.allow == ["write_file"])
         #expect(fs.tools.ask.isEmpty)
         #expect(updated.decision(server: fs, tool: "write_file") == .allow)
+        #expect(environment.integrity == .trusted)
 
-        #expect(MCPRun.approve(id: "missing", always: false, environment: environment).failureMessage?.contains("no pending") == true)
+        let missing = await MCPRun.approve(id: "missing", always: false, environment: environment)
+        #expect(missing.failureMessage?.contains("no pending") == true)
+        let events = fixture.approvalEvents()
+        #expect(events.map(\.decision) == [.allowed, .allowed])
+        #expect(events.first?.detail["method"] == "test")
+        #expect(events.last?.detail["always"] == "true")
+    }
+
+    @Test func approvingNeedsThePersonAndTheCodeTheGatewayPrinted() async throws {
+        let fixture = Fixture()
+        let probe = fixture.environment()
+        let ticket = try #require(probe.approvals.request(server: "fs", tool: "write", argumentsHash: "h", argumentKeys: []))
+        let code = try #require(ticket.code)
+
+        let script = await MCPRun.approve(id: ticket.id, always: false, environment: fixture.environment(presence: Self.absent))
+        #expect(script.failureMessage == "not approved: this process has no terminal")
+        let guessed = await MCPRun.approve(
+            id: ticket.id, always: false, environment: fixture.environment(presence: Self.typing { "AAAAA-AAAAA" }))
+        #expect(guessed.failureMessage == "not approved: wrong confirmation code")
+        #expect(probe.approvals.pending().map(\.id) == [ticket.id])
+        #expect(probe.approvals.consumeGrant(server: "fs", tool: "write", argumentsHash: "h") == .none)
+
+        let typed = await MCPRun.approve(
+            id: ticket.id, always: false, environment: fixture.environment(presence: Self.typing { code.lowercased() }))
+        #expect((try? typed.get())?.contains("once") == true)
+        #expect(probe.approvals.consumeGrant(server: "fs", tool: "write", argumentsHash: "h") == .granted(id: ticket.id))
+
+        let events = fixture.approvalEvents()
+        #expect(events.map(\.decision) == [.denied, .denied, .allowed])
+        #expect(events.first?.reason?.contains("no terminal") == true)
+        #expect(events.last?.detail["method"] == "terminal confirmation code")
+        #expect(events.allSatisfy { $0.subject == "fs/write" && $0.source == "rv mcp approve" })
+    }
+
+    @Test func outsideEditFailsCheckDowngradesAllowAndBlocksSigningUntilTrusted() async throws {
+        let fixture = Fixture()
+        try signedConfiguration(fixture, MCPConfiguration(servers: [
+            MCPServerDefinition(name: "fs", command: "fs-mcp", tools: MCPToolPolicy(allow: ["read_*"], ask: ["write_*"]))
+        ]))
+        #expect(try report(fixture).passes)
+        let path = ".config/rv/mcp.json"
+        try fixture.write(path, fixture.text(path).replacingOccurrences(of: "write_*", with: "zz_*"))
+        chmod(fixture.home.appendingPathComponent(path).path, 0o600)
+
+        let environment = fixture.environment()
+        let failing = try report(fixture)
+        #expect(failing.passes == false)
+        #expect(failing.integrity == "untrusted")
+        #expect(MCPRun.checkText(failing, home: fixture.home).contains("mcp.json was edited outside rv"))
+        #expect(MCPRun.listText(failing, home: fixture.home).contains("warning: mcp.json was edited outside rv"))
+        let loaded = try MCPRun.configuration(environment).get()
+        let fs = try #require(loaded.server(named: "fs"))
+        #expect(loaded.decision(server: fs, tool: "read_file") == .ask)
+
+        try fixture.write(".cursor/mcp.json", Self.cursorConfig)
+        let imported = MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false, environment: environment)
+        #expect(imported.failureMessage?.contains("edited outside rv") == true)
+        #expect(imported.failureMessage?.contains("nothing imported") == true)
+        #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
+        let id = try #require(environment.approvals.request(server: "fs", tool: "zz_x", argumentsHash: "h", argumentKeys: [])?.id)
+        let always = await MCPRun.approve(id: id, always: true, environment: environment)
+        #expect(always.failureMessage?.contains("edited outside rv") == true)
+
+        let shown = Mutex("")
+        let refused = await MCPRun.trust(environment: fixture.environment(presence: Self.absent), show: { text in
+            shown.withLock { $0 += text }
+        })
+        #expect(refused.failureMessage == "not trusted: this process has no terminal")
+        #expect(shown.withLock { $0 }.contains("fs: fs-mcp"))
+        #expect(shown.withLock { $0 }.contains("ask zz_*"))
+        #expect(environment.integrity.isTrusted == false)
+
+        #expect(try await MCPRun.trust(environment: environment, show: { _ in }).get().contains("trusted mcp.json"))
+        #expect(environment.integrity == .trusted)
+        #expect(try await MCPRun.trust(environment: environment, show: { _ in }).get().contains("already matches"))
+        let trusted = fixture.approvalEvents().last
+        #expect(trusted?.source == "rv mcp trust")
+        #expect(trusted?.detail["sha256"]?.count == 64)
+    }
+
+    @Test func trustNeedsAReadableConfiguration() async throws {
+        let fixture = Fixture()
+        let none = await MCPRun.trust(environment: fixture.environment(), show: { _ in })
+        #expect(none.failureMessage == "there is no mcp.json to trust")
+        try fixture.write(".config/rv/mcp.json", "{")
+        chmod(fixture.home.appendingPathComponent(".config/rv/mcp.json").path, 0o600)
+        chmod(fixture.config.path, 0o700)
+        let invalid = await MCPRun.trust(environment: fixture.environment(), show: { _ in })
+        #expect(invalid.failureMessage?.contains("not valid JSON") == true)
     }
 
     @Test func rvPathIsAbsoluteAndFoundOnPath() throws {

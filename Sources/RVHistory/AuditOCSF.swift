@@ -96,7 +96,7 @@ public enum AuditOCSF {
 
     static func mappedClass(_ event: AuditEvent) -> Class {
         let kind = event.kind
-        if kind == .mcpCall || kind == .secretUse {
+        if kind == .mcpCall || kind == .mcpApproval || kind == .secretUse {
             return Class(uid: 6003, name: "API Activity", category: 6, categoryName: "Application Activity", activity: 99, activityName: "Other")
         }
         if kind == .egressDenied {
