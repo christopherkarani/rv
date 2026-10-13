@@ -160,6 +160,63 @@ step("7.2 approve --always refuses a ruled tool", code != 0 and "has argument ru
 calls = rv("audit", "--kind", "mcp.call", "--json").stdout.replace(" ", "")
 step("7.2 audit records the denial", '"policy":"deny"' in calls)
 
+# 7.6 tamper-evident audit (the 7.2 run above wrote real audit.jsonl lines)
+import hashlib, http.server, threading
+AUDIT = f"{CONFIG}/audit.jsonl"
+lines = open(AUDIT, "rb").read().split(b"\n")[:-1]
+prevs = [json.loads(l).get("prev") for l in lines]
+linked = prevs[0] == "0" * 64 and all(prevs[i] == hashlib.sha256(lines[i - 1]).hexdigest() for i in range(1, len(lines)))
+step("7.6 every line carries prev = sha256 of the line before", len(lines) > 3 and linked, f"{len(lines)} lines")
+head = hashlib.sha256(lines[-1]).hexdigest()
+v = rv("audit", "verify")
+step("7.6 verify: intact", v.returncode == 0 and v.stdout.startswith(f"audit chain intact: {len(lines)} lines, head {head}"), v.stdout.strip())
+vj = json.loads(rv("audit", "verify", "--json").stdout)
+step("7.6 verify --json", vj["lines"] == len(lines) and vj["head"] == head and "firstBreak" not in vj)
+
+received = []
+
+
+class Receiver(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        received.extend(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, *a):
+        pass
+
+
+httpd = http.server.HTTPServer(("127.0.0.1", 0), Receiver)
+threading.Thread(target=httpd.serve_forever, daemon=True).start()
+f = rv("audit", "forward", "--to", f"http://127.0.0.1:{httpd.server_port}/siem")
+chained = [e["unmapped"] for e in received if "rv_chain_head" in e.get("unmapped", {})]
+step("7.6 forward: OCSF events carry rv_prev and rv_chain_head", f.returncode == 0 and len(chained) == len(lines)
+     and chained[-1]["rv_chain_head"] == head and all(chained[i]["rv_prev"] == chained[i - 1]["rv_chain_head"] for i in range(1, len(chained))),
+     f.stdout.strip())
+httpd.shutdown()
+
+original = open(AUDIT, "rb").read()
+edited = original.replace(b'"policy":"deny"', b'"policy":"allow"', 1)
+open(AUDIT, "wb").write(edited)
+v = rv("audit", "verify")
+step("7.6 verify: an edited line breaks the chain", v.returncode == 1 and "BROKEN at line" in v.stdout and "prev does not match" in v.stdout,
+     v.stdout.strip().splitlines()[0])
+open(AUDIT, "wb").write(b"\n".join(l for i, l in enumerate(original.split(b"\n")) if i != 1))
+v = rv("audit", "verify")
+step("7.6 verify: a deleted line breaks the chain", v.returncode == 1 and "BROKEN at line 2" in v.stdout, v.stdout.strip().splitlines()[0])
+open(AUDIT, "wb").write(original)
+step("7.6 verify: restored file is intact again", rv("audit", "verify").returncode == 0)
+
+i = rv("audit", "forward", "--install", "--to", "https://siem.example.com/rv", "--header", "Authorization=Bearer ${secret:SIEM}")
+if sys.platform == "darwin":
+    plist = f"{HOME}/Library/LaunchAgents/dev.rv.audit-forward.plist"
+    step("7.6 --install writes the LaunchAgent", i.returncode == 0 and os.path.exists(plist) and "StartInterval" in open(plist).read(), i.stdout.splitlines()[0])
+else:
+    step("7.6 --install on Linux prints a cron line", i.returncode == 1 and "*/5 * * * *" in i.stderr and "'audit' 'forward' '--to'" in i.stderr,
+         i.stderr.strip().splitlines()[-1][:70])
+i = rv("audit", "forward", "--install", "--to", "https://siem.example.com/rv", "--header", "Authorization=Bearer plain-token-value")
+step("7.6 --install refuses a literal header", i.returncode == 1 and "${secret:NAME}" in i.stderr and "plain-token-value" not in i.stderr + i.stdout)
+
 failed = [n for n, ok in STEPS if not ok]
 print(f"\n{len(STEPS) - len(failed)}/{len(STEPS)} passed")
 if not failed:
