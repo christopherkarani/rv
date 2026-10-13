@@ -37,7 +37,8 @@ struct CommandIntent: Sendable {
 ///
 /// Two robot/pretty semantics survive behind this one seam, because they are
 /// contractually different bytes (CON-001): `appearance` is CI/TTY-aware
-/// (CI or a non-TTY stdout renders robot), while `explicitRobot` honors the
+/// (CI or a non-TTY stdout renders robot unless `--plain` explicitly
+/// requests human output), while `explicitRobot` honors the
 /// operator's `--json`/`--robot` flags only. Appearance-rendered commands
 /// (scan, doctor, service) branch on `appearance`; JSON-or-plain-text
 /// commands (policy, packs, allowlist, allow-once, blocks, policy draft)
@@ -85,7 +86,7 @@ struct CommandContext: Sendable {
                 plainFlag: plain,
                 noColorFlag: noColor
             ),
-            requested: requested(json: json, robot: robot),
+            requested: requested(json: json, robot: robot, plain: plain),
             explicitRobot: json || robot,
             home: CLIProcess.home()
         )
@@ -119,15 +120,20 @@ struct CommandContext: Sendable {
     // MARK: - Output resolution (the single robot/pretty path)
 
     /// Requested-mode derivation, absorbed from `OutputModeResolver`.
-    static func requested(json: Bool, robot: Bool) -> RequestedMode {
+    /// Explicit `--json`/`--robot` wins over `--plain`; explicit `--plain`
+    /// requests human (pretty, color-off) output and beats the piped/CI
+    /// automatic robot fallback.
+    static func requested(json: Bool, robot: Bool, plain: Bool = false) -> RequestedMode {
         if json || robot { return .robot }
+        if plain { return .pretty }
         return .automatic
     }
 
-    /// The single appearance algorithm: CI forces robot, else the probe and
-    /// requested mode decide. `CLIAppearance.resolve` delegates here.
+    /// The single appearance algorithm: CI forces robot for automatic
+    /// output, but an explicit human request (`--plain` -> `.pretty`)
+    /// still wins. `CLIAppearance.resolve` delegates here.
     static func resolveAppearance(probe: ThemeProbe, requested: RequestedMode) -> CLIAppearance {
-        if probe.ci { return .robot }
+        if probe.ci, requested != .pretty { return .robot }
         let mode = OutputMode(probe: probe, requested: requested)
         switch mode {
         case .robot:
@@ -146,7 +152,7 @@ struct CommandContext: Sendable {
                 plainFlag: plain,
                 noColorFlag: noColor
             ),
-            requested: requested(json: json, robot: robot)
+            requested: requested(json: json, robot: robot, plain: plain)
         )
     }
 

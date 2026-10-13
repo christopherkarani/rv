@@ -145,8 +145,12 @@ enum HelpCatalog {
                 HelpRow(name: "--explain", description: "Print explain steps"),
                 HelpRow(name: "--json", description: "Robot JSON on stdout"),
                 HelpRow(name: "--robot", description: "Robot JSON on stdout"),
-                HelpRow(name: "--plain", description: "Disable browse and color"),
+                HelpRow(name: "--plain", description: "Plain human output without color, even when piped"),
                 HelpRow(name: "--no-color", description: "Disable color"),
+            ]),
+            HelpSection(heading: "Exit codes", rows: [
+                HelpRow(name: "0", description: "Allow"),
+                HelpRow(name: "1", description: "Deny (or incomplete evaluation)"),
             ]),
         ],
         examples: [
@@ -165,7 +169,7 @@ enum HelpCatalog {
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--json", description: "Robot JSON on stdout"),
                 HelpRow(name: "--robot", description: "Robot JSON on stdout"),
-                HelpRow(name: "--plain", description: "Disable browse and color"),
+                HelpRow(name: "--plain", description: "Plain human output without color, even when piped"),
                 HelpRow(name: "--no-color", description: "Disable color"),
             ]),
         ],
@@ -280,7 +284,7 @@ enum HelpCatalog {
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--json", description: "Robot JSON on stdout"),
                 HelpRow(name: "--robot", description: "Robot JSON on stdout"),
-                HelpRow(name: "--plain", description: "Disable browse and color"),
+                HelpRow(name: "--plain", description: "Plain human output without color, even when piped"),
                 HelpRow(name: "--no-color", description: "Disable color"),
             ]),
         ],

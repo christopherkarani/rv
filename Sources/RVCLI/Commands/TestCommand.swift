@@ -7,7 +7,7 @@ struct FormatFlags: ParsableArguments {
     @Flag(name: .customLong("robot"), help: "Robot JSON on stdout.")
     var robot = false
 
-    @Flag(name: .customLong("plain"), help: "Disable color.")
+    @Flag(name: .customLong("plain"), help: "Plain human output without color, even when piped.")
     var plain = false
 
     @Flag(name: .customLong("no-color"), help: "Disable color.")
