@@ -630,6 +630,182 @@ private func expectCoherent(_ state: WorkspaceTUIState, sourceLocation: SourceLo
         #expect(reconnected.state.panes[rtPane]?.scroll == ScrollPosition(anchor: 2, generation: 0))
         expectCoherent(reconnected.state)
     }
+
+    @Test func reconnectOfExitedPaneRestsWithoutACandidate() {
+        // A dead pane whose runtime is still listed must not install a
+        // reconnect candidate. Observe is dropped when the terminal is
+        // not running, so that candidate would never clear, and both
+        // Enter and the launch gate would stay closed.
+        var state = rtConnected()
+        state = WorkspaceTUIReducer.reduce(
+            state, .hostEvents([.exited(runtime: rtRuntimeA, status: 0)])
+        ).state
+        #expect(state.view.panes[rtPane]?.lifecycle == .exited)
+        state = WorkspaceTUIReducer.reduce(state, .hostDisconnected).state
+        state.panes[rtPane]?.scroll = ScrollPosition(anchor: 5, generation: 1)
+        let reconnected = WorkspaceTUIReducer.reduce(
+            state,
+            .reconnectSucceeded(terminals: [
+                ListedRuntime(id: rtRuntimeA, hook: nil, running: false, terminal: true),
+            ])
+        )
+        #expect(reconnected.state.panes[rtPane]?.phase.candidate == nil)
+        if case .attached(let terminal)? = reconnected.state.panes[rtPane]?.phase {
+            #expect(terminal.state.running == false)
+            #expect(terminal.state.runtime == rtRuntimeA)
+        } else {
+            Issue.record("expected an attached phase, got \(String(describing: reconnected.state.panes[rtPane]?.phase))")
+        }
+        #expect(reconnected.state.view.panes[rtPane]?.lifecycle == .exited)
+        #expect(reconnected.state.panes[rtPane]?.scroll == ScrollPosition(anchor: 5, generation: 1))
+        #expect(reconnected.effects == [.restartEvents])
+        expectCoherent(reconnected.state)
+        let target = PrefixTarget(pane: rtPane, generation: 1)
+        let retry = WorkspaceTUIReducer.reduce(reconnected.state, .key(.enter))
+        #expect(retry.effects == [.queueLaunch(target: target, choice: rtShell)])
+        let due = WorkspaceTUIReducer.reduce(
+            retry.state, .launchDue(target: target, choice: rtShell)
+        )
+        guard case .launchQuery = due.effects.first else {
+            Issue.record("expected the launch gate to admit the relaunch, got \(due.effects)")
+            return
+        }
+    }
+
+    @Test func reconnectCollapsesSlotlessLaunchingWhenRuntimeIsPresent() {
+        // Enter on a slot-less .failed pane, then disconnect before the
+        // query returns. Reconnect with the saved runtime still listed
+        // must collapse that .launching record to .missing(nil): with
+        // no slot, landAttach never leaves .launching and Enter cannot
+        // retry. Scroll and the other non-phase fields stay.
+        var state = rtRestoredSlotless()
+        let target = PrefixTarget(pane: rtPane, generation: 0)
+        state = WorkspaceTUIReducer.reduce(
+            state, .launchQueryFailed(target: target, choice: rtShell, error: .unavailable)
+        ).state
+        state.panes[rtPane]?.scroll = ScrollPosition(anchor: 3, generation: 0)
+        let retry = WorkspaceTUIReducer.reduce(state, .key(.enter))
+        #expect(retry.state.panes[rtPane]?.phase == .launching(LaunchDetail(previous: nil, candidate: nil)))
+        let disconnected = WorkspaceTUIReducer.reduce(retry.state, .hostDisconnected)
+        let reconnected = WorkspaceTUIReducer.reduce(
+            disconnected.state, .reconnectSucceeded(terminals: [rtListed(rtRuntimeA)])
+        )
+        #expect(reconnected.state.panes[rtPane]?.phase == .missing(stale: nil))
+        #expect(reconnected.state.view.panes[rtPane]?.lifecycle == .missing)
+        #expect(reconnected.state.panes[rtPane]?.scroll == ScrollPosition(anchor: 3, generation: 0))
+        let slotless = PaneBindingKey(pane: rtPane, runtime: rtRuntimeA, generation: 0)
+        #expect(reconnected.effects == [
+            .observe(binding: slotless, context: .reconnect), .restartEvents,
+        ])
+        expectCoherent(reconnected.state)
+    }
+
+    @Test func scrollBeforeConnectDoesNotInventAMissingRecord() {
+        // Keys are accepted before the first inventory. Entering scroll
+        // on a restored bound pane must not insert .missing: that phase
+        // derives .missing while the nil record still reads .disconnected,
+        // so chrome would say the runtime is gone before connect. With
+        // no record the anchor reads as 0, and a later step must not
+        // create the record either.
+        let tab = WorkspaceTab(id: TabID(), tree: .leaf(rtPane), focusedPaneID: rtPane)
+        let restoredBinding = RuntimeBinding(
+            workspace: WorkspaceSessionID(rawValue: rtSummary.workspace),
+            runtime: RuntimeSessionID(rawValue: rtRuntimeA),
+            generation: 0
+        )
+        let view = WorkspaceView(
+            id: ViewID(),
+            tabs: [tab],
+            activeTabID: tab.id,
+            panes: [rtPane: WorkspacePane(id: rtPane, binding: restoredBinding, lifecycle: .disconnected)]
+        )
+        var state = WorkspaceTUIState(
+            lifecycle: .neverConnected,
+            summary: rtSummary,
+            launcher: [rtShell],
+            initialRows: 24,
+            initialColumns: 80,
+            mode: .terminal,
+            terminal: nil,
+            leasedRuntime: nil,
+            retryAcquire: false,
+            shouldExit: false,
+            initialLaunchRequested: false,
+            viewSize: .init(rows: 40, columns: 100),
+            presentationRevision: 0,
+            restoredView: view
+        )
+        #expect(state.panes[rtPane] == nil)
+        #expect(state.lifecycle == .neverConnected)
+        var transition = WorkspaceTUIReducer.reduce(state, .key(.control("b")))
+        transition = WorkspaceTUIReducer.reduce(transition.state, .key(.character("[")))
+        #expect(transition.state.mode == .scroll(pane: rtPane))
+        #expect(transition.state.panes[rtPane] == nil)
+        #expect(transition.state.view.panes[rtPane]?.lifecycle == .disconnected)
+        transition = WorkspaceTUIReducer.reduce(transition.state, .key(.character("k")))
+        #expect(transition.state.panes[rtPane] == nil)
+        #expect(transition.state.view.panes[rtPane]?.lifecycle == .disconnected)
+        state = transition.state
+        let connected = WorkspaceTUIReducer.reduce(
+            state, .connectQuery(described: rtSummary, runtimes: [])
+        )
+        #expect(connected.state.panes[rtPane]?.phase == .missing(stale: nil))
+        #expect(connected.state.panes[rtPane]?.scroll == nil)
+        #expect(connected.state.view.panes[rtPane]?.lifecycle == .missing)
+        expectCoherent(connected.state)
+    }
+
+    @Test func connectKeepsScrollWhenSavedRuntimeIsGone() {
+        // A record that already exists at connect (scroll, typeahead,
+        // and the other non-phase fields) must survive the gone-runtime
+        // branch. Replacing it with a fresh .missing record drops the
+        // scroll the branch's comment says it holds.
+        let tab = WorkspaceTab(id: TabID(), tree: .leaf(rtPane), focusedPaneID: rtPane)
+        let restoredBinding = RuntimeBinding(
+            workspace: WorkspaceSessionID(rawValue: rtSummary.workspace),
+            runtime: RuntimeSessionID(rawValue: rtRuntimeA),
+            generation: 0
+        )
+        let view = WorkspaceView(
+            id: ViewID(),
+            tabs: [tab],
+            activeTabID: tab.id,
+            panes: [rtPane: WorkspacePane(id: rtPane, binding: restoredBinding, lifecycle: .disconnected)]
+        )
+        var state = WorkspaceTUIState(
+            lifecycle: .neverConnected,
+            summary: rtSummary,
+            launcher: [rtShell],
+            initialRows: 24,
+            initialColumns: 80,
+            mode: .terminal,
+            terminal: nil,
+            leasedRuntime: nil,
+            retryAcquire: false,
+            shouldExit: false,
+            initialLaunchRequested: false,
+            viewSize: .init(rows: 40, columns: 100),
+            presentationRevision: 0,
+            restoredView: view
+        )
+        let binding = PaneBindingKey(pane: rtPane, runtime: rtRuntimeA, generation: 0)
+        var record = PaneRuntime(phase: .missing(stale: nil))
+        record.scroll = ScrollPosition(anchor: 7, generation: 0)
+        record.input = WorkspaceTUIState.PendingPaneInput(binding: binding, bytes: Data([0x01]))
+        record.recentOutputOnly = true
+        record.retries = [.acquire]
+        state.panes[rtPane] = record
+        let connected = WorkspaceTUIReducer.reduce(
+            state, .connectQuery(described: rtSummary, runtimes: [])
+        )
+        #expect(connected.state.panes[rtPane]?.phase == .missing(stale: nil))
+        #expect(connected.state.panes[rtPane]?.scroll == ScrollPosition(anchor: 7, generation: 0))
+        #expect(connected.state.panes[rtPane]?.input == record.input)
+        #expect(connected.state.panes[rtPane]?.recentOutputOnly == true)
+        #expect(connected.state.panes[rtPane]?.retries == [.acquire])
+        #expect(connected.state.view.panes[rtPane]?.lifecycle == .missing)
+        expectCoherent(connected.state)
+    }
 }
 
 @Suite struct PaneIdentityTests {

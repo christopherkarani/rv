@@ -370,12 +370,14 @@ struct WorkspaceTUIState: Equatable, Sendable {
     /// Sets one pane's scroll anchor, preserving the generation scroll
     /// mode opened under (re-pinned from the live binding when absent,
     /// which only crafted events without scroll mode can observe).
+    /// A pane with no record is left alone. Inserting `.missing` would
+    /// derive missing before connect, while a nil record still reads
+    /// disconnected, and the anchor reads as 0 either way.
     mutating func setScrollAnchor(_ anchor: Int, for paneID: PaneID) {
+        guard panes[paneID] != nil else { return }
         let generation = panes[paneID]?.scroll?.generation
             ?? bindingKey(for: paneID)?.generation ?? 0
-        panes[paneID, default: PaneRuntime(phase: .missing(stale: nil))].scroll = ScrollPosition(
-            anchor: anchor, generation: generation
-        )
+        panes[paneID]?.scroll = ScrollPosition(anchor: anchor, generation: generation)
     }
 
     /// Takes bytes queued for exactly this binding. Anything else stays put.
@@ -637,10 +639,15 @@ enum WorkspaceTUIReducer {
                 guard let saved = next.view.panes[paneID]?.binding else { continue }
                 guard saved.workspace.rawValue == described.workspace,
                       let runtime = available[saved.runtime.rawValue] else {
-                    // A saved runtime that is gone. The record (with no
-                    // stale terminal) holds scroll and typeahead for the
-                    // pane until the navigator attaches a replacement.
-                    next.panes[paneID] = PaneRuntime(phase: .missing(stale: nil))
+                    // A saved runtime that is gone. An existing record
+                    // keeps scroll, typeahead, and its other non-phase
+                    // fields; only the phase becomes missing. Replacing
+                    // the record would drop a scroll pinned before
+                    // inventory. The navigator attaches a replacement
+                    // onto this slot-less missing record.
+                    var record = next.panes[paneID] ?? PaneRuntime(phase: .missing(stale: nil))
+                    record.phase = .missing(stale: nil)
+                    next.panes[paneID] = record
                     continue
                 }
                 let rows = runtime.rows.map(Self.bound) ?? next.initialRows
@@ -903,12 +910,17 @@ enum WorkspaceTUIReducer {
                 if case .scroll(let pane) = next.mode, next.view.panes[pane]?.binding != nil {
                     // Entering re-pins the generation and keeps a previous
                     // anchor (a re-entered mode resumes where it left off).
-                    let anchor = next.panes[pane]?.scroll?.anchor ?? 0
-                    let generation = next.bindingKey(for: pane)?.generation ?? 0
-                    next.panes[pane, default: PaneRuntime(phase: .missing(stale: nil))].scroll = ScrollPosition(
-                        anchor: anchor,
-                        generation: generation
-                    )
+                    // No record means there is nothing to pin: inserting
+                    // `.missing` would flip chrome to "runtime missing"
+                    // before connect, and the anchor reads as 0 anyway.
+                    if next.panes[pane] != nil {
+                        let anchor = next.panes[pane]?.scroll?.anchor ?? 0
+                        let generation = next.bindingKey(for: pane)?.generation ?? 0
+                        next.panes[pane]?.scroll = ScrollPosition(
+                            anchor: anchor,
+                            generation: generation
+                        )
+                    }
                 } else {
                     next.mode = .terminal
                     next.feedback = "Nothing to scroll"
@@ -1341,21 +1353,44 @@ enum WorkspaceTUIReducer {
                     continue
                 }
                 if let stale = next.terminal(for: paneID) {
-                    // Re-attach lands in the candidate slot under the
-                    // current binding: no rebind, so no generation bump.
-                    next.panes[paneID]?.phase = .launching(LaunchDetail(
-                        previous: nil, candidate: .init(binding: binding, terminal: stale)
-                    ))
+                    if stale.state.running {
+                        // Re-attach lands in the candidate slot under the
+                        // current binding: no rebind, so no generation bump.
+                        // Only a running terminal gets a candidate. Observe
+                        // and attach complete and landAttach clears it.
+                        next.panes[paneID]?.phase = .launching(LaunchDetail(
+                            previous: nil, candidate: .init(binding: binding, terminal: stale)
+                        ))
+                    } else {
+                        // A dead terminal is already exited. A candidate
+                        // would derive attaching and close the launch gate,
+                        // and observe is dropped while the terminal is not
+                        // running, so nothing would clear it. Rest on the
+                        // stale terminal with no candidate and no reattach.
+                        next.panes[paneID]?.phase = .attached(stale)
+                    }
+                } else if case .launching? = next.panes[paneID]?.phase {
+                    // No slot: a .launching record (the query returned
+                    // during the outage) would stay .launching. landAttach
+                    // no-ops without a slot, and Enter cannot retry.
+                    // Collapse it the way the absent-runtime branch does,
+                    // keeping scroll and the other non-phase fields.
+                    var record = next.panes[paneID] ?? PaneRuntime(phase: .missing(stale: nil))
+                    record.phase = .missing(stale: nil)
+                    next.panes[paneID] = record
                 }
                 // A slot-less pane keeps its record (or lack of one): with
                 // no terminal to book the subscription on, the attach
                 // below still issues and its success releases, exactly as
                 // before — the pane keeps reading missing instead of
-                // sticking on attaching.
-                if next.panes[paneID]?.preDisconnectLease?.runtime == binding.runtime {
-                    effects.append(.attach(binding: binding, context: .reconnect))
-                } else {
-                    effects.append(.observe(binding: binding, context: .reconnect))
+                // sticking on attaching. A non-running stale terminal
+                // does not reattach; that effect would never land.
+                if next.terminal(for: paneID)?.state.running != false {
+                    if next.panes[paneID]?.preDisconnectLease?.runtime == binding.runtime {
+                        effects.append(.attach(binding: binding, context: .reconnect))
+                    } else {
+                        effects.append(.observe(binding: binding, context: .reconnect))
+                    }
                 }
             }
             for paneID in next.panes.keys {
