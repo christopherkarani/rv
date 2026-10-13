@@ -650,7 +650,7 @@ struct MCPServe: AsyncParsableCommand {
         case .failure(let error): try fail(error.message)
         case .success(let loaded): secrets = loaded
         }
-        let planned: [(MCPGatewayCore.Upstream, MCPUpstreamLaunch)]
+        let planned: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)]
         switch MCPLaunchPlanner.plan(
             servers: names, configuration: configuration, secrets: secrets,
             resolver: .live(home: home.rawValue), baseEnvironment: environment.processEnvironment,
@@ -677,7 +677,7 @@ struct MCPServe: AsyncParsableCommand {
             approvals: .store(environment.approvals))
         let runtime = MCPGatewayRuntime(
             core: core,
-            launches: planned.map { $0.1 },
+            connections: planned.map { $0.1 },
             audit: { MCPRun.auditRecord($0, configDirectory: configDirectory) },
             event: { _ = AuditLog.append($0, configDirectory: configDirectory) },
             log: log)

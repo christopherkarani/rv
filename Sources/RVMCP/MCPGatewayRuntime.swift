@@ -55,48 +55,81 @@ public enum MCPLaunchPlanner {
         resolver: SecretResolver,
         baseEnvironment: [String: String],
         sandbox: (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> = { .success($1) }
-    ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamLaunch)], MCPLaunchError> {
-        var planned: [(MCPGatewayCore.Upstream, MCPUpstreamLaunch)] = []
+    ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], MCPLaunchError> {
+        var planned: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)] = []
         for name in names {
             if configuration.isBlocked(name) { return .failure(.blocked(name)) }
             guard let definition = configuration.server(named: name) else { return .failure(.unknownServer(name)) }
+            if let remote = definition.remote {
+                let resolved: [String: String]
+                switch resolve(
+                    remote.secretNames, server: name, configuration: configuration, secrets: secrets, resolver: resolver,
+                    header: true)
+                {
+                case .failure(let error): return .failure(error)
+                case .success(let values): resolved = values
+                }
+                let headers = remote.headers.mapValues { MCPSecretReference.substitute($0, values: resolved) }
+                let launch = MCPRemoteLaunch(server: name, url: remote.url, headers: headers, transport: remote.transport)
+                planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: named(resolved)), .remote(launch)))
+                continue
+            }
             if configuration.managed?.mcp.requireSandbox == true, definition.sandbox == nil {
                 return .failure(.sandbox("organization policy requires a sandbox for \(name); add \"sandbox\" to its mcp.json entry"))
             }
             var environment = definition.sandbox == nil ? baseEnvironment : sandboxEnvironment(baseEnvironment)
             for (key, value) in definition.environment { environment[key] = value }
-            var resolved: [String: String] = [:]
             let referenced = Set(definition.secrets.values).union(definition.args.flatMap { MCPSecretReference.names(in: $0) ?? [] })
-            for secretName in referenced.sorted() {
-                guard let secret = secrets.secret(named: secretName) else {
-                    return .failure(.secretUndefined(server: name, secret: secretName))
-                }
-                if configuration.managed?.allowsSecretSource(secret.source.kind) == false {
-                    return .failure(.secretUnavailable(
-                        server: name, secret: secretName,
-                        reason: "organization policy does not allow \(secret.source.kind) secrets"))
-                }
-                switch resolver.resolve(secret.source) {
-                case .failure(let error):
-                    return .failure(.secretUnavailable(server: name, secret: secretName, reason: error.message))
-                case .success(let value):
-                    guard let text = String(validating: value.revealed(), as: UTF8.self), text.contains("\0") == false else {
-                        return .failure(.secretUnavailable(server: name, secret: secretName, reason: "not usable as text"))
-                    }
-                    resolved[secretName] = text
-                }
+            let resolved: [String: String]
+            switch resolve(referenced.sorted(), server: name, configuration: configuration, secrets: secrets, resolver: resolver) {
+            case .failure(let error): return .failure(error)
+            case .success(let values): resolved = values
             }
             for (variable, secretName) in definition.secrets { environment[variable] = resolved[secretName] }
             let args = definition.args.map { MCPSecretReference.substitute($0, values: resolved) }
-            let values = resolved.keys.sorted().compactMap { key in resolved[key].map { (name: key, value: $0) } }
             let launch = MCPUpstreamLaunch(
                 server: name, executable: envPath, arguments: [definition.command] + args, environment: environment)
             switch sandbox(definition, launch) {
             case .failure(let error): return .failure(error)
-            case .success(let caged): planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: values), caged))
+            case .success(let caged):
+                planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: named(resolved)), .process(caged)))
             }
         }
         return .success(planned)
+    }
+
+    static func named(_ resolved: [String: String]) -> [(name: String, value: String)] {
+        resolved.keys.sorted().compactMap { key in resolved[key].map { (name: key, value: $0) } }
+    }
+
+    static func resolve(
+        _ names: [String], server: String, configuration: MCPConfiguration, secrets: SecretsConfiguration,
+        resolver: SecretResolver, header: Bool = false
+    ) -> Result<[String: String], MCPLaunchError> {
+        var resolved: [String: String] = [:]
+        for secretName in names {
+            guard let secret = secrets.secret(named: secretName) else {
+                return .failure(.secretUndefined(server: server, secret: secretName))
+            }
+            if configuration.managed?.allowsSecretSource(secret.source.kind) == false {
+                return .failure(.secretUnavailable(
+                    server: server, secret: secretName,
+                    reason: "organization policy does not allow \(secret.source.kind) secrets"))
+            }
+            switch resolver.resolve(secret.source) {
+            case .failure(let error):
+                return .failure(.secretUnavailable(server: server, secret: secretName, reason: error.message))
+            case .success(let value):
+                guard let text = String(validating: value.revealed(), as: UTF8.self),
+                    text.contains("\0") == false,
+                    header == false || text.unicodeScalars.allSatisfy({ $0 != "\r" && $0 != "\n" })
+                else {
+                    return .failure(.secretUnavailable(server: server, secret: secretName, reason: "not usable as text"))
+                }
+                resolved[secretName] = text
+            }
+        }
+        return .success(resolved)
     }
 
     /// Host environment a sandboxed upstream may see. Credentials the host
@@ -117,7 +150,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     public static let maximumLineBytes = 64 * 1024 * 1024
 
     private var core: MCPGatewayCore
-    private let launches: [MCPUpstreamLaunch]
+    private let connections: [MCPUpstreamConnection]
+    private let authorizers: [String: MCPRemoteAuthorizer]
     private let input: Int32
     private let output: Int32
     private let audit: @Sendable (MCPCallRecord) -> Void
@@ -126,12 +160,14 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     private let queue = DispatchQueue(label: "rv.mcp.gateway")
     private var processes: [String: Process] = [:]
     private var upstreamInputs: [String: FileHandle] = [:]
+    private var remotes: [String: MCPRemoteUpstream] = [:]
     private let finished = DispatchSemaphore(value: 0)
     private var stopping = false
 
     public init(
         core: MCPGatewayCore,
-        launches: [MCPUpstreamLaunch],
+        connections: [MCPUpstreamConnection],
+        authorizers: [String: MCPRemoteAuthorizer] = [:],
         input: Int32 = STDIN_FILENO,
         output: Int32 = STDOUT_FILENO,
         audit: @escaping @Sendable (MCPCallRecord) -> Void,
@@ -139,7 +175,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         log: @escaping @Sendable (String) -> Void
     ) {
         self.core = core
-        self.launches = launches
+        self.connections = connections
+        self.authorizers = authorizers
         self.input = input
         self.output = output
         self.audit = audit
@@ -152,7 +189,12 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         signal(SIGPIPE, SIG_IGN)
         queue.sync {
             var failed: [String] = []
-            for launch in launches where spawn(launch) == false { failed.append(launch.server) }
+            for connection in connections {
+                switch connection {
+                case .process(let launch): if spawn(launch) == false { failed.append(launch.server) }
+                case .remote(let launch): connect(launch)
+                }
+            }
             perform(core.start())
             for server in failed { perform(core.handle(.upstreamExited(server: server))) }
         }
@@ -208,13 +250,35 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         return true
     }
 
+    private func connect(_ launch: MCPRemoteLaunch) {
+        let server = launch.server
+        let remote = MCPRemoteUpstream(
+            launch: launch, authorizer: authorizers[server],
+            deliver: { [self] message in
+                queue.async { self.perform(self.core.handle(.upstream(server: server, message: message))) }
+            },
+            exited: { [self] in
+                queue.async {
+                    guard self.stopping == false else { return }
+                    self.perform(self.core.handle(.upstreamExited(server: server)))
+                }
+            },
+            log: log)
+        remotes[server] = remote
+        remote.start()
+    }
+
     private func perform(_ outputs: [MCPGatewayOutput]) {
         for item in outputs {
             switch item {
             case .toClient(let message):
                 Self.writeLine(output, message)
             case .toUpstream(let server, let message):
-                if let handle = upstreamInputs[server] { Self.writeLine(handle.fileDescriptor, message) }
+                if let handle = upstreamInputs[server] {
+                    Self.writeLine(handle.fileDescriptor, message)
+                } else {
+                    remotes[server]?.send(message)
+                }
             case .audit(let record):
                 audit(record)
             case .event(let item):
@@ -226,6 +290,8 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
     }
 
     private func stopUpstreams() {
+        for remote in remotes.values { remote.stop() }
+        remotes = [:]
         for handle in upstreamInputs.values { try? handle.close() }
         upstreamInputs = [:]
         let deadline = Date().addingTimeInterval(2)

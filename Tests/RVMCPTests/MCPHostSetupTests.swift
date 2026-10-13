@@ -93,7 +93,7 @@ struct MCPImportTests {
         let planned = try MCPLaunchPlanner.plan(
             servers: ["s"], configuration: configuration, secrets: secrets, resolver: resolver, baseEnvironment: [:]
         ).get()
-        #expect(planned[0].1.arguments == ["srv", "--api-key", "tok_arg_value_123"])
+        #expect(planned[0].1.process?.arguments == ["srv", "--api-key", "tok_arg_value_123"])
         #expect(planned[0].0.secretValues.map(\.name) == ["S_KEY"])
 
         if case .failure(let error) = MCPLaunchPlanner.plan(
@@ -122,7 +122,7 @@ struct MCPImportTests {
             servers: ["s"], configuration: MCPConfiguration(servers: [definition]), secrets: secrets, resolver: resolver,
             baseEnvironment: base
         ).get()
-        let environment = planned[0].1.environment
+        let environment = try #require(planned[0].1.process).environment
         #expect(environment["PATH"] == "/usr/bin")
         #expect(environment["HOME"] == "/home/me")
         #expect(environment["TMPDIR"] == "/tmp")
@@ -141,7 +141,7 @@ struct MCPImportTests {
             servers: ["s"], configuration: MCPConfiguration(servers: [plain]), secrets: secrets, resolver: resolver,
             baseEnvironment: base
         ).get()
-        #expect(inherited[0].1.environment["AWS_SECRET_ACCESS_KEY"] == "aws-secret")
+        #expect(inherited[0].1.process?.environment["AWS_SECRET_ACCESS_KEY"] == "aws-secret")
     }
 }
 

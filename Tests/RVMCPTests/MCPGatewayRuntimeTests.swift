@@ -108,7 +108,7 @@ struct MCPGatewayRuntimeTests {
             servers: ["fixture"], configuration: configuration, secrets: secrets, resolver: resolver,
             baseEnvironment: base
         ).get()
-        #expect(planned[0].1.environment["FIXTURE_TOKEN"] == "tok_live_9f8e7d6c5b4a")
+        #expect(planned[0].1.process?.environment["FIXTURE_TOKEN"] == "tok_live_9f8e7d6c5b4a")
 
         let client = LineClient()
         let audits = RecordedAudits()
@@ -116,7 +116,7 @@ struct MCPGatewayRuntimeTests {
             configuration: configuration, upstreams: planned.map { $0.0 },
             approvals: MCPApprovalGate(consumeGrant: { _, _, _ in .none }, request: { _, _, _, _ in nil }))
         let runtime = MCPGatewayRuntime(
-            core: core, launches: planned.map { $0.1 },
+            core: core, connections: planned.map { $0.1 },
             input: client.toGateway.fileHandleForReading.fileDescriptor,
             output: client.fromGateway.fileHandleForWriting.fileDescriptor,
             audit: { record in audits.items.withLock { $0.append(record) } },
