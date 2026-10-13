@@ -319,70 +319,70 @@
       "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+object\\s+drop\\s+(?:database|schema)\\b",
       "severity": "critical",
       "description": "snow object drop database/schema removes the object and everything inside it.",
-      "explanation": "Dropping a database or schema removes ALL contained objects (tables, views, \\ stages, pipes, tasks, functions). Time Travel/UNDROP recovery is conditional \\ on retention, edition, and privileges - it is not a substitute for preventing \\ the drop. Verify with `snow object list database` / `snow object describe` \\ and consider `CREATE DATABASE <name>_backup CLONE <name>` first."
+      "explanation": "Dropping a database or schema removes ALL contained objects (tables, views, stages, pipes, tasks, functions). Time Travel/UNDROP recovery is conditional on retention, edition, and privileges - it is not a substitute for preventing the drop. Verify with `snow object list database` / `snow object describe` and consider `CREATE DATABASE <name>_backup CLONE <name>` first."
     },
     {
       "name": "cli-object-drop",
       "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+object\\s+drop\\b",
       "severity": "high",
       "description": "snow object drop permanently removes a Snowflake object.",
-      "explanation": "snow object drop removes tables, views, stages, streams, tasks, warehouses, \\ users, roles, integrations, and more; --force skips the confirmation prompt. \\ Dropping shared infrastructure can break applications and automation \\ immediately. Inspect first with `snow object describe <type> <name>`."
+      "explanation": "snow object drop removes tables, views, stages, streams, tasks, warehouses, users, roles, integrations, and more; --force skips the confirmation prompt. Dropping shared infrastructure can break applications and automation immediately. Inspect first with `snow object describe <type> <name>`."
     },
     {
       "name": "cli-stage-drop",
       "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+stage\\s+drop\\b",
       "severity": "high",
       "description": "snow stage drop removes the stage; internal staged files are not recoverable.",
-      "explanation": "Dropped stages cannot be recovered - internal stage files are gone, and \\ workflows (COPY INTO, Snowpipe) referencing the stage break immediately. \\ List contents first with `snow stage list-files <stage>`."
+      "explanation": "Dropped stages cannot be recovered - internal stage files are gone, and workflows (COPY INTO, Snowpipe) referencing the stage break immediately. List contents first with `snow stage list-files <stage>`."
     },
     {
       "name": "cli-stage-remove",
       "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+stage\\s+remove\\b",
       "severity": "high",
       "description": "snow stage remove deletes files from a stage.",
-      "explanation": "Files removed from an internal stage are not covered by Time Travel. \\ Ingestion pipelines expecting those files will silently see nothing to \\ load. Preview with `snow stage list-files <stage>` and consider copying \\ the files out first."
+      "explanation": "Files removed from an internal stage are not covered by Time Travel. Ingestion pipelines expecting those files will silently see nothing to load. Preview with `snow stage list-files <stage>` and consider copying the files out first."
     },
     {
       "name": "cli-app-teardown",
       "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+app\\s+teardown\\b",
       "severity": "high",
       "description": "snow app teardown drops the Native App and (with --cascade) its owned objects.",
-      "explanation": "snow app teardown drops the application object and the application \\ package's development artifacts; with --cascade it also drops objects the \\ app owns, databases included. Anyone using the app loses access \\ immediately."
+      "explanation": "snow app teardown drops the application object and the application package's development artifacts; with --cascade it also drops objects the app owns, databases included. Anyone using the app loses access immediately."
     },
     {
       "name": "cli-app-version-drop",
       "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+app\\s+version\\s+drop\\b",
       "severity": "medium",
       "description": "snow app version drop removes a Native App version definition.",
-      "explanation": "Dropping an application package version prevents new installs and upgrades \\ of that version; releases pinned to it break."
+      "explanation": "Dropping an application package version prevents new installs and upgrades of that version; releases pinned to it break."
     },
     {
       "name": "cli-snowpark-drop",
       "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+snowpark\\s+drop\\b",
       "severity": "medium",
       "description": "snow snowpark drop removes a deployed procedure or function from Snowflake.",
-      "explanation": "snow snowpark drop function/procedure drops the named object from \\ Snowflake. Downstream callers (tasks, other procedures, applications) \\ fail until it is redeployed."
+      "explanation": "snow snowpark drop function/procedure drops the named object from Snowflake. Downstream callers (tasks, other procedures, applications) fail until it is redeployed."
     },
     {
       "name": "cli-spcs-drop",
       "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+spcs\\s+(?:service|compute-pool|image-repository)\\s+drop\\b",
       "severity": "high",
       "description": "snow spcs ... drop removes container services infrastructure.",
-      "explanation": "Dropping an SPCS service stops and removes the running workload; dropping \\ a compute pool removes the compute for every service on it; dropping an \\ image repository deletes the stored images."
+      "explanation": "Dropping an SPCS service stops and removes the running workload; dropping a compute pool removes the compute for every service on it; dropping an image repository deletes the stored images."
     },
     {
       "name": "cli-dbt-drop",
       "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+dbt\\s+drop\\b",
       "severity": "medium",
       "description": "snow dbt drop removes a dbt project object from Snowflake.",
-      "explanation": "snow dbt drop removes the named DBT PROJECT object; scheduled `snow dbt \\ execute` runs and tasks referencing it fail until it is redeployed."
+      "explanation": "snow dbt drop removes the named DBT PROJECT object; scheduled `snow dbt execute` runs and tasks referencing it fail until it is redeployed."
     },
     {
       "name": "cli-dcm-drop",
       "pattern": "(?:^|[\\s;&|(])snow(?:\\s+--?[^\\s;&|]+(?:\\s+[^-\\s;&|][^\\s;&|]*)?)*\\s+dcm\\s+drop\\b",
       "severity": "medium",
       "description": "snow dcm drop removes a DCM project object from Snowflake.",
-      "explanation": "snow dcm drop removes the named DCM PROJECT object, including its \\ deployment history in Snowflake."
+      "explanation": "snow dcm drop removes the named DCM PROJECT object, including its deployment history in Snowflake."
     }
   ]
 }

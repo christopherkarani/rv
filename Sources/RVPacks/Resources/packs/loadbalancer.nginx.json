@@ -54,35 +54,35 @@
       "pattern": "nginx\\s+-s\\s+stop\\b",
       "severity": "high",
       "description": "nginx -s stop shuts down nginx and stops the load balancer.",
-      "explanation": "Sending the stop signal terminates nginx immediately without waiting for \\ active connections to finish. All in-flight requests are dropped and upstream \\ traffic stops being routed.\n\n\\ To reload config without downtime: \\ nginx -s reload\n\n\\ To gracefully finish current requests: \\ nginx -s quit"
+      "explanation": "Sending the stop signal terminates nginx immediately without waiting for active connections to finish. All in-flight requests are dropped and upstream traffic stops being routed.\n\nTo reload config without downtime: nginx -s reload\n\nTo gracefully finish current requests: nginx -s quit"
     },
     {
       "name": "nginx-quit",
       "pattern": "nginx\\s+-s\\s+quit\\b",
       "severity": "high",
       "description": "nginx -s quit gracefully stops nginx and halts traffic handling.",
-      "explanation": "The quit signal waits for active connections to complete before shutting \\ down nginx. While graceful, it still permanently stops the load balancer \\ and no new connections are accepted once issued.\n\n\\ To reload config without stopping: \\ nginx -s reload\n\n\\ Test config before changes: \\ nginx -t"
+      "explanation": "The quit signal waits for active connections to complete before shutting down nginx. While graceful, it still permanently stops the load balancer and no new connections are accepted once issued.\n\nTo reload config without stopping: nginx -s reload\n\nTest config before changes: nginx -t"
     },
     {
       "name": "systemctl-stop-nginx",
       "pattern": "systemctl\\b.*?\\s+stop\\s+nginx(?:\\.service)?\\b",
       "severity": "high",
       "description": "systemctl stop nginx stops the nginx service and disrupts traffic.",
-      "explanation": "Stopping the nginx systemd service shuts down all nginx worker processes. \\ Any sites, APIs, or reverse proxies served by this nginx instance become \\ unreachable until the service is restarted.\n\n\\ Check status first: \\ systemctl status nginx\n\n\\ To restart instead of stop: \\ systemctl restart nginx"
+      "explanation": "Stopping the nginx systemd service shuts down all nginx worker processes. Any sites, APIs, or reverse proxies served by this nginx instance become unreachable until the service is restarted.\n\nCheck status first: systemctl status nginx\n\nTo restart instead of stop: systemctl restart nginx"
     },
     {
       "name": "service-stop-nginx",
       "pattern": "service\\s+nginx\\s+stop\\b",
       "severity": "high",
       "description": "service nginx stop stops the nginx service and disrupts traffic.",
-      "explanation": "Stopping nginx via the legacy service command terminates all worker \\ processes. All sites and proxies served by nginx become unavailable.\n\n\\ Check status first: \\ service nginx status\n\n\\ Prefer systemctl on systemd systems: \\ systemctl status nginx"
+      "explanation": "Stopping nginx via the legacy service command terminates all worker processes. All sites and proxies served by nginx become unavailable.\n\nCheck status first: service nginx status\n\nPrefer systemctl on systemd systems: systemctl status nginx"
     },
     {
       "name": "nginx-config-delete",
       "pattern": "\\brm\\b.*\\s+['\"]?/etc/nginx(?:/|\\b)",
       "severity": "critical",
       "description": "Removing files from /etc/nginx deletes nginx configuration.",
-      "explanation": "Deleting nginx configuration files removes site definitions, upstream \\ blocks, SSL certificate references, and load balancing rules. Nginx will \\ fail to start or reload without valid configuration.\n\n\\ Back up config first: \\ cp -r /etc/nginx /etc/nginx.backup\n\n\\ Test config validity: \\ nginx -t"
+      "explanation": "Deleting nginx configuration files removes site definitions, upstream blocks, SSL certificate references, and load balancing rules. Nginx will fail to start or reload without valid configuration.\n\nBack up config first: cp -r /etc/nginx /etc/nginx.backup\n\nTest config validity: nginx -t"
     }
   ]
 }
