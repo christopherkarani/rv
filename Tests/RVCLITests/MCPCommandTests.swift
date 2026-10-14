@@ -1691,6 +1691,41 @@ struct MCPCommandTests {
         try await expectSplitSecretRefused("ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
     }
 
+    @Test func importRefusesACircledTimesAndTheNextOperator() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let extra = tail + "EXTRA"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-", "AKIA", "AIza", "ASIA"]
+        let marks: [UInt32] = [0x2295, 0x2296, 0x2297, 0x2299, 0x229A, 0x229B]
+        for code in marks {
+            let mark = String(Unicode.Scalar(code)!)
+            let value = head + mark + tail
+            try await expectSplitSecretRefused(value, sk: "sk-12345678g" + mark + tail, absent: absent, label: "circled times")
+            try await expectSplitSecretRefused(head + mark + extra, absent: absent + [extra], label: "circled times extra")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": value]),
+                absent: absent, label: "circled times command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(value)"]]),
+                absent: absent, label: "circled times cwd")
+            for disguised in ["x" + value, "." + value] {
+                try await expectSplitSecretRefused(disguised, absent: absent, label: "disguised circled times")
+                try await expectImportRefused(
+                    try hostJSON("api", [
+                        "url": "https://mcp.example/mcp",
+                        "headers": ["X-Trace": disguised, "Authorization": "Bearer \(value)"],
+                    ]),
+                    absent: absent + ["Bearer"], label: "circled times trace")
+            }
+            for overlapped in ["AKIA" + mark + "Iza12345678", "ASIA" + mark + "Iza12345678"] {
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": overlapped, "LOG_LEVEL": overlapped]]),
+                    absent: ["AKIA", "ASIA", "AIza", "Iza12345678"], label: "circled times akia")
+            }
+        }
+        try await expectSplitSecretRefused("ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
+    }
+
     @Test func importRefusesANestedSchemeSplitByALineBreak() async throws {
         let password = "supersecretpassword"
         let values = [
@@ -1720,6 +1755,38 @@ struct MCPCommandTests {
                     ],
                 ]),
                 absent: [password], label: "split scheme header")
+        }
+    }
+
+    @Test func importRefusesANestedSchemeSplitByCarriageReturnAndLineFeed() async throws {
+        let password = "supersecretpassword"
+        let values = [
+            "https://mcp.example?next=https:%0D%0A\\\(password)%%0040evil.example/hook",
+            "https://mcp.example?next=https:%0D%0A\\\\\(password)%%0040evil.example",
+            "https://mcp.example?next=https:%0D%0A//\(password)%%0040evil.example/hook",
+            "https://mcp.example?next=https:%%000D%%000A\\\(password)%%0040evil.example/hook",
+            "https://mcp.example?next=https:%0D%0A%%002F%%002F\(password)%%0040evil.example/hook",
+            "https://mcp.example?next=https:%0D%0A%%005C%%005C\(password)%%0040evil.example/hook",
+            "https://mcp.example?next=http:%0D%0A\\\(password)%%0040evil.example/hook",
+            "https://mcp.example?next=wss:%0D%0A\\\(password)%%0040evil.example/hook",
+            "https://mcp.example?next=postgres:%0D%0A\\\(password)%%0040db/app",
+            "https://mcp.example?@https:%0D%0A\\\(password)%%0040evil.example/hook",
+        ]
+        for value in values {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": value, "LOG_LEVEL": value]]),
+                absent: [password], label: "crlf scheme env")
+            try await expectImportRefused(
+                try hostJSON("api", [
+                    "url": "https://mcp.example/mcp",
+                    "headers": [
+                        "Authorization": value,
+                        "X-API-Key": value,
+                        "Cookie": value,
+                        "X-Trace": value,
+                    ],
+                ]),
+                absent: [password], label: "crlf scheme header")
         }
     }
 
