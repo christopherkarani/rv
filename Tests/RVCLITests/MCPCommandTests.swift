@@ -605,6 +605,20 @@ struct MCPCommandTests {
             #"["user~:su&\#(password)@collector.example"]"#,
             #"["user:su/\#(password)@collector.example"]"#,
             #"["user:su\\\#(password)@collector.example"]"#,
+            #"["user:%2F\#(password)@collector.example"]"#,
+            #"["user:/\#(password)@collector.example"]"#,
+            #"["user~:/\#(password)@collector.example"]"#,
+            #"["user+:%2F\#(password)@collector.example"]"#,
+            #"["user!:/\#(password)@collector.example"]"#,
+            #"["user:\\#(password)@collector.example"]"#,
+            #"["wss://example.com/user:/\#(password)@collector.example"]"#,
+            #"["postgres://db.example/user:/\#(password)@collector.example"]"#,
+            #"["ctx7sk-12345678^\#(token)"]"#,
+            #"["sk-12345678^\#(token)"]"#,
+            #"["ctx7sk-12345678!\#(token)"]"#,
+            #"["ctx7sk-12345678%\#(token)"]"#,
+            #"["ctx7sk-12345678＿\#(token)"]"#,
+            #"["ctx7sk-12345678_xghp_12345678"]"#,
         ]
         for args in hidden {
             let home = Fixture()
@@ -617,6 +631,7 @@ struct MCPCommandTests {
             ).get()
             let text = review.withLock { $0 } + result
             #expect(text.contains(token) == false, "\(args)")
+            #expect(text.contains("ghp_") == false, "\(args)")
             #expect(text.contains(password) == false, "\(args)")
             #expect(result.contains("nothing to import"), "\(args)")
             #expect(FileManager.default.fileExists(atPath: home.config.appendingPathComponent("mcp.json").path) == false)
@@ -635,6 +650,32 @@ struct MCPCommandTests {
         #expect(commandResult.contains(token) == false)
         #expect(FileManager.default.fileExists(atPath: commandHome.config.appendingPathComponent("mcp.json").path) == false)
         #expect(commandHome.keychain.items.withLock { $0 }.isEmpty)
+
+        let slashCommand = Fixture()
+        try slashCommand.write(
+            ".cursor/mcp.json",
+            #"{"mcpServers":{"db":{"command":"https://mcp.example/sse?next=user:%2F\#(password)@collector.example"}}}"#)
+        let slashResult = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: slashCommand.environment(presence: Self.present), show: { _ in }
+        ).get()
+        #expect(slashResult.contains("nothing to import"))
+        #expect(slashResult.contains(password) == false)
+        #expect(FileManager.default.fileExists(atPath: slashCommand.config.appendingPathComponent("mcp.json").path) == false)
+        #expect(slashCommand.keychain.items.withLock { $0 }.isEmpty)
+
+        let rawSlashCommand = Fixture()
+        try rawSlashCommand.write(
+            ".cursor/mcp.json",
+            #"{"mcpServers":{"db":{"command":"https://mcp.example/sse?next=user:/\#(password)@collector.example"}}}"#)
+        let rawSlashResult = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: rawSlashCommand.environment(presence: Self.present), show: { _ in }
+        ).get()
+        #expect(rawSlashResult.contains("nothing to import"))
+        #expect(rawSlashResult.contains(password) == false)
+        #expect(FileManager.default.fileExists(atPath: rawSlashCommand.config.appendingPathComponent("mcp.json").path) == false)
+        #expect(rawSlashCommand.keychain.items.withLock { $0 }.isEmpty)
     }
 
     static let present = UserPresence { _, _ in .confirmed(method: "test") }

@@ -186,9 +186,11 @@ public enum MCPRedaction {
                 if atStart || afterSlash || afterUser {
                     let after = decoded.index(after: index)
                     if after < decoded.endIndex {
-                        // `http://` is a colon after a name. `/: /password@` is not.
-                        let schemeSlash = decoded[after] == "/" && afterUser && atStart == false && afterSlash == false
-                        if schemeSlash == false, let at = decoded[after...].firstIndex(of: "@"), at > after {
+                        // `http://` is two slashes. `user:/password@` is one slash and is userinfo.
+                        let slash = decoded.index(after: after)
+                        let scheme = decoded[after] == "/" && slash < decoded.endIndex && decoded[slash] == "/"
+                            && afterUser && atStart == false && afterSlash == false
+                        if scheme == false, let at = decoded[after...].firstIndex(of: "@"), at > after {
                             return true
                         }
                     }
@@ -298,24 +300,14 @@ public enum MCPRedaction {
         if containsUserinfoSpelling(decoded) { return true }
         let pieces = decoded.split(whereSeparator: isTokenSeparator)
         if pieces.dropFirst().contains(where: { pathSegmentCarriesToken(String($0)) }) { return true }
-        return joinedSecondToken(decoded)
+        guard let prefix = leadingTokenPrefix(decoded) else { return containsEmbeddedPrefix(decoded) }
+        return containsEmbeddedPrefix(String(decoded.dropFirst(prefix.count)))
     }
 
-    /// `ctx7sk-…-ghp_…`, `ctx7sk-…=ghp_…`, `sk-…+ghp_…`, and the `_` / `*` twins.
-    /// The hyphen inside `sk-` stays, because the tail must itself be a prefix.
-    private static func joinedSecondToken(_ text: String) -> Bool {
-        let joins: Set<Character> = ["-", "=", "+", "_", "*"]
-        var index = text.startIndex
-        while index < text.endIndex {
-            if joins.contains(text[index]) {
-                let tail = text[text.index(after: index)...]
-                if tokenPrefixes.contains(where: { tail.hasPrefix($0) && tail.count >= $0.count + 8 }) {
-                    return true
-                }
-            }
-            index = text.index(after: index)
-        }
-        return false
+    /// The longest known prefix at the start, so `ctx7sk-…` is not read as a shorter prefix.
+    private static func leadingTokenPrefix(_ text: String) -> String? {
+        tokenPrefixes.filter { text.hasPrefix($0) && text.count >= $0.count + 8 }
+            .max(by: { $0.count < $1.count })
     }
 
     /// A query value that is itself a URL with userinfo, a fragment, a token

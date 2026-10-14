@@ -518,5 +518,16 @@ private func concealedAuditDestinations(pathSecret: String, nestedSecret: String
         ("https://siem.example/hook?next=user~:su&\(nestedSecret)@collector.example", "secret in its query"),
         ("https://siem.example/user:su/\(nestedSecret)@collector.example/hook", "secret in its path"),
         ("https://siem.example/user:su\\\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:%2F\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:%5C\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:/\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:\\\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/hook?next=user:%2Fsu&\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/user~:/\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user+:%2F\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user!:/\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user%3A%2F\(nestedSecret)%40collector.example/hook", "secret in its path"),
+        ("https://siem.example/hook?next=user:/su&\(nestedSecret)@collector.example", "secret in its query"),
+        ("http://127.0.0.1/user:/\(nestedSecret)@collector.example", "secret in its path"),
     ]
 }
