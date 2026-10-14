@@ -711,7 +711,18 @@ public enum MCPSandbox {
             }
             if let run = homogeneousRun(folded, from: index),
                let compact = repeatedScalarPattern(folded[index], count: run) {
-                let pattern = compact + emit(index + run)
+                // `st` is only two scalars, so `ﬅ`/`ﬆ` starts on the last `s`
+                // of a run. The compact `ss` pattern would otherwise hand the
+                // following `t` to its own atom and drop the ligature.
+                let stayed = compact + emit(index + run)
+                let pattern: String
+                if let bridge = leavingPairPattern(folded, at: index + run - 1),
+                   let shorter = repeatedScalarPattern(folded[index], count: run - 1) {
+                    let crossed = shorter + bridge + emit(index + run + 1)
+                    pattern = "(" + stayed + "|" + crossed + ")"
+                } else {
+                    pattern = stayed
+                }
                 memo[index] = pattern
                 return pattern
             }
@@ -758,9 +769,11 @@ public enum MCPSandbox {
         return emit(0)
     }
 
-    /// A run of one scalar whose only multi-scalar fold is that scalar
-    /// repeated (`ss`, `ff`). A longer fold that leaves the run (`ffi`)
-    /// stays on the mixed path so both spellings are still alternations.
+    /// A run of one scalar whose only multi-scalar fold inside the run is
+    /// that scalar repeated (`ss`, `ff`). A longer fold that leaves the run
+    /// (`ffi`) stays on the mixed path so both spellings are still
+    /// alternations. A length-2 fold that starts on the last copy (`st`)
+    /// is bridged at the call site; it is not a reason to leave this path.
     private static func homogeneousRun(_ folded: [Unicode.Scalar], from index: Int) -> Int? {
         let scalar = folded[index]
         var end = index + 1
@@ -786,6 +799,17 @@ public enum MCPSandbox {
             return (length, "(\(body))\u{017F}?")
         }
         return nil
+    }
+
+    /// A length-2 fold that consumes the last copy of a homogeneous run and
+    /// the scalar after it (`s` + `t` → `ﬅ`/`ﬆ`). The run stays compact; this
+    /// alternation keeps the ligature without copying the tail into every `ß`.
+    private static func leavingPairPattern(_ folded: [Unicode.Scalar], at index: Int) -> String? {
+        guard index + 1 < folded.count, folded[index] != folded[index + 1] else { return nil }
+        let key = scalarString([folded[index], folded[index + 1]])
+        guard let forms = foldTables.multi[key], forms.isEmpty == false else { return nil }
+        let body = forms.map { regexEscape(String($0)) }.joined(separator: "|")
+        return "(\(body))\u{017F}?"
     }
 
     /// Exactly `count` folded copies of `scalar`, including a weight-2
@@ -1009,6 +1033,16 @@ public enum MCPSandbox {
         var modifiedNsec: Int64
         var changed: Int64
         var changedNsec: Int64
+        /// Set when `path` is a symlink. The target directory can be unlistable
+        /// on both reads; a move into it still changes this link count.
+        var targetPresent: Bool = false
+        var targetDevice: UInt64 = 0
+        var targetInode: UInt64 = 0
+        var targetLinks: UInt64 = 0
+        var targetModified: Int64 = 0
+        var targetModifiedNsec: Int64 = 0
+        var targetChanged: Int64 = 0
+        var targetChangedNsec: Int64 = 0
     }
 
     private static func inodeStamp(_ path: String) -> InodeStamp {
@@ -1029,7 +1063,10 @@ public enum MCPSandbox {
     /// directory a symlink already names. Moving a project into a grandchild
     /// changes that directory's link count and timestamps. A direct child's
     /// own stamp does not. The symlink's inode stays in the stamp, so
-    /// replacing a directory with a link still changes it.
+    /// replacing a directory with a link still changes it. The target
+    /// directory's own inode is on that same stamp: a target that cannot be
+    /// listed never adds child keys, and its link count is the change a move
+    /// into it leaves behind.
     private struct TreeStamp: Equatable {
         var root: InodeStamp
         var children: [String: InodeStamp]
@@ -1055,12 +1092,17 @@ public enum MCPSandbox {
             let kind = info.st_mode & S_IFMT
             guard kind == S_IFDIR || kind == S_IFLNK else { continue }
             let rel = relative.isEmpty ? name : relative + "/" + name
-            stamps[rel] = inodeStamp(child)
             let entered: String?
             if kind == S_IFDIR {
+                stamps[rel] = inodeStamp(child)
                 entered = child
             } else {
                 entered = symlinkDirectory(child)
+                if let entered {
+                    stamps[rel] = stampNotingTarget(child, target: entered)
+                } else {
+                    stamps[rel] = inodeStamp(child)
+                }
             }
             guard let entered, let identity = directoryIdentity(entered), visited.insert(identity).inserted else {
                 continue
@@ -1070,6 +1112,22 @@ public enum MCPSandbox {
             }
         }
         return stamps
+    }
+
+    /// The symlink's own inode, plus the directory it names. Listing that
+    /// directory can fail (mode `0111`) while its link count still changes.
+    private static func stampNotingTarget(_ path: String, target: String) -> InodeStamp {
+        var stamp = inodeStamp(path)
+        let noted = inodeStamp(target)
+        stamp.targetPresent = noted.present
+        stamp.targetDevice = noted.device
+        stamp.targetInode = noted.inode
+        stamp.targetLinks = noted.links
+        stamp.targetModified = noted.modified
+        stamp.targetModifiedNsec = noted.modifiedNsec
+        stamp.targetChanged = noted.changed
+        stamp.targetChangedNsec = noted.changedNsec
+        return stamp
     }
 
     /// The real directory a symlink names, relative target included.

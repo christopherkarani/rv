@@ -101,5 +101,29 @@ struct WorkspaceLeftoversCommandTests {
             #expect(unknown.lowerBound < files.lowerBound)
         }
     }
+
+    @Test func leftoverLineFieldsTheProjectPath() {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let project = "/tmp/p\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence
+        let text = WorkspaceCommandRun.leftoverLine(
+            WorkspaceLeftover(
+                project: project,
+                workspace: UUID(),
+                lastEvent: "runtimeStarted",
+                recordedAt: Date(timeIntervalSince1970: 0),
+                attachment: .orphaned(UUID())
+            )
+        )
+        #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x2029 } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(text.contains("\\u001b[2J\\u001b[H"))
+        #expect(text.contains("\\u2028"))
+        #expect(text.contains("\\u2029"))
+        #expect(text.contains("\\u202e"))
+        let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+        #expect(lines.contains(sentence) == false)
+    }
 }
 #endif

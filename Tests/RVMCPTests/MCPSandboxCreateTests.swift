@@ -927,6 +927,126 @@ struct MCPSandboxCreateTests {
         }
     }
 
+    @Test func sRunFollowedByTStillDeniesTheStLigature() throws {
+        func whole(_ component: String, _ file: String) -> Bool {
+            seatbeltWholeMatch(
+                MCPSandbox.seatbeltPathPattern("/private/tmp/\(component)"),
+                "/private/tmp/\(file)")
+        }
+        #expect(whole("sst-keys", "sst-keys/id_rsa"))
+        #expect(whole("sst-keys", "\u{00DF}t-keys/id_rsa"))
+        #expect(whole("sst-keys", "s\u{FB05}-keys/id_rsa"))
+        #expect(whole("sst-keys", "s\u{FB06}-keys/id_rsa"))
+        #expect(whole("sst-keys", "\u{FB05}-keys/id_rsa") == false)
+        #expect(whole("ssst-keys", "ss\u{FB05}-keys/id_rsa"))
+        #expect(whole("ssst-keys", "ss\u{FB06}-keys/id_rsa"))
+        #expect(whole("ssst-keys", "\u{00DF}\u{FB05}-keys/id_rsa"))
+        #expect(whole("sssst-keys", "sss\u{FB05}-keys/id_rsa"))
+        #expect(whole("ssssst-keys", "ssss\u{FB05}-keys/id_rsa"))
+        #expect(whole("bosst", "bos\u{FB05}"))
+        #expect(whole("bosst", "bos\u{FB06}"))
+        let ten = String(repeating: "s", count: 10)
+        #expect(whole("\(ten)-keys", "\u{00DF}" + String(repeating: "s", count: 8) + "-keys/id_rsa"))
+        #expect(whole("\(ten)-keys", "\u{1E9E}" + String(repeating: "s", count: 8) + "-keys/id_rsa"))
+        #expect(whole("\(ten)-keys", String(repeating: "s", count: 9) + "-keys/id_rsa") == false)
+        #expect(whole("host-keys", "ho\u{FB05}-keys/id_rsa"))
+        #expect(whole("host-keys", "ho\u{FB06}-keys/id_rsa"))
+        #expect(whole("future-keys", "fu\u{00DF}ure-keys/id_rsa") == false)
+        #expect(whole("file-keys", "\u{FB01}le-keys/id_rsa"))
+        #expect(whole("office-keys", "o\u{FB00}ice-keys/id_rsa"))
+
+        let zone = "/private/tmp/rv-st-ligature-\(UUID().uuidString)"
+        let keys = zone + "/sst-keys"
+        defer { try? FileManager.default.removeItem(atPath: zone) }
+        try FileManager.default.createDirectory(atPath: keys, withIntermediateDirectories: true)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-st-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let caches = home.appendingPathComponent("Library/Caches")
+        let scratch = caches.appendingPathComponent("rv-mcp/server")
+        try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".npm"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".cache"), withIntermediateDirectories: true)
+        let ssh = home.appendingPathComponent(".ssh").path
+        #expect(symlink(keys, ssh) == 0)
+        let pin = try #require(MCPSandbox.pinExistingAncestors(scratch.path))
+        #expect(MCPSandbox.createPinned(scratch.path, pinned: pin))
+        #expect(MCPSandbox.missingSymlinkOpenings(ssh).isEmpty)
+        let profile = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: "/private/tmp")
+        guard case .success(let text) = profile else {
+            Issue.record("profile failed before the ligature check: \(profile)")
+            return
+        }
+        for scalar in ["\u{FB05}", "\u{FB06}"] {
+            let opened = zone + "/s\(scalar)-keys/id_rsa"
+            let last = lastFileReadRule(text, path: opened)
+            if last?.hasPrefix("(deny ") != true {
+                Issue.record("last read rule for \(opened) was \(last ?? "none")")
+            }
+        }
+    }
+
+    @Test func unlistableSymlinkTargetThenMoveDoesNotAllowTheCache() throws {
+        for planted in plantedCacheLinks where planted.moveParentUnderRoot == planted.targetUnderRoot {
+            let fixture = try plantedCacheLink(planted)
+            defer {
+                _ = chmod(fixture.landing.path, 0o755)
+                try? FileManager.default.removeItem(at: fixture.root)
+            }
+            #expect(chmod(fixture.landing.path, 0o111) == 0)
+            let pin = try #require(MCPSandbox.pinExistingAncestors(fixture.scratch))
+            #expect(MCPSandbox.createPinned(fixture.scratch, pinned: pin))
+            #expect(chmod(fixture.landing.path, 0o755) == 0)
+            try FileManager.default.moveItem(at: fixture.project, to: fixture.landing.appendingPathComponent("project"))
+            #expect(chmod(fixture.landing.path, 0o111) == 0)
+            let profile = MCPSandbox.profile(
+                policy: MCPSandboxPolicy(network: false, writable: []),
+                scratch: fixture.scratch, home: fixture.home, configDirectory: fixture.root.appendingPathComponent("config").path,
+                temporaryDirectory: fixture.temporary)
+            guard case .failure = profile else {
+                Issue.record("profile allowed \(fixture.watched) through unlistable \(planted.homeLink)")
+                return
+            }
+            #expect(String(describing: profile).contains("(subpath \"\(fixture.watched)\")") == false)
+            #expect(chmod(fixture.landing.path, 0o755) == 0)
+            #expect(FileManager.default.fileExists(atPath: fixture.landing.appendingPathComponent("project/src/App.swift").path))
+        }
+    }
+
+    @Test func unlistableSymlinkMoveInsideTheHookDoesNotCreateTheLeaf() throws {
+        for planted in plantedCacheLinks where planted.moveParentUnderRoot == planted.targetUnderRoot {
+            let fixture = try plantedCacheLink(planted)
+            defer {
+                _ = chmod(fixture.landing.path, 0o755)
+                try? FileManager.default.removeItem(at: fixture.root)
+            }
+            #expect(chmod(fixture.landing.path, 0o111) == 0)
+            let pin = try #require(MCPSandbox.pinExistingAncestors(fixture.scratch))
+            let created = MCPSandbox.createPinned(fixture.scratch, pinned: pin) {
+                _ = chmod(fixture.landing.path, 0o755)
+                try? FileManager.default.moveItem(at: fixture.project, to: fixture.landing.appendingPathComponent("project"))
+                _ = chmod(fixture.landing.path, 0o111)
+            }
+            #expect(created == false)
+            #expect(FileManager.default.fileExists(atPath: fixture.scratch) == false)
+            #expect(chmod(fixture.landing.path, 0o755) == 0)
+            #expect(FileManager.default.fileExists(atPath: fixture.landing.appendingPathComponent("project/src/App.swift").path))
+            let profile = MCPSandbox.profile(
+                policy: MCPSandboxPolicy(network: false, writable: []),
+                scratch: fixture.scratch, home: fixture.home, configDirectory: fixture.root.appendingPathComponent("config").path,
+                temporaryDirectory: fixture.temporary)
+            guard case .failure = profile else {
+                Issue.record("profile allowed \(fixture.watched) after a move into unlistable \(planted.homeLink)")
+                return
+            }
+            #expect(String(describing: profile).contains("(subpath \"\(fixture.watched)\")") == false)
+        }
+    }
+
     @Test func undoEscapesTheRecordedHostName() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-setup-undo-\(UUID().uuidString)", isDirectory: true)
@@ -1031,4 +1151,66 @@ private func plantedCacheLink(_ planted: PlantedCacheLink) throws -> PlantedCach
     return PlantedCacheLinkFixture(
         root: root, home: home.path, scratch: scratch.path, temporary: temporary.path,
         watched: watched, project: project, landing: landing)
+}
+
+private func seatbeltWholeMatch(_ pattern: String, _ text: String) -> Bool {
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+    let range = NSRange(text.startIndex..., in: text)
+    guard let match = regex.firstMatch(in: text, range: range) else { return false }
+    return match.range.location == 0 && match.range.length == range.length
+}
+
+private func lastFileReadRule(_ profile: String, path: String) -> String? {
+    var last: String?
+    for line in profile.split(separator: "\n", omittingEmptySubsequences: false) {
+        let text = String(line)
+        guard text.contains("file-read") else { continue }
+        if seatbeltRuleMatches(text, path: path) {
+            last = text
+        }
+    }
+    return last
+}
+
+private func seatbeltRuleMatches(_ rule: String, path: String) -> Bool {
+    let directories = seatbeltQuoted(rule, marker: "(subpath \"", keepEscapes: false)
+    let patterns = seatbeltQuoted(rule, marker: "(regex #\"", keepEscapes: true)
+    if directories.isEmpty && patterns.isEmpty { return true }
+    for directory in directories where path == directory || path.hasPrefix(directory + "/") {
+        return true
+    }
+    return patterns.contains { seatbeltWholeMatch($0, path) }
+}
+
+/// Values between `marker` and the closing quote. Subpath text unescapes
+/// `\\` and `\"`. A regex keeps those backslashes; only an unescaped quote ends it.
+private func seatbeltQuoted(_ rule: String, marker: String, keepEscapes: Bool) -> [String] {
+    var found: [String] = []
+    var rest = Substring(rule)
+    while let range = rest.range(of: marker) {
+        var index = range.upperBound
+        var value = ""
+        var closed = false
+        while index < rest.endIndex {
+            let character = rest[index]
+            if character == "\\" {
+                let next = rest.index(after: index)
+                guard next < rest.endIndex else { break }
+                if keepEscapes { value.append(character) }
+                value.append(rest[next])
+                index = rest.index(after: next)
+                continue
+            }
+            if character == "\"" {
+                found.append(value)
+                rest = rest[rest.index(after: index)...]
+                closed = true
+                break
+            }
+            value.append(character)
+            index = rest.index(after: index)
+        }
+        if closed == false { break }
+    }
+    return found
 }

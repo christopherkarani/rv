@@ -42,6 +42,47 @@ import RVIsolation
     #expect(text.contains("did not answer") == false)
 }
 
+@Test func workspaceStatusAndLeftoversFieldTheProjectPath() throws {
+    let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+    let project = "/tmp/p\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence
+    let status = WorkspaceCommandRun.statusLines(
+        workspace: "11111111-1111-1111-1111-111111111111",
+        host: "22222222-2222-2222-2222-222222222222",
+        phase: "active",
+        project: project,
+        attached: 1
+    )
+    let leftover = WorkspaceCommandRun.leftoverProjectLine(
+        project: project,
+        attachment: "orphaned 33333333-3333-3333-3333-333333333333",
+        detail: "last runtimeStarted at 2026-01-01T00:00:00Z"
+    )
+    for text in [status, leftover] {
+        #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x2029 } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(text.contains("\\u001b[2J\\u001b[H"))
+        #expect(text.contains("\\u2028"))
+        #expect(text.contains("\\u2029"))
+        #expect(text.contains("\\u202e"))
+        let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+        #expect(lines.contains(sentence) == false)
+    }
+    #expect(status.contains("phase active"))
+    #expect(status.contains("attached 1"))
+    #expect(status.split(separator: "\n").contains { $0.hasPrefix("project ") })
+
+    let source = try String(contentsOf: workspaceCommandSourceURL(), encoding: .utf8)
+    let described = try #require(swiftFunctionBody(source, "func lines(_ description: WorkspaceDescription)"))
+    #expect(described.contains("statusLines("))
+    #expect(described.contains("project: description.project"))
+    #expect(described.contains("project \\(description.project)") == false)
+    let row = try #require(swiftFunctionBody(source, "func leftoverLine("))
+    #expect(row.contains("leftoverProjectLine("))
+    #expect(row.contains("project: leftover.project"))
+}
+
 #if os(macOS)
 @Test func staleEndpointSurfacesShareOneText() {
     let fromInspect = WorkspaceCommandRun.text(WorkspaceAttachment.staleEndpoint)
@@ -168,3 +209,29 @@ import RVIsolation
     }
 }
 #endif
+
+private func workspaceCommandSourceURL() -> URL {
+    URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("Sources/RVCLI/Commands/WorkspaceCommand.swift")
+}
+
+private func swiftFunctionBody(_ source: String, _ signature: String) -> String? {
+    guard let start = source.range(of: signature) else { return nil }
+    let rest = source[start.upperBound...]
+    guard let open = rest.firstIndex(of: "{") else { return nil }
+    var depth = 0
+    var index = open
+    while index < rest.endIndex {
+        let character = rest[index]
+        if character == "{" { depth += 1 }
+        if character == "}" {
+            depth -= 1
+            if depth == 0 { return String(rest[open...index]) }
+        }
+        index = rest.index(after: index)
+    }
+    return nil
+}
