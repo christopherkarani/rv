@@ -438,7 +438,9 @@ public enum MCPSandbox {
     /// continues along it with only that one component left. A collapsed
     /// path that is not under the creation directory
     /// (`foo/../../private/tmp/future-keys` while `foo` is missing under
-    /// the anchor) is that one opening too. A final name after a real
+    /// the anchor) is that one opening too. A final name on that path
+    /// (`x/../../private/tmp/future-keys/x`) can still be `ln -s .` inside
+    /// the real directory. A final name after a real
     /// directory (`link/../private/tmp/future-keys/x`, `anchor/future-keys`)
     /// does not: `ln -s .` or `ln -s ../future-keys` still reads the
     /// credential directory. A later missing name
@@ -482,8 +484,10 @@ public enum MCPSandbox {
         // shared prefix is either the collapsed path staying on the parent
         // (`link/../private/tmp/future-keys/x`) or a path that left it
         // (`foo/../../private/tmp/future-keys` → `/private/tmp/future-keys`
-        // while the missing name sits under `/private/tmp/anchor`). Only a
-        // longer suffix that is still on the parent can be `ln -s .`.
+        // while the missing name sits under `/private/tmp/anchor`). A final
+        // name on the path that left (`x/../../private/tmp/future-keys/x`)
+        // is kept beside that opening. Only a longer suffix that is still
+        // on the parent can be `ln -s .` through the later-name walk.
         guard shared > parentParts.count - dots else { return false }
         let prefix = parent == "/" ? "/" : parent + "/"
         guard opened == parent || opened.hasPrefix(prefix) else { return true }
@@ -514,7 +518,9 @@ public enum MCPSandbox {
     private static func openingsIncludingKeySibling(_ primary: [String], parent: String) -> [String] {
         guard primary.count == 1, let opened = primary.first, opened != parent else { return primary }
         let prefix = parent == "/" ? "/" : parent + "/"
-        guard opened.hasPrefix(prefix) else { return primary }
+        guard opened.hasPrefix(prefix) else {
+            return openingsIncludingFinalDirectory(primary, opened: opened, parent: parent)
+        }
         let parts = opened.dropFirst(prefix.count).split(
             separator: "/", omittingEmptySubsequences: true
         )
@@ -524,6 +530,39 @@ public enum MCPSandbox {
             results.append(child)
         }
         return results
+    }
+
+    /// `ln -s .` on a final name whose collapsed path left the creation
+    /// directory (`x/../../private/tmp/future-keys/x`). The real directory
+    /// around that name is an opening. An ancestor of the creation directory
+    /// (`/private/tmp` for `foo/../../private/tmp/future-keys`) stays off the
+    /// list: that shape is already the one lexical path.
+    private static func openingsIncludingFinalDirectory(
+        _ primary: [String], opened: String, parent: String
+    ) -> [String] {
+        guard let directory = realDirectoryOfFinalName(opened) else { return primary }
+        if directory == parent { return primary }
+        let ancestor = directory == "/" ? "/" : directory + "/"
+        if parent == directory || parent.hasPrefix(ancestor) { return primary }
+        var results = primary
+        if results.contains(directory) == false { results.append(directory) }
+        return results
+    }
+
+    /// The real directory that contains the final component, when every
+    /// component before it already exists. A missing component before that
+    /// name is a different opening.
+    private static func realDirectoryOfFinalName(_ opened: String) -> String? {
+        let parts = opened.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard parts.count > 1 else { return nil }
+        var current = "/"
+        for part in parts.dropLast() {
+            let next = current == "/" ? "/" + part : current + "/" + part
+            guard isRealDirectory(next) else { return nil }
+            current = next
+        }
+        guard current != "/" else { return nil }
+        return current
     }
 
     /// Real directories under `parent` that already contain `id_rsa`.
