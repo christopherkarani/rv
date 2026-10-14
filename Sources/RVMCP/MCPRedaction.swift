@@ -346,11 +346,13 @@ public enum MCPRedaction {
             // and two intact prefixes with a space between them are still two.
             // Joining `:`, `/`, `@`, and `.` inside a visible `user:password` URL
             // can leave a port or path digits that look like one token. That URL
-            // is still written. A mark inside `ghp_` has no scheme and is still refused.
+            // contains `@` and is still written. `://` with no `@` still joins
+            // into one token. A mark inside `ghp_` has no scheme and is still refused.
             let joined = textJoiningHiddenBreaks(decoded)
             if secretPrefixCount(joined) >= 2 { return true }
             if joined != decoded, containsEmbeddedPrefix(joined) { return true }
-            if joined != decoded, decoded.contains("://") == false, looksLikeToken(joined) { return true }
+            let keepsVisibleUserPassword = decoded.contains("://") && decoded.contains("@")
+            if joined != decoded, keepsVisibleUserPassword == false, looksLikeToken(joined) { return true }
             if looksLikeToken(decoded) {
                 if hidesAnotherSecret(decoded) || looksLikeToken(candidate) == false { return true }
                 continue
@@ -638,8 +640,8 @@ public enum MCPRedaction {
     /// vulgar fraction or a square sign whose NFKD contains one is dropped. A self-NFKD solidus or slash
     /// glyph is a separator, including U+2298 and U+2F03, as are the circled operators U+2295–U+229B,
     /// U+229C–U+22A1, the tacks and turnstiles U+22A2–U+22AF, U+22B0–U+22C4, U+22C8–U+22E9, and
-    /// U+22EE–U+2307, U+230C–U+2328, U+232B–U+233E, U+2343–U+2348, U+234A–U+2426, and U+2440–U+2449.
-    /// U+22C5–U+22C7 stay listed beside them. U+22EA–U+22ED stay unlisted and drop through their fold.
+    /// U+22EE–U+2307, U+230C–U+2328, U+232B–U+233E, U+2343–U+2348, U+234A–U+2426, U+2440–U+2449,
+    /// and U+2460–U+2473. U+22C5–U+22C7 stay listed beside them. U+22EA–U+22ED stay unlisted and drop through their fold.
     /// U+2308, U+2329, and U+232A stay unlisted. U+233F–U+2342 and U+2349 stay listed. U+2427–U+243F stay unlisted. U+244A stays listed. U+2212, U+22C5, U+2219, U+02D7, and
     /// U+E002F. A self-NFKD box-drawing diagonal is a separator too: U+2571–U+2573, U+1FBA0–U+1FBAE,
     /// U+1FBBD–U+1FBBF, the block diagonals U+1FB3C–U+1FB67, and U+292B / U+292C. U+292F and U+2930
@@ -661,7 +663,7 @@ public enum MCPRedaction {
         case 0x2044, 0x2215, 0xFF0E,
             0x2216, 0x29F5, 0x29F6, 0x29F7, 0x29F8, 0x29F9, 0x2AFD, 0x2AFB, 0x1F67C, 0x1F67D,
             0x2212, 0x2213, 0x2214, 0x22C5, 0x22C6, 0x22C7, 0x2217, 0x2218, 0x2219, 0x02D7, 0xE002F,
-            0x2295...0x22AF, 0x22B0...0x22C4, 0x22C8...0x22E9, 0x22EE...0x2307, 0x230C...0x2328, 0x232B...0x233E, 0x2343...0x2348, 0x234A...0x2426, 0x2440...0x2449, 0x29B8, 0x233F, 0x2340, 0x2341, 0x2342, 0x2349, 0x244A,
+            0x2295...0x22AF, 0x22B0...0x22C4, 0x22C8...0x22E9, 0x22EE...0x2307, 0x230C...0x2328, 0x232B...0x233E, 0x2343...0x2348, 0x234A...0x2426, 0x2440...0x2449, 0x2460...0x2473, 0x29B8, 0x233F, 0x2340, 0x2341, 0x2342, 0x2349, 0x244A,
             0x27C8, 0x27C9, 0x27CB, 0x27CC, 0x27CD, 0x292B, 0x292C, 0x292F, 0x2930, 0x29C4, 0x29C5, 0x2F03,
             0x2571...0x2573, 0x2613, 0x26DD, 0x26DE, 0x2B59, 0x1F7A8...0x1F7AE, 0x1FBA0...0x1FBAE,
             0x1FBBD...0x1FBC0, 0x1FB3C...0x1FB67:

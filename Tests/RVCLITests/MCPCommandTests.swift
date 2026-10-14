@@ -2009,6 +2009,48 @@ struct MCPCommandTests {
         try await expectSplitSecretRefused("ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
     }
 
+    @Test func importRefusesACircledDigitOneThroughTwenty() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let extra = tail + "EXTRA"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-", "AKIA", "AIza", "ASIA"]
+        let marks = Array(UInt32(0x2460)...UInt32(0x2473))
+        for code in marks {
+            let mark = String(Unicode.Scalar(code)!)
+            let value = head + mark + tail
+            try await expectSplitSecretRefused(value, sk: "sk-12345678g" + mark + tail, absent: absent, label: "circled")
+            try await expectSplitSecretRefused(head + mark + extra, absent: absent + [extra], label: "circled extra")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": value]),
+                absent: absent, label: "circled command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(value)"]]),
+                absent: absent, label: "circled cwd")
+            let joined = "g" + mark + tail
+            try await expectImportRefused(
+                try hostJSON("db", ["command": joined]),
+                absent: ["ghp_", tail], label: "circled joined command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": [joined, "--api-key", joined]]),
+                absent: ["ghp_", tail], label: "circled joined argument")
+            for disguised in ["x" + value, "." + value] {
+                try await expectSplitSecretRefused(disguised, absent: absent, label: "disguised circled")
+                try await expectImportRefused(
+                    try hostJSON("api", [
+                        "url": "https://mcp.example/mcp",
+                        "headers": ["X-Trace": disguised, "Authorization": "Bearer \(value)"],
+                    ]),
+                    absent: absent + ["Bearer"], label: "circled trace")
+            }
+            for overlapped in ["AKIA" + mark + "Iza12345678", "ASIA" + mark + "Iza12345678"] {
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": overlapped, "LOG_LEVEL": overlapped]]),
+                    absent: ["AKIA", "ASIA", "AIza", "Iza12345678"], label: "circled akia")
+            }
+        }
+        try await expectSplitSecretRefused("ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
+    }
+
     @Test func importRefusesADownTackUnderbarThroughTheOCRAccountNumber() async throws {
         let tail = "hp_1234567890abcdefghij"
         let extra = tail + "EXTRA"
@@ -2135,6 +2177,24 @@ struct MCPCommandTests {
         try await expectImportRefused(
             try hostJSON("db", ["command": "db-mcp", "args": [joined]]),
             absent: ["ghp_", "hp_1234567890abcdefghij"], label: "joined argument")
+    }
+
+    @Test func importRefusesASchemeSplitOfANonPrefixToken() async throws {
+        let spelling = "abcdefghij1234klmnop://qrstuvwxyzabcd"
+        let absent = ["abcdefghij1234", "qrstuvwxyzabcd"]
+        try await expectImportRefused(
+            try hostJSON("db", ["command": spelling]),
+            absent: absent, label: "scheme command")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(spelling)"]]),
+            absent: absent, label: "scheme cwd")
+        let embedded = "g://hp_1234567890abcdefghij"
+        try await expectImportRefused(
+            try hostJSON("db", ["command": embedded]),
+            absent: ["ghp_", "hp_1234567890abcdefghij"], label: "scheme prefix command")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": "db-mcp", "args": [embedded]]),
+            absent: ["ghp_", "hp_1234567890abcdefghij"], label: "scheme prefix argument")
     }
 
     @Test func importRefusesAPrependScalarGluedToAnAtSign() async throws {
