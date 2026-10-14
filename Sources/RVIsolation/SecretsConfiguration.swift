@@ -198,7 +198,7 @@ enum SecretsDecoding {
 
     static func onlyKeys(_ object: [String: Any], _ allowed: Set<String>, at place: String) throws {
         if let unknown = object.keys.first(where: { allowed.contains($0) == false }) {
-            throw Failure("unknown key \(unknown) in \(place)")
+            throw Failure("unknown key \(DisplayedText.field(unknown)) in \(place)")
         }
     }
 
@@ -288,7 +288,7 @@ enum SecretsDecoding {
             }
             return .awsSecretsManager(secretID: secretID, field: field, region: region)
         default:
-            throw Failure("\(secret).source kind \(kind) is not supported")
+            throw Failure("\(secret).source kind \(DisplayedText.field(kind)) is not supported")
         }
     }
 
@@ -313,7 +313,7 @@ enum SecretsDecoding {
             }
             return .gateway(SecretGatewayBinding(upstream: upstream, baseURLEnv: baseURLEnv, placeholderPrefix: prefix))
         default:
-            throw Failure("\(secret).delivery kind \(kind) is not supported")
+            throw Failure("\(secret).delivery kind \(DisplayedText.field(kind)) is not supported")
         }
     }
 

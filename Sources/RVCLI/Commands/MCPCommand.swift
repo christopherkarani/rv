@@ -519,6 +519,26 @@ enum MCPRun {
         MCPDisplayedText.field(text)
     }
 
+    /// Robot JSON. `JSONEncoder` already writes ESC as `\u001b`. U+2028,
+    /// U+2029, and U+202E stay raw unless they are replaced after encoding.
+    /// The result is still valid JSON. Secrets commands keep `SecretsRun.json`.
+    static func robotJSON<T: Encodable>(_ value: T) -> String {
+        var text = SecretsRun.json(value)
+        let scalars: [(Character, String)] = [
+            ("\u{2028}", "\\u2028"),
+            ("\u{2029}", "\\u2029"),
+            ("\u{202E}", "\\u202e"),
+        ]
+        for (scalar, escaped) in scalars {
+            text = text.replacingOccurrences(of: String(scalar), with: escaped)
+        }
+        return text
+    }
+
+    static func denyMissingIDMessage(_ id: String) -> String {
+        "no MCP approval has id \(reviewField(id))"
+    }
+
     /// Quoted review values. `read_file` plus `shell` does not look like the
     /// single name `read_file, shell`.
     static func quotedReviewFields(_ values: [String]) -> String {
@@ -653,7 +673,8 @@ enum MCPRun {
         }
         let missing = names.filter { name in entries.contains { $0.name == name } == false }
         guard missing.isEmpty else {
-            return .failure(CommandFailure("\(host.rawValue) has no MCP server named \(missing.joined(separator: ", "))"))
+            let shown = missing.map(reviewField).joined(separator: ", ")
+            return .failure(CommandFailure("\(host.rawValue) has no MCP server named \(shown)"))
         }
         let plan = MCPImport.plan(entries: entries, configuration: configuration, secrets: secrets, allowTools: allowTools)
         var lines: [String] = []
@@ -836,7 +857,7 @@ struct MCPList: AsyncParsableCommand {
             let report = MCPRun.report(
                 environment, project: MCPRun.projectURL(project), configuration: configuration,
                 rvExecutable: MCPExecutable.currentPath())
-            ctx.writeStdout(ctx.explicitRobot ? SecretsRun.json(report) : MCPRun.listText(report, home: environment.home))
+            ctx.writeStdout(ctx.explicitRobot ? MCPRun.robotJSON(report) : MCPRun.listText(report, home: environment.home))
         }
     }
 }
@@ -859,7 +880,7 @@ struct MCPCheck: AsyncParsableCommand {
             let report = MCPRun.report(
                 environment, project: MCPRun.projectURL(project), configuration: configuration,
                 rvExecutable: MCPExecutable.currentPath())
-            let text = ctx.explicitRobot ? SecretsRun.json(report) : MCPRun.checkText(report, home: environment.home)
+            let text = ctx.explicitRobot ? MCPRun.robotJSON(report) : MCPRun.checkText(report, home: environment.home)
             if report.passes {
                 ctx.writeStdout(text)
             } else {
@@ -933,7 +954,7 @@ struct MCPPending: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "mcp pending", format: format)
         let environment = MCPEnvironment.live(home: try ctx.requireHome())
         let rows = MCPRun.pendingRows(environment.approvals)
-        ctx.writeStdout(ctx.explicitRobot ? SecretsRun.json(rows) : MCPRun.pendingText(rows))
+        ctx.writeStdout(ctx.explicitRobot ? MCPRun.robotJSON(rows) : MCPRun.pendingText(rows))
     }
 }
 
@@ -964,7 +985,7 @@ struct MCPDeny: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "mcp deny", json: false, robot: false, plain: true, noColor: true)
         let environment = MCPEnvironment.live(home: try ctx.requireHome())
         guard let request = environment.approvals.remove(id: id) else {
-            try ctx.fail("rv mcp deny: no MCP approval has id \(id)\n")
+            try ctx.fail("rv mcp deny: \(MCPRun.denyMissingIDMessage(id))\n")
         }
         ctx.writeStdout(MCPRun.deniedLine(server: request.server, tool: request.tool))
     }

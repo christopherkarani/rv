@@ -48,6 +48,9 @@ public enum MCPSandbox {
             #if os(macOS)
             let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/\(definition.name)", isDirectory: true)
             let temporary = launch.environment["TMPDIR"] ?? NSTemporaryDirectory()
+            guard let pinned = pinExistingAncestors(scratch.path) else {
+                return .failure(.sandbox("could not create \(scratch.path)"))
+            }
             if let widened = unreviewedWrite(
                 policy: policy, scratch: scratch.path, home: home.path, temporaryDirectory: temporary)
             {
@@ -56,7 +59,7 @@ public enum MCPSandbox {
             if let widened = unreviewedHome(home.path) {
                 return .failure(.sandbox(widened))
             }
-            guard createCheckedDirectory(scratch.path) else {
+            guard createPinned(scratch.path, pinned: pinned) else {
                 return .failure(.sandbox("could not create \(scratch.path)"))
             }
             switch profile(
@@ -91,13 +94,20 @@ public enum MCPSandbox {
             return .failure(.sandbox(widened))
         }
         let unreadable = deniedReads.map(expand) + [configDirectory]
+        let writeAllow = paths(writable, denyTargets: false)
+        let linkDenies = symlinkDenies(unreadable)
         var lines = [
             "(version 1)",
             "(allow default)",
             "(deny file-write*)",
-            "(allow file-write* " + paths(writable, denyTargets: false) + ")",
-            "(deny file-read* file-write* " + paths(unreadable, denyTargets: true) + symlinkDenies(unreadable) + ")",
+            "(allow file-write* " + writeAllow + ")",
+            "(deny file-read* file-write* " + paths(unreadable, denyTargets: true) + linkDenies + ")",
         ]
+        // A symlink parent is denied so a later retarget is not allow-default.
+        // Reviewed write paths are allowed again after that deny.
+        if linkDenies.isEmpty == false {
+            lines.append("(allow file-read* file-write* " + writeAllow + ")")
+        }
         if policy.network == false {
             lines.append("(deny network*)")
         }
@@ -183,8 +193,11 @@ public enum MCPSandbox {
         var seen = Set<String>()
         var filters: [String] = []
         for path in raw {
-            let resolved = realPath(path)
-            let spellings = (denyTargets || sameReviewedDirectory(path, resolved)) ? [path, resolved] : [path]
+            let resolved = denyTargets ? deniedRealPath(path) : realPath(path)
+            var spellings = (denyTargets || sameReviewedDirectory(path, resolved)) ? [path, resolved] : [path]
+            if denyTargets {
+                spellings += seatbeltSpellings(resolved)
+            }
             for spelling in spellings where seen.insert(spelling).inserted {
                 filters.append("(subpath \"\(escape(spelling))\")")
             }
@@ -195,6 +208,41 @@ public enum MCPSandbox {
     static func realPath(_ path: String) -> String {
         if let resolved = resolveExisting(path) { return resolved }
         return resolvingMissingSuffix(path)
+    }
+
+    /// The path Seatbelt will check. A dangling symlink uses `readlink` so the
+    /// target is denied even when that directory does not exist yet.
+    static func deniedRealPath(_ path: String) -> String {
+        if let resolved = resolveExisting(path) { return resolved }
+        if let target = absoluteLinkTarget(path) {
+            if let resolved = resolveExisting(target) { return resolved }
+            return resolvingMissingSuffix(target)
+        }
+        return resolvingMissingSuffix(path)
+    }
+
+    static func absoluteLinkTarget(_ path: String) -> String? {
+        guard let raw = readLink(path) else { return nil }
+        if raw.hasPrefix("/") { return raw }
+        let parent = URL(fileURLWithPath: path).deletingLastPathComponent().path
+        return URL(fileURLWithPath: parent).appendingPathComponent(raw).path
+    }
+
+    /// Spellings Seatbelt may check for one path: `/tmp` and `/private/tmp`,
+    /// `/Users` and the Data-volume firmlink.
+    static func seatbeltSpellings(_ path: String) -> [String] {
+        var spellings = [path]
+        if path == "/tmp" || path.hasPrefix("/tmp/") {
+            spellings.append("/private" + path)
+        } else if path == "/private/tmp" || path.hasPrefix("/private/tmp/") {
+            spellings.append("/tmp" + path.dropFirst("/private/tmp".count))
+        }
+        if path == "/Users" || path.hasPrefix("/Users/") {
+            spellings.append("/System/Volumes/Data" + path)
+        } else if path.hasPrefix("/System/Volumes/Data/Users") {
+            spellings.append(String(path.dropFirst("/System/Volumes/Data".count)))
+        }
+        return spellings
     }
 
     /// The leaf does not exist yet. Resolve the nearest existing ancestor so
@@ -227,20 +275,29 @@ public enum MCPSandbox {
         path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    /// Each symlink in a credential chain is denied by a regex Seatbelt still
-    /// matches after it normalizes the path: dot segments, repeated slashes,
-    /// and case differences on the volume. The resolved target stays a subpath
-    /// on the deny line and off the allow line. A later retarget of the link,
-    /// or of an intermediate link, is still the link's path.
+    /// Each symlink in a credential chain is denied by a regex built from the
+    /// path Seatbelt checks, and by its parent. A static regex cannot see a
+    /// retarget, so the parent is not left to `(allow default)`. Reviewed
+    /// write paths are allowed again after that deny.
     static func symlinkDenies(_ raw: [String]) -> String {
         var seen = Set<String>()
         var filters: [String] = []
         for path in raw {
             for link in symlinkChain(path) {
-                let exact = "(regex #\"^\(regexEscape(link))(/.*)?$\")"
-                let normalized = "(regex #\"\(seatbeltPathPattern(link))\")"
-                for filter in [exact, normalized] where seen.insert(filter).inserted {
-                    filters.append(filter)
+                var candidates = [link]
+                candidates += seatbeltSpellings(link)
+                for candidate in candidates {
+                    let exact = "(regex #\"^\(regexEscape(candidate))(/.*)?$\")"
+                    let normalized = "(regex #\"\(seatbeltPathPattern(candidate))\")"
+                    for filter in [exact, normalized] where seen.insert(filter).inserted {
+                        filters.append(filter)
+                    }
+                }
+                let parent = URL(fileURLWithPath: link).deletingLastPathComponent().path
+                guard parent != "/" else { continue }
+                for spelling in seatbeltSpellings(parent) {
+                    let filter = "(subpath \"\(escape(spelling))\")"
+                    if seen.insert(filter).inserted { filters.append(filter) }
                 }
             }
         }
@@ -279,12 +336,19 @@ public enum MCPSandbox {
     }
 
     /// `^/+(\./+)*` between components, letters as classes, so `/a/./b`,
-    /// `/a//b`, and `/A/b` are the same path. A quote in the path stays escaped
-    /// and still fails the profile closed.
+    /// `/a//b`, and `/A/b` are the same path. `/tmp` also matches
+    /// `/private/tmp`, and `/Users` also matches the Data-volume firmlink.
+    /// A quote in the path stays escaped and still fails the profile closed.
     static func seatbeltPathPattern(_ path: String) -> String {
         let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         guard parts.isEmpty == false else { return "^$" }
-        let body = parts.map { caseFold(regexEscape($0)) }.joined(separator: "/+(\\./+)*")
+        var body = parts.map { caseFold(regexEscape($0)) }.joined(separator: "/+(\\./+)*")
+        if parts[0].lowercased() == "tmp" {
+            body = "([Pp][Rr][Ii][Vv][Aa][Tt][Ee]/+(\\./+)*)?" + body
+        } else if parts[0].lowercased() == "users" {
+            let firm = "[Ss][Yy][Ss][Tt][Ee][Mm]/+(\\./+)*[Vv][Oo][Ll][Uu][Mm][Ee][Ss]/+(\\./+)*[Dd][Aa][Tt][Aa]/+(\\./+)*"
+            body = "(\(firm))?" + body
+        }
         return "^/+(\\./+)*" + body + "(/+.*)?$"
     }
 
@@ -357,29 +421,105 @@ public enum MCPSandbox {
         }
     }
 
+    /// Ancestors held before a scratch leaf is created. A later rename of one
+    /// of those directories does not redirect `mkdirat`.
+    struct PinnedScratch {
+        var directories: [HeldDirectory]
+        var missing: [String]
+    }
+
+    /// Open every existing ancestor of `path` with `O_NOFOLLOW`. A symlink in
+    /// the chain is not a directory this can hold.
+    static func pinExistingAncestors(_ path: String) -> PinnedScratch? {
+        guard path.hasPrefix("/") else { return nil }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard let root = HeldDirectory(path: "/") else { return nil }
+        var directories = [root]
+        var built = ""
+        for (index, part) in parts.enumerated() {
+            built += "/" + part
+            var info = stat()
+            if lstat(built, &info) != 0 {
+                guard errno == ENOENT else { return nil }
+                return PinnedScratch(directories: directories, missing: Array(parts[index...]))
+            }
+            let kind = info.st_mode & S_IFMT
+            if kind == S_IFLNK { return nil }
+            guard kind == S_IFDIR, let held = HeldDirectory(path: built) else { return nil }
+            directories.append(held)
+        }
+        return PinnedScratch(directories: directories, missing: [])
+    }
+
     /// Creates `path` by holding a descriptor for every ancestor. `O_NOFOLLOW`
     /// applies to each component, so swapping `~/Library` (the parent of the
     /// checked Caches directory) cannot `mkdirat` the leaf into the project.
     static func createCheckedDirectory(_ path: String) -> Bool {
-        guard path.hasPrefix("/") else { return false }
+        guard let pinned = pinExistingAncestors(path) else { return false }
+        return createPinned(path, pinned: pinned)
+    }
+
+    /// `mkdirat` on the held ancestors. If a component's inode is no longer
+    /// the one that was pinned, the path points at another directory: do not
+    /// create the leaf.
+    static func createPinned(_ path: String, pinned: PinnedScratch) -> Bool {
         let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        guard parts.isEmpty == false else { return false }
+        let existingCount = parts.count - pinned.missing.count
+        guard existingCount == pinned.directories.count - 1, let last = pinned.directories.last, last.stillChecked()
+        else { return false }
         let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
         let root = open("/", flags)
         guard root >= 0 else { return false }
         var opened = [root]
         defer { opened.forEach { close($0) } }
+        var rootInfo = stat()
+        guard fstat(root, &rootInfo) == 0,
+            UInt64(rootInfo.st_dev) == pinned.directories[0].device,
+            UInt64(rootInfo.st_ino) == pinned.directories[0].inode
+        else { return false }
         var current = root
-        for (index, part) in parts.enumerated() {
-            let next = part.withCString { openat(current, $0, flags) }
-            if next >= 0 {
+        if existingCount > 0 {
+            for index in 0..<existingCount {
+                let next = parts[index].withCString { openat(current, $0, flags) }
+                guard next >= 0 else { return false }
                 opened.append(next)
+                var info = stat()
+                guard fstat(next, &info) == 0 else { return false }
+                let held = pinned.directories[index + 1]
+                if UInt64(info.st_dev) != held.device || UInt64(info.st_ino) != held.inode {
+                    return false
+                }
                 current = next
-                continue
             }
-            let openError = errno
-            guard openError == ENOENT else { return false }
-            return createMissing(Array(parts[index...]), parent: current)
+        }
+        var parent = stat()
+        guard fstat(current, &parent) == 0,
+            UInt64(parent.st_dev) == last.device,
+            UInt64(parent.st_ino) == last.inode,
+            last.stillChecked()
+        else { return false }
+        guard createMissing(pinned.missing, parent: current) else { return false }
+        return confirmLeafParent(pinned.missing, parent: current, held: last) && last.stillChecked()
+    }
+
+    /// The new leaf's parent is the pinned directory, or a directory created
+    /// from that descriptor.
+    static func confirmLeafParent(_ missing: [String], parent: Int32, held: HeldDirectory) -> Bool {
+        guard missing.isEmpty == false else { return true }
+        let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        var current = parent
+        var opened: [Int32] = []
+        defer { opened.forEach { close($0) } }
+        for part in missing.dropLast() {
+            let next = part.withCString { openat(current, $0, flags) }
+            guard next >= 0 else { return false }
+            opened.append(next)
+            current = next
+        }
+        var info = stat()
+        guard fstat(current, &info) == 0 else { return false }
+        if missing.count == 1 {
+            return UInt64(info.st_dev) == held.device && UInt64(info.st_ino) == held.inode
         }
         return true
     }

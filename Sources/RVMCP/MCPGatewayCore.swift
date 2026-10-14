@@ -549,20 +549,19 @@ public struct MCPGatewayCore {
     }
 
     /// Denied tools are hidden; `ask` tools say so in their description.
+    /// Routing uses the raw name. Every other string the client can read,
+    /// including title and schemas, is escaped once.
     func exposedTool(_ tool: JSONValue, upstream: Upstream) -> JSONValue? {
-        guard var object = scrub(tool, for: upstream.definition.name).objectValue, let name = object["name"]?.stringValue else {
+        let scrubbed = scrub(tool, for: upstream.definition.name)
+        guard let object = scrubbed.objectValue, let name = object["name"]?.stringValue else {
             return nil
         }
+        let rawDescription = object["description"]?.stringValue
         switch configuration.decision(server: upstream.definition, tool: name) {
         case .deny:
             return nil
-        case .ask:
-            let description = object["description"]?.stringValue ?? ""
-            object["description"] = .string("[rv: needs the user's approval] " + MCPDisplayedText.field(description))
-        case .allow:
-            if let description = object["description"]?.stringValue {
-                object["description"] = .string(MCPDisplayedText.field(description))
-            }
+        case .ask, .allow:
+            break
         }
         var listedName = name
         if prefixesTools {
@@ -572,44 +571,42 @@ public struct MCPGatewayCore {
             guard route(exposedName)?.server == upstream.definition.name else { return nil }
             listedName = exposedName
         }
-        object["name"] = .string(MCPDisplayedText.field(listedName))
-        return .object(object)
+        guard var walked = displayedContent(.object(object)).objectValue else { return nil }
+        if configuration.decision(server: upstream.definition, tool: name) == .ask {
+            walked["description"] = .string("[rv: needs the user's approval] " + MCPDisplayedText.field(rawDescription ?? ""))
+        }
+        walked["name"] = .string(MCPDisplayedText.field(listedName))
+        return .object(walked)
     }
 
-    /// Progress text and a finished tool error are what the client shows.
-    /// Controls stay inside the field, so a fake `ok:` line cannot stand alone.
+    /// Every string in a progress notification, including the token.
     func displayedProgress(_ message: JSONValue) -> JSONValue {
-        guard var object = message.objectValue, var params = object["params"]?.objectValue,
-            let text = params["message"]?.stringValue
-        else { return message }
-        params["message"] = .string(MCPDisplayedText.field(text))
-        object["params"] = .object(params)
-        return .object(object)
+        displayedContent(message)
     }
 
+    /// Every string in a scrubbed tool result, including a successful call,
+    /// nested resource text, and error data.
     func clientVisibleReply(_ message: JSONValue, server: String) -> JSONValue {
-        let scrubbed = scrub(message, for: server)
-        guard var object = scrubbed.objectValue else { return scrubbed }
-        if var error = object["error"]?.objectValue, let text = error["message"]?.stringValue {
-            error["message"] = .string(MCPDisplayedText.field(text))
-            object["error"] = .object(error)
-        }
-        if object["result"]?["isError"]?.boolValue == true, var result = object["result"]?.objectValue,
-            let content = result["content"]
-        {
-            result["content"] = displayedContent(content)
-            object["result"] = .object(result)
-        }
-        return .object(object)
+        displayedContent(scrub(message, for: server))
     }
 
+    /// Escape every string the client would display. Object keys are escaped
+    /// too. Each raw string is escaped once.
     func displayedContent(_ content: JSONValue) -> JSONValue {
-        guard let items = content.arrayValue else { return content }
-        return .array(items.map { item in
-            guard var block = item.objectValue, let text = block["text"]?.stringValue else { return item }
-            block["text"] = .string(MCPDisplayedText.field(text))
-            return .object(block)
-        })
+        switch content {
+        case .string(let text):
+            return .string(MCPDisplayedText.field(text))
+        case .array(let items):
+            return .array(items.map(displayedContent))
+        case .object(let object):
+            var copy = JSONObject()
+            for (key, value) in object.entries {
+                copy[MCPDisplayedText.field(key)] = displayedContent(value)
+            }
+            return .object(copy)
+        default:
+            return content
+        }
     }
 
     mutating func upstreamExited(_ server: String) -> [MCPGatewayOutput] {

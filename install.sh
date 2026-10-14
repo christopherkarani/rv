@@ -337,14 +337,17 @@ source_after_verdict() {
 }
 
 # Prints "real" when a Developer ID Application authority is a certificate
-# line, and "injected" when that line is still inside Identifier=. A newline
-# inside the identifier must not become a trusted Authority line. Format,
-# CodeDirectory, Signature size, Signature, TeamIdentifier, and the other
-# structural codesign fields end the identifier.
+# line, and "injected" when that line is still inside Identifier= or continues
+# an earlier authority value. A newline inside the identifier must not become
+# a trusted Authority line. Only a real Format field ends the identifier.
+# Format=, CodeDirectory, Signature size=, TeamIdentifier=, and Timestamp=
+# planted in the identifier do not. A later Authority= line continues the
+# previous authority value; it is not a new certificate.
 classify_authorities() {
   details=$1
   needle="Authority=Developer ID Application:"
   in_identifier=
+  seen_authority=
   real=
   injected=
   rest=$details
@@ -363,22 +366,23 @@ classify_authorities() {
         ;;
     esac
     case "$line" in
-      Identifier=*) in_identifier=1 ;;
-    esac
-    if [ -n "$in_identifier" ]; then
-      case "$line" in
-        Format=*|CodeDirectory*|Signature\ size=*|Signature=*|TeamIdentifier=*|Sealed\ Resources*|Info.plist*|Timestamp=*|Signed\ Time=*|Notarization\ Ticket=*|Runtime\ Version=*)
-          in_identifier=
-          ;;
-      esac
-    fi
-    case "$line" in
-      "$needle"*)
-        if [ -n "$in_identifier" ]; then
-          injected=1
-        else
-          real=1
-        fi
+      Identifier=*)
+        in_identifier=1
+        ;;
+      Format=Mach-O*|Format=bundle\ with\ *|Format=app\ bundle\ *)
+        in_identifier=
+        ;;
+      Authority=*)
+        case "$line" in
+          "$needle"*)
+            if [ -n "$in_identifier" ] || [ -n "$seen_authority" ]; then
+              injected=1
+            else
+              real=1
+            fi
+            ;;
+        esac
+        seen_authority=1
         ;;
     esac
   done

@@ -136,4 +136,24 @@ struct SecretsConfigurationTests {
         try FileManager.default.createSymbolicLink(at: file, withDestinationURL: real)
         #expect(SecretsConfiguration.load(configDirectory: directory) == .failure(.unsafeFile("symlink")))
     }
+
+    @Test func unknownKeyAndSourceKindAreEscaped() {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let key = invalidReason("{\"version\":1,\"\\u202e\(sentence)\":true}")
+        #expect(key?.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(key?.contains("\\u202e") == true)
+        #expect(key?.contains("unknown key") == true)
+        let kind = invalidReason(
+            "{\"version\":1,\"secrets\":[{\"name\":\"TOKEN\",\"source\":{\"\\u001b[2J\\u001b[H\(sentence)\":{}},\"delivery\":{\"environment\":{}}}]}"
+        )
+        #expect(kind?.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(kind?.contains("\\u001b[2J") == true)
+        #expect(kind?.contains("source kind") == true)
+        let delivery = invalidReason(
+            "{\"version\":1,\"secrets\":[{\"name\":\"TOKEN\",\"source\":{\"hostEnvironment\":{\"variable\":\"X\"}},\"delivery\":{\"\\u2029\(sentence)\":{}}}]}"
+        )
+        #expect(delivery?.unicodeScalars.contains { $0.value == 0x2029 } == false)
+        #expect(delivery?.contains("\\u2029") == true)
+        #expect(delivery?.contains("delivery kind") == true)
+    }
 }

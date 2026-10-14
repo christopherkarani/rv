@@ -271,6 +271,127 @@ struct MCPGatewayCoreTests {
         #expect(listedName.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).contains(sentence) == false)
     }
 
+    @Test func everyClientStringIsEscapedOnce() {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let raw = "\u{1B}[2J\u{1B}[H" + sentence
+        let lineBreak = "\u{2028}" + sentence
+        let bidi = "\u{202E}" + sentence
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        _ = harness.ready()
+
+        func shown(_ value: JSONValue?) -> String {
+            value?.stringValue ?? ""
+        }
+        func escaped(_ text: String) {
+            #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+            #expect(text.contains("\\u001b") || text.contains("\\u2028") || text.contains("\\u202e"))
+            #expect(text.contains("\\\\u001b") == false)
+            let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+            #expect(lines.contains(sentence) == false)
+        }
+
+        let successCall = harness.client(#"{"jsonrpc":"2.0","id":"ok","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
+        let successID = successCall.toUpstream.first?.1["id"]?.intValue ?? -1
+        let success = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": .int(successID),
+            "result": .object([
+                "content": .array([.object(["type": .string("text"), "text": .string(raw)])]),
+                "structuredContent": .object(["text": .string(lineBreak)]),
+                "_meta": .object(["note": .string(bidi)]),
+            ]),
+        ])))
+        let result = success.toClient.first?["result"]
+        escaped(shown(result?["content"]?.arrayValue?.first?["text"]))
+        escaped(shown(result?["structuredContent"]?["text"]))
+        escaped(shown(result?["_meta"]?["note"]))
+
+        let dataCall = harness.client(#"{"jsonrpc":"2.0","id":"data","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
+        let dataID = dataCall.toUpstream.first?.1["id"]?.intValue ?? -1
+        let withData = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": .int(dataID),
+            "error": .object(["code": .int(-32000), "message": .string("failed"), "data": .string(raw)]),
+        ])))
+        #expect(shown(withData.toClient.first?["error"]?["message"]) == "failed")
+        escaped(shown(withData.toClient.first?["error"]?["data"]))
+
+        let nestedCall = harness.client(#"{"jsonrpc":"2.0","id":"nest","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
+        let nestedID = nestedCall.toUpstream.first?.1["id"]?.intValue ?? -1
+        let nested = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": .int(nestedID),
+            "error": .object(["code": .int(-32000), "message": .object(["text": .string(raw)])]),
+        ])))
+        escaped(shown(nested.toClient.first?["error"]?["message"]?["text"]))
+
+        let resourceCall = harness.client(#"{"jsonrpc":"2.0","id":"res","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
+        let resourceID = resourceCall.toUpstream.first?.1["id"]?.intValue ?? -1
+        let resource = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": .int(resourceID),
+            "result": .object([
+                "isError": .bool(true),
+                "content": .array([
+                    .object([
+                        "type": .string("resource"),
+                        "resource": .object(["uri": .string("file://x"), "text": .string(raw)]),
+                    ]),
+                    .object([
+                        "type": .string("resource_link"),
+                        "name": .string(lineBreak),
+                        "description": .string(bidi),
+                    ]),
+                ]),
+            ]),
+        ])))
+        let blocks = resource.toClient.first?["result"]?["content"]?.arrayValue ?? []
+        escaped(shown(blocks.first?["resource"]?["text"]))
+        escaped(shown(blocks.dropFirst().first?["name"]))
+        escaped(shown(blocks.dropFirst().first?["description"]))
+
+        let plainCall = harness.client(#"{"jsonrpc":"2.0","id":"plain","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
+        let plainID = plainCall.toUpstream.first?.1["id"]?.intValue ?? -1
+        let plain = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": .int(plainID),
+            "result": .object(["content": .string(raw)]),
+        ])))
+        escaped(shown(plain.toClient.first?["result"]?["content"]))
+
+        let list = harness.client(#"{"jsonrpc":"2.0","id":11,"method":"tools/list"}"#)
+        let listID = list.toUpstream.first?.1["id"]?.intValue ?? -1
+        let listed = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": .int(listID),
+            "result": .object(["tools": .array([
+                .object([
+                    "name": .string("list_issues"),
+                    "description": .string("plain"),
+                    "title": .string(raw),
+                    "annotations": .object(["title": .string(lineBreak)]),
+                    "inputSchema": .object(["description": .string(raw)]),
+                    "outputSchema": .object(["description": .string(bidi)]),
+                ]),
+            ])]),
+        ])))
+        let tool = listed.toClient.first?["result"]?["tools"]?.arrayValue?.first
+        #expect(shown(tool?["name"]) == "list_issues")
+        #expect(shown(tool?["description"]) == "plain")
+        escaped(shown(tool?["title"]))
+        escaped(shown(tool?["annotations"]?["title"]))
+        escaped(shown(tool?["inputSchema"]?["description"]))
+        escaped(shown(tool?["outputSchema"]?["description"]))
+
+        let tokenOnly = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "method": .string("notifications/progress"),
+            "params": .object(["progressToken": .string(raw)]),
+        ])))
+        escaped(shown(tokenOnly.toClient.first?["params"]?["progressToken"]))
+        let tokenAndMessage = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "method": .string("notifications/progress"),
+            "params": .object(["progressToken": .string(lineBreak), "message": .string("working")]),
+        ])))
+        escaped(shown(tokenAndMessage.toClient.first?["params"]?["progressToken"]))
+        #expect(shown(tokenAndMessage.toClient.first?["params"]?["message"]) == "working")
+    }
+
     @Test func askRecordsARequestThenAGrantLetsTheSameCallThroughOnce() {
         var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
         _ = harness.ready()

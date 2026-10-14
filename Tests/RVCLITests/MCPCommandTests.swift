@@ -599,6 +599,7 @@ struct MCPCommandTests {
         let allow = lines.first { $0.hasPrefix("(allow file-write*") } ?? ""
         let targetPath = canonicalPath(target.path)
         #expect(deny.contains("(subpath \"\(targetPath)\")"))
+        #expect(deny.contains("(subpath \"\(home.path)\")"))
         #expect(allow.contains(targetPath) == false)
         #expect(deny.contains("(regex #\""))
         #expect(deny.contains("\\.ssh"))
@@ -655,6 +656,107 @@ struct MCPCommandTests {
         }
         #expect(patterns.contains { Self.wholeMatch($0, parent + "/Xssh/id_rsa") } == false)
         #expect(deny.contains("\\.ssh"))
+    }
+
+    @Test func credentialDeniesUseThePathSeatbeltChecks() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-future-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let scratch = root.appendingPathComponent("scratch")
+        let tmp = root.appendingPathComponent("tmp")
+        let future = root.appendingPathComponent("future-keys")
+        let ssh = home.appendingPathComponent(".ssh")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        #expect(symlink(future.path, ssh.path) == 0)
+        let dangling = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: tmp.path)
+        guard case .success(let danglingProfile) = dangling else {
+            Issue.record("profile refused a dangling credential link: \(dangling)")
+            return
+        }
+        let danglingDeny = danglingProfile.split(separator: "\n").first { $0.hasPrefix("(deny file-read*") } ?? ""
+        #expect(danglingDeny.contains("future-keys"))
+        let parent = home.path
+        #expect(danglingDeny.contains("(subpath \"\(parent)\")"))
+        let sibling = home.appendingPathComponent("real-keys/id_rsa").path
+        #expect(sibling.hasPrefix(parent + "/"))
+        let allow = danglingProfile.split(separator: "\n").first { $0.hasPrefix("(allow file-write*") } ?? ""
+        #expect(allow.contains("future-keys") == false)
+        #expect(allow.contains("(subpath \"\(parent)\")") == false)
+    }
+
+    @Test func displayedNamesAndRobotJSONEscapeClientText() async throws {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let raw = "\u{1B}[2J\u{1B}[H" + sentence
+        let broken = "\u{2028}" + sentence
+        let reversed = "\u{202E}" + sentence
+        func escaped(_ text: String) {
+            #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+            let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+            #expect(lines.contains(sentence) == false)
+        }
+
+        let denied = "rv mcp deny: \(MCPRun.denyMissingIDMessage(raw + broken))\n"
+        escaped(denied)
+        #expect(denied.contains("\\u001b[2J"))
+        #expect(denied.contains("\\u2028"))
+
+        let missing = MCPLaunchError.unknownServer(raw).message
+        escaped(missing)
+        #expect(missing.contains("mcp.json has no server named"))
+        #expect(missing.contains("\\u001b[2J"))
+
+        let fixture = Fixture()
+        try fixture.write(".cursor/mcp.json", "{\"mcpServers\":{}}")
+        let imported = await MCPRun.importServers(
+            host: .cursor, names: [reversed], project: nil, allowTools: false, dryRun: true,
+            environment: fixture.environment())
+        guard case .failure(let failure) = imported else {
+            Issue.record("unknown host server was imported")
+            return
+        }
+        escaped(failure.message)
+        #expect(failure.message.contains("cursor has no MCP server named"))
+        #expect(failure.message.contains("\\u202e"))
+
+        let hostJSON = "{\"mcpServers\":{\"\\u001b[2J\\u001b[H\(sentence)\":{\"command\":\"npx\"}}}"
+        let hostFile = fixture.home.appendingPathComponent(".cursor/hostile.json")
+        try Data(hostJSON.utf8).write(to: hostFile)
+        let setup = MCPHostSetup.setup(
+            files: [MCPHostFile(
+                host: .cursor, scope: .user, path: hostFile,
+                format: .json(keyPath: ["mcpServers"], lenient: false, opencode: false))],
+            configuration: MCPConfiguration(), servers: nil, rvPath: "/usr/bin/rv",
+            configDirectory: fixture.config,
+            read: { _ in .data(Data(hostJSON.utf8)) })
+        guard case .success(let setupResult) = setup else {
+            Issue.record("setup failed: \(setup)")
+            return
+        }
+        let skipped = setupResult.skipped.joined(separator: "\n")
+        escaped(skipped)
+        #expect(skipped.contains("not in mcp.json"))
+        #expect(skipped.contains("\\u001b[2J"))
+
+        let row = MCPRun.PendingRow(
+            id: raw + broken + "\u{2029}" + sentence + reversed, server: "github", tool: "list_issues",
+            argumentKeys: [], argumentKeysBound: true, requestedAt: Date(timeIntervalSince1970: 0))
+        let robot = MCPRun.robotJSON([row])
+        escaped(robot)
+        #expect(robot.contains("\\u001b"))
+        #expect(robot.contains("\\\\u001b") == false)
+        #expect(robot.contains("\\u2028"))
+        #expect(robot.contains("\\u2029"))
+        #expect(robot.contains("\\u202e"))
+        let parsed = try JSONSerialization.jsonObject(with: Data(robot.utf8)) as? [[String: Any]]
+        #expect(parsed?.first?["server"] as? String == "github")
     }
 
     @Test func temporaryDirectoryTheReviewDidNotNameIsRefused() throws {

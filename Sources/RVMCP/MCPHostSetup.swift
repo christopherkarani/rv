@@ -235,12 +235,13 @@ public enum MCPHostSetup {
                             ? MCPInventory.opencodeEntry(name: name, object: object, file: file)
                             : MCPInventory.standardEntry(name: name, object: object, file: file)
                     else { continue }
+                    let shown = MCPDisplayedText.field(name)
                     guard hostEntry.governedServer == nil else {
-                        result.skipped.append("\(name) (\(file.host.rawValue)): already routed through rv")
+                        result.skipped.append("\(shown) (\(file.host.rawValue)): already routed through rv")
                         continue
                     }
                     guard configuration.server(named: name) != nil else {
-                        result.skipped.append("\(name) (\(file.host.rawValue)): not in mcp.json; `rv mcp import` it first")
+                        result.skipped.append("\(shown) (\(file.host.rawValue)): not in mcp.json; `rv mcp import` it first")
                         continue
                     }
                     let written = gatewayEntry(rvPath: rvPath, server: name, original: object, opencode: opencode)
@@ -248,7 +249,7 @@ public enum MCPHostSetup {
                     records.append(MCPSetupRecord(
                         host: file.host.rawValue, configPath: file.path.path, keyPath: keyPath, name: name,
                         original: entry, written: written))
-                    result.changed.append("\(name) (\(file.host.rawValue), \(file.path.path))")
+                    result.changed.append("\(shown) (\(file.host.rawValue), \(file.path.path))")
                     changed = true
                 }
                 guard changed else { continue }
@@ -283,7 +284,7 @@ public enum MCPHostSetup {
             let url = URL(fileURLWithPath: path)
             let mine = selected.filter { records[$0].configPath == path }
             guard case .data(let data) = read(url), var root = try? JSONValue.parse(data, maximumDepth: 128) else {
-                result.skipped += mine.map { "\(records[$0].name): \(path) is missing or unreadable" }
+                result.skipped += mine.map { "\(MCPDisplayedText.field(records[$0].name)): \(path) is missing or unreadable" }
                 done.formUnion(mine)
                 continue
             }
@@ -294,14 +295,14 @@ public enum MCPHostSetup {
                 guard var servers = value(at: record.keyPath, in: root)?.objectValue,
                     servers[record.name] == record.written
                 else {
-                    result.skipped.append("\(record.name) (\(record.host)): changed since setup; left as is")
+                    result.skipped.append("\(MCPDisplayedText.field(record.name)) (\(record.host)): changed since setup; left as is")
                     continue
                 }
                 servers[record.name] = record.original
                 guard let updated = replacing(record.keyPath, in: root, with: .object(servers)) else { continue }
                 root = updated
                 changed = true
-                result.changed.append("\(record.name) (\(record.host), \(path))")
+                result.changed.append("\(MCPDisplayedText.field(record.name)) (\(record.host), \(path))")
             }
             if changed, writePreservingMode(Data(root.prettyText.utf8), to: url) == false {
                 return .failure(.writeFailed(path))
