@@ -77,7 +77,7 @@ public enum PolicyDocumentTOML {
         }
         if document.allowPaths.isEmpty == false {
             let quoted = document.allowPaths
-                .map { "\"\(escapeTOMLString($0))\"" }
+                .map { "\"\(escapeTOMLDisplayed($0))\"" }
                 .joined(separator: ", ")
             parts.append("secret.allow_paths = [\(quoted)]")
         }
@@ -124,7 +124,7 @@ public enum PolicyDocumentTOML {
                 lines.append("predicate = \"filesystemMove\"")
             }
             if let english = rule.english {
-                lines.append("english = \"\(escapeTOMLString(english))\"")
+                lines.append("english = \"\(escapeTOMLDisplayed(english))\"")
             }
             parts.append(lines.joined(separator: "\n"))
         }

@@ -16,7 +16,11 @@ public struct ScanPrettyRenderer: FrameRenderer {
         }
         for warning in model.warnings {
             lines.append(
-                paint("warning \(warning.code): \(warning.message)", slot: palette.mark, reset: palette.reset)
+                paint(
+                    "warning \(warning.code): \(DisplayedText.field(warning.message))",
+                    slot: palette.mark,
+                    reset: palette.reset
+                )
             )
         }
         lines.append(summaryLine(model, palette: palette))

@@ -325,7 +325,7 @@ struct AllowOnceRedeem: AsyncParsableCommand {
                 )
             }
             ctx.writeStdout(
-                "granted \(redeemed.row.commandRedacted) (cwd \(DisplayedText.field(redeemed.row.cwd.rawValue)))\n"
+                "granted \(DisplayedText.field(redeemed.row.commandRedacted)) (cwd \(DisplayedText.field(redeemed.row.cwd.rawValue)))\n"
             )
         } catch AllowOnceError.ttyRequired {
             try ctx.fail(

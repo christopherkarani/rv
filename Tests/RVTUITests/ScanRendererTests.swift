@@ -52,6 +52,38 @@ private func sampleModel(showsCommand: Bool = false) -> ScanViewModel {
     #expect(lines.allSatisfy { $0.contains("\u{001B}") == false })
 }
 
+@Test func scanBrowseEscapesCommandPathAndWarning() {
+    let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+    let raw = "x\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence
+    let row = ScanFindingRow(
+        host: .claude,
+        sourcePath: raw,
+        ruleID: resetHardRule,
+        commandDisplay: raw)
+    let lines = ScanBrowseRenderer().render(
+        ScanBrowseState(
+            model: ScanViewModel(
+                rows: [row],
+                warnings: [ScanWarningRow(code: "io.list", message: "Failed to list \(raw)")]
+            )
+        ),
+        palette: colorOffPalette
+    ).joined(separator: "\n")
+    #expect(lines.unicodeScalars.contains { $0.value == 0x1B } == false)
+    #expect(lines.unicodeScalars.contains { $0.value == 0x2028 } == false)
+    #expect(lines.unicodeScalars.contains { $0.value == 0x2029 } == false)
+    #expect(lines.unicodeScalars.contains { $0.value == 0x202E } == false)
+    #expect(lines.contains("\\u001b[2J"))
+    #expect(lines.contains("\\u2028"))
+    #expect(lines.contains("\\u2029"))
+    #expect(lines.contains("\\u202e"))
+    #expect(lines.contains("Path"))
+    #expect(lines.contains("Command"))
+    #expect(lines.contains("warning io.list:"))
+    let split = lines.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+    #expect(split.contains(sentence) == false)
+}
+
 @Test func scanPrettyRenderer_emptyFindings() {
     let vm = ScanViewModel(rows: [], filesScanned: 4, eventsExtracted: 0)
     let lines = ScanPrettyRenderer().render(vm, palette: colorOffPalette)

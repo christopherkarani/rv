@@ -405,11 +405,14 @@ public enum MCPSandbox {
     /// name is then the symlink. Each missing name is an opening.
     /// When `/<name>` and the ancestors already collapse to one path
     /// (`../private/tmp/future-keys`), that path is the whole set.
+    /// A `..` tail that pops above the directory the name is created in
+    /// collapses those bases to `/future-keys`. That is not the file `open`
+    /// reads after the name is a deep relative symlink, so the walk continues.
     private static func openingsFromMissing(parent: String, parts: [String], origin: String) -> [String] {
         guard let name = parts.first else { return [] }
         let tail = Array(parts.dropFirst())
         let primary = syntheticOpenings(parent: parent, name: name, tail: tail, origin: origin, includeCreationDirectory: false)
-        if tail.isEmpty || primary.count <= 1 {
+        if tail.isEmpty || collapsedOpeningCoversTheParent(primary, parent: parent, tail: tail) {
             return primary
         }
         var results = syntheticOpenings(parent: parent, name: name, tail: tail, origin: origin, includeCreationDirectory: true)
@@ -419,6 +422,20 @@ public enum MCPSandbox {
             results.append(opening)
         }
         return results
+    }
+
+    /// One collapsed opening is the whole set when it still names a path at
+    /// least as deep as the directory the missing name is created in.
+    /// `link/../../../future-keys` collapses to `/future-keys`, which is
+    /// shallower than `/private/tmp`, so a later `ln -s a/b/c` is not covered.
+    private static func collapsedOpeningCoversTheParent(
+        _ primary: [String], parent: String, tail: [String]
+    ) -> Bool {
+        guard primary.count <= 1 else { return false }
+        guard tail.contains(".."), let opened = primary.first else { return true }
+        let parentDepth = parent.split(separator: "/", omittingEmptySubsequences: true).count
+        let openedDepth = opened.split(separator: "/", omittingEmptySubsequences: true).count
+        return openedDepth >= parentDepth
     }
 
     /// Openings for a component that does not exist yet. `name` → `/name`
@@ -1006,11 +1023,18 @@ public enum MCPSandbox {
         for name in names where name != "." && name != ".." {
             let child = path == "/" ? "/" + name : path + "/" + name
             var info = stat()
-            guard lstat(child, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { continue }
+            guard lstat(child, &info) == 0 else { continue }
+            let kind = info.st_mode & S_IFMT
+            // A symlink planted where a grandchild directory would be is not
+            // entered. Its own inode is still part of the stamp, so replacing
+            // that directory with a link to another tree changes the stamp.
+            guard kind == S_IFDIR || kind == S_IFLNK else { continue }
             let rel = relative.isEmpty ? name : relative + "/" + name
             stamps[rel] = inodeStamp(child)
-            for (deeper, stamp) in directoryStamps(under: child, relative: rel) {
-                stamps[deeper] = stamp
+            if kind == S_IFDIR {
+                for (deeper, stamp) in directoryStamps(under: child, relative: rel) {
+                    stamps[deeper] = stamp
+                }
             }
         }
         return stamps
@@ -1042,6 +1066,10 @@ public enum MCPSandbox {
         /// Parent, then each directory above it. Moving `rv-mcp` together
         /// with the leaf keeps those two inodes and changes `Caches`.
         var ancestors: [AncestorPin]
+        /// `~/Library/Caches`, `~/.npm`, and `~/.cache` at the moment the leaf
+        /// was recorded. A later move into a grandchild does not change the
+        /// ancestor inodes. `profile` re-reads these stamps.
+        var watched: [String: TreeStamp]
     }
 
     private final class LeafRecords: @unchecked Sendable {
@@ -1055,7 +1083,8 @@ public enum MCPSandbox {
         var info = stat()
         guard lstat(path, &info) == 0 else {
             return LeafIdentity(
-                present: false, device: 0, inode: 0, parentDevice: 0, parentInode: 0, ancestors: [])
+                present: false, device: 0, inode: 0, parentDevice: 0, parentInode: 0,
+                ancestors: [], watched: [:])
         }
         var parentInfo = stat()
         let parent = parentDirectory(path)
@@ -1064,7 +1093,16 @@ public enum MCPSandbox {
             present: true, device: UInt64(info.st_dev), inode: UInt64(info.st_ino),
             parentDevice: parentOK ? UInt64(parentInfo.st_dev) : 0,
             parentInode: parentOK ? UInt64(parentInfo.st_ino) : 0,
-            ancestors: ancestorPins(parent))
+            ancestors: ancestorPins(parent),
+            watched: watchedStamps(path))
+    }
+
+    private static func watchedStamps(_ path: String) -> [String: TreeStamp] {
+        var stamps: [String: TreeStamp] = [:]
+        for root in watchedWritableRoots(path) {
+            stamps[root] = treeStamp(root)
+        }
+        return stamps
     }
 
     private static func ancestorPins(_ path: String) -> [AncestorPin] {

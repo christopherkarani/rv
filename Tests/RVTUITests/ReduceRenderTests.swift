@@ -583,6 +583,44 @@ private func isTreeSpacer(_ line: String) -> Bool {
     #expect(split.contains(sentence) == false)
 }
 
+@Test func explainEscapesPathPathspecRefAndRemote() {
+    let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+    let raw = "x\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence
+    let explained = ExplainViewModel(
+        command: ShellCommand(rawValue: "rm /tmp/p"),
+        normalized: "rm /tmp/p",
+        decision: .deny(Deny(ruleID: RuleID(pack: .coreFilesystem, pattern: "rm-rf-general"), reason: "blocked")),
+        packID: .coreFilesystem,
+        ruleID: RuleID(pack: .coreFilesystem, pattern: "rm-rf-general"),
+        fact: "blocked",
+        nextAction: nil,
+        steps: [],
+        semantic: ExplainSemanticView(
+            action: "delete",
+            scope: "filesystem",
+            remote: raw,
+            ref: raw,
+            pathspec: raw,
+            path: raw
+        )
+    )
+    let lines = ExplainRenderer().render(explained, palette: colorOffPalette).joined(separator: "\n")
+    #expect(lines.unicodeScalars.contains { $0.value == 0x1B } == false)
+    #expect(lines.unicodeScalars.contains { $0.value == 0x2028 } == false)
+    #expect(lines.unicodeScalars.contains { $0.value == 0x2029 } == false)
+    #expect(lines.unicodeScalars.contains { $0.value == 0x202E } == false)
+    #expect(lines.contains("\\u001b[2J"))
+    #expect(lines.contains("\\u2028"))
+    #expect(lines.contains("\\u2029"))
+    #expect(lines.contains("\\u202e"))
+    #expect(lines.contains("Path"))
+    #expect(lines.contains("Pathspec"))
+    #expect(lines.contains("Ref"))
+    #expect(lines.contains("Remote"))
+    let split = lines.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+    #expect(split.contains(sentence) == false)
+}
+
 @Test func scanPrettyEscapesCommandText() {
     let raw = "x\u{1B}[2J\u{202E}ok"
     let row = ScanFindingRow(
@@ -597,4 +635,31 @@ private func isTreeSpacer(_ line: String) -> Bool {
     #expect(lines.unicodeScalars.contains { $0.value == 0x202E } == false)
     #expect(lines.contains("\\u001b[2J"))
     #expect(lines.contains("\\u202e"))
+}
+
+@Test func scanPrettyEscapesWarningPath() {
+    let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+    let raw = "x\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence
+    let lines = ScanPrettyRenderer().render(
+        ScanViewModel(
+            rows: [],
+            warnings: [
+                ScanWarningRow(code: "io.list", message: "Failed to list \(raw)"),
+                ScanWarningRow(code: "io.stat", message: "Failed to read metadata for \(raw)"),
+            ]
+        ),
+        palette: colorOffPalette
+    ).joined(separator: "\n")
+    #expect(lines.unicodeScalars.contains { $0.value == 0x1B } == false)
+    #expect(lines.unicodeScalars.contains { $0.value == 0x2028 } == false)
+    #expect(lines.unicodeScalars.contains { $0.value == 0x2029 } == false)
+    #expect(lines.unicodeScalars.contains { $0.value == 0x202E } == false)
+    #expect(lines.contains("warning io.list:"))
+    #expect(lines.contains("warning io.stat:"))
+    #expect(lines.contains("\\u001b[2J"))
+    #expect(lines.contains("\\u2028"))
+    #expect(lines.contains("\\u2029"))
+    #expect(lines.contains("\\u202e"))
+    let split = lines.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+    #expect(split.contains(sentence) == false)
 }

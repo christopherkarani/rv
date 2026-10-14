@@ -77,16 +77,16 @@ private func semanticItems(_ model: ExplainViewModel) -> [OutlineItem]? {
         items.append(.leaf(label: "Effect", value: effect, emphasis: .fact))
     }
     if let remote = semantic.remote {
-        items.append(.leaf(label: "Remote", value: remote, emphasis: .plain))
+        items.append(.leaf(label: "Remote", value: DisplayedText.field(remote), emphasis: .plain))
     }
     if let ref = semantic.ref {
-        items.append(.leaf(label: "Ref", value: ref, emphasis: .plain))
+        items.append(.leaf(label: "Ref", value: DisplayedText.field(ref), emphasis: .plain))
     }
     if let pathspec = semantic.pathspec {
-        items.append(.leaf(label: "Pathspec", value: pathspec, emphasis: .plain))
+        items.append(.leaf(label: "Pathspec", value: DisplayedText.field(pathspec), emphasis: .plain))
     }
     if let path = semantic.path {
-        items.append(.leaf(label: "Path", value: path, emphasis: .plain))
+        items.append(.leaf(label: "Path", value: DisplayedText.field(path), emphasis: .plain))
     }
     if let kind = semantic.kind {
         items.append(.leaf(label: "Kind", value: kind, emphasis: .fact))
