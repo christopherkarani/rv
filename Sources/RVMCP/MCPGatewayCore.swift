@@ -238,13 +238,15 @@ public struct MCPGatewayCore {
         let accepted = Self.elicitationAccepts(message["result"])
         guard accepted else {
             let reason = "declined by the user"
+            let shownServer = MCPDisplayedText.field(call.server)
+            let shownTool = MCPDisplayedText.field(call.tool)
             return [
                 .audit(MCPCallRecord(
                     server: call.server, tool: call.tool, decision: .ask, approvalID: key, argumentKeys: call.keys,
                     isError: true, declined: true, reason: reason)),
                 .toClient(Self.toolError(
                     id: call.client,
-                    "The user declined \(call.server) tool \(call.tool) in rv's approval prompt. Do not retry unless the user asks.")),
+                    "The user declined \(shownServer) tool \(shownTool) in rv's approval prompt. Do not retry unless the user asks.")),
             ]
         }
         guard phases[call.server] == .ready else {
@@ -402,22 +404,28 @@ public struct MCPGatewayCore {
                 reason: "awaiting approval")),
             .toClient(Self.toolError(id: client, text)),
         ]
-        if ticket.code != nil {
-            outputs.append(.log("approval \(shownID) for \(shownServer) tool \(shownTool) is waiting for the user"))
+        if let code = ticket.code {
+            let shownCode = MCPDisplayedText.field(code)
+            outputs.append(.log(
+                "approval \(shownID) for \(shownServer) tool \(shownTool): confirmation code \(shownCode)"))
         }
         return outputs
     }
 
     static func elicitationMessage(server: String, tool: String, arguments: JSONValue) -> String {
-        "rv: allow MCP server \(server) to run tool \(tool)?\nArguments: \(arguments.canonicalText)"
+        let shownServer = MCPDisplayedText.field(server)
+        let shownTool = MCPDisplayedText.field(tool)
+        let shownArguments = MCPDisplayedText.field(arguments.canonicalText)
+        return "rv: allow MCP server \(shownServer) to run tool \(shownTool)?\nArguments: \(shownArguments)"
     }
 
     /// True only when `shown` carries the arguments that would run, in full.
-    /// A prefix, with or without an ellipsis, is not enough.
+    /// A prefix, with or without an ellipsis, is not enough. The comparison
+    /// is the escaped text the person is shown.
     static func elicitationCovers(_ arguments: JSONValue, shown: String) -> Bool {
         let marker = "\nArguments: "
         guard let range = shown.range(of: marker) else { return false }
-        return shown[range.upperBound...] == arguments.canonicalText
+        return shown[range.upperBound...] == MCPDisplayedText.field(arguments.canonicalText)
     }
 
     func argumentsNotShown(
@@ -429,7 +437,7 @@ public struct MCPGatewayCore {
                 server: server, tool: tool, decision: .ask, argumentKeys: keys, isError: true, reason: reason)),
             .toClient(Self.toolError(
                 id: client,
-                "rv refused \(server) tool \(tool): the approval prompt did not include the full arguments. The call was not run.")),
+                "rv refused \(MCPDisplayedText.field(server)) tool \(MCPDisplayedText.field(tool)): the approval prompt did not include the full arguments. The call was not run.")),
         ]
     }
 
@@ -492,9 +500,9 @@ public struct MCPGatewayCore {
                     + releaseWaiting()
             }
             let raw = message["error"]?["message"]?.stringValue ?? "initialize failed"
-            let reason = scrubText(raw, for: server)
+            let reason = MCPDisplayedText.field(scrubText(raw, for: server))
             phases[server] = .failed(reason)
-            return [.log("MCP server \(server) failed to initialize: \(reason)")] + releaseWaiting()
+            return [.log("MCP server \(MCPDisplayedText.field(server)) failed to initialize: \(reason)")] + releaseWaiting()
         case .list(let fanout, _):
             return listPage(fanout: fanout, server: server, message: message)
         case .call(let client, _, let tool, let keys, let approval, let started):

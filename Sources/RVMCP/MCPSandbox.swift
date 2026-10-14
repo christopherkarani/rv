@@ -17,9 +17,18 @@ public enum MCPSandbox {
     static let seatbeltWriteRoots = ["/private/tmp", "/private/var/folders", "/dev"]
 
     /// Write paths a present sandbox still allows. Trust and import show this
-    /// list. `TMPDIR` is the launch temporary directory, chosen when the server starts.
-    public static func disclosedWritePaths(server name: String, policy: MCPSandboxPolicy) -> [String] {
-        ["~/Library/Caches/rv-mcp/\(name)", "TMPDIR"] + seatbeltWriteRoots + defaultWritable + policy.writable
+    /// list. `~` is this home when `home` is set, so the review names the
+    /// directory serve will expand. Temp is only `/private/tmp` and
+    /// `/private/var/folders`, not whatever `TMPDIR` is at serve.
+    public static func disclosedWritePaths(
+        server name: String, policy: MCPSandboxPolicy, home: String? = nil
+    ) -> [String] {
+        func show(_ path: String) -> String {
+            guard let home, path.hasPrefix("~/") else { return path }
+            return home + String(path.dropFirst(1))
+        }
+        let scratch = show("~/Library/Caches/rv-mcp/\(name)")
+        return [scratch] + seatbeltWriteRoots + defaultWritable.map(show) + policy.writable
     }
 
     static let deniedReads = [
@@ -42,6 +51,9 @@ public enum MCPSandbox {
             if let widened = unreviewedWrite(
                 policy: policy, scratch: scratch.path, home: home.path, temporaryDirectory: temporary)
             {
+                return .failure(.sandbox(widened))
+            }
+            if let widened = unreviewedHome(home.path) {
                 return .failure(.sandbox(widened))
             }
             do {
@@ -76,7 +88,9 @@ public enum MCPSandbox {
         }
         let writable = [scratch, temporaryDirectory] + seatbeltWriteRoots
             + (defaultWritable + policy.writable).map(expand)
-        if let widened = unreviewedWrite(paths: writable) {
+        if let widened = unreviewedWrite(
+            policy: policy, scratch: scratch, home: home, temporaryDirectory: temporaryDirectory)
+        {
             return .failure(.sandbox(widened))
         }
         let unreadable = deniedReads.map(expand) + [configDirectory]
@@ -84,8 +98,8 @@ public enum MCPSandbox {
             "(version 1)",
             "(allow default)",
             "(deny file-write*)",
-            "(allow file-write* " + paths(writable) + ")",
-            "(deny file-read* file-write* " + paths(unreadable) + ")",
+            "(allow file-write* " + paths(writable, denyTargets: false) + ")",
+            "(deny file-read* file-write* " + paths(unreadable, denyTargets: true) + ")",
         ]
         if policy.network == false {
             lines.append("(deny network*)")
@@ -101,9 +115,41 @@ public enum MCPSandbox {
         func expand(_ path: String) -> String {
             path.hasPrefix("~/") ? home + path.dropFirst(1) : path
         }
+        if let widened = unreviewedTemporary(temporaryDirectory) {
+            return widened
+        }
         let writable = [scratch, temporaryDirectory] + seatbeltWriteRoots
             + (defaultWritable + policy.writable).map(expand)
         return unreviewedWrite(paths: writable)
+    }
+
+    /// `TMPDIR` is a write root only when it is `/private/tmp`,
+    /// `/private/var/folders`, or a directory inside one of those. A concrete
+    /// path the review never named is refused.
+    static func unreviewedTemporary(_ path: String) -> String? {
+        let resolved = tmpAlias(realPath(path))
+        let roots = ["/private/tmp", "/private/var/folders"]
+        if roots.contains(where: { resolved == $0 || resolved.hasPrefix($0 + "/") }) {
+            return nil
+        }
+        return "\(MCPDisplayedText.field(path)) resolves to \(MCPDisplayedText.field(realPath(path))), which was not the path reviewed"
+    }
+
+    /// `~` in the review is the account home. A serve-time `HOME` that points
+    /// somewhere else is a write root the review did not name.
+    static func unreviewedHome(_ home: String) -> String? {
+        guard let passwd = passwdHome() else {
+            return "\(MCPDisplayedText.field(home)) resolves to a directory that was not the path reviewed"
+        }
+        let resolved = realPath(home)
+        if sameReviewedDirectory(resolved, realPath(passwd)) { return nil }
+        return "\(MCPDisplayedText.field(home)) resolves to \(MCPDisplayedText.field(resolved)), which was not the path reviewed"
+    }
+
+    static func passwdHome() -> String? {
+        guard let entry = getpwuid(geteuid()), let dir = entry.pointee.pw_dir else { return nil }
+        let home = String(cString: dir)
+        return home.isEmpty ? nil : home
     }
 
     static func unreviewedWrite(paths writable: [String]) -> String? {
@@ -128,14 +174,15 @@ public enum MCPSandbox {
         return path
     }
 
-    /// `subpath` filters on real paths. Only the `/tmp` alias is added; a
-    /// symlink to a different tree is refused before this list is built.
-    static func paths(_ raw: [String]) -> String {
+    /// Allow filters add a resolved spelling only when it is the same
+    /// directory. Deny filters also add a different real path, so a symlink
+    /// at `~/.ssh` or the config directory does not leave the target readable.
+    static func paths(_ raw: [String], denyTargets: Bool) -> String {
         var seen = Set<String>()
         var filters: [String] = []
         for path in raw {
             let resolved = realPath(path)
-            let spellings = sameReviewedDirectory(path, resolved) ? [path, resolved] : [path]
+            let spellings = (denyTargets || sameReviewedDirectory(path, resolved)) ? [path, resolved] : [path]
             for spelling in spellings where seen.insert(spelling).inserted {
                 filters.append("(subpath \"\(escape(spelling))\")")
             }
@@ -144,7 +191,32 @@ public enum MCPSandbox {
     }
 
     static func realPath(_ path: String) -> String {
-        guard let resolved = realpath(path, nil) else { return path }
+        if let resolved = resolveExisting(path) { return resolved }
+        return resolvingMissingSuffix(path)
+    }
+
+    /// The leaf does not exist yet. Resolve the nearest existing ancestor so
+    /// a parent symlink cannot hide the directory `createDirectory` would make.
+    static func resolvingMissingSuffix(_ path: String) -> String {
+        var suffix: [String] = []
+        var current = path
+        while true {
+            let url = URL(fileURLWithPath: current)
+            let parent = url.deletingLastPathComponent().path
+            let leaf = url.lastPathComponent
+            if parent == current || leaf.isEmpty || leaf == "/" { return path }
+            suffix.append(leaf)
+            if let resolved = resolveExisting(parent) {
+                return suffix.reversed().reduce(resolved) { base, part in
+                    URL(fileURLWithPath: base).appendingPathComponent(part).path
+                }
+            }
+            current = parent
+        }
+    }
+
+    static func resolveExisting(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
         defer { free(resolved) }
         return String(cString: resolved)
     }

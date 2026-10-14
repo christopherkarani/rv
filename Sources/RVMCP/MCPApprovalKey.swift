@@ -591,7 +591,8 @@ enum ApprovalKeychain {
 }
 #endif
 
-/// One-time code bound to one pending call. It is not written to the gateway log.
+/// One-time code bound to one pending call. The gateway prints it on stderr
+/// when the request is recorded, so the person can type it before Touch ID.
 /// 10 symbols from a 32-letter alphabet without look-alikes: 50 bits.
 public enum MCPConfirmationCode {
     static let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")

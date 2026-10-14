@@ -280,7 +280,7 @@ struct MCPCommandTests {
         })
         #expect(refused.failureMessage == "not trusted: this process has no terminal")
         #expect(shown.withLock { $0 }.contains("fs: fs-mcp"))
-        #expect(shown.withLock { $0 }.contains("ask zz_*"))
+        #expect(shown.withLock { $0 }.contains("ask \"zz_*\""))
         #expect(environment.integrity.isTrusted == false)
 
         #expect(try await MCPRun.trust(environment: environment, show: { _ in }).get().contains("trusted mcp.json"))
@@ -517,6 +517,87 @@ struct MCPCommandTests {
         #expect(error.message.contains(canonicalPath(target.path)))
     }
 
+    @Test func missingScratchLeafThroughAParentSymlinkIsNotCreated() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-leaf-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("project")
+        let home = root.appendingPathComponent("home")
+        let tmp = root.appendingPathComponent("tmp")
+        let caches = home.appendingPathComponent("Library/Caches")
+        let scratch = caches.appendingPathComponent("rv-mcp/notes")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home.appendingPathComponent("Library"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        #expect(symlink(project.path, caches.path) == 0)
+        let result = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: tmp.path)
+        guard case .failure(let error) = result else {
+            Issue.record("a missing scratch leaf through a parent symlink was allowed")
+            return
+        }
+        #expect(error.message.contains("not the path reviewed"))
+        #expect(error.message.contains(canonicalPath(project.path)))
+        #expect(FileManager.default.fileExists(atPath: project.appendingPathComponent("rv-mcp").path) == false)
+    }
+
+    @Test func sshSymlinkDenyCoversTheTarget() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-ssh-\(UUID().uuidString)", isDirectory: true)
+        let target = URL(fileURLWithPath: "/workspace/rv-ssh-target-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: target)
+        }
+        let home = root.appendingPathComponent("home")
+        let scratch = root.appendingPathComponent("scratch")
+        let tmp = root.appendingPathComponent("tmp")
+        let ssh = home.appendingPathComponent(".ssh")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        #expect(symlink(target.path, ssh.path) == 0)
+        let result = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: tmp.path)
+        guard case .success(let profile) = result else {
+            Issue.record("profile refused before the credential deny could be checked: \(result)")
+            return
+        }
+        let lines = profile.split(separator: "\n").map(String.init)
+        let deny = lines.first { $0.hasPrefix("(deny file-read*") } ?? ""
+        let allow = lines.first { $0.hasPrefix("(allow file-write*") } ?? ""
+        let targetPath = canonicalPath(target.path)
+        #expect(deny.contains("(subpath \"\(targetPath)\")"))
+        #expect(allow.contains(targetPath) == false)
+    }
+
+    @Test func temporaryDirectoryTheReviewDidNotNameIsRefused() throws {
+        let root = URL(fileURLWithPath: "/workspace/rv-unreviewed-tmpdir-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let scratch = root.appendingPathComponent("scratch")
+        let home = root.appendingPathComponent("home")
+        let app = root.appendingPathComponent("src/app")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        let result = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: app.path)
+        guard case .failure(let error) = result else {
+            Issue.record("TMPDIR \(app.path) was allowed")
+            return
+        }
+        #expect(error.message.contains("not the path reviewed"))
+        #expect(error.message.contains(app.path))
+        #expect(error.message.contains("(subpath") == false)
+    }
+
     private func canonicalPath(_ path: String) -> String {
         guard let resolved = realpath(path, nil) else { return path }
         defer { free(resolved) }
@@ -677,6 +758,132 @@ struct MCPCommandTests {
         #expect(approved.contains("\\u000b"))
         #expect(approved.unicodeScalars.contains { $0.value == 0x0B } == false)
         Self.expectNoForgedReviewLine(approved, trailer: trailer)
+    }
+
+    @Test func approveReasonKeepsTheForwardArgumentsHashWhenTheToolNameOverridesDirection() async throws {
+        let fixture = Fixture()
+        let hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        let tool = "\u{202E}notes"
+        let store = fixture.environment().approvals
+        let ticket = try #require(store.request(
+            server: "fs", tool: tool, argumentsHash: hash, argumentKeys: ["path"]))
+        let code = try #require(ticket.code)
+        let reason = Mutex("")
+        let presence = UserPresence { why, challenge in
+            reason.withLock { $0 = why }
+            guard case .printedCode(let check) = challenge, check(code) else {
+                return .refused("wrong confirmation code")
+            }
+            return .confirmed(method: "terminal confirmation code")
+        }
+        _ = try await MCPRun.approve(
+            id: ticket.id, always: false, environment: fixture.environment(presence: presence)).get()
+        let shown = reason.withLock { $0 }
+        #expect(shown.contains("arguments \(hash)"))
+        #expect(shown.contains("\\u202e"))
+        #expect(shown.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(shown.contains("\n") == false)
+        #expect(store.consumeGrant(
+            server: "fs", tool: tool, argumentsHash: hash, argumentKeys: ["path"]) == .granted(id: ticket.id))
+    }
+
+    @Test func c1StringTerminatorsStayVisibleInTheToolNameThatIsSigned() async throws {
+        let fixture = Fixture()
+        let tool = "\u{0098}\u{009E}read_ssh\u{009C}\u{009F}notes echo"
+        let store = fixture.environment().approvals
+        let ticket = try #require(store.request(
+            server: "fs", tool: tool, argumentsHash: "h1", argumentKeys: []))
+        let code = try #require(ticket.code)
+        let pending = MCPRun.pendingText(MCPRun.pendingRows(store))
+        let reason = Mutex("")
+        let presence = UserPresence { why, challenge in
+            reason.withLock { $0 = why }
+            guard case .printedCode(let check) = challenge, check(code) else {
+                return .refused("wrong confirmation code")
+            }
+            return .confirmed(method: "terminal confirmation code")
+        }
+        _ = try await MCPRun.approve(
+            id: ticket.id, always: false, environment: fixture.environment(presence: presence)).get()
+        for shown in [pending, reason.withLock { $0 }] {
+            #expect(shown.contains("read_ssh"))
+            #expect(shown.contains("notes echo"))
+            #expect(shown.contains("\\u0098"))
+            #expect(shown.contains("\\u009e"))
+            #expect(shown.contains("\\u009c"))
+            #expect(shown.contains("\\u009f"))
+            let scalars = Set(shown.unicodeScalars.map(\.value))
+            #expect(scalars.contains(0x98) == false)
+            #expect(scalars.contains(0x9E) == false)
+            #expect(scalars.contains(0x9C) == false)
+            #expect(scalars.contains(0x9F) == false)
+        }
+        #expect(store.consumeGrant(
+            server: "fs", tool: tool, argumentsHash: "h1", argumentKeys: []) == .granted(id: ticket.id))
+    }
+
+    @Test func quotedAllowListsDoNotRenderTheSameAndTrustingOneDoesNotSignTheOther() async throws {
+        let separate = MCPConfiguration(servers: [
+            MCPServerDefinition(name: "notes", command: "git", tools: MCPToolPolicy(allow: ["read_file", "shell"]))
+        ])
+        let joined = MCPConfiguration(servers: [
+            MCPServerDefinition(name: "notes", command: "git", tools: MCPToolPolicy(allow: ["read_file, shell"]))
+        ])
+        let separateReview = MCPRun.trustReview(separate)
+        let joinedReview = MCPRun.trustReview(joined)
+        #expect(separateReview.contains("\"read_file\", \"shell\""))
+        #expect(joinedReview.contains("\"read_file, shell\""))
+        #expect(separateReview.contains("\"read_file, shell\"") == false)
+        #expect(separateReview != joinedReview)
+        let fixture = Fixture()
+        let url = try fixture.write(".config/rv/mcp.json", separate.encoded().prettyText)
+        chmod(url.path, 0o600)
+        chmod(fixture.config.path, 0o700)
+        let presence = UserPresence { _, challenge in
+            guard case .deviceOwner = challenge else { return .refused("not device owner") }
+            return .confirmed(method: "device owner authentication")
+        }
+        _ = try await MCPRun.trust(
+            environment: fixture.environment(presence: presence), show: { _ in }
+        ).get()
+        #expect(fixture.environment().integrity == .trusted)
+        try Data(joined.encoded().prettyText.utf8).write(to: url)
+        chmod(url.path, 0o600)
+        #expect(fixture.environment().integrity != .trusted)
+    }
+
+    @Test func listAndCheckEscapeAToolNameThatWouldClearTheTerminal() {
+        let ok = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let name = "\u{1B}[2J\u{1B}[H\(ok)\u{1B}]0;pwned\u{7}"
+        let row = MCPRun.Row(
+            host: "cursor", scope: "user", configPath: "/tmp/mcp.json", name: name, status: "bypass",
+            command: "npx \u{1B}[2J", environmentNames: [], headerNames: [], plaintextCredentials: [],
+            governedServer: nil)
+        let report = MCPRun.Report(
+            servers: 0, direct: 0, blocked: 0, integrity: "none", integrityProblem: nil,
+            rows: [row], problems: [])
+        let home = URL(fileURLWithPath: "/tmp/home")
+        for text in [MCPRun.listText(report, home: home), MCPRun.checkText(report, home: home)] {
+            let scalars = Set(text.unicodeScalars.map(\.value))
+            #expect(scalars.contains(0x1B) == false)
+            #expect(text.contains("\\u001b[2J"))
+            #expect(text.contains("\\u001b[H"))
+            let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            #expect(lines.contains(ok) == false)
+        }
+    }
+
+    @Test func importLineEscapesACommandThatWouldClearScrollback() async throws {
+        let fixture = Fixture()
+        try fixture.write(".cursor/mcp.json", #"{"mcpServers": {"notes": {"command": "echo\u001b[3J"}}}"#)
+        let dry = try await MCPRun.importServers(
+            host: .cursor, names: ["notes"], project: nil, allowTools: false, dryRun: true,
+            environment: fixture.environment(presence: Self.absent)
+        ).get()
+        #expect(dry.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(dry.contains("\\u001b"))
+        #expect(dry.contains("[3J"))
+        #expect(dry.contains("import notes:"))
     }
 
     @Test func importRequiresPresenceBeforeItSigns() async throws {
@@ -1006,7 +1213,7 @@ struct MCPCommandTests {
             #expect(text.contains("env GIT_SSH_COMMAND=evil-ssh"))
             #expect(text.contains("env LD_PRELOAD=/tmp/p.so"))
             #expect(text.contains("secret GITHUB_TOKEN=NOTES_GITHUB_TOKEN"))
-            #expect(text.contains("allow one, two, three, four, five"))
+            #expect(text.contains("allow \"one\", \"two\", \"three\", \"four\", \"five\""))
             #expect(text.contains("no sandbox"))
             #expect(text.range(of: #"\+\d+ more"#, options: .regularExpression) == nil)
         }
@@ -1056,20 +1263,22 @@ struct MCPCommandTests {
             #expect(lines.contains { line in
                 line.contains("sandbox writable ")
                     && line.contains("~/Library/Caches/rv-mcp/closed")
-                    && line.contains("TMPDIR")
+                    && line.contains("TMPDIR") == false
                     && line.contains("/private/tmp")
+                    && line.contains("/private/var/folders")
                     && line.contains("/dev")
-                    && line.hasSuffix("/Users/me/proj\\n\(trailer)")
+                    && line.hasSuffix("\"/Users/me/proj\\\\n\(trailer)\"")
             })
             #expect(lines.contains { line in
                 line.contains("sandbox writable ")
                     && line.contains("~/Library/Caches/rv-mcp/open")
-                    && line.contains("TMPDIR")
+                    && line.contains("TMPDIR") == false
                     && line.contains("/private/tmp")
+                    && line.contains("/private/var/folders")
                     && line.contains("/dev")
                     && line.contains("~/.cache")
                     && line.contains("~/Library/Caches")
-                    && line.hasSuffix(", /")
+                    && line.hasSuffix("\"/\"")
                     && line.contains("proj") == false
             })
             #expect(text.contains("writable none") == false)
@@ -1078,7 +1287,7 @@ struct MCPCommandTests {
             #expect(text.contains("bare: /bin/cat"))
             #expect(text.contains("\\n  notes: /usr/bin/true"))
             #expect(text.contains("\\n  hidden: true"))
-            #expect(text.contains("allow read\\n\(trailer)"))
+            #expect(text.contains("allow \"read\\\\n\(trailer)\""))
             Self.expectNoForgedReviewLine(text, trailer: trailer)
         }
         let shownLines = review.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -1144,11 +1353,12 @@ struct MCPCommandTests {
             environment: fixture.environment(presence: presence), show: { text in shown.withLock { $0 = text } }
         ).get()
         let paths = [
-            "~/Library/Caches/rv-mcp/caged", "TMPDIR", "/private/tmp", "/private/var/folders", "/dev",
+            "~/Library/Caches/rv-mcp/caged", "/private/tmp", "/private/var/folders", "/dev",
             "~/.npm", "~/.cache", "~/Library/Caches",
         ]
         for text in [shown.withLock { $0 }, reasonAtPrompt.withLock { $0 }, imported.shown, imported.reason] {
             #expect(text.contains("writable none") == false)
+            #expect(text.contains("TMPDIR") == false)
             #expect(text.contains("sandbox network false"))
             for path in paths {
                 #expect(text.contains(path), "missing \(path)")

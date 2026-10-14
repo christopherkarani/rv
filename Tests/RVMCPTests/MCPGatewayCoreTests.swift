@@ -330,6 +330,23 @@ struct MCPGatewayCoreTests {
         #expect(later.toClient.first?.compactText.contains("sekret") == false)
     }
 
+    @Test func initializeFailureLogEscapesTerminalControls() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        let started = harness.core.start().toUpstream
+        let id = started[0].1["id"] ?? .null
+        let failed = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": id,
+            "error": .object(["code": .int(-1), "message": .string("\u{1B}[2J\u{1B}[Hbad\u{009E}")]),
+        ])))
+        let log = failed.logs.first ?? ""
+        let scalars = Set(log.unicodeScalars.map(\.value))
+        #expect(scalars.contains(0x1B) == false)
+        #expect(scalars.contains(0x9E) == false)
+        #expect(log.contains("\\u001b"))
+        #expect(log.contains("\\u009e"))
+        #expect(log.split(separator: "\n").count == 1)
+    }
+
     @Test func grantIsKeptWhenTheUpstreamIsNotReady() {
         var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
         _ = harness.core.start()
@@ -416,5 +433,14 @@ struct MCPApprovalStoreTests {
         let b = try JSONValue.parse(#"{"a":"s","b":[1,{"x":1,"y":2}]}"#)
         #expect(a.canonicalHash == b.canonicalHash)
         #expect(a.canonicalHash != (try JSONValue.parse(#"{"a":"t","b":[1,{"x":1,"y":2}]}"#)).canonicalHash)
+    }
+
+    @Test func serveHomeThatIsNotTheAccountHomeIsRefused() {
+        let other = "/workspace/not-the-account-home-\(UUID().uuidString)"
+        let message = MCPSandbox.unreviewedHome(other)
+        #expect(message?.contains("not the path reviewed") == true)
+        if let passwd = MCPSandbox.passwdHome() {
+            #expect(MCPSandbox.unreviewedHome(passwd) == nil)
+        }
     }
 }

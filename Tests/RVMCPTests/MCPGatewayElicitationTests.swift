@@ -88,6 +88,47 @@ struct MCPGatewayElicitationTests {
         #expect(forwarded?["benign"] == .string("ok"))
     }
 
+    @Test func elicitationEscapesControlsAndStillRunsTheHeldCall() {
+        let payload = "ssh-key"
+        let tool = "\u{1B}[2J\u{1B}[H\u{009E}read_ssh\u{009C}"
+        let arguments = JSONValue.object(["note": .string("\u{009B}secret"), "path": .string(payload)])
+        let message = MCPGatewayCore.elicitationMessage(server: "fs", tool: tool, arguments: arguments)
+        let scalars = Set(message.unicodeScalars.map(\.value))
+        #expect(scalars.contains(0x1B) == false)
+        #expect(scalars.contains(0x9B) == false)
+        #expect(scalars.contains(0x9E) == false)
+        #expect(scalars.contains(0x9C) == false)
+        #expect(message.contains("\\u001b"))
+        #expect(message.contains("\\u009b"))
+        #expect(message.contains(payload))
+        #expect(MCPGatewayCore.elicitationCovers(arguments, shown: message))
+        let swallowing = "notes\nArguments: {\"ok\":true}"
+        let swallowed = MCPGatewayCore.elicitationMessage(
+            server: "fs", tool: swallowing, arguments: arguments)
+        #expect(MCPGatewayCore.elicitationCovers(arguments, shown: swallowed))
+        #expect(swallowed.split(separator: "\n").map(String.init).contains("Arguments: {\"ok\":true}") == false)
+
+        var harness = GatewayHarness(MCPConfiguration(servers: [
+            MCPServerDefinition(name: "fs", command: "fs", tools: MCPToolPolicy(defaultDecision: .ask))
+        ]))
+        _ = harness.ready()
+        _ = harness.client(
+            #"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{}}}}"#)
+        let call = #"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"\u001b[2J\u001b[H\u009eread_ssh\u009c","arguments":{"note":"\u009bsecret","path":"\#(payload)"}}}"#
+        let held = harness.client(call)
+        let prompt = held.toClient.first?["params"]?["message"]?.stringValue ?? ""
+        #expect(prompt.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(prompt.contains(payload))
+        #expect(MCPGatewayCore.elicitationCovers(
+            .object(["note": .string("\u{009B}secret"), "path": .string(payload)]), shown: prompt))
+        let id = held.toClient.first?["id"]?.stringValue ?? ""
+        let accepted = harness.client(Self.answer(id, #"{"action":"accept","content":{"approve":true}}"#))
+        let forwarded = accepted.toUpstream.first?.1["params"]
+        #expect(forwarded?["name"]?.stringValue == tool)
+        #expect(forwarded?["arguments"]?["path"] == .string(payload))
+        #expect(forwarded?["arguments"]?["note"] == .string("\u{009B}secret"))
+    }
+
     @Test func declineCancelAndUncheckedBoxAllRefuse() {
         for result in [
             #"{"action":"decline"}"#, #"{"action":"cancel"}"#, #"{"action":"accept","content":{"approve":false}}"#,
@@ -127,9 +168,9 @@ struct MCPGatewayElicitationTests {
         let fallback = harness.client(#"{"jsonrpc":"2.0","id":"\#(id)","error":{"code":-32601,"message":"no"}}"#)
         #expect(fallback.toUpstream.isEmpty)
         #expect(fallback.toClient.first?.compactText.contains("rv mcp approve req1") == true)
-        #expect(fallback.logs.first == "approval req1 for github tool create_issue is waiting for the user")
-        #expect(fallback.logs.joined().contains("ABCDE-FGHJK") == false)
-        #expect(fallback.logs.joined().contains("confirmation code") == false)
+        #expect(fallback.logs.first == "approval req1 for github tool create_issue: confirmation code ABCDE-FGHJK")
+        #expect(fallback.toClient.first?.compactText.contains("ABCDE-FGHJK") == false)
+        #expect(fallback.toClient.first?.compactText.contains("confirmation code") == false)
         #expect(harness.approvals.requested.withLock { $0 } == ["github/create_issue"])
     }
 
@@ -147,9 +188,9 @@ struct MCPGatewayElicitationTests {
         let paused = harness.client(Self.createCall)
         #expect(paused.toClient.first?["method"] == nil)
         #expect(paused.toClient.first?.compactText.contains("in their own terminal") == true)
-        #expect(paused.logs == ["approval req1 for github tool create_issue is waiting for the user"])
-        #expect(paused.logs.joined().contains("ABCDE-FGHJK") == false)
-        #expect(paused.logs.joined().contains("confirmation code") == false)
+        #expect(paused.logs == ["approval req1 for github tool create_issue: confirmation code ABCDE-FGHJK"])
+        #expect(paused.toClient.first?.compactText.contains("ABCDE-FGHJK") == false)
+        #expect(paused.toClient.first?.compactText.contains("confirmation code") == false)
         var urlOnly = Self.harness(elicitation: #"{"url":{}}"#)
         #expect(urlOnly.client(Self.createCall).toClient.first?["method"] == nil)
     }

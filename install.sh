@@ -262,12 +262,14 @@ fetch_pack_bundles() {
   exit 1
 }
 
-# True when $1 has a line whose entire text is $2. A phrase inside
-# Identifier=, Executable=, or another field does not count.
-has_field_line() {
-  details="$1"
-  want="$2"
-  rest="$details"
+# The last physical line whose text starts with $2. A newline inside
+# Identifier=, Executable=, or a path is its own line, so an earlier
+# injected TeamIdentifier= is not the signature's team.
+last_field_prefix() {
+  details=$1
+  prefix=$2
+  found=
+  rest=$details
   while [ -n "$rest" ]; do
     case "$rest" in
       *"
@@ -279,12 +281,50 @@ has_field_line() {
         ;;
       *)
         line=$rest
-        rest=""
+        rest=
         ;;
     esac
-    [ "$line" = "$want" ] && return 0
+    case "$line" in
+      "$prefix"*) found=$line ;;
+    esac
   done
-  return 1
+  printf '%s' "$found"
+}
+
+# spctl prints the path, then ": accepted" or ": rejected", then source=.
+# A source= line inside the path is dropped when that verdict line is seen.
+source_after_verdict() {
+  details=$1
+  found=
+  armed=
+  rest=$details
+  while [ -n "$rest" ]; do
+    case "$rest" in
+      *"
+"*)
+        line=${rest%%
+*}
+        rest=${rest#*
+}
+        ;;
+      *)
+        line=$rest
+        rest=
+        ;;
+    esac
+    case "$line" in
+      *": accepted"|*": rejected")
+        armed=1
+        found=
+        ;;
+      source=*)
+        if [ -n "$armed" ]; then
+          found=$line
+        fi
+        ;;
+    esac
+  done
+  printf '%s' "$found"
 }
 
 # Downloaded macOS release files must carry a valid, notarized Developer ID
@@ -308,6 +348,15 @@ verify_release_signatures() {
   for name in "$@"; do
     file="$dir/$name"
     [ -f "$file" ] || continue
+    # A newline in the path is a new line in codesign and spctl output.
+    # Refuse before trusting any field, and name only the basename.
+    case "$file" in
+      *"
+"*)
+        echo "rv: refusing to install: $name is not a single path, so its signature cannot be checked" >&2
+        exit 1
+        ;;
+    esac
     details="$("$codesign" -dvv "$file" 2>&1 || true)"
     # "not signed at all" inside Identifier, TMPDIR, or Executable= is not an
     # unsigned file. Only the unsigned diagnostic, and only when no Developer
@@ -334,20 +383,30 @@ verify_release_signatures() {
       echo "rv: refusing to install: $name is signed, but no Developer ID team is pinned (release_team_id)" >&2
       exit 1
     fi
-    if ! has_field_line "$details" "TeamIdentifier=$team"; then
+    team_line=$(last_field_prefix "$details" "TeamIdentifier=")
+    sig_line=$(last_field_prefix "$details" "Signature=")
+    # A Developer ID dylib is not passed to spctl. Ad-hoc is, including a
+    # dylib: Signature=adhoc or TeamIdentifier=not set must not skip it.
+    # "Signature=" does not match "Signature size=".
+    need_spctl=1
+    case "$name" in
+      *.dylib) need_spctl=0 ;;
+    esac
+    if [ "$sig_line" = "Signature=adhoc" ] || [ "$team_line" = "TeamIdentifier=not set" ]; then
+      need_spctl=1
+    fi
+    if [ "$need_spctl" = 1 ]; then
+      verdict="$("$spctl" -a -t open --context context:primary-signature -vv "$file" 2>&1 || true)"
+      source_line=$(source_after_verdict "$verdict")
+      if [ "$source_line" != "source=Notarized Developer ID" ]; then
+        echo "rv: refusing to install: Gatekeeper does not accept $name as notarized" >&2
+        exit 1
+      fi
+    fi
+    if [ "$team_line" != "TeamIdentifier=$team" ]; then
       echo "rv: refusing to install: $name is not signed by team $team" >&2
       exit 1
     fi
-    case "$name" in
-      *.dylib) ;;
-      *)
-        verdict="$("$spctl" -a -t open --context context:primary-signature -vv "$file" 2>&1 || true)"
-        if ! has_field_line "$verdict" "source=Notarized Developer ID"; then
-          echo "rv: refusing to install: Gatekeeper does not accept $name as notarized" >&2
-          exit 1
-        fi
-        ;;
-    esac
     signed="$signed $name"
   done
   if [ -n "$signed" ] && [ -n "$unsigned" ]; then

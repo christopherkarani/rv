@@ -935,6 +935,13 @@ private func writeSignatureShims(in shim: URL) throws {
               adhoc) printf 'Executable=%s\\nSignature=adhoc\\nTeamIdentifier=not set\\n' "$file" >&2; exit 0 ;;
               phrase) printf 'Executable=/tmp/not signed at all/%s\\nIdentifier=not signed at all\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nTeamIdentifier=TEAMRV1234\\n' "$name" >&2; exit 0 ;;
               identifier-team) printf 'Executable=%s\\nIdentifier=com.rv.TeamIdentifier=TEAMRV1234\\nAuthority=Developer ID Application: Other (OTHERTEAM9)\\nTeamIdentifier=OTHERTEAM9\\n' "$file" >&2; exit 0 ;;
+              identifier-newline) printf 'Executable=%s\\nIdentifier=com.evil\\nTeamIdentifier=TEAMRV1234\\nAuthority=Developer ID Application: Other (OTHERTEAM9)\\nTeamIdentifier=OTHERTEAM9\\n' "$file" >&2; exit 0 ;;
+              adhoc-forged)
+                case "$name" in
+                  *.dylib) printf 'Executable=%s\\nIdentifier=com.evil\\nAuthority=Developer ID Application: Fake (TEAMRV1234)\\nTeamIdentifier=TEAMRV1234\\nSignature=adhoc\\nTeamIdentifier=not set\\n' "$file" >&2; exit 0 ;;
+                  *) printf 'Executable=%s\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nAuthority=Developer ID Certification Authority\\nTeamIdentifier=TEAMRV1234\\n' "$file" >&2; exit 0 ;;
+                esac
+                ;;
               *) printf 'Executable=%s\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nAuthority=Developer ID Certification Authority\\nTeamIdentifier=TEAMRV1234\\n' "$file" >&2; exit 0 ;;
             esac
             ;;
@@ -1131,6 +1138,64 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     #expect(run.stderr.contains("is signed, but no Developer ID team is pinned"))
     #expect(run.stderr.contains("warning: release files are not code-signed") == false)
     #expect(run.toolLog.contains("codesign -dvv "))
+    try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_identifierNewlineUnderDashDoesNotPass() throws {
+    let shell = (try? FileManager.default.destinationOfSymbolicLink(atPath: "/bin/sh")) ?? ""
+    #expect(shell.contains("dash"))
+    let run = try runSignedDownloadInstall(
+        environment: ["RV_TEST_CODESIGN": "identifier-newline", "RV_INSTALL_TEAM_ID": "TEAMRV1234"],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("is not signed by team TEAMRV1234"))
+    #expect(run.stderr.contains("warning: release files are not code-signed") == false)
+    try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_tmpdirNewlineDoesNotForgeTheTeamOrSourceLine() throws {
+    let parent = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-install-nl-\(UUID().uuidString)", isDirectory: true)
+    let nasty = parent.appendingPathComponent(
+        "evil\nTeamIdentifier=TEAMRV1234\nsource=Notarized Developer ID", isDirectory: true)
+    try FileManager.default.createDirectory(at: nasty, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: parent) }
+    let run = try runSignedDownloadInstall(
+        environment: [
+            "RV_INSTALL_TEAM_ID": "TEAMRV1234",
+            "TMPDIR": nasty.path,
+        ],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("is not a single path, so its signature cannot be checked"))
+    #expect(run.stderr.contains("TeamIdentifier=") == false)
+    #expect(run.stderr.contains("source=Notarized Developer ID") == false)
+    #expect(run.stderr.contains("warning: release files are not code-signed") == false)
+    try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_adHocDylibDoesNotSkipSpctl() throws {
+    let run = try runSignedDownloadInstall(
+        environment: [
+            "RV_TEST_CODESIGN": "adhoc-forged",
+            "RV_TEST_SPCTL": "accept",
+            "RV_INSTALL_TEAM_ID": "TEAMRV1234",
+        ],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("libswiftCompatibilitySpan.dylib is not signed by team TEAMRV1234"))
+    #expect(run.toolLog.contains("spctl "))
+    #expect(run.toolLog.contains("libswiftCompatibilitySpan.dylib"))
+    #expect(run.stderr.contains("warning: release files are not code-signed") == false)
     try expectPreviousInstallKept(run)
 }
 

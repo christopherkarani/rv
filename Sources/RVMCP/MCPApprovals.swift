@@ -24,7 +24,8 @@ public struct MCPApprovalRequest: Sendable, Equatable {
     public var state: State
     /// Written by `rv mcp approve`; a grant without a valid MAC is forged.
     public var grantMAC: String?
-    /// MAC of the confirmation code, bound to this call. The gateway does not print the code.
+    /// MAC of the confirmation code, bound to this call. The plaintext code is
+    /// printed once on the gateway stderr, not stored in this file.
     public var codeMAC: String?
 
     public init(

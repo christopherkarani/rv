@@ -209,22 +209,24 @@ enum MCPRun {
         ]
         if report.rows.isEmpty { lines.append("no MCP servers found in any host configuration") }
         var currentFile: String?
-        let width = min(28, report.rows.map(\.name.count).max() ?? 0)
+        let shownNames = report.rows.map { reviewField($0.name) }
+        let width = min(28, shownNames.map(\.count).max() ?? 0)
         for row in report.rows {
-            let file = "\(row.host) (\(row.scope == "user" ? "user" : "project"), \(abbreviate(row.configPath, home: home)))"
+            let file = "\(reviewField(row.host)) (\(row.scope == "user" ? "user" : "project"), \(reviewField(abbreviate(row.configPath, home: home))))"
             if file != currentFile {
                 lines.append("")
                 lines.append(file)
                 currentFile = file
             }
-            let name = row.name.padding(toLength: max(width, row.name.count), withPad: " ", startingAt: 0)
-            let status = row.status.padding(toLength: 10, withPad: " ", startingAt: 0)
-            lines.append("  \(name)  \(status)  \(row.command)")
+            let name = reviewField(row.name)
+            let padded = name.padding(toLength: max(width, name.count), withPad: " ", startingAt: 0)
+            let status = reviewField(row.status).padding(toLength: 10, withPad: " ", startingAt: 0)
+            lines.append("  \(padded)  \(status)  \(reviewField(row.command))")
             var details: [String] = []
-            if row.environmentNames.isEmpty == false { details.append("env " + capped(row.environmentNames)) }
-            if row.headerNames.isEmpty == false { details.append("headers " + row.headerNames.joined(separator: ", ")) }
+            if row.environmentNames.isEmpty == false { details.append("env " + capped(row.environmentNames.map(reviewField))) }
+            if row.headerNames.isEmpty == false { details.append("headers " + row.headerNames.map(reviewField).joined(separator: ", ")) }
             if row.plaintextCredentials.isEmpty == false {
-                details.append("plaintext credential: " + row.plaintextCredentials.joined(separator: ", "))
+                details.append("plaintext credential: " + row.plaintextCredentials.map(reviewField).joined(separator: ", "))
             }
             if details.isEmpty == false {
                 lines.append("  " + String(repeating: " ", count: max(width, row.name.count)) + "  " + details.joined(separator: " · "))
@@ -233,7 +235,7 @@ enum MCPRun {
         lines.append("")
         lines.append(summary(report))
         lines += problemLines(report, home: home)
-        if let problem = report.integrityProblem { lines.append("warning: " + problem) }
+        if let problem = report.integrityProblem { lines.append("warning: " + reviewField(problem)) }
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -242,10 +244,11 @@ enum MCPRun {
         if report.passes {
             lines.append("ok: every MCP server is governed by rv, allowed direct, or disabled (\(report.rows.count) checked)")
         } else {
-            if let problem = report.integrityProblem { lines.append("untrusted  " + problem) }
+            if let problem = report.integrityProblem { lines.append("untrusted  " + reviewField(problem)) }
             for row in report.failing {
                 let status = MCPEntryStatus(rawValue: row.status)
-                lines.append("\(row.status)  \(row.name)  \(row.host) \(abbreviate(row.configPath, home: home))")
+                lines.append(
+                    "\(reviewField(row.status))  \(reviewField(row.name))  \(reviewField(row.host)) \(reviewField(abbreviate(row.configPath, home: home)))")
                 if let status { lines.append("  \(status.explanation)") }
             }
             lines += problemLines(report, home: home)
@@ -255,7 +258,7 @@ enum MCPRun {
         if leaks.isEmpty == false {
             lines.append(
                 "warning: \(leaks.count) host entr\(leaks.count == 1 ? "y holds" : "ies hold") plaintext credentials ("
-                    + leaks.map(\.name).joined(separator: ", ") + "); `rv mcp import` moves them into rv secrets")
+                    + leaks.map { reviewField($0.name) }.joined(separator: ", ") + "); `rv mcp import` moves them into rv secrets")
         }
         return lines.joined(separator: "\n") + "\n"
     }
@@ -277,7 +280,9 @@ enum MCPRun {
     }
 
     static func problemLines(_ report: Report, home: URL) -> [String] {
-        report.problems.map { "unreadable: \(abbreviate($0.path, home: home)): \($0.message)" }
+        report.problems.map {
+            "unreadable: \(reviewField(abbreviate($0.path, home: home))): \(reviewField($0.message))"
+        }
     }
 
     static func abbreviate(_ path: String, home: URL) -> String {
@@ -497,29 +502,36 @@ enum MCPRun {
             }
         }
         if configuration.direct.isEmpty == false {
-            lines.append("  direct: " + configuration.direct.map(reviewField).joined(separator: ", "))
+            lines.append("  direct: " + quotedReviewFields(configuration.direct))
         }
         if configuration.blocked.isEmpty == false {
-            lines.append("  blocked: " + configuration.blocked.map(reviewField).joined(separator: ", "))
+            lines.append("  blocked: " + quotedReviewFields(configuration.blocked))
         }
         return lines.joined(separator: "\n")
     }
 
-    /// One review field. Line breaks and the C1 controls a terminal executes
-    /// stay inside the field, so a value cannot start a new line or redraw it.
+    /// One review field. Line breaks, C1 controls, and bidi overrides stay
+    /// inside the field, so a value cannot start a new line, redraw it, or
+    /// reverse the hash that follows.
     static func reviewField(_ text: String) -> String {
         MCPDisplayedText.field(text)
+    }
+
+    /// Quoted review values. `read_file` plus `shell` does not look like the
+    /// single name `read_file, shell`.
+    static func quotedReviewFields(_ values: [String]) -> String {
+        values.map { value in
+            let quoted = reviewField(value)
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            return "\"\(quoted)\""
+        }.joined(separator: ", ")
     }
 
     /// Quoted argument names. `path` plus `contents` does not look like the
     /// single name `path, contents`.
     static func displayedArgumentKeys(_ keys: [String]) -> String {
-        keys.map { key in
-            let quoted = reviewField(key)
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
-            return "\"\(quoted)\""
-        }.joined(separator: ", ")
+        quotedReviewFields(keys)
     }
 
     static func deniedLine(server: String, tool: String) -> String {
@@ -530,8 +542,8 @@ enum MCPRun {
     /// inherit the host environment.
     static func sandboxLines(_ server: MCPServerDefinition, indent: String = "") -> [String] {
         guard let sandbox = server.sandbox else { return ["\(indent)no sandbox"] }
-        let writable = MCPSandbox.disclosedWritePaths(server: server.name, policy: sandbox)
-            .map(reviewField).joined(separator: ", ")
+        let writable = quotedReviewFields(
+            MCPSandbox.disclosedWritePaths(server: server.name, policy: sandbox))
         return ["\(indent)sandbox network \(sandbox.network)", "\(indent)sandbox writable \(writable)"]
     }
 
@@ -545,13 +557,13 @@ enum MCPRun {
             lines.append("\(indent)secret \(reviewField(name))=\(reviewField(secret))")
         }
         if server.tools.allow.isEmpty == false {
-            lines.append("\(indent)allow " + server.tools.allow.map(reviewField).joined(separator: ", "))
+            lines.append("\(indent)allow " + quotedReviewFields(server.tools.allow))
         }
         if server.tools.ask.isEmpty == false {
-            lines.append("\(indent)ask " + server.tools.ask.map(reviewField).joined(separator: ", "))
+            lines.append("\(indent)ask " + quotedReviewFields(server.tools.ask))
         }
         if server.tools.deny.isEmpty == false {
-            lines.append("\(indent)deny " + server.tools.deny.map(reviewField).joined(separator: ", "))
+            lines.append("\(indent)deny " + quotedReviewFields(server.tools.deny))
         }
         return lines
     }
@@ -645,15 +657,15 @@ enum MCPRun {
         let plan = MCPImport.plan(entries: entries, configuration: configuration, secrets: secrets, allowTools: allowTools)
         var lines: [String] = []
         for server in plan.servers {
-            var detail = "import \(server.name): \(server.command)"
+            var detail = "import \(reviewField(server.name)): \(reviewField(server.command))"
             if server.secrets.isEmpty == false || server.args.contains(where: { $0.contains("${secret:") }) {
                 let names = Set(server.secrets.values).union(server.args.flatMap { MCPSecretReference.names(in: $0) ?? [] })
-                detail += " (credentials → rv secrets " + names.sorted().joined(separator: ", ") + ")"
+                detail += " (credentials → rv secrets " + names.sorted().map(reviewField).joined(separator: ", ") + ")"
             }
             lines.append(detail)
         }
-        lines += plan.skipped.map { "skip \($0.name): \($0.reason)" }
-        lines += plan.notes.map { "note \($0)" }
+        lines += plan.skipped.map { "skip \(reviewField($0.name)): \(reviewField($0.reason))" }
+        lines += plan.notes.map { "note \(reviewField($0))" }
         guard plan.servers.isEmpty == false else {
             return .success((lines + ["nothing to import"]).joined(separator: "\n") + "\n")
         }

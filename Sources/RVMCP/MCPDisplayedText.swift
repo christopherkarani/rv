@@ -15,10 +15,23 @@ public enum MCPDisplayedText {
             case 0x85: escaped += "\\u0085"
             case 0x8D: escaped += "\\u008d"
             case 0x90: escaped += "\\u0090"
+            case 0x98: escaped += "\\u0098"
             case 0x9B: escaped += "\\u009b"
+            case 0x9C: escaped += "\\u009c"
             case 0x9D: escaped += "\\u009d"
+            case 0x9E: escaped += "\\u009e"
+            case 0x9F: escaped += "\\u009f"
             case 0x2028: escaped += "\\u2028"
             case 0x2029: escaped += "\\u2029"
+            case 0x202A: escaped += "\\u202a"
+            case 0x202B: escaped += "\\u202b"
+            case 0x202C: escaped += "\\u202c"
+            case 0x202D: escaped += "\\u202d"
+            case 0x202E: escaped += "\\u202e"
+            case 0x2066: escaped += "\\u2066"
+            case 0x2067: escaped += "\\u2067"
+            case 0x2068: escaped += "\\u2068"
+            case 0x2069: escaped += "\\u2069"
             default: escaped.unicodeScalars.append(scalar)
             }
         }
