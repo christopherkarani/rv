@@ -929,10 +929,10 @@ struct DiskImageCancellationTests {
         #expect(establishCancelReportsCancelled(detachExitedZero: false) == false)
     }
 
-    /// A nil listing does not clear while the disk can still appear. A
-    /// sibling row does not keep an image-path hold after this image is
-    /// gone. A listing that shows this image keeps the hold.
-    @Test func deadHelperClearsANilListingAndKeepsASiblingListing() {
+    /// A nil listing does not clear, including on a failed stat. A sibling
+    /// row does not clear while this file is still present, and does clear
+    /// once the file is gone. A listing that shows this image keeps the hold.
+    @Test func deadHelperClearsANilListingAndKeepsASiblingListing() throws {
         let image = "/tmp/rv-inode-TOKEN.sparseimage"
         let empty = diskImageInfoListingShowsImage(
             parsedImageCount: 0,
@@ -950,13 +950,19 @@ struct DiskImageCancellationTests {
             helperStillAlive: false,
             imageListed: empty,
             infoTimedOut: true,
-            imageFileGone: true
+            imageFileGone: false
         ) == false)
         #expect(diskImagePublicationRecheckCanClear(
             helperStillAlive: false,
             imageListed: empty,
+            infoTimedOut: true,
             imageFileGone: true
         ))
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: empty,
+            imageFileGone: true
+        ) == false)
         let unreportedMount = diskImageInfoListingShowsImage(
             parsedImageCount: 1,
             identity: "/private/var/folders/ws",
@@ -967,16 +973,41 @@ struct DiskImageCancellationTests {
         #expect(diskImagePublicationRecheckCanClear(
             helperStillAlive: false,
             imageListed: unreportedMount,
+            imageFileGone: false,
             identityIsImage: false
         ) == false)
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: unreportedMount,
+            infoTimedOut: false,
+            imageFileGone: true,
+            identityIsImage: false
+        ))
         let sibling = diskImageInfoListingShowsImage(
             parsedImageCount: 1,
             identity: image,
             imagePaths: ["/tmp/rv-inode-OTHER.sparseimage"]
         )
         #expect(sibling == false)
-        #expect(diskImagePublicationRecheckCanClear(helperStillAlive: false, imageListed: sibling))
-        #expect(diskImagePublicationRecheckCanClear(helperStillAlive: false, imageListed: false))
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: sibling,
+            imageFileGone: false
+        ) == false)
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: false,
+            imageFileGone: false
+        ) == false)
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: sibling,
+            imageFileGone: true
+        ))
+        #expect(diskImageMayStartHelper(
+            publicationHeld: true,
+            arguments: ["/usr/bin/hdiutil", "attach", "-nomount", "-plist", image]
+        ) == false)
         let shown = diskImageInfoListingShowsImage(
             parsedImageCount: 1,
             identity: image,
@@ -1001,6 +1032,38 @@ struct DiskImageCancellationTests {
         ) == false)
         #expect(DiskImageCancelBudget.returnBound == 8)
         #expect(DiskImageCancelBudget.detachCap == 5)
+        let now = Date(timeIntervalSince1970: 50_000)
+        let bound = now.addingTimeInterval(DiskImageCancelBudget.returnBound)
+        let late = now.addingTimeInterval(7.74)
+        let sleep = diskImageRecheckAllowance(
+            budget: DiskImageCancelBudget.preemptCleanup,
+            cancelDeadline: bound,
+            now: late
+        )
+        let info = diskImageRecheckAllowance(
+            budget: DiskImageCancelBudget.preemptReap,
+            cancelDeadline: bound,
+            now: late.addingTimeInterval(sleep)
+        )
+        #expect(sleep < DiskImageCancelBudget.preemptCleanup)
+        #expect(late.addingTimeInterval(sleep + info) <= bound)
+        #expect(diskImageRecheckAllowance(
+            budget: DiskImageCancelBudget.preemptCleanup,
+            cancelDeadline: nil,
+            now: now
+        ) == DiskImageCancelBudget.preemptCleanup)
+        #expect(fcopyfileAttributeCopySucceeded(toolStatus: 0, statusQuit: true) == false)
+        #expect(fcopyfileAttributeCopySucceeded(toolStatus: 0, statusQuit: false))
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-gate-stat-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let present = root.appendingPathComponent("rv-inode-TOKEN.sparseimage")
+        FileManager.default.createFile(atPath: present.path, contents: Data("x".utf8))
+        #expect(diskImageSparseFileIsDefinitivelyGone(present.path) == false)
+        #expect(diskImageSparseFileIsDefinitivelyGone(root.appendingPathComponent("missing").path))
+        #expect(diskImageMountPointIsGone(root.path))
+        #expect(diskImageParkedPathIsGone(present.path, identityIsImage: true) == false)
     }
 
     /// A directory walk stops while the detach reserve is still left.
@@ -1357,8 +1420,70 @@ private func assertXattrCopyStopsBeforeDetachReserve() throws {
     let attribute = readXattr(destination.fileDescriptor, name)?.count ?? 0
     #expect(attribute < value.count)
     #expect(attribute != value.count)
+    try assertFcopyfileQuitAndPreSetClockDoNotWriteTheAttribute(name: name, value: value)
     #endif
 }
+
+#if canImport(Darwin)
+private func assertFcopyfileQuitAndPreSetClockDoNotWriteTheAttribute(name: String, value: [UInt8]) throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-fcopy-clock-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let sourceURL = root.appendingPathComponent("source")
+    let quitDestURL = root.appendingPathComponent("quit")
+    let startDestURL = root.appendingPathComponent("start")
+    FileManager.default.createFile(atPath: sourceURL.path, contents: Data("src".utf8))
+    FileManager.default.createFile(atPath: quitDestURL.path, contents: Data("dst".utf8))
+    FileManager.default.createFile(atPath: startDestURL.path, contents: Data("dst".utf8))
+    let source = try FileHandle(forUpdating: sourceURL)
+    let quitDest = try FileHandle(forUpdating: quitDestURL)
+    let startDest = try FileHandle(forUpdating: startDestURL)
+    defer {
+        try? source.close()
+        try? quitDest.close()
+        try? startDest.close()
+    }
+    #expect(writeXattr(source.fileDescriptor, name, value))
+    var quitChecks = 0
+    let quitCopy = copyXattrsWithFcopyfile(
+        from: source.fileDescriptor,
+        to: quitDest.fileDescriptor
+    ) {
+        quitChecks += 1
+        return quitChecks == 1
+    }
+    #expect(quitCopy == false)
+    #expect(quitChecks == 2)
+    let quitLanded = readXattr(quitDest.fileDescriptor, name)?.count ?? 0
+    #expect(quitLanded == 0)
+    #expect(quitLanded != value.count)
+    var startChecks = 0
+    var deadline: Date?
+    let started = Date()
+    let startCopy = copyXattrsWithFcopyfile(
+        from: source.fileDescriptor,
+        to: startDest.fileDescriptor
+    ) {
+        startChecks += 1
+        if deadline == nil {
+            deadline = Date().addingTimeInterval(DiskImageCancelBudget.detachCap + 0.25)
+        }
+        // The wrapper and `COPYFILE_START` stay inside the budget.
+        // The check immediately before the set spends the reserve.
+        if startChecks >= 6 {
+            Thread.sleep(forTimeInterval: 0.35)
+        }
+        return DiskImageCancelBudget.copyMayContinue(deadline: deadline, now: Date())
+    }
+    #expect(startCopy == false)
+    #expect(startChecks >= 6)
+    let startLanded = readXattr(startDest.fileDescriptor, name)?.count ?? 0
+    #expect(startLanded < value.count)
+    #expect(startLanded != value.count)
+    #expect(Date().timeIntervalSince(started) < DiskImageCancelBudget.returnBound)
+}
+#endif
 
 #if canImport(Darwin)
 private func namedForkByteCount(_ path: String) -> Int {

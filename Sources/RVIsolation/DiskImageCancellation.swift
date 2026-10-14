@@ -537,11 +537,16 @@ func diskImagePublicationGateUpdate(
 }
 
 /// One bounded recheck after the helper is dead. A listing that shows this
-/// image keeps the hold. An info timeout, empty info while the sparseimage
-/// is still on disk, or a `mount_hfs` hdiutil does not report also keep it:
-/// that disk can still appear. A sibling `rv-inode` row does not. When this
-/// image path is absent from a listing that was read, or the file is already
-/// gone, the hold drops. This is not a spin out to the 30-minute cap.
+/// image keeps the hold. `imageListed == false` does not win before
+/// `imageFileGone`: a sibling row keeps the hold while this file is still
+/// on disk, and clears once that file is gone. A nil or unparsed listing
+/// does not clear on a stat failure, because that listing can still
+/// appear. An info timeout still consults `imageFileGone`. One timeout
+/// while the file can appear does not clear, and a file that is gone does
+/// not stick because the timeout returned first. A mount-point identity
+/// clears after umount when `imageFileGone` says the path is no longer a
+/// mount, even if some other image stays listed. This is not a spin out
+/// to the 30-minute cap.
 func diskImagePublicationRecheckCanClear(
     helperStillAlive: Bool,
     imageListed: Bool?,
@@ -551,15 +556,64 @@ func diskImagePublicationRecheckCanClear(
 ) -> Bool {
     if helperStillAlive { return false }
     if imageListed == true { return false }
-    if infoTimedOut { return false }
-    // A live mount_hfs is not in `hdiutil info`, including when the only
-    // row is a sibling image. That nil is not proof the volume is gone.
-    if identityIsImage == false { return false }
-    // Omitted from a listing that was read. Not mounted, and it cannot
-    // appear, even while some other `rv-inode` image stays listed.
-    if imageListed == false { return true }
-    // Empty info. The file still being present is the publish race.
+    if infoTimedOut { return imageFileGone }
+    // After umount the directory is still there. `imageFileGone` is the
+    // device check, not `stat`. A sibling row does not keep that hold.
+    if identityIsImage == false { return imageFileGone }
+    // Empty or unparsed info. ENOENT after diskimagesd has the fd, and
+    // EIO or ESTALE while the file exists, are not proof it is gone.
+    if imageListed == nil { return false }
     return imageFileGone
+}
+
+/// How long the publication recheck may sleep or run `hdiutil info` without
+/// pushing a cancelled waiter past the cancel clock. A nil deadline is the
+/// full budget. `returnBound` and `detachCap` are not raised.
+func diskImageRecheckAllowance(
+    budget: TimeInterval,
+    cancelDeadline: Date?,
+    now: Date
+) -> TimeInterval {
+    let capped = max(0, budget)
+    guard let cancelDeadline else { return capped }
+    return min(capped, max(0, cancelDeadline.timeIntervalSince(now)))
+}
+
+/// `stat` failure is not absence. Only `ENOENT` means the sparseimage is
+/// gone. `EIO` and `ESTALE` leave the hold, because the file can still exist.
+func diskImageSparseFileIsDefinitivelyGone(_ path: String) -> Bool {
+    var status = stat()
+    if path.withCString({ stat($0, &status) }) == 0 { return false }
+    return errno == ENOENT
+}
+
+/// A mount-point directory remains after `umount`. It is gone as a volume
+/// when its device matches its parent, or when the path itself is missing.
+func diskImageMountPointIsGone(_ path: String) -> Bool {
+    var here = stat()
+    if path.withCString({ stat($0, &here) }) != 0 { return true }
+    guard let parent = diskImageParentPath(path) else { return false }
+    var above = stat()
+    guard parent.withCString({ stat($0, &above) }) == 0 else { return false }
+    return here.st_dev == above.st_dev
+}
+
+func diskImageParentPath(_ path: String) -> String? {
+    guard path != "/" else { return nil }
+    let trimmed = path.hasSuffix("/") && path.count > 1 ? String(path.dropLast()) : path
+    guard let slash = trimmed.lastIndex(of: "/") else { return nil }
+    if slash == trimmed.startIndex { return "/" }
+    return String(trimmed[..<slash])
+}
+
+func diskImageParkedPathIsGone(_ path: String, identityIsImage: Bool) -> Bool {
+    if identityIsImage { return diskImageSparseFileIsDefinitivelyGone(path) }
+    return diskImageMountPointIsGone(path)
+}
+
+/// `fcopyfile` returns 0 after `COPYFILE_QUIT`. That is not a copied attribute.
+func fcopyfileAttributeCopySucceeded(toolStatus: Int32, statusQuit: Bool) -> Bool {
+    statusQuit == false && toolStatus == 0
 }
 
 /// Drop the publication hold only when this helper is dead and the image
@@ -567,8 +621,8 @@ func diskImagePublicationRecheckCanClear(
 /// a nil listing, or a non-empty listing that merely omitted this image
 /// before the publication wait, stays true and must not clear. The gate's
 /// bounded recheck is `diskImagePublicationRecheckCanClear`: a nil listing
-/// clears only after the sparseimage file is gone, and a sibling omission
-/// does clear. A plan `.none` umount or detach stores no image; once its
+/// does not clear on a failed stat, and a sibling omission clears only
+/// after the file is gone. A plan `.none` umount or detach stores no image; once its
 /// helper is dead the latch cannot publish and does drop. `returnBound`
 /// and `detachCap` are not involved.
 func diskImagePublicationCanClear(
@@ -1451,6 +1505,8 @@ func copyXattrsWithFcopyfile(
 
 private final class FcopyfileClockBox {
     let mayContinue: () -> Bool
+    var statusQuit = false
+    var skippedNames: [String] = []
     init(_ mayContinue: @escaping () -> Bool) {
         self.mayContinue = mayContinue
     }
@@ -1470,6 +1526,7 @@ private func xattrFcopyfileStatus(
     _ = dst
     guard let ctx else { return COPYFILE_QUIT }
     let box = Unmanaged<FcopyfileClockBox>.fromOpaque(ctx).takeUnretainedValue()
+    var attributeName: String?
     if let state {
         var name: UnsafePointer<CChar>?
         let read = withUnsafeMutablePointer(to: &name) { pointer in
@@ -1479,12 +1536,21 @@ private func xattrFcopyfileStatus(
                 UnsafeMutableRawPointer(pointer)
             )
         }
-        if read == 0, let name, strcmp(name, "com.apple.ResourceFork") == 0 {
-            return COPYFILE_SKIP
+        if read == 0, let name {
+            if strcmp(name, "com.apple.ResourceFork") == 0 { return COPYFILE_SKIP }
+            attributeName = String(cString: name)
         }
     }
-    if box.mayContinue() == false { return COPYFILE_QUIT }
-    return COPYFILE_CONTINUE
+    if box.mayContinue() == false {
+        box.statusQuit = true
+        return COPYFILE_QUIT
+    }
+    // A true clock at `COPYFILE_START` is not permission to `fsetxattr`
+    // the whole value. Skip it here and copy it with a check on the set.
+    if let attributeName {
+        box.skippedNames.append(attributeName)
+    }
+    return COPYFILE_SKIP
 }
 
 private func copyXattrsByFcopyfile(
@@ -1515,7 +1581,24 @@ private func copyXattrsByFcopyfile(
     )
     guard contextSet == 0, callbackSet == 0 else { return false }
     trace.noteFcopyfile()
-    return fcopyfile(source, destination, state, copyfile_flags_t(COPYFILE_XATTR)) == 0
+    let status = fcopyfile(source, destination, state, copyfile_flags_t(COPYFILE_XATTR))
+    // `COPYFILE_QUIT` sets `ECANCELED` and still returns 0. That is not success.
+    guard fcopyfileAttributeCopySucceeded(toolStatus: status, statusQuit: box.statusQuit) else {
+        return false
+    }
+    for name in box.skippedNames where name != "com.apple.ResourceFork" {
+        if copyOneXattrObservingClock(
+            from: source,
+            to: destination,
+            name: name,
+            chunkBytes: 64 * 1024,
+            trace: trace,
+            mayContinue: mayContinue
+        ) == false {
+            return false
+        }
+    }
+    return true
 }
 
 private func xattrListSize(_ fd: Int32) -> Int {

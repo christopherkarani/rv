@@ -1787,10 +1787,11 @@ private enum DiskImageToolSerialization {
         }
     }
 
-    /// One bounded recheck once the helper is dead. An info timeout, empty
-    /// info while the sparseimage remains, or a mount hdiutil does not
-    /// report keeps the hold. A sibling row does not. A listing that shows
-    /// this image keeps it. This does not spin until the 30-minute cap.
+    /// One bounded recheck once the helper is dead. The 0.5s sleep and the
+    /// 0.25s info are clipped to the cancel clock, so a cancelled acquire
+    /// still returns inside `returnBound`. A sibling row does not clear
+    /// while this file is present. A nil listing does not clear on a failed
+    /// stat. This does not spin until the 30-minute cap.
     static func clearPublicationGateIfDiskIsGone(clock: DiskImageCancelClock) {
         let parked = publication.withLock { $0 }
         guard parked.held else { return }
@@ -1812,15 +1813,24 @@ private enum DiskImageToolSerialization {
             return
         }
         if helperAlive { return }
-        let allowance = DiskImageCancelBudget.preemptCleanup
-        if allowance > 0 {
-            usleep(UInt32(allowance * 1_000_000))
+        let cleanup = diskImageRecheckAllowance(
+            budget: DiskImageCancelBudget.preemptCleanup,
+            cancelDeadline: clock.deadline,
+            now: Date()
+        )
+        if cleanup > 0 {
+            usleep(UInt32(cleanup * 1_000_000))
         }
-        let deadline = Date().addingTimeInterval(DiskImageCancelBudget.preemptReap)
+        let infoBudget = diskImageRecheckAllowance(
+            budget: DiskImageCancelBudget.preemptReap,
+            cancelDeadline: clock.deadline,
+            now: Date()
+        )
+        guard infoBudget > 0 else { return }
+        let deadline = Date().addingTimeInterval(infoBudget)
         let listed = workspaceImageListed(image, returnDeadline: deadline, clock: clock)
         let identityIsImage = image.contains("rv-inode-") && image.hasSuffix(".sparseimage")
-        var imageStatus = stat()
-        let imageFileGone = identityIsImage && image.withCString { stat($0, &imageStatus) != 0 }
+        let imageFileGone = diskImageParkedPathIsGone(image, identityIsImage: identityIsImage)
         guard diskImagePublicationRecheckCanClear(
             helperStillAlive: false,
             imageListed: listed.imageListed,
