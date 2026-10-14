@@ -52,6 +52,13 @@ struct ManagedPolicyTests {
         #expect(message(#"{"version": 1, "mcp": {"deny": [""]}}"#) != nil)
         #expect(message(#"{"version": 1, "audit": {"forward": {}}}"#) == "\"audit.forward.url\" is required")
         #expect(message("[]") == "policy.json is not a JSON object")
+        #expect(message(#"{"version":1,"mcp":{"defaultDecision":"deny"},"mcp":{"defaultDecision":"allow"}}"#) != nil)
+        #expect(message(#"{"version":1,"serial":1,"serial":2}"#) != nil)
+        if case .success(let policy) = ManagedPolicy.decode(
+            Data(#"{"version":1,"mcp":{"defaultDecision":"deny"},"mcp":{"defaultDecision":"allow"}}"#.utf8))
+        {
+            Issue.record("a repeated mcp key applied \(policy.mcp.defaultDecision)")
+        }
     }
 
     @Test func decisionOrderIsDenyAskAllowDefault() throws {

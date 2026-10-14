@@ -134,10 +134,10 @@ public struct MCPRemoteServer: Sendable, Equatable {
         {
             return "must not carry a secret in its host (send it as a header with ${secret:NAME})"
         }
-        let items = components.queryItems ?? []
-        if items.contains(where: { item in
-            MCPRedaction.queryPieceCarriesSecret(item.name) || MCPRedaction.queryPieceCarriesSecret(item.value ?? "")
-        }) {
+        let rawQuery = components.percentEncodedQuery ?? MCPRedaction.rawQuery(url.absoluteString)
+        if MCPRedaction.queryCarriesSecret(encoded: rawQuery, items: components.queryItems)
+            || MCPRedaction.rawQuery(url.absoluteString).map({ MCPRedaction.queryCarriesSecret(encoded: $0, items: nil) }) == true
+        {
             return "must not carry a secret in its query (send it as a header with ${secret:NAME})"
         }
         if MCPRedaction.pathCarriesSecret(components.percentEncodedPath) {

@@ -70,10 +70,10 @@ enum AuditForwardRun {
         if MCPRedaction.pathCarriesSecret(components.percentEncodedPath) {
             return .failure("--to must not carry a secret in its path")
         }
-        let items = components.queryItems ?? []
-        if items.contains(where: { item in
-            MCPRedaction.queryPieceCarriesSecret(item.name) || MCPRedaction.queryPieceCarriesSecret(item.value ?? "")
-        }) {
+        let rawQuery = components.percentEncodedQuery ?? MCPRedaction.rawQuery(text)
+        if MCPRedaction.queryCarriesSecret(encoded: rawQuery, items: components.queryItems)
+            || MCPRedaction.rawQuery(text).map({ MCPRedaction.queryCarriesSecret(encoded: $0, items: nil) }) == true
+        {
             return .failure("--to must not carry a secret in its query")
         }
         if scheme == "https" { return .success(url) }

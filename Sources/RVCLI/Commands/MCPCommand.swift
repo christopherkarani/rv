@@ -193,31 +193,43 @@ enum MCPRun {
             : names.prefix(limit).joined(separator: ", ") + " +\(names.count - limit) more"
     }
 
-    /// Terminal-safe spelling. CR, ESC, and other controls stay visible as text
-    /// so a password cannot be erased or concealed before confirm.
+    /// Terminal-safe spelling. CR, ESC, C1, and bidi marks stay visible as text
+    /// so a password cannot be erased, concealed, or reordered before confirm.
     static func visible(_ text: String) -> String {
         var output = ""
         output.reserveCapacity(text.utf8.count)
         for scalar in text.unicodeScalars {
-            switch scalar.value {
-            case 0x09: output += "\\t"
-            case 0x0A: output += "\\n"
-            case 0x0D: output += "\\r"
-            case 0x1B: output += "\\u{001B}"
-            case 0x00..<0x20, 0x7F:
-                output += String(format: "\\u{%04X}", scalar.value)
-            default:
+            if scalar == "\n" {
+                output += "\\n"
+            } else if concealsOnATerminal(scalar) {
+                switch scalar.value {
+                case 0x09: output += "\\t"
+                case 0x0D: output += "\\r"
+                case 0x1B: output += "\\u{001B}"
+                default: output += String(format: "\\u{%04X}", scalar.value)
+                }
+            } else {
                 output.unicodeScalars.append(scalar)
             }
         }
         return output
     }
 
-    /// A review that still contains a raw control would hide text on a terminal.
+    /// A review that still contains a raw control or bidi mark would hide text on a terminal.
     static func reviewConceals(_ review: String) -> Bool {
         review.unicodeScalars.contains { scalar in
-            scalar != "\n" && (scalar.value < 0x20 || scalar.value == 0x7F)
+            scalar != "\n" && concealsOnATerminal(scalar)
         }
+    }
+
+    /// C0, DEL, C1 (U+0080–U+009F), and bidi isolates (U+202A–U+202E, U+2066–U+2069).
+    static func concealsOnATerminal(_ scalar: Unicode.Scalar) -> Bool {
+        let value = scalar.value
+        if value < 0x20 || value == 0x7F { return true }
+        if (0x80...0x9F).contains(value) { return true }
+        if (0x202A...0x202E).contains(value) { return true }
+        if (0x2066...0x2069).contains(value) { return true }
+        return false
     }
 
     static func summary(_ report: Report) -> String {
@@ -372,8 +384,9 @@ enum MCPRun {
         if environment.integrity == .trusted {
             return .success("mcp.json already matches rv's signature; nothing to trust\n")
         }
-        let review = trustReview(configuration)
-        guard trustReviewShowsEveryLiteral(configuration, review) else {
+        let digest = RVDigest.sha256Hex([UInt8](data))
+        let review = trustReview(configuration) + "\nsha256: \(digest)"
+        guard review.contains("sha256: \(digest)"), trustReviewShowsEveryLiteral(configuration, review) else {
             return .failure("trust review omitted a literal value; nothing signed")
         }
         show(review + "\n")

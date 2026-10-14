@@ -121,6 +121,7 @@ enum JSONLiteral: Equatable {
             }
             while index < bytes.count {
                 guard let key = parseString(), skipWhitespace(), consume(":"), let value = parseValue() else { return nil }
+                if object[key] != nil { return nil }
                 object[key] = value
                 guard skipWhitespace() else { return nil }
                 if peek(UInt8(ascii: "}")) {

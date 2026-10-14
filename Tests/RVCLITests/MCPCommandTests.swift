@@ -466,6 +466,96 @@ struct MCPCommandTests {
         #expect(importedReview.withLock { $0 }.contains(escaped))
     }
 
+    @Test func trustEscapesC1AndBidiBeforeSigning() async throws {
+        let password = "supersecretpassword"
+        let database = "postgres://user:\(password)@db.example/app"
+        let c1Document = """
+            {"version":1,"servers":[
+              {"name":"db","command":"db-mcp","env":{"DATABASE_URL":"\(database)\\u009b2K"}},
+              {"name":"api","url":"https://mcp.example/mcp","headers":{"X-Database":"\\u009b8m\(database)\\u009b28m"}}
+            ]}
+            """
+        try await expectEscapedControl(
+            c1Document, marker: "\\u{009B}", raw: "\u{009B}", password: password)
+
+        let bidiDocument = """
+            {"version":1,"servers":[{"name":"db","command":"db-mcp\\u202E\(database)",
+              "description":"ok\\u202E\(database)",
+              "args":["ok\\u202E\(database)"],
+              "env":{"DATABASE_URL":"ok\\u202E\(database)"},
+              "sandbox":{"network":false,"writable":["~/ok\\u202E\(database)"]},
+              "tools":{"allow":["a","b","c","d","ok\\u202E\(database)"]}}]}
+            """
+        try await expectEscapedControl(
+            bidiDocument, marker: "\\u{202E}", raw: "\u{202E}", password: password)
+    }
+
+    private func expectEscapedControl(
+        _ document: String, marker: String, raw: Character, password: String
+    ) async throws {
+        let fixture = Fixture()
+        try fixture.write(".config/rv/mcp.json", document)
+        chmod(fixture.home.appendingPathComponent(".config/rv/mcp.json").path, 0o600)
+        chmod(fixture.config.path, 0o700)
+        let environment = fixture.environment()
+        let shown = Mutex("")
+        let presence = UserPresence { _, _ in
+            let review = shown.withLock { $0 }
+            let seen = review.contains(password) && review.contains(marker) && review.contains(raw) == false
+                && review.contains("sha256: ")
+            if seen && environment.integrity.isTrusted == false { return .confirmed(method: "terminal confirmation") }
+            return .refused("value was not shown")
+        }
+        let trusted = try await MCPRun.trust(
+            environment: fixture.environment(presence: presence), show: { text in shown.withLock { $0 += text } }
+        ).get()
+        #expect(trusted.contains("trusted mcp.json"))
+        let review = shown.withLock { $0 }
+        #expect(review.contains(marker))
+        #expect(review.contains(raw) == false)
+        let signed = fixture.approvalEvents().last?.detail["sha256"]
+        let shownHash = review.split(separator: "\n").first { $0.hasPrefix("sha256: ") }.map {
+            String($0.dropFirst("sha256: ".count))
+        }
+        #expect(shownHash == signed)
+        #expect(shownHash?.isEmpty == false)
+    }
+
+    @Test func importRefusesATokenPrefixThatHidesAnotherSecret() async throws {
+        let token = "ghp_1234567890abcdefghij"
+        let password = "supersecretpassword"
+        let hidden = [
+            #"["ctx7sk-12345678/opt/\#(token)"]"#,
+            #"["sk-12345678#\#(token)"]"#,
+            #"["--api-key","ctx7sk-12345678/opt/\#(token)"]"#,
+            #"["ctx7sk-12345678:\#(password)@collector.example"]"#,
+            #"["ctx7sk-12345678;\#(token)"]"#,
+            #"["\#(token)/opt/notes"]"#,
+            #"["\#(token)//user:\#(password)@collector.example"]"#,
+            #"["%67hp_1234567890abcdefghij//user:\#(password)@collector.example"]"#,
+            #"["%67hp_1234567890abcdefghij"]"#,
+            #"["/:\#(password)@collector.example"]"#,
+            #"["user:\#(password)@collector.example"]"#,
+            #"["user%3A\#(password)%40collector.example"]"#,
+        ]
+        for args in hidden {
+            let home = Fixture()
+            try home.write(".cursor/mcp.json", #"{"mcpServers":{"db":{"command":"db-mcp","args":\#(args)}}}"#)
+            let review = Mutex("")
+            let result = try await MCPRun.importServers(
+                host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                environment: home.environment(presence: Self.present),
+                show: { text in review.withLock { $0 += text } }
+            ).get()
+            let text = review.withLock { $0 } + result
+            #expect(text.contains(token) == false, "\(args)")
+            #expect(text.contains(password) == false, "\(args)")
+            #expect(result.contains("nothing to import"), "\(args)")
+            #expect(FileManager.default.fileExists(atPath: home.config.appendingPathComponent("mcp.json").path) == false)
+            #expect(home.keychain.items.withLock { $0 }.isEmpty)
+        }
+    }
+
     static let present = UserPresence { _, _ in .confirmed(method: "test") }
     static let absent = UserPresence { _, _ in .refused("this process has no terminal") }
 
