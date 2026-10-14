@@ -1789,9 +1789,12 @@ private enum DiskImageToolSerialization {
 
     /// One bounded recheck once the helper is dead. The 0.5s sleep and the
     /// 0.25s info are clipped to the cancel clock, so a cancelled acquire
-    /// still returns inside `returnBound`. A sibling row does not clear
-    /// while this file is present. A nil listing does not clear on a failed
-    /// stat. This does not spin until the 30-minute cap.
+    /// still returns inside `returnBound`. A zero info budget returns
+    /// before `hdiutil info` and before the stat. When info does run, the
+    /// stat is skipped once the cancel clock is due, so a wedged mount
+    /// does not return past 8 seconds. A sibling row and an info timeout
+    /// do not clear on `ENOENT`. A parsed `images: []` can. This does not
+    /// spin until the 30-minute cap.
     static func clearPublicationGateIfDiskIsGone(clock: DiskImageCancelClock) {
         let parked = publication.withLock { $0 }
         guard parked.held else { return }
@@ -1829,6 +1832,7 @@ private enum DiskImageToolSerialization {
         guard infoBudget > 0 else { return }
         let deadline = Date().addingTimeInterval(infoBudget)
         let listed = workspaceImageListed(image, returnDeadline: deadline, clock: clock)
+        guard diskImageRecheckMayStat(cancelDeadline: clock.deadline, now: Date()) else { return }
         let identityIsImage = image.contains("rv-inode-") && image.hasSuffix(".sparseimage")
         let imageFileGone = diskImageParkedPathIsGone(image, identityIsImage: identityIsImage)
         guard diskImagePublicationRecheckCanClear(
@@ -1836,7 +1840,9 @@ private enum DiskImageToolSerialization {
             imageListed: listed.imageListed,
             infoTimedOut: listed.infoTimedOut,
             imageFileGone: imageFileGone,
-            identityIsImage: identityIsImage
+            identityIsImage: identityIsImage,
+            listingUnparsed: listed.listingUnparsed,
+            parsedImageCount: listed.parsedImageCount
         ) else { return }
         publication.withLock { state in
             guard let current = state.image, diskImageSamePath(current, image) else { return }
@@ -2469,6 +2475,11 @@ private func detachPublishedTarget(
 struct DiskImageListingRead: Equatable, Sendable {
     var imageListed: Bool?
     var infoTimedOut: Bool
+    /// `hdiutil info` exited 0 but the plist did not parse. Not `images: []`.
+    var listingUnparsed: Bool = false
+    /// Entries in the plist `images` array, including a row with no
+    /// `image-path`. Zero is a successful empty listing.
+    var parsedImageCount: Int = 0
 }
 
 /// `hdiutil info` for one image. A timeout is not an empty listing.
@@ -2491,16 +2502,20 @@ private func workspaceImageListed(
         return DiskImageListingRead(imageListed: nil, infoTimedOut: true)
     }
     guard let data = info.output.stdout.data(using: .utf8),
-        let images = AttachedWorkspaceImage.parse(hdiutilInfo: data)
-    else { return DiskImageListingRead(imageListed: nil, infoTimedOut: false) }
+        let images = AttachedWorkspaceImage.parse(hdiutilInfo: data),
+        let rawCount = AttachedWorkspaceImage.listedImageCount(hdiutilInfo: data)
+    else {
+        return DiskImageListingRead(imageListed: nil, infoTimedOut: false, listingUnparsed: true)
+    }
     return DiskImageListingRead(
         imageListed: diskImageInfoListingShowsImage(
-            parsedImageCount: images.count,
+            parsedImageCount: rawCount,
             identity: image,
             imagePaths: images.map(\.imagePath),
             mountPoints: images.compactMap(\.mountPoint)
         ),
-        infoTimedOut: false
+        infoTimedOut: false,
+        parsedImageCount: rawCount
     )
 }
 

@@ -537,33 +537,40 @@ func diskImagePublicationGateUpdate(
 }
 
 /// One bounded recheck after the helper is dead. A listing that shows this
-/// image keeps the hold. `imageListed == false` does not win before
-/// `imageFileGone`: a sibling row keeps the hold while this file is still
-/// on disk, and clears once that file is gone. A nil or unparsed listing
-/// does not clear on a stat failure, because that listing can still
-/// appear. An info timeout still consults `imageFileGone`. One timeout
-/// while the file can appear does not clear, and a file that is gone does
-/// not stick because the timeout returned first. A mount-point identity
-/// clears after umount when `imageFileGone` says the path is no longer a
-/// mount, even if some other image stays listed. This is not a spin out
-/// to the 30-minute cap.
+/// image keeps the hold. A sibling omission keeps it too: `ENOENT` after
+/// the attach handed diskimagesd the fd is not absence, and a plist row
+/// with no `image-path` is not this image being missing. An info timeout
+/// is a nil listing and does not return `imageFileGone`. A successful
+/// `images: []` (`parsedImageCount == 0`, parse succeeded) does clear an
+/// image file that is actually gone, when nothing is attached. An
+/// unparsed listing does not. A mount-point identity does not clear while
+/// `/dev/diskN` can still appear: hdiutil omits `mount_hfs` paths, so an
+/// attached sparseimage keeps that hold, and `st_dev` matching the parent
+/// is the directory before the mount. This is not a spin out to the
+/// 30-minute cap.
 func diskImagePublicationRecheckCanClear(
     helperStillAlive: Bool,
     imageListed: Bool?,
     infoTimedOut: Bool = false,
     imageFileGone: Bool = false,
-    identityIsImage: Bool = true
+    identityIsImage: Bool = true,
+    listingUnparsed: Bool = false,
+    parsedImageCount: Int = 0
 ) -> Bool {
     if helperStillAlive { return false }
     if imageListed == true { return false }
-    if infoTimedOut { return imageFileGone }
-    // After umount the directory is still there. `imageFileGone` is the
-    // device check, not `stat`. A sibling row does not keep that hold.
-    if identityIsImage == false { return imageFileGone }
-    // Empty or unparsed info. ENOENT after diskimagesd has the fd, and
-    // EIO or ESTALE while the file exists, are not proof it is gone.
-    if imageListed == nil { return false }
-    return imageFileGone
+    // Timeout before the nil keep. ENOENT while diskimagesd is still
+    // publishing must not clear, including when a finished empty plist
+    // with that same ENOENT would.
+    if infoTimedOut { return false }
+    // `imageListed == true` is not the only keep. hdiutil does not see
+    // the kernel mount table. An attached sparseimage, a pre-mount
+    // directory, and EIO/ESTALE/EACCES are not a gone volume.
+    if identityIsImage == false { return false }
+    if listingUnparsed || imageListed == false || parsedImageCount > 0 { return false }
+    // Parsed `images: []` only. A failed stat leaves `imageFileGone` false.
+    if imageListed == nil { return imageFileGone }
+    return false
 }
 
 /// How long the publication recheck may sleep or run `hdiutil info` without
@@ -587,23 +594,30 @@ func diskImageSparseFileIsDefinitivelyGone(_ path: String) -> Bool {
     return errno == ENOENT
 }
 
-/// A mount-point directory remains after `umount`. It is gone as a volume
-/// when its device matches its parent, or when the path itself is missing.
-func diskImageMountPointIsGone(_ path: String) -> Bool {
-    var here = stat()
-    if path.withCString({ stat($0, &here) }) != 0 { return true }
-    guard let parent = diskImageParentPath(path) else { return false }
-    var above = stat()
-    guard parent.withCString({ stat($0, &above) }) == 0 else { return false }
-    return here.st_dev == above.st_dev
+/// A mount directory that shares its parent's device is not a gone volume:
+/// that is the path before `mount_hfs`, and the path after `umount` while
+/// `/dev/diskN` can still be attached. `EIO`, `ESTALE`, and `EACCES` are
+/// not absence either. Only a missing path is.
+func diskImageMountStatIsGone(statSucceeded: Bool, errnoValue: Int32) -> Bool {
+    if statSucceeded { return false }
+    return errnoValue == ENOENT
 }
 
-func diskImageParentPath(_ path: String) -> String? {
-    guard path != "/" else { return nil }
-    let trimmed = path.hasSuffix("/") && path.count > 1 ? String(path.dropLast()) : path
-    guard let slash = trimmed.lastIndex(of: "/") else { return nil }
-    if slash == trimmed.startIndex { return "/" }
-    return String(trimmed[..<slash])
+func diskImageMountPointIsGone(_ path: String) -> Bool {
+    var here = stat()
+    if path.withCString({ stat($0, &here) }) != 0 {
+        return diskImageMountStatIsGone(statSucceeded: false, errnoValue: errno)
+    }
+    return diskImageMountStatIsGone(statSucceeded: true, errnoValue: 0)
+}
+
+/// The publication stat runs only while the cancel clock still has time.
+/// A nil deadline is the non-cancel path. A deadline that is already due
+/// skips the stat and does not clear. `returnBound` and `detachCap` are
+/// not raised.
+func diskImageRecheckMayStat(cancelDeadline: Date?, now: Date) -> Bool {
+    guard let cancelDeadline else { return true }
+    return now < cancelDeadline
 }
 
 func diskImageParkedPathIsGone(_ path: String, identityIsImage: Bool) -> Bool {
@@ -620,11 +634,12 @@ func fcopyfileAttributeCopySucceeded(toolStatus: Int32, statusQuit: Bool) -> Boo
 /// can no longer appear. `diskImageCanStillAppear` is that second fact:
 /// a nil listing, or a non-empty listing that merely omitted this image
 /// before the publication wait, stays true and must not clear. The gate's
-/// bounded recheck is `diskImagePublicationRecheckCanClear`: a nil listing
-/// does not clear on a failed stat, and a sibling omission clears only
-/// after the file is gone. A plan `.none` umount or detach stores no image; once its
-/// helper is dead the latch cannot publish and does drop. `returnBound`
-/// and `detachCap` are not involved.
+/// bounded recheck is `diskImagePublicationRecheckCanClear`: a sibling
+/// omission and an info timeout do not clear on `ENOENT`, and a parsed
+/// `images: []` clears only an image file that is actually gone. A plan
+/// `.none` umount or detach stores no image; once its helper is dead the
+/// latch cannot publish and does drop. `returnBound` and `detachCap` are
+/// not involved.
 func diskImagePublicationCanClear(
     helperStillAlive: Bool,
     diskCanStillAppear: Bool,

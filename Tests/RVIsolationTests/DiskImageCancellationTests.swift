@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import Testing
 @testable import RVIsolation
@@ -929,9 +934,11 @@ struct DiskImageCancellationTests {
         #expect(establishCancelReportsCancelled(detachExitedZero: false) == false)
     }
 
-    /// A nil listing does not clear, including on a failed stat. A sibling
-    /// row does not clear while this file is still present, and does clear
-    /// once the file is gone. A listing that shows this image keeps the hold.
+    /// A sibling row does not clear while this file is present, and does
+    /// not clear on `ENOENT` while diskimagesd can still hold the fd. A
+    /// timeout does not clear that `ENOENT` either. A parsed `images: []`
+    /// does clear an image file that is actually gone. A mount path does
+    /// not clear while `/dev/diskN` can still appear.
     @Test func deadHelperClearsANilListingAndKeepsASiblingListing() throws {
         let image = "/tmp/rv-inode-TOKEN.sparseimage"
         let empty = diskImageInfoListingShowsImage(
@@ -957,11 +964,25 @@ struct DiskImageCancellationTests {
             imageListed: empty,
             infoTimedOut: true,
             imageFileGone: true
-        ))
+        ) == false)
         #expect(diskImagePublicationRecheckCanClear(
             helperStillAlive: false,
             imageListed: empty,
-            imageFileGone: true
+            infoTimedOut: false,
+            imageFileGone: true,
+            listingUnparsed: true
+        ) == false)
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: empty,
+            imageFileGone: true,
+            parsedImageCount: 0
+        ))
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: nil,
+            imageFileGone: true,
+            parsedImageCount: 1
         ) == false)
         let unreportedMount = diskImageInfoListingShowsImage(
             parsedImageCount: 1,
@@ -981,8 +1002,17 @@ struct DiskImageCancellationTests {
             imageListed: unreportedMount,
             infoTimedOut: false,
             imageFileGone: true,
-            identityIsImage: false
-        ))
+            identityIsImage: false,
+            parsedImageCount: 1
+        ) == false)
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: unreportedMount,
+            infoTimedOut: false,
+            imageFileGone: true,
+            identityIsImage: false,
+            parsedImageCount: 0
+        ) == false)
         let sibling = diskImageInfoListingShowsImage(
             parsedImageCount: 1,
             identity: image,
@@ -1002,8 +1032,9 @@ struct DiskImageCancellationTests {
         #expect(diskImagePublicationRecheckCanClear(
             helperStillAlive: false,
             imageListed: sibling,
-            imageFileGone: true
-        ))
+            imageFileGone: true,
+            parsedImageCount: 1
+        ) == false)
         #expect(diskImageMayStartHelper(
             publicationHeld: true,
             arguments: ["/usr/bin/hdiutil", "attach", "-nomount", "-plist", image]
@@ -1052,6 +1083,23 @@ struct DiskImageCancellationTests {
             cancelDeadline: nil,
             now: now
         ) == DiskImageCancelBudget.preemptCleanup)
+        let armed = Date(timeIntervalSince1970: 70_000)
+        let clockEnd = armed.addingTimeInterval(DiskImageCancelBudget.cancelledSequenceBudget)
+        let acquired = armed.addingTimeInterval(7)
+        let clippedSleep = diskImageRecheckAllowance(
+            budget: DiskImageCancelBudget.preemptCleanup,
+            cancelDeadline: clockEnd,
+            now: acquired
+        )
+        let clippedInfo = diskImageRecheckAllowance(
+            budget: DiskImageCancelBudget.preemptReap,
+            cancelDeadline: clockEnd,
+            now: acquired.addingTimeInterval(clippedSleep)
+        )
+        let afterInfo = acquired.addingTimeInterval(clippedSleep + clippedInfo)
+        #expect(diskImageRecheckMayStat(cancelDeadline: clockEnd, now: afterInfo) == false)
+        #expect(diskImageRecheckMayStat(cancelDeadline: nil, now: afterInfo))
+        #expect(afterInfo <= armed.addingTimeInterval(DiskImageCancelBudget.returnBound))
         #expect(fcopyfileAttributeCopySucceeded(toolStatus: 0, statusQuit: true) == false)
         #expect(fcopyfileAttributeCopySucceeded(toolStatus: 0, statusQuit: false))
         let root = FileManager.default.temporaryDirectory
@@ -1062,8 +1110,15 @@ struct DiskImageCancellationTests {
         FileManager.default.createFile(atPath: present.path, contents: Data("x".utf8))
         #expect(diskImageSparseFileIsDefinitivelyGone(present.path) == false)
         #expect(diskImageSparseFileIsDefinitivelyGone(root.appendingPathComponent("missing").path))
-        #expect(diskImageMountPointIsGone(root.path))
+        #expect(diskImageMountPointIsGone(root.path) == false)
+        #expect(diskImageMountPointIsGone(root.appendingPathComponent("missing-mount").path))
+        #expect(diskImageMountStatIsGone(statSucceeded: false, errnoValue: EIO) == false)
+        #expect(diskImageMountStatIsGone(statSucceeded: false, errnoValue: ESTALE) == false)
+        #expect(diskImageMountStatIsGone(statSucceeded: false, errnoValue: EACCES) == false)
+        #expect(diskImageMountStatIsGone(statSucceeded: false, errnoValue: ENOENT))
+        #expect(diskImageMountStatIsGone(statSucceeded: true, errnoValue: 0) == false)
         #expect(diskImageParkedPathIsGone(present.path, identityIsImage: true) == false)
+        #expect(diskImageParkedPathIsGone(root.path, identityIsImage: false) == false)
     }
 
     /// A directory walk stops while the detach reserve is still left.
