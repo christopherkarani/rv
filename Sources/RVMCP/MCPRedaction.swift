@@ -56,7 +56,22 @@ public enum MCPRedaction {
         let decoded = percentDecode(segment)
         if decoded.stoppedEarly { return true }
         if looksLikeToken(decoded.text) { return true }
-        return decoded.text.split(whereSeparator: isTokenSeparator).contains { looksLikeToken(String($0)) }
+        if decoded.text.split(whereSeparator: isTokenSeparator).contains(where: { looksLikeToken(String($0)) }) {
+            return true
+        }
+        return containsEmbeddedPrefix(decoded.text)
+    }
+
+    /// A known prefix such as `ghp_` or `sk-` counts even when `_`, `+`, or `-` hides it.
+    private static func containsEmbeddedPrefix(_ text: String) -> Bool {
+        for prefix in tokenPrefixes {
+            var search = text.startIndex
+            while let range = text.range(of: prefix, range: search..<text.endIndex) {
+                if text[range.lowerBound...].count >= prefix.count + 8 { return true }
+                search = range.upperBound
+            }
+        }
+        return false
     }
 
     /// Percent-decode to a fixed point. A dangling `%` does not stop the other
@@ -91,7 +106,9 @@ public enum MCPRedaction {
     private static func isTokenSeparator(_ character: Character) -> Bool {
         character == "." || character == "~" || character == "#" || character == "\\" || character == "/"
             || character == ";" || character == "?" || character == "&" || character == ":" || character == ","
-            || character == "|" || character == "@" || character == "=" || character == "\0" || character.isWhitespace
+            || character == "|" || character == "@" || character == "=" || character == "+"
+            || character == "\"" || character == "'" || character == "\u{200B}"
+            || character == "\0" || character.isWhitespace
     }
 
     /// Decode every valid `%HH` and leave a `%` that is not an escape in place.
@@ -157,8 +174,8 @@ public enum MCPRedaction {
     }
 
     /// `:password@host` and `user:password@host`. The password may contain `&`,
-    /// `#`, `?`, or a space. `/:password@host` may also contain `/` or `\`,
-    /// which percent-decoding and slash normalization reveal as `/`.
+    /// `#`, `?`, a space, or a slash (`%2F` / `%5C`, including a password that
+    /// starts with `/`). `scheme://` is the colon after a name, not this form.
     private static func colonThenAt(_ decoded: String) -> Bool {
         var index = decoded.startIndex
         while index < decoded.endIndex {
@@ -168,11 +185,12 @@ public enum MCPRedaction {
                 let afterUser = usernameEnds(decoded, at: index)
                 if atStart || afterSlash || afterUser {
                     let after = decoded.index(after: index)
-                    if after < decoded.endIndex, decoded[after] != "/",
-                        let at = decoded[after...].firstIndex(of: "@"), at > after
-                    {
-                        let password = decoded[after..<at]
-                        if atStart || afterSlash || password.contains("/") == false { return true }
+                    if after < decoded.endIndex {
+                        // `http://` is a colon after a name. `/: /password@` is not.
+                        let schemeSlash = decoded[after] == "/" && afterUser && atStart == false && afterSlash == false
+                        if schemeSlash == false, let at = decoded[after...].firstIndex(of: "@"), at > after {
+                            return true
+                        }
                     }
                 }
             }
@@ -183,8 +201,7 @@ public enum MCPRedaction {
 
     private static func usernameEnds(_ text: String, at colon: String.Index) -> Bool {
         guard colon > text.startIndex else { return false }
-        let character = text[text.index(before: colon)]
-        return character.isLetter || character.isNumber || character == "-" || character == "_" || character == "."
+        return text[text.index(before: colon)] != "/"
     }
 
     /// A host label that is a token, or userinfo percent-decoded into the host.
@@ -284,9 +301,10 @@ public enum MCPRedaction {
         return joinedSecondToken(decoded)
     }
 
-    /// `ctx7sk-…-ghp_…`, `ctx7sk-…=ghp_…`, and `sk-…+ghp_…`. The hyphen inside `sk-` stays.
+    /// `ctx7sk-…-ghp_…`, `ctx7sk-…=ghp_…`, `sk-…+ghp_…`, and the `_` / `*` twins.
+    /// The hyphen inside `sk-` stays, because the tail must itself be a prefix.
     private static func joinedSecondToken(_ text: String) -> Bool {
-        let joins: Set<Character> = ["-", "=", "+"]
+        let joins: Set<Character> = ["-", "=", "+", "_", "*"]
         var index = text.startIndex
         while index < text.endIndex {
             if joins.contains(text[index]) {

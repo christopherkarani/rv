@@ -582,6 +582,29 @@ struct MCPCommandTests {
             #"["ingest%\#(String(repeating: "25", count: 64))09\#(token)"]"#,
             #"["ingest%\#(String(repeating: "25", count: 64))0A\#(token)"]"#,
             #"["ingest%\#(String(repeating: "25", count: 64))0D\#(token)"]"#,
+            #"["user:su%2F\#(password)@collector.example"]"#,
+            #"["user:su%5C\#(password)@collector.example"]"#,
+            #"["/:%2F\#(password)@collector.example"]"#,
+            #"["/:%5C\#(password)@collector.example"]"#,
+            #"["user:su%2F\#(password)@collector.example://x"]"#,
+            #"["http://127.0.0.1/:%2F\#(password)@collector.example"]"#,
+            #"["http://127.0.0.1/user:su%2F\#(password)@collector.example"]"#,
+            #"["ctx7sk-12345678_\#(token)"]"#,
+            #"["ctx7sk-12345678*\#(token)"]"#,
+            #"["in+ghp_12345678"]"#,
+            #"["https://example.com/?token=%22\#(token)%"]"#,
+            #"["https://example.com/?token=%22%67hp_1234567890abcdefghij%"]"#,
+            #"["--endpoint=https://example.com/?token=%22\#(token)%"]"#,
+            #"["x_ghp_12345678"]"#,
+            #"["x+ghp_12345678"]"#,
+            #"["x-ghp_12345678"]"#,
+            #"["stdio://srv?t=x_ghp_12345678"]"#,
+            #"["wss://example.com/x_ghp_12345678"]"#,
+            #"["postgres://user:x_ghp_12345678@db.example/app"]"#,
+            #"["--api-key=ctx7sk-12345678_\#(token)"]"#,
+            #"["user~:su&\#(password)@collector.example"]"#,
+            #"["user:su/\#(password)@collector.example"]"#,
+            #"["user:su\\\#(password)@collector.example"]"#,
         ]
         for args in hidden {
             let home = Fixture()
@@ -599,6 +622,19 @@ struct MCPCommandTests {
             #expect(FileManager.default.fileExists(atPath: home.config.appendingPathComponent("mcp.json").path) == false)
             #expect(home.keychain.items.withLock { $0 }.isEmpty)
         }
+
+        let commandHome = Fixture()
+        try commandHome.write(
+            ".cursor/mcp.json",
+            #"{"mcpServers":{"db":{"command":"https://mcp.example/sse?token=\#(token)"}}}"#)
+        let commandResult = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: commandHome.environment(presence: Self.present), show: { _ in }
+        ).get()
+        #expect(commandResult.contains("nothing to import"))
+        #expect(commandResult.contains(token) == false)
+        #expect(FileManager.default.fileExists(atPath: commandHome.config.appendingPathComponent("mcp.json").path) == false)
+        #expect(commandHome.keychain.items.withLock { $0 }.isEmpty)
     }
 
     static let present = UserPresence { _, _ in .confirmed(method: "test") }

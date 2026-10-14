@@ -64,6 +64,10 @@ public enum MCPImport {
                 }
                 continue
             }
+            if MCPRedaction.argumentCarriesRefusedSecret(command) {
+                plan.skipped.append((entry.name, "the command carries a secret in its URL or path"))
+                continue
+            }
             if args.contains(where: MCPRedaction.argumentCarriesRefusedSecret) {
                 plan.skipped.append((entry.name, "an argument carries a secret in its URL or path"))
                 continue
