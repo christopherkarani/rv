@@ -64,7 +64,9 @@ enum AuditForwardRun {
         if components.fragment != nil {
             return .failure("--to must not have a fragment")
         }
-        if MCPRedaction.hostCarriesSecret(rawHost) || MCPRedaction.hostCarriesSecret(components.percentEncodedHost ?? "") {
+        if MCPRedaction.hostCarriesSecret(rawHost) || MCPRedaction.hostCarriesSecret(components.percentEncodedHost ?? "")
+            || MCPRedaction.authorityCarriesPassword(text)
+        {
             return .failure("--to must not carry a secret in its host")
         }
         if MCPRedaction.pathCarriesSecret(components.percentEncodedPath) {

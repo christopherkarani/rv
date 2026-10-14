@@ -562,5 +562,10 @@ private func concealedAuditDestinations(pathSecret: String, nestedSecret: String
         ("http://127.0.0.1/https://\(nestedSecret)@collector.example/hook", "secret in its path"),
         ("https://siem.example/https://user:\(nestedSecret)@collector.example/hook", "secret in its path"),
         ("https://siem.example/hook?next=https://\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/hook?next=https://\(nestedSecret)%40collector.example", "secret in its query"),
+        ("https://\(nestedSecret)@collector.example/hook", "username or password"),
+        ("https://\(nestedSecret)%40collector.example/hook", "secret in its host"),
+        ("https://\(nestedSecret)%2540collector.example/hook", "secret in its host"),
+        ("HTTPS://\(nestedSecret)%40collector.example/hook", "secret in its host"),
     ]
 }

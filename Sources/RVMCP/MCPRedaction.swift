@@ -80,15 +80,16 @@ public enum MCPRedaction {
     }
 
     /// Strip by scalar. `U+200C` and `U+200D` glue to the neighboring letter, so a `Character` filter would keep them.
-    /// Format characters and U+00A0 are removed the same way, before a prefix or length check.
-    /// U+0020 stays: a space between two prefixes is still scanned, and it is not glued into one token.
+    /// Format characters, the soft hyphen, and the separators that can sit inside `ghp_` are removed
+    /// before a prefix or length check. U+0020 stays, so a space still separates two intact prefixes.
     private static func withoutInvisibleBreaks(_ text: String) -> String {
         String(String.UnicodeScalarView(text.unicodeScalars.filter { scalar in
             switch scalar.value {
-            case 0x00A0, 0x034F, 0x061C, 0x180E, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2060, 0x2061, 0x2062,
-                0x2063, 0x2064, 0xFEFF:
+            case 0x0009, 0x00A0, 0x00AD, 0x034F, 0x061C, 0x180B, 0x180C, 0x180D, 0x180E, 0x2007, 0x200B, 0x200C,
+                0x200D, 0x200E, 0x200F, 0x2028, 0x2029, 0x202F, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0xFE0F,
+                0xFEFF:
                 return false
-            case 0x202A...0x202E, 0x2066...0x2069:
+            case 0x202A...0x202E, 0x2066...0x206F:
                 return false
             default:
                 return true
@@ -246,10 +247,18 @@ public enum MCPRedaction {
     }
 
     /// A host label that is a token, or userinfo percent-decoded into the host.
+    /// `%40` stays inside the host for `URLComponents`, so `password@host` never sets `user`.
     public static func hostCarriesSecret(_ host: String) -> Bool {
         let decoded = repeatedDecode(host)
+        if decoded.contains("@") { return true }
         if containsUserinfoSpelling(decoded) { return true }
         return pathSegmentCarriesToken(decoded)
+    }
+
+    /// `https://password@host` after percent-decode, including `%40` and an encoded leading scheme.
+    /// `https://user:password@host` is not this shape and stays visible on a non-secret flag.
+    public static func authorityCarriesPassword(_ text: String) -> Bool {
+        passwordSitsInAuthority(slashNormalized(text))
     }
 
     /// A path with a token segment, a decoded `#` token, a backslash token, or `user:secret@`.
@@ -293,12 +302,14 @@ public enum MCPRedaction {
             // `/:password@host` and `user:password@host` are not scheme URLs.
             // Authority userinfo on `postgres://user:pass@…` still stays, so the
             // review can show it. Path userinfo and a later `://` do not.
-            if argumentUserinfoIsRefused(decoded) { return true }
+            if argumentUserinfoIsRefused(decoded) || passwordSitsInAuthority(decoded) { return true }
             if let query = rawQuery(decoded), queryCarriesSecret(encoded: query, items: nil) { return true }
             // A ctx7sk-, sk-, or ghp_ prefix returns before `/` or `#`. Decode
             // first. A prefix that also carries a path, fragment, userinfo, or
             // another secret is not stored. A bare token is ${secret:NAME}.
             // An encoded token the raw spelling would copy in the clear is refused.
+            // The same prefix count as an env value, so a mark inside `ghp_` is a second token.
+            if secretPrefixCount(decoded) >= 2 { return true }
             if looksLikeToken(decoded) {
                 if hidesAnotherSecret(decoded) || looksLikeToken(candidate) == false { return true }
                 continue
@@ -324,6 +335,18 @@ public enum MCPRedaction {
         return containsUserinfoSpelling(String(rest[slash...]))
     }
 
+    /// The authority of a leading `http://`, `https://`, `wss://`, or `postgres://` is
+    /// `password@host`. `knownSchemeSlash` skips that one colon, so the user check never
+    /// sees it. `user:password@host` still has a colon in the user part and is not this case.
+    private static func passwordSitsInAuthority(_ decoded: String) -> Bool {
+        guard let restStart = schemeAuthorityStart(decoded) else { return false }
+        let rest = decoded[restStart...]
+        let authorityEnd = rest.firstIndex(where: { $0 == "/" || $0 == "?" || $0 == "#" }) ?? rest.endIndex
+        let authority = rest[..<authorityEnd]
+        guard let at = authority.firstIndex(of: "@"), at > authority.startIndex else { return false }
+        return authority[..<at].contains(":") == false
+    }
+
     /// Index just after `http://`, `https://`, `wss://`, or `postgres://`.
     private static func schemeAuthorityStart(_ decoded: String) -> String.Index? {
         var start = decoded.startIndex
@@ -339,17 +362,20 @@ public enum MCPRedaction {
     /// An env or header value that hides a second token prefix.
     /// The scan runs even when `looksLikeToken` is false: a space, `://`, a leading
     /// `.` or `x`, or a tab still leaves two prefixes in one stored value.
+    /// An unfinished percent-decode is a secret even when the partial text is not a token.
     static func credentialHidesAnotherSecret(_ value: String) -> Bool {
         let pass = percentDecode(value)
-        let decoded = withoutInvisibleBreaks(pass.text)
-        if nonOverlappingPrefixCount(decoded) >= 2 { return true }
-        guard looksLikeToken(decoded) else { return false }
         if pass.stoppedEarly { return true }
+        let decoded = withoutInvisibleBreaks(pass.text)
+        if secretPrefixCount(decoded) >= 2 { return true }
+        guard looksLikeToken(decoded) else { return false }
         return hidesAnotherSecret(decoded)
     }
 
-    /// Known prefixes that do not overlap. `ctx7sk-…` is one prefix: the `sk-` inside it is not a second token.
-    private static func nonOverlappingPrefixCount(_ text: String) -> Int {
+    /// Known prefixes. A match leaves its last character in place, so `AKIA`/`AIza` share that
+    /// character and both count. `sk-` inside `ctx7sk` does not start on the last character, so
+    /// `ctx7sk-…` stays one prefix.
+    private static func secretPrefixCount(_ text: String) -> Int {
         let text = withoutInvisibleBreaks(text)
         var count = 0
         var index = text.startIndex
@@ -359,7 +385,8 @@ public enum MCPRedaction {
                 .max(by: { $0.count < $1.count })
             {
                 count += 1
-                index = text.index(index, offsetBy: match.count)
+                let step = max(match.count - 1, 1)
+                index = text.index(index, offsetBy: step)
             } else {
                 index = text.index(after: index)
             }
@@ -369,12 +396,14 @@ public enum MCPRedaction {
 
     /// True when a token-shaped value also carries a path, fragment, userinfo, or a second token.
     private static func hidesAnotherSecret(_ decoded: String) -> Bool {
+        let decoded = withoutInvisibleBreaks(decoded)
         if decoded.contains("/") || decoded.contains("#") || decoded.contains("|") || decoded.contains("@") { return true }
         if containsUserinfoSpelling(decoded) { return true }
         let pieces = decoded.split(whereSeparator: isTokenSeparator)
         if pieces.dropFirst().contains(where: { pathSegmentCarriesToken(String($0)) }) { return true }
         guard let prefix = leadingTokenPrefix(decoded) else { return containsEmbeddedPrefix(decoded) }
-        return containsEmbeddedPrefix(String(decoded.dropFirst(prefix.count)))
+        let drop = prefix.count > 1 ? prefix.count - 1 : prefix.count
+        return containsEmbeddedPrefix(String(decoded.dropFirst(drop)))
     }
 
     /// The longest known prefix at the start, so `ctx7sk-…` is not read as a shorter prefix.
@@ -506,7 +535,7 @@ public enum MCPRedaction {
         let queryLeak = queryCarriesSecret(encoded: encodedQuery, items: components.queryItems)
             || rawQuery(raw).map { queryCarriesSecret(encoded: $0, items: nil) } == true
         let credential = components.user != nil || components.password != nil || components.fragment != nil
-        return (display, credential || hostLeaked || queryLeak || pathCarriesSecret(path))
+        return (display, credential || hostLeaked || queryLeak || pathCarriesSecret(path) || authorityCarriesPassword(raw))
     }
 
     /// Names of env vars or headers that hold a literal credential.

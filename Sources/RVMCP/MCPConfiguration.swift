@@ -131,6 +131,7 @@ public struct MCPRemoteServer: Sendable, Equatable {
         if components.fragment != nil { return "must not have a fragment" }
         if let rawHost = components.host,
             MCPRedaction.hostCarriesSecret(rawHost) || MCPRedaction.hostCarriesSecret(components.percentEncodedHost ?? "")
+            || MCPRedaction.authorityCarriesPassword(url.absoluteString)
         {
             return "must not carry a secret in its host (send it as a header with ${secret:NAME})"
         }
