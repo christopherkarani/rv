@@ -2172,6 +2172,115 @@ struct MCPCommandTests {
         }
     }
 
+    @Test func importRefusesAHotBeverage() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let extra = tail + "EXTRA"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-", "AKIA", "AIza", "ASIA"]
+        let mark = String(Unicode.Scalar(0x2615)!)
+        let value = head + mark + tail
+        try await expectSplitSecretRefused(value, sk: "sk-12345678g" + mark + tail, absent: absent, label: "beverage")
+        try await expectSplitSecretRefused(head + mark + extra, absent: absent + [extra], label: "beverage extra")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": value]),
+            absent: absent, label: "beverage command")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": "db-mcp", "args": [value, "--api-key", value, "--api-key=\(value)"]]),
+            absent: absent, label: "beverage argument")
+        let joined = "g" + mark + tail
+        try await expectImportRefused(
+            try hostJSON("db", ["command": joined]),
+            absent: ["ghp_", tail], label: "beverage joined command")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": "db-mcp", "args": [joined, "--api-key", joined]]),
+            absent: ["ghp_", tail], label: "beverage joined argument")
+        try await expectSplitSecretRefused("x" + value, absent: absent, label: "beverage leading x")
+        try await expectImportRefused(
+            try hostJSON("api", [
+                "url": "https://mcp.example/mcp",
+                "headers": ["X-Trace": "x" + value, "Authorization": "Bearer \(value)"],
+            ]),
+            absent: absent + ["Bearer"], label: "beverage trace")
+        try await expectSplitSecretRefused("." + value, absent: absent, label: "beverage leading dot")
+        for overlapped in ["AKIA" + mark + "Iza12345678", "ASIA" + mark + "Iza12345678"] {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": overlapped, "LOG_LEVEL": overlapped]]),
+                absent: ["AKIA", "ASIA", "AIza", "Iza12345678"], label: "beverage akia")
+        }
+        let halves = ["abcdefghij1234", "qrstuvwxyzabcd"]
+        for scheme in ["https", "http", "wss", "postgres"] {
+            let spelling = "abcdefghij1234\(mark)\(scheme)://qrstuvwxyzabcd"
+            try await expectImportRefused(
+                try hostJSON("db", ["command": spelling]),
+                absent: halves, label: "beverage scheme command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": [spelling]]),
+                absent: halves, label: "beverage scheme argument")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(spelling)"]]),
+                absent: halves, label: "beverage scheme cwd")
+            let hidden = "1234\(mark)\(scheme)://\(tail)"
+            try await expectImportRefused(
+                try hostJSON("db", ["command": hidden]),
+                absent: [tail], label: "beverage scheme tail command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": [hidden, "--api-key", hidden, "--api-key=\(hidden)"]]),
+                absent: [tail], label: "beverage scheme tail argument")
+        }
+    }
+
+    @Test func importRefusesAFormatPrependGluedToADigitBeforeAScheme() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let marks = [
+            UInt32(0x0600), 0x0601, 0x0602, 0x0603, 0x0604, 0x0605,
+            0x06DD, 0x070F, 0x0890, 0x0891, 0x08E2, 0x110BD, 0x110CD,
+        ]
+        for code in marks {
+            let mark = String(Unicode.Scalar(code)!)
+            for scheme in ["https", "http", "wss", "postgres"] {
+                for spelling in [
+                    mark + "4\(scheme)://\(tail)",
+                    "123\(mark)4\(scheme)://\(tail)",
+                ] {
+                    try await expectImportRefused(
+                        try hostJSON("db", ["command": spelling]),
+                        absent: [tail], label: "prepend digit command")
+                    try await expectImportRefused(
+                        try hostJSON("db", ["command": "db-mcp", "args": [spelling]]),
+                        absent: [tail], label: "prepend digit argument")
+                    try await expectImportRefused(
+                        try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(spelling)"]]),
+                        absent: [tail], label: "prepend digit cwd")
+                    try await expectImportRefused(
+                        try hostJSON("db", ["command": "db-mcp", "args": ["--api-key", spelling, "--api-key=\(spelling)"]]),
+                        absent: [tail], label: "prepend digit api-key")
+                }
+                let after = "4\(mark)\(scheme)://\(tail)"
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": after]),
+                    absent: [tail], label: "prepend after digit")
+            }
+        }
+    }
+
+    @Test func importRefusesAHyphenOrUnderscoreBeforeAScheme() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        for glue in ["-", "_"] {
+            for scheme in ["https", "http", "wss", "postgres"] {
+                let spelling = "1234\(glue)\(scheme)://\(tail)"
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": spelling]),
+                    absent: [tail], label: "glue scheme command")
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "args": [spelling]]),
+                    absent: [tail], label: "glue scheme argument")
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "args": ["--api-key", spelling, "--api-key=\(spelling)"]]),
+                    absent: [tail], label: "glue scheme api-key")
+            }
+        }
+    }
+
     @Test func importRefusesADownTackUnderbarThroughTheOCRAccountNumber() async throws {
         let tail = "hp_1234567890abcdefghij"
         let extra = tail + "EXTRA"
@@ -2339,6 +2448,7 @@ struct MCPCommandTests {
             String(Unicode.Scalar(0xFFED)!),
             String(Unicode.Scalar(0xFFEE)!),
             String(Unicode.Scalar(0x2614)!),
+            String(Unicode.Scalar(0x2615)!),
             String(Unicode.Scalar(0x00A8)!),
             ".",
         ])
