@@ -914,6 +914,20 @@ struct MCPSandboxCreateTests {
         #expect(MCPSandbox.missingSymlinkOpenings(nested).contains(opened))
     }
 
+    @Test func laterNameUnderPrivateTmpStillOpensTheCreationDirectory() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-private-tmp-later-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let me = root.appendingPathComponent("Users/me")
+        try FileManager.default.createDirectory(at: me, withIntermediateDirectories: true)
+        #expect(symlink("/private/tmp/anchor", me.appendingPathComponent("jump").path) == 0)
+        let opened = "/private/tmp/future-keys"
+        let named = me.path + "/jump/../private/tmp/x/future-keys"
+        let nested = me.path + "/jump/../private/tmp/foo/future-keys"
+        #expect(MCPSandbox.missingSymlinkOpenings(named).contains(opened))
+        #expect(MCPSandbox.missingSymlinkOpenings(nested).contains(opened))
+    }
+
     @Test func preexistingSymlinkThenMoveDoesNotAllowTheCache() throws {
         for planted in plantedCacheLinks {
             let fixture = try plantedCacheLink(planted)

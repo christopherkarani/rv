@@ -425,12 +425,15 @@ public enum MCPSandbox {
     }
 
     /// One collapsed opening is the whole set when it already lies under the
-    /// creation directory (`../private/tmp/future-keys` →
-    /// `/private/tmp/future-keys`), or when a `..` run cannot leave that
-    /// directory and the collapsed path continues along it. A missing name
-    /// that repeats an ancestor (`private` → `/private/future-keys`) does
-    /// not: `ln -s .` still reads the creation directory. `../private`
-    /// after `link` collapses to `/private/...` and is not that file either.
+    /// creation directory and every component before the last one is a real
+    /// directory (`../private/tmp/future-keys` → `/private/tmp/future-keys`),
+    /// or when a `..` run cannot leave that directory and the collapsed path
+    /// continues along it. A later missing name under that directory
+    /// (`../private/tmp/x/future-keys` → `/private/tmp/x/future-keys`) does
+    /// not: `ln -s /private` on `private` and `ln -s .` on `x` still read
+    /// the creation directory. A missing name that repeats an ancestor
+    /// (`private` → `/private/future-keys`) does not either. `../private`
+    /// after `link` collapses to `/private/...` and is not that file.
     /// `/foo/future-keys` is as deep as `/private/tmp` and is a different
     /// tree: `link/../../../foo/future-keys` then `ln -s .` reads
     /// `/private/tmp/future-keys`. `foo/../../private/tmp/future-keys` stays
@@ -441,8 +444,7 @@ public enum MCPSandbox {
         guard primary.count <= 1 else { return false }
         guard let opened = primary.first else { return true }
         if tail.contains("..") == false {
-            let prefix = parent == "/" ? "/" : parent + "/"
-            return opened == parent || opened.hasPrefix(prefix)
+            return collapsedOpeningLiesOnTheParent(opened, parent: parent)
         }
         let parentParts = parent.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         let openedParts = opened.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
@@ -468,6 +470,27 @@ public enum MCPSandbox {
         // shared prefix is the collapsed path staying on the parent
         // (`foo/../../private/tmp/future-keys`).
         return shared > parentParts.count - dots
+    }
+
+    /// A single collapsed path covers the creation directory when it is that
+    /// directory, or lies under it with only the final component still
+    /// missing. An earlier missing name (`x` in `/private/tmp/x/future-keys`)
+    /// can be `ln -s .` and read a sibling of that name.
+    private static func collapsedOpeningLiesOnTheParent(_ opened: String, parent: String) -> Bool {
+        if opened == parent { return true }
+        let prefix = parent == "/" ? "/" : parent + "/"
+        guard opened.hasPrefix(prefix) else { return false }
+        let parts = opened.dropFirst(prefix.count).split(
+            separator: "/", omittingEmptySubsequences: true
+        ).map(String.init)
+        guard parts.count > 1 else { return true }
+        var current = parent
+        for part in parts.dropLast() {
+            let next = current == "/" ? "/" + part : current + "/" + part
+            guard isRealDirectory(next) else { return false }
+            current = next
+        }
+        return true
     }
 
     /// Openings for a component that does not exist yet. `name` → `/name`
