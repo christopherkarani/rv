@@ -183,6 +183,14 @@ public enum MCPOAuth {
         return path
     }
 
+    /// Scheme, host, port, path, and query. A token for one path is not a token for another.
+    static func sameResource(_ lhs: URL, _ rhs: URL) -> Bool {
+        guard MCPHTTPExchange.sameOrigin(lhs, rhs), trimmedPath(lhs) == trimmedPath(rhs) else { return false }
+        let left = URLComponents(url: lhs, resolvingAgainstBaseURL: false)?.percentEncodedQuery
+        let right = URLComponents(url: rhs, resolvingAgainstBaseURL: false)?.percentEncodedQuery
+        return left == right
+    }
+
     public static func base64URL(_ bytes: [UInt8]) -> String {
         Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
@@ -417,21 +425,21 @@ public struct MCPOAuthFlow: Sendable {
                 let first = issuers.first, let issuer = URL(string: first)
             else { continue }
             let resource = json["resource"]?.stringValue ?? server.absoluteString
-            guard let resourceURL = URL(string: resource), MCPHTTPExchange.sameOrigin(resourceURL, server) else {
+            guard let resourceURL = URL(string: resource) else {
+                return .failure(MCPOAuthError("resource metadata names a resource that is not this MCP URL (\(resource))"))
+            }
+            guard MCPHTTPExchange.sameOrigin(resourceURL, server) else {
                 return .failure(MCPOAuthError("resource metadata names a resource on another origin (\(resource))"))
+            }
+            guard MCPOAuth.sameResource(resourceURL, server) else {
+                return .failure(MCPOAuthError("resource metadata names a different URL than this MCP server (\(resource))"))
             }
             if let problem = Self.endpointBindingProblem(issuer, issuer: issuer, server: server) {
                 return .failure(MCPOAuthError("authorization server \(problem)"))
             }
-            return .success((resource, issuer, json["scopes_supported"]?.stringArray?.joined(separator: " ")))
+            return .success((server.absoluteString, issuer, json["scopes_supported"]?.stringArray?.joined(separator: " ")))
         }
-        guard var origin = URLComponents(url: server, resolvingAgainstBaseURL: false) else {
-            return .failure(MCPOAuthError("no protected resource metadata found"))
-        }
-        origin.path = ""
-        origin.query = nil
-        guard let issuer = origin.url else { return .failure(MCPOAuthError("no protected resource metadata found")) }
-        return .success((server.absoluteString, issuer, nil))
+        return .failure(MCPOAuthError("no protected resource metadata found"))
     }
 
     func authorizationServer(_ issuer: URL, server: URL) -> Result<ServerMetadata, MCPOAuthError> {

@@ -150,6 +150,21 @@ struct AuditForwardTests {
         #expect((try? AuditForwardRun.destination("http://127.0.0.1:9000/x").get()) != nil)
         #expect((try? AuditForwardRun.destination("http://siem.example.com").get()) == nil)
         #expect((try? AuditForwardRun.destination("not a url").get()) == nil)
+        #expect((try? AuditForwardRun.destination("https://siem.example/hook?v=1").get()) != nil)
+        let userinfo = AuditForwardRun.destination("https://user:pass@siem.example/ingest")
+        guard case .failure(let userinfoFailure) = userinfo else {
+            Issue.record("userinfo must be refused")
+            return
+        }
+        #expect(userinfoFailure.message.contains("username or password"))
+        #expect(userinfoFailure.message.contains("user:pass") == false)
+        let query = AuditForwardRun.destination("https://siem.example/hook?token=abc123")
+        guard case .failure(let queryFailure) = query else {
+            Issue.record("a query secret must be refused")
+            return
+        }
+        #expect(queryFailure.message.contains("secret in its query"))
+        #expect(queryFailure.message.contains("abc123") == false)
         #expect(try AuditForwardRun.parseHeaders(["Authorization=Bearer x=y"]).get() == ["Authorization": "Bearer x=y"])
         #expect((try? AuditForwardRun.parseHeaders(["=x"]).get()) == nil)
 
@@ -331,6 +346,16 @@ struct AuditForwardInstallTests {
         }
         #expect(failure.message.contains("${secret:NAME}"))
         #expect(failure.message.contains("abc123") == false)
+        #expect(FileManager.default.fileExists(atPath: home.url.appendingPathComponent("Library").path) == false)
+
+        let mixed = AuditForwardInstall.install(
+            plan(["--header", "Authorization=Bearer real-token ${secret:PLACEHOLDER}"], home: home))
+        guard case .failure(let mixedFailure) = mixed else {
+            Issue.record("a literal beside a secret reference must be refused")
+            return
+        }
+        #expect(mixedFailure.message.contains("${secret:NAME}"))
+        #expect(mixedFailure.message.contains("real-token") == false)
         #expect(FileManager.default.fileExists(atPath: home.url.appendingPathComponent("Library").path) == false)
     }
 

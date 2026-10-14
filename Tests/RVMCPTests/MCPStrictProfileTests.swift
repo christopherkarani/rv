@@ -97,9 +97,10 @@ struct MCPStrictProfileTests {
     }
 
     @Test func proxyEnvironmentPointsEveryClientAtTheProxy() {
-        let environment = MCPSandbox.proxyEnvironment(["NO_PROXY": "*", "no_proxy": "*", "PATH": "/bin"], port: 4321)
+        let environment = MCPSandbox.proxyEnvironment(
+            ["NO_PROXY": "*", "no_proxy": "*", "PATH": "/bin"], port: 4321, credential: "abc")
         for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"] {
-            #expect(environment[key] == "http://127.0.0.1:4321", "\(key)")
+            #expect(environment[key] == "http://rv:abc@127.0.0.1:4321", "\(key)")
         }
         #expect(environment["NODE_USE_ENV_PROXY"] == "1")
         #expect(environment["NO_PROXY"] == nil && environment["no_proxy"] == nil)
@@ -172,7 +173,7 @@ struct MCPSandboxHostsLiveTests {
         process.waitUntilExit()
         let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
 
-        #expect(output.contains("proxy=http://127.0.0.1:"), "\(output)")
+        #expect(output.contains("proxy=http://rv:") && output.contains("@127.0.0.1:"), "\(output)")
         #expect(output.contains("PROXY_OK"), "\(output)")
         #expect(output.contains("DIRECT_OK") == false, "\(output)")
     }

@@ -205,10 +205,47 @@ struct MCPGatewayRuntimeTests {
         }
         #expect(calls.count == 0)
         #expect(askedForToken == false)
-        let local = try MCPLaunchPlanner.plan(
-            servers: ["local"], configuration: configuration, secrets: SecretsConfiguration(),
-            resolver: SecretResolver { _ in .failure(.notFound("x")) }, baseEnvironment: [:]).get()
-        #expect(local.count == 1)
-        #expect(local[0].1.process != nil)
+        let localSecrets = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "TOKEN", source: .hostEnvironment(variable: "TOKEN"), delivery: .environment),
+        ])
+        var localConfiguration = configuration
+        localConfiguration.servers = [
+            MCPServerDefinition(name: "local", command: "echo", secrets: ["T": "TOKEN"])
+        ]
+        let local = MCPLaunchPlanner.plan(
+            servers: ["local"], configuration: localConfiguration, secrets: localSecrets, resolver: resolver,
+            baseEnvironment: [:])
+        guard case .failure(.untrustedRemote("local")) = local else {
+            Issue.record("untrusted mcp.json planned a local server")
+            return
+        }
+        #expect(calls.count == 0)
+    }
+
+    @Test func oauthTokenStaysOnTheResourceURLItWasIssuedFor() throws {
+        let issued = MCPOAuthTokens(
+            accessToken: "super-token", tokenEndpoint: URL(string: "https://auth.example/token")!, clientID: "c",
+            resource: "https://good.example/mcp")
+        func plan(_ url: String) throws -> MCPRemoteLaunch? {
+            let configuration = MCPConfiguration(servers: [
+                MCPServerDefinition(name: "api", remote: MCPRemoteServer(url: try #require(URL(string: url))))
+            ])
+            let planned = try MCPLaunchPlanner.plan(
+                servers: ["api"], configuration: configuration, secrets: SecretsConfiguration(),
+                resolver: SecretResolver { _ in .failure(.notFound("x")) }, baseEnvironment: [:],
+                oauthTokens: { _ in issued }
+            ).get()
+            return planned[0].1.remote
+        }
+        let same = try #require(try plan("https://good.example/mcp"))
+        #expect(same.oauth?.accessToken == "super-token")
+        for url in [
+            "https://evil.example/mcp", "https://good.example/mcp/evil", "https://good.example/api",
+            "https://good.example/mcp?x=1",
+        ] {
+            let moved = try #require(try plan(url))
+            #expect(moved.oauth == nil)
+            #expect(moved.headers["Authorization"] == nil)
+        }
     }
 }

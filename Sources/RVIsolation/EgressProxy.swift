@@ -19,6 +19,8 @@ public enum EgressDenialReason: String, Sendable, Equatable, CaseIterable {
     case dnsFailed = "dns-failed"
     case addressFiltered = "address-filtered"
     case dialFailed = "dial-failed"
+    /// The listener requires a client credential and this connection did not present it.
+    case unauthenticated = "unauthenticated"
 }
 
 /// One denied CONNECT, recorded for the allowlist learning loop.
@@ -74,6 +76,10 @@ enum DialOutcome: Sendable, Equatable {
 public final class EgressProxy: @unchecked Sendable {
     private let policy: EgressHostPolicy
     private let record: @Sendable (EgressProxyDenial) -> Void
+    /// When set, CONNECT and absolute-URI requests must present this secret
+    /// as `Proxy-Authorization: Basic` for `rv:<credential>`. An open
+    /// 127.0.0.1 listener is otherwise a relay for any local client.
+    private let clientCredential: String?
     private let lock = NSLock()
     private var listenFD: Int32 = -1
     private var running = false
@@ -84,10 +90,12 @@ public final class EgressProxy: @unchecked Sendable {
 
     public init(
         policy: EgressHostPolicy = .publicHTTPS,
-        record: (@Sendable (EgressProxyDenial) -> Void)? = nil
+        record: (@Sendable (EgressProxyDenial) -> Void)? = nil,
+        clientCredential: String? = nil
     ) {
         self.policy = policy
         self.record = record ?? EgressProxy.productionDenialLog()
+        self.clientCredential = clientCredential
     }
 
     /// Bound port after `start` succeeds.
@@ -237,6 +245,14 @@ public final class EgressProxy: @unchecked Sendable {
     }
 
     private func serveRequest(client: Int32, header: String, leftover: [UInt8]) {
+        if let credential = clientCredential {
+            let expected = "rv:\(credential)"
+            let presented = EgressProxy.basicProxyCredential(header) ?? ""
+            guard EgressProxy.constantTimeEquals(presented, expected) else {
+                deny(client: client, host: "", port: 0, reason: .unauthenticated)
+                return
+            }
+        }
         if let target = EgressProxy.parseCONNECT(header: header) {
             let external = policy.allows(host: target.host, port: target.port)
             let loopback = policy.allowsLoopbackTarget(host: target.host, port: target.port)
@@ -348,6 +364,37 @@ public final class EgressProxy: @unchecked Sendable {
             close(client)
             close(upstream)
         }
+    }
+
+    /// `Proxy-Authorization: Basic` decoded as text, or nil when the header is absent.
+    /// A present but unusable header is an empty string, which never matches.
+    static func basicProxyCredential(_ header: String) -> String? {
+        var found = false
+        var decoded = ""
+        for line in header.split(separator: "\r\n").dropFirst() {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let name = line[..<colon].trimmingCharacters(in: .whitespaces)
+            guard name.lowercased() == "proxy-authorization" else { continue }
+            found = true
+            let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            let parts = value.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            guard parts.count == 2, parts[0].lowercased() == "basic",
+                let data = Data(base64Encoded: String(parts[1])),
+                let text = String(data: data, encoding: .utf8)
+            else {
+                decoded = ""
+                continue
+            }
+            decoded = text
+        }
+        return found ? decoded : nil
+    }
+
+    private static func constantTimeEquals(_ lhs: String, _ rhs: String) -> Bool {
+        let left = Array(lhs.utf8)
+        let right = Array(rhs.utf8)
+        guard left.count == right.count else { return false }
+        return zip(left, right).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) } == 0
     }
 
     /// CONNECT target from a header block. Strict: exactly `CONNECT

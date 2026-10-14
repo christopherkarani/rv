@@ -31,10 +31,27 @@ enum AuditForwardInstall {
     }
 
     /// Header values end up in the plist, so they must name secrets, not hold them.
+    /// A literal beside `${secret:NAME}` is still a secret.
     static func plaintextHeader(_ arguments: [String]) -> String? {
         zip(arguments, arguments.dropFirst()).first { flag, value in
-            flag == "--header" && (MCPSecretReference.names(in: value) ?? []).isEmpty
+            flag == "--header" && headerCarriesLiteral(value)
         }.map { _, value in String(value.prefix { $0 != "=" }) }
+    }
+
+    /// True unless every credential in the header is a `${secret:NAME}` reference.
+    /// `Bearer` / `Basic` / `Token` may sit in front of one reference; any other leftover is literal.
+    static func headerCarriesLiteral(_ header: String) -> Bool {
+        guard let names = MCPSecretReference.names(in: header), names.isEmpty == false else { return true }
+        var rest = header
+        for name in names {
+            rest = rest.replacingOccurrences(of: "${secret:\(name)}", with: "")
+        }
+        let payload = rest.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).dropFirst()
+            .joined(separator: "=")
+        let words = payload.split(whereSeparator: \.isWhitespace).map(String.init)
+        if words.isEmpty { return false }
+        if words.count == 1, ["bearer", "basic", "token"].contains(words[0].lowercased()) { return false }
+        return true
     }
 
     static func agentPlist(_ plan: Plan) -> Data {

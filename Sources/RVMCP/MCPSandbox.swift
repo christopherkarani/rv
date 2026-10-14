@@ -47,15 +47,16 @@ public enum MCPSandbox {
             var proxyPort: Int?
             if policy.hosts.isEmpty == false {
                 let server = definition.name
+                let credential = proxyCredential()
                 let proxy = EgressProxy(
                     policy: EgressHostPolicy(allowedHosts: Set(policy.hosts), relaysLoopback: false),
-                    record: { denied(server, $0) })
+                    record: { denied(server, $0) }, clientCredential: credential)
                 guard case .success(let port) = proxy.start() else {
                     return .failure(.sandbox("could not start the egress proxy for \(server)"))
                 }
                 proxies.withLock { $0.append(proxy) }
                 proxyPort = port
-                environment = proxyEnvironment(environment, port: port)
+                environment = proxyEnvironment(environment, port: port, credential: credential)
             }
             let profile = profile(
                 policy: policy, scratch: scratch.path, home: home.path, configDirectory: configDirectory.path,
@@ -72,10 +73,17 @@ public enum MCPSandbox {
         }
     }
 
+    /// 32 random bytes, hex. The proxy requires this as `Proxy-Authorization`.
+    static func proxyCredential() -> String {
+        (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+    }
+
     /// Points HTTP clients at the proxy; Node's fetch needs `NODE_USE_ENV_PROXY`.
-    public static func proxyEnvironment(_ base: [String: String], port: Int) -> [String: String] {
+    /// The credential is the userinfo of the proxy URL so clients send it as
+    /// proxy basic auth. A process that can only dial 127.0.0.1 does not have it.
+    public static func proxyEnvironment(_ base: [String: String], port: Int, credential: String) -> [String: String] {
         var environment = base
-        let url = "http://127.0.0.1:\(port)"
+        let url = "http://rv:\(credential)@127.0.0.1:\(port)"
         for key in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
             environment[key] = url
             environment[key.lowercased()] = url

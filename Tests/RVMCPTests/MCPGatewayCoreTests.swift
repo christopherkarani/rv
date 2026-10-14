@@ -477,6 +477,77 @@ struct MCPApprovalStoreTests {
         #expect(full.consumeGrant(server: "gh", tool: "g", argumentsHash: "g0") != .none)
     }
 
+    @Test func nonCanonicalIntegersCannotSlipPastADenyOrAsk() throws {
+        let configuration = try MCPConfiguration.decode(Data(#"""
+            {"version": 1, "toolMode": "search", "servers": [{"name": "pay", "command": "pay-mcp", "tools": {"default": "allow",
+              "ask": [{"tool": "note", "when": {"/amount": {"==": 7}}}],
+              "deny": [
+                {"tool": "eq", "when": {"/amount": {"==": 9007199254740993}}},
+                {"tool": "mem", "when": {"/amount": {"in": [9007199254740993, -9007199254740993]}}},
+                {"tool": "gt", "when": {"/amount": {">": 9007199254740992}}},
+                {"tool": "neg", "when": {"/amount": {"<": -9007199254740992}}},
+                {"tool": "wide", "when": {"/amount": {">": 4611686018427387904}}},
+                {"tool": "rounded", "when": {"/amount": {">": 9007199254740995.0}}},
+                {"tool": "pass", "when": {"/amount": {"==": 1}}},
+                {"tool": "near", "when": {"/amount": {"==": 9007199254740992}}},
+                {"tool": "nearin", "when": {"/amount": {"in": [9007199254740992]}}}
+              ]}}]}
+            """#.utf8)).get()
+        var harness = GatewayHarness(configuration)
+        _ = harness.ready()
+
+        func call(_ id: Int, _ tool: String, _ amount: String) -> [MCPGatewayOutput] {
+            harness.client(
+                #"{"jsonrpc":"2.0","id":\#(id),"method":"tools/call","params":{"name":"\#(tool)","arguments":{"amount":\#(amount)}}}"#)
+        }
+        func denied(_ id: Int, _ tool: String, _ amount: String) {
+            let reply = call(id, tool, amount)
+            #expect(reply.toUpstream.isEmpty, "\(tool) \(amount)")
+            #expect(reply.audits.first?.decision == .deny, "\(tool) \(amount)")
+            #expect(reply.toClient.first?.compactText.contains(amount) == false, "\(tool) \(amount)")
+        }
+
+        denied(1, "eq", "9007199254740993.0")
+        denied(2, "eq", "9007199254740993e0")
+        denied(3, "eq", "9.007199254740993e15")
+        denied(4, "eq", "9007199254740993")
+        denied(5, "mem", "9007199254740993.0")
+        denied(6, "mem", "-9007199254740993.0")
+        denied(7, "gt", "9007199254740993.0")
+        denied(8, "gt", "9007199254740993")
+        denied(9, "neg", "-9007199254740993.0")
+        denied(10, "wide", "4611686018427387905.0")
+        denied(11, "wide", "4611686018427387905")
+        denied(12, "rounded", "9007199254740996")
+
+        let unsafe = call(13, "pass", "9007199254740993.5")
+        #expect(unsafe.toUpstream.isEmpty)
+        #expect(unsafe.audits.first?.reason?.contains("cannot read exactly") == true)
+        #expect(unsafe.toClient.first?.compactText.contains("9007199254740993.5") == false)
+
+        let missed = call(14, "pass", "9007199254740993.0")
+        #expect(missed.audits.isEmpty)
+        #expect(missed.toUpstream.first?.1["params"]?["arguments"]?["amount"] == .number("9007199254740993"))
+        #expect(missed.toUpstream.first?.1.compactText.contains("9007199254740993.0") == false)
+
+        let notTheRoundedValue = call(15, "near", "9007199254740993.0")
+        #expect(notTheRoundedValue.toUpstream.first?.1["params"]?["arguments"]?["amount"] == .number("9007199254740993"))
+        let notInTheRoundedList = call(16, "nearin", "9007199254740993e0")
+        #expect(notInTheRoundedList.toUpstream.first?.1["params"]?["arguments"]?["amount"] == .number("9007199254740993"))
+
+        let askedMiss = call(17, "note", "2.0")
+        #expect(askedMiss.audits.isEmpty)
+        #expect(askedMiss.toUpstream.first?.1["params"]?["arguments"]?["amount"] == .number("2"))
+
+        let reentered = harness.client(#"""
+            {"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"rv_call_tool","arguments":{"name":"eq","arguments":{"amount":9007199254740993.0}}}}
+            """#)
+        #expect(reentered.toUpstream.isEmpty)
+        #expect(reentered.audits.first?.decision == .deny)
+        #expect(reentered.audits.first?.tool == "eq")
+        #expect(reentered.toClient.first?.compactText.contains("9007199254740993.0") == false)
+    }
+
     @Test func canonicalHashIgnoresKeyOrder() throws {
         let a = try JSONValue.parse(#"{"b":[1,{"y":2,"x":1}],"a":"s"}"#)
         let b = try JSONValue.parse(#"{"a":"s","b":[1,{"x":1,"y":2}]}"#)

@@ -59,13 +59,13 @@ struct MCPCommandTests {
         return MCPRun.report(environment, project: nil, configuration: configuration, rvExecutable: rvExecutable)
     }
 
-    @Test func importThenSetupTakesCheckFromFailingToPassing() throws {
+    @Test func importThenSetupTakesCheckFromFailingToPassing() async throws {
         let fixture = Fixture()
         try fixture.write(".cursor/mcp.json", Self.cursorConfig)
         #expect(try report(fixture).passes == false)
         #expect(MCPRun.checkText(try report(fixture), home: fixture.home).contains("plaintext"))
 
-        let imported = try MCPRun.importServers(
+        let imported = try await MCPRun.importServers(
             host: .cursor, names: [], project: nil, allowTools: false, dryRun: false, environment: fixture.environment()
         ).get()
         #expect(imported.contains("import github: npx (credentials → rv secrets GITHUB_PERSONAL_ACCESS_TOKEN)"))
@@ -98,30 +98,30 @@ struct MCPCommandTests {
         #expect(fixture.text(".cursor/mcp.json").contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"))
     }
 
-    @Test func dryRunAndKeychainFailureWriteNothing() throws {
+    @Test func dryRunAndKeychainFailureWriteNothing() async throws {
         let fixture = Fixture()
         try fixture.write(".cursor/mcp.json", Self.cursorConfig)
-        let dry = try MCPRun.importServers(
+        let dry = try await MCPRun.importServers(
             host: .cursor, names: ["github"], project: nil, allowTools: false, dryRun: true, environment: fixture.environment()
         ).get()
         #expect(dry.contains("dry run"))
         #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
 
         let refusing = SecretKeychainWriter(store: { _, _, _ in false }, delete: { _, _ in false })
-        let failed = MCPRun.importServers(
+        let failed = await MCPRun.importServers(
             host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
             environment: fixture.environment(keychain: refusing))
         #expect(failed.failureMessage?.contains("nothing imported") == true)
         #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
         #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("secrets.json").path) == false)
 
-        let unknown = MCPRun.importServers(
+        let unknown = await MCPRun.importServers(
             host: .cursor, names: ["nope"], project: nil, allowTools: false, dryRun: false, environment: fixture.environment())
         #expect(unknown.failureMessage == "cursor has no MCP server named nope")
 
         let huge = String(repeating: "a1", count: (SecretValue.maximumBytes / 2) + 1)
         try fixture.write(".cursor/mcp.json", #"{"mcpServers": {"gh": {"command": "npx", "env": {"GITHUB_TOKEN": "\#(huge)"}}}}"#)
-        let rejected = MCPRun.importServers(
+        let rejected = await MCPRun.importServers(
             host: .cursor, names: [], project: nil, allowTools: false, dryRun: false, environment: fixture.environment())
         #expect(rejected.failureMessage?.contains("nothing imported") == true)
         #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
@@ -138,12 +138,31 @@ struct MCPCommandTests {
         try fixture.write(".cursor/mcp.json", """
             {"mcpServers": {"gh": {"command": "npx", "env": {"GITHUB_TOKEN": "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "API_KEY": "sk-abcdefghijklmnopqrst"}}}}
             """)
-        let failedSecond = MCPRun.importServers(
+        let failedSecond = await MCPRun.importServers(
             host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
             environment: fixture.environment(keychain: partial))
         #expect(failedSecond.failureMessage?.contains("nothing imported") == false)
         #expect(failedSecond.failureMessage?.contains("already stored") == true)
         #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
+    }
+
+    @Test func importRefusesWithoutDeviceOwnerPresenceAndWritesNothing() async throws {
+        let fixture = Fixture()
+        try fixture.write(".cursor/mcp.json", Self.cursorConfig)
+        let dry = try await MCPRun.importServers(
+            host: .cursor, names: ["github"], project: nil, allowTools: false, dryRun: true,
+            environment: fixture.environment(presence: Self.absent)
+        ).get()
+        #expect(dry.contains("dry run"))
+        #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
+
+        let refused = await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: fixture.environment(presence: Self.absent))
+        #expect(refused.failureMessage == "not imported: this process has no terminal; nothing imported")
+        #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
+        #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("secrets.json").path) == false)
     }
 
     static let present = UserPresence { _, _ in .confirmed(method: "test") }
@@ -294,7 +313,7 @@ struct MCPCommandTests {
         #expect(loaded.decision(server: fs, tool: "read_file") == .ask)
 
         try fixture.write(".cursor/mcp.json", Self.cursorConfig)
-        let imported = MCPRun.importServers(
+        let imported = await MCPRun.importServers(
             host: .cursor, names: [], project: nil, allowTools: false, dryRun: false, environment: environment)
         #expect(imported.failureMessage?.contains("edited outside rv") == true)
         #expect(imported.failureMessage?.contains("nothing imported") == true)

@@ -497,7 +497,7 @@ enum MCPRun {
 
     static func importServers(
         host: MCPHost, names: [String], project: URL?, allowTools: Bool, dryRun: Bool, environment: MCPEnvironment
-    ) -> Result<String, CommandFailure> {
+    ) async -> Result<String, CommandFailure> {
         let configuration: MCPConfiguration
         switch self.configuration(environment) {
         case .failure(let failure): return .failure(failure)
@@ -551,6 +551,11 @@ enum MCPRun {
         for secret in plan.secrets where SecretValue(secret.value) == nil {
             return .failure(CommandFailure(
                 "\(secret.definition.name) is empty, contains NUL, or is over \(SecretValue.maximumBytes) bytes; nothing imported"))
+        }
+        let outcome = await environment.presence.confirm("rv: import MCP servers into mcp.json", .echoCode)
+        guard case .confirmed = outcome else {
+            let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
+            return .failure(CommandFailure("not imported: \(refusal); nothing imported"))
         }
         var stored: [String] = []
         func rollback() -> Bool {
@@ -911,10 +916,10 @@ struct MCPImportCommand: AsyncParsableCommand {
     @Flag(help: "Allow every tool of the imported servers instead of asking.") var allowTools = false
     @Flag(help: "Show what would change; write nothing.") var dryRun = false
 
-    func run() throws {
+    func run() async throws {
         let ctx = CommandContext.current(command: "mcp import", json: false, robot: false, plain: true, noColor: true)
         let environment = MCPEnvironment.live(home: try ctx.requireHome())
-        switch MCPRun.importServers(
+        switch await MCPRun.importServers(
             host: host, names: servers, project: MCPRun.projectURL(project), allowTools: allowTools, dryRun: dryRun,
             environment: environment)
         {

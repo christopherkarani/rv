@@ -43,7 +43,7 @@ public enum MCPLaunchError: Error, Sendable, Equatable {
         case .secretUnavailable(let server, let secret, let reason): "\(server) could not read secret \(secret): \(reason)"
         case .sandbox(let reason): "sandbox: \(reason)"
         case .untrustedRemote(let name):
-            "\(name) is remote and mcp.json is untrusted, so rv will not open it or send its tokens or header secrets"
+            "\(name) is in an untrusted mcp.json, so rv will not start it, resolve its secrets, or send its tokens"
         }
     }
 }
@@ -64,10 +64,10 @@ public enum MCPLaunchPlanner {
     ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], MCPLaunchError> {
         var planned: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)] = []
         for name in names {
+            if configuration.untrusted { return .failure(.untrustedRemote(name)) }
             if configuration.isBlocked(name) { return .failure(.blocked(name)) }
             guard let definition = configuration.server(named: name) else { return .failure(.unknownServer(name)) }
             if let remote = definition.remote {
-                if configuration.untrusted { return .failure(.untrustedRemote(name)) }
                 let resolved: [String: String]
                 switch resolve(
                     remote.secretNames, server: name, configuration: configuration, secrets: secrets, resolver: resolver,
@@ -77,7 +77,13 @@ public enum MCPLaunchPlanner {
                 case .success(let values): resolved = values
                 }
                 let headers = remote.headers.mapValues { MCPSecretReference.substitute($0, values: resolved) }
-                let tokens = remote.headers.keys.contains { $0.lowercased() == "authorization" } ? nil : oauthTokens(name)
+                let loaded = remote.headers.keys.contains { $0.lowercased() == "authorization" } ? nil : oauthTokens(name)
+                let tokens = loaded.flatMap { candidate -> MCPOAuthTokens? in
+                    guard let resource = URL(string: candidate.resource), MCPOAuth.sameResource(resource, remote.url) else {
+                        return nil
+                    }
+                    return candidate
+                }
                 let launch = MCPRemoteLaunch(
                     server: name, url: remote.url, headers: headers, transport: remote.transport, oauth: tokens)
                 let scrubbed = named(resolved) + (tokens.map(MCPGatewayCore.oauthSecrets) ?? [])

@@ -240,6 +240,29 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     #expect(collector.all.first?.host == "127.0.0.1")
 }
 
+@Test func credentialedProxyIsNotAnOpenRelay() throws {
+    let collector = EgressDenialCollector()
+    let proxy = EgressProxy(
+        policy: EgressHostPolicy(allowedHosts: ["api.example.com"], relaysLoopback: false),
+        record: { collector.record($0) }, clientCredential: "secret-token")
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let anonymous = try #require(egressConnect(port: port))
+    defer { close(anonymous) }
+    #expect(egressSend(anonymous, text: "CONNECT api.example.com:443 HTTP/1.1\r\nHost: api.example.com:443\r\n\r\n"))
+    #expect(egressReadUntil403(anonymous).contains("HTTP/1.1 403"))
+
+    let encoded = Data("rv:secret-token".utf8).base64EncodedString()
+    let authed = try #require(egressConnect(port: port))
+    defer { close(authed) }
+    #expect(egressSend(
+        authed,
+        text: "CONNECT 127.0.0.1:9 HTTP/1.1\r\nHost: 127.0.0.1:9\r\nProxy-Authorization: Basic \(encoded)\r\n\r\n"))
+    #expect(egressReadUntil403(authed).contains("HTTP/1.1 403"))
+    egressAwaitDenials(collector, count: 2)
+    #expect(collector.all.map(\.reason) == [.unauthenticated, .deniedPolicy])
+}
+
 @Test func egressProxyRelaysLoopbackTargets() throws {
     let stub = try #require(EgressStubServer(reply: "PONG\n"))
     let collector = EgressDenialCollector()
@@ -503,6 +526,7 @@ private final class AuditDiagnosticCollector: @unchecked Sendable {
             "dns-failed",
             "header-too-large",
             "malformed",
+            "unauthenticated",
         ]
     )
 }

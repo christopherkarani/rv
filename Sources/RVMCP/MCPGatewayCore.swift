@@ -335,7 +335,14 @@ public struct MCPGatewayCore {
         guard let (server, tool) = route(exposed), let upstream = upstreams[server] else {
             return [.toClient(Self.error(id: client, code: -32602, message: "Unknown tool: \(exposed)"))]
         }
-        let arguments = params?["arguments"] ?? .object([:])
+        let rawArguments = params?["arguments"] ?? .object([:])
+        guard let arguments = rawArguments.withExactNumbers() else {
+            let reason = "rv will not forward a number it cannot read exactly"
+            return [
+                .audit(MCPCallRecord(server: server, tool: tool, decision: .deny, argumentKeys: [], isError: true, reason: reason)),
+                .toClient(Self.toolError(id: client, "\(reason). Do not retry; ask the user if you need it.")),
+            ]
+        }
         let keys = arguments.objectValue?.keys.sorted() ?? []
         let decision = configuration.decision(server: upstream.definition, tool: tool, arguments: arguments)
         if decision == .deny {
@@ -350,6 +357,7 @@ public struct MCPGatewayCore {
         }
         var forwarded = params?.objectValue ?? JSONObject()
         forwarded["name"] = .string(tool)
+        if params?["arguments"] != nil { forwarded["arguments"] = arguments }
         var approval: Approval?
         var outputs: [MCPGatewayOutput] = []
         if decision == .ask {

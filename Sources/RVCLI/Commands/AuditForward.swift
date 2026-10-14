@@ -46,10 +46,21 @@ enum AuditForwardRun {
         var batchSize = 500
     }
 
-    /// https anywhere; plain http only to this machine.
+    /// https anywhere; plain http only to this machine. No userinfo and no query secret:
+    /// `--install` copies `--to` into a plist.
     static func destination(_ text: String) -> Result<URL, CommandFailure> {
-        guard let url = URL(string: text), let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else {
+        guard let url = URL(string: text),
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+            let scheme = components.scheme?.lowercased(), let host = components.host?.lowercased(), host.isEmpty == false
+        else {
             return .failure("--to must be an absolute URL")
+        }
+        if components.user != nil || components.password != nil {
+            return .failure("--to must not include a username or password")
+        }
+        let items = components.queryItems ?? []
+        if items.contains(where: { MCPRedaction.isSecretName($0.name) || MCPRedaction.looksLikeToken($0.value ?? "") }) {
+            return .failure("--to must not carry a secret in its query")
         }
         if scheme == "https" { return .success(url) }
         if scheme == "http", ["127.0.0.1", "localhost", "::1", "[::1]"].contains(host) { return .success(url) }

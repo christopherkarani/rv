@@ -144,6 +144,16 @@ struct MCPOAuthTests {
         #expect(connect(flow(answers))?.contains("resource on another origin") == true)
 
         answers = protected
+        answers["/.well-known/oauth-protected-resource/mcp"] = json(200, #"{"resource":"https://a.example/api","authorization_servers":["https://auth.example"]}"#)
+        #expect(connect(flow(answers))?.contains("different URL than this MCP server") == true)
+
+        answers = protected
+        answers["/.well-known/oauth-protected-resource/mcp"] = json(404, "")
+        let presentedFallback = Mutex(false)
+        #expect(connect(flow(answers) { _ in presentedFallback.withLock { $0 = true } })?.contains("no protected resource metadata") == true)
+        #expect(presentedFallback.withLock { $0 } == false)
+
+        answers = protected
         answers["/.well-known/oauth-authorization-server"] = json(200, #"{"issuer":"https://auth.example","authorization_endpoint":"https://auth.example/authorize","token_endpoint":"https://auth.example/token","registration_endpoint":"https://auth.example/register"}"#)
         #expect(connect(flow(answers))?.contains("does not offer PKCE S256") == true)
 
