@@ -231,6 +231,18 @@ enum WorkspaceCommandRun {
         [DisplayedText.field(project), attachment, detail].joined(separator: "  ")
     }
 
+    /// `rv workspace leftovers` example `rm` of an unattached image file.
+    /// The path is a field: ESC and line separators stay inside it.
+    static func leftoverDetachedImageLine(_ path: String) -> String {
+        "  rm \(DisplayedText.field(path))"
+    }
+
+    /// A stranded mount in the same report. The mount point is the project
+    /// path. The device is the kernel name beside it.
+    static func leftoverMountLine(mountPoint: String, device: String) -> String {
+        "  \(DisplayedText.field(mountPoint))  \(device)"
+    }
+
     static func start(_ raw: String?) throws {
         #if !os(macOS)
         throw ValidationError(ContainedRuntimeRefusal.message)
@@ -345,13 +357,13 @@ enum WorkspaceCommandRun {
                 let retainedMounted = mounted.filter { retainedPaths.contains($0.imagePath) }
                 let detachableMounted = mounted.filter { retainedPaths.contains($0.imagePath) == false }
                 lines += retainedMounted.prefix(20).map { image in
-                    "  \(image.mountPoint ?? "-")  \(image.device ?? "-")"
+                    leftoverMountLine(mountPoint: image.mountPoint ?? "-", device: image.device ?? "-")
                 }
                 if retainedMounted.count > 20 {
                     lines.append("  … \(retainedMounted.count - 20) more mounted")
                 }
                 lines += detachableMounted.prefix(20).map { image in
-                    "  \(image.mountPoint ?? "-")  \(image.device ?? "-")"
+                    leftoverMountLine(mountPoint: image.mountPoint ?? "-", device: image.device ?? "-")
                 }
                 if detachableMounted.count > 20 {
                     lines.append("  … \(detachableMounted.count - 20) more mounted")
@@ -374,7 +386,7 @@ enum WorkspaceCommandRun {
         if disk.detachedImageFiles.isEmpty == false {
             lines.append("unattached workspace image files: \(disk.detachedImageFiles.count) in the temporary directory")
             lines.append("  nothing has them attached; delete them while no workspace is starting, e.g.")
-            lines.append("  rm \(disk.detachedImageFiles.first ?? "")")
+            lines.append(leftoverDetachedImageLine(disk.detachedImageFiles.first ?? ""))
         }
         return lines.joined(separator: "\n")
     }

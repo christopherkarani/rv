@@ -83,6 +83,35 @@ import RVIsolation
     #expect(row.contains("project: leftover.project"))
 }
 
+@Test func workspaceLeftoversDiskLinesFieldPaths() throws {
+    let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+    let path = "/tmp/rv-inode-x\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence + ".sparseimage"
+    let mount = "/tmp/p\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence
+    let removed = WorkspaceCommandRun.leftoverDetachedImageLine(path)
+    let mounted = WorkspaceCommandRun.leftoverMountLine(mountPoint: mount, device: "/dev/disk3")
+    for text in [removed, mounted] {
+        #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x2029 } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(text.contains("\\u001b[2J\\u001b[H"))
+        #expect(text.contains("\\u2028"))
+        #expect(text.contains("\\u2029"))
+        #expect(text.contains("\\u202e"))
+        let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+        #expect(lines.contains(sentence) == false)
+    }
+    #expect(removed.hasPrefix("  rm "))
+    #expect(mounted.hasSuffix("  /dev/disk3"))
+
+    let source = try String(contentsOf: workspaceCommandSourceURL(), encoding: .utf8)
+    let report = try #require(swiftFunctionBody(source, "func leftoverReport("))
+    #expect(report.contains("leftoverDetachedImageLine("))
+    #expect(report.contains("leftoverMountLine("))
+    #expect(report.contains("rm \\(disk.detachedImageFiles") == false)
+    #expect(report.contains("\\(image.mountPoint") == false)
+}
+
 #if os(macOS)
 @Test func staleEndpointSurfacesShareOneText() {
     let fromInspect = WorkspaceCommandRun.text(WorkspaceAttachment.staleEndpoint)

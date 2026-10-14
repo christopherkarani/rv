@@ -426,7 +426,9 @@ public enum MCPSandbox {
 
     /// One collapsed opening is the whole set when the tail has no `..`, or
     /// when that `..` run cannot leave the directory the name is created in
-    /// and the collapsed path still begins on that directory.
+    /// and the collapsed path continues along that directory, not merely
+    /// the ancestor the `..` landed on. `../private` collapses to
+    /// `/private/...` and is not the file under the creation directory.
     /// `/foo/future-keys` is as deep as `/private/tmp` and is a different
     /// tree: `link/../../../foo/future-keys` then `ln -s .` reads
     /// `/private/tmp/future-keys`. `foo/../../private/tmp/future-keys` stays
@@ -455,7 +457,11 @@ public enum MCPSandbox {
             if parentPart != openedPart { break }
             shared += 1
         }
-        return shared >= parentParts.count - dots
+        // Matching only the ancestor `..` landed on is the tail repeating
+        // that name (`../private` collapses to `/private/...`). A longer
+        // shared prefix is the collapsed path staying on the parent
+        // (`foo/../../private/tmp/future-keys`).
+        return shared > parentParts.count - dots
     }
 
     /// Openings for a component that does not exist yet. `name` → `/name`
