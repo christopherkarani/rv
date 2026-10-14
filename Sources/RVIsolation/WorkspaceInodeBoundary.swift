@@ -447,28 +447,33 @@ final class WorkspaceInodeBoundary: Sendable {
 
     private func detachVolume() {
         if blockingWorkIsCancelled() {
-            // Unmount directly first: arbitration-mediated unmounts wedge
-            // when the daemon is unresponsive, and then every detach below
-            // fails "Resource busy" while the mount leaks. One detach.
-            // `honorCancellation` would SIGTERM hdiutil on the first poll,
-            // the mount would stay, and teardown would replace the child's
-            // `.cancelled` with `workspaceInodeBoundaryFailed`. Five seconds
-            // stays inside the caller's 8-second bound. The diskimage lock
-            // yields to this caller, so that budget is not spent waiting
-            // for another suite's helper.
-            unmountDirect(workspacePath, onlySource: disk)
-            _ = runTool(
-                ["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk],
-                honorCancellation: false,
-                deadline: 5
-            )
+            detachCancelledVolume()
             return
         }
         // Unmount directly first: arbitration-mediated unmounts wedge when
         // the daemon is unresponsive, and then every detach below fails
         // "Resource busy" while the mount leaks.
         unmountDirect(workspacePath, onlySource: disk)
+        if blockingWorkIsCancelled() {
+            // Those umounts already ran, and each one was capped from the
+            // moment cancellation became visible. Repeating them would
+            // stack a second sequence on top of the 8-second bound.
+            _ = runTool(
+                ["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk],
+                honorCancellation: false,
+                deadline: DiskImageCancelBudget.cancelledDetachHelpers().detach
+            )
+            return
+        }
         for _ in 0..<8 {
+            if blockingWorkIsCancelled() {
+                _ = runTool(
+                    ["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk],
+                    honorCancellation: false,
+                    deadline: DiskImageCancelBudget.cancelledDetachHelpers().detach
+                )
+                return
+            }
             let result = runTool(
                 ["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk],
                 honorCancellation: false,
@@ -477,10 +482,34 @@ final class WorkspaceInodeBoundary: Sendable {
             // A deadline means diskimagesd is wedged. Further detaches wait
             // out the same wedge and hold the isolation shard until the job
             // cap. A fast nonzero exit is the transient failure the retry is
-            // for.
-            if result.status == 0 || result.timedOut { return }
+            // for. Cancellation caps this attempt inside `runToolBody`;
+            // another detach would spend the return bound twice.
+            if result.status == 0 || result.timedOut || blockingWorkIsCancelled() { return }
             usleep(40_000)
         }
+    }
+
+    /// Cancelled teardown. Arbitration-mediated unmounts wedge when the
+    /// daemon is unresponsive, so both umounts run directly and then one
+    /// detach. `honorCancellation` would SIGTERM hdiutil on the first poll
+    /// and leave the mount up, replacing the child's `.cancelled` with
+    /// `workspaceInodeBoundaryFailed`. The detach cap stays 5 seconds.
+    /// Lock waits count toward each helper's deadline, and the two umounts
+    /// are capped, so their sum plus one preempt reap and one preempt
+    /// cleanup stays inside the 8-second cancellation bound.
+    private func detachCancelledVolume() {
+        let helpers = DiskImageCancelBudget.cancelledDetachHelpers()
+        unmountDirect(
+            workspacePath,
+            onlySource: disk,
+            plainDeadline: helpers.plainUnmount,
+            forceDeadline: helpers.forceUnmount
+        )
+        _ = runTool(
+            ["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk],
+            honorCancellation: false,
+            deadline: helpers.detach
+        )
     }
 
     private func updateSaved(_ relative: String, from entry: TreeEntry) -> Bool {
@@ -1079,6 +1108,19 @@ private func createMountedDiskBody(
     )
     timedOut = timedOut || attached.timedOut
     guard attached.status == 0 else {
+        // A preempted or failed attach can publish a disk before it exits.
+        // Detach that image before unlinking it, or the device stays and
+        // the retry attaches a second one.
+        let leaked = PreemptedDiskHelperCleanup.plan(arguments: [
+            "/usr/bin/hdiutil", "attach", "-nomount", "-plist", image,
+        ])
+        if let follow = leaked.followUpArguments {
+            _ = runTool(
+                follow,
+                honorCancellation: false,
+                deadline: DiskImageCancelBudget.preemptCleanup
+            )
+        }
         unlink(image)
         return finish(.failure(.workspaceInodeBoundaryFailed))
     }
@@ -1465,12 +1507,13 @@ private enum DiskImageAttempt {
 /// through its deadline and the F-M shard hits the job cap. The lock is
 /// only around the helper, not the contained command.
 ///
-/// A cancelled teardown does not sit out that wait. The 5-second detach
-/// budget starts only after the lock is acquired, so waiting for another
-/// suite's helper pushes `executor.run` past the 8-second cancellation
-/// bound even when the detach itself succeeds. Non-urgent holders abort
-/// and release the lock; the cancelled caller is urgent and keeps the
-/// critical section. Helpers stay serialized either way.
+/// A cancelled teardown does not sit out that wait. Non-urgent holders
+/// abort when a cancelled caller is queued. The lock stays held until
+/// the aborted helper has exited and a preempted attach or mount has
+/// been detached or unmounted, so the next helper cannot start on top
+/// of a parked process or a leaked device. Lock-wait time counts toward
+/// the caller's deadline. The cancelled detach path's own deadlines stay
+/// inside the 8-second return bound (`DiskImageCancelBudget`).
 private enum DiskImageToolSerialization {
     static let lock = Mutex<UInt8>(0)
     private static let priority = Mutex<DiskImagePriority>(DiskImagePriority())
@@ -1535,12 +1578,19 @@ func hfsSliceDevice(inPlist stdout: String) -> String? {
 /// while a direct `umount` completes in milliseconds and detaching the
 /// bare disk afterwards succeeds.
 private func detachWorkspaceDisk(_ disk: String, mountPoint: String?) {
+    let helpers = blockingWorkIsCancelled() ? DiskImageCancelBudget.cancelledDetachHelpers() : nil
     if let mountPoint {
-        unmountDirect(mountPoint, onlySource: disk)
+        unmountDirect(
+            mountPoint,
+            onlySource: disk,
+            plainDeadline: helpers?.plainUnmount,
+            forceDeadline: helpers?.forceUnmount
+        )
     }
     _ = runTool(
         ["/usr/bin/hdiutil", "detach", "-force", "-quiet", disk],
-        honorCancellation: false
+        honorCancellation: false,
+        deadline: helpers?.detach
     )
 }
 
@@ -1548,15 +1598,28 @@ private func detachWorkspaceDisk(_ disk: String, mountPoint: String?) {
 /// statfs source is our disk, so a reused path never unmounts a foreign
 /// volume. Plain unmount first; forced only while our source is still
 /// mounted (open descriptors make the plain call fail busy).
-private func unmountDirect(_ mountPoint: String, onlySource disk: String) {
+private func unmountDirect(
+    _ mountPoint: String,
+    onlySource disk: String,
+    plainDeadline: TimeInterval? = nil,
+    forceDeadline: TimeInterval? = nil
+) {
     func isOurs(_ source: String?) -> Bool {
         guard let source else { return false }
         return source == disk || source.hasPrefix(disk + "s")
     }
     guard isOurs(workspaceMountSource(mountPoint)) else { return }
-    _ = runTool(["/sbin/umount", mountPoint], honorCancellation: false)
+    _ = runTool(
+        ["/sbin/umount", mountPoint],
+        honorCancellation: false,
+        deadline: plainDeadline
+    )
     guard isOurs(workspaceMountSource(mountPoint)) else { return }
-    _ = runTool(["/sbin/umount", "-f", mountPoint], honorCancellation: false)
+    _ = runTool(
+        ["/sbin/umount", "-f", mountPoint],
+        honorCancellation: false,
+        deadline: forceDeadline
+    )
 }
 
 /// Runs a short-lived helper.
@@ -1576,10 +1639,12 @@ private func unmountDirect(_ mountPoint: String, onlySource disk: String) {
 /// flag as well as `Task.isCancelled`. Cleanup calls pass
 /// `honorCancellation: false` so a cancelled task can still detach the disk
 /// it created. Diskimage helpers take `DiskImageToolSerialization.lock`
-/// for the whole call, including the deadline wait, so a second test cannot
-/// start another `hdiutil` while the first is still inside diskimagesd.
-/// A cancelled teardown is the exception: the holder aborts and the
-/// teardown acquires the lock inside its own deadline.
+/// until the helper has exited. A preempted attach or mount is detached or
+/// unmounted before that lock drops, so the next helper cannot start while
+/// the first is still inside diskimagesd or while its device is still
+/// attached. Lock-wait time counts toward `deadline`. A cancel that arrives
+/// during the wait notes a priority waiter on the next poll instead of
+/// running the attempt as non-urgent.
 private func runTool(
     _ arguments: [String],
     honorCancellation: Bool = false,
@@ -1599,49 +1664,119 @@ private func runTool(
     // A yield has no caller-visible failure. Before spawn, nothing ran.
     // Mid-flight, the helper was killed so this same teardown can take
     // the lock; retrying here keeps the caller's own retry for a real
-    // diskimagesd failure. A killed `hdiutil create` can leave a partial
-    // sparseimage that the retry would refuse, so that file is removed
-    // first.
+    // diskimagesd failure. The preempted helper is reaped, and a partial
+    // image, attach, or mount is cleaned, before the lock drops.
     let yieldBudget = Date().addingTimeInterval(deadline ?? 45)
-    while true {
-        let cancelled = blockingWorkIsCancelled()
-        if cancelled {
-            DiskImageToolSerialization.notePriorityWaiter()
+    var notedPriority = false
+    defer {
+        if notedPriority {
+            DiskImageToolSerialization.endPriorityWaiter()
         }
-        let attempt = DiskImageToolSerialization.lock.withLock { _ -> DiskImageAttempt in
-            if cancelled {
+    }
+    while true {
+        if Date() >= yieldBudget {
+            return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
+        }
+        if blockingWorkIsCancelled(), notedPriority == false {
+            DiskImageToolSerialization.notePriorityWaiter()
+            notedPriority = true
+        }
+        let notedAtEntry = notedPriority
+        let attempt = DiskImageToolSerialization.lock.withLockIfAvailable { _ -> DiskImageAttempt in
+            if notedAtEntry {
                 DiskImageToolSerialization.endPriorityWaiter()
             }
-            DiskImageToolSerialization.beginHolding(urgent: cancelled)
-            if cancelled == false, DiskImageToolSerialization.hasPriorityWaiter() {
+            // Sample cancellation again. The flag can flip while this
+            // thread is polling for the mutex; the attempt must be urgent
+            // if it is set now, not only if it was set before the wait.
+            let urgent = blockingWorkIsCancelled()
+            DiskImageToolSerialization.beginHolding(urgent: urgent)
+            if urgent == false, DiskImageToolSerialization.hasPriorityWaiter() {
                 DiskImageToolSerialization.endHolding()
                 return .yielded
+            }
+            let remaining = yieldBudget.timeIntervalSinceNow
+            if remaining <= 0 {
+                DiskImageToolSerialization.endHolding()
+                return .done(
+                    ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
+                )
+            }
+            // Cancellation can flip while this thread is polling for the
+            // mutex. The caller may still have passed the 45-second
+            // default. An urgent umount or detach uses the cancelled cap
+            // so that wait plus the helper stays inside the 8-second bound.
+            var attemptSeconds = remaining
+            if urgent, let cap = DiskImageCancelBudget.urgentDeadline(arguments: arguments) {
+                attemptSeconds = min(attemptSeconds, cap)
             }
             let ran = runToolBody(
                 arguments,
                 honorCancellation: honorCancellation,
-                deadline: deadline,
-                yieldToPriorityWaiter: cancelled == false
+                deadline: attemptSeconds,
+                yieldToPriorityWaiter: urgent == false,
+                parkIfStuck: false
             )
-            DiskImageToolSerialization.endHolding()
-            // Mid-flight abort is retried here. Returning it would spend
-            // the caller's one retry and the next attempt can be aborted
-            // again by this same teardown.
             if ran.preempted {
+                let plan = PreemptedDiskHelperCleanup.plan(arguments: arguments)
+                let finished = applyPreemptCleanup(plan)
+                // The helper was reaped inside `runToolBody` (`parkIfStuck`
+                // is false). Cleanup of an attach or mount also waits until
+                // its follow-up exits. Dropping the lock before either is
+                // done lets the next helper into diskimagesd.
+                precondition(
+                    diskImageMayDropSerializationLock(
+                        helperStillAlive: false,
+                        cleanup: plan,
+                        cleanupFinished: finished
+                    ),
+                    "diskimage lock dropped while a preempted helper or its attach/mount is still live"
+                )
+                DiskImageToolSerialization.endHolding()
                 return .yielded
             }
+            DiskImageToolSerialization.endHolding()
             return .done(ran.output)
         }
+        if attempt != nil, notedAtEntry {
+            notedPriority = false
+        }
         switch attempt {
-        case .done(let output):
+        case nil:
+            usleep(10_000)
+        case .some(.done(let output)):
             return output
-        case .yielded:
+        case .some(.yielded):
             if Date() >= yieldBudget {
                 return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
             }
-            discardPreemptedSparseImage(arguments)
             usleep(20_000)
         }
+    }
+}
+
+/// Runs inside `DiskImageToolSerialization.lock`. Unlink is immediate.
+/// A follow-up detach or unmount uses `runToolBody` directly so it does
+/// not take the lock again, and it does not return while that process
+/// is still alive.
+@discardableResult
+private func applyPreemptCleanup(_ plan: PreemptedDiskHelperCleanup) -> Bool {
+    switch plan {
+    case .none:
+        return true
+    case .unlinkSparseImage(let path):
+        unlink(path)
+        return true
+    case .detachImage, .unmount:
+        guard let follow = plan.followUpArguments else { return false }
+        _ = runToolBody(
+            follow,
+            honorCancellation: false,
+            deadline: DiskImageCancelBudget.preemptCleanup,
+            yieldToPriorityWaiter: false,
+            parkIfStuck: false
+        )
+        return true
     }
 }
 
@@ -1650,21 +1785,12 @@ private struct HelperRun {
     var preempted = false
 }
 
-private func discardPreemptedSparseImage(_ arguments: [String]) {
-    guard arguments.count >= 3,
-        arguments[0] == "/usr/bin/hdiutil",
-        arguments[1] == "create"
-    else { return }
-    let image = arguments[arguments.count - 1]
-    guard image.contains("rv-inode-"), image.hasSuffix(".sparseimage") else { return }
-    unlink(image)
-}
-
 private func runToolBody(
     _ arguments: [String],
     honorCancellation: Bool,
     deadline: TimeInterval?,
-    yieldToPriorityWaiter: Bool
+    yieldToPriorityWaiter: Bool,
+    parkIfStuck: Bool = true
 ) -> HelperRun {
     guard let executable = arguments.first else {
         return HelperRun(output: ToolOutput(status: 1, stdout: "", stderr: "missing executable"))
@@ -1690,14 +1816,26 @@ private func runToolBody(
     var stdout = Data()
     var stderr = Data()
     let limit = deadline.map { Date().addingTimeInterval($0) }
+    var cancelLimit: Date?
     var interrupted = false
     var timedOut = false
     var preempted = false
     while process.isRunning {
         stdout.append(readToolPipe(outFD))
         stderr.append(readToolPipe(errFD))
+        // `honorCancellation` would SIGTERM on the first poll and leave a
+        // mount up. Umount and detach still have to finish, but once
+        // cancellation is visible their remaining time is the cancelled
+        // cap, not a 45-second default chosen before the flag flipped.
+        if cancelLimit == nil,
+            blockingWorkIsCancelled(),
+            let cap = DiskImageCancelBudget.urgentDeadline(arguments: arguments)
+        {
+            cancelLimit = Date().addingTimeInterval(cap)
+        }
         let cancelled = honorCancellation && blockingWorkIsCancelled()
         let expired = limit.map { Date() >= $0 } ?? false
+        let cancelExpired = cancelLimit.map { Date() >= $0 } ?? false
         // A cancelled teardown is waiting on the serialization lock.
         // Kill this helper immediately so that teardown can acquire the
         // lock inside its own deadline. `runTool` retries afterwards.
@@ -1708,9 +1846,9 @@ private func runToolBody(
             kill(process.processIdentifier, SIGKILL)
             break
         }
-        if cancelled || expired {
+        if cancelled || expired || cancelExpired {
             interrupted = true
-            timedOut = expired
+            timedOut = expired || cancelExpired
             process.terminate()
             let killAfter = Date().addingTimeInterval(0.5)
             while process.isRunning, Date() < killAfter {
@@ -1726,16 +1864,31 @@ private func runToolBody(
         usleep(10_000)
     }
     if interrupted {
-        let reapDeadline = Date().addingTimeInterval(0.25)
-        while process.isRunning, Date() < reapDeadline {
-            stdout.append(readToolPipe(outFD))
-            stderr.append(readToolPipe(errFD))
-            usleep(10_000)
-        }
-        if process.isRunning {
-            UnreapedToolProcesses.park(process)
-        } else {
+        // Diskimage helpers pass `parkIfStuck: false` and hold the
+        // serialization lock until this returns. Parking a preempted
+        // process and dropping the lock lets the next helper into
+        // diskimagesd while the first is still alive. Helpers that are
+        // not on that lock (the cancellation probe) may still park after
+        // a short reap so a stuck child cannot block `Process.deinit`.
+        if preempted || parkIfStuck == false {
+            while process.isRunning {
+                stdout.append(readToolPipe(outFD))
+                stderr.append(readToolPipe(errFD))
+                usleep(10_000)
+            }
             process.waitUntilExit()
+        } else {
+            let reapDeadline = Date().addingTimeInterval(DiskImageCancelBudget.preemptReap)
+            while process.isRunning, Date() < reapDeadline {
+                stdout.append(readToolPipe(outFD))
+                stderr.append(readToolPipe(errFD))
+                usleep(10_000)
+            }
+            if process.isRunning {
+                UnreapedToolProcesses.park(process)
+            } else {
+                process.waitUntilExit()
+            }
         }
     } else {
         process.waitUntilExit()

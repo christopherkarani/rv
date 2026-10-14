@@ -1,13 +1,13 @@
 import Foundation
 import Testing
 import RVDomain
-import RVPolicy
+@testable import RVPolicy
 
 /// Seam gate: every rollback path refuses (`blockedByFindings`, before
-/// anything is written) a restore that drops a live deny or ask, relaxes
-/// a surviving predicate's verdict, downgrades the safety level, or widens
-/// secret exemptions. The existing side is the live policy file
-/// enforcement loads. Dropping an allow is narrowing and still succeeds.
+/// anything is written) a restore that is weaker than the live file or
+/// weaker than the history head (sealed tail, or the repo JSONL head).
+/// Repo rollback holds `.policy.lock` across the live re-read, the gate,
+/// and the write. Dropping an allow is narrowing and still succeeds.
 @Suite("RollbackRiskGate")
 struct RollbackRiskGateTests {
     @Test func machineRollbackRefusesVerdictRelaxation() throws {
@@ -268,6 +268,201 @@ struct RollbackRiskGateTests {
         #expect(head.revision == 3)
         #expect(try store.loadMachineDocument().rules == [keep])
     }
+
+    @Test func rollbackRevivingAnAllowStillSucceeds() throws {
+        let root = try isolatedGateDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TypedRuleStore(baseDirectory: root)
+        let deny = protectiveRule("keep", verdict: .deny, predicate: .gitPush(force: .exactly(.force), branch: "main"))
+        let allow = protectiveRule("revived", verdict: .allow, predicate: .gitDiscardWorktree(pathspec: nil))
+        try store.saveMachine(PolicyDocument(rules: [deny, allow]))
+        try store.saveMachine(PolicyDocument(rules: [deny]))
+
+        let head = try store.rollbackMachine(to: 1)
+
+        #expect(head.revision == 3)
+        #expect(try store.loadMachineDocument().rules == [deny, allow])
+    }
+
+    @Test func deletedLiveFileCannotRestoreARevisionWeakerThanTheSealedHead() throws {
+        let root = try isolatedGateDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TypedRuleStore(baseDirectory: root)
+        let older = PolicyDocument(rules: [
+            protectiveRule("old", verdict: .allow, predicate: .gitPush(force: .exactly(.force), branch: "main")),
+        ])
+        let sealed = PolicyDocument(rules: [
+            protectiveRule("head", verdict: .deny, predicate: .gitDiscardWorktree(pathspec: nil)),
+        ])
+        try store.saveMachine(older)
+        try store.saveMachine(sealed)
+        try FileManager.default.removeItem(at: store.machineFileURL)
+
+        let report = try expectBlockedReport {
+            try store.rollbackMachine(toRevision: 1)
+        }
+
+        #expect(report.blockingFindings.contains {
+            $0.kind == .verdictRelaxed && $0.detail == "core.git:head deny->removed"
+        })
+        #expect(FileManager.default.fileExists(atPath: store.machineFileURL.path) == false)
+        #expect(try store.machineHistory().map(\.revision) == [1, 2])
+    }
+
+    @Test func weakenedLiveFileCannotRestoreARevisionWeakerThanTheSealedHead() throws {
+        let root = try isolatedGateDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TypedRuleStore(baseDirectory: root)
+        var older = PolicyDocument(rules: [
+            protectiveRule("gated", verdict: .allow, predicate: .gitPush(force: .exactly(.force), branch: "main")),
+        ])
+        older.allowPaths = ["~/.ssh/id_rsa"]
+        var sealed = PolicyDocument(rules: [
+            protectiveRule("gated", verdict: .deny, predicate: .gitPush(force: .exactly(.force), branch: "main")),
+        ])
+        sealed.safetyLevel = .strict
+        try store.saveMachine(older)
+        try store.saveMachine(sealed)
+        try Data(PolicyDocumentTOML.render(older).utf8).write(to: store.machineFileURL)
+        let liveBytes = try Data(contentsOf: store.machineFileURL)
+
+        let report = try expectBlockedReport {
+            try store.rollbackMachine(toRevision: 1)
+        }
+
+        #expect(report.blockingFindings.contains { $0.kind == .verdictRelaxed })
+        #expect(report.blockingFindings.contains { $0.kind == .safetyDowngrade })
+        #expect(report.blockingFindings.contains { $0.kind == .newSecretExemption })
+        #expect(try Data(contentsOf: store.machineFileURL) == liveBytes)
+        #expect(try store.machineHistory().map(\.revision) == [1, 2])
+    }
+
+    @Test func restoringTheSealedHeadSucceedsWhenTheLiveFileWasDeleted() throws {
+        let root = try isolatedGateDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TypedRuleStore(baseDirectory: root)
+        let older = PolicyDocument(rules: [
+            protectiveRule("old", verdict: .allow, predicate: .gitReset(mode: nil)),
+        ])
+        let sealed = PolicyDocument(rules: [
+            protectiveRule("head", verdict: .deny, predicate: .gitDiscardWorktree(pathspec: nil)),
+        ])
+        try store.saveMachine(older)
+        try store.saveMachine(sealed)
+        try FileManager.default.removeItem(at: store.machineFileURL)
+
+        _ = try store.rollbackMachine(toRevision: 2)
+
+        #expect(try store.loadMachineDocument() == sealed)
+    }
+
+    @Test func deletedRepoFileCannotRestoreARevisionWeakerThanTheHead() throws {
+        let config = try isolatedGateDirectory()
+        let workspace = try isolatedGateDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: config)
+            try? FileManager.default.removeItem(at: workspace)
+        }
+        let store = TypedRuleStore(baseDirectory: config)
+        let older = PolicyDocument(rules: [
+            protectiveRule("old", verdict: .allow, predicate: .gitPush(force: .exactly(.force), branch: "main")),
+        ])
+        let head = PolicyDocument(rules: [
+            protectiveRule("head", verdict: .ask, predicate: .gitDiscardWorktree(pathspec: nil)),
+        ])
+        try store.saveRepo(older, workspace: workspace)
+        try store.saveRepo(head, workspace: workspace)
+        let file = TypedRuleStore.repoFileURL(workspace: workspace)
+        try FileManager.default.removeItem(at: file)
+
+        let report = try expectBlockedReport {
+            try store.rollbackRepo(to: 1, workspace: workspace)
+        }
+
+        #expect(report.blockingFindings.contains {
+            $0.kind == .verdictRelaxed && $0.detail == "core.git:head ask->removed"
+        })
+        #expect(FileManager.default.fileExists(atPath: file.path) == false)
+        #expect(try store.listRepoRevisions(workspace: workspace).map(\.revision) == [1, 2])
+    }
+
+    @Test func repoRollbackRereadsTheLiveFileUnderThePolicyLock() throws {
+        let config = try isolatedGateDirectory()
+        let workspace = try isolatedGateDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: config)
+            try? FileManager.default.removeItem(at: workspace)
+        }
+        let store = TypedRuleStore(baseDirectory: config)
+        let keep = protectiveRule("keep", verdict: .deny, predicate: .gitPush(force: .exactly(.force), branch: "main"))
+        let narrowing = protectiveRule("narrowing", verdict: .allow, predicate: .gitReset(mode: nil))
+        let planted = protectiveRule("planted", verdict: .deny, predicate: .gitDiscardWorktree(pathspec: nil))
+        try store.saveRepo(PolicyDocument(rules: [keep]), workspace: workspace)
+        try store.saveRepo(PolicyDocument(rules: [keep, narrowing]), workspace: workspace)
+        let file = TypedRuleStore.repoFileURL(workspace: workspace)
+        let lock = file.deletingLastPathComponent().appendingPathComponent(".policy.lock")
+        let probe = RollbackLockProbe()
+        let plantedDocument = PolicyDocument(rules: [keep, narrowing, planted])
+
+        let report = try expectBlockedReport {
+            try store.rollbackRepo(to: 2, workspace: workspace, interlock: RepoRollbackInterlock(
+                beforeLiveRead: {
+                    probe.readLockHeld = RepoRollbackInterlock.policyLockIsHeld(at: lock)
+                    try? Data(PolicyDocumentTOML.render(plantedDocument).utf8).write(to: file)
+                },
+                beforeWrite: {
+                    probe.writeRan = true
+                }
+            ))
+        }
+
+        #expect(probe.readLockHeld)
+        #expect(probe.writeRan == false)
+        #expect(report.blockingFindings.contains {
+            $0.kind == .verdictRelaxed && $0.detail == "core.git:planted deny->removed"
+        })
+        #expect(try Data(contentsOf: file) == Data(PolicyDocumentTOML.render(plantedDocument).utf8))
+        #expect(try store.listRepoRevisions(workspace: workspace).map(\.revision) == [1, 2])
+    }
+
+    @Test func repoRollbackWriteStaysInsideThePolicyLock() throws {
+        let config = try isolatedGateDirectory()
+        let workspace = try isolatedGateDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: config)
+            try? FileManager.default.removeItem(at: workspace)
+        }
+        let store = TypedRuleStore(baseDirectory: config)
+        let keep = protectiveRule("keep", verdict: .deny, predicate: .gitPush(force: .exactly(.force), branch: "main"))
+        let allow = protectiveRule("dropped", verdict: .allow, predicate: .gitDiscardWorktree(pathspec: nil))
+        try store.saveRepo(PolicyDocument(rules: [keep]), workspace: workspace)
+        try store.saveRepo(PolicyDocument(rules: [keep, allow]), workspace: workspace)
+        let file = TypedRuleStore.repoFileURL(workspace: workspace)
+        let lock = file.deletingLastPathComponent().appendingPathComponent(".policy.lock")
+        let probe = RollbackLockProbe()
+
+        let head = try store.rollbackRepo(to: 1, workspace: workspace, interlock: RepoRollbackInterlock(
+            beforeLiveRead: {
+                probe.readLockHeld = RepoRollbackInterlock.policyLockIsHeld(at: lock)
+            },
+            beforeWrite: {
+                probe.writeLockHeld = RepoRollbackInterlock.policyLockIsHeld(at: lock)
+                probe.writeRan = true
+            }
+        ))
+
+        #expect(probe.readLockHeld)
+        #expect(probe.writeRan)
+        #expect(probe.writeLockHeld)
+        #expect(head.revision == 3)
+        #expect(try store.loadRepoDocument(workspace: workspace).rules == [keep])
+    }
+}
+
+private final class RollbackLockProbe {
+    var readLockHeld = false
+    var writeLockHeld = false
+    var writeRan = false
 }
 
 private func protectiveRule(
