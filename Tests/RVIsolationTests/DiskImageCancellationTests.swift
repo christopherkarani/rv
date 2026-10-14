@@ -572,11 +572,20 @@ struct DiskImageCancellationTests {
         let allowance: TimeInterval = 0.12
         let deadline = started.addingTimeInterval(DiskImageCancelBudget.detachCap + allowance)
         #expect(DiskImageCancelBudget.copyMayContinue(deadline: deadline, now: started))
+        // The copy budget above the detach reserve is 0.12s. A slow runner's
+        // sleep inside the first check used to expire that before any write.
+        // Admit the read and the pre-write recheck on the original instant,
+        // then sleep, so one slice lands and the rest of the fork does not.
+        var byteChecks = 0
         let copied = copyFileLeavingDetachReserve(
             from: source.fileDescriptor,
             to: destination.fileDescriptor,
             mayContinue: { point in
                 if point == .xattr { return false }
+                byteChecks += 1
+                if byteChecks <= 2 {
+                    return DiskImageCancelBudget.copyMayContinue(deadline: deadline, now: started)
+                }
                 Thread.sleep(forTimeInterval: 0.05)
                 return DiskImageCancelBudget.copyMayContinue(deadline: deadline, now: Date())
             },
@@ -597,6 +606,29 @@ struct DiskImageCancellationTests {
         #expect(diskImageLockWaitIsExpired(cancelled: false, cancelClockSpent: true) == false)
         #expect(diskImageLockWaitIsExpired(cancelled: true, cancelClockSpent: true))
         #expect(diskImageLockWaitIsExpired(cancelled: true, cancelClockSpent: false) == false)
+        let sliceStart = Date(timeIntervalSince1970: 5_000)
+        let sliceEnd = sliceStart.addingTimeInterval(45)
+        #expect(diskImageNextWaitDeadline(
+            current: sliceEnd,
+            now: sliceStart.addingTimeInterval(30),
+            cancelled: false,
+            cancelDeadline: nil
+        ) == sliceEnd)
+        #expect(diskImageLockWaitIsExpired(
+            cancelled: false,
+            cancelClockSpent: false,
+            acquireSliceSpent: true
+        ))
+        #expect(diskImageLockWaitIsExpired(
+            cancelled: false,
+            cancelClockSpent: true,
+            acquireSliceSpent: false
+        ) == false)
+        #expect(diskImageLockWaitIsExpired(
+            cancelled: true,
+            cancelClockSpent: false,
+            acquireSliceSpent: true
+        ) == false)
     }
 
     /// The closure returns while the helper is alive. The publication hold
@@ -683,23 +715,69 @@ struct DiskImageCancellationTests {
         ) == false)
         #expect(diskImagePublicationCanClear(
             helperStillAlive: true,
-            imageFileExists: false,
-            imageListed: false
+            diskCanStillAppear: false,
+            imageKnown: true
         ) == false)
+        let omittedWithoutWait = diskImageCanStillAppear(
+            helperStillAlive: false,
+            detachStatus: 0,
+            detachTimedOut: false,
+            detachOutput: "",
+            imageListedAfterDetach: false,
+            waitedForPublication: false
+        )
+        #expect(omittedWithoutWait)
         #expect(diskImagePublicationCanClear(
             helperStillAlive: false,
-            imageFileExists: true,
-            imageListed: nil
+            diskCanStillAppear: omittedWithoutWait,
+            imageKnown: true
         ) == false)
+        let nilListingCanAppear = diskImageCanStillAppear(
+            helperStillAlive: false,
+            detachStatus: 0,
+            detachTimedOut: false,
+            detachOutput: "",
+            imageListedAfterDetach: nil,
+            waitedForPublication: true
+        )
+        #expect(nilListingCanAppear)
         #expect(diskImagePublicationCanClear(
             helperStillAlive: false,
-            imageFileExists: false,
-            imageListed: nil
+            diskCanStillAppear: nilListingCanAppear,
+            imageKnown: true
+        ) == false)
+        let goneAfterWait = diskImageCanStillAppear(
+            helperStillAlive: false,
+            detachStatus: 0,
+            detachTimedOut: false,
+            detachOutput: "",
+            imageListedAfterDetach: false,
+            waitedForPublication: true
+        )
+        #expect(goneAfterWait == false)
+        #expect(diskImagePublicationCanClear(
+            helperStillAlive: false,
+            diskCanStillAppear: goneAfterWait,
+            imageKnown: true
         ))
         #expect(diskImagePublicationCanClear(
             helperStillAlive: false,
-            imageFileExists: true,
-            imageListed: false
+            diskCanStillAppear: true,
+            imageKnown: false
+        ))
+        #expect(diskImagePublicationHoldAfterUpdate(
+            updateKeepsHold: false,
+            planHasImage: false,
+            parkedImageKnown: false,
+            helperStillAlive: false,
+            diskCanStillAppear: false
+        ) == false)
+        #expect(diskImagePublicationHoldAfterUpdate(
+            updateKeepsHold: false,
+            planHasImage: false,
+            parkedImageKnown: true,
+            helperStillAlive: false,
+            diskCanStillAppear: false
         ))
         #expect(DiskImageCancelBudget.returnBound == 8)
     }
@@ -745,6 +823,33 @@ struct DiskImageCancellationTests {
         let alias = "/private/var/folders/ab/rv-inode-token.sparseimage"
         let local = "/var/folders/ab/rv-inode-token.sparseimage"
         #expect(diskImageSamePath(local, alias))
+        #expect(diskImageSamePath(
+            "/tmp/rv-inode-token.sparseimage",
+            "/private/tmp/rv-inode-token.sparseimage"
+        ))
+        #expect(diskImageSamePath(
+            "/private/var/folders/ab/rv-inode-token.sparseimage",
+            "/System/Volumes/Data/private/var/folders/ab/rv-inode-token.sparseimage"
+        ))
+        #expect(diskImageSamePath(
+            "/tmp/link/rv-inode-token.sparseimage",
+            "/private/var/folders/ab/rv-inode-token.sparseimage"
+        ))
+        #expect(diskImageInfoListingShowsImage(
+            parsedImageCount: 1,
+            identity: "/tmp/rv-inode-token.sparseimage",
+            imagePaths: ["/private/tmp/rv-inode-token.sparseimage"]
+        ) == true)
+        #expect(diskImageInfoListingShowsImage(
+            parsedImageCount: 1,
+            identity: "/tmp/link/rv-inode-token.sparseimage",
+            imagePaths: ["/private/var/folders/ab/rv-inode-token.sparseimage"]
+        ) == true)
+        #expect(diskImageInfoListingShowsImage(
+            parsedImageCount: 1,
+            identity: "/tmp/rv-inode-token.sparseimage",
+            imagePaths: ["/private/tmp/rv-inode-other.sparseimage"]
+        ) == false)
         let shown = diskImageInfoListingShowsImage(
             parsedImageCount: 1,
             identity: local,
@@ -972,6 +1077,53 @@ struct DiskImageCancellationTests {
         #expect(DiskImageCancelBudget.returnBound == 8)
         #expect(DiskImageCancelBudget.detachCap == 5)
     }
+
+    /// The backup lives on `temporaryDirectory`. The saved inode does not.
+    /// `rename` across those volumes is `EXDEV`. A short restore must not
+    /// leave the truncated file where the saved tree is.
+    @Test func shortRestoreAcrossDevicesDoesNotLeaveTheTruncatedInode() throws {
+        let temporary = FileManager.default.temporaryDirectory
+        let other = URL(fileURLWithPath: "/dev/shm")
+            .appendingPathComponent("rv-restore-exdev-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: other) }
+        #expect(diskImageSameDevice(temporary.path, other.path) == false)
+        let originalURL = other.appendingPathComponent(".rv-saved-token")
+        let sourceURL = other.appendingPathComponent("volume")
+        let originalBytes = Data(repeating: 0x41, count: 200_000)
+        let sourceBytes = Data(repeating: 0x42, count: 64)
+        try originalBytes.write(to: originalURL)
+        try sourceBytes.write(to: sourceURL)
+        let original = try FileHandle(forUpdating: originalURL)
+        let source = try FileHandle(forReadingFrom: sourceURL)
+        defer {
+            try? original.close()
+            try? source.close()
+        }
+        let outcome = replaceOriginalOnlyAfterStagedCopy(
+            source: source.fileDescriptor,
+            original: original.fileDescriptor,
+            originalPath: originalURL.path,
+            mayContinue: { point in
+                if point == .xattr { return true }
+                let size = descriptorSize(original.fileDescriptor) ?? -1
+                return size != 0
+            },
+            copyXattr: { _, _ in true }
+        )
+        #expect(outcome.reachedTruncate)
+        #expect(outcome.committed == false)
+        #expect(outcome.mayRenameOntoWorkspace == false)
+        if FileManager.default.fileExists(atPath: originalURL.path) {
+            #expect(try Data(contentsOf: originalURL) == originalBytes)
+        } else {
+            #expect(FileManager.default.fileExists(atPath: originalURL.path) == false)
+        }
+        let leftover = (try? Data(contentsOf: originalURL)) ?? Data([0])
+        #expect(leftover.isEmpty == false)
+        #expect(DiskImageCancelBudget.returnBound == 8)
+        #expect(DiskImageCancelBudget.detachCap == 5)
+    }
 }
 
 private func assertXattrCopyStopsBeforeDetachReserve() throws {
@@ -990,22 +1142,36 @@ private func assertXattrCopyStopsBeforeDetachReserve() throws {
         try? destination.close()
     }
     let name = "user.rv-fork"
-    let value = [UInt8](repeating: 3, count: 24 * 1024)
+    // Inline user attributes top out near 4KB here. Three chunks still
+    // make one get and one set of the whole value fail this test.
+    let value = [UInt8](repeating: 3, count: 3_000)
     let wrote = writeXattr(source.fileDescriptor, name, value)
+    #expect(wrote)
     if wrote {
+        let trace = XattrCopyTrace()
+        let chunk = 1_000
         var checks = 0
+        let started = Date()
+        // Enough checks for the old integer walk to accept this value and
+        // for one fsetxattr of all of it. A windowed copy stops first.
         let copied = copyXattrsObservingClock(
             from: source.fileDescriptor,
             to: destination.fileDescriptor,
-            chunkBytes: 8 * 1024
+            chunkBytes: chunk,
+            trace: trace
         ) {
             checks += 1
-            return checks < 2
+            return checks <= 2 + (value.count / chunk)
         }
         #expect(copied == false)
         #expect(checks >= 1)
+        #expect(trace.largestRead > 0)
+        #expect(trace.largestRead <= chunk)
+        #expect(trace.largestRead < value.count)
+        #expect(trace.largestWrite < value.count)
         let landed = readXattr(destination.fileDescriptor, name)?.count ?? 0
         #expect(landed < value.count)
+        #expect(Date().timeIntervalSince(started) < DiskImageCancelBudget.returnBound)
     }
     var walked = 0
     let stopped = copyXattrBytesObservingClock(byteCount: 192 * 1024, chunkBytes: 64 * 1024) {
@@ -1023,6 +1189,9 @@ private func assertXattrCopyStopsBeforeDetachReserve() throws {
         fcopyChecks += 1
         return fcopyChecks < 2
     }
-    #expect(fcopy == false || fcopyChecks >= 1)
+    #expect(fcopy == false)
+    #expect(fcopyChecks >= 1)
+    let fcopyLanded = readXattr(destination.fileDescriptor, name)?.count ?? 0
+    #expect(fcopyLanded < value.count)
     #endif
 }

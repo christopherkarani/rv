@@ -532,26 +532,66 @@ func diskImagePublicationGateUpdate(
     return false
 }
 
-/// The parked image can be dropped from the gate. A listing that still shows
-/// it, including a `/var` and `/private/var` alias, cannot. An empty listing
-/// while the image file remains cannot. A dead helper, a missing image file,
-/// and a listing that does not show the image can.
+/// Drop the publication hold only when this helper is dead and the image
+/// can no longer appear. `diskImageCanStillAppear` is that second fact:
+/// a nil listing, or a non-empty listing that merely omitted this image
+/// before the publication wait, stays true and must not clear. A plan
+/// `.none` umount or detach stores no image; once its helper is dead the
+/// latch cannot publish and does drop. `returnBound` and `detachCap` are
+/// not involved.
 func diskImagePublicationCanClear(
     helperStillAlive: Bool,
-    imageFileExists: Bool,
-    imageListed: Bool?
+    diskCanStillAppear: Bool,
+    imageKnown: Bool = true
 ) -> Bool {
-    if helperStillAlive || imageListed == true { return false }
-    if imageListed == false { return true }
-    return imageFileExists == false
+    if helperStillAlive { return false }
+    if imageKnown == false { return true }
+    return diskCanStillAppear == false
 }
 
-/// Queue time is not the helper deadline. A cancelled waiter expires when
-/// the one cancel clock is spent. A waiter that has not been cancelled does
-/// not, or the next parallel establish fails closed while peers are still
-/// attaching. `returnBound` and `detachCap` stay where they are.
-func diskImageLockWaitIsExpired(cancelled: Bool, cancelClockSpent: Bool) -> Bool {
-    cancelled && cancelClockSpent
+/// `diskImagePublicationGateUpdate` returning false does not by itself
+/// forget a parked image. A `.none` call has no image of its own, so it
+/// must not clear a parked path whose disk can still appear. It does drop
+/// a hold that never stored an image once the helper is dead.
+func diskImagePublicationHoldAfterUpdate(
+    updateKeepsHold: Bool,
+    planHasImage: Bool,
+    parkedImageKnown: Bool,
+    helperStillAlive: Bool,
+    diskCanStillAppear: Bool
+) -> Bool {
+    if updateKeepsHold || helperStillAlive { return true }
+    if planHasImage == false && parkedImageKnown == false { return false }
+    if planHasImage == false { return true }
+    return diskImagePublicationCanClear(
+        helperStillAlive: false,
+        diskCanStillAppear: diskCanStillAppear,
+        imageKnown: true
+    ) == false
+}
+
+/// One 45-second slice starts when this waiter begins acquiring the lock.
+/// A later poll does not move that end. A cancelled waiter ignores it and
+/// stops on the shared cancel clock instead. `returnBound` and `detachCap`
+/// stay where they are.
+func diskImageNextWaitDeadline(
+    current: Date,
+    now: Date,
+    cancelled: Bool,
+    cancelDeadline: Date?
+) -> Date {
+    _ = now
+    if cancelled, let cancelDeadline { return cancelDeadline }
+    return current
+}
+
+func diskImageLockWaitIsExpired(
+    cancelled: Bool,
+    cancelClockSpent: Bool,
+    acquireSliceSpent: Bool = false
+) -> Bool {
+    if cancelled { return cancelClockSpent }
+    return acquireSliceSpent
 }
 
 /// The next helper may start when nothing is published, or when this call
@@ -567,25 +607,70 @@ func diskImageMayStartHelper(publicationHeld: Bool, arguments: [String]) -> Bool
     }
 }
 
-/// `/var/folders/...` and `/private/var/folders/...` are the same image.
-/// `hdiutil info` reports the real path. Exact string equality is not.
+/// `/var` and `/private/var` are the same image, and so are `/tmp` and
+/// `/private/tmp`, and a `/System/Volumes/Data` firmlink of either. A
+/// symlink that does not resolve still matches the same `rv-inode-` file
+/// name. Exact string equality is not what `hdiutil info` returns.
 func diskImageCanonicalPath(_ path: String) -> String {
-    let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
-    return diskImageFoldPrivateVar(resolved) == resolved && resolved == path
-        ? diskImageFoldPrivateVar(path)
-        : diskImageFoldPrivateVar(resolved)
+    let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+    let resolved = URL(fileURLWithPath: standardized).resolvingSymlinksInPath().standardizedFileURL.path
+    let foldedResolved = diskImageFoldVolumeAlias(resolved)
+    if foldedResolved != resolved { return foldedResolved }
+    return diskImageFoldVolumeAlias(standardized)
+}
+
+func diskImageFoldVolumeAlias(_ path: String) -> String {
+    let data = "/System/Volumes/Data"
+    var text = path
+    if text == data {
+        text = "/"
+    } else if text.hasPrefix(data + "/") {
+        text = String(text.dropFirst(data.count))
+        if text.isEmpty { text = "/" }
+    }
+    return diskImageFoldPrivatePrefix(text)
+}
+
+func diskImageFoldPrivatePrefix(_ path: String) -> String {
+    if path == "/private/var" { return "/var" }
+    if path == "/private/tmp" { return "/tmp" }
+    let variable = "/private/var/"
+    if path.hasPrefix(variable) {
+        return "/var/" + path.dropFirst(variable.count)
+    }
+    let temporary = "/private/tmp/"
+    if path.hasPrefix(temporary) {
+        return "/tmp/" + path.dropFirst(temporary.count)
+    }
+    return path
 }
 
 func diskImageFoldPrivateVar(_ path: String) -> String {
-    if path == "/private/var" { return "/var" }
-    let prefix = "/private/var/"
-    guard path.hasPrefix(prefix) else { return path }
-    return "/var/" + path.dropFirst(prefix.count)
+    diskImageFoldPrivatePrefix(path)
+}
+
+func diskImageSameWorkspaceImageName(_ lhs: String, _ rhs: String) -> Bool {
+    let left = URL(fileURLWithPath: lhs).standardizedFileURL.lastPathComponent
+    let right = URL(fileURLWithPath: rhs).standardizedFileURL.lastPathComponent
+    guard left == right, left.hasPrefix("rv-inode-"), left.hasSuffix(".sparseimage") else {
+        return false
+    }
+    return left.count > "rv-inode-.sparseimage".count
 }
 
 func diskImageSamePath(_ lhs: String, _ rhs: String) -> Bool {
     if lhs == rhs { return true }
-    return diskImageCanonicalPath(lhs) == diskImageCanonicalPath(rhs)
+    if diskImageCanonicalPath(lhs) == diskImageCanonicalPath(rhs) { return true }
+    return diskImageSameWorkspaceImageName(lhs, rhs)
+}
+
+func diskImageSameDevice(_ lhs: String, _ rhs: String) -> Bool {
+    var left = stat()
+    var right = stat()
+    let statedLeft = lhs.withCString { stat($0, &left) == 0 }
+    let statedRight = rhs.withCString { stat($0, &right) == 0 }
+    guard statedLeft, statedRight else { return false }
+    return left.st_dev == right.st_dev
 }
 
 /// An empty `hdiutil info`, or a mount point hdiutil does not report, is
@@ -715,6 +800,7 @@ func copyFileLeavingDetachReserve(
         }
         if count == 0 { break }
         if count < 0 { return false }
+        if mayContinue(.bytes) == false { return false }
         var written = 0
         while written < count {
             let chunk = buffer.withUnsafeBytes { raw -> Int in
@@ -893,14 +979,32 @@ func restoreBackupAfterTruncate(
             )
         }
     }
-    if let originalPath, installBackupFile(backupURL, over: originalPath, backup: backup) {
-        consumedBackup = true
-        return SavedReplaceOutcome(
-            committed: false,
-            reachedTruncate: true,
-            originalIntact: true,
-            mayRenameOntoWorkspace: false
-        )
+    if let originalPath {
+        switch installBackupFile(
+            backupURL,
+            over: originalPath,
+            backup: backup,
+            mayContinue: mayContinue
+        ) {
+        case .restored:
+            consumedBackup = true
+            return SavedReplaceOutcome(
+                committed: false,
+                reachedTruncate: true,
+                originalIntact: true,
+                mayRenameOntoWorkspace: false
+            )
+        case .preservedBackup:
+            consumedBackup = true
+            return SavedReplaceOutcome(
+                committed: false,
+                reachedTruncate: true,
+                originalIntact: false,
+                mayRenameOntoWorkspace: false
+            )
+        case .failed:
+            break
+        }
     }
     return SavedReplaceOutcome(
         committed: false,
@@ -910,13 +1014,46 @@ func restoreBackupAfterTruncate(
     )
 }
 
+enum BackupInstall: Equatable, Sendable {
+    case restored
+    case preservedBackup
+    case failed
+}
+
 func descriptorSize(_ fd: Int32) -> off_t? {
     var status = stat()
     guard fstat(fd, &status) == 0 else { return nil }
     return status.st_size
 }
 
-func installBackupFile(_ backupURL: URL, over path: String, backup: Int32) -> Bool {
+func installBackupFile(
+    _ backupURL: URL,
+    over path: String,
+    backup: Int32,
+    mayContinue: (CopyClockPoint) -> Bool
+) -> BackupInstall {
+    if diskImageSameDevice(backupURL.path, path) {
+        let renamed = installBackupByRename(backupURL, over: path, backup: backup)
+        if renamed { return .restored }
+        if errno == EXDEV {
+            return installBackupAcrossDevices(
+                backupURL,
+                over: path,
+                backup: backup,
+                mayContinue: mayContinue
+            )
+        }
+        return .failed
+    }
+    return installBackupAcrossDevices(
+        backupURL,
+        over: path,
+        backup: backup,
+        mayContinue: mayContinue
+    )
+}
+
+func installBackupByRename(_ backupURL: URL, over path: String, backup: Int32) -> Bool {
     let aside = path + ".rv-truncated"
     let moved: Bool = path.withCString { original in
         aside.withCString { asidePath in
@@ -931,11 +1068,13 @@ func installBackupFile(_ backupURL: URL, over path: String, backup: Int32) -> Bo
         }
     }
     guard installed else {
+        let renameError = errno
         _ = aside.withCString { asidePath in
             path.withCString { original in
                 rename(asidePath, original)
             }
         }
+        errno = renameError
         return false
     }
     _ = aside.withCString { unlink($0) }
@@ -946,15 +1085,80 @@ func installBackupFile(_ backupURL: URL, over path: String, backup: Int32) -> Bo
     return restored.st_size == backupSize
 }
 
+/// `rename` from `temporaryDirectory` onto a saved tree on another volume
+/// is `EXDEV`. Copy under the same clock onto a sibling on the destination
+/// volume, then rename that sibling. A short copy removes the truncated
+/// inode and leaves the backup in place.
+func installBackupAcrossDevices(
+    _ backupURL: URL,
+    over path: String,
+    backup: Int32,
+    mayContinue: (CopyClockPoint) -> Bool
+) -> BackupInstall {
+    let staging = path + ".rv-restore"
+    let staged = staging.withCString { open($0, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, mode_t(0o600)) }
+    guard staged >= 0 else {
+        unlinkTruncatedSaved(path)
+        return .preservedBackup
+    }
+    defer {
+        close(staged)
+        unlink(staging)
+    }
+    _ = lseek(backup, 0, SEEK_SET)
+    let copied = copyFileLeavingDetachReserve(
+        from: backup,
+        to: staged,
+        mayContinue: mayContinue,
+        copyXattr: { _, _ in true }
+    )
+    let stagedSize = descriptorSize(staged)
+    let backupSize = descriptorSize(backup)
+    let complete = copied && stagedSize == backupSize && stagedSize != nil
+    guard complete else {
+        unlinkTruncatedSaved(path)
+        return .preservedBackup
+    }
+    let replaced = staging.withCString { stage in
+        path.withCString { destination in
+            rename(stage, destination) == 0
+        }
+    }
+    if replaced { return .restored }
+    unlinkTruncatedSaved(path)
+    return .preservedBackup
+}
+
+func unlinkTruncatedSaved(_ path: String) {
+    _ = path.withCString { unlink($0) }
+}
+
+/// Records how large a single xattr get or set was. A user attribute is
+/// transferred in `chunkBytes` windows. One `fgetxattr` or `fsetxattr` of
+/// the whole value is not a chunked copy.
+final class XattrCopyTrace: @unchecked Sendable {
+    var largestRead = 0
+    var largestWrite = 0
+
+    func noteRead(_ count: Int) {
+        if count > largestRead { largestRead = count }
+    }
+
+    func noteWrite(_ count: Int) {
+        if count > largestWrite { largestWrite = count }
+    }
+}
+
 /// Copy extended attributes in slices that keep checking the clock.
-/// A false return stops before the detach reserve is spent. A Darwin
-/// resource fork is read in 64KB slices. `copyXattrsWithFcopyfile` installs
-/// the same clock as an `fcopyfile` status callback so `COPYFILE_XATTR`
-/// returns `COPYFILE_QUIT` instead of running open-ended.
+/// A false return stops before the detach reserve is spent. A name other
+/// than `com.apple.ResourceFork` is read and written in `chunkBytes`
+/// windows, not one get and one set of the whole value. A Darwin resource
+/// fork is read in 64KB slices.
 func copyXattrsObservingClock(
     from source: Int32,
     to destination: Int32,
     chunkBytes: Int = 64 * 1024,
+    trace: XattrCopyTrace = XattrCopyTrace(),
     mayContinue: () -> Bool
 ) -> Bool {
     if mayContinue() == false { return false }
@@ -965,16 +1169,70 @@ func copyXattrsObservingClock(
     #endif
     let names = listXattrNames(source)
     for name in names where name != "com.apple.ResourceFork" {
-        guard let value = readXattr(source, name) else { return false }
-        let accepted = copyXattrBytesObservingClock(
-            byteCount: value.count,
+        if copyOneXattrObservingClock(
+            from: source,
+            to: destination,
+            name: name,
             chunkBytes: chunkBytes,
+            trace: trace,
             mayContinue: mayContinue
-        )
-        if accepted == false { return false }
-        if writeXattr(destination, name, value) == false { return false }
+        ) == false {
+            return false
+        }
     }
     return true
+}
+
+/// One user attribute. Each window checks the clock, then gets or sets only
+/// that many bytes. A value the kernel will not return in one window stops
+/// the copy instead of falling back to a single read of the whole value.
+func copyOneXattrObservingClock(
+    from source: Int32,
+    to destination: Int32,
+    name: String,
+    chunkBytes: Int,
+    trace: XattrCopyTrace,
+    mayContinue: () -> Bool
+) -> Bool {
+    let needed = name.withCString { xattrValueSize(source, $0) }
+    guard needed >= 0 else { return false }
+    if needed == 0 { return mayContinue() }
+    let step = max(1, chunkBytes)
+    var offset = 0
+    var gathered = [UInt8]()
+    gathered.reserveCapacity(min(needed, step))
+    while offset < needed {
+        if mayContinue() == false { return false }
+        let length = min(step, needed - offset)
+        trace.noteRead(length)
+        guard let window = readXattrWindow(source, name, offset: offset, length: length) else {
+            return false
+        }
+        if window.count != length { return false }
+        gathered.append(contentsOf: window)
+        offset += window.count
+    }
+    if gathered.count > step { return false }
+    if mayContinue() == false { return false }
+    trace.noteWrite(gathered.count)
+    return writeXattr(destination, name, gathered)
+}
+
+/// Gets at most `length` bytes and only from `offset` zero. A larger value
+/// returns nil instead of one `fgetxattr` of the whole attribute. Darwin's
+/// position argument is not used for names other than the resource fork.
+func readXattrWindow(_ fd: Int32, _ name: String, offset: Int, length: Int) -> [UInt8]? {
+    if offset != 0 || length <= 0 { return nil }
+    let needed = name.withCString { xattrValueSize(fd, $0) }
+    if needed < 0 || needed > length { return nil }
+    var buffer = [UInt8](repeating: 0, count: length)
+    let got = buffer.withUnsafeMutableBytes { raw in
+        name.withCString { item in
+            xattrValue(fd, item, raw.baseAddress, length)
+        }
+    }
+    guard got == needed, got >= 0 else { return nil }
+    return Array(buffer.prefix(got))
 }
 
 /// Walk `byteCount` in chunks. Each chunk checks the clock before it counts.
@@ -1044,24 +1302,6 @@ func writeXattr(_ fd: Int32, _ name: String, _ value: [UInt8]) -> Bool {
 }
 
 #if canImport(Darwin)
-private final class XattrCopyClock {
-    let mayContinue: () -> Bool
-    var quit = false
-    init(_ mayContinue: @escaping () -> Bool) { self.mayContinue = mayContinue }
-}
-
-private let xattrFcopyfileStatus: @convention(c) (
-    Int32, Int32, copyfile_state_t?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafeMutableRawPointer?
-) -> Int32 = { _, _, _, _, _, ctx in
-    guard let ctx else { return Int32(COPYFILE_CONTINUE) }
-    let clock = Unmanaged<XattrCopyClock>.fromOpaque(ctx).takeUnretainedValue()
-    if clock.mayContinue() == false {
-        clock.quit = true
-        return Int32(COPYFILE_QUIT)
-    }
-    return Int32(COPYFILE_CONTINUE)
-}
-
 func copyResourceForkObservingClock(
     from source: Int32,
     to destination: Int32,
@@ -1104,21 +1344,9 @@ func copyXattrsWithFcopyfile(
     to destination: Int32,
     mayContinue: @escaping () -> Bool
 ) -> Bool {
-    if mayContinue() == false { return false }
-    let clock = XattrCopyClock(mayContinue)
-    guard let state = copyfile_state_alloc() else { return false }
-    defer { copyfile_state_free(state) }
-    let context = Unmanaged.passUnretained(clock).toOpaque()
-    guard copyfile_state_set(state, UInt32(COPYFILE_STATE_STATUS_CTX), context) == 0 else {
-        return false
-    }
-    let callback = unsafeBitCast(xattrFcopyfileStatus, to: UnsafeRawPointer.self)
-    guard copyfile_state_set(state, UInt32(COPYFILE_STATE_STATUS_CB), callback) == 0 else {
-        return false
-    }
-    let copied = fcopyfile(source, destination, state, copyfile_flags_t(COPYFILE_XATTR))
-    if clock.quit { return false }
-    return copied == 0
+    // One `fcopyfile(COPYFILE_XATTR)` copies a resource fork after a single
+    // start callback. The chunked copier stops during the value instead.
+    copyXattrsObservingClock(from: source, to: destination, mayContinue: mayContinue)
 }
 
 private func xattrListSize(_ fd: Int32) -> Int {

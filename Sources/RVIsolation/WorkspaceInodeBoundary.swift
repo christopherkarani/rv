@@ -1767,12 +1767,19 @@ private enum DiskImageToolSerialization {
             parkedDiskCanStillAppear: parked.held && parkedAlive,
             publicationAlreadyHeld: parked.held
         )
+        let keep = diskImagePublicationHoldAfterUpdate(
+            updateKeepsHold: held,
+            planHasImage: diskImagePublicationImage(plan) != nil,
+            parkedImageKnown: parked.image?.isEmpty == false,
+            helperStillAlive: helperStillAlive || parkedAlive,
+            diskCanStillAppear: diskCanStillAppear
+        )
         publication.withLock { state in
-            if held {
+            if keep {
                 state.held = true
                 if let image = diskImagePublicationImage(plan) { state.image = image }
                 if pid > 1 { state.pid = pid }
-            } else if parked.held == false {
+            } else {
                 state.held = false
                 state.image = nil
                 state.pid = 0
@@ -1785,18 +1792,48 @@ private enum DiskImageToolSerialization {
     /// file still present, or a `/private/var` alias of that image, keeps it.
     static func clearPublicationGateIfDiskIsGone(clock: DiskImageCancelClock) {
         let parked = publication.withLock { $0 }
-        guard parked.held, let image = parked.image, image.isEmpty == false else { return }
-        if parked.pid > 1, kill(parked.pid, 0) == 0 { return }
+        guard parked.held else { return }
+        let helperAlive = parked.pid > 1 && kill(parked.pid, 0) == 0
+        guard let image = parked.image, image.isEmpty == false else {
+            guard diskImagePublicationCanClear(
+                helperStillAlive: helperAlive,
+                diskCanStillAppear: false,
+                imageKnown: false
+            ) else { return }
+            publication.withLock { state in
+                let stillNoImage = state.image == nil || state.image?.isEmpty == true
+                let alive = state.pid > 1 && kill(state.pid, 0) == 0
+                guard state.held, stillNoImage, alive == false else { return }
+                state.held = false
+                state.image = nil
+                state.pid = 0
+            }
+            return
+        }
+        if helperAlive { return }
+        let allowance = DiskImageCancelBudget.preemptCleanup
+        if allowance > 0 {
+            usleep(UInt32(allowance * 1_000_000))
+        }
         let deadline = Date().addingTimeInterval(DiskImageCancelBudget.preemptReap)
         let listed = workspaceImageListed(image, returnDeadline: deadline, clock: clock)
-        let exists = FileManager.default.fileExists(atPath: image)
+        let canAppear = diskImageCanStillAppear(
+            helperStillAlive: false,
+            detachStatus: 0,
+            detachTimedOut: false,
+            detachOutput: "",
+            imageListedAfterDetach: listed,
+            waitedForPublication: true
+        )
         guard diskImagePublicationCanClear(
             helperStillAlive: false,
-            imageFileExists: exists,
-            imageListed: listed
+            diskCanStillAppear: canAppear,
+            imageKnown: true
         ) else { return }
         publication.withLock { state in
             guard let current = state.image, diskImageSamePath(current, image) else { return }
+            let alive = state.pid > 1 && kill(state.pid, 0) == 0
+            guard alive == false else { return }
             state.held = false
             state.image = nil
             state.pid = 0
@@ -1988,6 +2025,8 @@ private func runTool(
     // diskimagesd failure. The preempted helper is reaped, and a partial
     // image, attach, or mount is cleaned, before the lock drops.
     let helperSlice = deadline
+    // One slice, started as this waiter begins acquiring. A later poll
+    // must not move it, or the wait never ends before the job cap.
     var yieldBudget = Date().addingTimeInterval(deadline ?? 45)
     var notedPriority = false
     var protectNext = false
@@ -2004,15 +2043,29 @@ private func runTool(
             // The wait is the sequence clock. A 45-second default, or a
             // 0.5-second umount slice, must not expire it while a peer
             // still holds the lock.
-            yieldBudget = end
+            yieldBudget = diskImageNextWaitDeadline(
+                current: end,
+                now: Date(),
+                cancelled: true,
+                cancelDeadline: end
+            )
             if diskImageLockWaitIsExpired(cancelled: true, cancelClockSpent: Date() >= end) {
                 return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
             }
         } else {
-            // Parallel establishes share this lock. Time spent queued behind
-            // a peer is not the helper deadline, or the last waiter comes
-            // back as a failed inode boundary while the peers are healthy.
-            yieldBudget = Date().addingTimeInterval(deadline ?? 45)
+            yieldBudget = diskImageNextWaitDeadline(
+                current: yieldBudget,
+                now: Date(),
+                cancelled: false,
+                cancelDeadline: nil
+            )
+            if diskImageLockWaitIsExpired(
+                cancelled: false,
+                cancelClockSpent: false,
+                acquireSliceSpent: Date() >= yieldBudget
+            ) {
+                return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
+            }
         }
         if blockingWorkIsCancelled(), notedPriority == false {
             DiskImageToolSerialization.notePriorityWaiter()
@@ -2197,7 +2250,8 @@ private func runTool(
             protectNext = true
             if diskImageLockWaitIsExpired(
                 cancelled: clock.deadline != nil,
-                cancelClockSpent: Date() >= yieldBudget
+                cancelClockSpent: Date() >= yieldBudget,
+                acquireSliceSpent: Date() >= yieldBudget
             ) {
                 return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
             }
