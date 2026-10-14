@@ -644,6 +644,23 @@ struct MCPCommandTests {
             #"["ctx7sk-12345678g\#("\u{FEFF}")hp_12345678"]"#,
             #"["ctx7sk-12345678g\#("\u{2060}")hp_12345678"]"#,
             #"["ctx7sk-12345678g%E2%80%8Bhp_12345678"]"#,
+            #"["ctx7sk-12345678g\#("\u{200E}")hp_12345678"]"#,
+            #"["--api-key","ctx7sk-12345678g\#("\u{200E}")hp_12345678"]"#,
+            #"["ctx7sk-12345678g\#("\u{200F}")hp_12345678"]"#,
+            #"["ctx7sk-12345678g\#("\u{061C}")hp_12345678"]"#,
+            #"["sk-12345678g\#("\u{200E}")hp_12345678"]"#,
+            #"["ctx7sk-12345678g\#("\u{2063}")hp_12345678"]"#,
+            #"["ctx7sk-12345678g\#("\u{180E}")hp_12345678"]"#,
+            #"["ctx7sk-12345678g\#("\u{00A0}")hp_1234567890abcdefghij"]"#,
+            #"["ctx7sk-12345678g%E2%80%8Ehp_12345678"]"#,
+            #"["wss://example.com/http://\#(password)@collector.example"]"#,
+            #"["wss://example.com/https://\#(password)@collector.example"]"#,
+            #"["postgres://db.example/http://\#(password)@collector.example"]"#,
+            #"["postgres://db.example/https://\#(password)@collector.example"]"#,
+            #"["postgres://http://\#(password)@db.example/app"]"#,
+            #"["--cwd=wss://example.com/http://\#(password)@collector.example"]"#,
+            #"["wss://example.com/http:%5C%5C\#(password)@collector.example"]"#,
+            #"["wss://example.com/https:%5C%5C\#(password)@collector.example"]"#,
         ]
         for args in hidden {
             let home = Fixture()
@@ -657,6 +674,7 @@ struct MCPCommandTests {
             let text = review.withLock { $0 } + result
             #expect(text.contains(token) == false, "\(args)")
             #expect(text.contains("ghp_") == false, "\(args)")
+            #expect(text.contains("${secret:") == false, "\(args)")
             #expect(text.contains(password) == false, "\(args)")
             #expect(result.contains("nothing to import"), "\(args)")
             #expect(FileManager.default.fileExists(atPath: home.config.appendingPathComponent("mcp.json").path) == false)
@@ -787,6 +805,158 @@ struct MCPCommandTests {
         #expect(apiResult.contains("${secret:") == false)
         #expect(apiResult.contains("nothing to import"))
         #expect(apiKey.keychain.items.withLock { $0 }.isEmpty)
+    }
+
+    @Test func importRefusesASecondPrefixThatDoesNotLookLikeOneToken() async throws {
+        let token = "ghp_1234567890abcdefghij"
+        let envValues = [
+            "ctx7sk-12345678%20^\(token)",
+            "ctx7sk-12345678%20%67hp_1234567890abcdefghij",
+            "xctx7sk-12345678^\(token)",
+            " ctx7sk-12345678^\(token)",
+            "ctx7sk-12345678 ^\(token)",
+            "ctx7sk-12345678://\(token)",
+            ".ctx7sk-12345678^\(token)",
+            "%2Ectx7sk-12345678^\(token)",
+            "ctx7sk-12345678%3A%2F%2F\(token)",
+            "ctx7sk-12345678g\u{200E}hp_1234567890abcdefghij",
+            "ctx7sk-12345678g\u{200F}hp_1234567890abcdefghij",
+            "ctx7sk-12345678g\u{061C}hp_1234567890abcdefghij",
+            "ctx7sk-12345678g\u{2063}hp_1234567890abcdefghij",
+            "ctx7sk-12345678g\u{180E}hp_1234567890abcdefghij",
+            "ctx7sk-12345678g\u{00A0}hp_1234567890abcdefghij",
+            "ctx7sk-12345678g\u{2061}hp_1234567890abcdefghij",
+            "ctx7sk-12345678g\u{202A}hp_1234567890abcdefghij",
+            "ctx7sk-12345678g%E2%80%8Ehp_1234567890abcdefghij",
+        ]
+        for value in envValues {
+            for variable in ["GITHUB_TOKEN", "LOG_LEVEL"] {
+                let home = Fixture()
+                let encoded = value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+                try home.write(
+                    ".cursor/mcp.json",
+                    #"{"mcpServers":{"db":{"command":"db-mcp","env":{"\#(variable)":"\#(encoded)"}}}}"#)
+                let review = Mutex("")
+                let result = try await MCPRun.importServers(
+                    host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                    environment: home.environment(presence: Self.present),
+                    show: { text in review.withLock { $0 += text } }
+                ).get()
+                let text = review.withLock { $0 } + result
+                #expect(text.contains(token) == false, "\(variable) \(value)")
+                #expect(text.contains("ghp_") == false, "\(variable)")
+                #expect(text.contains("${secret:") == false, "\(variable) \(text)")
+                #expect(result.contains("nothing to import"), "\(variable)")
+                #expect(home.keychain.items.withLock { $0 }.isEmpty)
+            }
+        }
+
+        let headers: [(String, String)] = [
+            ("Authorization", "Bearer ctx7sk-12345678%20^\(token)"),
+            ("Authorization", "Bearer%20ctx7sk-12345678^\(token)"),
+            ("Authorization", "Bearer xctx7sk-12345678^\(token)"),
+            ("Authorization", "Bearer ctx7sk-12345678g\u{200E}hp_1234567890abcdefghij"),
+            ("X-API-Key", "sk-12345678%20^\(token)"),
+            ("X-API-Key", "sk-12345678%20%67hp_1234567890abcdefghij"),
+            ("X-API-Key", "xsk-12345678^\(token)"),
+            ("X-API-Key", "sk-12345678g\u{2063}hp_1234567890abcdefghij"),
+            ("X-API-Key", "sk-12345678g\u{00A0}hp_1234567890abcdefghij"),
+            ("Cookie", "ctx7sk-12345678%20^\(token)"),
+            ("Cookie", "ctx7sk-12345678g\u{180E}hp_1234567890abcdefghij"),
+            ("Proxy-Authorization", "Basic\u{00A0}ctx7sk-12345678^\(token)"),
+        ]
+        for (header, value) in headers {
+            let home = Fixture()
+            let encoded = value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+            try home.write(
+                ".cursor/mcp.json",
+                #"{"mcpServers":{"api":{"url":"https://mcp.example/mcp","headers":{"\#(header)":"\#(encoded)"}}}}"#)
+            let review = Mutex("")
+            let result = try await MCPRun.importServers(
+                host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                environment: home.environment(presence: Self.present),
+                show: { text in review.withLock { $0 += text } }
+            ).get()
+            let text = review.withLock { $0 } + result
+            #expect(text.contains(token) == false, "\(header)")
+            #expect(text.contains("ghp_") == false, "\(header) \(text)")
+            #expect(text.contains("${secret:") == false, "\(header) \(text)")
+            #expect(result.contains("nothing to import"), "\(header) \(text)")
+            #expect(home.keychain.items.withLock { $0 }.isEmpty)
+        }
+
+        let tabbed = Fixture()
+        try tabbed.write(
+            ".cursor/mcp.json",
+            #"{"mcpServers":{"api":{"url":"https://mcp.example/mcp","headers":{"Authorization":"Bearer\tctx7sk-12345678^\#(token)"}}}}"#)
+        let tabbedReview = Mutex("")
+        let tabbedResult = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: tabbed.environment(presence: Self.present),
+            show: { text in tabbedReview.withLock { $0 += text } }
+        ).get()
+        let tabbedText = tabbedReview.withLock { $0 } + tabbedResult
+        #expect(tabbedText.contains(token) == false, "\(tabbedText)")
+        #expect(tabbedText.contains("ghp_") == false, "\(tabbedText)")
+        #expect(tabbedText.contains("${secret:") == false, "\(tabbedText)")
+        #expect(tabbedResult.contains("nothing to import"))
+        #expect(tabbed.keychain.items.withLock { $0 }.isEmpty)
+
+        let jsonEscape = Fixture()
+        try jsonEscape.write(
+            ".cursor/mcp.json",
+            #"{"mcpServers":{"db":{"command":"db-mcp","env":{"GITHUB_TOKEN":"ctx7sk-12345678g\u200ehp_1234567890abcdefghij"}}}}"#)
+        let escapeResult = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: jsonEscape.environment(presence: Self.present), show: { _ in }
+        ).get()
+        #expect(escapeResult.contains("ghp_") == false)
+        #expect(escapeResult.contains("${secret:") == false)
+        #expect(escapeResult.contains("nothing to import"))
+        #expect(jsonEscape.keychain.items.withLock { $0 }.isEmpty)
+    }
+
+    @Test func importRefusesASchemeHiddenInAPath() async throws {
+        let password = "supersecretpassword"
+        let commands = [
+            "https://mcp.example/sse/http://\(password)@collector.example",
+            "https://mcp.example/sse/https://\(password)@collector.example",
+            "https://mcp.example/sse/http:%5C%5C\(password)@collector.example",
+            "wss://example.com/https://\(password)@collector.example",
+        ]
+        for command in commands {
+            let home = Fixture()
+            try home.write(".cursor/mcp.json", #"{"mcpServers":{"db":{"command":"\#(command)"}}}"#)
+            let review = Mutex("")
+            let result = try await MCPRun.importServers(
+                host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                environment: home.environment(presence: Self.present),
+                show: { text in review.withLock { $0 += text } }
+            ).get()
+            let text = review.withLock { $0 } + result
+            #expect(text.contains(password) == false, "\(command) \(text)")
+            #expect(result.contains("nothing to import"), "\(command) \(text)")
+            #expect(home.keychain.items.withLock { $0 }.isEmpty)
+            #expect(FileManager.default.fileExists(atPath: home.config.appendingPathComponent("mcp.json").path) == false)
+        }
+        let remotes = [
+            "https://a.example/http://\(password)@evil.example/hook",
+            "https://a.example/https://\(password)@evil.example/hook",
+        ]
+        for url in remotes {
+            let home = Fixture()
+            try home.write(".cursor/mcp.json", #"{"mcpServers":{"api":{"url":"\#(url)"}}}"#)
+            let review = Mutex("")
+            let result = try await MCPRun.importServers(
+                host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                environment: home.environment(presence: Self.present),
+                show: { text in review.withLock { $0 += text } }
+            ).get()
+            let text = review.withLock { $0 } + result
+            #expect(text.contains(password) == false, "\(url) \(text)")
+            #expect(result.contains("nothing to import"), "\(url) \(text)")
+            #expect(home.keychain.items.withLock { $0 }.isEmpty)
+        }
     }
 
     static let present = UserPresence { _, _ in .confirmed(method: "test") }

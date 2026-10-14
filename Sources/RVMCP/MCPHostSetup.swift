@@ -118,8 +118,13 @@ public enum MCPImport {
         guard entry.headers.count <= MCPRemoteServer.maximumHeaders else {
             return .failure(Skip(reason: "more than \(MCPRemoteServer.maximumHeaders) headers"))
         }
-        for value in entry.headers.values where MCPRedaction.credentialHidesAnotherSecret(headerCredential(value)) {
-            return .failure(Skip(reason: "a header value carries a second secret"))
+        for value in entry.headers.values {
+            // The scheme is not always split off: `Bearer%20`, a tab, and U+00A0 stay on the value.
+            if MCPRedaction.credentialHidesAnotherSecret(value)
+                || MCPRedaction.credentialHidesAnotherSecret(headerCredential(value))
+            {
+                return .failure(Skip(reason: "a header value carries a second secret"))
+            }
         }
         var remote = MCPRemoteServer(url: url, transport: entry.remoteTransport ?? .http)
         for (header, value) in entry.headers.sorted(by: { $0.key < $1.key }) {

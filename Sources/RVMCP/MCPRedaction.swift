@@ -55,11 +55,14 @@ public enum MCPRedaction {
     public static func pathSegmentCarriesToken(_ segment: String) -> Bool {
         let decoded = percentDecode(segment)
         if decoded.stoppedEarly { return true }
-        if looksLikeToken(decoded.text) { return true }
-        if decoded.text.split(whereSeparator: isTokenSeparator).contains(where: { looksLikeToken(String($0)) }) {
+        // Drop format characters and U+00A0 before the prefix and length checks.
+        // A no-break space inside `ghp_` would otherwise leave a 23-character piece.
+        let text = withoutInvisibleBreaks(decoded.text)
+        if looksLikeToken(text) { return true }
+        if text.split(whereSeparator: isTokenSeparator).contains(where: { looksLikeToken(String($0)) }) {
             return true
         }
-        return containsEmbeddedPrefix(decoded.text)
+        return containsEmbeddedPrefix(text)
     }
 
     /// A known prefix such as `ghp_` or `sk-` counts even when `_`, `+`, or `-` hides it.
@@ -77,11 +80,18 @@ public enum MCPRedaction {
     }
 
     /// Strip by scalar. `U+200C` and `U+200D` glue to the neighboring letter, so a `Character` filter would keep them.
+    /// Format characters and U+00A0 are removed the same way, before a prefix or length check.
+    /// U+0020 stays: a space between two prefixes is still scanned, and it is not glued into one token.
     private static func withoutInvisibleBreaks(_ text: String) -> String {
         String(String.UnicodeScalarView(text.unicodeScalars.filter { scalar in
             switch scalar.value {
-            case 0x200B, 0x200C, 0x200D, 0xFEFF, 0x2060: return false
-            default: return true
+            case 0x00A0, 0x034F, 0x061C, 0x180E, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2060, 0x2061, 0x2062,
+                0x2063, 0x2064, 0xFEFF:
+                return false
+            case 0x202A...0x202E, 0x2066...0x2069:
+                return false
+            default:
+                return true
             }
         }))
     }
@@ -190,7 +200,8 @@ public enum MCPRedaction {
 
     /// `:password@host` and `user:password@host`. The password may contain `&`,
     /// `#`, `?`, a space, a slash, or start with `@`. Two slashes are userinfo
-    /// unless the name is `http`, `https`, `wss`, or `postgres`.
+    /// unless they are the leading `http`, `https`, `wss`, or `postgres` scheme.
+    /// A later copy of those names, including inside a path, is not a scheme.
     private static func colonThenAt(_ decoded: String) -> Bool {
         var index = decoded.startIndex
         while index < decoded.endIndex {
@@ -212,7 +223,9 @@ public enum MCPRedaction {
         return false
     }
 
-    /// `https://` at this colon. `user://` and a second slash that came from `%2F` or `\` are not.
+    /// The leading `http://`, `https://`, `wss://`, or `postgres://` only.
+    /// The same spelling later in a path is userinfo. `user://` is not a scheme.
+    /// A second slash that came from `%2F` or `\` is `//` only after normalization.
     private static func knownSchemeSlash(_ text: String, colon: String.Index) -> Bool {
         let after = text.index(after: colon)
         guard after < text.endIndex, text[after] == "/" else { return false }
@@ -223,7 +236,7 @@ public enum MCPRedaction {
             let previous = text.index(before: start)
             if text[previous].isLetter { start = previous } else { break }
         }
-        guard start < colon else { return false }
+        guard start == text.startIndex, start < colon else { return false }
         return authoritySchemes.contains(text[start..<colon].lowercased())
     }
 
@@ -323,13 +336,35 @@ public enum MCPRedaction {
         return range.upperBound
     }
 
-    /// An env or header value that would be stored, but hides a second token prefix.
+    /// An env or header value that hides a second token prefix.
+    /// The scan runs even when `looksLikeToken` is false: a space, `://`, a leading
+    /// `.` or `x`, or a tab still leaves two prefixes in one stored value.
     static func credentialHidesAnotherSecret(_ value: String) -> Bool {
         let pass = percentDecode(value)
         let decoded = withoutInvisibleBreaks(pass.text)
+        if nonOverlappingPrefixCount(decoded) >= 2 { return true }
         guard looksLikeToken(decoded) else { return false }
         if pass.stoppedEarly { return true }
         return hidesAnotherSecret(decoded)
+    }
+
+    /// Known prefixes that do not overlap. `ctx7sk-…` is one prefix: the `sk-` inside it is not a second token.
+    private static func nonOverlappingPrefixCount(_ text: String) -> Int {
+        let text = withoutInvisibleBreaks(text)
+        var count = 0
+        var index = text.startIndex
+        while index < text.endIndex {
+            let rest = text[index...]
+            if let match = tokenPrefixes.filter({ rest.hasPrefix($0) && rest.count >= $0.count + 8 })
+                .max(by: { $0.count < $1.count })
+            {
+                count += 1
+                index = text.index(index, offsetBy: match.count)
+            } else {
+                index = text.index(after: index)
+            }
+        }
+        return count
     }
 
     /// True when a token-shaped value also carries a path, fragment, userinfo, or a second token.
