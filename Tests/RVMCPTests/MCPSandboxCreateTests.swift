@@ -1241,6 +1241,56 @@ struct MCPSandboxCreateTests {
         #expect(MCPSandbox.missingSymlinkOpenings(exact) == [opened])
     }
 
+    @Test func anchorNameStillOpensTheKeyDirectory() throws {
+        Self.hostPrivateTmpLock.lock()
+        defer { Self.hostPrivateTmpLock.unlock() }
+        let opened = "/private/tmp/future-keys"
+        let anchor = "/private/tmp/anchor"
+        let hostFoo = anchor + "/foo"
+        let createdOpened = FileManager.default.fileExists(atPath: opened) == false
+        let createdAnchor = FileManager.default.fileExists(atPath: anchor) == false
+        if createdOpened {
+            try FileManager.default.createDirectory(atPath: opened, withIntermediateDirectories: true)
+        }
+        if createdAnchor {
+            try FileManager.default.createDirectory(atPath: anchor, withIntermediateDirectories: true)
+        }
+        let fooExisted = FileManager.default.fileExists(atPath: hostFoo)
+        if fooExisted {
+            try FileManager.default.removeItem(atPath: hostFoo)
+        }
+        defer {
+            if createdOpened { try? FileManager.default.removeItem(atPath: opened) }
+            if createdAnchor {
+                try? FileManager.default.removeItem(atPath: anchor)
+            } else if fooExisted {
+                try? FileManager.default.createDirectory(atPath: hostFoo, withIntermediateDirectories: true)
+            } else {
+                try? FileManager.default.removeItem(atPath: hostFoo)
+            }
+        }
+        try Data("key".utf8).write(to: URL(fileURLWithPath: opened + "/id_rsa"))
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-anchor-name-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let me = root.appendingPathComponent("Users/me")
+        try FileManager.default.createDirectory(at: me, withIntermediateDirectories: true)
+        #expect(symlink("/private/tmp/anchor", me.appendingPathComponent("jump").path) == 0)
+        let shapes = [
+            me.path + "/jump/x/../../private/tmp/y/anchor",
+            me.path + "/jump/a/../../private/tmp/y/anchor",
+            me.path + "/jump/foo/../../private/tmp/y/anchor",
+            me.path + "/jump/x/../../private/tmp/y/w/anchor",
+            me.path + "/jump/x/../../private/tmp/y/z/anchor",
+            me.path + "/jump/x/../../private/tmp/y/anchor/w",
+        ]
+        for shape in shapes {
+            #expect(MCPSandbox.missingSymlinkOpenings(shape).contains(opened))
+        }
+        let exact = me.path + "/jump/foo/../../private/tmp/future-keys"
+        #expect(MCPSandbox.missingSymlinkOpenings(exact) == [opened])
+    }
+
     @Test func preexistingSymlinkThenMoveDoesNotAllowTheCache() throws {
         for planted in plantedCacheLinks {
             let fixture = try plantedCacheLink(planted)
