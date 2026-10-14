@@ -1064,12 +1064,19 @@ public enum MCPSandbox {
     /// changes that directory's link count and timestamps. A direct child's
     /// own stamp does not. The symlink's inode stays in the stamp, so
     /// replacing a directory with a link still changes it. The target
-    /// directory's own inode is on that same stamp: a target that cannot be
-    /// listed never adds child keys, and its link count is the change a move
-    /// into it leaves behind.
+    /// directory's own inode is on that same stamp: its link count is the
+    /// change a move into it leaves behind. A child that already exists under
+    /// an unlistable target is on the stamp too. Listing that target adds the
+    /// owner's read bit and restores the mode; chmod changes ctime, so that
+    /// ctime is not part of the stamp. The child's link count is.
     private struct TreeStamp: Equatable {
         var root: InodeStamp
         var children: [String: InodeStamp]
+    }
+
+    private struct DirectoryWalk {
+        var stamps: [String: InodeStamp]
+        var clearedChangeTime: Bool
     }
 
     private static func treeStamp(_ path: String) -> TreeStamp {
@@ -1077,14 +1084,23 @@ public enum MCPSandbox {
         if let identity = directoryIdentity(path) {
             visited.insert(identity)
         }
-        return TreeStamp(root: inodeStamp(path), children: directoryStamps(under: path, relative: "", visited: &visited))
+        var root = inodeStamp(path)
+        let walked = directoryStamps(under: path, relative: "", visited: &visited)
+        if walked.clearedChangeTime {
+            root.changed = 0
+            root.changedNsec = 0
+        }
+        return TreeStamp(root: root, children: walked.stamps)
     }
 
     private static func directoryStamps(
         under path: String, relative: String, visited: inout Set<String>
-    ) -> [String: InodeStamp] {
+    ) -> DirectoryWalk {
         var stamps: [String: InodeStamp] = [:]
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: path) else { return stamps }
+        let listed = listDirectory(path)
+        guard let names = listed.names else {
+            return DirectoryWalk(stamps: stamps, clearedChangeTime: listed.clearedChangeTime)
+        }
         for name in names where name != "." && name != ".." {
             let child = path == "/" ? "/" + name : path + "/" + name
             var info = stat()
@@ -1107,11 +1123,41 @@ public enum MCPSandbox {
             guard let entered, let identity = directoryIdentity(entered), visited.insert(identity).inserted else {
                 continue
             }
-            for (deeper, stamp) in directoryStamps(under: entered, relative: rel, visited: &visited) {
+            let nested = directoryStamps(under: entered, relative: rel, visited: &visited)
+            if nested.clearedChangeTime, var stamp = stamps[rel] {
+                if kind == S_IFDIR {
+                    stamp.changed = 0
+                    stamp.changedNsec = 0
+                } else {
+                    stamp.targetChanged = 0
+                    stamp.targetChangedNsec = 0
+                }
+                stamps[rel] = stamp
+            }
+            for (deeper, stamp) in nested.stamps {
                 stamps[deeper] = stamp
             }
         }
-        return stamps
+        return DirectoryWalk(stamps: stamps, clearedChangeTime: listed.clearedChangeTime)
+    }
+
+    /// Names in `path`. Mode `0111` cannot be listed. The owner read bit is
+    /// added for this call and the mode is put back. `chmod` updates ctime
+    /// and leaves mtime and the link count alone, so the caller drops ctime.
+    private static func listDirectory(_ path: String) -> (names: [String]?, clearedChangeTime: Bool) {
+        if let names = try? FileManager.default.contentsOfDirectory(atPath: path) {
+            return (names, false)
+        }
+        var info = stat()
+        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else {
+            return (nil, false)
+        }
+        let mode = info.st_mode & 0o7777
+        guard (mode & S_IRUSR) == 0, chmod(path, mode | S_IRUSR) == 0 else {
+            return (nil, false)
+        }
+        defer { _ = chmod(path, mode) }
+        return (try? FileManager.default.contentsOfDirectory(atPath: path), true)
     }
 
     /// The symlink's own inode, plus the directory it names. Listing that

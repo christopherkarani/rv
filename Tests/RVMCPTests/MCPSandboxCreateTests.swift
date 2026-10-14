@@ -1047,6 +1047,18 @@ struct MCPSandboxCreateTests {
         }
     }
 
+    @Test func unlistableSymlinkChildThenMoveDoesNotAllowTheCache() throws {
+        for planted in plantedCacheLinks where planted.moveParentUnderRoot != planted.targetUnderRoot {
+            try denyMoveIntoUnlistableChild(planted, duringCreate: false)
+        }
+    }
+
+    @Test func unlistableSymlinkChildMoveInsideTheHookDoesNotCreateTheLeaf() throws {
+        for planted in plantedCacheLinks where planted.moveParentUnderRoot != planted.targetUnderRoot {
+            try denyMoveIntoUnlistableChild(planted, duringCreate: true)
+        }
+    }
+
     @Test func undoEscapesTheRecordedHostName() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-setup-undo-\(UUID().uuidString)", isDirectory: true)
@@ -1100,6 +1112,21 @@ private let plantedCacheLinks = [
     PlantedCacheLink(
         homeLink: ".npm/_cacache", targetUnderRoot: "opt/outside",
         relativeTarget: nil, moveParentUnderRoot: "opt/outside/content"),
+    PlantedCacheLink(
+        homeLink: ".npm/_cacache", targetUnderRoot: "opt/outside",
+        relativeTarget: "../../opt/outside", moveParentUnderRoot: "opt/outside/content"),
+    PlantedCacheLink(
+        homeLink: ".cache/pip", targetUnderRoot: "opt/outside",
+        relativeTarget: nil, moveParentUnderRoot: "opt/outside/http"),
+    PlantedCacheLink(
+        homeLink: ".cache/pip", targetUnderRoot: "opt/outside",
+        relativeTarget: "../../opt/outside", moveParentUnderRoot: "opt/outside/http"),
+    PlantedCacheLink(
+        homeLink: "Library/Caches/com.apple.nsurl", targetUnderRoot: "opt/outside",
+        relativeTarget: nil, moveParentUnderRoot: "opt/outside/fsCachedData"),
+    PlantedCacheLink(
+        homeLink: "Library/Caches/com.apple.nsurl", targetUnderRoot: "opt/outside",
+        relativeTarget: "../../../opt/outside", moveParentUnderRoot: "opt/outside/fsCachedData"),
 ]
 
 private struct PlantedCacheLinkFixture {
@@ -1110,6 +1137,47 @@ private struct PlantedCacheLinkFixture {
     var watched: String
     var project: URL
     var landing: URL
+}
+
+/// The symlink target stays mode `0111`. The project lands in a directory
+/// that already exists under that target, so the target's own link count
+/// does not change.
+private func denyMoveIntoUnlistableChild(_ planted: PlantedCacheLink, duringCreate: Bool) throws {
+    let fixture = try plantedCacheLink(planted)
+    let target = fixture.root.appendingPathComponent(planted.targetUnderRoot)
+    defer {
+        _ = chmod(target.path, 0o755)
+        try? FileManager.default.removeItem(at: fixture.root)
+    }
+    #expect(chmod(target.path, 0o111) == 0)
+    let pin = try #require(MCPSandbox.pinExistingAncestors(fixture.scratch))
+    if duringCreate {
+        let created = MCPSandbox.createPinned(fixture.scratch, pinned: pin) {
+            try? FileManager.default.moveItem(at: fixture.project, to: fixture.landing.appendingPathComponent("project"))
+        }
+        #expect(created == false)
+        #expect(FileManager.default.fileExists(atPath: fixture.scratch) == false)
+    } else {
+        #expect(MCPSandbox.createPinned(fixture.scratch, pinned: pin))
+        try FileManager.default.moveItem(at: fixture.project, to: fixture.landing.appendingPathComponent("project"))
+    }
+    var info = stat()
+    #expect(lstat(target.path, &info) == 0)
+    #expect((info.st_mode & 0o777) == 0o111)
+    let child = planted.moveParentUnderRoot.dropFirst(planted.targetUnderRoot.count)
+    let opened = fixture.home + "/" + planted.homeLink + child + "/project/src/App.swift"
+    #expect(String(decoding: (try? Data(contentsOf: URL(fileURLWithPath: opened))) ?? Data(), as: UTF8.self) == "app")
+    let resolved = URL(fileURLWithPath: opened).resolvingSymlinksInPath().path
+    #expect(resolved.hasSuffix(planted.moveParentUnderRoot + "/project/src/App.swift"))
+    let profile = MCPSandbox.profile(
+        policy: MCPSandboxPolicy(network: false, writable: []),
+        scratch: fixture.scratch, home: fixture.home, configDirectory: fixture.root.appendingPathComponent("config").path,
+        temporaryDirectory: fixture.temporary)
+    guard case .failure = profile else {
+        Issue.record("profile allowed \(fixture.watched) through unlistable \(planted.homeLink)")
+        return
+    }
+    #expect(String(describing: profile).contains("(subpath \"\(fixture.watched)\")") == false)
 }
 
 private func plantedCacheLink(_ planted: PlantedCacheLink) throws -> PlantedCacheLinkFixture {

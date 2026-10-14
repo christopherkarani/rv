@@ -46,7 +46,7 @@ struct ScanSessionsFlags: ParsableArguments {
         ids.reserveCapacity(packs.count)
         for token in packs {
             guard let id = PackID(validating: token) else {
-                throw ValidationError("unknown pack id: \(token)")
+                throw ValidationError("unknown pack id: \(DisplayedText.field(token))")
             }
             ids.append(id)
         }
