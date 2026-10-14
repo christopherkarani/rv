@@ -64,6 +64,10 @@ public enum MCPImport {
                 }
                 continue
             }
+            if args.contains(where: MCPRedaction.argumentCarriesRefusedSecret) {
+                plan.skipped.append((entry.name, "an argument carries a secret in its URL or path"))
+                continue
+            }
             var definition = MCPServerDefinition(name: entry.name, description: description, command: command)
             if allowTools { definition.tools.defaultDecision = .allow }
             let credentials = Set(MCPRedaction.literalCredentials(entry.environment))

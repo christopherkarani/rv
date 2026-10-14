@@ -53,24 +53,26 @@ enum AuditForwardRun {
     static func destination(_ text: String) -> Result<URL, CommandFailure> {
         guard let url = URL(string: text),
             let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-            let scheme = components.scheme?.lowercased(), let host = components.host?.lowercased(), host.isEmpty == false
+            let scheme = components.scheme?.lowercased(), let rawHost = components.host, rawHost.isEmpty == false
         else {
             return .failure("--to must be an absolute URL")
         }
+        let host = rawHost.lowercased()
         if components.user != nil || components.password != nil {
             return .failure("--to must not include a username or password")
         }
         if components.fragment != nil {
             return .failure("--to must not have a fragment")
         }
-        let path = components.percentEncodedPath.removingPercentEncoding ?? components.percentEncodedPath
-        if path.split(separator: "/").contains(where: { MCPRedaction.pathSegmentCarriesToken(String($0)) }) {
+        if MCPRedaction.hostCarriesSecret(rawHost) || MCPRedaction.hostCarriesSecret(components.percentEncodedHost ?? "") {
+            return .failure("--to must not carry a secret in its host")
+        }
+        if MCPRedaction.pathCarriesSecret(components.percentEncodedPath) {
             return .failure("--to must not carry a secret in its path")
         }
         let items = components.queryItems ?? []
         if items.contains(where: { item in
-            MCPRedaction.isSecretName(item.name) || MCPRedaction.looksLikeToken(item.value ?? "")
-                || MCPRedaction.urlCarriesSecret(item.value ?? "")
+            MCPRedaction.queryPieceCarriesSecret(item.name) || MCPRedaction.queryPieceCarriesSecret(item.value ?? "")
         }) {
             return .failure("--to must not carry a secret in its query")
         }

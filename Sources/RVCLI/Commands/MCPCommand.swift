@@ -343,7 +343,11 @@ enum MCPRun {
         if environment.integrity == .trusted {
             return .success("mcp.json already matches rv's signature; nothing to trust\n")
         }
-        show(trustReview(configuration) + "\n")
+        let review = trustReview(configuration)
+        guard trustReviewShowsEveryLiteral(configuration, review) else {
+            return .failure("trust review omitted a literal value; nothing signed")
+        }
+        show(review + "\n")
         let outcome = await environment.presence.confirm("rv: trust mcp.json as shown", .echoCode)
         guard case .confirmed(let method) = outcome else {
             let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
@@ -383,14 +387,19 @@ enum MCPRun {
                 let redacted = MCPRedaction.url(remote.url.absoluteString)
                 let shown = redacted.leaked ? "\(redacted.display) (credential-like part hidden)" : remote.url.absoluteString
                 lines.append("  \(server.name): \(shown) (remote, \(transport))")
-                if remote.headers.isEmpty == false {
-                    rules.append("headers " + remote.headers.keys.sorted().map { name in
-                        let secrets = MCPSecretReference.names(in: remote.headers[name] ?? "") ?? []
-                        return secrets.isEmpty ? "\(name) (literal)" : "\(name) (secret \(secrets.joined(separator: ", ")))"
-                    }.joined(separator: ", "))
+                for name in remote.headers.keys.sorted() {
+                    let value = remote.headers[name] ?? ""
+                    lines.append("    \(name): \(value)")
+                    let secrets = MCPSecretReference.names(in: value) ?? []
+                    if secrets.isEmpty == false {
+                        lines.append("    \(name) → secret \(secrets.joined(separator: ", "))")
+                    }
                 }
             } else {
                 lines.append("  \(server.name): \(([server.command] + server.args).joined(separator: " "))")
+            }
+            for name in server.environment.keys.sorted() {
+                lines.append("    \(name)=\(server.environment[name] ?? "")")
             }
             let tools = server.tools
             if tools.allow.isEmpty == false { rules.append("allow " + capped(tools.allow)) }
@@ -646,6 +655,7 @@ enum MCPRun {
                 }
             }
             for arg in server.args {
+                lines.append("    argument: \(arg)")
                 for name in MCPSecretReference.names(in: arg) ?? [] {
                     lines.append("    argument → secret \(name)")
                 }
@@ -656,18 +666,38 @@ enum MCPRun {
     }
 
     /// Nothing in the plan is signed unless the review text the device owner
-    /// sees contains that literal env value, header value, and server URL.
+    /// sees contains that literal env value, header value, argument, and server URL.
     static func reviewShowsEveryLiteral(_ plan: MCPImportPlan, _ review: String) -> Bool {
+        let lines = Set(review.split(separator: "\n", omittingEmptySubsequences: false).map(String.init))
         for server in plan.servers {
             if let remote = server.remote {
                 if MCPRedaction.url(remote.url.absoluteString).leaked { return false }
                 if review.contains(remote.url.absoluteString) == false { return false }
-                for (name, value) in remote.headers where review.contains("\(name): \(value)") == false {
+                for (name, value) in remote.headers where lines.contains("    \(name): \(value)") == false {
                     return false
                 }
             }
-            for (name, value) in server.environment where review.contains("\(name)=\(value)") == false {
+            for (name, value) in server.environment where lines.contains("    \(name)=\(value)") == false {
                 return false
+            }
+            for arg in server.args where lines.contains("    argument: \(arg)") == false {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Nothing is signed unless the trust review lists every env value and header value.
+    static func trustReviewShowsEveryLiteral(_ configuration: MCPConfiguration, _ review: String) -> Bool {
+        let lines = Set(review.split(separator: "\n", omittingEmptySubsequences: false).map(String.init))
+        for server in configuration.servers {
+            for (name, value) in server.environment where lines.contains("    \(name)=\(value)") == false {
+                return false
+            }
+            if let remote = server.remote {
+                for (name, value) in remote.headers where lines.contains("    \(name): \(value)") == false {
+                    return false
+                }
             }
         }
         return true

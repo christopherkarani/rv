@@ -49,30 +49,118 @@ public enum MCPRedaction {
         return allowed && digits >= 4 && letters >= 4
     }
 
-    /// A path segment that is a token, including `.ghp_…` and `ghp_… x`.
+    /// A path segment that is a token, including `.ghp_…`, `~ghp_…`, `/opt/ghp_…`,
+    /// `ghp_… x`, `ingest\ghp_…`, and `ingest#ghp_…`.
     public static func pathSegmentCarriesToken(_ segment: String) -> Bool {
-        if looksLikeToken(segment) { return true }
-        let pieces = segment.split { $0 == "." || $0.isWhitespace }
+        let decoded = repeatedDecode(segment)
+        if looksLikeToken(decoded) { return true }
+        let pieces = decoded.split { character in
+            character == "." || character == "~" || character == "#" || character == "\\" || character == "/"
+                || character.isWhitespace
+        }
         return pieces.contains { looksLikeToken(String($0)) }
     }
 
-    /// A query value that is itself a URL with userinfo, a fragment, a token
-    /// path, or another nested secret. `//user:pass@host` counts.
-    public static func urlCarriesSecret(_ value: String, depth: Int = 0) -> Bool {
-        if depth > 4 { return true }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.contains("://") || trimmed.hasPrefix("//") else { return false }
-        guard let components = URLComponents(string: trimmed), let host = components.host, host.isEmpty == false else {
-            return false
+    /// Percent-decode until the text stops changing, so `%253A` becomes `:`.
+    public static func repeatedDecode(_ value: String) -> String {
+        var current = value
+        for _ in 0..<6 {
+            guard current.contains("%"), let next = current.removingPercentEncoding, next != current else { return current }
+            current = next
         }
-        if components.user != nil || components.password != nil || components.fragment != nil { return true }
-        let path = components.percentEncodedPath.removingPercentEncoding ?? components.percentEncodedPath
-        if path.split(separator: "/").contains(where: { pathSegmentCarriesToken(String($0)) }) { return true }
-        for item in components.queryItems ?? [] {
-            if isSecretName(item.name) || looksLikeToken(item.value ?? "") { return true }
-            if let nested = item.value, urlCarriesSecret(nested, depth: depth + 1) { return true }
+        return current
+    }
+
+    /// Repeated percent-decode, then treat `\` as `/`.
+    public static func slashNormalized(_ value: String) -> String {
+        repeatedDecode(value).replacingOccurrences(of: "\\", with: "/")
+    }
+
+    /// `user:password@host`, including when it is only a path segment.
+    public static func containsUserinfoSpelling(_ text: String) -> Bool {
+        let decoded = repeatedDecode(text)
+        for piece in decoded.split(whereSeparator: isMaterialSeparator) {
+            guard let at = piece.firstIndex(of: "@"), at > piece.startIndex else { continue }
+            let userinfo = piece[..<at]
+            guard let colon = userinfo.firstIndex(of: ":"), colon > userinfo.startIndex, userinfo.index(after: colon) < at else {
+                continue
+            }
+            return true
         }
         return false
+    }
+
+    /// A host label that is a token, or userinfo percent-decoded into the host.
+    public static func hostCarriesSecret(_ host: String) -> Bool {
+        let decoded = repeatedDecode(host)
+        if containsUserinfoSpelling(decoded) { return true }
+        return pathSegmentCarriesToken(decoded)
+    }
+
+    /// A path with a token segment, a decoded `#` token, a backslash token, or `user:secret@`.
+    public static func pathCarriesSecret(_ path: String) -> Bool {
+        let normalized = slashNormalized(path)
+        return normalized.split(whereSeparator: { $0 == "/" || $0 == "#" }).contains { segment in
+            let text = String(segment)
+            return pathSegmentCarriesToken(text) || containsUserinfoSpelling(text)
+        }
+    }
+
+    /// A query name or value: token, `.ghp_…`, `ghp_… x`, userinfo, or a nested URL.
+    public static func queryPieceCarriesSecret(_ value: String, depth: Int = 0) -> Bool {
+        if value.isEmpty { return false }
+        let decoded = slashNormalized(value)
+        if isSecretName(decoded) || looksLikeToken(decoded) || pathSegmentCarriesToken(decoded) { return true }
+        if containsUserinfoSpelling(decoded) || pathCarriesSecret(decoded) { return true }
+        return urlCarriesSecret(decoded, depth: depth + 1)
+    }
+
+    /// Protocol-relative `//user:pass@host`, or a path segment that is a token.
+    /// A `postgres://user:pass@…` flag value is not this case; the review shows it.
+    public static func argumentCarriesRefusedSecret(_ arg: String) -> Bool {
+        var candidates = [arg]
+        if arg.hasPrefix("-") {
+            let body = arg.drop { $0 == "-" }
+            if let equals = body.firstIndex(of: "=") {
+                candidates.append(String(body[body.index(after: equals)...]))
+            }
+        }
+        for candidate in candidates {
+            let decoded = slashNormalized(candidate)
+            if decoded.hasPrefix("//"), containsUserinfoSpelling(decoded) || urlCarriesSecret(decoded) { return true }
+            if decoded.split(whereSeparator: { $0 == "/" || $0 == "#" }).contains(where: { pathSegmentCarriesToken(String($0)) }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// A query value that is itself a URL with userinfo, a fragment, a token
+    /// path, or another nested secret. `//user:pass@host` counts. Backslashes
+    /// and repeated percent-encoding are decoded first.
+    public static func urlCarriesSecret(_ value: String, depth: Int = 0) -> Bool {
+        if depth > 4 { return true }
+        let trimmed = slashNormalized(value).trimmingCharacters(in: .whitespacesAndNewlines)
+        // Userinfo is read from the text itself. A space or a second encoding layer
+        // can make URLComponents fail before it would have set user and password.
+        if containsUserinfoSpelling(trimmed) { return true }
+        guard trimmed.contains("://") || trimmed.hasPrefix("//") else { return false }
+        guard let components = URLComponents(string: trimmed), let host = components.host, host.isEmpty == false else {
+            return pathCarriesSecret(trimmed)
+        }
+        if components.user != nil || components.password != nil || components.fragment != nil { return true }
+        if hostCarriesSecret(host) { return true }
+        if pathCarriesSecret(components.percentEncodedPath) { return true }
+        for item in components.queryItems ?? [] {
+            if queryPieceCarriesSecret(item.name, depth: depth) || queryPieceCarriesSecret(item.value ?? "", depth: depth) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func isMaterialSeparator(_ character: Character) -> Bool {
+        character == "/" || character == "?" || character == "#" || character == "&" || character == "\\" || character.isWhitespace
     }
 
     /// Args with credentials masked, plus what was masked (flag names or positions).
@@ -123,19 +211,18 @@ public enum MCPRedaction {
         guard let components = URLComponents(string: raw), let scheme = components.scheme, let host = components.host else {
             return ("<url>", looksLikeToken(raw) || urlCarriesSecret(raw))
         }
-        var display = "\(scheme)://\(host)"
+        let hostLeaked = hostCarriesSecret(host)
+        var display = hostLeaked ? "\(scheme)://…" : "\(scheme)://\(host)"
         if let port = components.port { display += ":\(port)" }
         let path = components.percentEncodedPath
         if (path.isEmpty == false && path != "/") || components.percentEncodedQuery != nil {
             display += "/…"
         }
-        let decoded = path.removingPercentEncoding ?? path
         let queryLeak = (components.queryItems ?? []).contains { item in
-            isSecretName(item.name) || looksLikeToken(item.value ?? "") || urlCarriesSecret(item.value ?? "")
+            queryPieceCarriesSecret(item.name) || queryPieceCarriesSecret(item.value ?? "")
         }
-        let pathLeak = decoded.split(separator: "/").contains { pathSegmentCarriesToken(String($0)) }
         let credential = components.user != nil || components.password != nil || components.fragment != nil
-        return (display, credential || queryLeak || pathLeak)
+        return (display, credential || hostLeaked || queryLeak || pathCarriesSecret(path))
     }
 
     /// Names of env vars or headers that hold a literal credential.

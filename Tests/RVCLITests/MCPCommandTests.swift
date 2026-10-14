@@ -263,9 +263,95 @@ struct MCPCommandTests {
             #expect(result.contains(password) == false)
             #expect(result.contains(token) == false)
             #expect(result.contains("nothing to import"))
-            #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
-            #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
+        #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
         }
+    }
+
+    @Test func importShowsLiteralArgsBeforeConfirmAndRefusesConcealedArgSecrets() async throws {
+        let fixture = Fixture()
+        let password = "supersecretpassword"
+        let database = "postgres://user:\(password)@db.example/app"
+        let databaseArg = "--database-url=\(database)"
+        let cwdArg = "--cwd=\(database)"
+        try fixture.write(".cursor/mcp.json", """
+            {"mcpServers":{"db":{"command":"db-mcp","args":["\(databaseArg)","\(cwdArg)"]}}}
+            """)
+        let shown = Mutex("")
+        let signed = fixture.config.appendingPathComponent("mcp.json")
+        let presence = UserPresence { _, _ in
+            let review = shown.withLock { $0 }
+            let seen = review.contains("argument: \(databaseArg)") && review.contains("argument: \(cwdArg)")
+                && review.contains(password)
+            let notWritten = FileManager.default.fileExists(atPath: signed.path) == false
+            if seen && notWritten { return .confirmed(method: "terminal confirmation") }
+            return .refused("arg was not shown")
+        }
+        let imported = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: fixture.environment(presence: presence), show: { text in shown.withLock { $0 += text } }
+        ).get()
+        #expect(imported.contains("wrote mcp.json"))
+        let stored = try String(contentsOf: signed, encoding: .utf8)
+        #expect(stored.contains(databaseArg))
+        #expect(stored.contains(cwdArg))
+
+        let token = "ghp_1234567890abcdefghij"
+        let refused = [
+            "//user:\(password)@db.example/app",
+            "--endpoint=//user:\(password)@db.example/app",
+            "/opt/\(token)",
+            "--config=/opt/\(token)",
+        ]
+        for arg in refused {
+            let home = Fixture()
+            let encoded = arg.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+            try home.write(".cursor/mcp.json", """
+                {"mcpServers":{"db":{"command":"db-mcp","args":["\(encoded)"]}}}
+                """)
+            let review = Mutex("")
+            let result = try await MCPRun.importServers(
+                host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                environment: home.environment(presence: Self.present),
+                show: { text in review.withLock { $0 += text } }
+            ).get()
+            let text = review.withLock { $0 } + result
+            #expect(text.contains(password) == false, "\(arg)")
+            #expect(text.contains(token) == false, "\(arg)")
+            #expect(result.contains("nothing to import"), "\(arg)")
+            #expect(FileManager.default.fileExists(atPath: home.config.appendingPathComponent("mcp.json").path) == false)
+        }
+    }
+
+    @Test func trustShowsEnvAndHeaderValuesBeforeSigning() async throws {
+        let fixture = Fixture()
+        let password = "supersecretpassword"
+        let database = "postgres://user:\(password)@db.example/app"
+        try fixture.write(".config/rv/mcp.json", """
+            {"version":1,"servers":[
+              {"name":"db","command":"db-mcp","env":{"DATABASE_URL":"\(database)"}},
+              {"name":"api","url":"https://mcp.example/mcp","headers":{"X-Database":"\(database)"}}
+            ]}
+            """)
+        chmod(fixture.home.appendingPathComponent(".config/rv/mcp.json").path, 0o600)
+        chmod(fixture.config.path, 0o700)
+        let environment = fixture.environment()
+        #expect(environment.integrity.isTrusted == false)
+        let shown = Mutex("")
+        let presence = UserPresence { _, _ in
+            let review = shown.withLock { $0 }
+            let seen = review.contains("DATABASE_URL=\(database)") && review.contains("X-Database: \(database)")
+                && review.contains(password)
+            if seen && environment.integrity.isTrusted == false { return .confirmed(method: "terminal confirmation") }
+            return .refused("value was not shown")
+        }
+        let trusted = try await MCPRun.trust(
+            environment: fixture.environment(presence: presence), show: { text in shown.withLock { $0 += text } }
+        ).get()
+        #expect(trusted.contains("trusted mcp.json"))
+        #expect(fixture.environment().integrity == .trusted)
+        let review = shown.withLock { $0 }
+        #expect(review.contains("(literal)") == false)
     }
 
     static let present = UserPresence { _, _ in .confirmed(method: "test") }
@@ -353,14 +439,15 @@ struct MCPCommandTests {
         #expect(review.contains(" · no network"), "\(review)")
     }
 
-    @Test func trustReviewShowsRemoteOriginsAndHeaderNamesButNoValues() throws {
+    @Test func trustReviewShowsHeaderValuesAndHidesPathTokens() throws {
         let remote = MCPRemoteServer(
             url: try #require(URL(string: "https://api.example.com/mcp")),
             headers: ["Authorization": "Bearer ${secret:GH_PAT}", "X-Team": "literal-value-9"], transport: .sse)
         let review = MCPRun.trustReview(MCPConfiguration(servers: [MCPServerDefinition(name: "gh", remote: remote)]))
         #expect(review.contains("  gh: https://api.example.com/mcp (remote, legacy SSE)"), "\(review)")
-        #expect(review.contains("headers Authorization (secret GH_PAT), X-Team (literal)"), "\(review)")
-        #expect(review.contains("literal-value-9") == false)
+        #expect(review.contains("Authorization: Bearer ${secret:GH_PAT}"), "\(review)")
+        #expect(review.contains("Authorization → secret GH_PAT"), "\(review)")
+        #expect(review.contains("X-Team: literal-value-9"), "\(review)")
         #expect(review.contains("no sandbox") == false)
 
         let keyed = MCPRemoteServer(url: try #require(URL(string: "https://mcp.example.com/s/zk_8f3a9c2b7d1e4f60a5b3c9d2e7f1/mcp")))
