@@ -1092,18 +1092,17 @@ func copyResourceForkObservingClock(
 }
 
 func pathForFileDescriptor(_ fd: Int32) -> String? {
-    var buffer = [CChar](repeating: 0, count: 4_096)
-    let found = buffer.withUnsafeMutableBufferPointer { raw in
-        fcntl(fd, F_GETPATH, raw.baseAddress)
-    }
-    guard found == 0 else { return nil }
-    return String(cString: buffer)
+    var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+    // Darwin's pointer overlay. The variadic C `fcntl` is unavailable in Swift.
+    guard fcntl(fd, F_GETPATH, &buffer) == 0 else { return nil }
+    let count = buffer.firstIndex(of: 0) ?? buffer.count
+    return String(decoding: buffer[..<count].map { UInt8(bitPattern: $0) }, as: UTF8.self)
 }
 
 func copyXattrsWithFcopyfile(
     from source: Int32,
     to destination: Int32,
-    mayContinue: () -> Bool
+    mayContinue: @escaping () -> Bool
 ) -> Bool {
     if mayContinue() == false { return false }
     let clock = XattrCopyClock(mayContinue)
@@ -1123,11 +1122,11 @@ func copyXattrsWithFcopyfile(
 }
 
 private func xattrListSize(_ fd: Int32) -> Int {
-    flistxattr(fd, nil, 0)
+    flistxattr(fd, nil, 0, 0)
 }
 
 private func xattrList(_ fd: Int32, _ buffer: UnsafeMutablePointer<CChar>?, _ size: Int) -> Int {
-    flistxattr(fd, buffer, size)
+    flistxattr(fd, buffer, size, 0)
 }
 
 private func xattrValueSize(_ fd: Int32, _ name: UnsafePointer<CChar>) -> Int {
