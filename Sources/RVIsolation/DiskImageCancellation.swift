@@ -846,6 +846,27 @@ func diskImagePerformWithinCopyClock(_ body: @escaping @Sendable () -> Bool) -> 
     )
 }
 
+/// A proof or image unlink after detach. The copy budget may already be
+/// zero; the detach reserve is what this call is for. It stops at the
+/// cancel clock, not `detachCap` earlier. Zero remaining does not start
+/// the call. No clock waits for the syscall, same as the copy helper.
+func diskImagePerformWithinCancelClock(_ body: @escaping @Sendable () -> Bool) -> Bool? {
+    let allowance: TimeInterval?
+    if let deadline = CooperativeLaunchStop.cancelClock?.deadline {
+        allowance = max(0, deadline.timeIntervalSinceNow)
+    } else {
+        allowance = nil
+    }
+    return diskImageWaitForStat(
+        allowance: allowance,
+        liveDeadline: {
+            if blockingWorkIsCancelled() { CooperativeLaunchStop.noteCancel() }
+            return CooperativeLaunchStop.cancelClock?.deadline
+        },
+        stat: body
+    )
+}
+
 /// Duplicates `fd` at or above 256 so a worker thread does not take a low
 /// number the spawn floor still probes. `dup` would reuse the descriptor
 /// `relocateDescriptor` just closed.
@@ -869,12 +890,26 @@ enum DiskImagePathObservation {
 }
 
 func diskImageObservePath(_ path: String) -> DiskImagePathObservation {
+    diskImageObservePath(path, perform: diskImagePerformWithinCopyClock)
+}
+
+/// Post-detach identity check. A copy budget of zero must not skip this
+/// `lstat`: the detach reserve is still on the cancel clock. `.stopped`
+/// is still not proof the mount is gone.
+func diskImageObservePathWithinCancelClock(_ path: String) -> DiskImagePathObservation {
+    diskImageObservePath(path, perform: diskImagePerformWithinCancelClock)
+}
+
+private func diskImageObservePath(
+    _ path: String,
+    perform: (@escaping @Sendable () -> Bool) -> Bool?
+) -> DiskImagePathObservation {
     final class Box: @unchecked Sendable {
         var status = stat()
         var found = false
     }
     let box = Box()
-    let ok = diskImagePerformWithinCopyClock {
+    let ok = perform {
         box.found = path.withCString { lstat($0, &box.status) == 0 }
         return true
     }
@@ -899,12 +934,23 @@ enum DiskImageDirectoryPresence {
 }
 
 func diskImageDirectoryPresence(_ path: String) -> DiskImageDirectoryPresence {
+    diskImageDirectoryPresence(path, perform: diskImagePerformWithinCopyClock)
+}
+
+func diskImageDirectoryPresenceWithinCancelClock(_ path: String) -> DiskImageDirectoryPresence {
+    diskImageDirectoryPresence(path, perform: diskImagePerformWithinCancelClock)
+}
+
+private func diskImageDirectoryPresence(
+    _ path: String,
+    perform: (@escaping @Sendable () -> Bool) -> Bool?
+) -> DiskImageDirectoryPresence {
     final class Box: @unchecked Sendable {
         var status = stat()
         var found = false
     }
     let box = Box()
-    let ok = diskImagePerformWithinCopyClock {
+    let ok = perform {
         box.found = path.withCString { stat($0, &box.status) == 0 }
         return true
     }
@@ -967,11 +1013,124 @@ func diskImageRmdirWithinCopyClock(_ path: String) -> Bool? {
     }
 }
 
+/// `mkdir` off the caller. `nil` means this thread does not know whether
+/// the directory was created: the clock returned first, so the caller must
+/// not rename another tree onto that path.
+func diskImageMkdirWithinCopyClock(_ path: String, _ mode: mode_t) -> Bool? {
+    let target = path
+    return diskImagePerformWithinCopyClock {
+        target.withCString { mkdir($0, mode) == 0 }
+    }
+}
+
+/// `fileExists` off the caller. `nil` is the copy clock, not a missing path.
+func diskImagePathExists(_ path: String) -> Bool? {
+    diskImagePathExists(diskImageDirectoryPresence(path))
+}
+
+/// Existence after detach. Uses the cancel clock, including the detach
+/// reserve the copy budget has already given up.
+func diskImagePathExistsWithinCancelClock(_ path: String) -> Bool? {
+    diskImagePathExists(diskImageDirectoryPresenceWithinCancelClock(path))
+}
+
+private func diskImagePathExists(_ presence: DiskImageDirectoryPresence) -> Bool? {
+    switch presence {
+    case .directory, .notDirectory:
+        return true
+    case .missing:
+        return false
+    case .stopped:
+        return nil
+    }
+}
+
+struct DiskImageNodeSnapshot {
+    var mode: mode_t
+    var nlink: UInt64
+}
+
+enum DiskImageNodeObservation {
+    case value(DiskImageNodeSnapshot)
+    case missing
+    case stopped
+}
+
+/// `lstat` including link count. `.stopped` is not a missing path.
+func diskImageLstatNode(_ path: String) -> DiskImageNodeObservation {
+    final class Box: @unchecked Sendable {
+        var status = stat()
+        var found = false
+    }
+    let box = Box()
+    let ok = diskImagePerformWithinCopyClock {
+        box.found = path.withCString { lstat($0, &box.status) == 0 }
+        return true
+    }
+    if ok == nil { return .stopped }
+    guard box.found else { return .missing }
+    return .value(
+        DiskImageNodeSnapshot(
+            mode: box.status.st_mode,
+            nlink: UInt64(box.status.st_nlink)
+        )
+    )
+}
+
+/// Read an already-open descriptor until EOF. `nil` is the copy clock or a
+/// finished error. It is not an empty file. `EINTR` is retried only after
+/// `errno` is `EINTR` and the copy clock still allows another call.
+func diskImageReadFDToEndWithinCopyClock(_ fd: Int32) -> Data? {
+    var data = Data()
+    while true {
+        guard let chunk = diskImageReadWithinCopyClock(fd, maxCount: 65_536) else {
+            return nil
+        }
+        if chunk.count > 0 {
+            data.append(contentsOf: chunk.bytes)
+            continue
+        }
+        if chunk.count == 0 { return data }
+        if chunk.errnoValue == EINTR {
+            let allowance = diskImageTreeSyscallAllowance(
+                deadline: CooperativeLaunchStop.cancelClock?.deadline
+            )
+            if allowance == nil || (allowance ?? 0) > 0 { continue }
+        }
+        return nil
+    }
+}
+
+/// `open` plus read of one path. `nil` from the open does not close a
+/// descriptor the worker may still be creating and does not unlink the path.
+/// A stop during `read` is `nil`, not the bytes gathered so far.
+func diskImageReadWholeFileWithinCopyClock(_ path: String) -> Data? {
+    guard let opened = diskImageOpenPathWithinCopyClock(path, O_RDONLY | O_CLOEXEC) else {
+        return nil
+    }
+    guard opened >= 0 else { return nil }
+    defer { close(opened) }
+    return diskImageReadFDToEndWithinCopyClock(opened)
+}
+
 /// `unlink` off the caller. `nil` is not a missing file. A finished `false`
 /// is the syscall's own failure, including `ENOENT` after the call returned.
 func diskImageUnlinkWithinCopyClock(_ path: String) -> Bool? {
+    diskImageUnlink(path, perform: diskImagePerformWithinCopyClock)
+}
+
+/// Image unlink after the volume is gone. A spent copy budget must not
+/// skip it while the cancel clock still has the detach reserve.
+func diskImageUnlinkWithinCancelClock(_ path: String) -> Bool? {
+    diskImageUnlink(path, perform: diskImagePerformWithinCancelClock)
+}
+
+private func diskImageUnlink(
+    _ path: String,
+    perform: (@escaping @Sendable () -> Bool) -> Bool?
+) -> Bool? {
     let target = path
-    return diskImagePerformWithinCopyClock {
+    return perform {
         target.withCString { unlink($0) == 0 }
     }
 }
@@ -1745,13 +1904,20 @@ func replaceOriginalOnlyAfterStagedCopy(
     if mayContinue(.bytes) == false { return untouched() }
     let stagedURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-stage-\(UUID().uuidString)")
-    let staged = stagedURL.path.withCString { path in
-        open(path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(0o600))
+    // `nil` is the copy clock. Do not unlink a path the worker may still
+    // be opening. A finished `-1` did not create the file.
+    guard let stagedOpened = diskImageOpenPathWithinCopyClock(
+        stagedURL.path,
+        O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC,
+        mode_t(0o600)
+    ) else {
+        return untouched()
     }
-    guard staged >= 0 else { return untouched() }
+    guard stagedOpened >= 0 else { return untouched() }
+    let staged = stagedOpened
     defer {
         close(staged)
-        unlink(stagedURL.path)
+        _ = diskImageUnlinkWithinCopyClock(stagedURL.path)
     }
     guard copyFileLeavingDetachReserve(
         from: source,
@@ -1765,14 +1931,21 @@ func replaceOriginalOnlyAfterStagedCopy(
     ) else { return untouched() }
     let backupURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-backup-\(UUID().uuidString)")
-    let backup = backupURL.path.withCString { path in
-        open(path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(0o600))
+    guard let backupOpened = diskImageOpenPathWithinCopyClock(
+        backupURL.path,
+        O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC,
+        mode_t(0o600)
+    ) else {
+        return untouched()
     }
-    guard backup >= 0 else { return untouched() }
+    guard backupOpened >= 0 else { return untouched() }
+    let backup = backupOpened
     var consumedBackup = false
     defer {
         close(backup)
-        if consumedBackup == false { unlink(backupURL.path) }
+        if consumedBackup == false {
+            _ = diskImageUnlinkWithinCopyClock(backupURL.path)
+        }
     }
     guard lseek(original, 0, SEEK_SET) == 0 else { return untouched() }
     guard copyFileLeavingDetachReserve(

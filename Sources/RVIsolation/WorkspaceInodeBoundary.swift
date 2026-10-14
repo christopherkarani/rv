@@ -213,21 +213,7 @@ final class WorkspaceInodeBoundary: Sendable {
             return nil
         }
         defer { close(fd) }
-        var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while true {
-            let count = buffer.withUnsafeMutableBytes { raw -> Int in
-                guard let base = raw.baseAddress else { return -1 }
-                return read(fd, base, raw.count)
-            }
-            if count > 0 {
-                data.append(buffer, count: count)
-                continue
-            }
-            if count == 0 { return data }
-            if errno == EINTR { continue }
-            return nil
-        }
+        return diskImageReadFDToEndWithinCopyClock(fd)
     }
 
     /// Remove host-staged agent credential links and the cage dir from the
@@ -314,15 +300,28 @@ final class WorkspaceInodeBoundary: Sendable {
     /// back at the workspace path and release the volume.
     func publishAndRestore() -> Result<Void, IsolationApplyError> {
         scrubHostStagedAgentHomes()
+        var wrote = false
+        var rejected = false
         let published: Result<Void, IsolationApplyError>
         if remainsEstablished() {
-            published = publishIntoSaved(writing: true)
+            published = publishIntoSaved(writing: true, wrote: &wrote, rejected: &rejected)
         } else {
             published = .failure(.workspaceInodeBoundaryFailed)
         }
         let restored = restoreOriginalDirectory()
+        // The copy budget is already the detach reserve. Publish did not
+        // write and did not reject, and the original directory is back.
+        // The volume's unpublished names are gone with it. That is a
+        // finished cancel, not a boundary failure. A real reject still fails.
+        let cancelledWithoutWrite = blockingWorkIsCancelled()
+            && wrote == false
+            && rejected == false
+            && cancelClockAllowsTreeCopy() == false
+            && mutable.withLock { $0.blockWorkspaceRename } == false
         switch (published, restored) {
         case (.success, .success):
+            return .success(())
+        case (.failure, .success) where cancelledWithoutWrite:
             return .success(())
         case (.failure(let error), _), (_, .failure(let error)):
             return .failure(error)
@@ -365,13 +364,17 @@ final class WorkspaceInodeBoundary: Sendable {
 
     /// The publish rules reject the saved tree. The mount is left in place.
     func preflightPublish() -> Result<Void, IsolationApplyError> {
-        publishIntoSaved(writing: false)
+        var wrote = false
+        var rejected = false
+        return publishIntoSaved(writing: false, wrote: &wrote, rejected: &rejected)
     }
 
     /// Copy the volume onto the hidden original. Does not unmount.
     func publishPreservingMount() -> Result<Void, IsolationApplyError> {
         scrubHostStagedAgentHomes()
-        return publishIntoSaved(writing: true)
+        var wrote = false
+        var rejected = false
+        return publishIntoSaved(writing: true, wrote: &wrote, rejected: &rejected)
     }
 
     /// Detach this volume only when the mount source and device still match.
@@ -386,7 +389,7 @@ final class WorkspaceInodeBoundary: Sendable {
             close(volume)
         }
         detachVolume()
-        switch observedDevice(workspacePath) {
+        switch observedDevice(workspacePath, afterDetach: true) {
         case .device(let device) where device == volumeDevice:
             return .failure(.workspaceInodeBoundaryFailed)
         case .stopped:
@@ -413,7 +416,11 @@ final class WorkspaceInodeBoundary: Sendable {
         restoreOriginalDirectory()
     }
 
-    private func publishIntoSaved(writing: Bool) -> Result<Void, IsolationApplyError> {
+    private func publishIntoSaved(
+        writing: Bool,
+        wrote: inout Bool,
+        rejected: inout Bool
+    ) -> Result<Void, IsolationApplyError> {
         guard remainsEstablished() else {
             return .failure(.workspaceInodeBoundaryFailed)
         }
@@ -429,7 +436,6 @@ final class WorkspaceInodeBoundary: Sendable {
         guard let volumeEntries = collectTree(root: fds.0, checkDevice: volumeDevice) else {
             return .failure(.workspaceInodeBoundaryFailed)
         }
-        var rejected = false
         let present = volumeEntries.keys.sorted { pathDepth($0) < pathDepth($1) }
         for relative in present {
             if cancelClockAllowsTreeCopy() == false {
@@ -443,12 +449,18 @@ final class WorkspaceInodeBoundary: Sendable {
             )
             switch decision {
             case .update:
-                if writing, updateSaved(relative, from: entry) == false {
-                    rejected = true
+                if writing {
+                    wrote = true
+                    if updateSaved(relative, from: entry) == false {
+                        rejected = true
+                    }
                 }
             case .create:
-                if writing, createSaved(relative, from: entry) == false {
-                    rejected = true
+                if writing {
+                    wrote = true
+                    if createSaved(relative, from: entry) == false {
+                        rejected = true
+                    }
                 }
             case .remove, .leave, .reject:
                 rejected = true
@@ -467,8 +479,11 @@ final class WorkspaceInodeBoundary: Sendable {
             )
             switch decision {
             case .remove:
-                if writing, removeSaved(relative) == false {
-                    rejected = true
+                if writing {
+                    wrote = true
+                    if removeSaved(relative) == false {
+                        rejected = true
+                    }
                 }
             case .leave:
                 break
@@ -495,7 +510,7 @@ final class WorkspaceInodeBoundary: Sendable {
             close(volume)
         }
         let detached = detachVolume()
-        switch observedDevice(workspacePath) {
+        switch observedDevice(workspacePath, afterDetach: true) {
         case .device(let device) where device == volumeDevice:
             // The mount is still here. Do not delete it by path: that would
             // operate on the volume, and a forced replacement could be a
@@ -507,13 +522,20 @@ final class WorkspaceInodeBoundary: Sendable {
         case .device, .missing:
             break
         }
-        if FileManager.default.fileExists(atPath: workspacePath) {
-            if FileManager.default.fileExists(atPath: quarantinePath) {
+        switch diskImagePathExistsWithinCancelClock(workspacePath) {
+        case nil:
+            return .failure(.workspaceInodeBoundaryFailed)
+        case true:
+            switch diskImagePathExistsWithinCancelClock(quarantinePath) {
+            case nil, true:
                 return .failure(.workspaceInodeBoundaryFailed)
+            case false:
+                guard renamePath(workspacePath, quarantinePath) else {
+                    return .failure(.workspaceInodeBoundaryFailed)
+                }
             }
-            guard renamePath(workspacePath, quarantinePath) else {
-                return .failure(.workspaceInodeBoundaryFailed)
-            }
+        case false:
+            break
         }
         guard renamePath(savedPath, workspacePath) else {
             return .failure(.workspaceInodeBoundaryFailed)
@@ -532,7 +554,7 @@ final class WorkspaceInodeBoundary: Sendable {
         // The image path is what a later detach still needs.
         if let imagePath, diskImageMayRemoveImage(detachSucceeded: detached) {
             // A stopped unlink is not the image being gone.
-            if diskImageUnlinkWithinCopyClock(imagePath) == nil {
+            if diskImageUnlinkWithinCancelClock(imagePath) == nil {
                 return .failure(.workspaceInodeBoundaryFailed)
             }
         }
@@ -912,7 +934,14 @@ final class WorkspaceInodeBoundary: Sendable {
         ) == .ownedMount else {
             return .failure(.workspaceInodeBoundaryFailed)
         }
-        let savedFD = identity.savedPath.withCString { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) }
+        guard let savedOpened = diskImageOpenPathWithinCopyClock(
+            identity.savedPath,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        ) else {
+            return .failure(.workspaceInodeBoundaryFailed)
+        }
+        guard savedOpened >= 0 else { return .failure(.workspaceInodeBoundaryFailed) }
+        let savedFD = savedOpened
         // `nil` is the copy clock. The worker may still be inside `open` of
         // the mount, so this does not close a descriptor it never received
         // and does not remove the path.
@@ -929,8 +958,7 @@ final class WorkspaceInodeBoundary: Sendable {
             return .failure(.workspaceInodeBoundaryFailed)
         }
         let volumeFD = volumeOpened
-        var savedStatus = stat()
-        guard fstat(savedFD, &savedStatus) == 0,
+        guard let savedStatus = fstatWithinCopyClock(savedFD),
             let volumeStatus = fstatWithinCopyClock(volumeFD),
             device(of: savedStatus) == identity.savedDevice,
             UInt64(savedStatus.st_ino) == identity.savedInode,
@@ -981,13 +1009,20 @@ final class WorkspaceInodeBoundary: Sendable {
         case .ownedMount, .unrelatedMount, .savedTreeMismatch, .ambiguous:
             return .failure(.workspaceInodeBoundaryFailed)
         }
-        if FileManager.default.fileExists(atPath: project) {
-            if FileManager.default.fileExists(atPath: identity.quarantinePath) {
+        switch diskImagePathExists(project) {
+        case nil:
+            return .failure(.workspaceInodeBoundaryFailed)
+        case true:
+            switch diskImagePathExists(identity.quarantinePath) {
+            case nil, true:
                 return .failure(.workspaceInodeBoundaryFailed)
+            case false:
+                guard renamePath(project, identity.quarantinePath) else {
+                    return .failure(.workspaceInodeBoundaryFailed)
+                }
             }
-            guard renamePath(project, identity.quarantinePath) else {
-                return .failure(.workspaceInodeBoundaryFailed)
-            }
+        case false:
+            break
         }
         guard renamePath(identity.savedPath, project) else {
             return .failure(.workspaceInodeBoundaryFailed)
@@ -1038,12 +1073,15 @@ func establishWorkspaceInodeBoundary(
     if blockingWorkIsCancelled() {
         return .failure(.cancelled)
     }
-    let rootFD = workspacePath.withCString { path in
-        open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    guard let rootOpened = diskImageOpenPathWithinCopyClock(
+        workspacePath,
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+    ) else {
+        return .failure(.workspaceInodeBoundaryFailed)
     }
-    guard rootFD >= 0 else { return .failure(.workspaceInodeBoundaryFailed) }
-    var rootStatus = stat()
-    guard fstat(rootFD, &rootStatus) == 0 else {
+    guard rootOpened >= 0 else { return .failure(.workspaceInodeBoundaryFailed) }
+    let rootFD = rootOpened
+    guard let rootStatus = fstatWithinCopyClock(rootFD) else {
         close(rootFD)
         return .failure(.workspaceInodeBoundaryFailed)
     }
@@ -1066,7 +1104,12 @@ func establishWorkspaceInodeBoundary(
     guard renamePath(workspacePath, savedPath) else {
         return .failure(.workspaceInodeBoundaryFailed)
     }
-    guard mkdir(workspacePath, 0o700) == 0 else {
+    switch diskImageMkdirWithinCopyClock(workspacePath, 0o700) {
+    case true:
+        break
+    case nil:
+        return .failure(.workspaceInodeBoundaryFailed)
+    case false:
         _ = renamePath(savedPath, workspacePath)
         return .failure(.workspaceInodeBoundaryFailed)
     }
@@ -1080,11 +1123,16 @@ func establishWorkspaceInodeBoundary(
     case .success(let disk):
         mounted = disk
     }
-    func failMounted(saved: Int32 = -1, volume: Int32 = -1) -> Result<WorkspaceInodeBoundary, IsolationApplyError> {
+    func failMounted(
+        saved: Int32 = -1,
+        volume: Int32 = -1,
+        renameSaved: Bool = true
+    ) -> Result<WorkspaceInodeBoundary, IsolationApplyError> {
         if saved >= 0 { close(saved) }
         if volume >= 0 { close(volume) }
         let detached = detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
-        if diskImageRmdirWithinCopyClock(workspacePath) != nil {
+        let removed = diskImageRmdirWithinCopyClock(workspacePath)
+        if renameSaved, removed != nil {
             _ = renamePath(savedPath, workspacePath)
         }
         unlinkImageIfDetached(mounted.imagePath, detachSucceeded: detached)
@@ -1098,9 +1146,16 @@ func establishWorkspaceInodeBoundary(
     else {
         return failMounted()
     }
-    let savedFD = savedPath.withCString { path in
-        open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    // `nil` leaves the saved path alone: the worker may still be inside
+    // `open`, and `failMounted` would rename that path back.
+    guard let savedOpened = diskImageOpenPathWithinCopyClock(
+        savedPath,
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+    ) else {
+        return failMounted(renameSaved: false)
     }
+    guard savedOpened >= 0 else { return failMounted() }
+    let savedFD = savedOpened
     // `nil` is the copy clock. `failMounted` would `rmdir` this path while
     // the worker may still be inside `open`. A finished `-1` may.
     guard let volumeOpened = diskImageOpenPathWithinCopyClock(
@@ -1114,8 +1169,9 @@ func establishWorkspaceInodeBoundary(
         return failMounted(saved: savedFD, volume: volumeOpened)
     }
     let volumeFD = volumeOpened
-    var savedStatus = stat()
-    guard fstat(savedFD, &savedStatus) == 0, device(of: savedStatus) == originalDevice else {
+    guard let savedStatus = fstatWithinCopyClock(savedFD),
+        device(of: savedStatus) == originalDevice
+    else {
         return failMounted(saved: savedFD, volume: volumeFD)
     }
     if copyTree(from: savedFD, to: volumeFD, expectDevice: originalDevice) == false {
@@ -1862,8 +1918,11 @@ private enum ObservedDevice {
     case stopped
 }
 
-private func observedDevice(_ path: String) -> ObservedDevice {
-    switch diskImageObservePath(path) {
+private func observedDevice(_ path: String, afterDetach: Bool = false) -> ObservedDevice {
+    let observation = afterDetach
+        ? diskImageObservePathWithinCancelClock(path)
+        : diskImageObservePath(path)
+    switch observation {
     case .value(let snapshot):
         return .device(snapshot.device)
     case .missing:
@@ -1949,21 +2008,27 @@ private func renamePath(_ source: String, _ destination: String) -> Bool {
 /// Delete a leftover mountpoint directory only when every inode is a
 /// single-link object. A planted hard link is left in place.
 private func inodeCheckedDelete(_ root: String) -> Bool {
-    var status = stat()
-    let exists = root.withCString { lstat($0, &status) == 0 }
-    guard exists else { return true }
-    guard kind(of: status.st_mode) == .directory else {
-        if status.st_nlink > 1 { return false }
-        return root.withCString { unlink($0) == 0 }
-    }
-    guard let names = try? FileManager.default.contentsOfDirectory(atPath: root) else {
+    switch diskImageLstatNode(root) {
+    case .stopped:
         return false
+    case .missing:
+        return true
+    case .value(let node):
+        guard kind(of: node.mode) == .directory else {
+            if node.nlink > 1 { return false }
+            return diskImageUnlinkWithinCopyClock(root) == true
+        }
+        guard let names = readDirectoryNamesStoppingForDetachReserve(root, mayContinue: {
+            cancelClockAllowsTreeCopy()
+        }) else {
+            return false
+        }
+        for name in names {
+            let child = (root as NSString).appendingPathComponent(name)
+            if inodeCheckedDelete(child) == false { return false }
+        }
+        return diskImageRmdirWithinCopyClock(root) == true
     }
-    for name in names {
-        let child = (root as NSString).appendingPathComponent(name)
-        if inodeCheckedDelete(child) == false { return false }
-    }
-    return root.withCString { rmdir($0) == 0 }
 }
 
 private struct ToolOutput {

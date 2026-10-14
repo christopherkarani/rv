@@ -1887,6 +1887,174 @@ struct DiskImageCancellationTests {
         }
         #expect(try Data(contentsOf: held) == Data("held".utf8))
     }
+
+    /// `8b691cad` unlinks the staged temp file on the caller after the copy
+    /// clock has already stopped the read. A stop is not gone, so the file
+    /// stays. The read is a pipe with no writer: allowance 0 would return
+    /// before `open`. This budget is positive, and the call does not return
+    /// until that read has been entered.
+    @Test func clockStopLeavesTheStagedFile() throws {
+        #expect(DiskImageCancelBudget.returnBound == 8)
+        #expect(DiskImageCancelBudget.detachCap == 5)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-stage-hold-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let originalURL = root.appendingPathComponent("original")
+        try Data("old".utf8).write(to: originalURL)
+        let original = try FileHandle(forUpdating: originalURL)
+        defer { try? original.close() }
+        var pair: [Int32] = [-1, -1]
+        let opened = pair.withUnsafeMutableBufferPointer { buffer -> Int32 in
+            guard let base = buffer.baseAddress else { return -1 }
+            return pipe(base)
+        }
+        try #require(opened == 0)
+        defer {
+            if pair[0] >= 0 { close(pair[0]) }
+            if pair[1] >= 0 { close(pair[1]) }
+        }
+        let before = stageNames()
+        try withCopyBudget(0.25) {
+            let allowance = diskImageTreeSyscallAllowance(
+                deadline: CooperativeLaunchStop.cancelClock?.deadline
+            )
+            #expect((allowance ?? 0) > 0.1)
+            #expect((allowance ?? 1) < 1)
+            let started = Date()
+            let outcome = replaceOriginalOnlyAfterStagedCopy(
+                source: pair[0],
+                original: original.fileDescriptor,
+                originalPath: originalURL.path,
+                mayContinue: { _ in true },
+                copyXattr: { _, _ in true }
+            )
+            let elapsed = Date().timeIntervalSince(started)
+            #expect(outcome.committed == false)
+            #expect(outcome.reachedTruncate == false)
+            #expect(elapsed > 0.1)
+            #expect(elapsed < DiskImageCancelBudget.returnBound)
+        }
+        if pair[1] >= 0 {
+            close(pair[1])
+            pair[1] = -1
+        }
+        let created = stageNames().filter { before.contains($0) == false }
+        #expect(created.isEmpty == false)
+        for name in created {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+            #expect(FileManager.default.fileExists(atPath: url.path))
+            try? FileManager.default.removeItem(at: url)
+        }
+        #expect(try Data(contentsOf: originalURL) == Data("old".utf8))
+    }
+
+    /// `loadSnapshot` reads through this. `8b691cad` uses `Data(contentsOf:)`,
+    /// which stays inside `open` until the writer at 1.5s and then returns
+    /// bytes. A positive copy budget returns nil first. Allowance 0 does not
+    /// enter `open`.
+    @Test func blockedPathReadReturnsBeforeTheWriter() throws {
+        #expect(DiskImageCancelBudget.returnBound == 8)
+        #expect(DiskImageCancelBudget.detachCap == 5)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-path-read-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fifo = root.appendingPathComponent("snapshot")
+        try #require(fifo.path.withCString { mkfifo($0, 0o600) } == 0)
+        let release = DispatchSemaphore(value: 0)
+        let fifoPath = fifo.path
+        Thread.detachNewThread {
+            Thread.sleep(forTimeInterval: 1.5)
+            let writer = fifoPath.withCString { open($0, O_WRONLY | O_NONBLOCK | O_CLOEXEC) }
+            if writer >= 0 { close(writer) }
+            release.signal()
+        }
+        defer { release.wait() }
+        try withCopyBudget(0.25) {
+            let allowance = diskImageTreeSyscallAllowance(
+                deadline: CooperativeLaunchStop.cancelClock?.deadline
+            )
+            #expect((allowance ?? 0) > 0.1)
+            let started = Date()
+            let bytes = diskImageReadWholeFileWithinCopyClock(fifo.path)
+            let elapsed = Date().timeIntervalSince(started)
+            #expect(bytes == nil)
+            #expect(elapsed > 0.1)
+            #expect(elapsed < DiskImageCancelBudget.returnBound)
+        }
+        let writer = fifo.path.withCString { open($0, O_WRONLY | O_NONBLOCK | O_CLOEXEC) }
+        if writer >= 0 { close(writer) }
+    }
+
+    /// After the copy budget is spent, the detach reserve is still on the
+    /// cancel clock. Proving the mount is gone and unlinking the image use
+    /// that reserve. A copy-clock `lstat` returns `.stopped` and must not
+    /// be what restore uses, or a cancelled launch reports
+    /// `workspaceInodeBoundaryFailed` after the volume is already down.
+    @Test func detachProofRunsAfterTheCopyBudgetIsSpent() throws {
+        #expect(DiskImageCancelBudget.returnBound == 8)
+        #expect(DiskImageCancelBudget.detachCap == 5)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-detach-proof-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let present = root.appendingPathComponent("present")
+        try Data("here".utf8).write(to: present)
+        let missing = root.appendingPathComponent("missing").path
+        let image = root.appendingPathComponent("image")
+        try Data("img".utf8).write(to: image)
+
+        try withCopyBudget(0) {
+            let allowance = diskImageTreeSyscallAllowance(
+                deadline: CooperativeLaunchStop.cancelClock?.deadline
+            )
+            #expect(allowance == 0)
+            let full = CooperativeLaunchStop.cancelClock?.deadline?.timeIntervalSinceNow ?? 0
+            #expect(full > 1)
+            #expect(full <= DiskImageCancelBudget.detachCap + 0.05)
+
+            if case .stopped = diskImageObservePath(present.path) {
+            } else {
+                Issue.record("copy-clock lstat must not start once the copy budget is spent")
+            }
+            #expect(diskImagePathExists(missing) == nil)
+            #expect(diskImageUnlinkWithinCopyClock(image.path) == nil)
+            #expect(FileManager.default.fileExists(atPath: image.path))
+
+            guard case .value(let snapshot) = diskImageObservePathWithinCancelClock(present.path) else {
+                Issue.record("detach proof must lstat during the detach reserve")
+                return
+            }
+            let identity = try #require(lstatIdentity(present.path))
+            #expect(snapshot.device == identity.device)
+            #expect(snapshot.inode == identity.inode)
+            #expect(diskImagePathExistsWithinCancelClock(missing) == false)
+            #expect(diskImagePathExistsWithinCancelClock(present.path) == true)
+            #expect(diskImageUnlinkWithinCancelClock(image.path) == true)
+            #expect(FileManager.default.fileExists(atPath: image.path) == false)
+        }
+    }
+}
+
+private func stageNames() -> Set<String> {
+    let names = (try? FileManager.default.contentsOfDirectory(
+        atPath: FileManager.default.temporaryDirectory.path
+    )) ?? []
+    return Set(names.filter { $0.hasPrefix("rv-stage-") })
+}
+
+private func withCopyBudget(_ budget: TimeInterval, _ body: () throws -> Void) rethrows {
+    let now = Date()
+    let timeLeft = DiskImageCancelBudget.detachCap + budget
+    let cancelledAt = now.addingTimeInterval(
+        timeLeft - DiskImageCancelBudget.cancelledSequenceBudget
+    )
+    let flag = CooperativeLaunchStop.Flag()
+    flag.noteCancel(now: cancelledAt)
+    CooperativeLaunchStop.install(flag)
+    defer { CooperativeLaunchStop.uninstall() }
+    try body()
 }
 
 private func withSpentCopyClock(_ body: () throws -> Void) rethrows {

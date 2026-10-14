@@ -1179,15 +1179,18 @@ extension WorkspaceRecovery {
     private static func loadSnapshot(
         _ identity: WorkspaceDurableIdentity
     ) -> Result<[String: WorkspaceInodeStamp], IsolationApplyError> {
-        var status = stat()
-        guard identity.snapshotPath.withCString({ lstat($0, &status) == 0 }),
-            UInt64(status.st_dev) == identity.snapshotDevice,
-            UInt64(status.st_ino) == identity.snapshotInode,
-            (status.st_mode & S_IFMT) == S_IFREG
-        else {
+        switch diskImageObservePath(identity.snapshotPath) {
+        case .stopped, .missing:
             return .failure(.workspaceInodeBoundaryFailed)
+        case .value(let snapshot):
+            guard snapshot.device == identity.snapshotDevice,
+                snapshot.inode == identity.snapshotInode,
+                (snapshot.mode & S_IFMT) == S_IFREG
+            else {
+                return .failure(.workspaceInodeBoundaryFailed)
+            }
         }
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: identity.snapshotPath)),
+        guard let data = diskImageReadWholeFileWithinCopyClock(identity.snapshotPath),
             let file = try? JSONDecoder().decode(SnapshotFile.self, from: data)
         else {
             return .failure(.workspaceInodeBoundaryFailed)
