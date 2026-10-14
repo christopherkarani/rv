@@ -80,16 +80,16 @@ public enum MCPRedaction {
     }
 
     /// Strip by scalar. `U+200C` and `U+200D` glue to the neighboring letter, so a `Character` filter would keep them.
-    /// Format characters, the soft hyphen, and the separators that can sit inside `ghp_` are removed
-    /// before a prefix or length check. U+0020 stays, so a space still separates two intact prefixes.
+    /// Variation selectors glue the same way. Format characters, the soft hyphen, VT, FF, and the
+    /// separators that can sit inside `ghp_` are removed before a prefix or length check.
+    /// U+0020 stays, so a space still separates two intact prefixes.
     private static func withoutInvisibleBreaks(_ text: String) -> String {
         String(String.UnicodeScalarView(text.unicodeScalars.filter { scalar in
             switch scalar.value {
-            case 0x0009, 0x00A0, 0x00AD, 0x034F, 0x061C, 0x180B, 0x180C, 0x180D, 0x180E, 0x2007, 0x200B, 0x200C,
-                0x200D, 0x200E, 0x200F, 0x2028, 0x2029, 0x202F, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0xFE0F,
-                0xFEFF:
+            case 0x0009, 0x000B, 0x000C, 0x00A0, 0x00AD, 0x034F, 0x061C, 0x180B, 0x180C, 0x180D, 0x180E,
+                0x2007, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2028, 0x2029, 0x202F, 0xFEFF:
                 return false
-            case 0x202A...0x202E, 0x2066...0x206F:
+            case 0x202A...0x202E, 0x2060...0x206F, 0xFE00...0xFE0F:
                 return false
             default:
                 return true
@@ -338,13 +338,29 @@ public enum MCPRedaction {
     /// The authority of a leading `http://`, `https://`, `wss://`, or `postgres://` is
     /// `password@host`. `knownSchemeSlash` skips that one colon, so the user check never
     /// sees it. `user:password@host` still has a colon in the user part and is not this case.
+    /// A `%2F`, `%5C`, `%3F`, or `%23` decoded immediately before `@` is still the user:
+    /// the host after `@` contains a dot, and a real `host/@path` does not.
     private static func passwordSitsInAuthority(_ decoded: String) -> Bool {
         guard let restStart = schemeAuthorityStart(decoded) else { return false }
         let rest = decoded[restStart...]
-        let authorityEnd = rest.firstIndex(where: { $0 == "/" || $0 == "?" || $0 == "#" }) ?? rest.endIndex
-        let authority = rest[..<authorityEnd]
-        guard let at = authority.firstIndex(of: "@"), at > authority.startIndex else { return false }
-        return authority[..<at].contains(":") == false
+        var index = rest.startIndex
+        while index < rest.endIndex {
+            let character = rest[index]
+            if character == "@" {
+                return index > rest.startIndex && rest[..<index].contains(":") == false
+            }
+            if character == "/" || character == "?" || character == "#" {
+                let next = rest.index(after: index)
+                guard next < rest.endIndex, rest[next] == "@" else { return false }
+                let user = rest[..<index]
+                let hostStart = rest.index(after: next)
+                guard user.isEmpty == false, user.contains(":") == false else { return false }
+                let hostEnd = rest[hostStart...].firstIndex(where: { $0 == "/" || $0 == "?" || $0 == "#" }) ?? rest.endIndex
+                return rest[hostStart..<hostEnd].contains(".")
+            }
+            index = rest.index(after: index)
+        }
+        return false
     }
 
     /// Index just after `http://`, `https://`, `wss://`, or `postgres://`.
@@ -375,8 +391,14 @@ public enum MCPRedaction {
     /// Known prefixes. A match leaves its last character in place, so `AKIA`/`AIza` share that
     /// character and both count. `sk-` inside `ctx7sk` does not start on the last character, so
     /// `ctx7sk-…` stays one prefix.
+    /// `.` `+` `=` `:` and whitespace are not part of a prefix. Dropping them for the count
+    /// rejoins `g.hp_` and `g hp_` without removing U+0020 from the value itself. A space
+    /// between two intact prefixes still counts as two.
     private static func secretPrefixCount(_ text: String) -> Int {
-        let text = withoutInvisibleBreaks(text)
+        let text = String(withoutInvisibleBreaks(text).filter { character in
+            if character == "." || character == "+" || character == "=" || character == ":" { return false }
+            return character.isWhitespace == false
+        })
         var count = 0
         var index = text.startIndex
         while index < text.endIndex {

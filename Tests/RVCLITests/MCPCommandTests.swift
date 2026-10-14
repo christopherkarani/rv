@@ -987,6 +987,134 @@ struct MCPCommandTests {
                 #"{"mcpServers":{"api":{"url":"\#(url)"}}}"#,
                 absent: [password], label: "remote")
         }
+        let encodedDelimiters = [
+            "https://\(password)%2F@collector.example/hook",
+            "https://\(password)%2f@collector.example/hook",
+            "https://\(password)%5C@collector.example/hook",
+            "https://\(password)%3F@collector.example/hook",
+            "https://\(password)%23@collector.example/hook",
+            "https://\(password)%252F@collector.example/hook",
+            "http://\(password)%2F@collector.example/hook",
+            "HTTPS://\(password)%2F@collector.example/hook",
+            "wss://\(password)%2F@collector.example/hook",
+            "postgres://\(password)%2F@db.example/app",
+            "https:%2F%2F\(password)%2F@collector.example/hook",
+        ]
+        for value in encodedDelimiters {
+            try await expectImportRefused(
+                #"{"mcpServers":{"db":{"command":"\#(value)"}}}"#,
+                absent: [password], label: "delimiter command")
+            try await expectImportRefused(
+                #"{"mcpServers":{"db":{"command":"db-mcp","args":["\#(value)","--cwd=\#(value)","--database-url=\#(value)"]}}}"#,
+                absent: [password], label: "delimiter argument")
+        }
+    }
+
+    @Test func importRefusesASplitterInsideAToken() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-"]
+        let marks = (0xFE00...0xFE0E).compactMap(Unicode.Scalar.init).map(String.init) + ["\u{2065}", "\u{000B}", "\u{000C}"]
+        func percentEncoded(_ text: String) -> String {
+            text.utf8.map { String(format: "%%%02X", $0) }.joined()
+        }
+        let encoded = (0xFE00...0xFE0E).compactMap(Unicode.Scalar.init).map { percentEncoded(String($0)) }
+            + [percentEncoded("\u{2065}"), percentEncoded("\u{000B}"), percentEncoded("\u{000C}")]
+        for mark in marks + encoded {
+            let value = head + mark + tail
+            let sk = "sk-12345678g" + mark + tail
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": value, "LOG_LEVEL": value]]),
+                absent: absent, label: "splitter env")
+            try await expectImportRefused(
+                try hostJSON("api", [
+                    "url": "https://mcp.example/mcp",
+                    "headers": [
+                        "Authorization": "Bearer \(value)",
+                        "Proxy-Authorization": "Basic \(value)",
+                        "X-API-Key": sk,
+                        "Cookie": value,
+                    ],
+                ]),
+                absent: absent, label: "splitter header")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": [value, "--api-key", value]]),
+                absent: absent, label: "splitter argument")
+        }
+        let longTail = tail + "EXTRA"
+        for mark in ["\u{FE00}", "\u{2065}", "\u{000B}"] {
+            let value = head + mark + longTail
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": value, "LOG_LEVEL": value]]),
+                absent: absent + [longTail], label: "long splitter")
+        }
+        let spaced = "ctx7sk-12345678 ghp_\(tail)"
+        try await expectImportRefused(
+            try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": spaced, "LOG_LEVEL": spaced]]),
+            absent: ["ghp_", tail], label: "space separates")
+
+        let joiners = ["%2E", ".", "+", "=", ":", "%0A", "%E2%80%83", "\u{2003}"]
+        for joiner in joiners {
+            let value = head + joiner + tail
+            let sk = "sk-12345678g" + joiner + tail
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": value, "LOG_LEVEL": value]]),
+                absent: absent, label: "joiner env")
+            try await expectImportRefused(
+                try hostJSON("api", [
+                    "url": "https://mcp.example/mcp",
+                    "headers": [
+                        "Authorization": "Bearer \(value)",
+                        "Proxy-Authorization": "Basic \(value)",
+                        "X-API-Key": sk,
+                        "Cookie": value,
+                    ],
+                ]),
+                absent: absent, label: "joiner header")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": [value, "--api-key", value, "--api-key=\(value)"]]),
+                absent: absent, label: "joiner argument")
+        }
+        let finished = "%" + String(repeating: "25", count: 31) + "2E" + tail
+        let finishedValue = head + finished
+        let spaceInside = [
+            head + " " + tail,
+            head + " " + longTail,
+            " " + head + "%2E" + longTail,
+            head + "%EF%B8%80" + longTail,
+            "sk-12345678g%EF%B8%80" + longTail,
+            head + "\u{FE00}" + longTail,
+        ]
+        for value in [finishedValue] + spaceInside {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": value, "LOG_LEVEL": value]]),
+                absent: absent + [longTail], label: "space or finished decode")
+        }
+        let bearerChain = "Bearer%20" + finishedValue
+        let variationChain = head
+            + "%" + String(repeating: "25", count: 31) + "EF"
+            + "%" + String(repeating: "25", count: 31) + "B8"
+            + "%" + String(repeating: "25", count: 31) + "80"
+            + longTail
+        try await expectImportRefused(
+            try hostJSON("api", [
+                "url": "https://mcp.example/mcp",
+                "headers": ["X-API-Key": "sk-12345678g%EF%B8%80" + longTail],
+            ]),
+            absent: absent + [longTail], label: "variation key")
+        for value in [bearerChain, "Bearer " + finishedValue, variationChain, "Bearer%20" + variationChain] {
+            try await expectImportRefused(
+                try hostJSON("api", [
+                    "url": "https://mcp.example/mcp",
+                    "headers": [
+                        "Authorization": value,
+                        "Proxy-Authorization": value,
+                        "X-API-Key": value,
+                        "Cookie": value,
+                    ],
+                ]),
+                absent: absent + [longTail, "Bearer%20"], label: "bearer chain")
+        }
     }
 
     @Test func importRefusesASplitTokenAnOverlapAndAStoppedDecode() async throws {
