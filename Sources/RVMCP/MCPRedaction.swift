@@ -413,7 +413,7 @@ public enum MCPRedaction {
 
     /// Userinfo bounded by a raw `/`, `?`, or `#`. A raw `\` stays in the user: curl and Python
     /// keep it there, and Node drops a leading `\`. Extra `/` or `\` after the scheme, and a tab,
-    /// LF, or CR in front of those, are still the scheme. An empty first `@` stays in the user.
+    /// LF, CR, or CR+LF in front of those, are still the scheme. An empty first `@` stays in the user.
     /// Percent-encoded delimiters stay in the user.
     private static func rawUserinfoIsPassword(_ text: String) -> Bool {
         let body = authorityBody(text)
@@ -441,10 +441,10 @@ public enum MCPRedaction {
         return false
     }
 
-    /// `/`, `\`, or a tab, LF, or CR glued to the scheme. Node drops those and still reads the user.
-    /// U+0020 is not one of these.
+    /// `/`, `\`, or a tab, LF, CR, or CR+LF glued to the scheme. Node drops those and still reads the user.
+    /// CR+LF is one `Character`. U+0020 is not one of these.
     private static func isExtraAuthorityMark(_ character: Character) -> Bool {
-        character == "/" || character == "\\" || character == "\t" || character == "\n" || character == "\r"
+        character == "/" || character == "\\" || isLineBreakGap(character)
     }
 
     private static func skipExtraAuthorityMarks(_ text: Substring, from index: String.Index) -> String.Index {
@@ -455,12 +455,12 @@ public enum MCPRedaction {
         return index
     }
 
-    /// `password@host`, `:password@host`, or a tab, LF, or CR in front of that colon.
+    /// `password@host`, `:password@host`, or a tab, LF, CR, or CR+LF in front of that colon.
     /// `user:password@host` and a space or VT in front of the colon stay visible.
     private static func userinfoIsPasswordOnly(_ user: Substring) -> Bool {
         guard user.isEmpty == false else { return false }
         var index = user.startIndex
-        while index < user.endIndex, user[index] == "\t" || user[index] == "\n" || user[index] == "\r" {
+        while index < user.endIndex, isLineBreakGap(user[index]) {
             index = user.index(after: index)
         }
         let rest = user[index...]
@@ -623,8 +623,8 @@ public enum MCPRedaction {
     /// An ASCII scalar other than a letter, a digit, `-`, or `_` splits `ghp_`, the same way `$` and `#` do.
     /// U+0020 is whitespace and is not removed from the value. U+2044 and U+2215 are separators, so a
     /// vulgar fraction or a square sign whose NFKD contains one is dropped. A self-NFKD solidus or slash
-    /// glyph is a separator, including U+2298 and U+2F03, as are the circled operators U+2295–U+2297
-    /// and U+2299–U+229B, and U+2212, U+22C5, U+2219, U+02D7, and
+    /// glyph is a separator, including U+2298 and U+2F03, as are the circled operators U+2295–U+229B
+    /// and the next operators U+229C–U+22A1, and U+2212, U+22C5, U+2219, U+02D7, and
     /// U+E002F. A self-NFKD box-drawing diagonal is a separator too: U+2571–U+2573, U+1FBA0–U+1FBAE,
     /// U+1FBBD–U+1FBBF, the block diagonals U+1FB3C–U+1FB67, and U+292B / U+292C. U+292F and U+2930
     /// are the diagonal crossings next to those. Saltires are separators too: U+1FBC0, U+2613, U+26DD,
@@ -645,7 +645,7 @@ public enum MCPRedaction {
         case 0x2044, 0x2215, 0xFF0E,
             0x2216, 0x29F5, 0x29F6, 0x29F7, 0x29F8, 0x29F9, 0x2AFD, 0x2AFB, 0x1F67C, 0x1F67D,
             0x2212, 0x2213, 0x2214, 0x22C5, 0x22C6, 0x22C7, 0x2217, 0x2218, 0x2219, 0x02D7, 0xE002F,
-            0x2295...0x229B, 0x29B8, 0x233F, 0x2340, 0x2341, 0x2342, 0x2349, 0x244A,
+            0x2295...0x22A1, 0x29B8, 0x233F, 0x2340, 0x2341, 0x2342, 0x2349, 0x244A,
             0x27C8, 0x27C9, 0x27CB, 0x27CC, 0x27CD, 0x292B, 0x292C, 0x292F, 0x2930, 0x29C4, 0x29C5, 0x2F03,
             0x2571...0x2573, 0x2613, 0x26DD, 0x26DE, 0x2B59, 0x1F7A8...0x1F7AE, 0x1FBA0...0x1FBAE,
             0x1FBBD...0x1FBC0, 0x1FB3C...0x1FB67:
