@@ -416,6 +416,9 @@ public enum MCPSandbox {
             return primary
         }
         var results = syntheticOpenings(parent: parent, name: name, tail: tail, origin: origin, includeCreationDirectory: true)
+        if let dot = finalNameDotOpening(primary, parent: parent), results.contains(dot) == false {
+            results.append(dot)
+        }
         let nextParent = parent == "/" ? "/" + name : parent + "/" + name
         for opening in openingsFromMissing(parent: nextParent, parts: tail, origin: origin)
             where results.contains(opening) == false {
@@ -424,20 +427,21 @@ public enum MCPSandbox {
         return results
     }
 
-    /// One collapsed opening is the whole set when it already lies under the
-    /// creation directory and every component before the last one is a real
-    /// directory (`../private/tmp/future-keys` → `/private/tmp/future-keys`),
-    /// or when a `..` run cannot leave that directory and the collapsed path
-    /// continues along it. A later missing name under that directory
-    /// (`../private/tmp/x/future-keys` → `/private/tmp/x/future-keys`) does
-    /// not: `ln -s /private` on `private` and `ln -s .` on `x` still read
-    /// the creation directory. A missing name that repeats an ancestor
-    /// (`private` → `/private/future-keys`) does not either. `../private`
-    /// after `link` collapses to `/private/...` and is not that file.
-    /// `/foo/future-keys` is as deep as `/private/tmp` and is a different
-    /// tree: `link/../../../foo/future-keys` then `ln -s .` reads
-    /// `/private/tmp/future-keys`. `foo/../../private/tmp/future-keys` stays
-    /// on `/private/tmp/future-keys` and is the whole set.
+    /// One collapsed opening is the whole set when it is the creation
+    /// directory or one missing component directly under it
+    /// (`../private/tmp/future-keys` → `/private/tmp/future-keys`), or when
+    /// a `..` run cannot leave that directory and the collapsed path
+    /// continues along it. A final name after a real directory
+    /// (`future-keys/x`, `anchor/future-keys`) does not: `ln -s .` or
+    /// `ln -s ../future-keys` still reads the credential directory. A later
+    /// missing name (`../private/tmp/x/future-keys`) does not either.
+    /// A missing name that repeats an ancestor (`private` →
+    /// `/private/future-keys`) does not. `../private` after `link` collapses
+    /// to `/private/...` and is not that file. `/foo/future-keys` is as deep
+    /// as `/private/tmp` and is a different tree: `link/../../../foo/future-keys`
+    /// then `ln -s .` reads `/private/tmp/future-keys`.
+    /// `foo/../../private/tmp/future-keys` stays on `/private/tmp/future-keys`
+    /// and is the whole set.
     private static func collapsedOpeningCoversTheParent(
         _ primary: [String], parent: String, tail: [String]
     ) -> Bool {
@@ -473,24 +477,38 @@ public enum MCPSandbox {
     }
 
     /// A single collapsed path covers the creation directory when it is that
-    /// directory, or lies under it with only the final component still
-    /// missing. An earlier missing name (`x` in `/private/tmp/x/future-keys`)
-    /// can be `ln -s .` and read a sibling of that name.
+    /// directory, or one missing component directly under it. A name after a
+    /// real directory (`x` in `/private/tmp/future-keys/x`, or `future-keys`
+    /// in `/private/tmp/anchor/future-keys`) can still be a symlink.
     private static func collapsedOpeningLiesOnTheParent(_ opened: String, parent: String) -> Bool {
         if opened == parent { return true }
         let prefix = parent == "/" ? "/" : parent + "/"
         guard opened.hasPrefix(prefix) else { return false }
         let parts = opened.dropFirst(prefix.count).split(
             separator: "/", omittingEmptySubsequences: true
+        )
+        return parts.count <= 1
+    }
+
+    /// `ln -s .` on a final name that already sits in a real directory.
+    /// `/private/tmp/future-keys/x` reads `/private/tmp/future-keys`.
+    /// A missing component before that name is a different opening.
+    private static func finalNameDotOpening(_ primary: [String], parent: String) -> String? {
+        guard primary.count == 1, let opened = primary.first else { return nil }
+        let prefix = parent == "/" ? "/" : parent + "/"
+        guard opened.hasPrefix(prefix) else { return nil }
+        let parts = opened.dropFirst(prefix.count).split(
+            separator: "/", omittingEmptySubsequences: true
         ).map(String.init)
-        guard parts.count > 1 else { return true }
+        guard parts.count > 1 else { return nil }
         var current = parent
         for part in parts.dropLast() {
             let next = current == "/" ? "/" + part : current + "/" + part
-            guard isRealDirectory(next) else { return false }
+            guard isRealDirectory(next) else { return nil }
             current = next
         }
-        return true
+        guard current != "/" else { return nil }
+        return current
     }
 
     /// Openings for a component that does not exist yet. `name` → `/name`

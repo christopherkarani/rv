@@ -928,6 +928,35 @@ struct MCPSandboxCreateTests {
         #expect(MCPSandbox.missingSymlinkOpenings(nested).contains(opened))
     }
 
+    @Test func finalNameUnderARealDirectoryStillOpensTheCredentialDirectory() throws {
+        let opened = "/private/tmp/future-keys"
+        let anchor = "/private/tmp/anchor"
+        let createdOpened = FileManager.default.fileExists(atPath: opened) == false
+        let createdAnchor = FileManager.default.fileExists(atPath: anchor) == false
+        if createdOpened {
+            try FileManager.default.createDirectory(atPath: opened, withIntermediateDirectories: true)
+        }
+        if createdAnchor {
+            try FileManager.default.createDirectory(atPath: anchor, withIntermediateDirectories: true)
+        }
+        defer {
+            if createdOpened { try? FileManager.default.removeItem(atPath: opened) }
+            if createdAnchor { try? FileManager.default.removeItem(atPath: anchor) }
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-final-name-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let me = root.appendingPathComponent("Users/me")
+        try FileManager.default.createDirectory(at: me, withIntermediateDirectories: true)
+        #expect(symlink("/private/tmp/anchor", me.appendingPathComponent("jump").path) == 0)
+        let named = me.path + "/jump/../private/tmp/future-keys/x"
+        let nested = me.path + "/jump/../private/tmp/future-keys/foo"
+        let anchored = me.path + "/jump/../private/tmp/anchor/future-keys"
+        #expect(MCPSandbox.missingSymlinkOpenings(named).contains(opened))
+        #expect(MCPSandbox.missingSymlinkOpenings(nested).contains(opened))
+        #expect(MCPSandbox.missingSymlinkOpenings(anchored).contains(opened))
+    }
+
     @Test func preexistingSymlinkThenMoveDoesNotAllowTheCache() throws {
         for planted in plantedCacheLinks {
             let fixture = try plantedCacheLink(planted)
