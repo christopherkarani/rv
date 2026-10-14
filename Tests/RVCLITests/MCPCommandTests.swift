@@ -216,6 +216,32 @@ struct MCPCommandTests {
         #expect(events.last?.detail["always"] == "true")
     }
 
+    @Test func approveAlwaysEscapesAToolThatStillMatchesAsk() async throws {
+        let fixture = Fixture()
+        try signedConfiguration(fixture, MCPConfiguration(servers: [
+            MCPServerDefinition(name: "notes", command: "notes-mcp", tools: MCPToolPolicy(ask: ["*"]))
+        ]))
+        let screen = "\u{1B}[2J\u{1B}[Happroved notes evil always"
+        let store = fixture.environment().approvals
+        let painted = try #require(store.request(
+            server: "notes", tool: screen, argumentsHash: "h-screen", argumentKeys: ["note"]))
+        let prompts = Mutex(0)
+        let watching = UserPresence { _, _ in
+            prompts.withLock { $0 += 1 }
+            return .confirmed(method: "test")
+        }
+        let refused = await MCPRun.approve(
+            id: painted.id, always: true, environment: fixture.environment(presence: watching))
+        let refusedText = refused.failureMessage ?? ""
+        #expect(refusedText.contains("still matches an ask or deny rule"))
+        #expect(refusedText.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(refusedText.contains("\\u001b[2J"))
+        #expect(refusedText.contains("\\u001b[H"))
+        #expect(refusedText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            .contains("approved notes evil always") == false)
+        #expect(prompts.withLock { $0 } == 0)
+    }
+
     @Test func approvingNeedsThePersonAndTheCodeTheGatewayPrinted() async throws {
         let fixture = Fixture()
         let probe = fixture.environment()
@@ -579,6 +605,58 @@ struct MCPCommandTests {
         #expect(allow.contains("regex") == false)
     }
 
+    @Test func sshSymlinkDenyMatchesSpellingsAndAnIntermediateLink() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-ssh-chain-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let scratch = root.appendingPathComponent("scratch")
+        let tmp = root.appendingPathComponent("tmp")
+        let decoy = root.appendingPathComponent("decoy")
+        let mid = home.appendingPathComponent("mid")
+        let ssh = home.appendingPathComponent(".ssh")
+        let realKeys = home.appendingPathComponent("real-keys")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: decoy, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: realKeys, withIntermediateDirectories: true)
+        #expect(symlink(decoy.path, mid.path) == 0)
+        #expect(symlink(mid.path, ssh.path) == 0)
+        let result = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: tmp.path)
+        guard case .success(let profile) = result else {
+            Issue.record("profile refused before the credential deny could be checked: \(result)")
+            return
+        }
+        let lines = profile.split(separator: "\n").map(String.init)
+        let deny = lines.first { $0.hasPrefix("(deny file-read*") } ?? ""
+        let allow = lines.first { $0.hasPrefix("(allow file-write*") } ?? ""
+        let decoyPath = canonicalPath(decoy.path)
+        #expect(deny.contains("(subpath \"\(decoyPath)\")"))
+        #expect(allow.contains(decoyPath) == false)
+        #expect(allow.contains(canonicalPath(realKeys.path)) == false)
+        #expect(allow.contains("regex") == false)
+        let patterns = Self.seatbeltRegexes(deny)
+        let parent = ssh.deletingLastPathComponent().path
+        let spellings = [
+            ssh.path + "/id_rsa",
+            parent + "/./.ssh/id_rsa",
+            parent + "//.ssh/id_rsa",
+            parent + "/.SSH/id_rsa",
+            mid.path + "/id_rsa",
+            parent + "/./mid/id_rsa",
+            parent + "//mid/id_rsa",
+        ]
+        for spelling in spellings {
+            #expect(patterns.contains { Self.wholeMatch($0, spelling) }, "\(spelling) was not denied")
+        }
+        #expect(patterns.contains { Self.wholeMatch($0, parent + "/Xssh/id_rsa") } == false)
+        #expect(deny.contains("\\.ssh"))
+    }
+
     @Test func temporaryDirectoryTheReviewDidNotNameIsRefused() throws {
         let root = URL(fileURLWithPath: "/workspace/rv-unreviewed-tmpdir-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -682,6 +760,26 @@ struct MCPCommandTests {
         guard let resolved = realpath(path, nil) else { return path }
         defer { free(resolved) }
         return String(cString: resolved)
+    }
+
+    private static func seatbeltRegexes(_ deny: String) -> [String] {
+        var patterns: [String] = []
+        var rest = Substring(deny)
+        let opener = "(regex #\""
+        while let start = rest.range(of: opener) {
+            let after = rest[start.upperBound...]
+            guard let end = after.range(of: "\")") else { break }
+            patterns.append(String(after[..<end.lowerBound]))
+            rest = after[end.upperBound...]
+        }
+        return patterns
+    }
+
+    private static func wholeMatch(_ pattern: String, _ text: String) -> Bool {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = regex.firstMatch(in: text, range: range) else { return false }
+        return match.range.location == 0 && match.range.length == range.length
     }
 
     @Test func approveDoesNotSignARowRewrittenDuringReview() async throws {

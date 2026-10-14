@@ -291,13 +291,15 @@ last_field_prefix() {
   printf '%s' "$found"
 }
 
-# A real spctl verdict is a path (it contains "/") ending in ": accepted" or
-# ": rejected". A certificate label that continues as its own ": accepted"
-# line is not a verdict, and neither is ": rejected (the code is valid...)".
-# The source is the first source= line after the last real verdict. A later
-# source= does not replace it, and a source= before that verdict is dropped.
+# A real spctl verdict is the assessed path, the exact path passed to spctl,
+# followed by ": accepted" or ": rejected". A certificate continuation that
+# contains "/" and ends in ": accepted" is not a verdict, and neither is a
+# bare ": accepted" or ": rejected (the code is valid...)". The source is the
+# first source= line after the last real verdict. A later source= does not
+# replace it, and a source= before that verdict is dropped.
 source_after_verdict() {
   details=$1
+  path=$2
   found=
   armed=
   took=
@@ -316,28 +318,35 @@ source_after_verdict() {
         rest=
         ;;
     esac
-    case "$line" in
-      origin=*|Authority=*|Identifier=*) ;;
-      */*": accepted"|*/*": rejected")
-        armed=1
-        found=
-        took=
-        ;;
-      source=*)
-        if [ -n "$armed" ] && [ -z "$took" ]; then
-          found=$line
-          took=1
-        fi
-        ;;
-    esac
+    if [ "$line" = "$path: accepted" ] || [ "$line" = "$path: rejected" ]; then
+      armed=1
+      found=
+      took=
+    else
+      case "$line" in
+        source=*)
+          if [ -n "$armed" ] && [ -z "$took" ]; then
+            found=$line
+            took=1
+          fi
+          ;;
+      esac
+    fi
   done
   printf '%s' "$found"
 }
 
-# 0 when any physical line starts with $2.
-has_line_prefix() {
+# Prints "real" when a Developer ID Application authority is a certificate
+# line, and "injected" when that line is still inside Identifier=. A newline
+# inside the identifier must not become a trusted Authority line. Format,
+# CodeDirectory, Signature size, Signature, TeamIdentifier, and the other
+# structural codesign fields end the identifier.
+classify_authorities() {
   details=$1
-  prefix=$2
+  needle="Authority=Developer ID Application:"
+  in_identifier=
+  real=
+  injected=
   rest=$details
   while [ -n "$rest" ]; do
     case "$rest" in
@@ -354,10 +363,26 @@ has_line_prefix() {
         ;;
     esac
     case "$line" in
-      "$prefix"*) return 0 ;;
+      Identifier=*) in_identifier=1 ;;
+    esac
+    if [ -n "$in_identifier" ]; then
+      case "$line" in
+        Format=*|CodeDirectory*|Signature\ size=*|Signature=*|TeamIdentifier=*|Sealed\ Resources*|Info.plist*|Timestamp=*|Signed\ Time=*|Notarization\ Ticket=*|Runtime\ Version=*)
+          in_identifier=
+          ;;
+      esac
+    fi
+    case "$line" in
+      "$needle"*)
+        if [ -n "$in_identifier" ]; then
+          injected=1
+        else
+          real=1
+        fi
+        ;;
     esac
   done
-  return 1
+  printf '%s%s' "${real:+real}" "${injected:+ injected}"
 }
 
 # 0 when the Authority phrase appears on a line that does not start with it.
@@ -433,17 +458,26 @@ verify_release_signatures() {
       echo "rv: refusing to install: $name has an invalid code signature" >&2
       exit 1
     fi
-    # A Developer ID certificate is a line that starts with Authority=.
-    # The same text in the leaf name (Identifier= or Executable=) is not.
+    # A Developer ID certificate is an Authority line outside Identifier=.
+    # The same text in the leaf name, or on a line a newline inside
+    # Identifier= created, is not that certificate.
+    kinds=$(classify_authorities "$details")
     real_authority=0
-    if has_line_prefix "$details" "Authority=Developer ID Application:"; then
-      real_authority=1
-    fi
+    injected_authority=0
+    case "$kinds" in
+      *real*) real_authority=1 ;;
+    esac
+    case "$kinds" in
+      *injected*) injected_authority=1 ;;
+    esac
     leaf_phrase=0
     case "$name" in
       *"Authority=Developer ID Application:"*) leaf_phrase=1 ;;
     esac
     if phrase_outside_authority "$details"; then
+      leaf_phrase=1
+    fi
+    if [ "$injected_authority" = 1 ]; then
       leaf_phrase=1
     fi
     if [ "$real_authority" != 1 ] && [ "$leaf_phrase" != 1 ]; then
@@ -473,7 +507,7 @@ verify_release_signatures() {
     fi
     if [ "$need_spctl" = 1 ]; then
       verdict="$("$spctl" -a -t open --context context:primary-signature -vv "$file" 2>&1 || true)"
-      source_line=$(source_after_verdict "$verdict")
+      source_line=$(source_after_verdict "$verdict" "$file")
       if [ "$source_line" != "source=Notarized Developer ID" ]; then
         echo "rv: refusing to install: Gatekeeper does not accept $name as notarized" >&2
         exit 1

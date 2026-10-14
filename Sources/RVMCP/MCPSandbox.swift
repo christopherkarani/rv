@@ -227,19 +227,90 @@ public enum MCPSandbox {
         path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    /// A credential symlink is named by a regex of its own path, after
-    /// `(allow default)`, so the link itself is not only the resolved target.
-    /// The target subpath stays on the deny line and off the allow line.
+    /// Each symlink in a credential chain is denied by a regex Seatbelt still
+    /// matches after it normalizes the path: dot segments, repeated slashes,
+    /// and case differences on the volume. The resolved target stays a subpath
+    /// on the deny line and off the allow line. A later retarget of the link,
+    /// or of an intermediate link, is still the link's path.
     static func symlinkDenies(_ raw: [String]) -> String {
         var seen = Set<String>()
         var filters: [String] = []
         for path in raw {
-            var info = stat()
-            guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFLNK else { continue }
-            let filter = "(regex #\"^\(regexEscape(path))(/.*)?$\")"
-            if seen.insert(filter).inserted { filters.append(filter) }
+            for link in symlinkChain(path) {
+                let exact = "(regex #\"^\(regexEscape(link))(/.*)?$\")"
+                let normalized = "(regex #\"\(seatbeltPathPattern(link))\")"
+                for filter in [exact, normalized] where seen.insert(filter).inserted {
+                    filters.append(filter)
+                }
+            }
         }
         return filters.isEmpty ? "" : " " + filters.joined(separator: " ")
+    }
+
+    /// The path and every symlink it points through, without the final real
+    /// directory. A second symlink at an intermediate path is its own deny.
+    static func symlinkChain(_ path: String) -> [String] {
+        var links: [String] = []
+        var current = path
+        var seen = Set<String>()
+        while seen.insert(current).inserted, links.count < 32 {
+            var info = stat()
+            guard lstat(current, &info) == 0, (info.st_mode & S_IFMT) == S_IFLNK else { break }
+            links.append(current)
+            guard let target = readLink(current) else { break }
+            if target.hasPrefix("/") {
+                current = target
+            } else {
+                let parent = URL(fileURLWithPath: current).deletingLastPathComponent().path
+                current = URL(fileURLWithPath: parent).appendingPathComponent(target).path
+            }
+        }
+        return links
+    }
+
+    static func readLink(_ path: String) -> String? {
+        let capacity = 4096
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: capacity)
+        defer { buffer.deallocate() }
+        let count = readlink(path, buffer, capacity - 1)
+        guard count > 0 else { return nil }
+        buffer[count] = 0
+        return String(cString: buffer)
+    }
+
+    /// `^/+(\./+)*` between components, letters as classes, so `/a/./b`,
+    /// `/a//b`, and `/A/b` are the same path. A quote in the path stays escaped
+    /// and still fails the profile closed.
+    static func seatbeltPathPattern(_ path: String) -> String {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard parts.isEmpty == false else { return "^$" }
+        let body = parts.map { caseFold(regexEscape($0)) }.joined(separator: "/+(\\./+)*")
+        return "^/+(\\./+)*" + body + "(/+.*)?$"
+    }
+
+    static func caseFold(_ escaped: String) -> String {
+        var folded = ""
+        var escapedNext = false
+        for scalar in escaped.unicodeScalars {
+            if escapedNext {
+                folded.unicodeScalars.append(scalar)
+                escapedNext = false
+                continue
+            }
+            if scalar == "\\" {
+                folded.unicodeScalars.append(scalar)
+                escapedNext = true
+                continue
+            }
+            let upper = String(scalar).uppercased()
+            let lower = String(scalar).lowercased()
+            if upper != lower {
+                folded += "[\(upper)\(lower)]"
+            } else {
+                folded.unicodeScalars.append(scalar)
+            }
+        }
+        return folded
     }
 
     static func regexEscape(_ path: String) -> String {
@@ -286,13 +357,49 @@ public enum MCPSandbox {
         }
     }
 
-    /// Creates `path` through the nearest existing directory, opened with
-    /// `O_NOFOLLOW`. A symlink swapped in before the open is not followed.
+    /// Creates `path` by holding a descriptor for every ancestor. `O_NOFOLLOW`
+    /// applies to each component, so swapping `~/Library` (the parent of the
+    /// checked Caches directory) cannot `mkdirat` the leaf into the project.
     static func createCheckedDirectory(_ path: String) -> Bool {
-        guard let (ancestor, parts) = existingDirectory(path) else { return false }
-        guard let held = HeldDirectory(path: ancestor) else { return false }
-        if parts.isEmpty { return held.stillChecked() }
-        return createRelative(parts, holding: held)
+        guard path.hasPrefix("/") else { return false }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard parts.isEmpty == false else { return false }
+        let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        let root = open("/", flags)
+        guard root >= 0 else { return false }
+        var opened = [root]
+        defer { opened.forEach { close($0) } }
+        var current = root
+        for (index, part) in parts.enumerated() {
+            let next = part.withCString { openat(current, $0, flags) }
+            if next >= 0 {
+                opened.append(next)
+                current = next
+                continue
+            }
+            let openError = errno
+            guard openError == ENOENT else { return false }
+            return createMissing(Array(parts[index...]), parent: current)
+        }
+        return true
+    }
+
+    /// `mkdirat` the missing suffix on a descriptor already opened with
+    /// `O_NOFOLLOW`. A symlink swapped in for a missing name is not followed.
+    static func createMissing(_ parts: [String], parent: Int32) -> Bool {
+        let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        var current = parent
+        var opened: [Int32] = []
+        defer { opened.forEach { close($0) } }
+        for part in parts {
+            let created = part.withCString { mkdirat(current, $0, mode_t(0o700)) }
+            if created != 0 && errno != EEXIST { return false }
+            let next = part.withCString { openat(current, $0, flags) }
+            guard next >= 0 else { return false }
+            opened.append(next)
+            current = next
+        }
+        return true
     }
 
     /// `mkdirat` each component on `held`. The leaf's parent is that
@@ -328,24 +435,4 @@ public enum MCPSandbox {
         return held.stillChecked()
     }
 
-    /// Nearest existing directory and the missing components under it.
-    /// A symlink is not an ancestor: opening it would follow the swap.
-    static func existingDirectory(_ path: String) -> (ancestor: String, parts: [String])? {
-        var parts: [String] = []
-        var current = path
-        while true {
-            var info = stat()
-            if lstat(current, &info) == 0 {
-                if (info.st_mode & S_IFMT) == S_IFLNK { return nil }
-                if (info.st_mode & S_IFMT) == S_IFDIR { return (current, parts.reversed()) }
-                return nil
-            }
-            let url = URL(fileURLWithPath: current)
-            let parent = url.deletingLastPathComponent().path
-            let leaf = url.lastPathComponent
-            if parent == current || leaf.isEmpty { return nil }
-            parts.append(leaf)
-            current = parent
-        }
-    }
 }

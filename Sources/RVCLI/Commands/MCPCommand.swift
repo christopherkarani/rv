@@ -337,7 +337,7 @@ enum MCPRun {
     static func approve(id: String, always: Bool, environment: MCPEnvironment) async -> Result<String, CommandFailure> {
         let store = environment.approvals
         guard let request = store.pending().first(where: { $0.id == id }) else {
-            return .failure("no pending MCP approval has id \(id) (see `rv mcp pending`)")
+            return .failure("no pending MCP approval has id \(reviewField(id)) (see `rv mcp pending`)")
         }
         var allowed: (MCPConfiguration, MCPSigner)?
         if always {
@@ -415,7 +415,7 @@ enum MCPRun {
         }
         var configuration = bound.configuration
         guard let index = configuration.servers.firstIndex(where: { $0.name == request.server }) else {
-            return .failure("mcp.json no longer defines \(request.server)")
+            return .failure("mcp.json no longer defines \(reviewField(request.server))")
         }
         var tools = configuration.servers[index].tools
         tools.ask.removeAll { $0 == request.tool }
@@ -424,10 +424,12 @@ enum MCPRun {
         if let organization = configuration.organizationDecision(server: request.server, tool: request.tool),
             organization != .allow
         {
-            return .failure("organization policy says \(organization.rawValue) for \(request.server)/\(request.tool); approve it once instead")
+            return .failure(
+                "organization policy says \(organization.rawValue) for \(reviewField(request.server))/\(reviewField(request.tool)); approve it once instead")
         }
         if configuration.decision(server: configuration.servers[index], tool: request.tool) != .allow {
-            return .failure("\(request.tool) still matches an ask or deny rule in mcp.json; edit that rule instead")
+            return .failure(
+                "\(reviewField(request.tool)) still matches an ask or deny rule in mcp.json; edit that rule instead")
         }
         return .success((configuration, signer))
     }

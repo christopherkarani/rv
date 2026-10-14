@@ -206,7 +206,8 @@ public struct MCPGatewayCore {
             }
             return method == "tools/list" ? listTools(client: id) : callTool(client: id, params: message["params"])
         default:
-            return [.toClient(Self.error(id: id, code: -32601, message: "Method not found: \(method)"))]
+            return [.toClient(Self.error(
+                id: id, code: -32601, message: "Method not found: \(MCPDisplayedText.field(method))"))]
         }
     }
 
@@ -488,7 +489,7 @@ public struct MCPGatewayCore {
             case "notifications/tools/list_changed":
                 return [.toClient(Self.notification(method, nil))]
             case "notifications/progress":
-                return [.toClient(scrub(message, for: server))]
+                return [.toClient(displayedProgress(scrub(message, for: server)))]
             default:
                 return []
             }
@@ -509,7 +510,7 @@ public struct MCPGatewayCore {
             return listPage(fanout: fanout, server: server, message: message)
         case .call(let client, _, let tool, let keys, let approval, let started):
             let isError = message["error"] != nil || message["result"]?["isError"]?.boolValue == true
-            var reply = scrub(message, for: server).objectValue ?? JSONObject()
+            var reply = clientVisibleReply(message, server: server).objectValue ?? JSONObject()
             reply["id"] = client
             let duration = Int((clock().timeIntervalSince(started) * 1000).rounded())
             return [
@@ -557,18 +558,58 @@ public struct MCPGatewayCore {
             return nil
         case .ask:
             let description = object["description"]?.stringValue ?? ""
-            object["description"] = .string("[rv: needs the user's approval] " + description)
+            object["description"] = .string("[rv: needs the user's approval] " + MCPDisplayedText.field(description))
         case .allow:
-            break
+            if let description = object["description"]?.stringValue {
+                object["description"] = .string(MCPDisplayedText.field(description))
+            }
         }
+        var listedName = name
         if prefixesTools {
             let exposedName = upstream.definition.name + Self.separator + name
             // A shorter server's tool must not be listed under a name the
             // longest matching server owns; that call would not reach it.
             guard route(exposedName)?.server == upstream.definition.name else { return nil }
-            object["name"] = .string(exposedName)
+            listedName = exposedName
+        }
+        object["name"] = .string(MCPDisplayedText.field(listedName))
+        return .object(object)
+    }
+
+    /// Progress text and a finished tool error are what the client shows.
+    /// Controls stay inside the field, so a fake `ok:` line cannot stand alone.
+    func displayedProgress(_ message: JSONValue) -> JSONValue {
+        guard var object = message.objectValue, var params = object["params"]?.objectValue,
+            let text = params["message"]?.stringValue
+        else { return message }
+        params["message"] = .string(MCPDisplayedText.field(text))
+        object["params"] = .object(params)
+        return .object(object)
+    }
+
+    func clientVisibleReply(_ message: JSONValue, server: String) -> JSONValue {
+        let scrubbed = scrub(message, for: server)
+        guard var object = scrubbed.objectValue else { return scrubbed }
+        if var error = object["error"]?.objectValue, let text = error["message"]?.stringValue {
+            error["message"] = .string(MCPDisplayedText.field(text))
+            object["error"] = .object(error)
+        }
+        if object["result"]?["isError"]?.boolValue == true, var result = object["result"]?.objectValue,
+            let content = result["content"]
+        {
+            result["content"] = displayedContent(content)
+            object["result"] = .object(result)
         }
         return .object(object)
+    }
+
+    func displayedContent(_ content: JSONValue) -> JSONValue {
+        guard let items = content.arrayValue else { return content }
+        return .array(items.map { item in
+            guard var block = item.objectValue, let text = block["text"]?.stringValue else { return item }
+            block["text"] = .string(MCPDisplayedText.field(text))
+            return .object(block)
+        })
     }
 
     mutating func upstreamExited(_ server: String) -> [MCPGatewayOutput] {

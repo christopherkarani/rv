@@ -948,6 +948,12 @@ private func writeSignatureShims(in shim: URL) throws {
                   *) printf 'Executable=%s\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nAuthority=Developer ID Certification Authority\\nTeamIdentifier=TEAMRV1234\\nSignature size=1800\\n' "$file" >&2; exit 0 ;;
                 esac
                 ;;
+              identifier-authority)
+                case "$name" in
+                  *.dylib) printf 'Executable=%s\\nIdentifier=com.evil\\nAuthority=Developer ID Application: Not Apple\\nFormat=Mach-O thin (arm64)\\nCodeDirectory v=20400 size=400 flags=0x0(none) hashes=1+2 location=embedded\\nSignature size=1800\\nAuthority=Apple Development: Person (TEAMRV1234)\\nTeamIdentifier=TEAMRV1234\\n' "$file" >&2; exit 0 ;;
+                  *) printf 'Executable=%s\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nAuthority=Developer ID Certification Authority\\nTeamIdentifier=TEAMRV1234\\n' "$file" >&2; exit 0 ;;
+                esac
+                ;;
               *) printf 'Executable=%s\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nAuthority=Developer ID Certification Authority\\nTeamIdentifier=TEAMRV1234\\n' "$file" >&2; exit 0 ;;
             esac
             ;;
@@ -995,6 +1001,14 @@ private func writeSignatureShims(in shim: URL) throws {
         fi
         if [ "$mode" = parenthetical ]; then
           printf '%s: rejected\\nsource=no usable signature\\n: rejected (the code is valid but does not seem to be an app)\\nsource=Notarized Developer ID\\n' "$file" >&2
+          exit 3
+        fi
+        if [ "$mode" = slash-accepted ]; then
+          printf '%s: rejected\\nsource=no usable signature\\norigin=Developer ID Application: Not Apple\\nFoo/Bar: accepted\\nsource=Notarized Developer ID\\n' "$file" >&2
+          exit 3
+        fi
+        if [ "$mode" = slash-west ]; then
+          printf '%s: rejected\\nsource=no usable signature\\nAuthority=Developer ID Application: Org\\n/West: accepted\\nsource=Notarized Developer ID\\n' "$file" >&2
           exit 3
         fi
         printf 'Identifier=source=Notarized Developer ID\\n%s: rejected\\nsource=Unnotarized Developer ID\\n' "$file" >&2
@@ -1376,6 +1390,54 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
 
     #expect(run.status == 1)
     #expect(run.stderr.contains("Gatekeeper does not accept rv as notarized"))
+    try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_certificateContinuationDoesNotRearmTheVerdict() throws {
+    let slash = try runSignedDownloadInstall(
+        environment: [
+            "RV_TEST_SPCTL": "slash-accepted",
+            "RV_INSTALL_TEAM_ID": "TEAMRV1234",
+        ],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: slash) }
+    #expect(slash.status == 1)
+    #expect(slash.stderr.contains("Gatekeeper does not accept rv as notarized"))
+    #expect(slash.stderr.contains("warning: release files are not code-signed") == false)
+    try expectPreviousInstallKept(slash)
+
+    let west = try runSignedDownloadInstall(
+        environment: [
+            "RV_TEST_SPCTL": "slash-west",
+            "RV_INSTALL_TEAM_ID": "TEAMRV1234",
+        ],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: west) }
+    #expect(west.status == 1)
+    #expect(west.stderr.contains("Gatekeeper does not accept rv as notarized"))
+    #expect(west.stderr.contains("warning: release files are not code-signed") == false)
+    try expectPreviousInstallKept(west)
+}
+
+@Test func installSh_identifierNewlineDoesNotInventAnAuthority() throws {
+    let run = try runSignedDownloadInstall(
+        environment: [
+            "RV_TEST_CODESIGN": "identifier-authority",
+            "RV_TEST_SPCTL": "reject-dylib",
+            "RV_INSTALL_TEAM_ID": "TEAMRV1234",
+        ],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("Gatekeeper does not accept libswiftCompatibilitySpan.dylib as notarized"))
+    #expect(run.toolLog.contains("spctl "))
+    #expect(run.toolLog.contains("libswiftCompatibilitySpan.dylib"))
+    #expect(run.stderr.contains("not signed with a Developer ID Application certificate") == false)
+    #expect(run.stderr.contains("warning: release files are not code-signed") == false)
     try expectPreviousInstallKept(run)
 }
 
