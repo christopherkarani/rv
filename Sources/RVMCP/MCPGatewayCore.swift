@@ -326,7 +326,11 @@ public struct MCPGatewayCore {
                 outputs.append(.event(AuditEvent(
                     time: clock(), kind: .mcpApproval, decision: .denied, subject: "\(server)/\(tool)",
                     reason: "forged grant rejected", source: "mcp-gateway", detail: ["approval": id])))
-                outputs.append(.log("rejected approval \(id) for \(server) tool \(tool): its grant was not signed by rv"))
+                let shownID = MCPDisplayedText.field(id)
+                let shownServer = MCPDisplayedText.field(server)
+                let shownTool = MCPDisplayedText.field(tool)
+                outputs.append(.log(
+                    "rejected approval \(shownID) for \(shownServer) tool \(shownTool): its grant was not signed by rv"))
             case .none:
                 break
             }
@@ -386,9 +390,12 @@ public struct MCPGatewayCore {
                 .toClient(Self.toolError(id: client, reason)),
             ]
         }
-        let text = "rv paused this call: \(server) tool \(tool) needs the user's approval. "
-            + "Ask the user to run `rv mcp approve \(ticket.id)` in their own terminal "
-            + "(or `rv mcp approve \(ticket.id) --always`), then call the tool again with the same arguments."
+        let shownServer = MCPDisplayedText.field(server)
+        let shownTool = MCPDisplayedText.field(tool)
+        let shownID = MCPDisplayedText.field(ticket.id)
+        let text = "rv paused this call: \(shownServer) tool \(shownTool) needs the user's approval. "
+            + "Ask the user to run `rv mcp approve \(shownID)` in their own terminal "
+            + "(or `rv mcp approve \(shownID) --always`), then call the tool again with the same arguments."
         var outputs: [MCPGatewayOutput] = [
             .audit(MCPCallRecord(
                 server: server, tool: tool, decision: .ask, approvalID: ticket.id, argumentKeys: keys, isError: true,
@@ -396,7 +403,7 @@ public struct MCPGatewayCore {
             .toClient(Self.toolError(id: client, text)),
         ]
         if ticket.code != nil {
-            outputs.append(.log("approval \(ticket.id) for \(server) tool \(tool) is waiting for the user"))
+            outputs.append(.log("approval \(shownID) for \(shownServer) tool \(shownTool) is waiting for the user"))
         }
         return outputs
     }

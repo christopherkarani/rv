@@ -1,3 +1,8 @@
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
 import Foundation
 import RVDomain
 import RVHistory
@@ -337,6 +342,185 @@ struct MCPCommandTests {
         #expect(UserPresence.isCallerControlledTerminal("/dev/tty1") == false)
         #expect(UserPresence.isCallerControlledTerminal("/dev/console") == false)
         #expect(UserPresence.refusalForPrintedCode(ttyPath: "/dev/tty1") == nil)
+    }
+
+    @Test func approveFromATerminalNameReachesDeviceOwner() {
+        let touchID = PresenceOutcome.confirmed(method: "device owner authentication")
+        let reached = UserPresence.finishPrintedCode(
+            ttyPath: "/dev/ttys000", codeVerified: true, deviceOwner: touchID, deviceOwnerCanRun: true)
+        #expect(reached == touchID)
+        let skipped = UserPresence.finishPrintedCode(
+            ttyPath: "/dev/ttys000", codeVerified: true, deviceOwner: nil, deviceOwnerCanRun: true)
+        #expect(skipped == .refused(UserPresence.pseudoTerminalRefusal))
+        let cancelled = UserPresence.finishPrintedCode(
+            ttyPath: "/dev/ttys000", codeVerified: true,
+            deviceOwner: .refused("authentication was cancelled or failed"), deviceOwnerCanRun: true)
+        #expect(cancelled == .refused("authentication was cancelled or failed"))
+        let codeFirst = UserPresence.finishPrintedCode(
+            ttyPath: "/dev/ttys000", codeVerified: false, deviceOwner: touchID, deviceOwnerCanRun: true)
+        #expect(codeFirst == .refused("wrong confirmation code"))
+        let linux = UserPresence.finishPrintedCode(
+            ttyPath: "/dev/pts/4", codeVerified: true, deviceOwner: nil, deviceOwnerCanRun: false)
+        #expect(linux == .confirmed(method: "terminal confirmation code"))
+        let console = UserPresence.finishPrintedCode(
+            ttyPath: "/dev/tty1", codeVerified: true, deviceOwner: nil, deviceOwnerCanRun: true)
+        #expect(console == .confirmed(method: "terminal confirmation code"))
+    }
+
+    @Test func pendingEscapesADecoyApprovalID() throws {
+        let fixture = Fixture()
+        let store = fixture.environment().approvals
+        let decoy = try #require(store.request(server: "notes", tool: "echo", argumentsHash: "h-decoy", argumentKeys: []))
+        let real = try #require(store.request(
+            server: "fs", tool: "read_ssh", argumentsHash: "h-real", argumentKeys: ["path"]))
+        let file = fixture.config.appendingPathComponent("mcp-approvals.json")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let forged = "x\\u001b[2J\\u000d\\u0008\\u000b  \(real.id)  notes echo  no arguments"
+        try text.replacingOccurrences(of: "\"\(decoy.id)\"", with: "\"\(forged)\"")
+            .write(to: file, atomically: true, encoding: .utf8)
+        let pending = MCPRun.pendingText(MCPRun.pendingRows(store))
+        let scalars = Set(pending.unicodeScalars.map(\.value))
+        #expect(scalars.contains(0x1B) == false)
+        #expect(scalars.contains(0x0B) == false)
+        #expect(scalars.contains(0x0D) == false)
+        #expect(scalars.contains(0x08) == false)
+        #expect(pending.contains("\\u001b"))
+        #expect(pending.contains("\\u000b"))
+        #expect(pending.contains(real.id))
+        let lines = pending.split(whereSeparator: \.isNewline).map(String.init)
+        #expect(lines.contains { $0.hasPrefix(real.id) && $0.contains("notes echo") } == false)
+        #expect(MCPRun.deniedLine(server: "fs", tool: "read\u{000B}ssh")
+            .unicodeScalars.contains { $0.value == 0x0B } == false)
+    }
+
+    @Test func toolNameCSIDoesNotRedrawTheApproveReason() async throws {
+        let fixture = Fixture()
+        let trailer = "sha256 " + String(repeating: "0", count: 64)
+        let tool = "write\u{009B}2J\u{009B}H\(trailer)"
+        let store = fixture.environment().approvals
+        let ticket = try #require(store.request(
+            server: "fs", tool: tool, argumentsHash: "h1", argumentKeys: ["path"]))
+        let code = try #require(ticket.code)
+        let pending = MCPRun.pendingText(MCPRun.pendingRows(store))
+        let reason = Mutex("")
+        let presence = UserPresence { why, challenge in
+            reason.withLock { $0 = why }
+            guard case .printedCode(let check) = challenge, check(code) else {
+                return .refused("wrong confirmation code")
+            }
+            return .confirmed(method: "terminal confirmation code")
+        }
+        _ = try await MCPRun.approve(
+            id: ticket.id, always: false, environment: fixture.environment(presence: presence)).get()
+        for text in [pending, reason.withLock { $0 }] {
+            #expect(text.unicodeScalars.contains { $0.value == 0x9B } == false)
+            #expect(text.contains("\\u009b"))
+            #expect(text.split(whereSeparator: \.isNewline).map(String.init).contains(trailer) == false)
+        }
+    }
+
+    @Test func quotedArgumentKeysDoNotCollapseAComma() async throws {
+        let fixture = Fixture()
+        let store = fixture.environment().approvals
+        let two = try #require(store.request(
+            server: "fs", tool: "write_file", argumentsHash: "h-two", argumentKeys: ["path", "contents"]))
+        let one = try #require(store.request(
+            server: "fs", tool: "write_file", argumentsHash: "h-one", argumentKeys: ["path, contents"]))
+        let twoCode = try #require(two.code)
+        let pending = MCPRun.pendingText(MCPRun.pendingRows(store))
+        let lines = pending.split(whereSeparator: \.isNewline).map(String.init)
+        let twoLine = try #require(lines.first { $0.contains(two.id) })
+        let oneLine = try #require(lines.first { $0.contains(one.id) })
+        #expect(twoLine.contains("\"path\", \"contents\""))
+        #expect(oneLine.contains("\"path, contents\""))
+        #expect(twoLine != oneLine)
+        let reasons = Mutex<[String]>([])
+        let presence = UserPresence { why, challenge in
+            reasons.withLock { $0.append(why) }
+            guard case .printedCode(let check) = challenge, check(twoCode) else {
+                return .refused("wrong confirmation code")
+            }
+            return .confirmed(method: "terminal confirmation code")
+        }
+        _ = try await MCPRun.approve(
+            id: two.id, always: false, environment: fixture.environment(presence: presence)).get()
+        let shown = reasons.withLock { $0 }.joined(separator: "\n")
+        #expect(shown.contains("\"path\", \"contents\""))
+        #expect(shown.contains("\"path, contents\"") == false)
+        #expect(store.consumeGrant(
+            server: "fs", tool: "write_file", argumentsHash: "h-two", argumentKeys: ["path", "contents"])
+            == .granted(id: two.id))
+        #expect(store.consumeGrant(
+            server: "fs", tool: "write_file", argumentsHash: "h-two", argumentKeys: ["path, contents"]) == .none)
+        #expect(store.consumeGrant(
+            server: "fs", tool: "write_file", argumentsHash: "h-one", argumentKeys: ["path, contents"]) == .none)
+        #expect(store.pending().map(\.id) == [one.id])
+        #expect(store.grant(
+            id: one.id, server: "fs", tool: "write_file", argumentsHash: "h-one", argumentKeys: ["path", "contents"]) == nil)
+    }
+
+    @Test func symlinkScratchIsNotAReviewedWrite() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-scratch-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("project")
+        let scratch = root.appendingPathComponent("scratch")
+        let home = root.appendingPathComponent("home")
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        #expect(symlink(target.path, scratch.path) == 0)
+        let result = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: tmp.path)
+        guard case .failure(let error) = result else {
+            Issue.record("a symlink scratch was allowed")
+            return
+        }
+        #expect(error.message.contains("not the path reviewed"))
+        #expect(error.message.contains("(subpath") == false)
+        #expect(error.message.contains(canonicalPath(target.path)))
+    }
+
+    @Test func writableSymlinkPlantedAfterConfirmIsRefused() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-writable-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let link = root.appendingPathComponent("notes")
+        let target = root.appendingPathComponent("home")
+        let scratch = root.appendingPathComponent("scratch")
+        let home = root.appendingPathComponent("person")
+        let tmp = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let server = MCPServerDefinition(
+            name: "notes", command: "/bin/true",
+            sandbox: MCPSandboxPolicy(network: false, writable: [link.path]))
+        let review = MCPRun.trustReview(MCPConfiguration(servers: [server]))
+        #expect(review.contains(link.path))
+        #expect(review.contains(target.path) == false)
+        #expect(symlink(target.path, link.path) == 0)
+        let result = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: [link.path]),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: tmp.path)
+        guard case .failure(let error) = result else {
+            Issue.record("a writable symlink planted after confirm was allowed")
+            return
+        }
+        #expect(error.message.contains("not the path reviewed"))
+        #expect(error.message.contains("(subpath") == false)
+        #expect(error.message.contains(canonicalPath(target.path)))
+    }
+
+    private func canonicalPath(_ path: String) -> String {
+        guard let resolved = realpath(path, nil) else { return path }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     @Test func approveDoesNotSignARowRewrittenDuringReview() async throws {

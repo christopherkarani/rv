@@ -316,9 +316,9 @@ enum MCPRun {
             } else if row.argumentKeys.isEmpty {
                 keys = "no arguments"
             } else {
-                keys = "arguments " + row.argumentKeys.map(reviewField).joined(separator: ", ")
+                keys = "arguments " + displayedArgumentKeys(row.argumentKeys)
             }
-            return "\(row.id)  \(reviewField(row.server)) \(reviewField(row.tool))  \(keys)  \(formatter.string(from: row.requestedAt))"
+            return "\(reviewField(row.id))  \(reviewField(row.server)) \(reviewField(row.tool))  \(keys)  \(formatter.string(from: row.requestedAt))"
         }
         return (lines + [
             "approve in your own terminal with `rv mcp approve <id>` (once) or `--always`; refuse with `rv mcp deny <id>`",
@@ -346,7 +346,7 @@ enum MCPRun {
         }
         let shownKeys = request.argumentKeys.isEmpty
             ? "no arguments"
-            : request.argumentKeys.map(reviewField).joined(separator: ", ")
+            : displayedArgumentKeys(request.argumentKeys)
         let reason = "rv: approve \(reviewField(request.server)) tool \(reviewField(request.tool)) "
             + "arguments \(request.argumentsHash) keys \(shownKeys) "
             + (always ? "always" : "once")
@@ -505,25 +505,25 @@ enum MCPRun {
         return lines.joined(separator: "\n")
     }
 
-    /// One review field. Line breaks stay inside the field, so a value cannot
-    /// start a new server line or a `sha256` trailer.
+    /// One review field. Line breaks and the C1 controls a terminal executes
+    /// stay inside the field, so a value cannot start a new line or redraw it.
     static func reviewField(_ text: String) -> String {
-        var escaped = ""
-        for scalar in text.unicodeScalars {
-            switch scalar.value {
-            case 0x08: escaped += "\\u0008"
-            case 0x0A: escaped += "\\n"
-            case 0x0B: escaped += "\\u000b"
-            case 0x0C: escaped += "\\u000c"
-            case 0x0D: escaped += "\\r"
-            case 0x1B: escaped += "\\u001b"
-            case 0x85: escaped += "\\u0085"
-            case 0x2028: escaped += "\\u2028"
-            case 0x2029: escaped += "\\u2029"
-            default: escaped.unicodeScalars.append(scalar)
-            }
-        }
-        return escaped
+        MCPDisplayedText.field(text)
+    }
+
+    /// Quoted argument names. `path` plus `contents` does not look like the
+    /// single name `path, contents`.
+    static func displayedArgumentKeys(_ keys: [String]) -> String {
+        keys.map { key in
+            let quoted = reviewField(key)
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            return "\"\(quoted)\""
+        }.joined(separator: ", ")
+    }
+
+    static func deniedLine(server: String, tool: String) -> String {
+        "refused \(reviewField(server)) \(reviewField(tool))\n"
     }
 
     /// Sandbox network and writable paths, or `no sandbox` when serve will
@@ -953,7 +953,7 @@ struct MCPDeny: AsyncParsableCommand {
         guard let request = environment.approvals.remove(id: id) else {
             try ctx.fail("rv mcp deny: no MCP approval has id \(id)\n")
         }
-        ctx.writeStdout("refused \(request.server) \(request.tool)\n")
+        ctx.writeStdout(MCPRun.deniedLine(server: request.server, tool: request.tool))
     }
 }
 

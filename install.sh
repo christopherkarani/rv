@@ -262,6 +262,31 @@ fetch_pack_bundles() {
   exit 1
 }
 
+# True when $1 has a line whose entire text is $2. A phrase inside
+# Identifier=, Executable=, or another field does not count.
+has_field_line() {
+  details="$1"
+  want="$2"
+  rest="$details"
+  while [ -n "$rest" ]; do
+    case "$rest" in
+      *"
+"*)
+        line=${rest%%
+*}
+        rest=${rest#*
+}
+        ;;
+      *)
+        line=$rest
+        rest=""
+        ;;
+    esac
+    [ "$line" = "$want" ] && return 0
+  done
+  return 1
+}
+
 # Downloaded macOS release files must carry a valid, notarized Developer ID
 # signature from the pinned team. A broken, foreign, or unpinned signature
 # always refuses, including libswiftCompatibilitySpan.dylib. Unsigned files
@@ -309,24 +334,18 @@ verify_release_signatures() {
       echo "rv: refusing to install: $name is signed, but no Developer ID team is pinned (release_team_id)" >&2
       exit 1
     fi
-    case "$details" in
-      *"TeamIdentifier=$team"*) ;;
-      *)
-        echo "rv: refusing to install: $name is not signed by team $team" >&2
-        exit 1
-        ;;
-    esac
+    if ! has_field_line "$details" "TeamIdentifier=$team"; then
+      echo "rv: refusing to install: $name is not signed by team $team" >&2
+      exit 1
+    fi
     case "$name" in
       *.dylib) ;;
       *)
         verdict="$("$spctl" -a -t open --context context:primary-signature -vv "$file" 2>&1 || true)"
-        case "$verdict" in
-          *"source=Notarized Developer ID"*) ;;
-          *)
-            echo "rv: refusing to install: Gatekeeper does not accept $name as notarized" >&2
-            exit 1
-            ;;
-        esac
+        if ! has_field_line "$verdict" "source=Notarized Developer ID"; then
+          echo "rv: refusing to install: Gatekeeper does not accept $name as notarized" >&2
+          exit 1
+        fi
         ;;
     esac
     signed="$signed $name"

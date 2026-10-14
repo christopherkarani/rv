@@ -934,6 +934,7 @@ private func writeSignatureShims(in shim: URL) throws {
               unsigned) echo "$file: code object is not signed at all" >&2; exit 1 ;;
               adhoc) printf 'Executable=%s\\nSignature=adhoc\\nTeamIdentifier=not set\\n' "$file" >&2; exit 0 ;;
               phrase) printf 'Executable=/tmp/not signed at all/%s\\nIdentifier=not signed at all\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nTeamIdentifier=TEAMRV1234\\n' "$name" >&2; exit 0 ;;
+              identifier-team) printf 'Executable=%s\\nIdentifier=com.rv.TeamIdentifier=TEAMRV1234\\nAuthority=Developer ID Application: Other (OTHERTEAM9)\\nTeamIdentifier=OTHERTEAM9\\n' "$file" >&2; exit 0 ;;
               *) printf 'Executable=%s\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nAuthority=Developer ID Certification Authority\\nTeamIdentifier=TEAMRV1234\\n' "$file" >&2; exit 0 ;;
             esac
             ;;
@@ -960,7 +961,7 @@ private func writeSignatureShims(in shim: URL) throws {
           printf '%s: accepted\\nsource=Notarized Developer ID\\n' "$file" >&2
           exit 0
         fi
-        printf '%s: rejected\\nsource=Unnotarized Developer ID\\n' "$file" >&2
+        printf 'Identifier=source=Notarized Developer ID\\n%s: rejected\\nsource=Unnotarized Developer ID\\n' "$file" >&2
         exit 3
         """
     )
@@ -1130,6 +1131,40 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     #expect(run.stderr.contains("is signed, but no Developer ID team is pinned"))
     #expect(run.stderr.contains("warning: release files are not code-signed") == false)
     #expect(run.toolLog.contains("codesign -dvv "))
+    try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_identifierContainingThePinnedTeamDoesNotPass() throws {
+    let run = try runSignedDownloadInstall(
+        environment: ["RV_TEST_CODESIGN": "identifier-team", "RV_INSTALL_TEAM_ID": "TEAMRV1234"],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("is not signed by team TEAMRV1234"))
+    #expect(run.stderr.contains("warning: release files are not code-signed") == false)
+    try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_notarizationPhraseInThePathDoesNotPass() throws {
+    let tmp = FileManager.default.temporaryDirectory
+        .appendingPathComponent("source=Notarized Developer ID-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+    let run = try runSignedDownloadInstall(
+        environment: [
+            "RV_INSTALL_TEAM_ID": "TEAMRV1234",
+            "RV_TEST_SPCTL": "reject",
+            "TMPDIR": tmp.path,
+        ],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("Gatekeeper does not accept"))
+    #expect(run.stderr.contains("warning: release files are not code-signed") == false)
     try expectPreviousInstallKept(run)
 }
 

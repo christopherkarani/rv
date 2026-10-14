@@ -38,20 +38,30 @@ public enum MCPSandbox {
             guard let policy = definition.sandbox else { return .success(launch) }
             #if os(macOS)
             let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/\(definition.name)", isDirectory: true)
+            let temporary = launch.environment["TMPDIR"] ?? NSTemporaryDirectory()
+            if let widened = unreviewedWrite(
+                policy: policy, scratch: scratch.path, home: home.path, temporaryDirectory: temporary)
+            {
+                return .failure(.sandbox(widened))
+            }
             do {
                 try FileManager.default.createDirectory(
                     at: scratch, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             } catch {
                 return .failure(.sandbox("could not create \(scratch.path)"))
             }
-            let profile = profile(
+            switch profile(
                 policy: policy, scratch: scratch.path, home: home.path, configDirectory: configDirectory.path,
-                temporaryDirectory: launch.environment["TMPDIR"] ?? NSTemporaryDirectory())
-            var caged = launch
-            caged.executable = sandboxExec
-            caged.arguments = ["-p", profile, launch.executable] + launch.arguments
-            caged.workingDirectory = scratch.path
-            return .success(caged)
+                temporaryDirectory: temporary)
+            {
+            case .failure(let error): return .failure(error)
+            case .success(let text):
+                var caged = launch
+                caged.executable = sandboxExec
+                caged.arguments = ["-p", text, launch.executable] + launch.arguments
+                caged.workingDirectory = scratch.path
+                return .success(caged)
+            }
             #else
             return .failure(.sandbox("\(definition.name) asks for a sandbox, which rv supports only on macOS"))
             #endif
@@ -60,12 +70,15 @@ public enum MCPSandbox {
 
     public static func profile(
         policy: MCPSandboxPolicy, scratch: String, home: String, configDirectory: String, temporaryDirectory: String
-    ) -> String {
+    ) -> Result<String, MCPLaunchError> {
         func expand(_ path: String) -> String {
             path.hasPrefix("~/") ? home + path.dropFirst(1) : path
         }
         let writable = [scratch, temporaryDirectory] + seatbeltWriteRoots
             + (defaultWritable + policy.writable).map(expand)
+        if let widened = unreviewedWrite(paths: writable) {
+            return .failure(.sandbox(widened))
+        }
         let unreadable = deniedReads.map(expand) + [configDirectory]
         var lines = [
             "(version 1)",
@@ -77,16 +90,53 @@ public enum MCPSandbox {
         if policy.network == false {
             lines.append("(deny network*)")
         }
-        return lines.joined(separator: "\n")
+        return .success(lines.joined(separator: "\n"))
     }
 
-    /// `subpath` filters on real paths; both spellings are listed when a
-    /// prefix is a symlink (`/tmp` → `/private/tmp`).
+    /// The real path when it is not the path the review named. `/tmp` and
+    /// `/private/tmp` are the same directory. Any other symlink target is refused.
+    static func unreviewedWrite(
+        policy: MCPSandboxPolicy, scratch: String, home: String, temporaryDirectory: String
+    ) -> String? {
+        func expand(_ path: String) -> String {
+            path.hasPrefix("~/") ? home + path.dropFirst(1) : path
+        }
+        let writable = [scratch, temporaryDirectory] + seatbeltWriteRoots
+            + (defaultWritable + policy.writable).map(expand)
+        return unreviewedWrite(paths: writable)
+    }
+
+    static func unreviewedWrite(paths writable: [String]) -> String? {
+        for path in writable {
+            let resolved = realPath(path)
+            if sameReviewedDirectory(path, resolved) { continue }
+            return "\(MCPDisplayedText.field(path)) resolves to \(MCPDisplayedText.field(resolved)), which was not the path reviewed"
+        }
+        return nil
+    }
+
+    /// Same directory, including the `/tmp` → `/private/tmp` alias. A symlink
+    /// to a different tree is not the same directory.
+    static func sameReviewedDirectory(_ reviewed: String, _ resolved: String) -> Bool {
+        if reviewed == resolved { return true }
+        return tmpAlias(reviewed) == tmpAlias(resolved)
+    }
+
+    static func tmpAlias(_ path: String) -> String {
+        if path == "/tmp" { return "/private/tmp" }
+        if path.hasPrefix("/tmp/") { return "/private/tmp/" + path.dropFirst("/tmp/".count) }
+        return path
+    }
+
+    /// `subpath` filters on real paths. Only the `/tmp` alias is added; a
+    /// symlink to a different tree is refused before this list is built.
     static func paths(_ raw: [String]) -> String {
         var seen = Set<String>()
         var filters: [String] = []
         for path in raw {
-            for spelling in [path, realPath(path)] where seen.insert(spelling).inserted {
+            let resolved = realPath(path)
+            let spellings = sameReviewedDirectory(path, resolved) ? [path, resolved] : [path]
+            for spelling in spellings where seen.insert(spelling).inserted {
                 filters.append("(subpath \"\(escape(spelling))\")")
             }
         }
