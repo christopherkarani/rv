@@ -2135,6 +2135,43 @@ struct MCPCommandTests {
         try await expectSplitSecretRefused("ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
     }
 
+    @Test func importRefusesAnUmbrellaWithRainDrops() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let extra = tail + "EXTRA"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-", "AKIA", "AIza", "ASIA"]
+        let mark = String(Unicode.Scalar(0x2614)!)
+        let value = head + mark + tail
+        try await expectSplitSecretRefused(value, sk: "sk-12345678g" + mark + tail, absent: absent, label: "umbrella")
+        try await expectSplitSecretRefused(head + mark + extra, absent: absent + [extra], label: "umbrella extra")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": value]),
+            absent: absent, label: "umbrella command")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": "db-mcp", "args": [value, "--api-key", value, "--api-key=\(value)"]]),
+            absent: absent, label: "umbrella argument")
+        let joined = "g" + mark + tail
+        try await expectImportRefused(
+            try hostJSON("db", ["command": joined]),
+            absent: ["ghp_", tail], label: "umbrella joined command")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": "db-mcp", "args": [joined, "--api-key", joined]]),
+            absent: ["ghp_", tail], label: "umbrella joined argument")
+        try await expectSplitSecretRefused("x" + value, absent: absent, label: "umbrella leading x")
+        try await expectImportRefused(
+            try hostJSON("api", [
+                "url": "https://mcp.example/mcp",
+                "headers": ["X-Trace": "x" + value, "Authorization": "Bearer \(value)"],
+            ]),
+            absent: absent + ["Bearer"], label: "umbrella trace")
+        try await expectSplitSecretRefused("." + value, absent: absent, label: "umbrella leading dot")
+        for overlapped in ["AKIA" + mark + "Iza12345678", "ASIA" + mark + "Iza12345678"] {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": overlapped, "LOG_LEVEL": overlapped]]),
+                absent: ["AKIA", "ASIA", "AIza", "Iza12345678"], label: "umbrella akia")
+        }
+    }
+
     @Test func importRefusesADownTackUnderbarThroughTheOCRAccountNumber() async throws {
         let tail = "hp_1234567890abcdefghij"
         let extra = tail + "EXTRA"
@@ -2292,6 +2329,47 @@ struct MCPCommandTests {
             try await expectImportRefused(
                 try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(spelling)"]]),
                 absent: absent, label: "embedded \(tail) cwd")
+        }
+    }
+
+    @Test func importRefusesASchemeNameAfterADroppedSeparator() async throws {
+        let schemes = ["https", "http", "wss", "postgres"]
+        var marks = Array(UInt32(0x2574)...UInt32(0x2612)).map { String(Unicode.Scalar($0)!) }
+        marks.append(contentsOf: [
+            String(Unicode.Scalar(0xFFED)!),
+            String(Unicode.Scalar(0xFFEE)!),
+            String(Unicode.Scalar(0x2614)!),
+            String(Unicode.Scalar(0x00A8)!),
+            ".",
+        ])
+        let halves = ["abcdefghij1234", "qrstuvwxyzabcd"]
+        let tail = "hp_1234567890abcdefghij"
+        for mark in marks {
+            for scheme in schemes {
+                let spelling = "abcdefghij1234\(mark)\(scheme)://qrstuvwxyzabcd"
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": spelling]),
+                    absent: halves, label: "separator scheme command")
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "args": [spelling]]),
+                    absent: halves, label: "separator scheme argument")
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(spelling)"]]),
+                    absent: halves, label: "separator scheme cwd")
+                let hidden = "1234\(mark)\(scheme)://\(tail)"
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": hidden]),
+                    absent: [tail], label: "separator tail command")
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "args": [hidden]]),
+                    absent: [tail], label: "separator tail argument")
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "args": ["--api-key", hidden]]),
+                    absent: [tail], label: "separator tail api-key")
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "args": ["--api-key=\(hidden)"]]),
+                    absent: [tail], label: "separator tail api-key equals")
+            }
         }
     }
 
