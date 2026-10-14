@@ -1,3 +1,4 @@
+import RVDomain
 import RVPresentation
 import RVTheme
 
@@ -33,7 +34,7 @@ public struct ScanPrettyRenderer: FrameRenderer {
 
     private func findingLine(_ row: ScanFindingRow, palette: Palette) -> String {
         let rule = paint(row.ruleLabel, slot: palette.deny, reset: palette.reset)
-        let command = paint(row.commandDisplay, slot: palette.fact, reset: palette.reset)
+        let command = paint(DisplayedText.field(row.commandDisplay), slot: palette.fact, reset: palette.reset)
         let countSuffix = row.count > 1 ? paint(" ×\(row.count)", slot: palette.muted, reset: palette.reset) : ""
         return "\(rule)  \(command)\(countSuffix)"
     }

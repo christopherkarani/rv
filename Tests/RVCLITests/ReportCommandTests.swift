@@ -78,4 +78,42 @@ struct ReportCommandTests {
         let failing = try #require(mcp["failing"] as? [[String: Any]])
         #expect(failing.first?["name"] as? String == raw)
     }
+
+    @Test func mcpErrorPathIsEscaped() throws {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let raw = "/tmp/h\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence
+        let error = raw + "/.cursor/mcp.json: not a regular file"
+        func report(counts: [String: Int]) -> ReportRun.Report {
+            ReportRun.Report(
+                schema: ReportRun.schema,
+                generatedAt: "2026-01-01T00:00:00Z",
+                rv: .init(version: "0.0.0", platform: "linux"),
+                host: .init(name: "build", user: "me", uid: 1),
+                managed: .init(
+                    state: "none", directory: "/tmp/managed", reason: nil, organization: nil,
+                    serial: nil, sha256: nil, signed: nil, restrictions: nil),
+                config: [],
+                mcp: .init(ok: false, error: error, servers: 0, counts: counts, failing: [], plaintextCredentials: 0),
+                secrets: .init(error: nil, items: []),
+                audit: .init(since: "2026-01-01T00:00:00Z", total: 0, byKind: [:], lastEventAt: nil),
+                sandbox: .init(platform: "linux", mcpSandbox: false, peerTrustInstalled: false))
+        }
+        for counts in [[String: Int](), ["unreviewed": 1]] {
+            let text = ReportRun.text(report(counts: counts))
+            #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x2029 } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+            #expect(text.contains("\\u001b[2J"))
+            #expect(text.contains("\\u2028"))
+            #expect(text.contains("\\u2029"))
+            #expect(text.contains("\\u202e"))
+            let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+            #expect(lines.contains(sentence) == false)
+        }
+        let json = ReportRun.json(report(counts: [:]))
+        let parsed = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        let mcp = try #require(parsed["mcp"] as? [String: Any])
+        #expect(mcp["error"] as? String == error)
+    }
 }

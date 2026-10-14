@@ -282,6 +282,22 @@ func escapeTOMLString(_ text: String) -> String {
         .replacingOccurrences(of: "\"", with: "\\\"")
 }
 
+/// Policy export text. Quotes and backslashes stay TOML escapes. ESC,
+/// U+2028, U+2029, and U+202E are spellings, not raw scalars.
+func escapeTOMLDisplayed(_ text: String) -> String {
+    var escaped = escapeTOMLString(text)
+    let scalars: [(Unicode.Scalar, String)] = [
+        ("\u{1B}", "\\u001b"),
+        ("\u{2028}", "\\u2028"),
+        ("\u{2029}", "\\u2029"),
+        ("\u{202E}", "\\u202e"),
+    ]
+    for (scalar, spelling) in scalars {
+        escaped = escaped.replacingOccurrences(of: String(scalar), with: spelling)
+    }
+    return escaped
+}
+
 func parseISO8601(_ text: String) -> Date? {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime]

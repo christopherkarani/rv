@@ -1,3 +1,4 @@
+import RVDomain
 import RVPresentation
 import RVTheme
 
@@ -14,7 +15,7 @@ public struct ExplainRenderer: FrameRenderer {
                 label: "Command",
                 emphasis: .heading,
                 children: [
-                    .leaf(label: "Input", value: model.command.rawValue, emphasis: .fact),
+                    .leaf(label: "Input", value: DisplayedText.field(model.command.rawValue), emphasis: .fact),
                 ]
             ),
         ]
@@ -110,7 +111,7 @@ private func matchItems(_ model: ExplainViewModel) -> [OutlineItem]? {
     }
     var match: [OutlineItem] = []
     if let rule = model.ruleDisplay {
-        match.append(.leaf(label: "Rule", value: rule, emphasis: .fact))
+        match.append(.leaf(label: "Rule", value: DisplayedText.field(rule), emphasis: .fact))
     }
     if let pack = model.packDisplay {
         match.append(.leaf(label: "Pack", value: pack, emphasis: .plain))

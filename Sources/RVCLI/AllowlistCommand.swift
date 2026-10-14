@@ -93,7 +93,7 @@ struct AllowlistAdd: AsyncParsableCommand {
         )
         do {
             try AllowlistCLI.store(home: try ctx.requireHome()).add(entry, tty: ctx.tty)
-            ctx.writeStdout("added \(ruleID.rawValue)\n")
+            ctx.writeStdout("added \(DisplayedText.field(ruleID.rawValue))\n")
         } catch AllowOnceError.ttyRequired {
             try ctx.fail("rv allowlist add: requires an interactive TTY\n", exitCode: 2)
         } catch AllowlistStoreError.lockFailed {

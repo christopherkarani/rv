@@ -198,13 +198,13 @@ enum ReportRun {
             ManagedRun.statusText(report.managed).trimmingCharacters(in: .newlines),
         ]
         if let error = report.mcp.error, report.mcp.ok == false, report.mcp.counts.isEmpty {
-            lines.append("mcp: \(error)")
+            lines.append("mcp: \(DisplayedText.field(error))")
         } else {
             let counts = report.mcp.counts.sorted { $0.key < $1.key }.map { "\($0.value) \($0.key)" }
             lines.append("mcp: \(report.mcp.ok ? "ok" : "FAIL"), \(report.mcp.servers) gateway servers; "
                 + (counts.isEmpty ? "no host entries" : counts.joined(separator: ", ")))
             lines += report.mcp.failing.map { "  \($0.status)  \(DisplayedText.field($0.name))  \($0.host)" }
-            if let error = report.mcp.error { lines.append("  " + error) }
+            if let error = report.mcp.error { lines.append("  " + DisplayedText.field(error)) }
             if report.mcp.plaintextCredentials > 0 {
                 lines.append("  \(report.mcp.plaintextCredentials) plaintext credential(s) in host configs")
             }

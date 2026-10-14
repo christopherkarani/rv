@@ -381,7 +381,7 @@ public enum MCPSandbox {
                 if let name = rest.first {
                     let child = absolute == "/" ? "/" + name : absolute + "/" + name
                     if readLink(child) == nil, isRealDirectory(child) == false {
-                        return syntheticOpenings(parent: absolute, name: name, tail: Array(rest.dropFirst()), origin: path)
+                        return openingsFromMissing(parent: absolute, parts: rest, origin: path)
                     }
                 }
                 let continuedRest = rest.joined(separator: "/")
@@ -396,9 +396,29 @@ public enum MCPSandbox {
             // missing name under it can still be created as a symlink, and
             // that link can point at an ancestor, not only at `/<name>`.
             guard afterSymlink else { return [] }
-            return syntheticOpenings(parent: current, name: part, tail: Array(parts[index...]), origin: path)
+            return openingsFromMissing(parent: current, parts: [part] + Array(parts[index...]), origin: path)
         }
         return []
+    }
+
+    /// The first missing name can be created as a directory, and a later
+    /// name is then the symlink. Each missing name is an opening.
+    /// When `/<name>` and the ancestors already collapse to one path
+    /// (`../private/tmp/future-keys`), that path is the whole set.
+    private static func openingsFromMissing(parent: String, parts: [String], origin: String) -> [String] {
+        guard let name = parts.first else { return [] }
+        let tail = Array(parts.dropFirst())
+        let primary = syntheticOpenings(parent: parent, name: name, tail: tail, origin: origin, includeCreationDirectory: false)
+        if tail.isEmpty || primary.count <= 1 {
+            return primary
+        }
+        var results = syntheticOpenings(parent: parent, name: name, tail: tail, origin: origin, includeCreationDirectory: true)
+        let nextParent = parent == "/" ? "/" + name : parent + "/" + name
+        for opening in openingsFromMissing(parent: nextParent, parts: tail, origin: origin)
+            where results.contains(opening) == false {
+            results.append(opening)
+        }
+        return results
     }
 
     /// Openings for a component that does not exist yet. `name` → `/name`
@@ -406,7 +426,9 @@ public enum MCPSandbox {
     /// The same component can instead point at an ancestor of the directory
     /// it is created in (`x` → `/private`, `tmp` → `/private/tmp`). A final
     /// missing name can point at that directory itself.
-    private static func syntheticOpenings(parent: String, name: String, tail: [String], origin: String) -> [String] {
+    private static func syntheticOpenings(
+        parent: String, name: String, tail: [String], origin: String, includeCreationDirectory: Bool = false
+    ) -> [String] {
         var results: [String] = []
         func add(_ base: String) {
             let combined: String
@@ -428,7 +450,9 @@ public enum MCPSandbox {
             add(ancestor)
             ancestor = parentDirectory(ancestor)
         }
-        if tail.isEmpty {
+        // `.` is this directory even when the tail is not empty
+        // (`ln -s .` then `future-keys`). A final name already includes it.
+        if includeCreationDirectory || tail.isEmpty {
             add(parent)
         }
         return results
@@ -648,30 +672,105 @@ public enum MCPSandbox {
                 memo[index] = ""
                 return ""
             }
-            let one = foldAtom(folded[index]) + "\u{017F}?"
-            let tail = emit(index + 1)
-            if tail.count > 2048 {
-                let simple = one + tail
-                memo[index] = simple
-                return simple
+            if let run = homogeneousRun(folded, from: index),
+               let compact = repeatedScalarPattern(folded[index], count: run) {
+                let pattern = compact + emit(index + run)
+                memo[index] = pattern
+                return pattern
             }
-            var choices = [one + tail]
+            let one = foldAtom(folded[index]) + "\u{017F}?"
+            var spans: [(length: Int, pattern: String)] = []
             let longest = min(3, folded.count - index)
             if longest >= 2 {
                 for length in 2...longest {
                     let key = scalarString(Array(folded[index..<(index + length)]))
                     guard let forms = foldTables.multi[key], forms.isEmpty == false else { continue }
-                    let rest = emit(index + length)
-                    if rest.count > 2048 { continue }
                     let body = forms.map { regexEscape(String($0)) }.joined(separator: "|")
-                    choices.append("(\(body))\u{017F}?" + rest)
+                    spans.append((length, "(\(body))\u{017F}?"))
                 }
             }
-            let pattern = choices.count == 1 ? choices[0] : "(" + choices.joined(separator: "|") + ")"
+            if spans.isEmpty {
+                let pattern = one + emit(index + 1)
+                memo[index] = pattern
+                return pattern
+            }
+            let clean = spans.filter { span in
+                (1..<span.length).allSatisfy { multiSpan(folded, at: index + $0) == nil }
+            }
+            if clean.count == spans.count, Set(clean.map(\.length)).count == 1, let length = clean.first?.length {
+                var short = ""
+                for offset in 0..<length {
+                    short += foldAtom(folded[index + offset]) + "\u{017F}?"
+                }
+                let choices = [short] + clean.map(\.pattern)
+                let pattern = "(" + choices.joined(separator: "|") + ")" + emit(index + length)
+                memo[index] = pattern
+                return pattern
+            }
+            // Overlapping folds (`ff` beside `ffi`) keep every alternation.
+            // The continuation is shared through `memo`; it is not dropped
+            // once the text gets long.
+            var choices = [one + emit(index + 1)]
+            for span in spans {
+                choices.append(span.pattern + emit(index + span.length))
+            }
+            let pattern = "(" + choices.joined(separator: "|") + ")"
             memo[index] = pattern
             return pattern
         }
         return emit(0)
+    }
+
+    /// A run of one scalar whose only multi-scalar fold is that scalar
+    /// repeated (`ss`, `ff`). A longer fold that leaves the run (`ffi`)
+    /// stays on the mixed path so both spellings are still alternations.
+    private static func homogeneousRun(_ folded: [Unicode.Scalar], from index: Int) -> Int? {
+        let scalar = folded[index]
+        var end = index + 1
+        while end < folded.count, folded[end] == scalar { end += 1 }
+        let count = end - index
+        guard count >= 2 else { return nil }
+        let pair = scalarString([scalar, scalar])
+        guard foldTables.multi[pair]?.isEmpty == false else { return nil }
+        for start in index..<end {
+            guard let span = multiSpan(folded, at: start), span.length > 2 else { continue }
+            if folded[start + span.length - 1] != scalar { return nil }
+        }
+        return count
+    }
+
+    private static func multiSpan(_ folded: [Unicode.Scalar], at index: Int) -> (length: Int, pattern: String)? {
+        let longest = min(3, folded.count - index)
+        guard longest >= 2 else { return nil }
+        for length in stride(from: longest, through: 2, by: -1) {
+            let key = scalarString(Array(folded[index..<(index + length)]))
+            guard let forms = foldTables.multi[key], forms.isEmpty == false else { continue }
+            let body = forms.map { regexEscape(String($0)) }.joined(separator: "|")
+            return (length, "(\(body))\u{017F}?")
+        }
+        return nil
+    }
+
+    /// Exactly `count` folded copies of `scalar`, including a weight-2
+    /// spelling at any alignment. The tail is not copied into each
+    /// alternative, so a long run keeps `(ß|ẞ)` instead of dropping it.
+    private static func repeatedScalarPattern(_ scalar: Unicode.Scalar, count: Int) -> String? {
+        let pair = scalarString([scalar, scalar])
+        guard let forms = foldTables.multi[pair], forms.isEmpty == false else { return nil }
+        let atom = "(" + foldAtom(scalar) + "\u{017F}?)"
+        let wide = "(" + forms.map { regexEscape(String($0)) }.joined(separator: "|") + ")\u{017F}?"
+        // The next scalar is not another copy of this run. A's may sit on
+        // either side of a weight-2 spelling; the token count fixes the weight.
+        let boundary = "(?!" + atom + "|" + wide + ")"
+        var alts: [String] = []
+        for copies in 0...(count / 2) {
+            let singles = count - 2 * copies
+            let tokens = singles + copies
+            let look = "(?=(" + atom + "*" + wide + "){\(copies)}" + atom + "*" + boundary + ")"
+            let body = "(" + atom + "|" + wide + "){\(tokens)}"
+            alts.append("(" + look + body + ")")
+        }
+        return "(" + alts.joined(separator: "|") + ")"
     }
 
     private static func foldAtom(_ scalar: Unicode.Scalar) -> String {
@@ -889,23 +988,32 @@ public enum MCPSandbox {
             changed: clock.changed, changedNsec: clock.changedNsec)
     }
 
-    /// The watched directory plus each direct child. Moving a project into
-    /// a child that already exists changes that child, not the parent stamp.
+    /// The watched directory and every directory under it. Moving a project
+    /// into a grandchild changes that directory's link count and timestamps.
+    /// A direct child's own stamp does not.
     private struct TreeStamp: Equatable {
         var root: InodeStamp
         var children: [String: InodeStamp]
     }
 
     private static func treeStamp(_ path: String) -> TreeStamp {
-        let root = inodeStamp(path)
-        var children: [String: InodeStamp] = [:]
-        if let names = try? FileManager.default.contentsOfDirectory(atPath: path) {
-            for name in names where name != "." && name != ".." {
-                let child = path == "/" ? "/" + name : path + "/" + name
-                children[name] = inodeStamp(child)
+        TreeStamp(root: inodeStamp(path), children: directoryStamps(under: path, relative: ""))
+    }
+
+    private static func directoryStamps(under path: String, relative: String) -> [String: InodeStamp] {
+        var stamps: [String: InodeStamp] = [:]
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: path) else { return stamps }
+        for name in names where name != "." && name != ".." {
+            let child = path == "/" ? "/" + name : path + "/" + name
+            var info = stat()
+            guard lstat(child, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { continue }
+            let rel = relative.isEmpty ? name : relative + "/" + name
+            stamps[rel] = inodeStamp(child)
+            for (deeper, stamp) in directoryStamps(under: child, relative: rel) {
+                stamps[deeper] = stamp
             }
         }
-        return TreeStamp(root: root, children: children)
+        return stamps
     }
 
     private static func directoryClock(_ info: stat) -> (modified: Int64, modifiedNsec: Int64, changed: Int64, changedNsec: Int64) {
@@ -920,12 +1028,20 @@ public enum MCPSandbox {
         #endif
     }
 
+    private struct AncestorPin: Equatable {
+        var device: UInt64
+        var inode: UInt64
+    }
+
     private struct LeafIdentity: Equatable {
         var present: Bool
         var device: UInt64
         var inode: UInt64
         var parentDevice: UInt64
         var parentInode: UInt64
+        /// Parent, then each directory above it. Moving `rv-mcp` together
+        /// with the leaf keeps those two inodes and changes `Caches`.
+        var ancestors: [AncestorPin]
     }
 
     private final class LeafRecords: @unchecked Sendable {
@@ -938,14 +1054,33 @@ public enum MCPSandbox {
     private static func leafIdentity(_ path: String) -> LeafIdentity {
         var info = stat()
         guard lstat(path, &info) == 0 else {
-            return LeafIdentity(present: false, device: 0, inode: 0, parentDevice: 0, parentInode: 0)
+            return LeafIdentity(
+                present: false, device: 0, inode: 0, parentDevice: 0, parentInode: 0, ancestors: [])
         }
         var parentInfo = stat()
-        let parentOK = lstat(parentDirectory(path), &parentInfo) == 0
+        let parent = parentDirectory(path)
+        let parentOK = lstat(parent, &parentInfo) == 0
         return LeafIdentity(
             present: true, device: UInt64(info.st_dev), inode: UInt64(info.st_ino),
             parentDevice: parentOK ? UInt64(parentInfo.st_dev) : 0,
-            parentInode: parentOK ? UInt64(parentInfo.st_ino) : 0)
+            parentInode: parentOK ? UInt64(parentInfo.st_ino) : 0,
+            ancestors: ancestorPins(parent))
+    }
+
+    private static func ancestorPins(_ path: String) -> [AncestorPin] {
+        var pins: [AncestorPin] = []
+        var current = path
+        while true {
+            var info = stat()
+            if lstat(current, &info) == 0 {
+                pins.append(AncestorPin(device: UInt64(info.st_dev), inode: UInt64(info.st_ino)))
+            } else {
+                pins.append(AncestorPin(device: 0, inode: 0))
+            }
+            if current == "/" { break }
+            current = parentDirectory(current)
+        }
+        return pins
     }
 
     private static func rememberLeafIdentity(_ path: String) {

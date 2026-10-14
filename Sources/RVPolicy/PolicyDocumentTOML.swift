@@ -83,7 +83,7 @@ public enum PolicyDocumentTOML {
         }
         for rule in document.rules {
             var lines = ["[[rule]]"]
-            lines.append("id = \"\(escapeTOMLString(rule.id.rawValue))\"")
+            lines.append("id = \"\(escapeTOMLDisplayed(rule.id.rawValue))\"")
             lines.append("verdict = \"\(rule.verdict.rawValue)\"")
             switch rule.predicate {
             case .gitPush(let force, let branch):
@@ -92,12 +92,12 @@ public enum PolicyDocumentTOML {
                     lines.append("force = \"\(value.rawValue)\"")
                 }
                 if let branch {
-                    lines.append("branch = \"\(escapeTOMLString(branch))\"")
+                    lines.append("branch = \"\(escapeTOMLDisplayed(branch))\"")
                 }
             case .gitDiscardWorktree(let pathspec):
                 lines.append("predicate = \"gitDiscardWorktree\"")
                 if let pathspec {
-                    lines.append("pathspec = \"\(escapeTOMLString(pathspec))\"")
+                    lines.append("pathspec = \"\(escapeTOMLDisplayed(pathspec))\"")
                 }
             case .gitReset(let mode):
                 lines.append("predicate = \"gitReset\"")
