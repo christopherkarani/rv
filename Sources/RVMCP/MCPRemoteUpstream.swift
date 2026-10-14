@@ -324,9 +324,9 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         }
     }
 
-    /// Legacy SSE: the stream names where to POST. It must be same-origin
-    /// and pass the same URL checks as `mcp.json`, or headers and tokens
-    /// would go to a host, userinfo, or query secret the user never reviewed.
+    /// Legacy SSE: the stream names where to POST. The bearer stays on this
+    /// server's exact URL. A different path or query, a foreign origin, or a
+    /// URL `mcp.json` would refuse is not a place to send it.
     private func useEndpoint(_ text: String, stream: URLSessionDataTask) {
         if let problem = Self.messageEndpointRefusal(text, relativeTo: launch.url) {
             log("MCP server \(name) named a message endpoint \(problem); refused")
@@ -355,6 +355,7 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         // https check, which is the log the legacy SSE stream already emits.
         if MCPHTTPExchange.sameOrigin(url, base) == false { return "on another origin" }
         if let problem = MCPRemoteServer.endpointProblem(url) { return "that \(problem)" }
+        if MCPOAuth.sameResource(url, base) == false { return "other than this MCP server's URL" }
         return nil
     }
 }

@@ -5,7 +5,7 @@ Prints "PORT <n>" on stdout once listening, then logs one line per request
 on stderr. Routes:
   POST/DELETE /mcp       streamable HTTP (session id, protocol version header,
                          JSON replies for tools/list, SSE replies for tools/call)
-  GET /sse, POST /messages   legacy HTTP+SSE
+  GET /sse, POST /sse        legacy HTTP+SSE; the message endpoint is that same URL
   GET /sse-foreign       legacy stream whose endpoint is on another origin
 With --token T every MCP request needs "Authorization: Bearer T".
 With --oauth it is also its own OAuth 2.1 authorization server (RFC 9728
@@ -188,8 +188,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.oauth_post(path.path)
         if path.path == "/mcp":
             return self.streamable()
-        if path.path == "/messages":
-            return self.legacy_post(parse_qs(path.query).get("session", [""])[0])
+        if path.path in ("/sse", "/messages"):
+            return self.legacy_post(path.path, parse_qs(path.query).get("session", [""])[0])
         self.send(404)
 
     def do_DELETE(self):
@@ -254,7 +254,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
-        endpoint = "http://example.invalid/messages?session=" + sid if foreign else "/messages?session=" + sid
+        endpoint = "http://example.invalid/messages?session=" + sid if foreign else urlparse(self.path).path
         try:
             self.wfile.write(("event: endpoint\ndata: %s\n\n" % endpoint).encode())
             self.wfile.flush()
@@ -275,15 +275,17 @@ class Handler(BaseHTTPRequestHandler):
             log("CLOSED legacy %s" % sid)
         self.close_connection = True
 
-    def legacy_post(self, sid):
+    def legacy_post(self, path, sid):
         if not self.authorized():
             return
         with STATE["lock"]:
+            if not sid and len(STATE["legacy"]) == 1:
+                sid = next(iter(STATE["legacy"]))
             outbox = STATE["legacy"].get(sid)
         if outbox is None:
             return self.send(404)
         msg = self.read_json()
-        log("REQ POST /messages %s session=%s" % (msg.get("method"), sid))
+        log("REQ POST %s %s session=%s" % (path, msg.get("method"), sid))
         if "id" in msg and "method" in msg:
             outbox.put(answer(msg, self.headers))
         self.send(202)

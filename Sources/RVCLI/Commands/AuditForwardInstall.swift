@@ -30,6 +30,15 @@ enum AuditForwardInstall {
         }
     }
 
+    /// `--to` is copied into the plist. Refuse it here too, so a direct install
+    /// cannot write a destination `AuditForwardRun.destination` would reject.
+    static func refusedDestination(_ arguments: [String]) -> CommandFailure? {
+        for (flag, value) in zip(arguments, arguments.dropFirst()) where flag == "--to" {
+            if case .failure(let failure) = AuditForwardRun.destination(value) { return failure }
+        }
+        return nil
+    }
+
     /// Header values end up in the plist, so they must name secrets, not hold them.
     /// A literal beside `${secret:NAME}` is still a secret.
     static func plaintextHeader(_ arguments: [String]) -> String? {
@@ -81,6 +90,7 @@ enum AuditForwardInstall {
     }
 
     static func install(_ plan: Plan) -> Result<String, CommandFailure> {
+        if let failure = refusedDestination(plan.forwardArguments) { return .failure(failure) }
         if let header = plaintextHeader(plan.forwardArguments) {
             return .failure(CommandFailure(
                 "--install writes the command into a plist, so header \(header) must use ${secret:NAME} instead of a literal value"))

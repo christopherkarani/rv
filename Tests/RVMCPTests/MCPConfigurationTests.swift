@@ -189,6 +189,13 @@ struct MCPConfigurationTests {
         #expect(try JSONValue.parse(Data("4611686018427387905.0".utf8)).domainValue == .string("4611686018427387905"))
         #expect(try JSONValue.parse(Data("-9007199254740993.0".utf8)).domainValue == .string("-9007199254740993"))
         #expect(try JSONValue.parse(Data("2.0".utf8)).domainValue == .number(2))
+        #expect(try JSONValue.parse(Data("-12.5".utf8)).domainValue == .number(-12.5))
+        for spelling in [
+            "9007199254740991.4", "9007199254740990.1", "9007199254740990.9", "-9007199254740990.1",
+            "4503599627370496.4", "1.0000000000000001",
+        ] {
+            #expect(try JSONValue.parse(Data(spelling.utf8)).domainValue == .string(spelling))
+        }
     }
 
     @Test func globs() {

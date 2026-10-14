@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 
 /// JSON that keeps each number's source spelling. `JSONDecoder` reads numbers
 /// through `Double`, so an integer above 2^53 can round before anyone compares it.
@@ -13,6 +14,30 @@ enum JSONLiteral: Equatable {
     var object: [String: JSONLiteral]? {
         if case .object(let value) = self { return value }
         return nil
+    }
+
+    /// The same value policy rules compare. Exact integers, including `.0` and
+    /// an exponent, keep the digits the call path uses. A fraction `Double`
+    /// would round onto an integer stays text, so it is not that integer.
+    func domainValue() -> JSONValue {
+        switch self {
+        case .null: return .null
+        case .bool(let flag): return .bool(flag)
+        case .string(let text): return .string(text)
+        case .array(let items): return .array(items.map { $0.domainValue() })
+        case .object(let members):
+            var object: [String: JSONValue] = [:]
+            for (key, value) in members { object[key] = value.domainValue() }
+            return .object(object)
+        case .number(let spelling):
+            if let digits = JSONExactInteger.digits(spelling) {
+                return JSONExactInteger.domainValue(digits)
+            }
+            if let number = JSONExactInteger.finiteNonInteger(spelling) {
+                return .number(number)
+            }
+            return .string(spelling)
+        }
     }
 
     /// `0` or a decimal integer with no leading zero. Nil when it does not fit in `Int`.

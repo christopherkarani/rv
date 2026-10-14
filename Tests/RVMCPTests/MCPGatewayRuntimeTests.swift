@@ -241,7 +241,8 @@ struct MCPGatewayRuntimeTests {
         #expect(same.oauth?.accessToken == "super-token")
         for url in [
             "https://evil.example/mcp", "https://good.example/mcp/evil", "https://good.example/api",
-            "https://good.example/mcp?x=1",
+            "https://good.example/mcp?x=1", "https://good.example/mcp/", "https://good.example/mcp%2F",
+            "https://good.example/%6Dcp",
         ] {
             let moved = try #require(try plan(url))
             #expect(moved.oauth == nil)

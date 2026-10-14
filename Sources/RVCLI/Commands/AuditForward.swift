@@ -46,8 +46,10 @@ enum AuditForwardRun {
         var batchSize = 500
     }
 
-    /// https anywhere; plain http only to this machine. No userinfo and no query secret:
-    /// `--install` copies `--to` into a plist.
+    /// https anywhere; plain http only to this machine. No userinfo, fragment,
+    /// path secret, or query secret (including a query value that is a URL
+    /// with userinfo). `--install` copies `--to` into a plist and a crontab
+    /// line, so a refusal names the problem and not the secret.
     static func destination(_ text: String) -> Result<URL, CommandFailure> {
         guard let url = URL(string: text),
             let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -58,13 +60,31 @@ enum AuditForwardRun {
         if components.user != nil || components.password != nil {
             return .failure("--to must not include a username or password")
         }
+        if components.fragment != nil {
+            return .failure("--to must not have a fragment")
+        }
+        let path = components.percentEncodedPath.removingPercentEncoding ?? components.percentEncodedPath
+        if path.split(separator: "/").contains(where: { MCPRedaction.looksLikeToken(String($0)) }) {
+            return .failure("--to must not carry a secret in its path")
+        }
         let items = components.queryItems ?? []
-        if items.contains(where: { MCPRedaction.isSecretName($0.name) || MCPRedaction.looksLikeToken($0.value ?? "") }) {
+        if items.contains(where: { item in
+            MCPRedaction.isSecretName(item.name) || MCPRedaction.looksLikeToken(item.value ?? "")
+                || queryCarriesUserinfo(item.value ?? "")
+        }) {
             return .failure("--to must not carry a secret in its query")
         }
         if scheme == "https" { return .success(url) }
         if scheme == "http", ["127.0.0.1", "localhost", "::1", "[::1]"].contains(host) { return .success(url) }
         return .failure("audit forwarding needs https (plain http is allowed only to localhost)")
+    }
+
+    /// A query value that is itself a URL with a username or password.
+    private static func queryCarriesUserinfo(_ value: String) -> Bool {
+        guard value.contains("://"), let nested = URL(string: value),
+            let components = URLComponents(url: nested, resolvingAgainstBaseURL: false)
+        else { return false }
+        return components.user != nil || components.password != nil
     }
 
     static func stateDirectory(_ configDirectory: URL) -> URL {

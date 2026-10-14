@@ -67,7 +67,16 @@ struct MCPRemoteTransportTests {
         #expect(origin("https://a.example/sse", "http://a.example/m") == false)
         #expect(origin("https://a.example/sse", "https://b.example/m") == false)
         let base = try #require(URL(string: "https://a.example/sse"))
-        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://a.example/messages", relativeTo: base) == nil)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://a.example/sse", relativeTo: base) == nil)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("/sse", relativeTo: base) == nil)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://a.example/messages", relativeTo: base)?
+            .contains("MCP server's URL") == true)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://a.example/sse/", relativeTo: base)?
+            .contains("MCP server's URL") == true)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://a.example/sse?x=1", relativeTo: base)?
+            .contains("MCP server's URL") == true)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://a.example/%73se", relativeTo: base)?
+            .contains("MCP server's URL") == true)
         #expect(MCPRemoteUpstream.messageEndpointRefusal("https://user:pw@a.example/messages", relativeTo: base)?
             .contains("without credentials") == true)
         #expect(MCPRemoteUpstream.messageEndpointRefusal("https://a.example/messages?api_key=zzz", relativeTo: base)?
@@ -233,7 +242,7 @@ struct MCPRemoteRuntimeTests {
         }
         let requests = fixture.stop()
         #expect(requests.contains("REQ GET /sse session="), "\(requests)")
-        #expect(requests.contains("REQ POST /messages tools/call session="), "\(requests)")
+        #expect(requests.contains("REQ POST /sse tools/call session="), "\(requests)")
     }
 
     @Test func refusedCredentialsAndForeignEndpointsFailTheServerNotTheGateway() throws {

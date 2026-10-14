@@ -82,4 +82,42 @@ struct MCPManagedPolicyTests {
         #expect(plan("envy") == .secretUnavailable(
             server: "envy", secret: "HOST_TOKEN", reason: "organization policy does not allow hostEnvironment secrets"))
     }
+
+    @Test func organizationThresholdsUseTheExactIntegerSpelling() throws {
+        func decide(_ op: String, _ threshold: String, _ amount: String) throws -> MCPToolDecision {
+            var configuration = MCPConfiguration(defaultDecision: .allow, servers: [
+                MCPServerDefinition(name: "pay", command: "pay", tools: MCPToolPolicy(defaultDecision: .allow)),
+            ])
+            configuration.managed = try organization("""
+                {"version":1,"mcp":{"deny":[{"tool":"pay/charge","when":{"/amount":{"\(op)":\(threshold)}}}]}}
+                """)
+            let server = try #require(configuration.server(named: "pay"))
+            let arguments = try RVMCP.JSONValue.parse(Data("{\"amount\":\(amount)}".utf8))
+            return configuration.decision(server: server, tool: "charge", arguments: arguments)
+        }
+        for threshold in ["9007199254740995.0", "9007199254740995e0", "9.007199254740995e15"] {
+            #expect(try decide(">", threshold, "9007199254740996") == .deny)
+            #expect(try decide("==", threshold, "9007199254740995") == .deny)
+            #expect(try decide("==", threshold, "9007199254740996") == .allow)
+            #expect(try decide("in", "[\(threshold)]", "9007199254740995") == .deny)
+            #expect(try decide("in", "[\(threshold)]", "9007199254740996") == .allow)
+        }
+        for threshold in ["9007199254740993.0", "9007199254740993e0", "9.007199254740993e15"] {
+            #expect(try decide("<", threshold, "9007199254740992") == .deny)
+        }
+        #expect(try decide(">", "9007199254740995", "9007199254740996") == .deny)
+        #expect(try decide("<", "-9007199254740990", "-9007199254740990.1") == .deny)
+        #expect(try decide("==", "9007199254740991", "9007199254740991.4") == .allow)
+        #expect(try decide("in", "[9007199254740991]", "9007199254740991.4") == .allow)
+        #expect(try decide(">", "12.5", "13") == .deny)
+        #expect(try decide(">", "12.5", "12.5") == .allow)
+
+        let rounded = ManagedPolicy.decode(Data(
+            #"{"version":1,"mcp":{"deny":[{"tool":"pay/charge","when":{"/amount":{">":9007199254740991.4}}}]}}"#.utf8))
+        guard case .failure(let error) = rounded else {
+            Issue.record("a fraction Double would round onto an integer must not become a policy threshold")
+            return
+        }
+        #expect(error.message.contains("needs a number"))
+    }
 }

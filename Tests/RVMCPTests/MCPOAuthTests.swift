@@ -147,6 +147,23 @@ struct MCPOAuthTests {
         answers["/.well-known/oauth-protected-resource/mcp"] = json(200, #"{"resource":"https://a.example/api","authorization_servers":["https://auth.example"]}"#)
         #expect(connect(flow(answers))?.contains("different URL than this MCP server") == true)
 
+        for resource in ["https://a.example/mcp/", "https://a.example/mcp%2F", "https://a.example/%6Dcp"] {
+            answers = protected
+            answers["/.well-known/oauth-protected-resource/mcp"] = json(
+                200, #"{"resource":"\#(resource)","authorization_servers":["https://auth.example"]}"#)
+            #expect(connect(flow(answers))?.contains("different URL than this MCP server") == true, "\(resource)")
+        }
+
+        answers = protected
+        answers["/.well-known/oauth-protected-resource/mcp"] = json(200, #"{"authorization_servers":["https://auth.example"]}"#)
+        let presentedOmission = Mutex(false)
+        #expect(connect(flow(answers) { _ in presentedOmission.withLock { $0 = true } })?.contains("does not name") == true)
+        #expect(presentedOmission.withLock { $0 } == false)
+
+        answers = protected
+        answers["/.well-known/oauth-protected-resource/mcp"] = json(200, #"{"resource":1,"authorization_servers":["https://auth.example"]}"#)
+        #expect(connect(flow(answers))?.contains("does not name") == true)
+
         answers = protected
         answers["/.well-known/oauth-protected-resource/mcp"] = json(404, "")
         let presentedFallback = Mutex(false)

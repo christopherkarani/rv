@@ -141,13 +141,13 @@ extension ManagedPolicy {
     /// Strict: unknown keys are errors, so a typo cannot silently weaken policy.
     public static func decode(_ data: Data) -> Result<ManagedPolicy, ManagedPolicyError> {
         guard data.count <= maximumBytes else { return .failure(.init("policy.json is larger than 256 KiB")) }
-        guard let root = try? JSONDecoder().decode(JSONValue.self, from: data), case .object(let object) = root else {
+        guard let literal = JSONLiteral.parse(data), case .object(let object) = literal.domainValue() else {
             return .failure(.init("policy.json is not a JSON object"))
         }
         do {
             var decoded = try policy(object)
             if object["serial"] != nil {
-                guard case .number(let token)? = JSONLiteral.parse(data)?.object?["serial"],
+                guard case .number(let token)? = literal.object?["serial"],
                     let exact = JSONLiteral.nonNegativeInteger(token)
                 else { return .failure(.init("\"serial\" must be a non-negative integer")) }
                 decoded.serial = exact

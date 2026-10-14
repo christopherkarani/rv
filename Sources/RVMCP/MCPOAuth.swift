@@ -183,12 +183,15 @@ public enum MCPOAuth {
         return path
     }
 
-    /// Scheme, host, port, path, and query. A token for one path is not a token for another.
+    /// Scheme, host, port, and the exact percent-encoded path and query.
+    /// Trailing slashes and `%` escapes are different resources. Discovery
+    /// still uses `trimmedPath`; this check does not.
     static func sameResource(_ lhs: URL, _ rhs: URL) -> Bool {
-        guard MCPHTTPExchange.sameOrigin(lhs, rhs), trimmedPath(lhs) == trimmedPath(rhs) else { return false }
-        let left = URLComponents(url: lhs, resolvingAgainstBaseURL: false)?.percentEncodedQuery
-        let right = URLComponents(url: rhs, resolvingAgainstBaseURL: false)?.percentEncodedQuery
-        return left == right
+        guard MCPHTTPExchange.sameOrigin(lhs, rhs) else { return false }
+        let left = URLComponents(url: lhs, resolvingAgainstBaseURL: false)
+        let right = URLComponents(url: rhs, resolvingAgainstBaseURL: false)
+        return left?.percentEncodedPath == right?.percentEncodedPath
+            && left?.percentEncodedQuery == right?.percentEncodedQuery
     }
 
     public static func base64URL(_ bytes: [UInt8]) -> String {
@@ -424,7 +427,9 @@ public struct MCPOAuthFlow: Sendable {
                 let json = try? JSONValue.parse(response.body), let issuers = json["authorization_servers"]?.stringArray,
                 let first = issuers.first, let issuer = URL(string: first)
             else { continue }
-            let resource = json["resource"]?.stringValue ?? server.absoluteString
+            guard let resource = json["resource"]?.stringValue else {
+                return .failure(MCPOAuthError("resource metadata does not name this MCP server"))
+            }
             guard let resourceURL = URL(string: resource) else {
                 return .failure(MCPOAuthError("resource metadata names a resource that is not this MCP URL (\(resource))"))
             }

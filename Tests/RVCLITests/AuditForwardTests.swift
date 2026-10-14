@@ -165,6 +165,24 @@ struct AuditForwardTests {
         }
         #expect(queryFailure.message.contains("secret in its query"))
         #expect(queryFailure.message.contains("abc123") == false)
+        let pathSecret = "ghp_1234567890abcdefghij"
+        let nestedSecret = "supersecretpassword"
+        let secretDestinations = [
+            ("https://siem.example/ingest/\(pathSecret)", "secret in its path"),
+            ("https://siem.example/ingest#\(pathSecret)", "fragment"),
+            ("https://siem.example/hook?next=https://user:\(nestedSecret)@collector.example", "secret in its query"),
+        ]
+        for (text, fragment) in secretDestinations {
+            guard case .failure(let failure) = AuditForwardRun.destination(text) else {
+                Issue.record("refused \(fragment)")
+                continue
+            }
+            #expect(failure.message.contains(fragment), "\(fragment)")
+            #expect(failure.message.contains(pathSecret) == false)
+            #expect(failure.message.contains(nestedSecret) == false)
+            #expect(failure.message.contains("user:\(nestedSecret)") == false)
+        }
+        #expect((try? AuditForwardRun.destination("https://siem.example/hook?next=https://collector.example/v1").get()) != nil)
         #expect(try AuditForwardRun.parseHeaders(["Authorization=Bearer x=y"]).get() == ["Authorization": "Bearer x=y"])
         #expect((try? AuditForwardRun.parseHeaders(["=x"]).get()) == nil)
 
@@ -356,6 +374,24 @@ struct AuditForwardInstallTests {
         }
         #expect(mixedFailure.message.contains("${secret:NAME}"))
         #expect(mixedFailure.message.contains("real-token") == false)
+        #expect(FileManager.default.fileExists(atPath: home.url.appendingPathComponent("Library").path) == false)
+
+        let pathSecret = "ghp_1234567890abcdefghij"
+        let nestedSecret = "supersecretpassword"
+        for text in [
+            "https://siem.example/ingest/\(pathSecret)",
+            "https://siem.example/ingest#\(pathSecret)",
+            "https://siem.example/hook?next=https://user:\(nestedSecret)@collector.example",
+        ] {
+            let installed = AuditForwardInstall.install(plan(["--to", text], home: home))
+            guard case .failure(let failure) = installed else {
+                Issue.record("install must refuse a secret destination")
+                continue
+            }
+            #expect(failure.message.contains(pathSecret) == false)
+            #expect(failure.message.contains(nestedSecret) == false)
+            #expect(failure.message.contains("user:\(nestedSecret)") == false)
+        }
         #expect(FileManager.default.fileExists(atPath: home.url.appendingPathComponent("Library").path) == false)
     }
 

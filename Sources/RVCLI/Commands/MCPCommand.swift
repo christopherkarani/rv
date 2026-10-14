@@ -496,7 +496,8 @@ enum MCPRun {
     }
 
     static func importServers(
-        host: MCPHost, names: [String], project: URL?, allowTools: Bool, dryRun: Bool, environment: MCPEnvironment
+        host: MCPHost, names: [String], project: URL?, allowTools: Bool, dryRun: Bool, environment: MCPEnvironment,
+        show: @escaping @Sendable (String) -> Void = { _ in }
     ) async -> Result<String, CommandFailure> {
         let configuration: MCPConfiguration
         switch self.configuration(environment) {
@@ -552,7 +553,8 @@ enum MCPRun {
             return .failure(CommandFailure(
                 "\(secret.definition.name) is empty, contains NUL, or is over \(SecretValue.maximumBytes) bytes; nothing imported"))
         }
-        let outcome = await environment.presence.confirm("rv: import MCP servers into mcp.json", .echoCode)
+        show(importReview(plan, allowTools: allowTools) + "\n")
+        let outcome = await environment.presence.confirm("rv: import MCP servers into mcp.json as shown", .echoCode)
         guard case .confirmed = outcome else {
             let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
             return .failure(CommandFailure("not imported: \(refusal); nothing imported"))
@@ -606,6 +608,38 @@ enum MCPRun {
         }
         lines.append("next: `rv mcp setup --host \(host.rawValue)` routes the host through rv")
         return .success(lines.joined(separator: "\n") + "\n")
+    }
+
+    /// What the device owner sees before secrets are stored or mcp.json is signed.
+    /// Secret names and server URLs only; secret values stay off the terminal.
+    static func importReview(_ plan: MCPImportPlan, allowTools: Bool) -> String {
+        var lines = ["import into mcp.json:"]
+        for server in plan.servers {
+            if let remote = server.remote {
+                let transport = remote.transport == .sse ? "legacy SSE" : "streamable HTTP"
+                lines.append("  \(server.name): \(remote.url.absoluteString) (remote, \(transport))")
+                for name in remote.headers.keys.sorted() {
+                    let secrets = MCPSecretReference.names(in: remote.headers[name] ?? "") ?? []
+                    if secrets.isEmpty == false {
+                        lines.append("    \(name) → secret \(secrets.joined(separator: ", "))")
+                    }
+                }
+            } else {
+                lines.append("  \(server.name): \(server.command)")
+            }
+            for variable in server.secrets.keys.sorted() {
+                if let name = server.secrets[variable] {
+                    lines.append("    \(variable) → secret \(name)")
+                }
+            }
+            for arg in server.args {
+                for name in MCPSecretReference.names(in: arg) ?? [] {
+                    lines.append("    argument → secret \(name)")
+                }
+            }
+            if allowTools { lines.append("    tools will be allow") }
+        }
+        return lines.joined(separator: "\n")
     }
 
     static func setup(
@@ -921,7 +955,7 @@ struct MCPImportCommand: AsyncParsableCommand {
         let environment = MCPEnvironment.live(home: try ctx.requireHome())
         switch await MCPRun.importServers(
             host: host, names: servers, project: MCPRun.projectURL(project), allowTools: allowTools, dryRun: dryRun,
-            environment: environment)
+            environment: environment, show: { ctx.writeStdout($0) })
         {
         case .failure(let failure): try ctx.fail("rv mcp import: \(failure.message)\n")
         case .success(let text): ctx.writeStdout(text)

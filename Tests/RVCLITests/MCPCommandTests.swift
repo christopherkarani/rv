@@ -165,6 +165,48 @@ struct MCPCommandTests {
         #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("secrets.json").path) == false)
     }
 
+    @Test func importShowsEveryServerURLAndSecretBindingBeforeWriting() async throws {
+        let fixture = Fixture()
+        let token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+        try fixture.write(".cursor/mcp.json", """
+            {"mcpServers": {
+              "api": {"url": "https://mcp.example/mcp", "headers": {"Authorization": "Bearer \(token)"}},
+              "github": {"command": "npx", "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "\(token)"}}
+            }}
+            """)
+        let shown = Mutex("")
+        let promptedAfterReview = Mutex(false)
+        let presence = UserPresence { reason, _ in
+            let review = shown.withLock { $0 }
+            promptedAfterReview.withLock { $0 = review.contains("https://mcp.example/mcp") && reason.contains("as shown") }
+            return .refused("declined")
+        }
+        let dryShown = Mutex(false)
+        let dry = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: true, dryRun: true,
+            environment: fixture.environment(presence: presence), show: { _ in dryShown.withLock { $0 = true } }
+        ).get()
+        #expect(dry.contains("dry run"))
+        #expect(dry.contains(token) == false)
+        #expect(dryShown.withLock { $0 } == false)
+        #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
+
+        let refused = await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: true, dryRun: false,
+            environment: fixture.environment(presence: presence), show: { text in shown.withLock { $0 += text } })
+        #expect(refused.failureMessage == "not imported: declined; nothing imported")
+        let review = shown.withLock { $0 }
+        #expect(review.contains("https://mcp.example/mcp"))
+        #expect(review.contains("Authorization → secret API_AUTHORIZATION"))
+        #expect(review.contains("GITHUB_PERSONAL_ACCESS_TOKEN → secret GITHUB_PERSONAL_ACCESS_TOKEN"))
+        #expect(review.contains("tools will be allow"))
+        #expect(review.contains(token) == false)
+        #expect(promptedAfterReview.withLock { $0 })
+        #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
+        #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("secrets.json").path) == false)
+    }
+
     static let present = UserPresence { _, _ in .confirmed(method: "test") }
     static let absent = UserPresence { _, _ in .refused("this process has no terminal") }
 
@@ -313,10 +355,13 @@ struct MCPCommandTests {
         #expect(loaded.decision(server: fs, tool: "read_file") == .ask)
 
         try fixture.write(".cursor/mcp.json", Self.cursorConfig)
+        let importShown = Mutex("")
         let imported = await MCPRun.importServers(
-            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false, environment: environment)
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false, environment: environment,
+            show: { text in importShown.withLock { $0 += text } })
         #expect(imported.failureMessage?.contains("edited outside rv") == true)
         #expect(imported.failureMessage?.contains("nothing imported") == true)
+        #expect(importShown.withLock { $0 }.isEmpty)
         #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
         let id = try #require(environment.approvals.request(server: "fs", tool: "zz_x", argumentsHash: "h", argumentKeys: [])?.id)
         let always = await MCPRun.approve(id: id, always: true, environment: environment)

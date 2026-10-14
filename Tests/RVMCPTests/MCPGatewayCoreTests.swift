@@ -546,6 +546,23 @@ struct MCPApprovalStoreTests {
         #expect(reentered.audits.first?.decision == .deny)
         #expect(reentered.audits.first?.tool == "eq")
         #expect(reentered.toClient.first?.compactText.contains("9007199254740993.0") == false)
+
+        func unreadable(_ id: Int, _ spelling: String) {
+            let reply = call(id, "pass", spelling)
+            #expect(reply.toUpstream.isEmpty, "\(spelling)")
+            #expect(reply.audits.first?.reason?.contains("cannot read exactly") == true, "\(spelling)")
+            #expect(reply.toClient.first?.compactText.contains(spelling) == false, "\(spelling)")
+        }
+        unreadable(19, "9007199254740991.4")
+        unreadable(20, "9007199254740990.1")
+        unreadable(21, "9007199254740990.9")
+        unreadable(22, "-9007199254740990.1")
+        unreadable(23, "4503599627370496.4")
+        unreadable(24, "1.0000000000000001")
+
+        let genuine = call(25, "pass", "12.5")
+        #expect(genuine.audits.isEmpty)
+        #expect(genuine.toUpstream.first?.1["params"]?["arguments"]?["amount"] == .number("12.5"))
     }
 
     @Test func canonicalHashIgnoresKeyOrder() throws {
