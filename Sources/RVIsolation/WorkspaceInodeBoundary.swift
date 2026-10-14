@@ -1787,9 +1787,11 @@ private enum DiskImageToolSerialization {
         }
     }
 
-    /// One listing. The hold drops only when `diskImagePublicationCanClear`
-    /// says the parked disk cannot appear. An empty listing with the image
-    /// file still present, or a `/private/var` alias of that image, keeps it.
+    /// One bounded recheck once the helper is dead. A nil listing (empty
+    /// info, a short info timeout, or a mount hdiutil does not report)
+    /// means this image is not mounted, so the hold drops. A listing that
+    /// shows this image, or a non-empty listing that only shows a sibling,
+    /// keeps it. This does not spin until the 30-minute cap.
     static func clearPublicationGateIfDiskIsGone(clock: DiskImageCancelClock) {
         let parked = publication.withLock { $0 }
         guard parked.held else { return }
@@ -1817,18 +1819,9 @@ private enum DiskImageToolSerialization {
         }
         let deadline = Date().addingTimeInterval(DiskImageCancelBudget.preemptReap)
         let listed = workspaceImageListed(image, returnDeadline: deadline, clock: clock)
-        let canAppear = diskImageCanStillAppear(
+        guard diskImagePublicationRecheckCanClear(
             helperStillAlive: false,
-            detachStatus: 0,
-            detachTimedOut: false,
-            detachOutput: "",
-            imageListedAfterDetach: listed,
-            waitedForPublication: true
-        )
-        guard diskImagePublicationCanClear(
-            helperStillAlive: false,
-            diskCanStillAppear: canAppear,
-            imageKnown: true
+            imageListed: listed
         ) else { return }
         publication.withLock { state in
             guard let current = state.image, diskImageSamePath(current, image) else { return }
@@ -1839,6 +1832,10 @@ private enum DiskImageToolSerialization {
             state.pid = 0
         }
     }
+}
+
+final class DiskImageArmedSlice: @unchecked Sendable {
+    var deadline: Date?
 }
 
 private struct PublicationGate: Sendable {
@@ -2025,9 +2022,11 @@ private func runTool(
     // diskimagesd failure. The preempted helper is reaped, and a partial
     // image, attach, or mount is cleaned, before the lock drops.
     let helperSlice = deadline
-    // One slice, started as this waiter begins acquiring. A later poll
-    // must not move it, or the wait never ends before the job cap.
-    var yieldBudget = Date().addingTimeInterval(deadline ?? 45)
+    let acquireSlice = deadline ?? 45
+    // The 45-second slice starts when the lock is taken, not while a peer
+    // holds it. A later poll does not move that end. Queue time must not
+    // fail the boundary.
+    let armedSlice = DiskImageArmedSlice()
     var notedPriority = false
     var protectNext = false
     defer {
@@ -2043,7 +2042,7 @@ private func runTool(
             // The wait is the sequence clock. A 45-second default, or a
             // 0.5-second umount slice, must not expire it while a peer
             // still holds the lock.
-            yieldBudget = diskImageNextWaitDeadline(
+            _ = diskImageNextWaitDeadline(
                 current: end,
                 now: Date(),
                 cancelled: true,
@@ -2052,20 +2051,13 @@ private func runTool(
             if diskImageLockWaitIsExpired(cancelled: true, cancelClockSpent: Date() >= end) {
                 return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
             }
-        } else {
-            yieldBudget = diskImageNextWaitDeadline(
-                current: yieldBudget,
+        } else if let armed = armedSlice.deadline {
+            armedSlice.deadline = diskImageNextWaitDeadline(
+                current: armed,
                 now: Date(),
                 cancelled: false,
                 cancelDeadline: nil
             )
-            if diskImageLockWaitIsExpired(
-                cancelled: false,
-                cancelClockSpent: false,
-                acquireSliceSpent: Date() >= yieldBudget
-            ) {
-                return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
-            }
         }
         if blockingWorkIsCancelled(), notedPriority == false {
             DiskImageToolSerialization.notePriorityWaiter()
@@ -2092,8 +2084,23 @@ private func runTool(
                 DiskImageToolSerialization.endHolding()
                 return .yielded
             }
-            let remaining = yieldBudget.timeIntervalSinceNow
-            if remaining <= 0 {
+            let budgetEnd: Date
+            if let cancelEnd = clock.deadline {
+                budgetEnd = cancelEnd
+            } else {
+                armedSlice.deadline = diskImageAcquireSliceDeadline(
+                    armed: armedSlice.deadline,
+                    now: Date(),
+                    slice: acquireSlice,
+                    peerHoldsLock: false
+                )
+                budgetEnd = armedSlice.deadline ?? Date().addingTimeInterval(acquireSlice)
+            }
+            let remaining = budgetEnd.timeIntervalSinceNow
+            if diskImagePeerWaitFailsBoundary(
+                peerHoldsLock: false,
+                acquireSliceSpent: remaining <= 0
+            ) {
                 DiskImageToolSerialization.endHolding()
                 return .done(
                     ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
@@ -2130,11 +2137,11 @@ private func runTool(
                     holderIsUrgent: urgent
                 ),
                 parkIfStuck: false,
-                returnDeadline: clock.deadline ?? yieldBudget,
+                returnDeadline: budgetEnd,
                 clock: clock
             )
             let plan = PreemptedDiskHelperCleanup.plan(arguments: arguments)
-            let returnDeadline = clock.deadline ?? yieldBudget
+            let returnDeadline = budgetEnd
             let mustDetach = diskImageMustDetachBeforeUnlock(
                 cleanup: plan,
                 helperStillAlive: ran.helperStillAlive,
@@ -2243,16 +2250,21 @@ private func runTool(
         switch attempt {
         case nil:
             protectNext = true
+            let queued = armedSlice.deadline.map { Date() >= $0 } ?? false
+            if diskImagePeerWaitFailsBoundary(peerHoldsLock: true, acquireSliceSpent: queued) {
+                return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
+            }
             usleep(10_000)
         case .some(.done(let output)):
             return output
         case .some(.yielded):
             protectNext = true
-            if diskImageLockWaitIsExpired(
-                cancelled: clock.deadline != nil,
-                cancelClockSpent: Date() >= yieldBudget,
-                acquireSliceSpent: Date() >= yieldBudget
-            ) {
+            if let end = clock.deadline,
+                diskImageLockWaitIsExpired(cancelled: true, cancelClockSpent: Date() >= end) {
+                return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
+            }
+            let queued = armedSlice.deadline.map { Date() >= $0 } ?? false
+            if diskImagePeerWaitFailsBoundary(peerHoldsLock: true, acquireSliceSpent: queued) {
                 return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
             }
             usleep(20_000)

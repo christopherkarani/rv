@@ -217,6 +217,27 @@ struct SecretGatewayTests {
         #expect(upstream.requests.first?.headers["expect"] == nil)
     }
 
+    @Test func headWithIllegalBodyFramingIsRefused() throws {
+        let upstream = RecordingUpstream()
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+        let overflow = try gatewayExchange(port: port,
+            "HEAD /s/OPENAI_API_KEY/x HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n"
+                + "Transfer-Encoding: chunked\r\n\r\n1\r\nA\r\n7fffffffffffffff\r\n")
+        #expect(overflow.status == 413)
+        let oversized = try gatewayExchange(port: port,
+            "HEAD /s/OPENAI_API_KEY/x HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n"
+                + "Content-Length: \(SecretGateway.maximumBodyBytes + 1)\r\n\r\n")
+        #expect(oversized.status == 413)
+        let invalid = try gatewayExchange(port: port,
+            "HEAD /s/OPENAI_API_KEY/x HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n"
+                + "Content-Length: nope\r\n\r\n")
+        #expect(invalid.status == 413)
+        #expect(upstream.requests.isEmpty)
+        #expect(audit.items.withLock { $0.allSatisfy { $0.allowed == false } && $0.isEmpty == false })
+    }
+
     @Test func headResponsesCarryNoBodyFraming() throws {
         let upstream = RecordingUpstream(status: 200, headers: [("ETag", "x")])
         let audit = AuditRecords()

@@ -414,16 +414,25 @@ public final class SecretGateway: @unchecked Sendable {
     }
 
     private func readBody(_ reader: GatewaySocket.Reader, head: GatewayRequestHead) -> Data? {
-        // HEAD carries no body. Missing `Content-Length` is not a malformed
-        // request and must not wait for bytes that will not arrive.
-        if head.method == "HEAD" { return Data() }
+        // The same framing limits apply to HEAD. An illegal or oversized
+        // body is refused before the placeholder is treated as empty.
+        // Missing `Content-Length` is not a malformed request and must not
+        // wait for bytes that will not arrive.
+        let framed: Data?
         if let encoding = head.header("Transfer-Encoding") {
             guard encoding.lowercased() == "chunked" else { return nil }
-            return reader.readChunked(limit: Self.maximumBodyBytes)
+            framed = reader.readChunked(limit: Self.maximumBodyBytes)
+        } else if let lengthText = head.header("Content-Length") {
+            guard let length = Int(lengthText), length >= 0, length <= Self.maximumBodyBytes else {
+                return nil
+            }
+            framed = length == 0 ? Data() : reader.readExactly(length)
+        } else {
+            framed = Data()
         }
-        guard let lengthText = head.header("Content-Length") else { return Data() }
-        guard let length = Int(lengthText), length >= 0, length <= Self.maximumBodyBytes else { return nil }
-        return reader.readExactly(length)
+        guard let framed else { return nil }
+        if head.method == "HEAD" { return Data() }
+        return framed
     }
 
     private func refuse(_ client: Int32, _ refusal: GatewayRefusal, method: String, path: String, secret: String?) {

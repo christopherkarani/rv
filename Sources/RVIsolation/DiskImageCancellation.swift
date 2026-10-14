@@ -532,13 +532,28 @@ func diskImagePublicationGateUpdate(
     return false
 }
 
+/// One bounded recheck after the helper is dead. A nil listing is an empty
+/// `hdiutil info`, a timed-out info, or a mount hdiutil does not report:
+/// this image is not mounted, so the hold can drop and a later attach can
+/// run. A listing that shows this image keeps the hold. A non-empty listing
+/// that merely omits this image is a sibling, not evidence this disk is
+/// gone. This is not a spin out to the 30-minute cap.
+func diskImagePublicationRecheckCanClear(
+    helperStillAlive: Bool,
+    imageListed: Bool?
+) -> Bool {
+    if helperStillAlive { return false }
+    return imageListed == nil
+}
+
 /// Drop the publication hold only when this helper is dead and the image
 /// can no longer appear. `diskImageCanStillAppear` is that second fact:
 /// a nil listing, or a non-empty listing that merely omitted this image
-/// before the publication wait, stays true and must not clear. A plan
-/// `.none` umount or detach stores no image; once its helper is dead the
-/// latch cannot publish and does drop. `returnBound` and `detachCap` are
-/// not involved.
+/// before the publication wait, stays true and must not clear. The gate's
+/// bounded recheck is `diskImagePublicationRecheckCanClear`, which treats
+/// a nil listing as not mounted. A plan `.none` umount or detach stores no
+/// image; once its helper is dead the latch cannot publish and does drop.
+/// `returnBound` and `detachCap` are not involved.
 func diskImagePublicationCanClear(
     helperStillAlive: Bool,
     diskCanStillAppear: Bool,
@@ -583,6 +598,31 @@ func diskImageNextWaitDeadline(
     _ = now
     if cancelled, let cancelDeadline { return cancelDeadline }
     return current
+}
+
+/// The 45-second slice starts once, when this waiter takes the lock. A
+/// later poll does not move that end. While a peer still holds the lock
+/// the slice stays unarmed, so queue time is not the boundary.
+func diskImageAcquireSliceDeadline(
+    armed: Date?,
+    now: Date,
+    slice: TimeInterval,
+    peerHoldsLock: Bool
+) -> Date? {
+    if peerHoldsLock { return armed }
+    if let armed { return armed }
+    return now.addingTimeInterval(slice)
+}
+
+/// A non-cancelled establish that is only waiting on a peer does not fail
+/// the boundary, including when a 45-second slice would already be spent.
+/// A waiter that holds the lock still stops when its slice is spent.
+func diskImagePeerWaitFailsBoundary(
+    peerHoldsLock: Bool,
+    acquireSliceSpent: Bool
+) -> Bool {
+    if peerHoldsLock { return false }
+    return acquireSliceSpent
 }
 
 func diskImageLockWaitIsExpired(
@@ -1139,6 +1179,8 @@ func unlinkTruncatedSaved(_ path: String) {
 final class XattrCopyTrace: @unchecked Sendable {
     var largestRead = 0
     var largestWrite = 0
+    var forkBytesWritten = 0
+    var fcopyfileInvoked = false
 
     func noteRead(_ count: Int) {
         if count > largestRead { largestRead = count }
@@ -1147,6 +1189,21 @@ final class XattrCopyTrace: @unchecked Sendable {
     func noteWrite(_ count: Int) {
         if count > largestWrite { largestWrite = count }
     }
+
+    func noteFork(_ count: Int) {
+        if count > forkBytesWritten { forkBytesWritten = count }
+    }
+
+    func noteFcopyfile() {
+        fcopyfileInvoked = true
+    }
+}
+
+/// A failed path lookup must not skip the named fork. That skip is what
+/// lets one unbounded copy of `..namedfork/rsrc` run with no further clock
+/// check. No resolved path means the copy stops.
+func namedForkCopyStarts(pathResolved: Bool) -> Bool {
+    pathResolved
 }
 
 /// Copy extended attributes in slices that keep checking the clock.
@@ -1204,11 +1261,13 @@ func copyOneXattrObservingClock(
     while offset < needed {
         if mayContinue() == false { return false }
         let length = min(step, needed - offset)
-        trace.noteRead(length)
         guard let window = readXattrWindow(source, name, offset: offset, length: length) else {
             return false
         }
         if window.count != length { return false }
+        trace.noteRead(window.count)
+        // The get can spend the budget. Do not set once it is gone.
+        if mayContinue() == false { return false }
         gathered.append(contentsOf: window)
         offset += window.count
     }
@@ -1305,11 +1364,12 @@ func writeXattr(_ fd: Int32, _ name: String, _ value: [UInt8]) -> Bool {
 func copyResourceForkObservingClock(
     from source: Int32,
     to destination: Int32,
+    trace: XattrCopyTrace = XattrCopyTrace(),
     mayContinue: () -> Bool
 ) -> Bool {
     guard let sourcePath = pathForFileDescriptor(source),
         let destinationPath = pathForFileDescriptor(destination)
-    else { return true }
+    else { return namedForkCopyStarts(pathResolved: false) }
     let sourceFork = sourcePath + "/..namedfork/rsrc"
     let destinationFork = destinationPath + "/..namedfork/rsrc"
     let src = sourceFork.withCString { open($0, O_RDONLY | O_CLOEXEC) }
@@ -1324,11 +1384,8 @@ func copyResourceForkObservingClock(
         mayContinue: { _ in mayContinue() },
         copyXattr: { _, _ in true }
     )
-    if copied == false {
-        _ = ftruncate(dst, 0)
-        return false
-    }
-    return true
+    trace.noteFork(Int(descriptorSize(dst) ?? 0))
+    return copied
 }
 
 func pathForFileDescriptor(_ fd: Int32) -> String? {
@@ -1342,11 +1399,94 @@ func pathForFileDescriptor(_ fd: Int32) -> String? {
 func copyXattrsWithFcopyfile(
     from source: Int32,
     to destination: Int32,
+    trace: XattrCopyTrace = XattrCopyTrace(),
     mayContinue: @escaping () -> Bool
 ) -> Bool {
-    // One `fcopyfile(COPYFILE_XATTR)` copies a resource fork after a single
-    // start callback. The chunked copier stops during the value instead.
-    copyXattrsObservingClock(from: source, to: destination, mayContinue: mayContinue)
+    if mayContinue() == false { return false }
+    // `fcopyfile` copies the other attributes. The named fork is skipped
+    // there and copied in 64KB slices so a short clock stops during it.
+    if copyXattrsByFcopyfile(
+        from: source,
+        to: destination,
+        trace: trace,
+        mayContinue: mayContinue
+    ) == false {
+        return false
+    }
+    return copyResourceForkObservingClock(
+        from: source,
+        to: destination,
+        trace: trace,
+        mayContinue: mayContinue
+    )
+}
+
+private final class FcopyfileClockBox {
+    let mayContinue: () -> Bool
+    init(_ mayContinue: @escaping () -> Bool) {
+        self.mayContinue = mayContinue
+    }
+}
+
+private func xattrFcopyfileStatus(
+    _ what: Int32,
+    _ stage: Int32,
+    _ state: copyfile_state_t?,
+    _ src: UnsafePointer<CChar>?,
+    _ dst: UnsafePointer<CChar>?,
+    _ ctx: UnsafeMutableRawPointer?
+) -> Int32 {
+    _ = what
+    _ = stage
+    _ = src
+    _ = dst
+    guard let ctx else { return COPYFILE_QUIT }
+    let box = Unmanaged<FcopyfileClockBox>.fromOpaque(ctx).takeUnretainedValue()
+    if let state {
+        var name: UnsafePointer<CChar>?
+        let read = withUnsafeMutablePointer(to: &name) { pointer in
+            copyfile_state_get(
+                state,
+                UInt32(COPYFILE_STATE_XATTRNAME),
+                UnsafeMutableRawPointer(pointer)
+            )
+        }
+        if read == 0, let name, strcmp(name, "com.apple.ResourceFork") == 0 {
+            return COPYFILE_SKIP
+        }
+    }
+    if box.mayContinue() == false { return COPYFILE_QUIT }
+    return COPYFILE_CONTINUE
+}
+
+private func copyXattrsByFcopyfile(
+    from source: Int32,
+    to destination: Int32,
+    trace: XattrCopyTrace,
+    mayContinue: @escaping () -> Bool
+) -> Bool {
+    guard let state = copyfile_state_alloc() else { return false }
+    defer { copyfile_state_free(state) }
+    let box = FcopyfileClockBox(mayContinue)
+    var context = Unmanaged.passUnretained(box).toOpaque()
+    var callback: copyfile_callback_t = xattrFcopyfileStatus
+    let contextSet = withUnsafePointer(to: &context) { pointer in
+        copyfile_state_set(
+            state,
+            UInt32(COPYFILE_STATE_STATUS_CTX),
+            UnsafeRawPointer(pointer)
+        )
+    }
+    let callbackSet = withUnsafePointer(to: &callback) { pointer in
+        copyfile_state_set(
+            state,
+            UInt32(COPYFILE_STATE_STATUS_CB),
+            UnsafeRawPointer(pointer)
+        )
+    }
+    guard contextSet == 0, callbackSet == 0 else { return false }
+    trace.noteFcopyfile()
+    return fcopyfile(source, destination, state, copyfile_flags_t(COPYFILE_XATTR)) == 0
 }
 
 private func xattrListSize(_ fd: Int32) -> Int {
