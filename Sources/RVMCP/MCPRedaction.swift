@@ -274,8 +274,10 @@ public enum MCPRedaction {
     /// The run may follow `=` on `--cwd=`, so the scheme does not have to start the value.
     /// A digit stops the walk, and that tail is not a scheme: `1234https://` stays one token.
     /// A separator the join drops, including `.`, U+00A8, and a box drawing, does not hide that digit.
-    /// A format Prepend glued to that digit is still that number. `-` and `_` do not hide it either,
-    /// and they stay attached for prefix matching. U+0020 stays, so a space between `:` and `/` is still not `://`.
+    /// A format Prepend or a combining mark glued to that digit is still that number.
+    /// `-` and `_` do not hide it, including when a variation selector, a Prepend, or an accent
+    /// sits in the same character. A letter before that hyphen is not a scheme either.
+    /// They stay attached for prefix matching. U+0020 stays, so a space between `:` and `/` is still not `://`.
     private static func hasAuthorityScheme(_ decoded: String) -> Bool {
         var index = decoded.startIndex
         while let range = decoded[index...].range(of: "://") {
@@ -285,10 +287,14 @@ public enum MCPRedaction {
                 if decoded[previous].isLetter { schemeStart = previous } else { break }
             }
             var boundary = schemeStart
+            var sawHyphen = false
             while boundary > decoded.startIndex {
                 let previous = decoded.index(before: boundary)
                 let character = decoded[previous]
-                if characterIsJoinDropped(character) || character == "-" || character == "_" {
+                if boundaryScalars(character).isEmpty {
+                    boundary = previous
+                } else if isHyphenBoundary(character) {
+                    sawHyphen = true
                     boundary = previous
                 } else {
                     break
@@ -297,33 +303,43 @@ public enum MCPRedaction {
             let precededByNumber = boundary > decoded.startIndex
                 && characterLeavesANumber(decoded[decoded.index(before: boundary)])
             let scheme = decoded[schemeStart..<range.lowerBound].lowercased()
-            if precededByNumber == false, authoritySchemes.contains(scheme) { return true }
+            if sawHyphen == false, precededByNumber == false, authoritySchemes.contains(scheme) {
+                return true
+            }
             index = range.upperBound
         }
         return false
     }
 
-    /// A character the join removes: every scalar is whitespace other than U+0020, default-ignorable,
-    /// format, or a prefix separator (including a compatibility fold that contains one).
-    private static func characterIsJoinDropped(_ character: Character) -> Bool {
-        var sawScalar = false
-        for scalar in character.unicodeScalars {
-            sawScalar = true
-            if joinDrops(scalar) == false { return false }
+    /// Scalars that still decide the scheme boundary. Join-dropped scalars and combining marks
+    /// that are not letters are ignored, so a digit or a hyphen can sit under one of them.
+    private static func boundaryScalars(_ character: Character) -> [Unicode.Scalar] {
+        character.unicodeScalars.filter { scalar in
+            joinDrops(scalar) == false && nonLetterMark(scalar) == false
         }
-        return sawScalar
     }
 
-    /// Digits that remain after join-dropped scalars are still a number.
-    /// A format Prepend glued to `4` is one character whose first scalar is not numeric.
-    private static func characterLeavesANumber(_ character: Character) -> Bool {
-        var sawNumber = false
-        for scalar in character.unicodeScalars {
-            if joinDrops(scalar) { continue }
-            guard scalar.properties.numericType != nil else { return false }
-            sawNumber = true
+    private static func nonLetterMark(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar.properties.isAlphabetic { return false }
+        switch scalar.properties.generalCategory {
+        case .nonspacingMark, .spacingMark, .enclosingMark:
+            return true
+        default:
+            return false
         }
-        return sawNumber
+    }
+
+    /// `-` or `_`, including a variation selector, a Prepend, or an accent in the same character.
+    private static func isHyphenBoundary(_ character: Character) -> Bool {
+        let kept = boundaryScalars(character)
+        return kept.isEmpty == false && kept.allSatisfy { $0.value == 0x2D || $0.value == 0x5F }
+    }
+
+    /// Digits that remain after join-dropped scalars and non-letter marks are still a number.
+    /// A format Prepend or U+0308 glued to `4` is one character whose first scalar is not numeric.
+    private static func characterLeavesANumber(_ character: Character) -> Bool {
+        let kept = boundaryScalars(character)
+        return kept.isEmpty == false && kept.allSatisfy { $0.properties.numericType != nil }
     }
 
     private static func usernameEnds(_ text: String, at colon: String.Index) -> Bool {
@@ -658,8 +674,10 @@ public enum MCPRedaction {
         if pass.text != value || decoded != pass.text {
             if looksLikeToken(decoded) || containsEmbeddedPrefix(decoded) { return true }
         }
-        // Whitespace other than U+0020, a format scalar, and a spacing mark whose NFKD contains U+0020
-        // join one `ghp_`. The prefix count stays 1. U+0020 stays, so `Bearer ` plus a token is still one secret reference.
+        // Whitespace other than U+0020, a format scalar, a spacing mark whose NFKD contains U+0020,
+        // and a combining mark that is not a letter join one `ghp_`. The prefix count stays 1.
+        // U+0020 stays, so `Bearer ` plus a token is still one secret reference.
+        // U+0301 and U+0308 leave the join, so `4` and `-` stay the digit and the hyphen.
         let joined = textJoiningHiddenBreaks(decoded)
         if joined != decoded, looksLikeToken(joined) || containsEmbeddedPrefix(joined) { return true }
         // The raw spelling keeps `%2F` inside the user. The revealed spelling is what `%%0040` becomes,
@@ -670,19 +688,22 @@ public enum MCPRedaction {
         return hidesAnotherSecret(decoded)
     }
 
-    /// Drop whitespace other than U+0020, a default-ignorable or format scalar, and a spacing mark
-    /// whose NFKD contains U+0020 (U+00A8 and the other marks the prefix count already drops).
-    /// `Bearer ` (U+0020) plus one token stays intact.
+    /// Drop whitespace other than U+0020, a default-ignorable or format scalar, a spacing mark
+    /// whose NFKD contains U+0020 (U+00A8 and the other marks the prefix count already drops),
+    /// and a combining mark that is not a letter. `Bearer ` (U+0020) plus one token stays intact.
+    /// U+0301 and U+0308 leave, so a digit or a hyphen under one of them still joins as that scalar.
     private static func textJoiningHiddenBreaks(_ text: String) -> String {
         String(String.UnicodeScalarView(text.unicodeScalars.filter { joinDrops($0) == false }))
     }
 
     /// True when `textJoiningHiddenBreaks` removes this scalar. U+0020 stays.
+    /// A non-letter mark is removed here and is not a prefix separator, so `-` and `_` stay attached.
     private static func joinDrops(_ scalar: Unicode.Scalar) -> Bool {
         if scalar.value == 0x20 { return false }
         if scalar.properties.isWhitespace { return true }
         if scalar.properties.isDefaultIgnorableCodePoint { return true }
         if scalar.properties.generalCategory == .format { return true }
+        if nonLetterMark(scalar) { return true }
         return dropsForPrefixCount(scalar)
     }
 
@@ -708,7 +729,7 @@ public enum MCPRedaction {
     /// and U+11F02 are separators, as is the Unicode 16 Prepend letter U+113D1, so a port URL
     /// still joins after one of them is glued to `@`.
     /// U+2574–U+2612 and the halfwidth twins U+FFED and U+FFEE are separators. U+2613 stays listed.
-    /// U+2614 UMBRELLA WITH RAIN DROPS and U+2615 HOT BEVERAGE are separators. The list does not continue past U+2615.
+    /// U+2614 UMBRELLA WITH RAIN DROPS, U+2615 HOT BEVERAGE, and U+2616 WHITE SHOGI PIECE are separators. The list does not continue past U+2616.
     /// U+22C5–U+22C7 stay listed beside them. U+22EA–U+22ED stay unlisted and drop through their fold.
     /// U+2308, U+2329, and U+232A stay unlisted. U+233F–U+2342 and U+2349 stay listed. U+2427–U+243F stay unlisted. U+244A stays listed. U+2474–U+24B5 stay unlisted and drop through their fold. U+2212, U+22C5, U+2219, U+02D7, and
     /// U+E002F. A self-NFKD box-drawing diagonal is a separator too: U+2571–U+2573, U+1FBA0–U+1FBAE,
@@ -735,7 +756,7 @@ public enum MCPRedaction {
             0x0D4E, 0x111C2, 0x111C3, 0x1193F, 0x11941, 0x11A3A, 0x11A84...0x11A89, 0x11D46, 0x11F02, 0x113D1,
             0x29B8, 0x233F, 0x2340, 0x2341, 0x2342, 0x2349, 0x244A,
             0x27C8, 0x27C9, 0x27CB, 0x27CC, 0x27CD, 0x292B, 0x292C, 0x292F, 0x2930, 0x29C4, 0x29C5, 0x2F03,
-            0x2571...0x2573, 0x2574...0x2612, 0xFFED, 0xFFEE, 0x2613, 0x2614, 0x2615, 0x26DD, 0x26DE, 0x2B59, 0x1F7A8...0x1F7AE, 0x1FBA0...0x1FBAE,
+            0x2571...0x2573, 0x2574...0x2612, 0xFFED, 0xFFEE, 0x2613, 0x2614, 0x2615, 0x2616, 0x26DD, 0x26DE, 0x2B59, 0x1F7A8...0x1F7AE, 0x1FBA0...0x1FBAE,
             0x1FBBD...0x1FBC0, 0x1FB3C...0x1FB67:
             return true
         default:

@@ -2229,6 +2229,60 @@ struct MCPCommandTests {
         }
     }
 
+    @Test func importRefusesAWhiteShogiPiece() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let extra = tail + "EXTRA"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-", "AKIA", "AIza", "ASIA"]
+        let mark = String(Unicode.Scalar(0x2616)!)
+        let value = head + mark + tail
+        try await expectSplitSecretRefused(value, sk: "sk-12345678g" + mark + tail, absent: absent, label: "shogi")
+        try await expectSplitSecretRefused(head + mark + extra, absent: absent + [extra], label: "shogi extra")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": value]),
+            absent: absent, label: "shogi command")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": "db-mcp", "args": [value, "--api-key", value, "--api-key=\(value)"]]),
+            absent: absent, label: "shogi argument")
+        let joined = "g" + mark + tail
+        try await expectImportRefused(
+            try hostJSON("db", ["command": joined]),
+            absent: ["ghp_", tail], label: "shogi joined command")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": "db-mcp", "args": [joined, "--api-key", joined, "--api-key=\(joined)"]]),
+            absent: ["ghp_", tail], label: "shogi joined argument")
+        try await expectSplitSecretRefused("x" + value, absent: absent, label: "shogi leading x")
+        try await expectImportRefused(
+            try hostJSON("api", [
+                "url": "https://mcp.example/mcp",
+                "headers": ["X-Trace": "x" + value, "Authorization": "Bearer \(value)"],
+            ]),
+            absent: absent + ["Bearer"], label: "shogi trace")
+        try await expectSplitSecretRefused("." + value, absent: absent, label: "shogi leading dot")
+        for overlapped in ["AKIA" + mark + "Iza12345678", "ASIA" + mark + "Iza12345678"] {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": overlapped, "LOG_LEVEL": overlapped]]),
+                absent: ["AKIA", "ASIA", "AIza", "Iza12345678"], label: "shogi akia")
+        }
+        let halves = ["abcdefghij1234", "qrstuvwxyzabcd"]
+        for scheme in ["https", "http", "wss", "postgres"] {
+            let spelling = "abcdefghij1234\(mark)\(scheme)://qrstuvwxyzabcd"
+            try await expectImportRefused(
+                try hostJSON("db", ["command": spelling]),
+                absent: halves, label: "shogi scheme command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": [spelling, "--cwd=\(spelling)"]]),
+                absent: halves, label: "shogi scheme argument")
+            let hidden = "1234\(mark)\(scheme)://\(tail)"
+            try await expectImportRefused(
+                try hostJSON("db", ["command": hidden]),
+                absent: [tail], label: "shogi scheme tail command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": [hidden, "--api-key", hidden, "--api-key=\(hidden)"]]),
+                absent: [tail], label: "shogi scheme tail argument")
+        }
+    }
+
     @Test func importRefusesAFormatPrependGluedToADigitBeforeAScheme() async throws {
         let tail = "hp_1234567890abcdefghij"
         let marks = [
@@ -2278,6 +2332,44 @@ struct MCPCommandTests {
                     try hostJSON("db", ["command": "db-mcp", "args": ["--api-key", spelling, "--api-key=\(spelling)"]]),
                     absent: [tail], label: "glue scheme api-key")
             }
+        }
+    }
+
+    @Test func importRefusesAMarkedHyphenBeforeAScheme() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let schemes = ["https", "http", "wss", "postgres"]
+        let fe0f = String(Unicode.Scalar(0xFE0F)!)
+        let acute = String(Unicode.Scalar(0x0301)!)
+        let diaeresis = String(Unicode.Scalar(0x0308)!)
+        let prepends = [
+            UInt32(0x0600), 0x0601, 0x0602, 0x0603, 0x0604, 0x0605,
+            0x06DD, 0x070F, 0x0890, 0x0891, 0x08E2, 0x110BD, 0x110CD,
+        ].map { String(Unicode.Scalar($0)!) }
+        func refuse(_ spelling: String, _ label: String) async throws {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": spelling]),
+                absent: [tail], label: "\(label) command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": [spelling]]),
+                absent: [tail], label: "\(label) argument")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(spelling)"]]),
+                absent: [tail], label: "\(label) cwd")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--api-key", spelling, "--api-key=\(spelling)"]]),
+                absent: [tail], label: "\(label) api-key")
+        }
+        for scheme in schemes {
+            for glue in ["-", "_"] {
+                try await refuse("1234\(glue)\(fe0f)\(scheme)://\(tail)", "variation")
+                try await refuse("1234\(glue)\(acute)\(scheme)://\(tail)", "acute hyphen")
+                try await refuse("a\(glue)\(scheme)://\(tail)", "letter hyphen")
+                for mark in prepends {
+                    try await refuse("1234\(mark)\(glue)\(scheme)://\(tail)", "prepend hyphen")
+                }
+            }
+            try await refuse("1234\(diaeresis)\(scheme)://\(tail)", "diaeresis digit")
+            try await refuse("1234\(acute)\(scheme)://\(tail)", "acute digit")
         }
     }
 
@@ -2449,6 +2541,7 @@ struct MCPCommandTests {
             String(Unicode.Scalar(0xFFEE)!),
             String(Unicode.Scalar(0x2614)!),
             String(Unicode.Scalar(0x2615)!),
+            String(Unicode.Scalar(0x2616)!),
             String(Unicode.Scalar(0x00A8)!),
             ".",
         ])
