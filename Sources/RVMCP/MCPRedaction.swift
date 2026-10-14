@@ -356,13 +356,17 @@ public enum MCPRedaction {
 
     /// Path userinfo is refused. A plain `postgres://user:password@host` stays visible.
     /// `user://`, a password that starts with `/` or `@`, and path userinfo do not.
+    /// A nested scheme may use `\` for its slash, and an earlier `@` must not hide a later one.
     private static func argumentUserinfoIsRefused(_ decoded: String) -> Bool {
+        let decoded = decoded.replacingOccurrences(of: "\\", with: "/")
         guard containsUserinfoSpelling(decoded) else { return false }
         guard let restStart = schemeAuthorityStart(decoded) else { return true }
         let rest = decoded[restStart...]
-        if let at = rest.firstIndex(of: "@") {
+        var index = rest.startIndex
+        while let at = rest[index...].firstIndex(of: "@") {
             let before = rest[..<at]
             if before.contains(":/") || before.hasSuffix(":") { return true }
+            index = rest.index(after: at)
         }
         guard let slash = rest.firstIndex(of: "/") else { return false }
         return containsUserinfoSpelling(String(rest[slash...]))
@@ -557,12 +561,28 @@ public enum MCPRedaction {
         if pass.text != value || decoded != pass.text {
             if looksLikeToken(decoded) || containsEmbeddedPrefix(decoded) { return true }
         }
+        // Whitespace other than U+0020, and a format scalar the first strip keeps, join one `ghp_`.
+        // The prefix count stays 1. U+0020 stays, so `Bearer ` plus a token is still one secret reference.
+        let joined = textJoiningHiddenBreaks(decoded)
+        if joined != decoded, looksLikeToken(joined) || containsEmbeddedPrefix(joined) { return true }
         // The raw spelling keeps `%2F` inside the user. The revealed spelling is what `%%0040` becomes,
         // including a nested scheme and the same URL in a query.
         if passwordSitsInAuthority(value) || passwordSitsInAuthority(pass.text) { return true }
         if argumentUserinfoIsRefused(pass.text) { return true }
         guard looksLikeToken(decoded) else { return false }
         return hidesAnotherSecret(decoded)
+    }
+
+    /// Drop whitespace other than U+0020, plus a default-ignorable or format scalar the first strip keeps.
+    /// `Bearer ` (U+0020) plus one token stays intact.
+    private static func textJoiningHiddenBreaks(_ text: String) -> String {
+        String(String.UnicodeScalarView(text.unicodeScalars.filter { scalar in
+            if scalar.value == 0x20 { return true }
+            if scalar.properties.isWhitespace { return false }
+            if scalar.properties.isDefaultIgnorableCodePoint { return false }
+            if scalar.properties.generalCategory == .format { return false }
+            return true
+        }))
     }
 
     /// Separators dropped only for the prefix count. `-` and `_` stay, so `sk-` and `ctx7sk` still match.
@@ -581,9 +601,12 @@ public enum MCPRedaction {
     /// vulgar fraction or a square sign whose NFKD contains one is dropped. A self-NFKD solidus or slash
     /// glyph is a separator, including U+2298 and U+2F03, as are U+2212, U+22C5, U+2219, U+02D7, and
     /// U+E002F. A self-NFKD box-drawing diagonal is a separator too: U+2571–U+2573, U+1FBA0–U+1FBAE,
-    /// U+1FBBD–U+1FBBF, the block diagonals U+1FB3C–U+1FB67, and U+292B / U+292C. U+2213, U+2214,
-    /// U+2217, U+2218, U+22C6, and U+27CC sit next to those listed operators and are separators as well.
-    /// A default-ignorable scalar such as U+E0001 is a separator too. U+0020 is not one.
+    /// U+1FBBD–U+1FBBF, the block diagonals U+1FB3C–U+1FB67, and U+292B / U+292C. U+292F and U+2930
+    /// are the diagonal crossings next to those. Saltires are separators too: U+1FBC0, U+2613, U+26DD,
+    /// U+2B59, and U+1F7A8–U+1F7AE. U+2213, U+2214, U+2217, U+2218, U+22C6, U+22C7, and U+27CC sit
+    /// next to those listed operators and are separators as well.
+    /// A default-ignorable scalar such as U+E0001 is a separator too, as is a format scalar
+    /// the property does not mark, including U+FFF9–U+FFFB. U+0020 is not one.
     /// Non-ASCII punctuation is a separator even when it folds to `-` or `_`. A decomposition that
     /// contains one of these separators is dropped too, including U+2025 (`..`) and U+2260.
     private static func dropsForPrefixCount(_ scalar: Unicode.Scalar) -> Bool {
@@ -596,15 +619,18 @@ public enum MCPRedaction {
         switch scalar.value {
         case 0x2044, 0x2215, 0xFF0E,
             0x2216, 0x29F5, 0x29F6, 0x29F7, 0x29F8, 0x29F9, 0x2AFD, 0x2AFB, 0x1F67C, 0x1F67D,
-            0x2212, 0x2213, 0x2214, 0x22C5, 0x22C6, 0x2217, 0x2218, 0x2219, 0x02D7, 0xE002F,
+            0x2212, 0x2213, 0x2214, 0x22C5, 0x22C6, 0x22C7, 0x2217, 0x2218, 0x2219, 0x02D7, 0xE002F,
             0x2298, 0x29B8, 0x233F, 0x2340, 0x2341, 0x2342, 0x2349, 0x244A,
-            0x27C8, 0x27C9, 0x27CB, 0x27CC, 0x27CD, 0x292B, 0x292C, 0x29C4, 0x29C5, 0x2F03,
-            0x2571...0x2573, 0x1FBA0...0x1FBAE, 0x1FBBD...0x1FBBF, 0x1FB3C...0x1FB67:
+            0x27C8, 0x27C9, 0x27CB, 0x27CC, 0x27CD, 0x292B, 0x292C, 0x292F, 0x2930, 0x29C4, 0x29C5, 0x2F03,
+            0x2571...0x2573, 0x2613, 0x26DD, 0x2B59, 0x1F7A8...0x1F7AE, 0x1FBA0...0x1FBAE,
+            0x1FBBD...0x1FBC0, 0x1FB3C...0x1FB67:
             return true
         default:
             break
         }
         if scalar.properties.isDefaultIgnorableCodePoint { return true }
+        // U+FFF9–U+FFFB are format and are not marked default-ignorable here.
+        if scalar.properties.generalCategory == .format { return true }
         if scalar.isASCII == false, isPunctuation(scalar) { return true }
         guard scalar.isASCII else { return false }
         switch scalar.value {

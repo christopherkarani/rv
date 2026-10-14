@@ -1619,6 +1619,73 @@ struct MCPCommandTests {
         try await expectSplitSecretRefused("ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
     }
 
+    @Test func importRefusesASaltireAndTheNextDiagonal() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let extra = tail + "EXTRA"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-", "AKIA", "AIza", "ASIA"]
+        var marks: [UInt32] = [0x1FBC0, 0x2613, 0x26DD, 0x2B59, 0x292F, 0x2930, 0x22C7]
+        marks.append(contentsOf: UInt32(0x1F7A8)...UInt32(0x1F7AE))
+        for code in marks {
+            let mark = String(Unicode.Scalar(code)!)
+            let value = head + mark + tail
+            try await expectSplitSecretRefused(value, sk: "sk-12345678g" + mark + tail, absent: absent, label: "saltire")
+            try await expectSplitSecretRefused(head + mark + extra, absent: absent + [extra], label: "saltire extra")
+        }
+        for code in [UInt32(0x1FBC0), 0x2613, 0x26DD, 0x2B59, 0x1F7A8, 0x1F7AB, 0x1F7AE, 0x292F, 0x2930, 0x22C7] {
+            let mark = String(Unicode.Scalar(code)!)
+            let value = head + mark + tail
+            try await expectImportRefused(
+                try hostJSON("db", ["command": value]),
+                absent: absent, label: "saltire command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(value)"]]),
+                absent: absent, label: "saltire cwd")
+            for disguised in ["x" + value, "." + value] {
+                try await expectSplitSecretRefused(disguised, absent: absent, label: "disguised saltire")
+                try await expectImportRefused(
+                    try hostJSON("api", [
+                        "url": "https://mcp.example/mcp",
+                        "headers": ["X-Trace": disguised, "Authorization": "Bearer \(value)"],
+                    ]),
+                    absent: absent + ["Bearer"], label: "saltire trace")
+            }
+            for overlapped in ["AKIA" + mark + "Iza12345678", "ASIA" + mark + "Iza12345678"] {
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": overlapped, "LOG_LEVEL": overlapped]]),
+                    absent: ["AKIA", "ASIA", "AIza", "Iza12345678"], label: "saltire akia")
+            }
+        }
+        try await expectSplitSecretRefused("ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
+    }
+
+    @Test func importRefusesANestedSchemeHiddenByABackslashOrAnEarlierAt() async throws {
+        let password = "supersecretpassword"
+        var values = [
+            "https://mcp.example?@https://\(password)%%0040evil.example/hook",
+            "https://mcp.example?next=https:\\\\\(password)%%0040evil.example",
+        ]
+        for scheme in ["https", "http", "wss", "postgres"] {
+            values.append("https://mcp.example?next=\(scheme):\\\(password)%%0040evil.example/hook")
+        }
+        for value in values {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": value, "LOG_LEVEL": value]]),
+                absent: [password], label: "hidden nested env")
+            try await expectImportRefused(
+                try hostJSON("api", [
+                    "url": "https://mcp.example/mcp",
+                    "headers": [
+                        "Authorization": value,
+                        "X-API-Key": value,
+                        "Cookie": value,
+                        "X-Trace": value,
+                    ],
+                ]),
+                absent: [password], label: "hidden nested header")
+        }
+    }
+
     @Test func importRefusesASecondStrippedByteInsideAPercentEscape() async throws {
         let tail = "hp_1234567890abcdefghij"
         let absent = ["ghp_", "sk-", "ctx7sk", "AKIA", "ASIA", "AIza", "%67", "%73", "%00"]
@@ -1792,6 +1859,58 @@ struct MCPCommandTests {
                 ]),
                 absent: absent, label: "strip join header")
         }
+    }
+
+    @Test func importRefusesAWhitespaceOrIgnorableThatJoinsOnePrefix() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let absent = ["ghp_", tail, "12345678"]
+        var marks: [UInt32] = [
+            0x0085, 0x1680, 0x205F, 0x3000,
+            0xE0001, 0x115F, 0x1160, 0x3164, 0xFFA0,
+            0xFFF9, 0xFFFA, 0xFFFB,
+            0x1BCA0, 0x1BCA3, 0x1D173, 0x1D17A,
+        ]
+        marks.append(contentsOf: UInt32(0x2000)...UInt32(0x2006))
+        marks.append(contentsOf: UInt32(0x2008)...UInt32(0x200A))
+        for code in marks {
+            let mark = String(Unicode.Scalar(code)!)
+            let value = "g" + mark + tail
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": value, "LOG_LEVEL": value]]),
+                absent: absent, label: "joined prefix env")
+            try await expectImportRefused(
+                try hostJSON("api", [
+                    "url": "https://mcp.example/mcp",
+                    "headers": [
+                        "Authorization": value,
+                        "X-API-Key": value,
+                        "Cookie": value,
+                        "X-Trace": value,
+                    ],
+                ]),
+                absent: absent, label: "joined prefix header")
+        }
+        for code in [UInt32(0x0085), 0x2008, 0xE0001, 0xFFF9, 0x1D17A] {
+            let mark = String(Unicode.Scalar(code)!)
+            for value in ["x" + mark + "ghp_12345678", "%67" + mark + tail] {
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": value, "LOG_LEVEL": value]]),
+                    absent: absent, label: "joined disguised env")
+                try await expectImportRefused(
+                    try hostJSON("api", [
+                        "url": "https://mcp.example/mcp",
+                        "headers": [
+                            "Authorization": value,
+                            "X-API-Key": value,
+                            "Cookie": value,
+                            "X-Trace": value,
+                        ],
+                    ]),
+                    absent: absent, label: "joined disguised header")
+            }
+        }
+        try await expectSplitSecretRefused(
+            "ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
     }
 
     @Test func importRefusesAStrippedByteInsideAPercentEscape() async throws {
