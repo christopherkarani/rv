@@ -1337,8 +1337,12 @@ enum RVIsolationMount {
         volumeDevice: UInt64,
         mountSource: String
     ) -> WorkspaceMountObservation {
-        let saved = workspacePathIdentity(savedPath)
-        let projectIdentity = workspacePathIdentity(project)
+        let savedRead = diskImageObservePath(savedPath)
+        let projectRead = diskImageObservePath(project)
+        if case .stopped = savedRead { return .ambiguous }
+        if case .stopped = projectRead { return .ambiguous }
+        let saved = workspaceIdentity(savedRead)
+        let projectIdentity = workspaceIdentity(projectRead)
         let facts = workspaceMountFacts(project)
         let savedMatches = saved?.device == savedDevice && saved?.inode == savedInode && saved?.isDirectory == true
         let projectIsSaved = projectIdentity?.device == savedDevice
@@ -1346,8 +1350,14 @@ enum RVIsolationMount {
             && projectIdentity?.isDirectory == true
         let ownedDevice = projectIdentity?.device == volumeDevice
         let ownedSource = facts?.source == mountSource
-        let projectCanonical = posixRealpath(project) ?? project
-        let pointCanonical = facts.map { posixRealpath($0.point) ?? $0.point }
+        guard let projectCanonical = canonicalPathOrRaw(project) else { return .ambiguous }
+        let pointCanonical: String?
+        if let facts {
+            guard let point = canonicalPathOrRaw(facts.point) else { return .ambiguous }
+            pointCanonical = point
+        } else {
+            pointCanonical = nil
+        }
         let mountedHere = pointCanonical == projectCanonical
         if ownedDevice && ownedSource {
             return savedMatches ? .ownedMount : .savedTreeMismatch
@@ -1365,6 +1375,28 @@ enum RVIsolationMount {
             return .savedTreeMismatch
         }
         return .ambiguous
+    }
+}
+
+private func workspaceIdentity(_ observation: DiskImagePathObservation) -> WorkspacePathIdentity? {
+    guard case let .value(snapshot) = observation else { return nil }
+    return WorkspacePathIdentity(
+        device: snapshot.device,
+        inode: snapshot.inode,
+        isDirectory: (snapshot.mode & S_IFMT) == S_IFDIR
+    )
+}
+
+/// `.stopped` is nil so the caller does not treat an unfinished `realpath`
+/// as the raw path. A finished failure keeps the raw path.
+private func canonicalPathOrRaw(_ path: String) -> String? {
+    switch posixRealpathRead(path) {
+    case .stopped:
+        return nil
+    case .path(let resolved):
+        return resolved
+    case .unresolved:
+        return path
     }
 }
 #endif

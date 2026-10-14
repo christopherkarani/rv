@@ -742,16 +742,31 @@ func diskImageMountStatAllowance(sharedDeadline: Date?, now: Date) -> DiskImageR
 
 /// A timed-out worker may still be inside a syscall Darwin will not
 /// interrupt. Keep the `Thread` so it is not released while that call runs.
+/// Parked objects stay alive too: releasing a directory enumerator while
+/// `nextObject` is still inside `getattrlistbulk` would free it under the call.
 private final class DiskImageParkedCalls: @unchecked Sendable {
     static let shared = DiskImageParkedCalls()
     private let lock = NSLock()
     private var threads: [Thread] = []
+    private var objects: [AnyObject] = []
 
     func keep(_ thread: Thread) {
         lock.lock()
         threads.append(thread)
         lock.unlock()
     }
+
+    func keepObject(_ object: AnyObject) {
+        lock.lock()
+        objects.append(object)
+        lock.unlock()
+    }
+}
+
+/// Retains `object` for the process lifetime. Used when a clock stop returns
+/// while a worker may still be inside a call that uses `object`.
+func diskImageRetainAcrossPark(_ object: AnyObject) {
+    DiskImageParkedCalls.shared.keepObject(object)
 }
 
 private final class DiskImageStatWorker: @unchecked Sendable {
@@ -836,6 +851,132 @@ func diskImagePerformWithinCopyClock(_ body: @escaping @Sendable () -> Bool) -> 
 /// `relocateDescriptor` just closed.
 func diskImageDuplicateDescriptor(_ fd: Int32) -> Int32 {
     fcntl(fd, F_DUPFD_CLOEXEC, 256)
+}
+
+struct DiskImagePathSnapshot {
+    var device: UInt64
+    var inode: UInt64
+    var mode: mode_t
+}
+
+/// `lstat` of one path. `.stopped` means the copy clock returned before the
+/// call finished. `.missing` is a finished failure. A stopped read is not
+/// evidence the path is gone.
+enum DiskImagePathObservation {
+    case value(DiskImagePathSnapshot)
+    case missing
+    case stopped
+}
+
+func diskImageObservePath(_ path: String) -> DiskImagePathObservation {
+    final class Box: @unchecked Sendable {
+        var status = stat()
+        var found = false
+    }
+    let box = Box()
+    let ok = diskImagePerformWithinCopyClock {
+        box.found = path.withCString { lstat($0, &box.status) == 0 }
+        return true
+    }
+    if ok == nil { return .stopped }
+    guard box.found else { return .missing }
+    return .value(
+        DiskImagePathSnapshot(
+            device: UInt64(box.status.st_dev),
+            inode: UInt64(box.status.st_ino),
+            mode: box.status.st_mode
+        )
+    )
+}
+
+/// `stat` (follows symlinks), for the directory check `fileExists` used to
+/// make on the caller. A stopped call is not "missing".
+enum DiskImageDirectoryPresence {
+    case directory
+    case notDirectory
+    case missing
+    case stopped
+}
+
+func diskImageDirectoryPresence(_ path: String) -> DiskImageDirectoryPresence {
+    final class Box: @unchecked Sendable {
+        var status = stat()
+        var found = false
+    }
+    let box = Box()
+    let ok = diskImagePerformWithinCopyClock {
+        box.found = path.withCString { stat($0, &box.status) == 0 }
+        return true
+    }
+    if ok == nil { return .stopped }
+    guard box.found else { return .missing }
+    if (box.status.st_mode & S_IFMT) == S_IFDIR { return .directory }
+    return .notDirectory
+}
+
+/// One `open` of a path. `nil` is the copy clock: the caller does not close
+/// a descriptor the worker may still be creating. `-1` is a finished failure.
+func diskImageOpenPathWithinCopyClock(
+    _ path: String,
+    _ flags: Int32,
+    _ mode: mode_t = 0
+) -> Int32? {
+    let hold = DiskImageOpenedFD()
+    let ok = diskImagePerformWithinCopyClock {
+        let opened = path.withCString { open($0, flags, mode) }
+        hold.store(opened)
+        return true
+    }
+    if ok == nil {
+        hold.leak()
+        return nil
+    }
+    return hold.take()
+}
+
+/// `ftruncate` on a duplicate of `fd`. The duplicate shares the open file
+/// description, so the caller's offset and size change with it. A clock
+/// stop returns false and does not close the duplicate out from under the call.
+func diskImageFtruncateWithinCopyClock(_ fd: Int32, _ length: off_t) -> Bool {
+    let ok = diskImagePerformWithinCopyClock {
+        let copy = diskImageDuplicateDescriptor(fd)
+        guard copy >= 0 else { return false }
+        let truncated = ftruncate(copy, length) == 0
+        close(copy)
+        return truncated
+    }
+    return ok == true
+}
+
+/// An fd opened on a worker. A clock stop leaks it instead of closing a
+/// number `open` may not have stored yet, or may store after the caller left.
+private final class DiskImageOpenedFD: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fd: Int32 = -1
+    private var leaked = false
+
+    func store(_ opened: Int32) {
+        lock.lock()
+        if leaked == false {
+            fd = opened
+        }
+        lock.unlock()
+    }
+
+    func take() -> Int32 {
+        lock.lock()
+        let opened = fd
+        fd = -1
+        lock.unlock()
+        return opened
+    }
+
+    func leak() {
+        lock.lock()
+        leaked = true
+        fd = -1
+        lock.unlock()
+    }
 }
 
 /// An `EINTR` from `read` or `write` may be retried only while the copy
@@ -1093,12 +1234,44 @@ func diskImageMayStartHelper(publicationHeld: Bool, arguments: [String]) -> Bool
 
 /// `/var` and `/private/var` are the same image, and so are `/tmp` and
 /// `/private/tmp`, and a `/System/Volumes/Data` firmlink of either. Folding
-/// is string work. It does not `lstat` or resolve symlinks on the caller.
+/// is string work. It does not `lstat`, `stat`, or resolve symlinks.
+/// `standardizedFileURL` stats a `/private/` path through `fileExists`.
+/// This collapses `.` and `..` in the string instead.
 /// A path that still differs matches the same `rv-inode-` file name.
 /// Exact string equality is not what `hdiutil info` returns.
 func diskImageCanonicalPath(_ path: String) -> String {
-    let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
-    return diskImageFoldVolumeAlias(standardized)
+    diskImageFoldVolumeAlias(diskImageLexicalPath(path))
+}
+
+/// Lexical `.` / `..` collapse. Does not touch the filesystem.
+func diskImageLexicalPath(_ path: String) -> String {
+    let absolute = path.hasPrefix("/")
+    var parts: [String] = []
+    for part in path.split(separator: "/", omittingEmptySubsequences: true) {
+        if part == "." { continue }
+        if part == ".." {
+            if let last = parts.last, last != ".." {
+                parts.removeLast()
+            } else if absolute == false {
+                parts.append("..")
+            }
+            continue
+        }
+        parts.append(String(part))
+    }
+    if absolute {
+        if parts.isEmpty { return "/" }
+        return "/" + parts.joined(separator: "/")
+    }
+    if parts.isEmpty { return "." }
+    return parts.joined(separator: "/")
+}
+
+func diskImagePathTail(_ path: String) -> String {
+    guard let slash = path.lastIndex(of: "/") else { return path }
+    let tail = path[path.index(after: slash)...]
+    if tail.isEmpty { return path == "/" ? "/" : String(path[..<slash]) }
+    return String(tail)
 }
 
 func diskImageFoldVolumeAlias(_ path: String) -> String {
@@ -1132,8 +1305,8 @@ func diskImageFoldPrivateVar(_ path: String) -> String {
 }
 
 func diskImageSameWorkspaceImageName(_ lhs: String, _ rhs: String) -> Bool {
-    let left = URL(fileURLWithPath: lhs).standardizedFileURL.lastPathComponent
-    let right = URL(fileURLWithPath: rhs).standardizedFileURL.lastPathComponent
+    let left = diskImagePathTail(diskImageLexicalPath(lhs))
+    let right = diskImagePathTail(diskImageLexicalPath(rhs))
     guard left == right, left.hasPrefix("rv-inode-"), left.hasSuffix(".sparseimage") else {
         return false
     }
@@ -1200,20 +1373,26 @@ func directoryReadMayContinue(_ mayContinue: Bool) -> Bool {
     mayContinue
 }
 
+#if canImport(Darwin)
+private typealias DirectoryStream = UnsafeMutablePointer<DIR>
+#else
+private typealias DirectoryStream = OpaquePointer
+#endif
+
 /// Holds a `DIR` opened off the caller. A clock stop leaks it instead of
 /// closing it while `readdir` or `fdopendir` may still be inside the call.
 private final class DirectoryHold: @unchecked Sendable {
     private let lock = NSLock()
-    private var dir: OpaquePointer?
+    private var dir: DirectoryStream?
     private var leaked = false
 
-    func store(_ opened: OpaquePointer?) {
+    func store(_ opened: DirectoryStream?) {
         lock.lock()
         dir = opened
         lock.unlock()
     }
 
-    func take() -> OpaquePointer? {
+    func take() -> DirectoryStream? {
         lock.lock()
         let opened = dir
         lock.unlock()
@@ -1239,8 +1418,8 @@ private final class DirectoryHold: @unchecked Sendable {
 }
 
 private final class DirectoryPointer: @unchecked Sendable {
-    let dir: OpaquePointer
-    init(_ dir: OpaquePointer) { self.dir = dir }
+    let dir: DirectoryStream
+    init(_ dir: DirectoryStream) { self.dir = dir }
 }
 
 private final class DirectoryEntryBox: @unchecked Sendable {
@@ -1511,7 +1690,7 @@ func replaceOriginalOnlyAfterStagedCopy(
     guard lseek(staged, 0, SEEK_SET) == 0, lseek(original, 0, SEEK_SET) == 0 else {
         return untouched()
     }
-    guard ftruncate(original, 0) == 0 else { return untouched() }
+    guard diskImageFtruncateWithinCopyClock(original, 0) else { return untouched() }
     let committed = copyFileLeavingDetachReserve(
         from: staged,
         to: original,
@@ -1768,7 +1947,7 @@ func copyXattrsObservingClock(
         return false
     }
     #endif
-    let names = listXattrNames(source)
+    guard let names = listXattrNames(source) else { return false }
     for name in names where name != "com.apple.ResourceFork" {
         if copyOneXattrObservingClock(
             from: source,
@@ -1865,30 +2044,49 @@ func copyXattrBytesObservingClock(
     return mayContinue()
 }
 
-func listXattrNames(_ fd: Int32) -> [String] {
-    let needed = xattrListSize(fd)
+func listXattrNames(_ fd: Int32) -> [String]? {
+    final class SizeBox: @unchecked Sendable { var count = 0 }
+    let sizeBox = SizeBox()
+    let sized = diskImagePerformWithinCopyClock {
+        let copy = diskImageDuplicateDescriptor(fd)
+        guard copy >= 0 else { return false }
+        sizeBox.count = xattrListSize(copy)
+        close(copy)
+        return true
+    }
+    guard sized == true else { return nil }
+    let needed = sizeBox.count
     guard needed > 0 else { return [] }
-    var buffer = [CChar](repeating: 0, count: needed)
-    let listed = buffer.withUnsafeMutableBufferPointer { raw in
-        xattrList(fd, raw.baseAddress, needed)
-    }
-    guard listed > 0 else { return [] }
-    var names: [String] = []
-    var start = 0
-    let bytes = buffer.map { UInt8(bitPattern: $0) }
-    let count = min(listed, bytes.count)
-    var index = 0
-    while index < count {
-        if bytes[index] == 0 {
-            if index > start {
-                let slice = bytes[start..<index]
-                names.append(String(decoding: slice, as: UTF8.self))
-            }
-            start = index + 1
+    final class NameBox: @unchecked Sendable { var names: [String] = [] }
+    let nameBox = NameBox()
+    let listed = diskImagePerformWithinCopyClock {
+        let copy = diskImageDuplicateDescriptor(fd)
+        guard copy >= 0 else { return false }
+        var buffer = [CChar](repeating: 0, count: needed)
+        let count = buffer.withUnsafeMutableBufferPointer { raw in
+            xattrList(copy, raw.baseAddress, needed)
         }
-        index += 1
+        close(copy)
+        guard count > 0 else { return count == 0 }
+        let bytes = buffer.map { UInt8(bitPattern: $0) }
+        let limit = min(count, bytes.count)
+        var names: [String] = []
+        var start = 0
+        var index = 0
+        while index < limit {
+            if bytes[index] == 0 {
+                if index > start {
+                    names.append(String(decoding: bytes[start..<index], as: UTF8.self))
+                }
+                start = index + 1
+            }
+            index += 1
+        }
+        nameBox.names = names
+        return true
     }
-    return names
+    guard listed == true else { return nil }
+    return nameBox.names
 }
 
 func readXattr(_ fd: Int32, _ name: String) -> [UInt8]? {
@@ -1925,10 +2123,16 @@ func copyResourceForkObservingClock(
     else { return namedForkCopyStarts(pathResolved: false) }
     let sourceFork = sourcePath + "/..namedfork/rsrc"
     let destinationFork = destinationPath + "/..namedfork/rsrc"
-    let src = sourceFork.withCString { open($0, O_RDONLY | O_CLOEXEC) }
+    guard let src = diskImageOpenPathWithinCopyClock(sourceFork, O_RDONLY | O_CLOEXEC) else {
+        return false
+    }
     if src < 0 { return true }
     defer { close(src) }
-    let dst = destinationFork.withCString { open($0, O_RDWR | O_CREAT | O_CLOEXEC, mode_t(0o600)) }
+    guard let dst = diskImageOpenPathWithinCopyClock(
+        destinationFork,
+        O_RDWR | O_CREAT | O_CLOEXEC,
+        mode_t(0o600)
+    ) else { return false }
     guard dst >= 0 else { return false }
     defer { close(dst) }
     let copied = copyFileLeavingDetachReserve(
@@ -1942,11 +2146,22 @@ func copyResourceForkObservingClock(
 }
 
 func pathForFileDescriptor(_ fd: Int32) -> String? {
-    var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
-    // Darwin's pointer overlay. The variadic C `fcntl` is unavailable in Swift.
-    guard fcntl(fd, F_GETPATH, &buffer) == 0 else { return nil }
-    let count = buffer.firstIndex(of: 0) ?? buffer.count
-    return String(decoding: buffer[..<count].map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    final class Box: @unchecked Sendable { var path: String? }
+    let box = Box()
+    let ok = diskImagePerformWithinCopyClock {
+        let copy = diskImageDuplicateDescriptor(fd)
+        guard copy >= 0 else { return false }
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        // Darwin's pointer overlay. The variadic C `fcntl` is unavailable in Swift.
+        let got = fcntl(copy, F_GETPATH, &buffer) == 0
+        close(copy)
+        guard got else { return false }
+        let count = buffer.firstIndex(of: 0) ?? buffer.count
+        box.path = String(decoding: buffer[..<count].map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        return true
+    }
+    guard ok == true else { return nil }
+    return box.path
 }
 
 func copyXattrsWithFcopyfile(

@@ -1013,36 +1013,62 @@ func resolvedWorkspacePath(_ workspace: WorkingDirectory) -> String {
 func existingResolvedWorkspacePath(
     _ workspace: WorkingDirectory
 ) -> Result<String, IsolationApplyError> {
-    if let resolved = posixRealpath(workspace.rawValue) {
-        var isDirectory: ObjCBool = false
-        let exists = FileManager.default.fileExists(atPath: resolved, isDirectory: &isDirectory)
-        guard exists, isDirectory.boolValue else {
+    switch posixRealpathRead(workspace.rawValue) {
+    case .stopped:
+        return .failure(.workspacePathUnresolvable)
+    case .path(let resolved):
+        switch diskImageDirectoryPresence(resolved) {
+        case .directory:
+            if isUnsafeResolvedWorkspace(resolved) {
+                return .failure(.workspacePathUnsafe)
+            }
+            return .success(resolved)
+        case .stopped:
+            return .failure(.workspacePathUnresolvable)
+        case .missing, .notDirectory:
             return .failure(.workspaceDoesNotExist)
         }
-        if isUnsafeResolvedWorkspace(resolved) {
-            return .failure(.workspacePathUnsafe)
+    case .unresolved:
+        switch diskImageDirectoryPresence(workspace.rawValue) {
+        case .directory:
+            return .failure(.workspacePathUnresolvable)
+        case .stopped:
+            return .failure(.workspacePathUnresolvable)
+        case .missing, .notDirectory:
+            return .failure(.workspaceDoesNotExist)
         }
-        return .success(resolved)
     }
-    var isDirectory: ObjCBool = false
-    let exists = FileManager.default.fileExists(
-        atPath: workspace.rawValue,
-        isDirectory: &isDirectory
-    )
-    if exists, isDirectory.boolValue {
-        return .failure(.workspacePathUnresolvable)
+}
+
+/// `realpath` off the caller. `.stopped` is the copy clock, not a missing path.
+/// The worker frees the buffer after the call returns, including when the
+/// caller has already left.
+enum PosixRealpathRead {
+    case path(String)
+    case unresolved
+    case stopped
+}
+
+func posixRealpathRead(_ path: String) -> PosixRealpathRead {
+    final class Box: @unchecked Sendable {
+        var text: String?
     }
-    return .failure(.workspaceDoesNotExist)
+    let box = Box()
+    let ok = diskImagePerformWithinCopyClock {
+        let resolved = path.withCString { realpath($0, nil) }
+        guard let resolved else { return false }
+        box.text = String(cString: resolved)
+        free(resolved)
+        return true
+    }
+    if ok == nil { return .stopped }
+    if let text = box.text { return .path(text) }
+    return .unresolved
 }
 
 func posixRealpath(_ path: String) -> String? {
-    path.withCString { source in
-        guard let buffer = realpath(source, nil) else {
-            return nil
-        }
-        defer { free(buffer) }
-        return String(cString: buffer)
-    }
+    if case let .path(text) = posixRealpathRead(path) { return text }
+    return nil
 }
 
 /// Canonicalize one resource path for profile grants. The prepare

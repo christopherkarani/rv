@@ -240,16 +240,75 @@ final class WorkspaceInodeBoundary: Sendable {
     func scrubHostStagedAgentHomes() {
         // Upgrade cleanup only: new launches never stage credentials in a
         // workspace. The link list is the shared staging catalog, so staged
-        // and scrubbed paths cannot drift apart.
-        let manager = FileManager.default
+        // and scrubbed paths cannot drift apart. Each unlink runs off the
+        // caller. A stopped call is not a missing path, and it does not
+        // start the next removal on this thread.
         for relative in AgentHomeStaging.credentialLinks.map(\.relative) {
             guard snapshot[relative] == nil else { continue }
             let path = "\(workspacePath)/\(relative)"
-            guard (try? manager.destinationOfSymbolicLink(atPath: path)) != nil else { continue }
-            try? manager.removeItem(atPath: path)
+            if scrubStagedSymlink(path) == .stopped { return }
         }
         guard snapshot[AgentHomeStaging.cageDirectoryName] == nil else { return }
-        try? manager.removeItem(atPath: "\(workspacePath)/\(AgentHomeStaging.cageDirectoryName)")
+        _ = scrubRemoveTree("\(workspacePath)/\(AgentHomeStaging.cageDirectoryName)")
+    }
+
+    private enum ScrubStep {
+        case done
+        case stopped
+    }
+
+    /// Removes `path` only when a finished `lstat` says it is a symlink.
+    private func scrubStagedSymlink(_ path: String) -> ScrubStep {
+        switch diskImageObservePath(path) {
+        case .stopped:
+            return .stopped
+        case .missing:
+            return .done
+        case .value(let snapshot):
+            guard (snapshot.mode & S_IFMT) == S_IFLNK else { return .done }
+            return unlinkPathObservingClock(path)
+        }
+    }
+
+    /// Best-effort removal of a staged tree. A clock stop returns `.stopped`
+    /// and leaves the rest. A finished failure is ignored by the caller,
+    /// matching the previous `try?` removal.
+    private func scrubRemoveTree(_ path: String) -> ScrubStep {
+        switch diskImageObservePath(path) {
+        case .stopped:
+            return .stopped
+        case .missing:
+            return .done
+        case .value(let snapshot):
+            let kind = snapshot.mode & S_IFMT
+            guard kind == S_IFDIR else { return unlinkPathObservingClock(path) }
+            guard let names = readDirectoryNamesStoppingForDetachReserve(
+                path,
+                mayContinue: { cancelClockAllowsTreeCopy() }
+            ) else {
+                return .stopped
+            }
+            for name in names {
+                if scrubRemoveTree(path + "/" + name) == .stopped { return .stopped }
+            }
+            return rmdirPathObservingClock(path)
+        }
+    }
+
+    private func unlinkPathObservingClock(_ path: String) -> ScrubStep {
+        let ok = diskImagePerformWithinCopyClock {
+            path.withCString { unlink($0) == 0 }
+        }
+        if ok == nil { return .stopped }
+        return .done
+    }
+
+    private func rmdirPathObservingClock(_ path: String) -> ScrubStep {
+        let ok = diskImagePerformWithinCopyClock {
+            path.withCString { rmdir($0) == 0 }
+        }
+        if ok == nil { return .stopped }
+        return .done
     }
 
     /// Copy volume contents onto the original inodes, then put that directory
@@ -328,15 +387,22 @@ final class WorkspaceInodeBoundary: Sendable {
             close(volume)
         }
         detachVolume()
-        if currentDevice(workspacePath) == volumeDevice {
+        switch observedDevice(workspacePath) {
+        case .device(let device) where device == volumeDevice:
             return .failure(.workspaceInodeBoundaryFailed)
+        case .stopped:
+            return .failure(.workspaceInodeBoundaryFailed)
+        case .device, .missing:
+            break
         }
         mutable.withLock { $0.didDetach = true }
         return .success(())
     }
 
     private func mountedIdentityMatches() -> Bool {
-        guard let device = currentDevice(workspacePath), device == volumeDevice else { return false }
+        guard case let .device(device) = observedDevice(workspacePath), device == volumeDevice else {
+            return false
+        }
         guard let facts = workspaceMountFacts(workspacePath), facts.source == mountSource else {
             return false
         }
@@ -430,12 +496,17 @@ final class WorkspaceInodeBoundary: Sendable {
             close(volume)
         }
         let detached = detachVolume()
-        let workspaceDevice = currentDevice(workspacePath)
-        if workspaceDevice == volumeDevice {
+        switch observedDevice(workspacePath) {
+        case .device(let device) where device == volumeDevice:
             // The mount is still here. Do not delete it by path: that would
             // operate on the volume, and a forced replacement could be a
             // different tree. Leave both directories and fail closed.
             return .failure(.workspaceInodeBoundaryFailed)
+        case .stopped:
+            // A stopped stat is not proof the mount is gone.
+            return .failure(.workspaceInodeBoundaryFailed)
+        case .device, .missing:
+            break
         }
         if FileManager.default.fileExists(atPath: workspacePath) {
             if FileManager.default.fileExists(atPath: quarantinePath) {
@@ -593,9 +664,7 @@ final class WorkspaceInodeBoundary: Sendable {
             guard let status = fstatatWithinCopyClock(parent.fd, parent.name),
                 acceptableSavedInode(captured, status)
             else { return false }
-            let removed = parent.name.withCString { name in
-                unlinkat(parent.fd, name, 0) == 0
-            }
+            let removed = unlinkatWithinCopyClock(parent.fd, parent.name, 0)
             guard removed else { return false }
             return symlinkWithinCopyClock(parent.fd, parent.name, target)
         }
@@ -740,10 +809,8 @@ final class WorkspaceInodeBoundary: Sendable {
         guard let status = fstatatWithinCopyClock(parent.fd, parent.name),
             acceptableSavedInode(captured, status)
         else { return false }
-        let flags = captured.kind == .directory ? AT_REMOVEDIR : 0
-        return parent.name.withCString { name in
-            unlinkat(parent.fd, name, flags) == 0
-        }
+        let flags: Int32 = captured.kind == .directory ? AT_REMOVEDIR : 0
+        return unlinkatWithinCopyClock(parent.fd, parent.name, flags)
     }
 
     private func savedStamp(_ relative: String) -> WorkspaceInodeStamp? {
@@ -998,7 +1065,9 @@ func establishWorkspaceInodeBoundary(
         mounted = disk
     }
     _ = workspacePath.withCString { chmod($0, 0o700) }
-    guard let volumeDevice = currentDevice(workspacePath), volumeDevice != originalDevice else {
+    guard case let .device(volumeDevice) = observedDevice(workspacePath),
+        volumeDevice != originalDevice
+    else {
         let detached = detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
         rmdir(workspacePath)
         _ = renamePath(savedPath, workspacePath)
@@ -1695,9 +1764,22 @@ private func copyExtendedAttributes(_ source: Int32, _ destination: Int32) -> Bo
 }
 
 private func unlinkNewSaved(_ dirfd: Int32, _ name: String) {
-    _ = name.withCString { item in
-        unlinkat(dirfd, item, 0)
+    _ = unlinkatWithinCopyClock(dirfd, name, 0)
+}
+
+private func unlinkatWithinCopyClock(_ dirfd: Int32, _ name: String, _ flags: Int32) -> Bool {
+    let allowance = diskImageTreeSyscallAllowance(
+        deadline: CooperativeLaunchStop.cancelClock?.deadline
+    )
+    if let allowance, allowance <= 0 { return false }
+    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
+        let copy = diskImageDuplicateDescriptor(dirfd)
+        guard copy >= 0 else { return false }
+        let removed = name.withCString { unlinkat(copy, $0, flags) == 0 }
+        close(copy)
+        return removed
     }
+    return ok == true
 }
 
 func directoryNames(_ dirfd: Int32, isWorkspaceRoot: Bool) -> [String]? {
@@ -1771,10 +1853,21 @@ func device(of status: stat) -> UInt64 {
     UInt64(status.st_dev)
 }
 
-private func currentDevice(_ path: String) -> UInt64? {
-    var status = stat()
-    guard path.withCString({ lstat($0, &status) == 0 }) else { return nil }
-    return device(of: status)
+private enum ObservedDevice {
+    case device(UInt64)
+    case missing
+    case stopped
+}
+
+private func observedDevice(_ path: String) -> ObservedDevice {
+    switch diskImageObservePath(path) {
+    case .value(let snapshot):
+        return .device(snapshot.device)
+    case .missing:
+        return .missing
+    case .stopped:
+        return .stopped
+    }
 }
 
 struct WorkspacePathIdentity: Equatable {
@@ -1784,12 +1877,11 @@ struct WorkspacePathIdentity: Equatable {
 }
 
 func workspacePathIdentity(_ path: String) -> WorkspacePathIdentity? {
-    var status = stat()
-    guard path.withCString({ lstat($0, &status) == 0 }) else { return nil }
+    guard case let .value(snapshot) = diskImageObservePath(path) else { return nil }
     return WorkspacePathIdentity(
-        device: device(of: status),
-        inode: UInt64(status.st_ino),
-        isDirectory: (status.st_mode & S_IFMT) == S_IFDIR
+        device: snapshot.device,
+        inode: snapshot.inode,
+        isDirectory: (snapshot.mode & S_IFMT) == S_IFDIR
     )
 }
 

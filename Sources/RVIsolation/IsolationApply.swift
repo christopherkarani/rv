@@ -885,44 +885,64 @@ func rejectWorkspaceInodeAlias(_ root: String) -> Result<Void, IsolationApplyErr
     let keys: Set<URLResourceKey> = [
         .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .linkCountKey,
     ]
-    for case let url as URL in enumerator {
-        if scan.failed {
+    let walk = AliasWalk(enumerator, scan: scan)
+    while true {
+        if walk.failed {
             return .failure(.workspaceContainsInodeAlias)
         }
-        if diskImageTreeSyscallAllowance(
-            deadline: CooperativeLaunchStop.cancelClock?.deadline
-        ) == 0 {
+        walk.url = nil
+        walk.values = nil
+        walk.ended = false
+        walk.valuesFailed = false
+        let stepped = diskImagePerformWithinCopyClock {
+            if let next = walk.enumerator.nextObject() as? URL {
+                walk.url = next
+                do {
+                    walk.values = try next.resourceValues(forKeys: keys)
+                } catch {
+                    walk.valuesFailed = true
+                }
+            } else {
+                walk.ended = true
+            }
+            return true
+        }
+        if stepped == nil {
+            diskImageRetainAcrossPark(walk)
             return .failure(.workspaceContainsInodeAlias)
         }
-        do {
-            let values = try url.resourceValues(forKeys: keys)
-            let isRootChild = url.deletingLastPathComponent().standardizedFileURL == rootURL.standardizedFileURL
-            let box = AliasStatBox()
-            let stated = diskImagePerformWithinCopyClock {
-                url.path.withCString { lstat($0, &box.status) == 0 }
-            }
-            guard stated == true else {
-                return .failure(.workspaceContainsInodeAlias)
-            }
-            let status = box.status
-            if WorkspaceFilesystemMetadata.shouldSkip(
-                name: url.lastPathComponent,
-                isRootChild: isRootChild,
-                isDirectory: (status.st_mode & S_IFMT) == S_IFDIR,
-                isSymbolicLink: (status.st_mode & S_IFMT) == S_IFLNK,
-                ownerUid: status.st_uid,
-                ownersIgnored: ownersIgnored
-            ) {
-                enumerator.skipDescendants()
-                continue
-            }
-            if values.isSymbolicLink == true {
-                continue
-            }
-            if values.isRegularFile == true, let count = values.linkCount, count > 1 {
-                return .failure(.workspaceContainsInodeAlias)
-            }
-        } catch {
+        if walk.failed || walk.valuesFailed {
+            return .failure(.workspaceContainsInodeAlias)
+        }
+        if walk.ended { break }
+        guard let url = walk.url, let values = walk.values else {
+            return .failure(.workspaceContainsInodeAlias)
+        }
+        let isRootChild = diskImageCanonicalPath(url.deletingLastPathComponent().path)
+            == diskImageCanonicalPath(root)
+        let box = AliasStatBox()
+        let stated = diskImagePerformWithinCopyClock {
+            url.path.withCString { lstat($0, &box.status) == 0 }
+        }
+        guard stated == true else {
+            return .failure(.workspaceContainsInodeAlias)
+        }
+        let status = box.status
+        if WorkspaceFilesystemMetadata.shouldSkip(
+            name: url.lastPathComponent,
+            isRootChild: isRootChild,
+            isDirectory: (status.st_mode & S_IFMT) == S_IFDIR,
+            isSymbolicLink: (status.st_mode & S_IFMT) == S_IFLNK,
+            ownerUid: status.st_uid,
+            ownersIgnored: ownersIgnored
+        ) {
+            walk.enumerator.skipDescendants()
+            continue
+        }
+        if values.isSymbolicLink == true {
+            continue
+        }
+        if values.isRegularFile == true, let count = values.linkCount, count > 1 {
             return .failure(.workspaceContainsInodeAlias)
         }
     }
@@ -949,10 +969,27 @@ func containedLaunchResult(
     }
 }
 
-/// Mutable flag for `rejectWorkspaceInodeAlias`. The directory walk is synchronous.
-/// Not Sendable: FileManager calls the error handler on the scanning thread.
-private final class InodeAliasScan {
+/// Mutable flag for `rejectWorkspaceInodeAlias`. FileManager calls the error
+/// handler on the scanning thread, which is the copy-clock worker.
+private final class InodeAliasScan: @unchecked Sendable {
     var failed = false
+}
+
+/// Enumerator and the values read from it. Not Sendable on its own; the
+/// walk runs off the caller and this box crosses that boundary.
+private final class AliasWalk: @unchecked Sendable {
+    let enumerator: FileManager.DirectoryEnumerator
+    var url: URL?
+    var values: URLResourceValues?
+    var ended = false
+    var valuesFailed = false
+    var failed: Bool { scan.failed }
+    private let scan: InodeAliasScan
+
+    init(_ enumerator: FileManager.DirectoryEnumerator, scan: InodeAliasScan) {
+        self.enumerator = enumerator
+        self.scan = scan
+    }
 }
 
 private final class AliasStatBox: @unchecked Sendable {

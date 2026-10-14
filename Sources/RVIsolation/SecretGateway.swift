@@ -149,9 +149,13 @@ public final class SecretGateway: @unchecked Sendable {
         lock.unlock()
         overlap?()
         #if canImport(Darwin)
-        var fd = socket(AF_INET, SOCK_STREAM, 0)
+        var fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0)
         #else
-        var fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+        var fd = socket(
+            AF_INET,
+            Int32(SOCK_STREAM.rawValue) | Int32(SOCK_CLOEXEC.rawValue),
+            0
+        )
         #endif
         guard fd >= 0 else { return .failure(.socketFailed(errno: errno)) }
         // A listener that stays below the spawn floor occupies a number
@@ -256,9 +260,13 @@ public final class SecretGateway: @unchecked Sendable {
     /// not remain on a number below the spawn floor.
     private func wakeListeningPort(_ port: Int) {
         #if canImport(Darwin)
-        var fd = socket(AF_INET, SOCK_STREAM, 0)
+        var fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0)
         #else
-        var fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+        var fd = socket(
+            AF_INET,
+            Int32(SOCK_STREAM.rawValue) | Int32(SOCK_CLOEXEC.rawValue),
+            0
+        )
         #endif
         guard fd >= 0 else { return }
         if relocateDescriptor(&fd, above: Self.socketFloor) == false {
