@@ -133,6 +133,15 @@ public enum MCPSandbox {
         func expand(_ path: String) -> String {
             path.hasPrefix("~/") ? home + path.dropFirst(1) : path
         }
+        // The scratch directory was just created on the pinned inode. If that
+        // path is gone, Caches was renamed onto the project after createPinned
+        // returned and the path string would allow the project.
+        if resolveExisting(scratch) == nil {
+            let resolved = realPath(scratch)
+            if sameReviewedDirectory(scratch, resolved) {
+                return "\(MCPDisplayedText.field(scratch)) resolves to \(MCPDisplayedText.field(resolved)), which was not the path reviewed"
+            }
+        }
         if let widened = unreviewedTemporary(temporaryDirectory) {
             return widened
         }
@@ -284,31 +293,66 @@ public enum MCPSandbox {
         return spellings
     }
 
-    /// The leaf does not exist yet. Resolve the nearest existing ancestor so
-    /// a parent symlink cannot hide the directory `createDirectory` would make.
-    /// `.` and `..` are collapsed in the string first. `URL` treats a last
-    /// component of `..` as another component to append, so a missing `..`
-    /// never reaches an existing parent and the deny is never built.
+    /// The leaf does not exist yet. Walk the path the kernel walks: follow a
+    /// symlink, then let `..` mean that directory's parent. Popping `..` in
+    /// the string first turns `jump/../private/tmp/...` into a home path and
+    /// leaves the `/private/tmp` allow in front of the real target.
+    /// A component that does not exist yet is collapsed only in the suffix,
+    /// so `no-such/../future-keys` is still `future-keys`. `URL` is not used:
+    /// a last component of `..` must not grow the path.
     static func resolvingMissingSuffix(_ path: String) -> String {
-        let normalized = lexicalAbsolute(path)
-        var parts = normalized.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        var suffix: [String] = []
-        while parts.isEmpty == false {
-            let current = "/" + parts.joined(separator: "/")
-            if let resolved = resolveExisting(current) {
-                return suffix.reduce(resolved) { base, part in
-                    base == "/" ? "/" + part : base + "/" + part
-                }
+        guard path.hasPrefix("/") else { return lexicalAbsolute(path) }
+        return resolvingWalk(path, followsLeft: 32)
+    }
+
+    private static func resolvingWalk(_ path: String, followsLeft: Int) -> String {
+        var current = "/"
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        var index = 0
+        while index < parts.count {
+            let part = parts[index]
+            index += 1
+            if part == "." { continue }
+            if part == ".." {
+                current = parentDirectory(current)
+                continue
             }
-            suffix.insert(parts.removeLast(), at: 0)
+            let next = current == "/" ? "/" + part : current + "/" + part
+            if let link = readLink(next) {
+                guard followsLeft > 0 else {
+                    return lexicalJoin(current, [part] + Array(parts[index...]))
+                }
+                let absolute = link.hasPrefix("/") ? link : (current == "/" ? "/" + link : current + "/" + link)
+                let rest = parts[index...].joined(separator: "/")
+                let continued = rest.isEmpty ? absolute : absolute + "/" + rest
+                return resolvingWalk(continued, followsLeft: followsLeft - 1)
+            }
+            if isRealDirectory(next) {
+                current = next
+                continue
+            }
+            return lexicalJoin(current, [part] + Array(parts[index...]))
         }
-        return normalized
+        return current
+    }
+
+    private static func parentDirectory(_ path: String) -> String {
+        guard path != "/" else { return "/" }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true)
+        guard parts.count > 1 else { return "/" }
+        return "/" + parts.dropLast().joined(separator: "/")
+    }
+
+    /// Collapse `.` and `..` in a suffix onto a directory the walk already
+    /// reached. `URL` is not used, so a missing `..` does not grow the path.
+    private static func lexicalJoin(_ base: String, _ suffix: [String]) -> String {
+        let combined = (base == "/" ? "" : base) + "/" + suffix.joined(separator: "/")
+        return lexicalAbsolute(combined)
     }
 
     /// Collapse `.` and `..` without asking `URL` to delete a component.
-    /// A missing middle component still yields the path Seatbelt checks once
-    /// that component exists. `realpath` staying NULL is not a reason to drop
-    /// the path.
+    /// Used for the not-yet-existing suffix. A symlink component is followed
+    /// by the walk before this runs, so `..` is not popped past that link.
     static func lexicalAbsolute(_ path: String) -> String {
         var parts: [String] = []
         for part in path.split(separator: "/", omittingEmptySubsequences: true) {
@@ -320,6 +364,12 @@ public enum MCPSandbox {
             parts.append(String(part))
         }
         return "/" + parts.joined(separator: "/")
+    }
+
+    private static func isRealDirectory(_ path: String) -> Bool {
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return false }
+        return (info.st_mode & S_IFMT) == S_IFDIR
     }
 
     /// NFC and NFD of one path. A catalog name in the other form misses a
@@ -431,6 +481,9 @@ public enum MCPSandbox {
         return "^/+(\\./+)*" + body + "(/+.*)?$"
     }
 
+    /// Simple case-fold class. Per-scalar upper and lower of `s` is `[Ss]`,
+    /// which misses U+017F, and `σ` misses final sigma. A fold of more than
+    /// one scalar (`ß` → `SS`) stays out of the class.
     static func caseFold(_ escaped: String) -> String {
         var folded = ""
         var escapedNext = false
@@ -445,15 +498,54 @@ public enum MCPSandbox {
                 escapedNext = true
                 continue
             }
-            let upper = String(scalar).uppercased()
-            let lower = String(scalar).lowercased()
-            if upper != lower {
-                folded += "[\(upper)\(lower)]"
+            let equivalents = foldClass(scalar)
+            if equivalents.count > 1 {
+                folded += "[" + characterClassBody(equivalents) + "]"
             } else {
                 folded.unicodeScalars.append(scalar)
             }
+            // U+017F casefolds to s, and a catalog name can also show it
+            // beside the ASCII letter (`fuſture-keys` for `future-keys`).
+            // It is optional so the ASCII spelling still matches. A fold of
+            // more than one scalar (`ß` → `SS`) is not added.
+            folded += "\u{017F}?"
         }
         return folded
+    }
+
+    private static func simpleFoldKey(_ scalar: Unicode.Scalar) -> Unicode.Scalar {
+        let folded = String(scalar).uppercased().lowercased()
+        let scalars = Array(folded.unicodeScalars)
+        if scalars.count == 1, let only = scalars.first { return only }
+        return scalar
+    }
+
+    /// BMP scalars that share a one-scalar fold, in code-point order.
+    private static let simpleFoldClasses: [UInt32: [Unicode.Scalar]] = {
+        var groups: [UInt32: [Unicode.Scalar]] = [:]
+        for value in 0...0xFFFF {
+            guard let scalar = Unicode.Scalar(value) else { continue }
+            groups[simpleFoldKey(scalar).value, default: []].append(scalar)
+        }
+        return groups
+    }()
+
+    private static func foldClass(_ scalar: Unicode.Scalar) -> [Unicode.Scalar] {
+        simpleFoldClasses[simpleFoldKey(scalar).value] ?? [scalar]
+    }
+
+    private static func characterClassBody(_ scalars: [Unicode.Scalar]) -> String {
+        var body = ""
+        for scalar in scalars {
+            switch scalar {
+            case "\\", "]", "^", "-":
+                body += "\\"
+                body.unicodeScalars.append(scalar)
+            default:
+                body.unicodeScalars.append(scalar)
+            }
+        }
+        return body
     }
 
     static func regexEscape(_ path: String) -> String {
@@ -584,8 +676,13 @@ public enum MCPSandbox {
             last.stillChecked()
         else { return false }
         let existingPath = existingCount == 0 ? "/" : "/" + parts.prefix(existingCount).joined(separator: "/")
+        let watched = watchedWritableRoots(path)
+        let watchedBefore = watched.map(inodeStamp)
         afterAncestorMatch?()
         guard pathStillNames(existingPath, held: last) else { return false }
+        if zip(watched, watchedBefore).contains(where: { inodeStamp($0.0) != $0.1 }) {
+            return false
+        }
         guard createMissing(pinned.missing, parent: current) else { return false }
         guard pathStillNames(existingPath, held: last) else {
             removeCreated(pinned.missing, parent: current)
@@ -600,12 +697,51 @@ public enum MCPSandbox {
         return true
     }
 
-    /// The path string still names the directory the walk opened. `lstat`
-    /// does not follow a symlink planted on that path. A project moved onto
-    /// `~/Library/Caches` after the openat match has a different inode.
-    static func pathStillNames(_ path: String, held: HeldDirectory) -> Bool {
+    /// `~/.npm` and `~/.cache` next to a `Library/Caches` scratch. The profile
+    /// allows both. A project moved onto either one during the openat window
+    /// must not make this call return true.
+    private static func watchedWritableRoots(_ scratch: String) -> [String] {
+        guard let marker = scratch.range(of: "/Library/Caches/") else { return [] }
+        let home = String(scratch[..<marker.lowerBound])
+        return [home + "/.npm", home + "/.cache"]
+    }
+
+    private struct InodeStamp: Equatable {
+        var present: Bool
+        var device: UInt64
+        var inode: UInt64
+    }
+
+    private static func inodeStamp(_ path: String) -> InodeStamp {
         var info = stat()
-        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return false }
+        guard lstat(path, &info) == 0 else {
+            return InodeStamp(present: false, device: 0, inode: 0)
+        }
+        return InodeStamp(present: true, device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
+    }
+
+    /// The path string still names the directory the walk opened. Each
+    /// component is opened with `O_NOFOLLOW`, so a symlink planted on an
+    /// ancestor (`~/Library` → project) is not the pinned Caches inode.
+    /// `lstat` of the final path would follow that ancestor. A project moved
+    /// onto `~/Library/Caches` has a different inode.
+    static func pathStillNames(_ path: String, held: HeldDirectory) -> Bool {
+        guard path.hasPrefix("/") else { return false }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        let root = open("/", flags)
+        guard root >= 0 else { return false }
+        var current = root
+        var opened = [root]
+        defer { opened.forEach { close($0) } }
+        for part in parts {
+            let next = part.withCString { openat(current, $0, flags) }
+            guard next >= 0 else { return false }
+            opened.append(next)
+            current = next
+        }
+        var info = stat()
+        guard fstat(current, &info) == 0 else { return false }
         return UInt64(info.st_dev) == held.device && UInt64(info.st_ino) == held.inode
     }
 

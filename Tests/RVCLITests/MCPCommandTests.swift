@@ -826,6 +826,99 @@ struct MCPCommandTests {
         #expect(credential > writeAllow)
     }
 
+    @Test func dotDotThroughASymlinkDeniesThePrivateTmpTarget() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-kernel-allow-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let me = root.appendingPathComponent("Users/me")
+        let scratch = root.appendingPathComponent("scratch")
+        let tmp = root.appendingPathComponent("tmp")
+        let ssh = home.appendingPathComponent(".ssh")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: me, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        #expect(symlink("/private/tmp/anchor", me.appendingPathComponent("jump").path) == 0)
+        let shapes = [
+            me.path + "/jump/../private/tmp/future-keys",
+            me.path + "/jump/./../private/tmp/future-keys",
+            me.path + "/jump/foo/../../private/tmp/future-keys",
+        ]
+        let secret = "/private/tmp/private/tmp/future-keys/id_rsa"
+        for shape in shapes {
+            try? FileManager.default.removeItem(at: ssh)
+            #expect(symlink(shape, ssh.path) == 0)
+            let result = MCPSandbox.profile(
+                policy: MCPSandboxPolicy(network: false, writable: []),
+                scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+                temporaryDirectory: tmp.path)
+            guard case .success(let profile) = result else {
+                Issue.record("profile refused \(shape): \(result)")
+                return
+            }
+            let rule = lastFileReadRule(profile, matching: secret)
+            #expect(rule?.hasPrefix("(deny") == true)
+            let lines = profile.split(separator: "\n").map(String.init)
+            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+            let credential = lines.lastIndex { line in
+                line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, secret) }
+            } ?? -1
+            #expect(credential > writeAllow)
+            #expect(rule?.contains("future-keys") == true)
+        }
+    }
+
+    @Test func longSMatchesTheCredentialDenyNotThePrivateTmpAllow() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-long-s-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let scratch = root.appendingPathComponent("scratch")
+        let tmp = root.appendingPathComponent("tmp")
+        let ssh = home.appendingPathComponent(".ssh")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        #expect(symlink("/private/tmp/future-keys", ssh.path) == 0)
+        let result = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: tmp.path)
+        guard case .success(let profile) = result else {
+            Issue.record("profile refused a dangling tmp credential link: \(result)")
+            return
+        }
+        let secret = "/private/tmp/fu\u{017F}ture-keys/id_rsa"
+        let rule = lastFileReadRule(profile, matching: secret)
+        #expect(rule?.hasPrefix("(deny") == true)
+        let lines = profile.split(separator: "\n").map(String.init)
+        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+        let credential = lines.lastIndex { line in
+            line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, secret) }
+        } ?? -1
+        #expect(credential > writeAllow)
+
+        try FileManager.default.removeItem(at: ssh)
+        #expect(symlink("/private/tmp/\u{03C3}-keys", ssh.path) == 0)
+        let sigma = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: tmp.path)
+        guard case .success(let sigmaProfile) = sigma else {
+            Issue.record("profile refused a sigma credential link: \(sigma)")
+            return
+        }
+        let finalSigma = "/private/tmp/\u{03C2}-keys/id_rsa"
+        #expect(lastFileReadRule(sigmaProfile, matching: finalSigma)?.hasPrefix("(deny") == true)
+        let sigmaLines = sigmaProfile.split(separator: "\n").map(String.init)
+        let sigmaAllow = sigmaLines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+        let sigmaDeny = sigmaLines.lastIndex { line in
+            line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, finalSigma) }
+        } ?? -1
+        #expect(sigmaDeny > sigmaAllow)
+    }
+
     @Test func blockedServerArgumentIsEscaped() {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let raw = "\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{202E}" + sentence

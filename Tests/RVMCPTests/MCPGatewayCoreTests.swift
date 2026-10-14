@@ -271,6 +271,20 @@ struct MCPGatewayCoreTests {
         #expect(listedName.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).contains(sentence) == false)
     }
 
+    @Test func pingClientIdEscapesRightToLeftOverride() throws {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let id = "\u{202E}" + sentence
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        let reply = harness.client("{\"jsonrpc\":\"2.0\",\"id\":\"\(id)\",\"method\":\"ping\"}")
+        let text = try #require(reply.toClient.first?.compactText)
+        #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(text.contains("\\u202e"))
+        #expect(text.contains("\\\\u202e") == false)
+        let echoed = try #require(try JSONValue.parse(text)["id"]?.stringValue)
+        #expect(echoed.unicodeScalars.contains { $0.value == 0x202E })
+        #expect(echoed.contains(sentence))
+    }
+
     @Test func everyClientStringIsEscapedOnce() {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let raw = "\u{1B}[2J\u{1B}[H" + sentence

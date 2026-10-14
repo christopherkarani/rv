@@ -242,4 +242,46 @@ struct ManagedCommandTests {
         let forwarded = "organization policy is invalid: \(error.message)"
         #expect(forwarded.unicodeScalars.contains { $0.value == 0x202E } == false)
     }
+
+    @Test func managedPathArgumentEscapesControlsOnVerifyKeygenAndSign() throws {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let hostile = "/tmp/p\u{1B}[2J\u{1B}[H\u{2028}\(sentence)\u{202E}\(sentence)"
+        let directory = URL(fileURLWithPath: hostile, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        func spelled(_ text: String) {
+            #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+            #expect(text.contains("\\u001b[2J"))
+            #expect(text.contains("\\u2028"))
+            #expect(text.contains("\\u202e"))
+            #expect(text.contains("\\\\u001b") == false)
+            let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+            #expect(lines.contains(sentence) == false)
+        }
+
+        let missing = failure(ManagedRun.verify(directory: directory)) ?? ""
+        #expect(missing.contains("has no policy.json"))
+        spelled(missing)
+
+        let wrote = try ManagedRun.keygen(directory: directory).get()
+        #expect(wrote.contains("wrote "))
+        #expect(wrote.contains("org-key.pub"))
+        spelled(wrote)
+
+        let blocker = FileManager.default.temporaryDirectory.appendingPathComponent("rv-keygen-blocker-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: blocker) }
+        try Data("x".utf8).write(to: blocker)
+        let blocked = blocker.appendingPathComponent("p\u{1B}[2J\u{1B}[H\u{2028}\(sentence)\u{202E}\(sentence)")
+        let unwritable = failure(ManagedRun.keygen(directory: blocked)) ?? ""
+        #expect(unwritable.contains("could not write keys to "))
+        spelled(unwritable)
+
+        let scratch = Scratch()
+        let policy = try scratch.write("bundle/policy.json", #"{"version": 1}"#)
+        let unsigned = failure(ManagedRun.sign(policy: policy, key: directory, output: nil)) ?? ""
+        #expect(unsigned.contains("is not a base64 Ed25519 private key"))
+        spelled(unsigned)
+    }
 }

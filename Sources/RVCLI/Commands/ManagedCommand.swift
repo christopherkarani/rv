@@ -74,7 +74,7 @@ enum ManagedRun {
             try? Data(contentsOf: directory.appendingPathComponent(name))
         }
         guard let policy = read(ManagedPolicyLocation.policyFile) else {
-            return .failure(CommandFailure("\(directory.path) has no \(ManagedPolicyLocation.policyFile)"))
+            return .failure(CommandFailure("\(DisplayedText.field(directory.path)) has no \(ManagedPolicyLocation.policyFile)"))
         }
         let state = ManagedPolicyVerifier.verify(
             policy: policy, signature: read(ManagedPolicyLocation.signatureFile),
@@ -87,7 +87,7 @@ enum ManagedRun {
         let publicURL = directory.appendingPathComponent(ManagedPolicyLocation.publicKeyFile)
         let privateURL = directory.appendingPathComponent("org-key.private")
         for url in [publicURL, privateURL] where FileManager.default.fileExists(atPath: url.path) {
-            return .failure(CommandFailure("\(url.path) already exists; refusing to overwrite a key"))
+            return .failure(CommandFailure("\(DisplayedText.field(url.path)) already exists; refusing to overwrite a key"))
         }
         let pair = ManagedPolicyVerifier.generateKeyPair()
         do {
@@ -95,35 +95,35 @@ enum ManagedRun {
             guard FileManager.default.createFile(
                 atPath: privateURL.path, contents: Data((pair.privateKey + "\n").utf8),
                 attributes: [.posixPermissions: 0o600])
-            else { return .failure(CommandFailure("could not write \(privateURL.path)")) }
+            else { return .failure(CommandFailure("could not write \(DisplayedText.field(privateURL.path))")) }
             try Data((pair.publicKey + "\n").utf8).write(to: publicURL)
         } catch {
-            return .failure(CommandFailure("could not write keys to \(directory.path)"))
+            return .failure(CommandFailure("could not write keys to \(DisplayedText.field(directory.path))"))
         }
         return .success("""
-            wrote \(publicURL.path) (install it in the managed directory)
-            wrote \(privateURL.path) (keep it off managed machines)
+            wrote \(DisplayedText.field(publicURL.path)) (install it in the managed directory)
+            wrote \(DisplayedText.field(privateURL.path)) (keep it off managed machines)
 
             """)
     }
 
     static func sign(policy policyURL: URL, key keyURL: URL, output: URL?) -> Result<String, CommandFailure> {
         guard let policy = try? Data(contentsOf: policyURL) else {
-            return .failure(CommandFailure("cannot read \(policyURL.path)"))
+            return .failure(CommandFailure("cannot read \(DisplayedText.field(policyURL.path))"))
         }
         if case .failure(let error) = ManagedPolicy.decode(policy) {
-            return .failure(CommandFailure("\(policyURL.lastPathComponent): \(error.message); not signed"))
+            return .failure(CommandFailure("\(DisplayedText.field(policyURL.lastPathComponent)): \(error.message); not signed"))
         }
         guard let key = try? Data(contentsOf: keyURL), let signature = ManagedPolicyVerifier.sign(policy, privateKey: key) else {
-            return .failure(CommandFailure("\(keyURL.path) is not a base64 Ed25519 private key"))
+            return .failure(CommandFailure("\(DisplayedText.field(keyURL.path)) is not a base64 Ed25519 private key"))
         }
         let destination = output ?? policyURL.deletingLastPathComponent().appendingPathComponent(ManagedPolicyLocation.signatureFile)
         do {
             try Data((signature + "\n").utf8).write(to: destination)
         } catch {
-            return .failure(CommandFailure("could not write \(destination.path)"))
+            return .failure(CommandFailure("could not write \(DisplayedText.field(destination.path))"))
         }
-        return .success("wrote \(destination.path)\n")
+        return .success("wrote \(DisplayedText.field(destination.path))\n")
     }
 
     /// Robot JSON for `rv managed`. `JSONEncoder` already writes ESC as
