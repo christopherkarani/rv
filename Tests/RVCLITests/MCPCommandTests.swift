@@ -1008,6 +1008,121 @@ struct MCPCommandTests {
                 #"{"mcpServers":{"db":{"command":"db-mcp","args":["\#(value)","--cwd=\#(value)","--database-url=\#(value)"]}}}"#,
                 absent: [password], label: "delimiter argument")
         }
+        let passwordGaps = [
+            "https://\(password)%2F%2F@collector.example/hook",
+            "https://\(password)%2Fx@collector.example/hook",
+            "https://\(password)%5Cx@collector.example/hook",
+            "https://\(password)%3Fx@collector.example/hook",
+            "https://\(password)%23x@collector.example/hook",
+            "https://\(password)%252F%252F@collector.example/hook",
+            "https://%2F\(password)@collector.example/hook",
+            "https://\(password)%2F%E2%80%8B@collector.example/hook",
+            "https:%2F%2F\(password)%2F%2F@collector.example/hook",
+            "https://\(password)%2F@localhost/hook",
+            "postgres://\(password)%2F@db/app",
+            "https://\(password)%2F@[::1]/hook",
+            "https://\(password)%2F@collector\u{3002}example/hook",
+            "https://%3A\(password)@collector.example/hook",
+            "https://:\(password)@collector.example/hook",
+        ]
+        for value in passwordGaps {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": value]),
+                absent: [password], label: "userinfo command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": [value, "--cwd=\(value)", "--database-url=\(value)"]]),
+                absent: [password], label: "userinfo argument")
+        }
+    }
+
+    @Test func importRefusesAMarkInsideAToken() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let extra = tail + "EXTRA"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-"]
+        let separators = ["%7E", "~", "%3B", "%2C", "%3F", "%26", "%22", "%27", "%00", "%5C", "!", "%21"]
+        for mark in separators {
+            let value = head + mark + tail
+            try await expectSplitSecretRefused(value, sk: "sk-12345678g" + mark + tail, absent: absent, label: "separator")
+        }
+        let finishedTilde = head + "%" + String(repeating: "25", count: 31) + "7E" + tail
+        try await expectSplitSecretRefused(finishedTilde, absent: absent, label: "finished tilde")
+        try await expectSplitSecretRefused(
+            "Bearer%20" + finishedTilde, absent: absent + ["Bearer%20"], label: "bearer tilde", headerOnly: true)
+        try await expectSplitSecretRefused(
+            "Basic%20" + finishedTilde, absent: absent + ["Basic%20"], label: "basic tilde", headerOnly: true)
+
+        let extenders = ["%21", "%EF%BC%8E", "%CC%A3", "\u{FF0E}", "\u{0323}"]
+        for mark in extenders {
+            try await expectSplitSecretRefused(head + mark + tail, sk: "sk-12345678g" + mark + tail, absent: absent, label: "short mark")
+            try await expectSplitSecretRefused(
+                head + mark + extra, sk: "sk-12345678g" + mark + extra, absent: absent + [extra], label: "extra mark")
+        }
+        try await expectSplitSecretRefused(
+            "sk-12345678g%21" + extra, absent: absent + [extra], label: "sk bang extra", headerOnly: true)
+
+        let slashForms = [
+            head + "%3A%2F%2F" + tail,
+            head + "%3A%2F%2F" + extra,
+            head + "://" + tail,
+            head + "://" + extra,
+            "x" + head + "%2F" + tail,
+            "x" + head + "%2F" + extra,
+            "." + head + "%2F" + tail,
+        ]
+        for value in slashForms {
+            try await expectSplitSecretRefused(value, absent: absent + [extra], label: "slash form")
+        }
+
+        let controls = [
+            "\u{0001}", "\u{0008}", "\u{000E}", "\u{001F}", "\u{007F}", "\u{0080}", "\u{009F}",
+            "\u{0300}", "\u{E0100}", "\u{E01EF}",
+            "%01", "%08", "%0E", "%1F", "%7F", "%C2%80", "%C2%9F", "%CC%80", "%F3%A0%84%80",
+        ]
+        for mark in controls {
+            try await expectSplitSecretRefused(
+                head + mark + extra, sk: "sk-12345678g" + mark + extra, absent: absent + [extra], label: "control")
+        }
+        let finishedControl = head + "%" + String(repeating: "25", count: 31) + "01" + tail
+        try await expectSplitSecretRefused(finishedControl, absent: absent, label: "finished control")
+        try await expectSplitSecretRefused(
+            "Bearer%20" + finishedControl, absent: absent + ["Bearer%20"], label: "bearer control", headerOnly: true)
+        try await expectSplitSecretRefused(
+            "Basic%20" + finishedControl, absent: absent + ["Basic%20"], label: "basic control", headerOnly: true)
+        let spaced = "ctx7sk-12345678 ghp_\(tail)"
+        try await expectSplitSecretRefused(spaced, absent: ["ghp_", tail], label: "space still two")
+    }
+
+    private func expectSplitSecretRefused(
+        _ value: String, sk: String? = nil, absent: [String], label: String, headerOnly: Bool = false
+    ) async throws {
+        let key = sk ?? value
+        if headerOnly == false {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": value, "LOG_LEVEL": value]]),
+                absent: absent, label: "\(label) env")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": [value]]),
+                absent: absent, label: "\(label) argument")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--api-key", value]]),
+                absent: absent, label: "\(label) api-key")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--api-key=\(value)"]]),
+                absent: absent, label: "\(label) api-key equals")
+        }
+        let schemeIsLiteral = value.hasPrefix("Bearer") || value.hasPrefix("Basic")
+        try await expectImportRefused(
+            try hostJSON("api", [
+                "url": "https://mcp.example/mcp",
+                "headers": [
+                    "Authorization": schemeIsLiteral ? value : "Bearer \(value)",
+                    "Proxy-Authorization": schemeIsLiteral ? value : "Basic \(value)",
+                    "X-API-Key": key,
+                    "Cookie": value,
+                ],
+            ]),
+            absent: absent, label: "\(label) header")
     }
 
     @Test func importRefusesASplitterInsideAToken() async throws {

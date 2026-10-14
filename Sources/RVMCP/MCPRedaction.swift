@@ -79,17 +79,20 @@ public enum MCPRedaction {
         return false
     }
 
-    /// Strip by scalar. `U+200C` and `U+200D` glue to the neighboring letter, so a `Character` filter would keep them.
-    /// Variation selectors glue the same way. Format characters, the soft hyphen, VT, FF, and the
-    /// separators that can sit inside `ghp_` are removed before a prefix or length check.
-    /// U+0020 stays, so a space still separates two intact prefixes.
+    /// Strip by scalar. `U+200C`, `U+200D`, and grapheme extenders glue to the neighboring letter,
+    /// so a `Character` filter would keep them. Variation selectors, including U+E0100–U+E01EF, glue
+    /// the same way. C0 controls other than LF and CR, DEL, and C1 controls other than U+0085 are
+    /// removed before a prefix or length check. U+0020 stays, so a space still separates two intact prefixes.
     private static func withoutInvisibleBreaks(_ text: String) -> String {
         String(String.UnicodeScalarView(text.unicodeScalars.filter { scalar in
+            if scalar.properties.isGraphemeExtend { return false }
             switch scalar.value {
-            case 0x0009, 0x000B, 0x000C, 0x00A0, 0x00AD, 0x034F, 0x061C, 0x180B, 0x180C, 0x180D, 0x180E,
+            case 0x0000...0x0009, 0x000B...0x000C, 0x000E...0x001F, 0x007F, 0x0080...0x0084, 0x0086...0x009F:
+                return false
+            case 0x00A0, 0x00AD, 0x034F, 0x061C, 0x180B, 0x180C, 0x180D, 0x180E,
                 0x2007, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2028, 0x2029, 0x202F, 0xFEFF:
                 return false
-            case 0x202A...0x202E, 0x2060...0x206F, 0xFE00...0xFE0F:
+            case 0x202A...0x202E, 0x2060...0x206F, 0xFE00...0xFE0F, 0xE0100...0xE01EF:
                 return false
             default:
                 return true
@@ -258,7 +261,7 @@ public enum MCPRedaction {
     /// `https://password@host` after percent-decode, including `%40` and an encoded leading scheme.
     /// `https://user:password@host` is not this shape and stays visible on a non-secret flag.
     public static func authorityCarriesPassword(_ text: String) -> Bool {
-        passwordSitsInAuthority(slashNormalized(text))
+        passwordSitsInAuthority(text)
     }
 
     /// A path with a token segment, a decoded `#` token, a backslash token, or `user:secret@`.
@@ -302,7 +305,7 @@ public enum MCPRedaction {
             // `/:password@host` and `user:password@host` are not scheme URLs.
             // Authority userinfo on `postgres://user:pass@…` still stays, so the
             // review can show it. Path userinfo and a later `://` do not.
-            if argumentUserinfoIsRefused(decoded) || passwordSitsInAuthority(decoded) { return true }
+            if argumentUserinfoIsRefused(decoded) || passwordSitsInAuthority(candidate) { return true }
             if let query = rawQuery(decoded), queryCarriesSecret(encoded: query, items: nil) { return true }
             // A ctx7sk-, sk-, or ghp_ prefix returns before `/` or `#`. Decode
             // first. A prefix that also carries a path, fragment, userinfo, or
@@ -338,19 +341,96 @@ public enum MCPRedaction {
     /// The authority of a leading `http://`, `https://`, `wss://`, or `postgres://` is
     /// `password@host`. `knownSchemeSlash` skips that one colon, so the user check never
     /// sees it. `user:password@host` still has a colon in the user part and is not this case.
-    /// A `%2F`, `%5C`, `%3F`, or `%23` decoded immediately before `@` is still the user:
-    /// the host after `@` contains a dot, and a real `host/@path` does not.
-    private static func passwordSitsInAuthority(_ decoded: String) -> Bool {
+    /// An encoded `/`, `\`, `?`, or `#` is still inside the user when `@` comes later: a raw
+    /// delimiter ends the authority, and `host/@path` does not. `:password@host` is an empty user.
+    private static func passwordSitsInAuthority(_ text: String) -> Bool {
+        if rawUserinfoIsPassword(text) { return true }
+        return decodedPasswordSitsInAuthority(slashNormalized(text))
+    }
+
+    /// Userinfo bounded by a raw `/`, `\`, `?`, or `#`. Percent-encoded delimiters stay in the user.
+    private static func rawUserinfoIsPassword(_ text: String) -> Bool {
+        let body = authorityBody(text)
+        guard let userStart = rawSchemeEnd(body) else { return false }
+        var index = userStart
+        while index < body.endIndex {
+            if body[index] == "%", let after = indexAfterPercentEscape(body, index) {
+                index = after
+                continue
+            }
+            let character = body[index]
+            if character == "@" {
+                let user = body[userStart..<index]
+                guard user.isEmpty == false else { return false }
+                if user.first == ":" { return true }
+                return user.contains(":") == false
+            }
+            if character == "/" || character == "\\" || character == "?" || character == "#" { return false }
+            index = body.index(after: index)
+        }
+        return false
+    }
+
+    private static func authorityBody(_ text: String) -> Substring {
+        if text.hasPrefix("-"), let equals = text.firstIndex(of: "=") {
+            return text[text.index(after: equals)...]
+        }
+        return Substring(text)
+    }
+
+    /// `scheme://` or `scheme:%2F%2F` at the start of the authority body.
+    private static func rawSchemeEnd(_ body: Substring) -> String.Index? {
+        for scheme in authoritySchemes {
+            guard let schemeEnd = body.index(body.startIndex, offsetBy: scheme.count, limitedBy: body.endIndex),
+                schemeEnd < body.endIndex,
+                body[body.startIndex..<schemeEnd].lowercased() == scheme,
+                body[schemeEnd] == ":"
+            else { continue }
+            let afterColon = body.index(after: schemeEnd)
+            if let end = rawSlashPairEnd(body, afterColon) { return end }
+        }
+        return nil
+    }
+
+    private static func rawSlashPairEnd(_ body: Substring, _ index: String.Index) -> String.Index? {
+        if body[index...].hasPrefix("//") { return body.index(index, offsetBy: 2) }
+        guard let first = indexAfterEncodedSlash(body, index) else { return nil }
+        return indexAfterEncodedSlash(body, first)
+    }
+
+    private static func indexAfterEncodedSlash(_ body: Substring, _ index: String.Index) -> String.Index? {
+        guard let end = indexAfterPercentEscape(body, index), body[index..<end].lowercased() == "%2f" else { return nil }
+        return end
+    }
+
+    private static func indexAfterPercentEscape(_ text: Substring, _ index: String.Index) -> String.Index? {
+        guard text[index] == "%" else { return nil }
+        guard let first = text.index(index, offsetBy: 1, limitedBy: text.endIndex), first < text.endIndex,
+            let second = text.index(first, offsetBy: 1, limitedBy: text.endIndex), second < text.endIndex,
+            hexNibble(text[first]) != nil, hexNibble(text[second]) != nil
+        else { return nil }
+        return text.index(after: second)
+    }
+
+    /// Decoded `password@host`, including a delimiter glued to `@`. A raw `host/@path` whose host
+    /// has no dot stays visible. `:password@host` is refused here too.
+    private static func decodedPasswordSitsInAuthority(_ decoded: String) -> Bool {
         guard let restStart = schemeAuthorityStart(decoded) else { return false }
         let rest = decoded[restStart...]
         var index = rest.startIndex
         while index < rest.endIndex {
             let character = rest[index]
             if character == "@" {
-                return index > rest.startIndex && rest[..<index].contains(":") == false
+                let user = rest[..<index]
+                guard user.isEmpty == false else { return false }
+                if user.first == ":" { return true }
+                return user.contains(":") == false
             }
             if character == "/" || character == "?" || character == "#" {
-                let next = rest.index(after: index)
+                var next = rest.index(after: index)
+                while next < rest.endIndex, withoutInvisibleBreaks(String(rest[next])).isEmpty {
+                    next = rest.index(after: next)
+                }
                 guard next < rest.endIndex, rest[next] == "@" else { return false }
                 let user = rest[..<index]
                 let hostStart = rest.index(after: next)
@@ -388,17 +468,30 @@ public enum MCPRedaction {
         return hidesAnotherSecret(decoded)
     }
 
+    /// Separators dropped only for the prefix count. `-` and `_` stay, so `sk-` and `ctx7sk` still match.
+    /// U+0020 is whitespace here and is not removed from the stored value.
+    private static func textForPrefixCount(_ text: String) -> String {
+        let scalars = withoutInvisibleBreaks(text).unicodeScalars.filter { scalar in
+            if scalar.properties.isWhitespace { return false }
+            switch scalar.value {
+            case 0x0021, 0x0022, 0x0026, 0x0027, 0x002B, 0x002C, 0x002E, 0x002F,
+                0x003A, 0x003B, 0x003D, 0x003F, 0x005C, 0x007E, 0xFF0E:
+                return false
+            default:
+                return true
+            }
+        }
+        return String(String.UnicodeScalarView(scalars))
+    }
+
     /// Known prefixes. A match leaves its last character in place, so `AKIA`/`AIza` share that
     /// character and both count. `sk-` inside `ctx7sk` does not start on the last character, so
     /// `ctx7sk-…` stays one prefix.
-    /// `.` `+` `=` `:` and whitespace are not part of a prefix. Dropping them for the count
-    /// rejoins `g.hp_` and `g hp_` without removing U+0020 from the value itself. A space
+    /// Separators and whitespace are not part of a prefix. Dropping them for the count rejoins
+    /// `g.hp_`, `g/hp_`, and `g hp_` without removing U+0020 from the value itself. A space
     /// between two intact prefixes still counts as two.
     private static func secretPrefixCount(_ text: String) -> Int {
-        let text = String(withoutInvisibleBreaks(text).filter { character in
-            if character == "." || character == "+" || character == "=" || character == ":" { return false }
-            return character.isWhitespace == false
-        })
+        let text = textForPrefixCount(text)
         var count = 0
         var index = text.startIndex
         while index < text.endIndex {
