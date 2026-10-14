@@ -53,7 +53,7 @@ public enum MCPRedaction {
     /// `ghp_… x`, `ingest\ghp_…`, `ingest#ghp_…`, and a token after `;`, `?`,
     /// `&`, `:`, `,`, `|`, `@`, or a decoded NUL.
     public static func pathSegmentCarriesToken(_ segment: String) -> Bool {
-        let decoded = percentDecode(segment)
+        let decoded = revealedDecode(segment)
         if decoded.stoppedEarly { return true }
         // Drop format characters and U+00A0 before the prefix and length checks.
         // A no-break space inside `ghp_` would otherwise leave a 23-character piece.
@@ -127,6 +127,20 @@ public enum MCPRedaction {
         guard current.contains("%") else { return PercentPass(text: current, stoppedEarly: false) }
         let next = current.removingPercentEncoding ?? lenientPercentDecode(current)
         return PercentPass(text: current, stoppedEarly: next != current)
+    }
+
+    /// Decode, then if stripping a byte joins `%` to the following hex, decode that
+    /// spelling with the same cap. `%%0067hp_` is `%` + NUL + `67hp_` until the NUL is gone.
+    /// A strip that does not unlock another escape keeps the original spelling, so a
+    /// variation selector after `://` is still visible to the userinfo check.
+    private static func revealedDecode(_ value: String) -> PercentPass {
+        let pass = percentDecode(value)
+        if pass.stoppedEarly { return pass }
+        let stripped = withoutInvisibleBreaks(pass.text)
+        guard stripped != pass.text else { return pass }
+        let again = percentDecode(stripped)
+        guard again.stoppedEarly || again.text != stripped else { return pass }
+        return again
     }
 
     private static func isTokenSeparator(_ character: Character) -> Bool {
@@ -298,7 +312,7 @@ public enum MCPRedaction {
             }
         }
         for candidate in candidates {
-            let pass = percentDecode(candidate)
+            let pass = revealedDecode(candidate)
             if pass.stoppedEarly { return true }
             let decoded = pass.text.replacingOccurrences(of: "\\", with: "/")
             if decoded.hasPrefix("//"), containsUserinfoSpelling(decoded) || urlCarriesSecret(decoded) { return true }
@@ -510,7 +524,7 @@ public enum MCPRedaction {
     /// a token and stays `${secret:NAME}`. An unfinished percent-decode is a secret
     /// even when the partial text is not a token.
     static func credentialHidesAnotherSecret(_ value: String) -> Bool {
-        let pass = percentDecode(value)
+        let pass = revealedDecode(value)
         if pass.stoppedEarly { return true }
         let decoded = withoutInvisibleBreaks(pass.text)
         if secretPrefixCount(decoded) >= 2 { return true }
@@ -534,10 +548,11 @@ public enum MCPRedaction {
 
     /// An ASCII scalar other than a letter, a digit, `-`, or `_` splits `ghp_`, the same way `$` and `#` do.
     /// U+0020 is whitespace and is not removed from the value. U+2044 and U+2215 are separators, so a
-    /// vulgar fraction or a square sign whose NFKD contains one is dropped. A self-NFKD solidus operator
-    /// is a separator too, as are U+2212, U+22C5, U+2219, U+02D7, and U+E002F. Non-ASCII punctuation is a
-    /// separator even when it folds to `-` or `_`. A decomposition that contains one of these separators
-    /// is dropped too, including U+2025 (`..`) and U+2260 (`=` plus a combining mark).
+    /// vulgar fraction or a square sign whose NFKD contains one is dropped. A self-NFKD solidus or slash
+    /// glyph is a separator, including U+2298 and U+2F03, as are U+2212, U+22C5, U+2219, U+02D7, and
+    /// U+E002F. A default-ignorable scalar such as U+E0001 is a separator too. U+0020 is not one.
+    /// Non-ASCII punctuation is a separator even when it folds to `-` or `_`. A decomposition that
+    /// contains one of these separators is dropped too, including U+2025 (`..`) and U+2260.
     private static func dropsForPrefixCount(_ scalar: Unicode.Scalar) -> Bool {
         if isPrefixSeparator(scalar) { return true }
         let folded = String(scalar).decomposedStringWithCompatibilityMapping
@@ -548,11 +563,14 @@ public enum MCPRedaction {
         switch scalar.value {
         case 0x2044, 0x2215, 0xFF0E,
             0x2216, 0x29F5, 0x29F6, 0x29F7, 0x29F8, 0x29F9, 0x2AFD, 0x2AFB, 0x1F67C, 0x1F67D,
-            0x2212, 0x22C5, 0x2219, 0x02D7, 0xE002F:
+            0x2212, 0x22C5, 0x2219, 0x02D7, 0xE002F,
+            0x2298, 0x29B8, 0x233F, 0x2340, 0x2341, 0x2342, 0x2349, 0x244A,
+            0x27C8, 0x27C9, 0x27CB, 0x27CD, 0x29C4, 0x29C5, 0x2F03:
             return true
         default:
             break
         }
+        if scalar.properties.isDefaultIgnorableCodePoint { return true }
         if scalar.isASCII == false, isPunctuation(scalar) { return true }
         guard scalar.isASCII else { return false }
         switch scalar.value {
