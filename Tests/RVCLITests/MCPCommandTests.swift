@@ -1974,6 +1974,83 @@ struct MCPCommandTests {
         try await expectSplitSecretRefused("ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
     }
 
+    @Test func importRefusesAQuadLessThanThroughTheQuadRightwardsArrow() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let extra = tail + "EXTRA"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-", "AKIA", "AIza", "ASIA"]
+        let marks = Array(UInt32(0x2343)...UInt32(0x2348))
+        for code in marks {
+            let mark = String(Unicode.Scalar(code)!)
+            let value = head + mark + tail
+            try await expectSplitSecretRefused(value, sk: "sk-12345678g" + mark + tail, absent: absent, label: "quad")
+            try await expectSplitSecretRefused(head + mark + extra, absent: absent + [extra], label: "quad extra")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": value]),
+                absent: absent, label: "quad command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(value)"]]),
+                absent: absent, label: "quad cwd")
+            for disguised in ["x" + value, "." + value] {
+                try await expectSplitSecretRefused(disguised, absent: absent, label: "disguised quad")
+                try await expectImportRefused(
+                    try hostJSON("api", [
+                        "url": "https://mcp.example/mcp",
+                        "headers": ["X-Trace": disguised, "Authorization": "Bearer \(value)"],
+                    ]),
+                    absent: absent + ["Bearer"], label: "quad trace")
+            }
+            for overlapped in ["AKIA" + mark + "Iza12345678", "ASIA" + mark + "Iza12345678"] {
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": overlapped, "LOG_LEVEL": overlapped]]),
+                    absent: ["AKIA", "ASIA", "AIza", "Iza12345678"], label: "quad akia")
+            }
+        }
+        try await expectSplitSecretRefused("ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
+    }
+
+    @Test func importRefusesAJoinedPrefixOnACommandOrArgument() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let absent = ["ghp_", tail, "12345678"]
+        var marks = Array(UInt32(0x232B)...UInt32(0x233E)) + Array(UInt32(0x2343)...UInt32(0x2348))
+        marks.append(contentsOf: [
+            0x00A8, 0x00AF, 0x00B4, 0x00B8, 0x037A, 0x0384, 0x0385, 0x309B, 0x309C, 0xFFE3,
+            0x2017, 0x203E, 0xFDFA, 0xFDFB,
+            0xFE70, 0xFE72, 0xFE74, 0xFE76, 0xFE78, 0xFE7A, 0xFE7C, 0xFE7E,
+            0x1FBD, 0x1FBF, 0x1FC0, 0x1FC1, 0x1FED, 0x1FEE, 0x1FFD, 0x1FFE,
+            0x0085, 0xE0001, 0xFFF9, 0xFFFA, 0xFFFB,
+        ])
+        marks.append(contentsOf: UInt32(0x02D8)...UInt32(0x02DD))
+        marks.append(contentsOf: UInt32(0xFC5E)...UInt32(0xFC63))
+        marks.append(contentsOf: UInt32(0xFE49)...UInt32(0xFE4C))
+        marks.append(contentsOf: UInt32(0x1FCD)...UInt32(0x1FCF))
+        marks.append(contentsOf: UInt32(0x1FDD)...UInt32(0x1FDF))
+        for code in marks {
+            let mark = String(Unicode.Scalar(code)!)
+            let value = "g" + mark + tail
+            try await expectImportRefused(
+                try hostJSON("db", ["command": value]),
+                absent: absent, label: "joined command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": [value]]),
+                absent: absent, label: "joined argument")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(value)"]]),
+                absent: absent, label: "joined cwd")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--api-key", value]]),
+                absent: absent, label: "joined api-key")
+        }
+        let contiguous = "x" + String(Unicode.Scalar(0x232B)!) + "ghp_12345678"
+        try await expectImportRefused(
+            try hostJSON("db", ["command": contiguous]),
+            absent: absent, label: "contiguous command")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": "db-mcp", "args": [contiguous]]),
+            absent: absent, label: "contiguous argument")
+        try await expectSplitSecretRefused("ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
+    }
+
     @Test func importRefusesAPrependScalarGluedToAnAtSign() async throws {
         let password = "supersecretpassword"
         let marks = [UInt32](0x0600...0x0605) + [0x06DD, 0x070F] + [UInt32](0x0890...0x0891)
