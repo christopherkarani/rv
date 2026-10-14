@@ -999,6 +999,40 @@ struct MCPSandboxCreateTests {
         }
     }
 
+    @Test func linkDotDotStillOpensTheKeyDirectory() throws {
+        let opened = "/private/tmp/future-keys"
+        let anchor = "/private/tmp/anchor"
+        let createdOpened = FileManager.default.fileExists(atPath: opened) == false
+        let createdAnchor = FileManager.default.fileExists(atPath: anchor) == false
+        if createdOpened {
+            try FileManager.default.createDirectory(atPath: opened, withIntermediateDirectories: true)
+        }
+        if createdAnchor {
+            try FileManager.default.createDirectory(atPath: anchor, withIntermediateDirectories: true)
+        }
+        defer {
+            if createdOpened { try? FileManager.default.removeItem(atPath: opened) }
+            if createdAnchor { try? FileManager.default.removeItem(atPath: anchor) }
+        }
+        try Data("key".utf8).write(to: URL(fileURLWithPath: opened + "/id_rsa"))
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-link-dotdot-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let me = root.appendingPathComponent("Users/me")
+        try FileManager.default.createDirectory(at: me, withIntermediateDirectories: true)
+        #expect(symlink("/private/tmp/anchor", me.appendingPathComponent("jump").path) == 0)
+        let shapes = [
+            me.path + "/jump/../link/../private/tmp/future-keys/x",
+            me.path + "/jump/../link/../private/tmp/future-keys/foo",
+            me.path + "/jump/../link/../private/tmp/x/future-keys",
+            me.path + "/jump/../link/../private/tmp/anchor/future-keys",
+            me.path + "/jump/../link/../private/tmp/anchor/x",
+        ]
+        for shape in shapes {
+            #expect(MCPSandbox.missingSymlinkOpenings(shape).contains(opened))
+        }
+    }
+
     @Test func preexistingSymlinkThenMoveDoesNotAllowTheCache() throws {
         for planted in plantedCacheLinks {
             let fixture = try plantedCacheLink(planted)

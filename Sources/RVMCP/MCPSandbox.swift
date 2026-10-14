@@ -416,8 +416,12 @@ public enum MCPSandbox {
             return openingsIncludingKeySibling(primary, parent: parent)
         }
         var results = syntheticOpenings(parent: parent, name: name, tail: tail, origin: origin, includeCreationDirectory: true)
-        if let dot = finalNameDotOpening(primary, parent: parent), results.contains(dot) == false {
-            results.append(dot)
+        if let dot = finalNameDotOpening(primary, parent: parent) {
+            if results.contains(dot) == false { results.append(dot) }
+            // `ln -s ../future-keys` from inside `dot` (`anchor/x`).
+            for sibling in keyDirectories(under: parentDirectory(dot)) where results.contains(sibling) == false {
+                results.append(sibling)
+            }
         }
         let nextParent = parent == "/" ? "/" + name : parent + "/" + name
         for opening in openingsFromMissing(parent: nextParent, parts: tail, origin: origin)
@@ -431,10 +435,14 @@ public enum MCPSandbox {
     /// directory or one missing component directly under it
     /// (`../private/tmp/future-keys` → `/private/tmp/future-keys`), or when
     /// a `..` run cannot leave that directory and the collapsed path
-    /// continues along it. A final name after a real directory
-    /// (`future-keys/x`, `anchor/future-keys`) does not: `ln -s .` or
-    /// `ln -s ../future-keys` still reads the credential directory. A later
-    /// missing name (`../private/tmp/x/future-keys`) does not either.
+    /// continues along it with only that one component left. A collapsed
+    /// path that is not under the creation directory
+    /// (`foo/../../private/tmp/future-keys` while `foo` is missing under
+    /// the anchor) is that one opening too. A final name after a real
+    /// directory (`link/../private/tmp/future-keys/x`, `anchor/future-keys`)
+    /// does not: `ln -s .` or `ln -s ../future-keys` still reads the
+    /// credential directory. A later missing name
+    /// (`../private/tmp/x/future-keys`) does not either.
     /// A missing name that repeats an ancestor (`private` →
     /// `/private/future-keys`) does not. `../private` after `link` collapses
     /// to `/private/...` and is not that file. `/foo/future-keys` is as deep
@@ -471,9 +479,15 @@ public enum MCPSandbox {
         }
         // Matching only the ancestor `..` landed on is the tail repeating
         // that name (`../private` collapses to `/private/...`). A longer
-        // shared prefix is the collapsed path staying on the parent
-        // (`foo/../../private/tmp/future-keys`).
-        return shared > parentParts.count - dots
+        // shared prefix is either the collapsed path staying on the parent
+        // (`link/../private/tmp/future-keys/x`) or a path that left it
+        // (`foo/../../private/tmp/future-keys` → `/private/tmp/future-keys`
+        // while the missing name sits under `/private/tmp/anchor`). Only a
+        // longer suffix that is still on the parent can be `ln -s .`.
+        guard shared > parentParts.count - dots else { return false }
+        let prefix = parent == "/" ? "/" : parent + "/"
+        guard opened == parent || opened.hasPrefix(prefix) else { return true }
+        return collapsedOpeningLiesOnTheParent(opened, parent: parent)
     }
 
     /// A single collapsed path covers the creation directory when it is that
@@ -505,16 +519,23 @@ public enum MCPSandbox {
             separator: "/", omittingEmptySubsequences: true
         )
         guard parts.count == 1, isRealDirectory(opened) == false else { return primary }
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: parent) else { return primary }
         var results = primary
-        for name in names {
-            let child = parent == "/" ? "/" + name : parent + "/" + name
-            guard child != opened, results.contains(child) == false else { continue }
-            guard isRealDirectory(child) else { continue }
-            guard FileManager.default.fileExists(atPath: child + "/id_rsa") else { continue }
+        for child in keyDirectories(under: parent) where child != opened && results.contains(child) == false {
             results.append(child)
         }
         return results
+    }
+
+    /// Real directories under `parent` that already contain `id_rsa`.
+    private static func keyDirectories(under parent: String) -> [String] {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: parent) else { return [] }
+        return names.compactMap { name in
+            let child = parent == "/" ? "/" + name : parent + "/" + name
+            guard isRealDirectory(child), FileManager.default.fileExists(atPath: child + "/id_rsa") else {
+                return nil
+            }
+            return child
+        }
     }
 
     /// `ln -s .` on a final name that already sits in a real directory.
