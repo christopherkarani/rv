@@ -1084,34 +1084,54 @@ func watchSeatbeltProcess(
         drain: { live.drainPending() },
         onDeathObserved: onDeathObserved
     )
+    if outcome.cancelled {
+        // The clock starts at cancel, which is before this poll. The poll
+        // stops at what that clock has left. It does not run its own two
+        // seconds and then let detach arm a fresh 7.75s.
+        CooperativeLaunchStop.noteCancel()
+    }
+    let sessionBudget = outcome.cancelled
+        ? DiskImageCancelBudget.boundedWait(
+            spentSinceCancel: CooperativeLaunchStop.spentSinceCancel(),
+            cap: DiskImageCancelBudget.sessionDeathWait
+        )
+        : DiskImageCancelBudget.sessionDeathWait
     let dead = waitUntilSessionIsDead(
         pgid: live.pid,
-        also: outcome.recordedPIDs.union([live.pid])
+        also: outcome.recordedPIDs.union([live.pid]),
+        budget: sessionBudget
     )
     if dead { live.resources?.remove() }
     let mounted: MountedSeatbeltOutcome
-    if dead == false {
-        mounted = MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
-    } else if outcome.cancelled {
+    switch seatbeltWatchDisposition(cancelled: outcome.cancelled, leaderDead: dead) {
+    case .cancelled:
+        // An unreaped leader on the cancel path is still cancellation.
+        // Publish only when the group was actually collected. A real
+        // lifetime miss (cancel unset) is the next case and stays
+        // lifetimeBoundaryFailed.
         mounted = MountedSeatbeltOutcome(
             result: .failure(.cancelled),
-            publish: outcome.established
+            publish: dead && outcome.established
         )
-    } else if outcome.established, let status = outcome.status {
-        mounted = MountedSeatbeltOutcome(
-            result: .success(
-                IsolatedRunResult(
-                    established: .seatbelt(live.session),
-                    exitStatus: status
-                )
-            ),
-            publish: true
-        )
-    } else {
-        mounted = MountedSeatbeltOutcome(
-            result: .failure(.seatbeltNotEstablished),
-            publish: false
-        )
+    case .lifetimeBoundaryFailed:
+        mounted = MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
+    case .proceed:
+        if outcome.established, let status = outcome.status {
+            mounted = MountedSeatbeltOutcome(
+                result: .success(
+                    IsolatedRunResult(
+                        established: .seatbelt(live.session),
+                        exitStatus: status
+                    )
+                ),
+                publish: true
+            )
+        } else {
+            mounted = MountedSeatbeltOutcome(
+                result: .failure(.seatbeltNotEstablished),
+                publish: false
+            )
+        }
     }
     if case .failure(let error) = mounted.result {
         live.recordTerminal(error)
@@ -1151,6 +1171,9 @@ private func waitForSeatbeltSession(
     while true {
         if blockingWorkIsCancelled() || stop.isRequested {
             outcome.cancelled = true
+            // Arm the shared clock before the leader reap. Detach later
+            // adopts that clock instead of starting 7.75s from scratch.
+            CooperativeLaunchStop.noteCancel()
             admission.finish()
         }
         if outcome.established == false {
@@ -1187,7 +1210,13 @@ private func waitForSeatbeltSession(
                 }
             }
             if outcome.status == nil {
-                outcome.status = reapLeaderStatus(root)
+                let budget = outcome.cancelled
+                    ? DiskImageCancelBudget.boundedWait(
+                        spentSinceCancel: CooperativeLaunchStop.spentSinceCancel(),
+                        cap: DiskImageCancelBudget.leaderReap
+                    )
+                    : DiskImageCancelBudget.leaderReap
+                outcome.status = reapLeaderStatus(root, budget: budget)
             }
             outcome.recordedPIDs = recorded
             return outcome
@@ -1371,9 +1400,14 @@ private func terminateSession(pgid: pid_t, also pids: Set<pid_t>) {
 
 /// After SIGKILL, poll `waitpid(WNOHANG)` for a short bound. A blocking
 /// `waitpid` does not return when the leader is stuck in disk I/O.
-private func reapLeaderStatus(_ pid: pid_t) -> Int32? {
-    let deadline = Date().addingTimeInterval(0.25)
-    while Date() < deadline {
+/// `budget` is the leader-reap cap, already shortened by time spent since
+/// cancel so this poll cannot run and then leave a full detach clock.
+private func reapLeaderStatus(
+    _ pid: pid_t,
+    budget: TimeInterval = DiskImageCancelBudget.leaderReap
+) -> Int32? {
+    let deadline = Date().addingTimeInterval(max(0, budget))
+    while true {
         var status: Int32 = 0
         let waited = waitpid(pid, &status, WNOHANG)
         if waited == pid {
@@ -1382,13 +1416,19 @@ private func reapLeaderStatus(_ pid: pid_t) -> Int32? {
         if waited < 0, errno == ECHILD {
             return nil
         }
+        if Date() >= deadline { return nil }
         usleep(10_000)
     }
-    return nil
 }
 
-private func waitUntilSessionIsDead(pgid: pid_t, also pids: Set<pid_t>, reap: Bool = true) -> Bool {
-    for _ in 0..<200 {
+private func waitUntilSessionIsDead(
+    pgid: pid_t,
+    also pids: Set<pid_t>,
+    reap: Bool = true,
+    budget: TimeInterval = DiskImageCancelBudget.sessionDeathWait
+) -> Bool {
+    let deadline = Date().addingTimeInterval(max(0, budget))
+    while Date() < deadline {
         if reap {
             var status: Int32 = 0
             _ = waitpid(pgid, &status, WNOHANG)

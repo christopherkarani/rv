@@ -16,6 +16,14 @@ enum DiskImageCancelBudget {
     /// lock is not released while that process is still alive; this is the
     /// time the 8-second bound allots for a helper that can actually die.
     static let preemptReap: TimeInterval = 0.25
+    /// `reapLeaderStatus` after the session leader is SIGKILL'd. Same
+    /// quarter-second the sequence budget already counts. It is not added
+    /// again in front of a fresh detach clock.
+    static let leaderReap: TimeInterval = preemptReap
+    /// `waitUntilSessionIsDead` when cancel is not set. On the cancel path
+    /// this cap is shortened by time already spent, so a wedged leader
+    /// cannot run two seconds and then start a new 7.75s detach.
+    static let sessionDeathWait: TimeInterval = 2
     /// Detach or forced unmount of a preempted attach or mount, still
     /// inside the serialization lock, before the next helper starts.
     static let preemptCleanup: TimeInterval = 0.5
@@ -71,10 +79,85 @@ enum DiskImageCancelBudget {
 
     /// An urgent holder yields when another waiter is queued, unless this
     /// acquire was granted a turn after it already waited or was preempted.
-    /// That turn is one helper, so two cancelled teardowns do not livelock
-    /// and the second is not left waiting out the first's full sequence.
-    static func yieldsToWaiter(otherWaiters: Int, protectThisAcquire: Bool) -> Bool {
-        otherWaiters > 0 && protectThisAcquire == false
+    /// That turn is one helper, so two cancelled teardowns do not livelock.
+    /// A non-urgent holder always yields. One missed lock must not let a
+    /// 45-second create or attach ignore a cancelled waiter; that waiter
+    /// still has to unmount its volume.
+    static func yieldsToWaiter(
+        otherWaiters: Int,
+        protectThisAcquire: Bool,
+        holderIsUrgent: Bool = true
+    ) -> Bool {
+        guard otherWaiters > 0 else { return false }
+        if holderIsUrgent == false { return true }
+        return protectThisAcquire == false
+    }
+
+    /// Time left on the one cancel clock after `spentSinceCancel`. A later
+    /// helper does not receive a fresh `cancelledSequenceBudget` on top of
+    /// time the in-flight tool, the leader reap, or the session-death poll
+    /// already used after the flag flipped.
+    static func sequenceRemaining(spentSinceCancel: TimeInterval) -> TimeInterval {
+        max(0, cancelledSequenceBudget - max(0, spentSinceCancel))
+    }
+
+    /// Leader reap and the session-death poll stop at what the one clock
+    /// still has. `cap` is `leaderReap` or `sessionDeathWait`.
+    static func boundedWait(spentSinceCancel: TimeInterval, cap: TimeInterval) -> TimeInterval {
+        min(max(0, cap), sequenceRemaining(spentSinceCancel: spentSinceCancel))
+    }
+
+    /// Wall time from cancel through the leader reap, the session-death
+    /// poll, and a detach that uses only the remainder. Stacking a fresh
+    /// `cancelledSequenceBudget` after those waits is not under `returnBound`.
+    static func wholeSequenceWallTime(reap: TimeInterval, sessionWait: TimeInterval) -> TimeInterval {
+        let spent = max(0, reap) + max(0, sessionWait)
+        return spent + sequenceRemaining(spentSinceCancel: spent)
+    }
+
+    static func wholeSequenceStaysUnderReturnBound(
+        reap: TimeInterval,
+        sessionWait: TimeInterval
+    ) -> Bool {
+        wholeSequenceWallTime(reap: reap, sessionWait: sessionWait) < returnBound
+    }
+
+    /// Cap for an umount or detach that is already running when cancel
+    /// flips. `callerDeadline` of 45 or 8 is the snapshot the helper
+    /// started with. The result is the urgent slice, and it also shrinks
+    /// by time already spent after cancel, so the caller is back inside
+    /// `returnBound` from the flag. Create, attach, and mount return nil
+    /// from `urgentDeadline` and are not passed here.
+    static func inFlightLimit(
+        callerDeadline: TimeInterval?,
+        spentSinceCancel: TimeInterval,
+        arguments: [String]
+    ) -> TimeInterval {
+        let left = sequenceRemaining(spentSinceCancel: spentSinceCancel)
+        let urgent = urgentDeadline(arguments: arguments) ?? left
+        var cap = min(urgent, left)
+        if let callerDeadline {
+            cap = min(cap, max(0, callerDeadline))
+        }
+        return max(0, cap)
+    }
+
+    /// Force `umount` once cancellation is visible. This is the 0.5s the
+    /// sequence budget already counts, not `remaining - 1`. A longer slice
+    /// lets one protected holder run until the other teardown's clock
+    /// expires, and that volume stays mounted.
+    static func cancelledForceSlice(remaining: TimeInterval) -> TimeInterval {
+        min(cancelledDetachHelpers().forceUnmount, max(0, remaining))
+    }
+
+    /// True when a waiter whose peer has already held the lock for
+    /// `peerHold` still has both cancelled umount slices left. The
+    /// accounted peer is force plus one signal grace. A multi-second
+    /// force hold is not.
+    static func waiterCanUnmount(peerHold: TimeInterval) -> Bool {
+        let helpers = cancelledDetachHelpers()
+        let need = helpers.plainUnmount + helpers.forceUnmount
+        return sequenceRemaining(spentSinceCancel: peerHold) >= need
     }
 
     /// Reap after SIGKILL. Never open-ended. Also stops at the teardown's
@@ -205,33 +288,114 @@ func diskImageMayDropSerializationLock(
     helperStillAlive: Bool,
     reapExpired: Bool = false,
     cleanup: PreemptedDiskHelperCleanup,
-    cleanupFinished: Bool
+    cleanupFinished: Bool,
+    cleanupAttempted: Bool = false
 ) -> Bool {
     if helperStillAlive && reapExpired == false { return false }
-    // The reap deadline passed and the helper is still alive (D-state).
-    // Park it and return. Waiting for it to exit misses the 8-second bound.
-    if helperStillAlive && reapExpired { return true }
     switch cleanup {
     case .none:
+        // The helper is the umount or detach. After the reap, park it and
+        // return. There is no second device to detach.
         return true
     case .unlinkSparseImage, .detachImage, .unmount:
+        // A live attach can still publish `/dev/diskN`. Do not drop the
+        // lock before the detach or unmount has been attempted, and do
+        // not treat that attempt's failure as a reason to unlink.
+        if helperStillAlive && cleanupAttempted == false { return false }
+        if helperStillAlive && reapExpired && cleanupAttempted { return true }
         return cleanupFinished
     }
 }
 
+/// The image file is the path a later detach uses. Remove it only after
+/// `hdiutil detach` exits 0. A skipped or failed detach leaves the file.
+func diskImageMayRemoveImage(detachSucceeded: Bool) -> Bool {
+    detachSucceeded
+}
+
+/// A second `hdiutil attach` is safe only when the first disk is gone.
+/// A fast mount or slice failure must not retry while that disk is still
+/// attached, even when the mount helper itself did not time out.
+func diskImageMayRetryCreate(
+    publishedDisk: Bool,
+    detachSucceeded: Bool,
+    timedOut: Bool
+) -> Bool {
+    if timedOut { return false }
+    if publishedDisk { return detachSucceeded }
+    return true
+}
+
+/// Unlink only when the helper that could publish the disk has exited
+/// and the detach of that disk exited 0. A detach that wins the race
+/// while the parked attach is still in diskimagesd does not count.
+func diskImageMayUnlinkPublishedImage(helperStillAlive: Bool, detachSucceeded: Bool) -> Bool {
+    helperStillAlive == false && detachSucceeded
+}
+
 /// Retrying the preempted helper is safe only after its attach or mount
-/// was actually removed. A failed detach must not retry into a second disk,
-/// and must not unlink the image that is still the detach path.
+/// was actually removed, or the follow-up found nothing attached. A failed
+/// detach of a disk that is still published must not retry into a second
+/// disk. A peer that only needed the lock must not turn that miss into a
+/// timed-out workspace setup: the preempted caller retries its own image.
+/// A helper that is still alive can still publish, so it is not retried.
 func diskImageMayRetryPreemptedHelper(
     cleanup: PreemptedDiskHelperCleanup,
-    cleanupSucceeded: Bool
+    cleanupSucceeded: Bool,
+    helperStillAlive: Bool = false,
+    targetWasAbsent: Bool = false
 ) -> Bool {
+    if helperStillAlive { return false }
     switch cleanup {
     case .none, .unlinkSparseImage:
         return true
     case .detachImage, .unmount:
-        return cleanupSucceeded
+        if cleanupSucceeded { return true }
+        return targetWasAbsent
     }
+}
+
+/// Preempt cleanup may touch only the image or mount the preempted helper
+/// itself was using. A `/dev/diskN` or another workspace path is not that
+/// image: detaching it would take down a volume some other caller still owns.
+func diskImageCleanupConfinedToCaller(_ plan: PreemptedDiskHelperCleanup) -> Bool {
+    switch plan {
+    case .none:
+        return true
+    case .unlinkSparseImage(let path), .detachImage(let path):
+        return path.contains("rv-inode-") && path.hasSuffix(".sparseimage")
+    case .unmount(let mount):
+        return mount.hasPrefix("/") && mount.contains("\0") == false
+    }
+}
+
+/// `hdiutil detach` / `umount` failed because the preempted helper had not
+/// published a device. That is not "resource busy". The same caller can
+/// run the helper again. A timeout is not absence.
+func diskImageCleanupTargetWasAbsent(status: Int32, timedOut: Bool, output: String) -> Bool {
+    if status == 0 || timedOut { return false }
+    let text = output.lowercased()
+    return text.contains("not currently attached")
+        || text.contains("not attached")
+        || text.contains("not currently mounted")
+        || text.contains("not mounted")
+        || text.contains("no such file")
+        || text.contains("no such disk")
+}
+
+/// What `watchSeatbeltProcess` reports. Cancel wins even when the leader
+/// was not reaped. A real lifetime miss, with cancel unset, stays a
+/// lifetime failure.
+enum SeatbeltWatchDisposition: Equatable, Sendable {
+    case cancelled
+    case lifetimeBoundaryFailed
+    case proceed
+}
+
+func seatbeltWatchDisposition(cancelled: Bool, leaderDead: Bool) -> SeatbeltWatchDisposition {
+    if cancelled { return .cancelled }
+    if leaderDead == false { return .lifetimeBoundaryFailed }
+    return .proceed
 }
 
 /// Shared end for one cancelled teardown. The first `arm` wins. Later
@@ -240,10 +404,14 @@ func diskImageMayRetryPreemptedHelper(
 final class DiskImageCancelClock: @unchecked Sendable {
     private let state = Mutex<Date?>(nil)
 
-    func arm(now: Date = Date()) {
+    /// First call wins. `spentSinceCancel` shortens that end so a helper
+    /// that already ran after the flag does not grant the next helper a
+    /// fresh 7.75s on top of that time.
+    func arm(now: Date = Date(), spentSinceCancel: TimeInterval = 0) {
         state.withLock { end in
             if end == nil {
-                end = now.addingTimeInterval(DiskImageCancelBudget.cancelledSequenceBudget)
+                let budget = DiskImageCancelBudget.sequenceRemaining(spentSinceCancel: spentSinceCancel)
+                end = now.addingTimeInterval(budget)
             }
         }
     }

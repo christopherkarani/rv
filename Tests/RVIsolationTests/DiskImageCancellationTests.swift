@@ -193,6 +193,13 @@ struct DiskImageCancellationTests {
             reapExpired: true,
             cleanup: plan,
             cleanupFinished: false
+        ) == false)
+        #expect(diskImageMayDropSerializationLock(
+            helperStillAlive: true,
+            reapExpired: true,
+            cleanup: plan,
+            cleanupFinished: false,
+            cleanupAttempted: true
         ))
         #expect(diskImageMayDropSerializationLock(
             helperStillAlive: false,
@@ -219,5 +226,170 @@ struct DiskImageCancellationTests {
             plistStdout: mount,
             mountPoint: mount
         ) != mount)
+    }
+
+    @Test func inFlightToolUsesTheCancelClockNotAFreshBudget() {
+        let plain = ["/sbin/umount", "/tmp/rv-workspace"]
+        let force = ["/sbin/umount", "-f", "/tmp/rv-workspace"]
+        let detach = ["/usr/bin/hdiutil", "detach", "-force", "-quiet", "/dev/disk3"]
+        let capped = DiskImageCancelBudget.inFlightLimit(
+            callerDeadline: 45,
+            spentSinceCancel: 0,
+            arguments: plain
+        )
+        #expect(capped == DiskImageCancelBudget.cancelledDetachHelpers().plainUnmount)
+        #expect(capped == 0.5)
+        #expect(capped != 45)
+        let spent: TimeInterval = 1
+        let forceCap = DiskImageCancelBudget.inFlightLimit(
+            callerDeadline: 45,
+            spentSinceCancel: spent,
+            arguments: force
+        )
+        #expect(forceCap == 0.5)
+        let shared = spent + DiskImageCancelBudget.sequenceRemaining(spentSinceCancel: spent)
+        #expect(shared < 8)
+        #expect(shared < DiskImageCancelBudget.returnBound)
+        let stacked = spent + DiskImageCancelBudget.cancelledSequenceBudget
+        #expect(stacked >= 8)
+        let detachCap = DiskImageCancelBudget.inFlightLimit(
+            callerDeadline: 8,
+            spentSinceCancel: 0,
+            arguments: detach
+        )
+        #expect(detachCap == DiskImageCancelBudget.detachCap)
+        #expect(detachCap == 5)
+    }
+
+    @Test func nonUrgentHolderYieldsToACancelledWaiter() {
+        #expect(DiskImageCancelBudget.yieldsToWaiter(
+            otherWaiters: 1,
+            protectThisAcquire: true,
+            holderIsUrgent: false
+        ))
+        #expect(DiskImageCancelBudget.yieldsToWaiter(
+            otherWaiters: 1,
+            protectThisAcquire: true,
+            holderIsUrgent: true
+        ) == false)
+        #expect(DiskImageCancelBudget.yieldsToWaiter(
+            otherWaiters: 0,
+            protectThisAcquire: false,
+            holderIsUrgent: false
+        ) == false)
+    }
+
+    @Test func forceUnmountStaysHalfASecondSoTheSecondVolumeCanUnmount() {
+        #expect(DiskImageCancelBudget.cancelledForceSlice(remaining: 7) == 0.5)
+        #expect(DiskImageCancelBudget.cancelledForceSlice(remaining: 7) != 6)
+        let helpers = DiskImageCancelBudget.cancelledDetachHelpers()
+        let accounted = helpers.forceUnmount + DiskImageCancelBudget.signalGrace
+        #expect(DiskImageCancelBudget.waiterCanUnmount(peerHold: accounted))
+        let tooLong = (DiskImageCancelBudget.cancelledSequenceBudget - 1) + DiskImageCancelBudget.signalGrace
+        #expect(DiskImageCancelBudget.waiterCanUnmount(peerHold: tooLong) == false)
+        #expect(DiskImageCancelBudget.urgentDeadline(
+            arguments: ["/sbin/umount", "-f", "/tmp/rv-workspace"]
+        ) == 0.5)
+    }
+
+    @Test func failedDetachDoesNotUnlinkOrRetryAPublishedDisk() {
+        #expect(diskImageMayRemoveImage(detachSucceeded: false) == false)
+        #expect(diskImageMayRemoveImage(detachSucceeded: true))
+        #expect(diskImageMayRetryCreate(
+            publishedDisk: true,
+            detachSucceeded: false,
+            timedOut: false
+        ) == false)
+        #expect(diskImageMayRetryCreate(
+            publishedDisk: true,
+            detachSucceeded: true,
+            timedOut: false
+        ))
+        #expect(diskImageMayRetryCreate(
+            publishedDisk: false,
+            detachSucceeded: false,
+            timedOut: false
+        ))
+        #expect(diskImageMayRetryCreate(
+            publishedDisk: false,
+            detachSucceeded: true,
+            timedOut: true
+        ) == false)
+        #expect(diskImageMayUnlinkPublishedImage(helperStillAlive: true, detachSucceeded: true) == false)
+        #expect(diskImageMayUnlinkPublishedImage(helperStillAlive: false, detachSucceeded: true))
+        #expect(diskImageMayUnlinkPublishedImage(helperStillAlive: false, detachSucceeded: false) == false)
+    }
+
+    @Test func preemptedCallerRetriesItsOwnImageAndDoesNotTouchAnotherDisk() {
+        let image = "/tmp/rv-inode-token.sparseimage"
+        let plan = PreemptedDiskHelperCleanup.detachImage(image)
+        #expect(diskImageCleanupConfinedToCaller(plan))
+        #expect(diskImageCleanupConfinedToCaller(.detachImage("/dev/disk3")) == false)
+        #expect(diskImageCleanupConfinedToCaller(.unmount("/tmp/rv-workspace")))
+        #expect(diskImageMayRetryPreemptedHelper(
+            cleanup: plan,
+            cleanupSucceeded: false,
+            targetWasAbsent: true
+        ))
+        #expect(diskImageMayRetryPreemptedHelper(
+            cleanup: plan,
+            cleanupSucceeded: false,
+            helperStillAlive: true,
+            targetWasAbsent: true
+        ) == false)
+        #expect(diskImageMayRetryPreemptedHelper(
+            cleanup: plan,
+            cleanupSucceeded: false,
+            targetWasAbsent: false
+        ) == false)
+        #expect(diskImageCleanupTargetWasAbsent(
+            status: 1,
+            timedOut: false,
+            output: "hdiutil: detach failed - No such file or directory"
+        ))
+        #expect(diskImageCleanupTargetWasAbsent(
+            status: 1,
+            timedOut: true,
+            output: "No such file or directory"
+        ) == false)
+        #expect(diskImageCleanupTargetWasAbsent(
+            status: 1,
+            timedOut: false,
+            output: "Resource busy"
+        ) == false)
+    }
+
+    /// The 8-second return starts at cancel and includes the leader reap,
+    /// the session-death poll, and the detach. A fresh 7.75s after those
+    /// waits is the bug `cancellationTerminatesOwnedProcessesBeforeReturn`
+    /// measures with `Date` interval < 8.
+    @Test func wholeCancelSequenceStaysUnderEightSeconds() {
+        let reap = DiskImageCancelBudget.leaderReap
+        let session = DiskImageCancelBudget.sessionDeathWait
+        #expect(reap == 0.25)
+        #expect(session == 2)
+        let reapThenFresh = reap + DiskImageCancelBudget.cancelledSequenceBudget
+        #expect(reapThenFresh >= 8)
+        #expect(reapThenFresh >= DiskImageCancelBudget.returnBound)
+        let sessionThenFresh = reap + session + DiskImageCancelBudget.cancelledSequenceBudget
+        #expect(sessionThenFresh >= 8)
+        #expect(DiskImageCancelBudget.wholeSequenceStaysUnderReturnBound(reap: reap, sessionWait: 0))
+        #expect(DiskImageCancelBudget.wholeSequenceStaysUnderReturnBound(reap: reap, sessionWait: session))
+        let shared = DiskImageCancelBudget.wholeSequenceWallTime(reap: reap, sessionWait: session)
+        #expect(shared < 8)
+        #expect(shared < DiskImageCancelBudget.returnBound)
+        let now = Date(timeIntervalSince1970: 5_000)
+        let clock = DiskImageCancelClock()
+        clock.arm(now: now, spentSinceCancel: reap + session)
+        let end = clock.deadline
+        #expect(end == now.addingTimeInterval(
+            DiskImageCancelBudget.sequenceRemaining(spentSinceCancel: reap + session)
+        ))
+        #expect(seatbeltWatchDisposition(cancelled: true, leaderDead: false) == .cancelled)
+        #expect(seatbeltWatchDisposition(cancelled: true, leaderDead: true) == .cancelled)
+        #expect(seatbeltWatchDisposition(cancelled: false, leaderDead: false) == .lifetimeBoundaryFailed)
+        #expect(seatbeltWatchDisposition(cancelled: false, leaderDead: true) == .proceed)
+        #expect(DiskImageCancelBudget.boundedWait(spentSinceCancel: reap, cap: session) == session)
+        #expect(DiskImageCancelBudget.boundedWait(spentSinceCancel: 7.6, cap: session) < 1)
     }
 }
