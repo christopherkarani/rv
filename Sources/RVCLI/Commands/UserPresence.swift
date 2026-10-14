@@ -35,10 +35,22 @@ struct UserPresence: Sendable {
         "this needs you present: run it yourself in a terminal (this process has no terminal)"
 
     static let live = UserPresence { reason, challenge in
-        #if canImport(LocalAuthentication)
-        if let outcome = await deviceOwner(reason) { return outcome }
-        #endif
-        return terminal(reason, challenge)
+        switch challenge {
+        case .printedCode:
+            // The code MAC, which includes the argument names, is checked
+            // before Touch ID can return. Device owner alone does not approve.
+            let codeOutcome = terminal(reason, challenge)
+            guard case .confirmed = codeOutcome else { return codeOutcome }
+            #if canImport(LocalAuthentication)
+            if let outcome = await deviceOwner(reason) { return outcome }
+            #endif
+            return codeOutcome
+        case .deviceOwner:
+            #if canImport(LocalAuthentication)
+            if let outcome = await deviceOwner(reason) { return outcome }
+            #endif
+            return terminal(reason, challenge)
+        }
     }
 
     #if canImport(LocalAuthentication)

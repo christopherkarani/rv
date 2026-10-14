@@ -319,7 +319,7 @@ public struct MCPGatewayCore {
         var outputs: [MCPGatewayOutput] = []
         if decision == .ask {
             let hash = arguments.canonicalHash
-            switch approvals.consumeGrant(server, tool, hash) {
+            switch approvals.consumeGrant(server, tool, hash, keys) {
             case .granted(let id):
                 approval = Approval(id: id, channel: .local)
             case .forged(let id):

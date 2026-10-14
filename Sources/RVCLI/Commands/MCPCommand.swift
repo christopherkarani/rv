@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import Synchronization
 import RVHistory
 import RVIsolation
 import RVMCP
@@ -290,12 +291,18 @@ enum MCPRun {
         var server: String
         var tool: String
         var argumentKeys: [String]
+        /// False when the stored names are not the names inside the key MAC.
+        var argumentKeysBound: Bool
         var requestedAt: Date
     }
 
     static func pendingRows(_ store: MCPApprovalStore) -> [PendingRow] {
-        store.pending().map {
-            PendingRow(id: $0.id, server: $0.server, tool: $0.tool, argumentKeys: $0.argumentKeys, requestedAt: $0.requestedAt)
+        store.pending().map { request in
+            let bound = store.argumentKeysAreBound(request)
+            return PendingRow(
+                id: request.id, server: request.server, tool: request.tool,
+                argumentKeys: bound ? request.argumentKeys : [], argumentKeysBound: bound,
+                requestedAt: request.requestedAt)
         }
     }
 
@@ -303,8 +310,15 @@ enum MCPRun {
         guard rows.isEmpty == false else { return "no MCP tool calls are waiting for approval\n" }
         let formatter = ISO8601DateFormatter()
         let lines = rows.map { row in
-            let keys = row.argumentKeys.isEmpty ? "no arguments" : "arguments " + row.argumentKeys.joined(separator: ", ")
-            return "\(row.id)  \(row.server) \(row.tool)  \(keys)  \(formatter.string(from: row.requestedAt))"
+            let keys: String
+            if row.argumentKeysBound == false {
+                keys = "arguments changed outside rv"
+            } else if row.argumentKeys.isEmpty {
+                keys = "no arguments"
+            } else {
+                keys = "arguments " + row.argumentKeys.map(reviewField).joined(separator: ", ")
+            }
+            return "\(row.id)  \(reviewField(row.server)) \(reviewField(row.tool))  \(keys)  \(formatter.string(from: row.requestedAt))"
         }
         return (lines + [
             "approve in your own terminal with `rv mcp approve <id>` (once) or `--always`; refuse with `rv mcp deny <id>`",
@@ -327,14 +341,31 @@ enum MCPRun {
             case .success(let result): allowed = result
             }
         }
-        let reason = "rv: approve \(request.server) tool \(request.tool) arguments \(request.argumentsHash) "
+        guard store.argumentKeysAreBound(request) else {
+            return .failure("the approval changed while you reviewed it; nothing was signed")
+        }
+        let shownKeys = request.argumentKeys.isEmpty
+            ? "no arguments"
+            : request.argumentKeys.map(reviewField).joined(separator: ", ")
+        let reason = "rv: approve \(reviewField(request.server)) tool \(reviewField(request.tool)) "
+            + "arguments \(request.argumentsHash) keys \(shownKeys) "
             + (always ? "always" : "once")
-        let outcome = await environment.presence.confirm(reason, .printedCode { store.verifyCode(id: id, typed: $0) })
+        let codeChecked = Mutex(false)
+        let outcome = await environment.presence.confirm(reason, .printedCode { typed in
+            let ok = store.verifyCode(id: id, typed: typed)
+            if ok { codeChecked.withLock { $0 = true } }
+            return ok
+        })
         guard case .confirmed(let method) = outcome else {
             let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
             audit(request, decision: .denied, reason: "user presence not confirmed: \(refusal)", method: nil,
                   always: always, configDirectory: environment.configDirectory)
             return .failure(CommandFailure("not approved: \(refusal)"))
+        }
+        guard codeChecked.withLock({ $0 }) else {
+            audit(request, decision: .denied, reason: "confirmation code was not checked", method: method,
+                  always: always, configDirectory: environment.configDirectory)
+            return .failure("not approved: confirmation code was not checked")
         }
         guard store.grant(
             id: id, server: request.server, tool: request.tool, argumentsHash: request.argumentsHash,
@@ -357,8 +388,8 @@ enum MCPRun {
         audit(request, decision: .allowed, reason: nil, method: method, always: always,
               configDirectory: environment.configDirectory)
         return .success(always
-            ? "approved \(request.server) \(request.tool) always (added to its allow list in mcp.json)\n"
-            : "approved \(request.server) \(request.tool) once; the agent can retry the same call\n")
+            ? "approved \(reviewField(request.server)) \(reviewField(request.tool)) always (added to its allow list in mcp.json)\n"
+            : "approved \(reviewField(request.server)) \(reviewField(request.tool)) once; the agent can retry the same call\n")
     }
 
     /// mcp.json with the request's tool moved to the allow list, and the signer to write it with.
@@ -480,8 +511,13 @@ enum MCPRun {
         var escaped = ""
         for scalar in text.unicodeScalars {
             switch scalar.value {
+            case 0x08: escaped += "\\u0008"
             case 0x0A: escaped += "\\n"
+            case 0x0B: escaped += "\\u000b"
+            case 0x0C: escaped += "\\u000c"
             case 0x0D: escaped += "\\r"
+            case 0x1B: escaped += "\\u001b"
+            case 0x85: escaped += "\\u0085"
             case 0x2028: escaped += "\\u2028"
             case 0x2029: escaped += "\\u2029"
             default: escaped.unicodeScalars.append(scalar)
@@ -494,7 +530,8 @@ enum MCPRun {
     /// inherit the host environment.
     static func sandboxLines(_ server: MCPServerDefinition, indent: String = "") -> [String] {
         guard let sandbox = server.sandbox else { return ["\(indent)no sandbox"] }
-        let writable = sandbox.writable.isEmpty ? "none" : sandbox.writable.map(reviewField).joined(separator: ", ")
+        let writable = MCPSandbox.disclosedWritePaths(server: server.name, policy: sandbox)
+            .map(reviewField).joined(separator: ", ")
         return ["\(indent)sandbox network \(sandbox.network)", "\(indent)sandbox writable \(writable)"]
     }
 

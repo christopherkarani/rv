@@ -94,24 +94,24 @@ struct MCPApprovalSecurityTests {
 
         let unsigned = try #require(store.request(server: "gh", tool: "push", argumentsHash: "h1", argumentKeys: [])?.id)
         try rewrite(fileURL) { $0.replacingOccurrences(of: "\"pending\"", with: "\"granted\"") }
-        #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h1") == .forged(id: unsigned))
-        #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h1") == .none)
+        #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h1", argumentKeys: []) == .forged(id: unsigned))
+        #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h1", argumentKeys: []) == .none)
 
         let rebound = try #require(store.request(server: "gh", tool: "push", argumentsHash: "h2", argumentKeys: [])?.id)
         #expect(store.grant(id: rebound, server: "gh", tool: "push", argumentsHash: "h2", argumentKeys: []) != nil)
         try rewrite(fileURL) { $0.replacingOccurrences(of: "\"h2\"", with: "\"h3\"") }
-        #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h3") == .forged(id: rebound))
+        #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h3", argumentKeys: []) == .forged(id: rebound))
 
         let otherKey = MCPApprovalStore(
             configDirectory: directory, keys: MCPApprovalKeyStore(load: { MCPSigner(key: Self.key) }, loadOrCreate: { MCPSigner(key: Self.key) }))
         let signedElsewhere = try #require(otherKey.request(server: "gh", tool: "push", argumentsHash: "h4", argumentKeys: [])?.id)
         #expect(otherKey.grant(id: signedElsewhere, server: "gh", tool: "push", argumentsHash: "h4", argumentKeys: []) != nil)
-        #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h4") == .forged(id: signedElsewhere))
+        #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h4", argumentKeys: []) == .forged(id: signedElsewhere))
 
         let keyless = MCPApprovalStore(configDirectory: directory, keys: .unavailable)
         let lost = try #require(store.request(server: "gh", tool: "push", argumentsHash: "h5", argumentKeys: [])?.id)
         #expect(store.grant(id: lost, server: "gh", tool: "push", argumentsHash: "h5", argumentKeys: []) != nil)
-        #expect(keyless.consumeGrant(server: "gh", tool: "push", argumentsHash: "h5") == .forged(id: lost))
+        #expect(keyless.consumeGrant(server: "gh", tool: "push", argumentsHash: "h5", argumentKeys: []) == .forged(id: lost))
         #expect(keyless.grant(id: "any", server: "gh", tool: "push", argumentsHash: "h5", argumentKeys: []) == nil)
     }
 
@@ -128,8 +128,8 @@ struct MCPApprovalSecurityTests {
         #expect(store.grant(id: ticket.id, server: "gh", tool: "push", argumentsHash: "h1", argumentKeys: ["branch"]) == nil)
         #expect(store.pending().map(\.tool) == ["steal"])
         #expect(store.pending().allSatisfy { $0.state == .pending && $0.grantMAC == nil })
-        #expect(store.consumeGrant(server: "gh", tool: "steal", argumentsHash: "h1") == .none)
-        #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h1") == .none)
+        #expect(store.consumeGrant(server: "gh", tool: "steal", argumentsHash: "h1", argumentKeys: ["branch"]) == .none)
+        #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h1", argumentKeys: ["branch"]) == .none)
     }
 
     @Test func rewrittenArgumentKeysAreNotSigned() throws {
@@ -150,7 +150,10 @@ struct MCPApprovalSecurityTests {
             id: ticket.id, server: "fs", tool: "write_file", argumentsHash: "h1", argumentKeys: ["path", "contents"]) == nil)
         #expect(store.pending().map(\.argumentKeys) == [["note"]])
         #expect(store.pending().allSatisfy { $0.grantMAC == nil && $0.argumentsHash == "h1" })
-        #expect(store.consumeGrant(server: "fs", tool: "write_file", argumentsHash: "h1") == .none)
+        #expect(store.grant(
+            id: ticket.id, server: "fs", tool: "write_file", argumentsHash: "h1", argumentKeys: ["note"]) == nil)
+        #expect(store.consumeGrant(
+            server: "fs", tool: "write_file", argumentsHash: "h1", argumentKeys: ["path", "contents"]) == .none)
     }
 
     private func rewrite(_ url: URL, _ change: (String) -> String) throws {

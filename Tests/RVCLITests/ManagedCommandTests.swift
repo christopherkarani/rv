@@ -80,11 +80,21 @@ struct ManagedCommandTests {
             == "organization policy is invalid, so MCP is disabled: bad signature")
 
         environment.managed = try active(#"{"version": 1, "mcp": {"ask": ["github/create_*"]}}"#)
-        let id = try #require(
-            environment.approvals.request(server: "github", tool: "create_issue", argumentsHash: "h", argumentKeys: [])?.id)
-        #expect(failure(await MCPRun.approve(id: id, always: true, environment: environment))
+        let ticket = try #require(
+            environment.approvals.request(server: "github", tool: "create_issue", argumentsHash: "h", argumentKeys: []))
+        #expect(failure(await MCPRun.approve(id: ticket.id, always: true, environment: environment))
             == "organization policy says ask for github/create_issue; approve it once instead")
-        #expect(try await MCPRun.approve(id: id, always: false, environment: environment).get().contains("once"))
+        let code = try #require(ticket.code)
+        environment.presence = UserPresence { _, challenge in
+            switch challenge {
+            case .printedCode(let check):
+                guard check(code) else { return .refused("wrong confirmation code") }
+                return .confirmed(method: "terminal confirmation code")
+            case .deviceOwner:
+                return .confirmed(method: "device owner authentication")
+            }
+        }
+        #expect(try await MCPRun.approve(id: ticket.id, always: false, environment: environment).get().contains("once"))
 
         try scratch.write("home/.cursor/mcp.json", """
             {"mcpServers": {"svc": {"command": "svc", "env": {"API_TOKEN": "tok_live_abcdefghijklmnopqrstu"}}}}

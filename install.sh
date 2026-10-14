@@ -271,7 +271,10 @@ verify_release_signatures() {
   dir="$1"
   shift
   team="${RV_INSTALL_TEAM_ID:-$release_team_id}"
-  if ! command -v codesign >/dev/null 2>&1; then
+  # Absolute paths. A codesign earlier on PATH must not decide this check.
+  codesign=/usr/bin/codesign
+  spctl=/usr/sbin/spctl
+  if [ ! -x "$codesign" ]; then
     echo "rv: refusing to install: codesign is not available, so a Developer ID signature cannot be checked" >&2
     exit 1
   fi
@@ -280,14 +283,18 @@ verify_release_signatures() {
   for name in "$@"; do
     file="$dir/$name"
     [ -f "$file" ] || continue
-    details="$(codesign -dvv "$file" 2>&1 || true)"
+    details="$("$codesign" -dvv "$file" 2>&1 || true)"
+    # "not signed at all" inside Identifier, TMPDIR, or Executable= is not an
+    # unsigned file. Only the unsigned diagnostic, and only when no Developer
+    # ID authority is present, may take the unsigned warning.
     case "$details" in
-      *"not signed at all"*)
+      *"Authority=Developer ID Application:"*) ;;
+      *"code object is not signed at all"*)
         unsigned="$unsigned $name"
         continue
         ;;
     esac
-    if ! codesign --verify --strict "$file" >/dev/null 2>&1; then
+    if ! "$codesign" --verify --strict "$file" >/dev/null 2>&1; then
       echo "rv: refusing to install: $name has an invalid code signature" >&2
       exit 1
     fi
@@ -312,7 +319,7 @@ verify_release_signatures() {
     case "$name" in
       *.dylib) ;;
       *)
-        verdict="$(spctl -a -t open --context context:primary-signature -vv "$file" 2>&1 || true)"
+        verdict="$("$spctl" -a -t open --context context:primary-signature -vv "$file" 2>&1 || true)"
         case "$verdict" in
           *"source=Notarized Developer ID"*) ;;
           *)

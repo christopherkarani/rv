@@ -10,7 +10,7 @@ final class FakeApprovals: Sendable {
 
     var gate: MCPApprovalGate {
         MCPApprovalGate(
-            consumeGrant: { server, tool, hash in
+            consumeGrant: { server, tool, hash, _ in
                 let key = "\(server)/\(tool)/\(hash)"
                 if self.granted.withLock({ $0.remove(key) }) != nil { return .granted(id: "grant1") }
                 if self.forged.withLock({ $0.remove(key) }) != nil { return .forged(id: "forged1") }
@@ -341,12 +341,13 @@ struct MCPApprovalStoreTests {
         let id = try #require(store.request(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"])?.id)
         #expect(store.request(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"])?.id == id)
         #expect(store.pending().map(\.id) == [id])
-        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == .none)
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"]) == .none)
         #expect(store.grant(id: id, server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"])?.state == .granted)
         #expect(store.pending().isEmpty)
-        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "other") == .none)
-        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == .granted(id: id))
-        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == .none)
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "other", argumentKeys: ["title"]) == .none)
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["note"]) == .none)
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"]) == .granted(id: id))
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"]) == .none)
         #expect(store.grant(id: "missing", server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"]) == nil)
     }
 
@@ -375,7 +376,7 @@ struct MCPApprovalStoreTests {
         let newest = try #require(store.request(server: "gh", tool: "t", argumentsHash: "newest", argumentKeys: [])?.id)
         #expect(store.pending().map(\.id).contains(oldestPending) == false)
         #expect(store.pending().map(\.id).contains(newest))
-        #expect(store.consumeGrant(server: "gh", tool: "keep", argumentsHash: "grant") == .granted(id: grant))
+        #expect(store.consumeGrant(server: "gh", tool: "keep", argumentsHash: "grant", argumentKeys: []) == .granted(id: grant))
 
         let grants = Self.scratch()
         defer { try? FileManager.default.removeItem(at: grants) }
@@ -385,7 +386,7 @@ struct MCPApprovalStoreTests {
             #expect(full.grant(id: id, server: "gh", tool: "g", argumentsHash: "g\(index)", argumentKeys: []) != nil)
         }
         #expect(full.request(server: "gh", tool: "g", argumentsHash: "overflow", argumentKeys: []) == nil)
-        #expect(full.consumeGrant(server: "gh", tool: "g", argumentsHash: "g0") != .none)
+        #expect(full.consumeGrant(server: "gh", tool: "g", argumentsHash: "g0", argumentKeys: []) != .none)
     }
 
     @Test func canonicalHashIgnoresKeyOrder() throws {

@@ -29,7 +29,7 @@ public struct MCPApprovalRequest: Sendable, Equatable {
 
     public init(
         id: String, server: String, tool: String, argumentsHash: String, argumentKeys: [String],
-        requestedAt: Date, state: State, grantMAC: String? = nil, codeMAC: String? = nil
+        requestedAt: Date, state: State, grantMAC: String? = nil, codeMAC: String? = nil, argumentKeysMAC: String? = nil
     ) {
         self.id = id
         self.server = server
@@ -40,6 +40,7 @@ public struct MCPApprovalRequest: Sendable, Equatable {
         self.state = state
         self.grantMAC = grantMAC
         self.codeMAC = codeMAC
+        self.argumentKeysMAC = argumentKeysMAC
     }
 
     /// Canonical argument-key list. One JSON array, so a same-uid edit of the
@@ -48,7 +49,13 @@ public struct MCPApprovalRequest: Sendable, Equatable {
         JSONValue.array(keys.map(JSONValue.string)).compactText
     }
 
-    var grantFields: [String] { [id, server, tool, argumentsHash, Self.argumentKeyField(argumentKeys)] }
+    /// MAC of the names shown for this call, without the one-time code.
+    /// `codeMAC` binds the same names plus the code.
+    public var argumentKeysMAC: String?
+
+    var grantFields: [String] {
+        [id, server, tool, argumentsHash, Self.argumentKeyField(argumentKeys)]
+    }
 }
 
 /// A recorded pending request. `code` is nil when no signing key exists.
@@ -72,12 +79,14 @@ public enum MCPGrantLookup: Sendable, Equatable {
 /// What the gateway core needs from approvals; tests pass in-memory closures.
 public struct MCPApprovalGate: Sendable {
     /// A granted approval for exactly this call, consumed on use.
-    public var consumeGrant: @Sendable (_ server: String, _ tool: String, _ argumentsHash: String) -> MCPGrantLookup
+    public var consumeGrant: @Sendable (
+        _ server: String, _ tool: String, _ argumentsHash: String, _ argumentKeys: [String]
+    ) -> MCPGrantLookup
     /// Records (or reuses) a pending request. Nil when it could not be stored.
     public var request: @Sendable (_ server: String, _ tool: String, _ argumentsHash: String, _ keys: [String]) -> MCPApprovalTicket?
 
     public init(
-        consumeGrant: @escaping @Sendable (String, String, String) -> MCPGrantLookup,
+        consumeGrant: @escaping @Sendable (String, String, String, [String]) -> MCPGrantLookup,
         request: @escaping @Sendable (String, String, String, [String]) -> MCPApprovalTicket?
     ) {
         self.consumeGrant = consumeGrant
@@ -86,7 +95,7 @@ public struct MCPApprovalGate: Sendable {
 
     public static func store(_ store: MCPApprovalStore) -> MCPApprovalGate {
         MCPApprovalGate(
-            consumeGrant: { store.consumeGrant(server: $0, tool: $1, argumentsHash: $2) },
+            consumeGrant: { store.consumeGrant(server: $0, tool: $1, argumentsHash: $2, argumentKeys: $3) },
             request: { store.request(server: $0, tool: $1, argumentsHash: $2, argumentKeys: $3) })
     }
 }
@@ -129,17 +138,25 @@ public struct MCPApprovalStore: Sendable {
                         id: id, server: server, tool: tool, argumentsHash: argumentsHash, argumentKeys: argumentKeys,
                         code: code))
             }
+            func keysMAC(_ id: String) -> String? {
+                guard let signer else { return nil }
+                return signer.mac(
+                    "argument-keys", Self.boundFields(
+                        id: id, server: server, tool: tool, argumentsHash: argumentsHash, argumentKeys: argumentKeys))
+            }
             if let index = requests.firstIndex(where: {
                 $0.server == server && $0.tool == tool && $0.argumentsHash == argumentsHash && $0.state == .pending
             }) {
                 requests[index].argumentKeys = argumentKeys
+                requests[index].argumentKeysMAC = keysMAC(requests[index].id)
                 requests[index].codeMAC = codeMAC(requests[index].id)
                 return MCPApprovalTicket(id: requests[index].id, code: code)
             }
             let id = Self.newID()
             let request = MCPApprovalRequest(
                 id: id, server: server, tool: tool, argumentsHash: argumentsHash,
-                argumentKeys: argumentKeys, requestedAt: clock(), state: .pending, codeMAC: codeMAC(id))
+                argumentKeys: argumentKeys, requestedAt: clock(), state: .pending,
+                codeMAC: codeMAC(id), argumentKeysMAC: keysMAC(id))
             requests.append(request)
             while requests.count > Self.maximumRequests {
                 guard let index = requests.firstIndex(where: { $0.state == .pending && $0.id != request.id }) else {
@@ -152,18 +169,29 @@ public struct MCPApprovalStore: Sendable {
         } ?? nil
     }
 
-    public func consumeGrant(server: String, tool: String, argumentsHash: String) -> MCPGrantLookup {
+    public func consumeGrant(
+        server: String, tool: String, argumentsHash: String, argumentKeys: [String]
+    ) -> MCPGrantLookup {
         let signer = keys.load()
         return withLockedRequests { requests in
             guard let index = requests.firstIndex(where: {
                 $0.server == server && $0.tool == tool && $0.argumentsHash == argumentsHash && $0.state == .granted
             }) else { return MCPGrantLookup.none }
+            // The hash alone is not the call. A grant signed for other key names stays put.
+            guard requests[index].argumentKeys == argumentKeys else { return MCPGrantLookup.none }
             let entry = requests.remove(at: index)
             guard let signer, signer.verify(entry.grantMAC, "grant", entry.grantFields) else {
                 return .forged(id: entry.id)
             }
             return .granted(id: entry.id)
         } ?? MCPGrantLookup.none
+    }
+
+    /// Whether the stored names are the names inside `argumentKeysMAC`.
+    /// A missing MAC or a rewritten list is not something to show or sign.
+    public func argumentKeysAreBound(_ request: MCPApprovalRequest) -> Bool {
+        guard let signer = keys.load(), let mac = request.argumentKeysMAC else { return false }
+        return signer.verify(mac, "argument-keys", request.grantFields)
     }
 
     /// Whether `typed` is the code for this pending request as it stands now.
@@ -195,19 +223,27 @@ public struct MCPApprovalStore: Sendable {
             guard requests[index].server == server, requests[index].tool == tool,
                 requests[index].argumentsHash == argumentsHash, requests[index].argumentKeys == argumentKeys
             else { return nil }
+            guard let keysMAC = requests[index].argumentKeysMAC,
+                signer.verify(keysMAC, "argument-keys", requests[index].grantFields)
+            else { return nil }
             requests[index].state = .granted
             requests[index].grantMAC = signer.mac("grant", requests[index].grantFields)
             return requests[index]
         } ?? nil
     }
 
+    static func boundFields(
+        id: String, server: String, tool: String, argumentsHash: String, argumentKeys: [String]
+    ) -> [String] {
+        [id, server, tool, argumentsHash, MCPApprovalRequest.argumentKeyField(argumentKeys)]
+    }
+
     static func codeFields(
         id: String, server: String, tool: String, argumentsHash: String, argumentKeys: [String], code: String
     ) -> [String] {
-        [
-            id, server, tool, argumentsHash, MCPApprovalRequest.argumentKeyField(argumentKeys),
-            MCPConfirmationCode.normalize(code),
-        ]
+        boundFields(
+            id: id, server: server, tool: tool, argumentsHash: argumentsHash, argumentKeys: argumentKeys
+        ) + [MCPConfirmationCode.normalize(code)]
     }
 
     /// Removes a request in any state.
@@ -266,6 +302,7 @@ public struct MCPApprovalStore: Sendable {
                 object["state"] = .string(request.state.rawValue)
                 if let mac = request.grantMAC { object["grantMAC"] = .string(mac) }
                 if let mac = request.codeMAC { object["codeMAC"] = .string(mac) }
+                if let mac = request.argumentKeysMAC { object["argumentKeysMAC"] = .string(mac) }
                 return .object(object)
             }),
         ])
@@ -283,7 +320,8 @@ public struct MCPApprovalStore: Sendable {
             return MCPApprovalRequest(
                 id: id, server: server, tool: tool, argumentsHash: hash,
                 argumentKeys: item["argumentKeys"]?.stringArray ?? [], requestedAt: requested, state: state,
-                grantMAC: item["grantMAC"]?.stringValue, codeMAC: item["codeMAC"]?.stringValue)
+                grantMAC: item["grantMAC"]?.stringValue, codeMAC: item["codeMAC"]?.stringValue,
+                argumentKeysMAC: item["argumentKeysMAC"]?.stringValue)
         }
     }
 }

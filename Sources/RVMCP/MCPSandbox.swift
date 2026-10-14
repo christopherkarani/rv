@@ -13,6 +13,14 @@ public enum MCPSandbox {
     public static let sandboxExec = "/usr/bin/sandbox-exec"
 
     static let defaultWritable = ["~/.npm", "~/.cache", "~/Library/Caches"]
+    /// Paths `profile` allows even when `policy.writable` is empty.
+    static let seatbeltWriteRoots = ["/private/tmp", "/private/var/folders", "/dev"]
+
+    /// Write paths a present sandbox still allows. Trust and import show this
+    /// list. `TMPDIR` is the launch temporary directory, chosen when the server starts.
+    public static func disclosedWritePaths(server name: String, policy: MCPSandboxPolicy) -> [String] {
+        ["~/Library/Caches/rv-mcp/\(name)", "TMPDIR"] + seatbeltWriteRoots + defaultWritable + policy.writable
+    }
 
     static let deniedReads = [
         "~/.ssh", "~/.aws", "~/.gnupg", "~/.kube", "~/.docker", "~/.config/gh", "~/.config/gcloud", "~/.azure",
@@ -56,7 +64,7 @@ public enum MCPSandbox {
         func expand(_ path: String) -> String {
             path.hasPrefix("~/") ? home + path.dropFirst(1) : path
         }
-        let writable = [scratch, temporaryDirectory, "/private/tmp", "/private/var/folders", "/dev"]
+        let writable = [scratch, temporaryDirectory] + seatbeltWriteRoots
             + (defaultWritable + policy.writable).map(expand)
         let unreadable = deniedReads.map(expand) + [configDirectory]
         var lines = [

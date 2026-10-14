@@ -760,20 +760,17 @@ private func writeCurlShim(
     try writeCurlShim(in: shim, assets: assets)
     try writeSignatureShims(in: shim)
 
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/sh")
-    process.arguments = [installScriptURL().path]
-    process.environment = [
-        "HOME": home.path,
-        "PATH": shim.path + ":/usr/bin:/bin",
-        "RV_TEST_CODESIGN": "unsigned",
-    ]
-    let stderr = Pipe()
-    process.standardError = stderr
-    process.standardOutput = Pipe()
-    try process.run()
-    process.waitUntilExit()
-    #expect(process.terminationStatus == 0)
+    let (status, stderr) = try runInstallScript(
+        script: installScriptURL(),
+        environment: [
+            "HOME": home.path,
+            "PATH": shim.path + ":/usr/bin:/bin",
+            "RV_TEST_CODESIGN": "unsigned",
+            "TAR_OPTIONS": "--no-same-owner",
+        ],
+        systemCodesignShim: shim
+    )
+    #expect(status == 0, "\(stderr)")
 
     let destBin = home.appendingPathComponent(".local/bin")
     #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rv").path))
@@ -831,20 +828,17 @@ private func writeCurlShim(
     try writeCurlShim(in: shim, assets: assets)
     try writeSignatureShims(in: shim)
 
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/sh")
-    process.arguments = [installScriptURL().path]
-    process.environment = [
-        "HOME": home.path,
-        "PATH": shim.path + ":/usr/bin:/bin",
-        "RV_TEST_CODESIGN": "unsigned",
-    ]
-    let stderr = Pipe()
-    process.standardError = stderr
-    process.standardOutput = Pipe()
-    try process.run()
-    process.waitUntilExit()
-    #expect(process.terminationStatus == 0)
+    let (status, stderr) = try runInstallScript(
+        script: installScriptURL(),
+        environment: [
+            "HOME": home.path,
+            "PATH": shim.path + ":/usr/bin:/bin",
+            "RV_TEST_CODESIGN": "unsigned",
+            "TAR_OPTIONS": "--no-same-owner",
+        ],
+        systemCodesignShim: shim
+    )
+    #expect(status == 0, "\(stderr)")
 
     let destBin = home.appendingPathComponent(".local/bin")
     #expect(FileManager.default.isExecutableFile(atPath: destBin.appendingPathComponent("rv").path))
@@ -939,6 +933,7 @@ private func writeSignatureShims(in shim: URL) throws {
             case "$mode" in
               unsigned) echo "$file: code object is not signed at all" >&2; exit 1 ;;
               adhoc) printf 'Executable=%s\\nSignature=adhoc\\nTeamIdentifier=not set\\n' "$file" >&2; exit 0 ;;
+              phrase) printf 'Executable=/tmp/not signed at all/%s\\nIdentifier=not signed at all\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nTeamIdentifier=TEAMRV1234\\n' "$name" >&2; exit 0 ;;
               *) printf 'Executable=%s\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nAuthority=Developer ID Certification Authority\\nTeamIdentifier=TEAMRV1234\\n' "$file" >&2; exit 0 ;;
             esac
             ;;
@@ -979,13 +974,60 @@ private struct SignedInstallRun {
     var destBin: URL { home.appendingPathComponent(".local/bin") }
 }
 
+private func shellQuote(_ path: String) -> String {
+    "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
+/// Runs `script` with `environment`. When `systemCodesignShim` is set, mounts
+/// that directory's `codesign` and `spctl` over `/usr/bin` and `/usr/sbin`
+/// inside a user namespace. A shim earlier on `PATH` is not `/usr/bin/codesign`.
+private func runInstallScript(
+    script: URL, environment: [String: String], systemCodesignShim: URL? = nil
+) throws -> (status: Int32, stderr: String) {
+    let process = Process()
+    let stderr = Pipe()
+    process.standardError = stderr
+    process.standardOutput = Pipe()
+    process.environment = environment
+    if let shim = systemCodesignShim {
+        let wrapper = shim.deletingLastPathComponent()
+            .appendingPathComponent("mount-codesign-\(UUID().uuidString).sh")
+        let body = """
+        #!/bin/bash
+        set -eu
+        upper_bin=$(mktemp -d)
+        work_bin=$(mktemp -d)
+        upper_sbin=$(mktemp -d)
+        work_sbin=$(mktemp -d)
+        cp \(shellQuote(shim.appendingPathComponent("codesign").path)) "$upper_bin/codesign"
+        cp \(shellQuote(shim.appendingPathComponent("spctl").path)) "$upper_sbin/spctl"
+        chmod 755 "$upper_bin/codesign" "$upper_sbin/spctl"
+        mount -t overlay overlay -o lowerdir=/usr/bin,upperdir="$upper_bin",workdir="$work_bin" /usr/bin
+        mount -t overlay overlay -o lowerdir=/usr/sbin,upperdir="$upper_sbin",workdir="$work_sbin" /usr/sbin
+        exec /bin/sh \(shellQuote(script.path))
+        """
+        try Data(body.utf8).write(to: wrapper)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wrapper.path)
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/unshare")
+        process.arguments = ["--user", "--map-root-user", "--mount", wrapper.path]
+    } else {
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = [script.path]
+    }
+    try process.run()
+    let err = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    process.waitUntilExit()
+    return (process.terminationStatus, err)
+}
+
 private func runSignedDownloadInstall(
     environment: [String: String] = [:],
     script: URL? = nil,
     withSpanRuntime: Bool = true,
     withPTYClaim: Bool = true,
     previousInstall: Bool = false,
-    withSignatureShims: Bool = true
+    withSignatureShims: Bool = true,
+    mountSystemCodesign: Bool = true
 ) throws -> SignedInstallRun {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-install-signed-\(UUID().uuidString)", isDirectory: true)
@@ -1009,22 +1051,16 @@ private func runSignedDownloadInstall(
     let log = root.appendingPathComponent("tools.log")
     try Data().write(to: log)
 
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/sh")
-    process.arguments = [(script ?? installScriptURL()).path]
-    process.environment = [
+    let processEnvironment = [
         "HOME": home.path,
         "PATH": shim.path + ":/usr/bin:/bin",
         "RV_TEST_TOOL_LOG": log.path,
     ].merging(environment) { $1 }
-    let stderr = Pipe()
-    process.standardError = stderr
-    process.standardOutput = Pipe()
-    try process.run()
-    let err = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-    process.waitUntilExit()
+    let mounted = (withSignatureShims && mountSystemCodesign) ? shim : nil
+    let (status, err) = try runInstallScript(
+        script: script ?? installScriptURL(), environment: processEnvironment, systemCodesignShim: mounted)
     return SignedInstallRun(
-        status: process.terminationStatus,
+        status: status,
         stderr: err,
         toolLog: (try? String(contentsOf: log, encoding: .utf8)) ?? "",
         home: home
@@ -1075,6 +1111,34 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
 
 @Test func installSh_missingCodesignRefusesADownload() throws {
     let run = try runSignedDownloadInstall(previousInstall: true, withSignatureShims: false)
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains(
+        "rv: refusing to install: codesign is not available, so a Developer ID signature cannot be checked"))
+    #expect(run.stderr.contains("warning: release files are not code-signed") == false)
+    #expect(run.toolLog.contains("codesign") == false)
+    try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_identifierPhraseDoesNotSkipTheEmptyTeamCheck() throws {
+    let run = try runSignedDownloadInstall(
+        environment: ["RV_TEST_CODESIGN": "phrase"], previousInstall: true)
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("is signed, but no Developer ID team is pinned"))
+    #expect(run.stderr.contains("warning: release files are not code-signed") == false)
+    #expect(run.toolLog.contains("codesign -dvv "))
+    try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_pathCodesignCannotSkipTheTeamCheck() throws {
+    let run = try runSignedDownloadInstall(
+        environment: ["RV_TEST_CODESIGN": "unsigned"],
+        previousInstall: true,
+        mountSystemCodesign: false
+    )
     defer { removeTemporaryRoot(of: run) }
 
     #expect(run.status == 1)
