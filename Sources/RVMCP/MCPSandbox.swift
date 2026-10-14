@@ -413,7 +413,7 @@ public enum MCPSandbox {
         let tail = Array(parts.dropFirst())
         let primary = syntheticOpenings(parent: parent, name: name, tail: tail, origin: origin, includeCreationDirectory: false)
         if tail.isEmpty || collapsedOpeningCoversTheParent(primary, parent: parent, tail: tail) {
-            return primary
+            return openingsIncludingKeySibling(primary, parent: parent)
         }
         var results = syntheticOpenings(parent: parent, name: name, tail: tail, origin: origin, includeCreationDirectory: true)
         if let dot = finalNameDotOpening(primary, parent: parent), results.contains(dot) == false {
@@ -479,7 +479,9 @@ public enum MCPSandbox {
     /// A single collapsed path covers the creation directory when it is that
     /// directory, or one missing component directly under it. A name after a
     /// real directory (`x` in `/private/tmp/future-keys/x`, or `future-keys`
-    /// in `/private/tmp/anchor/future-keys`) can still be a symlink.
+    /// in `/private/tmp/anchor/future-keys`) can still be a symlink. A single
+    /// missing name can also be `ln -s` to a sibling that already holds
+    /// `id_rsa`; that sibling is added beside the lexical path.
     private static func collapsedOpeningLiesOnTheParent(_ opened: String, parent: String) -> Bool {
         if opened == parent { return true }
         let prefix = parent == "/" ? "/" : parent + "/"
@@ -488,6 +490,31 @@ public enum MCPSandbox {
             separator: "/", omittingEmptySubsequences: true
         )
         return parts.count <= 1
+    }
+
+    /// `ln -s future-keys` on one missing name under the creation directory
+    /// (`../private/tmp/x`). The sibling is a real directory that already
+    /// contains `id_rsa`. The lexical path stays the only opening when that
+    /// path is already the directory (`../private/tmp/future-keys`), and when
+    /// the directory is absent. A directory with no key file is not an opening.
+    private static func openingsIncludingKeySibling(_ primary: [String], parent: String) -> [String] {
+        guard primary.count == 1, let opened = primary.first, opened != parent else { return primary }
+        let prefix = parent == "/" ? "/" : parent + "/"
+        guard opened.hasPrefix(prefix) else { return primary }
+        let parts = opened.dropFirst(prefix.count).split(
+            separator: "/", omittingEmptySubsequences: true
+        )
+        guard parts.count == 1, isRealDirectory(opened) == false else { return primary }
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: parent) else { return primary }
+        var results = primary
+        for name in names {
+            let child = parent == "/" ? "/" + name : parent + "/" + name
+            guard child != opened, results.contains(child) == false else { continue }
+            guard isRealDirectory(child) else { continue }
+            guard FileManager.default.fileExists(atPath: child + "/id_rsa") else { continue }
+            results.append(child)
+        }
+        return results
     }
 
     /// `ln -s .` on a final name that already sits in a real directory.
