@@ -81,6 +81,9 @@ public final class SecretGateway: @unchecked Sendable {
     /// can close it after Darwin would otherwise keep the port accepting.
     private var acceptExited: [Int32: DispatchSemaphore] = [:]
     private var boundPort: Int?
+    /// Bumped by `stop`. A `start` that was binding while `stop` ran must
+    /// not publish its listener afterwards.
+    private var lifecycleGeneration = 0
     private let slots = DispatchSemaphore(value: SecretGateway.maximumConnections)
     private let acceptQueue = DispatchQueue(label: "rv.secret-gateway.accept", qos: .userInitiated)
     /// Test seam, nil in production. Runs after the fast-path check and before
@@ -163,17 +166,19 @@ public final class SecretGateway: @unchecked Sendable {
             lock.unlock()
             return .success(boundPort)
         }
+        let generation = lifecycleGeneration
         let overlap = beforeListenerPublish
         lock.unlock()
         overlap?()
         var fd = Self.openStreamSocket()
         guard fd >= 0 else { return .failure(.socketFailed(errno: errno)) }
         // A listener that stays below the spawn floor occupies a number
-        // relocate just closed. Move it up before bind.
-        guard relocateDescriptor(&fd, above: Self.socketFloor) else {
-            let code = errno
-            close(fd)
-            return .failure(.socketFailed(errno: code))
+        // relocate just closed. Move it up before bind. The owned-socket
+        // form also closes a stdio-slot original, which `socket` may
+        // have returned on Linux when that slot was free.
+        guard relocateOwnedSocket(&fd, above: Self.socketFloor) else {
+            // The failed move already closed the original once.
+            return .failure(.socketFailed(errno: errno))
         }
         let listener = fd
         _ = fcntl(listener, F_SETFD, FD_CLOEXEC)
@@ -217,6 +222,13 @@ public final class SecretGateway: @unchecked Sendable {
         }
         let port = Int(UInt16(bigEndian: actual.sin_port))
         lock.lock()
+        // A stop ran while this socket was binding. Do not publish a
+        // listener after stop returned.
+        if lifecycleGeneration != generation {
+            lock.unlock()
+            close(listener)
+            return .failure(.socketFailed(errno: ECANCELED))
+        }
         // Another start published while this socket was binding. Close the
         // extra listener; callers must use the port that was already published.
         if let published = boundPort {
@@ -242,6 +254,7 @@ public final class SecretGateway: @unchecked Sendable {
 
     public func stop() {
         lock.lock()
+        lifecycleGeneration += 1
         let fds = listenFDs
         let port = boundPort
         let waits = fds.compactMap { acceptExited[$0] }
@@ -271,8 +284,8 @@ public final class SecretGateway: @unchecked Sendable {
     private func wakeListeningPort(_ port: Int) {
         var fd = Self.openStreamSocket()
         guard fd >= 0 else { return }
-        if relocateDescriptor(&fd, above: Self.socketFloor) == false {
-            close(fd)
+        // Owned-socket form: a failed move already closed the original.
+        if relocateOwnedSocket(&fd, above: Self.socketFloor) == false {
             return
         }
         defer { close(fd) }

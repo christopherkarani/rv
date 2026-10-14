@@ -61,6 +61,14 @@ func workspaceInodeAcceptableForPublish(
 /// `workspaceInodeAcceptableForPublish` is the authority check. A hard link
 /// planted on the hidden original tree fails it and must not be written or
 /// unlinked.
+///
+/// Publish is resumable after a clock-stopped partial pass. A name an
+/// earlier pass already removed stays removed (`.leave` off-volume, and
+/// a saved-missing name on-volume is created fresh, touching no existing
+/// inode). A name an earlier pass already created (no snapshot stamp,
+/// saved inode present with no alias) is updated in place; `updateSaved`
+/// re-verifies that live stamp at write time. An aliased saved inode
+/// (link count above one for a file or symlink) still rejects.
 func workspacePublishDecision(
     snapshot: WorkspaceInodeStamp?,
     saved: WorkspaceInodeStamp?,
@@ -71,8 +79,11 @@ func workspacePublishDecision(
         case (let captured?, let live?)
             where workspaceInodeAcceptableForPublish(captured: captured, live: live):
             return .update
-        case (nil, nil):
+        case (_, nil):
             return .create
+        case (nil, let live?)
+            where live.kind == .directory || live.linkCount == 1:
+            return .update
         default:
             return .reject
         }
@@ -81,7 +92,7 @@ func workspacePublishDecision(
     case (let captured?, let live?)
         where workspaceInodeAcceptableForPublish(captured: captured, live: live):
         return .remove
-    case (nil, .some), (nil, nil):
+    case (_, nil), (nil, .some):
         return .leave
     default:
         return .reject
@@ -388,7 +399,7 @@ final class WorkspaceInodeBoundary: Sendable {
         if volume >= 0 {
             close(volume)
         }
-        detachVolume()
+        let detached = detachVolume()
         switch observedDevice(workspacePath, afterDetach: true) {
         case .device(let device) where device == volumeDevice:
             return .failure(.workspaceInodeBoundaryFailed)
@@ -397,6 +408,10 @@ final class WorkspaceInodeBoundary: Sendable {
         case .device, .missing:
             break
         }
+        // A changed device proves only the unmount. Without a detach
+        // that exited 0 the disk stays attached, and marking cleanup
+        // complete would let file cleanup unlink its image.
+        guard detached else { return .failure(.workspaceInodeBoundaryFailed) }
         mutable.withLock { $0.didDetach = true }
         return .success(())
     }
@@ -649,8 +664,21 @@ final class WorkspaceInodeBoundary: Sendable {
         )
     }
 
+    /// A clock-stopped saved-tree mutation can still land from its parked
+    /// worker after this tree is renamed onto the workspace. Nil fences
+    /// that rename; Recovery reattaches with a fresh boundary and resumes.
+    private func savedMutation(_ result: Bool?) -> Bool {
+        if result == nil {
+            mutable.withLock { $0.blockWorkspaceRename = true }
+            return false
+        }
+        return result == true
+    }
+
     private func updateSaved(_ relative: String, from entry: TreeEntry) -> Bool {
-        guard let captured = snapshot[relative] else { return false }
+        // A resumed create has no snapshot stamp. Its authority is the
+        // live saved stamp, re-verified against the opened inode below.
+        guard let captured = snapshot[relative] ?? savedStamp(relative) else { return false }
         switch entry.kind {
         case .directory:
             guard let fd = openSaved(relative, directory: true), fd >= 0 else { return false }
@@ -658,7 +686,7 @@ final class WorkspaceInodeBoundary: Sendable {
             guard let status = fstatWithinCopyClock(fd), acceptableSavedInode(captured, status) else {
                 return false
             }
-            return fchmodWithinCopyClock(fd, entry.mode)
+            return savedMutation(fchmodWithinCopyClock(fd, entry.mode))
         case .regular:
             guard let source = openVolume(relative, directory: false), source >= 0 else { return false }
             defer { close(source) }
@@ -680,7 +708,7 @@ final class WorkspaceInodeBoundary: Sendable {
                 mutable.withLock { $0.blockWorkspaceRename = true }
             }
             guard outcome.committed else { return false }
-            return fchmodWithinCopyClock(dest, entry.mode)
+            return savedMutation(fchmodWithinCopyClock(dest, entry.mode))
         case .symlink:
             guard let target = readVolumeLink(relative) else { return false }
             guard let parent = savedParent(relative) else { return false }
@@ -688,9 +716,8 @@ final class WorkspaceInodeBoundary: Sendable {
             guard let status = fstatatWithinCopyClock(parent.fd, parent.name),
                 acceptableSavedInode(captured, status)
             else { return false }
-            let removed = unlinkatWithinCopyClock(parent.fd, parent.name, 0)
-            guard removed else { return false }
-            return symlinkWithinCopyClock(parent.fd, parent.name, target)
+            guard savedMutation(unlinkatWithinCopyClock(parent.fd, parent.name, 0)) else { return false }
+            return savedMutation(symlinkWithinCopyClock(parent.fd, parent.name, target))
         }
     }
 
@@ -723,9 +750,9 @@ final class WorkspaceInodeBoundary: Sendable {
         guard let same = savedContentsEqual(source, readOnly) else { return false }
         if same {
             if modeBits(status.st_mode) == mode { return true }
-            return fchmodWithinCopyClock(readOnly, mode)
+            return savedMutation(fchmodWithinCopyClock(readOnly, mode))
         }
-        guard fchmodWithinCopyClock(readOnly, modeBits(status.st_mode) | 0o200) else { return false }
+        guard savedMutation(fchmodWithinCopyClock(readOnly, modeBits(status.st_mode) | 0o200)) else { return false }
         let dest = openatWithinCopyClock(
             parent.fd,
             parent.name,
@@ -748,7 +775,7 @@ final class WorkspaceInodeBoundary: Sendable {
             mutable.withLock { $0.blockWorkspaceRename = true }
         }
         guard outcome.committed else { return false }
-        return fchmodWithinCopyClock(dest, mode)
+        return savedMutation(fchmodWithinCopyClock(dest, mode))
     }
 
     /// Byte-compare two descriptors from their starts. Nil when either side
@@ -799,7 +826,7 @@ final class WorkspaceInodeBoundary: Sendable {
         defer { close(parent.fd) }
         switch entry.kind {
         case .directory:
-            return mkdiratWithinCopyClock(parent.fd, parent.name, entry.mode)
+            return savedMutation(mkdiratWithinCopyClock(parent.fd, parent.name, entry.mode))
         case .regular:
             let dest = openatWithinCopyClock(
                 parent.fd,
@@ -821,7 +848,7 @@ final class WorkspaceInodeBoundary: Sendable {
             return true
         case .symlink:
             guard let target = readVolumeLink(relative) else { return false }
-            return symlinkWithinCopyClock(parent.fd, parent.name, target)
+            return savedMutation(symlinkWithinCopyClock(parent.fd, parent.name, target))
         }
     }
 
@@ -834,7 +861,7 @@ final class WorkspaceInodeBoundary: Sendable {
             acceptableSavedInode(captured, status)
         else { return false }
         let flags: Int32 = captured.kind == .directory ? AT_REMOVEDIR : 0
-        return unlinkatWithinCopyClock(parent.fd, parent.name, flags)
+        return savedMutation(unlinkatWithinCopyClock(parent.fd, parent.name, flags))
     }
 
     private func savedStamp(_ relative: String) -> WorkspaceInodeStamp? {
@@ -1067,11 +1094,75 @@ final class WorkspaceInodeBoundary: Sendable {
     }
 }
 
+private func orphanMarkerPath(forSaved savedPath: String) -> String {
+    savedPath + ".rv-orphan"
+}
+
+/// Rename the hidden tree back onto the workspace. The `.created`
+/// journal record is written only after establish succeeds, so when the
+/// rename cannot be confirmed (mount still up, name occupied), record
+/// where the tree belongs in a sibling marker. The next establish for
+/// that workspace finds it via `recoverOrphanedSavedTree`. Both paths
+/// live on the host parent filesystem, like `renamePath` itself.
+private func restoreSavedOrMarkOrphan(savedPath: String, workspacePath: String) {
+    if renamePath(savedPath, workspacePath) { return }
+    _ = FileManager.default.createFile(
+        atPath: orphanMarkerPath(forSaved: savedPath),
+        contents: Data((workspacePath + "\n").utf8)
+    )
+}
+
+enum OrphanedSavedRecovery: Equatable, Sendable {
+    case none
+    case restored
+    case blocked
+}
+
+/// Find a `.rv-saved-*` sibling whose orphan marker names this
+/// workspace and put it back. Blocked when the marker is ambiguous or
+/// the workspace name now holds a non-empty directory: never clobber.
+func recoverOrphanedSavedTree(at workspacePath: String) -> OrphanedSavedRecovery {
+    let parent = (workspacePath as NSString).deletingLastPathComponent
+    guard let names = try? FileManager.default.contentsOfDirectory(atPath: parent) else {
+        return .none
+    }
+    var matches: [String] = []
+    for name in names where name.hasPrefix(".rv-saved-") {
+        let savedPath = (parent as NSString).appendingPathComponent(name)
+        guard let text = try? String(
+            contentsOfFile: orphanMarkerPath(forSaved: savedPath),
+            encoding: .utf8
+        ) else { continue }
+        if text.trimmingCharacters(in: .whitespacesAndNewlines) == workspacePath {
+            matches.append(savedPath)
+        }
+    }
+    guard let savedPath = matches.first else { return .none }
+    guard matches.count == 1 else { return .blocked }
+    var occupied = ObjCBool(false)
+    if FileManager.default.fileExists(atPath: workspacePath, isDirectory: &occupied) {
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: workspacePath)) ?? []
+        guard occupied.boolValue, entries.isEmpty else { return .blocked }
+    }
+    guard renamePath(savedPath, workspacePath) else { return .blocked }
+    try? FileManager.default.removeItem(atPath: orphanMarkerPath(forSaved: savedPath))
+    return .restored
+}
+
 func establishWorkspaceInodeBoundary(
     at workspacePath: String
 ) -> Result<WorkspaceInodeBoundary, IsolationApplyError> {
     if blockingWorkIsCancelled() {
         return .failure(.cancelled)
+    }
+    // A launch cancelled mid-establish can leave the project hidden at a
+    // sibling `.rv-saved-*` with no journal record yet. Put it back (or
+    // refuse, when the name is occupied) before opening anything.
+    switch recoverOrphanedSavedTree(at: workspacePath) {
+    case .blocked:
+        return .failure(.workspaceInodeBoundaryFailed)
+    case .none, .restored:
+        break
     }
     guard let rootOpened = diskImageOpenPathWithinCopyClock(
         workspacePath,
@@ -1107,34 +1198,32 @@ func establishWorkspaceInodeBoundary(
     switch diskImageMkdirWithinCopyClock(workspacePath, 0o700) {
     case true:
         break
-    case nil:
-        return .failure(.workspaceInodeBoundaryFailed)
-    case false:
-        _ = renamePath(savedPath, workspacePath)
+    case nil, false:
+        // A parked mkdir landing after the rename-back fails EEXIST;
+        // one that landed first is an empty directory the rename
+        // replaces. Either way the tree must not stay hidden.
+        restoreSavedOrMarkOrphan(savedPath: savedPath, workspacePath: workspacePath)
         return .failure(.workspaceInodeBoundaryFailed)
     }
     let mounted: MountedDisk
     switch createMountedDisk(byteCount: byteCount, mountPoint: workspacePath, token: String(token)) {
     case .failure(let error):
-        if diskImageRmdirWithinCopyClock(workspacePath) != nil {
-            _ = renamePath(savedPath, workspacePath)
-        }
+        restoreSavedOrMarkOrphan(savedPath: savedPath, workspacePath: workspacePath)
         return .failure(error)
     case .success(let disk):
         mounted = disk
     }
     func failMounted(
         saved: Int32 = -1,
-        volume: Int32 = -1,
-        renameSaved: Bool = true
+        volume: Int32 = -1
     ) -> Result<WorkspaceInodeBoundary, IsolationApplyError> {
         if saved >= 0 { close(saved) }
         if volume >= 0 { close(volume) }
         let detached = detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
-        let removed = diskImageRmdirWithinCopyClock(workspacePath)
-        if renameSaved, removed != nil {
-            _ = renamePath(savedPath, workspacePath)
-        }
+        // No rmdir first: after detach the mount point is the empty
+        // directory mkdir made, which rename replaces. A parked rmdir
+        // could otherwise land on the restored tree.
+        restoreSavedOrMarkOrphan(savedPath: savedPath, workspacePath: workspacePath)
         unlinkImageIfDetached(mounted.imagePath, detachSucceeded: detached)
         return .failure(.workspaceInodeBoundaryFailed)
     }
@@ -1146,24 +1235,22 @@ func establishWorkspaceInodeBoundary(
     else {
         return failMounted()
     }
-    // `nil` leaves the saved path alone: the worker may still be inside
-    // `open`, and `failMounted` would rename that path back.
+    // `nil` means a read-only open may still be in flight. Renaming the
+    // saved tree back is safe against it (the descriptor, if one lands,
+    // is leaked read-only), and leaving the tree hidden is not.
     guard let savedOpened = diskImageOpenPathWithinCopyClock(
         savedPath,
         O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
     ) else {
-        return failMounted(renameSaved: false)
+        return failMounted()
     }
     guard savedOpened >= 0 else { return failMounted() }
     let savedFD = savedOpened
-    // `nil` is the copy clock. `failMounted` would `rmdir` this path while
-    // the worker may still be inside `open`. A finished `-1` may.
     guard let volumeOpened = diskImageOpenPathWithinCopyClock(
         workspacePath,
         O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
     ) else {
-        if savedFD >= 0 { close(savedFD) }
-        return .failure(.workspaceInodeBoundaryFailed)
+        return failMounted(saved: savedFD)
     }
     guard savedFD >= 0, volumeOpened >= 0 else {
         return failMounted(saved: savedFD, volume: volumeOpened)
@@ -1337,7 +1424,14 @@ private func createMountedDiskBody(
             timedOut: attached.timedOut,
             status: attached.status
         )
-        if let follow = leaked.followUpArguments, detachThis || attached.timedOut == false {
+        // `hdiutil detach` takes the published device, never the image
+        // path. Resolve it from the attach plist when one was printed.
+        let follow = DiskImageCancelBudget.detachTargetWhenPlistMissesDisk(
+            image: image,
+            plistStdout: attached.stdout,
+            mountPoint: mountPoint
+        ).map { DiskImageCancelBudget.detachArguments(device: $0) }
+        if let follow, detachThis || attached.timedOut == false {
             let detached = runTool(
                 follow,
                 honorCancellation: false,
@@ -1379,23 +1473,25 @@ private func createMountedDiskBody(
         return finish(.failure(.workspaceInodeBoundaryFailed))
     }
     guard let disk = diskDevice(inPlist: attached.stdout) else {
-        let target = DiskImageCancelBudget.detachTargetWhenPlistMissesDisk(
+        // No resolvable device: detaching by image path cannot work.
+        // Fail closed and leave the image for a later cleanup.
+        if let target = DiskImageCancelBudget.detachTargetWhenPlistMissesDisk(
             image: image,
             plistStdout: attached.stdout,
             mountPoint: mountPoint
-        )
-        let detached = runTool(
-            ["/usr/bin/hdiutil", "detach", "-force", "-quiet", target],
-            honorCancellation: false,
-            deadline: DiskImageCancelBudget.detachCap,
-            clock: clock
-        )
+        ) {
+            _ = runTool(
+                DiskImageCancelBudget.detachArguments(device: target),
+                honorCancellation: false,
+                deadline: DiskImageCancelBudget.detachCap,
+                clock: clock
+            )
+        }
         publishedDisk = true
-        // Detach ran. Exit 0 is not permission to unlink or retry while
-        // diskimagesd can still publish this image.
+        // Even when a detach ran, exit 0 is not permission to unlink or
+        // retry while diskimagesd can still publish this image.
         detachSucceeded = false
         timedOut = true
-        _ = detached
         return finish(.failure(.workspaceInodeBoundaryFailed))
     }
     publishedDisk = true
@@ -1451,8 +1547,11 @@ private func systemEntities(inPlist stdout: String) -> [JSONValue]? {
 private func diskDevice(inPlist stdout: String) -> String? {
     guard let entities = systemEntities(inPlist: stdout) else { return nil }
     let devices = entities.compactMap { $0["dev-entry"]?.string }
-    return devices.first { $0.contains("disk") && $0.hasSuffix("s1") == false && $0.contains("s") == false }
-        ?? devices.first
+    // Whole disk (`/dev/disk4`), never a slice (`/dev/disk4s1`).
+    if let whole = devices.first(where: { DiskImageCancelBudget.wholeDiskDevice($0) == $0 }) {
+        return whole
+    }
+    return devices.lazy.compactMap { DiskImageCancelBudget.wholeDiskDevice($0) }.first
 }
 
 func collectTree(root: Int32, checkDevice: UInt64) -> [String: TreeEntry]? {
@@ -1520,19 +1619,21 @@ private func fstatatWithinCopyClock(_ dirfd: Int32, _ name: String) -> stat? {
     return nil
 }
 
-private func fchmodWithinCopyClock(_ fd: Int32, _ mode: mode_t) -> Bool {
+/// Tri-state like every clocked mutator: nil means the clock stopped
+/// with the call possibly still in flight on a parked worker. Callers
+/// that mutate the saved tree must fence the workspace rename on nil.
+private func fchmodWithinCopyClock(_ fd: Int32, _ mode: mode_t) -> Bool? {
     let allowance = diskImageTreeSyscallAllowance(
         deadline: CooperativeLaunchStop.cancelClock?.deadline
     )
-    if let allowance, allowance <= 0 { return false }
-    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
+    if let allowance, allowance <= 0 { return nil }
+    return diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
         let copy = diskImageDuplicateDescriptor(fd)
         guard copy >= 0 else { return false }
         let changed = fchmod(copy, mode) == 0
         close(copy)
         return changed
     }
-    return ok == true
 }
 
 private func fstatWithinCopyClock(_ fd: Int32) -> stat? {
@@ -1599,12 +1700,12 @@ private func readlinkWithinCopyClock(_ dirfd: Int32, _ name: String) -> String? 
     return box.text
 }
 
-private func symlinkWithinCopyClock(_ dirfd: Int32, _ name: String, _ target: String) -> Bool {
+private func symlinkWithinCopyClock(_ dirfd: Int32, _ name: String, _ target: String) -> Bool? {
     let allowance = diskImageTreeSyscallAllowance(
         deadline: CooperativeLaunchStop.cancelClock?.deadline
     )
-    if let allowance, allowance <= 0 { return false }
-    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
+    if let allowance, allowance <= 0 { return nil }
+    return diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
         let copy = diskImageDuplicateDescriptor(dirfd)
         guard copy >= 0 else { return false }
         let linked = name.withCString { item in
@@ -1615,22 +1716,20 @@ private func symlinkWithinCopyClock(_ dirfd: Int32, _ name: String, _ target: St
         close(copy)
         return linked
     }
-    return ok == true
 }
 
-private func mkdiratWithinCopyClock(_ dirfd: Int32, _ name: String, _ mode: mode_t) -> Bool {
+private func mkdiratWithinCopyClock(_ dirfd: Int32, _ name: String, _ mode: mode_t) -> Bool? {
     let allowance = diskImageTreeSyscallAllowance(
         deadline: CooperativeLaunchStop.cancelClock?.deadline
     )
-    if let allowance, allowance <= 0 { return false }
-    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
+    if let allowance, allowance <= 0 { return nil }
+    return diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
         let copy = diskImageDuplicateDescriptor(dirfd)
         guard copy >= 0 else { return false }
         let created = name.withCString { mkdirat(copy, $0, mode) == 0 }
         close(copy)
         return created
     }
-    return ok == true
 }
 
 private func openatWithinCopyClock(
@@ -1713,7 +1812,7 @@ func copyTree(
         let mode = modeBits(status.st_mode)
         switch kind {
         case .directory:
-            guard mkdiratWithinCopyClock(destination, name, mode) else {
+            guard mkdiratWithinCopyClock(destination, name, mode) == true else {
                 return false
             }
             let childSource = openatWithinCopyClock(
@@ -1744,7 +1843,7 @@ func copyTree(
             guard let target = readlinkWithinCopyClock(source, name) else {
                 return false
             }
-            if symlinkWithinCopyClock(destination, name, target) == false {
+            if symlinkWithinCopyClock(destination, name, target) != true {
                 return false
             }
         case .regular:
@@ -1774,7 +1873,7 @@ func copyTree(
                 return false
             }
             let copied = copyFileDataObservingCancelClock(from: input, to: output)
-            let modeOK = copied && fchmodWithinCopyClock(output, mode)
+            let modeOK = copied && fchmodWithinCopyClock(output, mode) == true
             close(input)
             close(output)
             if modeOK == false { return false }
@@ -1826,19 +1925,18 @@ private func unlinkNewSaved(_ dirfd: Int32, _ name: String) {
     _ = unlinkatWithinCopyClock(dirfd, name, 0)
 }
 
-private func unlinkatWithinCopyClock(_ dirfd: Int32, _ name: String, _ flags: Int32) -> Bool {
+private func unlinkatWithinCopyClock(_ dirfd: Int32, _ name: String, _ flags: Int32) -> Bool? {
     let allowance = diskImageTreeSyscallAllowance(
         deadline: CooperativeLaunchStop.cancelClock?.deadline
     )
-    if let allowance, allowance <= 0 { return false }
-    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
+    if let allowance, allowance <= 0 { return nil }
+    return diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
         let copy = diskImageDuplicateDescriptor(dirfd)
         guard copy >= 0 else { return false }
         let removed = name.withCString { unlinkat(copy, $0, flags) == 0 }
         close(copy)
         return removed
     }
-    return ok == true
 }
 
 func directoryNames(_ dirfd: Int32, isWorkspaceRoot: Bool) -> [String]? {
@@ -2787,7 +2885,27 @@ private func detachPublishedTarget(
             waitedForPublication: false
         )
     }
-    guard let follow = plan.followUpArguments else {
+    let follow: [String]?
+    if case .detachImage(let image) = plan {
+        // Detach takes the published devname, never the image path.
+        switch workspaceImageDevice(image, returnDeadline: returnDeadline, clock: clock) {
+        case .device(let device):
+            follow = DiskImageCancelBudget.detachArguments(device: device)
+        case .absent:
+            return PreemptCleanupOutcome(
+                succeeded: false,
+                targetWasAbsent: true,
+                busy: false,
+                diskCanStillAppear: false,
+                waitedForPublication: waitedForPublication
+            )
+        case .unknown:
+            follow = nil
+        }
+    } else {
+        follow = plan.followUpArguments
+    }
+    guard let follow else {
         return PreemptCleanupOutcome(
             succeeded: false,
             targetWasAbsent: false,
@@ -2926,6 +3044,53 @@ private func workspaceImageListed(
         infoTimedOut: false,
         parsedImageCount: rawCount
     )
+}
+
+private enum WorkspaceImageDevice {
+    case device(String)
+    /// A parsed listing that does not contain the image.
+    case absent
+    case unknown
+}
+
+/// The whole-disk device `hdiutil info` currently publishes for `image`.
+/// `hdiutil detach` needs that devname; the image path is not accepted.
+private func workspaceImageDevice(
+    _ image: String,
+    returnDeadline: Date,
+    clock: DiskImageCancelClock
+) -> WorkspaceImageDevice {
+    let infoBudget = diskImageListedInfoBudget(
+        sliceDeadline: returnDeadline,
+        localDeadline: clock.deadline,
+        sharedDeadline: CooperativeLaunchStop.cancelClock?.deadline
+    )
+    guard infoBudget > 0 else { return .unknown }
+    let info = runToolBody(
+        ["/usr/bin/hdiutil", "info", "-plist"],
+        honorCancellation: false,
+        deadline: infoBudget,
+        yieldToPriorityWaiter: false,
+        parkIfStuck: false,
+        returnDeadline: returnDeadline,
+        clock: clock
+    )
+    if info.helperStillAlive || info.output.timedOut || info.output.status != 0 {
+        return .unknown
+    }
+    guard let data = info.output.stdout.data(using: .utf8),
+        let images = AttachedWorkspaceImage.parse(hdiutilInfo: data),
+        let rawCount = AttachedWorkspaceImage.listedImageCount(hdiutilInfo: data)
+    else {
+        return .unknown
+    }
+    guard let match = images.first(where: { diskImageSamePath($0.imagePath, image) }) else {
+        return rawCount > 0 ? .absent : .unknown
+    }
+    guard let raw = match.device, let device = DiskImageCancelBudget.wholeDiskDevice(raw) else {
+        return .unknown
+    }
+    return .device(device)
 }
 
 private struct HelperRun {

@@ -93,15 +93,21 @@ struct MountedSeatbeltOutcome {
 }
 
 /// Cooperative stop for one runtime. The watch loop polls it.
+///
+/// Backed by the same flag type the executor installs, so `request`
+/// also arms the one cancel clock at the request instant. The watch
+/// thread installs `launchStopFlag`; without it, `spentSinceCancel`
+/// and the shared clock read an empty thread dictionary there and
+/// teardown silently arms fresh budgets.
 final class RuntimeCancellation: Sendable {
-    private let flag = Mutex(false)
+    let launchStopFlag = CooperativeLaunchStop.Flag()
 
     func request() {
-        flag.withLock { $0 = true }
+        launchStopFlag.cancel()
     }
 
     var isRequested: Bool {
-        flag.withLock { $0 }
+        launchStopFlag.isSet
     }
 }
 

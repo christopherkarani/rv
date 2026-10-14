@@ -63,7 +63,9 @@ func relocateOwnedSocket(_ fd: inout Int32, above floor: Int32) -> Bool {
     let original = fd
     guard original >= 0 else { return false }
     guard relocateDescriptor(&fd, above: floor) else {
+        let failure = errno
         closeOwnedSocket(original)
+        errno = failure
         return false
     }
     if original < 3, original != fd {

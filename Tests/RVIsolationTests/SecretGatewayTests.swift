@@ -344,6 +344,38 @@ struct SecretGatewayTests {
         gateway.stop()
         #expect(portAccepts(restarted) == false)
     }
+
+    @Test func startBindingWhileStopRunsDoesNotPublishAListener() throws {
+        let gateway = SecretGateway(transport: RecordingUpstream().transport) { _ in }
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        gateway.beforeListenerPublish = {
+            entered.signal()
+            _ = release.wait(timeout: .now() + 10)
+        }
+        let outcome = Mutex<Result<Int, EgressStartError>?>(nil)
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { group.leave() }
+            outcome.withLock { $0 = gateway.start() }
+        }
+        #expect(entered.wait(timeout: .now() + 5) == .success)
+        gateway.stop()
+        release.signal()
+        #expect(group.wait(timeout: .now() + 5) == .success)
+        gateway.beforeListenerPublish = nil
+        let result = try #require(outcome.withLock { $0 })
+        if case .success(let leaked) = result {
+            Issue.record("start published port \(leaked) after stop")
+            #expect(portAccepts(leaked) == false)
+        }
+        #expect(gateway.port == nil)
+        // A later start still works and stop still closes it.
+        let restarted = try gateway.start().get()
+        gateway.stop()
+        #expect(portAccepts(restarted) == false)
+    }
 }
 
 /// Two `start` calls block until both have passed the fast path.

@@ -2370,6 +2370,15 @@ private final class WorkspaceChild: Sendable {
     ) {
         let child = self
         let thread = Thread {
+            // The watch and its teardown read the shared cancel clock
+            // through the thread dictionary. Install this runtime's flag
+            // so `request` starts that clock here, as on the executor.
+            IsolationBlockingWork.markOffPool()
+            CooperativeLaunchStop.install(child.stop.launchStopFlag)
+            defer {
+                CooperativeLaunchStop.uninstall()
+                IsolationBlockingWork.clearOffPool()
+            }
             _ = watchSeatbeltProcess(child.live, stop: child.stop, onDeathObserved: deathObserved)
             ended()
             child.markFinished()

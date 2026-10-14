@@ -1356,6 +1356,12 @@ enum RVIsolationMount {
         if ownedDevice && ownedSource {
             return savedMatches ? .ownedMount : .savedTreeMismatch
         }
+        // On the volume device but mount facts unavailable (clock-skipped
+        // statfs): the mount may still be ours. Calling it missing would
+        // mark mount cleanup complete without detaching.
+        if ownedDevice && facts == nil {
+            return .ambiguous
+        }
         if mountedHere {
             return .unrelatedMount
         }

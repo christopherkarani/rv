@@ -128,6 +128,10 @@ struct SeatbeltPerMIBExperimentTests {
             "/opt/homebrew/bin/node", "/usr/local/bin/node",
         ]) {
             tools.append((node, ["-e", "console.log('t9-node-ok')"], "t9-node-ok"))
+        } else if ProcessInfo.processInfo.environment["CI"] != nil {
+            // The node row is the only row that exercises
+            // hw.pagesize_compat. On CI it is a hard row, not a skip.
+            Issue.record("node not found on CI; hw.pagesize_compat row untested")
         }
         for tool in tools {
             #expect(FileManager.default.isExecutableFile(atPath: tool.path), "missing \(tool.path)")

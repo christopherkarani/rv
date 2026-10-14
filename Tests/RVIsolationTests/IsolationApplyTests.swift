@@ -313,6 +313,48 @@ struct IsolationApplyTests {
         linkedTwice.linkCount = 2
         #expect(workspacePublishDecision(snapshot: link, saved: linkedTwice, onVolume: true) == .reject)
     }
+
+    @Test func workspacePublishDecision_resumesAnInterruptedPublish() {
+        let original = WorkspaceInodeStamp(device: 1, inode: 10, linkCount: 1, kind: .regular)
+        // Already removed by the interrupted pass: nothing left to do.
+        #expect(workspacePublishDecision(snapshot: original, saved: nil, onVolume: false) == .leave)
+        // Saved name gone but the volume still has it (interrupted
+        // symlink replace): create a fresh inode, touch nothing existing.
+        #expect(workspacePublishDecision(snapshot: original, saved: nil, onVolume: true) == .create)
+        // Already created by the interrupted pass, no alias: update it.
+        let created = WorkspaceInodeStamp(device: 1, inode: 77, linkCount: 1, kind: .regular)
+        #expect(workspacePublishDecision(snapshot: nil, saved: created, onVolume: true) == .update)
+        var aliased = created
+        aliased.linkCount = 2
+        #expect(workspacePublishDecision(snapshot: nil, saved: aliased, onVolume: true) == .reject)
+        let createdDirectory = WorkspaceInodeStamp(device: 1, inode: 78, linkCount: 2, kind: .directory)
+        #expect(workspacePublishDecision(snapshot: nil, saved: createdDirectory, onVolume: true) == .update)
+    }
+
+    @Test func orphanedSavedTreeIsRestoredByItsMarker() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-orphan-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = root.appendingPathComponent("project", isDirectory: true)
+        let saved = root.appendingPathComponent(".rv-saved-ABCDEF012345", isDirectory: true)
+        try FileManager.default.createDirectory(at: saved, withIntermediateDirectories: true)
+        try Data("work".utf8).write(to: saved.appendingPathComponent("file.txt"))
+        let marker = saved.path + ".rv-orphan"
+        try Data((workspace.path + "\n").utf8).write(to: URL(fileURLWithPath: marker))
+        #expect(recoverOrphanedSavedTree(at: workspace.path) == .restored)
+        #expect(try Data(contentsOf: workspace.appendingPathComponent("file.txt")) == Data("work".utf8))
+        #expect(FileManager.default.fileExists(atPath: marker) == false)
+        #expect(recoverOrphanedSavedTree(at: workspace.path) == .none)
+
+        // An occupied non-empty workspace is never clobbered.
+        let savedAgain = root.appendingPathComponent(".rv-saved-ABCDEF012346", isDirectory: true)
+        try FileManager.default.createDirectory(at: savedAgain, withIntermediateDirectories: true)
+        try Data((workspace.path + "\n").utf8)
+            .write(to: URL(fileURLWithPath: savedAgain.path + ".rv-orphan"))
+        #expect(recoverOrphanedSavedTree(at: workspace.path) == .blocked)
+        #expect(FileManager.default.fileExists(atPath: savedAgain.path))
+    }
     #endif
 
     @Test func containedLaunchResult_reportsTeardownFailure() throws {

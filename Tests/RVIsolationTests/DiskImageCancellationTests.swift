@@ -32,7 +32,9 @@ private final class DeadlineGate: @unchecked Sendable {
 /// Cancelled diskimage teardown stays inside the existing 8-second return
 /// bound, and a preempted helper does not drop the serialization lock
 /// while it, or the attach/mount it published, is still live.
-@Suite("DiskImageCancellation")
+// Serialized: several tests assert wall-clock bounds against shared
+// clocks and thread state, which parallel suites on one runner skew.
+@Suite("DiskImageCancellation", .serialized)
 struct DiskImageCancellationTests {
     @Test func cancelledDetachBudgetStaysInsideEightSeconds() {
         let helpers = DiskImageCancelBudget.cancelledDetachHelpers()
@@ -103,8 +105,11 @@ struct DiskImageCancellationTests {
         let attach = ["/usr/bin/hdiutil", "attach", "-nomount", "-plist", image]
         let plan = PreemptedDiskHelperCleanup.plan(arguments: attach)
         #expect(plan == .detachImage(image))
-        #expect(plan.followUpArguments == [
-            "/usr/bin/hdiutil", "detach", "-force", "-quiet", image,
+        // No static argv: detach takes the published devname, resolved
+        // at the execution site, never the image path.
+        #expect(plan.followUpArguments == nil)
+        #expect(DiskImageCancelBudget.detachArguments(device: "/dev/disk4") == [
+            "/usr/bin/hdiutil", "detach", "-force", "-quiet", "/dev/disk4",
         ])
         #expect(diskImageMayDropSerializationLock(
             helperStillAlive: false, cleanup: plan, cleanupFinished: false
@@ -241,7 +246,7 @@ struct DiskImageCancellationTests {
         ) == false)
     }
 
-    @Test func plistMissDetachesTheImageOrPublishedDiskNeverTheMountPoint() {
+    @Test func plistMissDetachesOnlyAPublishedDiskNeverTheImageOrMountPoint() {
         let image = "/tmp/rv-inode-token.sparseimage"
         let mount = "/tmp/rv-workspace"
         #expect(DiskImageCancelBudget.detachTargetWhenPlistMissesDisk(
@@ -249,16 +254,26 @@ struct DiskImageCancellationTests {
             plistStdout: "system-entities /dev/disk4 junk",
             mountPoint: mount
         ) == "/dev/disk4")
+        // Real plist XML wraps the device in a string element.
+        #expect(DiskImageCancelBudget.detachTargetWhenPlistMissesDisk(
+            image: image,
+            plistStdout: "<key>dev-entry</key>\n<string>/dev/disk5s1</string>",
+            mountPoint: mount
+        ) == "/dev/disk5")
+        // No device anywhere: detach by image path cannot work, so nil.
         #expect(DiskImageCancelBudget.detachTargetWhenPlistMissesDisk(
             image: image,
             plistStdout: "",
             mountPoint: mount
-        ) == image)
+        ) == nil)
         #expect(DiskImageCancelBudget.detachTargetWhenPlistMissesDisk(
             image: image,
             plistStdout: mount,
             mountPoint: mount
-        ) != mount)
+        ) == nil)
+        #expect(DiskImageCancelBudget.wholeDiskDevice("/dev/disk12s3") == "/dev/disk12")
+        #expect(DiskImageCancelBudget.wholeDiskDevice("/dev/disk") == nil)
+        #expect(DiskImageCancelBudget.wholeDiskDevice("/tmp/disk4") == nil)
     }
 
     @Test func inFlightToolUsesTheCancelClockNotAFreshBudget() {
@@ -1646,6 +1661,57 @@ struct DiskImageCancellationTests {
         #expect(leftover.isEmpty == false)
         #expect(DiskImageCancelBudget.returnBound == 8)
         #expect(DiskImageCancelBudget.detachCap == 5)
+    }
+
+    /// A clock stop at `ftruncate` is not a finished failure: the parked
+    /// worker can still truncate. The tri-state result must say so (nil),
+    /// and a finished truncate still reports true.
+    @Test func ftruncateClockStopIsNotAFinishedFailure() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-ftruncate-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("saved")
+        try Data(repeating: 0x41, count: 128).write(to: url)
+        let handle = try FileHandle(forUpdating: url)
+        defer { try? handle.close() }
+        try withSpentCopyClock {
+            #expect(diskImageFtruncateWithinCopyClock(handle.fileDescriptor, 0) == nil)
+        }
+        #expect(try Data(contentsOf: url).count == 128)
+        #expect(diskImageFtruncateWithinCopyClock(handle.fileDescriptor, 0) == true)
+        #expect(try Data(contentsOf: url).count == 0)
+    }
+
+    /// An attribute larger than the copy window still copies: the get
+    /// and set run whole on clocked workers instead of failing the tree.
+    @Test func xattrLargerThanTheWindowStillCopies() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-xattr-large-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceURL = root.appendingPathComponent("source")
+        let destURL = root.appendingPathComponent("dest")
+        FileManager.default.createFile(atPath: sourceURL.path, contents: Data("src".utf8))
+        FileManager.default.createFile(atPath: destURL.path, contents: Data("dst".utf8))
+        let source = try FileHandle(forUpdating: sourceURL)
+        let destination = try FileHandle(forUpdating: destURL)
+        defer {
+            try? source.close()
+            try? destination.close()
+        }
+        let name = "user.rv-large"
+        let value = [UInt8](repeating: 7, count: 100_000)
+        try #require(writeXattr(source.fileDescriptor, name, value))
+        // A stale destination-only attribute must not survive the copy.
+        try #require(writeXattr(destination.fileDescriptor, "user.rv-stale", [1]))
+        let copied = copyXattrsObservingClock(
+            from: source.fileDescriptor,
+            to: destination.fileDescriptor
+        ) { true }
+        #expect(copied)
+        #expect(readXattr(destination.fileDescriptor, name) == value)
+        #expect(readXattr(destination.fileDescriptor, "user.rv-stale") == nil)
     }
 
     /// A spent copy clock must not run these on the caller. `a044874d` still

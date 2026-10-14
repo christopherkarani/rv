@@ -218,24 +218,61 @@ enum DiskImageCancelBudget {
         status == 0 && timedOut == false
     }
 
-    /// Plist parse missed the device. Detach a `/dev/disk*` in the text,
-    /// otherwise the image. Never the mount point: that is not the disk
-    /// `hdiutil attach` published.
+    /// Plist parse missed the device. Find a `/dev/disk*` in the text,
+    /// including inside plist XML (`<string>/dev/disk4</string>`).
+    /// `hdiutil detach` accepts only a devname or mount point, so the
+    /// image path is never a valid target: no device in the text means
+    /// nil, and the caller must fail closed instead of detaching by image.
     static func detachTargetWhenPlistMissesDisk(
         image: String,
         plistStdout: String,
         mountPoint: String
-    ) -> String {
-        if let disk = plistStdout.split(whereSeparator: \.isWhitespace).map(String.init).first(where: {
-            $0.hasPrefix("/dev/disk")
-        }) {
-            return disk
+    ) -> String? {
+        _ = image
+        _ = mountPoint
+        return firstDiskDevice(in: plistStdout)
+    }
+
+    /// First `/dev/diskN` (whole disk, slice suffix stripped) in `text`.
+    static func firstDiskDevice(in text: String) -> String? {
+        var search = text[...]
+        while let range = search.range(of: "/dev/disk") {
+            let rest = search[range.lowerBound...]
+            var end = rest.startIndex
+            while end < rest.endIndex,
+                rest[end].isNumber || rest[end].isLetter || rest[end] == "/"
+            {
+                end = rest.index(after: end)
+            }
+            if let device = wholeDiskDevice(String(rest[..<end])) {
+                return device
+            }
+            search = search[range.upperBound...]
         }
-        // `mountPoint` is the workspace path, not the disk attach published.
-        if image == mountPoint, image.hasPrefix("/dev/disk") {
-            return image
+        return nil
+    }
+
+    /// `/dev/disk4s1` → `/dev/disk4`. Nil for anything that is not a
+    /// `/dev/disk<digits>` optionally followed by `s<digits>`.
+    static func wholeDiskDevice(_ candidate: String) -> String? {
+        guard candidate.hasPrefix("/dev/disk") else { return nil }
+        var rest = candidate.dropFirst("/dev/disk".count)
+        var digits = ""
+        while let first = rest.first, first.isNumber {
+            digits.append(first)
+            rest = rest.dropFirst()
         }
-        return image
+        guard digits.isEmpty == false else { return nil }
+        if rest.isEmpty { return "/dev/disk" + digits }
+        guard rest.first == "s" else { return nil }
+        let slice = rest.dropFirst()
+        guard slice.isEmpty == false, slice.allSatisfy(\.isNumber) else { return nil }
+        return "/dev/disk" + digits
+    }
+
+    /// `hdiutil detach` argv for a resolved device.
+    static func detachArguments(device: String) -> [String] {
+        ["/usr/bin/hdiutil", "detach", "-force", "-quiet", device]
     }
 
     /// Deadline for an `umount` or `hdiutil detach` once cancellation is
@@ -314,12 +351,14 @@ enum PreemptedDiskHelperCleanup: Equatable, Sendable {
     }
 
     /// Helper to run before the lock is released. Unlink is not a helper.
+    /// A detached image has no static argv: `hdiutil detach` takes a
+    /// devname or mount point, never the image path, so the execution
+    /// site must resolve the device (attach plist or `hdiutil info`)
+    /// and use `DiskImageCancelBudget.detachArguments(device:)`.
     var followUpArguments: [String]? {
         switch self {
-        case .none, .unlinkSparseImage:
+        case .none, .unlinkSparseImage, .detachImage:
             return nil
-        case .detachImage(let image):
-            return ["/usr/bin/hdiutil", "detach", "-force", "-quiet", image]
         case .unmount(let mountPoint):
             return ["/sbin/umount", "-f", mountPoint]
         }
@@ -752,6 +791,11 @@ private final class DiskImageParkedCalls: @unchecked Sendable {
 
     func keep(_ thread: Thread) {
         lock.lock()
+        // A finished parked worker is no longer inside its syscall, so
+        // its Thread need not be retained. Pruning here bounds retention
+        // to workers that are still wedged, instead of every worker that
+        // ever timed out.
+        threads.removeAll { $0.isFinished }
         threads.append(thread)
         lock.unlock()
     }
@@ -982,16 +1026,17 @@ func diskImageOpenPathWithinCopyClock(
 
 /// `ftruncate` on a duplicate of `fd`. The duplicate shares the open file
 /// description, so the caller's offset and size change with it. A clock
-/// stop returns false and does not close the duplicate out from under the call.
-func diskImageFtruncateWithinCopyClock(_ fd: Int32, _ length: off_t) -> Bool {
-    let ok = diskImagePerformWithinCopyClock {
+/// stop returns nil and does not close the duplicate out from under the
+/// call: the parked worker can still truncate afterwards, so nil must be
+/// treated as "may have truncated", never as a finished failure.
+func diskImageFtruncateWithinCopyClock(_ fd: Int32, _ length: off_t) -> Bool? {
+    diskImagePerformWithinCopyClock {
         let copy = diskImageDuplicateDescriptor(fd)
         guard copy >= 0 else { return false }
         let truncated = ftruncate(copy, length) == 0
         close(copy)
         return truncated
     }
-    return ok == true
 }
 
 /// `chmod` off the caller. `nil` is the copy clock: the mode is unchanged
@@ -1867,8 +1912,9 @@ func mayReplaceSavedFile(stagedCopyFinished: Bool, clockAllowsCopy: Bool) -> Boo
 ///
 /// `mayRenameOntoWorkspace` is false when `ftruncate` already ran and the
 /// backup could not be written back under the clock. That file must not be
-/// renamed onto the workspace. A stop before `ftruncate` leaves the original
-/// bytes in place, so the saved tree may still be restored.
+/// renamed onto the workspace. A stop before `ftruncate` starts leaves the
+/// original bytes in place, so the saved tree may still be restored; a stop
+/// with `ftruncate` possibly in flight does not.
 struct SavedReplaceOutcome: Equatable, Sendable {
     var committed: Bool
     var reachedTruncate: Bool
@@ -1961,7 +2007,23 @@ func replaceOriginalOnlyAfterStagedCopy(
     guard lseek(staged, 0, SEEK_SET) == 0, lseek(original, 0, SEEK_SET) == 0 else {
         return untouched()
     }
-    guard diskImageFtruncateWithinCopyClock(original, 0) else { return untouched() }
+    switch diskImageFtruncateWithinCopyClock(original, 0) {
+    case true:
+        break
+    case false:
+        // A finished failure: the truncate did not run.
+        return untouched()
+    case nil:
+        // The parked worker can still truncate the original after this
+        // return. The bytes are not known-intact and the tree must not
+        // be renamed onto the workspace.
+        return SavedReplaceOutcome(
+            committed: false,
+            reachedTruncate: true,
+            originalIntact: false,
+            mayRenameOntoWorkspace: false
+        )
+    }
     let committed = copyFileLeavingDetachReserve(
         from: staged,
         to: original,
@@ -2148,7 +2210,7 @@ func installBackupAcrossDevices(
         return .failed
     }
     guard staged >= 0 else {
-        return preserveTruncatedSaved(path)
+        return preserveTruncatedSaved(path, backupURL: backupURL)
     }
     defer {
         close(staged)
@@ -2165,18 +2227,34 @@ func installBackupAcrossDevices(
     let backupSize = descriptorSize(backup)
     let complete = copied && stagedSize == backupSize && stagedSize != nil
     guard complete else {
-        return preserveTruncatedSaved(path)
+        return preserveTruncatedSaved(path, backupURL: backupURL)
     }
     let replaced = diskImageRenameWithinCopyClock(staging, path)
     if replaced == true { return .restored }
     if replaced == nil { return .failed }
-    return preserveTruncatedSaved(path)
+    return preserveTruncatedSaved(path, backupURL: backupURL)
 }
 
-/// A finished unlink keeps the old result: failure is still `.preservedBackup`.
-/// A clock stop is not that outcome, because the truncated file is not gone.
-private func preserveTruncatedSaved(_ path: String) -> BackupInstall {
-    if diskImageUnlinkWithinCopyClock(path) == nil { return .failed }
+/// The intact bytes survive only in the backup file. Deleting the saved
+/// name would leave that backup unrecorded in the temporary directory.
+/// Move the truncated file aside in the saved tree and name the backup
+/// in a sibling marker, so both artifacts stay discoverable beside the
+/// tree that recovery already inspects. A clock stop on the rename is
+/// not this outcome, because the truncated file is not yet aside.
+private func preserveTruncatedSaved(_ path: String, backupURL: URL) -> BackupInstall {
+    let aside = path + ".rv-truncated"
+    _ = diskImageUnlinkWithinCopyClock(aside)
+    guard diskImageRenameWithinCopyClock(path, aside) == true else { return .failed }
+    let marker = path + ".rv-backup-pointer"
+    if let markerFD = diskImageOpenPathWithinCopyClock(
+        marker,
+        O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
+        mode_t(0o600)
+    ), markerFD >= 0 {
+        let text = Array((backupURL.path + "\n").utf8)
+        _ = diskImageWriteWithinCopyClock(markerFD, bytes: text, offset: 0, count: text.count)
+        close(markerFD)
+    }
     return .preservedBackup
 }
 
@@ -2248,12 +2326,35 @@ func copyXattrsObservingClock(
             return false
         }
     }
+    // The destination is an existing saved inode on the publish path.
+    // An attribute the source no longer has must not survive there.
+    guard let destinationNames = listXattrNames(destination) else { return false }
+    let sourceNames = Set(names)
+    for name in destinationNames
+    where name != "com.apple.ResourceFork" && sourceNames.contains(name) == false {
+        if mayContinue() == false { return false }
+        if removeXattr(destination, name) == false { return false }
+    }
     return true
 }
 
-/// One user attribute. Each window checks the clock, then gets or sets only
-/// that many bytes. A value the kernel will not return in one window stops
-/// the copy instead of falling back to a single read of the whole value.
+func removeXattr(_ fd: Int32, _ name: String) -> Bool {
+    let label = name
+    let ok = diskImagePerformWithinCopyClock {
+        let copy = diskImageDuplicateDescriptor(fd)
+        guard copy >= 0 else { return false }
+        let removed = label.withCString { xattrRemove(copy, $0) == 0 }
+        close(copy)
+        return removed
+    }
+    return ok == true
+}
+
+/// One user attribute. A value that fits the window is got and set in
+/// that window. A larger value is got and set whole: Darwin's position
+/// argument serves only the resource fork, so a windowed get of a plain
+/// attribute cannot advance. The whole-value get and set still run on
+/// clocked workers and the detach reserve is rechecked between them.
 func copyOneXattrObservingClock(
     from source: Int32,
     to destination: Int32,
@@ -2272,23 +2373,24 @@ func copyOneXattrObservingClock(
     guard needed >= 0 else { return false }
     if needed == 0 { return mayContinue() }
     let step = max(1, chunkBytes)
-    var offset = 0
     var gathered = [UInt8]()
-    gathered.reserveCapacity(min(needed, step))
-    while offset < needed {
+    if needed > step {
         if mayContinue() == false { return false }
-        let length = min(step, needed - offset)
-        guard let window = readXattrWindow(source, name, offset: offset, length: length) else {
+        guard let whole = readXattr(source, name), whole.count == needed else { return false }
+        trace.noteRead(whole.count)
+        gathered = whole
+    } else {
+        gathered.reserveCapacity(needed)
+        if mayContinue() == false { return false }
+        guard let window = readXattrWindow(source, name, offset: 0, length: needed) else {
             return false
         }
-        if window.count != length { return false }
+        if window.count != needed { return false }
         trace.noteRead(window.count)
-        // The get can finish inside the budget. That is not the set.
-        if mayContinue() == false { return false }
         gathered.append(contentsOf: window)
-        offset += window.count
     }
-    if gathered.count > step { return false }
+    if mayContinue() == false { return false }
+    // The get can finish inside the budget. That is not the set.
     if mayContinue() == false { return false }
     // Immediately before `fsetxattr`. The detach reserve can be gone
     // even though the get finished inside the budget.
@@ -2490,7 +2592,19 @@ func copyResourceForkObservingClock(
     guard let src = diskImageOpenPathWithinCopyClock(sourceFork, O_RDONLY | O_CLOEXEC) else {
         return false
     }
-    if src < 0 { return true }
+    if src < 0 {
+        // No source fork. The destination is an existing saved inode on
+        // the publish path: clear its fork instead of resurrecting it.
+        guard let stale = diskImageOpenPathWithinCopyClock(
+            destinationFork,
+            O_RDWR | O_CLOEXEC
+        ) else { return false }
+        if stale < 0 { return true }
+        defer { close(stale) }
+        guard let staleSize = descriptorSize(stale) else { return false }
+        if staleSize == 0 { return true }
+        return diskImageFtruncateWithinCopyClock(stale, 0) == true
+    }
     defer { close(src) }
     guard let dst = diskImageOpenPathWithinCopyClock(
         destinationFork,
@@ -2499,6 +2613,8 @@ func copyResourceForkObservingClock(
     ) else { return false }
     guard dst >= 0 else { return false }
     defer { close(dst) }
+    // A shrunk fork must not keep its stale tail bytes.
+    guard diskImageFtruncateWithinCopyClock(dst, 0) == true else { return false }
     let copied = copyFileLeavingDetachReserve(
         from: src,
         to: dst,
@@ -2682,6 +2798,10 @@ private func xattrWrite(
 ) -> Int32 {
     fsetxattr(fd, name, buffer, size, 0, 0)
 }
+
+private func xattrRemove(_ fd: Int32, _ name: UnsafePointer<CChar>) -> Int32 {
+    fremovexattr(fd, name, 0)
+}
 #else
 @_silgen_name("flistxattr")
 private func rv_flistxattr(_ fd: Int32, _ list: UnsafeMutableRawPointer?, _ size: Int) -> Int
@@ -2734,6 +2854,13 @@ private func xattrWrite(
     _ size: Int
 ) -> Int32 {
     rv_fsetxattr(fd, name, buffer, size, 0)
+}
+
+@_silgen_name("fremovexattr")
+private func rv_fremovexattr(_ fd: Int32, _ name: UnsafePointer<CChar>) -> Int32
+
+private func xattrRemove(_ fd: Int32, _ name: UnsafePointer<CChar>) -> Int32 {
+    rv_fremovexattr(fd, name)
 }
 #endif
 
