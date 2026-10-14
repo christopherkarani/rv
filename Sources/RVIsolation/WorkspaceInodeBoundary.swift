@@ -913,16 +913,25 @@ final class WorkspaceInodeBoundary: Sendable {
             return .failure(.workspaceInodeBoundaryFailed)
         }
         let savedFD = identity.savedPath.withCString { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) }
-        let volumeFD = project.withCString { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) }
-        guard savedFD >= 0, volumeFD >= 0 else {
+        // `nil` is the copy clock. The worker may still be inside `open` of
+        // the mount, so this does not close a descriptor it never received
+        // and does not remove the path.
+        guard let volumeOpened = diskImageOpenPathWithinCopyClock(
+            project,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        ) else {
             if savedFD >= 0 { close(savedFD) }
-            if volumeFD >= 0 { close(volumeFD) }
             return .failure(.workspaceInodeBoundaryFailed)
         }
+        guard savedFD >= 0, volumeOpened >= 0 else {
+            if savedFD >= 0 { close(savedFD) }
+            if volumeOpened >= 0 { close(volumeOpened) }
+            return .failure(.workspaceInodeBoundaryFailed)
+        }
+        let volumeFD = volumeOpened
         var savedStatus = stat()
-        var volumeStatus = stat()
         guard fstat(savedFD, &savedStatus) == 0,
-            fstat(volumeFD, &volumeStatus) == 0,
+            let volumeStatus = fstatWithinCopyClock(volumeFD),
             device(of: savedStatus) == identity.savedDevice,
             UInt64(savedStatus.st_ino) == identity.savedInode,
             device(of: volumeStatus) == identity.volumeDevice
@@ -1092,12 +1101,19 @@ func establishWorkspaceInodeBoundary(
     let savedFD = savedPath.withCString { path in
         open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
     }
-    let volumeFD = workspacePath.withCString { path in
-        open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    // `nil` is the copy clock. `failMounted` would `rmdir` this path while
+    // the worker may still be inside `open`. A finished `-1` may.
+    guard let volumeOpened = diskImageOpenPathWithinCopyClock(
+        workspacePath,
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+    ) else {
+        if savedFD >= 0 { close(savedFD) }
+        return .failure(.workspaceInodeBoundaryFailed)
     }
-    guard savedFD >= 0, volumeFD >= 0 else {
-        return failMounted(saved: savedFD, volume: volumeFD)
+    guard savedFD >= 0, volumeOpened >= 0 else {
+        return failMounted(saved: savedFD, volume: volumeOpened)
     }
+    let volumeFD = volumeOpened
     var savedStatus = stat()
     guard fstat(savedFD, &savedStatus) == 0, device(of: savedStatus) == originalDevice else {
         return failMounted(saved: savedFD, volume: volumeFD)
@@ -1105,8 +1121,9 @@ func establishWorkspaceInodeBoundary(
     if copyTree(from: savedFD, to: volumeFD, expectDevice: originalDevice) == false {
         return failMounted(saved: savedFD, volume: volumeFD)
     }
-    var volumeStatus = stat()
-    guard fstat(volumeFD, &volumeStatus) == 0, device(of: volumeStatus) == volumeDevice else {
+    guard let volumeStatus = fstatWithinCopyClock(volumeFD),
+        device(of: volumeStatus) == volumeDevice
+    else {
         return failMounted(saved: savedFD, volume: volumeFD)
     }
     guard let mountSource = workspaceMountSource(workspacePath), mountSource.isEmpty == false else {

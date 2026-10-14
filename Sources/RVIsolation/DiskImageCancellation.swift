@@ -976,6 +976,27 @@ func diskImageUnlinkWithinCopyClock(_ path: String) -> Bool? {
     }
 }
 
+/// `lstat` then `unlink` of one regular file this process recorded.
+/// `.stopped` is not gone: the caller must fail the restore instead of
+/// marking the original restored. A finished miss, or a different inode,
+/// is success and does not unlink. A finished unlink failure is failure.
+func diskImageRemoveOwnedRegular(path: String, device: UInt64, inode: UInt64) -> Bool {
+    switch diskImageObservePath(path) {
+    case .stopped:
+        return false
+    case .missing:
+        return true
+    case .value(let snapshot):
+        guard snapshot.device == device,
+            snapshot.inode == inode,
+            (snapshot.mode & S_IFMT) == S_IFREG
+        else {
+            return true
+        }
+        return diskImageUnlinkWithinCopyClock(path) == true
+    }
+}
+
 /// `rename` off the caller. `nil` does not set `EXDEV`: a stopped rename is
 /// not a cross-device failure, and the caller must not start the other
 /// install path while this one is still inside the syscall. A finished

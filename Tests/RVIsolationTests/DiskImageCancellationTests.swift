@@ -1774,6 +1774,119 @@ struct DiskImageCancellationTests {
         #expect(readXattr(source.fileDescriptor, name) == value)
         #expect(descriptorSize(sized.fileDescriptor) == knownSize)
     }
+
+    /// Establish and reattach open the mount through
+    /// `diskImageOpenPathWithinCopyClock`. A positive copy budget enters
+    /// `open` of a fifo with no writer. The waiter returns nil before
+    /// `returnBound`. A bare `open` of that fifo stays inside the syscall
+    /// until the writer at 1.5s, then returns a descriptor, not nil.
+    /// Allowance 0 never enters `open` and returns in well under a tenth of
+    /// a second, so it fails `elapsed > 0.1`.
+    @Test func blockedMountOpenReturnsWhileTheSyscallIsInside() throws {
+        #expect(DiskImageCancelBudget.returnBound == 8)
+        #expect(DiskImageCancelBudget.detachCap == 5)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-mount-open-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fifo = root.appendingPathComponent("mount")
+        let created = fifo.path.withCString { mkfifo($0, 0o600) }
+        try #require(created == 0)
+
+        let release = DispatchSemaphore(value: 0)
+        let fifoPath = fifo.path
+        Thread.detachNewThread {
+            Thread.sleep(forTimeInterval: 1.5)
+            let writer = fifoPath.withCString { open($0, O_WRONLY | O_NONBLOCK | O_CLOEXEC) }
+            if writer >= 0 { close(writer) }
+            release.signal()
+        }
+        defer { release.wait() }
+
+        let budget: TimeInterval = 0.25
+        let now = Date()
+        let timeLeft = DiskImageCancelBudget.detachCap + budget
+        let cancelledAt = now.addingTimeInterval(
+            timeLeft - DiskImageCancelBudget.cancelledSequenceBudget
+        )
+        let flag = CooperativeLaunchStop.Flag()
+        flag.noteCancel(now: cancelledAt)
+        CooperativeLaunchStop.install(flag)
+        defer { CooperativeLaunchStop.uninstall() }
+        let allowance = diskImageTreeSyscallAllowance(
+            deadline: CooperativeLaunchStop.cancelClock?.deadline
+        )
+        #expect(allowance != nil)
+        let granted = allowance ?? 0
+        #expect(granted > 0.1)
+        #expect(granted < 1)
+
+        let started = Date()
+        let opened = diskImageOpenPathWithinCopyClock(fifo.path, O_RDONLY)
+        let elapsed = Date().timeIntervalSince(started)
+        #expect(opened == nil)
+        #expect(elapsed > 0.1)
+        #expect(elapsed < DiskImageCancelBudget.returnBound)
+        let writer = fifo.path.withCString { open($0, O_WRONLY | O_NONBLOCK | O_CLOEXEC) }
+        if writer >= 0 { close(writer) }
+        if let opened, opened >= 0 { close(opened) }
+    }
+
+    /// `removeOwnedFile` uses this. `a35644a2` `lstat`s and `unlink`s on the
+    /// caller with no clock, so a spent clock still deletes the file and
+    /// returns success. A stop is not gone. A different inode is left in
+    /// place. A missing path is success.
+    @Test func stoppedRemoveOwnedRegularIsNotGone() throws {
+        #expect(DiskImageCancelBudget.returnBound == 8)
+        #expect(DiskImageCancelBudget.detachCap == 5)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-owned-file-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let missing = root.appendingPathComponent("missing").path
+        #expect(diskImageRemoveOwnedRegular(path: missing, device: 1, inode: 1))
+
+        let directoryIdentity = try #require(lstatIdentity(root.path))
+        #expect(diskImageRemoveOwnedRegular(
+            path: root.path,
+            device: directoryIdentity.device,
+            inode: directoryIdentity.inode
+        ))
+        #expect(FileManager.default.fileExists(atPath: root.path))
+
+        let kept = root.appendingPathComponent("kept")
+        try Data("stay".utf8).write(to: kept)
+        let keptIdentity = try #require(lstatIdentity(kept.path))
+        #expect(diskImageRemoveOwnedRegular(
+            path: kept.path,
+            device: keptIdentity.device,
+            inode: keptIdentity.inode &+ 1
+        ))
+        #expect(try Data(contentsOf: kept) == Data("stay".utf8))
+
+        let doomed = root.appendingPathComponent("doomed")
+        try Data("gone".utf8).write(to: doomed)
+        let doomedIdentity = try #require(lstatIdentity(doomed.path))
+        #expect(diskImageRemoveOwnedRegular(
+            path: doomed.path,
+            device: doomedIdentity.device,
+            inode: doomedIdentity.inode
+        ))
+        #expect(FileManager.default.fileExists(atPath: doomed.path) == false)
+
+        let held = root.appendingPathComponent("held")
+        try Data("held".utf8).write(to: held)
+        let heldIdentity = try #require(lstatIdentity(held.path))
+        try withSpentCopyClock {
+            #expect(diskImageRemoveOwnedRegular(
+                path: held.path,
+                device: heldIdentity.device,
+                inode: heldIdentity.inode
+            ) == false)
+        }
+        #expect(try Data(contentsOf: held) == Data("held".utf8))
+    }
 }
 
 private func withSpentCopyClock(_ body: () throws -> Void) rethrows {
@@ -1788,6 +1901,12 @@ private func posixMode(_ path: String) -> mode_t? {
     var status = stat()
     guard path.withCString({ lstat($0, &status) == 0 }) else { return nil }
     return status.st_mode & 0o777
+}
+
+private func lstatIdentity(_ path: String) -> (device: UInt64, inode: UInt64)? {
+    var status = stat()
+    guard path.withCString({ lstat($0, &status) == 0 }) else { return nil }
+    return (UInt64(status.st_dev), UInt64(status.st_ino))
 }
 
 private func assertXattrCopyStopsBeforeDetachReserve() throws {

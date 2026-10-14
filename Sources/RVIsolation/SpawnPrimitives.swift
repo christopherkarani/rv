@@ -21,12 +21,55 @@ func relocateDescriptor(_ fd: inout Int32, above floor: Int32) -> Bool {
     return true
 }
 
-/// One `close` of a relocated descriptor. Stdio stays open. `close` is not
-/// retried: on Linux the kernel releases the number before `EINTR`, and a
-/// second `close` would drop whatever was opened there next.
+/// One `close` of a relocated descriptor. Stdio stays open: this helper is
+/// also used for pipes and directories, and a number below 3 may be the
+/// process stdin. `close` is not retried: on Linux the kernel releases the
+/// number before `EINTR`, and a second `close` would drop whatever was
+/// opened there next.
 func closeRelocatedOriginal(_ fd: Int32) {
     if fd < 3 { return }
     _ = close(fd)
+}
+
+/// One `close` of a socket this process just created or accepted. `socket`
+/// and `accept` return 0, 1, or 2 only when that slot is free, so the
+/// number is this socket and not an unrelated stdio stream. `close` is not
+/// retried.
+func closeOwnedSocket(_ fd: Int32) {
+    if fd < 0 { return }
+    _ = close(fd)
+}
+
+/// Darwin has no `SOCK_CLOEXEC`. The descriptor that survives is the
+/// `F_DUPFD_CLOEXEC` result. The original, even when it is 0, 1, or 2, is
+/// closed once on success and on dup failure. A failed dup returns `-1`
+/// and does not leave the original open.
+func publishCloexecSocket(raw: Int32, above floor: Int32) -> Int32 {
+    guard raw >= 0 else { return -1 }
+    let moved = fcntl(raw, F_DUPFD_CLOEXEC, floor)
+    let dupError = errno
+    closeOwnedSocket(raw)
+    if moved < 0 {
+        errno = dupError
+        return -1
+    }
+    return moved
+}
+
+/// Moves an accepted socket above `floor`. `relocateDescriptor` does not
+/// close an original below 3. This does, once, because that original is
+/// the socket `accept` just returned. A failed move closes it once too.
+func relocateOwnedSocket(_ fd: inout Int32, above floor: Int32) -> Bool {
+    let original = fd
+    guard original >= 0 else { return false }
+    guard relocateDescriptor(&fd, above: floor) else {
+        closeOwnedSocket(original)
+        return false
+    }
+    if original < 3, original != fd {
+        closeOwnedSocket(original)
+    }
+    return true
 }
 
 /// C string vectors that live until `release()`.

@@ -142,22 +142,12 @@ public final class SecretGateway: @unchecked Sendable {
     /// A TCP stream socket that is close-on-exec before the caller uses it.
     /// Linux passes `SOCK_CLOEXEC` to `socket`. Darwin does not define that
     /// flag, so the descriptor that survives is the one `F_DUPFD_CLOEXEC`
-    /// creates, and the original is closed once. Stdio is not closed, and
-    /// `close` is not retried: on Linux the kernel may already have reused
-    /// the number.
+    /// creates. The original is closed once, including when `socket`
+    /// returned 0, 1, or 2, because that slot was free and the number is
+    /// this socket. `close` is not retried.
     private static func openStreamSocket() -> Int32 {
         #if canImport(Darwin)
-        let raw = socket(AF_INET, SOCK_STREAM, 0)
-        guard raw >= 0 else { return -1 }
-        let moved = fcntl(raw, F_DUPFD_CLOEXEC, socketFloor)
-        let dupError = errno
-        if raw >= 3 {
-            _ = close(raw)
-        }
-        if moved < 0 {
-            errno = dupError
-        }
-        return moved
+        return publishCloexecSocket(raw: socket(AF_INET, SOCK_STREAM, 0), above: socketFloor)
         #else
         return socket(
             AF_INET,
@@ -335,11 +325,11 @@ public final class SecretGateway: @unchecked Sendable {
             }
             // Darwin inherits `O_NONBLOCK` from the listener. A read that
             // races the client's write is `EAGAIN`, and that is not a
-            // malformed request. The low number is closed before the handler
-            // blocks, so it does not stay a live socket below the floor.
+            // malformed request. The accepted number is closed once before
+            // the handler blocks, including when `accept` returned 0, 1, or
+            // 2. `F_SETFD` on the duplicate does not cover that original.
             var held = client
-            guard relocateDescriptor(&held, above: Self.socketFloor) else {
-                close(client)
+            guard relocateOwnedSocket(&held, above: Self.socketFloor) else {
                 continue
             }
             let flags = fcntl(held, F_GETFL, 0)

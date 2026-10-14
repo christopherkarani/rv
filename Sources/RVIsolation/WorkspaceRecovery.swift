@@ -1209,16 +1209,7 @@ extension WorkspaceRecovery {
 
     private static func removeOwnedFile(path: String?, device: UInt64?, inode: UInt64?) -> Bool {
         guard let path, let device, let inode else { return true }
-        var status = stat()
-        let exists = path.withCString { lstat($0, &status) == 0 }
-        if exists == false { return true }
-        guard UInt64(status.st_dev) == device,
-            UInt64(status.st_ino) == inode,
-            (status.st_mode & S_IFMT) == S_IFREG
-        else {
-            return true
-        }
-        return path.withCString { unlink($0) == 0 }
+        return diskImageRemoveOwnedRegular(path: path, device: device, inode: inode)
     }
 
     private static func writeExclusiveFile(

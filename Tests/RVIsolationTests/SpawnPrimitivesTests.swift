@@ -99,6 +99,61 @@ struct SpawnPrimitivesTests {
         #expect(fcntl(fd, F_GETFD) >= 0)
     }
 
+    /// `a35644a2` leaves a Darwin socket that landed on 0, 1, or 2 open
+    /// after `F_DUPFD_CLOEXEC`. The published fd is close-on-exec; the
+    /// original is closed once. Stdout is not closed.
+    @Test func stdioSlotSocketIsClosedOnceAfterCloexecDup() throws {
+        let stdoutBefore = fcntl(1, F_GETFD)
+        let slot = try occupyStdioSlotWithSocket()
+        defer { slot.restore() }
+        let published = publishCloexecSocket(raw: slot.fd, above: 64)
+        defer { if published >= 0 { close(published) } }
+        #expect(published >= 64)
+        let flags = fcntl(published, F_GETFD)
+        #expect(flags >= 0)
+        #expect(flags & FD_CLOEXEC != 0)
+        let probe = fcntl(slot.fd, F_GETFD)
+        let probeErrno = errno
+        #expect(probe == -1)
+        #expect(probeErrno == EBADF)
+        if stdoutBefore >= 0 {
+            #expect(fcntl(1, F_GETFD) >= 0)
+        }
+    }
+
+    /// A failed cloexec dup still closes the original once, including a
+    /// socket on 0, 1, or 2. `a35644a2` returns `-1` and leaks that fd.
+    @Test func stdioSlotSocketIsClosedOnceWhenCloexecDupFails() throws {
+        let slot = try occupyStdioSlotWithSocket()
+        defer { slot.restore() }
+        let published = publishCloexecSocket(raw: slot.fd, above: Int32.max)
+        #expect(published == -1)
+        let probe = fcntl(slot.fd, F_GETFD)
+        let probeErrno = errno
+        #expect(probe == -1)
+        #expect(probeErrno == EBADF)
+    }
+
+    /// `accept` on 0, 1, or 2 is dup'd close-on-exec, and
+    /// `closeRelocatedOriginal` does not close that original.
+    /// `a35644a2` leaves the client connection inheritable.
+    @Test func acceptedSocketOnStdioIsClosedOnce() throws {
+        let slot = try occupyStdioSlotWithSocket()
+        defer { slot.restore() }
+        var held = slot.fd
+        #expect(relocateOwnedSocket(&held, above: 64))
+        defer { if held >= 3 { close(held) } }
+        #expect(held >= 64)
+        #expect(held != slot.fd)
+        let flags = fcntl(held, F_GETFD)
+        #expect(flags >= 0)
+        #expect(flags & FD_CLOEXEC != 0)
+        let probe = fcntl(slot.fd, F_GETFD)
+        let probeErrno = errno
+        #expect(probe == -1)
+        #expect(probeErrno == EBADF)
+    }
+
     // MARK: - vectors
 
     @Test func vectorYieldsContentPlusTerminator() {
@@ -180,4 +235,52 @@ struct SpawnPrimitivesTests {
         #expect(matcher.append(Data()) == false)
         #expect(matcher.append(Data("b".utf8)) == true)
     }
+}
+
+/// A socket sitting on 0, 1, or 2. A slot that was already free is used as-is.
+/// When every stdio slot is live, fd 0 is replaced and `restore` puts the
+/// saved copy back. The test does not close a live descriptor it does not own.
+private struct StdioSlotSocket {
+    var fd: Int32
+    var saved: Int32
+
+    func restore() {
+        if saved >= 0 {
+            _ = dup2(saved, fd)
+            _ = close(saved)
+        }
+    }
+}
+
+private func occupyStdioSlotWithSocket() throws -> StdioSlotSocket {
+    #if canImport(Darwin)
+    let raw = socket(AF_INET, SOCK_STREAM, 0)
+    #else
+    let raw = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+    #endif
+    try #require(raw >= 0)
+    if raw < 3 {
+        return StdioSlotSocket(fd: raw, saved: -1)
+    }
+    for candidate: Int32 in 0..<3 {
+        if fcntl(candidate, F_GETFD) < 0, errno == EBADF {
+            let placed = dup2(raw, candidate)
+            if placed != candidate {
+                close(raw)
+                try #require(placed == candidate)
+            }
+            close(raw)
+            return StdioSlotSocket(fd: candidate, saved: -1)
+        }
+    }
+    let saved = fcntl(0, F_DUPFD_CLOEXEC, 64)
+    try #require(saved >= 64)
+    let placed = dup2(raw, 0)
+    if placed != 0 {
+        close(saved)
+        close(raw)
+        try #require(placed == 0)
+    }
+    if raw != 0 { close(raw) }
+    return StdioSlotSocket(fd: 0, saved: saved)
 }
