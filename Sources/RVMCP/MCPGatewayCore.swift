@@ -300,16 +300,18 @@ public struct MCPGatewayCore {
             return [.toClient(Self.error(id: client, code: -32602, message: "tools/call needs a name"))]
         }
         guard let (server, tool) = route(exposed), let upstream = upstreams[server] else {
-            return [.toClient(Self.error(id: client, code: -32602, message: "Unknown tool: \(exposed)"))]
+            let shown = MCPDisplayedText.field(exposed)
+            return [.toClient(Self.error(id: client, code: -32602, message: "Unknown tool: \(shown)"))]
         }
         let arguments = params?["arguments"] ?? .object([:])
         let keys = arguments.objectValue?.keys.sorted() ?? []
         let decision = configuration.decision(server: upstream.definition, tool: tool)
         if decision == .deny {
             let reason = "rv policy denies \(server) tool \(tool)"
+            let shown = "rv policy denies \(MCPDisplayedText.field(server)) tool \(MCPDisplayedText.field(tool))"
             return [
                 .audit(MCPCallRecord(server: server, tool: tool, decision: .deny, argumentKeys: keys, isError: true, reason: reason)),
-                .toClient(Self.toolError(id: client, "\(reason). Do not retry; ask the user if you need it.")),
+                .toClient(Self.toolError(id: client, "\(shown). Do not retry; ask the user if you need it.")),
             ]
         }
         guard phases[server] == .ready else {

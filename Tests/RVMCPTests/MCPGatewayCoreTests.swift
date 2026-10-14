@@ -161,6 +161,41 @@ struct MCPGatewayCoreTests {
         #expect(reply.audits.first?.decision == .deny)
     }
 
+    @Test func deniedAndUnknownToolNamesAreEscapedInTheClientError() {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let name = "\u{1B}[2J\u{1B}[H" + sentence
+        let deniedServer = MCPServerDefinition(
+            name: "notes", command: "notes-mcp", tools: MCPToolPolicy(defaultDecision: .deny))
+        var denied = GatewayHarness(MCPConfiguration(servers: [deniedServer]))
+        let refused = denied.core.callTool(
+            client: .int(1),
+            params: .object(["name": .string(name), "arguments": .object([:])]))
+        #expect(refused.toUpstream.isEmpty)
+        #expect(refused.audits.first?.decision == .deny)
+        let audit = refused.audits.first?.reason ?? ""
+        #expect(audit.unicodeScalars.contains { $0.value == 0x1B })
+        let client = refused.toClient.first?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue ?? ""
+        #expect(client.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(client.contains("\\u001b[2J"))
+        #expect(client.contains("\\u001b[H"))
+        let clientLines = client.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        #expect(clientLines.contains(sentence) == false)
+        #expect(refused.audits.first?.decision != .allow)
+
+        var unknown = GatewayHarness(MCPConfiguration(servers: []))
+        let missed = unknown.core.callTool(
+            client: .int(2),
+            params: .object(["name": .string(name), "arguments": .object([:])]))
+        #expect(missed.toUpstream.isEmpty)
+        #expect(missed.audits.isEmpty)
+        let message = missed.toClient.first?["error"]?["message"]?.stringValue ?? ""
+        #expect(message.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(message.contains("\\u001b[2J"))
+        #expect(message.contains("Unknown tool:"))
+        let messageLines = message.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        #expect(messageLines.contains(sentence) == false)
+    }
+
     @Test func askRecordsARequestThenAGrantLetsTheSameCallThroughOnce() {
         var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
         _ = harness.ready()

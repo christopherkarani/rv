@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import Synchronization
 #if canImport(Security)
 import Security
 #endif
@@ -237,7 +238,8 @@ enum ApprovalKeyAccess {
             let key = MCPHex.decode(Array(text.utf8)), key.count == 32,
             ApprovalKeyMAC.equal(RVDigest.sha256Hex(key), pinnedFingerprint),
             let enrollment = ApprovalKeyEnrollment.load(configDirectory),
-            enrollment.binds(key: key, anchor: anchor)
+            enrollment.binds(key: key, anchor: anchor),
+            ApprovalKeyCreation.created(pinnedFingerprint)
         else { return nil }
         return MCPSigner(key: key)
     }
@@ -335,6 +337,22 @@ enum ApprovalKeyAnchor {
 
     static func remove(_ configDirectory: URL) {
         unlink(url(configDirectory).path)
+    }
+}
+
+/// Fingerprints this process generated. A keychain pair that verifies on
+/// paper is not the signing secret unless `note` ran for that fingerprint
+/// here. User presence on a planted item does not count, and neither does a
+/// disk write of `approvals.anchor` or `approvals.enrollment`.
+enum ApprovalKeyCreation {
+    private static let fingerprints = Mutex<Set<String>>([])
+
+    static func note(_ fingerprint: String) {
+        fingerprints.withLock { $0.insert(fingerprint) }
+    }
+
+    static func created(_ fingerprint: String) -> Bool {
+        fingerprints.withLock { $0.contains(fingerprint) }
     }
 }
 
@@ -482,6 +500,7 @@ enum ApprovalKeychain {
             ApprovalKeyAnchor.remove(configDirectory)
             return nil
         }
+        ApprovalKeyCreation.note(RVDigest.sha256Hex(raw))
         guard let signer = read(configDirectory: configDirectory),
             let expected = MCPSigner(key: raw),
             signer.mac("enrollment", ["check"]) == expected.mac("enrollment", ["check"])

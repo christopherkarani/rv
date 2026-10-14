@@ -279,7 +279,7 @@ struct MCPCommandTests {
             shown.withLock { $0 += text }
         })
         #expect(refused.failureMessage == "not trusted: this process has no terminal")
-        #expect(shown.withLock { $0 }.contains("fs: fs-mcp"))
+        #expect(shown.withLock { $0 }.contains("fs: \"fs-mcp\""))
         #expect(shown.withLock { $0 }.contains("ask \"zz_*\""))
         #expect(environment.integrity.isTrusted == false)
 
@@ -574,6 +574,9 @@ struct MCPCommandTests {
         let targetPath = canonicalPath(target.path)
         #expect(deny.contains("(subpath \"\(targetPath)\")"))
         #expect(allow.contains(targetPath) == false)
+        #expect(deny.contains("(regex #\""))
+        #expect(deny.contains("\\.ssh"))
+        #expect(allow.contains("regex") == false)
     }
 
     @Test func temporaryDirectoryTheReviewDidNotNameIsRefused() throws {
@@ -596,6 +599,83 @@ struct MCPCommandTests {
         #expect(error.message.contains("not the path reviewed"))
         #expect(error.message.contains(app.path))
         #expect(error.message.contains("(subpath") == false)
+    }
+
+    @Test func temporaryDirectoryThroughAMissingComponentIsNotAnAllow() throws {
+        let lexical = "/private/tmp/no-such/../../Users/me/src/app"
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-dots-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let scratch = root.appendingPathComponent("scratch")
+        let home = root.appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let result = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: lexical)
+        guard case .failure(let error) = result else {
+            Issue.record("TMPDIR \(lexical) was emitted as an allow")
+            return
+        }
+        #expect(error.message.contains("not the path reviewed"))
+        #expect(error.message.contains("(subpath") == false)
+        #expect(String(describing: result).contains("(subpath \"/private/tmp/no-such") == false)
+    }
+
+    @Test func quotedFieldsDoNotCollapseAControlAndItsEscapeText() throws {
+        let controlName = "\u{1B}[2J"
+        let literalName = "\\u001b[2J"
+        let controlWritable = "/tmp/\nsecret"
+        let literalWritable = "/tmp/\\nsecret"
+        func server(allow: String, writable: String, env: String) -> MCPServerDefinition {
+            MCPServerDefinition(
+                name: "notes", command: "/bin/true",
+                environment: ["FOO": env],
+                tools: MCPToolPolicy(allow: [allow]),
+                sandbox: MCPSandboxPolicy(network: false, writable: [writable]))
+        }
+        let control = MCPConfiguration(servers: [
+            server(allow: controlName, writable: controlWritable, env: "\nsecret"),
+        ])
+        let literal = MCPConfiguration(servers: [
+            server(allow: literalName, writable: literalWritable, env: "\\nsecret"),
+        ])
+        let controlReview = MCPRun.trustReview(control)
+        let literalReview = MCPRun.trustReview(literal)
+        #expect(controlReview != literalReview)
+        #expect(controlReview.contains("\\\\u001b[2J"))
+        #expect(controlReview.contains("\\\\\\\\u001b[2J") == false)
+        #expect(literalReview.contains("\\\\\\\\u001b[2J"))
+        let controlImport = MCPRun.importPresenceReview(servers: control.servers, allowTools: false)
+        let literalImport = MCPRun.importPresenceReview(servers: literal.servers, allowTools: false)
+        func digest(_ shown: String) -> String {
+            shown.split(separator: "\n").first { $0.hasPrefix("sha256 ") }.map(String.init) ?? ""
+        }
+        #expect(digest(controlImport.shown) != digest(literalImport.shown))
+        #expect(digest(controlImport.shown).hasPrefix("sha256 "))
+        #expect(digest(literalImport.shown).hasPrefix("sha256 "))
+
+        let spaced = MCPServerDefinition(name: "notes", command: "bash", args: ["-c", "id"])
+        let joined = MCPServerDefinition(name: "notes", command: "bash -c", args: ["id"])
+        let spacedImport = MCPRun.importPresenceReview(servers: [spaced], allowTools: false)
+        let joinedImport = MCPRun.importPresenceReview(servers: [joined], allowTools: false)
+        #expect(spacedImport.shown != joinedImport.shown)
+        #expect(digest(spacedImport.shown) != digest(joinedImport.shown))
+        #expect(MCPRun.trustReview(MCPConfiguration(servers: [spaced])) != MCPRun.trustReview(MCPConfiguration(servers: [joined])))
+        #expect(spacedImport.shown.contains("\"bash\", \"-c\", \"id\""))
+        #expect(joinedImport.shown.contains("\"bash -c\", \"id\""))
+
+        let fixture = Fixture()
+        chmod(fixture.config.path, 0o700)
+        let keys = MCPApprovalKeyStore.file(configDirectory: fixture.config)
+        let signer = try #require(keys.loadOrCreate())
+        _ = try control.write(configDirectory: fixture.config, signer: signer).get()
+        #expect(MCPIntegrity.status(configDirectory: fixture.config, keys: keys).isTrusted)
+        let url = MCPConfiguration.fileURL(configDirectory: fixture.config)
+        try literal.encoded().prettyText.write(to: url, atomically: true, encoding: .utf8)
+        chmod(url.path, 0o600)
+        #expect(MCPIntegrity.status(configDirectory: fixture.config, keys: keys).isTrusted == false)
     }
 
     private func canonicalPath(_ path: String) -> String {
@@ -1107,11 +1187,11 @@ struct MCPCommandTests {
         let review = shown.withLock { $0 }
         #expect(shownBeforePrompt.withLock { $0 })
         #expect(review.contains("tools: allow every tool"))
-        #expect(review.contains("first: long-cmd \(long)"))
-        #expect(review.contains("second: hidden-cmd --flag"))
+        #expect(review.contains("first: \"long-cmd\", \"\(long)\""))
+        #expect(review.contains("second: \"hidden-cmd\", \"--flag\""))
         #expect(reason.contains("tools: allow every tool"))
-        #expect(reason.contains("first: long-cmd \(long)"))
-        #expect(reason.contains("second: hidden-cmd --flag"))
+        #expect(reason.contains("first: \"long-cmd\", \"\(long)\""))
+        #expect(reason.contains("second: \"hidden-cmd\", \"--flag\""))
         #expect(reason.contains("ask before every tool") == false)
         #expect(reason.count > 240)
         #expect(reason.hasSuffix("…") == false)
@@ -1208,7 +1288,7 @@ struct MCPCommandTests {
         let review = shown.withLock { $0 }
         for text in [reason, review] {
             #expect(text.contains(digest))
-            #expect(text.contains("notes: git status"))
+            #expect(text.contains("notes: \"git\", \"status\""))
             #expect(text.contains("env PATH=/tmp/evil"))
             #expect(text.contains("env GIT_SSH_COMMAND=evil-ssh"))
             #expect(text.contains("env LD_PRELOAD=/tmp/p.so"))
@@ -1284,7 +1364,8 @@ struct MCPCommandTests {
             #expect(text.contains("writable none") == false)
             #expect(lines.contains { $0.hasSuffix("no sandbox") })
             #expect(text.contains("other tools ask"))
-            #expect(text.contains("bare: /bin/cat"))
+            #expect(text.contains("closed: \"/bin/echo\", \"\\\\n  notes: /usr/bin/true\""))
+            #expect(text.contains("bare: \"/bin/cat\""))
             #expect(text.contains("\\n  notes: /usr/bin/true"))
             #expect(text.contains("\\n  hidden: true"))
             #expect(text.contains("allow \"read\\\\n\(trailer)\""))
@@ -1317,9 +1398,9 @@ struct MCPCommandTests {
         let importedReason = importReason.withLock { $0 }
         let importedReview = importShown.withLock { $0 }
         for text in [importedReason, importedReview] {
-            #expect(text.contains("first: /bin/echo \\n  notes: /usr/bin/true"))
+            #expect(text.contains("first: \"/bin/echo\", \"\\\\n  notes: /usr/bin/true\""))
             #expect(text.contains("env NOTE=/usr/bin\\n\(trailer)\\n  hidden: true"))
-            #expect(text.contains("later: /usr/bin/true --ok"))
+            #expect(text.contains("later: \"/usr/bin/true\", \"--ok\""))
             #expect(text.contains("no sandbox"))
             #expect(text.contains("ask before every tool"))
             Self.expectNoForgedReviewLine(text, trailer: trailer)
@@ -1327,7 +1408,7 @@ struct MCPCommandTests {
         let importLines = importedReview.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         #expect(importLines.filter { $0.hasPrefix("sha256 ") }.count == 1)
         let body = importedReview.components(separatedBy: "\nsha256 ").first ?? ""
-        #expect(body.contains("later: /usr/bin/true --ok"))
+        #expect(body.contains("later: \"/usr/bin/true\", \"--ok\""))
         #expect(body.contains("no sandbox"))
         #expect(imported.contains("wrote mcp.json"))
     }

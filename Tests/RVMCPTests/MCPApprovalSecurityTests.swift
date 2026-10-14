@@ -262,6 +262,7 @@ struct MCPIntegrityTests {
         #expect(ApprovalKeyAccess.disposition(
             secret: secret, anchor: nil, pinnedFingerprint: nil, item: .unreadable, configDirectory: directory) == .rejectKeep)
 
+        ApprovalKeyCreation.note(pin)
         let signer = try #require(ApprovalKeyAccess.adoptedSigner(
             secret: secret, anchor: anchor, pinnedFingerprint: pin, constraints: ["cpo": true], configDirectory: directory))
         let expected = try #require(MCPSigner(key: real))
@@ -296,6 +297,7 @@ struct MCPIntegrityTests {
         #expect(enrolled.contains(MCPHex.encode(anchor)) == false)
         #expect(FileManager.default.fileExists(atPath: ApprovalKeyAnchor.url(directory).path) == false)
         let secret = Data(MCPHex.encode(real).utf8)
+        ApprovalKeyCreation.note(pin)
         let signer = try #require(ApprovalKeyAccess.adoptedSigner(
             secret: secret, anchor: anchor, pinnedFingerprint: pin, constraints: ["cpo": true], configDirectory: directory))
         let expected = try #require(MCPSigner(key: real))
@@ -339,6 +341,50 @@ struct MCPIntegrityTests {
         let restored = try #require(ApprovalKeyAccess.adoptedSigner(
             secret: secret, anchor: anchor, pinnedFingerprint: pin, constraints: ["cpo": true], configDirectory: directory))
         #expect(restored.mac("enrollment", ["check"]) == expected.mac("enrollment", ["check"]))
+    }
+
+    @Test func plantedConsistentPairThisProcessDidNotCreateIsNotAdopted() throws {
+        let directory = MCPApprovalSecurityTests.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let attackerKey = [UInt8](repeating: 8, count: 32)
+        let attackerAnchor = [UInt8](repeating: 6, count: 32)
+        let enrollment = try #require(ApprovalKeyEnrollment.issue(key: attackerKey, anchor: attackerAnchor))
+        let pin = enrollment.fingerprint
+        #expect(ApprovalKeyAnchor.save(attackerAnchor, configDirectory: directory) == false)
+        #expect(ApprovalKeyAnchor.load(directory) == nil)
+        #expect(enrollment.save(configDirectory: directory))
+        #expect(ApprovalKeyCreation.created(pin) == false)
+        let secret = Data(MCPHex.encode(attackerKey).utf8)
+        #expect(ApprovalKeyAccess.adoptedSigner(
+            secret: secret, anchor: attackerAnchor, pinnedFingerprint: pin, constraints: ["cpo": true],
+            configDirectory: directory) == nil)
+        #expect(ApprovalKeyAccess.disposition(
+            secret: secret, anchor: attackerAnchor, pinnedFingerprint: pin, item: .constraints(userPresence: true),
+            configDirectory: directory) == .rejectPlanted)
+
+        let diskKey = [UInt8](repeating: 2, count: 32)
+        let diskAnchor = [UInt8](repeating: 1, count: 32)
+        let diskEnrollment = try #require(ApprovalKeyEnrollment.issue(key: diskKey, anchor: diskAnchor))
+        #expect(diskEnrollment.save(configDirectory: directory))
+        let fileAnchor = JSONValue.object(["version": .int(1), "anchor": .string(MCPHex.encode(diskAnchor))])
+        try Data(fileAnchor.compactText.utf8).write(to: ApprovalKeyAnchor.url(directory))
+        chmod(ApprovalKeyAnchor.url(directory).path, 0o600)
+        #expect(ApprovalKeyAnchor.load(directory) == nil)
+        #expect(ApprovalKeyAccess.adoptedSigner(
+            secret: Data(MCPHex.encode(diskKey).utf8), anchor: diskAnchor, pinnedFingerprint: diskEnrollment.fingerprint,
+            constraints: ["cpo": true], configDirectory: directory) == nil)
+        #expect(FileManager.default.fileExists(atPath: ApprovalKeyAnchor.url(directory).path) == false)
+
+        let real = [UInt8](repeating: 5, count: 32)
+        let realAnchor = [UInt8](repeating: 4, count: 32)
+        let realEnrollment = try #require(ApprovalKeyEnrollment.issue(key: real, anchor: realAnchor))
+        #expect(realEnrollment.save(configDirectory: directory))
+        ApprovalKeyCreation.note(realEnrollment.fingerprint)
+        let signer = try #require(ApprovalKeyAccess.adoptedSigner(
+            secret: Data(MCPHex.encode(real).utf8), anchor: realAnchor, pinnedFingerprint: realEnrollment.fingerprint,
+            constraints: ["cpo": true], configDirectory: directory))
+        let expected = try #require(MCPSigner(key: real))
+        #expect(signer.mac("enrollment", ["check"]) == expected.mac("enrollment", ["check"]))
     }
 
     @Test func integrityJudgesTheBytesItWasGivenWhenTheFileChangesDuringKeyLoad() throws {

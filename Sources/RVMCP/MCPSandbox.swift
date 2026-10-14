@@ -56,10 +56,7 @@ public enum MCPSandbox {
             if let widened = unreviewedHome(home.path) {
                 return .failure(.sandbox(widened))
             }
-            do {
-                try FileManager.default.createDirectory(
-                    at: scratch, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            } catch {
+            guard createCheckedDirectory(scratch.path) else {
                 return .failure(.sandbox("could not create \(scratch.path)"))
             }
             switch profile(
@@ -99,7 +96,7 @@ public enum MCPSandbox {
             "(allow default)",
             "(deny file-write*)",
             "(allow file-write* " + paths(writable, denyTargets: false) + ")",
-            "(deny file-read* file-write* " + paths(unreadable, denyTargets: true) + ")",
+            "(deny file-read* file-write* " + paths(unreadable, denyTargets: true) + symlinkDenies(unreadable) + ")",
         ]
         if policy.network == false {
             lines.append("(deny network*)")
@@ -125,14 +122,19 @@ public enum MCPSandbox {
 
     /// `TMPDIR` is a write root only when it is `/private/tmp`,
     /// `/private/var/folders`, or a directory inside one of those. A concrete
-    /// path the review never named is refused.
+    /// path the review never named is refused. A path C `realpath` cannot
+    /// resolve is refused too: a missing middle component must not be glued
+    /// back on, `..` and all, and emitted as an allow.
     static func unreviewedTemporary(_ path: String) -> String? {
-        let resolved = tmpAlias(realPath(path))
+        guard let existing = resolveExisting(path) else {
+            return "\(MCPDisplayedText.field(path)) resolves to \(MCPDisplayedText.field(path)), which was not the path reviewed"
+        }
+        let resolved = tmpAlias(existing)
         let roots = ["/private/tmp", "/private/var/folders"]
         if roots.contains(where: { resolved == $0 || resolved.hasPrefix($0 + "/") }) {
             return nil
         }
-        return "\(MCPDisplayedText.field(path)) resolves to \(MCPDisplayedText.field(realPath(path))), which was not the path reviewed"
+        return "\(MCPDisplayedText.field(path)) resolves to \(MCPDisplayedText.field(existing)), which was not the path reviewed"
     }
 
     /// `~` in the review is the account home. A serve-time `HOME` that points
@@ -223,5 +225,127 @@ public enum MCPSandbox {
 
     static func escape(_ path: String) -> String {
         path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    /// A credential symlink is named by a regex of its own path, after
+    /// `(allow default)`, so the link itself is not only the resolved target.
+    /// The target subpath stays on the deny line and off the allow line.
+    static func symlinkDenies(_ raw: [String]) -> String {
+        var seen = Set<String>()
+        var filters: [String] = []
+        for path in raw {
+            var info = stat()
+            guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFLNK else { continue }
+            let filter = "(regex #\"^\(regexEscape(path))(/.*)?$\")"
+            if seen.insert(filter).inserted { filters.append(filter) }
+        }
+        return filters.isEmpty ? "" : " " + filters.joined(separator: " ")
+    }
+
+    static func regexEscape(_ path: String) -> String {
+        var escaped = ""
+        for scalar in path.unicodeScalars {
+            switch scalar {
+            case "\\", ".", "^", "$", "*", "+", "?", "(", ")", "[", "]", "{", "}", "|", "\"":
+                escaped += "\\"
+                escaped.unicodeScalars.append(scalar)
+            default:
+                escaped.unicodeScalars.append(scalar)
+            }
+        }
+        return escaped
+    }
+
+    /// Opens `path` without following a symlink. The caller creates children
+    /// with `mkdirat` on this descriptor, so a later rename of the path does
+    /// not redirect the leaf.
+    final class HeldDirectory {
+        let fd: Int32
+        let device: UInt64
+        let inode: UInt64
+
+        init?(path: String) {
+            let opened = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard opened >= 0 else { return nil }
+            var info = stat()
+            guard fstat(opened, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else {
+                close(opened)
+                return nil
+            }
+            fd = opened
+            device = UInt64(info.st_dev)
+            inode = UInt64(info.st_ino)
+        }
+
+        deinit { close(fd) }
+
+        func stillChecked() -> Bool {
+            var info = stat()
+            guard fstat(fd, &info) == 0 else { return false }
+            return UInt64(info.st_dev) == device && UInt64(info.st_ino) == inode
+        }
+    }
+
+    /// Creates `path` through the nearest existing directory, opened with
+    /// `O_NOFOLLOW`. A symlink swapped in before the open is not followed.
+    static func createCheckedDirectory(_ path: String) -> Bool {
+        guard let (ancestor, parts) = existingDirectory(path) else { return false }
+        guard let held = HeldDirectory(path: ancestor) else { return false }
+        if parts.isEmpty { return held.stillChecked() }
+        return createRelative(parts, holding: held)
+    }
+
+    /// `mkdirat` each component on `held`. The leaf's parent is that
+    /// descriptor (or a directory created from it), and the checked inode
+    /// must be unchanged when the leaf is created.
+    static func createRelative(_ parts: [String], holding held: HeldDirectory) -> Bool {
+        guard held.stillChecked() else { return false }
+        var current = held.fd
+        var opened: [Int32] = []
+        defer { opened.forEach { close($0) } }
+        for (index, part) in parts.enumerated() {
+            let created = part.withCString { mkdirat(current, $0, mode_t(0o700)) }
+            if created != 0 && errno != EEXIST { return false }
+            guard held.stillChecked() else { return false }
+            let next = part.withCString { openat(current, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) }
+            guard next >= 0 else { return false }
+            if index + 1 == parts.count {
+                var parent = stat()
+                guard fstat(current, &parent) == 0 else {
+                    close(next)
+                    return false
+                }
+                if current == held.fd {
+                    guard UInt64(parent.st_dev) == held.device, UInt64(parent.st_ino) == held.inode else {
+                        close(next)
+                        return false
+                    }
+                }
+            }
+            opened.append(next)
+            current = next
+        }
+        return held.stillChecked()
+    }
+
+    /// Nearest existing directory and the missing components under it.
+    /// A symlink is not an ancestor: opening it would follow the swap.
+    static func existingDirectory(_ path: String) -> (ancestor: String, parts: [String])? {
+        var parts: [String] = []
+        var current = path
+        while true {
+            var info = stat()
+            if lstat(current, &info) == 0 {
+                if (info.st_mode & S_IFMT) == S_IFLNK { return nil }
+                if (info.st_mode & S_IFMT) == S_IFDIR { return (current, parts.reversed()) }
+                return nil
+            }
+            let url = URL(fileURLWithPath: current)
+            let parent = url.deletingLastPathComponent().path
+            let leaf = url.lastPathComponent
+            if parent == current || leaf.isEmpty { return nil }
+            parts.append(leaf)
+            current = parent
+        }
     }
 }

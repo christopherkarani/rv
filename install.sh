@@ -291,12 +291,16 @@ last_field_prefix() {
   printf '%s' "$found"
 }
 
-# spctl prints the path, then ": accepted" or ": rejected", then source=.
-# A source= line inside the path is dropped when that verdict line is seen.
+# A real spctl verdict is a path (it contains "/") ending in ": accepted" or
+# ": rejected". A certificate label that continues as its own ": accepted"
+# line is not a verdict, and neither is ": rejected (the code is valid...)".
+# The source is the first source= line after the last real verdict. A later
+# source= does not replace it, and a source= before that verdict is dropped.
 source_after_verdict() {
   details=$1
   found=
   armed=
+  took=
   rest=$details
   while [ -n "$rest" ]; do
     case "$rest" in
@@ -313,18 +317,75 @@ source_after_verdict() {
         ;;
     esac
     case "$line" in
-      *": accepted"|*": rejected")
+      origin=*|Authority=*|Identifier=*) ;;
+      */*": accepted"|*/*": rejected")
         armed=1
         found=
+        took=
         ;;
       source=*)
-        if [ -n "$armed" ]; then
+        if [ -n "$armed" ] && [ -z "$took" ]; then
           found=$line
+          took=1
         fi
         ;;
     esac
   done
   printf '%s' "$found"
+}
+
+# 0 when any physical line starts with $2.
+has_line_prefix() {
+  details=$1
+  prefix=$2
+  rest=$details
+  while [ -n "$rest" ]; do
+    case "$rest" in
+      *"
+"*)
+        line=${rest%%
+*}
+        rest=${rest#*
+}
+        ;;
+      *)
+        line=$rest
+        rest=
+        ;;
+    esac
+    case "$line" in
+      "$prefix"*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# 0 when the Authority phrase appears on a line that does not start with it.
+# That line is the leaf name (Identifier= or Executable=), not the certificate.
+phrase_outside_authority() {
+  details=$1
+  needle="Authority=Developer ID Application:"
+  rest=$details
+  while [ -n "$rest" ]; do
+    case "$rest" in
+      *"
+"*)
+        line=${rest%%
+*}
+        rest=${rest#*
+}
+        ;;
+      *)
+        line=$rest
+        rest=
+        ;;
+    esac
+    case "$line" in
+      "$needle"*) ;;
+      *"$needle"*) return 0 ;;
+    esac
+  done
+  return 1
 }
 
 # Downloaded macOS release files must carry a valid, notarized Developer ID
@@ -372,13 +433,23 @@ verify_release_signatures() {
       echo "rv: refusing to install: $name has an invalid code signature" >&2
       exit 1
     fi
-    case "$details" in
-      *"Authority=Developer ID Application:"*) ;;
-      *)
-        echo "rv: refusing to install: $name is not signed with a Developer ID Application certificate" >&2
-        exit 1
-        ;;
+    # A Developer ID certificate is a line that starts with Authority=.
+    # The same text in the leaf name (Identifier= or Executable=) is not.
+    real_authority=0
+    if has_line_prefix "$details" "Authority=Developer ID Application:"; then
+      real_authority=1
+    fi
+    leaf_phrase=0
+    case "$name" in
+      *"Authority=Developer ID Application:"*) leaf_phrase=1 ;;
     esac
+    if phrase_outside_authority "$details"; then
+      leaf_phrase=1
+    fi
+    if [ "$real_authority" != 1 ] && [ "$leaf_phrase" != 1 ]; then
+      echo "rv: refusing to install: $name is not signed with a Developer ID Application certificate" >&2
+      exit 1
+    fi
     if [ -z "$team" ]; then
       echo "rv: refusing to install: $name is signed, but no Developer ID team is pinned (release_team_id)" >&2
       exit 1
@@ -387,12 +458,17 @@ verify_release_signatures() {
     sig_line=$(last_field_prefix "$details" "Signature=")
     # A Developer ID dylib is not passed to spctl. Ad-hoc is, including a
     # dylib: Signature=adhoc or TeamIdentifier=not set must not skip it.
-    # "Signature=" does not match "Signature size=".
+    # "Signature=" does not match "Signature size=". A leaf name that
+    # contains the Authority phrase is not that certificate, so the dylib
+    # still goes through spctl.
     need_spctl=1
     case "$name" in
       *.dylib) need_spctl=0 ;;
     esac
     if [ "$sig_line" = "Signature=adhoc" ] || [ "$team_line" = "TeamIdentifier=not set" ]; then
+      need_spctl=1
+    fi
+    if [ "$leaf_phrase" = 1 ]; then
       need_spctl=1
     fi
     if [ "$need_spctl" = 1 ]; then

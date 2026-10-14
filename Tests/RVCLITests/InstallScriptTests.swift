@@ -942,6 +942,12 @@ private func writeSignatureShims(in shim: URL) throws {
                   *) printf 'Executable=%s\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nAuthority=Developer ID Certification Authority\\nTeamIdentifier=TEAMRV1234\\n' "$file" >&2; exit 0 ;;
                 esac
                 ;;
+              leaf-name)
+                case "$name" in
+                  *.dylib) printf 'Executable=%s\\nIdentifier=Authority=Developer ID Application: Not Apple\\nFormat=Mach-O thin (arm64)\\nCodeDirectory v=20400 size=400 flags=0x0(none) hashes=1+2 location=embedded\\nSignature size=1800\\nAuthority=Developer ID Application: Not Apple\\nTeamIdentifier=TEAMRV1234\\n' "$file" >&2; exit 0 ;;
+                  *) printf 'Executable=%s\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nAuthority=Developer ID Certification Authority\\nTeamIdentifier=TEAMRV1234\\nSignature size=1800\\n' "$file" >&2; exit 0 ;;
+                esac
+                ;;
               *) printf 'Executable=%s\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nAuthority=Developer ID Certification Authority\\nTeamIdentifier=TEAMRV1234\\n' "$file" >&2; exit 0 ;;
             esac
             ;;
@@ -964,9 +970,32 @@ private func writeSignatureShims(in shim: URL) throws {
         printf 'spctl %s\\n' "$*" >> "$RV_TEST_TOOL_LOG"
         file=""
         for arg in "$@"; do file="$arg"; done
-        if [ "${RV_TEST_SPCTL:-accept}" = accept ]; then
+        mode="${RV_TEST_SPCTL:-accept}"
+        if [ "$mode" = accept ]; then
           printf '%s: accepted\\nsource=Notarized Developer ID\\n' "$file" >&2
           exit 0
+        fi
+        if [ "$mode" = reject-dylib ]; then
+          case "$file" in
+            *.dylib)
+              printf '%s: rejected\\nsource=Unnotarized Developer ID\\n' "$file" >&2
+              exit 3
+              ;;
+          esac
+          printf '%s: accepted\\nsource=Notarized Developer ID\\n' "$file" >&2
+          exit 0
+        fi
+        if [ "$mode" = label-accepted ]; then
+          printf '%s: rejected\\nsource=no usable signature\\norigin=Developer ID Application: Not Apple\\n: accepted\\nsource=Notarized Developer ID\\n' "$file" >&2
+          exit 3
+        fi
+        if [ "$mode" = origin-only ]; then
+          printf '%s: rejected\\nsource=no usable signature\\norigin=Developer ID Application: Not Apple\\n' "$file" >&2
+          exit 3
+        fi
+        if [ "$mode" = parenthetical ]; then
+          printf '%s: rejected\\nsource=no usable signature\\n: rejected (the code is valid but does not seem to be an app)\\nsource=Notarized Developer ID\\n' "$file" >&2
+          exit 3
         fi
         printf 'Identifier=source=Notarized Developer ID\\n%s: rejected\\nsource=Unnotarized Developer ID\\n' "$file" >&2
         exit 3
@@ -1302,6 +1331,72 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     #expect(foreign.status == 1)
     #expect(foreign.stderr.contains("is not signed by team OTHERTEAM9"))
     try expectPreviousInstallKept(foreign)
+}
+
+@Test func installSh_certificateLabelAcceptedDoesNotReplaceTheVerdict() throws {
+    let run = try runSignedDownloadInstall(
+        environment: [
+            "RV_TEST_SPCTL": "label-accepted",
+            "RV_INSTALL_TEAM_ID": "TEAMRV1234",
+        ],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("Gatekeeper does not accept rv as notarized"))
+    #expect(run.stderr.contains("warning: release files are not code-signed") == false)
+    try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_oneLineOriginStillRefuses() throws {
+    let run = try runSignedDownloadInstall(
+        environment: [
+            "RV_TEST_SPCTL": "origin-only",
+            "RV_INSTALL_TEAM_ID": "TEAMRV1234",
+        ],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("Gatekeeper does not accept rv as notarized"))
+    try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_parentheticalRejectionDoesNotArm() throws {
+    let run = try runSignedDownloadInstall(
+        environment: [
+            "RV_TEST_SPCTL": "parenthetical",
+            "RV_INSTALL_TEAM_ID": "TEAMRV1234",
+        ],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("Gatekeeper does not accept rv as notarized"))
+    try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_dylibLeafNameDoesNotSkipSpctl() throws {
+    let run = try runSignedDownloadInstall(
+        environment: [
+            "RV_TEST_CODESIGN": "leaf-name",
+            "RV_TEST_SPCTL": "reject-dylib",
+            "RV_INSTALL_TEAM_ID": "TEAMRV1234",
+        ],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains("Gatekeeper does not accept libswiftCompatibilitySpan.dylib as notarized"))
+    #expect(run.toolLog.contains("spctl "))
+    #expect(run.toolLog.contains("libswiftCompatibilitySpan.dylib"))
+    #expect(run.stderr.contains("not signed with a Developer ID Application certificate") == false)
+    #expect(run.stderr.contains("warning: release files are not code-signed") == false)
+    try expectPreviousInstallKept(run)
 }
 
 @Test func installSh_unnotarizedReleaseRefuses() throws {

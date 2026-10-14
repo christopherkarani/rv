@@ -493,7 +493,7 @@ enum MCPRun {
     static func trustReview(_ configuration: MCPConfiguration) -> String {
         var lines = ["mcp.json: default \(configuration.defaultDecision.rawValue) for tools without a rule"]
         for server in configuration.servers {
-            let command = ([server.command] + server.args).map(reviewField).joined(separator: " ")
+            let command = quotedReviewFields([server.command] + server.args)
             lines.append("  \(reviewField(server.name)): \(command)")
             lines += bindingLines(server, indent: "    ")
             lines += sandboxLines(server, indent: "    ")
@@ -621,8 +621,7 @@ enum MCPRun {
     static func importPresenceReview(servers: [MCPServerDefinition], allowTools: Bool) -> (shown: String, reason: String) {
         let policy = allowTools ? "allow every tool" : "ask before every tool"
         let lines = servers.flatMap { server -> [String] in
-            let command = ([reviewField(server.name) + ":", reviewField(server.command)] + server.args.map(reviewField))
-                .joined(separator: " ")
+            let command = reviewField(server.name) + ": " + quotedReviewFields([server.command] + server.args)
             return ["\(command) (\(policy))"] + bindingLines(server) + sandboxLines(server)
         }
         let body = (["tools: \(policy)"] + lines).joined(separator: "\n")
