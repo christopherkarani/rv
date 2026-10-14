@@ -116,7 +116,7 @@ private func browseDetail(_ row: ScanFindingRow, palette: Palette) -> [String] {
         .leaf(label: "Path", value: DisplayedText.field(row.sourcePath), emphasis: .muted),
     ]
     if let sessionID = row.sessionID {
-        children.append(.leaf(label: "Session", value: sessionID, emphasis: .plain))
+        children.append(.leaf(label: "Session", value: DisplayedText.field(sessionID), emphasis: .plain))
     }
     if row.count > 1 {
         children.append(.leaf(label: "Count", value: String(row.count), emphasis: .plain))

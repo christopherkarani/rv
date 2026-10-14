@@ -94,6 +94,25 @@ func wd(_ raw: String) -> WorkingDirectory {
     WorkingDirectory(validating: raw)!
 }
 
+func captureStderr(_ body: () async throws -> Void) async throws -> String {
+    let pipe = Pipe()
+    let saved = dup(STDERR_FILENO)
+    defer {
+        close(saved)
+    }
+    dup2(pipe.fileHandleForWriting.fileDescriptor, STDERR_FILENO)
+    do {
+        try await body()
+    } catch {
+        dup2(saved, STDERR_FILENO)
+        pipe.fileHandleForWriting.closeFile()
+        throw error
+    }
+    dup2(saved, STDERR_FILENO)
+    pipe.fileHandleForWriting.closeFile()
+    return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+}
+
 func captureStdout(_ body: () async throws -> Void) async throws -> String {
     let pipe = Pipe()
     let saved = dup(STDOUT_FILENO)

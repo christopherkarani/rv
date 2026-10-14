@@ -863,6 +863,70 @@ struct MCPSandboxCreateTests {
         }
     }
 
+    @Test func deepRelativeLinkThroughALaterNameStillOpensThePrivateTmpTarget() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-later-name-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let me = root.appendingPathComponent("Users/me")
+        try FileManager.default.createDirectory(at: me, withIntermediateDirectories: true)
+        #expect(symlink("/private/tmp/anchor", me.appendingPathComponent("jump").path) == 0)
+        let opened = "/private/tmp/future-keys"
+        let shapes = [
+            me.path + "/jump/../link/../../../foo/future-keys",
+            me.path + "/jump/../link/../../foo/future-keys",
+            me.path + "/jump/../link/../x/future-keys",
+            me.path + "/jump/../link/../x/y/future-keys",
+            me.path + "/jump/../link/../../../future-keys",
+            me.path + "/jump/../link/../../future-keys",
+        ]
+        for shape in shapes {
+            #expect(MCPSandbox.missingSymlinkOpenings(shape).contains(opened))
+        }
+    }
+
+    @Test func preexistingSymlinkThenMoveDoesNotAllowTheCache() throws {
+        for planted in plantedCacheLinks {
+            let fixture = try plantedCacheLink(planted)
+            defer { try? FileManager.default.removeItem(at: fixture.root) }
+            let pin = try #require(MCPSandbox.pinExistingAncestors(fixture.scratch))
+            #expect(MCPSandbox.createPinned(fixture.scratch, pinned: pin))
+            try FileManager.default.moveItem(at: fixture.project, to: fixture.landing.appendingPathComponent("project"))
+            let profile = MCPSandbox.profile(
+                policy: MCPSandboxPolicy(network: false, writable: []),
+                scratch: fixture.scratch, home: fixture.home, configDirectory: fixture.root.appendingPathComponent("config").path,
+                temporaryDirectory: fixture.temporary)
+            guard case .failure = profile else {
+                Issue.record("profile allowed \(fixture.watched) through \(planted.homeLink)")
+                return
+            }
+            #expect(String(describing: profile).contains("(subpath \"\(fixture.watched)\")") == false)
+            #expect(FileManager.default.fileExists(atPath: fixture.landing.appendingPathComponent("project/src/App.swift").path))
+        }
+    }
+
+    @Test func preexistingSymlinkMoveInsideTheHookDoesNotCreateTheLeaf() throws {
+        for planted in plantedCacheLinks {
+            let fixture = try plantedCacheLink(planted)
+            defer { try? FileManager.default.removeItem(at: fixture.root) }
+            let pin = try #require(MCPSandbox.pinExistingAncestors(fixture.scratch))
+            let created = MCPSandbox.createPinned(fixture.scratch, pinned: pin) {
+                try? FileManager.default.moveItem(at: fixture.project, to: fixture.landing.appendingPathComponent("project"))
+            }
+            #expect(created == false)
+            #expect(FileManager.default.fileExists(atPath: fixture.scratch) == false)
+            #expect(FileManager.default.fileExists(atPath: fixture.landing.appendingPathComponent("project/src/App.swift").path))
+            let profile = MCPSandbox.profile(
+                policy: MCPSandboxPolicy(network: false, writable: []),
+                scratch: fixture.scratch, home: fixture.home, configDirectory: fixture.root.appendingPathComponent("config").path,
+                temporaryDirectory: fixture.temporary)
+            guard case .failure = profile else {
+                Issue.record("profile allowed \(fixture.watched) after a move through \(planted.homeLink)")
+                return
+            }
+            #expect(String(describing: profile).contains("(subpath \"\(fixture.watched)\")") == false)
+        }
+    }
+
     @Test func undoEscapesTheRecordedHostName() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-setup-undo-\(UUID().uuidString)", isDirectory: true)
@@ -885,4 +949,86 @@ struct MCPSandboxCreateTests {
         #expect(text.contains("\\u2028"))
         #expect(text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" }).map(String.init).contains(sentence) == false)
     }
+}
+
+private struct PlantedCacheLink {
+    var homeLink: String
+    var targetUnderRoot: String
+    var relativeTarget: String?
+    var moveParentUnderRoot: String
+}
+
+private let plantedCacheLinks = [
+    PlantedCacheLink(
+        homeLink: ".npm/_cacache/content", targetUnderRoot: "opt/outside/content",
+        relativeTarget: nil, moveParentUnderRoot: "opt/outside/content"),
+    PlantedCacheLink(
+        homeLink: ".cache/pip/http", targetUnderRoot: "opt/outside/http",
+        relativeTarget: nil, moveParentUnderRoot: "opt/outside/http"),
+    PlantedCacheLink(
+        homeLink: "Library/Caches/com.apple.nsurl/fsCachedData", targetUnderRoot: "opt/outside/fs",
+        relativeTarget: nil, moveParentUnderRoot: "opt/outside/fs"),
+    PlantedCacheLink(
+        homeLink: ".npm/_cacache/content", targetUnderRoot: "opt/outside/content",
+        relativeTarget: "../../../opt/outside/content", moveParentUnderRoot: "opt/outside/content"),
+    PlantedCacheLink(
+        homeLink: ".cache/pip/http", targetUnderRoot: "opt/outside/http",
+        relativeTarget: "../../../opt/outside/http", moveParentUnderRoot: "opt/outside/http"),
+    PlantedCacheLink(
+        homeLink: "Library/Caches/com.apple.nsurl/fsCachedData", targetUnderRoot: "opt/outside/fs",
+        relativeTarget: "../../../../opt/outside/fs", moveParentUnderRoot: "opt/outside/fs"),
+    PlantedCacheLink(
+        homeLink: ".npm/_cacache", targetUnderRoot: "opt/outside",
+        relativeTarget: nil, moveParentUnderRoot: "opt/outside/content"),
+]
+
+private struct PlantedCacheLinkFixture {
+    var root: URL
+    var home: String
+    var scratch: String
+    var temporary: String
+    var watched: String
+    var project: URL
+    var landing: URL
+}
+
+private func plantedCacheLink(_ planted: PlantedCacheLink) throws -> PlantedCacheLinkFixture {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-sandbox-planted-link-\(UUID().uuidString)", isDirectory: true)
+    let project = root.appendingPathComponent("project")
+    let home = root.appendingPathComponent("home")
+    let caches = home.appendingPathComponent("Library/Caches")
+    let scratch = caches.appendingPathComponent("rv-mcp/server")
+    let link = home.appendingPathComponent(planted.homeLink)
+    let target = root.appendingPathComponent(planted.targetUnderRoot)
+    let landing = root.appendingPathComponent(planted.moveParentUnderRoot)
+    try FileManager.default.createDirectory(at: project.appendingPathComponent("src"), withIntermediateDirectories: true)
+    try Data("app".utf8).write(to: project.appendingPathComponent("src/App.swift"))
+    try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: landing, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: home.appendingPathComponent(".ssh"), withIntermediateDirectories: true)
+    let temporary = root.appendingPathComponent("tmp")
+    try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+    if let relativeTarget = planted.relativeTarget {
+        guard symlink(relativeTarget, link.path) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+    } else {
+        guard symlink(target.path, link.path) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+    }
+    let watched: String
+    if planted.homeLink.hasPrefix(".npm") {
+        watched = home.appendingPathComponent(".npm").path
+    } else if planted.homeLink.hasPrefix(".cache") {
+        watched = home.appendingPathComponent(".cache").path
+    } else {
+        watched = caches.path
+    }
+    return PlantedCacheLinkFixture(
+        root: root, home: home.path, scratch: scratch.path, temporary: temporary.path,
+        watched: watched, project: project, landing: landing)
 }

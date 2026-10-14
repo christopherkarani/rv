@@ -112,7 +112,7 @@ enum PolicyDraftRun {
             case .refuse(let reason):
                 data = try encoder.encode(PolicyDraftRobotRefuse(refuse: reason))
             }
-            return String(decoding: data, as: UTF8.self)
+            return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
         }
         switch result {
         case .preview(let preview):

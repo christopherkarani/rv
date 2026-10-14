@@ -405,9 +405,9 @@ public enum MCPSandbox {
     /// name is then the symlink. Each missing name is an opening.
     /// When `/<name>` and the ancestors already collapse to one path
     /// (`../private/tmp/future-keys`), that path is the whole set.
-    /// A `..` tail that pops above the directory the name is created in
-    /// collapses those bases to `/future-keys`. That is not the file `open`
-    /// reads after the name is a deep relative symlink, so the walk continues.
+    /// `link/../../../future-keys` collapses to `/future-keys`, and
+    /// `link/../../../foo/future-keys` collapses to `/foo/future-keys`.
+    /// Neither is the file `open` reads after a deep relative symlink.
     private static func openingsFromMissing(parent: String, parts: [String], origin: String) -> [String] {
         guard let name = parts.first else { return [] }
         let tail = Array(parts.dropFirst())
@@ -424,18 +424,38 @@ public enum MCPSandbox {
         return results
     }
 
-    /// One collapsed opening is the whole set when it still names a path at
-    /// least as deep as the directory the missing name is created in.
-    /// `link/../../../future-keys` collapses to `/future-keys`, which is
-    /// shallower than `/private/tmp`, so a later `ln -s a/b/c` is not covered.
+    /// One collapsed opening is the whole set when the tail has no `..`, or
+    /// when that `..` run cannot leave the directory the name is created in
+    /// and the collapsed path still begins on that directory.
+    /// `/foo/future-keys` is as deep as `/private/tmp` and is a different
+    /// tree: `link/../../../foo/future-keys` then `ln -s .` reads
+    /// `/private/tmp/future-keys`. `foo/../../private/tmp/future-keys` stays
+    /// on `/private/tmp/future-keys` and is the whole set.
     private static func collapsedOpeningCoversTheParent(
         _ primary: [String], parent: String, tail: [String]
     ) -> Bool {
         guard primary.count <= 1 else { return false }
         guard tail.contains(".."), let opened = primary.first else { return true }
-        let parentDepth = parent.split(separator: "/", omittingEmptySubsequences: true).count
-        let openedDepth = opened.split(separator: "/", omittingEmptySubsequences: true).count
-        return openedDepth >= parentDepth
+        let parentParts = parent.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        let openedParts = opened.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        if openedParts.count < parentParts.count { return false }
+        var dots = 0
+        for part in tail {
+            if part == ".." {
+                dots += 1
+            } else {
+                break
+            }
+        }
+        // Enough `..` to leave the creation directory. Later names can be
+        // `ln -s .` and still name a file under that directory.
+        if dots >= parentParts.count { return false }
+        var shared = 0
+        for (parentPart, openedPart) in zip(parentParts, openedParts) {
+            if parentPart != openedPart { break }
+            shared += 1
+        }
+        return shared >= parentParts.count - dots
     }
 
     /// Openings for a component that does not exist yet. `name` → `/name`
@@ -1005,19 +1025,27 @@ public enum MCPSandbox {
             changed: clock.changed, changedNsec: clock.changedNsec)
     }
 
-    /// The watched directory and every directory under it. Moving a project
-    /// into a grandchild changes that directory's link count and timestamps.
-    /// A direct child's own stamp does not.
+    /// The watched directory and every directory under it, including the
+    /// directory a symlink already names. Moving a project into a grandchild
+    /// changes that directory's link count and timestamps. A direct child's
+    /// own stamp does not. The symlink's inode stays in the stamp, so
+    /// replacing a directory with a link still changes it.
     private struct TreeStamp: Equatable {
         var root: InodeStamp
         var children: [String: InodeStamp]
     }
 
     private static func treeStamp(_ path: String) -> TreeStamp {
-        TreeStamp(root: inodeStamp(path), children: directoryStamps(under: path, relative: ""))
+        var visited: Set<String> = []
+        if let identity = directoryIdentity(path) {
+            visited.insert(identity)
+        }
+        return TreeStamp(root: inodeStamp(path), children: directoryStamps(under: path, relative: "", visited: &visited))
     }
 
-    private static func directoryStamps(under path: String, relative: String) -> [String: InodeStamp] {
+    private static func directoryStamps(
+        under path: String, relative: String, visited: inout Set<String>
+    ) -> [String: InodeStamp] {
         var stamps: [String: InodeStamp] = [:]
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: path) else { return stamps }
         for name in names where name != "." && name != ".." {
@@ -1025,19 +1053,45 @@ public enum MCPSandbox {
             var info = stat()
             guard lstat(child, &info) == 0 else { continue }
             let kind = info.st_mode & S_IFMT
-            // A symlink planted where a grandchild directory would be is not
-            // entered. Its own inode is still part of the stamp, so replacing
-            // that directory with a link to another tree changes the stamp.
             guard kind == S_IFDIR || kind == S_IFLNK else { continue }
             let rel = relative.isEmpty ? name : relative + "/" + name
             stamps[rel] = inodeStamp(child)
+            let entered: String?
             if kind == S_IFDIR {
-                for (deeper, stamp) in directoryStamps(under: child, relative: rel) {
-                    stamps[deeper] = stamp
-                }
+                entered = child
+            } else {
+                entered = symlinkDirectory(child)
+            }
+            guard let entered, let identity = directoryIdentity(entered), visited.insert(identity).inserted else {
+                continue
+            }
+            for (deeper, stamp) in directoryStamps(under: entered, relative: rel, visited: &visited) {
+                stamps[deeper] = stamp
             }
         }
         return stamps
+    }
+
+    /// The real directory a symlink names, relative target included.
+    /// A link that does not name a directory is only its own inode.
+    private static func symlinkDirectory(_ path: String) -> String? {
+        guard let raw = readLink(path) else { return nil }
+        let absolute: String
+        if raw.hasPrefix("/") {
+            absolute = raw
+        } else {
+            let parent = parentDirectory(path)
+            absolute = parent == "/" ? "/" + raw : parent + "/" + raw
+        }
+        guard let resolved = resolveExisting(absolute) else { return nil }
+        guard directoryIdentity(resolved) != nil else { return nil }
+        return resolved
+    }
+
+    private static func directoryIdentity(_ path: String) -> String? {
+        var info = stat()
+        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return nil }
+        return "\(UInt64(info.st_dev)):\(UInt64(info.st_ino))"
     }
 
     private static func directoryClock(_ info: stat) -> (modified: Int64, modifiedNsec: Int64, changed: Int64, changedNsec: Int64) {
