@@ -212,7 +212,8 @@ public enum MCPRedaction {
     /// `user:password@host`, including an empty user (`:password@host`) and a
     /// path segment that is only that spelling.
     public static func containsUserinfoSpelling(_ text: String) -> Bool {
-        let decoded = percentDecode(text)
+        // `%%0040` is `@` only after a strip joins `%` to `40`. A nested scheme in a path or query uses that `@`.
+        let decoded = revealedDecode(text)
         if decoded.stoppedEarly { return true }
         if colonThenAt(decoded.text) { return true }
         for piece in decoded.text.split(whereSeparator: isMaterialSeparator) {
@@ -291,7 +292,7 @@ public enum MCPRedaction {
 
     /// A path with a token segment, a decoded `#` token, a backslash token, or `user:secret@`.
     public static func pathCarriesSecret(_ path: String) -> Bool {
-        let decoded = percentDecode(path)
+        let decoded = revealedDecode(path)
         if decoded.stoppedEarly { return true }
         let normalized = decoded.text.replacingOccurrences(of: "\\", with: "/")
         if containsUserinfoSpelling(normalized) { return true }
@@ -551,10 +552,15 @@ public enum MCPRedaction {
         let decoded = withoutInvisibleBreaks(pass.text)
         if secretPrefixCount(decoded) >= 2 { return true }
         // `%67hp_` still contains `hp_`, so a raw prefix search is not enough.
-        // Refuse only when decoding reveals a token the raw spelling did not show.
-        if pass.text != value, looksLikeToken(decoded) || containsEmbeddedPrefix(decoded) { return true }
-        // `%%0040` is `@` only after the strip. A password in that authority is not a token.
-        if passwordSitsInAuthority(pass.text) { return true }
+        // A strip that does not form `%HH` leaves `pass.text` unchanged; the token is in `decoded`.
+        // A bare `ctx7sk-` or `sk-` is unchanged on both, so it stays `${secret:NAME}`.
+        if pass.text != value || decoded != pass.text {
+            if looksLikeToken(decoded) || containsEmbeddedPrefix(decoded) { return true }
+        }
+        // The raw spelling keeps `%2F` inside the user. The revealed spelling is what `%%0040` becomes,
+        // including a nested scheme and the same URL in a query.
+        if passwordSitsInAuthority(value) || passwordSitsInAuthority(pass.text) { return true }
+        if argumentUserinfoIsRefused(pass.text) { return true }
         guard looksLikeToken(decoded) else { return false }
         return hidesAnotherSecret(decoded)
     }
@@ -574,9 +580,10 @@ public enum MCPRedaction {
     /// U+0020 is whitespace and is not removed from the value. U+2044 and U+2215 are separators, so a
     /// vulgar fraction or a square sign whose NFKD contains one is dropped. A self-NFKD solidus or slash
     /// glyph is a separator, including U+2298 and U+2F03, as are U+2212, U+22C5, U+2219, U+02D7, and
-    /// U+E002F. A self-NFKD box-drawing diagonal is a separator too: U+2571–U+2573, U+1FBA0–U+1FBAD,
-    /// U+1FBBD, and U+1FBBE. U+2213, U+2217, and U+2218 sit next to those listed operators and are
-    /// separators as well. A default-ignorable scalar such as U+E0001 is a separator too. U+0020 is not one.
+    /// U+E002F. A self-NFKD box-drawing diagonal is a separator too: U+2571–U+2573, U+1FBA0–U+1FBAE,
+    /// U+1FBBD–U+1FBBF, the block diagonals U+1FB3C–U+1FB67, and U+292B / U+292C. U+2213, U+2214,
+    /// U+2217, U+2218, U+22C6, and U+27CC sit next to those listed operators and are separators as well.
+    /// A default-ignorable scalar such as U+E0001 is a separator too. U+0020 is not one.
     /// Non-ASCII punctuation is a separator even when it folds to `-` or `_`. A decomposition that
     /// contains one of these separators is dropped too, including U+2025 (`..`) and U+2260.
     private static func dropsForPrefixCount(_ scalar: Unicode.Scalar) -> Bool {
@@ -589,10 +596,10 @@ public enum MCPRedaction {
         switch scalar.value {
         case 0x2044, 0x2215, 0xFF0E,
             0x2216, 0x29F5, 0x29F6, 0x29F7, 0x29F8, 0x29F9, 0x2AFD, 0x2AFB, 0x1F67C, 0x1F67D,
-            0x2212, 0x2213, 0x22C5, 0x2217, 0x2218, 0x2219, 0x02D7, 0xE002F,
+            0x2212, 0x2213, 0x2214, 0x22C5, 0x22C6, 0x2217, 0x2218, 0x2219, 0x02D7, 0xE002F,
             0x2298, 0x29B8, 0x233F, 0x2340, 0x2341, 0x2342, 0x2349, 0x244A,
-            0x27C8, 0x27C9, 0x27CB, 0x27CD, 0x29C4, 0x29C5, 0x2F03,
-            0x2571...0x2573, 0x1FBA0...0x1FBAD, 0x1FBBD, 0x1FBBE:
+            0x27C8, 0x27C9, 0x27CB, 0x27CC, 0x27CD, 0x292B, 0x292C, 0x29C4, 0x29C5, 0x2F03,
+            0x2571...0x2573, 0x1FBA0...0x1FBAE, 0x1FBBD...0x1FBBF, 0x1FB3C...0x1FB67:
             return true
         default:
             break
@@ -704,7 +711,7 @@ public enum MCPRedaction {
     }
 
     private static func queryTextCarriesSecret(_ query: String, depth: Int) -> Bool {
-        let pass = percentDecode(query)
+        let pass = revealedDecode(query)
         if pass.stoppedEarly { return true }
         let decoded = pass.text.replacingOccurrences(of: "\\", with: "/")
         // A raw `&`, `#`, or `?` inside `user:password@host` must be seen before the split.
