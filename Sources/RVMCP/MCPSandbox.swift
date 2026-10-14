@@ -424,11 +424,13 @@ public enum MCPSandbox {
         return results
     }
 
-    /// One collapsed opening is the whole set when the tail has no `..`, or
-    /// when that `..` run cannot leave the directory the name is created in
-    /// and the collapsed path continues along that directory, not merely
-    /// the ancestor the `..` landed on. `../private` collapses to
-    /// `/private/...` and is not the file under the creation directory.
+    /// One collapsed opening is the whole set when it already lies under the
+    /// creation directory (`../private/tmp/future-keys` →
+    /// `/private/tmp/future-keys`), or when a `..` run cannot leave that
+    /// directory and the collapsed path continues along it. A missing name
+    /// that repeats an ancestor (`private` → `/private/future-keys`) does
+    /// not: `ln -s .` still reads the creation directory. `../private`
+    /// after `link` collapses to `/private/...` and is not that file either.
     /// `/foo/future-keys` is as deep as `/private/tmp` and is a different
     /// tree: `link/../../../foo/future-keys` then `ln -s .` reads
     /// `/private/tmp/future-keys`. `foo/../../private/tmp/future-keys` stays
@@ -437,7 +439,11 @@ public enum MCPSandbox {
         _ primary: [String], parent: String, tail: [String]
     ) -> Bool {
         guard primary.count <= 1 else { return false }
-        guard tail.contains(".."), let opened = primary.first else { return true }
+        guard let opened = primary.first else { return true }
+        if tail.contains("..") == false {
+            let prefix = parent == "/" ? "/" : parent + "/"
+            return opened == parent || opened.hasPrefix(prefix)
+        }
         let parentParts = parent.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         let openedParts = opened.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         if openedParts.count < parentParts.count { return false }
