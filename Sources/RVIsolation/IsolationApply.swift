@@ -923,6 +923,25 @@ func rejectWorkspaceInodeAlias(_ root: String) -> Result<Void, IsolationApplyErr
     return .success(())
 }
 
+/// The workspace is back at its original path only when teardown succeeds.
+/// A failed detach or rename is the result the caller has to act on when the
+/// child was not cancelled. A cancelled child stays `.cancelled`: teardown
+/// must not replace it with `workspaceInodeBoundaryFailed`.
+func containedLaunchResult(
+    child: Result<IsolatedRunResult, IsolationApplyError>,
+    teardown: Result<Void, IsolationApplyError>
+) -> Result<IsolatedRunResult, IsolationApplyError> {
+    if case .failure(.cancelled) = child {
+        return child
+    }
+    switch teardown {
+    case .failure(let error):
+        return .failure(error)
+    case .success:
+        return child
+    }
+}
+
 /// Mutable flag for `rejectWorkspaceInodeAlias`. The directory walk is synchronous.
 /// Not Sendable: FileManager calls the error handler on the scanning thread.
 private final class InodeAliasScan {

@@ -611,7 +611,9 @@ public struct TypedRuleStore: Sendable {
     /// - a deny or ask whose predicate is absent from the restored document
     ///   (`removedRuleFindings`);
     /// - an explicit verdict relaxation on a surviving predicate
-    ///   (deny → ask/allow), via share semantics;
+    ///   (deny → ask/allow), via share semantics. Duplicate predicates in
+    ///   legacy `typed-rules.json` use the strictest verdict, the same
+    ///   ranking enforcement uses. The first row must not hide a later deny;
     /// - a safety-level downgrade (`strict` → anything else);
     /// - a widening of secret `allowPaths`.
     ///
@@ -630,17 +632,49 @@ public struct TypedRuleStore: Sendable {
     }
 
     /// One baseline. Callers compare the live file and the history head.
+    /// Legacy JSON keeps every row. Enforcement ranks the strictest verdict
+    /// for a predicate. Share's first-row match and removal's presence check
+    /// would otherwise treat allow-then-deny as allow, and a rollback to an
+    /// allow head would seal that allow over the live deny.
+    private static func strictestRules(_ rules: [PolicyDocumentRule]) -> [PolicyDocumentRule] {
+        var merged: [PolicyDocumentRule] = []
+        for rule in rules {
+            if let index = merged.firstIndex(where: { $0.predicate == rule.predicate }) {
+                if restrictionRank(rule.verdict) > restrictionRank(merged[index].verdict) {
+                    merged[index] = rule
+                }
+            } else {
+                merged.append(rule)
+            }
+        }
+        return merged
+    }
+
     private static func refuseRelaxingRollback(
         existing: PolicyDocument,
         incoming: PolicyDocument
     ) throws {
+        let existingRules = strictestRules(existing.rules)
+        let incomingRules = strictestRules(incoming.rules)
+        let existingDocument = PolicyDocument(
+            schemaVersion: existing.schemaVersion,
+            rules: existingRules,
+            safetyLevel: existing.safetyLevel,
+            allowPaths: existing.allowPaths
+        )
+        let incomingDocument = PolicyDocument(
+            schemaVersion: incoming.schemaVersion,
+            rules: incomingRules,
+            safetyLevel: incoming.safetyLevel,
+            allowPaths: incoming.allowPaths
+        )
         var findings = PolicyDiffRisk.evaluateShare(
-            existing: existing,
-            incoming: incoming
+            existing: existingDocument,
+            incoming: incomingDocument
         ).findings
         findings += PolicyDiffRisk.removedRuleFindings(
-            old: existing.rules,
-            new: incoming.rules
+            old: existingRules,
+            new: incomingRules
         )
         if existing.safetyLevel == .strict, incoming.safetyLevel != .strict {
             findings.append(

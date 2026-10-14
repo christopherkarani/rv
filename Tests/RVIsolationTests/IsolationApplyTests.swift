@@ -313,11 +313,13 @@ struct IsolationApplyTests {
         linkedTwice.linkCount = 2
         #expect(workspacePublishDecision(snapshot: link, saved: linkedTwice, onVolume: true) == .reject)
     }
+    #endif
 
     @Test func containedLaunchResult_reportsTeardownFailure() throws {
         let success = Result<IsolatedRunResult, IsolationApplyError>.success(
             IsolatedRunResult(established: .observed, exitStatus: 0)
         )
+        let cancelled = Result<IsolatedRunResult, IsolationApplyError>.failure(.cancelled)
         let childFailure = Result<IsolatedRunResult, IsolationApplyError>.failure(.processSpawnFailed)
         let restored = Result<Void, IsolationApplyError>.success(())
         let restoreFailure = Result<Void, IsolationApplyError>.failure(.workspaceInodeBoundaryFailed)
@@ -331,8 +333,11 @@ struct IsolationApplyTests {
             containedLaunchResult(child: childFailure, teardown: restoreFailure)
                 == .failure(.workspaceInodeBoundaryFailed)
         )
+        // A second cancelled teardown can still fail to detach inside the
+        // return bound. That failure must not replace the child's cancel.
+        #expect(containedLaunchResult(child: cancelled, teardown: restoreFailure) == cancelled)
+        #expect(containedLaunchResult(child: cancelled, teardown: restored) == cancelled)
     }
-    #endif
 
     @Test func compileSeatbeltProfile_contained_writeLimitIsWorkspaceNotRepositoryRoot() throws {
         let workspace = try requireWorkspace("/ws")

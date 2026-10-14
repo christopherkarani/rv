@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Budgets for a cancelled workspace-volume teardown.
 ///
@@ -40,10 +41,78 @@ enum DiskImageCancelBudget {
         )
     }
 
+    /// SIGTERM-to-SIGKILL grace already in `runToolBody`. Counted so a
+    /// peer that dies on schedule is not treated as shorter than it is.
+    static let signalGrace: TimeInterval = 0.5
+
+    /// One cancelled teardown, including the mutex wait. Strictly inside
+    /// `returnBound`. Longer than plain+grace, force+grace, and detach+grace
+    /// (7.5s), so a waiter behind that peer is still inside its budget when
+    /// the peer releases, and still returns before 8 seconds.
+    static var cancelledSequenceBudget: TimeInterval {
+        let peer = (unmountWindow / 2) + signalGrace
+            + (unmountWindow / 2) + signalGrace
+            + detachCap + signalGrace
+        return peer + preemptReap
+    }
+
+    /// Mutex wait once cancellation is visible. `nil` and `45` are the
+    /// historical default; neither is returned. A shorter per-helper slice
+    /// does not expire the wait either. Elapsed time since cancel counts
+    /// inside this budget, so the waiter returns before `returnBound`.
+    static func lockWait(elapsedSinceCancel: TimeInterval, callerDeadline: TimeInterval?) -> TimeInterval {
+        let remaining = cancelledSequenceBudget - max(0, elapsedSinceCancel)
+        let capped = max(0, remaining)
+        if let callerDeadline, callerDeadline >= 45 {
+            return min(capped, callerDeadline)
+        }
+        return capped
+    }
+
+    /// An urgent holder yields when another waiter is queued, unless this
+    /// acquire was granted a turn after it already waited or was preempted.
+    /// That turn is one helper, so two cancelled teardowns do not livelock
+    /// and the second is not left waiting out the first's full sequence.
+    static func yieldsToWaiter(otherWaiters: Int, protectThisAcquire: Bool) -> Bool {
+        otherWaiters > 0 && protectThisAcquire == false
+    }
+
+    /// Reap after SIGKILL. Never open-ended. Also stops at the teardown's
+    /// return deadline so a D-state helper cannot hold the caller past 8s.
+    static func reapSlice(until returnDeadline: Date, now: Date) -> TimeInterval {
+        min(preemptReap, max(0, returnDeadline.timeIntervalSince(now)))
+    }
+
+    /// Follow-up detach or unmount counts only when it exits 0 before its
+    /// deadline. A timeout or nonzero status is not cleanup.
+    static func preemptCleanupSucceeded(status: Int32, timedOut: Bool) -> Bool {
+        status == 0 && timedOut == false
+    }
+
+    /// Plist parse missed the device. Detach a `/dev/disk*` in the text,
+    /// otherwise the image. Never the mount point: that is not the disk
+    /// `hdiutil attach` published.
+    static func detachTargetWhenPlistMissesDisk(
+        image: String,
+        plistStdout: String,
+        mountPoint: String
+    ) -> String {
+        if let disk = plistStdout.split(whereSeparator: \.isWhitespace).map(String.init).first(where: {
+            $0.hasPrefix("/dev/disk")
+        }) {
+            return disk
+        }
+        // `mountPoint` is the workspace path, not the disk attach published.
+        if image == mountPoint, image.hasPrefix("/dev/disk") {
+            return image
+        }
+        return image
+    }
+
     /// Deadline for an `umount` or `hdiutil detach` once cancellation is
-    /// visible. Create, attach, and mount keep the caller's deadline:
-    /// they are not the cancelled detach sequence. A nil result means
-    /// this helper is not part of that sequence.
+    /// visible. Create, attach, and mount keep the caller's deadline for
+    /// the running helper. The mutex wait uses `lockWait`, not this slice
+    /// and not the 45-second default.
     static func urgentDeadline(arguments: [String]) -> TimeInterval? {
         guard let executable = arguments.first else { return nil }
         let helpers = cancelledDetachHelpers()
@@ -134,14 +203,57 @@ enum PreemptedDiskHelperCleanup: Equatable, Sendable {
 /// lock so the next `hdiutil` / `mount_hfs` / `umount` cannot start.
 func diskImageMayDropSerializationLock(
     helperStillAlive: Bool,
+    reapExpired: Bool = false,
     cleanup: PreemptedDiskHelperCleanup,
     cleanupFinished: Bool
 ) -> Bool {
-    if helperStillAlive { return false }
+    if helperStillAlive && reapExpired == false { return false }
+    // The reap deadline passed and the helper is still alive (D-state).
+    // Park it and return. Waiting for it to exit misses the 8-second bound.
+    if helperStillAlive && reapExpired { return true }
     switch cleanup {
     case .none:
         return true
     case .unlinkSparseImage, .detachImage, .unmount:
         return cleanupFinished
+    }
+}
+
+/// Retrying the preempted helper is safe only after its attach or mount
+/// was actually removed. A failed detach must not retry into a second disk,
+/// and must not unlink the image that is still the detach path.
+func diskImageMayRetryPreemptedHelper(
+    cleanup: PreemptedDiskHelperCleanup,
+    cleanupSucceeded: Bool
+) -> Bool {
+    switch cleanup {
+    case .none, .unlinkSparseImage:
+        return true
+    case .detachImage, .unmount:
+        return cleanupSucceeded
+    }
+}
+
+/// Shared end for one cancelled teardown. The first `arm` wins. Later
+/// helpers and the mutex wait consume what is left. Not armed until
+/// cancellation is visible, so a non-cancel helper keeps its own deadline.
+final class DiskImageCancelClock: @unchecked Sendable {
+    private let state = Mutex<Date?>(nil)
+
+    func arm(now: Date = Date()) {
+        state.withLock { end in
+            if end == nil {
+                end = now.addingTimeInterval(DiskImageCancelBudget.cancelledSequenceBudget)
+            }
+        }
+    }
+
+    var deadline: Date? {
+        state.withLock { $0 }
+    }
+
+    var remaining: TimeInterval {
+        guard let deadline else { return 0 }
+        return max(0, deadline.timeIntervalSinceNow)
     }
 }

@@ -85,21 +85,6 @@ func superviseSeatbelt(
     return containedLaunchResult(child: mounted.result, teardown: teardown)
 }
 
-/// The workspace is back at its original path only when teardown succeeds.
-/// A failed detach or rename is the result the caller has to act on, including
-/// when the child already failed or the task was cancelled.
-func containedLaunchResult(
-    child: Result<IsolatedRunResult, IsolationApplyError>,
-    teardown: Result<Void, IsolationApplyError>
-) -> Result<IsolatedRunResult, IsolationApplyError> {
-    switch teardown {
-    case .failure(let error):
-        return .failure(error)
-    case .success:
-        return child
-    }
-}
-
 struct MountedSeatbeltOutcome {
     var result: Result<IsolatedRunResult, IsolationApplyError>
     /// Copy the volume back only after the in-sandbox handshake succeeded.

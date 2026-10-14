@@ -457,6 +457,84 @@ struct RollbackRiskGateTests {
         #expect(head.revision == 3)
         #expect(try store.loadRepoDocument(workspace: workspace).rules == [keep])
     }
+
+    @Test func legacyJSONAllowThenDenyRefusesRollbackToTheAllowHead() throws {
+        // policy.toml is gone. typed-rules.json lists allow on P and then
+        // deny on P. Share would keep the first row and removal would see
+        // P still present, so a rollback to the sealed allow would seal
+        // that allow and drop the live deny. Enforcement ranks the deny.
+        let root = try isolatedGateDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TypedRuleStore(baseDirectory: root)
+        let predicate = PolicyPredicate.gitPush(force: .exactly(.force), branch: "main")
+        try store.saveMachine(PolicyDocument(rules: [gateRule(predicate, verdict: .allow)]))
+        try FileManager.default.removeItem(at: store.machineFileURL)
+        let allow = TypedRule(
+            id: RuleID(pack: .coreGit, pattern: "first"),
+            predicate: predicate,
+            verdict: .allow,
+            origin: .machine
+        )
+        let deny = TypedRule(
+            id: RuleID(pack: .coreGit, pattern: "second"),
+            predicate: predicate,
+            verdict: .deny,
+            origin: .machine
+        )
+        let json = try JSONEncoder().encode(LegacyTypedRulesFile(schemaVersion: 1, rules: [allow, deny]))
+        try json.write(to: store.machineLegacyJSONURL)
+        let loaded = try store.loadMachine()
+        #expect(loaded.map(\.verdict) == [.allow, .deny])
+        let effective = TypedRuleStore.merge(builtin: [], machine: loaded, repo: [])
+        #expect(effective.map(\.verdict) == [.deny])
+        #expect(FileManager.default.fileExists(atPath: store.machineFileURL.path) == false)
+
+        let report = try expectBlockedReport {
+            try store.rollbackMachine(toRevision: 1)
+        }
+
+        #expect(report.blockingFindings.contains {
+            $0.kind == .verdictRelaxed && $0.detail == "core.git:gated deny->allow"
+        })
+        #expect(FileManager.default.fileExists(atPath: store.machineFileURL.path) == false)
+        #expect(try Data(contentsOf: store.machineLegacyJSONURL) == json)
+        #expect(try store.machineHistory().map(\.revision) == [1])
+        #expect(try store.loadMachine().map(\.verdict) == [.allow, .deny])
+    }
+
+    @Test func legacyJSONPlantedDenyWithNoEarlierAllowIsStillRefused() throws {
+        let root = try isolatedGateDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TypedRuleStore(baseDirectory: root)
+        let kept = PolicyPredicate.gitPush(force: .exactly(.force), branch: "main")
+        let plantedPredicate = PolicyPredicate.gitDiscardWorktree(pathspec: nil)
+        try store.saveMachine(PolicyDocument(rules: [gateRule(kept, verdict: .allow)]))
+        try FileManager.default.removeItem(at: store.machineFileURL)
+        let planted = TypedRule(
+            id: RuleID(pack: .coreGit, pattern: "planted"),
+            predicate: plantedPredicate,
+            verdict: .deny,
+            origin: .machine
+        )
+        let json = try JSONEncoder().encode(LegacyTypedRulesFile(schemaVersion: 1, rules: [planted]))
+        try json.write(to: store.machineLegacyJSONURL)
+
+        let report = try expectBlockedReport {
+            try store.rollbackMachine(toRevision: 1)
+        }
+
+        #expect(report.blockingFindings.contains {
+            $0.kind == .verdictRelaxed && $0.detail == "core.git:planted deny->removed"
+        })
+        #expect(FileManager.default.fileExists(atPath: store.machineFileURL.path) == false)
+        #expect(try Data(contentsOf: store.machineLegacyJSONURL) == json)
+        #expect(try store.machineHistory().map(\.revision) == [1])
+    }
+}
+
+private struct LegacyTypedRulesFile: Codable {
+    var schemaVersion: Int
+    var rules: [TypedRule]
 }
 
 private final class RollbackLockProbe {
