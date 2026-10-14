@@ -9,6 +9,10 @@ import Testing
 
 @Suite("MCP sandbox directory creation")
 struct MCPSandboxCreateTests {
+    /// These tests create and remove `/private/tmp/future-keys` and
+    /// `/private/tmp/anchor`. Parallel runs otherwise delete the directory
+    /// another test is still reading.
+    private static let hostPrivateTmpLock = NSLock()
     @Test func scratchLeafIsCreatedOnTheCheckedDirectoryAfterTheParentIsSwapped() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-swap-\(UUID().uuidString)", isDirectory: true)
@@ -929,6 +933,8 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func finalNameUnderARealDirectoryStillOpensTheCredentialDirectory() throws {
+        Self.hostPrivateTmpLock.lock()
+        defer { Self.hostPrivateTmpLock.unlock() }
         let opened = "/private/tmp/future-keys"
         let anchor = "/private/tmp/anchor"
         let createdOpened = FileManager.default.fileExists(atPath: opened) == false
@@ -958,6 +964,8 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func singleNameUnderPrivateTmpStillOpensTheKeyDirectory() throws {
+        Self.hostPrivateTmpLock.lock()
+        defer { Self.hostPrivateTmpLock.unlock() }
         let opened = "/private/tmp/future-keys"
         let anchor = "/private/tmp/anchor"
         let createdOpened = FileManager.default.fileExists(atPath: opened) == false
@@ -1000,6 +1008,8 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func linkDotDotStillOpensTheKeyDirectory() throws {
+        Self.hostPrivateTmpLock.lock()
+        defer { Self.hostPrivateTmpLock.unlock() }
         let opened = "/private/tmp/future-keys"
         let anchor = "/private/tmp/anchor"
         let createdOpened = FileManager.default.fileExists(atPath: opened) == false
@@ -1034,6 +1044,8 @@ struct MCPSandboxCreateTests {
     }
 
     @Test func anchorChildDotDotStillOpensTheKeyDirectory() throws {
+        Self.hostPrivateTmpLock.lock()
+        defer { Self.hostPrivateTmpLock.unlock() }
         let opened = "/private/tmp/future-keys"
         let anchor = "/private/tmp/anchor"
         let hostFoo = anchor + "/foo"
@@ -1080,6 +1092,54 @@ struct MCPSandboxCreateTests {
         try FileManager.default.createDirectory(atPath: hostFoo, withIntermediateDirectories: true)
         let present = me.path + "/jump/foo/../../private/tmp/future-keys/x"
         #expect(MCPSandbox.missingSymlinkOpenings(present).contains(opened))
+    }
+
+    @Test func dotLinkBeforeTheKeyDirectoryStillOpensIt() throws {
+        Self.hostPrivateTmpLock.lock()
+        defer { Self.hostPrivateTmpLock.unlock() }
+        let opened = "/private/tmp/future-keys"
+        let anchor = "/private/tmp/anchor"
+        let hostFoo = anchor + "/foo"
+        let createdOpened = FileManager.default.fileExists(atPath: opened) == false
+        let createdAnchor = FileManager.default.fileExists(atPath: anchor) == false
+        if createdOpened {
+            try FileManager.default.createDirectory(atPath: opened, withIntermediateDirectories: true)
+        }
+        if createdAnchor {
+            try FileManager.default.createDirectory(atPath: anchor, withIntermediateDirectories: true)
+        }
+        let fooExisted = FileManager.default.fileExists(atPath: hostFoo)
+        if fooExisted {
+            try FileManager.default.removeItem(atPath: hostFoo)
+        }
+        defer {
+            if createdOpened { try? FileManager.default.removeItem(atPath: opened) }
+            if createdAnchor {
+                try? FileManager.default.removeItem(atPath: anchor)
+            } else if fooExisted {
+                try? FileManager.default.createDirectory(atPath: hostFoo, withIntermediateDirectories: true)
+            } else {
+                try? FileManager.default.removeItem(atPath: hostFoo)
+            }
+        }
+        try Data("key".utf8).write(to: URL(fileURLWithPath: opened + "/id_rsa"))
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-dot-before-key-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let me = root.appendingPathComponent("Users/me")
+        try FileManager.default.createDirectory(at: me, withIntermediateDirectories: true)
+        #expect(symlink("/private/tmp/anchor", me.appendingPathComponent("jump").path) == 0)
+        let shapes = [
+            me.path + "/jump/x/../../private/tmp/y/future-keys",
+            me.path + "/jump/x/../../private/tmp/z/future-keys",
+            me.path + "/jump/a/../../private/tmp/y/future-keys",
+            me.path + "/jump/foo/../../private/tmp/y/future-keys",
+        ]
+        for shape in shapes {
+            #expect(MCPSandbox.missingSymlinkOpenings(shape).contains(opened))
+        }
+        let exact = me.path + "/jump/foo/../../private/tmp/future-keys"
+        #expect(MCPSandbox.missingSymlinkOpenings(exact) == [opened])
     }
 
     @Test func preexistingSymlinkThenMoveDoesNotAllowTheCache() throws {
