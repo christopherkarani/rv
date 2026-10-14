@@ -129,18 +129,29 @@ public enum MCPRedaction {
         return PercentPass(text: current, stoppedEarly: next != current)
     }
 
-    /// Decode, then if stripping a byte joins `%` to the following hex, decode that
-    /// spelling with the same cap. `%%0067hp_` is `%` + NUL + `67hp_` until the NUL is gone.
-    /// A strip that does not unlock another escape keeps the original spelling, so a
+    /// Decode, then while stripping a byte joins `%` to the following hex, decode that
+    /// spelling again. Each pass uses the same cap. `%%0067hp_` is `%` + NUL + `67hp_`
+    /// until the NUL is gone, and a second NUL inside the next escape is the same step.
+    /// A strip that does not unlock another escape keeps the spelling already in hand, so a
     /// variation selector after `://` is still visible to the userinfo check.
     private static func revealedDecode(_ value: String) -> PercentPass {
-        let pass = percentDecode(value)
+        var pass = percentDecode(value)
         if pass.stoppedEarly { return pass }
+        for _ in 0..<decodeBound {
+            let stripped = withoutInvisibleBreaks(pass.text)
+            if stripped == pass.text { return pass }
+            let again = percentDecode(stripped)
+            if again.stoppedEarly { return again }
+            if again.text == stripped { return pass }
+            pass = again
+        }
         let stripped = withoutInvisibleBreaks(pass.text)
         guard stripped != pass.text else { return pass }
         let again = percentDecode(stripped)
-        guard again.stoppedEarly || again.text != stripped else { return pass }
-        return again
+        if again.stoppedEarly || again.text != stripped {
+            return PercentPass(text: pass.text, stoppedEarly: true)
+        }
+        return pass
     }
 
     private static func isTokenSeparator(_ character: Character) -> Bool {
@@ -319,7 +330,11 @@ public enum MCPRedaction {
             // `/:password@host` and `user:password@host` are not scheme URLs.
             // Authority userinfo on `postgres://user:pass@…` still stays, so the
             // review can show it. Path userinfo and a later `://` do not.
-            if argumentUserinfoIsRefused(decoded) || passwordSitsInAuthority(candidate) { return true }
+            // The raw spelling keeps `%2F` inside the user. The revealed spelling is what
+            // `%%0040`, `%%002F`, and a tab hidden in `%00` become.
+            if argumentUserinfoIsRefused(decoded) || passwordSitsInAuthority(candidate) || passwordSitsInAuthority(pass.text) {
+                return true
+            }
             if let query = rawQuery(decoded), queryCarriesSecret(encoded: query, items: nil) { return true }
             // A ctx7sk-, sk-, or ghp_ prefix returns before `/` or `#`. Decode
             // first. A prefix that also carries a path, fragment, userinfo, or
@@ -359,6 +374,13 @@ public enum MCPRedaction {
     /// delimiter ends the authority, and `host/@path` does not. `:password@host` is an empty user.
     private static func passwordSitsInAuthority(_ text: String) -> Bool {
         if rawUserinfoIsPassword(text) { return true }
+        let pass = revealedDecode(text)
+        if pass.text != text || pass.stoppedEarly {
+            let revealed = pass.text.replacingOccurrences(of: "\\", with: "/")
+            if rawUserinfoIsPassword(pass.text) || decodedPasswordSitsInAuthority(revealed) { return true }
+            // An unfinished decode in a path is still a secret, but it is not this authority.
+            return false
+        }
         return decodedPasswordSitsInAuthority(slashNormalized(text))
     }
 
@@ -531,6 +553,8 @@ public enum MCPRedaction {
         // `%67hp_` still contains `hp_`, so a raw prefix search is not enough.
         // Refuse only when decoding reveals a token the raw spelling did not show.
         if pass.text != value, looksLikeToken(decoded) || containsEmbeddedPrefix(decoded) { return true }
+        // `%%0040` is `@` only after the strip. A password in that authority is not a token.
+        if passwordSitsInAuthority(pass.text) { return true }
         guard looksLikeToken(decoded) else { return false }
         return hidesAnotherSecret(decoded)
     }
@@ -550,7 +574,9 @@ public enum MCPRedaction {
     /// U+0020 is whitespace and is not removed from the value. U+2044 and U+2215 are separators, so a
     /// vulgar fraction or a square sign whose NFKD contains one is dropped. A self-NFKD solidus or slash
     /// glyph is a separator, including U+2298 and U+2F03, as are U+2212, U+22C5, U+2219, U+02D7, and
-    /// U+E002F. A default-ignorable scalar such as U+E0001 is a separator too. U+0020 is not one.
+    /// U+E002F. A self-NFKD box-drawing diagonal is a separator too: U+2571–U+2573, U+1FBA0–U+1FBAD,
+    /// U+1FBBD, and U+1FBBE. U+2213, U+2217, and U+2218 sit next to those listed operators and are
+    /// separators as well. A default-ignorable scalar such as U+E0001 is a separator too. U+0020 is not one.
     /// Non-ASCII punctuation is a separator even when it folds to `-` or `_`. A decomposition that
     /// contains one of these separators is dropped too, including U+2025 (`..`) and U+2260.
     private static func dropsForPrefixCount(_ scalar: Unicode.Scalar) -> Bool {
@@ -563,9 +589,10 @@ public enum MCPRedaction {
         switch scalar.value {
         case 0x2044, 0x2215, 0xFF0E,
             0x2216, 0x29F5, 0x29F6, 0x29F7, 0x29F8, 0x29F9, 0x2AFD, 0x2AFB, 0x1F67C, 0x1F67D,
-            0x2212, 0x22C5, 0x2219, 0x02D7, 0xE002F,
+            0x2212, 0x2213, 0x22C5, 0x2217, 0x2218, 0x2219, 0x02D7, 0xE002F,
             0x2298, 0x29B8, 0x233F, 0x2340, 0x2341, 0x2342, 0x2349, 0x244A,
-            0x27C8, 0x27C9, 0x27CB, 0x27CD, 0x29C4, 0x29C5, 0x2F03:
+            0x27C8, 0x27C9, 0x27CB, 0x27CD, 0x29C4, 0x29C5, 0x2F03,
+            0x2571...0x2573, 0x1FBA0...0x1FBAD, 0x1FBBD, 0x1FBBE:
             return true
         default:
             break
