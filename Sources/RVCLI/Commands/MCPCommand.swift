@@ -553,7 +553,11 @@ enum MCPRun {
             return .failure(CommandFailure(
                 "\(secret.definition.name) is empty, contains NUL, or is over \(SecretValue.maximumBytes) bytes; nothing imported"))
         }
-        show(importReview(plan, allowTools: allowTools) + "\n")
+        let review = importReview(plan, allowTools: allowTools)
+        guard reviewShowsEveryLiteral(plan, review) else {
+            return .failure(CommandFailure("import review omitted a literal value; nothing imported"))
+        }
+        show(review + "\n")
         let outcome = await environment.presence.confirm("rv: import MCP servers into mcp.json as shown", .echoCode)
         guard case .confirmed = outcome else {
             let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
@@ -611,21 +615,30 @@ enum MCPRun {
     }
 
     /// What the device owner sees before secrets are stored or mcp.json is signed.
-    /// Secret names and server URLs only; secret values stay off the terminal.
+    /// Every literal env `NAME=value` and every header value is listed, so a
+    /// password inside an unclassified value is visible before confirm.
+    /// Classified secrets stay in the Keychain and appear here only as names.
     static func importReview(_ plan: MCPImportPlan, allowTools: Bool) -> String {
         var lines = ["import into mcp.json:"]
         for server in plan.servers {
             if let remote = server.remote {
                 let transport = remote.transport == .sse ? "legacy SSE" : "streamable HTTP"
-                lines.append("  \(server.name): \(remote.url.absoluteString) (remote, \(transport))")
+                let shown = MCPRedaction.url(remote.url.absoluteString)
+                let address = shown.leaked ? shown.display : remote.url.absoluteString
+                lines.append("  \(server.name): \(address) (remote, \(transport))")
                 for name in remote.headers.keys.sorted() {
-                    let secrets = MCPSecretReference.names(in: remote.headers[name] ?? "") ?? []
+                    let value = remote.headers[name] ?? ""
+                    lines.append("    \(name): \(value)")
+                    let secrets = MCPSecretReference.names(in: value) ?? []
                     if secrets.isEmpty == false {
                         lines.append("    \(name) → secret \(secrets.joined(separator: ", "))")
                     }
                 }
             } else {
                 lines.append("  \(server.name): \(server.command)")
+            }
+            for name in server.environment.keys.sorted() {
+                lines.append("    \(name)=\(server.environment[name] ?? "")")
             }
             for variable in server.secrets.keys.sorted() {
                 if let name = server.secrets[variable] {
@@ -640,6 +653,24 @@ enum MCPRun {
             if allowTools { lines.append("    tools will be allow") }
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// Nothing in the plan is signed unless the review text the device owner
+    /// sees contains that literal env value, header value, and server URL.
+    static func reviewShowsEveryLiteral(_ plan: MCPImportPlan, _ review: String) -> Bool {
+        for server in plan.servers {
+            if let remote = server.remote {
+                if MCPRedaction.url(remote.url.absoluteString).leaked { return false }
+                if review.contains(remote.url.absoluteString) == false { return false }
+                for (name, value) in remote.headers where review.contains("\(name): \(value)") == false {
+                    return false
+                }
+            }
+            for (name, value) in server.environment where review.contains("\(name)=\(value)") == false {
+                return false
+            }
+        }
+        return true
     }
 
     static func setup(

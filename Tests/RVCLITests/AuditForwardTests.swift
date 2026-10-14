@@ -169,8 +169,15 @@ struct AuditForwardTests {
         let nestedSecret = "supersecretpassword"
         let secretDestinations = [
             ("https://siem.example/ingest/\(pathSecret)", "secret in its path"),
+            ("https://siem.example/.\(pathSecret)", "secret in its path"),
+            ("https://siem.example/\(pathSecret)%20x", "secret in its path"),
             ("https://siem.example/ingest#\(pathSecret)", "fragment"),
             ("https://siem.example/hook?next=https://user:\(nestedSecret)@collector.example", "secret in its query"),
+            ("https://siem.example/hook?next=//user:\(nestedSecret)@collector.example", "secret in its query"),
+            ("https://siem.example/hook?next=https://collector.example/ingest/\(pathSecret)", "secret in its query"),
+            ("https://siem.example/hook?next=https://collector.example/hook%23\(pathSecret)", "secret in its query"),
+            ("https://siem.example/hook?next=https%3A%2F%2Fcollector.example%2Fhook%3Ftoken%3D\(pathSecret)", "secret in its query"),
+            ("https://siem.example/hook?next=https://collector.example/?api_key=\(pathSecret)", "secret in its query"),
         ]
         for (text, fragment) in secretDestinations {
             guard case .failure(let failure) = AuditForwardRun.destination(text) else {
@@ -380,8 +387,15 @@ struct AuditForwardInstallTests {
         let nestedSecret = "supersecretpassword"
         for text in [
             "https://siem.example/ingest/\(pathSecret)",
+            "https://siem.example/.\(pathSecret)",
+            "https://siem.example/\(pathSecret)%20x",
             "https://siem.example/ingest#\(pathSecret)",
             "https://siem.example/hook?next=https://user:\(nestedSecret)@collector.example",
+            "https://siem.example/hook?next=//user:\(nestedSecret)@collector.example",
+            "https://siem.example/hook?next=https://collector.example/ingest/\(pathSecret)",
+            "https://siem.example/hook?next=https://collector.example/hook%23\(pathSecret)",
+            "https://siem.example/hook?next=https%3A%2F%2Fcollector.example%2Fhook%3Ftoken%3D\(pathSecret)",
+            "https://siem.example/hook?next=https://collector.example/?api_key=\(pathSecret)",
         ] {
             let installed = AuditForwardInstall.install(plan(["--to", text], home: home))
             guard case .failure(let failure) = installed else {

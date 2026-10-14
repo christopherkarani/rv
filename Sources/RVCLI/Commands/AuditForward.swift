@@ -64,27 +64,19 @@ enum AuditForwardRun {
             return .failure("--to must not have a fragment")
         }
         let path = components.percentEncodedPath.removingPercentEncoding ?? components.percentEncodedPath
-        if path.split(separator: "/").contains(where: { MCPRedaction.looksLikeToken(String($0)) }) {
+        if path.split(separator: "/").contains(where: { MCPRedaction.pathSegmentCarriesToken(String($0)) }) {
             return .failure("--to must not carry a secret in its path")
         }
         let items = components.queryItems ?? []
         if items.contains(where: { item in
             MCPRedaction.isSecretName(item.name) || MCPRedaction.looksLikeToken(item.value ?? "")
-                || queryCarriesUserinfo(item.value ?? "")
+                || MCPRedaction.urlCarriesSecret(item.value ?? "")
         }) {
             return .failure("--to must not carry a secret in its query")
         }
         if scheme == "https" { return .success(url) }
         if scheme == "http", ["127.0.0.1", "localhost", "::1", "[::1]"].contains(host) { return .success(url) }
         return .failure("audit forwarding needs https (plain http is allowed only to localhost)")
-    }
-
-    /// A query value that is itself a URL with a username or password.
-    private static func queryCarriesUserinfo(_ value: String) -> Bool {
-        guard value.contains("://"), let nested = URL(string: value),
-            let components = URLComponents(url: nested, resolvingAgainstBaseURL: false)
-        else { return false }
-        return components.user != nil || components.password != nil
     }
 
     static func stateDirectory(_ configDirectory: URL) -> URL {

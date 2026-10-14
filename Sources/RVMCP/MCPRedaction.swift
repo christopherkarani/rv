@@ -49,6 +49,32 @@ public enum MCPRedaction {
         return allowed && digits >= 4 && letters >= 4
     }
 
+    /// A path segment that is a token, including `.ghp_…` and `ghp_… x`.
+    public static func pathSegmentCarriesToken(_ segment: String) -> Bool {
+        if looksLikeToken(segment) { return true }
+        let pieces = segment.split { $0 == "." || $0.isWhitespace }
+        return pieces.contains { looksLikeToken(String($0)) }
+    }
+
+    /// A query value that is itself a URL with userinfo, a fragment, a token
+    /// path, or another nested secret. `//user:pass@host` counts.
+    public static func urlCarriesSecret(_ value: String, depth: Int = 0) -> Bool {
+        if depth > 4 { return true }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.contains("://") || trimmed.hasPrefix("//") else { return false }
+        guard let components = URLComponents(string: trimmed), let host = components.host, host.isEmpty == false else {
+            return false
+        }
+        if components.user != nil || components.password != nil || components.fragment != nil { return true }
+        let path = components.percentEncodedPath.removingPercentEncoding ?? components.percentEncodedPath
+        if path.split(separator: "/").contains(where: { pathSegmentCarriesToken(String($0)) }) { return true }
+        for item in components.queryItems ?? [] {
+            if isSecretName(item.name) || looksLikeToken(item.value ?? "") { return true }
+            if let nested = item.value, urlCarriesSecret(nested, depth: depth + 1) { return true }
+        }
+        return false
+    }
+
     /// Args with credentials masked, plus what was masked (flag names or positions).
     public static func args(_ args: [String]) -> (shown: [String], credentials: [String]) {
         var shown: [String] = []
@@ -91,11 +117,11 @@ public enum MCPRedaction {
     }
 
     /// `scheme://host[:port]`, with `/…` when a path or query was dropped.
-    /// `leaked` when the URL itself carries credentials (userinfo or a
-    /// secret-looking query item).
+    /// `leaked` when the URL carries userinfo, a fragment, a token path, or a
+    /// query value that is itself a secret or a URL carrying one.
     public static func url(_ raw: String) -> (display: String, leaked: Bool) {
         guard let components = URLComponents(string: raw), let scheme = components.scheme, let host = components.host else {
-            return ("<url>", looksLikeToken(raw))
+            return ("<url>", looksLikeToken(raw) || urlCarriesSecret(raw))
         }
         var display = "\(scheme)://\(host)"
         if let port = components.port { display += ":\(port)" }
@@ -103,11 +129,13 @@ public enum MCPRedaction {
         if (path.isEmpty == false && path != "/") || components.percentEncodedQuery != nil {
             display += "/…"
         }
+        let decoded = path.removingPercentEncoding ?? path
         let queryLeak = (components.queryItems ?? []).contains { item in
-            isSecretName(item.name) || looksLikeToken(item.value ?? "")
+            isSecretName(item.name) || looksLikeToken(item.value ?? "") || urlCarriesSecret(item.value ?? "")
         }
-        let pathLeak = path.split(separator: "/").contains { looksLikeToken(String($0)) }
-        return (display, components.password != nil || queryLeak || pathLeak)
+        let pathLeak = decoded.split(separator: "/").contains { pathSegmentCarriesToken(String($0)) }
+        let credential = components.user != nil || components.password != nil || components.fragment != nil
+        return (display, credential || queryLeak || pathLeak)
     }
 
     /// Names of env vars or headers that hold a literal credential.

@@ -153,7 +153,11 @@ struct MCPConfigurationTests {
             (server(#""url":"https://a.example/#frag""#), "fragment"),
             (server(#""url":"https://a.example/mcp?api_key=zzz""#), "secret in its query"),
             (server(#""url":"https://a.example/mcp?x=0123456789abcdefghijklmnop""#), "secret in its query"),
+            (server(#""url":"https://a.example/mcp?next=https://user:pw@evil.example/x""#), "secret in its query"),
+            (server(#""url":"https://a.example/mcp?next=https://evil.example/ghp_1234567890abcdefghij""#), "secret in its query"),
+            (server(#""url":"https://a.example/mcp?next=//user:pw@evil.example""#), "secret in its query"),
             (server(#""url":"https://a.example/sk-1234567890abcdefghijklmnop/mcp""#), "secret in its path"),
+            (server(#""url":"https://a.example/.ghp_1234567890abcdefghij""#), "secret in its path"),
             (server(#""url":"https://a.example","transport":"ws""#), #"transport must be "http" or "sse""#),
             (server(#""url":"https://a.example","headers":{"Mcp-Session-Id":"x"}"#), "rv sets Mcp-Session-Id"),
             (server(#""url":"https://a.example","headers":{"host":"x"}"#), "rv sets host"),
@@ -190,9 +194,18 @@ struct MCPConfigurationTests {
         #expect(try JSONValue.parse(Data("-9007199254740993.0".utf8)).domainValue == .string("-9007199254740993"))
         #expect(try JSONValue.parse(Data("2.0".utf8)).domainValue == .number(2))
         #expect(try JSONValue.parse(Data("-12.5".utf8)).domainValue == .number(-12.5))
+        for spelling in ["12.50", "1.25e1", "125e-1"] {
+            #expect(try JSONValue.parse(Data(spelling.utf8)).domainValue == .number(12.5), "\(spelling)")
+        }
+        #expect(try JSONValue.parse(Data("10.5".utf8)).domainValue == .number(10.5))
+        #expect(try JSONValue.parse(Data("10.25".utf8)).domainValue == .number(10.25))
+        #expect(try JSONValue.parse(Data("2251799813685248.5".utf8)).domainValue == .number(2251799813685248.5))
+        #expect(try JSONValue.parse(Data("4503599627370495.5".utf8)).domainValue == .number(4503599627370495.5))
         for spelling in [
             "9007199254740991.4", "9007199254740990.1", "9007199254740990.9", "-9007199254740990.1",
             "4503599627370496.4", "1.0000000000000001",
+            "2251799813685248.4", "2251799813685248.6", "4503599627370495.4", "4503599627370495.6",
+            "12.500000000000001",
         ] {
             #expect(try JSONValue.parse(Data(spelling.utf8)).domainValue == .string(spelling))
         }

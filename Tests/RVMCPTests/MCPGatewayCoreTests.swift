@@ -559,10 +559,24 @@ struct MCPApprovalStoreTests {
         unreadable(22, "-9007199254740990.1")
         unreadable(23, "4503599627370496.4")
         unreadable(24, "1.0000000000000001")
+        unreadable(26, "2251799813685248.4")
+        unreadable(27, "2251799813685248.6")
+        unreadable(28, "4503599627370495.4")
+        unreadable(29, "4503599627370495.6")
+        unreadable(30, "12.500000000000001")
 
         let genuine = call(25, "pass", "12.5")
         #expect(genuine.audits.isEmpty)
         #expect(genuine.toUpstream.first?.1["params"]?["arguments"]?["amount"] == .number("12.5"))
+        let trailing = call(31, "pass", "12.50")
+        #expect(trailing.audits.isEmpty)
+        #expect(trailing.toUpstream.first?.1["params"]?["arguments"]?["amount"] == .number("12.50"))
+        let half = call(32, "pass", "2251799813685248.5")
+        #expect(half.audits.isEmpty)
+        #expect(half.toUpstream.first?.1["params"]?["arguments"]?["amount"] == .number("2251799813685248.5"))
+        let otherHalf = call(33, "pass", "4503599627370495.5")
+        #expect(otherHalf.audits.isEmpty)
+        #expect(otherHalf.toUpstream.first?.1["params"]?["arguments"]?["amount"] == .number("4503599627370495.5"))
     }
 
     @Test func canonicalHashIgnoresKeyOrder() throws {

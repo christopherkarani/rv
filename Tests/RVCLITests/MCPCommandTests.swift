@@ -207,6 +207,67 @@ struct MCPCommandTests {
         #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("secrets.json").path) == false)
     }
 
+    @Test func importShowsLiteralEnvironmentAndHeaderValuesBeforeConfirm() async throws {
+        let fixture = Fixture()
+        let password = "supersecretpassword"
+        let database = "postgres://user:\(password)@db.example/app"
+        try fixture.write(".cursor/mcp.json", """
+            {"mcpServers": {
+              "db": {"command": "db-mcp", "env": {"DATABASE_URL": "\(database)"}},
+              "api": {"url": "https://mcp.example/mcp", "headers": {"X-Db": "\(database)"}}
+            }}
+            """)
+        let shown = Mutex("")
+        let presence = UserPresence { _, _ in
+            let review = shown.withLock { $0 }
+            if review.contains("DATABASE_URL=\(database)") && review.contains("X-Db: \(database)") {
+                return .confirmed(method: "terminal confirmation")
+            }
+            return .refused("value was not shown")
+        }
+        let imported = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: fixture.environment(presence: presence), show: { text in shown.withLock { $0 += text } }
+        ).get()
+        let review = shown.withLock { $0 }
+        #expect(review.contains("DATABASE_URL=\(database)"))
+        #expect(review.contains("X-Db: \(database)"))
+        #expect(review.contains(password))
+        #expect(imported.contains("wrote mcp.json"))
+        let signed = try String(contentsOf: fixture.config.appendingPathComponent("mcp.json"), encoding: .utf8)
+        #expect(signed.contains(database))
+        #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
+    }
+
+    @Test func importRefusesASecretNestedInAQueryURL() async throws {
+        let password = "supersecretpassword"
+        let token = "ghp_1234567890abcdefghij"
+        let urls = [
+            "https://mcp.example/mcp?next=https://user:\(password)@evil.example/x",
+            "https://mcp.example/mcp?next=https://evil.example/\(token)",
+            "https://mcp.example/mcp?next=//user:\(password)@evil.example",
+        ]
+        for url in urls {
+            let fixture = Fixture()
+            try fixture.write(".cursor/mcp.json", #"{"mcpServers":{"api":{"url":"\#(url)"}}}"#)
+            let shown = Mutex("")
+            let result = try await MCPRun.importServers(
+                host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                environment: fixture.environment(presence: Self.present),
+                show: { text in shown.withLock { $0 += text } }
+            ).get()
+            let review = shown.withLock { $0 }
+            #expect(review.contains(password) == false)
+            #expect(review.contains(token) == false)
+            #expect(review.isEmpty)
+            #expect(result.contains(password) == false)
+            #expect(result.contains(token) == false)
+            #expect(result.contains("nothing to import"))
+            #expect(FileManager.default.fileExists(atPath: fixture.config.appendingPathComponent("mcp.json").path) == false)
+            #expect(fixture.keychain.items.withLock { $0 }.isEmpty)
+        }
+    }
+
     static let present = UserPresence { _, _ in .confirmed(method: "test") }
     static let absent = UserPresence { _, _ in .refused("this process has no terminal") }
 

@@ -130,11 +130,14 @@ public struct MCPRemoteServer: Sendable, Equatable {
         }
         if components.fragment != nil { return "must not have a fragment" }
         let items = components.queryItems ?? []
-        if items.contains(where: { MCPRedaction.isSecretName($0.name) || MCPRedaction.looksLikeToken($0.value ?? "") }) {
+        if items.contains(where: { item in
+            MCPRedaction.isSecretName(item.name) || MCPRedaction.looksLikeToken(item.value ?? "")
+                || MCPRedaction.urlCarriesSecret(item.value ?? "")
+        }) {
             return "must not carry a secret in its query (send it as a header with ${secret:NAME})"
         }
         let path = components.percentEncodedPath.removingPercentEncoding ?? components.percentEncodedPath
-        if path.split(separator: "/").contains(where: { MCPRedaction.looksLikeToken(String($0)) }) {
+        if path.split(separator: "/").contains(where: { MCPRedaction.pathSegmentCarriesToken(String($0)) }) {
             return "must not carry a secret in its path (send it as a header with ${secret:NAME})"
         }
         return nil

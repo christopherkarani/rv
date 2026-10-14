@@ -18,7 +18,7 @@ enum JSONLiteral: Equatable {
 
     /// The same value policy rules compare. Exact integers, including `.0` and
     /// an exponent, keep the digits the call path uses. A fraction `Double`
-    /// would round onto an integer stays text, so it is not that integer.
+    /// would round, onto an integer or onto another fraction, stays text.
     func domainValue() -> JSONValue {
         switch self {
         case .null: return .null

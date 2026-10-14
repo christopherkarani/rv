@@ -111,13 +111,25 @@ struct MCPManagedPolicyTests {
         #expect(try decide("in", "[9007199254740991]", "9007199254740991.4") == .allow)
         #expect(try decide(">", "12.5", "13") == .deny)
         #expect(try decide(">", "12.5", "12.5") == .allow)
+        #expect(try decide(">", "12.50", "12.5") == .allow)
+        #expect(try decide(">", "125e-1", "12.5") == .allow)
+        #expect(try decide(">", "2251799813685248.5", "2251799813685248.5") == .allow)
+        #expect(try decide(">", "2251799813685248.5", "2251799813685248.6") == .deny)
+        #expect(try decide("<", "4503599627370495.5", "4503599627370495.5") == .allow)
+        #expect(try decide("<", "4503599627370495.5", "4503599627370495.4") == .deny)
+        #expect(try decide(">", "4503599627370495.5", "4503599627370495.5") == .allow)
 
-        let rounded = ManagedPolicy.decode(Data(
-            #"{"version":1,"mcp":{"deny":[{"tool":"pay/charge","when":{"/amount":{">":9007199254740991.4}}}]}}"#.utf8))
-        guard case .failure(let error) = rounded else {
-            Issue.record("a fraction Double would round onto an integer must not become a policy threshold")
-            return
+        for spelling in [
+            "9007199254740991.4", "2251799813685248.4", "2251799813685248.6",
+            "4503599627370495.4", "12.500000000000001",
+        ] {
+            let rounded = ManagedPolicy.decode(Data(
+                #"{"version":1,"mcp":{"deny":[{"tool":"pay/charge","when":{"/amount":{">":\#(spelling)}}}]}}"#.utf8))
+            guard case .failure(let error) = rounded else {
+                Issue.record("\(spelling) must not become a policy threshold")
+                continue
+            }
+            #expect(error.message.contains("needs a number"), "\(spelling)")
         }
-        #expect(error.message.contains("needs a number"))
     }
 }
