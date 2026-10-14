@@ -2093,6 +2093,48 @@ struct MCPCommandTests {
         try await expectSplitSecretRefused("ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
     }
 
+    @Test func importRefusesALightLeftThroughTheBallotBox() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let extra = tail + "EXTRA"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-", "AKIA", "AIza", "ASIA"]
+        let marks = Array(UInt32(0x2574)...UInt32(0x2612)) + [UInt32(0xFFED), UInt32(0xFFEE)]
+        for code in marks {
+            let mark = String(Unicode.Scalar(code)!)
+            let value = head + mark + tail
+            try await expectSplitSecretRefused(value, sk: "sk-12345678g" + mark + tail, absent: absent, label: "box drawing")
+            try await expectSplitSecretRefused(head + mark + extra, absent: absent + [extra], label: "box drawing extra")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": value]),
+                absent: absent, label: "box drawing command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(value)"]]),
+                absent: absent, label: "box drawing cwd")
+            let joined = "g" + mark + tail
+            try await expectImportRefused(
+                try hostJSON("db", ["command": joined]),
+                absent: ["ghp_", tail], label: "box drawing joined command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": [joined, "--api-key", joined]]),
+                absent: ["ghp_", tail], label: "box drawing joined argument")
+            for disguised in ["x" + value, "." + value] {
+                try await expectSplitSecretRefused(disguised, absent: absent, label: "disguised box drawing")
+                try await expectImportRefused(
+                    try hostJSON("api", [
+                        "url": "https://mcp.example/mcp",
+                        "headers": ["X-Trace": disguised, "Authorization": "Bearer \(value)"],
+                    ]),
+                    absent: absent + ["Bearer"], label: "box drawing trace")
+            }
+            for overlapped in ["AKIA" + mark + "Iza12345678", "ASIA" + mark + "Iza12345678"] {
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": overlapped, "LOG_LEVEL": overlapped]]),
+                    absent: ["AKIA", "ASIA", "AIza", "Iza12345678"], label: "box drawing akia")
+            }
+        }
+        try await expectSplitSecretRefused("ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
+    }
+
     @Test func importRefusesADownTackUnderbarThroughTheOCRAccountNumber() async throws {
         let tail = "hp_1234567890abcdefghij"
         let extra = tail + "EXTRA"
@@ -2239,9 +2281,25 @@ struct MCPCommandTests {
             absent: ["ghp_", "hp_1234567890abcdefghij"], label: "scheme prefix argument")
     }
 
+    @Test func importRefusesASchemeNameAfterDigits() async throws {
+        let tails = ["https", "http", "wss", "postgres"]
+        let absent = ["abcdefghij1234", "qrstuvwxyzabcd"]
+        for tail in tails {
+            let spelling = "abcdefghij1234\(tail)://qrstuvwxyzabcd"
+            try await expectImportRefused(
+                try hostJSON("db", ["command": spelling]),
+                absent: absent, label: "embedded \(tail) command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(spelling)"]]),
+                absent: absent, label: "embedded \(tail) cwd")
+        }
+    }
+
     @Test func importWritesAPortURLWithNoUserinfo() async throws {
         let urls = [
             "https://collector.example:8080/hook",
+            "http://collector.example:8080/hook",
+            "wss://collector.example:8080/hook",
             "postgres://db.example:5432/app",
             "https://collector.example/hook1234",
         ]
@@ -2295,6 +2353,32 @@ struct MCPCommandTests {
                     ]),
                     absent: [password], label: "prepend port header")
             }
+        }
+    }
+
+    @Test func importRefusesTuluTigalariRephaGluedToAnAtSignOnAPort() async throws {
+        let password = "supersecretpassword"
+        let mark = String(Unicode.Scalar(0x113D1)!)
+        let tails = [
+            ("postgres://user:\(password)" + mark + "@db.example:5432/app"),
+            ("https://user:\(password)" + mark + "@collector.example:8080/hook"),
+            ("https://user:\(password)" + mark + "@collector.example/hook1234"),
+        ]
+        for value in tails {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "env": ["LOG_LEVEL": value]]),
+                absent: [password], label: "repha port env")
+            try await expectImportRefused(
+                try hostJSON("api", [
+                    "url": "https://mcp.example/mcp",
+                    "headers": [
+                        "X-Trace": value,
+                        "Authorization": value,
+                        "X-API-Key": value,
+                        "Cookie": value,
+                    ],
+                ]),
+                absent: [password], label: "repha port header")
         }
     }
 

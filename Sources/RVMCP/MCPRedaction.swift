@@ -272,6 +272,7 @@ public enum MCPRedaction {
 
     /// A letter run immediately before `://` is `http`, `https`, `wss`, or `postgres`.
     /// The run may follow `=` on `--cwd=`, so the scheme does not have to start the value.
+    /// A digit stops the walk, and that tail is not a scheme: `1234https://` stays one token.
     private static func hasAuthorityScheme(_ decoded: String) -> Bool {
         var index = decoded.startIndex
         while let range = decoded[index...].range(of: "://") {
@@ -280,8 +281,10 @@ public enum MCPRedaction {
                 let previous = decoded.index(before: schemeStart)
                 if decoded[previous].isLetter { schemeStart = previous } else { break }
             }
+            let precededByNumber = schemeStart > decoded.startIndex
+                && decoded[decoded.index(before: schemeStart)].isNumber
             let scheme = decoded[schemeStart..<range.lowerBound].lowercased()
-            if authoritySchemes.contains(scheme) { return true }
+            if precededByNumber == false, authoritySchemes.contains(scheme) { return true }
             index = range.upperBound
         }
         return false
@@ -664,7 +667,9 @@ public enum MCPRedaction {
     /// U+22EE–U+2307, U+230C–U+2328, U+232B–U+233E, U+2343–U+2348, U+234A–U+2426, U+2440–U+2449,
     /// and U+2460–U+2473, U+24B6–U+2570, and U+FFE8. The Unicode 15 Prepend letters
     /// U+0D4E, U+111C2–U+111C3, U+1193F, U+11941, U+11A3A, U+11A84–U+11A89, U+11D46,
-    /// and U+11F02 are separators, so a port URL still joins after one of them is glued to `@`.
+    /// and U+11F02 are separators, as is the Unicode 16 Prepend letter U+113D1, so a port URL
+    /// still joins after one of them is glued to `@`.
+    /// U+2574–U+2612 and the halfwidth twins U+FFED and U+FFEE are separators. U+2613 stays listed and the range does not continue past U+2612.
     /// U+22C5–U+22C7 stay listed beside them. U+22EA–U+22ED stay unlisted and drop through their fold.
     /// U+2308, U+2329, and U+232A stay unlisted. U+233F–U+2342 and U+2349 stay listed. U+2427–U+243F stay unlisted. U+244A stays listed. U+2474–U+24B5 stay unlisted and drop through their fold. U+2212, U+22C5, U+2219, U+02D7, and
     /// U+E002F. A self-NFKD box-drawing diagonal is a separator too: U+2571–U+2573, U+1FBA0–U+1FBAE,
@@ -688,10 +693,10 @@ public enum MCPRedaction {
             0x2216, 0x29F5, 0x29F6, 0x29F7, 0x29F8, 0x29F9, 0x2AFD, 0x2AFB, 0x1F67C, 0x1F67D,
             0x2212, 0x2213, 0x2214, 0x22C5, 0x22C6, 0x22C7, 0x2217, 0x2218, 0x2219, 0x02D7, 0xE002F,
             0x2295...0x22AF, 0x22B0...0x22C4, 0x22C8...0x22E9, 0x22EE...0x2307, 0x230C...0x2328, 0x232B...0x233E, 0x2343...0x2348, 0x234A...0x2426, 0x2440...0x2449, 0x2460...0x2473, 0x24B6...0x2570, 0xFFE8,
-            0x0D4E, 0x111C2, 0x111C3, 0x1193F, 0x11941, 0x11A3A, 0x11A84...0x11A89, 0x11D46, 0x11F02,
+            0x0D4E, 0x111C2, 0x111C3, 0x1193F, 0x11941, 0x11A3A, 0x11A84...0x11A89, 0x11D46, 0x11F02, 0x113D1,
             0x29B8, 0x233F, 0x2340, 0x2341, 0x2342, 0x2349, 0x244A,
             0x27C8, 0x27C9, 0x27CB, 0x27CC, 0x27CD, 0x292B, 0x292C, 0x292F, 0x2930, 0x29C4, 0x29C5, 0x2F03,
-            0x2571...0x2573, 0x2613, 0x26DD, 0x26DE, 0x2B59, 0x1F7A8...0x1F7AE, 0x1FBA0...0x1FBAE,
+            0x2571...0x2573, 0x2574...0x2612, 0xFFED, 0xFFEE, 0x2613, 0x26DD, 0x26DE, 0x2B59, 0x1F7A8...0x1F7AE, 0x1FBA0...0x1FBAE,
             0x1FBBD...0x1FBC0, 0x1FB3C...0x1FB67:
             return true
         default:
