@@ -175,4 +175,71 @@ struct ManagedCommandTests {
         #expect(broken.mcp.ok == false)
         #expect(broken.mcp.error?.contains("bad owner") == true)
     }
+
+    @Test func managedPolicyTextEscapesControlsInHumanAndRobotOutput() throws {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let scratch = Scratch()
+        let bundle = scratch.root.appendingPathComponent("bundle")
+        let carrier = "\\u001b[2J\\u001b[H\(sentence)\\u2028\(sentence)\\u202e\(sentence)"
+        let json = """
+        {"version":1,"organization":"\(carrier)","mcp":{"blocked":["\(carrier)"],"deny":["\(carrier)"],"ask":["\(carrier)"],"allow":["\(carrier)"]},"audit":{"forward":{"url":"\(carrier)"}}}
+        """
+        try scratch.write("bundle/policy.json", json)
+        let status = try ManagedRun.verify(directory: bundle).get()
+        let text = ManagedRun.statusText(status)
+        #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(text.contains("\\u001b[2J"))
+        #expect(text.contains("\\u2028"))
+        #expect(text.contains("\\u202e"))
+        #expect(text.contains("\\\\u001b") == false)
+        #expect(text.contains("mcp blocked servers:"))
+        #expect(text.contains("mcp deny:"))
+        #expect(text.contains("mcp ask:"))
+        #expect(text.contains("mcp allow:"))
+        #expect(text.contains("organization policy active:"))
+        #expect(text.contains("audit forwarded to"))
+        let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+        #expect(lines.contains(sentence) == false)
+
+        let robot = ManagedRun.robotJSON(status)
+        #expect(robot.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(robot.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(robot.unicodeScalars.contains { $0.value == 0x2029 } == false)
+        #expect(robot.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(robot.contains("\\u001b"))
+        #expect(robot.contains("\\\\u001b") == false)
+        #expect(robot.contains("\\u2028"))
+        #expect(robot.contains("\\u202e"))
+        let parsed = try #require(JSONSerialization.jsonObject(with: Data(robot.utf8)) as? [String: Any])
+        let organization = try #require(parsed["organization"] as? String)
+        #expect(organization.unicodeScalars.contains { $0.value == 0x1B })
+        #expect(organization.unicodeScalars.contains { $0.value == 0x2028 })
+        #expect(organization.unicodeScalars.contains { $0.value == 0x202E })
+        let restrictions = try #require(parsed["restrictions"] as? [String])
+        #expect(restrictions.contains { $0.contains("mcp blocked servers:") && $0.unicodeScalars.contains { $0.value == 0x202E } })
+    }
+
+    @Test func unknownSecretSourceIsEscapedOnThePolicyError() throws {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let carrier = "\\u001b[2J\\u001b[H\(sentence)\\u2028\(sentence)\\u202e\(sentence)"
+        let json = "{\"version\":1,\"secrets\":{\"allowedSources\":[\"\(carrier)\"]}}"
+        guard case .failure(let error) = ManagedPolicy.decode(Data(json.utf8)) else {
+            Issue.record("unknown secret source was accepted")
+            return
+        }
+        #expect(error.message.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(error.message.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(error.message.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(error.message.contains("\\u001b[2J"))
+        #expect(error.message.contains("\\u2028"))
+        #expect(error.message.contains("\\u202e"))
+        #expect(error.message.contains("\\\\u001b") == false)
+        #expect(error.message.contains("unknown secret source"))
+        let listed = "organization policy is invalid, so MCP is disabled: \(error.message)"
+        #expect(listed.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        let forwarded = "organization policy is invalid: \(error.message)"
+        #expect(forwarded.unicodeScalars.contains { $0.value == 0x202E } == false)
+    }
 }

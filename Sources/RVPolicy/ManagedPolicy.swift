@@ -176,7 +176,8 @@ extension ManagedPolicy {
             if secrets["allowedSources"] != nil {
                 let kinds = try strings(secrets["allowedSources"], "secrets.allowedSources")
                 if let unknown = kinds.first(where: { secretSourceKinds.contains($0) == false }) {
-                    throw ManagedPolicyError("unknown secret source \"\(unknown)\" in secrets.allowedSources")
+                    throw ManagedPolicyError(
+                        "unknown secret source \"\(DisplayedText.field(unknown))\" in secrets.allowedSources")
                 }
                 policy.secrets.allowedSources = kinds
             }

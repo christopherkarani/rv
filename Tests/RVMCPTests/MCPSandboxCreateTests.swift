@@ -125,6 +125,54 @@ struct MCPSandboxCreateTests {
         #expect(FileManager.default.fileExists(atPath: planted.appendingPathComponent("server").path) == false)
     }
 
+    @Test func missingDotDotDoesNotHangAndStillNamesTheTarget() {
+        let resolved = MCPSandbox.resolvingMissingSuffix("/private/tmp/no-such/../future-keys")
+        #expect(resolved.contains("..") == false)
+        #expect(resolved.hasSuffix("/future-keys"))
+        #expect(resolved == "/private/tmp/future-keys")
+    }
+
+    @Test func scratchPinFailureEscapesThePath() {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let path = "/tmp/\u{202E}link/Library/Caches/rv-mcp/notes\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence
+        let message = MCPSandbox.scratchCreationFailure(path)
+        #expect(message.hasPrefix("could not create "))
+        #expect(message.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(message.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(message.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(message.contains("\\u001b[2J"))
+        #expect(message.contains("\\u2028"))
+        #expect(message.contains("\\u202e"))
+        #expect(message.contains("\\\\u001b") == false)
+        let lines = message.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+        #expect(lines.contains(sentence) == false)
+    }
+
+    @Test func swappedCachesAfterTheAncestorMatchDoesNotCreateTheLeaf() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-caches-swap-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("project")
+        let home = root.appendingPathComponent("home")
+        let caches = home.appendingPathComponent("Library/Caches")
+        let aside = home.appendingPathComponent("Library/Caches.held")
+        let scratch = caches.appendingPathComponent("rv-mcp/server")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        try Data("MARKER".utf8).write(to: project.appendingPathComponent("MARKER"))
+        try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
+        let pin = try #require(MCPSandbox.pinExistingAncestors(scratch.path))
+        let created = MCPSandbox.createPinned(scratch.path, pinned: pin) {
+            try? FileManager.default.moveItem(at: caches, to: aside)
+            try? FileManager.default.moveItem(at: project, to: caches)
+        }
+        #expect(created == false)
+        #expect(FileManager.default.fileExists(atPath: aside.appendingPathComponent("rv-mcp").path) == false)
+        #expect(FileManager.default.fileExists(atPath: aside.appendingPathComponent("rv-mcp/server").path) == false)
+        #expect(FileManager.default.fileExists(atPath: caches.appendingPathComponent("rv-mcp").path) == false)
+        #expect(FileManager.default.fileExists(atPath: caches.appendingPathComponent("MARKER").path))
+        #expect(FileManager.default.fileExists(atPath: project.path) == false)
+    }
+
     @Test func childStderrIsEscapedWithoutANewline() {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let raw = Data(("\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{202E}" + sentence).utf8)

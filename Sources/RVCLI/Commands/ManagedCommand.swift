@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import RVDomain
 import RVPolicy
 
 /// `rv managed`: inspect, prepare, and sign the organization policy bundle.
@@ -38,12 +39,12 @@ enum ManagedRun {
                 + "MCP and secret staging are disabled until it is fixed (\(status.directory))\n"
         default:
             var lines = [
-                "organization policy active: \(status.organization ?? "unnamed")"
+                "organization policy active: \(DisplayedText.field(status.organization ?? "unnamed"))"
                     + (status.serial.map { " serial \($0)" } ?? ""),
                 "  \(status.signed == true ? "signed (org-key.pub pinned)" : "unsigned") sha256 \(status.sha256 ?? "")",
             ]
             let rules = status.restrictions ?? []
-            lines += rules.isEmpty ? ["  no restrictions"] : rules.map { "  " + $0 }
+            lines += rules.isEmpty ? ["  no restrictions"] : rules.map { "  " + DisplayedText.field($0) }
             return lines.joined(separator: "\n") + "\n"
         }
     }
@@ -124,6 +125,26 @@ enum ManagedRun {
         }
         return .success("wrote \(destination.path)\n")
     }
+
+    /// Robot JSON for `rv managed`. `JSONEncoder` already writes ESC as
+    /// `\u001b`. U+2028, U+2029, and U+202E stay raw unless they are replaced
+    /// after encoding. The result is still valid JSON. Policy strings are not
+    /// fielded first: that would turn ESC into the literal spelling `\\u001b`.
+    static func robotJSON<T: Encodable>(_ value: T) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(value), var text = String(data: data, encoding: .utf8) else { return "{}\n" }
+        text += "\n"
+        let scalars: [(Character, String)] = [
+            ("\u{2028}", "\\u2028"),
+            ("\u{2029}", "\\u2029"),
+            ("\u{202E}", "\\u202e"),
+        ]
+        for (scalar, escaped) in scalars {
+            text = text.replacingOccurrences(of: String(scalar), with: escaped)
+        }
+        return text
+    }
 }
 
 struct Managed: AsyncParsableCommand {
@@ -145,7 +166,7 @@ struct ManagedStatus: AsyncParsableCommand {
         let status = ManagedRun.status(
             ManagedPolicyLocation.installed.load(), directory: ManagedPolicyLocation.installedDirectory)
         if ctx.explicitRobot {
-            ctx.writeStdout(jsonText(status))
+            ctx.writeStdout(ManagedRun.robotJSON(status))
         } else {
             ctx.writeStdout(ManagedRun.statusText(status))
         }
@@ -164,7 +185,7 @@ struct ManagedVerify: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "managed verify", format: format)
         switch ManagedRun.verify(directory: URL(fileURLWithPath: directory, isDirectory: true)) {
         case .failure(let failure): try ctx.fail("rv managed verify: \(failure.message)\n")
-        case .success(let status): ctx.writeStdout(ctx.explicitRobot ? jsonText(status) : ManagedRun.statusText(status))
+        case .success(let status): ctx.writeStdout(ctx.explicitRobot ? ManagedRun.robotJSON(status) : ManagedRun.statusText(status))
         }
     }
 }
@@ -203,9 +224,3 @@ struct ManagedSign: AsyncParsableCommand {
     }
 }
 
-private func jsonText<T: Encodable>(_ value: T) -> String {
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-    guard let data = try? encoder.encode(value), let text = String(data: data, encoding: .utf8) else { return "{}\n" }
-    return text + "\n"
-}

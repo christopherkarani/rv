@@ -171,12 +171,14 @@ enum AuditForwardRun {
         var values: [String: String] = [:]
         for name in names.sorted() {
             guard let secret = configuration.secret(named: name) else {
-                return .failure(CommandFailure("header secret \(name) is not defined in secrets.json"))
+                return .failure(CommandFailure("header secret \(DisplayedText.field(name)) is not defined in secrets.json"))
             }
             switch resolver.resolve(secret.source) {
-            case .failure(let error): return .failure(CommandFailure("header secret \(name): \(error.message)"))
+            case .failure(let error): return .failure(CommandFailure("header secret \(DisplayedText.field(name)): \(error.message)"))
             case .success(let value):
-                guard let text = String(validating: value.revealed(), as: UTF8.self) else { return .failure(CommandFailure("header secret \(name) is not text")) }
+                guard let text = String(validating: value.revealed(), as: UTF8.self) else {
+                    return .failure(CommandFailure("header secret \(DisplayedText.field(name)) is not text"))
+                }
                 values[name] = text
             }
         }
@@ -187,7 +189,7 @@ enum AuditForwardRun {
         var headers: [String: String] = [:]
         for item in raw {
             guard let equals = item.firstIndex(of: "="), equals != item.startIndex else {
-                return .failure(CommandFailure("--header takes NAME=VALUE, got \(item)"))
+                return .failure(CommandFailure("--header takes NAME=VALUE, got \(DisplayedText.field(item))"))
             }
             headers[String(item[..<equals])] = String(item[item.index(after: equals)...])
         }

@@ -737,6 +737,95 @@ struct MCPCommandTests {
         #expect(credential > writeAllow)
     }
 
+    @Test func danglingCredentialTargetDeniesTheCaseSeatbeltChecks() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-case-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let scratch = root.appendingPathComponent("scratch")
+        let tmp = root.appendingPathComponent("tmp")
+        let ssh = home.appendingPathComponent(".ssh")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        #expect(symlink("/private/tmp/future-keys", ssh.path) == 0)
+        let result = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: tmp.path)
+        guard case .success(let profile) = result else {
+            Issue.record("profile refused a dangling tmp credential link: \(result)")
+            return
+        }
+        let folded = "/private/tmp/Future-Keys/id_rsa"
+        let rule = lastFileReadRule(profile, matching: folded)
+        #expect(rule?.hasPrefix("(deny") == true)
+        #expect(rule?.contains("future-keys") == true || rule?.contains("regex") == true)
+        let same = lastFileReadRule(profile, matching: "/private/tmp/future-keys/id_rsa")
+        #expect(same?.hasPrefix("(deny") == true)
+        let lines = profile.split(separator: "\n").map(String.init)
+        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+        let credential = lines.lastIndex { line in
+            line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, folded) }
+        } ?? -1
+        #expect(credential > writeAllow)
+
+        let nfc = "/private/tmp/caf\u{00E9}-keys"
+        let nfd = nfc.decomposedStringWithCanonicalMapping
+        #expect(nfc.unicodeScalars.map(\.value) != nfd.unicodeScalars.map(\.value))
+        try FileManager.default.removeItem(at: ssh)
+        #expect(symlink(nfc, ssh.path) == 0)
+        let composed = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: tmp.path)
+        guard case .success(let composedProfile) = composed else {
+            Issue.record("profile refused an NFC credential link: \(composed)")
+            return
+        }
+        let patterns = Self.seatbeltRegexes(composedProfile)
+        #expect(patterns.contains { Self.wholeMatch($0, nfd + "/id_rsa") })
+        #expect(patterns.contains { Self.wholeMatch($0, nfc + "/id_rsa") })
+        let nfdLines = composedProfile.split(separator: "\n").map(String.init)
+        let nfdAllow = nfdLines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+        let nfdDeny = nfdLines.lastIndex { line in
+            line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, nfd + "/id_rsa") }
+        } ?? -1
+        #expect(nfdDeny > nfdAllow)
+    }
+
+    @Test func dotDotAfterAMissingComponentStillBuildsTheCredentialDeny() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-dotdot-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let scratch = root.appendingPathComponent("scratch")
+        let tmp = root.appendingPathComponent("tmp")
+        let ssh = home.appendingPathComponent(".ssh")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        #expect(symlink("/private/tmp/no-such/../future-keys", ssh.path) == 0)
+        let result = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: tmp.path)
+        guard case .success(let profile) = result else {
+            Issue.record("profile refused a dot-dot credential link: \(result)")
+            return
+        }
+        #expect(profile.contains("..") == false || profile.contains("future-keys"))
+        let secret = "/private/tmp/future-keys/id_rsa"
+        let rule = lastFileReadRule(profile, matching: secret)
+        #expect(rule?.hasPrefix("(deny") == true)
+        let folded = lastFileReadRule(profile, matching: "/private/tmp/Future-Keys/id_rsa")
+        #expect(folded?.hasPrefix("(deny") == true)
+        let lines = profile.split(separator: "\n").map(String.init)
+        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+        let credential = lines.lastIndex { $0.hasPrefix("(deny file-read*") && $0.contains("future-keys") } ?? -1
+        #expect(credential > writeAllow)
+    }
+
     @Test func blockedServerArgumentIsEscaped() {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let raw = "\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{202E}" + sentence

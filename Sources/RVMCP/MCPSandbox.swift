@@ -49,7 +49,7 @@ public enum MCPSandbox {
             let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/\(definition.name)", isDirectory: true)
             let temporary = launch.environment["TMPDIR"] ?? NSTemporaryDirectory()
             guard let pinned = pinExistingAncestors(scratch.path) else {
-                return .failure(.sandbox("could not create \(scratch.path)"))
+                return .failure(.sandbox(scratchCreationFailure(scratch.path)))
             }
             if let widened = unreviewedWrite(
                 policy: policy, scratch: scratch.path, home: home.path, temporaryDirectory: temporary)
@@ -60,7 +60,7 @@ public enum MCPSandbox {
                 return .failure(.sandbox(widened))
             }
             guard createPinned(scratch.path, pinned: pinned) else {
-                return .failure(.sandbox("could not create \(scratch.path)"))
+                return .failure(.sandbox(scratchCreationFailure(scratch.path)))
             }
             switch profile(
                 policy: policy, scratch: scratch.path, home: home.path, configDirectory: configDirectory.path,
@@ -117,6 +117,12 @@ public enum MCPSandbox {
             lines.append("(deny network*)")
         }
         return .success(lines.joined(separator: "\n"))
+    }
+
+    /// Shown when the scratch path cannot be pinned or created. The path is
+    /// fielded once here. Callers that already field a reason do not use this.
+    static func scratchCreationFailure(_ path: String) -> String {
+        "could not create \(MCPDisplayedText.field(path))"
     }
 
     /// The real path when it is not the path the review named. `/tmp` and
@@ -195,16 +201,31 @@ public enum MCPSandbox {
     /// directory. Deny filters also add a different real path, so a symlink
     /// at `~/.ssh` or the config directory does not leave the target readable.
     static func paths(_ raw: [String], denyTargets: Bool) -> String {
-        var seen = Set<String>()
+        // Scalar identity, not String equality. Swift treats NFC and NFD as
+        // the same string, and a catalog name in the other form would be dropped.
+        var seen = Set<[UInt32]>()
+        func fresh(_ text: String) -> Bool {
+            seen.insert(text.unicodeScalars.map(\.value)).inserted
+        }
         var filters: [String] = []
         for path in raw {
             let resolved = denyTargets ? deniedRealPath(path) : realPath(path)
             var spellings = (denyTargets || sameReviewedDirectory(path, resolved)) ? [path, resolved] : [path]
             if denyTargets {
-                spellings += seatbeltSpellings(resolved)
+                var expanded: [String] = []
+                for spelling in spellings + seatbeltSpellings(resolved) {
+                    for form in unicodeForms(spelling) {
+                        expanded.append(contentsOf: seatbeltSpellings(form))
+                    }
+                }
+                spellings = expanded
             }
-            for spelling in spellings where seen.insert(spelling).inserted {
+            for spelling in spellings where fresh(spelling) {
                 filters.append("(subpath \"\(escape(spelling))\")")
+                if denyTargets {
+                    let pattern = "(regex #\"\(seatbeltPathPattern(spelling))\")"
+                    if fresh(pattern) { filters.append(pattern) }
+                }
             }
         }
         return filters.joined(separator: " ")
@@ -265,22 +286,52 @@ public enum MCPSandbox {
 
     /// The leaf does not exist yet. Resolve the nearest existing ancestor so
     /// a parent symlink cannot hide the directory `createDirectory` would make.
+    /// `.` and `..` are collapsed in the string first. `URL` treats a last
+    /// component of `..` as another component to append, so a missing `..`
+    /// never reaches an existing parent and the deny is never built.
     static func resolvingMissingSuffix(_ path: String) -> String {
+        let normalized = lexicalAbsolute(path)
+        var parts = normalized.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         var suffix: [String] = []
-        var current = path
-        while true {
-            let url = URL(fileURLWithPath: current)
-            let parent = url.deletingLastPathComponent().path
-            let leaf = url.lastPathComponent
-            if parent == current || leaf.isEmpty || leaf == "/" { return path }
-            suffix.append(leaf)
-            if let resolved = resolveExisting(parent) {
-                return suffix.reversed().reduce(resolved) { base, part in
-                    URL(fileURLWithPath: base).appendingPathComponent(part).path
+        while parts.isEmpty == false {
+            let current = "/" + parts.joined(separator: "/")
+            if let resolved = resolveExisting(current) {
+                return suffix.reduce(resolved) { base, part in
+                    base == "/" ? "/" + part : base + "/" + part
                 }
             }
-            current = parent
+            suffix.insert(parts.removeLast(), at: 0)
         }
+        return normalized
+    }
+
+    /// Collapse `.` and `..` without asking `URL` to delete a component.
+    /// A missing middle component still yields the path Seatbelt checks once
+    /// that component exists. `realpath` staying NULL is not a reason to drop
+    /// the path.
+    static func lexicalAbsolute(_ path: String) -> String {
+        var parts: [String] = []
+        for part in path.split(separator: "/", omittingEmptySubsequences: true) {
+            if part == "." { continue }
+            if part == ".." {
+                if parts.isEmpty == false { parts.removeLast() }
+                continue
+            }
+            parts.append(String(part))
+        }
+        return "/" + parts.joined(separator: "/")
+    }
+
+    /// NFC and NFD of one path. A catalog name in the other form misses a
+    /// byte-for-byte subpath. ASCII paths are one entry.
+    static func unicodeForms(_ path: String) -> [String] {
+        var forms: [String] = []
+        var seen = Set<[UInt32]>()
+        for form in [path, path.precomposedStringWithCanonicalMapping, path.decomposedStringWithCanonicalMapping] {
+            let scalars = form.unicodeScalars.map(\.value)
+            if seen.insert(scalars).inserted { forms.append(form) }
+        }
+        return forms
     }
 
     static func resolveExisting(_ path: String) -> String? {
@@ -489,8 +540,14 @@ public enum MCPSandbox {
 
     /// `mkdirat` on the held ancestors. If a component's inode is no longer
     /// the one that was pinned, the path points at another directory: do not
-    /// create the leaf.
-    static func createPinned(_ path: String, pinned: PinnedScratch) -> Bool {
+    /// create the leaf. `afterAncestorMatch` runs once the openat walk has
+    /// matched those inodes and before the leaf is created. A rename of the
+    /// path string after that match must not mkdirat onto the old inode or
+    /// return true: the profile allows the path string only when this returns
+    /// true.
+    static func createPinned(
+        _ path: String, pinned: PinnedScratch, afterAncestorMatch: (() -> Void)? = nil
+    ) -> Bool {
         let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         let existingCount = parts.count - pinned.missing.count
         guard existingCount == pinned.directories.count - 1, let last = pinned.directories.last, last.stillChecked()
@@ -526,8 +583,51 @@ public enum MCPSandbox {
             UInt64(parent.st_ino) == last.inode,
             last.stillChecked()
         else { return false }
+        let existingPath = existingCount == 0 ? "/" : "/" + parts.prefix(existingCount).joined(separator: "/")
+        afterAncestorMatch?()
+        guard pathStillNames(existingPath, held: last) else { return false }
         guard createMissing(pinned.missing, parent: current) else { return false }
-        return confirmLeafParent(pinned.missing, parent: current, held: last) && last.stillChecked()
+        guard pathStillNames(existingPath, held: last) else {
+            removeCreated(pinned.missing, parent: current)
+            return false
+        }
+        guard confirmLeafParent(pinned.missing, parent: current, held: last), last.stillChecked(),
+            pathStillNames(existingPath, held: last)
+        else {
+            removeCreated(pinned.missing, parent: current)
+            return false
+        }
+        return true
+    }
+
+    /// The path string still names the directory the walk opened. `lstat`
+    /// does not follow a symlink planted on that path. A project moved onto
+    /// `~/Library/Caches` after the openat match has a different inode.
+    static func pathStillNames(_ path: String, held: HeldDirectory) -> Bool {
+        var info = stat()
+        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return false }
+        return UInt64(info.st_dev) == held.device && UInt64(info.st_ino) == held.inode
+    }
+
+    /// Remove a suffix this call created on `parent` after the path string
+    /// stopped naming that directory. The leaf must not stay in the directory
+    /// that was renamed away.
+    static func removeCreated(_ parts: [String], parent: Int32) {
+        guard parts.isEmpty == false else { return }
+        let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        var current = parent
+        var opened: [Int32] = []
+        defer { opened.forEach { close($0) } }
+        for part in parts {
+            let next = part.withCString { openat(current, $0, flags) }
+            guard next >= 0 else { return }
+            opened.append(next)
+            current = next
+        }
+        for index in parts.indices.reversed() {
+            let directory = index == 0 ? parent : opened[index - 1]
+            _ = parts[index].withCString { unlinkat(directory, $0, AT_REMOVEDIR) }
+        }
     }
 
     /// The new leaf's parent is the pinned directory, or a directory this call

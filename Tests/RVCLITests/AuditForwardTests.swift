@@ -160,6 +160,34 @@ struct AuditForwardTests {
         #expect(resolved == ["Authorization": "Bearer tok123", "X-Plain": "p"])
         #expect((try? AuditForwardRun.resolveHeaders(
             ["A": "${secret:NOPE}"], secrets: { .success(secrets) }, resolver: resolver).get()) == nil)
+
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let raw = "\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{202E}" + sentence
+        guard case .failure(let header) = AuditForwardRun.parseHeaders([raw]) else {
+            Issue.record("header without '=' was accepted")
+            return
+        }
+        #expect(header.message.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(header.message.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(header.message.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(header.message.contains("got "))
+        #expect(header.message.contains("\\u001b[2J"))
+        #expect(header.message.contains("\\u2028"))
+        #expect(header.message.contains("\\u202e"))
+        #expect(header.message.contains("\\\\u001b") == false)
+        guard case .failure(let secret) = AuditForwardRun.resolveHeaders(
+            ["A": "${secret:\(raw)}"], secrets: { .success(secrets) }, resolver: resolver)
+        else {
+            Issue.record("unknown header secret was accepted")
+            return
+        }
+        #expect(secret.message.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(secret.message.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(secret.message.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(secret.message.contains("header secret "))
+        #expect(secret.message.contains("\\u001b[2J"))
+        #expect(secret.message.contains("\\u202e"))
+        #expect(secret.message.contains("\\\\u001b") == false)
     }
 }
 
