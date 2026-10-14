@@ -1217,6 +1217,84 @@ struct MCPCommandTests {
         }
     }
 
+    @Test func importRefusesADecompositionThatContainsASeparator() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let extra = tail + "EXTRA"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-"]
+        func percent(_ text: String) -> String {
+            text.utf8.map { String(format: "%%%02X", $0) }.joined()
+        }
+        func chain32(_ text: String) -> String {
+            text.utf8.map { byte in "%" + String(repeating: "25", count: 31) + String(format: "%02X", byte) }.joined()
+        }
+        let marks: [UInt32] = [0x2025, 0x2026, 0x203C, 0x2047, 0x2048, 0x2049, 0x2A74, 0x2A75, 0x2A76, 0xFE19, 0xFE30, 0x2260]
+        for code in marks {
+            let mark = String(Unicode.Scalar(code)!)
+            let value = head + mark + tail
+            let encoded = head + percent(mark) + tail
+            let chain = head + chain32(mark) + tail
+            try await expectSplitSecretRefused(value, sk: "sk-12345678g" + mark + tail, absent: absent, label: "decomposition")
+            try await expectSplitSecretRefused(head + mark + extra, absent: absent + [extra], label: "decomposition extra")
+            try await expectSplitSecretRefused(encoded, absent: absent, label: "decomposition percent")
+            try await expectSplitSecretRefused(chain, absent: absent, label: "decomposition chain")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(value)"]]),
+                absent: absent, label: "decomposition cwd")
+            for scheme in ["Bearer%20", "Basic%20"] {
+                try await expectSplitSecretRefused(
+                    scheme + value, absent: absent + [scheme], label: "decomposition scheme", headerOnly: true)
+                try await expectSplitSecretRefused(
+                    scheme + chain, absent: absent + [scheme], label: "decomposition scheme chain", headerOnly: true)
+            }
+            for disguised in ["x" + value, "." + value] {
+                try await expectSplitSecretRefused(disguised, absent: absent, label: "disguised decomposition")
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(disguised)"]]),
+                    absent: absent, label: "disguised decomposition cwd")
+            }
+        }
+    }
+
+    @Test func importRefusesAnAsciiMarkInsideAToken() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let extra = tail + "EXTRA"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-"]
+        func finished(_ count: Int) -> String {
+            "%" + String(repeating: "25", count: count)
+        }
+        let marks = ["%", "(", ")", "*", "<", ">", "[", "]", "^", "`", "{", "}", "\u{FF05}", "\u{FE6A}"]
+        for mark in marks {
+            try await expectSplitSecretRefused(
+                head + mark + tail, sk: "sk-12345678g" + mark + tail, absent: absent, label: "ascii mark")
+            try await expectSplitSecretRefused(head + mark + extra, absent: absent + [extra], label: "ascii mark extra")
+        }
+        let percentForms = [
+            head + "%25" + tail,
+            head + finished(31) + tail,
+            head + finished(32) + tail,
+            head + "%EF%BC%85" + tail,
+            head + "%EF%B9%AA" + tail,
+        ]
+        for value in percentForms {
+            try await expectSplitSecretRefused(value, absent: absent, label: "percent mark")
+        }
+        for scheme in ["Bearer%20", "Basic%20"] {
+            for body in [head + "%" + tail, head + "%25" + tail, head + finished(31) + tail, head + finished(32) + tail] {
+                try await expectSplitSecretRefused(
+                    scheme + body, absent: absent + [scheme, "Bearer%20"], label: "scheme percent")
+            }
+        }
+        for prefix in ["x", "."] {
+            for body in [head + "%" + tail, head + "%25" + tail, head + finished(31) + tail] {
+                let disguised = prefix + body
+                try await expectSplitSecretRefused(disguised, absent: absent, label: "disguised percent")
+            }
+        }
+        try await expectSplitSecretRefused("ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
+    }
+
     @Test func importRefusesASplitterInsideAToken() async throws {
         let tail = "hp_1234567890abcdefghij"
         let head = "ctx7sk-12345678g"

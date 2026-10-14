@@ -483,24 +483,23 @@ public enum MCPRedaction {
         return String(String.UnicodeScalarView(scalars))
     }
 
-    /// `$` and `#` split `ghp_` without being whitespace. `|` and `@` do too once `looksLikeToken` is false.
-    /// U+0020 is not here.
+    /// An ASCII scalar other than a letter, a digit, `-`, or `_` splits `ghp_`, the same way `$` and `#` do.
+    /// U+0020 is whitespace and is not removed from the value. A decomposition that contains one of
+    /// these separators is dropped too, including U+2025 (`..`) and U+2260 (`=` plus a combining mark).
     private static func dropsForPrefixCount(_ scalar: Unicode.Scalar) -> Bool {
         if isPrefixSeparator(scalar) { return true }
         let folded = String(scalar).decomposedStringWithCompatibilityMapping
-        guard folded.unicodeScalars.count == 1, let only = folded.unicodeScalars.first, only != scalar else { return false }
-        return isPrefixSeparator(only)
+        return folded.unicodeScalars.contains { isPrefixSeparator($0) }
     }
 
     private static func isPrefixSeparator(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar.value == 0xFF0E { return true }
+        guard scalar.isASCII else { return false }
         switch scalar.value {
-        case 0x0000, 0x0021, 0x0022, 0x0023, 0x0024, 0x0026, 0x0027,
-            0x002B, 0x002C, 0x002E, 0x002F,
-            0x003A, 0x003B, 0x003D, 0x003F,
-            0x0040, 0x005C, 0x007C, 0x007E, 0xFF0E:
-            return true
-        default:
+        case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x2D, 0x5F:
             return false
+        default:
+            return true
         }
     }
 
