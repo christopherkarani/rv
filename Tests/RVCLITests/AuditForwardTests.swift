@@ -483,5 +483,18 @@ private func concealedAuditDestinations(pathSecret: String, nestedSecret: String
         ("https://siem.example/:super%20\(nestedSecret)@collector.example/hook", "secret in its path"),
         ("https://siem.example/ingest%\(String(repeating: "25", count: 12))3B\(pathSecret)", "secret in its path"),
         ("https://siem.example/ingest%\(String(repeating: "25", count: 40))3B\(pathSecret)", "secret in its path"),
+        ("https://siem.example/user:su%26\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:su%20\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:su%23\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:su%3F\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/hook?next=https://collector.example/user:su%26\(nestedSecret)@db.example/x", "secret in its query"),
+        ("https://siem.example/hook?next=/:su&\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/hook?next=user:su&\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/:su%5C\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/:su%2F\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/ingest|t=ghp_1234567890abcdef", "secret in its path"),
+        ("https://siem.example/ingest%257Ct=ghp_1234567890abcdef", "secret in its path"),
+        ("https://siem.example/ingest%2540t=ghp_12345678", "secret in its path"),
+        ("http://127.0.0.1/:\(nestedSecret)@collector.example", "secret in its path"),
     ]
 }

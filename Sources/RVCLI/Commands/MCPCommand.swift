@@ -193,8 +193,8 @@ enum MCPRun {
             : names.prefix(limit).joined(separator: ", ") + " +\(names.count - limit) more"
     }
 
-    /// Terminal-safe spelling. CR, ESC, C1, and bidi marks stay visible as text
-    /// so a password cannot be erased, concealed, or reordered before confirm.
+    /// Terminal-safe spelling. CR, ESC, C1, line separators, and bidi marks stay
+    /// visible as text so a password cannot be erased, concealed, or reordered.
     static func visible(_ text: String) -> String {
         var output = ""
         output.reserveCapacity(text.utf8.count)
@@ -222,11 +222,14 @@ enum MCPRun {
         }
     }
 
-    /// C0, DEL, C1 (U+0080–U+009F), and bidi isolates (U+202A–U+202E, U+2066–U+2069).
+    /// C0 (including VT and FF), DEL, C1 (including NEXT LINE), line and paragraph
+    /// separators, and every Bidi_Control scalar.
     static func concealsOnATerminal(_ scalar: Unicode.Scalar) -> Bool {
         let value = scalar.value
         if value < 0x20 || value == 0x7F { return true }
         if (0x80...0x9F).contains(value) { return true }
+        if value == 0x2028 || value == 0x2029 { return true }
+        if value == 0x061C || value == 0x200E || value == 0x200F { return true }
         if (0x202A...0x202E).contains(value) { return true }
         if (0x2066...0x2069).contains(value) { return true }
         return false

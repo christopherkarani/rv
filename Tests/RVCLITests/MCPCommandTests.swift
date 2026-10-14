@@ -488,6 +488,27 @@ struct MCPCommandTests {
             """
         try await expectEscapedControl(
             bidiDocument, marker: "\\u{202E}", raw: "\u{202E}", password: password)
+
+        let lineDocument = """
+            {"version":1,"servers":[{"name":"db","command":"db-mcp",
+              "description":"ok\\u2028sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "env":{"DATABASE_URL":"\(database)\\u2029"}}]}
+            """
+        try await expectEscapedControl(
+            lineDocument, marker: "\\u{2028}", raw: "\u{2028}", password: password)
+        try await expectEscapedControl(
+            lineDocument, marker: "\\u{2029}", raw: "\u{2029}", password: password)
+
+        let marks: [(String, Character)] = [("\\u061C", "\u{061C}"), ("\\u200E", "\u{200E}"), ("\\u200F", "\u{200F}")]
+        for (escaped, raw) in marks {
+            let document = """
+                {"version":1,"servers":[{"name":"db","command":"db-mcp",
+                  "description":"https://good.example/mcp\(escaped)@evil.example",
+                  "env":{"DATABASE_URL":"\(database)"}}]}
+                """
+            let marker = "\\u{\(String(format: "%04X", raw.unicodeScalars.first!.value))}"
+            try await expectEscapedControl(document, marker: marker, raw: raw, password: password)
+        }
     }
 
     private func expectEscapedControl(
@@ -537,6 +558,30 @@ struct MCPCommandTests {
             #"["/:\#(password)@collector.example"]"#,
             #"["user:\#(password)@collector.example"]"#,
             #"["user%3A\#(password)%40collector.example"]"#,
+            #"["user:su%26\#(password)@collector.example"]"#,
+            #"["user:su&\#(password)@collector.example"]"#,
+            #"["user:su \#(password)@collector.example"]"#,
+            #"["user:su#\#(password)@collector.example"]"#,
+            #"["user:su?\#(password)@collector.example"]"#,
+            #"["/:su%5C\#(password)@collector.example"]"#,
+            #"["--file=/:su%5C\#(password)@collector.example"]"#,
+            #"["/:su%2F\#(password)@collector.example"]"#,
+            #"["user:\#(password)@collector.example://x"]"#,
+            #"["/:\#(password)@collector.example://x"]"#,
+            #"["user%3A\#(password)%40collector.example://x"]"#,
+            #"["%\#(String(repeating: "25", count: 64))67hp_1234567890abcdefghij"]"#,
+            #"["ctx7sk-12345678=\#(token)"]"#,
+            #"["sk-12345678=\#(token)"]"#,
+            #"["\#(token)=sk-1234567890abcdef"]"#,
+            #"["ctx7sk-12345678-\#(token)"]"#,
+            #"["sk-12345678+\#(token)"]"#,
+            #"["https://example.com/?token=\#(token)%"]"#,
+            #"["https://example.com/?token=%67hp_1234567890abcdefghij%"]"#,
+            #"["--endpoint=https://example.com/?token=\#(token)%"]"#,
+            #"["http://127.0.0.1/:\#(password)@collector.example"]"#,
+            #"["ingest%\#(String(repeating: "25", count: 64))09\#(token)"]"#,
+            #"["ingest%\#(String(repeating: "25", count: 64))0A\#(token)"]"#,
+            #"["ingest%\#(String(repeating: "25", count: 64))0D\#(token)"]"#,
         ]
         for args in hidden {
             let home = Fixture()

@@ -81,21 +81,17 @@ public enum MCPRedaction {
             if next == current { return PercentPass(text: current, stoppedEarly: false) }
             current = next
         }
-        return PercentPass(text: current, stoppedEarly: encodedSeparatorRemains(current))
-    }
-
-    /// Another decode would still reveal `;`, `|`, `@`, or another separator.
-    private static func encodedSeparatorRemains(_ text: String) -> Bool {
-        let next = text.removingPercentEncoding ?? lenientPercentDecode(text)
-        guard next != text else { return false }
-        let marks: Set<Character> = [";", "|", "@", "/", "\\", "#", "&", "?", ":", ",", "\0", " ", "~", ".", "%"]
-        return next.contains { marks.contains($0) }
+        // The bound was hit before a fixed point. A leftover `%09`, `%0A`, `%0D`,
+        // or an encoded token is still a secret. Do not peek for a mark set.
+        guard current.contains("%") else { return PercentPass(text: current, stoppedEarly: false) }
+        let next = current.removingPercentEncoding ?? lenientPercentDecode(current)
+        return PercentPass(text: current, stoppedEarly: next != current)
     }
 
     private static func isTokenSeparator(_ character: Character) -> Bool {
         character == "." || character == "~" || character == "#" || character == "\\" || character == "/"
             || character == ";" || character == "?" || character == "&" || character == ":" || character == ","
-            || character == "|" || character == "@" || character == "\0" || character.isWhitespace
+            || character == "|" || character == "@" || character == "=" || character == "\0" || character.isWhitespace
     }
 
     /// Decode every valid `%HH` and leave a `%` that is not an escape in place.
@@ -160,24 +156,35 @@ public enum MCPRedaction {
         return false
     }
 
-    /// `:password@host` even when the password contains `&`, `#`, `?`, or a space.
-    /// The colon is the first character of the piece or sits immediately after `/`.
+    /// `:password@host` and `user:password@host`. The password may contain `&`,
+    /// `#`, `?`, or a space. `/:password@host` may also contain `/` or `\`,
+    /// which percent-decoding and slash normalization reveal as `/`.
     private static func colonThenAt(_ decoded: String) -> Bool {
         var index = decoded.startIndex
         while index < decoded.endIndex {
             if decoded[index] == ":" {
-                let atStart = index == decoded.startIndex || decoded[decoded.index(before: index)] == "/"
-                if atStart {
+                let atStart = index == decoded.startIndex
+                let afterSlash = index > decoded.startIndex && decoded[decoded.index(before: index)] == "/"
+                let afterUser = usernameEnds(decoded, at: index)
+                if atStart || afterSlash || afterUser {
                     let after = decoded.index(after: index)
-                    if after < decoded.endIndex, let at = decoded[after...].firstIndex(of: "@"), at > after {
+                    if after < decoded.endIndex, decoded[after] != "/",
+                        let at = decoded[after...].firstIndex(of: "@"), at > after
+                    {
                         let password = decoded[after..<at]
-                        if password.contains("/") == false { return true }
+                        if atStart || afterSlash || password.contains("/") == false { return true }
                     }
                 }
             }
             index = decoded.index(after: index)
         }
         return false
+    }
+
+    private static func usernameEnds(_ text: String, at colon: String.Index) -> Bool {
+        guard colon > text.startIndex else { return false }
+        let character = text[text.index(before: colon)]
+        return character.isLetter || character.isNumber || character == "-" || character == "_" || character == "."
     }
 
     /// A host label that is a token, or userinfo percent-decoded into the host.
@@ -221,11 +228,15 @@ public enum MCPRedaction {
             }
         }
         for candidate in candidates {
-            let decoded = slashNormalized(candidate)
+            let pass = percentDecode(candidate)
+            if pass.stoppedEarly { return true }
+            let decoded = pass.text.replacingOccurrences(of: "\\", with: "/")
             if decoded.hasPrefix("//"), containsUserinfoSpelling(decoded) || urlCarriesSecret(decoded) { return true }
             // `/:password@host` and `user:password@host` are not scheme URLs.
-            // `postgres://user:pass@…` still stays, so the review can show it.
+            // Authority userinfo on `postgres://user:pass@…` still stays, so the
+            // review can show it. Path userinfo and a later `://` do not.
             if argumentUserinfoIsRefused(decoded) { return true }
+            if let query = rawQuery(decoded), queryCarriesSecret(encoded: query, items: nil) { return true }
             // A ctx7sk-, sk-, or ghp_ prefix returns before `/` or `#`. Decode
             // first. A prefix that also carries a path, fragment, userinfo, or
             // another secret is not stored. A bare token is ${secret:NAME}.
@@ -241,24 +252,27 @@ public enum MCPRedaction {
         return false
     }
 
-    /// Userinfo that is not inside `scheme://`. A flag value such as
-    /// `--database-url=postgres://user:pass@…` still stays so the review can show it.
+    /// Path userinfo is refused. Authority userinfo on a real `scheme://` stays visible.
+    /// `user:pass@host://x` and `http://127.0.0.1/:pass@other` are not that form.
     private static func argumentUserinfoIsRefused(_ decoded: String) -> Bool {
         guard containsUserinfoSpelling(decoded) else { return false }
-        guard let range = decoded.range(of: "://") else { return true }
-        let before = decoded[..<range.lowerBound]
-        var schemeStart = before.endIndex
-        while schemeStart > before.startIndex {
-            let previous = before.index(before: schemeStart)
-            let character = before[previous]
-            if character.isLetter || character.isNumber || character == "+" || character == "-" || character == "." {
-                schemeStart = previous
-            } else {
-                break
-            }
+        guard let restStart = schemeAuthorityStart(decoded) else { return true }
+        let rest = decoded[restStart...]
+        guard let slash = rest.firstIndex(of: "/") else { return false }
+        return containsUserinfoSpelling(String(rest[slash...]))
+    }
+
+    /// Index just after `scheme://` when the scheme starts the value, or the value after `=`.
+    private static func schemeAuthorityStart(_ decoded: String) -> String.Index? {
+        var start = decoded.startIndex
+        if decoded.hasPrefix("-"), let equals = decoded.firstIndex(of: "=") {
+            start = decoded.index(after: equals)
         }
-        guard let first = before[schemeStart...].first, first.isLetter else { return true }
-        return false
+        guard let range = decoded[start...].range(of: "://") else { return nil }
+        let scheme = decoded[start..<range.lowerBound]
+        guard let first = scheme.first, first.isLetter else { return nil }
+        guard scheme.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "+" || $0 == "-" || $0 == "." }) else { return nil }
+        return range.upperBound
     }
 
     /// True when a token-shaped value also carries a path, fragment, userinfo, or a second token.
@@ -266,7 +280,24 @@ public enum MCPRedaction {
         if decoded.contains("/") || decoded.contains("#") || decoded.contains("|") || decoded.contains("@") { return true }
         if containsUserinfoSpelling(decoded) { return true }
         let pieces = decoded.split(whereSeparator: isTokenSeparator)
-        return pieces.dropFirst().contains { pathSegmentCarriesToken(String($0)) }
+        if pieces.dropFirst().contains(where: { pathSegmentCarriesToken(String($0)) }) { return true }
+        return joinedSecondToken(decoded)
+    }
+
+    /// `ctx7sk-…-ghp_…`, `ctx7sk-…=ghp_…`, and `sk-…+ghp_…`. The hyphen inside `sk-` stays.
+    private static func joinedSecondToken(_ text: String) -> Bool {
+        let joins: Set<Character> = ["-", "=", "+"]
+        var index = text.startIndex
+        while index < text.endIndex {
+            if joins.contains(text[index]) {
+                let tail = text[text.index(after: index)...]
+                if tokenPrefixes.contains(where: { tail.hasPrefix($0) && tail.count >= $0.count + 8 }) {
+                    return true
+                }
+            }
+            index = text.index(after: index)
+        }
+        return false
     }
 
     /// A query value that is itself a URL with userinfo, a fragment, a token
@@ -311,7 +342,11 @@ public enum MCPRedaction {
     }
 
     private static func queryTextCarriesSecret(_ query: String, depth: Int) -> Bool {
-        if percentDecode(query).stoppedEarly { return true }
+        let pass = percentDecode(query)
+        if pass.stoppedEarly { return true }
+        let decoded = pass.text.replacingOccurrences(of: "\\", with: "/")
+        // A raw `&`, `#`, or `?` inside `user:password@host` must be seen before the split.
+        if containsUserinfoSpelling(decoded) || pathSegmentCarriesToken(decoded) { return true }
         for part in query.split(separator: "&", omittingEmptySubsequences: false) {
             let text = String(part)
             if let equals = text.firstIndex(of: "=") {
@@ -384,9 +419,9 @@ public enum MCPRedaction {
         if (path.isEmpty == false && path != "/") || components.percentEncodedQuery != nil {
             display += "/…"
         }
-        let queryLeak = (components.queryItems ?? []).contains { item in
-            queryPieceCarriesSecret(item.name) || queryPieceCarriesSecret(item.value ?? "")
-        }
+        let encodedQuery = components.percentEncodedQuery ?? rawQuery(raw)
+        let queryLeak = queryCarriesSecret(encoded: encodedQuery, items: components.queryItems)
+            || rawQuery(raw).map { queryCarriesSecret(encoded: $0, items: nil) } == true
         let credential = components.user != nil || components.password != nil || components.fragment != nil
         return (display, credential || hostLeaked || queryLeak || pathCarriesSecret(path))
     }
