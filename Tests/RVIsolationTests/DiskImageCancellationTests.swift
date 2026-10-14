@@ -7,6 +7,10 @@ import Foundation
 import Testing
 @testable import RVIsolation
 
+private final class StatCallCount: @unchecked Sendable {
+    var value = 0
+}
+
 /// Cancelled diskimage teardown stays inside the existing 8-second return
 /// bound, and a preempted helper does not drop the serialization lock
 /// while it, or the attach/mount it published, is still live.
@@ -1119,6 +1123,169 @@ struct DiskImageCancellationTests {
         #expect(diskImageMountStatIsGone(statSucceeded: true, errnoValue: 0) == false)
         #expect(diskImageParkedPathIsGone(present.path, identityIsImage: true) == false)
         #expect(diskImageParkedPathIsGone(root.path, identityIsImage: false) == false)
+    }
+
+    /// The detach follow-up keeps a sibling row, a pathless row, and a file
+    /// that is still on disk. A stat that starts with time left stops on the
+    /// cancel clock, including the shared clock when the local deadline is nil.
+    @Test func detachFollowUpKeepsASiblingAndTheStatStopsOnTheClock() throws {
+        let image = "/tmp/rv-inode-TOKEN.sparseimage"
+        let omittedAfterWait = diskImageCanStillAppear(
+            helperStillAlive: false,
+            detachStatus: 0,
+            detachTimedOut: false,
+            detachOutput: "not currently attached",
+            imageListedAfterDetach: false,
+            waitedForPublication: true
+        )
+        #expect(omittedAfterWait == false)
+        #expect(diskImageDetachFollowUpCanStillAppear(
+            listingCanAppear: omittedAfterWait,
+            imageListed: false,
+            imageFileGone: true,
+            parsedImageCount: 1
+        ))
+        #expect(diskImageDetachFollowUpCanStillAppear(
+            listingCanAppear: omittedAfterWait,
+            imageListed: false,
+            imageFileGone: false,
+            parsedImageCount: 1
+        ))
+        #expect(diskImageDetachFollowUpCanStillAppear(
+            listingCanAppear: omittedAfterWait,
+            imageListed: false,
+            imageFileGone: false,
+            parsedImageCount: 2
+        ))
+        let kept = diskImageSerializationExit(
+            helperStillAlive: false,
+            diskCanStillAppear: true,
+            detachOutputContainsBusy: false
+        )
+        #expect(kept.mayStartNextAttach == false)
+        #expect(diskImageMayRetryPreemptedHelper(
+            cleanup: .detachImage(image),
+            cleanupSucceeded: true,
+            helperStillAlive: false,
+            targetWasAbsent: false,
+            diskCanStillAppear: true
+        ) == false)
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: false,
+            imageFileGone: true,
+            parsedImageCount: 1
+        ) == false)
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: false,
+            identityIsImage: false
+        ) == false)
+        #expect(diskImageDetachFollowUpCanStillAppear(
+            listingCanAppear: true,
+            imageListed: nil,
+            imageFileGone: true,
+            parsedImageCount: 0
+        ))
+        let armed = Date(timeIntervalSince1970: 90_000)
+        let clockEnd = armed.addingTimeInterval(DiskImageCancelBudget.cancelledSequenceBudget)
+        let acquired = armed.addingTimeInterval(7)
+        let sleep = diskImageRecheckAllowance(
+            budget: DiskImageCancelBudget.preemptCleanup,
+            cancelDeadline: clockEnd,
+            now: acquired
+        )
+        #expect(sleep == DiskImageCancelBudget.preemptCleanup)
+        let afterFastInfo = acquired.addingTimeInterval(sleep)
+        let left = clockEnd.timeIntervalSince(afterFastInfo)
+        #expect(diskImageRecheckStatBudget(cancelDeadline: clockEnd, now: afterFastInfo) == .limited(left))
+        #expect(diskImageRecheckMayStat(cancelDeadline: clockEnd, now: afterFastInfo))
+        #expect(afterFastInfo.addingTimeInterval(left) <= armed.addingTimeInterval(DiskImageCancelBudget.returnBound))
+        let parked = armed.addingTimeInterval(1.5)
+        let parkedLeft = clockEnd.timeIntervalSince(parked)
+        #expect(diskImageRecheckStatBudget(cancelDeadline: clockEnd, now: parked) == .limited(parkedLeft))
+        #expect(parked.addingTimeInterval(parkedLeft) <= armed.addingTimeInterval(DiskImageCancelBudget.returnBound))
+        #expect(diskImageRecheckMayStat(
+            cancelDeadline: nil,
+            sharedCancelDeadline: clockEnd,
+            now: clockEnd
+        ) == false)
+        #expect(diskImageRecheckStatBudget(cancelDeadline: nil, now: clockEnd) == .uncancelled)
+        #expect(diskImageRecheckStatDeadline(local: nil, shared: clockEnd) == clockEnd)
+        #expect(diskImageRecheckAllowance(
+            budget: DiskImageCancelBudget.preemptCleanup,
+            cancelDeadline: diskImageRecheckStatDeadline(local: nil, shared: clockEnd),
+            now: clockEnd
+        ) == 0)
+        #expect(diskImageRecheckAllowance(
+            budget: DiskImageCancelBudget.preemptCleanup,
+            cancelDeadline: diskImageRecheckStatDeadline(local: nil, shared: nil),
+            now: armed
+        ) == DiskImageCancelBudget.preemptCleanup)
+        #expect(diskImageRecheckMayStat(cancelDeadline: nil, now: armed))
+        #expect(DiskImageCancelBudget.returnBound == 8)
+        #expect(DiskImageCancelBudget.detachCap == 5)
+        let skippedCalls = StatCallCount()
+        #expect(diskImageWaitForStat(allowance: 0) {
+            skippedCalls.value += 1
+            return true
+        } == nil)
+        #expect(skippedCalls.value == 0)
+        #expect(diskImageWaitForStat(allowance: nil) { false } == false)
+        let clipped = Date()
+        #expect(diskImageWaitForStat(allowance: 0.05) {
+            usleep(300_000)
+            return true
+        } == nil)
+        #expect(Date().timeIntervalSince(clipped) < 0.5)
+        #expect(Date().timeIntervalSince(clipped) < DiskImageCancelBudget.returnBound)
+        let dueCalls = StatCallCount()
+        #expect(diskImageStatObservingCancelClock(
+            localDeadline: nil,
+            sharedDeadline: clockEnd,
+            now: clockEnd
+        ) {
+            dueCalls.value += 1
+            return true
+        } == nil)
+        #expect(dueCalls.value == 0)
+        #expect(diskImageStatObservingCancelClock(
+            localDeadline: nil,
+            sharedDeadline: nil,
+            now: armed
+        ) { false } == false)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-detach-stat-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let present = root.appendingPathComponent("rv-inode-TOKEN.sparseimage")
+        FileManager.default.createFile(atPath: present.path, contents: Data("x".utf8))
+        let missing = root.appendingPathComponent("rv-inode-MISSING.sparseimage").path
+        #expect(diskImageDetachFollowUpFileIsGone(
+            identity: present.path,
+            imageListed: false,
+            localDeadline: nil,
+            sharedDeadline: nil
+        ) == false)
+        #expect(diskImageDetachFollowUpFileIsGone(
+            identity: missing,
+            imageListed: false,
+            localDeadline: nil,
+            sharedDeadline: nil
+        ))
+        #expect(diskImageDetachFollowUpFileIsGone(
+            identity: missing,
+            imageListed: false,
+            localDeadline: nil,
+            sharedDeadline: clockEnd,
+            now: clockEnd
+        ) == false)
+        #expect(diskImageDetachFollowUpFileIsGone(
+            identity: missing,
+            imageListed: nil,
+            localDeadline: nil,
+            sharedDeadline: nil
+        ) == false)
     }
 
     /// A directory walk stops while the detach reserve is still left.

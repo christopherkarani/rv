@@ -1787,14 +1787,14 @@ private enum DiskImageToolSerialization {
         }
     }
 
-    /// One bounded recheck once the helper is dead. The 0.5s sleep and the
-    /// 0.25s info are clipped to the cancel clock, so a cancelled acquire
-    /// still returns inside `returnBound`. A zero info budget returns
-    /// before `hdiutil info` and before the stat. When info does run, the
-    /// stat is skipped once the cancel clock is due, so a wedged mount
-    /// does not return past 8 seconds. A sibling row and an info timeout
-    /// do not clear on `ENOENT`. A parsed `images: []` can. This does not
-    /// spin until the 30-minute cap.
+    /// One bounded recheck once the helper is dead. The 0.5s sleep, the
+    /// 0.25s info, and the stat are clipped to the cancel clock, including
+    /// the shared clock `Flag.cancel()` armed while this acquire's deadline
+    /// is still nil. A stat that starts with time left stops when that
+    /// clock is due, so it does not return past `returnBound`. A zero info
+    /// budget returns before `hdiutil info` and before the stat. A sibling
+    /// row and an info timeout do not clear on `ENOENT`. A parsed
+    /// `images: []` can. This does not spin until the 30-minute cap.
     static func clearPublicationGateIfDiskIsGone(clock: DiskImageCancelClock) {
         let parked = publication.withLock { $0 }
         guard parked.held else { return }
@@ -1818,7 +1818,10 @@ private enum DiskImageToolSerialization {
         if helperAlive { return }
         let cleanup = diskImageRecheckAllowance(
             budget: DiskImageCancelBudget.preemptCleanup,
-            cancelDeadline: clock.deadline,
+            cancelDeadline: diskImageRecheckStatDeadline(
+                local: clock.deadline,
+                shared: CooperativeLaunchStop.cancelClock?.deadline
+            ),
             now: Date()
         )
         if cleanup > 0 {
@@ -1826,15 +1829,23 @@ private enum DiskImageToolSerialization {
         }
         let infoBudget = diskImageRecheckAllowance(
             budget: DiskImageCancelBudget.preemptReap,
-            cancelDeadline: clock.deadline,
+            cancelDeadline: diskImageRecheckStatDeadline(
+                local: clock.deadline,
+                shared: CooperativeLaunchStop.cancelClock?.deadline
+            ),
             now: Date()
         )
         guard infoBudget > 0 else { return }
         let deadline = Date().addingTimeInterval(infoBudget)
         let listed = workspaceImageListed(image, returnDeadline: deadline, clock: clock)
-        guard diskImageRecheckMayStat(cancelDeadline: clock.deadline, now: Date()) else { return }
         let identityIsImage = image.contains("rv-inode-") && image.hasSuffix(".sparseimage")
-        let imageFileGone = diskImageParkedPathIsGone(image, identityIsImage: identityIsImage)
+        guard let imageFileGone = diskImageStatObservingCancelClock(
+            localDeadline: clock.deadline,
+            sharedDeadline: CooperativeLaunchStop.cancelClock?.deadline,
+            stat: {
+                diskImageParkedPathIsGone(image, identityIsImage: identityIsImage)
+            }
+        ) else { return }
         guard diskImagePublicationRecheckCanClear(
             helperStillAlive: false,
             imageListed: listed.imageListed,
@@ -2441,18 +2452,35 @@ private func detachPublishedTarget(
         timedOut: ran.output.timedOut,
         output: output
     )
-    let listed: Bool? = busy ? true : workspaceImageListed(
-        identity,
-        returnDeadline: returnDeadline,
-        clock: clock
-    ).imageListed
-    let canAppear = diskImageCanStillAppear(
+    let read: DiskImageListingRead
+    if busy {
+        read = DiskImageListingRead(imageListed: true, infoTimedOut: false)
+    } else {
+        read = workspaceImageListed(
+            identity,
+            returnDeadline: returnDeadline,
+            clock: clock
+        )
+    }
+    let listingCanAppear = diskImageCanStillAppear(
         helperStillAlive: ran.helperStillAlive,
         detachStatus: ran.output.status,
         detachTimedOut: ran.output.timedOut,
         detachOutput: output,
-        imageListedAfterDetach: listed,
+        imageListedAfterDetach: read.imageListed,
         waitedForPublication: waitedForPublication
+    )
+    let imageFileGone = diskImageDetachFollowUpFileIsGone(
+        identity: identity,
+        imageListed: read.imageListed,
+        localDeadline: clock.deadline,
+        sharedDeadline: CooperativeLaunchStop.cancelClock?.deadline
+    )
+    let canAppear = diskImageDetachFollowUpCanStillAppear(
+        listingCanAppear: listingCanAppear,
+        imageListed: read.imageListed,
+        imageFileGone: imageFileGone,
+        parsedImageCount: read.parsedImageCount
     )
     let detachOK = DiskImageCancelBudget.preemptCleanupSucceeded(
         status: ran.output.status,

@@ -611,13 +611,156 @@ func diskImageMountPointIsGone(_ path: String) -> Bool {
     return diskImageMountStatIsGone(statSucceeded: true, errnoValue: 0)
 }
 
-/// The publication stat runs only while the cancel clock still has time.
-/// A nil deadline is the non-cancel path. A deadline that is already due
-/// skips the stat and does not clear. `returnBound` and `detachCap` are
-/// not raised.
-func diskImageRecheckMayStat(cancelDeadline: Date?, now: Date) -> Bool {
-    guard let cancelDeadline else { return true }
-    return now < cancelDeadline
+/// The cancel clock the publication stat must stop on. A nil local deadline
+/// still sees the shared clock `Flag.cancel()` armed. Both nil is a
+/// non-cancelled acquire.
+func diskImageRecheckStatDeadline(local: Date?, shared: Date?) -> Date? {
+    switch (local, shared) {
+    case let (local?, shared?):
+        return min(local, shared)
+    case let (local?, nil):
+        return local
+    case let (nil, shared?):
+        return shared
+    case (nil, nil):
+        return nil
+    }
+}
+
+enum DiskImageRecheckStatBudget: Equatable {
+    /// Not cancelled. The stat is not clipped to a cancel clock.
+    case uncancelled
+    /// Time left on the cancel clock. Stop waiting when it is gone.
+    case limited(TimeInterval)
+    /// The clock is already due. Do not stat and do not clear.
+    case skip
+}
+
+/// How long the publication stat may block. This is not a sample taken
+/// only before the call: a stat that is still inside diskimagesd stops
+/// at the end of `.limited`. `returnBound` and `detachCap` are not raised.
+func diskImageRecheckStatBudget(cancelDeadline: Date?, now: Date) -> DiskImageRecheckStatBudget {
+    guard let cancelDeadline else { return .uncancelled }
+    let left = cancelDeadline.timeIntervalSince(now)
+    if left <= 0 { return .skip }
+    return .limited(left)
+}
+
+func diskImageRecheckMayStat(
+    cancelDeadline: Date?,
+    sharedCancelDeadline: Date? = nil,
+    now: Date
+) -> Bool {
+    switch diskImageRecheckStatBudget(
+        cancelDeadline: diskImageRecheckStatDeadline(
+            local: cancelDeadline,
+            shared: sharedCancelDeadline
+        ),
+        now: now
+    ) {
+    case .skip:
+        return false
+    case .uncancelled, .limited:
+        return true
+    }
+}
+
+private final class DiskImageStatResult: @unchecked Sendable {
+    private let state = Mutex<Bool?>(nil)
+
+    func store(_ gone: Bool) {
+        state.withLock { $0 = gone }
+    }
+
+    func current() -> Bool? {
+        state.withLock { $0 }
+    }
+}
+
+/// Wait for one stat. `nil` allowance is the non-cancelled path. A positive
+/// allowance returns nil once that time is gone, even if the stat has not
+/// returned. Zero does not start the stat.
+func diskImageWaitForStat(
+    allowance: TimeInterval?,
+    stat: @escaping @Sendable () -> Bool
+) -> Bool? {
+    if let allowance, allowance <= 0 { return nil }
+    let box = DiskImageStatResult()
+    let worker = Thread {
+        box.store(stat())
+    }
+    let started = Date()
+    worker.start()
+    while true {
+        if let gone = box.current() { return gone }
+        if let allowance, Date().timeIntervalSince(started) >= allowance {
+            return nil
+        }
+        usleep(1_000)
+    }
+}
+
+/// One publication stat on the cancel clock. `nil` means the clock was
+/// already due, or the stat was still blocked when the allowance ended, so
+/// the caller must not clear. A nil local deadline still sees the shared
+/// clock. Both nil runs the stat with no cancel clip.
+func diskImageStatObservingCancelClock(
+    localDeadline: Date?,
+    sharedDeadline: Date?,
+    now: Date = Date(),
+    stat: @escaping @Sendable () -> Bool
+) -> Bool? {
+    let end = diskImageRecheckStatDeadline(local: localDeadline, shared: sharedDeadline)
+    switch diskImageRecheckStatBudget(cancelDeadline: end, now: now) {
+    case .skip:
+        return nil
+    case .uncancelled:
+        return stat()
+    case .limited(let allowance):
+        return diskImageWaitForStat(allowance: allowance, stat: stat)
+    }
+}
+
+/// The detach follow-up after the publication wait. `diskImageCanStillAppear`
+/// treats `imageListed == false` as gone once the wait has happened. The
+/// recheck does not. A sibling omission, a row with no `image-path`, and a
+/// file that is still on disk stay able to appear, including on `ENOENT`.
+/// `imageFileGone` is that stat. A nil listing is unchanged.
+func diskImageDetachFollowUpCanStillAppear(
+    listingCanAppear: Bool,
+    imageListed: Bool?,
+    imageFileGone: Bool,
+    parsedImageCount: Int = 0
+) -> Bool {
+    if imageListed == false {
+        // Present file and ENOENT are the same keep. A pathless row is
+        // this `false` with `parsedImageCount > 0`, not `images: []`.
+        // The next acquire's recheck clears a parsed `images: []`.
+        if imageFileGone == false { return true }
+        return parsedImageCount >= 0
+    }
+    return listingCanAppear
+}
+
+/// Stat TOKEN only when the detach listing omitted it. A due clock does
+/// not stat and does not report the file gone. A nil listing, including a
+/// mount, does not take this stat.
+func diskImageDetachFollowUpFileIsGone(
+    identity: String,
+    imageListed: Bool?,
+    localDeadline: Date?,
+    sharedDeadline: Date?,
+    now: Date = Date()
+) -> Bool {
+    if imageListed != false { return false }
+    let identityIsImage = identity.contains("rv-inode-") && identity.hasSuffix(".sparseimage")
+    return diskImageStatObservingCancelClock(
+        localDeadline: localDeadline,
+        sharedDeadline: sharedDeadline,
+        now: now
+    ) {
+        diskImageParkedPathIsGone(identity, identityIsImage: identityIsImage)
+    } ?? false
 }
 
 func diskImageParkedPathIsGone(_ path: String, identityIsImage: Bool) -> Bool {
