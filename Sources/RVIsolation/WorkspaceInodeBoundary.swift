@@ -106,6 +106,10 @@ private struct BoundaryMutable: Sendable {
     var savedFD: Int32
     var released = false
     var didDetach = false
+    /// Set when a saved file was truncated and the backup restore did not
+    /// finish. `restoreOriginalDirectory` must not rename that tree onto
+    /// the workspace.
+    var blockWorkspaceRename = false
 }
 
 /// Mounts the workspace path on a fresh volume before a contained process runs.
@@ -414,6 +418,9 @@ final class WorkspaceInodeBoundary: Sendable {
     }
 
     private func restoreOriginalDirectory() -> Result<Void, IsolationApplyError> {
+        if mutable.withLock({ $0.blockWorkspaceRename }) {
+            return .failure(.workspaceInodeBoundaryFailed)
+        }
         if mutable.withLock({ $0.released }) { return .success(()) }
         let volume = mutable.withLock { state -> Int32 in
             defer { state.volumeFD = -1 }
@@ -565,12 +572,17 @@ final class WorkspaceInodeBoundary: Sendable {
             defer { close(dest) }
             var status = stat()
             guard fstat(dest, &status) == 0, acceptableSavedInode(captured, status) else { return false }
-            guard replaceOriginalOnlyAfterStagedCopy(
+            let outcome = replaceOriginalOnlyAfterStagedCopy(
                 source: source,
                 original: dest,
+                originalPath: (savedPath as NSString).appendingPathComponent(relative),
                 mayContinue: publishCopyMayContinue,
                 copyXattr: copyExtendedAttributes
-            ) else { return false }
+            )
+            if outcome.reachedTruncate && outcome.mayRenameOntoWorkspace == false {
+                mutable.withLock { $0.blockWorkspaceRename = true }
+            }
+            guard outcome.committed else { return false }
             return fchmod(dest, entry.mode) == 0
         case .symlink:
             guard let target = readVolumeLink(relative) else { return false }
@@ -632,12 +644,17 @@ final class WorkspaceInodeBoundary: Sendable {
         var fresh = stat()
         guard fstat(dest, &fresh) == 0, acceptableSavedInode(captured, fresh) else { return false }
         guard lseek(source, 0, SEEK_SET) == 0 else { return false }
-        guard replaceOriginalOnlyAfterStagedCopy(
+        let outcome = replaceOriginalOnlyAfterStagedCopy(
             source: source,
             original: dest,
+            originalPath: (savedPath as NSString).appendingPathComponent(relative),
             mayContinue: publishCopyMayContinue,
             copyXattr: copyExtendedAttributes
-        ) else { return false }
+        )
+        if outcome.reachedTruncate && outcome.mayRenameOntoWorkspace == false {
+            mutable.withLock { $0.blockWorkspaceRename = true }
+        }
+        guard outcome.committed else { return false }
         return fchmod(dest, mode) == 0
     }
 
@@ -1490,8 +1507,9 @@ private func publishCopyMayContinue(_ point: CopyClockPoint) -> Bool {
 }
 
 private func copyExtendedAttributes(_ source: Int32, _ destination: Int32) -> Bool {
-    guard cancelClockAllowsTreeCopy() else { return false }
-    return fcopyfile(source, destination, nil, copyfile_flags_t(COPYFILE_XATTR)) == 0
+    copyXattrsObservingClock(from: source, to: destination) {
+        cancelClockAllowsTreeCopy()
+    }
 }
 
 private func unlinkNewSaved(_ dirfd: Int32, _ name: String) {
@@ -1725,25 +1743,79 @@ private enum DiskImageToolSerialization {
         priority.withLock { $0.waiters }
     }
 
-    private static let publication = Mutex<Bool>(false)
+    private static let publication = Mutex<PublicationGate>(PublicationGate())
 
     static func publicationGateHeld() -> Bool {
-        publication.withLock { $0 }
+        publication.withLock { $0.held }
     }
 
     static func notePublicationGate(
         _ plan: PreemptedDiskHelperCleanup,
         helperStillAlive: Bool,
         diskCanStillAppear: Bool,
-        busy: Bool
+        busy: Bool,
+        pid: pid_t
     ) {
-        guard let held = diskImagePublicationGateUpdate(
+        let parked = publication.withLock { $0 }
+        let parkedAlive = parked.pid > 1 && kill(parked.pid, 0) == 0
+        let held = diskImagePublicationGateUpdate(
             plan: plan,
             helperStillAlive: helperStillAlive,
             diskCanStillAppear: diskCanStillAppear,
-            busy: busy
+            busy: busy,
+            parkedHelperStillAlive: parkedAlive,
+            parkedDiskCanStillAppear: parked.held && parkedAlive,
+            publicationAlreadyHeld: parked.held
+        )
+        publication.withLock { state in
+            if held {
+                state.held = true
+                if let image = diskImagePublicationImage(plan) { state.image = image }
+                if pid > 1 { state.pid = pid }
+            } else if parked.held == false {
+                state.held = false
+                state.image = nil
+                state.pid = 0
+            }
+        }
+    }
+
+    /// One listing. The hold drops only when `diskImagePublicationCanClear`
+    /// says the parked disk cannot appear. An empty listing with the image
+    /// file still present, or a `/private/var` alias of that image, keeps it.
+    static func clearPublicationGateIfDiskIsGone(clock: DiskImageCancelClock) {
+        let parked = publication.withLock { $0 }
+        guard parked.held, let image = parked.image, image.isEmpty == false else { return }
+        if parked.pid > 1, kill(parked.pid, 0) == 0 { return }
+        let deadline = Date().addingTimeInterval(DiskImageCancelBudget.preemptReap)
+        let listed = workspaceImageListed(image, returnDeadline: deadline, clock: clock)
+        let exists = FileManager.default.fileExists(atPath: image)
+        guard diskImagePublicationCanClear(
+            helperStillAlive: false,
+            imageFileExists: exists,
+            imageListed: listed
         ) else { return }
-        publication.withLock { $0 = held }
+        publication.withLock { state in
+            guard let current = state.image, diskImageSamePath(current, image) else { return }
+            state.held = false
+            state.image = nil
+            state.pid = 0
+        }
+    }
+}
+
+private struct PublicationGate: Sendable {
+    var held = false
+    var image: String?
+    var pid: pid_t = 0
+}
+
+func diskImagePublicationImage(_ plan: PreemptedDiskHelperCleanup) -> String? {
+    switch plan {
+    case .unlinkSparseImage(let path), .detachImage(let path), .unmount(let path):
+        return path
+    case .none:
+        return nil
     }
 }
 
@@ -1933,9 +2005,14 @@ private func runTool(
             // 0.5-second umount slice, must not expire it while a peer
             // still holds the lock.
             yieldBudget = end
-        }
-        if Date() >= yieldBudget {
-            return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
+            if diskImageLockWaitIsExpired(cancelled: true, cancelClockSpent: Date() >= end) {
+                return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
+            }
+        } else {
+            // Parallel establishes share this lock. Time spent queued behind
+            // a peer is not the helper deadline, or the last waiter comes
+            // back as a failed inode boundary while the peers are healthy.
+            yieldBudget = Date().addingTimeInterval(deadline ?? 45)
         }
         if blockingWorkIsCancelled(), notedPriority == false {
             DiskImageToolSerialization.notePriorityWaiter()
@@ -1969,6 +2046,7 @@ private func runTool(
                     ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
                 )
             }
+            DiskImageToolSerialization.clearPublicationGateIfDiskIsGone(clock: clock)
             if diskImageMayStartHelper(
                 publicationHeld: DiskImageToolSerialization.publicationGateHeld(),
                 arguments: arguments
@@ -2065,8 +2143,12 @@ private func runTool(
                     plan,
                     helperStillAlive: helperAlive,
                     diskCanStillAppear: helperAlive || cleanup.diskCanStillAppear,
-                    busy: cleanup.busy
+                    busy: cleanup.busy,
+                    pid: ran.pid
                 )
+                if helperAlive == false && cleanup.diskCanStillAppear == false && cleanup.busy == false {
+                    DiskImageToolSerialization.clearPublicationGateIfDiskIsGone(clock: clock)
+                }
                 DiskImageToolSerialization.endHolding()
                 let mayRetry = diskImageMayRetryPreemptedHelper(
                     cleanup: plan,
@@ -2096,6 +2178,7 @@ private func runTool(
                     return .done(output)
                 }
             }
+            DiskImageToolSerialization.clearPublicationGateIfDiskIsGone(clock: clock)
             DiskImageToolSerialization.endHolding()
             var output = ran.output
             output.helperStillAlive = ran.helperStillAlive
@@ -2112,7 +2195,10 @@ private func runTool(
             return output
         case .some(.yielded):
             protectNext = true
-            if Date() >= yieldBudget {
+            if diskImageLockWaitIsExpired(
+                cancelled: clock.deadline != nil,
+                cancelClockSpent: Date() >= yieldBudget
+            ) {
                 return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
             }
             usleep(20_000)
@@ -2312,11 +2398,11 @@ private func workspaceImageListed(
     guard let data = info.output.stdout.data(using: .utf8),
         let images = AttachedWorkspaceImage.parse(hdiutilInfo: data)
     else { return nil }
-    let listed = images.contains { $0.imagePath == image || $0.mountPoint == image }
     return diskImageInfoListingShowsImage(
         parsedImageCount: images.count,
         identity: image,
-        listed: listed
+        imagePaths: images.map(\.imagePath),
+        mountPoints: images.compactMap(\.mountPoint)
     )
 }
 

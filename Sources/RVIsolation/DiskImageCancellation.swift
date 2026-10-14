@@ -510,22 +510,48 @@ func diskImageSerializationExit(
     )
 }
 
-/// `nil` leaves the publication hold unchanged. Umount and `hdiutil detach`
-/// are plan `.none` and must not clear a hold that belongs to a parked
-/// attach. A publishing plan sets the hold while its disk can still appear
-/// and clears it only when that disk is gone.
+/// True keeps the publication hold. False clears it. A live helper, a busy
+/// detach, or a disk that can still appear keeps the hold, including a hold
+/// parked by an earlier attach. Umount and `hdiutil detach` are plan `.none`
+/// and clear that hold only once the parked helper is dead and its disk
+/// cannot appear. `returnBound` and `detachCap` are not involved.
 func diskImagePublicationGateUpdate(
     plan: PreemptedDiskHelperCleanup,
     helperStillAlive: Bool,
     diskCanStillAppear: Bool,
-    busy: Bool
-) -> Bool? {
-    switch plan {
-    case .none:
-        return nil
-    case .unlinkSparseImage, .detachImage, .unmount:
-        return helperStillAlive || diskCanStillAppear || busy
+    busy: Bool,
+    parkedHelperStillAlive: Bool = false,
+    parkedDiskCanStillAppear: Bool = false,
+    publicationAlreadyHeld: Bool = false
+) -> Bool {
+    _ = plan
+    if helperStillAlive || diskCanStillAppear || busy { return true }
+    if publicationAlreadyHeld && (parkedHelperStillAlive || parkedDiskCanStillAppear) {
+        return true
     }
+    return false
+}
+
+/// The parked image can be dropped from the gate. A listing that still shows
+/// it, including a `/var` and `/private/var` alias, cannot. An empty listing
+/// while the image file remains cannot. A dead helper, a missing image file,
+/// and a listing that does not show the image can.
+func diskImagePublicationCanClear(
+    helperStillAlive: Bool,
+    imageFileExists: Bool,
+    imageListed: Bool?
+) -> Bool {
+    if helperStillAlive || imageListed == true { return false }
+    if imageListed == false { return true }
+    return imageFileExists == false
+}
+
+/// Queue time is not the helper deadline. A cancelled waiter expires when
+/// the one cancel clock is spent. A waiter that has not been cancelled does
+/// not, or the next parallel establish fails closed while peers are still
+/// attaching. `returnBound` and `detachCap` stay where they are.
+func diskImageLockWaitIsExpired(cancelled: Bool, cancelClockSpent: Bool) -> Bool {
+    cancelled && cancelClockSpent
 }
 
 /// The next helper may start when nothing is published, or when this call
@@ -541,18 +567,44 @@ func diskImageMayStartHelper(publicationHeld: Bool, arguments: [String]) -> Bool
     }
 }
 
+/// `/var/folders/...` and `/private/var/folders/...` are the same image.
+/// `hdiutil info` reports the real path. Exact string equality is not.
+func diskImageCanonicalPath(_ path: String) -> String {
+    let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+    return diskImageFoldPrivateVar(resolved) == resolved && resolved == path
+        ? diskImageFoldPrivateVar(path)
+        : diskImageFoldPrivateVar(resolved)
+}
+
+func diskImageFoldPrivateVar(_ path: String) -> String {
+    if path == "/private/var" { return "/var" }
+    let prefix = "/private/var/"
+    guard path.hasPrefix(prefix) else { return path }
+    return "/var/" + path.dropFirst(prefix.count)
+}
+
+func diskImageSamePath(_ lhs: String, _ rhs: String) -> Bool {
+    if lhs == rhs { return true }
+    return diskImageCanonicalPath(lhs) == diskImageCanonicalPath(rhs)
+}
+
 /// An empty `hdiutil info`, or a mount point hdiutil does not report, is
 /// not proof the disk is gone. `nil` keeps `diskImageCanStillAppear` true.
 /// A non-empty listing that omits an image path is the only false result.
+/// The same image under `/var` and `/private/var` is still listed.
 func diskImageInfoListingShowsImage(
     parsedImageCount: Int,
     identity: String,
-    listed: Bool
+    imagePaths: [String],
+    mountPoints: [String] = []
 ) -> Bool? {
     if parsedImageCount == 0 { return nil }
     let isImage = identity.contains("rv-inode-") && identity.hasSuffix(".sparseimage")
-    if isImage { return listed }
-    if listed { return true }
+    if isImage {
+        return imagePaths.contains { diskImageSamePath($0, identity) }
+    }
+    if mountPoints.contains(where: { diskImageSamePath($0, identity) }) { return true }
+    if imagePaths.contains(where: { diskImageSamePath($0, identity) }) { return true }
     return nil
 }
 
@@ -705,22 +757,51 @@ func mayReplaceSavedFile(stagedCopyFinished: Bool, clockAllowsCopy: Bool) -> Boo
     stagedCopyFinished && clockAllowsCopy
 }
 
+/// Result of replacing one saved inode from a staged copy.
+///
+/// `mayRenameOntoWorkspace` is false when `ftruncate` already ran and the
+/// backup could not be written back under the clock. That file must not be
+/// renamed onto the workspace. A stop before `ftruncate` leaves the original
+/// bytes in place, so the saved tree may still be restored.
+struct SavedReplaceOutcome: Equatable, Sendable {
+    var committed: Bool
+    var reachedTruncate: Bool
+    var originalIntact: Bool
+    var mayRenameOntoWorkspace: Bool
+}
+
+func savedTreeMayRenameOntoWorkspace(originalIntact: Bool, restoreFinished: Bool) -> Bool {
+    originalIntact && restoreFinished
+}
+
 /// Stage `source` onto a temp file. `ftruncate` of `original` runs only
 /// when that stage finished and the clock still allows the commit. A clock
-/// stop leaves `original` untouched and returns false.
+/// stop before that leaves `original` untouched. A stop after `ftruncate`
+/// restores from the backup under the same clock. It does not force the
+/// clock on. A short restore puts the backup file back at `originalPath`
+/// and reports that the tree must not be renamed onto the workspace.
 func replaceOriginalOnlyAfterStagedCopy(
     source: Int32,
     original: Int32,
+    originalPath: String? = nil,
     mayContinue: (CopyClockPoint) -> Bool,
     copyXattr: (_ source: Int32, _ destination: Int32) -> Bool
-) -> Bool {
-    if mayContinue(.bytes) == false { return false }
+) -> SavedReplaceOutcome {
+    func untouched() -> SavedReplaceOutcome {
+        SavedReplaceOutcome(
+            committed: false,
+            reachedTruncate: false,
+            originalIntact: true,
+            mayRenameOntoWorkspace: true
+        )
+    }
+    if mayContinue(.bytes) == false { return untouched() }
     let stagedURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-stage-\(UUID().uuidString)")
     let staged = stagedURL.path.withCString { path in
         open(path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(0o600))
     }
-    guard staged >= 0 else { return false }
+    guard staged >= 0 else { return untouched() }
     defer {
         close(staged)
         unlink(stagedURL.path)
@@ -730,52 +811,400 @@ func replaceOriginalOnlyAfterStagedCopy(
         to: staged,
         mayContinue: mayContinue,
         copyXattr: copyXattr
-    ) else { return false }
+    ) else { return untouched() }
     guard mayReplaceSavedFile(
         stagedCopyFinished: true,
         clockAllowsCopy: mayContinue(.bytes)
-    ) else { return false }
+    ) else { return untouched() }
     let backupURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-backup-\(UUID().uuidString)")
     let backup = backupURL.path.withCString { path in
         open(path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(0o600))
     }
-    guard backup >= 0 else { return false }
+    guard backup >= 0 else { return untouched() }
+    var consumedBackup = false
     defer {
         close(backup)
-        unlink(backupURL.path)
+        if consumedBackup == false { unlink(backupURL.path) }
     }
-    guard lseek(original, 0, SEEK_SET) == 0 else { return false }
+    guard lseek(original, 0, SEEK_SET) == 0 else { return untouched() }
     guard copyFileLeavingDetachReserve(
         from: original,
         to: backup,
         mayContinue: mayContinue,
         copyXattr: { _, _ in true }
-    ) else { return false }
+    ) else { return untouched() }
     guard mayReplaceSavedFile(
         stagedCopyFinished: true,
         clockAllowsCopy: mayContinue(.bytes)
-    ) else { return false }
-    guard lseek(staged, 0, SEEK_SET) == 0, lseek(original, 0, SEEK_SET) == 0 else { return false }
-    guard ftruncate(original, 0) == 0 else { return false }
+    ) else { return untouched() }
+    guard lseek(staged, 0, SEEK_SET) == 0, lseek(original, 0, SEEK_SET) == 0 else {
+        return untouched()
+    }
+    guard ftruncate(original, 0) == 0 else { return untouched() }
     let committed = copyFileLeavingDetachReserve(
         from: staged,
         to: original,
         mayContinue: mayContinue,
         copyXattr: copyXattr
     )
-    if committed { return true }
-    _ = lseek(backup, 0, SEEK_SET)
-    _ = lseek(original, 0, SEEK_SET)
-    _ = ftruncate(original, 0)
-    _ = copyFileLeavingDetachReserve(
-        from: backup,
-        to: original,
-        mayContinue: { _ in true },
+    if committed {
+        return SavedReplaceOutcome(
+            committed: true,
+            reachedTruncate: true,
+            originalIntact: true,
+            mayRenameOntoWorkspace: true
+        )
+    }
+    return restoreBackupAfterTruncate(
+        original: original,
+        originalPath: originalPath,
+        backup: backup,
+        backupURL: backupURL,
+        mayContinue: mayContinue,
+        consumedBackup: &consumedBackup
+    )
+}
+
+func restoreBackupAfterTruncate(
+    original: Int32,
+    originalPath: String?,
+    backup: Int32,
+    backupURL: URL,
+    mayContinue: (CopyClockPoint) -> Bool,
+    consumedBackup: inout Bool
+) -> SavedReplaceOutcome {
+    let backupSize = descriptorSize(backup)
+    if mayContinue(.bytes) {
+        _ = lseek(backup, 0, SEEK_SET)
+        _ = lseek(original, 0, SEEK_SET)
+        let restored = copyFileLeavingDetachReserve(
+            from: backup,
+            to: original,
+            mayContinue: mayContinue,
+            copyXattr: { _, _ in true }
+        )
+        if restored, let backupSize, descriptorSize(original) == backupSize {
+            return SavedReplaceOutcome(
+                committed: false,
+                reachedTruncate: true,
+                originalIntact: true,
+                mayRenameOntoWorkspace: true
+            )
+        }
+    }
+    if let originalPath, installBackupFile(backupURL, over: originalPath, backup: backup) {
+        consumedBackup = true
+        return SavedReplaceOutcome(
+            committed: false,
+            reachedTruncate: true,
+            originalIntact: true,
+            mayRenameOntoWorkspace: false
+        )
+    }
+    return SavedReplaceOutcome(
+        committed: false,
+        reachedTruncate: true,
+        originalIntact: false,
+        mayRenameOntoWorkspace: false
+    )
+}
+
+func descriptorSize(_ fd: Int32) -> off_t? {
+    var status = stat()
+    guard fstat(fd, &status) == 0 else { return nil }
+    return status.st_size
+}
+
+func installBackupFile(_ backupURL: URL, over path: String, backup: Int32) -> Bool {
+    let aside = path + ".rv-truncated"
+    let moved: Bool = path.withCString { original in
+        aside.withCString { asidePath in
+            unlink(asidePath)
+            return rename(original, asidePath) == 0
+        }
+    }
+    guard moved else { return false }
+    let installed: Bool = backupURL.path.withCString { backupPath in
+        path.withCString { original in
+            rename(backupPath, original) == 0
+        }
+    }
+    guard installed else {
+        _ = aside.withCString { asidePath in
+            path.withCString { original in
+                rename(asidePath, original)
+            }
+        }
+        return false
+    }
+    _ = aside.withCString { unlink($0) }
+    var restored = stat()
+    let stated = path.withCString { stat($0, &restored) == 0 }
+    guard stated else { return false }
+    guard let backupSize = descriptorSize(backup) else { return false }
+    return restored.st_size == backupSize
+}
+
+/// Copy extended attributes in slices that keep checking the clock.
+/// A false return stops before the detach reserve is spent. A Darwin
+/// resource fork is read in 64KB slices. `copyXattrsWithFcopyfile` installs
+/// the same clock as an `fcopyfile` status callback so `COPYFILE_XATTR`
+/// returns `COPYFILE_QUIT` instead of running open-ended.
+func copyXattrsObservingClock(
+    from source: Int32,
+    to destination: Int32,
+    chunkBytes: Int = 64 * 1024,
+    mayContinue: () -> Bool
+) -> Bool {
+    if mayContinue() == false { return false }
+    #if canImport(Darwin)
+    if copyResourceForkObservingClock(from: source, to: destination, mayContinue: mayContinue) == false {
+        return false
+    }
+    #endif
+    let names = listXattrNames(source)
+    for name in names where name != "com.apple.ResourceFork" {
+        guard let value = readXattr(source, name) else { return false }
+        let accepted = copyXattrBytesObservingClock(
+            byteCount: value.count,
+            chunkBytes: chunkBytes,
+            mayContinue: mayContinue
+        )
+        if accepted == false { return false }
+        if writeXattr(destination, name, value) == false { return false }
+    }
+    return true
+}
+
+/// Walk `byteCount` in chunks. Each chunk checks the clock before it counts.
+/// A large resource fork that starts with budget left stops while detach
+/// time remains.
+func copyXattrBytesObservingClock(
+    byteCount: Int,
+    chunkBytes: Int = 64 * 1024,
+    mayContinue: () -> Bool
+) -> Bool {
+    if byteCount == 0 { return mayContinue() }
+    let step = max(1, chunkBytes)
+    var offset = 0
+    while offset < byteCount {
+        if mayContinue() == false { return false }
+        offset += min(step, byteCount - offset)
+    }
+    return mayContinue()
+}
+
+func listXattrNames(_ fd: Int32) -> [String] {
+    let needed = xattrListSize(fd)
+    guard needed > 0 else { return [] }
+    var buffer = [CChar](repeating: 0, count: needed)
+    let listed = buffer.withUnsafeMutableBufferPointer { raw in
+        xattrList(fd, raw.baseAddress, needed)
+    }
+    guard listed > 0 else { return [] }
+    var names: [String] = []
+    var start = 0
+    let bytes = buffer.map { UInt8(bitPattern: $0) }
+    let count = min(listed, bytes.count)
+    var index = 0
+    while index < count {
+        if bytes[index] == 0 {
+            if index > start {
+                let slice = bytes[start..<index]
+                names.append(String(decoding: slice, as: UTF8.self))
+            }
+            start = index + 1
+        }
+        index += 1
+    }
+    return names
+}
+
+func readXattr(_ fd: Int32, _ name: String) -> [UInt8]? {
+    let needed = name.withCString { xattrValueSize(fd, $0) }
+    guard needed >= 0 else { return nil }
+    if needed == 0 { return [] }
+    var buffer = [UInt8](repeating: 0, count: needed)
+    let read = buffer.withUnsafeMutableBytes { raw in
+        name.withCString { item in
+            xattrValue(fd, item, raw.baseAddress, needed)
+        }
+    }
+    guard read == needed else { return nil }
+    return buffer
+}
+
+func writeXattr(_ fd: Int32, _ name: String, _ value: [UInt8]) -> Bool {
+    value.withUnsafeBytes { raw in
+        name.withCString { item in
+            xattrWrite(fd, item, raw.baseAddress, value.count) == 0
+        }
+    }
+}
+
+#if canImport(Darwin)
+private final class XattrCopyClock {
+    let mayContinue: () -> Bool
+    var quit = false
+    init(_ mayContinue: @escaping () -> Bool) { self.mayContinue = mayContinue }
+}
+
+private let xattrFcopyfileStatus: @convention(c) (
+    Int32, Int32, copyfile_state_t?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafeMutableRawPointer?
+) -> Int32 = { _, _, _, _, _, ctx in
+    guard let ctx else { return Int32(COPYFILE_CONTINUE) }
+    let clock = Unmanaged<XattrCopyClock>.fromOpaque(ctx).takeUnretainedValue()
+    if clock.mayContinue() == false {
+        clock.quit = true
+        return Int32(COPYFILE_QUIT)
+    }
+    return Int32(COPYFILE_CONTINUE)
+}
+
+func copyResourceForkObservingClock(
+    from source: Int32,
+    to destination: Int32,
+    mayContinue: () -> Bool
+) -> Bool {
+    guard let sourcePath = pathForFileDescriptor(source),
+        let destinationPath = pathForFileDescriptor(destination)
+    else { return true }
+    let sourceFork = sourcePath + "/..namedfork/rsrc"
+    let destinationFork = destinationPath + "/..namedfork/rsrc"
+    let src = sourceFork.withCString { open($0, O_RDONLY | O_CLOEXEC) }
+    if src < 0 { return true }
+    defer { close(src) }
+    let dst = destinationFork.withCString { open($0, O_RDWR | O_CREAT | O_CLOEXEC, mode_t(0o600)) }
+    guard dst >= 0 else { return false }
+    defer { close(dst) }
+    let copied = copyFileLeavingDetachReserve(
+        from: src,
+        to: dst,
+        mayContinue: { _ in mayContinue() },
         copyXattr: { _, _ in true }
     )
-    return false
+    if copied == false {
+        _ = ftruncate(dst, 0)
+        return false
+    }
+    return true
 }
+
+func pathForFileDescriptor(_ fd: Int32) -> String? {
+    var buffer = [CChar](repeating: 0, count: 4_096)
+    let found = buffer.withUnsafeMutableBufferPointer { raw in
+        fcntl(fd, F_GETPATH, raw.baseAddress)
+    }
+    guard found == 0 else { return nil }
+    return String(cString: buffer)
+}
+
+func copyXattrsWithFcopyfile(
+    from source: Int32,
+    to destination: Int32,
+    mayContinue: () -> Bool
+) -> Bool {
+    if mayContinue() == false { return false }
+    let clock = XattrCopyClock(mayContinue)
+    guard let state = copyfile_state_alloc() else { return false }
+    defer { copyfile_state_free(state) }
+    let context = Unmanaged.passUnretained(clock).toOpaque()
+    guard copyfile_state_set(state, UInt32(COPYFILE_STATE_STATUS_CTX), context) == 0 else {
+        return false
+    }
+    let callback = unsafeBitCast(xattrFcopyfileStatus, to: UnsafeRawPointer.self)
+    guard copyfile_state_set(state, UInt32(COPYFILE_STATE_STATUS_CB), callback) == 0 else {
+        return false
+    }
+    let copied = fcopyfile(source, destination, state, copyfile_flags_t(COPYFILE_XATTR))
+    if clock.quit { return false }
+    return copied == 0
+}
+
+private func xattrListSize(_ fd: Int32) -> Int {
+    flistxattr(fd, nil, 0)
+}
+
+private func xattrList(_ fd: Int32, _ buffer: UnsafeMutablePointer<CChar>?, _ size: Int) -> Int {
+    flistxattr(fd, buffer, size)
+}
+
+private func xattrValueSize(_ fd: Int32, _ name: UnsafePointer<CChar>) -> Int {
+    fgetxattr(fd, name, nil, 0, 0, 0)
+}
+
+private func xattrValue(
+    _ fd: Int32,
+    _ name: UnsafePointer<CChar>,
+    _ buffer: UnsafeMutableRawPointer?,
+    _ size: Int
+) -> Int {
+    fgetxattr(fd, name, buffer, size, 0, 0)
+}
+
+private func xattrWrite(
+    _ fd: Int32,
+    _ name: UnsafePointer<CChar>,
+    _ buffer: UnsafeRawPointer?,
+    _ size: Int
+) -> Int32 {
+    fsetxattr(fd, name, buffer, size, 0, 0)
+}
+#else
+@_silgen_name("flistxattr")
+private func rv_flistxattr(_ fd: Int32, _ list: UnsafeMutableRawPointer?, _ size: Int) -> Int
+
+@_silgen_name("fgetxattr")
+private func rv_fgetxattr(
+    _ fd: Int32,
+    _ name: UnsafePointer<CChar>,
+    _ value: UnsafeMutableRawPointer?,
+    _ size: Int
+) -> Int
+
+@_silgen_name("fsetxattr")
+private func rv_fsetxattr(
+    _ fd: Int32,
+    _ name: UnsafePointer<CChar>,
+    _ value: UnsafeRawPointer?,
+    _ size: Int,
+    _ flags: Int32
+) -> Int32
+
+private func xattrListSize(_ fd: Int32) -> Int {
+    rv_flistxattr(fd, nil, 0)
+}
+
+private func xattrList(_ fd: Int32, _ buffer: UnsafeMutablePointer<CChar>?, _ size: Int) -> Int {
+    guard let buffer else { return rv_flistxattr(fd, nil, size) }
+    return buffer.withMemoryRebound(to: UInt8.self, capacity: size) { raw in
+        rv_flistxattr(fd, raw, size)
+    }
+}
+
+private func xattrValueSize(_ fd: Int32, _ name: UnsafePointer<CChar>) -> Int {
+    rv_fgetxattr(fd, name, nil, 0)
+}
+
+private func xattrValue(
+    _ fd: Int32,
+    _ name: UnsafePointer<CChar>,
+    _ buffer: UnsafeMutableRawPointer?,
+    _ size: Int
+) -> Int {
+    rv_fgetxattr(fd, name, buffer, size)
+}
+
+private func xattrWrite(
+    _ fd: Int32,
+    _ name: UnsafePointer<CChar>,
+    _ buffer: UnsafeRawPointer?,
+    _ size: Int
+) -> Int32 {
+    rv_fsetxattr(fd, name, buffer, size, 0)
+}
+#endif
 
 /// What `watchSeatbeltProcess` reports. `.cancelled` is only a dead leader.
 /// A leader that is still alive at the end of the budget is not a finished
