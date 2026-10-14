@@ -740,30 +740,23 @@ func diskImageMountStatAllowance(sharedDeadline: Date?, now: Date) -> DiskImageR
     )
 }
 
-private let diskImageInterruptNothing: @convention(c) (Int32) -> Void = { _ in }
+/// A timed-out worker may still be inside a syscall Darwin will not
+/// interrupt. Keep the `Thread` so it is not released while that call runs.
+private final class DiskImageParkedCalls: @unchecked Sendable {
+    static let shared = DiskImageParkedCalls()
+    private let lock = NSLock()
+    private var threads: [Thread] = []
 
-private let diskImageInterruptReady = Mutex<Bool>(false)
-
-private func diskImageInstallStatInterrupt() {
-    diskImageInterruptReady.withLock { ready in
-        if ready { return }
-        var action = sigaction()
-        #if canImport(Darwin)
-        action.__sigaction_u.__sa_handler = diskImageInterruptNothing
-        #else
-        action.__sigaction_handler.sa_handler = diskImageInterruptNothing
-        #endif
-        sigemptyset(&action.sa_mask)
-        action.sa_flags = 0
-        sigaction(SIGUSR1, &action, nil)
-        ready = true
+    func keep(_ thread: Thread) {
+        lock.lock()
+        threads.append(thread)
+        lock.unlock()
     }
 }
 
 private final class DiskImageStatWorker: @unchecked Sendable {
     private let lock = NSLock()
-    private var threadID: pthread_t?
-    private var result: Bool?
+    private var result = false
     private var finished = false
     private let body: @Sendable () -> Bool
 
@@ -772,14 +765,6 @@ private final class DiskImageStatWorker: @unchecked Sendable {
     }
 
     func run() {
-        var unblock = sigset_t()
-        sigemptyset(&unblock)
-        sigaddset(&unblock, SIGUSR1)
-        pthread_sigmask(SIG_UNBLOCK, &unblock, nil)
-        let id = pthread_self()
-        lock.lock()
-        threadID = id
-        lock.unlock()
         let value = body()
         lock.lock()
         result = value
@@ -787,39 +772,28 @@ private final class DiskImageStatWorker: @unchecked Sendable {
         lock.unlock()
     }
 
-    func snapshot() -> (finished: Bool, result: Bool?, thread: pthread_t?) {
+    func snapshot() -> (finished: Bool, result: Bool) {
         lock.lock()
-        let state = (finished, result, threadID)
+        let state = (finished, result)
         lock.unlock()
         return state
     }
-
-    /// Signal the worker until `body` has returned. The caller does not
-    /// return while that thread is still inside the syscall.
-    func interruptUntilFinished() {
-        while true {
-            let state = snapshot()
-            if state.finished { return }
-            if let thread = state.thread {
-                _ = pthread_kill(thread, SIGUSR1)
-            }
-            usleep(1_000)
-        }
-    }
 }
 
-/// Wait for one stat. `nil` allowance is the non-cancelled path: the stat
-/// still runs off the caller, and a shared clock that arms during the
-/// syscall stops it. A positive allowance returns nil once that time is
-/// gone. The worker is interrupted and has left the syscall before this
-/// returns. Zero does not start the stat.
+/// Wait for one blocking call. `nil` allowance is the non-cancelled path:
+/// the call still runs off the caller, and a shared clock that arms during
+/// it makes this return. A positive allowance returns nil once that time is
+/// gone. `stat`, `statfs`, `fstatat`, `mkdir`, `readdir`, `read`, and
+/// `write` blocked on a vnode lock do not fail with `EINTR`, so this does
+/// not wait for the call to return. The caller is back by the stop. The
+/// worker may still be inside the call; it is parked, not joined. Zero does
+/// not start the call.
 func diskImageWaitForStat(
     allowance: TimeInterval?,
     liveDeadline: @escaping @Sendable () -> Date? = { diskImageLiveCancelDeadline() },
     stat: @escaping @Sendable () -> Bool
 ) -> Bool? {
     if let allowance, allowance <= 0 { return nil }
-    diskImageInstallStatInterrupt()
     let worker = DiskImageStatWorker(body: stat)
     let thread = Thread { worker.run() }
     let started = Date()
@@ -832,11 +806,109 @@ func diskImageWaitForStat(
             allowance: allowance,
             liveDeadline: liveDeadline()
         ), Date() >= stopAt {
-            worker.interruptUntilFinished()
+            DiskImageParkedCalls.shared.keep(thread)
             return nil
         }
         usleep(1_000)
     }
+}
+
+/// Tree and publish syscalls use the copy budget, which reserves `detachCap`.
+/// `nil` means the call did not finish before that stop.
+func diskImagePerformWithinCopyClock(_ body: @escaping @Sendable () -> Bool) -> Bool? {
+    diskImageWaitForStat(
+        allowance: diskImageTreeSyscallAllowance(
+            deadline: CooperativeLaunchStop.cancelClock?.deadline
+        ),
+        liveDeadline: {
+            if blockingWorkIsCancelled() { CooperativeLaunchStop.noteCancel() }
+            return diskImageTreeCopyStop(
+                deadline: CooperativeLaunchStop.cancelClock?.deadline,
+                now: Date()
+            )
+        },
+        stat: body
+    )
+}
+
+/// Duplicates `fd` at or above 256 so a worker thread does not take a low
+/// number the spawn floor still probes. `dup` would reuse the descriptor
+/// `relocateDescriptor` just closed.
+func diskImageDuplicateDescriptor(_ fd: Int32) -> Int32 {
+    fcntl(fd, F_DUPFD_CLOEXEC, 256)
+}
+
+/// An `EINTR` from `read` or `write` may be retried only while the copy
+/// clock still allows another call. A due clock does not spin.
+func diskImageInterruptedReadMayRetry(errnoValue: Int32, clockAllowsAnotherCall: Bool) -> Bool {
+    errnoValue == EINTR && clockAllowsAnotherCall
+}
+
+struct DiskImageIOResult: Sendable {
+    var count: Int
+    var errnoValue: Int32
+    var bytes: [UInt8]
+}
+
+private final class DiskImageReadBox: @unchecked Sendable {
+    var count = -1
+    var errnoValue: Int32 = 0
+    var bytes: [UInt8]
+    init(size: Int) { bytes = [UInt8](repeating: 0, count: max(size, 1)) }
+}
+
+/// One `read`, on a duplicate fd, off the caller. `nil` is the copy clock.
+/// `EINTR` is returned to the caller so the retry can see the clock.
+func diskImageReadWithinCopyClock(_ fd: Int32, maxCount: Int) -> DiskImageIOResult? {
+    let box = DiskImageReadBox(size: maxCount)
+    let ok = diskImagePerformWithinCopyClock {
+        let copy = diskImageDuplicateDescriptor(fd)
+        guard copy >= 0 else {
+            box.errnoValue = errno
+            return false
+        }
+        let count = box.bytes.withUnsafeMutableBytes { raw -> Int in
+            guard let base = raw.baseAddress else { return -1 }
+            return read(copy, base, raw.count)
+        }
+        box.count = count
+        box.errnoValue = count < 0 ? errno : 0
+        close(copy)
+        return true
+    }
+    guard ok == true else { return nil }
+    let kept = box.count > 0 ? Array(box.bytes.prefix(box.count)) : []
+    return DiskImageIOResult(count: box.count, errnoValue: box.errnoValue, bytes: kept)
+}
+
+/// One `write`, on a duplicate fd, off the caller. The bytes live in the
+/// worker until `write` returns, including when the caller has already left.
+func diskImageWriteWithinCopyClock(
+    _ fd: Int32,
+    bytes: [UInt8],
+    offset: Int,
+    count: Int
+) -> DiskImageIOResult? {
+    let box = DiskImageReadBox(size: 1)
+    let payload = bytes
+    let ok = diskImagePerformWithinCopyClock {
+        let copy = diskImageDuplicateDescriptor(fd)
+        guard copy >= 0 else {
+            box.errnoValue = errno
+            return false
+        }
+        let wrote = payload.withUnsafeBytes { raw -> Int in
+            guard let base = raw.baseAddress else { return -1 }
+            let start = base.advanced(by: offset)
+            return write(copy, start, count)
+        }
+        box.count = wrote
+        box.errnoValue = wrote < 0 ? errno : 0
+        close(copy)
+        return true
+    }
+    guard ok == true else { return nil }
+    return DiskImageIOResult(count: box.count, errnoValue: box.errnoValue, bytes: [])
 }
 
 /// One publication stat on the cancel clock. `nil` means the clock was
@@ -1020,14 +1092,12 @@ func diskImageMayStartHelper(publicationHeld: Bool, arguments: [String]) -> Bool
 }
 
 /// `/var` and `/private/var` are the same image, and so are `/tmp` and
-/// `/private/tmp`, and a `/System/Volumes/Data` firmlink of either. A
-/// symlink that does not resolve still matches the same `rv-inode-` file
-/// name. Exact string equality is not what `hdiutil info` returns.
+/// `/private/tmp`, and a `/System/Volumes/Data` firmlink of either. Folding
+/// is string work. It does not `lstat` or resolve symlinks on the caller.
+/// A path that still differs matches the same `rv-inode-` file name.
+/// Exact string equality is not what `hdiutil info` returns.
 func diskImageCanonicalPath(_ path: String) -> String {
     let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
-    let resolved = URL(fileURLWithPath: standardized).resolvingSymlinksInPath().standardizedFileURL.path
-    let foldedResolved = diskImageFoldVolumeAlias(resolved)
-    if foldedResolved != resolved { return foldedResolved }
     return diskImageFoldVolumeAlias(standardized)
 }
 
@@ -1077,12 +1147,19 @@ func diskImageSamePath(_ lhs: String, _ rhs: String) -> Bool {
 }
 
 func diskImageSameDevice(_ lhs: String, _ rhs: String) -> Bool {
-    var left = stat()
-    var right = stat()
-    let statedLeft = lhs.withCString { stat($0, &left) == 0 }
-    let statedRight = rhs.withCString { stat($0, &right) == 0 }
-    guard statedLeft, statedRight else { return false }
-    return left.st_dev == right.st_dev
+    final class Pair: @unchecked Sendable {
+        var left = stat()
+        var right = stat()
+    }
+    let pair = Pair()
+    let statedLeft = diskImagePerformWithinCopyClock {
+        lhs.withCString { stat($0, &pair.left) == 0 }
+    }
+    let statedRight = diskImagePerformWithinCopyClock {
+        rhs.withCString { stat($0, &pair.right) == 0 }
+    }
+    guard statedLeft == true, statedRight == true else { return false }
+    return pair.left.st_dev == pair.right.st_dev
 }
 
 /// An empty `hdiutil info`, or a mount point hdiutil does not report, is
@@ -1123,59 +1200,142 @@ func directoryReadMayContinue(_ mayContinue: Bool) -> Bool {
     mayContinue
 }
 
+/// Holds a `DIR` opened off the caller. A clock stop leaks it instead of
+/// closing it while `readdir` or `fdopendir` may still be inside the call.
+private final class DirectoryHold: @unchecked Sendable {
+    private let lock = NSLock()
+    private var dir: OpaquePointer?
+    private var leaked = false
+
+    func store(_ opened: OpaquePointer?) {
+        lock.lock()
+        dir = opened
+        lock.unlock()
+    }
+
+    func take() -> OpaquePointer? {
+        lock.lock()
+        let opened = dir
+        lock.unlock()
+        return opened
+    }
+
+    func leak() {
+        lock.lock()
+        leaked = true
+        lock.unlock()
+    }
+
+    func closeUnlessLeaked() {
+        lock.lock()
+        let opened = dir
+        let shouldClose = leaked == false
+        dir = nil
+        lock.unlock()
+        if shouldClose, let opened {
+            closedir(opened)
+        }
+    }
+}
+
+private final class DirectoryPointer: @unchecked Sendable {
+    let dir: OpaquePointer
+    init(_ dir: OpaquePointer) { self.dir = dir }
+}
+
+private final class DirectoryEntryBox: @unchecked Sendable {
+    var name: String?
+    var ended = false
+    var err: Int32 = 0
+}
+
 /// `readdir` stops while detach time is still left. A partial listing is
 /// not a snapshot: the caller fails the copy instead of publishing it.
+/// Each `readdir` runs off the caller and returns at the copy clock even
+/// when the call itself does not.
 func readDirectoryNamesStoppingForDetachReserve(
     _ path: String,
     mayContinue: () -> Bool
 ) -> [String]? {
     if directoryReadMayContinue(mayContinue()) == false { return nil }
-    guard let dir = opendir(path) else { return nil }
-    defer { closedir(dir) }
-    var names: [String] = []
-    while true {
-        if directoryReadMayContinue(mayContinue()) == false { return nil }
-        errno = 0
-        guard let entry = readdir(dir) else {
-            if errno != 0 { return nil }
-            break
-        }
-        let name = directoryEntryName(entry)
-        if name == "." || name == ".." { continue }
-        names.append(name)
+    let hold = DirectoryHold()
+    defer { hold.closeUnlessLeaked() }
+    let opened = diskImagePerformWithinCopyClock {
+        let dir = path.withCString { opendir($0) }
+        hold.store(dir)
+        return dir != nil
     }
-    return names
+    if opened == nil {
+        hold.leak()
+        return nil
+    }
+    guard opened == true, let dir = hold.take() else { return nil }
+    return readDirectoryEntries(DirectoryPointer(dir), mayContinue: mayContinue, hold: hold)
 }
 
 /// Same stop, on a directory fd. `fdopendir` consumes a duplicate so the
-/// caller's fd stays open.
+/// caller's fd stays open. The duplicate is opened on the worker.
 func readDirectoryNames(
     _ dirfd: Int32,
     mayContinue: () -> Bool
 ) -> [String]? {
     if directoryReadMayContinue(mayContinue()) == false { return nil }
-    let copy = dup(dirfd)
-    guard copy >= 0 else { return nil }
-    if lseek(copy, 0, SEEK_SET) < 0 {
-        close(copy)
+    let hold = DirectoryHold()
+    defer { hold.closeUnlessLeaked() }
+    let opened = diskImagePerformWithinCopyClock {
+        let copy = diskImageDuplicateDescriptor(dirfd)
+        guard copy >= 0 else { return false }
+        if lseek(copy, 0, SEEK_SET) < 0 {
+            close(copy)
+            return false
+        }
+        let dir = fdopendir(copy)
+        if dir == nil {
+            close(copy)
+            hold.store(nil)
+            return false
+        }
+        hold.store(dir)
+        return true
+    }
+    if opened == nil {
+        hold.leak()
         return nil
     }
-    guard let dir = fdopendir(copy) else {
-        close(copy)
-        return nil
-    }
-    defer { closedir(dir) }
+    guard opened == true, let dir = hold.take() else { return nil }
+    return readDirectoryEntries(DirectoryPointer(dir), mayContinue: mayContinue, hold: hold)
+}
+
+private func readDirectoryEntries(
+    _ dir: DirectoryPointer,
+    mayContinue: () -> Bool,
+    hold: DirectoryHold
+) -> [String]? {
     var names: [String] = []
     while true {
         if directoryReadMayContinue(mayContinue()) == false { return nil }
-        errno = 0
-        guard let entry = readdir(dir) else {
-            if errno != 0 { return nil }
+        let box = DirectoryEntryBox()
+        let ok = diskImagePerformWithinCopyClock {
+            errno = 0
+            if let entry = readdir(dir.dir) {
+                box.name = directoryEntryName(entry)
+            } else {
+                box.ended = true
+                box.err = errno
+            }
+            return true
+        }
+        if ok == nil {
+            hold.leak()
+            return nil
+        }
+        if box.ended {
+            if box.err != 0 { return nil }
             break
         }
-        let name = directoryEntryName(entry)
-        if name == "." || name == ".." { continue }
-        names.append(name)
+        if let name = box.name, name != ".", name != ".." {
+            names.append(name)
+        }
     }
     return names
 }
@@ -1199,32 +1359,44 @@ func copyFileLeavingDetachReserve(
     copyXattr: (_ source: Int32, _ destination: Int32) -> Bool
 ) -> Bool {
     let size = chunkBytes > 0 ? chunkBytes : 64 * 1024
-    var buffer = [UInt8](repeating: 0, count: size)
     while true {
         if mayContinue(.bytes) == false { return false }
-        let count = buffer.withUnsafeMutableBytes { raw -> Int in
-            guard let base = raw.baseAddress else { return -1 }
-            while true {
-                let readCount = read(source, base, raw.count)
-                if readCount < 0, errno == EINTR { continue }
-                return readCount
-            }
+        guard let read = diskImageReadWithinCopyClock(source, maxCount: size) else {
+            return false
         }
-        if count == 0 { break }
-        if count < 0 { return false }
+        if read.errnoValue == EINTR {
+            if diskImageInterruptedReadMayRetry(
+                errnoValue: read.errnoValue,
+                clockAllowsAnotherCall: mayContinue(.bytes)
+            ) {
+                continue
+            }
+            return false
+        }
+        if read.count == 0 { break }
+        if read.count < 0 { return false }
         if mayContinue(.bytes) == false { return false }
         var written = 0
-        while written < count {
-            let chunk = buffer.withUnsafeBytes { raw -> Int in
-                guard let base = raw.baseAddress else { return -1 }
-                while true {
-                    let wrote = write(destination, base.advanced(by: written), count - written)
-                    if wrote < 0, errno == EINTR { continue }
-                    return wrote
-                }
+        while written < read.count {
+            guard let wrote = diskImageWriteWithinCopyClock(
+                destination,
+                bytes: read.bytes,
+                offset: written,
+                count: read.count - written
+            ) else {
+                return false
             }
-            if chunk <= 0 { return false }
-            written += chunk
+            if wrote.errnoValue == EINTR {
+                if diskImageInterruptedReadMayRetry(
+                    errnoValue: wrote.errnoValue,
+                    clockAllowsAnotherCall: mayContinue(.bytes)
+                ) {
+                    continue
+                }
+                return false
+            }
+            if wrote.count <= 0 { return false }
+            written += wrote.count
         }
     }
     if mayContinue(.xattr) == false { return false }

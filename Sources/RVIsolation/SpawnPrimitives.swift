@@ -15,9 +15,26 @@ func relocateDescriptor(_ fd: inout Int32, above floor: Int32) -> Bool {
     if fd >= floor { return true }
     let moved = fcntl(fd, F_DUPFD_CLOEXEC, floor)
     guard moved >= 0 else { return false }
-    close(fd)
+    let original = fd
     fd = moved
+    // A caught signal can make `close` return `EINTR` and leave this number
+    // open below the floor. Close it before the caller probes, so that probe
+    // is `EBADF`.
+    closeDescriptorLeftBelowFloor(original)
     return true
+}
+
+/// Closes `fd` when a caught signal made `close` return `EINTR` and left the
+/// number open. A successful `close` returns immediately, so a descriptor
+/// another thread opens at that number afterward is left alone. The caller's
+/// probe then sees `EBADF`.
+func closeDescriptorLeftBelowFloor(_ fd: Int32) {
+    guard fd >= 0 else { return }
+    for _ in 0..<32 {
+        if close(fd) == 0 { return }
+        if errno != EINTR { return }
+        if fcntl(fd, F_GETFD) < 0 { return }
+    }
 }
 
 /// C string vectors that live until `release()`.

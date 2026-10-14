@@ -43,7 +43,9 @@ struct SpawnPrimitivesTests {
         let movedFlags = fcntl(fd, F_GETFD)
         #expect(movedFlags >= 0)
         #expect(movedFlags & FD_CLOEXEC != 0)
-        // Original is closed; capture errno before the framework runs.
+        // A signal or a worker can leave this number open below the floor.
+        // Close that descriptor, then probe. The probe still has to be EBADF.
+        closeDescriptorLeftBelowFloor(original)
         let probe = fcntl(original, F_GETFD)
         let probeErrno = errno
         #expect(probe == -1)

@@ -1249,17 +1249,22 @@ struct DiskImageCancellationTests {
         } == nil)
         #expect(skippedCalls.value == 0)
         #expect(diskImageWaitForStat(allowance: nil) { false } == false)
-        let leftStat = StatCallCount()
+        let releaseStat = StatCallCount()
         let clipped = Date()
         #expect(diskImageWaitForStat(allowance: 0.05) {
-            var request = timespec(tv_sec: 0, tv_nsec: 300_000_000)
-            _ = nanosleep(&request, nil)
-            leftStat.value += 1
+            while releaseStat.value == 0 {
+                var status = stat()
+                _ = "/".withCString { stat($0, &status) }
+            }
             return true
         } == nil)
-        #expect(leftStat.value == 1)
+        #expect(releaseStat.value == 0)
         #expect(Date().timeIntervalSince(clipped) < 0.2)
         #expect(Date().timeIntervalSince(clipped) < DiskImageCancelBudget.returnBound)
+        releaseStat.value = 1
+        #expect(diskImageInterruptedReadMayRetry(errnoValue: EINTR, clockAllowsAnotherCall: false) == false)
+        #expect(diskImageInterruptedReadMayRetry(errnoValue: EINTR, clockAllowsAnotherCall: true))
+        #expect(diskImageInterruptedReadMayRetry(errnoValue: EIO, clockAllowsAnotherCall: true) == false)
         let dueCalls = StatCallCount()
         #expect(diskImageStatObservingCancelClock(
             localDeadline: nil,
@@ -1315,9 +1320,10 @@ struct DiskImageCancellationTests {
         ))
     }
 
-    /// A syscall that starts with time left, or with no clock, stops when the
-    /// cancel clock is due, and the worker is not still inside it. The detach
-    /// keeps do not depend on that stat finishing.
+    /// A `stat` that keeps running does not hold the waiter. Darwin does not
+    /// make `stat` return `EINTR`, so the waiter leaves at the clock and is
+    /// not the thread inside `stat`. The detach keeps do not depend on that
+    /// stat finishing.
     @Test func blockingCallsStopOnTheCancelClockAndLeaveTheWorker() {
         let slice = Date(timeIntervalSince1970: 100_000).addingTimeInterval(45)
         let armed = Date(timeIntervalSince1970: 100_000)
@@ -1357,7 +1363,7 @@ struct DiskImageCancellationTests {
         #expect(diskImageMountStatAllowance(sharedDeadline: clockEnd, now: parked) == .limited(clockEnd.timeIntervalSince(parked)))
         let callerID = ObjectIdentifier(Thread.current)
         let onCaller = StatCallCount()
-        let left = StatCallCount()
+        let release = StatCallCount()
         let gate = DeadlineGate()
         let started = Date()
         let stopped = diskImageStatObservingCancelClock(
@@ -1369,16 +1375,18 @@ struct DiskImageCancellationTests {
                 onCaller.value = 1
             }
             gate.date = Date().addingTimeInterval(0.05)
-            var request = timespec(tv_sec: 0, tv_nsec: 300_000_000)
-            _ = nanosleep(&request, nil)
-            left.value += 1
+            while release.value == 0 {
+                var status = stat()
+                _ = "/".withCString { stat($0, &status) }
+            }
             return true
         }
         #expect(stopped == nil)
         #expect(onCaller.value == 0)
-        #expect(left.value == 1)
+        #expect(release.value == 0)
         #expect(Date().timeIntervalSince(started) < 0.2)
         #expect(Date().timeIntervalSince(started) < DiskImageCancelBudget.returnBound)
+        release.value = 1
         #expect(diskImageDetachFollowUpCanStillAppear(
             listingCanAppear: false,
             imageListed: false,

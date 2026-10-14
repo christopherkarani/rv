@@ -889,13 +889,22 @@ func rejectWorkspaceInodeAlias(_ root: String) -> Result<Void, IsolationApplyErr
         if scan.failed {
             return .failure(.workspaceContainsInodeAlias)
         }
+        if diskImageTreeSyscallAllowance(
+            deadline: CooperativeLaunchStop.cancelClock?.deadline
+        ) == 0 {
+            return .failure(.workspaceContainsInodeAlias)
+        }
         do {
             let values = try url.resourceValues(forKeys: keys)
             let isRootChild = url.deletingLastPathComponent().standardizedFileURL == rootURL.standardizedFileURL
-            var status = stat()
-            guard url.path.withCString({ lstat($0, &status) == 0 }) else {
+            let box = AliasStatBox()
+            let stated = diskImagePerformWithinCopyClock {
+                url.path.withCString { lstat($0, &box.status) == 0 }
+            }
+            guard stated == true else {
                 return .failure(.workspaceContainsInodeAlias)
             }
+            let status = box.status
             if WorkspaceFilesystemMetadata.shouldSkip(
                 name: url.lastPathComponent,
                 isRootChild: isRootChild,
@@ -944,4 +953,8 @@ func containedLaunchResult(
 /// Not Sendable: FileManager calls the error handler on the scanning thread.
 private final class InodeAliasScan {
     var failed = false
+}
+
+private final class AliasStatBox: @unchecked Sendable {
+    var status = stat()
 }

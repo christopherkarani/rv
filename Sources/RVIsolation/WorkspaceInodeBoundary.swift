@@ -560,9 +560,10 @@ final class WorkspaceInodeBoundary: Sendable {
         case .directory:
             guard let fd = openSaved(relative, directory: true), fd >= 0 else { return false }
             defer { close(fd) }
-            var status = stat()
-            guard fstat(fd, &status) == 0, acceptableSavedInode(captured, status) else { return false }
-            return fchmod(fd, entry.mode) == 0
+            guard let status = fstatWithinCopyClock(fd), acceptableSavedInode(captured, status) else {
+                return false
+            }
+            return fchmodWithinCopyClock(fd, entry.mode)
         case .regular:
             guard let source = openVolume(relative, directory: false), source >= 0 else { return false }
             defer { close(source) }
@@ -570,8 +571,9 @@ final class WorkspaceInodeBoundary: Sendable {
                 return updateReadOnlySaved(relative, from: source, captured: captured, mode: entry.mode)
             }
             defer { close(dest) }
-            var status = stat()
-            guard fstat(dest, &status) == 0, acceptableSavedInode(captured, status) else { return false }
+            guard let status = fstatWithinCopyClock(dest), acceptableSavedInode(captured, status) else {
+                return false
+            }
             let outcome = replaceOriginalOnlyAfterStagedCopy(
                 source: source,
                 original: dest,
@@ -583,25 +585,19 @@ final class WorkspaceInodeBoundary: Sendable {
                 mutable.withLock { $0.blockWorkspaceRename = true }
             }
             guard outcome.committed else { return false }
-            return fchmod(dest, entry.mode) == 0
+            return fchmodWithinCopyClock(dest, entry.mode)
         case .symlink:
             guard let target = readVolumeLink(relative) else { return false }
             guard let parent = savedParent(relative) else { return false }
             defer { close(parent.fd) }
-            var status = stat()
-            let matched = parent.name.withCString { name in
-                fstatat(parent.fd, name, &status, AT_SYMLINK_NOFOLLOW) == 0
-            }
-            guard matched, acceptableSavedInode(captured, status) else { return false }
+            guard let status = fstatatWithinCopyClock(parent.fd, parent.name),
+                acceptableSavedInode(captured, status)
+            else { return false }
             let removed = parent.name.withCString { name in
                 unlinkat(parent.fd, name, 0) == 0
             }
             guard removed else { return false }
-            return parent.name.withCString { name in
-                target.withCString { link in
-                    symlinkat(link, parent.fd, name) == 0
-                }
-            }
+            return symlinkWithinCopyClock(parent.fd, parent.name, target)
         }
     }
 
@@ -621,28 +617,32 @@ final class WorkspaceInodeBoundary: Sendable {
     ) -> Bool {
         guard let parent = savedParent(relative) else { return false }
         defer { close(parent.fd) }
-        let readOnly = parent.name.withCString { name in
-            openat(parent.fd, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
-        }
+        let readOnly = openatWithinCopyClock(
+            parent.fd,
+            parent.name,
+            O_RDONLY | O_NOFOLLOW | O_CLOEXEC
+        )
         guard readOnly >= 0 else { return false }
         defer { close(readOnly) }
-        var status = stat()
-        guard fstat(readOnly, &status) == 0, acceptableSavedInode(captured, status) else {
+        guard let status = fstatWithinCopyClock(readOnly), acceptableSavedInode(captured, status) else {
             return false
         }
         guard let same = savedContentsEqual(source, readOnly) else { return false }
         if same {
             if modeBits(status.st_mode) == mode { return true }
-            return fchmod(readOnly, mode) == 0
+            return fchmodWithinCopyClock(readOnly, mode)
         }
-        guard fchmod(readOnly, modeBits(status.st_mode) | 0o200) == 0 else { return false }
-        let dest = parent.name.withCString { name in
-            openat(parent.fd, name, O_RDWR | O_NOFOLLOW | O_CLOEXEC)
-        }
+        guard fchmodWithinCopyClock(readOnly, modeBits(status.st_mode) | 0o200) else { return false }
+        let dest = openatWithinCopyClock(
+            parent.fd,
+            parent.name,
+            O_RDWR | O_NOFOLLOW | O_CLOEXEC
+        )
         guard dest >= 0 else { return false }
         defer { close(dest) }
-        var fresh = stat()
-        guard fstat(dest, &fresh) == 0, acceptableSavedInode(captured, fresh) else { return false }
+        guard let fresh = fstatWithinCopyClock(dest), acceptableSavedInode(captured, fresh) else {
+            return false
+        }
         guard lseek(source, 0, SEEK_SET) == 0 else { return false }
         let outcome = replaceOriginalOnlyAfterStagedCopy(
             source: source,
@@ -655,7 +655,7 @@ final class WorkspaceInodeBoundary: Sendable {
             mutable.withLock { $0.blockWorkspaceRename = true }
         }
         guard outcome.committed else { return false }
-        return fchmod(dest, mode) == 0
+        return fchmodWithinCopyClock(dest, mode)
     }
 
     /// Byte-compare two descriptors from their starts. Nil when either side
@@ -678,13 +678,26 @@ final class WorkspaceInodeBoundary: Sendable {
     }
 
     private func readDescriptor(_ fd: Int32, into buffer: inout [UInt8]) -> Int {
-        buffer.withUnsafeMutableBytes { raw -> Int in
-            guard let base = raw.baseAddress else { return -1 }
-            while true {
-                let count = read(fd, base, raw.count)
-                if count < 0, errno == EINTR { continue }
-                return count
+        while true {
+            if directoryReadMayContinue(cancelClockAllowsTreeCopy()) == false { return -1 }
+            guard let read = diskImageReadWithinCopyClock(fd, maxCount: buffer.count) else {
+                return -1
             }
+            if read.errnoValue == EINTR {
+                if diskImageInterruptedReadMayRetry(
+                    errnoValue: read.errnoValue,
+                    clockAllowsAnotherCall: cancelClockAllowsTreeCopy()
+                ) {
+                    continue
+                }
+                return -1
+            }
+            if read.count > 0 {
+                for index in 0..<read.count {
+                    buffer[index] = read.bytes[index]
+                }
+            }
+            return read.count
         }
     }
 
@@ -693,19 +706,14 @@ final class WorkspaceInodeBoundary: Sendable {
         defer { close(parent.fd) }
         switch entry.kind {
         case .directory:
-            let created = parent.name.withCString { name in
-                mkdirat(parent.fd, name, entry.mode) == 0
-            }
-            return created
+            return mkdiratWithinCopyClock(parent.fd, parent.name, entry.mode)
         case .regular:
-            let dest = parent.name.withCString { name in
-                openat(
-                    parent.fd,
-                    name,
-                    O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_WRONLY,
-                    entry.mode
-                )
-            }
+            let dest = openatWithinCopyClock(
+                parent.fd,
+                parent.name,
+                O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_WRONLY,
+                entry.mode
+            )
             guard dest >= 0 else { return false }
             defer { close(dest) }
             guard let source = openVolume(relative, directory: false), source >= 0 else {
@@ -720,11 +728,7 @@ final class WorkspaceInodeBoundary: Sendable {
             return true
         case .symlink:
             guard let target = readVolumeLink(relative) else { return false }
-            return parent.name.withCString { name in
-                target.withCString { link in
-                    symlinkat(link, parent.fd, name) == 0
-                }
-            }
+            return symlinkWithinCopyClock(parent.fd, parent.name, target)
         }
     }
 
@@ -733,11 +737,9 @@ final class WorkspaceInodeBoundary: Sendable {
             return false
         }
         defer { close(parent.fd) }
-        var status = stat()
-        let matched = parent.name.withCString { name in
-            fstatat(parent.fd, name, &status, AT_SYMLINK_NOFOLLOW) == 0
-        }
-        guard matched, acceptableSavedInode(captured, status) else { return false }
+        guard let status = fstatatWithinCopyClock(parent.fd, parent.name),
+            acceptableSavedInode(captured, status)
+        else { return false }
         let flags = captured.kind == .directory ? AT_REMOVEDIR : 0
         return parent.name.withCString { name in
             unlinkat(parent.fd, name, flags) == 0
@@ -747,11 +749,7 @@ final class WorkspaceInodeBoundary: Sendable {
     private func savedStamp(_ relative: String) -> WorkspaceInodeStamp? {
         guard let parent = savedParent(relative) else { return nil }
         defer { close(parent.fd) }
-        var status = stat()
-        let ok = parent.name.withCString { name in
-            fstatat(parent.fd, name, &status, AT_SYMLINK_NOFOLLOW) == 0
-        }
-        guard ok else { return nil }
+        guard let status = fstatatWithinCopyClock(parent.fd, parent.name) else { return nil }
         return stamp(of: status)
     }
 
@@ -766,13 +764,14 @@ final class WorkspaceInodeBoundary: Sendable {
         var walked = ""
         for part in parts.dropLast() {
             walked = walked.isEmpty ? part : walked + "/" + part
-            let next = part.withCString { name in
-                openat(current, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-            }
+            let next = openatWithinCopyClock(
+                current,
+                part,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
             close(current)
             guard next >= 0 else { return nil }
-            var status = stat()
-            guard fstat(next, &status) == 0 else {
+            guard let status = fstatWithinCopyClock(next) else {
                 close(next)
                 return nil
             }
@@ -793,9 +792,7 @@ final class WorkspaceInodeBoundary: Sendable {
         let flags = O_NOFOLLOW | O_CLOEXEC | (directory
             ? O_RDONLY | O_DIRECTORY
             : (writable ? O_RDWR : O_RDONLY))
-        let fd = parent.name.withCString { name in
-            openat(parent.fd, name, flags)
-        }
+        let fd = openatWithinCopyClock(parent.fd, parent.name, flags)
         return fd >= 0 ? fd : nil
     }
 
@@ -803,9 +800,7 @@ final class WorkspaceInodeBoundary: Sendable {
         guard let parent = volumeParent(relative) else { return nil }
         defer { close(parent.fd) }
         let flags = O_NOFOLLOW | O_CLOEXEC | (directory ? (O_RDONLY | O_DIRECTORY) : O_RDONLY)
-        let fd = parent.name.withCString { name in
-            openat(parent.fd, name, flags)
-        }
+        let fd = openatWithinCopyClock(parent.fd, parent.name, flags)
         return fd >= 0 ? fd : nil
     }
 
@@ -815,9 +810,11 @@ final class WorkspaceInodeBoundary: Sendable {
         var current = dup(mutable.withLock { $0.volumeFD })
         guard current >= 0 else { return nil }
         for part in parts.dropLast() {
-            let next = part.withCString { name in
-                openat(current, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-            }
+            let next = openatWithinCopyClock(
+                current,
+                part,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
             close(current)
             guard next >= 0 else { return nil }
             current = next
@@ -828,12 +825,7 @@ final class WorkspaceInodeBoundary: Sendable {
     private func readVolumeLink(_ relative: String) -> String? {
         guard let parent = volumeParent(relative) else { return nil }
         defer { close(parent.fd) }
-        var buffer = [CChar](repeating: 0, count: 4096)
-        let count = parent.name.withCString { name in
-            readlinkat(parent.fd, name, &buffer, buffer.count - 1)
-        }
-        guard count >= 0, count < buffer.count - 1 else { return nil }
-        return String(decoding: buffer.prefix(count).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        return readlinkWithinCopyClock(parent.fd, parent.name)
     }
 
     static func reattach(
@@ -1347,6 +1339,15 @@ private final class TreeStatBox: @unchecked Sendable {
 
 private final class TreeFDBox: @unchecked Sendable {
     var fd: Int32 = -1
+    deinit {
+        if fd >= 0 { close(fd) }
+    }
+
+    func take() -> Int32 {
+        let value = fd
+        fd = -1
+        return value
+    }
 }
 
 private func treeSyscallLiveStop() -> Date? {
@@ -1360,17 +1361,133 @@ private func treeSyscallLiveStop() -> Date? {
     )
 }
 
+private enum ClockedStat {
+    case value(stat)
+    case failed
+    case stopped
+}
+
+private func fstatatObservingCopyClock(_ dirfd: Int32, _ name: String) -> ClockedStat {
+    let allowance = diskImageTreeSyscallAllowance(
+        deadline: CooperativeLaunchStop.cancelClock?.deadline
+    )
+    if let allowance, allowance <= 0 { return .stopped }
+    let box = TreeStatBox()
+    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
+        let copy = diskImageDuplicateDescriptor(dirfd)
+        guard copy >= 0 else { return false }
+        let stated = name.withCString {
+            fstatat(copy, $0, &box.status, AT_SYMLINK_NOFOLLOW) == 0
+        }
+        close(copy)
+        return stated
+    }
+    if ok == nil { return .stopped }
+    if ok == false { return .failed }
+    return .value(box.status)
+}
+
 private func fstatatWithinCopyClock(_ dirfd: Int32, _ name: String) -> stat? {
+    if case let .value(status) = fstatatObservingCopyClock(dirfd, name) { return status }
+    return nil
+}
+
+private func fchmodWithinCopyClock(_ fd: Int32, _ mode: mode_t) -> Bool {
+    let allowance = diskImageTreeSyscallAllowance(
+        deadline: CooperativeLaunchStop.cancelClock?.deadline
+    )
+    if let allowance, allowance <= 0 { return false }
+    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
+        let copy = diskImageDuplicateDescriptor(fd)
+        guard copy >= 0 else { return false }
+        let changed = fchmod(copy, mode) == 0
+        close(copy)
+        return changed
+    }
+    return ok == true
+}
+
+private func fstatWithinCopyClock(_ fd: Int32) -> stat? {
     let allowance = diskImageTreeSyscallAllowance(
         deadline: CooperativeLaunchStop.cancelClock?.deadline
     )
     if let allowance, allowance <= 0 { return nil }
     let box = TreeStatBox()
     let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
-        name.withCString { fstatat(dirfd, $0, &box.status, AT_SYMLINK_NOFOLLOW) == 0 }
+        let copy = diskImageDuplicateDescriptor(fd)
+        guard copy >= 0 else { return false }
+        let stated = fstat(copy, &box.status) == 0
+        close(copy)
+        return stated
     }
     guard ok == true else { return nil }
     return box.status
+}
+
+private func ownersIgnoredWithinCopyClock(_ dirfd: Int32) -> Bool? {
+    final class Box: @unchecked Sendable { var ignored = false }
+    let box = Box()
+    let allowance = diskImageTreeSyscallAllowance(
+        deadline: CooperativeLaunchStop.cancelClock?.deadline
+    )
+    if let allowance, allowance <= 0 { return nil }
+    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
+        let copy = diskImageDuplicateDescriptor(dirfd)
+        guard copy >= 0 else { return false }
+        var status = statfs()
+        let stated = fstatfs(copy, &status) == 0
+        close(copy)
+        if stated {
+            box.ignored = status.f_flags & UInt32(MNT_IGNORE_OWNERSHIP) != 0
+        }
+        return stated
+    }
+    if ok == nil { return nil }
+    if ok == false { return false }
+    return box.ignored
+}
+
+private func readlinkWithinCopyClock(_ dirfd: Int32, _ name: String) -> String? {
+    final class Box: @unchecked Sendable { var text: String? }
+    let box = Box()
+    let allowance = diskImageTreeSyscallAllowance(
+        deadline: CooperativeLaunchStop.cancelClock?.deadline
+    )
+    if let allowance, allowance <= 0 { return nil }
+    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
+        let copy = diskImageDuplicateDescriptor(dirfd)
+        guard copy >= 0 else { return false }
+        var buffer = [CChar](repeating: 0, count: 4096)
+        let count = name.withCString { readlinkat(copy, $0, &buffer, buffer.count - 1) }
+        close(copy)
+        guard count >= 0, count < buffer.count - 1 else { return false }
+        box.text = String(
+            decoding: buffer.prefix(count).map { UInt8(bitPattern: $0) },
+            as: UTF8.self
+        )
+        return true
+    }
+    guard ok == true else { return nil }
+    return box.text
+}
+
+private func symlinkWithinCopyClock(_ dirfd: Int32, _ name: String, _ target: String) -> Bool {
+    let allowance = diskImageTreeSyscallAllowance(
+        deadline: CooperativeLaunchStop.cancelClock?.deadline
+    )
+    if let allowance, allowance <= 0 { return false }
+    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
+        let copy = diskImageDuplicateDescriptor(dirfd)
+        guard copy >= 0 else { return false }
+        let linked = name.withCString { item in
+            target.withCString { link in
+                symlinkat(link, copy, item) == 0
+            }
+        }
+        close(copy)
+        return linked
+    }
+    return ok == true
 }
 
 private func mkdiratWithinCopyClock(_ dirfd: Int32, _ name: String, _ mode: mode_t) -> Bool {
@@ -1379,7 +1496,11 @@ private func mkdiratWithinCopyClock(_ dirfd: Int32, _ name: String, _ mode: mode
     )
     if let allowance, allowance <= 0 { return false }
     let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
-        name.withCString { mkdirat(dirfd, $0, mode) == 0 }
+        let copy = diskImageDuplicateDescriptor(dirfd)
+        guard copy >= 0 else { return false }
+        let created = name.withCString { mkdirat(copy, $0, mode) == 0 }
+        close(copy)
+        return created
     }
     return ok == true
 }
@@ -1396,12 +1517,14 @@ private func openatWithinCopyClock(
     if let allowance, allowance <= 0 { return -1 }
     let box = TreeFDBox()
     let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
-        let fd = name.withCString { openat(dirfd, $0, flags, mode) }
+        let copy = diskImageDuplicateDescriptor(dirfd)
+        guard copy >= 0 else { return false }
+        let fd = name.withCString { openat(copy, $0, flags, mode) }
+        close(copy)
         box.fd = fd
         return fd >= 0
     }
-    if ok == true, box.fd >= 0 { return box.fd }
-    if box.fd >= 0 { close(box.fd) }
+    if ok == true { return box.take() }
     return -1
 }
 
@@ -1490,18 +1613,10 @@ func copyTree(
             close(childDest)
             if copied == false { return false }
         case .symlink:
-            var buffer = [CChar](repeating: 0, count: 4096)
-            let count = name.withCString { item in
-                readlinkat(source, item, &buffer, buffer.count - 1)
-            }
-            guard count >= 0, count < buffer.count - 1 else {
+            guard let target = readlinkWithinCopyClock(source, name) else {
                 return false
             }
-            buffer[count] = 0
-            let linked = name.withCString { item in
-                symlinkat(buffer, destination, item) == 0
-            }
-            if linked == false {
+            if symlinkWithinCopyClock(destination, name, target) == false {
                 return false
             }
         case .regular:
@@ -1516,8 +1631,7 @@ func copyTree(
             guard input >= 0 else {
                 return false
             }
-            var again = stat()
-            guard fstat(input, &again) == 0, again.st_nlink <= 1 else {
+            guard let again = fstatWithinCopyClock(input), again.st_nlink <= 1 else {
                 close(input)
                 return false
             }
@@ -1532,7 +1646,7 @@ func copyTree(
                 return false
             }
             let copied = copyFileDataObservingCancelClock(from: input, to: output)
-            let modeOK = copied && fchmod(output, mode) == 0
+            let modeOK = copied && fchmodWithinCopyClock(output, mode)
             close(input)
             close(output)
             if modeOK == false { return false }
@@ -1599,23 +1713,25 @@ func directoryNames(_ dirfd: Int32, isWorkspaceRoot: Bool) -> [String]? {
         // root-owned copy skips. A nested same-named directory remains part
         // of the boundary.
         if isWorkspaceRoot, WorkspaceFilesystemMetadata.isBookkeepingName(name) {
-            var status = stat()
-            let stated = name.withCString { item in
-                fstatat(dirfd, item, &status, AT_SYMLINK_NOFOLLOW) == 0
-            }
-            if stated,
-                WorkspaceFilesystemMetadata.shouldSkip(
+            switch fstatatObservingCopyClock(dirfd, name) {
+            case .stopped:
+                return nil
+            case .failed:
+                break
+            case let .value(status):
+                guard let ownersIgnored = ownersIgnoredWithinCopyClock(dirfd) else {
+                    return nil
+                }
+                if WorkspaceFilesystemMetadata.shouldSkip(
                     name: name,
                     isRootChild: true,
                     isDirectory: kind(of: status.st_mode) == .directory,
                     isSymbolicLink: kind(of: status.st_mode) == .symlink,
                     ownerUid: status.st_uid,
-                    ownersIgnored: WorkspaceFilesystemMetadata.filesystemIgnoresOwnership(
-                        descriptor: dirfd
-                    )
-                )
-            {
-                continue
+                    ownersIgnored: ownersIgnored
+                ) {
+                    continue
+                }
             }
         }
         names.append(name)
