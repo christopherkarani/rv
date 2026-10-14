@@ -505,15 +505,18 @@ public enum MCPRedaction {
         return range.upperBound
     }
 
-    /// An env or header value that hides a second token prefix.
-    /// The scan runs even when `looksLikeToken` is false: a space, `://`, a leading
-    /// `.` or `x`, or a tab still leaves two prefixes in one stored value.
-    /// An unfinished percent-decode is a secret even when the partial text is not a token.
+    /// An env or header value that hides a second token prefix, or a token that
+    /// appears only after percent-decode. A bare `ctx7sk-` or `sk-` still looks like
+    /// a token and stays `${secret:NAME}`. An unfinished percent-decode is a secret
+    /// even when the partial text is not a token.
     static func credentialHidesAnotherSecret(_ value: String) -> Bool {
         let pass = percentDecode(value)
         if pass.stoppedEarly { return true }
         let decoded = withoutInvisibleBreaks(pass.text)
         if secretPrefixCount(decoded) >= 2 { return true }
+        // `%67hp_` still contains `hp_`, so a raw prefix search is not enough.
+        // Refuse only when decoding reveals a token the raw spelling did not show.
+        if pass.text != value, looksLikeToken(decoded) || containsEmbeddedPrefix(decoded) { return true }
         guard looksLikeToken(decoded) else { return false }
         return hidesAnotherSecret(decoded)
     }
@@ -530,8 +533,9 @@ public enum MCPRedaction {
     }
 
     /// An ASCII scalar other than a letter, a digit, `-`, or `_` splits `ghp_`, the same way `$` and `#` do.
-    /// U+0020 is whitespace and is not removed from the value. U+2044 and U+2215 are separators too, so a
-    /// vulgar fraction or a square sign whose NFKD contains one is dropped. Non-ASCII punctuation is a
+    /// U+0020 is whitespace and is not removed from the value. U+2044 and U+2215 are separators, so a
+    /// vulgar fraction or a square sign whose NFKD contains one is dropped. A self-NFKD solidus operator
+    /// is a separator too, as are U+2212, U+22C5, U+2219, U+02D7, and U+E002F. Non-ASCII punctuation is a
     /// separator even when it folds to `-` or `_`. A decomposition that contains one of these separators
     /// is dropped too, including U+2025 (`..`) and U+2260 (`=` plus a combining mark).
     private static func dropsForPrefixCount(_ scalar: Unicode.Scalar) -> Bool {
@@ -542,7 +546,9 @@ public enum MCPRedaction {
 
     private static func isPrefixSeparator(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.value {
-        case 0x2044, 0x2215, 0xFF0E:
+        case 0x2044, 0x2215, 0xFF0E,
+            0x2216, 0x29F5, 0x29F6, 0x29F7, 0x29F8, 0x29F9, 0x2AFD, 0x2AFB, 0x1F67C, 0x1F67D,
+            0x2212, 0x22C5, 0x2219, 0x02D7, 0xE002F:
             return true
         default:
             break

@@ -1438,6 +1438,118 @@ struct MCPCommandTests {
         }
     }
 
+    @Test func importRefusesASolidusOperatorInsideAToken() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let extra = tail + "EXTRA"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-", "AKIA", "AIza", "ASIA"]
+        func chain(_ passes: Int, _ text: String) -> String {
+            let repeats = passes - 1
+            return text.utf8.map { byte in
+                "%" + String(repeating: "25", count: repeats) + String(format: "%02X", byte)
+            }.joined()
+        }
+        let marks: [UInt32] = [
+            0x2216, 0x29F5, 0x29F6, 0x29F7, 0x29F8, 0x29F9, 0x2AFD, 0x2AFB, 0x1F67C, 0x1F67D,
+            0x2212, 0x22C5, 0x2219, 0x02D7, 0xE002F,
+        ]
+        for code in marks {
+            let mark = String(Unicode.Scalar(code)!)
+            let value = head + mark + tail
+            try await expectSplitSecretRefused(value, sk: "sk-12345678g" + mark + tail, absent: absent, label: "solidus")
+            try await expectSplitSecretRefused(head + mark + extra, absent: absent + [extra], label: "solidus extra")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": value]),
+                absent: absent, label: "solidus command")
+        }
+        let setMinus = "\u{2216}"
+        let value = head + setMinus + tail
+        let chain31 = head + chain(31, setMinus) + tail
+        let chain32 = head + chain(32, setMinus) + tail
+        try await expectSplitSecretRefused(head + "%E2%88%96" + tail, absent: absent, label: "set minus percent")
+        try await expectSplitSecretRefused(chain31, absent: absent, label: "set minus 31")
+        try await expectSplitSecretRefused(chain32, absent: absent, label: "set minus 32")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(value)"]]),
+            absent: absent, label: "set minus cwd")
+        for scheme in ["Bearer%20", "Basic%20"] {
+            try await expectSplitSecretRefused(
+                scheme + value, absent: absent + [scheme], label: "scheme set minus", headerOnly: true)
+            try await expectSplitSecretRefused(
+                scheme + chain31, absent: absent + [scheme], label: "scheme set minus 31", headerOnly: true)
+            try await expectSplitSecretRefused(
+                scheme + chain32, absent: absent + [scheme], label: "scheme set minus 32", headerOnly: true)
+        }
+        for disguised in ["x" + value, "." + value] {
+            try await expectSplitSecretRefused(disguised, absent: absent, label: "disguised set minus")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(disguised)"]]),
+                absent: absent, label: "disguised set minus cwd")
+        }
+        for overlapped in ["AKIA\u{2216}Iza12345678", "ASIA\u{2216}Iza12345678"] {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": overlapped, "LOG_LEVEL": overlapped]]),
+                absent: ["AKIA", "ASIA", "AIza", "Iza12345678"], label: "akia overlap")
+        }
+    }
+
+    @Test func importRefusesAnEncodedTokenCopiedInTheClear() async throws {
+        let absent = ["ghp_", "sk-", "ctx7sk", "AKIA", "ASIA", "AIza", "%67", "%73", "%63", "%41", "Bearer%20"]
+        let values = [
+            "%67hp_1234567890abcdefghij",
+            "%73k-12345678",
+            "%63tx7sk-12345678",
+            "%41KIA1234567890ABCD",
+            "%41SIA1234567890ABCD",
+            "%41IzaSyA1234567890abcd",
+            "x%67hp_12345678",
+            "x%73k-12345678",
+            ".%67hp_1234567890abcdefghij",
+            ".%63tx7sk-12345678",
+            "Bearer %67hp_1234567890abcdefghij",
+            "Bearer%20%67hp_1234567890abcdefghij",
+        ]
+        for value in values {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": value, "LOG_LEVEL": value]]),
+                absent: absent + [value], label: "encoded env")
+            try await expectImportRefused(
+                try hostJSON("api", [
+                    "url": "https://mcp.example/mcp",
+                    "headers": [
+                        "Authorization": value,
+                        "X-API-Key": value,
+                        "Cookie": value,
+                        "X-Trace": value,
+                    ],
+                ]),
+                absent: absent + [value], label: "encoded header")
+        }
+        let bare = Fixture()
+        let token = "sk-12345678"
+        let other = "ctx7sk-12345678"
+        try bare.write(".cursor/mcp.json", try hostJSON("db", [
+            "command": "db-mcp",
+            "env": ["LOG_LEVEL": token, "GITHUB_TOKEN": other],
+            "args": [token, "--api-key", other],
+        ]))
+        let review = Mutex("")
+        let result = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: bare.environment(presence: Self.present),
+            show: { text in review.withLock { $0 += text } }
+        ).get()
+        let text = review.withLock { $0 }
+        #expect(result.contains("wrote mcp.json"))
+        #expect(text.contains("${secret:"))
+        #expect(text.contains("→ secret"))
+        #expect(bare.keychain.items.withLock { $0 }.isEmpty == false)
+        let written = bare.text(".config/rv/mcp.json")
+        #expect(written.contains("${secret:"))
+        #expect(written.contains(token) == false)
+        #expect(written.contains(other) == false)
+    }
+
     @Test func importRefusesASplitterInsideAToken() async throws {
         let tail = "hp_1234567890abcdefghij"
         let head = "ctx7sk-12345678g"
