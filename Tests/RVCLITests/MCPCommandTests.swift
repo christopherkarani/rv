@@ -2283,6 +2283,152 @@ struct MCPCommandTests {
         }
     }
 
+    @Test func importRefusesABlackShogiPiece() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let extra = tail + "EXTRA"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-", "AKIA", "AIza", "ASIA"]
+        let mark = String(Unicode.Scalar(0x2617)!)
+        let value = head + mark + tail
+        try await expectSplitSecretRefused(value, sk: "sk-12345678g" + mark + tail, absent: absent, label: "black shogi")
+        try await expectSplitSecretRefused(head + mark + extra, absent: absent + [extra], label: "black shogi extra")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": value]),
+            absent: absent, label: "black shogi command")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": "db-mcp", "args": [value, "--api-key", value, "--api-key=\(value)"]]),
+            absent: absent, label: "black shogi argument")
+        try await expectImportRefused(
+            try hostJSON("api", [
+                "url": "https://mcp.example/mcp",
+                "headers": ["X-Trace": value],
+            ]),
+            absent: absent, label: "black shogi trace")
+        let joined = "g" + mark + tail
+        try await expectImportRefused(
+            try hostJSON("db", ["command": joined]),
+            absent: ["ghp_", tail], label: "black shogi joined command")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": "db-mcp", "args": [joined, "--api-key", joined, "--api-key=\(joined)"]]),
+            absent: ["ghp_", tail], label: "black shogi joined argument")
+        try await expectSplitSecretRefused("x" + value, absent: absent, label: "black shogi leading x")
+        try await expectImportRefused(
+            try hostJSON("api", [
+                "url": "https://mcp.example/mcp",
+                "headers": ["X-Trace": "x" + value, "Authorization": "Bearer \(value)"],
+            ]),
+            absent: absent + ["Bearer"], label: "black shogi leading x trace")
+        try await expectSplitSecretRefused("." + value, absent: absent, label: "black shogi leading dot")
+        for overlapped in ["AKIA" + mark + "Iza12345678", "ASIA" + mark + "Iza12345678"] {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": overlapped, "LOG_LEVEL": overlapped]]),
+                absent: ["AKIA", "ASIA", "AIza", "Iza12345678"], label: "black shogi akia")
+        }
+        let halves = ["abcdefghij1234", "qrstuvwxyzabcd"]
+        for scheme in ["https", "http", "wss", "postgres"] {
+            let spelling = "abcdefghij1234\(mark)\(scheme)://qrstuvwxyzabcd"
+            try await expectImportRefused(
+                try hostJSON("db", ["command": spelling]),
+                absent: halves, label: "black shogi scheme command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": [spelling, "--cwd=\(spelling)"]]),
+                absent: halves, label: "black shogi scheme argument")
+            let hidden = "1234\(mark)\(scheme)://\(tail)"
+            try await expectImportRefused(
+                try hostJSON("db", ["command": hidden]),
+                absent: [tail], label: "black shogi scheme tail command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": [hidden, "--api-key", hidden, "--api-key=\(hidden)"]]),
+                absent: [tail], label: "black shogi scheme tail argument")
+        }
+    }
+
+    @Test func importRefusesASchemeMarkTheArgumentJoinKeeps() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let schemes = ["https", "http", "wss", "postgres"]
+        func refuseArgument(_ spelling: String, _ label: String) async throws {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": spelling]),
+                absent: [tail], label: "\(label) command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": [spelling]]),
+                absent: [tail], label: "\(label) argument")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(spelling)"]]),
+                absent: [tail], label: "\(label) cwd")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--api-key", spelling, "--api-key=\(spelling)"]]),
+                absent: [tail], label: "\(label) api-key")
+        }
+        func refuseEnv(_ spelling: String, _ label: String) async throws {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "env": ["LOG_LEVEL": spelling]]),
+                absent: [tail], label: "\(label) env")
+            try await expectImportRefused(
+                try hostJSON("api", [
+                    "url": "https://mcp.example/mcp",
+                    "headers": [
+                        "X-Trace": spelling,
+                        "Authorization": "Bearer \(spelling)",
+                        "X-API-Key": spelling,
+                        "Cookie": spelling,
+                    ],
+                ]),
+                absent: [tail, "Bearer"], label: "\(label) header")
+        }
+        let ypogegrammeni = String(Unicode.Scalar(0x0345)!)
+        let visarga = String(Unicode.Scalar(0x0903)!)
+        let saraAm = String(Unicode.Scalar(0x0E33)!)
+        let voiced = String(Unicode.Scalar(0xFF9E)!)
+        let semiVoiced = String(Unicode.Scalar(0xFF9F)!)
+        let sheva = String(Unicode.Scalar(0x05B0)!)
+        let aa = String(Unicode.Scalar(0x09BE)!)
+        for scheme in schemes {
+            for glue in ["-", "_"] {
+                try await refuseArgument("1234\(glue)\(ypogegrammeni)\(scheme)://\(tail)", "ypogegrammeni glue")
+                try await refuseArgument("a\(ypogegrammeni)\(glue)\(scheme)://\(tail)", "ypogegrammeni letter")
+                try await refuseArgument("1234\(glue)\(voiced)\(scheme)://\(tail)", "voiced glue")
+                try await refuseArgument("1234\(glue)\(semiVoiced)\(scheme)://\(tail)", "semi-voiced glue")
+                try await refuseArgument("1234\(glue)\(sheva)\(scheme)://\(tail)", "sheva glue")
+                try await refuseArgument("1234\(glue)\(visarga)\(scheme)://\(tail)", "visarga glue")
+                try await refuseEnv("1234\(glue)\(visarga)\(scheme)://\(tail)", "visarga glue")
+                try await refuseArgument("1234\(glue)\(saraAm)\(scheme)://\(tail)", "sara am glue")
+                try await refuseEnv("1234\(glue)\(saraAm)\(scheme)://\(tail)", "sara am glue")
+            }
+            try await refuseArgument("1234\(ypogegrammeni)\(scheme)://\(tail)", "ypogegrammeni digit")
+            try await refuseArgument("1234\(visarga)\(scheme)://\(tail)", "visarga digit")
+            try await refuseEnv("1234\(visarga)\(scheme)://\(tail)", "visarga digit")
+            try await refuseArgument("1234\(saraAm)\(scheme)://\(tail)", "sara am digit")
+            try await refuseEnv("1234\(saraAm)\(scheme)://\(tail)", "sara am digit")
+            try await refuseArgument("1234\(aa)\(scheme)://\(tail)", "aa digit")
+            try await refuseArgument("\(scheme):\(voiced)//\(tail)", "voiced colon")
+            try await refuseArgument("\(scheme):\u{0080}//\(tail)", "control colon")
+            for code in UInt32(0x1F3FB)...UInt32(0x1F3FF) {
+                let tone = String(Unicode.Scalar(code)!)
+                try await refuseArgument("1234\(tone)\(scheme)://\(tail)", "tone digit")
+                try await refuseEnv("1234\(tone)\(scheme)://\(tail)", "tone digit")
+                try await refuseArgument("1234-\(tone)\(scheme)://\(tail)", "tone hyphen")
+                try await refuseEnv("1234-\(tone)\(scheme)://\(tail)", "tone hyphen")
+            }
+        }
+        var controls = Array(UInt32(0x80)...UInt32(0x84))
+        controls.append(contentsOf: Array(UInt32(0x86)...UInt32(0x9F)))
+        for code in controls {
+            let control = String(Unicode.Scalar(code)!)
+            for scheme in schemes {
+                try await refuseArgument("1234\(control)\(scheme)://\(tail)", "control gap")
+            }
+        }
+        try await refuseArgument("1234\u{0085}https://\(tail)", "next line stays")
+        let voicedTail = "g\(voiced)\(tail)"
+        try await expectImportRefused(
+            try hostJSON("db", ["command": voicedTail]),
+            absent: ["ghp_", tail], label: "voiced join command")
+        try await expectImportRefused(
+            try hostJSON("db", ["command": "db-mcp", "args": [voicedTail, "--api-key", voicedTail]]),
+            absent: ["ghp_", tail], label: "voiced join argument")
+    }
+
     @Test func importRefusesAFormatPrependGluedToADigitBeforeAScheme() async throws {
         let tail = "hp_1234567890abcdefghij"
         let marks = [
@@ -2536,15 +2682,8 @@ struct MCPCommandTests {
     @Test func importRefusesASchemeNameAfterADroppedSeparator() async throws {
         let schemes = ["https", "http", "wss", "postgres"]
         var marks = Array(UInt32(0x2574)...UInt32(0x2612)).map { String(Unicode.Scalar($0)!) }
-        marks.append(contentsOf: [
-            String(Unicode.Scalar(0xFFED)!),
-            String(Unicode.Scalar(0xFFEE)!),
-            String(Unicode.Scalar(0x2614)!),
-            String(Unicode.Scalar(0x2615)!),
-            String(Unicode.Scalar(0x2616)!),
-            String(Unicode.Scalar(0x00A8)!),
-            ".",
-        ])
+        marks.append(contentsOf: [0xFFED, 0xFFEE, 0x2614, 0x2615, 0x2616, 0x2617].map { String(Unicode.Scalar($0)!) })
+        marks.append(contentsOf: [String(Unicode.Scalar(0x00A8)!), "."])
         let halves = ["abcdefghij1234", "qrstuvwxyzabcd"]
         let tail = "hp_1234567890abcdefghij"
         for mark in marks {
