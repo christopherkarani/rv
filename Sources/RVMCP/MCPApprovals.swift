@@ -42,7 +42,13 @@ public struct MCPApprovalRequest: Sendable, Equatable {
         self.codeMAC = codeMAC
     }
 
-    var grantFields: [String] { [id, server, tool, argumentsHash] }
+    /// Canonical argument-key list. One JSON array, so a same-uid edit of the
+    /// names is a different MAC input than the hash alone.
+    static func argumentKeyField(_ keys: [String]) -> String {
+        JSONValue.array(keys.map(JSONValue.string)).compactText
+    }
+
+    var grantFields: [String] { [id, server, tool, argumentsHash, Self.argumentKeyField(argumentKeys)] }
 }
 
 /// A recorded pending request. `code` is nil when no signing key exists.
@@ -119,11 +125,14 @@ public struct MCPApprovalStore: Sendable {
             func codeMAC(_ id: String) -> String? {
                 guard let signer, let code else { return nil }
                 return signer.mac(
-                    "code", Self.codeFields(id: id, server: server, tool: tool, argumentsHash: argumentsHash, code: code))
+                    "code", Self.codeFields(
+                        id: id, server: server, tool: tool, argumentsHash: argumentsHash, argumentKeys: argumentKeys,
+                        code: code))
             }
             if let index = requests.firstIndex(where: {
                 $0.server == server && $0.tool == tool && $0.argumentsHash == argumentsHash && $0.state == .pending
             }) {
+                requests[index].argumentKeys = argumentKeys
                 requests[index].codeMAC = codeMAC(requests[index].id)
                 return MCPApprovalTicket(id: requests[index].id, code: code)
             }
@@ -158,13 +167,14 @@ public struct MCPApprovalStore: Sendable {
     }
 
     /// Whether `typed` is the code for this pending request as it stands now.
-    /// Server, tool, and arguments are part of the MAC, so a rewrite fails.
+    /// Server, tool, argument hash, and argument key names are part of the MAC, so a rewrite fails.
     public func verifyCode(id: String, typed: String) -> Bool {
         guard let signer = keys.load() else { return false }
         let request = withLockedRequests { requests in requests.first { $0.id == id && $0.state == .pending } } ?? nil
         guard let request else { return false }
         return signer.verify(request.codeMAC, "code", Self.codeFields(
-            id: request.id, server: request.server, tool: request.tool, argumentsHash: request.argumentsHash, code: typed))
+            id: request.id, server: request.server, tool: request.tool, argumentsHash: request.argumentsHash,
+            argumentKeys: request.argumentKeys, code: typed))
     }
 
     public func hasCode(id: String) -> Bool {
@@ -175,13 +185,15 @@ public struct MCPApprovalStore: Sendable {
     /// request has this id, the row no longer matches, or no key can be made.
     /// The check and the write happen in one locked read of the file. A row
     /// that changed after the user was shown `server`/`tool`/`argumentsHash`
-    /// is left pending and unsigned.
-    public func grant(id: String, server: String, tool: String, argumentsHash: String) -> MCPApprovalRequest? {
+    /// or the argument key names is left pending and unsigned.
+    public func grant(
+        id: String, server: String, tool: String, argumentsHash: String, argumentKeys: [String]
+    ) -> MCPApprovalRequest? {
         guard let signer = keys.loadOrCreate() else { return nil }
         return withLockedRequests { requests in
             guard let index = requests.firstIndex(where: { $0.id == id && $0.state == .pending }) else { return nil }
             guard requests[index].server == server, requests[index].tool == tool,
-                requests[index].argumentsHash == argumentsHash
+                requests[index].argumentsHash == argumentsHash, requests[index].argumentKeys == argumentKeys
             else { return nil }
             requests[index].state = .granted
             requests[index].grantMAC = signer.mac("grant", requests[index].grantFields)
@@ -189,8 +201,13 @@ public struct MCPApprovalStore: Sendable {
         } ?? nil
     }
 
-    static func codeFields(id: String, server: String, tool: String, argumentsHash: String, code: String) -> [String] {
-        [id, server, tool, argumentsHash, MCPConfirmationCode.normalize(code)]
+    static func codeFields(
+        id: String, server: String, tool: String, argumentsHash: String, argumentKeys: [String], code: String
+    ) -> [String] {
+        [
+            id, server, tool, argumentsHash, MCPApprovalRequest.argumentKeyField(argumentKeys),
+            MCPConfirmationCode.normalize(code),
+        ]
     }
 
     /// Removes a request in any state.

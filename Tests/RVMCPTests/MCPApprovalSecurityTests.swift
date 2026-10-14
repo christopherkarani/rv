@@ -98,21 +98,21 @@ struct MCPApprovalSecurityTests {
         #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h1") == .none)
 
         let rebound = try #require(store.request(server: "gh", tool: "push", argumentsHash: "h2", argumentKeys: [])?.id)
-        #expect(store.grant(id: rebound, server: "gh", tool: "push", argumentsHash: "h2") != nil)
+        #expect(store.grant(id: rebound, server: "gh", tool: "push", argumentsHash: "h2", argumentKeys: []) != nil)
         try rewrite(fileURL) { $0.replacingOccurrences(of: "\"h2\"", with: "\"h3\"") }
         #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h3") == .forged(id: rebound))
 
         let otherKey = MCPApprovalStore(
             configDirectory: directory, keys: MCPApprovalKeyStore(load: { MCPSigner(key: Self.key) }, loadOrCreate: { MCPSigner(key: Self.key) }))
         let signedElsewhere = try #require(otherKey.request(server: "gh", tool: "push", argumentsHash: "h4", argumentKeys: [])?.id)
-        #expect(otherKey.grant(id: signedElsewhere, server: "gh", tool: "push", argumentsHash: "h4") != nil)
+        #expect(otherKey.grant(id: signedElsewhere, server: "gh", tool: "push", argumentsHash: "h4", argumentKeys: []) != nil)
         #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h4") == .forged(id: signedElsewhere))
 
         let keyless = MCPApprovalStore(configDirectory: directory, keys: .unavailable)
         let lost = try #require(store.request(server: "gh", tool: "push", argumentsHash: "h5", argumentKeys: [])?.id)
-        #expect(store.grant(id: lost, server: "gh", tool: "push", argumentsHash: "h5") != nil)
+        #expect(store.grant(id: lost, server: "gh", tool: "push", argumentsHash: "h5", argumentKeys: []) != nil)
         #expect(keyless.consumeGrant(server: "gh", tool: "push", argumentsHash: "h5") == .forged(id: lost))
-        #expect(keyless.grant(id: "any", server: "gh", tool: "push", argumentsHash: "h5") == nil)
+        #expect(keyless.grant(id: "any", server: "gh", tool: "push", argumentsHash: "h5", argumentKeys: []) == nil)
     }
 
     @Test func rewrittenPendingRowIsNotSigned() throws {
@@ -125,11 +125,32 @@ struct MCPApprovalSecurityTests {
         try rewrite(fileURL) { $0.replacingOccurrences(of: "\"push\"", with: "\"steal\"") }
 
         #expect(store.verifyCode(id: ticket.id, typed: code) == false)
-        #expect(store.grant(id: ticket.id, server: "gh", tool: "push", argumentsHash: "h1") == nil)
+        #expect(store.grant(id: ticket.id, server: "gh", tool: "push", argumentsHash: "h1", argumentKeys: ["branch"]) == nil)
         #expect(store.pending().map(\.tool) == ["steal"])
         #expect(store.pending().allSatisfy { $0.state == .pending && $0.grantMAC == nil })
         #expect(store.consumeGrant(server: "gh", tool: "steal", argumentsHash: "h1") == .none)
         #expect(store.consumeGrant(server: "gh", tool: "push", argumentsHash: "h1") == .none)
+    }
+
+    @Test func rewrittenArgumentKeysAreNotSigned() throws {
+        let directory = Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MCPApprovalStore(configDirectory: directory, keys: .file(configDirectory: directory))
+        let ticket = try #require(store.request(
+            server: "fs", tool: "write_file", argumentsHash: "h1", argumentKeys: ["path", "contents"]))
+        let code = try #require(ticket.code)
+        let fileURL = directory.appendingPathComponent(MCPApprovalStore.fileName)
+        let needle = "\"path\",\n        \"contents\""
+        try rewrite(fileURL) { text in
+            #expect(text.contains(needle))
+            return text.replacingOccurrences(of: needle, with: "\"note\"")
+        }
+        #expect(store.verifyCode(id: ticket.id, typed: code) == false)
+        #expect(store.grant(
+            id: ticket.id, server: "fs", tool: "write_file", argumentsHash: "h1", argumentKeys: ["path", "contents"]) == nil)
+        #expect(store.pending().map(\.argumentKeys) == [["note"]])
+        #expect(store.pending().allSatisfy { $0.grantMAC == nil && $0.argumentsHash == "h1" })
+        #expect(store.consumeGrant(server: "fs", tool: "write_file", argumentsHash: "h1") == .none)
     }
 
     private func rewrite(_ url: URL, _ change: (String) -> String) throws {
@@ -199,40 +220,122 @@ struct MCPIntegrityTests {
         let planted = Data(plantedText.utf8)
         let plantedKey = try #require(MCPHex.decode(Array(plantedText.utf8)))
         #expect(plantedKey.count == 32)
-        #expect(ApprovalKeyAccess.adoptedSigner(secret: planted, constraints: ["cpo": true], configDirectory: directory) == nil)
-        #expect(ApprovalKeyAccess.disposition(
-            secret: planted, item: .constraints(userPresence: true), configDirectory: directory) == .rejectPlanted)
         #expect(ApprovalKeyAccess.adoptedSigner(
-            secret: planted, constraints: ["od": ["cpo": true]], configDirectory: directory) == nil)
+            secret: planted, anchor: nil, pinnedFingerprint: nil, constraints: ["cpo": true], configDirectory: directory) == nil)
+        #expect(ApprovalKeyAccess.disposition(
+            secret: planted, anchor: nil, pinnedFingerprint: nil, item: .constraints(userPresence: true),
+            configDirectory: directory) == .rejectPlanted)
+        #expect(ApprovalKeyAccess.adoptedSigner(
+            secret: planted, anchor: nil, pinnedFingerprint: nil, constraints: ["od": ["cpo": true]],
+            configDirectory: directory) == nil)
 
         let real = [UInt8](repeating: 9, count: 32)
         let anchor = [UInt8](repeating: 3, count: 32)
         let enrollment = try #require(ApprovalKeyEnrollment.issue(key: real, anchor: anchor))
-        #expect(ApprovalKeyAnchor.save(anchor, configDirectory: directory))
+        let pin = enrollment.fingerprint
+        #expect(ApprovalKeyAnchor.save(anchor, configDirectory: directory) == false)
+        #expect(ApprovalKeyAnchor.load(directory) == nil)
         #expect(enrollment.save(configDirectory: directory))
         let secret = Data(MCPHex.encode(real).utf8)
+        let stored = try String(contentsOf: ApprovalKeyEnrollment.url(directory), encoding: .utf8)
+        #expect(stored.contains(MCPHex.encode(real)) == false)
+        #expect(stored.contains(MCPHex.encode(anchor)) == false)
+        #expect(FileManager.default.fileExists(atPath: ApprovalKeyAnchor.url(directory).path) == false)
         let orPolicy: [String: Any] = ["cpo": true, "cup": true, "pkofn": 1]
         #expect(ApprovalKeyAccess.requiresUserPresence(orPolicy) == false)
         #expect(ApprovalKeyAccess.disposition(
-            secret: secret, item: ApprovalKeyAccess.item(from: orPolicy), configDirectory: directory) == .rejectAndDelete)
-        #expect(ApprovalKeyAccess.adoptedSigner(secret: secret, constraints: orPolicy, configDirectory: directory) == nil)
+            secret: secret, anchor: anchor, pinnedFingerprint: pin, item: ApprovalKeyAccess.item(from: orPolicy),
+            configDirectory: directory) == .rejectAndDelete)
+        #expect(ApprovalKeyAccess.adoptedSigner(
+            secret: secret, anchor: anchor, pinnedFingerprint: pin, constraints: orPolicy, configDirectory: directory) == nil)
         let nested = ApprovalKeyAccess.stringKeyed(["od": ["cpo": true, "cup": true, "pkofn": 1]] as NSDictionary)
         #expect(ApprovalKeyAccess.requiresUserPresence(nested) == false)
         #expect(ApprovalKeyAccess.disposition(
-            secret: secret, item: .constraints(userPresence: false), configDirectory: directory) == .rejectAndDelete)
-        #expect(ApprovalKeyAccess.disposition(secret: secret, item: .noAccessControl, configDirectory: directory) == .rejectAndDelete)
-        #expect(ApprovalKeyAccess.disposition(secret: secret, item: .unreadable, configDirectory: directory) == .rejectKeep)
+            secret: secret, anchor: anchor, pinnedFingerprint: pin, item: .constraints(userPresence: false),
+            configDirectory: directory) == .rejectAndDelete)
+        #expect(ApprovalKeyAccess.disposition(
+            secret: secret, anchor: anchor, pinnedFingerprint: pin, item: .noAccessControl, configDirectory: directory)
+            == .rejectAndDelete)
+        #expect(ApprovalKeyAccess.disposition(
+            secret: secret, anchor: nil, pinnedFingerprint: nil, item: .unreadable, configDirectory: directory) == .rejectKeep)
 
-        let signer = try #require(ApprovalKeyAccess.adoptedSigner(secret: secret, constraints: ["cpo": true], configDirectory: directory))
+        let signer = try #require(ApprovalKeyAccess.adoptedSigner(
+            secret: secret, anchor: anchor, pinnedFingerprint: pin, constraints: ["cpo": true], configDirectory: directory))
         let expected = try #require(MCPSigner(key: real))
         #expect(signer.mac("enrollment", ["check"]) == expected.mac("enrollment", ["check"]))
-        #expect(ApprovalKeyAccess.adoptedSigner(secret: planted, constraints: ["cpo": true], configDirectory: directory) == nil)
+        #expect(ApprovalKeyAccess.adoptedSigner(
+            secret: planted, anchor: anchor, pinnedFingerprint: pin, constraints: ["cpo": true], configDirectory: directory) == nil)
 
         let attacker = [UInt8](repeating: 4, count: 32)
         let forged = try #require(ApprovalKeyEnrollment.issue(key: plantedKey, anchor: attacker))
         #expect(forged.save(configDirectory: directory))
-        #expect(ApprovalKeyAccess.adoptedSigner(secret: planted, constraints: ["cpo": true], configDirectory: directory) == nil)
-        #expect(ApprovalKeyAccess.adoptedSigner(secret: secret, constraints: ["cpo": true], configDirectory: directory) == nil)
+        #expect(ApprovalKeyAccess.adoptedSigner(
+            secret: planted, anchor: anchor, pinnedFingerprint: pin, constraints: ["cpo": true], configDirectory: directory) == nil)
+        #expect(ApprovalKeyAccess.adoptedSigner(
+            secret: secret, anchor: anchor, pinnedFingerprint: pin, constraints: ["cpo": true], configDirectory: directory) == nil)
+    }
+
+    @Test func diskWriteDoesNotAdoptAPlantedKeyOrRevealTheMACKey() throws {
+        let directory = MCPApprovalSecurityTests.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let real = [UInt8](repeating: 9, count: 32)
+        let anchor = [UInt8](repeating: 3, count: 32)
+        let plantedText = String(repeating: "ab", count: 32)
+        let planted = Data(plantedText.utf8)
+        let plantedKey = try #require(MCPHex.decode(Array(plantedText.utf8)))
+        let enrollment = try #require(ApprovalKeyEnrollment.issue(key: real, anchor: anchor))
+        let pin = enrollment.fingerprint
+        #expect(ApprovalKeyAnchor.save(anchor, configDirectory: directory) == false)
+        #expect(ApprovalKeyAnchor.load(directory) == nil)
+        #expect(enrollment.save(configDirectory: directory))
+        let enrolled = try String(contentsOf: ApprovalKeyEnrollment.url(directory), encoding: .utf8)
+        #expect(enrolled.contains(MCPHex.encode(real)) == false)
+        #expect(enrolled.contains(MCPHex.encode(anchor)) == false)
+        #expect(FileManager.default.fileExists(atPath: ApprovalKeyAnchor.url(directory).path) == false)
+        let secret = Data(MCPHex.encode(real).utf8)
+        let signer = try #require(ApprovalKeyAccess.adoptedSigner(
+            secret: secret, anchor: anchor, pinnedFingerprint: pin, constraints: ["cpo": true], configDirectory: directory))
+        let expected = try #require(MCPSigner(key: real))
+        #expect(signer.mac("enrollment", ["check"]) == expected.mac("enrollment", ["check"]))
+
+        let attacker = [UInt8](repeating: 4, count: 32)
+        let fileAnchor = JSONValue.object(["version": .int(1), "anchor": .string(MCPHex.encode(attacker))])
+        try Data(fileAnchor.compactText.utf8).write(to: ApprovalKeyAnchor.url(directory))
+        chmod(ApprovalKeyAnchor.url(directory).path, 0o600)
+        let forged = try #require(ApprovalKeyEnrollment.issue(key: plantedKey, anchor: attacker))
+        #expect(forged.save(configDirectory: directory))
+        let leaked = try String(contentsOf: ApprovalKeyAnchor.url(directory), encoding: .utf8)
+        #expect(leaked.contains(MCPHex.encode(attacker)))
+        #expect(leaked.contains(MCPHex.encode(real)) == false)
+        #expect(ApprovalKeyAnchor.load(directory) == nil)
+        #expect(ApprovalKeyAccess.disposition(
+            secret: planted, anchor: nil, pinnedFingerprint: nil, item: .constraints(userPresence: true),
+            configDirectory: directory) == .rejectPlanted)
+        #expect(ApprovalKeyAccess.adoptedSigner(
+            secret: planted, anchor: nil, pinnedFingerprint: nil, constraints: ["cpo": true], configDirectory: directory) == nil)
+        #expect(ApprovalKeyAccess.adoptedSigner(
+            secret: planted, anchor: anchor, pinnedFingerprint: pin, constraints: ["cpo": true], configDirectory: directory) == nil)
+        #expect(ApprovalKeyAccess.adoptedSigner(
+            secret: planted, anchor: attacker, pinnedFingerprint: pin, constraints: ["cpo": true], configDirectory: directory) == nil)
+        #expect(FileManager.default.fileExists(atPath: ApprovalKeyAnchor.url(directory).path) == false)
+
+        let resealed = try #require(ApprovalKeyEnrollment.issue(key: plantedKey, anchor: anchor))
+        #expect(resealed.save(configDirectory: directory))
+        let again = JSONValue.object(["version": .int(1), "anchor": .string(MCPHex.encode(anchor))])
+        try Data(again.compactText.utf8).write(to: ApprovalKeyAnchor.url(directory))
+        chmod(ApprovalKeyAnchor.url(directory).path, 0o600)
+        let copied = try String(contentsOf: ApprovalKeyAnchor.url(directory), encoding: .utf8)
+        #expect(copied.contains(MCPHex.encode(anchor)))
+        #expect(copied.contains(MCPHex.encode(real)) == false)
+        #expect(ApprovalKeyAnchor.load(directory) == nil)
+        #expect(ApprovalKeyAccess.adoptedSigner(
+            secret: planted, anchor: anchor, pinnedFingerprint: pin, constraints: ["cpo": true], configDirectory: directory) == nil)
+        #expect(FileManager.default.fileExists(atPath: ApprovalKeyAnchor.url(directory).path) == false)
+
+        #expect(enrollment.save(configDirectory: directory))
+        let restored = try #require(ApprovalKeyAccess.adoptedSigner(
+            secret: secret, anchor: anchor, pinnedFingerprint: pin, constraints: ["cpo": true], configDirectory: directory))
+        #expect(restored.mac("enrollment", ["check"]) == expected.mac("enrollment", ["check"]))
     }
 
     @Test func integrityJudgesTheBytesItWasGivenWhenTheFileChangesDuringKeyLoad() throws {

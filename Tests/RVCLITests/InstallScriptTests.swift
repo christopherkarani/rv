@@ -758,6 +758,7 @@ private func writeCurlShim(
     let shim = root.appendingPathComponent("shim", isDirectory: true)
     try writeDarwinShims(in: shim)
     try writeCurlShim(in: shim, assets: assets)
+    try writeSignatureShims(in: shim)
 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -765,6 +766,7 @@ private func writeCurlShim(
     process.environment = [
         "HOME": home.path,
         "PATH": shim.path + ":/usr/bin:/bin",
+        "RV_TEST_CODESIGN": "unsigned",
     ]
     let stderr = Pipe()
     process.standardError = stderr
@@ -827,6 +829,7 @@ private func writeCurlShim(
     let shim = root.appendingPathComponent("shim", isDirectory: true)
     try writeDarwinShims(in: shim)
     try writeCurlShim(in: shim, assets: assets)
+    try writeSignatureShims(in: shim)
 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -834,6 +837,7 @@ private func writeCurlShim(
     process.environment = [
         "HOME": home.path,
         "PATH": shim.path + ":/usr/bin:/bin",
+        "RV_TEST_CODESIGN": "unsigned",
     ]
     let stderr = Pipe()
     process.standardError = stderr
@@ -980,7 +984,8 @@ private func runSignedDownloadInstall(
     script: URL? = nil,
     withSpanRuntime: Bool = true,
     withPTYClaim: Bool = true,
-    previousInstall: Bool = false
+    previousInstall: Bool = false,
+    withSignatureShims: Bool = true
 ) throws -> SignedInstallRun {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-install-signed-\(UUID().uuidString)", isDirectory: true)
@@ -998,7 +1003,9 @@ private func runSignedDownloadInstall(
     let shim = root.appendingPathComponent("shim", isDirectory: true)
     try writeDarwinShims(in: shim)
     try writeCurlShim(in: shim, assets: assets)
-    try writeSignatureShims(in: shim)
+    if withSignatureShims {
+        try writeSignatureShims(in: shim)
+    }
     let log = root.appendingPathComponent("tools.log")
     try Data().write(to: log)
 
@@ -1064,6 +1071,18 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     let claim = run.destBin.appendingPathComponent("rv-pty-claim")
     #expect(FileManager.default.isExecutableFile(atPath: claim.path))
     #expect(try String(contentsOf: claim, encoding: .utf8).contains("release-claim"))
+}
+
+@Test func installSh_missingCodesignRefusesADownload() throws {
+    let run = try runSignedDownloadInstall(previousInstall: true, withSignatureShims: false)
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1)
+    #expect(run.stderr.contains(
+        "rv: refusing to install: codesign is not available, so a Developer ID signature cannot be checked"))
+    #expect(run.stderr.contains("warning: release files are not code-signed") == false)
+    #expect(run.toolLog.contains("codesign") == false)
+    try expectPreviousInstallKept(run)
 }
 
 @Test func installSh_unsignedReleaseWarnsWhileSignedReleasesIsOff() throws {

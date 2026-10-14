@@ -271,15 +271,15 @@ verify_release_signatures() {
   dir="$1"
   shift
   team="${RV_INSTALL_TEAM_ID:-$release_team_id}"
+  if ! command -v codesign >/dev/null 2>&1; then
+    echo "rv: refusing to install: codesign is not available, so a Developer ID signature cannot be checked" >&2
+    exit 1
+  fi
   signed=""
   unsigned=""
   for name in "$@"; do
     file="$dir/$name"
     [ -f "$file" ] || continue
-    if ! command -v codesign >/dev/null 2>&1; then
-      unsigned="$unsigned $name"
-      continue
-    fi
     details="$(codesign -dvv "$file" 2>&1 || true)"
     case "$details" in
       *"not signed at all"*)

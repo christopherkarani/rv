@@ -358,6 +358,36 @@ struct MCPCommandTests {
         #expect(loaded.decision(server: fs, tool: "write_file") == .ask)
     }
 
+    @Test func approveDoesNotSignArgumentKeysRewrittenDuringReview() async throws {
+        let fixture = Fixture()
+        let environment = fixture.environment()
+        let ticket = try #require(environment.approvals.request(
+            server: "fs", tool: "write_file", argumentsHash: "h1", argumentKeys: ["path", "contents"]))
+        let code = try #require(ticket.code)
+        let approvals = fixture.config.appendingPathComponent("mcp-approvals.json").path
+        let needle = "\"path\",\n        \"contents\""
+        let swapping = UserPresence { _, _ in
+            let text = (try? String(contentsOfFile: approvals, encoding: .utf8)) ?? ""
+            try? text.replacingOccurrences(of: needle, with: "\"note\"")
+                .write(toFile: approvals, atomically: true, encoding: .utf8)
+            return .confirmed(method: "device owner authentication")
+        }
+        let refused = await MCPRun.approve(
+            id: ticket.id, always: false, environment: fixture.environment(presence: swapping))
+        #expect(refused.failureMessage == "the approval changed while you reviewed it; nothing was signed")
+        let store = fixture.environment().approvals
+        let pending = MCPRun.pendingText(MCPRun.pendingRows(store))
+        #expect(pending.contains("arguments note"))
+        #expect(pending.contains("path") == false)
+        #expect(pending.contains("contents") == false)
+        #expect(store.pending().map(\.argumentKeys) == [["note"]])
+        #expect(store.pending().allSatisfy { $0.argumentsHash == "h1" && $0.grantMAC == nil })
+        #expect(store.verifyCode(id: ticket.id, typed: code) == false)
+        #expect(store.grant(
+            id: ticket.id, server: "fs", tool: "write_file", argumentsHash: "h1", argumentKeys: ["path", "contents"]) == nil)
+        #expect(store.consumeGrant(server: "fs", tool: "write_file", argumentsHash: "h1") == .none)
+    }
+
     @Test func importRequiresPresenceBeforeItSigns() async throws {
         let fixture = Fixture()
         try fixture.write(".cursor/mcp.json", Self.cursorConfig)
@@ -690,6 +720,104 @@ struct MCPCommandTests {
         #expect(reason.contains("rv: trust mcp.json sha256 \(digest)\n"))
         #expect(reason.contains("mcp.json: default"))
         #expect(trusted.contains("trusted mcp.json"))
+    }
+
+    @Test func trustAndImportShowSandboxAndKeepNewlinesInsideFields() async throws {
+        let zeros = String(repeating: "0", count: 64)
+        let trailer = "sha256 \(zeros)"
+        let configuration = MCPConfiguration(servers: [
+            MCPServerDefinition(
+                name: "closed", command: "/bin/echo",
+                args: ["\n  notes: /usr/bin/true"],
+                environment: ["NOTE": "/usr/bin\n\(trailer)\n  hidden: true"],
+                tools: MCPToolPolicy(defaultDecision: .ask, allow: ["read\n\(trailer)"]),
+                sandbox: MCPSandboxPolicy(network: false, writable: ["/Users/me/proj\n\(trailer)"])
+            ),
+            MCPServerDefinition(
+                name: "open", command: "/bin/true",
+                sandbox: MCPSandboxPolicy(network: true, writable: ["/"])
+            ),
+            MCPServerDefinition(name: "bare", command: "/bin/cat"),
+        ])
+        let fixture = Fixture()
+        let url = try fixture.write(".config/rv/mcp.json", configuration.encoded().prettyText)
+        chmod(url.path, 0o600)
+        chmod(fixture.config.path, 0o700)
+        let digest = RVDigest.sha256Hex([UInt8](try Data(contentsOf: url)))
+        let shown = Mutex("")
+        let reasonAtPrompt = Mutex("")
+        let presence = UserPresence { reason, challenge in
+            guard case .deviceOwner = challenge else { return .refused("not device owner") }
+            reasonAtPrompt.withLock { $0 = reason }
+            return .confirmed(method: "device owner authentication")
+        }
+        let trusted = try await MCPRun.trust(
+            environment: fixture.environment(presence: presence), show: { text in shown.withLock { $0 = text } }
+        ).get()
+        let reason = reasonAtPrompt.withLock { $0 }
+        let review = shown.withLock { $0 }
+        for text in [reason, review] {
+            let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            #expect(lines.contains { $0.hasSuffix("sandbox network false") })
+            #expect(lines.contains { $0.hasSuffix("sandbox network true") })
+            #expect(lines.contains { $0.hasSuffix("sandbox writable /Users/me/proj\\n\(trailer)") })
+            #expect(lines.contains { $0.hasSuffix("sandbox writable /") && $0.contains("proj") == false })
+            #expect(lines.contains { $0.hasSuffix("no sandbox") })
+            #expect(text.contains("other tools ask"))
+            #expect(text.contains("bare: /bin/cat"))
+            #expect(text.contains("\\n  notes: /usr/bin/true"))
+            #expect(text.contains("\\n  hidden: true"))
+            #expect(text.contains("allow read\\n\(trailer)"))
+            Self.expectNoForgedReviewLine(text, trailer: trailer)
+        }
+        let shownLines = review.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        #expect(shownLines.filter { $0.hasPrefix("sha256 ") } == ["sha256 \(digest)"])
+        #expect(reason.contains("rv: trust mcp.json sha256 \(digest)\n"))
+        #expect(trusted.contains("trusted mcp.json"))
+
+        try fixture.write(".cursor/mcp.json", """
+            {"mcpServers": {
+              "first": {"command": "/bin/echo", "args": ["\\n  notes: /usr/bin/true"],
+                "env": {"NOTE": "/usr/bin\\nsha256 \(zeros)\\n  hidden: true"}},
+              "later": {"command": "/usr/bin/true", "args": ["--ok"]}
+            }}
+            """)
+        let importShown = Mutex("")
+        let importReason = Mutex("")
+        let importing = UserPresence { reason, challenge in
+            guard case .deviceOwner = challenge else { return .refused("not device owner") }
+            importReason.withLock { $0 = reason }
+            return .confirmed(method: "device owner authentication")
+        }
+        let imported = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: fixture.environment(presence: importing),
+            show: { text in importShown.withLock { $0 = text } }
+        ).get()
+        let importedReason = importReason.withLock { $0 }
+        let importedReview = importShown.withLock { $0 }
+        for text in [importedReason, importedReview] {
+            #expect(text.contains("first: /bin/echo \\n  notes: /usr/bin/true"))
+            #expect(text.contains("env NOTE=/usr/bin\\n\(trailer)\\n  hidden: true"))
+            #expect(text.contains("later: /usr/bin/true --ok"))
+            #expect(text.contains("no sandbox"))
+            #expect(text.contains("ask before every tool"))
+            Self.expectNoForgedReviewLine(text, trailer: trailer)
+        }
+        let importLines = importedReview.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        #expect(importLines.filter { $0.hasPrefix("sha256 ") }.count == 1)
+        let body = importedReview.components(separatedBy: "\nsha256 ").first ?? ""
+        #expect(body.contains("later: /usr/bin/true --ok"))
+        #expect(body.contains("no sandbox"))
+        #expect(imported.contains("wrote mcp.json"))
+    }
+
+    private static func expectNoForgedReviewLine(_ text: String, trailer: String) {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        #expect(lines.contains(trailer) == false)
+        #expect(lines.contains("  hidden: true") == false)
+        #expect(lines.contains("  notes: /usr/bin/true") == false)
+        #expect(lines.contains { $0.hasPrefix("  hidden:") } == false)
     }
 
     @Test func rvPathIsAbsoluteAndFoundOnPath() throws {

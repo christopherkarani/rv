@@ -337,7 +337,8 @@ enum MCPRun {
             return .failure(CommandFailure("not approved: \(refusal)"))
         }
         guard store.grant(
-            id: id, server: request.server, tool: request.tool, argumentsHash: request.argumentsHash
+            id: id, server: request.server, tool: request.tool, argumentsHash: request.argumentsHash,
+            argumentKeys: request.argumentKeys
         ) != nil else {
             audit(request, decision: .denied, reason: "approval changed before it was signed", method: method,
                   always: always, configDirectory: environment.configDirectory)
@@ -456,35 +457,64 @@ enum MCPRun {
     static func trustReview(_ configuration: MCPConfiguration) -> String {
         var lines = ["mcp.json: default \(configuration.defaultDecision.rawValue) for tools without a rule"]
         for server in configuration.servers {
-            lines.append("  \(server.name): \(([server.command] + server.args).joined(separator: " "))")
+            let command = ([server.command] + server.args).map(reviewField).joined(separator: " ")
+            lines.append("  \(reviewField(server.name)): \(command)")
             lines += bindingLines(server, indent: "    ")
-            var rules: [String] = []
-            if let fallback = server.tools.defaultDecision { rules.append("other tools \(fallback.rawValue)") }
-            if server.sandbox == nil { rules.append("no sandbox") }
-            if rules.isEmpty == false { lines.append("    " + rules.joined(separator: " · ")) }
+            lines += sandboxLines(server, indent: "    ")
+            if let fallback = server.tools.defaultDecision {
+                lines.append("    other tools \(fallback.rawValue)")
+            }
         }
-        if configuration.direct.isEmpty == false { lines.append("  direct: " + configuration.direct.joined(separator: ", ")) }
-        if configuration.blocked.isEmpty == false { lines.append("  blocked: " + configuration.blocked.joined(separator: ", ")) }
+        if configuration.direct.isEmpty == false {
+            lines.append("  direct: " + configuration.direct.map(reviewField).joined(separator: ", "))
+        }
+        if configuration.blocked.isEmpty == false {
+            lines.append("  blocked: " + configuration.blocked.map(reviewField).joined(separator: ", "))
+        }
         return lines.joined(separator: "\n")
+    }
+
+    /// One review field. Line breaks stay inside the field, so a value cannot
+    /// start a new server line or a `sha256` trailer.
+    static func reviewField(_ text: String) -> String {
+        var escaped = ""
+        for scalar in text.unicodeScalars {
+            switch scalar.value {
+            case 0x0A: escaped += "\\n"
+            case 0x0D: escaped += "\\r"
+            case 0x2028: escaped += "\\u2028"
+            case 0x2029: escaped += "\\u2029"
+            default: escaped.unicodeScalars.append(scalar)
+            }
+        }
+        return escaped
+    }
+
+    /// Sandbox network and writable paths, or `no sandbox` when serve will
+    /// inherit the host environment.
+    static func sandboxLines(_ server: MCPServerDefinition, indent: String = "") -> [String] {
+        guard let sandbox = server.sandbox else { return ["\(indent)no sandbox"] }
+        let writable = sandbox.writable.isEmpty ? "none" : sandbox.writable.map(reviewField).joined(separator: ", ")
+        return ["\(indent)sandbox network \(sandbox.network)", "\(indent)sandbox writable \(writable)"]
     }
 
     /// Every env binding, secret binding, and tool-list name, with no clip.
     static func bindingLines(_ server: MCPServerDefinition, indent: String = "") -> [String] {
         var lines: [String] = []
         for (name, value) in server.environment.sorted(by: { $0.key < $1.key }) {
-            lines.append("\(indent)env \(name)=\(value)")
+            lines.append("\(indent)env \(reviewField(name))=\(reviewField(value))")
         }
         for (name, secret) in server.secrets.sorted(by: { $0.key < $1.key }) {
-            lines.append("\(indent)secret \(name)=\(secret)")
+            lines.append("\(indent)secret \(reviewField(name))=\(reviewField(secret))")
         }
         if server.tools.allow.isEmpty == false {
-            lines.append("\(indent)allow " + server.tools.allow.joined(separator: ", "))
+            lines.append("\(indent)allow " + server.tools.allow.map(reviewField).joined(separator: ", "))
         }
         if server.tools.ask.isEmpty == false {
-            lines.append("\(indent)ask " + server.tools.ask.joined(separator: ", "))
+            lines.append("\(indent)ask " + server.tools.ask.map(reviewField).joined(separator: ", "))
         }
         if server.tools.deny.isEmpty == false {
-            lines.append("\(indent)deny " + server.tools.deny.joined(separator: ", "))
+            lines.append("\(indent)deny " + server.tools.deny.map(reviewField).joined(separator: ", "))
         }
         return lines
     }
@@ -542,8 +572,9 @@ enum MCPRun {
     static func importPresenceReview(servers: [MCPServerDefinition], allowTools: Bool) -> (shown: String, reason: String) {
         let policy = allowTools ? "allow every tool" : "ask before every tool"
         let lines = servers.flatMap { server -> [String] in
-            let command = ([server.name + ":", server.command] + server.args).joined(separator: " ")
-            return ["\(command) (\(policy))"] + bindingLines(server)
+            let command = ([reviewField(server.name) + ":", reviewField(server.command)] + server.args.map(reviewField))
+                .joined(separator: " ")
+            return ["\(command) (\(policy))"] + bindingLines(server) + sandboxLines(server)
         }
         let body = (["tools: \(policy)"] + lines).joined(separator: "\n")
         let digest = RVDigest.sha256Hex(Array(body.utf8))
