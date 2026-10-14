@@ -489,8 +489,9 @@ public enum MCPSandbox {
         // name on the path that left (`x/../../private/tmp/future-keys/x`),
         // and a missing name in front of a real directory
         // (`x/../../private/tmp/y/future-keys`), are kept beside that
-        // opening. Only a longer suffix that is still on the parent can be
-        // `ln -s .` through the later-name walk.
+        // opening. A missing name with no suffix (`.../y`) can be
+        // `ln -s future-keys`. Only a longer suffix that is still on the
+        // parent can be `ln -s .` through the later-name walk.
         guard shared > parentParts.count - dots else { return false }
         let prefix = parent == "/" ? "/" : parent + "/"
         guard opened == parent || opened.hasPrefix(prefix) else { return true }
@@ -539,16 +540,23 @@ public enum MCPSandbox {
     /// directory (`x/../../private/tmp/future-keys/x`). The real directory
     /// around that name is an opening. The same link on an earlier missing
     /// name (`y` in `x/../../private/tmp/y/future-keys`) reads the real
-    /// directory named by the suffix. An ancestor of the creation directory
-    /// (`/private/tmp` for `foo/../../private/tmp/future-keys`) stays off the
-    /// list: that shape is already the one lexical path.
+    /// directory named by the suffix. A missing name with nothing after it
+    /// (`x/../../private/tmp/y`) can be `ln -s future-keys`. Consecutive
+    /// missing names (`y/z/future-keys`) are each `ln -s .`. An ancestor of
+    /// the creation directory (`/private/tmp` for
+    /// `foo/../../private/tmp/future-keys`) stays off the list: that shape
+    /// is already the one lexical path.
     private static func openingsIncludingFinalDirectory(
         _ primary: [String], opened: String, parent: String
     ) -> [String] {
         var results = primary
-        for directory in [realDirectoryOfFinalName(opened), realDirectoryAfterDotLink(opened)] {
-            guard let directory, keepsFinalDirectory(directory, parent: parent) else { continue }
+        func add(_ directory: String?) {
+            guard let directory, keepsFinalDirectory(directory, parent: parent) else { return }
             if results.contains(directory) == false { results.append(directory) }
+        }
+        add(realDirectoryOfFinalName(opened))
+        for directory in directoriesAfterMissingName(opened) {
+            add(directory)
         }
         return results
     }
@@ -561,12 +569,15 @@ public enum MCPSandbox {
         return parent.hasPrefix(directory + "/") == false
     }
 
-    /// `ln -s .` on the first missing component. `/private/tmp/y/future-keys`
-    /// reads `/private/tmp/future-keys` when that directory already exists.
-    /// A missing name with nothing after it is the lexical opening itself.
-    private static func realDirectoryAfterDotLink(_ opened: String) -> String? {
+    /// Openings reached from the first missing component.
+    /// `/private/tmp/y` is `ln -s future-keys` onto a sibling that already
+    /// contains `id_rsa`. `/private/tmp/y/future-keys` is `ln -s .` and the
+    /// suffix names that directory. `/private/tmp/y/future-keys/x` is
+    /// `ln -s .` on `y` and again on `x`. `/private/tmp/y/z/future-keys` is
+    /// `ln -s .` on each missing name, then the real directory.
+    private static func directoriesAfterMissingName(_ opened: String) -> [String] {
         let parts = opened.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        guard parts.count > 1 else { return nil }
+        guard parts.count > 1 else { return [] }
         var current = "/"
         for index in parts.indices {
             let next = current == "/" ? "/" + parts[index] : current + "/" + parts[index]
@@ -574,13 +585,33 @@ public enum MCPSandbox {
                 current = next
                 continue
             }
-            let rest = parts[(index + 1)...]
-            guard rest.isEmpty == false, current != "/" else { return nil }
+            guard current != "/" else { return [] }
+            let rest = Array(parts[(index + 1)...])
+            if rest.isEmpty { return keyDirectories(under: current) }
+            var found: [String] = []
             let joined = current + "/" + rest.joined(separator: "/")
-            guard isRealDirectory(joined) else { return nil }
-            return joined
+            if isRealDirectory(joined) {
+                found.append(joined)
+            } else if let directory = realDirectoryOfFinalName(joined) {
+                found.append(directory)
+            }
+            var skipped = 0
+            while skipped < rest.count {
+                let candidate = current + "/" + rest[skipped]
+                if isRealDirectory(candidate) { break }
+                skipped += 1
+            }
+            if skipped > 0, skipped < rest.count {
+                let tail = current + "/" + rest[skipped...].joined(separator: "/")
+                if isRealDirectory(tail) {
+                    if found.contains(tail) == false { found.append(tail) }
+                } else if let directory = realDirectoryOfFinalName(tail), found.contains(directory) == false {
+                    found.append(directory)
+                }
+            }
+            return found
         }
-        return nil
+        return []
     }
 
     /// The real directory that contains the final component, when every
