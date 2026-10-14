@@ -575,6 +575,8 @@ public enum MCPSandbox {
     /// suffix names that directory. `/private/tmp/y/future-keys/x` is
     /// `ln -s .` on `y` and again on `x`. `/private/tmp/y/z/future-keys` is
     /// `ln -s .` on each missing name, then the real directory.
+    /// `/private/tmp/y/w` is `ln -s .` on `y` and `ln -s future-keys` on
+    /// `w`, or the key link on `y` and `ln -s .` on `w`.
     private static func directoriesAfterMissingName(_ opened: String) -> [String] {
         let parts = opened.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         guard parts.count > 1 else { return [] }
@@ -607,6 +609,17 @@ public enum MCPSandbox {
                     if found.contains(tail) == false { found.append(tail) }
                 } else if let directory = realDirectoryOfFinalName(tail), found.contains(directory) == false {
                     found.append(directory)
+                }
+            }
+            // Every name after the real directory is missing (`y/w`,
+            // `y/z/w`). `ln -s future-keys` on the last of them reads the
+            // sibling that already contains `id_rsa`.
+            let suffixIsMissing = rest.allSatisfy { name in
+                isRealDirectory(current + "/" + name) == false
+            }
+            if suffixIsMissing {
+                for child in keyDirectories(under: current) where found.contains(child) == false {
+                    found.append(child)
                 }
             }
             return found
