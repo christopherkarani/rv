@@ -974,6 +974,106 @@ struct MCPCommandTests {
         ])
     }
 
+    @Test func nonBMPCasePairMatchesTheCredentialDenyNotThePrivateTmpAllow() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-nonbmp-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let scratch = root.appendingPathComponent("scratch")
+        let tmp = root.appendingPathComponent("tmp")
+        let ssh = home.appendingPathComponent(".ssh")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        func denied(_ link: String, _ secrets: [String]) throws {
+            try? FileManager.default.removeItem(at: ssh)
+            #expect(symlink(link, ssh.path) == 0)
+            let result = MCPSandbox.profile(
+                policy: MCPSandboxPolicy(network: false, writable: []),
+                scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+                temporaryDirectory: tmp.path)
+            guard case .success(let profile) = result else {
+                Issue.record("profile refused \(link): \(result)")
+                return
+            }
+            let lines = profile.split(separator: "\n").map(String.init)
+            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+            for secret in secrets {
+                #expect(lastFileReadRule(profile, matching: secret)?.hasPrefix("(deny") == true)
+                let credential = lines.lastIndex { line in
+                    line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, secret) }
+                } ?? -1
+                #expect(credential > writeAllow)
+            }
+        }
+        try denied("/private/tmp/\u{10428}-keys", ["/private/tmp/\u{10400}-keys/id_rsa"])
+        try denied("/private/tmp/\u{10400}-keys", ["/private/tmp/\u{10428}-keys/id_rsa"])
+        try denied("/private/tmp/\u{104D8}-keys", ["/private/tmp/\u{104B0}-keys/id_rsa"])
+        try denied("/private/tmp/\u{10CC0}-keys", ["/private/tmp/\u{10C80}-keys/id_rsa"])
+        try denied("/private/tmp/\u{1E922}-keys", ["/private/tmp/\u{1E900}-keys/id_rsa"])
+        try denied("/private/tmp/future-keys", [
+            "/private/tmp/future-keys/id_rsa",
+            "/private/tmp/Future-Keys/id_rsa",
+        ])
+    }
+
+    @Test func ancestorSymlinkOpeningDeniesThePrivateTmpFileThatOpenReads() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-ancestor-open-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let me = root.appendingPathComponent("Users/me")
+        let scratch = root.appendingPathComponent("scratch")
+        let tmp = root.appendingPathComponent("tmp")
+        let ssh = home.appendingPathComponent(".ssh")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: me, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        #expect(symlink("/private/tmp/anchor", me.appendingPathComponent("jump").path) == 0)
+        let secret = "/private/tmp/future-keys/id_rsa"
+        let names = ["x", "alias", "fu\u{00DF}", "\u{FB01}le"]
+        for name in names {
+            for shape in [
+                me.path + "/jump/../\(name)/tmp/future-keys",
+                me.path + "/jump/./../\(name)/tmp/future-keys",
+            ] {
+                try? FileManager.default.removeItem(at: ssh)
+                #expect(symlink(shape, ssh.path) == 0)
+                let result = MCPSandbox.profile(
+                    policy: MCPSandboxPolicy(network: false, writable: []),
+                    scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+                    temporaryDirectory: tmp.path)
+                guard case .success(let profile) = result else {
+                    Issue.record("profile refused \(shape): \(result)")
+                    return
+                }
+                #expect(lastFileReadRule(profile, matching: secret)?.hasPrefix("(deny") == true)
+                let lines = profile.split(separator: "\n").map(String.init)
+                let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+                let credential = lines.lastIndex { line in
+                    line.hasPrefix("(deny file-read*") && (
+                        line.contains("(subpath \"/private/tmp/future-keys\")")
+                            || Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, secret) }
+                    )
+                } ?? -1
+                #expect(credential > writeAllow)
+            }
+        }
+        try? FileManager.default.removeItem(at: ssh)
+        #expect(symlink(me.path + "/jump/../private/tmp/fu\u{00DF}-keys", ssh.path) == 0)
+        let folded = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: tmp.path)
+        guard case .success(let foldedProfile) = folded else {
+            Issue.record("profile refused a folded final directory: \(folded)")
+            return
+        }
+        let sharpSecret = "/private/tmp/fu\u{00DF}-keys/id_rsa"
+        #expect(lastFileReadRule(foldedProfile, matching: sharpSecret)?.hasPrefix("(deny") == true)
+    }
+
     @Test func dotDotSymlinkOpeningDeniesThePrivateTmpFileThatOpenReads() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-open-\(UUID().uuidString)", isDirectory: true)

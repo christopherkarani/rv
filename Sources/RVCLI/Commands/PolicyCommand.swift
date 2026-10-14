@@ -186,7 +186,7 @@ enum PolicyShowRun {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let data = try encoder.encode(snapshot)
-        return String(decoding: data, as: UTF8.self)
+        return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
     }
 }
 
@@ -235,5 +235,5 @@ private func prettyOrigin(_ origin: TypedRuleOrigin, _ rules: [TypedRule]) -> St
 }
 
 private func formatRule(_ rule: TypedRule) -> String {
-    "\(rule.id.rawValue) \(rule.verdict.rawValue) \(predicateText(rule.predicate))"
+    "\(DisplayedText.field(rule.id.rawValue)) \(rule.verdict.rawValue) \(predicateText(rule.predicate))"
 }

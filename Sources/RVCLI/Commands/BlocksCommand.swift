@@ -23,7 +23,7 @@ enum BlocksRun {
             iso8601(record.timestamp),
             record.host.rawValue,
             record.tool.rawValue,
-            record.ruleID.rawValue,
+            DisplayedText.field(record.ruleID.rawValue),
             record.category.rawValue,
             DisplayedText.field(record.path),
         ].joined(separator: "  ")

@@ -133,10 +133,10 @@ public enum MCPSandbox {
         func expand(_ path: String) -> String {
             path.hasPrefix("~/") ? home + path.dropFirst(1) : path
         }
-        // createPinned records the leaf it created. A later rename of Caches
-        // onto the project is a different inode, including when the project
-        // already contained rv-mcp/<server> so the path still exists. A path
-        // that is simply gone is the same swap with nothing planted there.
+        // createPinned records the leaf it created and that leaf's parent.
+        // Moving the leaf inode into a planted rv-mcp/<server> keeps the
+        // inode and changes the parent. A path that is simply gone is the
+        // same swap with nothing planted there.
         if let recorded = createdLeafIdentity(scratch), leafIdentity(scratch) != recorded {
             let resolved = realPath(scratch)
             return "\(MCPDisplayedText.field(scratch)) resolves to \(MCPDisplayedText.field(resolved)), which was not the path reviewed"
@@ -357,7 +357,7 @@ public enum MCPSandbox {
         return symlinkOpenings(path, followsLeft: 32)
     }
 
-    private static func symlinkOpenings(_ path: String, followsLeft: Int) -> [String] {
+    private static func symlinkOpenings(_ path: String, followsLeft: Int, afterSymlink: Bool = false) -> [String] {
         var current = "/"
         let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         var index = 0
@@ -378,31 +378,60 @@ public enum MCPSandbox {
                     rest.removeFirst()
                     if first == ".." { absolute = parentDirectory(absolute) }
                 }
-                // The next component can be created later as a symlink to
-                // `/<name>`. `..` after that name is the target's parent, so
-                // `foo/../../private/tmp/...` and `../private/tmp/...` both
-                // open `/private/tmp/...`. Ancestors of the link target need
-                // not exist on this host.
                 if let name = rest.first {
                     let child = absolute == "/" ? "/" + name : absolute + "/" + name
                     if readLink(child) == nil, isRealDirectory(child) == false {
-                        let tail = rest.dropFirst().joined(separator: "/")
-                        let via = tail.isEmpty ? "/" + name : "/" + name + "/" + tail
-                        let opened = resolvingMissingSuffix(via)
-                        if opened != path { return [opened] }
+                        return syntheticOpenings(parent: absolute, name: name, tail: Array(rest.dropFirst()), origin: path)
                     }
                 }
                 let continuedRest = rest.joined(separator: "/")
                 let continued = continuedRest.isEmpty ? absolute : absolute + "/" + continuedRest
-                return symlinkOpenings(continued, followsLeft: followsLeft - 1)
+                return symlinkOpenings(continued, followsLeft: followsLeft - 1, afterSymlink: true)
             }
             if isRealDirectory(next) {
                 current = next
                 continue
             }
-            return []
+            // A directory that already exists is not the opening. A later
+            // missing name under it can still be created as a symlink, and
+            // that link can point at an ancestor, not only at `/<name>`.
+            guard afterSymlink else { return [] }
+            return syntheticOpenings(parent: current, name: part, tail: Array(parts[index...]), origin: path)
         }
         return []
+    }
+
+    /// Openings for a component that does not exist yet. `name` → `/name`
+    /// keeps `../private/tmp/...` and `foo/../../...` on `/private/tmp/...`.
+    /// The same component can instead point at an ancestor of the directory
+    /// it is created in (`x` → `/private`, `tmp` → `/private/tmp`). A final
+    /// missing name can point at that directory itself.
+    private static func syntheticOpenings(parent: String, name: String, tail: [String], origin: String) -> [String] {
+        var results: [String] = []
+        func add(_ base: String) {
+            let combined: String
+            if tail.isEmpty {
+                combined = base
+            } else if base == "/" {
+                combined = "/" + tail.joined(separator: "/")
+            } else {
+                combined = base + "/" + tail.joined(separator: "/")
+            }
+            let opened = resolvingMissingSuffix(combined)
+            if opened != origin, results.contains(opened) == false {
+                results.append(opened)
+            }
+        }
+        add("/" + name)
+        var ancestor = parentDirectory(parent)
+        while ancestor != "/" {
+            add(ancestor)
+            ancestor = parentDirectory(ancestor)
+        }
+        if tail.isEmpty {
+            add(parent)
+        }
+        return results
     }
 
     private static func parentDirectory(_ path: String) -> String {
@@ -590,13 +619,17 @@ public enum MCPSandbox {
         var multi: [String: [Unicode.Scalar]]
     }
 
-    /// BMP scalars grouped by full casefold. Multi-scalar folds are not
-    /// members of the one-scalar class.
+    /// Scalars grouped by full casefold, through U+10FFFF. A non-BMP small
+    /// letter and its capital are one class (`𐐨` includes `𐐀`), not a
+    /// single hard-coded pair. Uncased non-BMP scalars fold to themselves
+    /// and stay out of the table. Multi-scalar folds are not members of
+    /// the one-scalar class.
     private static let foldTables: FoldTables = {
         var single: [UInt32: [Unicode.Scalar]] = [:]
         var multi: [String: [Unicode.Scalar]] = [:]
-        for value in 0...0xFFFF {
+        for value in 0...0x10FFFF {
             guard let scalar = Unicode.Scalar(value) else { continue }
+            if value > 0xFFFF, scalar.properties.isCased == false { continue }
             let folded = fullFoldScalars(scalar)
             if folded.count == 1, let key = folded.first {
                 single[key.value, default: []].append(scalar)
@@ -798,10 +831,12 @@ public enum MCPSandbox {
         else { return false }
         let existingPath = existingCount == 0 ? "/" : "/" + parts.prefix(existingCount).joined(separator: "/")
         let watched = watchedWritableRoots(path)
-        let watchedBefore = watched.map(inodeStamp)
+        let watchedBefore = watched.map(treeStamp)
         afterAncestorMatch?()
         guard pathStillNames(existingPath, held: last) else { return false }
-        if zip(watched, watchedBefore).contains(where: { inodeStamp($0.0) != $0.1 }) {
+        // A rename into an existing child does not change the watched
+        // directory's own link count or timestamps. The child's stamp does.
+        if zip(watched, watchedBefore).contains(where: { treeStamp($0.0) != $0.1 }) {
             return false
         }
         guard createMissing(pinned.missing, parent: current) else { return false }
@@ -854,6 +889,25 @@ public enum MCPSandbox {
             changed: clock.changed, changedNsec: clock.changedNsec)
     }
 
+    /// The watched directory plus each direct child. Moving a project into
+    /// a child that already exists changes that child, not the parent stamp.
+    private struct TreeStamp: Equatable {
+        var root: InodeStamp
+        var children: [String: InodeStamp]
+    }
+
+    private static func treeStamp(_ path: String) -> TreeStamp {
+        let root = inodeStamp(path)
+        var children: [String: InodeStamp] = [:]
+        if let names = try? FileManager.default.contentsOfDirectory(atPath: path) {
+            for name in names where name != "." && name != ".." {
+                let child = path == "/" ? "/" + name : path + "/" + name
+                children[name] = inodeStamp(child)
+            }
+        }
+        return TreeStamp(root: root, children: children)
+    }
+
     private static func directoryClock(_ info: stat) -> (modified: Int64, modifiedNsec: Int64, changed: Int64, changedNsec: Int64) {
         #if canImport(Darwin)
         return (
@@ -870,6 +924,8 @@ public enum MCPSandbox {
         var present: Bool
         var device: UInt64
         var inode: UInt64
+        var parentDevice: UInt64
+        var parentInode: UInt64
     }
 
     private final class LeafRecords: @unchecked Sendable {
@@ -882,9 +938,14 @@ public enum MCPSandbox {
     private static func leafIdentity(_ path: String) -> LeafIdentity {
         var info = stat()
         guard lstat(path, &info) == 0 else {
-            return LeafIdentity(present: false, device: 0, inode: 0)
+            return LeafIdentity(present: false, device: 0, inode: 0, parentDevice: 0, parentInode: 0)
         }
-        return LeafIdentity(present: true, device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
+        var parentInfo = stat()
+        let parentOK = lstat(parentDirectory(path), &parentInfo) == 0
+        return LeafIdentity(
+            present: true, device: UInt64(info.st_dev), inode: UInt64(info.st_ino),
+            parentDevice: parentOK ? UInt64(parentInfo.st_dev) : 0,
+            parentInode: parentOK ? UInt64(parentInfo.st_ino) : 0)
     }
 
     private static func rememberLeafIdentity(_ path: String) {

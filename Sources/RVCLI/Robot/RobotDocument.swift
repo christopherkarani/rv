@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 import RVPresentation
 
 /// Closed machine-output document for CLI robot JSON.
@@ -39,7 +40,7 @@ enum RobotDocument {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         do {
             let data = try encoder.encode(value)
-            return String(decoding: data, as: UTF8.self)
+            return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
         } catch {
             // Defensive: JSONEncoder cannot fail on these plain Codable
             // payloads, so no seam exists to test this arm.

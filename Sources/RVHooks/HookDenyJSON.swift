@@ -67,6 +67,12 @@ func jsonQuoted(_ value: String) -> String {
             output += "\\r"
         case "\t":
             output += "\\t"
+        case "\u{2028}":
+            output += "\\u2028"
+        case "\u{2029}":
+            output += "\\u2029"
+        case "\u{202E}":
+            output += "\\u202e"
         default:
             if scalar.value < 0x20 {
                 output += String(format: "\\u%04x", scalar.value)

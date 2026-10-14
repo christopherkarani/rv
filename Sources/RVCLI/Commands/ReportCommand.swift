@@ -203,7 +203,7 @@ enum ReportRun {
             let counts = report.mcp.counts.sorted { $0.key < $1.key }.map { "\($0.value) \($0.key)" }
             lines.append("mcp: \(report.mcp.ok ? "ok" : "FAIL"), \(report.mcp.servers) gateway servers; "
                 + (counts.isEmpty ? "no host entries" : counts.joined(separator: ", ")))
-            lines += report.mcp.failing.map { "  \($0.status)  \($0.name)  \($0.host)" }
+            lines += report.mcp.failing.map { "  \($0.status)  \(DisplayedText.field($0.name))  \($0.host)" }
             if let error = report.mcp.error { lines.append("  " + error) }
             if report.mcp.plaintextCredentials > 0 {
                 lines.append("  \(report.mcp.plaintextCredentials) plaintext credential(s) in host configs")

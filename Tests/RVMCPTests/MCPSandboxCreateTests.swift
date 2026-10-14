@@ -202,6 +202,50 @@ struct MCPSandboxCreateTests {
         }
     }
 
+    @Test func symlinkToAnAncestorOpensThePrivateTmpTarget() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-ancestor-link-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let zone = root.appendingPathComponent("zone/tmp")
+        let anchor = zone.appendingPathComponent("anchor")
+        try FileManager.default.createDirectory(at: anchor.appendingPathComponent("foo"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: zone.appendingPathComponent("future-keys"), withIntermediateDirectories: true)
+        let me = root.appendingPathComponent("Users/me")
+        try FileManager.default.createDirectory(at: me, withIntermediateDirectories: true)
+        #expect(symlink(anchor.path, me.appendingPathComponent("jump").path) == 0)
+        let opened = zone.path + "/future-keys"
+        let names = ["x", "alias", "fu\u{00DF}", "\u{FB01}le"]
+        for name in names {
+            let shape = me.path + "/jump/../\(name)/tmp/future-keys"
+            #expect(MCPSandbox.missingSymlinkOpenings(shape).contains(opened))
+            let dotted = me.path + "/jump/./../\(name)/tmp/future-keys"
+            #expect(MCPSandbox.missingSymlinkOpenings(dotted).contains(opened))
+        }
+    }
+
+    @Test func laterMissingComponentOpensTheWritableAncestor() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-later-missing-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let zone = root.appendingPathComponent("zone/tmp")
+        let anchor = zone.appendingPathComponent("anchor")
+        try FileManager.default.createDirectory(at: anchor.appendingPathComponent("foo"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: zone.appendingPathComponent("private"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: zone.appendingPathComponent("future-keys"), withIntermediateDirectories: true)
+        let me = root.appendingPathComponent("Users/me")
+        try FileManager.default.createDirectory(at: me, withIntermediateDirectories: true)
+        #expect(symlink(anchor.path, me.appendingPathComponent("jump").path) == 0)
+        let opened = zone.path + "/future-keys"
+        let shapes = [
+            me.path + "/jump/../private/tmp/future-keys",
+            me.path + "/jump/./../private/tmp/future-keys",
+            me.path + "/jump/foo/../../private/tmp/future-keys",
+        ]
+        for shape in shapes {
+            #expect(MCPSandbox.missingSymlinkOpenings(shape).contains(opened))
+        }
+    }
+
     @Test func npmOrCacheSwapAfterTheAncestorMatchDoesNotCreateTheLeaf() throws {
         for name in [".npm", ".cache"] {
             let root = FileManager.default.temporaryDirectory
@@ -400,6 +444,84 @@ struct MCPSandboxCreateTests {
         #expect(FileManager.default.fileExists(atPath: caches.appendingPathComponent("src/App.swift").path))
     }
 
+    @Test func projectNestedUnderAnExistingCacheChildDoesNotAllowTheCache() throws {
+        let nests = [
+            (".npm", "_cacache"),
+            (".cache", "pip"),
+            ("Library/Caches", "com.apple.nsurl"),
+        ]
+        for (rootName, childName) in nests {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("rv-sandbox-nested-\(childName)-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let project = root.appendingPathComponent("project")
+            let home = root.appendingPathComponent("home")
+            let caches = home.appendingPathComponent("Library/Caches")
+            let scratch = caches.appendingPathComponent("rv-mcp/server")
+            let watched = home.appendingPathComponent(rootName)
+            let child = watched.appendingPathComponent(childName)
+            try FileManager.default.createDirectory(at: project.appendingPathComponent("src"), withIntermediateDirectories: true)
+            try Data("app".utf8).write(to: project.appendingPathComponent("src/App.swift"))
+            try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+            try Data("kept".utf8).write(to: child.appendingPathComponent("kept"))
+            try FileManager.default.createDirectory(at: home.appendingPathComponent(".ssh"), withIntermediateDirectories: true)
+            let temporary = root.appendingPathComponent("tmp")
+            try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+            let pin = try #require(MCPSandbox.pinExistingAncestors(scratch.path))
+            let created = MCPSandbox.createPinned(scratch.path, pinned: pin) {
+                try? FileManager.default.moveItem(at: project, to: child.appendingPathComponent("project"))
+            }
+            #expect(created == false)
+            #expect(FileManager.default.fileExists(atPath: scratch.path) == false)
+            #expect(FileManager.default.fileExists(atPath: child.appendingPathComponent("project/src/App.swift").path))
+            let profile = MCPSandbox.profile(
+                policy: MCPSandboxPolicy(network: false, writable: []),
+                scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+                temporaryDirectory: temporary.path)
+            guard case .failure = profile else {
+                Issue.record("profile allowed \(watched.path) after the project moved under \(childName)")
+                return
+            }
+            #expect(String(describing: profile).contains("(subpath \"\(watched.path)\")") == false)
+        }
+    }
+
+    @Test func movingTheLeafInodeIntoTheProjectThenSwappingCachesDoesNotAllowTheProject() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-leaf-move-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("project")
+        let home = root.appendingPathComponent("home")
+        let caches = home.appendingPathComponent("Library/Caches")
+        let aside = home.appendingPathComponent("Library/Caches.held")
+        let scratch = caches.appendingPathComponent("rv-mcp/server")
+        let planted = project.appendingPathComponent("rv-mcp/server")
+        try FileManager.default.createDirectory(at: planted, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: project.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try Data("app".utf8).write(to: project.appendingPathComponent("src/App.swift"))
+        try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".ssh"), withIntermediateDirectories: true)
+        let temporary = root.appendingPathComponent("tmp")
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        let pin = try #require(MCPSandbox.pinExistingAncestors(scratch.path))
+        #expect(MCPSandbox.createPinned(scratch.path, pinned: pin))
+        try FileManager.default.removeItem(at: planted)
+        try FileManager.default.moveItem(at: scratch, to: planted)
+        try FileManager.default.moveItem(at: caches, to: aside)
+        try FileManager.default.moveItem(at: project, to: caches)
+        let profile = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: temporary.path)
+        guard case .failure = profile else {
+            Issue.record("profile allowed Caches after the recorded leaf moved into the project")
+            return
+        }
+        #expect(String(describing: profile).contains("(subpath \"\(caches.path)\")") == false)
+        #expect(FileManager.default.fileExists(atPath: caches.appendingPathComponent("src/App.swift").path))
+    }
+
     @Test func childStderrIsEscapedWithoutANewline() {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let raw = Data(("\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{202E}" + sentence).utf8)
@@ -485,6 +607,17 @@ struct MCPSandboxCreateTests {
         #expect(wholeMatch(dotted, "/private/tmp/i\u{0307}-keys/id_rsa"))
         let fromDot = MCPSandbox.seatbeltPathPattern("/private/tmp/i\u{0307}-keys")
         #expect(wholeMatch(fromDot, "/private/tmp/\u{0130}-keys/id_rsa"))
+        let deseret = MCPSandbox.seatbeltPathPattern("/private/tmp/\u{10428}-keys")
+        #expect(wholeMatch(deseret, "/private/tmp/\u{10400}-keys/id_rsa"))
+        #expect(wholeMatch(deseret, "/private/tmp/\u{10428}-keys/id_rsa"))
+        let fromDeseret = MCPSandbox.seatbeltPathPattern("/private/tmp/\u{10400}-keys")
+        #expect(wholeMatch(fromDeseret, "/private/tmp/\u{10428}-keys/id_rsa"))
+        let osage = MCPSandbox.seatbeltPathPattern("/private/tmp/\u{104D8}-keys")
+        #expect(wholeMatch(osage, "/private/tmp/\u{104B0}-keys/id_rsa"))
+        let hungarian = MCPSandbox.seatbeltPathPattern("/private/tmp/\u{10CC0}-keys")
+        #expect(wholeMatch(hungarian, "/private/tmp/\u{10C80}-keys/id_rsa"))
+        let adlam = MCPSandbox.seatbeltPathPattern("/private/tmp/\u{1E922}-keys")
+        #expect(wholeMatch(adlam, "/private/tmp/\u{1E900}-keys/id_rsa"))
         let quoted = MCPSandbox.seatbeltPathPattern("/private/tmp/fu\"ture")
         #expect(quoted.contains("\\\""))
     }

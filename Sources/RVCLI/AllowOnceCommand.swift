@@ -469,7 +469,7 @@ struct AllowOnceList: AsyncParsableCommand {
             } else {
                 invoked = row.commandRedacted
             }
-            ctx.writeStdout("\(row.kind.rawValue) \(invoked) cwd=\(row.cwd.rawValue)\n")
+            ctx.writeStdout("\(row.kind.rawValue) \(invoked) cwd=\(DisplayedText.field(row.cwd.rawValue))\n")
         }
     }
 }

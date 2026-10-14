@@ -227,9 +227,9 @@ struct AllowlistList: AsyncParsableCommand {
                     let mark = entry.isActive(at: now) ? "" : " (expired)"
                     switch entry.selector {
                     case .rule(let ruleID):
-                        ctx.writeStdout("rule \(ruleID.rawValue) — \(entry.reason)\(mark)\n")
+                        ctx.writeStdout("rule \(DisplayedText.field(ruleID.rawValue)) — \(DisplayedText.field(entry.reason))\(mark)\n")
                     case .exactCommand(let command):
-                        ctx.writeStdout("exact \(command.rawValue) — \(entry.reason)\(mark)\n")
+                        ctx.writeStdout("exact \(DisplayedText.field(command.rawValue)) — \(DisplayedText.field(entry.reason))\(mark)\n")
                     }
                 }
             }
