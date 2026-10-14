@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import Synchronization
 
@@ -477,6 +482,299 @@ func diskImageCleanupTargetWasAbsent(status: Int32, timedOut: Bool, output: Stri
         || text.contains("not attached")
         || text.contains("not currently mounted")
         || text.contains("not mounted")
+}
+
+/// The mutex closure always returns. A live helper, a disk that can still
+/// appear, or a detach whose output contains "busy" keeps a publication
+/// hold that blocks the next attach, create, or mount. Umount and detach
+/// still proceed, so a cancelled peer can unmount. "busy" is not a reason
+/// to stay inside `withLockIfAvailable`.
+struct DiskImageSerializationExit: Equatable, Sendable {
+    var closureReturned: Bool
+    var publicationHeld: Bool
+    var teardownMayProceed: Bool
+    var mayStartNextAttach: Bool
+}
+
+func diskImageSerializationExit(
+    helperStillAlive: Bool,
+    diskCanStillAppear: Bool,
+    detachOutputContainsBusy: Bool
+) -> DiskImageSerializationExit {
+    let held = helperStillAlive || diskCanStillAppear || detachOutputContainsBusy
+    return DiskImageSerializationExit(
+        closureReturned: true,
+        publicationHeld: held,
+        teardownMayProceed: true,
+        mayStartNextAttach: held == false
+    )
+}
+
+/// `nil` leaves the publication hold unchanged. Umount and `hdiutil detach`
+/// are plan `.none` and must not clear a hold that belongs to a parked
+/// attach. A publishing plan sets the hold while its disk can still appear
+/// and clears it only when that disk is gone.
+func diskImagePublicationGateUpdate(
+    plan: PreemptedDiskHelperCleanup,
+    helperStillAlive: Bool,
+    diskCanStillAppear: Bool,
+    busy: Bool
+) -> Bool? {
+    switch plan {
+    case .none:
+        return nil
+    case .unlinkSparseImage, .detachImage, .unmount:
+        return helperStillAlive || diskCanStillAppear || busy
+    }
+}
+
+/// The next helper may start when nothing is published, or when this call
+/// is the umount / detach a cancelled peer needs. Attach, create, and
+/// `mount_hfs` wait until the hold drops.
+func diskImageMayStartHelper(publicationHeld: Bool, arguments: [String]) -> Bool {
+    if publicationHeld == false { return true }
+    switch PreemptedDiskHelperCleanup.plan(arguments: arguments) {
+    case .none:
+        return true
+    case .unlinkSparseImage, .detachImage, .unmount:
+        return false
+    }
+}
+
+/// An empty `hdiutil info`, or a mount point hdiutil does not report, is
+/// not proof the disk is gone. `nil` keeps `diskImageCanStillAppear` true.
+/// A non-empty listing that omits an image path is the only false result.
+func diskImageInfoListingShowsImage(
+    parsedImageCount: Int,
+    identity: String,
+    listed: Bool
+) -> Bool? {
+    if parsedImageCount == 0 { return nil }
+    let isImage = identity.contains("rv-inode-") && identity.hasSuffix(".sparseimage")
+    if isImage { return listed }
+    if listed { return true }
+    return nil
+}
+
+/// Detach exit 0 during establish is not the disk being gone, and it is
+/// not `.cancelled`.
+func establishCancelReportsCancelled(detachExitedZero: Bool) -> Bool {
+    _ = detachExitedZero
+    return false
+}
+
+/// Where a tree copy consults the one cancel clock. Bytes and xattrs share
+/// it. A false xattr check must not call the xattr copy.
+enum CopyClockPoint: Equatable, Sendable {
+    case bytes
+    case xattr
+}
+
+func directoryReadMayContinue(_ mayContinue: Bool) -> Bool {
+    mayContinue
+}
+
+/// `readdir` stops while detach time is still left. A partial listing is
+/// not a snapshot: the caller fails the copy instead of publishing it.
+func readDirectoryNamesStoppingForDetachReserve(
+    _ path: String,
+    mayContinue: () -> Bool
+) -> [String]? {
+    if directoryReadMayContinue(mayContinue()) == false { return nil }
+    guard let dir = opendir(path) else { return nil }
+    defer { closedir(dir) }
+    var names: [String] = []
+    while true {
+        if directoryReadMayContinue(mayContinue()) == false { return nil }
+        errno = 0
+        guard let entry = readdir(dir) else {
+            if errno != 0 { return nil }
+            break
+        }
+        let name = directoryEntryName(entry)
+        if name == "." || name == ".." { continue }
+        names.append(name)
+    }
+    return names
+}
+
+/// Same stop, on a directory fd. `fdopendir` consumes a duplicate so the
+/// caller's fd stays open.
+func readDirectoryNames(
+    _ dirfd: Int32,
+    mayContinue: () -> Bool
+) -> [String]? {
+    if directoryReadMayContinue(mayContinue()) == false { return nil }
+    let copy = dup(dirfd)
+    guard copy >= 0 else { return nil }
+    if lseek(copy, 0, SEEK_SET) < 0 {
+        close(copy)
+        return nil
+    }
+    guard let dir = fdopendir(copy) else {
+        close(copy)
+        return nil
+    }
+    defer { closedir(dir) }
+    var names: [String] = []
+    while true {
+        if directoryReadMayContinue(mayContinue()) == false { return nil }
+        errno = 0
+        guard let entry = readdir(dir) else {
+            if errno != 0 { return nil }
+            break
+        }
+        let name = directoryEntryName(entry)
+        if name == "." || name == ".." { continue }
+        names.append(name)
+    }
+    return names
+}
+
+private func directoryEntryName(_ entry: UnsafeMutablePointer<dirent>) -> String {
+    withUnsafePointer(to: &entry.pointee.d_name) { pointer in
+        pointer.withMemoryRebound(to: CChar.self, capacity: 1024) {
+            String(cString: $0)
+        }
+    }
+}
+
+/// File bytes in `chunkBytes` slices. The xattr copy runs only after the
+/// bytes finish and the same clock still allows it, so it cannot spend the
+/// detach reserve. A stop returns false and does not call `copyXattr`.
+func copyFileLeavingDetachReserve(
+    from source: Int32,
+    to destination: Int32,
+    chunkBytes: Int = 64 * 1024,
+    mayContinue: (CopyClockPoint) -> Bool,
+    copyXattr: (_ source: Int32, _ destination: Int32) -> Bool
+) -> Bool {
+    let size = chunkBytes > 0 ? chunkBytes : 64 * 1024
+    var buffer = [UInt8](repeating: 0, count: size)
+    while true {
+        if mayContinue(.bytes) == false { return false }
+        let count = buffer.withUnsafeMutableBytes { raw -> Int in
+            guard let base = raw.baseAddress else { return -1 }
+            while true {
+                let readCount = read(source, base, raw.count)
+                if readCount < 0, errno == EINTR { continue }
+                return readCount
+            }
+        }
+        if count == 0 { break }
+        if count < 0 { return false }
+        var written = 0
+        while written < count {
+            let chunk = buffer.withUnsafeBytes { raw -> Int in
+                guard let base = raw.baseAddress else { return -1 }
+                while true {
+                    let wrote = write(destination, base.advanced(by: written), count - written)
+                    if wrote < 0, errno == EINTR { continue }
+                    return wrote
+                }
+            }
+            if chunk <= 0 { return false }
+            written += chunk
+        }
+    }
+    if mayContinue(.xattr) == false { return false }
+    return copyXattr(source, destination)
+}
+
+/// A clock stop is not a successful publish, including when a row was
+/// already rejected or a staged copy wrote only part of a file.
+enum SavedTreePublish: Equatable, Sendable {
+    case success
+    case failed
+}
+
+func savedTreePublishOutcome(
+    clockAllowsCopy: Bool,
+    rejected: Bool,
+    stagedCopyFinished: Bool
+) -> SavedTreePublish {
+    if clockAllowsCopy == false || rejected || stagedCopyFinished == false {
+        return .failed
+    }
+    return .success
+}
+
+/// The original inode is replaced only after the staged copy finished and
+/// the clock still leaves the detach reserve. Otherwise the original stays.
+func mayReplaceSavedFile(stagedCopyFinished: Bool, clockAllowsCopy: Bool) -> Bool {
+    stagedCopyFinished && clockAllowsCopy
+}
+
+/// Stage `source` onto a temp file. `ftruncate` of `original` runs only
+/// when that stage finished and the clock still allows the commit. A clock
+/// stop leaves `original` untouched and returns false.
+func replaceOriginalOnlyAfterStagedCopy(
+    source: Int32,
+    original: Int32,
+    mayContinue: (CopyClockPoint) -> Bool,
+    copyXattr: (_ source: Int32, _ destination: Int32) -> Bool
+) -> Bool {
+    if mayContinue(.bytes) == false { return false }
+    let stagedURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-stage-\(UUID().uuidString)")
+    let staged = stagedURL.path.withCString { path in
+        open(path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(0o600))
+    }
+    guard staged >= 0 else { return false }
+    defer {
+        close(staged)
+        unlink(stagedURL.path)
+    }
+    guard copyFileLeavingDetachReserve(
+        from: source,
+        to: staged,
+        mayContinue: mayContinue,
+        copyXattr: copyXattr
+    ) else { return false }
+    guard mayReplaceSavedFile(
+        stagedCopyFinished: true,
+        clockAllowsCopy: mayContinue(.bytes)
+    ) else { return false }
+    let backupURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-backup-\(UUID().uuidString)")
+    let backup = backupURL.path.withCString { path in
+        open(path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(0o600))
+    }
+    guard backup >= 0 else { return false }
+    defer {
+        close(backup)
+        unlink(backupURL.path)
+    }
+    guard lseek(original, 0, SEEK_SET) == 0 else { return false }
+    guard copyFileLeavingDetachReserve(
+        from: original,
+        to: backup,
+        mayContinue: mayContinue,
+        copyXattr: { _, _ in true }
+    ) else { return false }
+    guard mayReplaceSavedFile(
+        stagedCopyFinished: true,
+        clockAllowsCopy: mayContinue(.bytes)
+    ) else { return false }
+    guard lseek(staged, 0, SEEK_SET) == 0, lseek(original, 0, SEEK_SET) == 0 else { return false }
+    guard ftruncate(original, 0) == 0 else { return false }
+    let committed = copyFileLeavingDetachReserve(
+        from: staged,
+        to: original,
+        mayContinue: mayContinue,
+        copyXattr: copyXattr
+    )
+    if committed { return true }
+    _ = lseek(backup, 0, SEEK_SET)
+    _ = lseek(original, 0, SEEK_SET)
+    _ = ftruncate(original, 0)
+    _ = copyFileLeavingDetachReserve(
+        from: backup,
+        to: original,
+        mayContinue: { _ in true },
+        copyXattr: { _, _ in true }
+    )
+    return false
 }
 
 /// What `watchSeatbeltProcess` reports. `.cancelled` is only a dead leader.

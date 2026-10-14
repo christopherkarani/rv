@@ -74,6 +74,9 @@ public final class SecretGateway: @unchecked Sendable {
     private var entries: [String: Entry] = [:]
     /// Every listener `start` handed to an accept loop. `stop` closes all of them.
     private var listenFDs: [Int32] = []
+    /// Signaled when that fd's accept loop has left the socket, so `stop`
+    /// can close it after Darwin would otherwise keep the port accepting.
+    private var acceptExited: [Int32: DispatchSemaphore] = [:]
     private var boundPort: Int?
     private let slots = DispatchSemaphore(value: SecretGateway.maximumConnections)
     private let acceptQueue = DispatchQueue(label: "rv.secret-gateway.accept", qos: .userInitiated)
@@ -196,9 +199,18 @@ public final class SecretGateway: @unchecked Sendable {
             close(fd)
             return .success(published)
         }
+        let exited = DispatchSemaphore(value: 0)
+        acceptExited[fd] = exited
         listenFDs.append(fd)
         boundPort = port
-        acceptQueue.async { [weak self] in self?.acceptLoop(fd) }
+        let flags = fcntl(fd, F_GETFL, 0)
+        if flags >= 0 {
+            _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        }
+        acceptQueue.async { [weak self] in
+            self?.acceptLoop(fd)
+            exited.signal()
+        }
         lock.unlock()
         return .success(port)
     }
@@ -206,21 +218,82 @@ public final class SecretGateway: @unchecked Sendable {
     public func stop() {
         lock.lock()
         let fds = listenFDs
+        let port = boundPort
+        let waits = fds.compactMap { acceptExited[$0] }
         listenFDs.removeAll()
+        acceptExited.removeAll()
         boundPort = nil
         entries.removeAll()
         lock.unlock()
+        if let port {
+            wakeListeningPort(port)
+        }
         for fd in fds where fd >= 0 {
             shutdown(fd, Int32(SHUT_RDWR))
+        }
+        for wait in waits {
+            _ = wait.wait(timeout: .now() + 2)
+        }
+        for fd in fds where fd >= 0 {
             close(fd)
+        }
+    }
+
+    /// A loopback connect makes `poll` see the listener so the accept loop
+    /// can leave the fd. `close` before that leaves the port accepting on Darwin.
+    private func wakeListeningPort(_ port: Int) {
+        #if canImport(Darwin)
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        #else
+        let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+        #endif
+        guard fd >= 0 else { return }
+        defer { close(fd) }
+        let flags = fcntl(fd, F_GETFL, 0)
+        if flags >= 0 {
+            _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        }
+        var address = sockaddr_in()
+        #if canImport(Darwin)
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        #endif
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(port).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        _ = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
         }
     }
 
     private func acceptLoop(_ fd: Int32) {
         while true {
+            lock.lock()
+            let live = listenFDs.contains(fd)
+            lock.unlock()
+            if live == false { return }
+            var state = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let polled = poll(&state, 1, 200)
+            if polled < 0 {
+                if errno == EINTR { continue }
+                return
+            }
+            lock.lock()
+            let still = listenFDs.contains(fd)
+            lock.unlock()
+            if still == false { return }
+            if polled == 0 { continue }
             let client = accept(fd, nil, nil)
             if client < 0 {
-                if errno == EINTR { continue }
+                if errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
+                return
+            }
+            lock.lock()
+            let serve = listenFDs.contains(fd)
+            lock.unlock()
+            if serve == false {
+                close(client)
                 return
             }
             _ = fcntl(client, F_SETFD, FD_CLOEXEC)

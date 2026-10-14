@@ -525,7 +525,7 @@ struct DiskImageCancellationTests {
     /// A tree copy longer than the time left on the one cancel clock stops
     /// before it consumes the detach slice. The return stays under 8 seconds.
     /// `returnBound` and `detachCap` are unchanged.
-    @Test func largeCopyStopsBeforeDetachAndStaysUnderEightSeconds() {
+    @Test func largeCopyStopsBeforeDetachAndStaysUnderEightSeconds() throws {
         #expect(DiskImageCancelBudget.returnBound == 8)
         #expect(DiskImageCancelBudget.detachCap == 5)
         let timeLeft = DiskImageCancelBudget.cancelledSequenceBudget
@@ -561,5 +561,292 @@ struct DiskImageCancellationTests {
         let shared = DiskImageCancelBudget.wholeSequenceWallTime(reap: 0.25, sessionWait: 2)
         #expect(shared < 8)
         #expect(shared == DiskImageCancelBudget.cancelledSequenceBudget)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-copy-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceURL = root.appendingPathComponent("source")
+        let destURL = root.appendingPathComponent("dest")
+        let payload = Data(repeating: 7, count: 256 * 1024)
+        try payload.write(to: sourceURL)
+        FileManager.default.createFile(atPath: destURL.path, contents: nil)
+        let source = try FileHandle(forReadingFrom: sourceURL)
+        let destination = try FileHandle(forWritingTo: destURL)
+        defer {
+            try? source.close()
+            try? destination.close()
+        }
+        let reserve = now.addingTimeInterval(DiskImageCancelBudget.detachCap)
+        var chunks = 0
+        let copied = copyFileLeavingDetachReserve(
+            from: source.fileDescriptor,
+            to: destination.fileDescriptor,
+            mayContinue: { point in
+                if point == .xattr { return false }
+                chunks += 1
+                if chunks == 1 { return true }
+                return DiskImageCancelBudget.copyMayContinue(deadline: reserve, now: now)
+            },
+            copyXattr: { _, _ in true }
+        )
+        #expect(copied == false)
+        let written = try Data(contentsOf: destURL)
+        #expect(written.isEmpty == false)
+        #expect(written.count < payload.count)
+    }
+
+    /// The closure returns while the helper is alive. The publication hold
+    /// blocks the next attach. Umount still proceeds, so a cancelled peer
+    /// can unmount instead of spinning out the shard.
+    @Test func closureReturnsWhileHelperAliveAndBusyDoesNotSpin() {
+        let alive = diskImageSerializationExit(
+            helperStillAlive: true,
+            diskCanStillAppear: true,
+            detachOutputContainsBusy: false
+        )
+        #expect(alive.closureReturned)
+        #expect(alive.publicationHeld)
+        #expect(alive.teardownMayProceed)
+        #expect(alive.mayStartNextAttach == false)
+        let image = "/tmp/rv-inode-token.sparseimage"
+        #expect(diskImageMayStartHelper(
+            publicationHeld: alive.publicationHeld,
+            arguments: ["/usr/bin/hdiutil", "attach", "-nomount", "-plist", image]
+        ) == false)
+        #expect(diskImageMayStartHelper(
+            publicationHeld: alive.publicationHeld,
+            arguments: ["/usr/bin/hdiutil", "create", "-quiet", image]
+        ) == false)
+        #expect(diskImageMayStartHelper(
+            publicationHeld: alive.publicationHeld,
+            arguments: ["/sbin/mount_hfs", "-o", "nobrowse", "/dev/disk2s1", "/tmp/ws"]
+        ) == false)
+        #expect(diskImageMayStartHelper(
+            publicationHeld: true,
+            arguments: ["/sbin/umount", "/tmp/ws"]
+        ))
+        #expect(diskImageMayStartHelper(
+            publicationHeld: true,
+            arguments: ["/usr/bin/hdiutil", "detach", "-force", "-quiet", image]
+        ))
+        let busy = diskImageSerializationExit(
+            helperStillAlive: false,
+            diskCanStillAppear: true,
+            detachOutputContainsBusy: true
+        )
+        #expect(busy.closureReturned)
+        #expect(busy.publicationHeld)
+        #expect(busy.teardownMayProceed)
+        #expect(busy.mayStartNextAttach == false)
+        #expect(diskImagePublicationGateUpdate(
+            plan: .detachImage(image),
+            helperStillAlive: true,
+            diskCanStillAppear: true,
+            busy: false
+        ) == true)
+        #expect(diskImagePublicationGateUpdate(
+            plan: .detachImage(image),
+            helperStillAlive: false,
+            diskCanStillAppear: true,
+            busy: true
+        ) == true)
+        #expect(diskImagePublicationGateUpdate(
+            plan: .none,
+            helperStillAlive: false,
+            diskCanStillAppear: false,
+            busy: false
+        ) == nil)
+        #expect(diskImagePublicationGateUpdate(
+            plan: .detachImage(image),
+            helperStillAlive: false,
+            diskCanStillAppear: false,
+            busy: false
+        ) == false)
+        #expect(DiskImageCancelBudget.returnBound == 8)
+    }
+
+    /// An empty hdiutil listing, or a mount point it does not report, does
+    /// not prove the disk is gone and does not authorize another attach.
+    @Test func emptyListingDoesNotProveTheDiskIsGone() {
+        let image = "/tmp/rv-inode-token.sparseimage"
+        let empty = diskImageInfoListingShowsImage(
+            parsedImageCount: 0,
+            identity: image,
+            listed: false
+        )
+        #expect(empty == nil)
+        let mount = diskImageInfoListingShowsImage(
+            parsedImageCount: 2,
+            identity: "/private/var/folders/ws",
+            listed: false
+        )
+        #expect(mount == nil)
+        #expect(diskImageCanStillAppear(
+            helperStillAlive: false,
+            detachStatus: 0,
+            detachTimedOut: false,
+            detachOutput: "",
+            imageListedAfterDetach: empty,
+            waitedForPublication: true
+        ))
+        #expect(diskImageCanStillAppear(
+            helperStillAlive: false,
+            detachStatus: 0,
+            detachTimedOut: false,
+            detachOutput: "",
+            imageListedAfterDetach: mount,
+            waitedForPublication: true
+        ))
+        #expect(diskImageInfoListingShowsImage(
+            parsedImageCount: 1,
+            identity: image,
+            listed: false
+        ) == false)
+        #expect(establishCancelReportsCancelled(detachExitedZero: true) == false)
+        #expect(establishCancelReportsCancelled(detachExitedZero: false) == false)
+    }
+
+    /// A directory walk stops while the detach reserve is still left.
+    @Test func directoryListingStopsForTheDetachReserve() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-list-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for index in 0..<8 {
+            FileManager.default.createFile(
+                atPath: root.appendingPathComponent("file-\(index)").path,
+                contents: Data("x".utf8)
+            )
+        }
+        var checks = 0
+        let stopped = readDirectoryNamesStoppingForDetachReserve(root.path) {
+            checks += 1
+            return checks <= 1
+        }
+        #expect(stopped == nil)
+        #expect(checks >= 1)
+        let now = Date(timeIntervalSince1970: 20_000)
+        #expect(DiskImageCancelBudget.copyMayContinue(
+            deadline: now.addingTimeInterval(DiskImageCancelBudget.detachCap),
+            now: now
+        ) == false)
+        #expect(DiskImageCancelBudget.detachCap == 5)
+        #expect(DiskImageCancelBudget.returnBound == 8)
+        let listed = readDirectoryNamesStoppingForDetachReserve(root.path) { true }
+        #expect(listed?.count == 8)
+    }
+
+    /// A cancelled publish does not ftruncate the saved file, and a clock
+    /// stop is not success even when a row was already rejected.
+    @Test func cancelledPublishDoesNotCommitATruncatedTree() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-publish-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let originalURL = root.appendingPathComponent("saved")
+        let sourceURL = root.appendingPathComponent("volume")
+        let originalBytes = Data(repeating: 0x41, count: 200_000)
+        let sourceBytes = Data(repeating: 0x42, count: 200_000)
+        try originalBytes.write(to: originalURL)
+        try sourceBytes.write(to: sourceURL)
+        let original = try FileHandle(forUpdating: originalURL)
+        let source = try FileHandle(forReadingFrom: sourceURL)
+        defer {
+            try? original.close()
+            try? source.close()
+        }
+        var xattrCalled = false
+        let published = replaceOriginalOnlyAfterStagedCopy(
+            source: source.fileDescriptor,
+            original: original.fileDescriptor,
+            mayContinue: { _ in false },
+            copyXattr: { _, _ in
+                xattrCalled = true
+                return true
+            }
+        )
+        #expect(published == false)
+        #expect(xattrCalled == false)
+        #expect(try Data(contentsOf: originalURL) == originalBytes)
+        #expect(savedTreePublishOutcome(
+            clockAllowsCopy: false,
+            rejected: true,
+            stagedCopyFinished: false
+        ) == .failed)
+        #expect(savedTreePublishOutcome(
+            clockAllowsCopy: false,
+            rejected: false,
+            stagedCopyFinished: true
+        ) == .failed)
+        #expect(mayReplaceSavedFile(stagedCopyFinished: true, clockAllowsCopy: false) == false)
+        #expect(mayReplaceSavedFile(stagedCopyFinished: false, clockAllowsCopy: true) == false)
+        try source.seek(toOffset: 0)
+        var chunks = 0
+        let partial = replaceOriginalOnlyAfterStagedCopy(
+            source: source.fileDescriptor,
+            original: original.fileDescriptor,
+            mayContinue: { point in
+                if point == .xattr { return false }
+                chunks += 1
+                return chunks <= 1
+            },
+            copyXattr: { _, _ in
+                xattrCalled = true
+                return true
+            }
+        )
+        #expect(partial == false)
+        #expect(xattrCalled == false)
+        #expect(try Data(contentsOf: originalURL) == originalBytes)
+        #expect(DiskImageCancelBudget.returnBound == 8)
+        #expect(DiskImageCancelBudget.detachCap == 5)
+    }
+
+    /// The xattr copy uses the same clock as the 64KB byte copy and stops
+    /// while the detach reserve is still left.
+    @Test func xattrCopyStopsBeforeTheDetachReserveIsGone() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-xattr-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceURL = root.appendingPathComponent("source")
+        let destURL = root.appendingPathComponent("dest")
+        let payload = Data(repeating: 9, count: 96 * 1024)
+        try payload.write(to: sourceURL)
+        FileManager.default.createFile(atPath: destURL.path, contents: nil)
+        let source = try FileHandle(forReadingFrom: sourceURL)
+        let destination = try FileHandle(forWritingTo: destURL)
+        defer {
+            try? source.close()
+            try? destination.close()
+        }
+        let now = Date(timeIntervalSince1970: 80_000)
+        let reserve = now.addingTimeInterval(DiskImageCancelBudget.detachCap)
+        var xattrCalled = false
+        let copied = copyFileLeavingDetachReserve(
+            from: source.fileDescriptor,
+            to: destination.fileDescriptor,
+            mayContinue: { point in
+                if point == .xattr {
+                    return DiskImageCancelBudget.copyMayContinue(deadline: reserve, now: now)
+                }
+                return true
+            },
+            copyXattr: { _, _ in
+                xattrCalled = true
+                return true
+            }
+        )
+        #expect(copied == false)
+        #expect(xattrCalled == false)
+        #expect(DiskImageCancelBudget.copyMayContinue(deadline: reserve, now: now) == false)
+        #expect(DiskImageCancelBudget.detachStillFits(
+            afterCopy: 0,
+            timeLeft: DiskImageCancelBudget.detachCap
+        ))
+        #expect(DiskImageCancelBudget.detachCap == 5)
+        #expect(DiskImageCancelBudget.returnBound == 8)
+        let written = try Data(contentsOf: destURL)
+        #expect(written == payload)
     }
 }
