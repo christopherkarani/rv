@@ -275,7 +275,7 @@ public enum MCPRedaction {
     /// A digit stops the walk, and that tail is not a scheme: `1234https://` stays one token.
     /// A separator the join drops, including `.`, U+00A8, and a box drawing, does not hide that digit.
     /// A format Prepend or a combining mark glued to that digit is still that number,
-    /// including an alphabetic mark, U+0E33, or an emoji modifier. A grapheme extender
+    /// including an alphabetic mark, U+0E33, U+0EB3, or an emoji modifier. A grapheme extender
     /// such as U+FF9E does not hide `-` or `_`. A C1 control between the digit and the
     /// scheme does not hide the digit. U+0085 is whitespace and already does not.
     /// `-` and `_` do not hide it. A letter before that hyphen is not a scheme either.
@@ -685,7 +685,7 @@ public enum MCPRedaction {
         // Whitespace other than U+0020, a format scalar, a spacing mark whose NFKD contains U+0020,
         // and a combining mark, including an alphabetic one, join one `ghp_`. The prefix count stays 1.
         // U+0020 stays, so `Bearer ` plus a token is still one secret reference.
-        // U+0903, U+0E33, and U+1F3FB leave this join. U+FF9E was already removed by the strip above.
+        // U+0903, U+0E33, U+0EB3, and U+1F3FB leave this join. U+FF9E was already removed by the strip above.
         let joined = textJoiningHiddenBreaks(decoded)
         if joined != decoded, looksLikeToken(joined) || containsEmbeddedPrefix(joined) { return true }
         // The raw spelling keeps `%2F` inside the user. The revealed spelling is what `%%0040` becomes,
@@ -715,7 +715,7 @@ public enum MCPRedaction {
 
     /// True when `textJoiningHiddenBreaks` removes this scalar. U+0020 stays.
     /// A combining mark is removed here and is not a prefix separator, so `-` and `_` stay attached.
-    /// U+0E33, U+1F3FB–U+1F3FF, and the C1 controls other than U+0085 leave too.
+    /// U+0E33, U+0EB3, U+1F3FB–U+1F3FF, and the C1 controls other than U+0085 leave too.
     /// U+FF9E does not. The letters of `ghp_`, `sk-`, `ctx7`, and `AKIA` do not.
     private static func joinDrops(_ scalar: Unicode.Scalar) -> Bool {
         if scalar.value == 0x20 { return false }
@@ -723,7 +723,7 @@ public enum MCPRedaction {
         if scalar.properties.isDefaultIgnorableCodePoint { return true }
         if scalar.properties.generalCategory == .format { return true }
         if nonLetterMark(scalar) { return true }
-        if scalar.value == 0x0E33 { return true }
+        if scalar.value == 0x0E33 || scalar.value == 0x0EB3 { return true }
         if scalar.value >= 0x1F3FB && scalar.value <= 0x1F3FF { return true }
         switch scalar.value {
         case 0x80...0x84, 0x86...0x9F:
@@ -756,7 +756,7 @@ public enum MCPRedaction {
     /// and U+11F02 are separators, as is the Unicode 16 Prepend letter U+113D1, so a port URL
     /// still joins after one of them is glued to `@`.
     /// U+2574–U+2612 and the halfwidth twins U+FFED and U+FFEE are separators. U+2613 stays listed.
-    /// U+2614 UMBRELLA WITH RAIN DROPS, U+2615 HOT BEVERAGE, U+2616 WHITE SHOGI PIECE, and U+2617 BLACK SHOGI PIECE are separators. The list does not continue past U+2617.
+    /// U+2614 UMBRELLA WITH RAIN DROPS, U+2615 HOT BEVERAGE, U+2616 WHITE SHOGI PIECE, U+2617 BLACK SHOGI PIECE, and U+2618 SHAMROCK are separators. The list does not continue past U+2618.
     /// U+22C5–U+22C7 stay listed beside them. U+22EA–U+22ED stay unlisted and drop through their fold.
     /// U+2308, U+2329, and U+232A stay unlisted. U+233F–U+2342 and U+2349 stay listed. U+2427–U+243F stay unlisted. U+244A stays listed. U+2474–U+24B5 stay unlisted and drop through their fold. U+2212, U+22C5, U+2219, U+02D7, and
     /// U+E002F. A self-NFKD box-drawing diagonal is a separator too: U+2571–U+2573, U+1FBA0–U+1FBAE,
@@ -783,7 +783,7 @@ public enum MCPRedaction {
             0x0D4E, 0x111C2, 0x111C3, 0x1193F, 0x11941, 0x11A3A, 0x11A84...0x11A89, 0x11D46, 0x11F02, 0x113D1,
             0x29B8, 0x233F, 0x2340, 0x2341, 0x2342, 0x2349, 0x244A,
             0x27C8, 0x27C9, 0x27CB, 0x27CC, 0x27CD, 0x292B, 0x292C, 0x292F, 0x2930, 0x29C4, 0x29C5, 0x2F03,
-            0x2571...0x2573, 0x2574...0x2612, 0xFFED, 0xFFEE, 0x2613, 0x2614, 0x2615, 0x2616, 0x2617, 0x26DD, 0x26DE, 0x2B59, 0x1F7A8...0x1F7AE, 0x1FBA0...0x1FBAE,
+            0x2571...0x2573, 0x2574...0x2612, 0xFFED, 0xFFEE, 0x2613, 0x2614, 0x2615, 0x2616, 0x2617, 0x2618, 0x26DD, 0x26DE, 0x2B59, 0x1F7A8...0x1F7AE, 0x1FBA0...0x1FBAE,
             0x1FBBD...0x1FBC0, 0x1FB3C...0x1FB67:
             return true
         default:
