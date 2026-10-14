@@ -365,11 +365,25 @@ public enum MCPRedaction {
         var index = rest.startIndex
         while let at = rest[index...].firstIndex(of: "@") {
             let before = rest[..<at]
-            if before.contains(":/") || before.hasSuffix(":") { return true }
+            if schemeSlashIgnoringLineBreaks(before) || before.hasSuffix(":") { return true }
             index = rest.index(after: at)
         }
         guard let slash = rest.firstIndex(of: "/") else { return false }
         return containsUserinfoSpelling(String(rest[slash...]))
+    }
+
+    /// `:/` with a tab, LF, or CR between the colon and the slash. U+0020 stays, so it still separates them.
+    private static func schemeSlashIgnoringLineBreaks(_ text: Substring) -> Bool {
+        var index = text.startIndex
+        while let colon = text[index...].firstIndex(of: ":") {
+            var next = text.index(after: colon)
+            while next < text.endIndex, text[next] == "\t" || text[next] == "\n" || text[next] == "\r" {
+                next = text.index(after: next)
+            }
+            if next < text.endIndex, text[next] == "/" { return true }
+            index = text.index(after: colon)
+        }
+        return false
     }
 
     /// The authority of a leading `http://`, `https://`, `wss://`, or `postgres://` is
@@ -561,8 +575,8 @@ public enum MCPRedaction {
         if pass.text != value || decoded != pass.text {
             if looksLikeToken(decoded) || containsEmbeddedPrefix(decoded) { return true }
         }
-        // Whitespace other than U+0020, and a format scalar the first strip keeps, join one `ghp_`.
-        // The prefix count stays 1. U+0020 stays, so `Bearer ` plus a token is still one secret reference.
+        // Whitespace other than U+0020, a format scalar, and a spacing mark whose NFKD contains U+0020
+        // join one `ghp_`. The prefix count stays 1. U+0020 stays, so `Bearer ` plus a token is still one secret reference.
         let joined = textJoiningHiddenBreaks(decoded)
         if joined != decoded, looksLikeToken(joined) || containsEmbeddedPrefix(joined) { return true }
         // The raw spelling keeps `%2F` inside the user. The revealed spelling is what `%%0040` becomes,
@@ -573,7 +587,8 @@ public enum MCPRedaction {
         return hidesAnotherSecret(decoded)
     }
 
-    /// Drop whitespace other than U+0020, plus a default-ignorable or format scalar the first strip keeps.
+    /// Drop whitespace other than U+0020, a default-ignorable or format scalar, and a spacing mark
+    /// whose NFKD contains U+0020 (U+00A8 and the other marks the prefix count already drops).
     /// `Bearer ` (U+0020) plus one token stays intact.
     private static func textJoiningHiddenBreaks(_ text: String) -> String {
         String(String.UnicodeScalarView(text.unicodeScalars.filter { scalar in
@@ -581,6 +596,7 @@ public enum MCPRedaction {
             if scalar.properties.isWhitespace { return false }
             if scalar.properties.isDefaultIgnorableCodePoint { return false }
             if scalar.properties.generalCategory == .format { return false }
+            if dropsForPrefixCount(scalar) { return false }
             return true
         }))
     }
@@ -603,7 +619,7 @@ public enum MCPRedaction {
     /// U+E002F. A self-NFKD box-drawing diagonal is a separator too: U+2571–U+2573, U+1FBA0–U+1FBAE,
     /// U+1FBBD–U+1FBBF, the block diagonals U+1FB3C–U+1FB67, and U+292B / U+292C. U+292F and U+2930
     /// are the diagonal crossings next to those. Saltires are separators too: U+1FBC0, U+2613, U+26DD,
-    /// U+2B59, and U+1F7A8–U+1F7AE. U+2213, U+2214, U+2217, U+2218, U+22C6, U+22C7, and U+27CC sit
+    /// U+26DE, U+2B59, and U+1F7A8–U+1F7AE. U+2213, U+2214, U+2217, U+2218, U+22C6, U+22C7, and U+27CC sit
     /// next to those listed operators and are separators as well.
     /// A default-ignorable scalar such as U+E0001 is a separator too, as is a format scalar
     /// the property does not mark, including U+FFF9–U+FFFB. U+0020 is not one.
@@ -622,7 +638,7 @@ public enum MCPRedaction {
             0x2212, 0x2213, 0x2214, 0x22C5, 0x22C6, 0x22C7, 0x2217, 0x2218, 0x2219, 0x02D7, 0xE002F,
             0x2298, 0x29B8, 0x233F, 0x2340, 0x2341, 0x2342, 0x2349, 0x244A,
             0x27C8, 0x27C9, 0x27CB, 0x27CC, 0x27CD, 0x292B, 0x292C, 0x292F, 0x2930, 0x29C4, 0x29C5, 0x2F03,
-            0x2571...0x2573, 0x2613, 0x26DD, 0x2B59, 0x1F7A8...0x1F7AE, 0x1FBA0...0x1FBAE,
+            0x2571...0x2573, 0x2613, 0x26DD, 0x26DE, 0x2B59, 0x1F7A8...0x1F7AE, 0x1FBA0...0x1FBAE,
             0x1FBBD...0x1FBC0, 0x1FB3C...0x1FB67:
             return true
         default:
