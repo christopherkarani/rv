@@ -139,6 +139,34 @@ public final class SecretGateway: @unchecked Sendable {
         return entries[token]
     }
 
+    /// A TCP stream socket that is close-on-exec before the caller uses it.
+    /// Linux passes `SOCK_CLOEXEC` to `socket`. Darwin does not define that
+    /// flag, so the descriptor that survives is the one `F_DUPFD_CLOEXEC`
+    /// creates, and the original is closed once. Stdio is not closed, and
+    /// `close` is not retried: on Linux the kernel may already have reused
+    /// the number.
+    private static func openStreamSocket() -> Int32 {
+        #if canImport(Darwin)
+        let raw = socket(AF_INET, SOCK_STREAM, 0)
+        guard raw >= 0 else { return -1 }
+        let moved = fcntl(raw, F_DUPFD_CLOEXEC, socketFloor)
+        let dupError = errno
+        if raw >= 3 {
+            _ = close(raw)
+        }
+        if moved < 0 {
+            errno = dupError
+        }
+        return moved
+        #else
+        return socket(
+            AF_INET,
+            Int32(SOCK_STREAM.rawValue) | Int32(SOCK_CLOEXEC.rawValue),
+            0
+        )
+        #endif
+    }
+
     public func start() -> Result<Int, EgressStartError> {
         lock.lock()
         if let boundPort {
@@ -148,15 +176,7 @@ public final class SecretGateway: @unchecked Sendable {
         let overlap = beforeListenerPublish
         lock.unlock()
         overlap?()
-        #if canImport(Darwin)
-        var fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0)
-        #else
-        var fd = socket(
-            AF_INET,
-            Int32(SOCK_STREAM.rawValue) | Int32(SOCK_CLOEXEC.rawValue),
-            0
-        )
-        #endif
+        var fd = Self.openStreamSocket()
         guard fd >= 0 else { return .failure(.socketFailed(errno: errno)) }
         // A listener that stays below the spawn floor occupies a number
         // relocate just closed. Move it up before bind.
@@ -259,15 +279,7 @@ public final class SecretGateway: @unchecked Sendable {
     /// The connect runs on a high fd: a non-blocking `EINPROGRESS` socket must
     /// not remain on a number below the spawn floor.
     private func wakeListeningPort(_ port: Int) {
-        #if canImport(Darwin)
-        var fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0)
-        #else
-        var fd = socket(
-            AF_INET,
-            Int32(SOCK_STREAM.rawValue) | Int32(SOCK_CLOEXEC.rawValue),
-            0
-        )
-        #endif
+        var fd = Self.openStreamSocket()
         guard fd >= 0 else { return }
         if relocateDescriptor(&fd, above: Self.socketFloor) == false {
             close(fd)

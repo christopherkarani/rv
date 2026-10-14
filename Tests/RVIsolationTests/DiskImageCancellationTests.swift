@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVDomain
 import Testing
 @testable import RVIsolation
 
@@ -1646,6 +1647,147 @@ struct DiskImageCancellationTests {
         #expect(DiskImageCancelBudget.returnBound == 8)
         #expect(DiskImageCancelBudget.detachCap == 5)
     }
+
+    /// A spent copy clock must not run these on the caller. `a044874d` still
+    /// chmod/rmdir/unlink/rename/open/fstat/fgetxattr/fsetxattr/realpath-fallback
+    /// here, so the file changes and the attribute lands. No sleep: allowance 0
+    /// does not start the syscall.
+    @Test func spentCopyClockDoesNotRunCallerVnodeCalls() throws {
+        #expect(DiskImageCancelBudget.returnBound == 8)
+        #expect(DiskImageCancelBudget.detachCap == 5)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-clock-vnode-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let target = root.appendingPathComponent("target", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let link = root.appendingPathComponent("link")
+        let linked = target.path.withCString { targetPath in
+            link.path.withCString { linkPath in
+                symlink(targetPath, linkPath)
+            }
+        }
+        #expect(linked == 0)
+        let workspace = try #require(WorkingDirectory(validating: link.path))
+        let resolvedWhileOpen = resolvedWorkspacePath(workspace)
+        #expect(resolvedWhileOpen != link.path)
+
+        let directory = root.appendingPathComponent("mode", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        #expect(diskImageChmodWithinCopyClock(directory.path, 0o755) == true)
+        let modeBefore = try #require(posixMode(directory.path))
+        #expect(modeBefore == 0o755)
+
+        let doomed = root.appendingPathComponent("doomed", isDirectory: true)
+        try FileManager.default.createDirectory(at: doomed, withIntermediateDirectories: true)
+        let kept = root.appendingPathComponent("kept")
+        try Data("stay".utf8).write(to: kept)
+        let originalURL = root.appendingPathComponent("original")
+        let backupURL = root.appendingPathComponent("backup")
+        try Data("old".utf8).write(to: originalURL)
+        try Data("new".utf8).write(to: backupURL)
+        let backup = try FileHandle(forReadingFrom: backupURL)
+        let sized = try FileHandle(forReadingFrom: originalURL)
+        defer {
+            try? backup.close()
+            try? sized.close()
+        }
+        let knownSize = descriptorSize(sized.fileDescriptor)
+        #expect(knownSize == 3)
+
+        let sourceURL = root.appendingPathComponent("xsrc")
+        let destURL = root.appendingPathComponent("xdst")
+        FileManager.default.createFile(atPath: sourceURL.path, contents: Data("src".utf8))
+        FileManager.default.createFile(atPath: destURL.path, contents: Data("dst".utf8))
+        let source = try FileHandle(forUpdating: sourceURL)
+        let destination = try FileHandle(forUpdating: destURL)
+        defer {
+            try? source.close()
+            try? destination.close()
+        }
+        let name = "user.rv-clock"
+        let value: [UInt8] = [9, 8, 7]
+        #expect(writeXattr(source.fileDescriptor, name, value))
+
+        try withSpentCopyClock {
+            let allowance = diskImageTreeSyscallAllowance(
+                deadline: CooperativeLaunchStop.cancelClock?.deadline
+            )
+            #expect(allowance == 0)
+            let stopped = resolvedWorkspacePath(workspace)
+            #expect(stopped == link.path)
+            #expect(stopped != resolvedWhileOpen)
+
+            #expect(diskImageChmodWithinCopyClock(directory.path, 0o700) == nil)
+            #expect(diskImageRmdirWithinCopyClock(doomed.path) == nil)
+            #expect(FileManager.default.fileExists(atPath: doomed.path))
+
+            unlinkTruncatedSaved(kept.path)
+            let keptBytes = try Data(contentsOf: kept)
+            #expect(keptBytes == Data("stay".utf8))
+
+            #expect(installBackupByRename(
+                backupURL,
+                over: originalURL.path,
+                backup: backup.fileDescriptor
+            ) == false)
+            let afterRename = try Data(contentsOf: originalURL)
+            #expect(afterRename == Data("old".utf8))
+            #expect(installBackupFile(
+                backupURL,
+                over: originalURL.path,
+                backup: backup.fileDescriptor,
+                mayContinue: { _ in true }
+            ) == .failed)
+            let afterOpen = try Data(contentsOf: originalURL)
+            #expect(afterOpen == Data("old".utf8))
+            #expect(FileManager.default.fileExists(atPath: originalURL.path + ".rv-restore") == false)
+
+            #expect(descriptorSize(sized.fileDescriptor) == nil)
+            #expect(copyOneXattrObservingClock(
+                from: source.fileDescriptor,
+                to: destination.fileDescriptor,
+                name: name,
+                chunkBytes: 64,
+                trace: XattrCopyTrace(),
+                mayContinue: { true }
+            ) == false)
+            #expect(readXattrWindow(
+                source.fileDescriptor,
+                name,
+                offset: 0,
+                length: value.count
+            ) == nil)
+            #expect(writeXattr(destination.fileDescriptor, name, value) == false)
+        }
+
+        #expect(posixMode(directory.path) == modeBefore)
+        #expect(FileManager.default.fileExists(atPath: doomed.path))
+        #expect(diskImageRmdirWithinCopyClock(doomed.path) == true)
+        #expect(FileManager.default.fileExists(atPath: doomed.path) == false)
+        #expect(diskImageChmodWithinCopyClock(directory.path, 0o700) == true)
+        #expect(posixMode(directory.path) == 0o700)
+        #expect(try Data(contentsOf: kept) == Data("stay".utf8))
+        #expect(try Data(contentsOf: originalURL) == Data("old".utf8))
+        #expect(readXattr(destination.fileDescriptor, name) == nil)
+        #expect(readXattr(source.fileDescriptor, name) == value)
+        #expect(descriptorSize(sized.fileDescriptor) == knownSize)
+    }
+}
+
+private func withSpentCopyClock(_ body: () throws -> Void) rethrows {
+    let flag = CooperativeLaunchStop.Flag()
+    flag.noteCancel(now: Date().addingTimeInterval(-100))
+    CooperativeLaunchStop.install(flag)
+    defer { CooperativeLaunchStop.uninstall() }
+    try body()
+}
+
+private func posixMode(_ path: String) -> mode_t? {
+    var status = stat()
+    guard path.withCString({ lstat($0, &status) == 0 }) else { return nil }
+    return status.st_mode & 0o777
 }
 
 private func assertXattrCopyStopsBeforeDetachReserve() throws {

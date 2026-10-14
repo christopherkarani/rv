@@ -1006,8 +1006,16 @@ func verifySeatbeltPlan(_ plan: IsolationPlan) -> Result<WorkingDirectory, Isola
 /// Prepare / spawn never use this fallback: an existing directory that
 /// `realpath` cannot resolve is `workspacePathUnresolvable`.
 func resolvedWorkspacePath(_ workspace: WorkingDirectory) -> String {
-    posixRealpath(workspace.rawValue)
-        ?? URL(fileURLWithPath: workspace.rawValue).resolvingSymlinksInPath().path
+    switch posixRealpathRead(workspace.rawValue) {
+    case .path(let resolved):
+        return resolved
+    case .stopped:
+        // A stopped `realpath` is not an unresolved compile fixture.
+        // `resolvingSymlinksInPath` would stat the path on this thread.
+        return workspace.rawValue
+    case .unresolved:
+        return URL(fileURLWithPath: workspace.rawValue).resolvingSymlinksInPath().path
+    }
 }
 
 func existingResolvedWorkspacePath(

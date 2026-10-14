@@ -270,8 +270,8 @@ enum WorkspaceVolumeDiffer {
         var leftBuffer = [UInt8](repeating: 0, count: 64 * 1024)
         var rightBuffer = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
-            let leftCount = readChunk(left, into: &leftBuffer)
-            let rightCount = readChunk(right, into: &rightBuffer)
+            guard let leftCount = readChunk(left, into: &leftBuffer) else { return .abort }
+            guard let rightCount = readChunk(right, into: &rightBuffer) else { return .abort }
             guard leftCount >= 0 else { return .discarded }
             guard rightCount >= 0 else { return .abort }
             guard leftCount == rightCount else { return .discarded }
@@ -410,14 +410,29 @@ enum WorkspaceVolumeDiffer {
         return .fd(box.fd)
     }
 
-    private static func readChunk(_ fd: Int32, into buffer: inout [UInt8]) -> Int {
-        buffer.withUnsafeMutableBytes { raw -> Int in
-            guard let base = raw.baseAddress else { return -1 }
-            while true {
-                let count = read(fd, base, raw.count)
-                if count < 0, errno == EINTR { continue }
-                return count
+    /// `nil` is the copy clock. A finished negative read stays negative so
+    /// the volume side can still discard and the saved side can still abort.
+    /// The clock is sampled only after `EINTR`, not as an argument to the
+    /// retry check: evaluating it early counts a byte check before the read.
+    private static func readChunk(_ fd: Int32, into buffer: inout [UInt8]) -> Int? {
+        while true {
+            guard let result = diskImageReadWithinCopyClock(fd, maxCount: buffer.count) else {
+                return nil
             }
+            if result.count < 0 {
+                if result.errnoValue == EINTR {
+                    if cancelClockAllowsTreeCopy() { continue }
+                    return nil
+                }
+                return result.count
+            }
+            let count = min(result.count, result.bytes.count, buffer.count)
+            if count > 0 {
+                for index in 0..<count {
+                    buffer[index] = result.bytes[index]
+                }
+            }
+            return count
         }
     }
 

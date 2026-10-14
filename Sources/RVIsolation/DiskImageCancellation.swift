@@ -948,6 +948,83 @@ func diskImageFtruncateWithinCopyClock(_ fd: Int32, _ length: off_t) -> Bool {
     return ok == true
 }
 
+/// `chmod` off the caller. `nil` is the copy clock: the mode is unchanged
+/// because the call did not start, or had not finished. `false` is a
+/// finished failure.
+func diskImageChmodWithinCopyClock(_ path: String, _ mode: mode_t) -> Bool? {
+    let target = path
+    return diskImagePerformWithinCopyClock {
+        target.withCString { chmod($0, mode) == 0 }
+    }
+}
+
+/// `rmdir` off the caller. `nil` means the directory is still there as far
+/// as this thread knows: the clock returned first.
+func diskImageRmdirWithinCopyClock(_ path: String) -> Bool? {
+    let target = path
+    return diskImagePerformWithinCopyClock {
+        target.withCString { rmdir($0) == 0 }
+    }
+}
+
+/// `unlink` off the caller. `nil` is not a missing file. A finished `false`
+/// is the syscall's own failure, including `ENOENT` after the call returned.
+func diskImageUnlinkWithinCopyClock(_ path: String) -> Bool? {
+    let target = path
+    return diskImagePerformWithinCopyClock {
+        target.withCString { unlink($0) == 0 }
+    }
+}
+
+/// `rename` off the caller. `nil` does not set `EXDEV`: a stopped rename is
+/// not a cross-device failure, and the caller must not start the other
+/// install path while this one is still inside the syscall. A finished
+/// failure copies the worker's `errno` back.
+func diskImageRenameWithinCopyClock(_ from: String, _ to: String) -> Bool? {
+    final class Box: @unchecked Sendable { var err: Int32 = 0 }
+    let box = Box()
+    let source = from
+    let destination = to
+    let ok = diskImagePerformWithinCopyClock {
+        let renamed = source.withCString { src in
+            destination.withCString { dst in
+                rename(src, dst) == 0
+            }
+        }
+        if renamed == false { box.err = errno }
+        return renamed
+    }
+    if ok == nil {
+        errno = EIO
+        return nil
+    }
+    if ok == false {
+        errno = box.err == 0 ? EIO : box.err
+        return false
+    }
+    return true
+}
+
+/// `stat` size off the caller. `nil` is a clock stop or a finished miss,
+/// not a zero-length file.
+func diskImageFileSizeWithinCopyClock(_ path: String) -> off_t? {
+    final class Box: @unchecked Sendable {
+        var size: off_t = 0
+        var found = false
+    }
+    let box = Box()
+    let target = path
+    let ok = diskImagePerformWithinCopyClock {
+        var status = stat()
+        let found = target.withCString { stat($0, &status) == 0 }
+        if found { box.size = status.st_size }
+        box.found = found
+        return true
+    }
+    guard ok == true, box.found else { return nil }
+    return box.size
+}
+
 /// An fd opened on a worker. A clock stop leaks it instead of closing a
 /// number `open` may not have stored yet, or may store after the caller left.
 private final class DiskImageOpenedFD: @unchecked Sendable {
@@ -1784,9 +1861,23 @@ enum BackupInstall: Equatable, Sendable {
 }
 
 func descriptorSize(_ fd: Int32) -> off_t? {
-    var status = stat()
-    guard fstat(fd, &status) == 0 else { return nil }
-    return status.st_size
+    final class Box: @unchecked Sendable {
+        var size: off_t = 0
+        var found = false
+    }
+    let box = Box()
+    let ok = diskImagePerformWithinCopyClock {
+        let copy = diskImageDuplicateDescriptor(fd)
+        guard copy >= 0 else { return false }
+        var status = stat()
+        let found = fstat(copy, &status) == 0
+        close(copy)
+        if found { box.size = status.st_size }
+        box.found = found
+        return true
+    }
+    guard ok == true, box.found else { return nil }
+    return box.size
 }
 
 func installBackupFile(
@@ -1818,34 +1909,28 @@ func installBackupFile(
 
 func installBackupByRename(_ backupURL: URL, over path: String, backup: Int32) -> Bool {
     let aside = path + ".rv-truncated"
-    let moved: Bool = path.withCString { original in
-        aside.withCString { asidePath in
-            unlink(asidePath)
-            return rename(original, asidePath) == 0
-        }
+    // A missing aside is a finished `ENOENT`. Only a clock stop skips the
+    // rename: the caller is not in `unlink`, and it must not `rename` a
+    // path that unlink may still be using.
+    guard diskImageUnlinkWithinCopyClock(aside) != nil else {
+        errno = EIO
+        return false
     }
-    guard moved else { return false }
-    let installed: Bool = backupURL.path.withCString { backupPath in
-        path.withCString { original in
-            rename(backupPath, original) == 0
-        }
-    }
-    guard installed else {
+    guard diskImageRenameWithinCopyClock(path, aside) == true else { return false }
+    let installed = diskImageRenameWithinCopyClock(backupURL.path, path)
+    guard installed == true else {
         let renameError = errno
-        _ = aside.withCString { asidePath in
-            path.withCString { original in
-                rename(asidePath, original)
-            }
+        // The install rename is still in the worker. Do not undo it here.
+        if installed == false {
+            _ = diskImageRenameWithinCopyClock(aside, path)
         }
         errno = renameError
         return false
     }
-    _ = aside.withCString { unlink($0) }
-    var restored = stat()
-    let stated = path.withCString { stat($0, &restored) == 0 }
-    guard stated else { return false }
+    _ = diskImageUnlinkWithinCopyClock(aside)
+    guard let restored = diskImageFileSizeWithinCopyClock(path) else { return false }
     guard let backupSize = descriptorSize(backup) else { return false }
-    return restored.st_size == backupSize
+    return restored == backupSize
 }
 
 /// `rename` from `temporaryDirectory` onto a saved tree on another volume
@@ -1859,14 +1944,21 @@ func installBackupAcrossDevices(
     mayContinue: (CopyClockPoint) -> Bool
 ) -> BackupInstall {
     let staging = path + ".rv-restore"
-    let staged = staging.withCString { open($0, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, mode_t(0o600)) }
+    // `nil` is the copy clock. The worker may still be inside `open`, so
+    // this thread does not unlink the staging name or the saved file.
+    guard let staged = diskImageOpenPathWithinCopyClock(
+        staging,
+        O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC,
+        mode_t(0o600)
+    ) else {
+        return .failed
+    }
     guard staged >= 0 else {
-        unlinkTruncatedSaved(path)
-        return .preservedBackup
+        return preserveTruncatedSaved(path)
     }
     defer {
         close(staged)
-        unlink(staging)
+        _ = diskImageUnlinkWithinCopyClock(staging)
     }
     _ = lseek(backup, 0, SEEK_SET)
     let copied = copyFileLeavingDetachReserve(
@@ -1879,21 +1971,23 @@ func installBackupAcrossDevices(
     let backupSize = descriptorSize(backup)
     let complete = copied && stagedSize == backupSize && stagedSize != nil
     guard complete else {
-        unlinkTruncatedSaved(path)
-        return .preservedBackup
+        return preserveTruncatedSaved(path)
     }
-    let replaced = staging.withCString { stage in
-        path.withCString { destination in
-            rename(stage, destination) == 0
-        }
-    }
-    if replaced { return .restored }
-    unlinkTruncatedSaved(path)
+    let replaced = diskImageRenameWithinCopyClock(staging, path)
+    if replaced == true { return .restored }
+    if replaced == nil { return .failed }
+    return preserveTruncatedSaved(path)
+}
+
+/// A finished unlink keeps the old result: failure is still `.preservedBackup`.
+/// A clock stop is not that outcome, because the truncated file is not gone.
+private func preserveTruncatedSaved(_ path: String) -> BackupInstall {
+    if diskImageUnlinkWithinCopyClock(path) == nil { return .failed }
     return .preservedBackup
 }
 
 func unlinkTruncatedSaved(_ path: String) {
-    _ = path.withCString { unlink($0) }
+    _ = diskImageUnlinkWithinCopyClock(path)
 }
 
 /// Records how large a single xattr get or set was. A user attribute is
@@ -1974,7 +2068,13 @@ func copyOneXattrObservingClock(
     trace: XattrCopyTrace,
     mayContinue: () -> Bool
 ) -> Bool {
-    let needed = name.withCString { xattrValueSize(source, $0) }
+    let needed: Int
+    switch xattrByteCountWithinCopyClock(source, name) {
+    case .stopped:
+        return false
+    case .bytes(let count):
+        needed = count
+    }
     guard needed >= 0 else { return false }
     if needed == 0 { return mayContinue() }
     let step = max(1, chunkBytes)
@@ -2014,16 +2114,36 @@ func xattrSetKeepsDetachReserve(mayContinue: () -> Bool) -> Bool {
 /// position argument is not used for names other than the resource fork.
 func readXattrWindow(_ fd: Int32, _ name: String, offset: Int, length: Int) -> [UInt8]? {
     if offset != 0 || length <= 0 { return nil }
-    let needed = name.withCString { xattrValueSize(fd, $0) }
-    if needed < 0 || needed > length { return nil }
-    var buffer = [UInt8](repeating: 0, count: length)
-    let got = buffer.withUnsafeMutableBytes { raw in
-        name.withCString { item in
-            xattrValue(fd, item, raw.baseAddress, length)
+    final class Box: @unchecked Sendable { var bytes: [UInt8]? }
+    let box = Box()
+    let label = name
+    let limit = length
+    let ok = diskImagePerformWithinCopyClock {
+        let copy = diskImageDuplicateDescriptor(fd)
+        guard copy >= 0 else { return false }
+        let needed = label.withCString { xattrValueSize(copy, $0) }
+        if needed < 0 || needed > limit {
+            close(copy)
+            return false
         }
+        if needed == 0 {
+            close(copy)
+            box.bytes = []
+            return true
+        }
+        var buffer = [UInt8](repeating: 0, count: limit)
+        let got = buffer.withUnsafeMutableBytes { raw in
+            label.withCString { item in
+                xattrValue(copy, item, raw.baseAddress, limit)
+            }
+        }
+        close(copy)
+        guard got == needed, got >= 0 else { return false }
+        box.bytes = Array(buffer.prefix(got))
+        return true
     }
-    guard got == needed, got >= 0 else { return nil }
-    return Array(buffer.prefix(got))
+    guard ok == true else { return nil }
+    return box.bytes
 }
 
 /// Walk `byteCount` in chunks. Each chunk checks the clock before it counts.
@@ -2090,25 +2210,75 @@ func listXattrNames(_ fd: Int32) -> [String]? {
 }
 
 func readXattr(_ fd: Int32, _ name: String) -> [UInt8]? {
-    let needed = name.withCString { xattrValueSize(fd, $0) }
-    guard needed >= 0 else { return nil }
-    if needed == 0 { return [] }
-    var buffer = [UInt8](repeating: 0, count: needed)
-    let read = buffer.withUnsafeMutableBytes { raw in
-        name.withCString { item in
-            xattrValue(fd, item, raw.baseAddress, needed)
+    final class Box: @unchecked Sendable { var bytes: [UInt8]? }
+    let box = Box()
+    let label = name
+    let ok = diskImagePerformWithinCopyClock {
+        let copy = diskImageDuplicateDescriptor(fd)
+        guard copy >= 0 else { return false }
+        let needed = label.withCString { xattrValueSize(copy, $0) }
+        if needed < 0 {
+            close(copy)
+            return false
         }
+        if needed == 0 {
+            close(copy)
+            box.bytes = []
+            return true
+        }
+        var buffer = [UInt8](repeating: 0, count: needed)
+        let read = buffer.withUnsafeMutableBytes { raw in
+            label.withCString { item in
+                xattrValue(copy, item, raw.baseAddress, needed)
+            }
+        }
+        close(copy)
+        guard read == needed else { return false }
+        box.bytes = buffer
+        return true
     }
-    guard read == needed else { return nil }
-    return buffer
+    guard ok == true else { return nil }
+    return box.bytes
 }
 
 func writeXattr(_ fd: Int32, _ name: String, _ value: [UInt8]) -> Bool {
-    value.withUnsafeBytes { raw in
-        name.withCString { item in
-            xattrWrite(fd, item, raw.baseAddress, value.count) == 0
+    let label = name
+    let payload = value
+    let ok = diskImagePerformWithinCopyClock {
+        let copy = diskImageDuplicateDescriptor(fd)
+        guard copy >= 0 else { return false }
+        let wrote = payload.withUnsafeBytes { raw in
+            label.withCString { item in
+                xattrWrite(copy, item, raw.baseAddress, payload.count) == 0
+            }
         }
+        close(copy)
+        return wrote
     }
+    return ok == true
+}
+
+/// Size of one attribute. The name bytes live in the worker. `.stopped` is
+/// not "no such attribute": a finished `fgetxattr` of `-1` is `.bytes(-1)`.
+private enum ClockedXattrSize {
+    case bytes(Int)
+    case stopped
+}
+
+private func xattrByteCountWithinCopyClock(_ fd: Int32, _ name: String) -> ClockedXattrSize {
+    final class Box: @unchecked Sendable { var count = -1 }
+    let box = Box()
+    let label = name
+    let ok = diskImagePerformWithinCopyClock {
+        let copy = diskImageDuplicateDescriptor(fd)
+        guard copy >= 0 else { return false }
+        box.count = label.withCString { xattrValueSize(copy, $0) }
+        close(copy)
+        return true
+    }
+    if ok == nil { return .stopped }
+    guard ok == true else { return .bytes(-1) }
+    return .bytes(box.count)
 }
 
 #if canImport(Darwin)
@@ -2141,7 +2311,9 @@ func copyResourceForkObservingClock(
         mayContinue: { _ in mayContinue() },
         copyXattr: { _, _ in true }
     )
-    trace.noteFork(Int(descriptorSize(dst) ?? 0))
+    if let size = descriptorSize(dst) {
+        trace.noteFork(Int(size))
+    }
     return copied
 }
 

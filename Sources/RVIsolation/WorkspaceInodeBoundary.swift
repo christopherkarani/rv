@@ -180,8 +180,7 @@ final class WorkspaceInodeBoundary: Sendable {
     func remainsEstablished() -> Bool {
         let fd = mutable.withLock { $0.volumeFD }
         guard fd >= 0 else { return false }
-        var status = stat()
-        guard fstat(fd, &status) == 0 else { return false }
+        guard let status = fstatWithinCopyClock(fd) else { return false }
         return device(of: status) == volumeDevice
     }
 
@@ -532,7 +531,10 @@ final class WorkspaceInodeBoundary: Sendable {
         // umount can succeed while `hdiutil detach` fails or is skipped.
         // The image path is what a later detach still needs.
         if let imagePath, diskImageMayRemoveImage(detachSucceeded: detached) {
-            unlink(imagePath)
+            // A stopped unlink is not the image being gone.
+            if diskImageUnlinkWithinCopyClock(imagePath) == nil {
+                return .failure(.workspaceInodeBoundaryFailed)
+            }
         }
         return .success(())
     }
@@ -1001,19 +1003,23 @@ final class WorkspaceInodeBoundary: Sendable {
         else {
             return .success(())
         }
-        var status = stat()
-        let exists = imagePath.withCString { lstat($0, &status) == 0 }
-        if exists == false { return .success(()) }
-        guard device(of: status) == imageDevice,
-            UInt64(status.st_ino) == imageInode,
-            (status.st_mode & S_IFMT) == S_IFREG
-        else {
+        switch diskImageObservePath(imagePath) {
+        case .stopped:
+            return .failure(.workspaceInodeBoundaryFailed)
+        case .missing:
+            return .success(())
+        case .value(let snapshot):
+            guard snapshot.device == imageDevice,
+                snapshot.inode == imageInode,
+                (snapshot.mode & S_IFMT) == S_IFREG
+            else {
+                return .success(())
+            }
+            guard diskImageUnlinkWithinCopyClock(imagePath) == true else {
+                return .failure(.workspaceInodeBoundaryFailed)
+            }
             return .success(())
         }
-        guard imagePath.withCString({ unlink($0) == 0 }) else {
-            return .failure(.workspaceInodeBoundaryFailed)
-        }
-        return .success(())
     }
 }
 
@@ -1058,21 +1064,30 @@ func establishWorkspaceInodeBoundary(
     let mounted: MountedDisk
     switch createMountedDisk(byteCount: byteCount, mountPoint: workspacePath, token: String(token)) {
     case .failure(let error):
-        rmdir(workspacePath)
-        _ = renamePath(savedPath, workspacePath)
+        if diskImageRmdirWithinCopyClock(workspacePath) != nil {
+            _ = renamePath(savedPath, workspacePath)
+        }
         return .failure(error)
     case .success(let disk):
         mounted = disk
     }
-    _ = workspacePath.withCString { chmod($0, 0o700) }
+    func failMounted(saved: Int32 = -1, volume: Int32 = -1) -> Result<WorkspaceInodeBoundary, IsolationApplyError> {
+        if saved >= 0 { close(saved) }
+        if volume >= 0 { close(volume) }
+        let detached = detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
+        if diskImageRmdirWithinCopyClock(workspacePath) != nil {
+            _ = renamePath(savedPath, workspacePath)
+        }
+        unlinkImageIfDetached(mounted.imagePath, detachSucceeded: detached)
+        return .failure(.workspaceInodeBoundaryFailed)
+    }
+    if diskImageChmodWithinCopyClock(workspacePath, 0o700) != true {
+        return failMounted()
+    }
     guard case let .device(volumeDevice) = observedDevice(workspacePath),
         volumeDevice != originalDevice
     else {
-        let detached = detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
-        rmdir(workspacePath)
-        _ = renamePath(savedPath, workspacePath)
-        unlinkImageIfDetached(mounted.imagePath, detachSucceeded: detached)
-        return .failure(.workspaceInodeBoundaryFailed)
+        return failMounted()
     }
     let savedFD = savedPath.withCString { path in
         open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
@@ -1081,61 +1096,25 @@ func establishWorkspaceInodeBoundary(
         open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
     }
     guard savedFD >= 0, volumeFD >= 0 else {
-        if savedFD >= 0 { close(savedFD) }
-        if volumeFD >= 0 { close(volumeFD) }
-        let detached = detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
-        rmdir(workspacePath)
-        _ = renamePath(savedPath, workspacePath)
-        unlinkImageIfDetached(mounted.imagePath, detachSucceeded: detached)
-        return .failure(.workspaceInodeBoundaryFailed)
+        return failMounted(saved: savedFD, volume: volumeFD)
     }
     var savedStatus = stat()
     guard fstat(savedFD, &savedStatus) == 0, device(of: savedStatus) == originalDevice else {
-        close(savedFD)
-        close(volumeFD)
-        let detached = detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
-        rmdir(workspacePath)
-        _ = renamePath(savedPath, workspacePath)
-        unlinkImageIfDetached(mounted.imagePath, detachSucceeded: detached)
-        return .failure(.workspaceInodeBoundaryFailed)
+        return failMounted(saved: savedFD, volume: volumeFD)
     }
     if copyTree(from: savedFD, to: volumeFD, expectDevice: originalDevice) == false {
-        close(savedFD)
-        close(volumeFD)
-        let detached = detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
-        rmdir(workspacePath)
-        _ = renamePath(savedPath, workspacePath)
-        unlinkImageIfDetached(mounted.imagePath, detachSucceeded: detached)
-        return .failure(.workspaceInodeBoundaryFailed)
+        return failMounted(saved: savedFD, volume: volumeFD)
     }
     var volumeStatus = stat()
     guard fstat(volumeFD, &volumeStatus) == 0, device(of: volumeStatus) == volumeDevice else {
-        close(savedFD)
-        close(volumeFD)
-        let detached = detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
-        rmdir(workspacePath)
-        _ = renamePath(savedPath, workspacePath)
-        unlinkImageIfDetached(mounted.imagePath, detachSucceeded: detached)
-        return .failure(.workspaceInodeBoundaryFailed)
+        return failMounted(saved: savedFD, volume: volumeFD)
     }
     guard let mountSource = workspaceMountSource(workspacePath), mountSource.isEmpty == false else {
-        close(savedFD)
-        close(volumeFD)
-        let detached = detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
-        rmdir(workspacePath)
-        _ = renamePath(savedPath, workspacePath)
-        unlinkImageIfDetached(mounted.imagePath, detachSucceeded: detached)
-        return .failure(.workspaceInodeBoundaryFailed)
+        return failMounted(saved: savedFD, volume: volumeFD)
     }
     let imageIdentity = mounted.imagePath.flatMap(workspacePathIdentity)
     if mounted.imagePath != nil, imageIdentity?.isDirectory != false {
-        close(savedFD)
-        close(volumeFD)
-        let detached = detachWorkspaceDisk(mounted.disk, mountPoint: workspacePath)
-        rmdir(workspacePath)
-        _ = renamePath(savedPath, workspacePath)
-        unlinkImageIfDetached(mounted.imagePath, detachSucceeded: detached)
-        return .failure(.workspaceInodeBoundaryFailed)
+        return failMounted(saved: savedFD, volume: volumeFD)
     }
     let boundary = WorkspaceInodeBoundary(
         workspacePath: workspacePath,
@@ -1195,7 +1174,9 @@ private func createMountedDisk(
     // Process exit plus a detach that exited 0 is not enough. Unlink only
     // when that attempt already proved the disk cannot appear.
     if diskImageMayRemoveImage(detachSucceeded: first.detachSucceeded) {
-        unlink(image)
+        if diskImageUnlinkWithinCopyClock(image) == nil {
+            return .failure(.workspaceInodeBoundaryFailed)
+        }
     }
     return createMountedDiskBody(byteCount: byteCount, mountPoint: mountPoint, token: token).result
 }
@@ -1244,7 +1225,9 @@ private func createMountedDiskBody(
         // A timed-out create may still be in diskimagesd. Unlink only
         // when that helper has already exited.
         if created.timedOut == false {
-            unlink(image)
+            if diskImageUnlinkWithinCopyClock(image) == nil {
+                timedOut = true
+            }
         }
         return finish(.failure(.workspaceInodeBoundaryFailed))
     }
@@ -1309,7 +1292,10 @@ private func createMountedDiskBody(
                 diskCanStillAppear: canAppear
             )
             if diskImageMayRemoveImage(detachSucceeded: detachSucceeded) {
-                unlink(image)
+                if diskImageUnlinkWithinCopyClock(image) == nil {
+                    detachSucceeded = false
+                    timedOut = true
+                }
             } else {
                 timedOut = true
             }
@@ -2260,7 +2246,7 @@ private func detachWorkspaceDisk(_ disk: String, mountPoint: String?) -> Bool {
 
 private func unlinkImageIfDetached(_ image: String?, detachSucceeded: Bool) {
     guard let image, diskImageMayRemoveImage(detachSucceeded: detachSucceeded) else { return }
-    unlink(image)
+    _ = diskImageUnlinkWithinCopyClock(image)
 }
 
 /// File-level so `detachWorkspaceDisk` uses the same 0.5s force slice
@@ -2663,7 +2649,15 @@ private func applyPreemptCleanup(
                 waitedForPublication: waitedForPublication
             )
         }
-        unlink(path)
+        guard diskImageUnlinkWithinCopyClock(path) != nil else {
+            return PreemptCleanupOutcome(
+                succeeded: false,
+                targetWasAbsent: false,
+                busy: false,
+                diskCanStillAppear: true,
+                waitedForPublication: waitedForPublication
+            )
+        }
         return PreemptCleanupOutcome(
             succeeded: true,
             targetWasAbsent: false,
