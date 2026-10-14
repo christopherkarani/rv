@@ -143,6 +143,11 @@ public struct MCPRemoteServer: Sendable, Equatable {
         if MCPRedaction.pathCarriesSecret(components.percentEncodedPath) {
             return "must not carry a secret in its path (send it as a header with ${secret:NAME})"
         }
+        if components.user == nil, components.password == nil,
+            MCPRedaction.containsUserinfoSpelling(url.absoluteString)
+        {
+            return "must not carry a secret in its path (send it as a header with ${secret:NAME})"
+        }
         return nil
     }
 

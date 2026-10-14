@@ -72,6 +72,10 @@ public enum MCPImport {
                 plan.skipped.append((entry.name, "an argument carries a secret in its URL or path"))
                 continue
             }
+            if entry.environment.values.contains(where: MCPRedaction.credentialHidesAnotherSecret) {
+                plan.skipped.append((entry.name, "an environment value carries a second secret"))
+                continue
+            }
             var definition = MCPServerDefinition(name: entry.name, description: description, command: command)
             if allowTools { definition.tools.defaultDecision = .allow }
             let credentials = Set(MCPRedaction.literalCredentials(entry.environment))
@@ -114,6 +118,9 @@ public enum MCPImport {
         guard entry.headers.count <= MCPRemoteServer.maximumHeaders else {
             return .failure(Skip(reason: "more than \(MCPRemoteServer.maximumHeaders) headers"))
         }
+        for value in entry.headers.values where MCPRedaction.credentialHidesAnotherSecret(headerCredential(value)) {
+            return .failure(Skip(reason: "a header value carries a second secret"))
+        }
         var remote = MCPRemoteServer(url: url, transport: entry.remoteTransport ?? .http)
         for (header, value) in entry.headers.sorted(by: { $0.key < $1.key }) {
             if MCPConfigurationDecoding.isHeaderName(header) == false
@@ -144,6 +151,12 @@ public enum MCPImport {
             remote.headers[header] = scheme + "${secret:\(name)}"
         }
         return .success(remote)
+    }
+
+    /// `Bearer <token>` keeps the scheme in the stored header and checks the token.
+    private static func headerCredential(_ value: String) -> String {
+        guard let space = value.firstIndex(of: " "), value[..<space].allSatisfy(\.isLetter) else { return value }
+        return value[value.index(after: space)...].trimmingCharacters(in: .whitespaces)
     }
 
     /// Credential flag values and bare tokens become `${secret:NAME}`.

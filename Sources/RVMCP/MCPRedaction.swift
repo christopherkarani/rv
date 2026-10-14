@@ -63,7 +63,9 @@ public enum MCPRedaction {
     }
 
     /// A known prefix such as `ghp_` or `sk-` counts even when `_`, `+`, or `-` hides it.
+    /// Zero-width characters are removed first so they cannot split `ghp_`.
     private static func containsEmbeddedPrefix(_ text: String) -> Bool {
+        let text = withoutInvisibleBreaks(text)
         for prefix in tokenPrefixes {
             var search = text.startIndex
             while let range = text.range(of: prefix, range: search..<text.endIndex) {
@@ -72,6 +74,16 @@ public enum MCPRedaction {
             }
         }
         return false
+    }
+
+    /// Strip by scalar. `U+200C` and `U+200D` glue to the neighboring letter, so a `Character` filter would keep them.
+    private static func withoutInvisibleBreaks(_ text: String) -> String {
+        String(String.UnicodeScalarView(text.unicodeScalars.filter { scalar in
+            switch scalar.value {
+            case 0x200B, 0x200C, 0x200D, 0xFEFF, 0x2060: return false
+            default: return true
+            }
+        }))
     }
 
     /// Percent-decode to a fixed point. A dangling `%` does not stop the other
@@ -167,30 +179,29 @@ public enum MCPRedaction {
         for piece in decoded.text.split(whereSeparator: isMaterialSeparator) {
             guard let at = piece.firstIndex(of: "@"), at > piece.startIndex else { continue }
             let userinfo = piece[..<at]
-            guard let colon = userinfo.firstIndex(of: ":"), userinfo.index(after: colon) < at else { continue }
+            guard let colon = userinfo.firstIndex(of: ":"), colon < at else { continue }
             return true
         }
         return false
     }
 
+    /// `http`, `https`, `wss`, and `postgres` followed by `://`. `user://` is not one of these.
+    private static let authoritySchemes: Set<String> = ["http", "https", "wss", "postgres"]
+
     /// `:password@host` and `user:password@host`. The password may contain `&`,
-    /// `#`, `?`, a space, or a slash (`%2F` / `%5C`, including a password that
-    /// starts with `/`). `scheme://` is the colon after a name, not this form.
+    /// `#`, `?`, a space, a slash, or start with `@`. Two slashes are userinfo
+    /// unless the name is `http`, `https`, `wss`, or `postgres`.
     private static func colonThenAt(_ decoded: String) -> Bool {
         var index = decoded.startIndex
         while index < decoded.endIndex {
             if decoded[index] == ":" {
-                let atStart = index == decoded.startIndex
-                let afterSlash = index > decoded.startIndex && decoded[decoded.index(before: index)] == "/"
-                let afterUser = usernameEnds(decoded, at: index)
-                if atStart || afterSlash || afterUser {
-                    let after = decoded.index(after: index)
-                    if after < decoded.endIndex {
-                        // `http://` is two slashes. `user:/password@` is one slash and is userinfo.
-                        let slash = decoded.index(after: after)
-                        let scheme = decoded[after] == "/" && slash < decoded.endIndex && decoded[slash] == "/"
-                            && afterUser && atStart == false && afterSlash == false
-                        if scheme == false, let at = decoded[after...].firstIndex(of: "@"), at > after {
+                if knownSchemeSlash(decoded, colon: index) == false {
+                    let atStart = index == decoded.startIndex
+                    let afterSlash = index > decoded.startIndex && decoded[decoded.index(before: index)] == "/"
+                    let afterUser = usernameEnds(decoded, at: index)
+                    if atStart || afterSlash || afterUser {
+                        let after = decoded.index(after: index)
+                        if after < decoded.endIndex, let at = decoded[after...].firstIndex(of: "@"), at >= after {
                             return true
                         }
                     }
@@ -199,6 +210,21 @@ public enum MCPRedaction {
             index = decoded.index(after: index)
         }
         return false
+    }
+
+    /// `https://` at this colon. `user://` and a second slash that came from `%2F` or `\` are not.
+    private static func knownSchemeSlash(_ text: String, colon: String.Index) -> Bool {
+        let after = text.index(after: colon)
+        guard after < text.endIndex, text[after] == "/" else { return false }
+        let second = text.index(after: after)
+        guard second < text.endIndex, text[second] == "/" else { return false }
+        var start = colon
+        while start > text.startIndex {
+            let previous = text.index(before: start)
+            if text[previous].isLetter { start = previous } else { break }
+        }
+        guard start < colon else { return false }
+        return authoritySchemes.contains(text[start..<colon].lowercased())
     }
 
     private static func usernameEnds(_ text: String, at colon: String.Index) -> Bool {
@@ -271,17 +297,21 @@ public enum MCPRedaction {
         return false
     }
 
-    /// Path userinfo is refused. Authority userinfo on a real `scheme://` stays visible.
-    /// `user:pass@host://x` and `http://127.0.0.1/:pass@other` are not that form.
+    /// Path userinfo is refused. A plain `postgres://user:password@host` stays visible.
+    /// `user://`, a password that starts with `/` or `@`, and path userinfo do not.
     private static func argumentUserinfoIsRefused(_ decoded: String) -> Bool {
         guard containsUserinfoSpelling(decoded) else { return false }
         guard let restStart = schemeAuthorityStart(decoded) else { return true }
         let rest = decoded[restStart...]
+        if let at = rest.firstIndex(of: "@") {
+            let before = rest[..<at]
+            if before.contains(":/") || before.hasSuffix(":") { return true }
+        }
         guard let slash = rest.firstIndex(of: "/") else { return false }
         return containsUserinfoSpelling(String(rest[slash...]))
     }
 
-    /// Index just after `scheme://` when the scheme starts the value, or the value after `=`.
+    /// Index just after `http://`, `https://`, `wss://`, or `postgres://`.
     private static func schemeAuthorityStart(_ decoded: String) -> String.Index? {
         var start = decoded.startIndex
         if decoded.hasPrefix("-"), let equals = decoded.firstIndex(of: "=") {
@@ -289,9 +319,17 @@ public enum MCPRedaction {
         }
         guard let range = decoded[start...].range(of: "://") else { return nil }
         let scheme = decoded[start..<range.lowerBound]
-        guard let first = scheme.first, first.isLetter else { return nil }
-        guard scheme.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "+" || $0 == "-" || $0 == "." }) else { return nil }
+        guard authoritySchemes.contains(scheme.lowercased()) else { return nil }
         return range.upperBound
+    }
+
+    /// An env or header value that would be stored, but hides a second token prefix.
+    static func credentialHidesAnotherSecret(_ value: String) -> Bool {
+        let pass = percentDecode(value)
+        let decoded = withoutInvisibleBreaks(pass.text)
+        guard looksLikeToken(decoded) else { return false }
+        if pass.stoppedEarly { return true }
+        return hidesAnotherSecret(decoded)
     }
 
     /// True when a token-shaped value also carries a path, fragment, userinfo, or a second token.

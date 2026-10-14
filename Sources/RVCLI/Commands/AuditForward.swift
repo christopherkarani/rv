@@ -76,6 +76,10 @@ enum AuditForwardRun {
         {
             return .failure("--to must not carry a secret in its query")
         }
+        // `user:/su?password@host` is split into a path and a query before those checks.
+        if components.user == nil, components.password == nil, MCPRedaction.containsUserinfoSpelling(text) {
+            return .failure("--to must not carry a secret in its path")
+        }
         if scheme == "https" { return .success(url) }
         if scheme == "http", ["127.0.0.1", "localhost", "::1", "[::1]"].contains(host) { return .success(url) }
         return .failure("audit forwarding needs https (plain http is allowed only to localhost)")

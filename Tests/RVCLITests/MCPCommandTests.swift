@@ -619,6 +619,31 @@ struct MCPCommandTests {
             #"["ctx7sk-12345678%\#(token)"]"#,
             #"["ctx7sk-12345678＿\#(token)"]"#,
             #"["ctx7sk-12345678_xghp_12345678"]"#,
+            #"["user://\#(password)@collector.example"]"#,
+            #"["user:\/\#(password)@collector.example"]"#,
+            #"["user:/\\\#(password)@collector.example"]"#,
+            #"["user:%2F%2F\#(password)@collector.example"]"#,
+            #"["user:%5C%5C\#(password)@collector.example"]"#,
+            #"["user:%2F%5C\#(password)@collector.example"]"#,
+            #"["user:%5C%2F\#(password)@collector.example"]"#,
+            #"["user:/%2F\#(password)@collector.example"]"#,
+            #"["user:/%5C\#(password)@collector.example"]"#,
+            #"["wss://example.com/user://\#(password)@collector.example"]"#,
+            #"["postgres://db.example/user://\#(password)@collector.example"]"#,
+            #"["postgres://user://\#(password)@db.example/app"]"#,
+            #"["wss://example.com/user:/%2F\#(password)@collector.example"]"#,
+            #"["postgres://db.example/user:/%2F\#(password)@collector.example"]"#,
+            #"["user:@\#(password)@collector.example"]"#,
+            #"["wss://example.com/user:@\#(password)@collector.example"]"#,
+            #"["postgres://db.example/user:@\#(password)@collector.example"]"#,
+            #"["ctx7sk-12345678g\#("\u{200B}")hp_12345678"]"#,
+            #"["sk-12345678g\#("\u{200B}")hp_12345678"]"#,
+            #"["--api-key","ctx7sk-12345678g\#("\u{200B}")hp_12345678"]"#,
+            #"["ctx7sk-12345678g\#("\u{200C}")hp_12345678"]"#,
+            #"["ctx7sk-12345678g\#("\u{200D}")hp_12345678"]"#,
+            #"["ctx7sk-12345678g\#("\u{FEFF}")hp_12345678"]"#,
+            #"["ctx7sk-12345678g\#("\u{2060}")hp_12345678"]"#,
+            #"["ctx7sk-12345678g%E2%80%8Bhp_12345678"]"#,
         ]
         for args in hidden {
             let home = Fixture()
@@ -676,6 +701,92 @@ struct MCPCommandTests {
         #expect(rawSlashResult.contains(password) == false)
         #expect(FileManager.default.fileExists(atPath: rawSlashCommand.config.appendingPathComponent("mcp.json").path) == false)
         #expect(rawSlashCommand.keychain.items.withLock { $0 }.isEmpty)
+
+        let doubleSlashCommand = Fixture()
+        try doubleSlashCommand.write(
+            ".cursor/mcp.json",
+            #"{"mcpServers":{"db":{"command":"https://mcp.example/sse?next=user://su&\#(password)@collector.example"}}}"#)
+        let doubleSlashResult = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: doubleSlashCommand.environment(presence: Self.present), show: { _ in }
+        ).get()
+        #expect(doubleSlashResult.contains("nothing to import"))
+        #expect(doubleSlashResult.contains(password) == false)
+        #expect(doubleSlashResult.contains("${secret:") == false)
+        #expect(doubleSlashCommand.keychain.items.withLock { $0 }.isEmpty)
+
+        let encodedSlashCommand = Fixture()
+        try encodedSlashCommand.write(
+            ".cursor/mcp.json",
+            #"{"mcpServers":{"db":{"command":"https://mcp.example/sse?next=user:/%2Fsu&\#(password)@collector.example"}}}"#)
+        let encodedSlashResult = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: encodedSlashCommand.environment(presence: Self.present), show: { _ in }
+        ).get()
+        #expect(encodedSlashResult.contains("nothing to import"))
+        #expect(encodedSlashResult.contains(password) == false)
+        #expect(encodedSlashCommand.keychain.items.withLock { $0 }.isEmpty)
+    }
+
+    @Test func importRefusesASecondPrefixInEnvAndHeaders() async throws {
+        let token = "ghp_1234567890abcdefghij"
+        let envValues = [
+            "ctx7sk-12345678^\(token)",
+            "ctx7sk-12345678!\(token)",
+            "ctx7sk-12345678%\(token)",
+            "ctx7sk-12345678＿\(token)",
+            "ctx7sk-12345678_xghp_12345678",
+        ]
+        for value in envValues {
+            for variable in ["GITHUB_TOKEN", "LOG_LEVEL"] {
+                let home = Fixture()
+                let encoded = value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+                try home.write(
+                    ".cursor/mcp.json",
+                    #"{"mcpServers":{"db":{"command":"db-mcp","env":{"\#(variable)":"\#(encoded)"}}}}"#)
+                let review = Mutex("")
+                let result = try await MCPRun.importServers(
+                    host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+                    environment: home.environment(presence: Self.present),
+                    show: { text in review.withLock { $0 += text } }
+                ).get()
+                let text = review.withLock { $0 } + result
+                #expect(text.contains(token) == false, "\(variable)")
+                #expect(text.contains("ghp_") == false, "\(variable)")
+                #expect(text.contains("${secret:") == false, "\(variable) \(text)")
+                #expect(result.contains("nothing to import"), "\(variable)")
+                #expect(home.keychain.items.withLock { $0 }.isEmpty)
+            }
+        }
+
+        let bearer = Fixture()
+        try bearer.write(
+            ".cursor/mcp.json",
+            #"{"mcpServers":{"api":{"url":"https://mcp.example/mcp","headers":{"Authorization":"Bearer ctx7sk-12345678^\#(token)"}}}}"#)
+        let bearerReview = Mutex("")
+        let bearerResult = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: bearer.environment(presence: Self.present),
+            show: { text in bearerReview.withLock { $0 += text } }
+        ).get()
+        let bearerText = bearerReview.withLock { $0 } + bearerResult
+        #expect(bearerText.contains(token) == false)
+        #expect(bearerText.contains("${secret:") == false, "\(bearerText)")
+        #expect(bearerResult.contains("nothing to import"))
+        #expect(bearer.keychain.items.withLock { $0 }.isEmpty)
+
+        let apiKey = Fixture()
+        try apiKey.write(
+            ".cursor/mcp.json",
+            #"{"mcpServers":{"api":{"url":"https://mcp.example/mcp","headers":{"X-API-Key":"sk-12345678^\#(token)"}}}}"#)
+        let apiResult = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: apiKey.environment(presence: Self.present), show: { _ in }
+        ).get()
+        #expect(apiResult.contains(token) == false)
+        #expect(apiResult.contains("${secret:") == false)
+        #expect(apiResult.contains("nothing to import"))
+        #expect(apiKey.keychain.items.withLock { $0 }.isEmpty)
     }
 
     static let present = UserPresence { _, _ in .confirmed(method: "test") }
