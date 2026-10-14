@@ -1024,6 +1024,23 @@ struct MCPCommandTests {
             "https://\(password)%2F@collector\u{3002}example/hook",
             "https://%3A\(password)@collector.example/hook",
             "https://:\(password)@collector.example/hook",
+            "https://\\\(password)@collector.example/hook",
+            "wss://\\\(password)@collector.example/hook",
+            "https://\\\(password)@localhost/hook",
+            "postgres://\\\(password)@db/app",
+            "https://\(password)\\x@collector.example/hook",
+            "https://\(password)\\\\@collector.example/hook",
+            "postgres://\(password)\\x@db.example/app",
+            "postgres://\(password)\\\\@collector.example/hook",
+            "wss://\(password)\\x@collector.example/hook",
+            "https://\(password)\\@localhost/hook",
+            "https://\(password)\\@db/hook",
+            "https://\(password)\\@[::1]/hook",
+            "https://\(password)\\@collector\u{3002}example/hook",
+            "postgres://\(password)\\@db/app",
+            "https://\t:\(password)@collector.example/hook",
+            "https://\n:\(password)@collector.example/hook",
+            "https://\r:\(password)@collector.example/hook",
         ]
         for value in passwordGaps {
             try await expectImportRefused(
@@ -1123,6 +1140,81 @@ struct MCPCommandTests {
                 ],
             ]),
             absent: absent, label: "\(label) header")
+    }
+
+    @Test func importRefusesADollarAHashAndACompatibilityTwin() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let extra = tail + "EXTRA"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-"]
+        func finished(_ byte: String) -> String {
+            "%" + String(repeating: "25", count: 31) + byte
+        }
+        let dollars = [head + "$" + tail, head + "$" + extra, head + "%24" + tail, head + finished("24") + tail]
+        for value in dollars {
+            try await expectSplitSecretRefused(value, sk: value.replacingOccurrences(of: head, with: "sk-12345678g"), absent: absent + [extra], label: "dollar")
+        }
+        for scheme in ["Bearer%20", "Basic%20"] {
+            try await expectSplitSecretRefused(
+                scheme + head + "%24" + tail, absent: absent + [scheme], label: "scheme dollar", headerOnly: true)
+            try await expectSplitSecretRefused(
+                scheme + head + finished("24") + tail, absent: absent + [scheme], label: "scheme dollar chain", headerOnly: true)
+        }
+        let hashes = [head + "#" + tail, head + "%23" + tail, "x" + head + "#" + tail]
+        for value in hashes {
+            try await expectSplitSecretRefused(value, absent: absent, label: "hash")
+        }
+        let hashed = head + "#" + tail
+        for scheme in ["Bearer%20", "Basic%20"] {
+            for body in [hashed, head + "%23" + tail, head + finished("23") + tail] {
+                try await expectSplitSecretRefused(
+                    scheme + body, absent: absent + [scheme], label: "scheme hash")
+            }
+        }
+
+        let question = "\u{037E}"
+        let questionChain = head + finished("CD") + finished("BE") + tail
+        for value in [head + question + tail, head + "%CD%BE" + tail, questionChain] {
+            try await expectSplitSecretRefused(
+                value, sk: "sk-12345678g" + String(value.dropFirst(head.count)), absent: absent, label: "greek question")
+        }
+        try await expectSplitSecretRefused(head + question + extra, absent: absent + [extra], label: "greek question extra")
+        for scheme in ["Bearer%20", "Basic%20"] {
+            try await expectSplitSecretRefused(
+                scheme + head + "%CD%BE" + tail, absent: absent + [scheme], label: "scheme greek", headerOnly: true)
+            try await expectSplitSecretRefused(
+                scheme + questionChain, absent: absent + [scheme], label: "scheme greek chain", headerOnly: true)
+        }
+        for disguised in ["x" + head + question + tail, "." + head + question + tail, "x" + head + "%CD%BE" + tail, "." + head + "%CD%BE" + tail] {
+            try await expectSplitSecretRefused(disguised, absent: absent, label: "disguised greek")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(disguised)"]]),
+                absent: absent, label: "disguised greek cwd")
+        }
+
+        let twins: [UInt32] = [
+            0xFF0F, 0xFF01, 0xFE52, 0xFF5E, 0xFF03, 0xFF20, 0xFF5C, 0xFE69, 0xFF04,
+            0x2024, 0x207A, 0x207C, 0x208A, 0x208C, 0xFB29, 0xFE10, 0xFE13, 0xFE14, 0xFE15, 0xFE16,
+            0xFE50, 0xFE54, 0xFE55, 0xFE56, 0xFE57, 0xFE5F, 0xFE60, 0xFE62, 0xFE66, 0xFE68, 0xFE6B,
+            0xFF02, 0xFF06, 0xFF07, 0xFF0B, 0xFF0C, 0xFF1A, 0xFF1B, 0xFF1D, 0xFF1F, 0xFF3C,
+        ]
+        for code in twins {
+            let mark = String(Unicode.Scalar(code)!)
+            let value = head + mark + tail
+            let longer = head + mark + extra
+            try await expectSplitSecretRefused(value, sk: "sk-12345678g" + mark + tail, absent: absent, label: "twin")
+            try await expectSplitSecretRefused(longer, sk: "sk-12345678g" + mark + extra, absent: absent + [extra], label: "twin extra")
+            for disguised in ["x" + value, "." + value] {
+                try await expectSplitSecretRefused(disguised, absent: absent, label: "disguised twin")
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(disguised)"]]),
+                    absent: absent, label: "disguised twin cwd")
+            }
+        }
+        for encoded in ["%EF%BC%8F", "%EF%BC%81", "%EF%B9%92", "%EF%BD%9E"] {
+            try await expectSplitSecretRefused(head + encoded + tail, absent: absent, label: "encoded twin")
+            try await expectSplitSecretRefused(head + encoded + extra, absent: absent + [extra], label: "encoded twin extra")
+        }
     }
 
     @Test func importRefusesASplitterInsideAToken() async throws {

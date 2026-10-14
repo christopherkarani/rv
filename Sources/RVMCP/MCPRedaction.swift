@@ -348,7 +348,8 @@ public enum MCPRedaction {
         return decodedPasswordSitsInAuthority(slashNormalized(text))
     }
 
-    /// Userinfo bounded by a raw `/`, `\`, `?`, or `#`. Percent-encoded delimiters stay in the user.
+    /// Userinfo bounded by a raw `/`, `?`, or `#`. A raw `\` stays in the user: curl and Python
+    /// keep it there, and Node drops a leading `\`. Percent-encoded delimiters stay in the user.
     private static func rawUserinfoIsPassword(_ text: String) -> Bool {
         let body = authorityBody(text)
         guard let userStart = rawSchemeEnd(body) else { return false }
@@ -359,16 +360,24 @@ public enum MCPRedaction {
                 continue
             }
             let character = body[index]
-            if character == "@" {
-                let user = body[userStart..<index]
-                guard user.isEmpty == false else { return false }
-                if user.first == ":" { return true }
-                return user.contains(":") == false
-            }
-            if character == "/" || character == "\\" || character == "?" || character == "#" { return false }
+            if character == "@" { return userinfoIsPasswordOnly(body[userStart..<index]) }
+            if character == "/" || character == "?" || character == "#" { return false }
             index = body.index(after: index)
         }
         return false
+    }
+
+    /// `password@host`, `:password@host`, or a tab, LF, or CR in front of that colon.
+    /// `user:password@host` and a space or VT in front of the colon stay visible.
+    private static func userinfoIsPasswordOnly(_ user: Substring) -> Bool {
+        guard user.isEmpty == false else { return false }
+        var index = user.startIndex
+        while index < user.endIndex, user[index] == "\t" || user[index] == "\n" || user[index] == "\r" {
+            index = user.index(after: index)
+        }
+        let rest = user[index...]
+        if rest.first == ":" { return true }
+        return rest.contains(":") == false
     }
 
     private static func authorityBody(_ text: String) -> Substring {
@@ -420,12 +429,7 @@ public enum MCPRedaction {
         var index = rest.startIndex
         while index < rest.endIndex {
             let character = rest[index]
-            if character == "@" {
-                let user = rest[..<index]
-                guard user.isEmpty == false else { return false }
-                if user.first == ":" { return true }
-                return user.contains(":") == false
-            }
+            if character == "@" { return userinfoIsPasswordOnly(rest[..<index]) }
             if character == "/" || character == "?" || character == "#" {
                 var next = rest.index(after: index)
                 while next < rest.endIndex, withoutInvisibleBreaks(String(rest[next])).isEmpty {
@@ -470,18 +474,34 @@ public enum MCPRedaction {
 
     /// Separators dropped only for the prefix count. `-` and `_` stay, so `sk-` and `ctx7sk` still match.
     /// U+0020 is whitespace here and is not removed from the stored value.
+    /// A compatibility twin (NFKD) of one of these separators is the same separator. U+037E is `;`.
     private static func textForPrefixCount(_ text: String) -> String {
         let scalars = withoutInvisibleBreaks(text).unicodeScalars.filter { scalar in
             if scalar.properties.isWhitespace { return false }
-            switch scalar.value {
-            case 0x0021, 0x0022, 0x0026, 0x0027, 0x002B, 0x002C, 0x002E, 0x002F,
-                0x003A, 0x003B, 0x003D, 0x003F, 0x005C, 0x007E, 0xFF0E:
-                return false
-            default:
-                return true
-            }
+            return dropsForPrefixCount(scalar) == false
         }
         return String(String.UnicodeScalarView(scalars))
+    }
+
+    /// `$` and `#` split `ghp_` without being whitespace. `|` and `@` do too once `looksLikeToken` is false.
+    /// U+0020 is not here.
+    private static func dropsForPrefixCount(_ scalar: Unicode.Scalar) -> Bool {
+        if isPrefixSeparator(scalar) { return true }
+        let folded = String(scalar).decomposedStringWithCompatibilityMapping
+        guard folded.unicodeScalars.count == 1, let only = folded.unicodeScalars.first, only != scalar else { return false }
+        return isPrefixSeparator(only)
+    }
+
+    private static func isPrefixSeparator(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x0000, 0x0021, 0x0022, 0x0023, 0x0024, 0x0026, 0x0027,
+            0x002B, 0x002C, 0x002E, 0x002F,
+            0x003A, 0x003B, 0x003D, 0x003F,
+            0x0040, 0x005C, 0x007C, 0x007E, 0xFF0E:
+            return true
+        default:
+            return false
+        }
     }
 
     /// Known prefixes. A match leaves its last character in place, so `AKIA`/`AIza` share that
