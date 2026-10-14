@@ -50,25 +50,73 @@ public enum MCPRedaction {
     }
 
     /// A path segment that is a token, including `.ghp_…`, `~ghp_…`, `/opt/ghp_…`,
-    /// `ghp_… x`, `ingest\ghp_…`, and `ingest#ghp_…`.
+    /// `ghp_… x`, `ingest\ghp_…`, `ingest#ghp_…`, and a token after `;`, `?`,
+    /// `&`, `:`, `,`, or a decoded NUL.
     public static func pathSegmentCarriesToken(_ segment: String) -> Bool {
         let decoded = repeatedDecode(segment)
         if looksLikeToken(decoded) { return true }
         let pieces = decoded.split { character in
             character == "." || character == "~" || character == "#" || character == "\\" || character == "/"
-                || character.isWhitespace
+                || character == ";" || character == "?" || character == "&" || character == ":" || character == ","
+                || character == "\0" || character.isWhitespace
         }
         return pieces.contains { looksLikeToken(String($0)) }
     }
 
     /// Percent-decode until the text stops changing, so `%253A` becomes `:`.
+    /// A dangling `%` (including one left by a trailing `%25`) is not a valid
+    /// escape. It must not stop the other escapes in the same string from decoding.
     public static func repeatedDecode(_ value: String) -> String {
         var current = value
         for _ in 0..<6 {
-            guard current.contains("%"), let next = current.removingPercentEncoding, next != current else { return current }
+            guard current.contains("%") else { return current }
+            let next = current.removingPercentEncoding ?? lenientPercentDecode(current)
+            if next == current { return current }
             current = next
         }
         return current
+    }
+
+    /// Decode every valid `%HH` and leave a `%` that is not an escape in place.
+    private static func lenientPercentDecode(_ value: String) -> String {
+        var output = ""
+        var bytes: [UInt8] = []
+        func flush() {
+            guard bytes.isEmpty == false else { return }
+            if let text = String(bytes: bytes, encoding: .utf8) {
+                output += text
+            } else {
+                output += String(String.UnicodeScalarView(bytes.compactMap(Unicode.Scalar.init)))
+            }
+            bytes.removeAll(keepingCapacity: true)
+        }
+        var index = value.startIndex
+        while index < value.endIndex {
+            if value[index] == "%",
+                let first = value.index(index, offsetBy: 1, limitedBy: value.endIndex), first < value.endIndex,
+                let second = value.index(first, offsetBy: 1, limitedBy: value.endIndex), second < value.endIndex,
+                let high = hexNibble(value[first]), let low = hexNibble(value[second])
+            {
+                bytes.append((high << 4) | low)
+                index = value.index(after: second)
+                continue
+            }
+            flush()
+            output.append(value[index])
+            index = value.index(after: index)
+        }
+        flush()
+        return output
+    }
+
+    private static func hexNibble(_ character: Character) -> UInt8? {
+        guard let ascii = character.asciiValue else { return nil }
+        switch ascii {
+        case 48...57: return ascii - 48
+        case 65...70: return ascii - 55
+        case 97...102: return ascii - 87
+        default: return nil
+        }
     }
 
     /// Repeated percent-decode, then treat `\` as `/`.
@@ -76,15 +124,14 @@ public enum MCPRedaction {
         repeatedDecode(value).replacingOccurrences(of: "\\", with: "/")
     }
 
-    /// `user:password@host`, including when it is only a path segment.
+    /// `user:password@host`, including an empty user (`:password@host`) and a
+    /// path segment that is only that spelling.
     public static func containsUserinfoSpelling(_ text: String) -> Bool {
         let decoded = repeatedDecode(text)
         for piece in decoded.split(whereSeparator: isMaterialSeparator) {
             guard let at = piece.firstIndex(of: "@"), at > piece.startIndex else { continue }
             let userinfo = piece[..<at]
-            guard let colon = userinfo.firstIndex(of: ":"), colon > userinfo.startIndex, userinfo.index(after: colon) < at else {
-                continue
-            }
+            guard let colon = userinfo.firstIndex(of: ":"), userinfo.index(after: colon) < at else { continue }
             return true
         }
         return false

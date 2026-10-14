@@ -193,6 +193,33 @@ enum MCPRun {
             : names.prefix(limit).joined(separator: ", ") + " +\(names.count - limit) more"
     }
 
+    /// Terminal-safe spelling. CR, ESC, and other controls stay visible as text
+    /// so a password cannot be erased or concealed before confirm.
+    static func visible(_ text: String) -> String {
+        var output = ""
+        output.reserveCapacity(text.utf8.count)
+        for scalar in text.unicodeScalars {
+            switch scalar.value {
+            case 0x09: output += "\\t"
+            case 0x0A: output += "\\n"
+            case 0x0D: output += "\\r"
+            case 0x1B: output += "\\u{001B}"
+            case 0x00..<0x20, 0x7F:
+                output += String(format: "\\u{%04X}", scalar.value)
+            default:
+                output.unicodeScalars.append(scalar)
+            }
+        }
+        return output
+    }
+
+    /// A review that still contains a raw control would hide text on a terminal.
+    static func reviewConceals(_ review: String) -> Bool {
+        review.unicodeScalars.contains { scalar in
+            scalar != "\n" && (scalar.value < 0x20 || scalar.value == 0x7F)
+        }
+    }
+
     static func summary(_ report: Report) -> String {
         let order: [MCPEntryStatus] = [.governed, .direct, .bypass, .unreviewed, .blocked, .dangling, .disabled]
         let counts = order.compactMap { status -> String? in
@@ -337,6 +364,8 @@ enum MCPRun {
         }
         let configuration: MCPConfiguration
         switch MCPConfiguration.decode(data) {
+        case .failure(.invalid("repeats a JSON key")):
+            return .failure("mcp.json repeats a JSON key; nothing signed")
         case .failure(let error): return .failure(CommandFailure(error.message))
         case .success(let decoded): configuration = decoded
         }
@@ -386,34 +415,52 @@ enum MCPRun {
                 let transport = remote.transport == .sse ? "legacy SSE" : "streamable HTTP"
                 let redacted = MCPRedaction.url(remote.url.absoluteString)
                 let shown = redacted.leaked ? "\(redacted.display) (credential-like part hidden)" : remote.url.absoluteString
-                lines.append("  \(server.name): \(shown) (remote, \(transport))")
+                lines.append("  \(server.name): \(visible(shown)) (remote, \(transport))")
                 for name in remote.headers.keys.sorted() {
                     let value = remote.headers[name] ?? ""
-                    lines.append("    \(name): \(value)")
+                    lines.append("    \(name): \(visible(value))")
                     let secrets = MCPSecretReference.names(in: value) ?? []
                     if secrets.isEmpty == false {
-                        lines.append("    \(name) → secret \(secrets.joined(separator: ", "))")
+                        lines.append("    \(name) → secret \(secrets.map(visible).joined(separator: ", "))")
                     }
                 }
             } else {
-                lines.append("  \(server.name): \(([server.command] + server.args).joined(separator: " "))")
+                let command = ([server.command] + server.args).map(visible).joined(separator: " ")
+                lines.append("  \(server.name): \(command)")
+                lines.append("    command: \(visible(server.command))")
+                for arg in server.args {
+                    lines.append("    argument: \(visible(arg))")
+                }
+            }
+            if let description = server.description {
+                lines.append("    description: \(visible(description))")
             }
             for name in server.environment.keys.sorted() {
-                lines.append("    \(name)=\(server.environment[name] ?? "")")
+                lines.append("    \(name)=\(visible(server.environment[name] ?? ""))")
+            }
+            for variable in server.secrets.keys.sorted() {
+                lines.append("    \(variable) → secret \(visible(server.secrets[variable] ?? ""))")
             }
             let tools = server.tools
-            if tools.allow.isEmpty == false { rules.append("allow " + capped(tools.allow)) }
-            if tools.ask.isEmpty == false { rules.append("ask " + capped(tools.ask)) }
-            if tools.deny.isEmpty == false { rules.append("deny " + capped(tools.deny)) }
-            for ruled in tools.rules { rules.append("\(ruled.decision.rawValue) \(ruled.rule.summary)") }
+            if tools.allow.isEmpty == false { rules.append("allow " + tools.allow.map(visible).joined(separator: ", ")) }
+            if tools.ask.isEmpty == false { rules.append("ask " + tools.ask.map(visible).joined(separator: ", ")) }
+            if tools.deny.isEmpty == false { rules.append("deny " + tools.deny.map(visible).joined(separator: ", ")) }
+            for glob in tools.allow { lines.append("    allow \(visible(glob))") }
+            for glob in tools.ask { lines.append("    ask \(visible(glob))") }
+            for glob in tools.deny { lines.append("    deny \(visible(glob))") }
+            for ruled in tools.rules { rules.append("\(ruled.decision.rawValue) \(visible(ruled.rule.summary))") }
             if strict {
                 rules.append("other tools deny")
             } else if let fallback = tools.defaultDecision {
                 rules.append("other tools \(fallback.rawValue)")
             }
             if let sandbox = server.sandbox {
+                for path in sandbox.writable {
+                    lines.append("    writable: \(visible(path))")
+                }
                 if sandbox.hosts.isEmpty == false {
-                    rules.append("network only to " + capped(sandbox.hosts))
+                    rules.append("network only to " + sandbox.hosts.map(visible).joined(separator: ", "))
+                    for host in sandbox.hosts { lines.append("    host \(visible(host))") }
                 } else if sandbox.network == false {
                     rules.append("no network")
                 }
@@ -624,81 +671,122 @@ enum MCPRun {
     }
 
     /// What the device owner sees before secrets are stored or mcp.json is signed.
-    /// Every literal env `NAME=value` and every header value is listed, so a
-    /// password inside an unclassified value is visible before confirm.
-    /// Classified secrets stay in the Keychain and appear here only as names.
+    /// Every literal env value, header, argument, description, writable path,
+    /// tool glob, and secret binding is listed. Controls are escaped so a
+    /// terminal cannot erase the password. Classified secrets stay in the
+    /// Keychain and appear here only as names.
     static func importReview(_ plan: MCPImportPlan, allowTools: Bool) -> String {
         var lines = ["import into mcp.json:"]
         for server in plan.servers {
-            if let remote = server.remote {
-                let transport = remote.transport == .sse ? "legacy SSE" : "streamable HTTP"
-                let shown = MCPRedaction.url(remote.url.absoluteString)
-                let address = shown.leaked ? shown.display : remote.url.absoluteString
-                lines.append("  \(server.name): \(address) (remote, \(transport))")
-                for name in remote.headers.keys.sorted() {
-                    let value = remote.headers[name] ?? ""
-                    lines.append("    \(name): \(value)")
-                    let secrets = MCPSecretReference.names(in: value) ?? []
-                    if secrets.isEmpty == false {
-                        lines.append("    \(name) → secret \(secrets.joined(separator: ", "))")
-                    }
-                }
-            } else {
-                lines.append("  \(server.name): \(server.command)")
-            }
-            for name in server.environment.keys.sorted() {
-                lines.append("    \(name)=\(server.environment[name] ?? "")")
-            }
-            for variable in server.secrets.keys.sorted() {
-                if let name = server.secrets[variable] {
-                    lines.append("    \(variable) → secret \(name)")
-                }
-            }
-            for arg in server.args {
-                lines.append("    argument: \(arg)")
-                for name in MCPSecretReference.names(in: arg) ?? [] {
-                    lines.append("    argument → secret \(name)")
-                }
-            }
-            if allowTools { lines.append("    tools will be allow") }
+            lines.append(contentsOf: reviewedServerLines(server, allowTools: allowTools))
         }
         return lines.joined(separator: "\n")
     }
 
-    /// Nothing in the plan is signed unless the review text the device owner
-    /// sees contains that literal env value, header value, argument, and server URL.
+    /// Nothing in the plan is signed unless the review the device owner sees
+    /// contains each value in the same spelling the terminal will show.
     static func reviewShowsEveryLiteral(_ plan: MCPImportPlan, _ review: String) -> Bool {
+        guard reviewConceals(review) == false else { return false }
         let lines = Set(review.split(separator: "\n", omittingEmptySubsequences: false).map(String.init))
-        for server in plan.servers {
-            if let remote = server.remote {
-                if MCPRedaction.url(remote.url.absoluteString).leaked { return false }
-                if review.contains(remote.url.absoluteString) == false { return false }
-                for (name, value) in remote.headers where lines.contains("    \(name): \(value)") == false {
-                    return false
-                }
-            }
-            for (name, value) in server.environment where lines.contains("    \(name)=\(value)") == false {
-                return false
-            }
-            for arg in server.args where lines.contains("    argument: \(arg)") == false {
-                return false
-            }
+        for server in plan.servers where reviewLists(server, lines: lines, review: review) == false {
+            return false
         }
         return true
     }
 
-    /// Nothing is signed unless the trust review lists every env value and header value.
+    /// Nothing is signed unless the trust review lists every value that the
+    /// original bytes contain, in the spelling the terminal will show.
     static func trustReviewShowsEveryLiteral(_ configuration: MCPConfiguration, _ review: String) -> Bool {
+        guard reviewConceals(review) == false else { return false }
         let lines = Set(review.split(separator: "\n", omittingEmptySubsequences: false).map(String.init))
-        for server in configuration.servers {
-            for (name, value) in server.environment where lines.contains("    \(name)=\(value)") == false {
-                return false
-            }
-            if let remote = server.remote {
-                for (name, value) in remote.headers where lines.contains("    \(name): \(value)") == false {
-                    return false
+        for server in configuration.servers where reviewLists(server, lines: lines, review: review) == false {
+            return false
+        }
+        return true
+    }
+
+    private static func reviewedServerLines(_ server: MCPServerDefinition, allowTools: Bool) -> [String] {
+        var lines: [String] = []
+        if let remote = server.remote {
+            let transport = remote.transport == .sse ? "legacy SSE" : "streamable HTTP"
+            let shown = MCPRedaction.url(remote.url.absoluteString)
+            let address = shown.leaked ? shown.display : remote.url.absoluteString
+            lines.append("  \(server.name): \(visible(address)) (remote, \(transport))")
+            for name in remote.headers.keys.sorted() {
+                let value = remote.headers[name] ?? ""
+                lines.append("    \(name): \(visible(value))")
+                let secrets = MCPSecretReference.names(in: value) ?? []
+                if secrets.isEmpty == false {
+                    lines.append("    \(name) → secret \(secrets.map(visible).joined(separator: ", "))")
                 }
             }
+        } else {
+            lines.append("  \(server.name): \(visible(server.command))")
+            lines.append("    command: \(visible(server.command))")
+        }
+        if let description = server.description {
+            lines.append("    description: \(visible(description))")
+        }
+        for name in server.environment.keys.sorted() {
+            lines.append("    \(name)=\(visible(server.environment[name] ?? ""))")
+        }
+        for variable in server.secrets.keys.sorted() {
+            if let name = server.secrets[variable] {
+                lines.append("    \(variable) → secret \(visible(name))")
+            }
+        }
+        for arg in server.args {
+            lines.append("    argument: \(visible(arg))")
+            for name in MCPSecretReference.names(in: arg) ?? [] {
+                lines.append("    argument → secret \(visible(name))")
+            }
+        }
+        for glob in server.tools.allow { lines.append("    allow \(visible(glob))") }
+        for glob in server.tools.ask { lines.append("    ask \(visible(glob))") }
+        for glob in server.tools.deny { lines.append("    deny \(visible(glob))") }
+        for path in server.sandbox?.writable ?? [] {
+            lines.append("    writable: \(visible(path))")
+        }
+        for host in server.sandbox?.hosts ?? [] {
+            lines.append("    host \(visible(host))")
+        }
+        if allowTools { lines.append("    tools will be allow") }
+        return lines
+    }
+
+    private static func reviewLists(
+        _ server: MCPServerDefinition, lines: Set<String>, review: String
+    ) -> Bool {
+        if let remote = server.remote {
+            let shown = MCPRedaction.url(remote.url.absoluteString)
+            if shown.leaked { return false }
+            if review.contains(visible(remote.url.absoluteString)) == false { return false }
+            for (name, value) in remote.headers where lines.contains("    \(name): \(visible(value))") == false {
+                return false
+            }
+        } else if lines.contains("    command: \(visible(server.command))") == false {
+            return false
+        }
+        if let description = server.description, lines.contains("    description: \(visible(description))") == false {
+            return false
+        }
+        for (name, value) in server.environment where lines.contains("    \(name)=\(visible(value))") == false {
+            return false
+        }
+        for (variable, name) in server.secrets where lines.contains("    \(variable) → secret \(visible(name))") == false {
+            return false
+        }
+        for arg in server.args where lines.contains("    argument: \(visible(arg))") == false {
+            return false
+        }
+        for glob in server.tools.allow where lines.contains("    allow \(visible(glob))") == false { return false }
+        for glob in server.tools.ask where lines.contains("    ask \(visible(glob))") == false { return false }
+        for glob in server.tools.deny where lines.contains("    deny \(visible(glob))") == false { return false }
+        for path in server.sandbox?.writable ?? [] where lines.contains("    writable: \(visible(path))") == false {
+            return false
+        }
+        for host in server.sandbox?.hosts ?? [] where lines.contains("    host \(visible(host))") == false {
+            return false
         }
         return true
     }

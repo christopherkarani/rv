@@ -310,6 +310,8 @@ public struct MCPConfiguration: Sendable, Equatable {
         let root: JSONValue
         do {
             root = try JSONValue.parse(data, maximumDepth: 16)
+        } catch JSONParseError.duplicateKey {
+            return .failure(.invalid("repeats a JSON key"))
         } catch {
             return .failure(.invalid("not valid JSON"))
         }

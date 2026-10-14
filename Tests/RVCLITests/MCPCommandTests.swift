@@ -354,6 +354,118 @@ struct MCPCommandTests {
         #expect(review.contains("(literal)") == false)
     }
 
+    @Test func trustRefusesARepeatedDatabaseUrl() async throws {
+        let password = "supersecretpassword"
+        let database = "postgres://user:\(password)@db.example/app"
+        let documents = [
+            #"{"version":1,"servers":[{"name":"db","command":"db-mcp","env":{"DATABASE_URL":"\#(database)","DATABASE_URL":"ok"}}]}"#,
+            #"{"version":1,"servers":[{"name":"db","command":"db-mcp","args":["--database-url=\#(database)"],"args":["--help"]}]}"#,
+            #"{"version":1,"servers":[{"name":"api","url":"https://mcp.example/mcp","headers":{"X-Database":"\#(database)","X-Database":"ok"}}]}"#,
+        ]
+        for document in documents {
+            let fixture = Fixture()
+            try fixture.write(".config/rv/mcp.json", document)
+            chmod(fixture.home.appendingPathComponent(".config/rv/mcp.json").path, 0o600)
+            chmod(fixture.config.path, 0o700)
+            let shown = Mutex("")
+            let result = await MCPRun.trust(
+                environment: fixture.environment(presence: Self.present),
+                show: { text in shown.withLock { $0 += text } }
+            )
+            let message = result.failureMessage ?? ""
+            #expect(message.contains("repeats a JSON key"), "\(message)")
+            #expect(message.contains("nothing signed"), "\(message)")
+            #expect(message.contains(password) == false, "\(message)")
+            #expect(shown.withLock { $0 }.contains(password) == false)
+            #expect(fixture.environment().integrity.isTrusted == false)
+        }
+    }
+
+    @Test func trustShowsTheFifthToolGlobBeforeSigning() async throws {
+        let fixture = Fixture()
+        let password = "supersecretpassword"
+        let database = "postgres://user:\(password)@db.example/app"
+        let writable = "/opt/ghp_1234567890abcdefghij"
+        try fixture.write(".config/rv/mcp.json", """
+            {"version":1,"servers":[{"name":"db","command":"db-mcp",
+              "description":"\(database)",
+              "secrets":{"DATABASE_URL":"\(password)"},
+              "sandbox":{"network":false,"writable":["\(writable)"]},
+              "tools":{"allow":["a","b","c","d","\(database)"]}}]}
+            """)
+        chmod(fixture.home.appendingPathComponent(".config/rv/mcp.json").path, 0o600)
+        chmod(fixture.config.path, 0o700)
+        let environment = fixture.environment()
+        let shown = Mutex("")
+        let presence = UserPresence { _, _ in
+            let review = shown.withLock { $0 }
+            let seen = review.contains("    allow \(database)")
+                && review.contains("+1 more") == false
+                && review.contains("    description: \(database)")
+                && review.contains("    writable: \(writable)")
+                && review.contains("    DATABASE_URL → secret \(password)")
+                && review.contains(password)
+            if seen && environment.integrity.isTrusted == false { return .confirmed(method: "terminal confirmation") }
+            return .refused("value was not shown")
+        }
+        let trusted = try await MCPRun.trust(
+            environment: fixture.environment(presence: presence), show: { text in shown.withLock { $0 += text } }
+        ).get()
+        #expect(trusted.contains("trusted mcp.json"))
+        #expect(fixture.environment().integrity == .trusted)
+    }
+
+    @Test func trustShowsAPasswordThatContainsACarriageReturn() async throws {
+        let fixture = Fixture()
+        let json = #"{"version":1,"servers":[{"name":"db","command":"db-mcp","env":{"DATABASE_URL":"postgres://user:super\rsecretpassword@db.example/app"}}]}"#
+        try fixture.write(".config/rv/mcp.json", json)
+        chmod(fixture.home.appendingPathComponent(".config/rv/mcp.json").path, 0o600)
+        chmod(fixture.config.path, 0o700)
+        let environment = fixture.environment()
+        let shown = Mutex("")
+        let escaped = "postgres://user:super\\rsecretpassword@db.example/app"
+        let presence = UserPresence { _, _ in
+            let review = shown.withLock { $0 }
+            let seen = review.contains(escaped) && review.contains("secretpassword")
+                && review.contains("\r") == false && review.contains("\u{1B}") == false
+            if seen && environment.integrity.isTrusted == false { return .confirmed(method: "terminal confirmation") }
+            return .refused("value was not shown")
+        }
+        let trusted = try await MCPRun.trust(
+            environment: fixture.environment(presence: presence), show: { text in shown.withLock { $0 += text } }
+        ).get()
+        #expect(trusted.contains("trusted mcp.json"))
+        #expect(shown.withLock { $0 }.contains(escaped))
+
+        let hidden = "\u{1B}[8mpostgres://user:supersecretpassword@db.example/app\u{1B}[28m"
+        let remote = MCPRemoteServer(
+            url: try #require(URL(string: "https://mcp.example/mcp")), headers: ["X-Database": hidden])
+        let review = MCPRun.trustReview(MCPConfiguration(servers: [MCPServerDefinition(name: "api", remote: remote)]))
+        #expect(review.contains("\\u{001B}[8m"))
+        #expect(review.contains("supersecretpassword"))
+        #expect(review.contains("\u{1B}") == false)
+        #expect(MCPRun.trustReviewShowsEveryLiteral(
+            MCPConfiguration(servers: [MCPServerDefinition(name: "api", remote: remote)]), review))
+
+        let home = Fixture()
+        try home.write(".cursor/mcp.json", #"{"mcpServers":{"db":{"command":"db-mcp","env":{"DATABASE_URL":"postgres://user:super\rsecretpassword@db.example/app"}}}}"#)
+        let importedReview = Mutex("")
+        let importing = UserPresence { _, _ in
+            let text = importedReview.withLock { $0 }
+            let seen = text.contains(escaped) && text.contains("description:") && text.contains("imported from cursor")
+                && text.contains("\r") == false
+            if seen { return .confirmed(method: "terminal confirmation") }
+            return .refused("value was not shown")
+        }
+        let imported = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: home.environment(presence: importing),
+            show: { text in importedReview.withLock { $0 += text } }
+        ).get()
+        #expect(imported.contains("import db"))
+        #expect(importedReview.withLock { $0 }.contains(escaped))
+    }
+
     static let present = UserPresence { _, _ in .confirmed(method: "test") }
     static let absent = UserPresence { _, _ in .refused("this process has no terminal") }
 
