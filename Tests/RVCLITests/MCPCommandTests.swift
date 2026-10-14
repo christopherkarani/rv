@@ -1834,6 +1834,41 @@ struct MCPCommandTests {
         try await expectSplitSecretRefused("ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
     }
 
+    @Test func importRefusesABowtieThroughSucceedsButNotEquivalent() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let extra = tail + "EXTRA"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-", "AKIA", "AIza", "ASIA"]
+        let marks = Array(UInt32(0x22C8)...UInt32(0x22E9))
+        for code in marks {
+            let mark = String(Unicode.Scalar(code)!)
+            let value = head + mark + tail
+            try await expectSplitSecretRefused(value, sk: "sk-12345678g" + mark + tail, absent: absent, label: "bowtie")
+            try await expectSplitSecretRefused(head + mark + extra, absent: absent + [extra], label: "bowtie extra")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": value]),
+                absent: absent, label: "bowtie command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(value)"]]),
+                absent: absent, label: "bowtie cwd")
+            for disguised in ["x" + value, "." + value] {
+                try await expectSplitSecretRefused(disguised, absent: absent, label: "disguised bowtie")
+                try await expectImportRefused(
+                    try hostJSON("api", [
+                        "url": "https://mcp.example/mcp",
+                        "headers": ["X-Trace": disguised, "Authorization": "Bearer \(value)"],
+                    ]),
+                    absent: absent + ["Bearer"], label: "bowtie trace")
+            }
+            for overlapped in ["AKIA" + mark + "Iza12345678", "ASIA" + mark + "Iza12345678"] {
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "env": ["GITHUB_TOKEN": overlapped, "LOG_LEVEL": overlapped]]),
+                    absent: ["AKIA", "ASIA", "AIza", "Iza12345678"], label: "bowtie akia")
+            }
+        }
+        try await expectSplitSecretRefused("ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
+    }
+
     @Test func importRefusesAPrependScalarGluedToAnAtSign() async throws {
         let password = "supersecretpassword"
         let marks = [UInt32](0x0600...0x0605) + [0x06DD, 0x070F] + [UInt32](0x0890...0x0891)
