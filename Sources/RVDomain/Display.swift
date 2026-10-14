@@ -47,6 +47,22 @@ public enum DisplayedText {
         }
         return escaped
     }
+
+    /// `JSONEncoder` writes ESC as `\u001b` and leaves U+2028, U+2029, and
+    /// U+202E raw inside strings. Replacing those scalars after encoding
+    /// keeps one JSON value and does not field the text first.
+    public static func escapeJSONScalars(_ text: String) -> String {
+        var text = text
+        let scalars: [(Character, String)] = [
+            ("\u{2028}", "\\u2028"),
+            ("\u{2029}", "\\u2029"),
+            ("\u{202E}", "\\u202e"),
+        ]
+        for (scalar, escaped) in scalars {
+            text = text.replacingOccurrences(of: String(scalar), with: escaped)
+        }
+        return text
+    }
 }
 
 /// Slash display (`core.git/reset-hard`); `RuleID.rawValue` is colon (`core.git:reset-hard`).

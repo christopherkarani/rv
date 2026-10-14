@@ -133,9 +133,14 @@ public enum MCPSandbox {
         func expand(_ path: String) -> String {
             path.hasPrefix("~/") ? home + path.dropFirst(1) : path
         }
-        // The scratch directory was just created on the pinned inode. If that
-        // path is gone, Caches was renamed onto the project after createPinned
-        // returned and the path string would allow the project.
+        // createPinned records the leaf it created. A later rename of Caches
+        // onto the project is a different inode, including when the project
+        // already contained rv-mcp/<server> so the path still exists. A path
+        // that is simply gone is the same swap with nothing planted there.
+        if let recorded = createdLeafIdentity(scratch), leafIdentity(scratch) != recorded {
+            let resolved = realPath(scratch)
+            return "\(MCPDisplayedText.field(scratch)) resolves to \(MCPDisplayedText.field(resolved)), which was not the path reviewed"
+        }
         if resolveExisting(scratch) == nil {
             let resolved = realPath(scratch)
             if sameReviewedDirectory(scratch, resolved) {
@@ -222,7 +227,12 @@ public enum MCPSandbox {
             var spellings = (denyTargets || sameReviewedDirectory(path, resolved)) ? [path, resolved] : [path]
             if denyTargets {
                 var expanded: [String] = []
-                for spelling in spellings + seatbeltSpellings(resolved) {
+                var roots = spellings + seatbeltSpellings(resolved)
+                for opening in missingSymlinkOpenings(path) {
+                    roots.append(opening)
+                    roots.append(contentsOf: seatbeltSpellings(opening))
+                }
+                for spelling in roots {
                     for form in unicodeForms(spelling) {
                         expanded.append(contentsOf: seatbeltSpellings(form))
                     }
@@ -334,6 +344,65 @@ public enum MCPSandbox {
             return lexicalJoin(current, [part] + Array(parts[index...]))
         }
         return current
+    }
+
+    /// Paths `open` can read after the profile is built. A missing component
+    /// under a write allow can be created as a symlink. `part` → `/part`
+    /// makes `jump/../private/tmp/future-keys` and `jump/foo/../../...` read
+    /// `/private/tmp/future-keys`, which the lexical doubled path does not
+    /// name. The doubled path stays denied too: without that symlink, `open`
+    /// still names it.
+    static func missingSymlinkOpenings(_ path: String) -> [String] {
+        guard path.hasPrefix("/") else { return [] }
+        return symlinkOpenings(path, followsLeft: 32)
+    }
+
+    private static func symlinkOpenings(_ path: String, followsLeft: Int) -> [String] {
+        var current = "/"
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        var index = 0
+        while index < parts.count {
+            let part = parts[index]
+            index += 1
+            if part == "." { continue }
+            if part == ".." {
+                current = parentDirectory(current)
+                continue
+            }
+            let next = current == "/" ? "/" + part : current + "/" + part
+            if let link = readLink(next) {
+                guard followsLeft > 0 else { return [] }
+                var absolute = link.hasPrefix("/") ? link : (current == "/" ? "/" + link : current + "/" + link)
+                var rest = Array(parts[index...])
+                while let first = rest.first, first == "." || first == ".." {
+                    rest.removeFirst()
+                    if first == ".." { absolute = parentDirectory(absolute) }
+                }
+                // The next component can be created later as a symlink to
+                // `/<name>`. `..` after that name is the target's parent, so
+                // `foo/../../private/tmp/...` and `../private/tmp/...` both
+                // open `/private/tmp/...`. Ancestors of the link target need
+                // not exist on this host.
+                if let name = rest.first {
+                    let child = absolute == "/" ? "/" + name : absolute + "/" + name
+                    if readLink(child) == nil, isRealDirectory(child) == false {
+                        let tail = rest.dropFirst().joined(separator: "/")
+                        let via = tail.isEmpty ? "/" + name : "/" + name + "/" + tail
+                        let opened = resolvingMissingSuffix(via)
+                        if opened != path { return [opened] }
+                    }
+                }
+                let continuedRest = rest.joined(separator: "/")
+                let continued = continuedRest.isEmpty ? absolute : absolute + "/" + continuedRest
+                return symlinkOpenings(continued, followsLeft: followsLeft - 1)
+            }
+            if isRealDirectory(next) {
+                current = next
+                continue
+            }
+            return []
+        }
+        return []
     }
 
     private static func parentDirectory(_ path: String) -> String {
@@ -463,7 +532,7 @@ public enum MCPSandbox {
     static func seatbeltPathPattern(_ path: String) -> String {
         let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         guard parts.isEmpty == false else { return "^$" }
-        var body = parts.map { caseFold(regexEscape($0)) }.joined(separator: "/+(\\./+)*")
+        var body = parts.map { caseFold($0) }.joined(separator: "/+(\\./+)*")
         let firm = "[Ss][Yy][Ss][Tt][Ee][Mm]/+(\\./+)*[Vv][Oo][Ll][Uu][Mm][Ee][Ss]/+(\\./+)*[Dd][Aa][Tt][Aa]/+(\\./+)*"
         let priv = "[Pp][Rr][Ii][Vv][Aa][Tt][Ee]/+(\\./+)*"
         switch parts[0].lowercased() {
@@ -481,57 +550,109 @@ public enum MCPSandbox {
         return "^/+(\\./+)*" + body + "(/+.*)?$"
     }
 
-    /// Simple case-fold class. Per-scalar upper and lower of `s` is `[Ss]`,
-    /// which misses U+017F, and `σ` misses final sigma. A fold of more than
-    /// one scalar (`ß` → `SS`) stays out of the class.
-    static func caseFold(_ escaped: String) -> String {
-        var folded = ""
-        var escapedNext = false
-        for scalar in escaped.unicodeScalars {
-            if escapedNext {
-                folded.unicodeScalars.append(scalar)
-                escapedNext = false
-                continue
-            }
-            if scalar == "\\" {
-                folded.unicodeScalars.append(scalar)
-                escapedNext = true
-                continue
-            }
-            let equivalents = foldClass(scalar)
-            if equivalents.count > 1 {
-                folded += "[" + characterClassBody(equivalents) + "]"
-            } else {
-                folded.unicodeScalars.append(scalar)
-            }
-            // U+017F casefolds to s, and a catalog name can also show it
-            // beside the ASCII letter (`fuſture-keys` for `future-keys`).
-            // It is optional so the ASCII spelling still matches. A fold of
-            // more than one scalar (`ß` → `SS`) is not added.
-            folded += "\u{017F}?"
+    /// Case-fold a path component. One-scalar folds become a class (`s` is
+    /// `[Ssſ]`, `σ` includes final sigma). A fold of more than one scalar
+    /// (`ß`/`ẞ` → `ss`, `ﬁ` → `fi`, `ﬅ`/`ﬆ` → `st`, `ﬀ` → `ff`, `İ` → `i`
+    /// plus U+0307) is an alternation, so either spelling matches. U+017F
+    /// stays optional beside each scalar (`fuſture-keys`). A quote is still
+    /// escaped inside the atom.
+    static func caseFold(_ component: String) -> String {
+        var folded: [Unicode.Scalar] = []
+        for scalar in component.unicodeScalars {
+            folded.append(contentsOf: fullFoldScalars(scalar))
         }
-        return folded
+        return caseFoldPattern(folded)
     }
 
-    private static func simpleFoldKey(_ scalar: Unicode.Scalar) -> Unicode.Scalar {
-        let folded = String(scalar).uppercased().lowercased()
-        let scalars = Array(folded.unicodeScalars)
-        if scalars.count == 1, let only = scalars.first { return only }
-        return scalar
+    /// Unicode full casefold where Swift's per-scalar upper+lower is not.
+    /// `ẞ`.uppercased().lowercased() is `ß`, not `ss`.
+    private static func fullFoldScalars(_ scalar: Unicode.Scalar) -> [Unicode.Scalar] {
+        if let override = fullFoldOverrides[scalar.value] { return override }
+        let folded = Array(String(scalar).uppercased().lowercased().unicodeScalars)
+        return folded.isEmpty ? [scalar] : folded
     }
 
-    /// BMP scalars that share a one-scalar fold, in code-point order.
-    private static let simpleFoldClasses: [UInt32: [Unicode.Scalar]] = {
-        var groups: [UInt32: [Unicode.Scalar]] = [:]
+    private static let fullFoldOverrides: [UInt32: [Unicode.Scalar]] = [
+        0x00DF: Array("ss".unicodeScalars),
+        0x1E9E: Array("ss".unicodeScalars),
+        0x0130: Array("i\u{0307}".unicodeScalars),
+        0xFB00: Array("ff".unicodeScalars),
+        0xFB01: Array("fi".unicodeScalars),
+        0xFB02: Array("fl".unicodeScalars),
+        0xFB03: Array("ffi".unicodeScalars),
+        0xFB04: Array("ffl".unicodeScalars),
+        0xFB05: Array("st".unicodeScalars),
+        0xFB06: Array("st".unicodeScalars),
+    ]
+
+    private struct FoldTables {
+        var single: [UInt32: [Unicode.Scalar]]
+        var multi: [String: [Unicode.Scalar]]
+    }
+
+    /// BMP scalars grouped by full casefold. Multi-scalar folds are not
+    /// members of the one-scalar class.
+    private static let foldTables: FoldTables = {
+        var single: [UInt32: [Unicode.Scalar]] = [:]
+        var multi: [String: [Unicode.Scalar]] = [:]
         for value in 0...0xFFFF {
             guard let scalar = Unicode.Scalar(value) else { continue }
-            groups[simpleFoldKey(scalar).value, default: []].append(scalar)
+            let folded = fullFoldScalars(scalar)
+            if folded.count == 1, let key = folded.first {
+                single[key.value, default: []].append(scalar)
+            } else {
+                multi[scalarString(folded), default: []].append(scalar)
+            }
         }
-        return groups
+        return FoldTables(single: single, multi: multi)
     }()
 
-    private static func foldClass(_ scalar: Unicode.Scalar) -> [Unicode.Scalar] {
-        simpleFoldClasses[simpleFoldKey(scalar).value] ?? [scalar]
+    private static func caseFoldPattern(_ folded: [Unicode.Scalar]) -> String {
+        var memo: [Int: String] = [:]
+        func emit(_ index: Int) -> String {
+            if let stored = memo[index] { return stored }
+            guard index < folded.count else {
+                memo[index] = ""
+                return ""
+            }
+            let one = foldAtom(folded[index]) + "\u{017F}?"
+            let tail = emit(index + 1)
+            if tail.count > 2048 {
+                let simple = one + tail
+                memo[index] = simple
+                return simple
+            }
+            var choices = [one + tail]
+            let longest = min(3, folded.count - index)
+            if longest >= 2 {
+                for length in 2...longest {
+                    let key = scalarString(Array(folded[index..<(index + length)]))
+                    guard let forms = foldTables.multi[key], forms.isEmpty == false else { continue }
+                    let rest = emit(index + length)
+                    if rest.count > 2048 { continue }
+                    let body = forms.map { regexEscape(String($0)) }.joined(separator: "|")
+                    choices.append("(\(body))\u{017F}?" + rest)
+                }
+            }
+            let pattern = choices.count == 1 ? choices[0] : "(" + choices.joined(separator: "|") + ")"
+            memo[index] = pattern
+            return pattern
+        }
+        return emit(0)
+    }
+
+    private static func foldAtom(_ scalar: Unicode.Scalar) -> String {
+        let equivalents = foldTables.single[scalar.value] ?? [scalar]
+        if equivalents.count > 1 {
+            return "[" + characterClassBody(equivalents) + "]"
+        }
+        return regexEscape(String(scalar))
+    }
+
+    private static func scalarString(_ scalars: [Unicode.Scalar]) -> String {
+        var text = ""
+        for scalar in scalars { text.unicodeScalars.append(scalar) }
+        return text
     }
 
     private static func characterClassBody(_ scalars: [Unicode.Scalar]) -> String {
@@ -694,30 +815,89 @@ public enum MCPSandbox {
             removeCreated(pinned.missing, parent: current)
             return false
         }
+        rememberLeafIdentity(path)
         return true
     }
 
-    /// `~/.npm` and `~/.cache` next to a `Library/Caches` scratch. The profile
-    /// allows both. A project moved onto either one during the openat window
-    /// must not make this call return true.
+    /// `Library/Caches`, `~/.npm`, and `~/.cache`. The profile allows all
+    /// three. Moving a project into a directory that already exists does not
+    /// change that directory's inode: `rename` into a non-empty directory
+    /// keeps it. The link count and timestamps do change.
     private static func watchedWritableRoots(_ scratch: String) -> [String] {
         guard let marker = scratch.range(of: "/Library/Caches/") else { return [] }
         let home = String(scratch[..<marker.lowerBound])
-        return [home + "/.npm", home + "/.cache"]
+        return [home + "/Library/Caches", home + "/.npm", home + "/.cache"]
     }
 
     private struct InodeStamp: Equatable {
         var present: Bool
         var device: UInt64
         var inode: UInt64
+        var links: UInt64
+        var modified: Int64
+        var modifiedNsec: Int64
+        var changed: Int64
+        var changedNsec: Int64
     }
 
     private static func inodeStamp(_ path: String) -> InodeStamp {
         var info = stat()
         guard lstat(path, &info) == 0 else {
-            return InodeStamp(present: false, device: 0, inode: 0)
+            return InodeStamp(
+                present: false, device: 0, inode: 0, links: 0,
+                modified: 0, modifiedNsec: 0, changed: 0, changedNsec: 0)
         }
-        return InodeStamp(present: true, device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
+        let clock = directoryClock(info)
+        return InodeStamp(
+            present: true, device: UInt64(info.st_dev), inode: UInt64(info.st_ino), links: UInt64(info.st_nlink),
+            modified: clock.modified, modifiedNsec: clock.modifiedNsec,
+            changed: clock.changed, changedNsec: clock.changedNsec)
+    }
+
+    private static func directoryClock(_ info: stat) -> (modified: Int64, modifiedNsec: Int64, changed: Int64, changedNsec: Int64) {
+        #if canImport(Darwin)
+        return (
+            Int64(info.st_mtimespec.tv_sec), Int64(info.st_mtimespec.tv_nsec),
+            Int64(info.st_ctimespec.tv_sec), Int64(info.st_ctimespec.tv_nsec))
+        #else
+        return (
+            Int64(info.st_mtim.tv_sec), Int64(info.st_mtim.tv_nsec),
+            Int64(info.st_ctim.tv_sec), Int64(info.st_ctim.tv_nsec))
+        #endif
+    }
+
+    private struct LeafIdentity: Equatable {
+        var present: Bool
+        var device: UInt64
+        var inode: UInt64
+    }
+
+    private final class LeafRecords: @unchecked Sendable {
+        let lock = NSLock()
+        var values: [String: LeafIdentity] = [:]
+    }
+
+    private static let leafRecords = LeafRecords()
+
+    private static func leafIdentity(_ path: String) -> LeafIdentity {
+        var info = stat()
+        guard lstat(path, &info) == 0 else {
+            return LeafIdentity(present: false, device: 0, inode: 0)
+        }
+        return LeafIdentity(present: true, device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
+    }
+
+    private static func rememberLeafIdentity(_ path: String) {
+        let identity = leafIdentity(path)
+        leafRecords.lock.lock()
+        leafRecords.values[path] = identity
+        leafRecords.lock.unlock()
+    }
+
+    private static func createdLeafIdentity(_ path: String) -> LeafIdentity? {
+        leafRecords.lock.lock()
+        defer { leafRecords.lock.unlock() }
+        return leafRecords.values[path]
     }
 
     /// The path string still names the directory the walk opened. Each

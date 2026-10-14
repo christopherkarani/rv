@@ -919,6 +919,107 @@ struct MCPCommandTests {
         #expect(sigmaDeny > sigmaAllow)
     }
 
+    @Test func multiScalarCasefoldMatchesTheCredentialDenyNotThePrivateTmpAllow() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-fold-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let scratch = root.appendingPathComponent("scratch")
+        let tmp = root.appendingPathComponent("tmp")
+        let ssh = home.appendingPathComponent(".ssh")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        func denied(_ link: String, _ secrets: [String]) throws {
+            try? FileManager.default.removeItem(at: ssh)
+            #expect(symlink(link, ssh.path) == 0)
+            let result = MCPSandbox.profile(
+                policy: MCPSandboxPolicy(network: false, writable: []),
+                scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+                temporaryDirectory: tmp.path)
+            guard case .success(let profile) = result else {
+                Issue.record("profile refused \(link): \(result)")
+                return
+            }
+            let lines = profile.split(separator: "\n").map(String.init)
+            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+            for secret in secrets {
+                #expect(lastFileReadRule(profile, matching: secret)?.hasPrefix("(deny") == true)
+                let credential = lines.lastIndex { line in
+                    line.hasPrefix("(deny file-read*") && Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, secret) }
+                } ?? -1
+                #expect(credential > writeAllow)
+            }
+        }
+        try denied("/private/tmp/fuss-keys", [
+            "/private/tmp/fu\u{00DF}-keys/id_rsa",
+            "/private/tmp/fu\u{1E9E}-keys/id_rsa",
+        ])
+        try denied("/private/tmp/fu\u{00DF}-keys", [
+            "/private/tmp/fuss-keys/id_rsa",
+            "/private/tmp/fuSS-keys/id_rsa",
+        ])
+        try denied("/private/tmp/file-keys", ["/private/tmp/\u{FB01}le-keys/id_rsa"])
+        try denied("/private/tmp/host-keys", [
+            "/private/tmp/ho\u{FB05}-keys/id_rsa",
+            "/private/tmp/ho\u{FB06}-keys/id_rsa",
+        ])
+        try denied("/private/tmp/office-keys", ["/private/tmp/o\u{FB00}ice-keys/id_rsa"])
+        try denied("/private/tmp/\u{0130}-keys", ["/private/tmp/i\u{0307}-keys/id_rsa"])
+        try denied("/private/tmp/i\u{0307}-keys", ["/private/tmp/\u{0130}-keys/id_rsa"])
+        try denied("/private/tmp/future-keys", [
+            "/private/tmp/future-keys/id_rsa",
+            "/private/tmp/Future-Keys/id_rsa",
+            "/private/tmp/fu\u{017F}ture-keys/id_rsa",
+        ])
+    }
+
+    @Test func dotDotSymlinkOpeningDeniesThePrivateTmpFileThatOpenReads() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-open-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let me = root.appendingPathComponent("Users/me")
+        let scratch = root.appendingPathComponent("scratch")
+        let tmp = root.appendingPathComponent("tmp")
+        let ssh = home.appendingPathComponent(".ssh")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: me, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        #expect(symlink("/private/tmp/anchor", me.appendingPathComponent("jump").path) == 0)
+        let shapes = [
+            me.path + "/jump/../private/tmp/future-keys",
+            me.path + "/jump/./../private/tmp/future-keys",
+            me.path + "/jump/foo/../../private/tmp/future-keys",
+        ]
+        let secret = "/private/tmp/future-keys/id_rsa"
+        for shape in shapes {
+            try? FileManager.default.removeItem(at: ssh)
+            #expect(symlink(shape, ssh.path) == 0)
+            let result = MCPSandbox.profile(
+                policy: MCPSandboxPolicy(network: false, writable: []),
+                scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+                temporaryDirectory: tmp.path)
+            guard case .success(let profile) = result else {
+                Issue.record("profile refused \(shape): \(result)")
+                return
+            }
+            #expect(lastFileReadRule(profile, matching: secret)?.hasPrefix("(deny") == true)
+            let lines = profile.split(separator: "\n").map(String.init)
+            let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+            let credential = lines.lastIndex { line in
+                line.hasPrefix("(deny file-read*") && (
+                    line.contains("(subpath \"/private/tmp/future-keys\")")
+                        || Self.seatbeltRegexes(line).contains { Self.wholeMatch($0, secret) }
+                )
+            } ?? -1
+            #expect(credential > writeAllow)
+            let doubled = "/private/tmp/private/tmp/future-keys/id_rsa"
+            #expect(lastFileReadRule(profile, matching: doubled)?.hasPrefix("(deny") == true)
+        }
+    }
+
     @Test func blockedServerArgumentIsEscaped() {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let raw = "\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{202E}" + sentence

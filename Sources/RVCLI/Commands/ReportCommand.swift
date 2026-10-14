@@ -189,8 +189,10 @@ enum ReportRun {
     }
 
     static func text(_ report: Report) -> String {
+        let hostName = DisplayedText.field(report.host.name)
+        let user = DisplayedText.field(report.host.user)
         var lines = [
-            "rv \(report.rv.version) on \(report.host.name) (\(report.host.user)): "
+            "rv \(report.rv.version) on \(hostName) (\(user)): "
                 + (report.compliant ? "compliant" : "NOT compliant"),
             "",
             ManagedRun.statusText(report.managed).trimmingCharacters(in: .newlines),
@@ -223,7 +225,7 @@ enum ReportRun {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         guard let data = try? encoder.encode(report), let text = String(data: data, encoding: .utf8) else { return "{}\n" }
-        return text + "\n"
+        return DisplayedText.escapeJSONScalars(text) + "\n"
     }
 
     static var platform: String {
