@@ -665,35 +665,174 @@ func diskImageRecheckMayStat(
     }
 }
 
-private final class DiskImageStatResult: @unchecked Sendable {
-    private let state = Mutex<Bool?>(nil)
-
-    func store(_ gone: Bool) {
-        state.withLock { $0 = gone }
+/// The shared clock `Flag.cancel()` armed on this thread. A nil result is a
+/// non-cancelled acquire. Polling this during a syscall is what stops the
+/// call when cancel arms after the syscall has already started.
+func diskImageLiveCancelDeadline(now: Date = Date()) -> Date? {
+    if blockingWorkIsCancelled() {
+        CooperativeLaunchStop.noteCancel(now: now)
     }
+    return CooperativeLaunchStop.cancelClock?.deadline
+}
 
-    func current() -> Bool? {
-        state.withLock { $0 }
+/// When a blocking call must return. A live deadline that appears after the
+/// call started still counts. `nil` means keep waiting.
+func diskImageWaitStop(
+    started: Date,
+    allowance: TimeInterval?,
+    liveDeadline: Date?
+) -> Date? {
+    let fromAllowance = allowance.map { started.addingTimeInterval($0) }
+    switch (fromAllowance, liveDeadline) {
+    case let (allowanceEnd?, live?):
+        return min(allowanceEnd, live)
+    case let (allowanceEnd?, nil):
+        return allowanceEnd
+    case let (nil, live?):
+        return live
+    case (nil, nil):
+        return nil
     }
 }
 
-/// Wait for one stat. `nil` allowance is the non-cancelled path. A positive
-/// allowance returns nil once that time is gone, even if the stat has not
-/// returned. Zero does not start the stat.
+/// `hdiutil info` after a detach. The 1s cap is not the budget when the
+/// shared cancel clock is sooner than the 45s slice. Zero does not start
+/// the helper.
+func diskImageListedInfoBudget(
+    sliceDeadline: Date,
+    localDeadline: Date?,
+    sharedDeadline: Date?,
+    now: Date = Date(),
+    cap: TimeInterval = 1
+) -> TimeInterval {
+    let sliceLeft = max(0, sliceDeadline.timeIntervalSince(now))
+    let cancelEnd = diskImageRecheckStatDeadline(local: localDeadline, shared: sharedDeadline)
+    guard let cancelEnd else { return min(max(0, cap), sliceLeft) }
+    let cancelLeft = max(0, cancelEnd.timeIntervalSince(now))
+    return min(max(0, cap), sliceLeft, cancelLeft)
+}
+
+/// How long one tree-copy syscall may block. `nil` means no clock is armed.
+/// Zero means the detach reserve is all that is left, so the call must not
+/// start. The stop is before `returnBound`.
+func diskImageTreeSyscallAllowance(deadline: Date?, now: Date = Date()) -> TimeInterval? {
+    guard let deadline else { return nil }
+    return DiskImageCancelBudget.copyBudget(timeLeft: deadline.timeIntervalSince(now)) ?? 0
+}
+
+/// Absolute stop for a tree syscall, reserving `detachCap`. `nil` means no
+/// clock. A due copy budget returns `now` so the waiter does not stay in
+/// the syscall.
+func diskImageTreeCopyStop(deadline: Date?, now: Date = Date()) -> Date? {
+    guard let deadline else { return nil }
+    let budget = DiskImageCancelBudget.copyBudget(timeLeft: deadline.timeIntervalSince(now)) ?? 0
+    if budget <= 0 { return now }
+    return now.addingTimeInterval(budget)
+}
+
+/// `statfs` before `umount` uses the same cancel clock as the publication
+/// stat. `.skip` does not call `statfs`. `.uncancelled` still calls it and
+/// watches the shared clock while the call is in progress.
+func diskImageMountStatAllowance(sharedDeadline: Date?, now: Date) -> DiskImageRecheckStatBudget {
+    diskImageRecheckStatBudget(
+        cancelDeadline: diskImageRecheckStatDeadline(local: nil, shared: sharedDeadline),
+        now: now
+    )
+}
+
+private let diskImageInterruptNothing: @convention(c) (Int32) -> Void = { _ in }
+
+private let diskImageInterruptReady = Mutex<Bool>(false)
+
+private func diskImageInstallStatInterrupt() {
+    diskImageInterruptReady.withLock { ready in
+        if ready { return }
+        var action = sigaction()
+        #if canImport(Darwin)
+        action.__sigaction_u.__sa_handler = diskImageInterruptNothing
+        #else
+        action.__sigaction_handler.sa_handler = diskImageInterruptNothing
+        #endif
+        sigemptyset(&action.sa_mask)
+        action.sa_flags = 0
+        sigaction(SIGUSR1, &action, nil)
+        ready = true
+    }
+}
+
+private final class DiskImageStatWorker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var threadID: pthread_t?
+    private var result: Bool?
+    private var finished = false
+    private let body: @Sendable () -> Bool
+
+    init(body: @escaping @Sendable () -> Bool) {
+        self.body = body
+    }
+
+    func run() {
+        var unblock = sigset_t()
+        sigemptyset(&unblock)
+        sigaddset(&unblock, SIGUSR1)
+        pthread_sigmask(SIG_UNBLOCK, &unblock, nil)
+        let id = pthread_self()
+        lock.lock()
+        threadID = id
+        lock.unlock()
+        let value = body()
+        lock.lock()
+        result = value
+        finished = true
+        lock.unlock()
+    }
+
+    func snapshot() -> (finished: Bool, result: Bool?, thread: pthread_t?) {
+        lock.lock()
+        let state = (finished, result, threadID)
+        lock.unlock()
+        return state
+    }
+
+    /// Signal the worker until `body` has returned. The caller does not
+    /// return while that thread is still inside the syscall.
+    func interruptUntilFinished() {
+        while true {
+            let state = snapshot()
+            if state.finished { return }
+            if let thread = state.thread {
+                _ = pthread_kill(thread, SIGUSR1)
+            }
+            usleep(1_000)
+        }
+    }
+}
+
+/// Wait for one stat. `nil` allowance is the non-cancelled path: the stat
+/// still runs off the caller, and a shared clock that arms during the
+/// syscall stops it. A positive allowance returns nil once that time is
+/// gone. The worker is interrupted and has left the syscall before this
+/// returns. Zero does not start the stat.
 func diskImageWaitForStat(
     allowance: TimeInterval?,
+    liveDeadline: @escaping @Sendable () -> Date? = { diskImageLiveCancelDeadline() },
     stat: @escaping @Sendable () -> Bool
 ) -> Bool? {
     if let allowance, allowance <= 0 { return nil }
-    let box = DiskImageStatResult()
-    let worker = Thread {
-        box.store(stat())
-    }
+    diskImageInstallStatInterrupt()
+    let worker = DiskImageStatWorker(body: stat)
+    let thread = Thread { worker.run() }
     let started = Date()
-    worker.start()
+    thread.start()
     while true {
-        if let gone = box.current() { return gone }
-        if let allowance, Date().timeIntervalSince(started) >= allowance {
+        let state = worker.snapshot()
+        if state.finished { return state.result }
+        if let stopAt = diskImageWaitStop(
+            started: started,
+            allowance: allowance,
+            liveDeadline: liveDeadline()
+        ), Date() >= stopAt {
+            worker.interruptUntilFinished()
             return nil
         }
         usleep(1_000)
@@ -703,11 +842,13 @@ func diskImageWaitForStat(
 /// One publication stat on the cancel clock. `nil` means the clock was
 /// already due, or the stat was still blocked when the allowance ended, so
 /// the caller must not clear. A nil local deadline still sees the shared
-/// clock. Both nil runs the stat with no cancel clip.
+/// clock. Both nil still starts the stat, and a cancel that arms during
+/// that stat stops it. The stat does not run on the caller.
 func diskImageStatObservingCancelClock(
     localDeadline: Date?,
     sharedDeadline: Date?,
     now: Date = Date(),
+    liveDeadline: @escaping @Sendable () -> Date? = { diskImageLiveCancelDeadline() },
     stat: @escaping @Sendable () -> Bool
 ) -> Bool? {
     let end = diskImageRecheckStatDeadline(local: localDeadline, shared: sharedDeadline)
@@ -715,9 +856,9 @@ func diskImageStatObservingCancelClock(
     case .skip:
         return nil
     case .uncancelled:
-        return stat()
+        return diskImageWaitForStat(allowance: nil, liveDeadline: liveDeadline, stat: stat)
     case .limited(let allowance):
-        return diskImageWaitForStat(allowance: allowance, stat: stat)
+        return diskImageWaitForStat(allowance: allowance, liveDeadline: liveDeadline, stat: stat)
     }
 }
 

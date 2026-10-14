@@ -11,6 +11,23 @@ private final class StatCallCount: @unchecked Sendable {
     var value = 0
 }
 
+private final class DeadlineGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Date?
+    var date: Date? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return stored
+        }
+        set {
+            lock.lock()
+            stored = newValue
+            lock.unlock()
+        }
+    }
+}
+
 /// Cancelled diskimage teardown stays inside the existing 8-second return
 /// bound, and a preempted helper does not drop the serialization lock
 /// while it, or the attach/mount it published, is still live.
@@ -1232,12 +1249,16 @@ struct DiskImageCancellationTests {
         } == nil)
         #expect(skippedCalls.value == 0)
         #expect(diskImageWaitForStat(allowance: nil) { false } == false)
+        let leftStat = StatCallCount()
         let clipped = Date()
         #expect(diskImageWaitForStat(allowance: 0.05) {
-            usleep(300_000)
+            var request = timespec(tv_sec: 0, tv_nsec: 300_000_000)
+            _ = nanosleep(&request, nil)
+            leftStat.value += 1
             return true
         } == nil)
-        #expect(Date().timeIntervalSince(clipped) < 0.5)
+        #expect(leftStat.value == 1)
+        #expect(Date().timeIntervalSince(clipped) < 0.2)
         #expect(Date().timeIntervalSince(clipped) < DiskImageCancelBudget.returnBound)
         let dueCalls = StatCallCount()
         #expect(diskImageStatObservingCancelClock(
@@ -1286,6 +1307,101 @@ struct DiskImageCancellationTests {
             localDeadline: nil,
             sharedDeadline: nil
         ) == false)
+        #expect(diskImageDetachFollowUpCanStillAppear(
+            listingCanAppear: omittedAfterWait,
+            imageListed: false,
+            imageFileGone: false,
+            parsedImageCount: 1
+        ))
+    }
+
+    /// A syscall that starts with time left, or with no clock, stops when the
+    /// cancel clock is due, and the worker is not still inside it. The detach
+    /// keeps do not depend on that stat finishing.
+    @Test func blockingCallsStopOnTheCancelClockAndLeaveTheWorker() {
+        let slice = Date(timeIntervalSince1970: 100_000).addingTimeInterval(45)
+        let armed = Date(timeIntervalSince1970: 100_000)
+        let clockEnd = armed.addingTimeInterval(DiskImageCancelBudget.cancelledSequenceBudget)
+        #expect(diskImageListedInfoBudget(
+            sliceDeadline: slice,
+            localDeadline: nil,
+            sharedDeadline: clockEnd,
+            now: clockEnd
+        ) == 0)
+        let atSevenFive = armed.addingTimeInterval(7.5)
+        let infoLeft = diskImageListedInfoBudget(
+            sliceDeadline: slice,
+            localDeadline: nil,
+            sharedDeadline: clockEnd,
+            now: atSevenFive
+        )
+        #expect(infoLeft == 0.25)
+        #expect(infoLeft < 1)
+        #expect(atSevenFive.addingTimeInterval(infoLeft) <= armed.addingTimeInterval(DiskImageCancelBudget.returnBound))
+        #expect(diskImageListedInfoBudget(
+            sliceDeadline: slice,
+            localDeadline: nil,
+            sharedDeadline: nil,
+            now: armed
+        ) == 1)
+        let copyAllowance = diskImageTreeSyscallAllowance(deadline: clockEnd, now: armed) ?? -1
+        #expect(copyAllowance == DiskImageCancelBudget.cancelledSequenceBudget - DiskImageCancelBudget.detachCap)
+        #expect(armed.addingTimeInterval(copyAllowance) <= armed.addingTimeInterval(DiskImageCancelBudget.returnBound))
+        #expect(diskImageTreeSyscallAllowance(deadline: nil, now: armed) == nil)
+        #expect(diskImageTreeSyscallAllowance(deadline: clockEnd, now: clockEnd) == 0)
+        let treeStop = diskImageTreeCopyStop(deadline: clockEnd, now: armed)
+        #expect(treeStop == armed.addingTimeInterval(copyAllowance))
+        #expect(diskImageMountStatAllowance(sharedDeadline: nil, now: armed) == .uncancelled)
+        #expect(diskImageMountStatAllowance(sharedDeadline: clockEnd, now: clockEnd) == .skip)
+        let parked = armed.addingTimeInterval(1.5)
+        #expect(diskImageMountStatAllowance(sharedDeadline: clockEnd, now: parked) == .limited(clockEnd.timeIntervalSince(parked)))
+        let callerID = ObjectIdentifier(Thread.current)
+        let onCaller = StatCallCount()
+        let left = StatCallCount()
+        let gate = DeadlineGate()
+        let started = Date()
+        let stopped = diskImageStatObservingCancelClock(
+            localDeadline: nil,
+            sharedDeadline: nil,
+            liveDeadline: { gate.date }
+        ) {
+            if ObjectIdentifier(Thread.current) == callerID {
+                onCaller.value = 1
+            }
+            gate.date = Date().addingTimeInterval(0.05)
+            var request = timespec(tv_sec: 0, tv_nsec: 300_000_000)
+            _ = nanosleep(&request, nil)
+            left.value += 1
+            return true
+        }
+        #expect(stopped == nil)
+        #expect(onCaller.value == 0)
+        #expect(left.value == 1)
+        #expect(Date().timeIntervalSince(started) < 0.2)
+        #expect(Date().timeIntervalSince(started) < DiskImageCancelBudget.returnBound)
+        #expect(diskImageDetachFollowUpCanStillAppear(
+            listingCanAppear: false,
+            imageListed: false,
+            imageFileGone: false,
+            parsedImageCount: 1
+        ))
+        #expect(diskImageDetachFollowUpCanStillAppear(
+            listingCanAppear: false,
+            imageListed: false,
+            imageFileGone: true,
+            parsedImageCount: 1
+        ))
+        let flag = CooperativeLaunchStop.Flag()
+        CooperativeLaunchStop.install(flag)
+        defer { CooperativeLaunchStop.uninstall() }
+        #expect(diskImageLiveCancelDeadline() == nil)
+        flag.cancel()
+        let live = diskImageLiveCancelDeadline()
+        #expect(live != nil)
+        #expect(live!.timeIntervalSinceNow < DiskImageCancelBudget.returnBound)
+        #expect(live!.timeIntervalSinceNow <= DiskImageCancelBudget.cancelledSequenceBudget + 0.05)
+        #expect(DiskImageCancelBudget.returnBound == 8)
+        #expect(DiskImageCancelBudget.detachCap == 5)
     }
 
     /// A directory walk stops while the detach reserve is still left.

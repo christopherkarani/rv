@@ -1341,6 +1341,70 @@ func collectTree(root: Int32, checkDevice: UInt64) -> [String: TreeEntry]? {
     return entries
 }
 
+private final class TreeStatBox: @unchecked Sendable {
+    var status = stat()
+}
+
+private final class TreeFDBox: @unchecked Sendable {
+    var fd: Int32 = -1
+}
+
+private func treeSyscallLiveStop() -> Date? {
+    let now = Date()
+    if blockingWorkIsCancelled() {
+        CooperativeLaunchStop.noteCancel(now: now)
+    }
+    return diskImageTreeCopyStop(
+        deadline: CooperativeLaunchStop.cancelClock?.deadline,
+        now: now
+    )
+}
+
+private func fstatatWithinCopyClock(_ dirfd: Int32, _ name: String) -> stat? {
+    let allowance = diskImageTreeSyscallAllowance(
+        deadline: CooperativeLaunchStop.cancelClock?.deadline
+    )
+    if let allowance, allowance <= 0 { return nil }
+    let box = TreeStatBox()
+    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
+        name.withCString { fstatat(dirfd, $0, &box.status, AT_SYMLINK_NOFOLLOW) == 0 }
+    }
+    guard ok == true else { return nil }
+    return box.status
+}
+
+private func mkdiratWithinCopyClock(_ dirfd: Int32, _ name: String, _ mode: mode_t) -> Bool {
+    let allowance = diskImageTreeSyscallAllowance(
+        deadline: CooperativeLaunchStop.cancelClock?.deadline
+    )
+    if let allowance, allowance <= 0 { return false }
+    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
+        name.withCString { mkdirat(dirfd, $0, mode) == 0 }
+    }
+    return ok == true
+}
+
+private func openatWithinCopyClock(
+    _ dirfd: Int32,
+    _ name: String,
+    _ flags: Int32,
+    _ mode: mode_t = 0
+) -> Int32 {
+    let allowance = diskImageTreeSyscallAllowance(
+        deadline: CooperativeLaunchStop.cancelClock?.deadline
+    )
+    if let allowance, allowance <= 0 { return -1 }
+    let box = TreeFDBox()
+    let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
+        let fd = name.withCString { openat(dirfd, $0, flags, mode) }
+        box.fd = fd
+        return fd >= 0
+    }
+    if ok == true, box.fd >= 0 { return box.fd }
+    if box.fd >= 0 { close(box.fd) }
+    return -1
+}
+
 private func readTree(
     fd: Int32,
     prefix: String,
@@ -1352,19 +1416,20 @@ private func readTree(
     for name in names {
         if directoryReadMayContinue(cancelClockAllowsTreeCopy()) == false { return false }
         let relative = prefix.isEmpty ? name : prefix + "/" + name
-        var status = stat()
-        let stated = name.withCString { item in
-            fstatat(fd, item, &status, AT_SYMLINK_NOFOLLOW) == 0
-        }
-        guard stated, device(of: status) == expectedDevice, let stamp = stamp(of: status) else {
+        guard let status = fstatatWithinCopyClock(fd, name),
+            device(of: status) == expectedDevice,
+            let stamp = stamp(of: status)
+        else {
             return false
         }
         let bytes = stamp.kind == .regular ? UInt64(status.st_size) : 0
         entries[relative] = TreeEntry(stamp: stamp, mode: modeBits(status.st_mode), bytes: bytes)
         if stamp.kind == .directory {
-            let child = name.withCString { item in
-                openat(fd, item, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-            }
+            let child = openatWithinCopyClock(
+                fd,
+                name,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
             guard child >= 0 else { return false }
             let ok = readTree(fd: child, prefix: relative, expectedDevice: expectedDevice, into: &entries)
             close(child)
@@ -1388,25 +1453,28 @@ func copyTree(
     }
     for name in names {
         if cancelClockAllowsTreeCopy() == false { return false }
-        var status = stat()
-        let stated = name.withCString { item in
-            fstatat(source, item, &status, AT_SYMLINK_NOFOLLOW) == 0
-        }
-        guard stated, device(of: status) == expectDevice, let kind = stamp(of: status)?.kind else {
+        guard let status = fstatatWithinCopyClock(source, name),
+            device(of: status) == expectDevice,
+            let kind = stamp(of: status)?.kind
+        else {
             return false
         }
         let mode = modeBits(status.st_mode)
         switch kind {
         case .directory:
-            guard name.withCString({ mkdirat(destination, $0, mode) == 0 }) else {
+            guard mkdiratWithinCopyClock(destination, name, mode) else {
                 return false
             }
-            let childSource = name.withCString { item in
-                openat(source, item, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-            }
-            let childDest = name.withCString { item in
-                openat(destination, item, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-            }
+            let childSource = openatWithinCopyClock(
+                source,
+                name,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+            let childDest = openatWithinCopyClock(
+                destination,
+                name,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
             guard childSource >= 0, childDest >= 0 else {
                 if childSource >= 0 { close(childSource) }
                 if childDest >= 0 { close(childDest) }
@@ -1440,9 +1508,11 @@ func copyTree(
             if status.st_nlink > 1 {
                 return false
             }
-            let input = name.withCString { item in
-                openat(source, item, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
-            }
+            let input = openatWithinCopyClock(
+                source,
+                name,
+                O_RDONLY | O_NOFOLLOW | O_CLOEXEC
+            )
             guard input >= 0 else {
                 return false
             }
@@ -1451,14 +1521,12 @@ func copyTree(
                 close(input)
                 return false
             }
-            let output = name.withCString { item in
-                openat(
-                    destination,
-                    item,
-                    O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_WRONLY,
-                    mode
-                )
-            }
+            let output = openatWithinCopyClock(
+                destination,
+                name,
+                O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_WRONLY,
+                mode
+            )
             guard output >= 0 else {
                 close(input)
                 return false
@@ -1609,14 +1677,35 @@ func workspacePathIdentity(_ path: String) -> WorkspacePathIdentity? {
     )
 }
 
+private final class MountStatBox: @unchecked Sendable {
+    var info = statfs()
+}
+
 struct WorkspaceMountFacts: Equatable {
     var source: String
     var point: String
 }
 
 func workspaceMountFacts(_ path: String) -> WorkspaceMountFacts? {
-    var info = statfs()
-    guard path.withCString({ statfs($0, &info) == 0 }) else { return nil }
+    let allowance = diskImageMountStatAllowance(
+        sharedDeadline: CooperativeLaunchStop.cancelClock?.deadline,
+        now: Date()
+    )
+    let limit: TimeInterval?
+    switch allowance {
+    case .skip:
+        return nil
+    case .uncancelled:
+        limit = nil
+    case .limited(let left):
+        limit = left
+    }
+    let box = MountStatBox()
+    let ok = diskImageWaitForStat(allowance: limit) {
+        path.withCString { statfs($0, &box.info) == 0 }
+    }
+    guard ok == true else { return nil }
+    let info = box.info
     let source = withUnsafePointer(to: info.f_mntfromname) {
         $0.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: info.f_mntfromname)) {
             String(cString: $0)
@@ -2517,10 +2606,18 @@ private func workspaceImageListed(
     returnDeadline: Date,
     clock: DiskImageCancelClock
 ) -> DiskImageListingRead {
+    let infoBudget = diskImageListedInfoBudget(
+        sliceDeadline: returnDeadline,
+        localDeadline: clock.deadline,
+        sharedDeadline: CooperativeLaunchStop.cancelClock?.deadline
+    )
+    if infoBudget <= 0 {
+        return DiskImageListingRead(imageListed: nil, infoTimedOut: true)
+    }
     let info = runToolBody(
         ["/usr/bin/hdiutil", "info", "-plist"],
         honorCancellation: false,
-        deadline: min(1.0, max(0, returnDeadline.timeIntervalSinceNow)),
+        deadline: infoBudget,
         yieldToPriorityWaiter: false,
         parkIfStuck: false,
         returnDeadline: returnDeadline,
