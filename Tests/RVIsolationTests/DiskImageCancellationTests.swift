@@ -639,7 +639,21 @@ struct DiskImageCancellationTests {
             peerHoldsLock: false
         ) == armed)
         #expect(diskImagePeerWaitFailsBoundary(peerHoldsLock: true, acquireSliceSpent: true) == false)
+        #expect(diskImagePeerWaitFailsBoundary(
+            peerHoldsLock: true,
+            acquireSliceSpent: true,
+            peerWaitSpent: false
+        ) == false)
+        #expect(diskImagePeerWaitFailsBoundary(
+            peerHoldsLock: true,
+            acquireSliceSpent: false,
+            peerWaitSpent: true
+        ))
         #expect(diskImagePeerWaitFailsBoundary(peerHoldsLock: false, acquireSliceSpent: true))
+        #expect(DiskImageCancelBudget.peerAcquireWait == 120)
+        #expect(DiskImageCancelBudget.peerAcquireWait > 45)
+        #expect(DiskImageCancelBudget.peerAcquireWait < 30 * 60)
+        #expect(DiskImageCancelBudget.peerAcquireWait != DiskImageCancelBudget.returnBound)
         #expect(diskImageLockWaitIsExpired(
             cancelled: false,
             cancelClockSpent: false,
@@ -915,9 +929,9 @@ struct DiskImageCancellationTests {
         #expect(establishCancelReportsCancelled(detachExitedZero: false) == false)
     }
 
-    /// A dead helper plus a nil listing (empty info, a short timeout, or a
-    /// mount hdiutil does not report) clears the gate. A sibling image in
-    /// that listing does not, and a listing that shows this image does not.
+    /// A nil listing does not clear while the disk can still appear. A
+    /// sibling row does not keep an image-path hold after this image is
+    /// gone. A listing that shows this image keeps the hold.
     @Test func deadHelperClearsANilListingAndKeepsASiblingListing() {
         let image = "/tmp/rv-inode-TOKEN.sparseimage"
         let empty = diskImageInfoListingShowsImage(
@@ -926,14 +940,23 @@ struct DiskImageCancellationTests {
             imagePaths: []
         )
         #expect(empty == nil)
-        #expect(diskImagePublicationRecheckCanClear(helperStillAlive: false, imageListed: empty))
-        let timedOut = diskImageInfoListingShowsImage(
-            parsedImageCount: 0,
-            identity: image,
-            imagePaths: []
-        )
-        #expect(timedOut == nil)
-        #expect(diskImagePublicationRecheckCanClear(helperStillAlive: false, imageListed: timedOut))
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: empty,
+            infoTimedOut: false,
+            imageFileGone: false
+        ) == false)
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: empty,
+            infoTimedOut: true,
+            imageFileGone: true
+        ) == false)
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: empty,
+            imageFileGone: true
+        ))
         let unreportedMount = diskImageInfoListingShowsImage(
             parsedImageCount: 1,
             identity: "/private/var/folders/ws",
@@ -943,16 +966,17 @@ struct DiskImageCancellationTests {
         #expect(unreportedMount == nil)
         #expect(diskImagePublicationRecheckCanClear(
             helperStillAlive: false,
-            imageListed: unreportedMount
-        ))
+            imageListed: unreportedMount,
+            identityIsImage: false
+        ) == false)
         let sibling = diskImageInfoListingShowsImage(
             parsedImageCount: 1,
             identity: image,
             imagePaths: ["/tmp/rv-inode-OTHER.sparseimage"]
         )
         #expect(sibling == false)
-        #expect(diskImagePublicationRecheckCanClear(helperStillAlive: false, imageListed: sibling) == false)
-        #expect(diskImagePublicationRecheckCanClear(helperStillAlive: false, imageListed: false) == false)
+        #expect(diskImagePublicationRecheckCanClear(helperStillAlive: false, imageListed: sibling))
+        #expect(diskImagePublicationRecheckCanClear(helperStillAlive: false, imageListed: false))
         let shown = diskImageInfoListingShowsImage(
             parsedImageCount: 1,
             identity: image,
@@ -1232,8 +1256,8 @@ private func assertXattrCopyStopsBeforeDetachReserve() throws {
     }
     let name = "user.rv-fork"
     // Publish uses the 64KB window. The value fits in that window, so one
-    // get returns all of it. The clock is checked after that get; a budget
-    // that is gone must not set the attribute. A smaller window that fails
+    // get returns all of it while the budget remains. The detach reserve
+    // is read again immediately before the set. A smaller window that fails
     // with ERANGE is not this test.
     let value = [UInt8](repeating: 3, count: 3_000)
     let chunk = 64 * 1024
@@ -1242,6 +1266,7 @@ private func assertXattrCopyStopsBeforeDetachReserve() throws {
     if wrote {
         let trace = XattrCopyTrace()
         var checks = 0
+        var deadline: Date?
         let started = Date()
         let copied = copyOneXattrObservingClock(
             from: source.fileDescriptor,
@@ -1251,15 +1276,24 @@ private func assertXattrCopyStopsBeforeDetachReserve() throws {
             trace: trace
         ) {
             checks += 1
-            return checks < 2
+            if deadline == nil {
+                deadline = Date().addingTimeInterval(DiskImageCancelBudget.detachCap + 0.25)
+            }
+            // The get's checks stay inside the budget. The check on the
+            // set itself spends the detach reserve.
+            if checks >= 4 {
+                Thread.sleep(forTimeInterval: 0.35)
+            }
+            return DiskImageCancelBudget.copyMayContinue(deadline: deadline, now: Date())
         }
         #expect(copied == false)
-        #expect(checks >= 2)
+        #expect(checks >= 4)
         #expect(trace.largestRead == value.count)
         #expect(trace.largestWrite == 0)
         let landed = readXattr(destination.fileDescriptor, name)?.count ?? 0
         #expect(landed == 0)
         #expect(landed < value.count)
+        #expect(landed != value.count)
         #expect(Date().timeIntervalSince(started) < DiskImageCancelBudget.returnBound)
     }
     #expect(namedForkCopyStarts(pathResolved: false) == false)
@@ -1293,12 +1327,25 @@ private func assertXattrCopyStopsBeforeDetachReserve() throws {
     }
     let forkTrace = XattrCopyTrace()
     let slice = 64 * 1024
+    var fcopyChecks = 0
+    let fcopyDeadline = Date().addingTimeInterval(DiskImageCancelBudget.detachCap + 0.2)
     let fcopy = copyXattrsWithFcopyfile(
         from: source.fileDescriptor,
         to: destination.fileDescriptor,
         trace: forkTrace
     ) {
-        namedForkByteCount(destURL.path) < slice
+        fcopyChecks += 1
+        if fcopyChecks == 1 {
+            return DiskImageCancelBudget.copyMayContinue(deadline: fcopyDeadline, now: Date())
+        }
+        // The status callback runs before `fsetxattr`. Spending the
+        // reserve there must quit instead of writing the attribute.
+        // Later checks are the named-fork slices.
+        if fcopyChecks == 2 {
+            Thread.sleep(forTimeInterval: 0.3)
+            return DiskImageCancelBudget.copyMayContinue(deadline: fcopyDeadline, now: Date())
+        }
+        return namedForkByteCount(destURL.path) < slice
     }
     #expect(fcopy == false)
     #expect(forkTrace.fcopyfileInvoked)
@@ -1307,6 +1354,9 @@ private func assertXattrCopyStopsBeforeDetachReserve() throws {
     #expect(forkLanded < forkBytes)
     #expect(forkTrace.forkBytesWritten > 0)
     #expect(forkTrace.forkBytesWritten < forkBytes)
+    let attribute = readXattr(destination.fileDescriptor, name)?.count ?? 0
+    #expect(attribute < value.count)
+    #expect(attribute != value.count)
     #endif
 }
 

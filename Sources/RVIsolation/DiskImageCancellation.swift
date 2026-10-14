@@ -34,6 +34,10 @@ enum DiskImageCancelBudget {
     static let preemptCleanup: TimeInterval = 0.5
     /// `hdiutil detach` on the cancelled path. Do not raise.
     static let detachCap: TimeInterval = 5
+    /// How long a non-cancelled waiter may queue for the disk lock before
+    /// the boundary fails. Longer than the 45-second slice that starts
+    /// after the lock is taken, shorter than the 30-minute job cap.
+    static let peerAcquireWait: TimeInterval = 120
     /// Plain `umount` and `umount -f` together, on the cancelled path only.
     /// Short enough that both, the 5-second detach, and the existing
     /// half-second SIGTERM grace on each of those three helpers still
@@ -532,28 +536,41 @@ func diskImagePublicationGateUpdate(
     return false
 }
 
-/// One bounded recheck after the helper is dead. A nil listing is an empty
-/// `hdiutil info`, a timed-out info, or a mount hdiutil does not report:
-/// this image is not mounted, so the hold can drop and a later attach can
-/// run. A listing that shows this image keeps the hold. A non-empty listing
-/// that merely omits this image is a sibling, not evidence this disk is
-/// gone. This is not a spin out to the 30-minute cap.
+/// One bounded recheck after the helper is dead. A listing that shows this
+/// image keeps the hold. An info timeout, empty info while the sparseimage
+/// is still on disk, or a `mount_hfs` hdiutil does not report also keep it:
+/// that disk can still appear. A sibling `rv-inode` row does not. When this
+/// image path is absent from a listing that was read, or the file is already
+/// gone, the hold drops. This is not a spin out to the 30-minute cap.
 func diskImagePublicationRecheckCanClear(
     helperStillAlive: Bool,
-    imageListed: Bool?
+    imageListed: Bool?,
+    infoTimedOut: Bool = false,
+    imageFileGone: Bool = false,
+    identityIsImage: Bool = true
 ) -> Bool {
     if helperStillAlive { return false }
-    return imageListed == nil
+    if imageListed == true { return false }
+    if infoTimedOut { return false }
+    // A live mount_hfs is not in `hdiutil info`, including when the only
+    // row is a sibling image. That nil is not proof the volume is gone.
+    if identityIsImage == false { return false }
+    // Omitted from a listing that was read. Not mounted, and it cannot
+    // appear, even while some other `rv-inode` image stays listed.
+    if imageListed == false { return true }
+    // Empty info. The file still being present is the publish race.
+    return imageFileGone
 }
 
 /// Drop the publication hold only when this helper is dead and the image
 /// can no longer appear. `diskImageCanStillAppear` is that second fact:
 /// a nil listing, or a non-empty listing that merely omitted this image
 /// before the publication wait, stays true and must not clear. The gate's
-/// bounded recheck is `diskImagePublicationRecheckCanClear`, which treats
-/// a nil listing as not mounted. A plan `.none` umount or detach stores no
-/// image; once its helper is dead the latch cannot publish and does drop.
-/// `returnBound` and `detachCap` are not involved.
+/// bounded recheck is `diskImagePublicationRecheckCanClear`: a nil listing
+/// clears only after the sparseimage file is gone, and a sibling omission
+/// does clear. A plan `.none` umount or detach stores no image; once its
+/// helper is dead the latch cannot publish and does drop. `returnBound`
+/// and `detachCap` are not involved.
 func diskImagePublicationCanClear(
     helperStillAlive: Bool,
     diskCanStillAppear: Bool,
@@ -615,13 +632,15 @@ func diskImageAcquireSliceDeadline(
 }
 
 /// A non-cancelled establish that is only waiting on a peer does not fail
-/// the boundary, including when a 45-second slice would already be spent.
-/// A waiter that holds the lock still stops when its slice is spent.
+/// on the 45-second slice. That wait stops at `peerAcquireWait` (120s),
+/// which is shorter than the 30-minute job cap. A waiter that holds the
+/// lock still stops when its own 45-second slice is spent.
 func diskImagePeerWaitFailsBoundary(
     peerHoldsLock: Bool,
-    acquireSliceSpent: Bool
+    acquireSliceSpent: Bool,
+    peerWaitSpent: Bool = false
 ) -> Bool {
-    if peerHoldsLock { return false }
+    if peerHoldsLock { return peerWaitSpent }
     return acquireSliceSpent
 }
 
@@ -1266,15 +1285,24 @@ func copyOneXattrObservingClock(
         }
         if window.count != length { return false }
         trace.noteRead(window.count)
-        // The get can spend the budget. Do not set once it is gone.
+        // The get can finish inside the budget. That is not the set.
         if mayContinue() == false { return false }
         gathered.append(contentsOf: window)
         offset += window.count
     }
     if gathered.count > step { return false }
     if mayContinue() == false { return false }
+    // Immediately before `fsetxattr`. The detach reserve can be gone
+    // even though the get finished inside the budget.
+    if xattrSetKeepsDetachReserve(mayContinue: mayContinue) == false { return false }
     trace.noteWrite(gathered.count)
     return writeXattr(destination, name, gathered)
+}
+
+/// The clock read that sits on the set itself. A true result from the
+/// post-get check does not skip this one.
+func xattrSetKeepsDetachReserve(mayContinue: () -> Bool) -> Bool {
+    mayContinue()
 }
 
 /// Gets at most `length` bytes and only from `offset` zero. A larger value
@@ -1405,20 +1433,20 @@ func copyXattrsWithFcopyfile(
     if mayContinue() == false { return false }
     // `fcopyfile` copies the other attributes. The named fork is skipped
     // there and copied in 64KB slices so a short clock stops during it.
-    if copyXattrsByFcopyfile(
-        from: source,
-        to: destination,
-        trace: trace,
-        mayContinue: mayContinue
-    ) == false {
-        return false
-    }
-    return copyResourceForkObservingClock(
+    // A status callback that quits does not skip that slice copy.
+    let attributesCopied = copyXattrsByFcopyfile(
         from: source,
         to: destination,
         trace: trace,
         mayContinue: mayContinue
     )
+    let forkCopied = copyResourceForkObservingClock(
+        from: source,
+        to: destination,
+        trace: trace,
+        mayContinue: mayContinue
+    )
+    return attributesCopied && forkCopied
 }
 
 private final class FcopyfileClockBox {
@@ -1468,22 +1496,23 @@ private func copyXattrsByFcopyfile(
     guard let state = copyfile_state_alloc() else { return false }
     defer { copyfile_state_free(state) }
     let box = FcopyfileClockBox(mayContinue)
-    var context = Unmanaged.passUnretained(box).toOpaque()
-    var callback: copyfile_callback_t = xattrFcopyfileStatus
-    let contextSet = withUnsafePointer(to: &context) { pointer in
-        copyfile_state_set(
-            state,
-            UInt32(COPYFILE_STATE_STATUS_CTX),
-            UnsafeRawPointer(pointer)
-        )
-    }
-    let callbackSet = withUnsafePointer(to: &callback) { pointer in
-        copyfile_state_set(
-            state,
-            UInt32(COPYFILE_STATE_STATUS_CB),
-            UnsafeRawPointer(pointer)
-        )
-    }
+    let context = Unmanaged.passUnretained(box).toOpaque()
+    // `copyfile_state_set` stores the pointer bits as the callback and the
+    // context. The address of a local that holds those pointers is not
+    // `xattrFcopyfileStatus`, so the status function would never run.
+    let callback = xattrFcopyfileStatus as copyfile_callback_t
+    let callbackBits = unsafeBitCast(callback, to: UInt.self)
+    guard let callbackPointer = UnsafeRawPointer(bitPattern: callbackBits) else { return false }
+    let contextSet = copyfile_state_set(
+        state,
+        UInt32(COPYFILE_STATE_STATUS_CTX),
+        UnsafeRawPointer(context)
+    )
+    let callbackSet = copyfile_state_set(
+        state,
+        UInt32(COPYFILE_STATE_STATUS_CB),
+        callbackPointer
+    )
     guard contextSet == 0, callbackSet == 0 else { return false }
     trace.noteFcopyfile()
     return fcopyfile(source, destination, state, copyfile_flags_t(COPYFILE_XATTR)) == 0

@@ -1787,11 +1787,10 @@ private enum DiskImageToolSerialization {
         }
     }
 
-    /// One bounded recheck once the helper is dead. A nil listing (empty
-    /// info, a short info timeout, or a mount hdiutil does not report)
-    /// means this image is not mounted, so the hold drops. A listing that
-    /// shows this image, or a non-empty listing that only shows a sibling,
-    /// keeps it. This does not spin until the 30-minute cap.
+    /// One bounded recheck once the helper is dead. An info timeout, empty
+    /// info while the sparseimage remains, or a mount hdiutil does not
+    /// report keeps the hold. A sibling row does not. A listing that shows
+    /// this image keeps it. This does not spin until the 30-minute cap.
     static func clearPublicationGateIfDiskIsGone(clock: DiskImageCancelClock) {
         let parked = publication.withLock { $0 }
         guard parked.held else { return }
@@ -1819,9 +1818,15 @@ private enum DiskImageToolSerialization {
         }
         let deadline = Date().addingTimeInterval(DiskImageCancelBudget.preemptReap)
         let listed = workspaceImageListed(image, returnDeadline: deadline, clock: clock)
+        let identityIsImage = image.contains("rv-inode-") && image.hasSuffix(".sparseimage")
+        var imageStatus = stat()
+        let imageFileGone = identityIsImage && image.withCString { stat($0, &imageStatus) != 0 }
         guard diskImagePublicationRecheckCanClear(
             helperStillAlive: false,
-            imageListed: listed
+            imageListed: listed.imageListed,
+            infoTimedOut: listed.infoTimedOut,
+            imageFileGone: imageFileGone,
+            identityIsImage: identityIsImage
         ) else { return }
         publication.withLock { state in
             guard let current = state.image, diskImageSamePath(current, image) else { return }
@@ -2024,9 +2029,10 @@ private func runTool(
     let helperSlice = deadline
     let acquireSlice = deadline ?? 45
     // The 45-second slice starts when the lock is taken, not while a peer
-    // holds it. A later poll does not move that end. Queue time must not
-    // fail the boundary.
+    // holds it. A later poll does not move that end. The wait to take the
+    // lock stops at 120 seconds, not at the 30-minute job cap and not at 45.
     let armedSlice = DiskImageArmedSlice()
+    let peerWaitEnd = Date().addingTimeInterval(DiskImageCancelBudget.peerAcquireWait)
     var notedPriority = false
     var protectNext = false
     defer {
@@ -2250,8 +2256,12 @@ private func runTool(
         switch attempt {
         case nil:
             protectNext = true
-            let queued = armedSlice.deadline.map { Date() >= $0 } ?? false
-            if diskImagePeerWaitFailsBoundary(peerHoldsLock: true, acquireSliceSpent: queued) {
+            if clock.deadline == nil,
+                diskImagePeerWaitFailsBoundary(
+                    peerHoldsLock: true,
+                    acquireSliceSpent: false,
+                    peerWaitSpent: Date() >= peerWaitEnd
+                ) {
                 return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
             }
             usleep(10_000)
@@ -2262,9 +2272,11 @@ private func runTool(
             if let end = clock.deadline,
                 diskImageLockWaitIsExpired(cancelled: true, cancelClockSpent: Date() >= end) {
                 return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
-            }
-            let queued = armedSlice.deadline.map { Date() >= $0 } ?? false
-            if diskImagePeerWaitFailsBoundary(peerHoldsLock: true, acquireSliceSpent: queued) {
+            } else if diskImagePeerWaitFailsBoundary(
+                peerHoldsLock: true,
+                acquireSliceSpent: false,
+                peerWaitSpent: Date() >= peerWaitEnd
+            ) {
                 return ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
             }
             usleep(20_000)
@@ -2417,7 +2429,7 @@ private func detachPublishedTarget(
         identity,
         returnDeadline: returnDeadline,
         clock: clock
-    )
+    ).imageListed
     let canAppear = diskImageCanStillAppear(
         helperStillAlive: ran.helperStillAlive,
         detachStatus: ran.output.status,
@@ -2444,13 +2456,18 @@ private func detachPublishedTarget(
     )
 }
 
-/// `hdiutil info` for one image. Nil when the listing could not be read.
+struct DiskImageListingRead: Equatable, Sendable {
+    var imageListed: Bool?
+    var infoTimedOut: Bool
+}
+
+/// `hdiutil info` for one image. A timeout is not an empty listing.
 /// Already inside the serialization lock, so this uses `runToolBody`.
 private func workspaceImageListed(
     _ image: String,
     returnDeadline: Date,
     clock: DiskImageCancelClock
-) -> Bool? {
+) -> DiskImageListingRead {
     let info = runToolBody(
         ["/usr/bin/hdiutil", "info", "-plist"],
         honorCancellation: false,
@@ -2460,15 +2477,20 @@ private func workspaceImageListed(
         returnDeadline: returnDeadline,
         clock: clock
     )
-    if info.helperStillAlive || info.output.timedOut || info.output.status != 0 { return nil }
+    if info.helperStillAlive || info.output.timedOut || info.output.status != 0 {
+        return DiskImageListingRead(imageListed: nil, infoTimedOut: true)
+    }
     guard let data = info.output.stdout.data(using: .utf8),
         let images = AttachedWorkspaceImage.parse(hdiutilInfo: data)
-    else { return nil }
-    return diskImageInfoListingShowsImage(
-        parsedImageCount: images.count,
-        identity: image,
-        imagePaths: images.map(\.imagePath),
-        mountPoints: images.compactMap(\.mountPoint)
+    else { return DiskImageListingRead(imageListed: nil, infoTimedOut: false) }
+    return DiskImageListingRead(
+        imageListed: diskImageInfoListingShowsImage(
+            parsedImageCount: images.count,
+            identity: image,
+            imagePaths: images.map(\.imagePath),
+            mountPoints: images.compactMap(\.mountPoint)
+        ),
+        infoTimedOut: false
     )
 }
 

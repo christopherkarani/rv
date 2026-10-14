@@ -419,16 +419,19 @@ public final class SecretGateway: @unchecked Sendable {
         // Missing `Content-Length` is not a malformed request and must not
         // wait for bytes that will not arrive.
         let framed: Data?
-        if let encoding = head.header("Transfer-Encoding") {
-            guard encoding.lowercased() == "chunked" else { return nil }
+        switch gatewayBodyFraming(
+            transferEncodings: head.headerValues("Transfer-Encoding"),
+            contentLengths: head.headerValues("Content-Length"),
+            maximum: Self.maximumBodyBytes
+        ) {
+        case .refused:
+            return nil
+        case .chunked:
             framed = reader.readChunked(limit: Self.maximumBodyBytes)
-        } else if let lengthText = head.header("Content-Length") {
-            guard let length = Int(lengthText), length >= 0, length <= Self.maximumBodyBytes else {
-                return nil
-            }
-            framed = length == 0 ? Data() : reader.readExactly(length)
-        } else {
+        case .empty:
             framed = Data()
+        case .fixed(let length):
+            framed = reader.readExactly(length)
         }
         guard let framed else { return nil }
         if head.method == "HEAD" { return Data() }

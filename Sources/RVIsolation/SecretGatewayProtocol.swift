@@ -67,6 +67,13 @@ struct GatewayRequestHead: Equatable {
         headers.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.value
     }
 
+    /// Every value for `name`, in arrival order. `header` is the first one.
+    /// Body framing has to see the rest: a later `Content-Length` can disagree
+    /// or sit above the maximum.
+    func headerValues(_ name: String) -> [String] {
+        headers.filter { $0.name.caseInsensitiveCompare(name) == .orderedSame }.map(\.value)
+    }
+
     /// Bytes up to and excluding the blank line. Nil for anything malformed.
     static func parse(_ bytes: [UInt8]) -> GatewayRequestHead? {
         guard bytes.count <= maximumBytes, bytes.contains(0) == false,
@@ -98,6 +105,47 @@ struct GatewayRequestHead: Equatable {
         (byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122)
             || "!#$%&'*+-.^_`|~".utf8.contains(byte)
     }
+}
+
+/// How `readBody` frames one request. Two `Content-Length` values that
+/// disagree, a value that does not parse, or any value above `maximum`
+/// is refused. That includes a later length beside `Transfer-Encoding`.
+enum GatewayBodyFraming: Equatable, Sendable {
+    case empty
+    case fixed(Int)
+    case chunked
+    case refused
+}
+
+func gatewayBodyFraming(
+    transferEncodings: [String],
+    contentLengths: [String],
+    maximum: Int
+) -> GatewayBodyFraming {
+    if contentLengthsRefuseBody(contentLengths, maximum: maximum) {
+        return .refused
+    }
+    if transferEncodings.isEmpty == false {
+        let chunked = transferEncodings.allSatisfy { $0.lowercased() == "chunked" }
+        return chunked ? .chunked : .refused
+    }
+    guard let first = contentLengths.first else { return .empty }
+    guard let length = Int(first), length >= 0, length <= maximum else { return .refused }
+    return length == 0 ? .empty : .fixed(length)
+}
+
+/// True when any length is unusable, above `maximum`, or not the same
+/// number as the others. A single in-range length, including zero, is not
+/// a refusal. Missing lengths are not a refusal.
+func contentLengthsRefuseBody(_ values: [String], maximum: Int) -> Bool {
+    if values.isEmpty { return false }
+    var accepted: Int?
+    for value in values {
+        guard let length = Int(value), length >= 0, length <= maximum else { return true }
+        if let accepted, accepted != length { return true }
+        accepted = length
+    }
+    return false
 }
 
 /// `/s/<NAME>[/rest][?query]` → secret name and the upstream-relative remainder.

@@ -234,6 +234,19 @@ struct SecretGatewayTests {
             "HEAD /s/OPENAI_API_KEY/x HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n"
                 + "Content-Length: nope\r\n\r\n")
         #expect(invalid.status == 413)
+        let secondLength = try gatewayExchange(port: port,
+            "HEAD /s/OPENAI_API_KEY/x HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n"
+                + "Content-Length: 0\r\nContent-Length: \(SecretGateway.maximumBodyBytes + 1)\r\n\r\n")
+        #expect(secondLength.status == 413)
+        let disagree = try gatewayExchange(port: port,
+            "HEAD /s/OPENAI_API_KEY/x HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n"
+                + "Content-Length: 0\r\nContent-Length: 1\r\n\r\n")
+        #expect(disagree.status == 413)
+        let besideChunked = try gatewayExchange(port: port,
+            "HEAD /s/OPENAI_API_KEY/x HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n"
+                + "Transfer-Encoding: chunked\r\nContent-Length: \(SecretGateway.maximumBodyBytes + 1)\r\n\r\n"
+                + "0\r\n\r\n")
+        #expect(besideChunked.status == 413)
         #expect(upstream.requests.isEmpty)
         #expect(audit.items.withLock { $0.allSatisfy { $0.allowed == false } && $0.isEmpty == false })
     }
@@ -248,6 +261,12 @@ struct SecretGatewayTests {
         #expect(response.status == 200)
         #expect(response.headers["transfer-encoding"] == nil)
         #expect(response.body.isEmpty)
+        let zero = try gatewayExchange(port: port,
+            "HEAD /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n"
+                + "Content-Length: 0\r\n\r\n")
+        #expect(zero.status == 200)
+        #expect(zero.body.isEmpty)
+        #expect(upstream.requests.count == 2)
     }
 
     @Test func oversizedBodiesAreRefused() throws {
