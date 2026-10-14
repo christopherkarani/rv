@@ -163,7 +163,9 @@ public enum MCPRedaction {
     }
 
     /// Protocol-relative `//user:pass@host`, or a path segment that is a token.
-    /// A `postgres://user:pass@…` flag value is not this case; the review shows it.
+    /// A bare token (`ctx7sk-…`, `sk-…`) is not a path: import stores it as a
+    /// keychain reference. A `postgres://user:pass@…` flag value is not this
+    /// case either; the review shows it.
     public static func argumentCarriesRefusedSecret(_ arg: String) -> Bool {
         var candidates = [arg]
         if arg.hasPrefix("-") {
@@ -175,6 +177,9 @@ public enum MCPRedaction {
         for candidate in candidates {
             let decoded = slashNormalized(candidate)
             if decoded.hasPrefix("//"), containsUserinfoSpelling(decoded) || urlCarriesSecret(decoded) { return true }
+            // looksLikeToken is what import turns into ${secret:NAME}. Refusing
+            // it here would skip the server and drop a credential that can be stored.
+            if looksLikeToken(decoded) { continue }
             if decoded.split(whereSeparator: { $0 == "/" || $0 == "#" }).contains(where: { pathSegmentCarriesToken(String($0)) }) {
                 return true
             }
