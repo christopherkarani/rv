@@ -690,6 +690,71 @@ struct MCPCommandTests {
         #expect(allow.contains("(subpath \"\(parent)\")") == false)
     }
 
+    @Test func danglingCredentialTargetStaysDeniedAfterTheWriteAllow() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-retarget-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let scratch = root.appendingPathComponent("scratch")
+        let tmp = root.appendingPathComponent("tmp")
+        let ssh = home.appendingPathComponent(".ssh")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        #expect(symlink("/private/tmp/future-keys", ssh.path) == 0)
+        let result = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: tmp.path)
+        guard case .success(let profile) = result else {
+            Issue.record("profile refused a dangling tmp credential link: \(result)")
+            return
+        }
+        let secret = "/private/tmp/future-keys/id_rsa"
+        let rule = lastFileReadRule(profile, matching: secret)
+        #expect(rule?.hasPrefix("(deny") == true)
+        #expect(rule?.contains("future-keys") == true)
+        let escaped = "/opt/secret/id_rsa"
+        let retarget = lastFileReadRule(profile, matching: escaped)
+        #expect(retarget != "(allow default)")
+        #expect(retarget?.hasPrefix("(deny") == true)
+        let dataOpt = "/System/Volumes/Data/opt/future-keys/id_rsa"
+        try FileManager.default.removeItem(at: ssh)
+        #expect(symlink("/opt/future-keys", ssh.path) == 0)
+        let opt = MCPSandbox.profile(
+            policy: MCPSandboxPolicy(network: false, writable: []),
+            scratch: scratch.path, home: home.path, configDirectory: root.appendingPathComponent("config").path,
+            temporaryDirectory: tmp.path)
+        guard case .success(let optProfile) = opt else {
+            Issue.record("profile refused a dangling opt credential link: \(opt)")
+            return
+        }
+        let optRule = lastFileReadRule(optProfile, matching: dataOpt)
+        #expect(optRule?.hasPrefix("(deny") == true)
+        let lines = profile.split(separator: "\n").map(String.init)
+        let writeAllow = lines.lastIndex { $0.hasPrefix("(allow file-read*") && $0.contains("/private/tmp") } ?? -1
+        let credential = lines.lastIndex { $0.hasPrefix("(deny file-read*") && $0.contains("future-keys") } ?? -1
+        #expect(credential > writeAllow)
+    }
+
+    @Test func blockedServerArgumentIsEscaped() {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let raw = "\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{202E}" + sentence
+        let blocked = MCPLaunchError.blocked(raw).message
+        #expect(blocked.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(blocked.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(blocked.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(blocked.contains("is blocked by mcp.json or organization policy"))
+        #expect(blocked.contains("\\u001b[2J"))
+        #expect(blocked.contains("\\u2028"))
+        #expect(blocked.contains("\\u202e"))
+        let lines = blocked.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+        #expect(lines.contains(sentence) == false)
+        let unknown = MCPLaunchError.unknownServer(raw).message
+        #expect(unknown.contains("\\u001b[2J"))
+        #expect(unknown.contains("\\\\u001b") == false)
+    }
+
     @Test func displayedNamesAndRobotJSONEscapeClientText() async throws {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let raw = "\u{1B}[2J\u{1B}[H" + sentence
@@ -856,6 +921,31 @@ struct MCPCommandTests {
         try literal.encoded().prettyText.write(to: url, atomically: true, encoding: .utf8)
         chmod(url.path, 0o600)
         #expect(MCPIntegrity.status(configDirectory: fixture.config, keys: keys).isTrusted == false)
+    }
+
+    /// Last file-read rule that matches `path`. Seatbelt uses the last match.
+    private func lastFileReadRule(_ profile: String, matching path: String) -> String? {
+        var last: String?
+        for line in profile.split(separator: "\n").map(String.init) {
+            if line == "(allow default)" || line == "(deny file-read*)" {
+                last = line
+                continue
+            }
+            let reads = line.hasPrefix("(deny file-read*") || line.hasPrefix("(allow file-read*")
+            guard reads else { continue }
+            let subpaths = line.split(separator: "(subpath \"").dropFirst().compactMap { piece -> String? in
+                guard let end = piece.firstIndex(of: "\"") else { return nil }
+                return String(piece[..<end])
+            }
+            if subpaths.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) {
+                last = line
+                continue
+            }
+            if Self.seatbeltRegexes(line).contains(where: { Self.wholeMatch($0, path) }) {
+                last = line
+            }
+        }
+        return last
     }
 
     private func canonicalPath(_ path: String) -> String {

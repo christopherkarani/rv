@@ -303,6 +303,22 @@ enum SecretsRun {
         return text + "\n"
     }
 
+    /// Robot JSON for `rv secrets`. `JSONEncoder` already writes ESC as
+    /// `\u001b`. U+2028, U+2029, and U+202E stay raw unless they are replaced
+    /// after encoding. The result is still valid JSON. `json` itself is unchanged.
+    static func robotJSON<T: Encodable>(_ value: T) -> String {
+        var text = json(value)
+        let scalars: [(Character, String)] = [
+            ("\u{2028}", "\\u2028"),
+            ("\u{2029}", "\\u2029"),
+            ("\u{202E}", "\\u202e"),
+        ]
+        for (scalar, escaped) in scalars {
+            text = text.replacingOccurrences(of: String(scalar), with: escaped)
+        }
+        return text
+    }
+
     /// The secret value: hidden prompt on a terminal, otherwise all of stdin
     /// minus trailing newlines.
     static func readValue(name: String, stdinIsTTY: Bool) -> Data? {
@@ -347,7 +363,7 @@ struct SecretsList: AsyncParsableCommand {
             try ctx.fail("rv secrets list: \(failure.message)\n")
         case .success(let configuration):
             let report = SecretsRun.list(configuration, profiles: SecretsRun.profiles(environment))
-            ctx.writeStdout(ctx.explicitRobot ? SecretsRun.json(report) : SecretsRun.listText(report))
+            ctx.writeStdout(ctx.explicitRobot ? SecretsRun.robotJSON(report) : SecretsRun.listText(report))
         }
     }
 }
@@ -369,7 +385,7 @@ struct SecretsCheck: AsyncParsableCommand {
         case .failure(let failure): try ctx.fail("rv secrets check: \(failure.message)\n")
         case .success(let checked): rows = checked
         }
-        let text = ctx.explicitRobot ? SecretsRun.json(rows) : SecretsRun.checkText(rows)
+        let text = ctx.explicitRobot ? SecretsRun.robotJSON(rows) : SecretsRun.checkText(rows)
         if rows.allSatisfy(\.ok) {
             ctx.writeStdout(text)
         } else {
@@ -464,7 +480,7 @@ struct SecretsScan: AsyncParsableCommand {
         case .success(let loaded): configuration = loaded
         }
         let report = SecretsRun.scan(root: root, configuration: configuration, environment: environment)
-        let text = ctx.explicitRobot ? SecretsRun.json(report) : SecretsRun.scanText(report)
+        let text = ctx.explicitRobot ? SecretsRun.robotJSON(report) : SecretsRun.scanText(report)
         if report.findings.isEmpty {
             ctx.writeStdout(text)
         } else {

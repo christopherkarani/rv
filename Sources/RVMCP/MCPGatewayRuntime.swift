@@ -35,7 +35,7 @@ public enum MCPLaunchError: Error, Sendable, Equatable {
     public var message: String {
         switch self {
         case .unknownServer(let name): "mcp.json has no server named \(MCPDisplayedText.field(name))"
-        case .blocked(let name): "\(name) is blocked by mcp.json or organization policy"
+        case .blocked(let name): "\(MCPDisplayedText.field(name)) is blocked by mcp.json or organization policy"
         case .secretUndefined(let server, let secret): "\(server) uses secret \(secret), which secrets.json does not define"
         case .secretUnavailable(let server, let secret, let reason): "\(server) could not read secret \(secret): \(reason)"
         case .sandbox(let reason): "sandbox: \(reason)"

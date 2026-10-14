@@ -174,9 +174,9 @@ public enum MCPSetupError: Error, Sendable, Equatable {
 
     public var message: String {
         switch self {
-        case .unreadable(let path): "could not read \(path)"
-        case .hasComments(let path): "\(path) has comments or trailing commas rv would lose; edit it by hand"
-        case .writeFailed(let path): "could not write \(path)"
+        case .unreadable(let path): "could not read \(MCPDisplayedText.field(path))"
+        case .hasComments(let path): "\(MCPDisplayedText.field(path)) has comments or trailing commas rv would lose; edit it by hand"
+        case .writeFailed(let path): "could not write \(MCPDisplayedText.field(path))"
         case .manifest(let reason): "setup manifest: \(reason)"
         }
     }
@@ -219,7 +219,7 @@ public enum MCPHostSetup {
                     && configuration.server(named: entry.name) != nil
                 {
                     let name = shellQuote(entry.name)
-                    let rv = shellQuote(rvPath)
+                    let rv = shellQuote(MCPDisplayedText.field(rvPath))
                     result.manualSteps.append(
                         "codex mcp remove \(name) && codex mcp add \(name) -- \(rv) mcp serve --server \(name)")
                 }
@@ -249,7 +249,7 @@ public enum MCPHostSetup {
                     records.append(MCPSetupRecord(
                         host: file.host.rawValue, configPath: file.path.path, keyPath: keyPath, name: name,
                         original: entry, written: written))
-                    result.changed.append("\(shown) (\(file.host.rawValue), \(file.path.path))")
+                    result.changed.append("\(shown) (\(file.host.rawValue), \(MCPDisplayedText.field(file.path.path)))")
                     changed = true
                 }
                 guard changed else { continue }
@@ -284,7 +284,8 @@ public enum MCPHostSetup {
             let url = URL(fileURLWithPath: path)
             let mine = selected.filter { records[$0].configPath == path }
             guard case .data(let data) = read(url), var root = try? JSONValue.parse(data, maximumDepth: 128) else {
-                result.skipped += mine.map { "\(MCPDisplayedText.field(records[$0].name)): \(path) is missing or unreadable" }
+                let shownPath = MCPDisplayedText.field(path)
+                result.skipped += mine.map { "\(MCPDisplayedText.field(records[$0].name)): \(shownPath) is missing or unreadable" }
                 done.formUnion(mine)
                 continue
             }
@@ -302,7 +303,7 @@ public enum MCPHostSetup {
                 guard let updated = replacing(record.keyPath, in: root, with: .object(servers)) else { continue }
                 root = updated
                 changed = true
-                result.changed.append("\(MCPDisplayedText.field(record.name)) (\(record.host), \(path))")
+                result.changed.append("\(MCPDisplayedText.field(record.name)) (\(record.host), \(MCPDisplayedText.field(path)))")
             }
             if changed, writePreservingMode(Data(root.prettyText.utf8), to: url) == false {
                 return .failure(.writeFailed(path))

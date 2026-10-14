@@ -103,10 +103,15 @@ public enum MCPSandbox {
             "(allow file-write* " + writeAllow + ")",
             "(deny file-read* file-write* " + paths(unreadable, denyTargets: true) + linkDenies + ")",
         ]
-        // A symlink parent is denied so a later retarget is not allow-default.
-        // Reviewed write paths are allowed again after that deny.
+        // A credential symlink can be retargeted at a path the profile did not
+        // name. File reads no longer fall through to (allow default). Reviewed
+        // write paths are allowed again, then the credential deny is repeated
+        // so a target under /private/tmp or a cache is not re-opened.
         if linkDenies.isEmpty == false {
+            let credentialDeny = "(deny file-read* file-write* " + paths(unreadable, denyTargets: true) + linkDenies + ")"
+            lines.append("(deny file-read*)")
             lines.append("(allow file-read* file-write* " + writeAllow + ")")
+            lines.append(credentialDeny)
         }
         if policy.network == false {
             lines.append("(deny network*)")
@@ -229,18 +234,31 @@ public enum MCPSandbox {
     }
 
     /// Spellings Seatbelt may check for one path: `/tmp` and `/private/tmp`,
-    /// `/Users` and the Data-volume firmlink.
+    /// `/var` and `/private/var`, and the Data-volume firmlink of an absolute
+    /// path (`/opt`, `/private`, `/Users`, and the rest).
     static func seatbeltSpellings(_ path: String) -> [String] {
-        var spellings = [path]
-        if path == "/tmp" || path.hasPrefix("/tmp/") {
-            spellings.append("/private" + path)
-        } else if path == "/private/tmp" || path.hasPrefix("/private/tmp/") {
-            spellings.append("/tmp" + path.dropFirst("/private/tmp".count))
+        var spellings: [String] = []
+        func add(_ value: String) {
+            if spellings.contains(value) == false { spellings.append(value) }
         }
-        if path == "/Users" || path.hasPrefix("/Users/") {
-            spellings.append("/System/Volumes/Data" + path)
-        } else if path.hasPrefix("/System/Volumes/Data/Users") {
-            spellings.append(String(path.dropFirst("/System/Volumes/Data".count)))
+        add(path)
+        if path == "/tmp" || path.hasPrefix("/tmp/") {
+            add("/private" + path)
+        } else if path == "/private/tmp" || path.hasPrefix("/private/tmp/") {
+            add("/tmp" + path.dropFirst("/private/tmp".count))
+        }
+        if path == "/var" || path.hasPrefix("/var/") {
+            add("/private" + path)
+        } else if path == "/private/var" || path.hasPrefix("/private/var/") {
+            add(String(path.dropFirst("/private".count)))
+        }
+        let firm = "/System/Volumes/Data"
+        for spelling in Array(spellings) {
+            if spelling == firm || spelling.hasPrefix(firm + "/") {
+                add(String(spelling.dropFirst(firm.count)))
+            } else if spelling.hasPrefix("/") {
+                add(firm + spelling)
+            }
         }
         return spellings
     }
@@ -336,18 +354,28 @@ public enum MCPSandbox {
     }
 
     /// `^/+(\./+)*` between components, letters as classes, so `/a/./b`,
-    /// `/a//b`, and `/A/b` are the same path. `/tmp` also matches
-    /// `/private/tmp`, and `/Users` also matches the Data-volume firmlink.
-    /// A quote in the path stays escaped and still fails the profile closed.
+    /// `/a//b`, and `/A/b` are the same path. `/tmp` and `/var` also match
+    /// `/private/...` and the Data-volume spelling of that private path.
+    /// `/opt`, `/private`, `/usr/local`, `/Volumes`, and `/Users` match the
+    /// Data-volume firmlink. A quote in the path stays escaped and still
+    /// fails the profile closed.
     static func seatbeltPathPattern(_ path: String) -> String {
         let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         guard parts.isEmpty == false else { return "^$" }
         var body = parts.map { caseFold(regexEscape($0)) }.joined(separator: "/+(\\./+)*")
-        if parts[0].lowercased() == "tmp" {
-            body = "([Pp][Rr][Ii][Vv][Aa][Tt][Ee]/+(\\./+)*)?" + body
-        } else if parts[0].lowercased() == "users" {
-            let firm = "[Ss][Yy][Ss][Tt][Ee][Mm]/+(\\./+)*[Vv][Oo][Ll][Uu][Mm][Ee][Ss]/+(\\./+)*[Dd][Aa][Tt][Aa]/+(\\./+)*"
+        let firm = "[Ss][Yy][Ss][Tt][Ee][Mm]/+(\\./+)*[Vv][Oo][Ll][Uu][Mm][Ee][Ss]/+(\\./+)*[Dd][Aa][Tt][Aa]/+(\\./+)*"
+        let priv = "[Pp][Rr][Ii][Vv][Aa][Tt][Ee]/+(\\./+)*"
+        switch parts[0].lowercased() {
+        case "tmp", "var":
+            body = "(\(firm))?(\(priv))?" + body
+        case "private", "opt", "volumes", "users":
             body = "(\(firm))?" + body
+        case "usr":
+            if parts.count > 1, parts[1].lowercased() == "local" {
+                body = "(\(firm))?" + body
+            }
+        default:
+            break
         }
         return "^/+(\\./+)*" + body + "(/+.*)?$"
     }
@@ -502,38 +530,50 @@ public enum MCPSandbox {
         return confirmLeafParent(pinned.missing, parent: current, held: last) && last.stillChecked()
     }
 
-    /// The new leaf's parent is the pinned directory, or a directory created
-    /// from that descriptor.
+    /// The new leaf's parent is the pinned directory, or a directory this call
+    /// created from that descriptor. A longer missing suffix is walked. It is
+    /// not treated as already checked. A name that existed before `mkdirat`
+    /// is not the leaf.
     static func confirmLeafParent(_ missing: [String], parent: Int32, held: HeldDirectory) -> Bool {
         guard missing.isEmpty == false else { return true }
         let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
         var current = parent
         var opened: [Int32] = []
         defer { opened.forEach { close($0) } }
-        for part in missing.dropLast() {
+        var info = stat()
+        guard fstat(current, &info) == 0,
+            UInt64(info.st_dev) == held.device,
+            UInt64(info.st_ino) == held.inode
+        else { return false }
+        for part in missing {
             let next = part.withCString { openat(current, $0, flags) }
             guard next >= 0 else { return false }
             opened.append(next)
+            var child = stat()
+            guard fstat(next, &child) == 0, (child.st_mode & S_IFMT) == S_IFDIR else { return false }
+            if UInt64(child.st_dev) == held.device && UInt64(child.st_ino) == held.inode {
+                return false
+            }
             current = next
         }
-        var info = stat()
-        guard fstat(current, &info) == 0 else { return false }
-        if missing.count == 1 {
-            return UInt64(info.st_dev) == held.device && UInt64(info.st_ino) == held.inode
-        }
-        return true
+        return held.stillChecked()
     }
 
     /// `mkdirat` the missing suffix on a descriptor already opened with
-    /// `O_NOFOLLOW`. A symlink swapped in for a missing name is not followed.
+    /// `O_NOFOLLOW`. A name that already exists was planted after the pin,
+    /// including the project moved onto that component. A symlink swapped in
+    /// for a missing name is not followed.
     static func createMissing(_ parts: [String], parent: Int32) -> Bool {
         let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
         var current = parent
         var opened: [Int32] = []
         defer { opened.forEach { close($0) } }
         for part in parts {
+            var existing = stat()
+            let present = part.withCString { fstatat(current, $0, &existing, AT_SYMLINK_NOFOLLOW) }
+            if present == 0 { return false }
             let created = part.withCString { mkdirat(current, $0, mode_t(0o700)) }
-            if created != 0 && errno != EEXIST { return false }
+            if created != 0 { return false }
             let next = part.withCString { openat(current, $0, flags) }
             guard next >= 0 else { return false }
             opened.append(next)

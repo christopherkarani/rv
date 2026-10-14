@@ -339,13 +339,36 @@ source_after_verdict() {
 # Prints "real" when a Developer ID Application authority is a certificate
 # line, and "injected" when that line is still inside Identifier= or continues
 # an earlier authority value. A newline inside the identifier must not become
-# a trusted Authority line. Only a real Format field ends the identifier.
-# Format=, CodeDirectory, Signature size=, TeamIdentifier=, and Timestamp=
-# planted in the identifier do not. A later Authority= line continues the
-# previous authority value; it is not a new certificate.
+# a trusted Authority line. Only the last real Format field ends the
+# identifier. Format=Mach-O, Format=bundle with, and Format=app bundle planted
+# before that field do not. Bare Format=, CodeDirectory, Signature size=,
+# TeamIdentifier=, and Timestamp= do not. A later Authority= line continues
+# the previous authority value; it is not a new certificate.
 classify_authorities() {
   details=$1
   needle="Authority=Developer ID Application:"
+  format_count=0
+  rest=$details
+  while [ -n "$rest" ]; do
+    case "$rest" in
+      *"
+"*)
+        line=${rest%%
+*}
+        rest=${rest#*
+}
+        ;;
+      *)
+        line=$rest
+        rest=
+        ;;
+    esac
+    case "$line" in
+      Format=Mach-O*|Format=bundle\ with\ *|Format=app\ bundle\ *)
+        format_count=$((format_count + 1))
+        ;;
+    esac
+  done
   in_identifier=
   seen_authority=
   real=
@@ -370,7 +393,10 @@ classify_authorities() {
         in_identifier=1
         ;;
       Format=Mach-O*|Format=bundle\ with\ *|Format=app\ bundle\ *)
-        in_identifier=
+        format_count=$((format_count - 1))
+        if [ "$format_count" -eq 0 ]; then
+          in_identifier=
+        fi
         ;;
       Authority=*)
         case "$line" in

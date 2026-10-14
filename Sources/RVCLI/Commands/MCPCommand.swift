@@ -521,7 +521,7 @@ enum MCPRun {
 
     /// Robot JSON. `JSONEncoder` already writes ESC as `\u001b`. U+2028,
     /// U+2029, and U+202E stay raw unless they are replaced after encoding.
-    /// The result is still valid JSON. Secrets commands keep `SecretsRun.json`.
+    /// The result is still valid JSON. `SecretsRun.json` itself is unchanged.
     static func robotJSON<T: Encodable>(_ value: T) -> String {
         var text = SecretsRun.json(value)
         let scalars: [(Character, String)] = [

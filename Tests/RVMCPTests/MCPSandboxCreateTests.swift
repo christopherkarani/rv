@@ -94,6 +94,37 @@ struct MCPSandboxCreateTests {
         #expect(FileManager.default.fileExists(atPath: cachesAside.appendingPathComponent("rv-mcp").path) == false)
     }
 
+    @Test func plantedMissingScratchComponentIsNotTheLeaf() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-sandbox-planted-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("project")
+        let caches = root.appendingPathComponent("home/Library/Caches")
+        let mcp = caches.appendingPathComponent("rv-mcp")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        try Data("MARKER".utf8).write(to: project.appendingPathComponent("MARKER"))
+        try FileManager.default.createDirectory(at: mcp, withIntermediateDirectories: true)
+
+        let leaf = mcp.appendingPathComponent("server")
+        let leafPin = try #require(MCPSandbox.pinExistingAncestors(leaf.path))
+        #expect(leafPin.missing == ["server"])
+        try FileManager.default.moveItem(at: project, to: leaf)
+        #expect(MCPSandbox.createPinned(leaf.path, pinned: leafPin) == false)
+        #expect(FileManager.default.fileExists(atPath: leaf.appendingPathComponent("MARKER").path))
+        #expect(FileManager.default.fileExists(atPath: leaf.appendingPathComponent("server").path) == false)
+
+        try FileManager.default.moveItem(at: leaf, to: project)
+        try FileManager.default.removeItem(at: mcp)
+        let nested = caches.appendingPathComponent("rv-mcp/server")
+        let nestedPin = try #require(MCPSandbox.pinExistingAncestors(nested.path))
+        #expect(nestedPin.missing == ["rv-mcp", "server"])
+        try FileManager.default.moveItem(at: project, to: caches.appendingPathComponent("rv-mcp"))
+        #expect(MCPSandbox.createPinned(nested.path, pinned: nestedPin) == false)
+        let planted = caches.appendingPathComponent("rv-mcp")
+        #expect(FileManager.default.fileExists(atPath: planted.appendingPathComponent("MARKER").path))
+        #expect(FileManager.default.fileExists(atPath: planted.appendingPathComponent("server").path) == false)
+    }
+
     @Test func childStderrIsEscapedWithoutANewline() {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let raw = Data(("\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{202E}" + sentence).utf8)
@@ -142,6 +173,14 @@ struct MCPSandboxCreateTests {
         let sibling = "/Users/me/real-keys/id_rsa"
         #expect(sibling.hasPrefix("/Users/me/"))
         #expect(wholeMatch(users, sibling) == false)
+        let variable = MCPSandbox.seatbeltPathPattern("/var/mid")
+        #expect(wholeMatch(variable, "/private/var/mid/id_rsa"))
+        #expect(wholeMatch(variable, "/var/mid/id_rsa"))
+        #expect(wholeMatch(temporary, "/System/Volumes/Data/private/tmp/mid/id_rsa"))
+        let opt = MCPSandbox.seatbeltPathPattern("/opt/future-keys")
+        #expect(wholeMatch(opt, "/opt/future-keys/id_rsa"))
+        #expect(wholeMatch(opt, "/System/Volumes/Data/opt/future-keys/id_rsa"))
+        #expect(wholeMatch(opt, "/opt/secret/id_rsa") == false)
     }
 
     @Test func undoEscapesTheRecordedHostName() throws {

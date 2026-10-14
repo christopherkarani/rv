@@ -239,6 +239,26 @@ struct SecretsCommandTests {
         let text = SecretsRun.scanText(report)
         #expect(text == ".env:2  GH_TOKEN\n")
     }
+
+    @Test func secretsRobotJSONEscapesLineAndBidiScalars() throws {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let row = SecretsRun.CheckRow(
+            name: "TOKEN",
+            source: "keychain rv.secrets/\u{2028}" + sentence,
+            ok: false,
+            fingerprint: nil,
+            error: "\u{2029}" + sentence + "\u{202E}" + sentence)
+        let robot = SecretsRun.robotJSON([row])
+        #expect(robot.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(robot.unicodeScalars.contains { $0.value == 0x2029 } == false)
+        #expect(robot.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(robot.contains("\\u2028"))
+        #expect(robot.contains("\\u2029"))
+        #expect(robot.contains("\\u202e"))
+        let parsed = try JSONSerialization.jsonObject(with: Data(robot.utf8)) as? [[String: Any]]
+        #expect(parsed?.first?["name"] as? String == "TOKEN")
+        #expect(parsed?.first?["ok"] as? Bool == false)
+    }
 }
 
 /// Real login Keychain: set → check → remove through the CLI logic.

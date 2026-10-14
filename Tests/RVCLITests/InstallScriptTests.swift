@@ -966,6 +966,16 @@ private func writeSignatureShims(in shim: URL) throws {
                   *) printf 'Executable=%s\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nAuthority=Developer ID Certification Authority\\nTeamIdentifier=TEAMRV1234\\n' "$file" >&2; exit 0 ;;
                 esac
                 ;;
+              planted-format)
+                case "$name" in
+                  *.dylib)
+                    planted="${RV_TEST_PLANTED_FORMAT:-Format=Mach-O thin (arm64)}"
+                    printf 'Executable=%s\\nIdentifier=com.evil\\n%s\\nAuthority=Developer ID Application: Not Apple\\nFormat=Mach-O thin (arm64)\\nCodeDirectory v=20400 size=400 flags=0x0(none) hashes=1+2 location=embedded\\nSignature size=1800\\nAuthority=Apple Development: Person (TEAMRV1234)\\nTeamIdentifier=TEAMRV1234\\n' "$file" "$planted" >&2
+                    exit 0
+                    ;;
+                  *) printf 'Executable=%s\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nAuthority=Developer ID Certification Authority\\nTeamIdentifier=TEAMRV1234\\n' "$file" >&2; exit 0 ;;
+                esac
+                ;;
               *) printf 'Executable=%s\\nAuthority=Developer ID Application: RV Test (TEAMRV1234)\\nAuthority=Developer ID Certification Authority\\nTeamIdentifier=TEAMRV1234\\n' "$file" >&2; exit 0 ;;
             esac
             ;;
@@ -1465,6 +1475,34 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     defer { removeTemporaryRoot(of: run) }
 
     #expect(run.status == 1)
+    #expect(run.stderr.contains("Gatekeeper does not accept libswiftCompatibilitySpan.dylib as notarized"))
+    #expect(run.toolLog.contains("spctl "))
+    #expect(run.toolLog.contains("libswiftCompatibilitySpan.dylib"))
+    #expect(run.stderr.contains("not signed with a Developer ID Application certificate") == false)
+    try expectPreviousInstallKept(run)
+}
+
+@Test(arguments: [
+    "Format=Mach-O thin (arm64)",
+    "Format=Mach-O",
+    "Format=bundle with Mach-O thin (arm64)",
+    "Format=app bundle with Mach-O thin (arm64)",
+    "Format=bundle with ",
+    "Format=app bundle ",
+])
+func installSh_plantedFormatInsideIdentifierStillRunsSpctl(_ planted: String) throws {
+    let run = try runSignedDownloadInstall(
+        environment: [
+            "RV_TEST_CODESIGN": "planted-format",
+            "RV_TEST_PLANTED_FORMAT": planted,
+            "RV_TEST_SPCTL": "reject-dylib",
+            "RV_INSTALL_TEAM_ID": "TEAMRV1234",
+        ],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1, "\(planted): \(run.stderr)")
     #expect(run.stderr.contains("Gatekeeper does not accept libswiftCompatibilitySpan.dylib as notarized"))
     #expect(run.toolLog.contains("spctl "))
     #expect(run.toolLog.contains("libswiftCompatibilitySpan.dylib"))
