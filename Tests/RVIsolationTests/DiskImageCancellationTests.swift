@@ -200,7 +200,13 @@ struct DiskImageCancellationTests {
             cleanup: plan,
             cleanupFinished: false,
             cleanupAttempted: true
-        ))
+        ) == false)
+        #expect(diskImageMayDropSerializationLock(
+            helperStillAlive: false,
+            cleanup: plan,
+            cleanupFinished: false,
+            diskCanStillAppear: true
+        ) == false)
         #expect(diskImageMayDropSerializationLock(
             helperStillAlive: false,
             cleanup: plan,
@@ -316,7 +322,12 @@ struct DiskImageCancellationTests {
             timedOut: true
         ) == false)
         #expect(diskImageMayUnlinkPublishedImage(helperStillAlive: true, detachSucceeded: true) == false)
-        #expect(diskImageMayUnlinkPublishedImage(helperStillAlive: false, detachSucceeded: true))
+        #expect(diskImageMayUnlinkPublishedImage(
+            helperStillAlive: false,
+            detachSucceeded: true,
+            diskCanStillAppear: false
+        ))
+        #expect(diskImageMayUnlinkPublishedImage(helperStillAlive: false, detachSucceeded: true) == false)
         #expect(diskImageMayUnlinkPublishedImage(helperStillAlive: false, detachSucceeded: false) == false)
     }
 
@@ -346,6 +357,16 @@ struct DiskImageCancellationTests {
             status: 1,
             timedOut: false,
             output: "hdiutil: detach failed - No such file or directory"
+        ) == false)
+        #expect(diskImageCleanupTargetWasAbsent(
+            status: 1,
+            timedOut: false,
+            output: "hdiutil: detach failed - No such disk"
+        ) == false)
+        #expect(diskImageCleanupTargetWasAbsent(
+            status: 1,
+            timedOut: false,
+            output: "hdiutil: detach failed - not currently attached"
         ))
         #expect(diskImageCleanupTargetWasAbsent(
             status: 1,
@@ -385,11 +406,160 @@ struct DiskImageCancellationTests {
         #expect(end == now.addingTimeInterval(
             DiskImageCancelBudget.sequenceRemaining(spentSinceCancel: reap + session)
         ))
-        #expect(seatbeltWatchDisposition(cancelled: true, leaderDead: false) == .cancelled)
+        #expect(seatbeltWatchDisposition(cancelled: true, leaderDead: false) == .leaderStillAlive)
+        #expect(seatbeltWatchDisposition(cancelled: true, leaderDead: false) != .lifetimeBoundaryFailed)
         #expect(seatbeltWatchDisposition(cancelled: true, leaderDead: true) == .cancelled)
         #expect(seatbeltWatchDisposition(cancelled: false, leaderDead: false) == .lifetimeBoundaryFailed)
         #expect(seatbeltWatchDisposition(cancelled: false, leaderDead: true) == .proceed)
         #expect(DiskImageCancelBudget.boundedWait(spentSinceCancel: reap, cap: session) == session)
         #expect(DiskImageCancelBudget.boundedWait(spentSinceCancel: 7.6, cap: session) < 1)
+    }
+
+    /// A busy detach is not cleanup. The lock stays held and the attach is
+    /// not retried while that disk is still published.
+    @Test func busyDetachIsNotSuccessAndDoesNotDropTheLock() {
+        let image = "/tmp/rv-inode-token.sparseimage"
+        let plan = PreemptedDiskHelperCleanup.detachImage(image)
+        let output = "hdiutil: detach failed - Resource busy"
+        #expect(diskImageDetachIsBusy(status: 1, timedOut: false, output: output))
+        #expect(DiskImageCancelBudget.preemptCleanupSucceeded(status: 1, timedOut: false) == false)
+        #expect(diskImageCleanupTargetWasAbsent(status: 1, timedOut: false, output: output) == false)
+        #expect(diskImageMayDropSerializationLock(
+            helperStillAlive: false,
+            cleanup: plan,
+            cleanupFinished: false,
+            cleanupAttempted: true,
+            diskCanStillAppear: true
+        ) == false)
+        #expect(diskImageMayRetryPreemptedHelper(
+            cleanup: plan,
+            cleanupSucceeded: false,
+            targetWasAbsent: false,
+            diskCanStillAppear: true
+        ) == false)
+        #expect(diskImageMayUnlinkPublishedImage(
+            helperStillAlive: false,
+            detachSucceeded: false,
+            diskCanStillAppear: true
+        ) == false)
+    }
+
+    /// A timeout after the attach process was reaped still has to detach.
+    /// A helper that is still alive is not detached: it can still publish.
+    @Test func reapedAttachTimeoutStillDetaches() {
+        let image = "/tmp/rv-inode-token.sparseimage"
+        let plan = PreemptedDiskHelperCleanup.detachImage(image)
+        #expect(diskImageMustDetachBeforeUnlock(
+            cleanup: plan,
+            helperStillAlive: false,
+            preempted: false,
+            timedOut: true,
+            status: -1
+        ))
+        #expect(diskImageMustDetachBeforeUnlock(
+            cleanup: plan,
+            helperStillAlive: true,
+            preempted: false,
+            timedOut: true,
+            status: -1
+        ) == false)
+        #expect(diskImageMustDetachBeforeUnlock(
+            cleanup: .none,
+            helperStillAlive: false,
+            preempted: false,
+            timedOut: true,
+            status: -1
+        ) == false)
+    }
+
+    /// Process exit plus detach 0 does not permit unlink or a second create
+    /// while diskimagesd can still publish that image.
+    @Test func processExitPlusDetachZeroDoesNotUnlinkOrRetry() {
+        let image = "/tmp/rv-inode-token.sparseimage"
+        let plan = PreemptedDiskHelperCleanup.detachImage(image)
+        #expect(diskImageCanStillAppear(
+            helperStillAlive: false,
+            detachStatus: 0,
+            detachTimedOut: false,
+            detachOutput: "",
+            imageListedAfterDetach: nil,
+            waitedForPublication: false
+        ))
+        #expect(diskImageMayUnlinkPublishedImage(
+            helperStillAlive: false,
+            detachSucceeded: true,
+            diskCanStillAppear: true
+        ) == false)
+        #expect(diskImageMayRetryCreate(
+            publishedDisk: true,
+            detachSucceeded: false,
+            timedOut: false
+        ) == false)
+        #expect(diskImageMayRetryPreemptedHelper(
+            cleanup: plan,
+            cleanupSucceeded: true,
+            helperStillAlive: false,
+            diskCanStillAppear: true
+        ) == false)
+        #expect(diskImageMayRetryPreemptedHelper(
+            cleanup: plan,
+            cleanupSucceeded: false,
+            targetWasAbsent: false,
+            diskCanStillAppear: true
+        ) == false)
+        #expect(diskImageCanStillAppear(
+            helperStillAlive: false,
+            detachStatus: 0,
+            detachTimedOut: false,
+            detachOutput: "",
+            imageListedAfterDetach: false,
+            waitedForPublication: true
+        ) == false)
+        #expect(diskImageMayUnlinkPublishedImage(
+            helperStillAlive: false,
+            detachSucceeded: true,
+            diskCanStillAppear: false
+        ))
+    }
+
+    /// A tree copy longer than the time left on the one cancel clock stops
+    /// before it consumes the detach slice. The return stays under 8 seconds.
+    /// `returnBound` and `detachCap` are unchanged.
+    @Test func largeCopyStopsBeforeDetachAndStaysUnderEightSeconds() {
+        #expect(DiskImageCancelBudget.returnBound == 8)
+        #expect(DiskImageCancelBudget.detachCap == 5)
+        let timeLeft = DiskImageCancelBudget.cancelledSequenceBudget
+        let huge: TimeInterval = 30
+        let budget = DiskImageCancelBudget.copyBudget(timeLeft: timeLeft)
+        #expect(budget != nil)
+        #expect((budget ?? 0) < huge)
+        #expect((budget ?? 0) + DiskImageCancelBudget.detachCap <= timeLeft)
+        let wall = DiskImageCancelBudget.cancelReturnWithClippedCopy(
+            copySeconds: huge,
+            timeLeft: timeLeft
+        )
+        #expect(wall < 8)
+        #expect(wall < DiskImageCancelBudget.returnBound)
+        #expect(DiskImageCancelBudget.detachStillFits(afterCopy: budget ?? 0, timeLeft: timeLeft))
+        let tiny: TimeInterval = 0.01
+        #expect(tiny < (budget ?? 0))
+        let tinyWall = DiskImageCancelBudget.cancelReturnWithClippedCopy(
+            copySeconds: tiny,
+            timeLeft: timeLeft
+        )
+        #expect(tinyWall < 8)
+        let now = Date(timeIntervalSince1970: 10_000)
+        #expect(DiskImageCancelBudget.copyMayContinue(
+            deadline: now.addingTimeInterval(timeLeft),
+            now: now
+        ))
+        #expect(DiskImageCancelBudget.copyMayContinue(
+            deadline: now.addingTimeInterval(DiskImageCancelBudget.detachCap),
+            now: now
+        ) == false)
+        #expect(DiskImageCancelBudget.copyMayContinue(deadline: nil, now: now))
+        let shared = DiskImageCancelBudget.wholeSequenceWallTime(reap: 0.25, sessionWait: 2)
+        #expect(shared < 8)
+        #expect(shared == DiskImageCancelBudget.cancelledSequenceBudget)
     }
 }

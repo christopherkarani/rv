@@ -333,9 +333,12 @@ struct IsolationApplyTests {
             containedLaunchResult(child: childFailure, teardown: restoreFailure)
                 == .failure(.workspaceInodeBoundaryFailed)
         )
-        // A second cancelled teardown can still fail to detach inside the
-        // return bound. That failure must not replace the child's cancel.
-        #expect(containedLaunchResult(child: cancelled, teardown: restoreFailure) == cancelled)
+        // .cancelled means the leader is dead and the volume was unmounted.
+        // A restore that leaves the mount is the teardown error.
+        #expect(
+            containedLaunchResult(child: cancelled, teardown: restoreFailure)
+                == .failure(.workspaceInodeBoundaryFailed)
+        )
         #expect(containedLaunchResult(child: cancelled, teardown: restored) == cancelled)
     }
 

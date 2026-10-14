@@ -348,6 +348,11 @@ final class WorkspaceInodeBoundary: Sendable {
         guard remainsEstablished() else {
             return .failure(.workspaceInodeBoundaryFailed)
         }
+        // A cancelled publish stops before it spends the detach slice.
+        // The caller still unmounts. Stopping here is not a rejected tree.
+        if cancelClockAllowsTreeCopy() == false {
+            return .success(())
+        }
         let fds = mutable.withLock { ($0.volumeFD, $0.savedFD) }
         guard fds.1 >= 0 else {
             return .failure(.workspaceInodeBoundaryFailed)
@@ -358,6 +363,9 @@ final class WorkspaceInodeBoundary: Sendable {
         var rejected = false
         let present = volumeEntries.keys.sorted { pathDepth($0) < pathDepth($1) }
         for relative in present {
+            if cancelClockAllowsTreeCopy() == false {
+                return .success(())
+            }
             guard let entry = volumeEntries[relative] else { continue }
             let decision = workspacePublishDecision(
                 snapshot: snapshot[relative],
@@ -367,10 +375,12 @@ final class WorkspaceInodeBoundary: Sendable {
             switch decision {
             case .update:
                 if writing, updateSaved(relative, from: entry) == false {
+                    if cancelClockAllowsTreeCopy() == false { return .success(()) }
                     rejected = true
                 }
             case .create:
                 if writing, createSaved(relative, from: entry) == false {
+                    if cancelClockAllowsTreeCopy() == false { return .success(()) }
                     rejected = true
                 }
             case .remove, .leave, .reject:
@@ -380,6 +390,9 @@ final class WorkspaceInodeBoundary: Sendable {
         let missing = snapshot.keys.filter { volumeEntries[$0] == nil }
             .sorted { pathDepth($0) > pathDepth($1) }
         for relative in missing {
+            if cancelClockAllowsTreeCopy() == false {
+                return .success(())
+            }
             let decision = workspacePublishDecision(
                 snapshot: snapshot[relative],
                 saved: savedStamp(relative),
@@ -554,9 +567,9 @@ final class WorkspaceInodeBoundary: Sendable {
             defer { close(dest) }
             var status = stat()
             guard fstat(dest, &status) == 0, acceptableSavedInode(captured, status) else { return false }
+            guard cancelClockAllowsTreeCopy() else { return false }
             guard ftruncate(dest, 0) == 0 else { return false }
-            guard fcopyfile(source, dest, nil, copyfile_flags_t(COPYFILE_DATA | COPYFILE_XATTR)) == 0
-            else { return false }
+            guard copyFileDataObservingCancelClock(from: source, to: dest) else { return false }
             return fchmod(dest, entry.mode) == 0
         case .symlink:
             guard let target = readVolumeLink(relative) else { return false }
@@ -618,9 +631,9 @@ final class WorkspaceInodeBoundary: Sendable {
         var fresh = stat()
         guard fstat(dest, &fresh) == 0, acceptableSavedInode(captured, fresh) else { return false }
         guard lseek(source, 0, SEEK_SET) == 0 else { return false }
+        guard cancelClockAllowsTreeCopy() else { return false }
         guard ftruncate(dest, 0) == 0 else { return false }
-        guard fcopyfile(source, dest, nil, copyfile_flags_t(COPYFILE_DATA | COPYFILE_XATTR)) == 0
-        else { return false }
+        guard copyFileDataObservingCancelClock(from: source, to: dest) else { return false }
         return fchmod(dest, mode) == 0
     }
 
@@ -675,7 +688,8 @@ final class WorkspaceInodeBoundary: Sendable {
             defer { close(dest) }
             guard let source = openVolume(relative, directory: false), source >= 0 else { return false }
             defer { close(source) }
-            return fcopyfile(source, dest, nil, copyfile_flags_t(COPYFILE_DATA | COPYFILE_XATTR)) == 0
+            guard cancelClockAllowsTreeCopy() else { return false }
+            return copyFileDataObservingCancelClock(from: source, to: dest)
         case .symlink:
             guard let target = readVolumeLink(relative) else { return false }
             return parent.name.withCString { name in
@@ -1089,7 +1103,11 @@ private func createMountedDisk(
     usleep(100_000)
     let image = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-inode-\(token).sparseimage").path
-    unlink(image)
+    // Process exit plus a detach that exited 0 is not enough. Unlink only
+    // when that attempt already proved the disk cannot appear.
+    if diskImageMayRemoveImage(detachSucceeded: first.detachSucceeded) {
+        unlink(image)
+    }
     return createMountedDiskBody(byteCount: byteCount, mountPoint: mountPoint, token: token).result
 }
 
@@ -1157,27 +1175,44 @@ private func createMountedDiskBody(
         // or still alive. A later detach that exits 0 must not unlink
         // while that parked attach can still publish.
         publishedDisk = true
-        if attached.timedOut {
-            detachSucceeded = false
-            timedOut = true
-            return finish(.failure(.workspaceInodeBoundaryFailed))
-        }
         let leaked = PreemptedDiskHelperCleanup.plan(arguments: [
             "/usr/bin/hdiutil", "attach", "-nomount", "-plist", image,
         ])
-        if let follow = leaked.followUpArguments {
+        // A reaped timeout used to return here without detach, so the
+        // disk hdiutil had already published stayed attached.
+        let detachThis = diskImageMustDetachBeforeUnlock(
+            cleanup: leaked,
+            helperStillAlive: false,
+            preempted: false,
+            timedOut: attached.timedOut,
+            status: attached.status
+        )
+        if let follow = leaked.followUpArguments, detachThis || attached.timedOut == false {
             let detached = runTool(
                 follow,
                 honorCancellation: false,
                 deadline: DiskImageCancelBudget.preemptCleanup,
                 clock: clock
             )
-            detachSucceeded = DiskImageCancelBudget.preemptCleanupSucceeded(
-                status: detached.status,
-                timedOut: detached.timedOut
-            ) && diskImageMayUnlinkPublishedImage(
+            let detachOutput = detached.stderr + "\n" + detached.stdout
+            // Exit 0 is not proof the disk is gone. This call does not
+            // wait out diskimagesd, so the image stays until a later
+            // cleanup that has.
+            let canAppear = diskImageCanStillAppear(
                 helperStillAlive: false,
-                detachSucceeded: true
+                detachStatus: detached.status,
+                detachTimedOut: detached.timedOut,
+                detachOutput: detachOutput,
+                imageListedAfterDetach: nil,
+                waitedForPublication: false
+            )
+            detachSucceeded = diskImageMayUnlinkPublishedImage(
+                helperStillAlive: false,
+                detachSucceeded: DiskImageCancelBudget.preemptCleanupSucceeded(
+                    status: detached.status,
+                    timedOut: detached.timedOut
+                ),
+                diskCanStillAppear: canAppear
             )
             if diskImageMayRemoveImage(detachSucceeded: detachSucceeded) {
                 unlink(image)
@@ -1203,33 +1238,26 @@ private func createMountedDiskBody(
             clock: clock
         )
         publishedDisk = true
-        detachSucceeded = DiskImageCancelBudget.preemptCleanupSucceeded(
-            status: detached.status,
-            timedOut: detached.timedOut
-        )
-        if diskImageMayRemoveImage(detachSucceeded: detachSucceeded) {
-            unlink(image)
-        } else {
-            timedOut = true
-        }
+        // Detach ran. Exit 0 is not permission to unlink or retry while
+        // diskimagesd can still publish this image.
+        detachSucceeded = false
+        timedOut = true
+        _ = detached
         return finish(.failure(.workspaceInodeBoundaryFailed))
     }
     publishedDisk = true
     guard let slice = hfsSliceDevice(inPlist: attached.stdout) else {
-        detachSucceeded = detachWorkspaceDisk(disk, mountPoint: nil)
-        if diskImageMayRemoveImage(detachSucceeded: detachSucceeded) {
-            unlink(image)
-        } else {
-            timedOut = true
-        }
+        _ = detachWorkspaceDisk(disk, mountPoint: nil)
+        detachSucceeded = false
+        timedOut = true
         return finish(.failure(.workspaceInodeBoundaryFailed))
     }
     if blockingWorkIsCancelled() {
-        detachSucceeded = detachWorkspaceDisk(disk, mountPoint: nil)
-        if diskImageMayRemoveImage(detachSucceeded: detachSucceeded) {
-            unlink(image)
-        } else {
-            timedOut = true
+        let detached = detachWorkspaceDisk(disk, mountPoint: nil)
+        detachSucceeded = false
+        timedOut = true
+        if detached == false {
+            return finish(.failure(.workspaceInodeBoundaryFailed))
         }
         return finish(.failure(.cancelled))
     }
@@ -1240,12 +1268,9 @@ private func createMountedDiskBody(
     )
     timedOut = timedOut || mounted.timedOut
     guard mounted.status == 0 else {
-        detachSucceeded = detachWorkspaceDisk(disk, mountPoint: mountPoint)
-        if diskImageMayRemoveImage(detachSucceeded: detachSucceeded) {
-            unlink(image)
-        } else {
-            timedOut = true
-        }
+        _ = detachWorkspaceDisk(disk, mountPoint: mountPoint)
+        detachSucceeded = false
+        timedOut = true
         return finish(.failure(.workspaceInodeBoundaryFailed))
     }
     return finish(.success(MountedDisk(disk: disk, imagePath: image)))
@@ -1321,10 +1346,12 @@ func copyTree(
     expectDevice: UInt64,
     isWorkspaceRoot: Bool = true
 ) -> Bool {
+    if cancelClockAllowsTreeCopy() == false { return false }
     guard let names = directoryNames(source, isWorkspaceRoot: isWorkspaceRoot) else {
         return false
     }
     for name in names {
+        if cancelClockAllowsTreeCopy() == false { return false }
         var status = stat()
         let stated = name.withCString { item in
             fstatat(source, item, &status, AT_SYMLINK_NOFOLLOW) == 0
@@ -1400,7 +1427,7 @@ func copyTree(
                 close(input)
                 return false
             }
-            let copied = fcopyfile(input, output, nil, copyfile_flags_t(COPYFILE_DATA | COPYFILE_XATTR)) == 0
+            let copied = copyFileDataObservingCancelClock(from: input, to: output)
             let modeOK = copied && fchmod(output, mode) == 0
             close(input)
             close(output)
@@ -1408,6 +1435,55 @@ func copyTree(
         }
     }
     return true
+}
+
+/// The one clock `Flag.cancel()` armed. A copy stops while `detachCap` is
+/// still left, so unmount and detach run inside the 8-second return.
+/// No clock means the copy is not clipped. This does not arm a second clock.
+func cancelClockAllowsTreeCopy(now: Date = Date()) -> Bool {
+    if blockingWorkIsCancelled() {
+        CooperativeLaunchStop.noteCancel(now: now)
+    }
+    guard blockingWorkIsCancelled() || CooperativeLaunchStop.cancelClock?.deadline != nil else {
+        return true
+    }
+    return DiskImageCancelBudget.copyMayContinue(
+        deadline: CooperativeLaunchStop.cancelClock?.deadline,
+        now: now
+    )
+}
+
+/// File bytes in chunks so a tree larger than the time left stops before
+/// detach is skipped. Xattrs are copied only after the bytes finish.
+func copyFileDataObservingCancelClock(from source: Int32, to destination: Int32) -> Bool {
+    var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+    while true {
+        if cancelClockAllowsTreeCopy() == false { return false }
+        let count = buffer.withUnsafeMutableBytes { raw -> Int in
+            guard let base = raw.baseAddress else { return -1 }
+            while true {
+                let readCount = read(source, base, raw.count)
+                if readCount < 0, errno == EINTR { continue }
+                return readCount
+            }
+        }
+        if count == 0 { break }
+        if count < 0 { return false }
+        var written = 0
+        while written < count {
+            let chunk = buffer.withUnsafeBytes { raw -> Int in
+                guard let base = raw.baseAddress else { return -1 }
+                while true {
+                    let wrote = write(destination, base.advanced(by: written), count - written)
+                    if wrote < 0, errno == EINTR { continue }
+                    return wrote
+                }
+            }
+            if chunk <= 0 { return false }
+            written += chunk
+        }
+    }
+    return fcopyfile(source, destination, nil, copyfile_flags_t(COPYFILE_XATTR)) == 0
 }
 
 func directoryNames(_ dirfd: Int32, isWorkspaceRoot: Bool) -> [String]? {
@@ -1901,44 +1977,99 @@ private func runTool(
                 clock: clock
             )
             let plan = PreemptedDiskHelperCleanup.plan(arguments: arguments)
-            if ran.helperStillAlive || ran.preempted {
-                // Detach or unmount this helper's own image before the
-                // lock drops. Do not unlink while it can still publish,
-                // and do not fail the caller's workspace just because a
-                // peer needed the lock: a dead helper whose disk was
-                // removed, or was never attached, is retried.
-                let cleanup = applyPreemptCleanup(
-                    plan,
-                    returnDeadline: clock.deadline ?? yieldBudget,
-                    clock: clock,
-                    helperCanStillPublish: ran.helperStillAlive
+            let returnDeadline = clock.deadline ?? yieldBudget
+            let mustDetach = diskImageMustDetachBeforeUnlock(
+                cleanup: plan,
+                helperStillAlive: ran.helperStillAlive,
+                preempted: ran.preempted,
+                timedOut: ran.output.timedOut,
+                status: ran.output.status
+            )
+            if ran.helperStillAlive || ran.preempted || mustDetach {
+                // Do not detach while this helper can still publish, and
+                // do not drop the lock while the disk is still published.
+                // A busy detach is retried here. "No such file" does not
+                // start a second attach.
+                var helperAlive = ran.helperStillAlive
+                var pid = ran.pid
+                var cleanup = PreemptCleanupOutcome(
+                    succeeded: false,
+                    targetWasAbsent: false,
+                    busy: false,
+                    diskCanStillAppear: true,
+                    waitedForPublication: false
                 )
-                _ = diskImageMayDropSerializationLock(
-                    helperStillAlive: ran.helperStillAlive,
-                    reapExpired: ran.helperStillAlive,
+                let publishDeadline = Date().addingTimeInterval(DiskImageCancelBudget.preemptCleanup)
+                while true {
+                    if helperAlive {
+                        let gone = pid > 1 && kill(pid, 0) != 0
+                        if gone {
+                            helperAlive = false
+                        } else if clock.deadline != nil && Date() >= returnDeadline {
+                            break
+                        } else {
+                            usleep(10_000)
+                            continue
+                        }
+                    }
+                    let waited = Date() >= publishDeadline
+                    cleanup = applyPreemptCleanup(
+                        plan,
+                        returnDeadline: returnDeadline,
+                        clock: clock,
+                        helperCanStillPublish: false,
+                        waitedForPublication: waited
+                    )
+                    let mayDropNow = diskImageMayDropSerializationLock(
+                        helperStillAlive: false,
+                        cleanup: plan,
+                        cleanupFinished: cleanup.succeeded || (waited && cleanup.diskCanStillAppear == false),
+                        cleanupAttempted: true,
+                        diskCanStillAppear: cleanup.diskCanStillAppear
+                    )
+                    if mayDropNow { break }
+                    // The cancel clock still ends this wait so the return
+                    // stays under 8 seconds, including a busy detach on that
+                    // clock. A peer with no clock keeps the lock while the
+                    // detach stays busy. A detach that is not busy stops at
+                    // the caller's own deadline.
+                    if clock.deadline != nil && Date() >= returnDeadline { break }
+                    if cleanup.busy == false && Date() >= returnDeadline { break }
+                    usleep(20_000)
+                }
+                let mayDrop = diskImageMayDropSerializationLock(
+                    helperStillAlive: helperAlive,
+                    reapExpired: helperAlive,
                     cleanup: plan,
-                    cleanupFinished: cleanup.succeeded,
-                    cleanupAttempted: true
+                    cleanupFinished: cleanup.succeeded || (cleanup.waitedForPublication && cleanup.diskCanStillAppear == false),
+                    cleanupAttempted: helperAlive == false,
+                    diskCanStillAppear: helperAlive || cleanup.diskCanStillAppear
                 )
-                DiskImageToolSerialization.endHolding()
-                if ran.helperStillAlive {
+                if mayDrop {
+                    DiskImageToolSerialization.endHolding()
+                }
+                let mayRetry = diskImageMayRetryPreemptedHelper(
+                    cleanup: plan,
+                    cleanupSucceeded: cleanup.succeeded,
+                    helperStillAlive: helperAlive,
+                    targetWasAbsent: cleanup.targetWasAbsent,
+                    diskCanStillAppear: helperAlive || cleanup.diskCanStillAppear || cleanup.busy
+                )
+                if mayDrop && mayRetry && (ran.preempted || ran.output.status != 0) && ran.output.timedOut == false {
+                    return .yielded
+                }
+                if mayDrop == false || cleanup.busy || cleanup.diskCanStillAppear {
                     return .done(
-                        ToolOutput(status: -1, stdout: "", stderr: "diskimage reap", timedOut: true)
+                        ToolOutput(
+                            status: -1,
+                            stdout: "",
+                            stderr: cleanup.busy ? "diskimage busy" : "preempt cleanup failed",
+                            timedOut: true
+                        )
                     )
                 }
-                if ran.preempted {
-                    let mayRetry = diskImageMayRetryPreemptedHelper(
-                        cleanup: plan,
-                        cleanupSucceeded: cleanup.succeeded,
-                        helperStillAlive: false,
-                        targetWasAbsent: cleanup.targetWasAbsent
-                    )
-                    if mayRetry {
-                        return .yielded
-                    }
-                    return .done(
-                        ToolOutput(status: -1, stdout: "", stderr: "preempt cleanup failed", timedOut: true)
-                    )
+                if ran.preempted || ran.output.timedOut {
+                    return .done(ran.output)
                 }
             }
             DiskImageToolSerialization.endHolding()
@@ -1966,6 +2097,9 @@ private func runTool(
 private struct PreemptCleanupOutcome {
     var succeeded: Bool
     var targetWasAbsent: Bool
+    var busy: Bool
+    var diskCanStillAppear: Bool
+    var waitedForPublication: Bool
 }
 
 /// Runs inside `DiskImageToolSerialization.lock`. Unlink is immediate.
@@ -1978,67 +2112,188 @@ private func applyPreemptCleanup(
     _ plan: PreemptedDiskHelperCleanup,
     returnDeadline: Date,
     clock: DiskImageCancelClock,
-    helperCanStillPublish: Bool
+    helperCanStillPublish: Bool,
+    waitedForPublication: Bool = false
 ) -> PreemptCleanupOutcome {
     guard diskImageCleanupConfinedToCaller(plan) else {
-        return PreemptCleanupOutcome(succeeded: false, targetWasAbsent: false)
+        return PreemptCleanupOutcome(
+            succeeded: false,
+            targetWasAbsent: false,
+            busy: false,
+            diskCanStillAppear: true,
+            waitedForPublication: waitedForPublication
+        )
     }
     switch plan {
     case .none:
-        return PreemptCleanupOutcome(succeeded: true, targetWasAbsent: false)
+        return PreemptCleanupOutcome(
+            succeeded: true,
+            targetWasAbsent: false,
+            busy: false,
+            diskCanStillAppear: false,
+            waitedForPublication: true
+        )
     case .unlinkSparseImage(let path):
-        // Create does not publish a disk, but a helper that is still
-        // running can. Leave the file until that helper has exited.
+        // Create does not publish a disk. A helper that is still running
+        // can. Leave the file until that helper has exited.
         guard diskImageMayUnlinkPublishedImage(
             helperStillAlive: helperCanStillPublish,
-            detachSucceeded: true
+            detachSucceeded: true,
+            diskCanStillAppear: false
         ) else {
-            return PreemptCleanupOutcome(succeeded: false, targetWasAbsent: false)
+            return PreemptCleanupOutcome(
+                succeeded: false,
+                targetWasAbsent: false,
+                busy: false,
+                diskCanStillAppear: helperCanStillPublish,
+                waitedForPublication: waitedForPublication
+            )
         }
         unlink(path)
-        return PreemptCleanupOutcome(succeeded: true, targetWasAbsent: false)
-    case .detachImage, .unmount:
-        guard let follow = plan.followUpArguments else {
-            return PreemptCleanupOutcome(succeeded: false, targetWasAbsent: false)
-        }
-        let ran = runToolBody(
-            follow,
-            honorCancellation: false,
-            deadline: min(DiskImageCancelBudget.preemptCleanup, max(0, returnDeadline.timeIntervalSinceNow)),
-            yieldToPriorityWaiter: false,
-            parkIfStuck: false,
-            returnDeadline: returnDeadline,
-            clock: clock
-        )
-        if ran.helperStillAlive {
-            return PreemptCleanupOutcome(succeeded: false, targetWasAbsent: false)
-        }
-        let succeeded = DiskImageCancelBudget.preemptCleanupSucceeded(
-            status: ran.output.status,
-            timedOut: ran.output.timedOut
-        )
-        let absent = diskImageCleanupTargetWasAbsent(
-            status: ran.output.status,
-            timedOut: ran.output.timedOut,
-            output: ran.output.stderr + "\n" + ran.output.stdout
-        )
-        // The original attach can still publish after this detach exits 0.
-        // That is not success, and it is not "nothing was attached".
-        let finished = diskImageMayUnlinkPublishedImage(
-            helperStillAlive: helperCanStillPublish,
-            detachSucceeded: succeeded
-        )
         return PreemptCleanupOutcome(
-            succeeded: finished,
-            targetWasAbsent: absent && helperCanStillPublish == false
+            succeeded: true,
+            targetWasAbsent: false,
+            busy: false,
+            diskCanStillAppear: false,
+            waitedForPublication: true
+        )
+    case .detachImage(let image):
+        return detachPublishedTarget(
+            plan,
+            identity: image,
+            returnDeadline: returnDeadline,
+            clock: clock,
+            helperCanStillPublish: helperCanStillPublish,
+            waitedForPublication: waitedForPublication
+        )
+    case .unmount(let mount):
+        return detachPublishedTarget(
+            plan,
+            identity: mount,
+            returnDeadline: returnDeadline,
+            clock: clock,
+            helperCanStillPublish: helperCanStillPublish,
+            waitedForPublication: waitedForPublication
         )
     }
+}
+
+private func detachPublishedTarget(
+    _ plan: PreemptedDiskHelperCleanup,
+    identity: String,
+    returnDeadline: Date,
+    clock: DiskImageCancelClock,
+    helperCanStillPublish: Bool,
+    waitedForPublication: Bool
+) -> PreemptCleanupOutcome {
+    // The original helper can still publish. Do not detach or unmount
+    // until it has exited.
+    if helperCanStillPublish {
+        return PreemptCleanupOutcome(
+            succeeded: false,
+            targetWasAbsent: false,
+            busy: false,
+            diskCanStillAppear: true,
+            waitedForPublication: false
+        )
+    }
+    guard let follow = plan.followUpArguments else {
+        return PreemptCleanupOutcome(
+            succeeded: false,
+            targetWasAbsent: false,
+            busy: false,
+            diskCanStillAppear: true,
+            waitedForPublication: waitedForPublication
+        )
+    }
+    let ran = runToolBody(
+        follow,
+        honorCancellation: false,
+        deadline: min(DiskImageCancelBudget.preemptCleanup, max(0, returnDeadline.timeIntervalSinceNow)),
+        yieldToPriorityWaiter: false,
+        parkIfStuck: false,
+        returnDeadline: returnDeadline,
+        clock: clock
+    )
+    let output = ran.output.stderr + "\n" + ran.output.stdout
+    if ran.helperStillAlive {
+        return PreemptCleanupOutcome(
+            succeeded: false,
+            targetWasAbsent: false,
+            busy: false,
+            diskCanStillAppear: true,
+            waitedForPublication: false
+        )
+    }
+    let busy = diskImageDetachIsBusy(
+        status: ran.output.status,
+        timedOut: ran.output.timedOut,
+        output: output
+    )
+    let absent = diskImageCleanupTargetWasAbsent(
+        status: ran.output.status,
+        timedOut: ran.output.timedOut,
+        output: output
+    )
+    let listed: Bool? = busy ? true : workspaceImageListed(
+        identity,
+        returnDeadline: returnDeadline,
+        clock: clock
+    )
+    let canAppear = diskImageCanStillAppear(
+        helperStillAlive: false,
+        detachStatus: ran.output.status,
+        detachTimedOut: ran.output.timedOut,
+        detachOutput: output,
+        imageListedAfterDetach: listed,
+        waitedForPublication: waitedForPublication
+    )
+    let detachOK = DiskImageCancelBudget.preemptCleanupSucceeded(
+        status: ran.output.status,
+        timedOut: ran.output.timedOut
+    )
+    let finished = diskImageMayUnlinkPublishedImage(
+        helperStillAlive: false,
+        detachSucceeded: detachOK,
+        diskCanStillAppear: canAppear
+    )
+    return PreemptCleanupOutcome(
+        succeeded: finished,
+        targetWasAbsent: absent && canAppear == false,
+        busy: busy,
+        diskCanStillAppear: canAppear,
+        waitedForPublication: waitedForPublication
+    )
+}
+
+/// `hdiutil info` for one image. Nil when the listing could not be read.
+/// Already inside the serialization lock, so this uses `runToolBody`.
+private func workspaceImageListed(
+    _ image: String,
+    returnDeadline: Date,
+    clock: DiskImageCancelClock
+) -> Bool? {
+    let info = runToolBody(
+        ["/usr/bin/hdiutil", "info", "-plist"],
+        honorCancellation: false,
+        deadline: min(1.0, max(0, returnDeadline.timeIntervalSinceNow)),
+        yieldToPriorityWaiter: false,
+        parkIfStuck: false,
+        returnDeadline: returnDeadline,
+        clock: clock
+    )
+    if info.helperStillAlive || info.output.timedOut || info.output.status != 0 { return nil }
+    guard let data = info.output.stdout.data(using: .utf8),
+        let images = AttachedWorkspaceImage.parse(hdiutilInfo: data)
+    else { return nil }
+    return images.contains { $0.imagePath == image || $0.mountPoint == image }
 }
 
 private struct HelperRun {
     var output: ToolOutput
     var preempted = false
     var helperStillAlive = false
+    var pid: pid_t = 0
 }
 
 private func runToolBody(
@@ -2179,7 +2434,8 @@ private func runToolBody(
             timedOut: timedOut
         ),
         preempted: preempted,
-        helperStillAlive: helperStillAlive
+        helperStillAlive: helperStillAlive,
+        pid: helperStillAlive ? process.processIdentifier : 0
     )
 }
 

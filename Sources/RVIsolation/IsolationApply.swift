@@ -924,16 +924,14 @@ func rejectWorkspaceInodeAlias(_ root: String) -> Result<Void, IsolationApplyErr
 }
 
 /// The workspace is back at its original path only when teardown succeeds.
-/// A failed detach or rename is the result the caller has to act on when the
-/// child was not cancelled. A cancelled child stays `.cancelled`: teardown
-/// must not replace it with `workspaceInodeBoundaryFailed`.
+/// `.cancelled` is that result only when teardown also succeeded, so the
+/// volume is unmounted. A failed detach stays the teardown error. A caller
+/// that treats `.cancelled` as "stopped" must not see it while the mount
+/// is still there.
 func containedLaunchResult(
     child: Result<IsolatedRunResult, IsolationApplyError>,
     teardown: Result<Void, IsolationApplyError>
 ) -> Result<IsolatedRunResult, IsolationApplyError> {
-    if case .failure(.cancelled) = child {
-        return child
-    }
     switch teardown {
     case .failure(let error):
         return .failure(error)

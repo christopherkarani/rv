@@ -122,6 +122,43 @@ enum DiskImageCancelBudget {
         wholeSequenceWallTime(reap: reap, sessionWait: sessionWait) < returnBound
     }
 
+    /// How long a tree copy may run on the one cancel clock. The detach
+    /// slice is reserved first, so a copy cannot spend the time `hdiutil
+    /// detach` still needs. `nil` means no clock is armed and the copy is
+    /// not clipped. `returnBound` and `detachCap` are not raised.
+    static func copyBudget(timeLeft: TimeInterval?) -> TimeInterval? {
+        guard let timeLeft else { return nil }
+        let left = max(0, timeLeft)
+        let reserve = min(detachCap, left)
+        return max(0, left - reserve)
+    }
+
+    /// Wall time when `copySeconds` is clipped to `copyBudget` and detach
+    /// then uses the reserved remainder. A copy longer than the clock does
+    /// not push the return to `returnBound`.
+    static func cancelReturnWithClippedCopy(
+        copySeconds: TimeInterval,
+        timeLeft: TimeInterval
+    ) -> TimeInterval {
+        let budget = copyBudget(timeLeft: timeLeft) ?? 0
+        let ran = min(max(0, copySeconds), budget)
+        let afterCopy = max(0, timeLeft - ran)
+        return ran + min(detachCap, afterCopy)
+    }
+
+    /// True while the copy still has time that is not reserved for detach.
+    static func copyMayContinue(deadline: Date?, now: Date = Date()) -> Bool {
+        guard let deadline else { return true }
+        let budget = copyBudget(timeLeft: deadline.timeIntervalSince(now)) ?? 0
+        return budget > 0
+    }
+
+    /// Detach still has a positive slice after a copy that used `budget`.
+    static func detachStillFits(afterCopy budget: TimeInterval, timeLeft: TimeInterval) -> Bool {
+        let after = max(0, timeLeft) - max(0, budget)
+        return after > 0
+    }
+
     /// Cap for an umount or detach that is already running when cancel
     /// flips. `callerDeadline` of 45 or 8 is the snapshot the helper
     /// started with. The result is the urgent slice, and it also shrinks
@@ -289,22 +326,74 @@ func diskImageMayDropSerializationLock(
     reapExpired: Bool = false,
     cleanup: PreemptedDiskHelperCleanup,
     cleanupFinished: Bool,
-    cleanupAttempted: Bool = false
+    cleanupAttempted: Bool = false,
+    diskCanStillAppear: Bool = false
 ) -> Bool {
-    if helperStillAlive && reapExpired == false { return false }
     switch cleanup {
     case .none:
         // The helper is the umount or detach. After the reap, park it and
         // return. There is no second device to detach.
+        if helperStillAlive && reapExpired == false { return false }
         return true
     case .unlinkSparseImage, .detachImage, .unmount:
-        // A live attach can still publish `/dev/diskN`. Do not drop the
-        // lock before the detach or unmount has been attempted, and do
-        // not treat that attempt's failure as a reason to unlink.
-        if helperStillAlive && cleanupAttempted == false { return false }
-        if helperStillAlive && reapExpired && cleanupAttempted { return true }
+        // A live helper can still publish `/dev/diskN`. A busy detach means
+        // that disk is still published. Neither case drops the lock. A
+        // cleanup attempt does not count while the helper can publish.
+        _ = cleanupAttempted
+        if helperStillAlive { return false }
+        if diskCanStillAppear { return false }
         return cleanupFinished
     }
+}
+
+/// `hdiutil detach` exited busy. The disk is still published. That is not
+/// cleanup success, and it is not "nothing was attached".
+func diskImageDetachIsBusy(status: Int32, timedOut: Bool, output: String) -> Bool {
+    if status == 0 && timedOut == false { return false }
+    let text = output.lowercased()
+    return text.contains("resource busy") || text.contains("busy")
+}
+
+/// A reaped attach or mount that timed out can already have published a
+/// disk. Detach it before the lock drops. A helper that is still alive is
+/// not detached here: it can still publish.
+func diskImageMustDetachBeforeUnlock(
+    cleanup: PreemptedDiskHelperCleanup,
+    helperStillAlive: Bool,
+    preempted: Bool,
+    timedOut: Bool,
+    status: Int32
+) -> Bool {
+    switch cleanup {
+    case .none:
+        return false
+    case .unlinkSparseImage:
+        return false
+    case .detachImage, .unmount:
+        if helperStillAlive { return false }
+        return preempted || timedOut || status != 0
+    }
+}
+
+/// Process exit plus detach 0 is not enough. The disk can still appear
+/// until a later listing shows it is gone and that listing was taken after
+/// waiting out the publish race. An unknown listing (`nil`) can still appear.
+func diskImageCanStillAppear(
+    helperStillAlive: Bool,
+    detachStatus: Int32,
+    detachTimedOut: Bool,
+    detachOutput: String,
+    imageListedAfterDetach: Bool?,
+    waitedForPublication: Bool
+) -> Bool {
+    if helperStillAlive || detachTimedOut { return true }
+    if diskImageDetachIsBusy(status: detachStatus, timedOut: detachTimedOut, output: detachOutput) {
+        return true
+    }
+    if imageListedAfterDetach != false { return true }
+    if waitedForPublication == false { return true }
+    _ = detachStatus
+    return false
 }
 
 /// The image file is the path a later detach uses. Remove it only after
@@ -329,8 +418,13 @@ func diskImageMayRetryCreate(
 /// Unlink only when the helper that could publish the disk has exited
 /// and the detach of that disk exited 0. A detach that wins the race
 /// while the parked attach is still in diskimagesd does not count.
-func diskImageMayUnlinkPublishedImage(helperStillAlive: Bool, detachSucceeded: Bool) -> Bool {
-    helperStillAlive == false && detachSucceeded
+func diskImageMayUnlinkPublishedImage(
+    helperStillAlive: Bool,
+    detachSucceeded: Bool,
+    diskCanStillAppear: Bool = true
+) -> Bool {
+    if helperStillAlive || detachSucceeded == false || diskCanStillAppear { return false }
+    return true
 }
 
 /// Retrying the preempted helper is safe only after its attach or mount
@@ -343,9 +437,10 @@ func diskImageMayRetryPreemptedHelper(
     cleanup: PreemptedDiskHelperCleanup,
     cleanupSucceeded: Bool,
     helperStillAlive: Bool = false,
-    targetWasAbsent: Bool = false
+    targetWasAbsent: Bool = false,
+    diskCanStillAppear: Bool = false
 ) -> Bool {
-    if helperStillAlive { return false }
+    if helperStillAlive || diskCanStillAppear { return false }
     switch cleanup {
     case .none, .unlinkSparseImage:
         return true
@@ -375,24 +470,28 @@ func diskImageCleanupConfinedToCaller(_ plan: PreemptedDiskHelperCleanup) -> Boo
 func diskImageCleanupTargetWasAbsent(status: Int32, timedOut: Bool, output: String) -> Bool {
     if status == 0 || timedOut { return false }
     let text = output.lowercased()
+    // "No such file" is not absence. diskimagesd can still publish the disk
+    // the preempted attach handed it. "Not currently attached" is hdiutil
+    // saying this image has no device.
     return text.contains("not currently attached")
         || text.contains("not attached")
         || text.contains("not currently mounted")
         || text.contains("not mounted")
-        || text.contains("no such file")
-        || text.contains("no such disk")
 }
 
-/// What `watchSeatbeltProcess` reports. Cancel wins even when the leader
-/// was not reaped. A real lifetime miss, with cancel unset, stays a
-/// lifetime failure.
+/// What `watchSeatbeltProcess` reports. `.cancelled` is only a dead leader.
+/// A leader that is still alive at the end of the budget is not a finished
+/// cancel and is not a lifetime miss. A real lifetime miss, with cancel
+/// unset, stays a lifetime failure.
 enum SeatbeltWatchDisposition: Equatable, Sendable {
     case cancelled
+    case leaderStillAlive
     case lifetimeBoundaryFailed
     case proceed
 }
 
 func seatbeltWatchDisposition(cancelled: Bool, leaderDead: Bool) -> SeatbeltWatchDisposition {
+    if cancelled && leaderDead == false { return .leaderStillAlive }
     if cancelled { return .cancelled }
     if leaderDead == false { return .lifetimeBoundaryFailed }
     return .proceed

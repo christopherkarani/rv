@@ -1105,13 +1105,18 @@ func watchSeatbeltProcess(
     let mounted: MountedSeatbeltOutcome
     switch seatbeltWatchDisposition(cancelled: outcome.cancelled, leaderDead: dead) {
     case .cancelled:
-        // An unreaped leader on the cancel path is still cancellation.
-        // Publish only when the group was actually collected. A real
-        // lifetime miss (cancel unset) is the next case and stays
-        // lifetimeBoundaryFailed.
+        // The leader is dead. Publish only when the handshake completed.
+        // Teardown still has to unmount; a mounted volume is not .cancelled.
         mounted = MountedSeatbeltOutcome(
             result: .failure(.cancelled),
-            publish: dead && outcome.established
+            publish: outcome.established
+        )
+    case .leaderStillAlive:
+        // Cancel was requested and the leader is still alive. This is not
+        // a finished cancel, and it is not a lifetime miss.
+        mounted = MountedSeatbeltOutcome(
+            result: .failure(.workspaceInodeBoundaryFailed),
+            publish: false
         )
     case .lifetimeBoundaryFailed:
         mounted = MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
@@ -1380,8 +1385,16 @@ func resumeAndClaimForeground(_ child: LiveSeatbeltChild) -> Result<Void, Isolat
         return .success(())
     case .cancelled:
         terminateSession(pgid: child.pid, also: [child.pid])
-        _ = waitUntilSessionIsDead(pgid: child.pid, also: [child.pid])
-        return .failure(.cancelled)
+        CooperativeLaunchStop.noteCancel()
+        let budget = DiskImageCancelBudget.boundedWait(
+            spentSinceCancel: CooperativeLaunchStop.spentSinceCancel(),
+            cap: DiskImageCancelBudget.sessionDeathWait
+        )
+        let dead = waitUntilSessionIsDead(pgid: child.pid, also: [child.pid], budget: budget)
+        if seatbeltWatchDisposition(cancelled: true, leaderDead: dead) == .cancelled {
+            return .failure(.cancelled)
+        }
+        return .failure(.workspaceInodeBoundaryFailed)
     case .failed:
         terminateSession(pgid: child.pid, also: [child.pid])
         _ = waitUntilSessionIsDead(pgid: child.pid, also: [child.pid])
