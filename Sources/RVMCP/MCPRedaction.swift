@@ -349,22 +349,47 @@ public enum MCPRedaction {
     }
 
     /// Userinfo bounded by a raw `/`, `?`, or `#`. A raw `\` stays in the user: curl and Python
-    /// keep it there, and Node drops a leading `\`. Percent-encoded delimiters stay in the user.
+    /// keep it there, and Node drops a leading `\`. Extra `/` or `\` after the scheme, and a tab,
+    /// LF, or CR in front of those, are still the scheme. An empty first `@` stays in the user.
+    /// Percent-encoded delimiters stay in the user.
     private static func rawUserinfoIsPassword(_ text: String) -> Bool {
         let body = authorityBody(text)
-        guard let userStart = rawSchemeEnd(body) else { return false }
-        var index = userStart
+        guard let schemeEnd = rawSchemeEnd(body) else { return false }
+        var index = skipExtraAuthorityMarks(body, from: schemeEnd)
+        let userStart = index
         while index < body.endIndex {
             if body[index] == "%", let after = indexAfterPercentEscape(body, index) {
                 index = after
                 continue
             }
             let character = body[index]
-            if character == "@" { return userinfoIsPasswordOnly(body[userStart..<index]) }
+            if isAtSign(character) {
+                let user = body[userStart..<index]
+                if userinfoIsPasswordOnly(user) { return true }
+                if user.isEmpty {
+                    index = body.index(after: index)
+                    continue
+                }
+                return false
+            }
             if character == "/" || character == "?" || character == "#" { return false }
             index = body.index(after: index)
         }
         return false
+    }
+
+    /// `/`, `\`, or a tab, LF, or CR glued to the scheme. Node drops those and still reads the user.
+    /// U+0020 is not one of these.
+    private static func isExtraAuthorityMark(_ character: Character) -> Bool {
+        character == "/" || character == "\\" || character == "\t" || character == "\n" || character == "\r"
+    }
+
+    private static func skipExtraAuthorityMarks(_ text: Substring, from index: String.Index) -> String.Index {
+        var index = index
+        while index < text.endIndex, isExtraAuthorityMark(text[index]) {
+            index = text.index(after: index)
+        }
+        return index
     }
 
     /// `password@host`, `:password@host`, or a tab, LF, or CR in front of that colon.
@@ -387,7 +412,8 @@ public enum MCPRedaction {
         return Substring(text)
     }
 
-    /// `scheme://` or `scheme:%2F%2F` at the start of the authority body.
+    /// `scheme://`, `scheme:/\`, or `scheme:%2F%2F` at the start of the authority body.
+    /// A `\` in the second slash is still the scheme. Node rewrites it to `/`.
     private static func rawSchemeEnd(_ body: Substring) -> String.Index? {
         for scheme in authoritySchemes {
             guard let schemeEnd = body.index(body.startIndex, offsetBy: scheme.count, limitedBy: body.endIndex),
@@ -401,10 +427,21 @@ public enum MCPRedaction {
         return nil
     }
 
+    /// Two scheme slashes. Each one may be `/`, `\`, or `%2F`.
     private static func rawSlashPairEnd(_ body: Substring, _ index: String.Index) -> String.Index? {
-        if body[index...].hasPrefix("//") { return body.index(index, offsetBy: 2) }
-        guard let first = indexAfterEncodedSlash(body, index) else { return nil }
-        return indexAfterEncodedSlash(body, first)
+        guard let first = indexAfterSchemeSlash(body, index) else { return nil }
+        return indexAfterSchemeSlash(body, first)
+    }
+
+    private static func indexAfterSchemeSlash(_ body: Substring, _ index: String.Index) -> String.Index? {
+        guard index < body.endIndex else { return nil }
+        if body[index] == "/" || body[index] == "\\" { return body.index(after: index) }
+        return indexAfterEncodedSlash(body, index)
+    }
+
+    /// `@` plus U+FE0F, U+FE0E, U+034F, or U+200D is one grapheme, and that grapheme is not `"@"`.
+    private static func isAtSign(_ character: Character) -> Bool {
+        character.unicodeScalars.first?.value == 0x40
     }
 
     private static func indexAfterEncodedSlash(_ body: Substring, _ index: String.Index) -> String.Index? {
@@ -426,16 +463,25 @@ public enum MCPRedaction {
     private static func decodedPasswordSitsInAuthority(_ decoded: String) -> Bool {
         guard let restStart = schemeAuthorityStart(decoded) else { return false }
         let rest = decoded[restStart...]
-        var index = rest.startIndex
+        var index = skipExtraAuthorityMarks(rest, from: rest.startIndex)
+        let userStart = index
         while index < rest.endIndex {
             let character = rest[index]
-            if character == "@" { return userinfoIsPasswordOnly(rest[..<index]) }
+            if isAtSign(character) {
+                let user = rest[userStart..<index]
+                if userinfoIsPasswordOnly(user) { return true }
+                if user.isEmpty {
+                    index = rest.index(after: index)
+                    continue
+                }
+                return false
+            }
             if character == "/" || character == "?" || character == "#" {
                 var next = rest.index(after: index)
                 while next < rest.endIndex, withoutInvisibleBreaks(String(rest[next])).isEmpty {
                     next = rest.index(after: next)
                 }
-                guard next < rest.endIndex, rest[next] == "@" else { return false }
+                guard next < rest.endIndex, isAtSign(rest[next]) else { return false }
                 let user = rest[..<index]
                 let hostStart = rest.index(after: next)
                 guard user.isEmpty == false, user.contains(":") == false else { return false }
@@ -484,8 +530,10 @@ public enum MCPRedaction {
     }
 
     /// An ASCII scalar other than a letter, a digit, `-`, or `_` splits `ghp_`, the same way `$` and `#` do.
-    /// U+0020 is whitespace and is not removed from the value. A decomposition that contains one of
-    /// these separators is dropped too, including U+2025 (`..`) and U+2260 (`=` plus a combining mark).
+    /// U+0020 is whitespace and is not removed from the value. U+2044 and U+2215 are separators too, so a
+    /// vulgar fraction or a square sign whose NFKD contains one is dropped. Non-ASCII punctuation is a
+    /// separator even when it folds to `-` or `_`. A decomposition that contains one of these separators
+    /// is dropped too, including U+2025 (`..`) and U+2260 (`=` plus a combining mark).
     private static func dropsForPrefixCount(_ scalar: Unicode.Scalar) -> Bool {
         if isPrefixSeparator(scalar) { return true }
         let folded = String(scalar).decomposedStringWithCompatibilityMapping
@@ -493,13 +541,30 @@ public enum MCPRedaction {
     }
 
     private static func isPrefixSeparator(_ scalar: Unicode.Scalar) -> Bool {
-        if scalar.value == 0xFF0E { return true }
+        switch scalar.value {
+        case 0x2044, 0x2215, 0xFF0E:
+            return true
+        default:
+            break
+        }
+        if scalar.isASCII == false, isPunctuation(scalar) { return true }
         guard scalar.isASCII else { return false }
         switch scalar.value {
         case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x2D, 0x5F:
             return false
         default:
             return true
+        }
+    }
+
+    /// ASCII `-` and `_` are not punctuation here. `sk-` and `ghp_` still match.
+    private static func isPunctuation(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.properties.generalCategory {
+        case .connectorPunctuation, .dashPunctuation, .openPunctuation, .closePunctuation,
+            .initialPunctuation, .finalPunctuation, .otherPunctuation:
+            return true
+        default:
+            return false
         }
     }
 

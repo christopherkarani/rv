@@ -1052,6 +1052,100 @@ struct MCPCommandTests {
         }
     }
 
+    @Test func importRefusesASchemeBackslashAndAnExtenderOnAt() async throws {
+        let password = "supersecretpassword"
+        let schemeBackslashes = [
+            "https:/\(password)\\x@collector.example/hook",
+            "https:/\(password)\\\\@collector.example/hook",
+            "http:/\(password)\\x@localhost/hook",
+            "wss:/\(password)\\x@collector.example/hook",
+            "postgres:/\(password)\\x@db/app",
+            "https:/\(password)\\@localhost/hook",
+            "https:/\(password)\\@db/hook",
+            "https:/\(password)\\@[::1]/hook",
+            "https:/\(password)\\@collector\u{3002}example/hook",
+            "https:/\(password)\\@collector.example/hook",
+        ]
+        for value in schemeBackslashes {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": value]),
+                absent: [password], label: "scheme backslash command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(value)"]]),
+                absent: [password], label: "scheme backslash cwd")
+        }
+        let extenders = ["\u{FE0F}", "\u{FE0E}", "\u{034F}", "\u{200D}"]
+        for mark in extenders {
+            let glued = "https://\(password)@\(mark)collector.example/hook"
+            let before = "https://\(mark)\(password)@collector.example/hook"
+            for value in [glued, before] {
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": value]),
+                    absent: [password], label: "at extender command")
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(value)"]]),
+                    absent: [password], label: "at extender cwd")
+            }
+        }
+        let named = "postgres://user:\(password)@\u{FE0F}db.example/app"
+        let home = Fixture()
+        try home.write(".cursor/mcp.json", try hostJSON("db", ["command": named, "args": ["--cwd=\(named)"]]))
+        let review = Mutex("")
+        let result = try await MCPRun.importServers(
+            host: .cursor, names: [], project: nil, allowTools: false, dryRun: false,
+            environment: home.environment(presence: Self.present),
+            show: { text in review.withLock { $0 += text } }
+        ).get()
+        let text = review.withLock { $0 }
+        #expect(text.contains(password))
+        #expect(result.contains("wrote mcp.json"))
+        #expect(home.text(".config/rv/mcp.json").contains(named))
+        #expect(home.keychain.items.withLock { $0 }.isEmpty)
+    }
+
+    @Test func importRefusesAnExtraSlashOrAnEmptyAtBeforeThePassword() async throws {
+        let password = "supersecretpassword"
+        let urls = [
+            "https:///\(password)@collector.example/hook",
+            "wss:///\(password)@collector.example/hook",
+            "http:///\(password)@collector.example/hook",
+            "https:////\(password)@collector.example/hook",
+            "postgres:///\(password)@db/app",
+            "https://\\/\(password)@collector.example/hook",
+            "https:\\//\(password)@collector.example/hook",
+            "https:/\\/\(password)@collector.example/hook",
+            "https://\t/\(password)@collector.example/hook",
+            "https://\n/\(password)@collector.example/hook",
+            "https://\r/\(password)@collector.example/hook",
+            "https://@\(password)@collector.example/hook",
+            "https://@\(password)@localhost/hook",
+            "https://@\(password)@db/hook",
+            "https://@\(password)@[::1]/hook",
+            "https://@\(password)@collector\u{3002}example/hook",
+            "wss://@\(password)@collector.example/hook",
+            "postgres://@\(password)@db/app",
+        ]
+        for value in urls {
+            try await expectImportRefused(
+                try hostJSON("db", ["command": value]),
+                absent: [password], label: "extra user command")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(value)"]]),
+                absent: [password], label: "extra user cwd")
+            guard case .failure(let failure) = AuditForwardRun.destination(value) else {
+                Issue.record("to accepted \(value)")
+                continue
+            }
+            #expect(failure.message.contains(password) == false)
+            if let url = URL(string: value) {
+                #expect(MCPRemoteServer.endpointProblem(url) != nil)
+                try await expectImportRefused(
+                    try hostJSON("api", ["url": value]),
+                    absent: [password], label: "extra user remote")
+            }
+        }
+    }
+
     @Test func importRefusesAMarkInsideAToken() async throws {
         let tail = "hp_1234567890abcdefghij"
         let extra = tail + "EXTRA"
@@ -1293,6 +1387,55 @@ struct MCPCommandTests {
             }
         }
         try await expectSplitSecretRefused("ctx7sk-12345678 ghp_\(tail)", absent: ["ghp_", tail], label: "space still two")
+    }
+
+    @Test func importRefusesAFractionSlashAndNonASCIIPunctuation() async throws {
+        let tail = "hp_1234567890abcdefghij"
+        let extra = tail + "EXTRA"
+        let head = "ctx7sk-12345678g"
+        let absent = ["ctx7sk", "ghp_", tail, "sk-"]
+        func percent(_ text: String) -> String {
+            text.utf8.map { String(format: "%%%02X", $0) }.joined()
+        }
+        func chain32(_ text: String) -> String {
+            text.utf8.map { byte in "%" + String(repeating: "25", count: 31) + String(format: "%02X", byte) }.joined()
+        }
+        let slashMarks: [UInt32] = [
+            0x00BC, 0x00BD, 0x00BE, 0x215F, 0x2189,
+            0x2150, 0x2151, 0x2152, 0x2153, 0x2154, 0x2155, 0x2156, 0x2157,
+            0x2158, 0x2159, 0x215A, 0x215B, 0x215C, 0x215D, 0x215E,
+            0x33A7, 0x33A8, 0x33AE, 0x33AF, 0x33C6, 0x33DE, 0x33DF,
+        ]
+        let punctuation: [UInt32] = [0x00B7, 0x00A1, 0x2019, 0xFF0D, 0xFE63, 0xFF3F, 0xFE33]
+        for code in slashMarks + punctuation {
+            let mark = String(Unicode.Scalar(code)!)
+            try await expectSplitSecretRefused(
+                head + mark + tail, sk: "sk-12345678g" + mark + tail, absent: absent, label: "slash or punctuation")
+            try await expectSplitSecretRefused(head + mark + extra, absent: absent + [extra], label: "slash extra")
+        }
+        for code in [UInt32(0x00BD), 0x33DE, 0x00B7, 0xFF0D] {
+            let mark = String(Unicode.Scalar(code)!)
+            let value = head + mark + tail
+            let encoded = head + percent(mark) + tail
+            let chain = head + chain32(mark) + tail
+            try await expectSplitSecretRefused(encoded, absent: absent, label: "encoded slash")
+            try await expectSplitSecretRefused(chain, absent: absent, label: "slash chain")
+            try await expectImportRefused(
+                try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(value)"]]),
+                absent: absent, label: "slash cwd")
+            for scheme in ["Bearer%20", "Basic%20"] {
+                try await expectSplitSecretRefused(
+                    scheme + value, absent: absent + [scheme], label: "scheme slash", headerOnly: true)
+                try await expectSplitSecretRefused(
+                    scheme + chain, absent: absent + [scheme], label: "scheme slash chain", headerOnly: true)
+            }
+            for disguised in ["x" + value, "." + value] {
+                try await expectSplitSecretRefused(disguised, absent: absent, label: "disguised slash")
+                try await expectImportRefused(
+                    try hostJSON("db", ["command": "db-mcp", "args": ["--cwd=\(disguised)"]]),
+                    absent: absent, label: "disguised slash cwd")
+            }
+        }
     }
 
     @Test func importRefusesASplitterInsideAToken() async throws {
