@@ -192,6 +192,49 @@ struct MCPIntegrityTests {
         #expect(ApprovalKeyAccess.adoption(.constraints(userPresence: true)) == .accept)
     }
 
+    @Test func plantedUserPresenceItemIsNotTheSigningSecret() throws {
+        let directory = MCPApprovalSecurityTests.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let plantedText = String(repeating: "ab", count: 32)
+        let planted = Data(plantedText.utf8)
+        let plantedKey = try #require(MCPHex.decode(Array(plantedText.utf8)))
+        #expect(plantedKey.count == 32)
+        #expect(ApprovalKeyAccess.adoptedSigner(secret: planted, constraints: ["cpo": true], configDirectory: directory) == nil)
+        #expect(ApprovalKeyAccess.disposition(
+            secret: planted, item: .constraints(userPresence: true), configDirectory: directory) == .rejectPlanted)
+        #expect(ApprovalKeyAccess.adoptedSigner(
+            secret: planted, constraints: ["od": ["cpo": true]], configDirectory: directory) == nil)
+
+        let real = [UInt8](repeating: 9, count: 32)
+        let anchor = [UInt8](repeating: 3, count: 32)
+        let enrollment = try #require(ApprovalKeyEnrollment.issue(key: real, anchor: anchor))
+        #expect(ApprovalKeyAnchor.save(anchor, configDirectory: directory))
+        #expect(enrollment.save(configDirectory: directory))
+        let secret = Data(MCPHex.encode(real).utf8)
+        let orPolicy: [String: Any] = ["cpo": true, "cup": true, "pkofn": 1]
+        #expect(ApprovalKeyAccess.requiresUserPresence(orPolicy) == false)
+        #expect(ApprovalKeyAccess.disposition(
+            secret: secret, item: ApprovalKeyAccess.item(from: orPolicy), configDirectory: directory) == .rejectAndDelete)
+        #expect(ApprovalKeyAccess.adoptedSigner(secret: secret, constraints: orPolicy, configDirectory: directory) == nil)
+        let nested = ApprovalKeyAccess.stringKeyed(["od": ["cpo": true, "cup": true, "pkofn": 1]] as NSDictionary)
+        #expect(ApprovalKeyAccess.requiresUserPresence(nested) == false)
+        #expect(ApprovalKeyAccess.disposition(
+            secret: secret, item: .constraints(userPresence: false), configDirectory: directory) == .rejectAndDelete)
+        #expect(ApprovalKeyAccess.disposition(secret: secret, item: .noAccessControl, configDirectory: directory) == .rejectAndDelete)
+        #expect(ApprovalKeyAccess.disposition(secret: secret, item: .unreadable, configDirectory: directory) == .rejectKeep)
+
+        let signer = try #require(ApprovalKeyAccess.adoptedSigner(secret: secret, constraints: ["cpo": true], configDirectory: directory))
+        let expected = try #require(MCPSigner(key: real))
+        #expect(signer.mac("enrollment", ["check"]) == expected.mac("enrollment", ["check"]))
+        #expect(ApprovalKeyAccess.adoptedSigner(secret: planted, constraints: ["cpo": true], configDirectory: directory) == nil)
+
+        let attacker = [UInt8](repeating: 4, count: 32)
+        let forged = try #require(ApprovalKeyEnrollment.issue(key: plantedKey, anchor: attacker))
+        #expect(forged.save(configDirectory: directory))
+        #expect(ApprovalKeyAccess.adoptedSigner(secret: planted, constraints: ["cpo": true], configDirectory: directory) == nil)
+        #expect(ApprovalKeyAccess.adoptedSigner(secret: secret, constraints: ["cpo": true], configDirectory: directory) == nil)
+    }
+
     @Test func integrityJudgesTheBytesItWasGivenWhenTheFileChangesDuringKeyLoad() throws {
         let directory = MCPApprovalSecurityTests.scratch()
         defer { try? FileManager.default.removeItem(at: directory) }

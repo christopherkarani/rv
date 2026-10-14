@@ -58,7 +58,9 @@ public enum MCPImport {
             var definition = MCPServerDefinition(
                 name: entry.name, description: "imported from \(entry.host.rawValue) (\(entry.configPath))",
                 command: command)
-            if allowTools { definition.tools.defaultDecision = .allow }
+            // The confirmed policy is stored on the server. A file-level allow
+            // must not become the decision for a server the person was shown as ask.
+            definition.tools.defaultDecision = allowTools ? .allow : .ask
             let credentials = Set(MCPRedaction.literalCredentials(entry.environment))
             for (variable, value) in entry.environment.sorted(by: { $0.key < $1.key }) {
                 guard SecretsConfiguration.isVariableName(variable) else {

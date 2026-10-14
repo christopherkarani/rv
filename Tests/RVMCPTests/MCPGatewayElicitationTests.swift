@@ -58,6 +58,36 @@ struct MCPGatewayElicitationTests {
         #expect(harness.client(Self.createCall).toClient.first?["method"] == .string("elicitation/create"))
     }
 
+    @Test func elicitationShowsTheFullArgumentsOrRefuses() {
+        let payload = "rm-rf-payload"
+        let filler = String(repeating: "a", count: 600)
+        let arguments = JSONValue.object(["aaa": .string(filler), "zzz": .string(payload)])
+        let message = MCPGatewayCore.elicitationMessage(server: "github", tool: "create_issue", arguments: arguments)
+        #expect(message.contains(payload))
+        #expect(message.contains(arguments.canonicalText))
+        #expect(message.hasSuffix("…") == false)
+        #expect(MCPGatewayCore.elicitationCovers(arguments, shown: message))
+        let clipped = "rv: allow MCP server github to run tool create_issue?\nArguments: "
+            + String(arguments.canonicalText.prefix(600)) + "…"
+        #expect(MCPGatewayCore.elicitationCovers(arguments, shown: clipped) == false)
+
+        let call = #"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"create_issue","arguments":{"aaa":"\#(filler)","benign":"ok","zzz":"\#(payload)"}}}"#
+        var harness = Self.harness(elicitation: "{}")
+        let held = harness.client(call)
+        #expect(held.toUpstream.isEmpty)
+        let prompt = held.toClient.first?["params"]?["message"]?.stringValue ?? ""
+        #expect(prompt.contains(payload) && prompt.contains("benign") && prompt.contains(filler))
+        #expect(prompt.hasSuffix("…") == false)
+        let shownArguments = JSONValue.object(["aaa": .string(filler), "benign": .string("ok"), "zzz": .string(payload)])
+        #expect(MCPGatewayCore.elicitationCovers(shownArguments, shown: prompt))
+        let id = held.toClient.first?["id"]?.stringValue ?? ""
+        let accepted = harness.client(Self.answer(id, #"{"action":"accept","content":{"approve":true}}"#))
+        let forwarded = accepted.toUpstream.first?.1["params"]?["arguments"]
+        #expect(forwarded?["zzz"] == .string(payload))
+        #expect(forwarded?["aaa"]?.stringValue?.count == 600)
+        #expect(forwarded?["benign"] == .string("ok"))
+    }
+
     @Test func declineCancelAndUncheckedBoxAllRefuse() {
         for result in [
             #"{"action":"decline"}"#, #"{"action":"cancel"}"#, #"{"action":"accept","content":{"approve":false}}"#,

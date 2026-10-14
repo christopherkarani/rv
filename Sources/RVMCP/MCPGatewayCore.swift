@@ -110,9 +110,11 @@ public struct MCPGatewayCore {
         var params: JSONObject
         var arguments: JSONValue
         var keys: [String]
+        /// The elicitation text the person was shown. Accept runs only when
+        /// this text contains the full arguments.
+        var shown: String
     }
 
-    static let argumentPreviewLimit = 600
     /// Unanswered elicitations past this fall back to `rv mcp approve`.
     static let maximumHeld = 64
 
@@ -248,6 +250,9 @@ public struct MCPGatewayCore {
         guard phases[call.server] == .ready else {
             return unavailable(client: call.client, server: call.server, tool: call.tool, decision: .ask, keys: call.keys)
         }
+        guard Self.elicitationCovers(call.arguments, shown: call.shown) else {
+            return argumentsNotShown(client: call.client, server: call.server, tool: call.tool, keys: call.keys)
+        }
         let approval = Approval(id: key, channel: .elicitation)
         let upstreamID = allocate(.call(
             client: call.client, server: call.server, tool: call.tool, keys: call.keys, approval: approval, started: clock()))
@@ -339,15 +344,20 @@ public struct MCPGatewayCore {
         client: JSONValue, server: String, tool: String, params: JSONObject, arguments: JSONValue, keys: [String]
     ) -> [MCPGatewayOutput] {
         if clientElicits, held.count < Self.maximumHeld {
+            let message = Self.elicitationMessage(server: server, tool: tool, arguments: arguments)
+            guard Self.elicitationCovers(arguments, shown: message) else {
+                return argumentsNotShown(client: client, server: server, tool: tool, keys: keys)
+            }
             let key = "rv-approval-\(nextID)"
             nextID += 1
-            held[key] = HeldCall(client: client, server: server, tool: tool, params: params, arguments: arguments, keys: keys)
+            held[key] = HeldCall(
+                client: client, server: server, tool: tool, params: params, arguments: arguments, keys: keys, shown: message)
             return [
                 .audit(MCPCallRecord(
                     server: server, tool: tool, decision: .ask, approvalID: key, argumentKeys: keys, isError: false,
                     reason: "awaiting approval in the client")),
                 .toClient(Self.request(id: .string(key), method: "elicitation/create", params: .object([
-                    "message": .string(Self.elicitationMessage(server: server, tool: tool, arguments: arguments)),
+                    "message": .string(message),
                     "requestedSchema": .object([
                         "type": .string("object"),
                         "properties": .object([
@@ -392,9 +402,28 @@ public struct MCPGatewayCore {
     }
 
     static func elicitationMessage(server: String, tool: String, arguments: JSONValue) -> String {
-        let text = arguments.canonicalText
-        let preview = text.count > argumentPreviewLimit ? String(text.prefix(argumentPreviewLimit)) + "…" : text
-        return "rv: allow MCP server \(server) to run tool \(tool)?\nArguments: \(preview)"
+        "rv: allow MCP server \(server) to run tool \(tool)?\nArguments: \(arguments.canonicalText)"
+    }
+
+    /// True only when `shown` carries the arguments that would run, in full.
+    /// A prefix, with or without an ellipsis, is not enough.
+    static func elicitationCovers(_ arguments: JSONValue, shown: String) -> Bool {
+        let marker = "\nArguments: "
+        guard let range = shown.range(of: marker) else { return false }
+        return shown[range.upperBound...] == arguments.canonicalText
+    }
+
+    func argumentsNotShown(
+        client: JSONValue, server: String, tool: String, keys: [String]
+    ) -> [MCPGatewayOutput] {
+        let reason = "approval prompt did not include the full arguments"
+        return [
+            .audit(MCPCallRecord(
+                server: server, tool: tool, decision: .ask, argumentKeys: keys, isError: true, reason: reason)),
+            .toClient(Self.toolError(
+                id: client,
+                "rv refused \(server) tool \(tool): the approval prompt did not include the full arguments. The call was not run.")),
+        ]
     }
 
     func unavailable(

@@ -428,8 +428,9 @@ enum MCPRun {
             return .success("mcp.json already matches rv's signature; nothing to trust\n")
         }
         let digest = RVDigest.sha256Hex([UInt8](data))
-        show(trustReview(configuration) + "\nsha256 \(digest)\n")
-        let outcome = await environment.presence.confirm("rv: trust mcp.json sha256 \(digest)", .deviceOwner)
+        let review = trustReview(configuration)
+        show(review + "\nsha256 \(digest)\n")
+        let outcome = await environment.presence.confirm("rv: trust mcp.json sha256 \(digest)\n\(review)", .deviceOwner)
         guard case .confirmed(let method) = outcome else {
             let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
             return .failure(CommandFailure("not trusted: \(refusal)"))
@@ -456,18 +457,36 @@ enum MCPRun {
         var lines = ["mcp.json: default \(configuration.defaultDecision.rawValue) for tools without a rule"]
         for server in configuration.servers {
             lines.append("  \(server.name): \(([server.command] + server.args).joined(separator: " "))")
-            let tools = server.tools
+            lines += bindingLines(server, indent: "    ")
             var rules: [String] = []
-            if tools.allow.isEmpty == false { rules.append("allow " + capped(tools.allow)) }
-            if tools.ask.isEmpty == false { rules.append("ask " + capped(tools.ask)) }
-            if tools.deny.isEmpty == false { rules.append("deny " + capped(tools.deny)) }
-            if let fallback = tools.defaultDecision { rules.append("other tools \(fallback.rawValue)") }
+            if let fallback = server.tools.defaultDecision { rules.append("other tools \(fallback.rawValue)") }
             if server.sandbox == nil { rules.append("no sandbox") }
             if rules.isEmpty == false { lines.append("    " + rules.joined(separator: " · ")) }
         }
         if configuration.direct.isEmpty == false { lines.append("  direct: " + configuration.direct.joined(separator: ", ")) }
         if configuration.blocked.isEmpty == false { lines.append("  blocked: " + configuration.blocked.joined(separator: ", ")) }
         return lines.joined(separator: "\n")
+    }
+
+    /// Every env binding, secret binding, and tool-list name, with no clip.
+    static func bindingLines(_ server: MCPServerDefinition, indent: String = "") -> [String] {
+        var lines: [String] = []
+        for (name, value) in server.environment.sorted(by: { $0.key < $1.key }) {
+            lines.append("\(indent)env \(name)=\(value)")
+        }
+        for (name, secret) in server.secrets.sorted(by: { $0.key < $1.key }) {
+            lines.append("\(indent)secret \(name)=\(secret)")
+        }
+        if server.tools.allow.isEmpty == false {
+            lines.append("\(indent)allow " + server.tools.allow.joined(separator: ", "))
+        }
+        if server.tools.ask.isEmpty == false {
+            lines.append("\(indent)ask " + server.tools.ask.joined(separator: ", "))
+        }
+        if server.tools.deny.isEmpty == false {
+            lines.append("\(indent)deny " + server.tools.deny.joined(separator: ", "))
+        }
+        return lines
     }
 
     static func auditRecord(_ record: MCPCallRecord, configDirectory: URL) {
@@ -517,13 +536,14 @@ enum MCPRun {
         }
     }
 
-    /// Every server that will be signed, including its command, arguments, and
-    /// whether its tools are allowed. The digest is of that whole text.
+    /// Every server that will be signed: command, arguments, tool policy, env
+    /// bindings, secret bindings, and every allow, ask, and deny name.
+    /// The digest is of that whole text. Nothing is clipped.
     static func importPresenceReview(servers: [MCPServerDefinition], allowTools: Bool) -> (shown: String, reason: String) {
         let policy = allowTools ? "allow every tool" : "ask before every tool"
-        let lines = servers.map { server in
+        let lines = servers.flatMap { server -> [String] in
             let command = ([server.name + ":", server.command] + server.args).joined(separator: " ")
-            return "\(command) (\(policy))"
+            return ["\(command) (\(policy))"] + bindingLines(server)
         }
         let body = (["tools: \(policy)"] + lines).joined(separator: "\n")
         let digest = RVDigest.sha256Hex(Array(body.utf8))

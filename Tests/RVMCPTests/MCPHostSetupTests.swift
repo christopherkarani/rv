@@ -35,7 +35,7 @@ struct MCPImportTests {
         #expect(context7.args == ["-y", "@upstash/context7-mcp", "--api-key", "${secret:CONTEXT7_API_KEY}"])
         #expect(context7.secrets == ["GITHUB_TOKEN": "GITHUB_TOKEN"])
         #expect(context7.environment == ["LOG_LEVEL": "info"])
-        #expect(context7.tools.defaultDecision == nil)
+        #expect(context7.tools.defaultDecision == .ask)
         #expect(plan.notes.contains { $0.contains("PROXY") })
 
         let bare = try #require(plan.servers.first { $0.name == "bare" })
@@ -51,6 +51,32 @@ struct MCPImportTests {
         #expect(encoded.contains("ctx7sk") == false && encoded.contains("ghp_") == false && encoded.contains("sk-proj") == false)
         #expect(encoded.contains("secret@") == false)
         #expect(try MCPConfiguration.decode(Data(encoded.utf8)).get().servers.count == 3)
+    }
+
+    @Test func askImportStoresAskEvenWhenTheFileAllows() throws {
+        var configuration = MCPConfiguration(defaultDecision: .allow, servers: [
+            MCPServerDefinition(name: "kept", command: "safe-bin")
+        ])
+        let plan = MCPImport.plan(
+            entries: [
+                entry(
+                    "notes", transport: .stdio(command: "git", args: ["status"]),
+                    environment: [
+                        "PATH": "/tmp/evil", "GIT_SSH_COMMAND": "evil-ssh", "LD_PRELOAD": "/tmp/p.so",
+                        "GITHUB_TOKEN": "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+                    ])
+            ],
+            configuration: configuration, secrets: SecretsConfiguration(), allowTools: false)
+        let notes = try #require(plan.servers.first { $0.name == "notes" })
+        #expect(notes.tools.defaultDecision == .ask)
+        #expect(notes.environment == ["PATH": "/tmp/evil", "GIT_SSH_COMMAND": "evil-ssh", "LD_PRELOAD": "/tmp/p.so"])
+        #expect(notes.secrets == ["GITHUB_TOKEN": "GITHUB_TOKEN"])
+        configuration.servers.append(notes)
+        #expect(configuration.defaultDecision == .allow)
+        #expect(configuration.decision(server: notes, tool: "status") == .ask)
+        let kept = try #require(configuration.server(named: "kept"))
+        #expect(kept.tools.defaultDecision == nil)
+        #expect(configuration.decision(server: kept, tool: "anything") == .allow)
     }
 
     @Test func skipsGovernedRemoteExistingAndAvoidsSecretNameCollisions() {

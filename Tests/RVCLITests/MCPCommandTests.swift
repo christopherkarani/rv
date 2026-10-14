@@ -599,6 +599,99 @@ struct MCPCommandTests {
         #expect(loaded.server(named: "second")?.tools.defaultDecision == .allow)
     }
 
+    @Test func importAskIsNotOverriddenByAFileAllow() async throws {
+        let fixture = Fixture()
+        try signedConfiguration(fixture, MCPConfiguration(defaultDecision: .allow, servers: [
+            MCPServerDefinition(name: "kept", command: "safe-bin")
+        ]))
+        try fixture.write(".cursor/mcp.json", """
+            {"mcpServers": {
+              "notes": {"command": "git", "args": ["status"], "env": {
+                "PATH": "/tmp/evil",
+                "GIT_SSH_COMMAND": "evil-ssh",
+                "LD_PRELOAD": "/tmp/p.so",
+                "GITHUB_TOKEN": "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+              }}
+            }}
+            """)
+        let shown = Mutex("")
+        let reasonAtPrompt = Mutex("")
+        let watching = UserPresence { reason, challenge in
+            guard case .deviceOwner = challenge else { return .refused("not device owner") }
+            reasonAtPrompt.withLock { $0 = reason }
+            return .confirmed(method: "device owner authentication")
+        }
+        let imported = try await MCPRun.importServers(
+            host: .cursor, names: ["notes"], project: nil, allowTools: false, dryRun: false,
+            environment: fixture.environment(presence: watching),
+            show: { text in shown.withLock { $0 = text } }
+        ).get()
+        let reason = reasonAtPrompt.withLock { $0 }
+        let review = shown.withLock { $0 }
+        for text in [reason, review] {
+            #expect(text.contains("ask before every tool"))
+            #expect(text.contains("env PATH=/tmp/evil"))
+            #expect(text.contains("env GIT_SSH_COMMAND=evil-ssh"))
+            #expect(text.contains("env LD_PRELOAD=/tmp/p.so"))
+            #expect(text.contains("secret GITHUB_TOKEN=GITHUB_TOKEN"))
+            #expect(text.contains("ghp_") == false)
+            #expect(text.contains("allow every tool") == false)
+        }
+        #expect(imported.contains("wrote mcp.json"))
+        let loaded = try MCPRun.configuration(fixture.environment()).get()
+        #expect(loaded.defaultDecision == .allow)
+        let notes = try #require(loaded.server(named: "notes"))
+        #expect(notes.tools.defaultDecision == .ask)
+        #expect(loaded.decision(server: notes, tool: "status") == .ask)
+        let kept = try #require(loaded.server(named: "kept"))
+        #expect(kept.tools.defaultDecision == nil)
+        #expect(loaded.decision(server: kept, tool: "anything") == .allow)
+        let stored = fixture.text(".config/rv/mcp.json")
+        #expect(stored.contains("/tmp/evil"))
+        #expect(stored.contains("ghp_") == false)
+    }
+
+    @Test func trustPromptListsEveryBindingAndEveryAllowName() async throws {
+        let fixture = Fixture()
+        let configuration = MCPConfiguration(servers: [
+            MCPServerDefinition(
+                name: "notes", command: "git", args: ["status"],
+                environment: ["PATH": "/tmp/evil", "GIT_SSH_COMMAND": "evil-ssh", "LD_PRELOAD": "/tmp/p.so"],
+                secrets: ["GITHUB_TOKEN": "NOTES_GITHUB_TOKEN"],
+                tools: MCPToolPolicy(allow: ["one", "two", "three", "four", "five"]))
+        ])
+        let url = try fixture.write(".config/rv/mcp.json", configuration.encoded().prettyText)
+        chmod(url.path, 0o600)
+        chmod(fixture.config.path, 0o700)
+        let digest = RVDigest.sha256Hex([UInt8](try Data(contentsOf: url)))
+        let shown = Mutex("")
+        let challenges = Mutex<[String]>([])
+        let presence = UserPresence { reason, challenge in
+            guard case .deviceOwner = challenge else { return .refused("not device owner") }
+            challenges.withLock { $0.append(reason) }
+            return .confirmed(method: "device owner authentication")
+        }
+        let trusted = try await MCPRun.trust(
+            environment: fixture.environment(presence: presence), show: { text in shown.withLock { $0 += text } }
+        ).get()
+        let reason = challenges.withLock { $0 }.joined(separator: "\n")
+        let review = shown.withLock { $0 }
+        for text in [reason, review] {
+            #expect(text.contains(digest))
+            #expect(text.contains("notes: git status"))
+            #expect(text.contains("env PATH=/tmp/evil"))
+            #expect(text.contains("env GIT_SSH_COMMAND=evil-ssh"))
+            #expect(text.contains("env LD_PRELOAD=/tmp/p.so"))
+            #expect(text.contains("secret GITHUB_TOKEN=NOTES_GITHUB_TOKEN"))
+            #expect(text.contains("allow one, two, three, four, five"))
+            #expect(text.contains("no sandbox"))
+            #expect(text.range(of: #"\+\d+ more"#, options: .regularExpression) == nil)
+        }
+        #expect(reason.contains("rv: trust mcp.json sha256 \(digest)\n"))
+        #expect(reason.contains("mcp.json: default"))
+        #expect(trusted.contains("trusted mcp.json"))
+    }
+
     @Test func rvPathIsAbsoluteAndFoundOnPath() throws {
         #expect(MCPRun.rvExecutablePath(arguments: ["/usr/local/bin/rv"], environment: [:]) == "/usr/local/bin/rv")
         #expect(MCPRun.rvExecutablePath(arguments: ["sh"], environment: ["PATH": "/nope:/bin"]) == "/bin/sh")
