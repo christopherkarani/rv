@@ -329,17 +329,11 @@ enum SecretsDecoding {
     static func label(_ value: String, max: Int) -> Bool {
         value.isEmpty == false && value.utf8.count <= max
             && value.unicodeScalars.allSatisfy { scalar in
-                scalar.properties.generalCategory != .control && lineOrBidi(scalar) == false
+                switch scalar.properties.generalCategory {
+                case .control, .format, .lineSeparator, .paragraphSeparator: false
+                default: true
+                }
             }
-    }
-
-    /// Line and paragraph separators, and bidi overrides, are not labels.
-    /// They are not controls, so the category check does not reject them.
-    static func lineOrBidi(_ scalar: Unicode.Scalar) -> Bool {
-        switch scalar.value {
-        case 0x2028, 0x2029, 0x202A...0x202E, 0x2066...0x2069: true
-        default: false
-        }
     }
 
     static func placeholderByte(_ byte: UInt8) -> Bool {

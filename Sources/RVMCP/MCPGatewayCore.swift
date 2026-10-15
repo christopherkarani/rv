@@ -113,10 +113,17 @@ public struct MCPGatewayCore {
         /// The elicitation text the person was shown. Accept runs only when
         /// this text contains the full arguments.
         var shown: String
+        var heldAt: Date
     }
 
     /// Unanswered elicitations past this fall back to `rv mcp approve`.
     static let maximumHeld = 64
+    /// Longest arguments text an elicitation prompt may carry. Past this a
+    /// client UI cannot be trusted to show every byte the user would be
+    /// approving, so the call is refused instead of prompted.
+    static let maximumElicitationArguments = 4096
+    /// An unanswered prompt older than this fails closed on the next message.
+    static let heldLifetime: TimeInterval = 300
 
     let configuration: MCPConfiguration
     let upstreams: [String: Upstream]
@@ -166,12 +173,33 @@ public struct MCPGatewayCore {
     }
 
     public mutating func handle(_ input: MCPGatewayInput) -> [MCPGatewayOutput] {
+        var outputs = expireHeld()
         switch input {
-        case .client(let message): clientMessage(message)
-        case .clientUnparseable: [.toClient(Self.error(id: .null, code: -32700, message: "Parse error"))]
-        case .upstream(let server, let message): upstreamMessage(server, message)
-        case .upstreamExited(let server): upstreamExited(server)
+        case .client(let message): outputs += clientMessage(message)
+        case .clientUnparseable: outputs.append(.toClient(Self.error(id: .null, code: -32700, message: "Parse error")))
+        case .upstream(let server, let message): outputs += upstreamMessage(server, message)
+        case .upstreamExited(let server): outputs += upstreamExited(server)
         }
+        return outputs
+    }
+
+    /// Fails held elicitations nobody answered in time, so prompts cannot
+    /// pin their arguments — or the 64 slots — for the whole session.
+    mutating func expireHeld() -> [MCPGatewayOutput] {
+        let cutoff = clock().addingTimeInterval(-Self.heldLifetime)
+        let expired = held.filter { $0.value.heldAt < cutoff }.sorted { $0.key < $1.key }
+        guard expired.isEmpty == false else { return [] }
+        var outputs: [MCPGatewayOutput] = []
+        for (key, call) in expired {
+            held[key] = nil
+            outputs.append(.audit(MCPCallRecord(
+                server: call.server, tool: call.tool, decision: .ask, approvalID: key, argumentKeys: call.keys,
+                isError: true, declined: true, reason: "approval prompt was not answered in time")))
+            outputs.append(.toClient(Self.toolError(
+                id: call.client,
+                "rv's approval prompt for \(MCPDisplayedText.field(call.server)) tool \(MCPDisplayedText.field(call.tool)) was not answered in time; the call was not run.")))
+        }
+        return outputs
     }
 
     // MARK: Client side
@@ -211,14 +239,14 @@ public struct MCPGatewayCore {
         }
     }
 
-    /// Accept only when `action` is `accept` and `content.approve` is a JSON
-    /// boolean true, or is absent (the schema default). A present non-boolean
-    /// (`"false"`, `0`, `null`) is a decline. The held call's arguments are
-    /// what runs; the client's content is not forwarded.
+    /// Accept only when `action` is `accept` and `content.approve` is
+    /// explicitly the JSON boolean true. An absent or non-boolean approve
+    /// (`"false"`, `0`, `null`, no content at all) is a decline: an
+    /// auto-answered or malformed response must not run the call. The held
+    /// call's arguments are what runs; the client's content is not forwarded.
     static func elicitationAccepts(_ result: JSONValue?) -> Bool {
         guard result?["action"]?.stringValue == "accept" else { return false }
-        guard let approve = result?["content"]?["approve"] else { return true }
-        guard case .bool(let value) = approve else { return false }
+        guard let approve = result?["content"]?["approve"], case .bool(let value) = approve else { return false }
         return value
     }
 
@@ -232,7 +260,22 @@ public struct MCPGatewayCore {
     /// The client's answer to an `elicitation/create` rv sent.
     mutating func clientResponse(id: JSONValue, _ message: JSONValue) -> [MCPGatewayOutput] {
         guard let key = id.stringValue, let call = held.removeValue(forKey: key) else { return [] }
-        if message["error"] != nil {
+        if let error = message["error"] {
+            // Only "method not found" means the client cannot show prompts at
+            // all, so only that falls back to `rv mcp approve`. Any other
+            // error (dismissed prompt, client failure) refuses: re-asking on
+            // a channel that shows less would turn a no into a second try.
+            guard error["code"]?.intValue == -32601 else {
+                let reason = "the approval prompt failed in the client"
+                return [
+                    .audit(MCPCallRecord(
+                        server: call.server, tool: call.tool, decision: .ask, approvalID: key, argumentKeys: call.keys,
+                        isError: true, declined: true, reason: reason)),
+                    .toClient(Self.toolError(
+                        id: call.client,
+                        "rv could not get an answer to its approval prompt for \(MCPDisplayedText.field(call.server)) tool \(MCPDisplayedText.field(call.tool)); the call was not run. Do not retry unless the user asks.")),
+                ]
+            }
             return outOfBand(
                 client: call.client, server: call.server, tool: call.tool, arguments: call.arguments, keys: call.keys)
         }
@@ -318,8 +361,16 @@ public struct MCPGatewayCore {
         guard phases[server] == .ready else {
             return unavailable(client: client, server: server, tool: tool, decision: decision, keys: keys)
         }
-        var forwarded = params?.objectValue ?? JSONObject()
+        // Forward only what approval covers: the tool name and the exact
+        // arguments that were hashed and shown, plus the client's progress
+        // token. Any other top-level params field would reach the upstream
+        // unshown and unhashed, including on a granted retry.
+        var forwarded = JSONObject()
         forwarded["name"] = .string(tool)
+        forwarded["arguments"] = arguments
+        if let token = params?["_meta"]?["progressToken"] {
+            forwarded["_meta"] = .object(["progressToken": token])
+        }
         var approval: Approval?
         var outputs: [MCPGatewayOutput] = []
         if decision == .ask {
@@ -353,6 +404,9 @@ public struct MCPGatewayCore {
         client: JSONValue, server: String, tool: String, params: JSONObject, arguments: JSONValue, keys: [String]
     ) -> [MCPGatewayOutput] {
         if clientElicits, held.count < Self.maximumHeld {
+            guard arguments.canonicalText.count <= Self.maximumElicitationArguments else {
+                return argumentsNotShown(client: client, server: server, tool: tool, keys: keys)
+            }
             let message = Self.elicitationMessage(server: server, tool: tool, arguments: arguments)
             guard Self.elicitationCovers(arguments, shown: message) else {
                 return argumentsNotShown(client: client, server: server, tool: tool, keys: keys)
@@ -360,7 +414,8 @@ public struct MCPGatewayCore {
             let key = "rv-approval-\(nextID)"
             nextID += 1
             held[key] = HeldCall(
-                client: client, server: server, tool: tool, params: params, arguments: arguments, keys: keys, shown: message)
+                client: client, server: server, tool: tool, params: params, arguments: arguments, keys: keys,
+                shown: message, heldAt: clock())
             return [
                 .audit(MCPCallRecord(
                     server: server, tool: tool, decision: .ask, approvalID: key, argumentKeys: keys, isError: false,
@@ -374,7 +429,6 @@ public struct MCPGatewayCore {
                                 "type": .string("boolean"),
                                 "title": .string("Allow this call once"),
                                 "description": .string("rv runs only this call, with exactly these arguments."),
-                                "default": .bool(true),
                             ])
                         ]),
                         "required": .array([.string("approve")]),
@@ -631,6 +685,13 @@ public struct MCPGatewayCore {
             default:
                 continue
             }
+        }
+        for (key, call) in held.filter({ $0.value.server == server }).sorted(by: { $0.key < $1.key }) {
+            held[key] = nil
+            outputs.append(.audit(MCPCallRecord(
+                server: server, tool: call.tool, decision: .ask, approvalID: key, argumentKeys: call.keys,
+                isError: true, reason: "upstream exited")))
+            outputs.append(.toClient(Self.error(id: call.client, code: -32603, message: "MCP server \(server) exited")))
         }
         return wasStarting ? outputs + releaseWaiting() : outputs
     }

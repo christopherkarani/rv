@@ -1004,6 +1004,10 @@ private func writeSignatureShims(in shim: URL) throws {
           printf '%s: accepted\\nsource=Notarized Developer ID\\n' "$file" >&2
           exit 0
         fi
+        if [ "$mode" = rejected-notarized ]; then
+          printf '%s: rejected\\nsource=Notarized Developer ID\\n' "$file" >&2
+          exit 3
+        fi
         if [ "$mode" = reject-dylib ]; then
           case "$file" in
             *.dylib)
@@ -1130,9 +1134,21 @@ private func runSignedDownloadInstall(
         "PATH": shim.path + ":/usr/bin:/bin",
         "RV_TEST_TOOL_LOG": log.path,
     ].merging(environment) { $1 }
+    // The shipped script takes its Team ID pin only from its own
+    // `release_team_id` (no environment override), so pin by patching a copy.
+    var scriptURL = script ?? installScriptURL()
+    if script == nil, let team = environment["RV_INSTALL_TEAM_ID"] {
+        let source = try String(contentsOf: scriptURL, encoding: .utf8)
+        let patched = source.replacingOccurrences(
+            of: "release_team_id=\"\"", with: "release_team_id=\"\(team)\"")
+        try #require(patched != source)
+        scriptURL = root.appendingPathComponent("install-pinned.sh")
+        try Data(patched.utf8).write(to: scriptURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+    }
     let mounted = (withSignatureShims && mountSystemCodesign) ? shim : nil
     let (status, err) = try runInstallScript(
-        script: script ?? installScriptURL(), environment: processEnvironment, systemCodesignShim: mounted)
+        script: scriptURL, environment: processEnvironment, systemCodesignShim: mounted)
     return SignedInstallRun(
         status: status,
         stderr: err,
@@ -1296,6 +1312,23 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     #expect(run.status == 1)
     #expect(run.stderr.contains("Gatekeeper does not accept"))
     #expect(run.stderr.contains("warning: release files are not code-signed") == false)
+    try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_rejectedVerdictWithNotarizedSourceRefuses() throws {
+    // spctl prints "source=Notarized Developer ID" for a rejected binary too
+    // (e.g. revoked certificate); only an accepted verdict may install.
+    let run = try runSignedDownloadInstall(
+        environment: [
+            "RV_INSTALL_TEAM_ID": "TEAMRV1234",
+            "RV_TEST_SPCTL": "rejected-notarized",
+        ],
+        previousInstall: true
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 1, "\(run.stderr)")
+    #expect(run.stderr.contains("Gatekeeper does not accept"))
     try expectPreviousInstallKept(run)
 }
 

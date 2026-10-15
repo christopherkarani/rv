@@ -4,7 +4,9 @@
 # Tests must set HOME to a temp directory.
 # Unset RV_INSTALL_BIN downloads the latest GitHub release trio into a temp
 # dir, then uses the same atomic stage+setup path as a local stage.
-# Downloaded macOS files are signature-checked before anything is staged.
+# Downloaded macOS files are signature-checked before anything is staged:
+# a signed file must be valid, notarized, and from the pinned team once one
+# is set. Unsigned files only warn until signed_releases=1 below.
 # TTY download UI matches SetupRenderer: "Downloading" + 24× ━/─ bar, driven by
 # real Content-Length weights (and mid-file byte growth while each curl runs).
 set -eu
@@ -318,7 +320,7 @@ source_after_verdict() {
         rest=
         ;;
     esac
-    if [ "$line" = "$path: accepted" ] || [ "$line" = "$path: rejected" ]; then
+    if [ "$line" = "$path: accepted" ]; then
       armed=1
       found=
       took=
@@ -453,7 +455,9 @@ phrase_outside_authority() {
 verify_release_signatures() {
   dir="$1"
   shift
-  team="${RV_INSTALL_TEAM_ID:-$release_team_id}"
+  # The pin comes only from this script. An environment override would let
+  # whatever ran `curl | sh` (direnv, CI, a wrapper) silently re-pin trust.
+  team="$release_team_id"
   # Absolute paths. A codesign earlier on PATH must not decide this check.
   codesign=/usr/bin/codesign
   spctl=/usr/sbin/spctl
@@ -538,7 +542,14 @@ verify_release_signatures() {
       need_spctl=1
     fi
     if [ "$need_spctl" = 1 ]; then
-      verdict="$("$spctl" -a -t open --context context:primary-signature -vv "$file" 2>&1 || true)"
+      # Gatekeeper's exit status is part of the verdict: a rejected binary
+      # whose output still names a Notarized source must not install.
+      if verdict="$("$spctl" -a -t open --context context:primary-signature -vv "$file" 2>&1)"; then
+        :
+      else
+        echo "rv: refusing to install: Gatekeeper does not accept $name as notarized" >&2
+        exit 1
+      fi
       source_line=$(source_after_verdict "$verdict" "$file")
       if [ "$source_line" != "source=Notarized Developer ID" ]; then
         echo "rv: refusing to install: Gatekeeper does not accept $name as notarized" >&2
@@ -612,9 +623,6 @@ else
     download_release_asset "$tmp_fetch" "rv-isolation-exec" "$size_isolation"
     chmod 755 "$tmp_fetch/rv-isolation-exec"
   fi
-  fetch_pack_bundles "$tmp_fetch" "$size_packs"
-  progress_finish
-
   src="$tmp_fetch"
   [ -x "$src/rv" ] && [ -x "$src/rv-cli" ] && [ -x "$src/rvd" ] && [ -x "$src/rv-workspace-host" ] || {
     echo "rv: download did not produce executable rv, rv-cli, rvd, and rv-workspace-host" >&2
@@ -624,6 +632,10 @@ else
     verify_release_signatures "$src" libswiftCompatibilitySpan.dylib \
       rv rv-cli rvd rv-workspace-host rv-pty-claim
   fi
+  # Pack bundles are unpacked only after the binaries they ship with have
+  # passed verification, so a refused release writes nothing at all.
+  fetch_pack_bundles "$tmp_fetch" "$size_packs"
+  progress_finish
 fi
 
 if [ "$os" = "Linux" ] && [ ! -x "$src/rv-isolation-exec" ]; then

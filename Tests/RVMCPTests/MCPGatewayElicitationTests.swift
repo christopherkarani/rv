@@ -150,16 +150,17 @@ struct MCPGatewayElicitationTests {
         }
     }
 
-    @Test func missingApproveUsesTheSchemaDefault() {
-        var harness = Self.harness(elicitation: "{}")
-        let id = harness.client(Self.createCall).toClient.first?["id"]?.stringValue ?? ""
-        let accepted = harness.client(Self.answer(id, #"{"action":"accept"}"#))
-        #expect(accepted.toUpstream.first?.1["params"]?["name"] == .string("create_issue"))
-
-        var emptyContent = Self.harness(elicitation: "{}")
-        let other = emptyContent.client(Self.createCall).toClient.first?["id"]?.stringValue ?? ""
-        let also = emptyContent.client(Self.answer(other, #"{"action":"accept","content":{}}"#))
-        #expect(also.toUpstream.first?.1["params"]?["arguments"] == .object(["title": .string("t"), "body": .string("b")]))
+    @Test func missingApproveRefusesInsteadOfDefaultingToYes() {
+        // An auto-answered or malformed accept without an explicit
+        // `approve: true` must not run the call.
+        for result in [#"{"action":"accept"}"#, #"{"action":"accept","content":{}}"#, #"{"action":"accept","content":"yes"}"#] {
+            var harness = Self.harness(elicitation: "{}")
+            let id = harness.client(Self.createCall).toClient.first?["id"]?.stringValue ?? ""
+            let refused = harness.client(Self.answer(id, result))
+            #expect(refused.toUpstream.isEmpty, "\(result)")
+            #expect(refused.toClient.first?["result"]?["isError"] == .bool(true))
+            #expect(refused.audits.first?.declined == true)
+        }
     }
 
     @Test func elicitationErrorFallsBackToOutOfBandApproval() {
@@ -218,5 +219,38 @@ struct MCPGatewayElicitationTests {
         #expect(event?.detail["approval"] == "forged1")
         #expect(reply.logs.contains { $0.contains("not signed by rv") })
         #expect(harness.approvals.requested.withLock { $0 } == ["github/create_issue"])
+    }
+
+    @Test func nonCapabilityElicitationErrorRefusesWithoutOutOfBandRetry() {
+        var harness = Self.harness(elicitation: "{}")
+        let id = harness.client(Self.createCall).toClient.first?["id"]?.stringValue ?? ""
+        let refused = harness.client(#"{"jsonrpc":"2.0","id":"\#(id)","error":{"code":-32603,"message":"dismissed"}}"#)
+        #expect(refused.toUpstream.isEmpty)
+        #expect(refused.toClient.first?["result"]?["isError"] == .bool(true))
+        #expect(refused.audits.first?.declined == true)
+        #expect(harness.approvals.requested.withLock { $0 }.isEmpty)
+    }
+
+    @Test func oversizedArgumentsAreRefusedNotPrompted() {
+        var harness = Self.harness(elicitation: "{}")
+        let filler = String(repeating: "a", count: MCPGatewayCore.maximumElicitationArguments + 100)
+        let call = #"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"create_issue","arguments":{"aaa":"\#(filler)","zzz":"payload"}}}"#
+        let refused = harness.client(call)
+        #expect(refused.toUpstream.isEmpty)
+        #expect(refused.toClient.first?["method"] == nil)
+        #expect(refused.toClient.first?.compactText.contains("did not include the full arguments") == true)
+    }
+
+    @Test func paramsFieldsOutsideArgumentsAreNotForwarded() {
+        var harness = Self.harness(elicitation: "{}")
+        let call = #"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"create_issue","arguments":{"title":"t"},"task":{"ttl":60},"extra":"evil","_meta":{"progressToken":7,"note":"x"}}}"#
+        let id = harness.client(call).toClient.first?["id"]?.stringValue ?? ""
+        let accepted = harness.client(Self.answer(id, #"{"action":"accept","content":{"approve":true}}"#))
+        let forwarded = accepted.toUpstream.first?.1["params"]
+        #expect(forwarded?["name"] == .string("create_issue"))
+        #expect(forwarded?["arguments"] == .object(["title": .string("t")]))
+        #expect(forwarded?["task"] == nil)
+        #expect(forwarded?["extra"] == nil)
+        #expect(forwarded?["_meta"] == .object(["progressToken": .int(7)]))
     }
 }

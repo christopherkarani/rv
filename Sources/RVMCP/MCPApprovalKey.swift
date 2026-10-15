@@ -4,7 +4,6 @@ import Darwin
 import Glibc
 #endif
 import Foundation
-import Synchronization
 #if canImport(Security)
 import Security
 #endif
@@ -134,10 +133,13 @@ enum ApprovalKeyProtection {
 }
 
 /// Whether a data-protection keychain item may be used as rv's approvals key.
-/// `SecAccessControlGetConstraints` records `kSecAccessControlUserPresence` as
-/// `cpo`, nested under `od`. An item with no such constraint is not adopted.
-/// `pkofn` is an OR (k-of-n) policy: cpo inside it does not by itself require
-/// user presence, so that item is not adopted either.
+/// The access-control constraint dictionary records
+/// `kSecAccessControlUserPresence` as `cpo`, nested under `od`. An item with
+/// no such constraint is not adopted. `pkofn` is an OR (k-of-n) policy: cpo
+/// inside it does not by itself require user presence, so that item is not
+/// adopted either. The dictionary has no public accessor, so the live check
+/// is behavioral: an item that copies without authentication UI does not
+/// require user presence, whatever its constraints claim.
 enum ApprovalKeyAccess {
     static let userPresenceConstraint = "cpo"
     static let orConstraint = "pkofn"
@@ -238,8 +240,7 @@ enum ApprovalKeyAccess {
             let key = MCPHex.decode(Array(text.utf8)), key.count == 32,
             ApprovalKeyMAC.equal(RVDigest.sha256Hex(key), pinnedFingerprint),
             let enrollment = ApprovalKeyEnrollment.load(configDirectory),
-            enrollment.binds(key: key, anchor: anchor),
-            ApprovalKeyCreation.created(pinnedFingerprint)
+            enrollment.binds(key: key, anchor: anchor)
         else { return nil }
         return MCPSigner(key: key)
     }
@@ -340,22 +341,6 @@ enum ApprovalKeyAnchor {
     }
 }
 
-/// Fingerprints this process generated. A keychain pair that verifies on
-/// paper is not the signing secret unless `note` ran for that fingerprint
-/// here. User presence on a planted item does not count, and neither does a
-/// disk write of `approvals.anchor` or `approvals.enrollment`.
-enum ApprovalKeyCreation {
-    private static let fingerprints = Mutex<Set<String>>([])
-
-    static func note(_ fingerprint: String) {
-        fingerprints.withLock { $0.insert(fingerprint) }
-    }
-
-    static func created(_ fingerprint: String) -> Bool {
-        fingerprints.withLock { $0.contains(fingerprint) }
-    }
-}
-
 enum ApprovalKeyMAC {
     static func equal(_ lhs: String, _ rhs: String) -> Bool {
         let left = Array(lhs.utf8)
@@ -392,15 +377,17 @@ enum ApprovalKeychain {
                 case .failed:
                     return nil
                 case .absent:
-                    deleteProtectedItem()
+                    // The key item requires presence but its seal item is
+                    // gone. Fail closed without deleting: destroying the key
+                    // here would void every grant and signature on a read.
                     return nil
                 case .value(let anchor, let pinnedFingerprint):
+                    // Enrollment mismatch also fails closed without deleting.
+                    // The only item `read` deletes is one that provably does
+                    // not require user presence, which cannot be rv's key.
                     guard let signer = ApprovalKeyAccess.signer(
                         secret: data, anchor: anchor, pinnedFingerprint: pinnedFingerprint, configDirectory: configDirectory)
-                    else {
-                        deleteProtectedItem()
-                        return nil
-                    }
+                    else { return nil }
                     return signer
                 }
             }
@@ -461,16 +448,29 @@ enum ApprovalKeychain {
             return .failed
         }
         guard let data = attributes[kSecValueData as String] as? Data else { return .failed }
-        return .item(data, inspection(of: attributes))
+        return .item(data, inspection(of: attributes, account: account))
     }
 
-    private static func inspection(of attributes: [String: Any]) -> ApprovalKeyAccess.Item {
-        guard let object = attributes[kSecAttrAccessControl as String] else { return .noAccessControl }
-        guard let control = object as? SecAccessControl else { return .unreadable }
-        guard let constraints = SecAccessControlGetConstraints(control) else { return .unreadable }
-        let parsed = ApprovalKeyAccess.stringKeyed(constraints)
-        guard parsed.isEmpty == false else { return .unreadable }
-        return .constraints(userPresence: ApprovalKeyAccess.requiresUserPresence(parsed))
+    /// The constraint dictionary behind a `SecAccessControl` has no public
+    /// accessor, so presence is judged behaviorally: copy the same item with
+    /// authentication UI failed. Success means the item does not require the
+    /// user (no `cpo`, or a `pkofn` bypass); an interaction/auth failure
+    /// means it does. Anything else is unreadable and the item is kept.
+    private static func inspection(of attributes: [String: Any], account: String) -> ApprovalKeyAccess.Item {
+        guard attributes[kSecAttrAccessControl as String] != nil else { return .noAccessControl }
+        var probe = copyQuery(silent: true, account: account)
+        probe[kSecReturnData as String] = false
+        probe[kSecReturnAttributes as String] = true
+        probe[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: AnyObject?
+        switch SecItemCopyMatching(probe as CFDictionary, &result) {
+        case errSecSuccess:
+            return .constraints(userPresence: false)
+        case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
+            return .constraints(userPresence: true)
+        default:
+            return .unreadable
+        }
     }
 
     static func create(configDirectory: URL) -> MCPSigner? {
@@ -500,7 +500,6 @@ enum ApprovalKeychain {
             ApprovalKeyAnchor.remove(configDirectory)
             return nil
         }
-        ApprovalKeyCreation.note(RVDigest.sha256Hex(raw))
         guard let signer = read(configDirectory: configDirectory),
             let expected = MCPSigner(key: raw),
             signer.mac("enrollment", ["check"]) == expected.mac("enrollment", ["check"])

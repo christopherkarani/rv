@@ -1031,25 +1031,26 @@ public enum MCPSandbox {
     }
 
     /// Exactly `count` folded copies of `scalar`, including a weight-2
-    /// spelling at any alignment. The tail is not copied into each
-    /// alternative, so a long run keeps `(ß|ẞ)` instead of dropping it.
+    /// spelling (`ß`/`ẞ` for `ss`) at any alignment. Seatbelt compiles POSIX
+    /// ERE, which has no lookaheads — a `(?=…)` pattern compiles yet never
+    /// matches, silently dropping the deny — so every token alignment is
+    /// enumerated instead. No boundary assertion is needed: each alternative
+    /// consumes exactly `count` weight and the surrounding pattern expects a
+    /// different scalar (or the end) next. Runs too long to enumerate return
+    /// nil and the caller falls back to the per-scalar alternations.
     private static func repeatedScalarPattern(_ scalar: Unicode.Scalar, count: Int) -> String? {
+        guard count >= 1, count <= 8 else { return nil }
         let pair = scalarString([scalar, scalar])
         guard let forms = foldTables.multi[pair], forms.isEmpty == false else { return nil }
         let atom = "(" + foldAtom(scalar) + "\u{017F}?)"
         let wide = "(" + forms.map { regexEscape(String($0)) }.joined(separator: "|") + ")\u{017F}?"
-        // The next scalar is not another copy of this run. A's may sit on
-        // either side of a weight-2 spelling; the token count fixes the weight.
-        let boundary = "(?!" + atom + "|" + wide + ")"
-        var alts: [String] = []
-        for copies in 0...(count / 2) {
-            let singles = count - 2 * copies
-            let tokens = singles + copies
-            let look = "(?=(" + atom + "*" + wide + "){\(copies)}" + atom + "*" + boundary + ")"
-            let body = "(" + atom + "|" + wide + "){\(tokens)}"
-            alts.append("(" + look + body + ")")
+        func sequences(_ remaining: Int) -> [String] {
+            if remaining == 0 { return [""] }
+            var out = sequences(remaining - 1).map { atom + $0 }
+            if remaining >= 2 { out += sequences(remaining - 2).map { wide + $0 } }
+            return out
         }
-        return "(" + alts.joined(separator: "|") + ")"
+        return "(" + sequences(count).joined(separator: "|") + ")"
     }
 
     private static func foldAtom(_ scalar: Unicode.Scalar) -> String {
@@ -1303,7 +1304,12 @@ public enum MCPSandbox {
             visited.insert(identity)
         }
         var root = inodeStamp(path)
-        let walked = directoryStamps(under: path, relative: "", visited: &visited)
+        // A symlink is only entered when its target stays inside the watched
+        // root. A planted link out of the root is stamped as a link (its
+        // target's identity is still noted), never walked — walking it would
+        // let a cache entry steer rv into listing and chmod'ing foreign trees.
+        let rootReal = resolvedPath(path)
+        let walked = directoryStamps(under: path, relative: "", visited: &visited, rootReal: rootReal)
         if walked.clearedChangeTime {
             root.changed = 0
             root.changedNsec = 0
@@ -1311,8 +1317,14 @@ public enum MCPSandbox {
         return TreeStamp(root: root, children: walked.stamps)
     }
 
+    private static func resolvedPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
     private static func directoryStamps(
-        under path: String, relative: String, visited: inout Set<String>
+        under path: String, relative: String, visited: inout Set<String>, rootReal: String?
     ) -> DirectoryWalk {
         var stamps: [String: InodeStamp] = [:]
         let listed = listDirectory(path)
@@ -1326,22 +1338,23 @@ public enum MCPSandbox {
             let kind = info.st_mode & S_IFMT
             guard kind == S_IFDIR || kind == S_IFLNK else { continue }
             let rel = relative.isEmpty ? name : relative + "/" + name
-            let entered: String?
+            var entered: String?
             if kind == S_IFDIR {
                 stamps[rel] = inodeStamp(child)
                 entered = child
-            } else {
-                entered = symlinkDirectory(child)
-                if let entered {
-                    stamps[rel] = stampNotingTarget(child, target: entered)
-                } else {
-                    stamps[rel] = inodeStamp(child)
+            } else if let target = symlinkDirectory(child) {
+                stamps[rel] = stampNotingTarget(child, target: target)
+                if let rootReal, let targetReal = resolvedPath(target),
+                    targetReal == rootReal || targetReal.hasPrefix(rootReal + "/") {
+                    entered = target
                 }
+            } else {
+                stamps[rel] = inodeStamp(child)
             }
             guard let entered, let identity = directoryIdentity(entered), visited.insert(identity).inserted else {
                 continue
             }
-            let nested = directoryStamps(under: entered, relative: rel, visited: &visited)
+            let nested = directoryStamps(under: entered, relative: rel, visited: &visited, rootReal: rootReal)
             if nested.clearedChangeTime, var stamp = stamps[rel] {
                 if kind == S_IFDIR {
                     stamp.changed = 0
@@ -1360,22 +1373,43 @@ public enum MCPSandbox {
     }
 
     /// Names in `path`. Mode `0111` cannot be listed. The owner read bit is
-    /// added for this call and the mode is put back. `chmod` updates ctime
+    /// added for this call and the mode is put back. `fchmod` updates ctime
     /// and leaves mtime and the link count alone, so the caller drops ctime.
+    /// Everything happens on one `O_NOFOLLOW` fd: swapping `path` for a
+    /// symlink between the stat and the chmod cannot redirect the mode
+    /// change (or the listing) at a foreign directory such as `~/.ssh`.
     private static func listDirectory(_ path: String) -> (names: [String]?, clearedChangeTime: Bool) {
         if let names = try? FileManager.default.contentsOfDirectory(atPath: path) {
             return (names, false)
         }
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { return (nil, false) }
+        defer { close(fd) }
         var info = stat()
-        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else {
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else {
             return (nil, false)
         }
         let mode = info.st_mode & 0o7777
-        guard (mode & S_IRUSR) == 0, chmod(path, mode | S_IRUSR) == 0 else {
+        guard (mode & S_IRUSR) == 0, fchmod(fd, mode | S_IRUSR) == 0 else {
             return (nil, false)
         }
-        defer { _ = chmod(path, mode) }
-        return (try? FileManager.default.contentsOfDirectory(atPath: path), true)
+        defer { _ = fchmod(fd, mode) }
+        let listing = dup(fd)
+        guard listing >= 0, let stream = fdopendir(listing) else {
+            if listing >= 0 { close(listing) }
+            return (nil, true)
+        }
+        defer { closedir(stream) }
+        var names: [String] = []
+        while let entry = readdir(stream) {
+            var entry = entry.pointee
+            let name = withUnsafeBytes(of: &entry.d_name) { raw -> String in
+                guard let base = raw.baseAddress else { return "" }
+                return String(cString: base.assumingMemoryBound(to: CChar.self))
+            }
+            if name.isEmpty == false { names.append(name) }
+        }
+        return (names, true)
     }
 
     /// The symlink's own inode, plus the directory it names. Listing that

@@ -7,6 +7,18 @@ public let incompleteEvalSentence =
 /// is doubled before a control is written as `\n` or `\uXXXX`, so the escape
 /// text is not the same field as the control.
 public enum DisplayedText {
+    /// Scalars that must never reach a display raw: C0/C1/DEL controls, line
+    /// and paragraph separators, and every format character (bidi marks and
+    /// overrides, zero-width and invisible tag characters). Category-based,
+    /// so a scalar nobody enumerated is still escaped.
+    public static func needsEscape(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar.value < 0x20 || (0x7F...0x9F).contains(scalar.value) { return true }
+        switch scalar.properties.generalCategory {
+        case .control, .format, .lineSeparator, .paragraphSeparator: return true
+        default: return false
+        }
+    }
+
     public static func field(_ text: String) -> String {
         var escaped = ""
         for scalar in text.unicodeScalars {
@@ -15,53 +27,37 @@ public enum DisplayedText {
                 continue
             }
             switch scalar.value {
-            case 0x08: escaped += "\\u0008"
             case 0x0A: escaped += "\\n"
-            case 0x0B: escaped += "\\u000b"
-            case 0x0C: escaped += "\\u000c"
             case 0x0D: escaped += "\\r"
-            case 0x1B: escaped += "\\u001b"
-            case 0x84: escaped += "\\u0084"
-            case 0x85: escaped += "\\u0085"
-            case 0x8D: escaped += "\\u008d"
-            case 0x90: escaped += "\\u0090"
-            case 0x98: escaped += "\\u0098"
-            case 0x9B: escaped += "\\u009b"
-            case 0x9C: escaped += "\\u009c"
-            case 0x9D: escaped += "\\u009d"
-            case 0x9E: escaped += "\\u009e"
-            case 0x9F: escaped += "\\u009f"
-            case 0x2028: escaped += "\\u2028"
-            case 0x2029: escaped += "\\u2029"
-            case 0x202A: escaped += "\\u202a"
-            case 0x202B: escaped += "\\u202b"
-            case 0x202C: escaped += "\\u202c"
-            case 0x202D: escaped += "\\u202d"
-            case 0x202E: escaped += "\\u202e"
-            case 0x2066: escaped += "\\u2066"
-            case 0x2067: escaped += "\\u2067"
-            case 0x2068: escaped += "\\u2068"
-            case 0x2069: escaped += "\\u2069"
-            default: escaped.unicodeScalars.append(scalar)
+            default:
+                if needsEscape(scalar) {
+                    escaped += String(format: "\\u%04x", scalar.value)
+                } else {
+                    escaped.unicodeScalars.append(scalar)
+                }
             }
         }
         return escaped
     }
 
-    /// `JSONEncoder` writes ESC as `\u001b` and leaves U+2028, U+2029, and
-    /// U+202E raw inside strings. Replacing those scalars after encoding
-    /// keeps one JSON value and does not field the text first.
+    /// `JSONEncoder` writes ESC as `\u001b` and leaves separators, bidi
+    /// controls, and other format scalars raw inside strings. Escaping those
+    /// scalars after encoding keeps one JSON value (and one line for
+    /// NEL/LS-splitting consumers) without fielding the text first. Astral
+    /// scalars are written as surrogate-pair escapes, as JSON requires.
     public static func escapeJSONScalars(_ text: String) -> String {
-        var text = text
-        let scalars: [(Character, String)] = [
-            ("\u{2028}", "\\u2028"),
-            ("\u{2029}", "\\u2029"),
-            ("\u{202E}", "\\u202e"),
-        ]
-        for (scalar, escaped) in scalars {
-            text = text.replacingOccurrences(of: String(scalar), with: escaped)
+        var escaped = ""
+        escaped.unicodeScalars.reserveCapacity(text.unicodeScalars.count)
+        for scalar in text.unicodeScalars {
+            if needsEscape(scalar), scalar.value >= 0x80 {
+                for unit in String(scalar).utf16 {
+                    escaped += String(format: "\\u%04x", unit)
+                }
+            } else {
+                escaped.unicodeScalars.append(scalar)
+            }
         }
-        return text
+        return escaped
     }
 }
 

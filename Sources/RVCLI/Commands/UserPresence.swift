@@ -72,6 +72,8 @@ struct UserPresence: Sendable {
             return .confirmed(method: "device owner authentication")
         } catch let error as LAError where error.code == .notInteractive {
             return nil
+        } catch is CancellationError {
+            return .refused("authentication was cancelled")
         } catch {
             return .refused("authentication was cancelled or failed")
         }

@@ -635,6 +635,18 @@ struct MCPSandboxCreateTests {
         let bare = MCPSandbox.seatbeltPathPattern("/private/tmp/\(twelve)")
         #expect(wholeMatch(bare, "/private/tmp/" + String(repeating: "\u{00DF}", count: 6) + "/id_rsa"))
         #expect(wholeMatch(bare, "/private/tmp/\(twelve)/id_rsa"))
+        // Seatbelt compiles POSIX ERE: lookaheads and other `(?…)` groups
+        // compile there yet never match, which silently drops the deny.
+        // ICU (above) would happily match them, so assert their absence.
+        for pattern in [temporary, users, variable, opt, longS, sharp, ligature, host, office, longRun, bare] {
+            #expect(pattern.contains("(?") == false, "\(pattern)")
+        }
+        let ssh = MCPSandbox.seatbeltPathPattern("/Users/me/.ssh")
+        #expect(ssh.contains("(?") == false)
+        #expect(wholeMatch(ssh, "/Users/me/.ssh/id_rsa"))
+        #expect(wholeMatch(ssh, "/Users/me/.\u{00DF}h/id_rsa"))
+        #expect(wholeMatch(ssh, "/Users/me/.SSH/id_rsa"))
+        #expect(wholeMatch(ssh, "/Users/me/.sh/id_rsa") == false)
     }
 
     @Test func dotSymlinkAtTheMissingNameOpensTheCreationDirectory() throws {

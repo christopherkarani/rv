@@ -180,8 +180,11 @@ public struct MCPApprovalStore: Sendable {
             }) else { return MCPGrantLookup.none }
             // The hash alone is not the call. A grant signed for other key names stays put.
             guard requests[index].argumentKeys == argumentKeys else { return MCPGrantLookup.none }
+            // No key to verify with: leave the grant for a keyed gateway
+            // instead of deleting a legitimate approval as "forged".
+            guard let signer else { return MCPGrantLookup.none }
             let entry = requests.remove(at: index)
-            guard let signer, signer.verify(entry.grantMAC, "grant", entry.grantFields) else {
+            guard signer.verify(entry.grantMAC, "grant", entry.grantFields) else {
                 return .forged(id: entry.id)
             }
             return .granted(id: entry.id)
@@ -279,8 +282,11 @@ public struct MCPApprovalStore: Sendable {
         case .success(nil): original = []
         case .failure: return nil
         }
-        let cutoff = clock().addingTimeInterval(-Self.lifetime)
-        var requests = original.filter { $0.requestedAt > cutoff }
+        let now = clock()
+        let cutoff = now.addingTimeInterval(-Self.lifetime)
+        // `requestedAt` is not MAC'd, so a future date smuggled into the file
+        // must not keep a grant alive past its real lifetime.
+        var requests = original.filter { $0.requestedAt > cutoff && $0.requestedAt <= now.addingTimeInterval(300) }
         let result = body(&requests)
         if requests != original {
             guard OwnerOnlyFile.write(Data(Self.encode(requests).prettyText.utf8), to: fileURL) else { return nil }
