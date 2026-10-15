@@ -15,8 +15,62 @@ func relocateDescriptor(_ fd: inout Int32, above floor: Int32) -> Bool {
     if fd >= floor { return true }
     let moved = fcntl(fd, F_DUPFD_CLOEXEC, floor)
     guard moved >= 0 else { return false }
-    close(fd)
+    let original = fd
     fd = moved
+    closeRelocatedOriginal(original)
+    return true
+}
+
+/// One `close` of a relocated descriptor. Every caller passes a
+/// descriptor it just created or opened (pipes, ptys, directory and
+/// `/dev/null` opens), never borrowed stdio, so an original on 0, 1,
+/// or 2 is that owned descriptor in a slot that happened to be free
+/// and is closed too: leaving it open would strand a duplicate in the
+/// low numbers this relocation exists to free. `close` is not
+/// retried: on Linux the kernel releases the number before `EINTR`,
+/// and a second `close` would drop whatever was opened there next.
+func closeRelocatedOriginal(_ fd: Int32) {
+    if fd < 0 { return }
+    _ = close(fd)
+}
+
+/// One `close` of a socket this process just created or accepted. `socket`
+/// and `accept` return 0, 1, or 2 only when that slot is free, so the
+/// number is this socket and not an unrelated stdio stream. `close` is not
+/// retried.
+func closeOwnedSocket(_ fd: Int32) {
+    if fd < 0 { return }
+    _ = close(fd)
+}
+
+/// Darwin has no `SOCK_CLOEXEC`. The descriptor that survives is the
+/// `F_DUPFD_CLOEXEC` result. The original, even when it is 0, 1, or 2, is
+/// closed once on success and on dup failure. A failed dup returns `-1`
+/// and does not leave the original open.
+func publishCloexecSocket(raw: Int32, above floor: Int32) -> Int32 {
+    guard raw >= 0 else { return -1 }
+    let moved = fcntl(raw, F_DUPFD_CLOEXEC, floor)
+    let dupError = errno
+    closeOwnedSocket(raw)
+    if moved < 0 {
+        errno = dupError
+        return -1
+    }
+    return moved
+}
+
+/// Moves an accepted socket above `floor`. `relocateDescriptor`
+/// closes the owned original on success, including one on 0, 1, or 2.
+/// A failed move leaves it open, so this closes it once instead.
+func relocateOwnedSocket(_ fd: inout Int32, above floor: Int32) -> Bool {
+    let original = fd
+    guard original >= 0 else { return false }
+    guard relocateDescriptor(&fd, above: floor) else {
+        let failure = errno
+        closeOwnedSocket(original)
+        errno = failure
+        return false
+    }
     return true
 }
 

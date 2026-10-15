@@ -108,14 +108,28 @@ struct SeatbeltPerMIBExperimentTests {
         let source = "(version 1)\n(allow default)\n\(SeatbeltSysctlExperiment.sbplRules(policy: .perMIBExperiment))\n"
         try Data(source.utf8).write(to: profileURL)
 
-        let tools: [(path: String, arguments: [String], marker: String)] = [
+        // swift and node are hard rows: exit 0 and the marker. A
+        // LowLevelAlloc abort is a failure. Node reaches that abort
+        // when sysconf(_SC_PAGESIZE) is EPERM; the experiment allowlist
+        // names hw.pagesize_compat for that numeric MIB. This profile
+        // is not what `compileSeatbeltProfile` emits (that compiler
+        // keeps `.coarse`).
+        var tools: [(path: String, arguments: [String], marker: String)] = [
             ("/bin/sh", ["-c", "echo t9-sh-ok"], "t9-sh-ok"),
             ("/usr/bin/git", ["--version"], "git version"),
             ("/usr/bin/python3", ["-c", "print('t9-py-ok')"], "t9-py-ok"),
             ("/usr/bin/curl", ["--version"], "curl"),
             ("/usr/bin/clang", ["--version"], "clang"),
             ("/usr/bin/xcrun", ["--version"], "xcrun"),
+            ("/usr/bin/swift", ["--version"], "swift-driver"),
         ]
+        if let node = perMIBFindNode() {
+            tools.append((node, ["-e", "console.log('t9-node-ok')"], "t9-node-ok"))
+        } else if ProcessInfo.processInfo.environment["CI"] != nil {
+            // The node row is the only row that exercises
+            // hw.pagesize_compat. On CI it is a hard row, not a skip.
+            Issue.record("node not found on CI; hw.pagesize_compat row untested")
+        }
         for tool in tools {
             #expect(FileManager.default.isExecutableFile(atPath: tool.path), "missing \(tool.path)")
             let (status, output) = try perMIBRun(
@@ -123,32 +137,6 @@ struct SeatbeltPerMIBExperimentTests {
                 path: tool.path, arguments: tool.arguments)
             #expect(status == 0, "\(tool.path) output:\n\(output)")
             #expect(output.contains(tool.marker), "\(tool.path) output:\n\(output)")
-        }
-        // Known-gap rows: node and swift size their allocators through
-        // raw-MIB sysctl queries that `sysctl-name` allows cannot express
-        // (measured LowLevelAlloc overflow aborts; see the SHIP-BLOCKED
-        // note in SeatbeltLoopbackTests). They pass on some hosts and
-        // abort with that one signature on others. Pin exactly that: a
-        // pass is fine, the documented crash is the known gap, and any
-        // other failure mode is a regression. When the toolchain leaves
-        // are identified, delete the crash arm so the rows hard-require.
-        var gapTools: [(path: String, arguments: [String], marker: String)] = [
-            ("/usr/bin/swift", ["--version"], "swift-driver")
-        ]
-        if let node = perMIBFindTool([
-            "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin/node",
-            "/opt/homebrew/bin/node", "/usr/local/bin/node",
-        ]) {
-            gapTools.append((node, ["-e", "console.log('t9-node-ok')"], "t9-node-ok"))
-        }
-        for tool in gapTools {
-            #expect(FileManager.default.isExecutableFile(atPath: tool.path), "missing \(tool.path)")
-            let (status, output) = try perMIBRun(
-                sandboxExec: sandboxExec, profileURL: profileURL,
-                path: tool.path, arguments: tool.arguments)
-            let passed = status == 0 && output.contains(tool.marker)
-            let knownGap = output.contains("LowLevelAlloc")
-            #expect(passed || knownGap, "\(tool.path) status=\(status) output:\n\(output)")
         }
     }
 }
@@ -170,6 +158,19 @@ private struct PerMIBFixture {
 
 private func perMIBFindTool(_ candidates: [String]) -> String? {
     candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+}
+
+/// Node wherever the runner put it: `PATH` (setup-node/hostedtoolcache
+/// on CI images) first, then the usual install prefixes.
+private func perMIBFindNode() -> String? {
+    var candidates = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+        .split(separator: ":")
+        .map { "\($0)/node" }
+    candidates += [
+        "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin/node",
+        "/opt/homebrew/bin/node", "/usr/local/bin/node",
+    ]
+    return perMIBFindTool(candidates)
 }
 
 private func perMIBRun(

@@ -123,9 +123,10 @@ public struct PolicyWorkspace: Sendable {
 
     /// Rollback re-submits an earlier revision's document as a new head.
     /// The log is append-only: earlier lines are never rewritten. Restores
-    /// that relax a surviving predicate's verdict, downgrade the safety
-    /// level, or widen secret exemptions refuse with `blockedByFindings`
-    /// before anything is written; predicate-set change itself passes.
+    /// that drop a live deny or ask, relax a surviving predicate's verdict,
+    /// downgrade the safety level, or widen secret exemptions refuse with
+    /// `blockedByFindings` before anything is written. Dropping an allow
+    /// still succeeds. The gate compares the live policy file.
     public func rollback(layer: PolicyDocumentLayer, to revision: Int) throws -> PolicyRevision {
         switch layer {
         case .machine:

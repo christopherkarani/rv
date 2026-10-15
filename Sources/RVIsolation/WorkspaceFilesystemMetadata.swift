@@ -38,16 +38,35 @@ enum WorkspaceFilesystemMetadata {
     /// (`MNT_IGNORE_OWNERSHIP`), so `st_uid` cannot identify the daemon's
     /// copy. Unknown paths fail closed toward honoring ownership.
     static func filesystemIgnoresOwnership(path: String) -> Bool {
-        var info = statfs()
-        guard path.withCString({ statfs($0, &info) == 0 }) else { return false }
-        return info.f_flags & UInt32(MNT_IGNORE_OWNERSHIP) != 0
+        final class Box: @unchecked Sendable { var ignored = false }
+        let box = Box()
+        let ok = diskImagePerformWithinCopyClock {
+            var info = statfs()
+            let stated = path.withCString { statfs($0, &info) == 0 }
+            if stated {
+                box.ignored = info.f_flags & UInt32(MNT_IGNORE_OWNERSHIP) != 0
+            }
+            return stated
+        }
+        return ok == true && box.ignored
     }
 
     /// Same check for an already-open directory descriptor.
     static func filesystemIgnoresOwnership(descriptor: Int32) -> Bool {
-        var info = statfs()
-        guard fstatfs(descriptor, &info) == 0 else { return false }
-        return info.f_flags & UInt32(MNT_IGNORE_OWNERSHIP) != 0
+        final class Box: @unchecked Sendable { var ignored = false }
+        let box = Box()
+        let ok = diskImagePerformWithinCopyClock {
+            let copy = diskImageDuplicateDescriptor(descriptor)
+            guard copy >= 0 else { return false }
+            var info = statfs()
+            let stated = fstatfs(copy, &info) == 0
+            close(copy)
+            if stated {
+                box.ignored = info.f_flags & UInt32(MNT_IGNORE_OWNERSHIP) != 0
+            }
+            return stated
+        }
+        return ok == true && box.ignored
     }
 #endif
 }

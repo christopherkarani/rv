@@ -128,6 +128,15 @@ enum SeatbeltSysctlExperiment {
     /// hw.machine join the kern.ostype/kern.osrelease base.
     /// hw.ncpu/hw.memsize: parallelism and memory topology every build
     /// system queries; verified not to reopen host procargs.
+    /// hw.pagesize_compat: getpagesize(3) and therefore
+    /// sysconf(_SC_PAGESIZE) issue the numeric MIB
+    /// {CTL_HW, HW_PAGESIZE}. That OID is the int node
+    /// `hw.pagesize_compat`, not the quad `hw.pagesize` (OID_AUTO).
+    /// Node's abseil LowLevelAlloc casts a failed sysconf to
+    /// `(size_t)-1` and aborts in CheckedAdd (`sum >= a`). Allowing
+    /// the quad name leaves the numeric query EPERM. The compat leaf
+    /// is still a named leaf, so it does not reopen nameless
+    /// KERN_PROCARGS2.
     static let allowlistedNames: [String] = [
         "kern.ostype",
         "kern.osrelease",
@@ -136,6 +145,7 @@ enum SeatbeltSysctlExperiment {
         "hw.machine",
         "hw.ncpu",
         "hw.memsize",
+        "hw.pagesize_compat",
     ]
 
     /// SBPL fragment for the sysctl posture. The coarse arm is the
@@ -996,43 +1006,97 @@ func verifySeatbeltPlan(_ plan: IsolationPlan) -> Result<WorkingDirectory, Isola
 /// Prepare / spawn never use this fallback: an existing directory that
 /// `realpath` cannot resolve is `workspacePathUnresolvable`.
 func resolvedWorkspacePath(_ workspace: WorkingDirectory) -> String {
-    posixRealpath(workspace.rawValue)
-        ?? URL(fileURLWithPath: workspace.rawValue).resolvingSymlinksInPath().path
+    switch posixRealpathRead(workspace.rawValue) {
+    case .path(let resolved):
+        return resolved
+    case .stopped:
+        // A stopped `realpath` is not an unresolved compile fixture.
+        // `resolvingSymlinksInPath` would stat the path on this thread.
+        return workspace.rawValue
+    case .unresolved:
+        return URL(fileURLWithPath: workspace.rawValue).resolvingSymlinksInPath().path
+    }
+}
+
+/// Resolution for profile compilation. A stopped `realpath` must not
+/// feed the unresolved symlink spelling into the unsafe check or the
+/// SBPL/Landlock grants: the kernel path is unknown, so compilation
+/// fails closed. A genuinely unresolved path keeps the fixture
+/// fallback above (prepare re-checks existence separately).
+func compileResolvedWorkspacePath(
+    _ workspace: WorkingDirectory
+) -> Result<String, IsolationApplyError> {
+    switch posixRealpathRead(workspace.rawValue) {
+    case .path(let resolved):
+        return .success(resolved)
+    case .stopped:
+        return .failure(.workspacePathUnresolvable)
+    case .unresolved:
+        return .success(
+            URL(fileURLWithPath: workspace.rawValue).resolvingSymlinksInPath().path
+        )
+    }
 }
 
 func existingResolvedWorkspacePath(
     _ workspace: WorkingDirectory
 ) -> Result<String, IsolationApplyError> {
-    if let resolved = posixRealpath(workspace.rawValue) {
-        var isDirectory: ObjCBool = false
-        let exists = FileManager.default.fileExists(atPath: resolved, isDirectory: &isDirectory)
-        guard exists, isDirectory.boolValue else {
+    switch posixRealpathRead(workspace.rawValue) {
+    case .stopped:
+        return .failure(.workspacePathUnresolvable)
+    case .path(let resolved):
+        switch diskImageDirectoryPresence(resolved) {
+        case .directory:
+            if isUnsafeResolvedWorkspace(resolved) {
+                return .failure(.workspacePathUnsafe)
+            }
+            return .success(resolved)
+        case .stopped:
+            return .failure(.workspacePathUnresolvable)
+        case .missing, .notDirectory:
             return .failure(.workspaceDoesNotExist)
         }
-        if isUnsafeResolvedWorkspace(resolved) {
-            return .failure(.workspacePathUnsafe)
+    case .unresolved:
+        switch diskImageDirectoryPresence(workspace.rawValue) {
+        case .directory:
+            return .failure(.workspacePathUnresolvable)
+        case .stopped:
+            return .failure(.workspacePathUnresolvable)
+        case .missing, .notDirectory:
+            return .failure(.workspaceDoesNotExist)
         }
-        return .success(resolved)
     }
-    var isDirectory: ObjCBool = false
-    let exists = FileManager.default.fileExists(
-        atPath: workspace.rawValue,
-        isDirectory: &isDirectory
-    )
-    if exists, isDirectory.boolValue {
-        return .failure(.workspacePathUnresolvable)
+}
+
+/// `realpath` off the caller. `.stopped` is the copy clock, not a missing path.
+/// The worker frees the buffer after the call returns, including when the
+/// caller has already left.
+enum PosixRealpathRead {
+    case path(String)
+    case unresolved
+    case stopped
+}
+
+func posixRealpathRead(_ path: String) -> PosixRealpathRead {
+    final class Box: @unchecked Sendable {
+        var text: String?
     }
-    return .failure(.workspaceDoesNotExist)
+    let box = Box()
+    let ok = diskImagePerformWithinCopyClock {
+        let resolved = path.withCString { realpath($0, nil) }
+        guard let resolved else { return false }
+        box.text = String(cString: resolved)
+        free(resolved)
+        return true
+    }
+    if ok == nil { return .stopped }
+    if let text = box.text { return .path(text) }
+    return .unresolved
 }
 
 func posixRealpath(_ path: String) -> String? {
-    path.withCString { source in
-        guard let buffer = realpath(source, nil) else {
-            return nil
-        }
-        defer { free(buffer) }
-        return String(cString: buffer)
-    }
+    if case let .path(text) = posixRealpathRead(path) { return text }
+    return nil
 }
 
 /// Canonicalize one resource path for profile grants. The prepare
@@ -1052,11 +1116,13 @@ func compileFirstSliceProfile(
     workspace: WorkingDirectory,
     sysctlPolicy: SeatbeltSysctlPolicy = .coarse
 ) -> Result<SeatbeltProfile, IsolationApplyError> {
-    compileFirstSliceProfile(
-        workspace: workspace,
-        resolvedWorkspace: resolvedWorkspacePath(workspace),
-        sysctlPolicy: sysctlPolicy
-    )
+    compileResolvedWorkspacePath(workspace).flatMap { resolved in
+        compileFirstSliceProfile(
+            workspace: workspace,
+            resolvedWorkspace: resolved,
+            sysctlPolicy: sysctlPolicy
+        )
+    }
 }
 
 /// Pure first-slice assembly over a pre-resolved workspace path. The

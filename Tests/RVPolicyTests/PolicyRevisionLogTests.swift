@@ -220,7 +220,7 @@ struct PolicyRevisionLogTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = TypedRuleStore(baseDirectory: root)
         let first = PolicyDocument(rules: [denyRule(pattern: "v1", branch: "main")])
-        let second = PolicyDocument(rules: [denyRule(pattern: "v2", branch: "develop")])
+        let second = PolicyDocument(rules: [denyRule(pattern: "v1", branch: "main"), allowDiscardRule()])
         try store.saveMachine(first)
         try store.saveMachine(second)
         let sealed = try store.machineHistory()[0].toml
@@ -346,6 +346,14 @@ struct PolicyRevisionLogTests {
 }
 
 // Shared with PolicyRevisionTests (cross-log agreement proofs use the same shapes).
+func allowDiscardRule() -> PolicyDocumentRule {
+    PolicyDocumentRule(
+        id: RuleID(pack: .typedGit, pattern: "discard-allow"),
+        verdict: .allow,
+        predicate: .gitDiscardWorktree(pathspec: nil)
+    )
+}
+
 func denyRule(pattern: String, branch: String) -> PolicyDocumentRule {
     PolicyDocumentRule(
         id: RuleID(pack: .coreGit, pattern: pattern),
