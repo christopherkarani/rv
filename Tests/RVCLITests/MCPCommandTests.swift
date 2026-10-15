@@ -608,7 +608,11 @@ struct MCPCommandTests {
     }
 
     @Test func sshSymlinkDenyMatchesSpellingsAndAnIntermediateLink() throws {
-        let root = FileManager.default.temporaryDirectory
+        // Canonicalize the temp root: with a /var/folders spelling the
+        // /var firmlink itself is a symlink ancestor, so every missing
+        // credential name generates ancestor openings (patterns for
+        // /var/folders/... itself) and the Xssh negative below cannot hold.
+        let root = URL(fileURLWithPath: canonicalPath(FileManager.default.temporaryDirectory.path))
             .appendingPathComponent("rv-sandbox-ssh-chain-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let home = root.appendingPathComponent("home")
