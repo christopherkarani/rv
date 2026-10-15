@@ -236,7 +236,18 @@ func usableIsolationExecPath(
     guard isDirectory.boolValue == false else {
         return .failure(.isDirectory)
     }
-    let canonicalWorkspace = posixRealpath(workspacePath) ?? workspacePath
+    // A stopped realpath must not fall back to the raw spelling for
+    // the inside-workspace checks below: a symlink spelling's target
+    // is unknown. A genuinely unresolved path keeps the raw fallback.
+    let canonicalWorkspace: String
+    switch posixRealpathRead(workspacePath) {
+    case .path(let resolvedWorkspace):
+        canonicalWorkspace = resolvedWorkspace
+    case .stopped:
+        return .failure(.unresolvable)
+    case .unresolved:
+        canonicalWorkspace = workspacePath
+    }
     guard isFilesystemRoot(canonicalWorkspace) == false else {
         return .failure(.workspaceIsRoot)
     }

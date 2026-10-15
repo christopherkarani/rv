@@ -35,6 +35,7 @@ public enum HelpTopic: Equatable, Sendable {
     case opencode
     case workspace
     case `operator`
+    case egress
 }
 
 /// Intercepts help argv before ArgumentParser so passthrough commands still get help.
@@ -149,6 +150,8 @@ public enum HelpDispatch {
             return .report
         case "operator":
             return .`operator`
+        case "egress":
+            return .egress
         case "help":
             return rest.isEmpty ? .help : nil
         default:

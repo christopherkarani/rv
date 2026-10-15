@@ -38,10 +38,21 @@ public struct AttachedWorkspaceImage: Sendable, Equatable {
         self.mountPoint = mountPoint
     }
 
+    /// Entries in the plist `images` array. A row with no `image-path` still
+    /// counts. Malformed input → nil. `[]` is a successful empty listing.
+    public static func listedImageCount(hdiutilInfo data: Data) -> Int? {
+        guard let root = try? PropertyListSerialization.propertyList(from: data, format: nil)
+                as? [String: Any],
+            let images = root["images"] as? [[String: Any]]
+        else { return nil }
+        return images.count
+    }
+
     /// `hdiutil info -plist` output → rv images only. rv mounts slices with
     /// `mount_hfs`, so hdiutil rarely knows the mount point; `mounts`
     /// (device → mount point, from the kernel table) fills it in.
-    /// Malformed input → nil.
+    /// Malformed input → nil. A row with no `image-path` is dropped here
+    /// and is not an empty listing; `listedImageCount` still counts it.
     public static func parse(
         hdiutilInfo data: Data,
         mounts: [String: String] = [:]

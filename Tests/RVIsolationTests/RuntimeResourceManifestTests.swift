@@ -16,8 +16,18 @@ import Testing
     let profile = try #require(prepared.seatbeltProfile)
     #expect(prepared.resources == nil)
     #expect(profile.source.contains("rv-agent-bin") == false)
-    #expect(profile.source.contains(".codex/auth.json") == false)
-    #expect(profile.source.contains(".claude/.credentials.json") == false)
+    // F2 default closed: compat credential paths appear only in deny
+    // rules (`(subpath ...)` under `(deny file-read*)`), never in allow
+    // grants (`(literal ...)` under `(allow file-read-data ...)`).
+    if let home = ProcessInfo.processInfo.environment["HOME"], isUsableAbsolutePath(home) {
+        for compat in [".codex/auth.json", ".claude/.credentials.json"] {
+            #expect(profile.source.contains("(subpath \"\(home)/\(compat)\")"))
+            #expect(profile.source.contains("(literal \"\(home)/\(compat)\")") == false)
+        }
+    } else {
+        #expect(profile.source.contains(".codex/auth.json") == false)
+        #expect(profile.source.contains(".claude/.credentials.json") == false)
+    }
     #expect(profile.source.contains("(allow network-outbound"))
     #expect(profile.source.contains("(remote tcp \"localhost:*\")"))
     #expect(profile.source.contains("(deny default)"))

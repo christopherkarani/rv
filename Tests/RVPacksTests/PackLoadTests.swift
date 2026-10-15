@@ -50,6 +50,33 @@ let expectedFilesystemDestructive = [
     #expect(git.destructive.contains { $0.name == "stash-drop" && $0.severity == .medium })
 }
 
+@Test func packLoad_rmRfRootHomeExplanationIsPlainProse() throws {
+    let filesystem = try PackRegistry.loadDocument(.coreFilesystem)
+    let rule = try #require(filesystem.destructive.first(where: { $0.name == "rm-rf-root-home" }))
+    let explanation = try #require(rule.explanation)
+    #expect(explanation.contains("\n"))
+    #expect(!explanation.contains("\\n"))
+    #expect(!explanation.contains("\\ "))
+    #expect(explanation.split(separator: "\n").contains(where: { $0.hasPrefix("- ") }))
+}
+
+@Test func packLoad_allExplanationsArePlainProse() throws {
+    let documents = try PackRegistry.loadAllDocuments()
+    for document in documents {
+        for rule in document.destructive {
+            guard let explanation = rule.explanation else { continue }
+            #expect(
+                !explanation.contains("\\n"),
+                "\(document.id.rawValue):\(rule.name) stores a literal backslash-n"
+            )
+            #expect(
+                !explanation.contains("\\ "),
+                "\(document.id.rawValue):\(rule.name) stores a backslash-space wrap marker"
+            )
+        }
+    }
+}
+
 @Test func packLoad_coreStillDefaultOn() throws {
     let git = try PackRegistry.loadDocument(.coreGit)
     let filesystem = try PackRegistry.loadDocument(.coreFilesystem)

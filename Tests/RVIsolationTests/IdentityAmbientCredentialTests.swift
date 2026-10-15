@@ -77,9 +77,17 @@ struct IdentityAmbientCredentialTests {
         #expect(request.legacyAgentIntegration == false)
         #expect(request.withIO(.pseudoTerminal(rows: 24, columns: 80)).legacyAgentIntegration == false)
         let profile = try #require(request.seatbeltProfile)
-        // Prove the fixture actually activates the pre-fix ambient branch.
-        let resolution = AgentBin.resolve(binDirectory: fixture.binDirectory, home: fixture.home.path)
+        // Prove the fixture actually activates the credential branch when
+        // opted in — and that the default request grants nothing.
+        let resolution = AgentBin.resolve(
+            binDirectory: fixture.binDirectory, home: fixture.home.path,
+            credentialDelivery: .legacyOptIn
+        )
         #expect(resolution.credentials.contains(fixture.authentication.path))
+        let closed = AgentBin.resolve(
+            binDirectory: fixture.binDirectory, home: fixture.home.path
+        )
+        #expect(closed.credentials.isEmpty)
         #expect(profile.source.contains("(literal \"\(fixture.authentication.path)\")") == false)
         try recordAmbientProbeCompletion()
     }

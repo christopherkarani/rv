@@ -85,21 +85,6 @@ func superviseSeatbelt(
     return containedLaunchResult(child: mounted.result, teardown: teardown)
 }
 
-/// The workspace is back at its original path only when teardown succeeds.
-/// A failed detach or rename is the result the caller has to act on, including
-/// when the child already failed or the task was cancelled.
-func containedLaunchResult(
-    child: Result<IsolatedRunResult, IsolationApplyError>,
-    teardown: Result<Void, IsolationApplyError>
-) -> Result<IsolatedRunResult, IsolationApplyError> {
-    switch teardown {
-    case .failure(let error):
-        return .failure(error)
-    case .success:
-        return child
-    }
-}
-
 struct MountedSeatbeltOutcome {
     var result: Result<IsolatedRunResult, IsolationApplyError>
     /// Copy the volume back only after the in-sandbox handshake succeeded.
@@ -108,15 +93,21 @@ struct MountedSeatbeltOutcome {
 }
 
 /// Cooperative stop for one runtime. The watch loop polls it.
+///
+/// Backed by the same flag type the executor installs, so `request`
+/// also arms the one cancel clock at the request instant. The watch
+/// thread installs `launchStopFlag`; without it, `spentSinceCancel`
+/// and the shared clock read an empty thread dictionary there and
+/// teardown silently arms fresh budgets.
 final class RuntimeCancellation: Sendable {
-    private let flag = Mutex(false)
+    let launchStopFlag = CooperativeLaunchStop.Flag()
 
     func request() {
-        flag.withLock { $0 = true }
+        launchStopFlag.cancel()
     }
 
     var isRequested: Bool {
-        flag.withLock { $0 }
+        launchStopFlag.isSet
     }
 }
 
@@ -304,6 +295,7 @@ func spawnSeatbeltProcess(
     started: RuntimeSession,
     admission: RuntimeAdmissionConfiguration,
     egressProxyPort: Int? = nil,
+    egressProxyCredential: EgressProxyCredential? = nil,
     host: HookHost? = nil,
     stagingAgent: DefinitionStagingTag? = nil,
     keychain: [(name: String, value: String)] = [],
@@ -318,6 +310,7 @@ func spawnSeatbeltProcess(
         started: started,
         admission: admission,
         egressProxyPort: egressProxyPort,
+        egressProxyCredential: egressProxyCredential,
         host: host,
         stagingAgent: stagingAgent,
         keychain: keychain,
@@ -340,6 +333,7 @@ func spawnSeatbeltProcess(
         started: started,
         admission: admission,
         egressProxyPort: egressProxyPort,
+        egressProxyCredential: egressProxyCredential,
         host: host,
         stagingAgent: stagingAgent,
         keychain: keychain,
@@ -373,6 +367,7 @@ func spawnSeatbeltProcessBody(
     started: RuntimeSession,
     admission: RuntimeAdmissionConfiguration,
     egressProxyPort: Int? = nil,
+    egressProxyCredential: EgressProxyCredential? = nil,
     host: HookHost? = nil,
     stagingAgent: DefinitionStagingTag? = nil,
     keychain: [(name: String, value: String)] = [],
@@ -568,27 +563,43 @@ func spawnSeatbeltProcessBody(
         request.productive
         ?? resolveProductiveWorkspace(
             workspacePath: workspace,
-            agentBin: agentBin
+            agentBin: agentBin,
+            credentialDelivery: request.credentialDelivery
         )
     if request.legacyAgentIntegration, case .pseudoTerminal = request.io {
         // Stage into the RV-managed home; the degraded workspace home
-        // keeps staging working when no managed home exists.
-        stageAgentHomes(cageHome: productive.developerHome?.home ?? workspace)
+        // keeps staging working when no managed home exists. Credential
+        // symlinks additionally require explicit opt-in on the request.
+        stageAgentHomes(
+            cageHome: productive.developerHome?.home ?? workspace,
+            credentialDelivery: request.credentialDelivery
+        )
     }
     // A retained prepared environment bypasses recomputation entirely:
-    // dispatch executes exactly what preparation froze, byte for byte. Nil
-    // preserves the legacy behavior of resolving live at spawn.
-    let environment =
-        preparedEnvironment
-        ?? containedRuntimeEnvironment(
+    // dispatch executes exactly what preparation froze, byte for byte —
+    // except the proxy binding, which never freezes: preparation mints
+    // no runtime, so it mints no proxy either, and the live per-runtime
+    // port (plus credential) is substituted at dispatch instead
+    // (`restampEgressProxyVariables`, GUD-2-6). Nil preserves the legacy
+    // behavior of resolving live at spawn.
+    let environment: [String]
+    if let frozen = preparedEnvironment {
+        environment = restampEgressProxyVariables(
+            frozen, port: egressProxyPort, credential: egressProxyCredential
+        )
+    } else {
+        environment = containedRuntimeEnvironment(
             workspace: workspace,
             io: request.io,
             agentBin: agentBin,
             resources: request.resources,
             egressProxyPort: egressProxyPort,
+            egressProxyCredential: egressProxyCredential,
             keychain: keychain,
-            productive: productive
+            productive: productive,
+            credentialDelivery: request.credentialDelivery
         )
+    }
     let argv = SpawnPointers(arguments)
     let envp = SpawnPointers(environment)
     defer {
@@ -758,10 +769,12 @@ func containedRuntimeEnvironment(
     agentBin: String? = nil,
     resources: RuntimeResourceManifest? = nil,
     egressProxyPort: Int? = nil,
+    egressProxyCredential: EgressProxyCredential? = nil,
     hostEnvironment: [String: String]? = nil,
     keychain: [(name: String, value: String)] = [],
     productive: ProductiveWorkspaceResolution? = nil,
-    probe: ContainedPATHProbe = .live
+    probe: ContainedPATHProbe = .live,
+    credentialDelivery: ContainedCredentialDelivery = .closed
 ) -> [String] {
     let host = hostEnvironment ?? ProcessInfo.processInfo.environment
     let context =
@@ -770,7 +783,8 @@ func containedRuntimeEnvironment(
             workspacePath: workspace,
             hostEnvironment: host,
             agentBin: agentBin,
-            probe: probe
+            probe: probe,
+            credentialDelivery: credentialDelivery
         )
     let cageHome = context.developerHome?.home ?? workspace
     let cageTmp = context.developerHome.map { $0.tmp + "/" } ?? workspace
@@ -832,25 +846,38 @@ func containedRuntimeEnvironment(
         let owned: Set<String> = [
             "OCX_SHIM_BYPASS", "MUSE_NO_AUTO_UPDATE", "DISABLE_AUTOUPDATER",
         ]
-        let compat = Set(AgentHomeStaging.gatewayPassthrough + AgentHomeStaging.apiKeyPassthrough)
-        values.removeAll { owned.contains($0.0) || compat.contains($0.0) }
+        values.removeAll { owned.contains($0.0) }
         values.append(("OCX_SHIM_BYPASS", "1"))
         values.append(("MUSE_NO_AUTO_UPDATE", "1"))
         values.append(("DISABLE_AUTOUPDATER", "1"))
-        // Temporary pre-secret-broker compatibility: re-injected after the
-        // generic policy strip, never widened. The generic runtime does not
-        // depend on these.
-        for name in AgentHomeStaging.gatewayPassthrough + AgentHomeStaging.apiKeyPassthrough {
-            if let value = host[name], value.contains("\0") == false {
-                values.append((name, value))
+        // F2 default closed: host API keys stay stripped unless the
+        // operator explicitly opts legacy keys in. Gateway routing needs
+        // no re-injection: no gatewayPassthrough name matches a denied
+        // token, infix, prefix, or exact rule, so the projection above is
+        // its single delivery path — a second, weaker check can no longer
+        // smuggle through a value the projection refused.
+        if credentialDelivery.legacyAPIKeys {
+            for name in AgentHomeStaging.apiKeyPassthrough {
+                if let value = host[name],
+                    ContainedEnvironmentPolicy.isSaneValue(value)
+                {
+                    values.append((name, value))
+                }
             }
         }
+        // Public constant, never a live key: gateway-routed runs work with
+        // no host key configured, and direct-endpoint runs with it fail
+        // closed at the provider (401), same as having no key.
         if values.allSatisfy({ $0.0 != "ANTHROPIC_API_KEY" }) {
             values.append(("ANTHROPIC_API_KEY", AgentHomeStaging.anthropicGatewayPlaceholder))
         }
     }
+    // Per-runtime proxy binding (CON-2-3, PAT-2-5): this runtime's
+    // loopback port, plus its supervisor-minted credential as URL
+    // userinfo when one was minted. Omitted on a bad or nil port: without
+    // a proxy the cage has no route out at all (fail closed).
     if let port = egressProxyPort, (1...65535).contains(port) {
-        let proxy = "http://127.0.0.1:\(port)"
+        let proxy = egressProxyURL(port: port, credential: egressProxyCredential)
         values.append(("HTTPS_PROXY", proxy))
         values.append(("HTTP_PROXY", proxy))
         values.append(("https_proxy", proxy))
@@ -872,6 +899,96 @@ func containedRuntimeEnvironment(
         keychain: keychain
     ).map { "\($0.0)=\($0.1)" }
 }
+
+/// Per-runtime proxy URL for one cage environment: the runtime's
+/// loopback port plus, when the supervisor minted one for this runtime,
+/// the credential as URL userinfo. Stock HTTP clients send `*_PROXY`
+/// userinfo as Basic `Proxy-Authorization`, which the credentialed proxy
+/// authenticates against that runtime's grant alone
+/// (`EgressProxy.proxyCredentialToken`); a sibling runtime holds a
+/// different token and is judged against its own grant. This is
+/// credential separation, not secrecy: the token rides the process
+/// environment, and the production (coarse sysctl-read) profile lets a
+/// same-uid sibling read it via KERN_PROCARGS2. Today every grant is
+/// the same `.publicHTTPS` policy, so harvesting a token grants no
+/// wider egress — but per-runtime policy differentiation must not ship
+/// until the per-MIB/pidinfo posture (or a dedicated uid) makes the
+/// token unreadable across cages. A missing or non-userinfo-safe
+/// credential stamps the port-only shape instead: open-mode proxies keep
+/// working unchanged, while credentialed proxies answer 407
+/// (`denied-credential`, fail closed) rather than admitting.
+private func egressProxyURL(port: Int, credential: EgressProxyCredential?) -> String {
+    guard let raw = credential?.rawValue, isEmbeddableProxyCredential(raw) else {
+        return "http://127.0.0.1:\(port)"
+    }
+    return "http://\(raw)@127.0.0.1:\(port)"
+}
+
+/// Tokens safe to embed as proxy-URL userinfo verbatim: non-empty,
+/// short, RFC 3986 unreserved characters only. Minted credentials are
+/// lowercase hex and always pass. Anything else — notably `@`, `/`,
+/// `:`, `?`, `#`, `%`, whitespace, or non-ASCII — would rewrite the URL
+/// authority or smuggle a second field, so it falls back to the
+/// port-only shape instead of percent-encoding: there is no decode gap
+/// because the proxy compares the exact presented token.
+private func isEmbeddableProxyCredential(_ raw: String) -> Bool {
+    guard raw.isEmpty == false, raw.utf8.count <= 256 else { return false }
+    return raw.allSatisfy { character in
+        guard let ascii = character.asciiValue else { return false }
+        return ascii.isEmbeddableProxyCredentialByte
+    }
+}
+
+private extension UInt8 {
+    var isEmbeddableProxyCredentialByte: Bool {
+        switch self {
+        case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x2D, 0x2E, 0x5F, 0x7E:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+/// GUD-2-6 re-stamp rule: substitute the live per-runtime proxy binding
+/// into a retained (frozen) environment at dispatch.
+///
+/// Preparation freezes with no proxy (`egressProxyPort: nil`: no
+/// runtime exists yet, so no proxy is minted), and dispatch executes
+/// what preparation froze — except the proxy binding, which belongs to
+/// the live runtime, not the frozen bytes. Rotation mid-preparation is
+/// safe by construction: frozen proxy entries (a stale port, a stale
+/// credential, a future prepare change) are stripped and the live
+/// values stamped. A nil or invalid port stamps nothing: without a
+/// proxy the cage has no route out at all (fail closed). Non-proxy
+/// entries pass through byte for byte, in order.
+func restampEgressProxyVariables(
+    _ frozen: [String],
+    port: Int?,
+    credential: EgressProxyCredential? = nil
+) -> [String] {
+    var kept = frozen.filter { entry in
+        guard let mark = entry.firstIndex(of: "=") else { return true }
+        return restampedProxyNames.contains(String(entry[..<mark]).uppercased()) == false
+    }
+    guard let port, (1...65535).contains(port) else { return kept }
+    let proxy = egressProxyURL(port: port, credential: credential)
+    kept.append("HTTPS_PROXY=\(proxy)")
+    kept.append("HTTP_PROXY=\(proxy)")
+    kept.append("https_proxy=\(proxy)")
+    kept.append("http_proxy=\(proxy)")
+    kept.append("NO_PROXY=localhost,127.0.0.1,::1")
+    kept.append("no_proxy=localhost,127.0.0.1,::1")
+    return kept
+}
+
+/// Proxy-variable names the re-stamp owns (uppercased for a
+/// case-insensitive match): the six the live path stamps, plus
+/// `ALL_PROXY`, which the live path never emits but a stale or foreign
+/// frozen entry must not smuggle past dispatch as a second route.
+private let restampedProxyNames: Set<String> = [
+    "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY",
+]
 
 private func addingResourceEnvironment(
     _ values: [(String, String)],
@@ -931,13 +1048,24 @@ private func addingKeychainEnvironment(
     let present = Set(values.map(\.0))
     var staged = Set<String>()
     for entry in keychain {
-        guard !entry.value.contains("\0"), entry.value.utf8.count <= 8_192,
+        // Cage-bound hardening: keychain entries are operator opt-in — the
+        // only production caller reads them from the selected resource
+        // profile (`WorkspaceSessionSupervisor.spawn`, via
+        // `keychainEnvironment(forAgent:reader:)`), and an empty profile
+        // section injects nothing — but they still cannot claim
+        // runtime-managed names, invalid names, or insane values.
+        // Secret-shaped names (`*_KEY`, `*_TOKEN`, ...) stay allowed: the
+        // generic projection never sees this path, and delivering them is
+        // the feature's purpose. A staged name replaces an ambient host
+        // value of the same name so the cage receives the staged secret.
+        guard ContainedEnvironmentPolicy.isValidName(entry.name),
+            ContainedEnvironmentPolicy.isSaneValue(entry.value),
+            entry.value.utf8.count <= 8_192,
+            ContainedEnvironmentPolicy.isManagedByRuntime(entry.name) == false,
+            entry.name.uppercased().hasSuffix("_PROXY") == false,
             staged.insert(entry.name).inserted
         else { continue }
         if present.contains(entry.name) {
-            guard ContainedEnvironmentPolicy.isManagedByRuntime(entry.name) == false,
-                entry.name.uppercased().hasSuffix("_PROXY") == false
-            else { continue }
             values.removeAll { $0.0 == entry.name }
         }
         values.append((entry.name, entry.value))
@@ -962,34 +1090,59 @@ func watchSeatbeltProcess(
         drain: { live.drainPending() },
         onDeathObserved: onDeathObserved
     )
+    if outcome.cancelled {
+        // The clock starts at cancel, which is before this poll. The poll
+        // stops at what that clock has left. It does not run its own two
+        // seconds and then let detach arm a fresh 7.75s.
+        CooperativeLaunchStop.noteCancel()
+    }
+    let sessionBudget = outcome.cancelled
+        ? DiskImageCancelBudget.boundedWait(
+            spentSinceCancel: CooperativeLaunchStop.spentSinceCancel(),
+            cap: DiskImageCancelBudget.sessionDeathWait
+        )
+        : DiskImageCancelBudget.sessionDeathWait
     let dead = waitUntilSessionIsDead(
         pgid: live.pid,
-        also: outcome.recordedPIDs.union([live.pid])
+        also: outcome.recordedPIDs.union([live.pid]),
+        budget: sessionBudget
     )
     if dead { live.resources?.remove() }
     let mounted: MountedSeatbeltOutcome
-    if dead == false {
-        mounted = MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
-    } else if outcome.cancelled {
+    switch seatbeltWatchDisposition(cancelled: outcome.cancelled, leaderDead: dead) {
+    case .cancelled:
+        // The leader is dead. Publish only when the handshake completed.
+        // Teardown still has to unmount; a mounted volume is not .cancelled.
         mounted = MountedSeatbeltOutcome(
             result: .failure(.cancelled),
             publish: outcome.established
         )
-    } else if outcome.established, let status = outcome.status {
+    case .leaderStillAlive:
+        // Cancel was requested and the leader is still alive. This is not
+        // a finished cancel, and it is not a lifetime miss.
         mounted = MountedSeatbeltOutcome(
-            result: .success(
-                IsolatedRunResult(
-                    established: .seatbelt(live.session),
-                    exitStatus: status
-                )
-            ),
-            publish: true
-        )
-    } else {
-        mounted = MountedSeatbeltOutcome(
-            result: .failure(.seatbeltNotEstablished),
+            result: .failure(.workspaceInodeBoundaryFailed),
             publish: false
         )
+    case .lifetimeBoundaryFailed:
+        mounted = MountedSeatbeltOutcome(result: .failure(.lifetimeBoundaryFailed), publish: false)
+    case .proceed:
+        if outcome.established, let status = outcome.status {
+            mounted = MountedSeatbeltOutcome(
+                result: .success(
+                    IsolatedRunResult(
+                        established: .seatbelt(live.session),
+                        exitStatus: status
+                    )
+                ),
+                publish: true
+            )
+        } else {
+            mounted = MountedSeatbeltOutcome(
+                result: .failure(.seatbeltNotEstablished),
+                publish: false
+            )
+        }
     }
     if case .failure(let error) = mounted.result {
         live.recordTerminal(error)
@@ -1029,6 +1182,9 @@ private func waitForSeatbeltSession(
     while true {
         if blockingWorkIsCancelled() || stop.isRequested {
             outcome.cancelled = true
+            // Arm the shared clock before the leader reap. Detach later
+            // adopts that clock instead of starting 7.75s from scratch.
+            CooperativeLaunchStop.noteCancel()
             admission.finish()
         }
         if outcome.established == false {
@@ -1065,7 +1221,13 @@ private func waitForSeatbeltSession(
                 }
             }
             if outcome.status == nil {
-                outcome.status = reapLeaderStatus(root)
+                let budget = outcome.cancelled
+                    ? DiskImageCancelBudget.boundedWait(
+                        spentSinceCancel: CooperativeLaunchStop.spentSinceCancel(),
+                        cap: DiskImageCancelBudget.leaderReap
+                    )
+                    : DiskImageCancelBudget.leaderReap
+                outcome.status = reapLeaderStatus(root, budget: budget)
             }
             outcome.recordedPIDs = recorded
             return outcome
@@ -1229,8 +1391,16 @@ func resumeAndClaimForeground(_ child: LiveSeatbeltChild) -> Result<Void, Isolat
         return .success(())
     case .cancelled:
         terminateSession(pgid: child.pid, also: [child.pid])
-        _ = waitUntilSessionIsDead(pgid: child.pid, also: [child.pid])
-        return .failure(.cancelled)
+        CooperativeLaunchStop.noteCancel()
+        let budget = DiskImageCancelBudget.boundedWait(
+            spentSinceCancel: CooperativeLaunchStop.spentSinceCancel(),
+            cap: DiskImageCancelBudget.sessionDeathWait
+        )
+        let dead = waitUntilSessionIsDead(pgid: child.pid, also: [child.pid], budget: budget)
+        if seatbeltWatchDisposition(cancelled: true, leaderDead: dead) == .cancelled {
+            return .failure(.cancelled)
+        }
+        return .failure(.workspaceInodeBoundaryFailed)
     case .failed:
         terminateSession(pgid: child.pid, also: [child.pid])
         _ = waitUntilSessionIsDead(pgid: child.pid, also: [child.pid])
@@ -1249,9 +1419,14 @@ private func terminateSession(pgid: pid_t, also pids: Set<pid_t>) {
 
 /// After SIGKILL, poll `waitpid(WNOHANG)` for a short bound. A blocking
 /// `waitpid` does not return when the leader is stuck in disk I/O.
-private func reapLeaderStatus(_ pid: pid_t) -> Int32? {
-    let deadline = Date().addingTimeInterval(0.25)
-    while Date() < deadline {
+/// `budget` is the leader-reap cap, already shortened by time spent since
+/// cancel so this poll cannot run and then leave a full detach clock.
+private func reapLeaderStatus(
+    _ pid: pid_t,
+    budget: TimeInterval = DiskImageCancelBudget.leaderReap
+) -> Int32? {
+    let deadline = Date().addingTimeInterval(max(0, budget))
+    while true {
         var status: Int32 = 0
         let waited = waitpid(pid, &status, WNOHANG)
         if waited == pid {
@@ -1260,13 +1435,22 @@ private func reapLeaderStatus(_ pid: pid_t) -> Int32? {
         if waited < 0, errno == ECHILD {
             return nil
         }
+        if Date() >= deadline { return nil }
         usleep(10_000)
     }
-    return nil
 }
 
-private func waitUntilSessionIsDead(pgid: pid_t, also pids: Set<pid_t>, reap: Bool = true) -> Bool {
-    for _ in 0..<200 {
+func waitUntilSessionIsDead(
+    pgid: pid_t,
+    also pids: Set<pid_t>,
+    reap: Bool = true,
+    budget: TimeInterval = DiskImageCancelBudget.sessionDeathWait
+) -> Bool {
+    let deadline = Date().addingTimeInterval(max(0, budget))
+    // Always one reap+terminate pass, even at a zero budget: a leader
+    // that already took SIGKILL is a zombie until `waitpid`, and the
+    // kill-based checks below read a zombie as alive.
+    while true {
         if reap {
             var status: Int32 = 0
             _ = waitpid(pgid, &status, WNOHANG)
@@ -1276,6 +1460,7 @@ private func waitUntilSessionIsDead(pgid: pid_t, also pids: Set<pid_t>, reap: Bo
         if processGroupIsEmpty(pgid), gone {
             return true
         }
+        if Date() >= deadline { break }
         usleep(10_000)
     }
     let gone = pids.allSatisfy { processIsGone($0) || (reap == false && sessionLeaderHasExited($0)) }
@@ -1502,7 +1687,17 @@ func usablePtyClaimPath(_ path: String, workspacePath: String) -> String? {
     var isDirectory: ObjCBool = false
     let exists = FileManager.default.fileExists(atPath: resolved, isDirectory: &isDirectory)
     guard exists, isDirectory.boolValue == false else { return nil }
-    let canonicalWorkspace = posixRealpath(workspacePath) ?? workspacePath
+    // Same fail-closed rule as the Landlock exec check: a stopped
+    // realpath leaves the workspace spelling's target unknown.
+    let canonicalWorkspace: String
+    switch posixRealpathRead(workspacePath) {
+    case .path(let resolvedWorkspace):
+        canonicalWorkspace = resolvedWorkspace
+    case .stopped:
+        return nil
+    case .unresolved:
+        canonicalWorkspace = workspacePath
+    }
     if isFilesystemRoot(canonicalWorkspace)
         || isLookupInsideWorkspace(path, workspace: canonicalWorkspace)
         || isResolvedPath(resolved, atOrBeneath: canonicalWorkspace)

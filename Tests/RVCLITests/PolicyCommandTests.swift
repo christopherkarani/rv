@@ -239,6 +239,13 @@ struct PolicyCommandTests {
         }
     }
 
+    @Test func applyRiskEvaluatesShareAskNotMergedOutcome() throws {
+        // The merge is tighten-only, so an existing-vs-merged diff could never
+        // flag a relaxation; apply must diff the share ask against the layer.
+        let source = try String(contentsOf: policyCommandSourceURL(), encoding: .utf8)
+        #expect(source.contains("evaluateShare(existing: existing, incoming: incoming)"))
+        #expect(source.contains("oldDocument: existing, newDocument: merged") == false)
+    }
 }
 
 private func jsonStrings(_ value: Any) -> [String] {
