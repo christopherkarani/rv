@@ -572,7 +572,8 @@ struct MCPCommandTests {
     @Test func sshSymlinkDenyCoversTheTarget() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-sandbox-ssh-\(UUID().uuidString)", isDirectory: true)
-        let target = URL(fileURLWithPath: "/workspace/rv-ssh-target-\(UUID().uuidString)", isDirectory: true)
+        let target = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-ssh-target-\(UUID().uuidString)", isDirectory: true)
         defer {
             try? FileManager.default.removeItem(at: root)
             try? FileManager.default.removeItem(at: target)
@@ -1208,7 +1209,10 @@ struct MCPCommandTests {
     }
 
     @Test func temporaryDirectoryTheReviewDidNotNameIsRefused() throws {
-        let root = URL(fileURLWithPath: "/workspace/rv-unreviewed-tmpdir-\(UUID().uuidString)", isDirectory: true)
+        // Under the real home, not the system temp roots: the point is a
+        // TMPDIR outside every reviewed temporary root.
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("rv-unreviewed-tmpdir-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let scratch = root.appendingPathComponent("scratch")
         let home = root.appendingPathComponent("home")

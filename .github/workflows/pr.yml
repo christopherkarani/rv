@@ -47,6 +47,12 @@ jobs:
           restore-keys: |
             swiftpm-test-${{ runner.os }}-${{ runner.arch }}-
 
+      # InstallScriptTests mount codesign/spctl shims over /usr/bin and
+      # /usr/sbin inside an unprivileged user namespace; Ubuntu 24.04
+      # runners restrict those by default (uid_map write fails).
+      - name: Allow unprivileged user namespaces for test shims
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Tarball runtime deps (not apt swift)
         run: |
           sudo apt-get update

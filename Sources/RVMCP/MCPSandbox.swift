@@ -1391,12 +1391,6 @@ public enum MCPSandbox {
         guard mayChmod else { return (nil, false) }
         #if canImport(Darwin)
         let fd = open(path, O_SEARCH | O_NOFOLLOW | O_CLOEXEC)
-        #else
-        // Swift's Glibc module does not export O_PATH; value from
-        // asm-generic/fcntl.h (same fallback as landlock_apply.c).
-        let oPath: Int32 = 0o10000000
-        let fd = open(path, oPath | O_NOFOLLOW | O_CLOEXEC)
-        #endif
         guard fd >= 0 else { return (nil, false) }
         defer { close(fd) }
         var info = stat()
@@ -1424,17 +1418,29 @@ public enum MCPSandbox {
             if name.isEmpty == false { names.append(name) }
         }
         return (names, true)
-    }
-
-    /// chmod the directory behind a search/path fd. Linux `fchmod` rejects
-    /// `O_PATH` fds, so go through `/proc/self/fd`, which names the same inode.
-    private static func chmodHeld(_ fd: Int32, _ mode: mode_t) -> Bool {
-        #if canImport(Darwin)
-        return fchmod(fd, mode) == 0
         #else
-        return chmod("/proc/self/fd/\(fd)", mode) == 0
+        // Linux has no O_SEARCH and Swift's Glibc module does not export
+        // O_PATH; seatbelt itself is Darwin-only, so keep the original
+        // path-based form here rather than inventing an untested fd dance.
+        var info = stat()
+        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else {
+            return (nil, false)
+        }
+        let mode = info.st_mode & 0o7777
+        guard (mode & S_IRUSR) == 0, chmod(path, mode | S_IRUSR) == 0 else {
+            return (nil, false)
+        }
+        defer { _ = chmod(path, mode) }
+        return (try? FileManager.default.contentsOfDirectory(atPath: path), true)
         #endif
     }
+
+    #if canImport(Darwin)
+    /// chmod the directory behind a search fd.
+    private static func chmodHeld(_ fd: Int32, _ mode: mode_t) -> Bool {
+        fchmod(fd, mode) == 0
+    }
+    #endif
 
     /// The symlink's own inode, plus the directory it names. Listing that
     /// directory can fail (mode `0111`) while its link count still changes.

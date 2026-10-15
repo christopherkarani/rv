@@ -7,6 +7,10 @@ import Foundation
 import Testing
 @testable import RVMCP
 
+/// The /private/tmp fixtures below create real directories under the
+/// Darwin firmlink tree; hosts without one (Linux CI) skip them.
+private let hostHasPrivateTmp = FileManager.default.fileExists(atPath: "/private/tmp")
+
 @Suite("MCP sandbox directory creation")
 struct MCPSandboxCreateTests {
     /// These tests create and remove `/private/tmp/future-keys` and
@@ -944,7 +948,7 @@ struct MCPSandboxCreateTests {
         #expect(MCPSandbox.missingSymlinkOpenings(nested).contains(opened))
     }
 
-    @Test func finalNameUnderARealDirectoryStillOpensTheCredentialDirectory() throws {
+    @Test(.enabled(if: hostHasPrivateTmp, "/private/tmp fixture needs a Darwin-shaped /private")) func finalNameUnderARealDirectoryStillOpensTheCredentialDirectory() throws {
         Self.hostPrivateTmpLock.lock()
         defer { Self.hostPrivateTmpLock.unlock() }
         let opened = "/private/tmp/future-keys"
@@ -975,7 +979,7 @@ struct MCPSandboxCreateTests {
         #expect(MCPSandbox.missingSymlinkOpenings(anchored).contains(opened))
     }
 
-    @Test func singleNameUnderPrivateTmpStillOpensTheKeyDirectory() throws {
+    @Test(.enabled(if: hostHasPrivateTmp, "/private/tmp fixture needs a Darwin-shaped /private")) func singleNameUnderPrivateTmpStillOpensTheKeyDirectory() throws {
         Self.hostPrivateTmpLock.lock()
         defer { Self.hostPrivateTmpLock.unlock() }
         let opened = "/private/tmp/future-keys"
@@ -1019,7 +1023,7 @@ struct MCPSandboxCreateTests {
         }
     }
 
-    @Test func linkDotDotStillOpensTheKeyDirectory() throws {
+    @Test(.enabled(if: hostHasPrivateTmp, "/private/tmp fixture needs a Darwin-shaped /private")) func linkDotDotStillOpensTheKeyDirectory() throws {
         Self.hostPrivateTmpLock.lock()
         defer { Self.hostPrivateTmpLock.unlock() }
         let opened = "/private/tmp/future-keys"
@@ -1055,7 +1059,7 @@ struct MCPSandboxCreateTests {
         }
     }
 
-    @Test func anchorChildDotDotStillOpensTheKeyDirectory() throws {
+    @Test(.enabled(if: hostHasPrivateTmp, "/private/tmp fixture needs a Darwin-shaped /private")) func anchorChildDotDotStillOpensTheKeyDirectory() throws {
         Self.hostPrivateTmpLock.lock()
         defer { Self.hostPrivateTmpLock.unlock() }
         let opened = "/private/tmp/future-keys"
@@ -1106,7 +1110,7 @@ struct MCPSandboxCreateTests {
         #expect(MCPSandbox.missingSymlinkOpenings(present).contains(opened))
     }
 
-    @Test func dotLinkBeforeTheKeyDirectoryStillOpensIt() throws {
+    @Test(.enabled(if: hostHasPrivateTmp, "/private/tmp fixture needs a Darwin-shaped /private")) func dotLinkBeforeTheKeyDirectoryStillOpensIt() throws {
         Self.hostPrivateTmpLock.lock()
         defer { Self.hostPrivateTmpLock.unlock() }
         let opened = "/private/tmp/future-keys"
@@ -1154,7 +1158,7 @@ struct MCPSandboxCreateTests {
         #expect(MCPSandbox.missingSymlinkOpenings(exact) == [opened])
     }
 
-    @Test func siblingLinkStillOpensTheKeyDirectory() throws {
+    @Test(.enabled(if: hostHasPrivateTmp, "/private/tmp fixture needs a Darwin-shaped /private")) func siblingLinkStillOpensTheKeyDirectory() throws {
         Self.hostPrivateTmpLock.lock()
         defer { Self.hostPrivateTmpLock.unlock() }
         let opened = "/private/tmp/future-keys"
@@ -1204,7 +1208,7 @@ struct MCPSandboxCreateTests {
         #expect(MCPSandbox.missingSymlinkOpenings(exact) == [opened])
     }
 
-    @Test func missingSuffixStillOpensTheKeyDirectory() throws {
+    @Test(.enabled(if: hostHasPrivateTmp, "/private/tmp fixture needs a Darwin-shaped /private")) func missingSuffixStillOpensTheKeyDirectory() throws {
         Self.hostPrivateTmpLock.lock()
         defer { Self.hostPrivateTmpLock.unlock() }
         let opened = "/private/tmp/future-keys"
@@ -1253,7 +1257,7 @@ struct MCPSandboxCreateTests {
         #expect(MCPSandbox.missingSymlinkOpenings(exact) == [opened])
     }
 
-    @Test func anchorNameStillOpensTheKeyDirectory() throws {
+    @Test(.enabled(if: hostHasPrivateTmp, "/private/tmp fixture needs a Darwin-shaped /private")) func anchorNameStillOpensTheKeyDirectory() throws {
         Self.hostPrivateTmpLock.lock()
         defer { Self.hostPrivateTmpLock.unlock() }
         let opened = "/private/tmp/future-keys"
@@ -1346,7 +1350,7 @@ struct MCPSandboxCreateTests {
         }
     }
 
-    @Test func sRunFollowedByTStillDeniesTheStLigature() throws {
+    @Test(.enabled(if: hostHasPrivateTmp, "/private/tmp fixture needs a Darwin-shaped /private")) func sRunFollowedByTStillDeniesTheStLigature() throws {
         func whole(_ component: String, _ file: String) -> Bool {
             seatbeltWholeMatch(
                 MCPSandbox.seatbeltPathPattern("/private/tmp/\(component)"),
