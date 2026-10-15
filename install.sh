@@ -250,8 +250,22 @@ fetch_pack_bundles() {
     fi
   fi
 
-  if tar -xzf "$tarball" -C "$dest"; then
+  # Unpack into a scratch dir, never straight over $dest: the tarball is
+  # not signature-checked, and an entry named like a binary must not
+  # overwrite the verified downloads beside it. Only pack bundle
+  # directories are promoted into $dest.
+  unpack="$dest/.packs-unpack"
+  rm -rf "$unpack"
+  mkdir -p "$unpack"
+  if tar -xzf "$tarball" -C "$unpack"; then
     rm -f "$tarball"
+    for bundle in "$unpack"/*_RVPacks.bundle "$unpack"/*_RVPacks.resources; do
+      [ -d "$bundle" ] && [ ! -L "$bundle" ] || continue
+      promoted="$(basename "$bundle")"
+      rm -rf "$dest/$promoted"
+      mv "$bundle" "$dest/$promoted"
+    done
+    rm -rf "$unpack"
     if [ "$expected" -gt 0 ]; then
       progress_base=$((progress_base + expected))
       progress_have=$progress_base
@@ -259,6 +273,7 @@ fetch_pack_bundles() {
     fi
     return 0
   fi
+  rm -rf "$unpack"
   rm -f "$tarball"
   echo "rv: failed to unpack $name" >&2
   exit 1
@@ -623,6 +638,9 @@ else
     download_release_asset "$tmp_fetch" "rv-isolation-exec" "$size_isolation"
     chmod 755 "$tmp_fetch/rv-isolation-exec"
   fi
+  fetch_pack_bundles "$tmp_fetch" "$size_packs"
+  progress_finish
+
   src="$tmp_fetch"
   [ -x "$src/rv" ] && [ -x "$src/rv-cli" ] && [ -x "$src/rvd" ] && [ -x "$src/rv-workspace-host" ] || {
     echo "rv: download did not produce executable rv, rv-cli, rvd, and rv-workspace-host" >&2
@@ -632,10 +650,6 @@ else
     verify_release_signatures "$src" libswiftCompatibilitySpan.dylib \
       rv rv-cli rvd rv-workspace-host rv-pty-claim
   fi
-  # Pack bundles are unpacked only after the binaries they ship with have
-  # passed verification, so a refused release writes nothing at all.
-  fetch_pack_bundles "$tmp_fetch" "$size_packs"
-  progress_finish
 fi
 
 if [ "$os" = "Linux" ] && [ ! -x "$src/rv-isolation-exec" ]; then

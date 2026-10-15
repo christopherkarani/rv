@@ -1129,13 +1129,17 @@ private func runSignedDownloadInstall(
     let log = root.appendingPathComponent("tools.log")
     try Data().write(to: log)
 
-    let processEnvironment = [
+    var processEnvironment = [
         "HOME": home.path,
         "PATH": shim.path + ":/usr/bin:/bin",
         "RV_TEST_TOOL_LOG": log.path,
     ].merging(environment) { $1 }
     // The shipped script takes its Team ID pin only from its own
-    // `release_team_id` (no environment override), so pin by patching a copy.
+    // `release_team_id` (no environment override), so pin by patching a
+    // copy — and keep the pinning value out of the child's environment,
+    // so a regression that re-read it from the environment cannot pass.
+    // `RV_TEST_CHILD_TEAM_ID` deliberately plants a *different* env value.
+    processEnvironment["RV_INSTALL_TEAM_ID"] = environment["RV_TEST_CHILD_TEAM_ID"]
     var scriptURL = script ?? installScriptURL()
     if script == nil, let team = environment["RV_INSTALL_TEAM_ID"] {
         let source = try String(contentsOf: scriptURL, encoding: .utf8)
@@ -1313,6 +1317,20 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     #expect(run.stderr.contains("Gatekeeper does not accept"))
     #expect(run.stderr.contains("warning: release files are not code-signed") == false)
     try expectPreviousInstallKept(run)
+}
+
+@Test func installSh_environmentTeamIDCannotRepinTrust() throws {
+    // The pin baked into the script (TEAMRV1234, what the shims sign with)
+    // must win over a different RV_INSTALL_TEAM_ID in the environment.
+    let run = try runSignedDownloadInstall(
+        environment: [
+            "RV_INSTALL_TEAM_ID": "TEAMRV1234",
+            "RV_TEST_CHILD_TEAM_ID": "OTHERTEAM9",
+        ]
+    )
+    defer { removeTemporaryRoot(of: run) }
+
+    #expect(run.status == 0, "\(run.stderr)")
 }
 
 @Test func installSh_rejectedVerdictWithNotarizedSourceRefuses() throws {

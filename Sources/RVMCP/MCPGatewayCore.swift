@@ -173,6 +173,13 @@ public struct MCPGatewayCore {
     }
 
     public mutating func handle(_ input: MCPGatewayInput) -> [MCPGatewayOutput] {
+        // An elicitation answer dispatches before expiry runs: on an idle
+        // gateway the user's own (possibly late) answer is the next input,
+        // and expiring first would drop it silently.
+        if case .client(let message) = input, message["method"] == nil,
+            let key = message["id"]?.stringValue, held[key] != nil {
+            return clientMessage(message) + expireHeld()
+        }
         var outputs = expireHeld()
         switch input {
         case .client(let message): outputs += clientMessage(message)
@@ -195,6 +202,9 @@ public struct MCPGatewayCore {
             outputs.append(.audit(MCPCallRecord(
                 server: call.server, tool: call.tool, decision: .ask, approvalID: key, argumentKeys: call.keys,
                 isError: true, declined: true, reason: "approval prompt was not answered in time")))
+            outputs.append(.toClient(Self.notification("notifications/cancelled", .object([
+                "requestId": .string(key), "reason": .string("the approval prompt was not answered in time"),
+            ]))))
             outputs.append(.toClient(Self.toolError(
                 id: call.client,
                 "rv's approval prompt for \(MCPDisplayedText.field(call.server)) tool \(MCPDisplayedText.field(call.tool)) was not answered in time; the call was not run.")))
@@ -691,6 +701,9 @@ public struct MCPGatewayCore {
             outputs.append(.audit(MCPCallRecord(
                 server: server, tool: call.tool, decision: .ask, approvalID: key, argumentKeys: call.keys,
                 isError: true, reason: "upstream exited")))
+            outputs.append(.toClient(Self.notification("notifications/cancelled", .object([
+                "requestId": .string(key), "reason": .string("the MCP server exited"),
+            ]))))
             outputs.append(.toClient(Self.error(id: call.client, code: -32603, message: "MCP server \(server) exited")))
         }
         return wasStarting ? outputs + releaseWaiting() : outputs

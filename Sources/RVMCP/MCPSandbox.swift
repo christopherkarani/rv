@@ -1304,12 +1304,12 @@ public enum MCPSandbox {
             visited.insert(identity)
         }
         var root = inodeStamp(path)
-        // A symlink is only entered when its target stays inside the watched
-        // root. A planted link out of the root is stamped as a link (its
-        // target's identity is still noted), never walked — walking it would
-        // let a cache entry steer rv into listing and chmod'ing foreign trees.
+        // Symlinked directories are walked (moves under their targets must
+        // stay visible to the stamp), but the chmod-to-list trick for 0111
+        // directories is only allowed inside the watched root: a planted
+        // link must not steer rv into chmod'ing foreign trees.
         let rootReal = resolvedPath(path)
-        let walked = directoryStamps(under: path, relative: "", visited: &visited, rootReal: rootReal)
+        let walked = directoryStamps(under: path, relative: "", visited: &visited, rootReal: rootReal, mayChmod: true)
         if walked.clearedChangeTime {
             root.changed = 0
             root.changedNsec = 0
@@ -1324,10 +1324,10 @@ public enum MCPSandbox {
     }
 
     private static func directoryStamps(
-        under path: String, relative: String, visited: inout Set<String>, rootReal: String?
+        under path: String, relative: String, visited: inout Set<String>, rootReal: String?, mayChmod: Bool
     ) -> DirectoryWalk {
         var stamps: [String: InodeStamp] = [:]
-        let listed = listDirectory(path)
+        let listed = listDirectory(path, mayChmod: mayChmod)
         guard let names = listed.names else {
             return DirectoryWalk(stamps: stamps, clearedChangeTime: listed.clearedChangeTime)
         }
@@ -1339,14 +1339,16 @@ public enum MCPSandbox {
             guard kind == S_IFDIR || kind == S_IFLNK else { continue }
             let rel = relative.isEmpty ? name : relative + "/" + name
             var entered: String?
+            var enteredMayChmod = mayChmod
             if kind == S_IFDIR {
                 stamps[rel] = inodeStamp(child)
                 entered = child
             } else if let target = symlinkDirectory(child) {
                 stamps[rel] = stampNotingTarget(child, target: target)
+                entered = target
                 if let rootReal, let targetReal = resolvedPath(target),
-                    targetReal == rootReal || targetReal.hasPrefix(rootReal + "/") {
-                    entered = target
+                    targetReal != rootReal && targetReal.hasPrefix(rootReal + "/") == false {
+                    enteredMayChmod = false
                 }
             } else {
                 stamps[rel] = inodeStamp(child)
@@ -1354,7 +1356,8 @@ public enum MCPSandbox {
             guard let entered, let identity = directoryIdentity(entered), visited.insert(identity).inserted else {
                 continue
             }
-            let nested = directoryStamps(under: entered, relative: rel, visited: &visited, rootReal: rootReal)
+            let nested = directoryStamps(
+                under: entered, relative: rel, visited: &visited, rootReal: rootReal, mayChmod: enteredMayChmod)
             if nested.clearedChangeTime, var stamp = stamps[rel] {
                 if kind == S_IFDIR {
                     stamp.changed = 0
@@ -1372,17 +1375,24 @@ public enum MCPSandbox {
         return DirectoryWalk(stamps: stamps, clearedChangeTime: listed.clearedChangeTime)
     }
 
-    /// Names in `path`. Mode `0111` cannot be listed. The owner read bit is
-    /// added for this call and the mode is put back. `fchmod` updates ctime
-    /// and leaves mtime and the link count alone, so the caller drops ctime.
-    /// Everything happens on one `O_NOFOLLOW` fd: swapping `path` for a
-    /// symlink between the stat and the chmod cannot redirect the mode
-    /// change (or the listing) at a foreign directory such as `~/.ssh`.
-    private static func listDirectory(_ path: String) -> (names: [String]?, clearedChangeTime: Bool) {
+    /// Names in `path`. Mode `0111` cannot be listed. When `mayChmod`, the
+    /// owner read bit is added for this call and the mode is put back;
+    /// chmod updates ctime and leaves mtime and the link count alone, so
+    /// the caller drops ctime. The directory is held by fd throughout
+    /// (`O_SEARCH`/`O_PATH` needs only execute permission, so a 0111
+    /// directory can still be opened): swapping `path` for a symlink
+    /// between the stat and the chmod cannot redirect the mode change (or
+    /// the listing) at a foreign directory such as `~/.ssh`.
+    private static func listDirectory(_ path: String, mayChmod: Bool) -> (names: [String]?, clearedChangeTime: Bool) {
         if let names = try? FileManager.default.contentsOfDirectory(atPath: path) {
             return (names, false)
         }
-        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard mayChmod else { return (nil, false) }
+        #if canImport(Darwin)
+        let fd = open(path, O_SEARCH | O_NOFOLLOW | O_CLOEXEC)
+        #else
+        let fd = open(path, O_PATH | O_NOFOLLOW | O_CLOEXEC)
+        #endif
         guard fd >= 0 else { return (nil, false) }
         defer { close(fd) }
         var info = stat()
@@ -1390,11 +1400,11 @@ public enum MCPSandbox {
             return (nil, false)
         }
         let mode = info.st_mode & 0o7777
-        guard (mode & S_IRUSR) == 0, fchmod(fd, mode | S_IRUSR) == 0 else {
+        guard (mode & S_IRUSR) == 0, chmodHeld(fd, mode | S_IRUSR) else {
             return (nil, false)
         }
-        defer { _ = fchmod(fd, mode) }
-        let listing = dup(fd)
+        defer { _ = chmodHeld(fd, mode) }
+        let listing = openat(fd, ".", O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
         guard listing >= 0, let stream = fdopendir(listing) else {
             if listing >= 0 { close(listing) }
             return (nil, true)
@@ -1410,6 +1420,16 @@ public enum MCPSandbox {
             if name.isEmpty == false { names.append(name) }
         }
         return (names, true)
+    }
+
+    /// chmod the directory behind a search/path fd. Linux `fchmod` rejects
+    /// `O_PATH` fds, so go through `/proc/self/fd`, which names the same inode.
+    private static func chmodHeld(_ fd: Int32, _ mode: mode_t) -> Bool {
+        #if canImport(Darwin)
+        return fchmod(fd, mode) == 0
+        #else
+        return chmod("/proc/self/fd/\(fd)", mode) == 0
+        #endif
     }
 
     /// The symlink's own inode, plus the directory it names. Listing that

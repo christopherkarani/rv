@@ -8,10 +8,16 @@ public let incompleteEvalSentence =
 /// text is not the same field as the control.
 public enum DisplayedText {
     /// Scalars that must never reach a display raw: C0/C1/DEL controls, line
-    /// and paragraph separators, and every format character (bidi marks and
+    /// and paragraph separators, and format characters (bidi marks and
     /// overrides, zero-width and invisible tag characters). Category-based,
-    /// so a scalar nobody enumerated is still escaped.
+    /// so a scalar nobody enumerated is still escaped. The joiners and the
+    /// soft hyphen are exempt: they are legitimate text (emoji sequences,
+    /// Persian/Indic shaping) and cannot reorder a line.
     public static func needsEscape(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x00AD, 0x200C, 0x200D: return false
+        default: break
+        }
         if scalar.value < 0x20 || (0x7F...0x9F).contains(scalar.value) { return true }
         switch scalar.properties.generalCategory {
         case .control, .format, .lineSeparator, .paragraphSeparator: return true

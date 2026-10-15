@@ -452,15 +452,15 @@ enum ApprovalKeychain {
     }
 
     /// The constraint dictionary behind a `SecAccessControl` has no public
-    /// accessor, so presence is judged behaviorally: copy the same item with
-    /// authentication UI failed. Success means the item does not require the
-    /// user (no `cpo`, or a `pkofn` bypass); an interaction/auth failure
-    /// means it does. Anything else is unreadable and the item is kept.
+    /// accessor, so presence is judged behaviorally: copy the same item's
+    /// data with authentication UI failed. (Attributes-only copies may not
+    /// engage the ACL, so the probe asks for data and discards it.) Success
+    /// means the item does not require the user (no `cpo`, or a `pkofn`
+    /// bypass); an interaction/auth failure means it does. Anything else is
+    /// unreadable and the item is kept.
     private static func inspection(of attributes: [String: Any], account: String) -> ApprovalKeyAccess.Item {
         guard attributes[kSecAttrAccessControl as String] != nil else { return .noAccessControl }
         var probe = copyQuery(silent: true, account: account)
-        probe[kSecReturnData as String] = false
-        probe[kSecReturnAttributes as String] = true
         probe[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: AnyObject?
         switch SecItemCopyMatching(probe as CFDictionary, &result) {
