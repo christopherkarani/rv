@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import Synchronization
 
 /// Seatbelt cage for upstream MCP servers that set `sandbox` in mcp.json.
 /// Allow-default (so npx/uvx/node work) with writes confined to a scratch
@@ -1502,12 +1503,7 @@ public enum MCPSandbox {
         var watched: [String: TreeStamp]
     }
 
-    private final class LeafRecords: @unchecked Sendable {
-        let lock = NSLock()
-        var values: [String: LeafIdentity] = [:]
-    }
-
-    private static let leafRecords = LeafRecords()
+    private static let leafRecords = Mutex<[String: LeafIdentity]>([:])
 
     private static func leafIdentity(_ path: String) -> LeafIdentity {
         var info = stat()
@@ -1553,15 +1549,11 @@ public enum MCPSandbox {
 
     private static func rememberLeafIdentity(_ path: String) {
         let identity = leafIdentity(path)
-        leafRecords.lock.lock()
-        leafRecords.values[path] = identity
-        leafRecords.lock.unlock()
+        leafRecords.withLock { $0[path] = identity }
     }
 
     private static func createdLeafIdentity(_ path: String) -> LeafIdentity? {
-        leafRecords.lock.lock()
-        defer { leafRecords.lock.unlock() }
-        return leafRecords.values[path]
+        leafRecords.withLock { $0[path] }
     }
 
     /// The path string still names the directory the walk opened. Each
