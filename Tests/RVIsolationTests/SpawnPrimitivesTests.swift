@@ -170,10 +170,12 @@ struct SpawnPrimitivesTests {
         #expect(code == 0)
     }
 
+    #if os(macOS)
     /// A zero session-death budget still reaps once: a killed leader
     /// is a zombie until `waitpid`, and kill-based probes read a
     /// zombie as alive. Pipe EOF proves the child exited (and is
     /// therefore a zombie) before the call, with no sleep.
+    /// `waitUntilSessionIsDead` lives in the macOS session supervisor.
     @Test func zeroBudgetSessionWaitStillReapsAZombie() throws {
         let (readEnd, writeEnd) = try openPipe()
         let pid = rvFork()
@@ -194,6 +196,7 @@ struct SpawnPrimitivesTests {
         #expect(waitpid(pid, &status, WNOHANG) == -1)
         #expect(errno == ECHILD)
     }
+    #endif
 
     // MARK: - vectors
 

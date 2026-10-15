@@ -3361,10 +3361,11 @@ private final class ParkedToolProcesses: Sendable {
         box.withLock { $0.append(process) }
     }
 
-    /// `nil` when no parked helper has this pid. Finished helpers are
-    /// pruned first: releasing an exited `Process` cannot block in
-    /// `waitUntilExit`, and its pid must not be confused with a later
-    /// unrelated process that reuses the number.
+    /// `nil` when no parked helper has this pid. Answered from the
+    /// retained process, then finished helpers are pruned: releasing
+    /// an exited `Process` cannot block in `waitUntilExit`, and its
+    /// pid must not be confused with a later unrelated process that
+    /// reuses the number.
     func isRunning(pid: pid_t) -> Bool? {
         box.withLock { processes in
             // Answer from the retained process before pruning it: once
