@@ -123,10 +123,7 @@ struct SeatbeltPerMIBExperimentTests {
             ("/usr/bin/xcrun", ["--version"], "xcrun"),
             ("/usr/bin/swift", ["--version"], "swift-driver"),
         ]
-        if let node = perMIBFindTool([
-            "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin/node",
-            "/opt/homebrew/bin/node", "/usr/local/bin/node",
-        ]) {
+        if let node = perMIBFindNode() {
             tools.append((node, ["-e", "console.log('t9-node-ok')"], "t9-node-ok"))
         } else if ProcessInfo.processInfo.environment["CI"] != nil {
             // The node row is the only row that exercises
@@ -161,6 +158,19 @@ private struct PerMIBFixture {
 
 private func perMIBFindTool(_ candidates: [String]) -> String? {
     candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+}
+
+/// Node wherever the runner put it: `PATH` (setup-node/hostedtoolcache
+/// on CI images) first, then the usual install prefixes.
+private func perMIBFindNode() -> String? {
+    var candidates = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+        .split(separator: ":")
+        .map { "\($0)/node" }
+    candidates += [
+        "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin/node",
+        "/opt/homebrew/bin/node", "/usr/local/bin/node",
+    ]
+    return perMIBFindTool(candidates)
 }
 
 private func perMIBRun(

@@ -21,13 +21,16 @@ func relocateDescriptor(_ fd: inout Int32, above floor: Int32) -> Bool {
     return true
 }
 
-/// One `close` of a relocated descriptor. Stdio stays open: this helper is
-/// also used for pipes and directories, and a number below 3 may be the
-/// process stdin. `close` is not retried: on Linux the kernel releases the
-/// number before `EINTR`, and a second `close` would drop whatever was
-/// opened there next.
+/// One `close` of a relocated descriptor. Every caller passes a
+/// descriptor it just created or opened (pipes, ptys, directory and
+/// `/dev/null` opens), never borrowed stdio, so an original on 0, 1,
+/// or 2 is that owned descriptor in a slot that happened to be free
+/// and is closed too: leaving it open would strand a duplicate in the
+/// low numbers this relocation exists to free. `close` is not
+/// retried: on Linux the kernel releases the number before `EINTR`,
+/// and a second `close` would drop whatever was opened there next.
 func closeRelocatedOriginal(_ fd: Int32) {
-    if fd < 3 { return }
+    if fd < 0 { return }
     _ = close(fd)
 }
 
@@ -56,9 +59,9 @@ func publishCloexecSocket(raw: Int32, above floor: Int32) -> Int32 {
     return moved
 }
 
-/// Moves an accepted socket above `floor`. `relocateDescriptor` does not
-/// close an original below 3. This does, once, because that original is
-/// the socket `accept` just returned. A failed move closes it once too.
+/// Moves an accepted socket above `floor`. `relocateDescriptor`
+/// closes the owned original on success, including one on 0, 1, or 2.
+/// A failed move leaves it open, so this closes it once instead.
 func relocateOwnedSocket(_ fd: inout Int32, above floor: Int32) -> Bool {
     let original = fd
     guard original >= 0 else { return false }
@@ -67,9 +70,6 @@ func relocateOwnedSocket(_ fd: inout Int32, above floor: Int32) -> Bool {
         closeOwnedSocket(original)
         errno = failure
         return false
-    }
-    if original < 3, original != fd {
-        closeOwnedSocket(original)
     }
     return true
 }

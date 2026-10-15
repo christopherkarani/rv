@@ -196,6 +196,19 @@ enum DiskImageCancelBudget {
         min(cancelledDetachHelpers().forceUnmount, max(0, remaining))
     }
 
+    /// The publication recheck (sleep + `hdiutil info` + stat) is
+    /// optional work inside the serialization lock, and
+    /// `cancelledSequenceBudget` does not count it. While a priority
+    /// waiter is queued on the cancel clock, running it spends that
+    /// waiter's umount slices, so the holder skips it and releases
+    /// sooner; the hold simply clears on a later unhurried acquire.
+    static func mayRunPublicationRecheck(
+        priorityWaiterQueued: Bool,
+        cancelClockArmed: Bool
+    ) -> Bool {
+        priorityWaiterQueued && cancelClockArmed ? false : true
+    }
+
     /// True when a waiter whose peer has already held the lock for
     /// `peerHold` still has both cancelled umount slices left. The
     /// accounted peer is force plus one signal grace. A multi-second
@@ -594,7 +607,9 @@ func diskImagePublicationRecheckCanClear(
     imageFileGone: Bool = false,
     identityIsImage: Bool = true,
     listingUnparsed: Bool = false,
-    parsedImageCount: Int = 0
+    parsedImageCount: Int = 0,
+    waitedForPublication: Bool = false,
+    mountNotMounted: Bool = false
 ) -> Bool {
     if helperStillAlive { return false }
     if imageListed == true { return false }
@@ -602,11 +617,24 @@ func diskImagePublicationRecheckCanClear(
     // publishing must not clear, including when a finished empty plist
     // with that same ENOENT would.
     if infoTimedOut { return false }
-    // `imageListed == true` is not the only keep. hdiutil does not see
-    // the kernel mount table. An attached sparseimage, a pre-mount
-    // directory, and EIO/ESTALE/EACCES are not a gone volume.
-    if identityIsImage == false { return false }
-    if listingUnparsed || imageListed == false || parsedImageCount > 0 { return false }
+    if listingUnparsed { return false }
+    if identityIsImage == false {
+        // hdiutil does not see the kernel mount table, so a mount
+        // identity clears only with stat proof nothing is mounted at
+        // the path, after the publication wait, with the helper dead.
+        return waitedForPublication && mountNotMounted
+    }
+    if waitedForPublication {
+        // After the full publication wait with the helper dead, a
+        // parsed listing that omits this image is absence: the device
+        // cannot still appear, whether a sibling stays attached or a
+        // leftover sparseimage file remains on disk. This matches
+        // `diskImageCanStillAppear` with `waitedForPublication`.
+        if imageListed == false { return true }
+        if imageListed == nil && parsedImageCount == 0 { return true }
+        return false
+    }
+    if imageListed == false || parsedImageCount > 0 { return false }
     // Parsed `images: []` only. A failed stat leaves `imageFileGone` false.
     if imageListed == nil { return imageFileGone }
     return false
@@ -648,6 +676,22 @@ func diskImageMountPointIsGone(_ path: String) -> Bool {
         return diskImageMountStatIsGone(statSucceeded: false, errnoValue: errno)
     }
     return diskImageMountStatIsGone(statSucceeded: true, errnoValue: 0)
+}
+
+/// Stat proof nothing is mounted at `path`: it is missing (`ENOENT`
+/// only), or it shares its parent's device, so it is the plain
+/// directory before `mount_hfs` or after `umount`. A mounted volume
+/// has its own device. Any other stat failure is not proof.
+func diskImageMountIsNotMounted(_ path: String) -> Bool {
+    var here = stat()
+    if path.withCString({ stat($0, &here) }) != 0 {
+        return errno == ENOENT
+    }
+    let parent = (path as NSString).deletingLastPathComponent
+    guard parent.isEmpty == false else { return false }
+    var up = stat()
+    guard parent.withCString({ stat($0, &up) }) == 0 else { return false }
+    return here.st_dev == up.st_dev
 }
 
 /// The cancel clock the publication stat must stop on. A nil local deadline
@@ -787,7 +831,15 @@ private final class DiskImageParkedCalls: @unchecked Sendable {
     static let shared = DiskImageParkedCalls()
     private let lock = NSLock()
     private var threads: [Thread] = []
-    private var objects: [AnyObject] = []
+    /// An object is needed only while a worker parked at its retain
+    /// time may still be inside a call using it, so each entry carries
+    /// the then-unfinished threads and is dropped once they all finish.
+    private var objects: [(object: AnyObject, workers: [Thread])] = []
+
+    private func prune() {
+        threads.removeAll { $0.isFinished }
+        objects.removeAll { $0.workers.allSatisfy { $0.isFinished } }
+    }
 
     func keep(_ thread: Thread) {
         lock.lock()
@@ -795,20 +847,22 @@ private final class DiskImageParkedCalls: @unchecked Sendable {
         // its Thread need not be retained. Pruning here bounds retention
         // to workers that are still wedged, instead of every worker that
         // ever timed out.
-        threads.removeAll { $0.isFinished }
+        prune()
         threads.append(thread)
         lock.unlock()
     }
 
     func keepObject(_ object: AnyObject) {
         lock.lock()
-        objects.append(object)
+        prune()
+        objects.append((object, threads.filter { $0.isFinished == false }))
         lock.unlock()
     }
 }
 
-/// Retains `object` for the process lifetime. Used when a clock stop returns
-/// while a worker may still be inside a call that uses `object`.
+/// Retains `object` until every worker parked at retain time has
+/// finished. Used when a clock stop returns while a worker may still
+/// be inside a call that uses `object`.
 func diskImageRetainAcrossPark(_ object: AnyObject) {
     DiskImageParkedCalls.shared.keepObject(object)
 }
@@ -818,6 +872,9 @@ private final class DiskImageStatWorker: @unchecked Sendable {
     private var result = false
     private var finished = false
     private let body: @Sendable () -> Bool
+    /// Signalled once when `finished` is set, so the waiter wakes on
+    /// completion instead of paying a poll interval per syscall.
+    let completion = DispatchSemaphore(value: 0)
 
     init(body: @escaping @Sendable () -> Bool) {
         self.body = body
@@ -829,6 +886,7 @@ private final class DiskImageStatWorker: @unchecked Sendable {
         result = value
         finished = true
         lock.unlock()
+        completion.signal()
     }
 
     func snapshot() -> (finished: Bool, result: Bool) {
@@ -860,15 +918,22 @@ func diskImageWaitForStat(
     while true {
         let state = worker.snapshot()
         if state.finished { return state.result }
+        let now = Date()
+        var slice: TimeInterval = 0.005
         if let stopAt = diskImageWaitStop(
             started: started,
             allowance: allowance,
             liveDeadline: liveDeadline()
-        ), Date() >= stopAt {
-            DiskImageParkedCalls.shared.keep(thread)
-            return nil
+        ) {
+            if now >= stopAt {
+                DiskImageParkedCalls.shared.keep(thread)
+                return nil
+            }
+            // Wake no later than the stop; the slice cap only bounds how
+            // quickly a deadline arming during the wait is noticed.
+            slice = min(slice, stopAt.timeIntervalSince(now))
         }
-        usleep(1_000)
+        _ = worker.completion.wait(timeout: .now() + slice)
     }
 }
 
@@ -1829,21 +1894,31 @@ private func directoryEntryName(_ entry: UnsafeMutablePointer<dirent>) -> String
     }
 }
 
+/// How a clocked file copy ended. `.stopped` means the copy clock
+/// returned first: a worker may still be inside a read or write on a
+/// duplicate of the destination fd, so the destination inode can still
+/// change after this returns. `.failed` is a finished syscall failure.
+enum DiskImageCopyOutcome: Equatable, Sendable {
+    case finished
+    case failed
+    case stopped
+}
+
 /// File bytes in `chunkBytes` slices. The xattr copy runs only after the
 /// bytes finish and the same clock still allows it, so it cannot spend the
-/// detach reserve. A stop returns false and does not call `copyXattr`.
-func copyFileLeavingDetachReserve(
+/// detach reserve. A stop does not call `copyXattr`.
+func copyFileLeavingDetachReserveOutcome(
     from source: Int32,
     to destination: Int32,
     chunkBytes: Int = 64 * 1024,
     mayContinue: (CopyClockPoint) -> Bool,
     copyXattr: (_ source: Int32, _ destination: Int32) -> Bool
-) -> Bool {
+) -> DiskImageCopyOutcome {
     let size = chunkBytes > 0 ? chunkBytes : 64 * 1024
     while true {
-        if mayContinue(.bytes) == false { return false }
+        if mayContinue(.bytes) == false { return .stopped }
         guard let read = diskImageReadWithinCopyClock(source, maxCount: size) else {
-            return false
+            return .stopped
         }
         if read.errnoValue == EINTR {
             if diskImageInterruptedReadMayRetry(
@@ -1852,11 +1927,11 @@ func copyFileLeavingDetachReserve(
             ) {
                 continue
             }
-            return false
+            return .failed
         }
         if read.count == 0 { break }
-        if read.count < 0 { return false }
-        if mayContinue(.bytes) == false { return false }
+        if read.count < 0 { return .failed }
+        if mayContinue(.bytes) == false { return .stopped }
         var written = 0
         while written < read.count {
             guard let wrote = diskImageWriteWithinCopyClock(
@@ -1865,7 +1940,7 @@ func copyFileLeavingDetachReserve(
                 offset: written,
                 count: read.count - written
             ) else {
-                return false
+                return .stopped
             }
             if wrote.errnoValue == EINTR {
                 if diskImageInterruptedReadMayRetry(
@@ -1874,14 +1949,33 @@ func copyFileLeavingDetachReserve(
                 ) {
                     continue
                 }
-                return false
+                return .failed
             }
-            if wrote.count <= 0 { return false }
+            if wrote.count <= 0 { return .failed }
             written += wrote.count
         }
     }
-    if mayContinue(.xattr) == false { return false }
-    return copyXattr(source, destination)
+    if mayContinue(.xattr) == false { return .stopped }
+    if copyXattr(source, destination) == false {
+        return mayContinue(.xattr) ? .failed : .stopped
+    }
+    return .finished
+}
+
+func copyFileLeavingDetachReserve(
+    from source: Int32,
+    to destination: Int32,
+    chunkBytes: Int = 64 * 1024,
+    mayContinue: (CopyClockPoint) -> Bool,
+    copyXattr: (_ source: Int32, _ destination: Int32) -> Bool
+) -> Bool {
+    copyFileLeavingDetachReserveOutcome(
+        from: source,
+        to: destination,
+        chunkBytes: chunkBytes,
+        mayContinue: mayContinue,
+        copyXattr: copyXattr
+    ) == .finished
 }
 
 /// A clock stop is not a successful publish, including when a row was
@@ -1936,6 +2030,7 @@ func replaceOriginalOnlyAfterStagedCopy(
     source: Int32,
     original: Int32,
     originalPath: String? = nil,
+    stagedDirectory: URL = FileManager.default.temporaryDirectory,
     mayContinue: (CopyClockPoint) -> Bool,
     copyXattr: (_ source: Int32, _ destination: Int32) -> Bool
 ) -> SavedReplaceOutcome {
@@ -1948,7 +2043,7 @@ func replaceOriginalOnlyAfterStagedCopy(
         )
     }
     if mayContinue(.bytes) == false { return untouched() }
-    let stagedURL = FileManager.default.temporaryDirectory
+    let stagedURL = stagedDirectory
         .appendingPathComponent("rv-stage-\(UUID().uuidString)")
     // `nil` is the copy clock. Do not unlink a path the worker may still
     // be opening. A finished `-1` did not create the file.
@@ -2885,27 +2980,48 @@ func seatbeltWatchDisposition(cancelled: Bool, leaderDead: Bool) -> SeatbeltWatc
 /// Shared end for one cancelled teardown. The first `arm` wins. Later
 /// helpers and the mutex wait consume what is left. Not armed until
 /// cancellation is visible, so a non-cancel helper keeps its own deadline.
+/// The end is monotonic: a wall-clock step during teardown must not
+/// stretch the stop past `returnBound` or abort it early. `deadline`
+/// is re-derived from that end on every read, so `Date`-based
+/// consumers still observe the monotonic remainder.
 final class DiskImageCancelClock: @unchecked Sendable {
-    private let state = Mutex<Date?>(nil)
+    private let state = Mutex<ContinuousClock.Instant?>(nil)
+    private let base = ContinuousClock()
 
     /// First call wins. `spentSinceCancel` shortens that end so a helper
     /// that already ran after the flag does not grant the next helper a
-    /// fresh 7.75s on top of that time.
+    /// fresh 7.75s on top of that time. `now` is the wall instant cancel
+    /// was requested; only the elapsed interval at arm time is taken
+    /// from it, never the absolute end.
     func arm(now: Date = Date(), spentSinceCancel: TimeInterval = 0) {
         state.withLock { end in
             if end == nil {
-                let budget = DiskImageCancelBudget.sequenceRemaining(spentSinceCancel: spentSinceCancel)
-                end = now.addingTimeInterval(budget)
+                let elapsed = max(0, Date().timeIntervalSince(now))
+                let budget = DiskImageCancelBudget.sequenceRemaining(
+                    spentSinceCancel: spentSinceCancel + elapsed
+                )
+                end = base.now.advanced(by: .seconds(budget))
             }
         }
     }
 
+    private var monotonicRemaining: TimeInterval? {
+        state.withLock { end in
+            guard let end else { return nil }
+            let left = base.now.duration(to: end)
+            return max(
+                0,
+                TimeInterval(left.components.seconds)
+                    + TimeInterval(left.components.attoseconds) / 1e18
+            )
+        }
+    }
+
     var deadline: Date? {
-        state.withLock { $0 }
+        monotonicRemaining.map { Date().addingTimeInterval($0) }
     }
 
     var remaining: TimeInterval {
-        guard let deadline else { return 0 }
-        return max(0, deadline.timeIntervalSinceNow)
+        monotonicRemaining ?? 0
     }
 }

@@ -1018,6 +1018,26 @@ func resolvedWorkspacePath(_ workspace: WorkingDirectory) -> String {
     }
 }
 
+/// Resolution for profile compilation. A stopped `realpath` must not
+/// feed the unresolved symlink spelling into the unsafe check or the
+/// SBPL/Landlock grants: the kernel path is unknown, so compilation
+/// fails closed. A genuinely unresolved path keeps the fixture
+/// fallback above (prepare re-checks existence separately).
+func compileResolvedWorkspacePath(
+    _ workspace: WorkingDirectory
+) -> Result<String, IsolationApplyError> {
+    switch posixRealpathRead(workspace.rawValue) {
+    case .path(let resolved):
+        return .success(resolved)
+    case .stopped:
+        return .failure(.workspacePathUnresolvable)
+    case .unresolved:
+        return .success(
+            URL(fileURLWithPath: workspace.rawValue).resolvingSymlinksInPath().path
+        )
+    }
+}
+
 func existingResolvedWorkspacePath(
     _ workspace: WorkingDirectory
 ) -> Result<String, IsolationApplyError> {
@@ -1096,11 +1116,13 @@ func compileFirstSliceProfile(
     workspace: WorkingDirectory,
     sysctlPolicy: SeatbeltSysctlPolicy = .coarse
 ) -> Result<SeatbeltProfile, IsolationApplyError> {
-    compileFirstSliceProfile(
-        workspace: workspace,
-        resolvedWorkspace: resolvedWorkspacePath(workspace),
-        sysctlPolicy: sysctlPolicy
-    )
+    compileResolvedWorkspacePath(workspace).flatMap { resolved in
+        compileFirstSliceProfile(
+            workspace: workspace,
+            resolvedWorkspace: resolved,
+            sysctlPolicy: sysctlPolicy
+        )
+    }
 }
 
 /// Pure first-slice assembly over a pre-resolved workspace path. The

@@ -8,8 +8,35 @@ import RVDomain
 import Testing
 @testable import RVIsolation
 
+/// Locked counter plus a release gate, so a parked test worker
+/// blocks on a semaphore instead of busy-spinning `stat("/")` while
+/// the waiter observes the clock stop.
 private final class StatCallCount: @unchecked Sendable {
-    var value = 0
+    private let lock = NSLock()
+    private var stored = 0
+    private let released = DispatchSemaphore(value: 0)
+
+    var value: Int {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return stored
+        }
+        set {
+            lock.lock()
+            stored = newValue
+            lock.unlock()
+        }
+    }
+
+    func release() {
+        value = 1
+        released.signal()
+    }
+
+    func waitForRelease() {
+        released.wait()
+    }
 }
 
 private final class DeadlineGate: @unchecked Sendable {
@@ -196,10 +223,15 @@ struct DiskImageCancellationTests {
         #expect(DiskImageCancelBudget.reapSlice(until: now, now: now) == 0)
         let clock = DiskImageCancelClock()
         #expect(clock.deadline == nil)
-        clock.arm(now: now)
-        #expect(clock.deadline == now.addingTimeInterval(DiskImageCancelBudget.cancelledSequenceBudget))
-        clock.arm(now: now.addingTimeInterval(5))
-        #expect(clock.deadline == now.addingTimeInterval(DiskImageCancelBudget.cancelledSequenceBudget))
+        // Monotonic end: arm at the real now, first call wins, and a
+        // second arm never extends the remainder.
+        clock.arm()
+        #expect(clock.deadline != nil)
+        #expect(clock.remaining <= DiskImageCancelBudget.cancelledSequenceBudget)
+        #expect(clock.remaining > DiskImageCancelBudget.cancelledSequenceBudget - 1)
+        let firstRemaining = clock.remaining
+        clock.arm()
+        #expect(clock.remaining <= firstRemaining)
     }
 
     @Test func failedDetachDoesNotCountAsCleanupOrAllowRetry() {
@@ -338,6 +370,17 @@ struct DiskImageCancellationTests {
         #expect(DiskImageCancelBudget.urgentDeadline(
             arguments: ["/sbin/umount", "-f", "/tmp/rv-workspace"]
         ) == 0.5)
+        // The optional in-lock recheck is not in the sequence budget,
+        // so a queued priority waiter on the cancel clock skips it.
+        #expect(DiskImageCancelBudget.mayRunPublicationRecheck(
+            priorityWaiterQueued: true, cancelClockArmed: true
+        ) == false)
+        #expect(DiskImageCancelBudget.mayRunPublicationRecheck(
+            priorityWaiterQueued: true, cancelClockArmed: false
+        ))
+        #expect(DiskImageCancelBudget.mayRunPublicationRecheck(
+            priorityWaiterQueued: false, cancelClockArmed: true
+        ))
     }
 
     @Test func failedDetachDoesNotUnlinkOrRetryAPublishedDisk() {
@@ -441,13 +484,12 @@ struct DiskImageCancellationTests {
         let shared = DiskImageCancelBudget.wholeSequenceWallTime(reap: reap, sessionWait: session)
         #expect(shared < 8)
         #expect(shared < DiskImageCancelBudget.returnBound)
-        let now = Date(timeIntervalSince1970: 5_000)
         let clock = DiskImageCancelClock()
-        clock.arm(now: now, spentSinceCancel: reap + session)
-        let end = clock.deadline
-        #expect(end == now.addingTimeInterval(
-            DiskImageCancelBudget.sequenceRemaining(spentSinceCancel: reap + session)
-        ))
+        clock.arm(spentSinceCancel: reap + session)
+        #expect(clock.deadline != nil)
+        let expected = DiskImageCancelBudget.sequenceRemaining(spentSinceCancel: reap + session)
+        #expect(clock.remaining <= expected)
+        #expect(clock.remaining > expected - 1)
         #expect(seatbeltWatchDisposition(cancelled: true, leaderDead: false) == .leaderStillAlive)
         #expect(seatbeltWatchDisposition(cancelled: true, leaderDead: false) != .lifetimeBoundaryFailed)
         #expect(seatbeltWatchDisposition(cancelled: true, leaderDead: true) == .cancelled)
@@ -1158,6 +1200,72 @@ struct DiskImageCancellationTests {
         #expect(diskImageParkedPathIsGone(root.path, identityIsImage: false) == false)
     }
 
+    /// After the full publication wait with the helper dead, a parsed
+    /// listing that omits this image clears the hold even while a
+    /// sibling volume stays attached or a leftover sparseimage file
+    /// remains, and a mount identity clears when stat proves nothing
+    /// is mounted. Without the wait, or with a timeout/unparsed
+    /// listing, the hold stays: otherwise one preempted helper wedges
+    /// every later establish until process restart.
+    @Test func waitedDeadHelperClearsAbsentImageAndUnmountedMount() throws {
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: false,
+            imageFileGone: false,
+            parsedImageCount: 1,
+            waitedForPublication: true
+        ))
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: nil,
+            imageFileGone: false,
+            parsedImageCount: 0,
+            waitedForPublication: true
+        ))
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: false,
+            infoTimedOut: true,
+            parsedImageCount: 1,
+            waitedForPublication: true
+        ) == false)
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: false,
+            listingUnparsed: true,
+            parsedImageCount: 1,
+            waitedForPublication: true
+        ) == false)
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: nil,
+            identityIsImage: false,
+            waitedForPublication: true,
+            mountNotMounted: true
+        ))
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: nil,
+            identityIsImage: false,
+            waitedForPublication: true,
+            mountNotMounted: false
+        ) == false)
+        #expect(diskImagePublicationRecheckCanClear(
+            helperStillAlive: false,
+            imageListed: nil,
+            identityIsImage: false,
+            waitedForPublication: false,
+            mountNotMounted: true
+        ) == false)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-mount-stat-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        // A plain subdirectory shares its parent's device: not a mount.
+        #expect(diskImageMountIsNotMounted(root.path))
+        #expect(diskImageMountIsNotMounted(root.appendingPathComponent("missing").path))
+    }
+
     /// The detach follow-up keeps a sibling row, a pathless row, and a file
     /// that is still on disk. A stat that starts with time left stops on the
     /// cancel clock, including the shared clock when the local deadline is nil.
@@ -1268,16 +1376,13 @@ struct DiskImageCancellationTests {
         let releaseStat = StatCallCount()
         let clipped = Date()
         #expect(diskImageWaitForStat(allowance: 0.05) {
-            while releaseStat.value == 0 {
-                var status = stat()
-                _ = "/".withCString { stat($0, &status) }
-            }
+            releaseStat.waitForRelease()
             return true
         } == nil)
         #expect(releaseStat.value == 0)
         #expect(Date().timeIntervalSince(clipped) < 0.2)
         #expect(Date().timeIntervalSince(clipped) < DiskImageCancelBudget.returnBound)
-        releaseStat.value = 1
+        releaseStat.release()
         #expect(diskImageInterruptedReadMayRetry(errnoValue: EINTR, clockAllowsAnotherCall: false) == false)
         #expect(diskImageInterruptedReadMayRetry(errnoValue: EINTR, clockAllowsAnotherCall: true))
         #expect(diskImageInterruptedReadMayRetry(errnoValue: EIO, clockAllowsAnotherCall: true) == false)
@@ -1391,10 +1496,7 @@ struct DiskImageCancellationTests {
                 onCaller.value = 1
             }
             gate.date = Date().addingTimeInterval(0.05)
-            while release.value == 0 {
-                var status = stat()
-                _ = "/".withCString { stat($0, &status) }
-            }
+            release.waitForRelease()
             return true
         }
         #expect(stopped == nil)
@@ -1402,7 +1504,7 @@ struct DiskImageCancellationTests {
         #expect(release.value == 0)
         #expect(Date().timeIntervalSince(started) < 0.2)
         #expect(Date().timeIntervalSince(started) < DiskImageCancelBudget.returnBound)
-        release.value = 1
+        release.release()
         #expect(diskImageDetachFollowUpCanStillAppear(
             listingCanAppear: false,
             imageListed: false,
@@ -1701,17 +1803,101 @@ struct DiskImageCancellationTests {
             try? destination.close()
         }
         let name = "user.rv-large"
-        let value = [UInt8](repeating: 7, count: 100_000)
+        // 3_000 fits the Linux VFS xattr ceiling (65_536) and ext4's
+        // single-block limit; chunkBytes below makes it larger than the
+        // copy window so the whole-value branch still runs.
+        let value = [UInt8](repeating: 7, count: 3_000)
         try #require(writeXattr(source.fileDescriptor, name, value))
         // A stale destination-only attribute must not survive the copy.
         try #require(writeXattr(destination.fileDescriptor, "user.rv-stale", [1]))
         let copied = copyXattrsObservingClock(
             from: source.fileDescriptor,
-            to: destination.fileDescriptor
+            to: destination.fileDescriptor,
+            chunkBytes: 1_024
         ) { true }
         #expect(copied)
         #expect(readXattr(destination.fileDescriptor, name) == value)
         #expect(readXattr(destination.fileDescriptor, "user.rv-stale") == nil)
+    }
+
+    /// A clock-stopped copy is not a finished failure: `createSaved`
+    /// fences the workspace rename on `.stopped` because a parked
+    /// write can still land in the new inode.
+    @Test func copyOutcomeDistinguishesStoppedFromFinishedFailure() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-copy-outcome-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceURL = root.appendingPathComponent("source")
+        let destURL = root.appendingPathComponent("dest")
+        try Data("payload".utf8).write(to: sourceURL)
+        FileManager.default.createFile(atPath: destURL.path, contents: nil)
+        let source = try FileHandle(forReadingFrom: sourceURL)
+        let destination = try FileHandle(forWritingTo: destURL)
+        defer {
+            try? source.close()
+            try? destination.close()
+        }
+        #expect(copyFileLeavingDetachReserveOutcome(
+            from: source.fileDescriptor,
+            to: destination.fileDescriptor,
+            mayContinue: { _ in false },
+            copyXattr: { _, _ in true }
+        ) == .stopped)
+        // Reading a write-only descriptor is a finished syscall failure.
+        #expect(copyFileLeavingDetachReserveOutcome(
+            from: destination.fileDescriptor,
+            to: destination.fileDescriptor,
+            mayContinue: { _ in true },
+            copyXattr: { _, _ in true }
+        ) == .failed)
+        #expect(copyFileLeavingDetachReserveOutcome(
+            from: source.fileDescriptor,
+            to: destination.fileDescriptor,
+            mayContinue: { _ in true },
+            copyXattr: { _, _ in true }
+        ) == .finished)
+        #expect(copyFileLeavingDetachReserveOutcome(
+            from: source.fileDescriptor,
+            to: destination.fileDescriptor,
+            mayContinue: { _ in true },
+            copyXattr: { _, _ in false }
+        ) == .failed)
+    }
+
+    /// A parked object is released once the workers parked at its
+    /// retain time finish, instead of leaking one enumerator (and its
+    /// directory fd) per cancelled scan for the process lifetime.
+    @Test func parkedObjectIsReleasedAfterItsWorkersFinish() {
+        final class ParkMarker {}
+        weak var weakMarker: ParkMarker?
+        do {
+            let marker = ParkMarker()
+            weakMarker = marker
+            diskImageRetainAcrossPark(marker)
+        }
+        #expect(weakMarker != nil)
+        // Each further retain prunes entries whose workers finished;
+        // earlier tests' parked workers drain within this bound.
+        for _ in 0..<100 where weakMarker != nil {
+            diskImageRetainAcrossPark(ParkMarker())
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        #expect(weakMarker == nil)
+    }
+
+    /// Completion wakes the waiter; 2,000 trivial syscalls must not
+    /// each pay a poll interval (that was ~1.5 ms per call).
+    @Test func waitForStatDoesNotPayAPollIntervalPerCall() {
+        let started = Date()
+        var finished = 0
+        for _ in 0..<2_000 {
+            if diskImageWaitForStat(allowance: nil, liveDeadline: { nil }, stat: { true }) == true {
+                finished += 1
+            }
+        }
+        #expect(finished == 2_000)
+        #expect(Date().timeIntervalSince(started) < 2)
     }
 
     /// A spent copy clock must not run these on the caller. `a044874d` still
@@ -1784,6 +1970,15 @@ struct DiskImageCancellationTests {
             let stopped = resolvedWorkspacePath(workspace)
             #expect(stopped == link.path)
             #expect(stopped != resolvedWhileOpen)
+            // Compilation must not consume that raw symlink spelling.
+            switch compileFirstSliceProfile(workspace: workspace) {
+            case .failure(.workspacePathUnresolvable):
+                break
+            case .failure(let other):
+                Issue.record("stopped realpath compiled with wrong failure: \(other)")
+            case .success:
+                Issue.record("stopped realpath compiled a profile from the raw spelling")
+            }
 
             #expect(diskImageChmodWithinCopyClock(directory.path, 0o700) == nil)
             #expect(diskImageRmdirWithinCopyClock(doomed.path) == nil)
@@ -1891,7 +2086,7 @@ struct DiskImageCancellationTests {
         let opened = diskImageOpenPathWithinCopyClock(fifo.path, O_RDONLY)
         let elapsed = Date().timeIntervalSince(started)
         #expect(opened == nil)
-        #expect(elapsed > 0.1)
+        #expect(elapsed > granted / 2)
         #expect(elapsed < DiskImageCancelBudget.returnBound)
         let writer = fifo.path.withCString { open($0, O_WRONLY | O_NONBLOCK | O_CLOEXEC) }
         if writer >= 0 { close(writer) }
@@ -1980,35 +2175,39 @@ struct DiskImageCancellationTests {
             if pair[0] >= 0 { close(pair[0]) }
             if pair[1] >= 0 { close(pair[1]) }
         }
-        let before = stageNames()
         try withCopyBudget(0.25) {
             let allowance = diskImageTreeSyscallAllowance(
                 deadline: CooperativeLaunchStop.cancelClock?.deadline
             )
             #expect((allowance ?? 0) > 0.1)
             #expect((allowance ?? 1) < 1)
+            let granted = allowance ?? 0
             let started = Date()
             let outcome = replaceOriginalOnlyAfterStagedCopy(
                 source: pair[0],
                 original: original.fileDescriptor,
                 originalPath: originalURL.path,
+                stagedDirectory: root,
                 mayContinue: { _ in true },
                 copyXattr: { _, _ in true }
             )
             let elapsed = Date().timeIntervalSince(started)
             #expect(outcome.committed == false)
             #expect(outcome.reachedTruncate == false)
-            #expect(elapsed > 0.1)
+            #expect(elapsed > granted / 2)
             #expect(elapsed < DiskImageCancelBudget.returnBound)
         }
         if pair[1] >= 0 {
             close(pair[1])
             pair[1] = -1
         }
-        let created = stageNames().filter { before.contains($0) == false }
+        // The staged file is staged under this test's own root, so the
+        // listing can only ever name this test's file.
+        let created = (try FileManager.default.contentsOfDirectory(atPath: root.path))
+            .filter { $0.hasPrefix("rv-stage-") }
         #expect(created.isEmpty == false)
         for name in created {
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+            let url = root.appendingPathComponent(name)
             #expect(FileManager.default.fileExists(atPath: url.path))
             try? FileManager.default.removeItem(at: url)
         }
@@ -2042,11 +2241,12 @@ struct DiskImageCancellationTests {
                 deadline: CooperativeLaunchStop.cancelClock?.deadline
             )
             #expect((allowance ?? 0) > 0.1)
+            let granted = allowance ?? 0
             let started = Date()
             let bytes = diskImageReadWholeFileWithinCopyClock(fifo.path)
             let elapsed = Date().timeIntervalSince(started)
             #expect(bytes == nil)
-            #expect(elapsed > 0.1)
+            #expect(elapsed > granted / 2)
             #expect(elapsed < DiskImageCancelBudget.returnBound)
         }
         let writer = fifo.path.withCString { open($0, O_WRONLY | O_NONBLOCK | O_CLOEXEC) }
@@ -2101,13 +2301,6 @@ struct DiskImageCancellationTests {
             #expect(FileManager.default.fileExists(atPath: image.path) == false)
         }
     }
-}
-
-private func stageNames() -> Set<String> {
-    let names = (try? FileManager.default.contentsOfDirectory(
-        atPath: FileManager.default.temporaryDirectory.path
-    )) ?? []
-    return Set(names.filter { $0.hasPrefix("rv-stage-") })
 }
 
 private func withCopyBudget(_ budget: TimeInterval, _ body: () throws -> Void) rethrows {

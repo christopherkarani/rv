@@ -101,57 +101,98 @@ struct SpawnPrimitivesTests {
 
     /// `a35644a2` leaves a Darwin socket that landed on 0, 1, or 2 open
     /// after `F_DUPFD_CLOEXEC`. The published fd is close-on-exec; the
-    /// original is closed once. Stdout is not closed.
+    /// original is closed once. Runs in a forked child whose stdio
+    /// slots start free, so this process's fd 0 is never touched.
     @Test func stdioSlotSocketIsClosedOnceAfterCloexecDup() throws {
-        let stdoutBefore = fcntl(1, F_GETFD)
-        let slot = try occupyStdioSlotWithSocket()
-        defer { slot.restore() }
-        let published = publishCloexecSocket(raw: slot.fd, above: 64)
-        defer { if published >= 0 { close(published) } }
-        #expect(published >= 64)
-        let flags = fcntl(published, F_GETFD)
-        #expect(flags >= 0)
-        #expect(flags & FD_CLOEXEC != 0)
-        let probe = fcntl(slot.fd, F_GETFD)
-        let probeErrno = errno
-        #expect(probe == -1)
-        #expect(probeErrno == EBADF)
-        if stdoutBefore >= 0 {
-            #expect(fcntl(1, F_GETFD) >= 0)
+        let code = try inStdioFreeChild {
+            let raw = makeStreamSocket()
+            guard raw == 0 else { return 10 }
+            let published = publishCloexecSocket(raw: raw, above: 64)
+            guard published >= 64 else { return 11 }
+            let flags = fcntl(published, F_GETFD)
+            guard flags >= 0, flags & FD_CLOEXEC != 0 else { return 12 }
+            guard fcntl(0, F_GETFD) == -1, errno == EBADF else { return 13 }
+            return 0
         }
+        #expect(code == 0)
     }
 
     /// A failed cloexec dup still closes the original once, including a
     /// socket on 0, 1, or 2. `a35644a2` returns `-1` and leaks that fd.
     @Test func stdioSlotSocketIsClosedOnceWhenCloexecDupFails() throws {
-        let slot = try occupyStdioSlotWithSocket()
-        defer { slot.restore() }
-        let published = publishCloexecSocket(raw: slot.fd, above: Int32.max)
-        #expect(published == -1)
-        let probe = fcntl(slot.fd, F_GETFD)
-        let probeErrno = errno
-        #expect(probe == -1)
-        #expect(probeErrno == EBADF)
+        let code = try inStdioFreeChild {
+            let raw = makeStreamSocket()
+            guard raw == 0 else { return 10 }
+            guard publishCloexecSocket(raw: raw, above: Int32.max) == -1 else { return 11 }
+            guard fcntl(0, F_GETFD) == -1, errno == EBADF else { return 12 }
+            return 0
+        }
+        #expect(code == 0)
     }
 
-    /// `accept` on 0, 1, or 2 is dup'd close-on-exec, and
-    /// `closeRelocatedOriginal` does not close that original.
-    /// `a35644a2` leaves the client connection inheritable.
+    /// `accept` on 0, 1, or 2 is dup'd close-on-exec and the original
+    /// is closed once. `a35644a2` leaves the client connection
+    /// inheritable.
     @Test func acceptedSocketOnStdioIsClosedOnce() throws {
-        let slot = try occupyStdioSlotWithSocket()
-        defer { slot.restore() }
-        var held = slot.fd
-        #expect(relocateOwnedSocket(&held, above: 64))
-        defer { if held >= 3 { close(held) } }
-        #expect(held >= 64)
-        #expect(held != slot.fd)
-        let flags = fcntl(held, F_GETFD)
-        #expect(flags >= 0)
-        #expect(flags & FD_CLOEXEC != 0)
-        let probe = fcntl(slot.fd, F_GETFD)
-        let probeErrno = errno
-        #expect(probe == -1)
-        #expect(probeErrno == EBADF)
+        let code = try inStdioFreeChild {
+            var held = makeStreamSocket()
+            guard held == 0 else { return 10 }
+            guard relocateOwnedSocket(&held, above: 64) else { return 11 }
+            guard held >= 64 else { return 12 }
+            let flags = fcntl(held, F_GETFD)
+            guard flags >= 0, flags & FD_CLOEXEC != 0 else { return 13 }
+            guard fcntl(0, F_GETFD) == -1, errno == EBADF else { return 14 }
+            return 0
+        }
+        #expect(code == 0)
+    }
+
+    /// An owned pipe end that landed on a stdio slot is closed by
+    /// relocation too: a stranded duplicate write end would suppress
+    /// EOF for the reader and keep a low number occupied.
+    @Test func relocatedOwnedPipeFreesItsStdioSlot() throws {
+        let code = try inStdioFreeChild {
+            var pair: [Int32] = [-1, -1]
+            let opened = pair.withUnsafeMutableBufferPointer { buffer -> Int32 in
+                guard let base = buffer.baseAddress else { return -1 }
+                return pipe(base)
+            }
+            guard opened == 0, pair[0] == 0, pair[1] == 1 else { return 10 }
+            var writeEnd = pair[1]
+            guard relocateDescriptor(&writeEnd, above: 64), writeEnd >= 64 else { return 11 }
+            guard fcntl(1, F_GETFD) == -1, errno == EBADF else { return 12 }
+            _ = close(writeEnd)
+            var byte: UInt8 = 0
+            let count = withUnsafeMutableBytes(of: &byte) { read(pair[0], $0.baseAddress, 1) }
+            guard count == 0 else { return 13 }
+            return 0
+        }
+        #expect(code == 0)
+    }
+
+    /// A zero session-death budget still reaps once: a killed leader
+    /// is a zombie until `waitpid`, and kill-based probes read a
+    /// zombie as alive. Pipe EOF proves the child exited (and is
+    /// therefore a zombie) before the call, with no sleep.
+    @Test func zeroBudgetSessionWaitStillReapsAZombie() throws {
+        let (readEnd, writeEnd) = try openPipe()
+        let pid = rvFork()
+        try #require(pid >= 0)
+        if pid == 0 {
+            _ = close(readEnd)
+            _exit(0)
+        }
+        _ = close(writeEnd)
+        var byte: UInt8 = 0
+        let count = withUnsafeMutableBytes(of: &byte) { read(readEnd, $0.baseAddress, 1) }
+        _ = close(readEnd)
+        try #require(count == 0)
+        // The child has exited but nothing has waited for it: zombie.
+        #expect(kill(pid, 0) == 0)
+        #expect(waitUntilSessionIsDead(pgid: pid, also: [pid], budget: 0))
+        var status: Int32 = 0
+        #expect(waitpid(pid, &status, WNOHANG) == -1)
+        #expect(errno == ECHILD)
     }
 
     // MARK: - vectors
@@ -237,50 +278,36 @@ struct SpawnPrimitivesTests {
     }
 }
 
-/// A socket sitting on 0, 1, or 2. A slot that was already free is used as-is.
-/// When every stdio slot is live, fd 0 is replaced and `restore` puts the
-/// saved copy back. The test does not close a live descriptor it does not own.
-private struct StdioSlotSocket {
-    var fd: Int32
-    var saved: Int32
+/// Darwin's Swift overlay marks `fork()` unavailable; the libc
+/// symbol is what these tests need. Children below use only
+/// syscall-level calls between fork and `_exit`.
+@_silgen_name("fork")
+private func rvFork() -> pid_t
 
-    func restore() {
-        if saved >= 0 {
-            _ = dup2(saved, fd)
-            _ = close(saved)
-        }
-    }
+private func makeStreamSocket() -> Int32 {
+    #if canImport(Darwin)
+    socket(AF_INET, SOCK_STREAM, 0)
+    #else
+    socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+    #endif
 }
 
-private func occupyStdioSlotWithSocket() throws -> StdioSlotSocket {
-    #if canImport(Darwin)
-    let raw = socket(AF_INET, SOCK_STREAM, 0)
-    #else
-    let raw = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
-    #endif
-    try #require(raw >= 0)
-    if raw < 3 {
-        return StdioSlotSocket(fd: raw, saved: -1)
+/// Runs `body` in a forked child whose fds 0–2 start free and returns
+/// its exit code (-1 when the child did not exit normally). The
+/// child must stick to plain syscall-level calls between `fork` and
+/// `_exit`; stdio-slot behavior is then exercised without mutating
+/// this test process's own stdio, which parallel suites share.
+private func inStdioFreeChild(_ body: () -> Int32) throws -> Int32 {
+    let pid = rvFork()
+    try #require(pid >= 0)
+    if pid == 0 {
+        _ = close(0)
+        _ = close(1)
+        _ = close(2)
+        _exit(body())
     }
-    for candidate: Int32 in 0..<3 {
-        if fcntl(candidate, F_GETFD) < 0, errno == EBADF {
-            let placed = dup2(raw, candidate)
-            if placed != candidate {
-                close(raw)
-                try #require(placed == candidate)
-            }
-            close(raw)
-            return StdioSlotSocket(fd: candidate, saved: -1)
-        }
-    }
-    let saved = fcntl(0, F_DUPFD_CLOEXEC, 64)
-    try #require(saved >= 64)
-    let placed = dup2(raw, 0)
-    if placed != 0 {
-        close(saved)
-        close(raw)
-        try #require(placed == 0)
-    }
-    if raw != 0 { close(raw) }
-    return StdioSlotSocket(fd: 0, saved: saved)
+    var status: Int32 = 0
+    while waitpid(pid, &status, 0) < 0, errno == EINTR {}
+    guard (status & 0x7f) == 0 else { return -1 }
+    return (status >> 8) & 0xff
 }

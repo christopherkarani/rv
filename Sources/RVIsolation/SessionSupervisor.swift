@@ -1440,14 +1440,17 @@ private func reapLeaderStatus(
     }
 }
 
-private func waitUntilSessionIsDead(
+func waitUntilSessionIsDead(
     pgid: pid_t,
     also pids: Set<pid_t>,
     reap: Bool = true,
     budget: TimeInterval = DiskImageCancelBudget.sessionDeathWait
 ) -> Bool {
     let deadline = Date().addingTimeInterval(max(0, budget))
-    while Date() < deadline {
+    // Always one reap+terminate pass, even at a zero budget: a leader
+    // that already took SIGKILL is a zombie until `waitpid`, and the
+    // kill-based checks below read a zombie as alive.
+    while true {
         if reap {
             var status: Int32 = 0
             _ = waitpid(pgid, &status, WNOHANG)
@@ -1457,6 +1460,7 @@ private func waitUntilSessionIsDead(
         if processGroupIsEmpty(pgid), gone {
             return true
         }
+        if Date() >= deadline { break }
         usleep(10_000)
     }
     let gone = pids.allSatisfy { processIsGone($0) || (reap == false && sessionLeaderHasExited($0)) }
@@ -1683,7 +1687,17 @@ func usablePtyClaimPath(_ path: String, workspacePath: String) -> String? {
     var isDirectory: ObjCBool = false
     let exists = FileManager.default.fileExists(atPath: resolved, isDirectory: &isDirectory)
     guard exists, isDirectory.boolValue == false else { return nil }
-    let canonicalWorkspace = posixRealpath(workspacePath) ?? workspacePath
+    // Same fail-closed rule as the Landlock exec check: a stopped
+    // realpath leaves the workspace spelling's target unknown.
+    let canonicalWorkspace: String
+    switch posixRealpathRead(workspacePath) {
+    case .path(let resolvedWorkspace):
+        canonicalWorkspace = resolvedWorkspace
+    case .stopped:
+        return nil
+    case .unresolved:
+        canonicalWorkspace = workspacePath
+    }
     if isFilesystemRoot(canonicalWorkspace)
         || isLookupInsideWorkspace(path, workspace: canonicalWorkspace)
         || isResolvedPath(resolved, atOrBeneath: canonicalWorkspace)

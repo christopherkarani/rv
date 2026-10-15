@@ -928,9 +928,11 @@ The seam wires the F1 rollback paths through the F3 gate and reconciles
 the two revision-log designs that grew in parallel:
 
 - **Rollback gate.** All three store rollbacks (`rollbackMachine(to:)`,
-  `rollbackMachine(toRevision:)`, `rollbackRepo`) compare the live
-  policy file enforcement loads with the restored document and throw
-  `blockedByFindings` before writing anything. Replacement semantics:
+  `rollbackMachine(toRevision:)`, `rollbackRepo`) compare the
+  restored document against both baselines — the live policy file
+  enforcement loads and the sealed/JSONL history head — and throw
+  `blockedByFindings` before writing anything when the restore is
+  weaker than either. Replacement semantics:
   a vanished deny or ask, an explicit verdict relaxation on a surviving
   predicate, a safety downgrade, or a new secret exemption refuses.
   Dropping an allow still succeeds. `PolicyWorkspace.rollback` inherits

@@ -20,10 +20,12 @@ enum CooperativeLaunchStop {
         private struct State: Sendable {
             var set = false
             var cancelledAt: Date?
+            var cancelledMonotonic: ContinuousClock.Instant?
             var clock: DiskImageCancelClock?
         }
 
         private let state = Mutex(State())
+        private let monotonicBase = ContinuousClock()
 
         /// Arms the one cancel clock at the instant cancel is requested.
         /// Leader reap, the session-death poll, and disk detach all consume
@@ -33,6 +35,7 @@ enum CooperativeLaunchStop {
                 value.set = true
                 if value.cancelledAt == nil {
                     value.cancelledAt = Date()
+                    value.cancelledMonotonic = monotonicBase.now
                 }
                 if value.clock == nil {
                     let clock = DiskImageCancelClock()
@@ -48,12 +51,28 @@ enum CooperativeLaunchStop {
             state.withLock { value in
                 if value.cancelledAt == nil {
                     value.cancelledAt = now
+                    let elapsed = max(0, Date().timeIntervalSince(now))
+                    value.cancelledMonotonic = monotonicBase.now.advanced(by: .seconds(-elapsed))
                 }
                 if value.clock == nil {
                     let clock = DiskImageCancelClock()
                     clock.arm(now: value.cancelledAt ?? now)
                     value.clock = clock
                 }
+            }
+        }
+
+        /// Monotonic elapsed since cancel, so a wall-clock step cannot
+        /// distort the spent figure the budget helpers consume.
+        var monotonicSpent: TimeInterval? {
+            state.withLock { value in
+                guard let start = value.cancelledMonotonic else { return nil }
+                let spent = start.duration(to: monotonicBase.now)
+                return max(
+                    0,
+                    TimeInterval(spent.components.seconds)
+                        + TimeInterval(spent.components.attoseconds) / 1e18
+                )
             }
         }
 
@@ -90,6 +109,7 @@ enum CooperativeLaunchStop {
     }
 
     static func spentSinceCancel(now: Date = Date()) -> TimeInterval {
+        if let spent = installed?.monotonicSpent { return spent }
         guard let start = installed?.cancelledAt else { return 0 }
         return max(0, now.timeIntervalSince(start))
     }

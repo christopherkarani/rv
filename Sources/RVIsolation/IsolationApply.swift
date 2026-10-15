@@ -886,67 +886,58 @@ func rejectWorkspaceInodeAlias(_ root: String) -> Result<Void, IsolationApplyErr
         .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .linkCountKey,
     ]
     let walk = AliasWalk(enumerator, scan: scan)
-    while true {
-        if walk.failed {
-            return .failure(.workspaceContainsInodeAlias)
-        }
-        walk.url = nil
-        walk.values = nil
-        walk.ended = false
-        walk.valuesFailed = false
-        let stepped = diskImagePerformWithinCopyClock {
-            if let next = walk.enumerator.nextObject() as? URL {
-                walk.url = next
-                do {
-                    walk.values = try next.resourceValues(forKeys: keys)
-                } catch {
-                    walk.valuesFailed = true
-                }
-            } else {
-                walk.ended = true
+    // The whole walk runs in one clocked worker: the caller still
+    // returns at the copy-clock stop (and parks the walk), while a
+    // fast scan does not pay a thread per entry. When a cancel clock
+    // is already armed, the worker also re-checks it between entries
+    // so it stops scanning soon after the stop; the thread-local
+    // flag itself is not visible on the worker thread.
+    let armedClock = CooperativeLaunchStop.cancelClock
+    let scanned = diskImagePerformWithinCopyClock {
+        while let url = walk.enumerator.nextObject() as? URL {
+            if scan.failed { return false }
+            if let armedClock,
+                DiskImageCancelBudget.copyMayContinue(deadline: armedClock.deadline, now: Date()) == false
+            {
+                return false
             }
-            return true
+            let values: URLResourceValues
+            do {
+                values = try url.resourceValues(forKeys: keys)
+            } catch {
+                return false
+            }
+            var status = stat()
+            guard url.path.withCString({ lstat($0, &status) == 0 }) else {
+                return false
+            }
+            let isRootChild = diskImageCanonicalPath(url.deletingLastPathComponent().path)
+                == diskImageCanonicalPath(root)
+            if WorkspaceFilesystemMetadata.shouldSkip(
+                name: url.lastPathComponent,
+                isRootChild: isRootChild,
+                isDirectory: (status.st_mode & S_IFMT) == S_IFDIR,
+                isSymbolicLink: (status.st_mode & S_IFMT) == S_IFLNK,
+                ownerUid: status.st_uid,
+                ownersIgnored: ownersIgnored
+            ) {
+                walk.enumerator.skipDescendants()
+                continue
+            }
+            if values.isSymbolicLink == true {
+                continue
+            }
+            if values.isRegularFile == true, let count = values.linkCount, count > 1 {
+                return false
+            }
         }
-        if stepped == nil {
-            diskImageRetainAcrossPark(walk)
-            return .failure(.workspaceContainsInodeAlias)
-        }
-        if walk.failed || walk.valuesFailed {
-            return .failure(.workspaceContainsInodeAlias)
-        }
-        if walk.ended { break }
-        guard let url = walk.url, let values = walk.values else {
-            return .failure(.workspaceContainsInodeAlias)
-        }
-        let isRootChild = diskImageCanonicalPath(url.deletingLastPathComponent().path)
-            == diskImageCanonicalPath(root)
-        let box = AliasStatBox()
-        let stated = diskImagePerformWithinCopyClock {
-            url.path.withCString { lstat($0, &box.status) == 0 }
-        }
-        guard stated == true else {
-            return .failure(.workspaceContainsInodeAlias)
-        }
-        let status = box.status
-        if WorkspaceFilesystemMetadata.shouldSkip(
-            name: url.lastPathComponent,
-            isRootChild: isRootChild,
-            isDirectory: (status.st_mode & S_IFMT) == S_IFDIR,
-            isSymbolicLink: (status.st_mode & S_IFMT) == S_IFLNK,
-            ownerUid: status.st_uid,
-            ownersIgnored: ownersIgnored
-        ) {
-            walk.enumerator.skipDescendants()
-            continue
-        }
-        if values.isSymbolicLink == true {
-            continue
-        }
-        if values.isRegularFile == true, let count = values.linkCount, count > 1 {
-            return .failure(.workspaceContainsInodeAlias)
-        }
+        return scan.failed == false
     }
-    if scan.failed {
+    if scanned == nil {
+        diskImageRetainAcrossPark(walk)
+        return .failure(.workspaceContainsInodeAlias)
+    }
+    guard scanned == true else {
         return .failure(.workspaceContainsInodeAlias)
     }
     return .success(())
@@ -975,23 +966,15 @@ private final class InodeAliasScan: @unchecked Sendable {
     var failed = false
 }
 
-/// Enumerator and the values read from it. Not Sendable on its own; the
-/// walk runs off the caller and this box crosses that boundary.
+/// The enumerator a clocked scan walks. Not Sendable on its own; the
+/// walk runs off the caller and this box crosses that boundary, and a
+/// parked walk retains it until the worker leaves the call.
 private final class AliasWalk: @unchecked Sendable {
     let enumerator: FileManager.DirectoryEnumerator
-    var url: URL?
-    var values: URLResourceValues?
-    var ended = false
-    var valuesFailed = false
-    var failed: Bool { scan.failed }
     private let scan: InodeAliasScan
 
     init(_ enumerator: FileManager.DirectoryEnumerator, scan: InodeAliasScan) {
         self.enumerator = enumerator
         self.scan = scan
     }
-}
-
-private final class AliasStatBox: @unchecked Sendable {
-    var status = stat()
 }

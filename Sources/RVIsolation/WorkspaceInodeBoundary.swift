@@ -675,6 +675,16 @@ final class WorkspaceInodeBoundary: Sendable {
         return result == true
     }
 
+    /// Remove a just-created saved entry whose copy did not finish.
+    /// Anything short of a finished unlink — a parked unlink, a
+    /// skipped unlink, or a finished failure — leaves a partial entry
+    /// in the saved tree, so the rename onto the workspace is fenced.
+    private func discardNewSaved(_ dirfd: Int32, _ name: String) {
+        if savedMutation(unlinkatWithinCopyClock(dirfd, name, 0)) == false {
+            mutable.withLock { $0.blockWorkspaceRename = true }
+        }
+    }
+
     private func updateSaved(_ relative: String, from entry: TreeEntry) -> Bool {
         // A resumed create has no snapshot stamp. Its authority is the
         // live saved stamp, re-verified against the opened inode below.
@@ -828,21 +838,35 @@ final class WorkspaceInodeBoundary: Sendable {
         case .directory:
             return savedMutation(mkdiratWithinCopyClock(parent.fd, parent.name, entry.mode))
         case .regular:
-            let dest = openatWithinCopyClock(
+            let opened = openatOutcomeWithinCopyClock(
                 parent.fd,
                 parent.name,
                 O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_WRONLY,
                 entry.mode
             )
+            // A parked O_CREAT can still create the entry after the
+            // saved tree is renamed onto the workspace. Fence it; do
+            // not unlink a name the parked open has not created yet.
+            if opened.stopped {
+                mutable.withLock { $0.blockWorkspaceRename = true }
+                return false
+            }
+            let dest = opened.fd
             guard dest >= 0 else { return false }
             defer { close(dest) }
             guard let source = openVolume(relative, directory: false), source >= 0 else {
-                unlinkNewSaved(parent.fd, parent.name)
+                discardNewSaved(parent.fd, parent.name)
                 return false
             }
             defer { close(source) }
-            guard copyFileDataObservingCancelClock(from: source, to: dest) else {
-                unlinkNewSaved(parent.fd, parent.name)
+            let copied = copyFileDataOutcomeObservingCancelClock(from: source, to: dest)
+            guard copied == .finished else {
+                // A parked write still holds a duplicate of `dest`
+                // and can land in this inode after a rename.
+                if copied == .stopped {
+                    mutable.withLock { $0.blockWorkspaceRename = true }
+                }
+                discardNewSaved(parent.fd, parent.name)
                 return false
             }
             return true
@@ -1732,16 +1756,21 @@ private func mkdiratWithinCopyClock(_ dirfd: Int32, _ name: String, _ mode: mode
     }
 }
 
-private func openatWithinCopyClock(
+/// `-1` with `stopped == true` means the copy clock returned while the
+/// open may still be inside `openat`: with `O_CREAT` the file can still
+/// appear after the caller moves on. `-1` with `stopped == false` is a
+/// finished failure. A zero allowance never starts the open, so it is
+/// a finished failure for fencing purposes: nothing is parked.
+private func openatOutcomeWithinCopyClock(
     _ dirfd: Int32,
     _ name: String,
     _ flags: Int32,
     _ mode: mode_t = 0
-) -> Int32 {
+) -> (fd: Int32, stopped: Bool) {
     let allowance = diskImageTreeSyscallAllowance(
         deadline: CooperativeLaunchStop.cancelClock?.deadline
     )
-    if let allowance, allowance <= 0 { return -1 }
+    if let allowance, allowance <= 0 { return (-1, false) }
     let box = TreeFDBox()
     let ok = diskImageWaitForStat(allowance: allowance, liveDeadline: { treeSyscallLiveStop() }) {
         let copy = diskImageDuplicateDescriptor(dirfd)
@@ -1751,8 +1780,18 @@ private func openatWithinCopyClock(
         box.fd = fd
         return fd >= 0
     }
-    if ok == true { return box.take() }
-    return -1
+    if ok == nil { return (-1, true) }
+    if ok == true { return (box.take(), false) }
+    return (-1, false)
+}
+
+private func openatWithinCopyClock(
+    _ dirfd: Int32,
+    _ name: String,
+    _ flags: Int32,
+    _ mode: mode_t = 0
+) -> Int32 {
+    openatOutcomeWithinCopyClock(dirfd, name, flags, mode).fd
 }
 
 private func readTree(
@@ -1902,7 +1941,14 @@ func cancelClockAllowsTreeCopy(now: Date = Date()) -> Bool {
 /// detach is skipped. The xattr copy uses that same clock and does not run
 /// once only the detach reserve is left.
 func copyFileDataObservingCancelClock(from source: Int32, to destination: Int32) -> Bool {
-    copyFileLeavingDetachReserve(
+    copyFileDataOutcomeObservingCancelClock(from: source, to: destination) == .finished
+}
+
+func copyFileDataOutcomeObservingCancelClock(
+    from source: Int32,
+    to destination: Int32
+) -> DiskImageCopyOutcome {
+    copyFileLeavingDetachReserveOutcome(
         from: source,
         to: destination,
         mayContinue: publishCopyMayContinue,
@@ -1921,9 +1967,7 @@ private func copyExtendedAttributes(_ source: Int32, _ destination: Int32) -> Bo
     }
 }
 
-private func unlinkNewSaved(_ dirfd: Int32, _ name: String) {
-    _ = unlinkatWithinCopyClock(dirfd, name, 0)
-}
+
 
 private func unlinkatWithinCopyClock(_ dirfd: Int32, _ name: String, _ flags: Int32) -> Bool? {
     let allowance = diskImageTreeSyscallAllowance(
@@ -2220,7 +2264,7 @@ private enum DiskImageToolSerialization {
         pid: pid_t
     ) {
         let parked = publication.withLock { $0 }
-        let parkedAlive = parked.pid > 1 && kill(parked.pid, 0) == 0
+        let parkedAlive = parkedHelperIsAlive(parked.pid)
         let held = diskImagePublicationGateUpdate(
             plan: plan,
             helperStillAlive: helperStillAlive,
@@ -2261,7 +2305,7 @@ private enum DiskImageToolSerialization {
     static func clearPublicationGateIfDiskIsGone(clock: DiskImageCancelClock) {
         let parked = publication.withLock { $0 }
         guard parked.held else { return }
-        let helperAlive = parked.pid > 1 && kill(parked.pid, 0) == 0
+        let helperAlive = parkedHelperIsAlive(parked.pid)
         guard let image = parked.image, image.isEmpty == false else {
             guard diskImagePublicationCanClear(
                 helperStillAlive: helperAlive,
@@ -2270,7 +2314,7 @@ private enum DiskImageToolSerialization {
             ) else { return }
             publication.withLock { state in
                 let stillNoImage = state.image == nil || state.image?.isEmpty == true
-                let alive = state.pid > 1 && kill(state.pid, 0) == 0
+                let alive = parkedHelperIsAlive(state.pid)
                 guard state.held, stillNoImage, alive == false else { return }
                 state.held = false
                 state.image = nil
@@ -2302,25 +2346,29 @@ private enum DiskImageToolSerialization {
         let deadline = Date().addingTimeInterval(infoBudget)
         let listed = workspaceImageListed(image, returnDeadline: deadline, clock: clock)
         let identityIsImage = image.contains("rv-inode-") && image.hasSuffix(".sparseimage")
-        guard let imageFileGone = diskImageStatObservingCancelClock(
+        guard let parkedGone = diskImageStatObservingCancelClock(
             localDeadline: clock.deadline,
             sharedDeadline: CooperativeLaunchStop.cancelClock?.deadline,
             stat: {
-                diskImageParkedPathIsGone(image, identityIsImage: identityIsImage)
+                identityIsImage
+                    ? diskImageParkedPathIsGone(image, identityIsImage: true)
+                    : diskImageMountIsNotMounted(image)
             }
         ) else { return }
         guard diskImagePublicationRecheckCanClear(
             helperStillAlive: false,
             imageListed: listed.imageListed,
             infoTimedOut: listed.infoTimedOut,
-            imageFileGone: imageFileGone,
+            imageFileGone: identityIsImage ? parkedGone : false,
             identityIsImage: identityIsImage,
             listingUnparsed: listed.listingUnparsed,
-            parsedImageCount: listed.parsedImageCount
+            parsedImageCount: listed.parsedImageCount,
+            waitedForPublication: cleanup >= DiskImageCancelBudget.preemptCleanup,
+            mountNotMounted: identityIsImage ? false : parkedGone
         ) else { return }
         publication.withLock { state in
             guard let current = state.image, diskImageSamePath(current, image) else { return }
-            let alive = state.pid > 1 && kill(state.pid, 0) == 0
+            let alive = parkedHelperIsAlive(state.pid)
             guard alive == false else { return }
             state.held = false
             state.image = nil
@@ -2602,7 +2650,12 @@ private func runTool(
                     ToolOutput(status: -1, stdout: "", stderr: "diskimage lock", timedOut: true)
                 )
             }
-            DiskImageToolSerialization.clearPublicationGateIfDiskIsGone(clock: clock)
+            if DiskImageCancelBudget.mayRunPublicationRecheck(
+                priorityWaiterQueued: DiskImageToolSerialization.hasPriorityWaiter(),
+                cancelClockArmed: clock.deadline != nil
+            ) {
+                DiskImageToolSerialization.clearPublicationGateIfDiskIsGone(clock: clock)
+            }
             if diskImageMayStartHelper(
                 publicationHeld: DiskImageToolSerialization.publicationGateHeld(),
                 arguments: arguments
@@ -2656,7 +2709,7 @@ private func runTool(
                     let slice = DiskImageCancelBudget.reapSlice(until: returnDeadline, now: Date())
                     let end = Date().addingTimeInterval(slice)
                     while helperAlive, Date() < end {
-                        if ran.pid > 1, kill(ran.pid, 0) != 0 {
+                        if parkedHelperIsAlive(ran.pid) == false {
                             helperAlive = false
                             break
                         }
@@ -2703,7 +2756,12 @@ private func runTool(
                     pid: ran.pid
                 )
                 if helperAlive == false && cleanup.diskCanStillAppear == false && cleanup.busy == false {
-                    DiskImageToolSerialization.clearPublicationGateIfDiskIsGone(clock: clock)
+                    if DiskImageCancelBudget.mayRunPublicationRecheck(
+                        priorityWaiterQueued: DiskImageToolSerialization.hasPriorityWaiter(),
+                        cancelClockArmed: clock.deadline != nil
+                    ) {
+                        DiskImageToolSerialization.clearPublicationGateIfDiskIsGone(clock: clock)
+                    }
                 }
                 DiskImageToolSerialization.endHolding()
                 let mayRetry = diskImageMayRetryPreemptedHelper(
@@ -2734,7 +2792,12 @@ private func runTool(
                     return .done(output)
                 }
             }
-            DiskImageToolSerialization.clearPublicationGateIfDiskIsGone(clock: clock)
+            if DiskImageCancelBudget.mayRunPublicationRecheck(
+                priorityWaiterQueued: DiskImageToolSerialization.hasPriorityWaiter(),
+                cancelClockArmed: clock.deadline != nil
+            ) {
+                DiskImageToolSerialization.clearPublicationGateIfDiskIsGone(clock: clock)
+            }
             DiskImageToolSerialization.endHolding()
             var output = ran.output
             output.helperStillAlive = ran.helperStillAlive
@@ -3297,6 +3360,20 @@ private final class ParkedToolProcesses: Sendable {
     func park(_ process: Process) {
         box.withLock { $0.append(process) }
     }
+
+    /// `nil` when no parked helper has this pid. Finished helpers are
+    /// pruned first: releasing an exited `Process` cannot block in
+    /// `waitUntilExit`, and its pid must not be confused with a later
+    /// unrelated process that reuses the number.
+    func isRunning(pid: pid_t) -> Bool? {
+        box.withLock { processes in
+            // Answer from the retained process before pruning it: once
+            // removed, a reused pid must not fall back to `kill`.
+            let found = processes.first(where: { $0.processIdentifier == pid })?.isRunning
+            processes.removeAll { $0.isRunning == false }
+            return found
+        }
+    }
 }
 
 private enum UnreapedToolProcesses {
@@ -3305,5 +3382,22 @@ private enum UnreapedToolProcesses {
     static func park(_ process: Process) {
         parked.park(process)
     }
+
+    static func isRunning(pid: pid_t) -> Bool? {
+        parked.isRunning(pid: pid)
+    }
+}
+
+/// Liveness for a helper pid recorded by the publication gate. The
+/// retained `Process` is the authority while it is parked: a bare pid
+/// can be reused by an unrelated live process after the helper is
+/// reaped, which would hold the gate forever. Only a pid that was
+/// never parked here falls back to `kill(pid, 0)`.
+private func parkedHelperIsAlive(_ pid: pid_t) -> Bool {
+    guard pid > 1 else { return false }
+    if let running = UnreapedToolProcesses.isRunning(pid: pid) {
+        return running
+    }
+    return kill(pid, 0) == 0
 }
 #endif

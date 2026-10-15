@@ -530,6 +530,214 @@ struct RollbackRiskGateTests {
         #expect(try Data(contentsOf: store.machineLegacyJSONURL) == json)
         #expect(try store.machineHistory().map(\.revision) == [1])
     }
+
+    /// Every duplicate-predicate order in legacy JSON gates on the
+    /// strictest live verdict, not the first row: rollback to the
+    /// sealed allow refuses whenever a stricter row exists.
+    @Test func legacyJSONStrictestVerdictWinsInEveryOrder() throws {
+        let predicate = PolicyPredicate.gitPush(force: .exactly(.force), branch: "main")
+        let orders: [([TypedRuleVerdict], String)] = [
+            ([.deny, .allow], "deny->allow"),
+            ([.allow, .ask], "ask->allow"),
+            ([.ask, .allow], "ask->allow"),
+            ([.allow, .deny, .ask], "deny->allow"),
+        ]
+        for (verdicts, suffix) in orders {
+            let root = try isolatedGateDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let store = TypedRuleStore(baseDirectory: root)
+            try store.saveMachine(PolicyDocument(rules: [gateRule(predicate, verdict: .allow)]))
+            try FileManager.default.removeItem(at: store.machineFileURL)
+            let rows = verdicts.enumerated().map { index, verdict in
+                TypedRule(
+                    id: RuleID(pack: .coreGit, pattern: "row\(index)"),
+                    predicate: predicate,
+                    verdict: verdict,
+                    origin: .machine
+                )
+            }
+            let json = try JSONEncoder().encode(
+                LegacyTypedRulesFile(schemaVersion: 1, rules: rows)
+            )
+            try json.write(to: store.machineLegacyJSONURL)
+
+            let report = try expectBlockedReport {
+                try store.rollbackMachine(toRevision: 1)
+            }
+
+            #expect(report.blockingFindings.contains {
+                $0.kind == .verdictRelaxed && $0.detail.hasSuffix(suffix)
+            }, "order \(verdicts)")
+            #expect(FileManager.default.fileExists(atPath: store.machineFileURL.path) == false)
+            #expect(try store.machineHistory().map(\.revision) == [1])
+        }
+    }
+
+    /// The repo layer shares `loadDocument`, so its legacy JSON gets
+    /// the same strictest-verdict gate.
+    @Test func repoLegacyJSONAllowThenDenyRefusesRollbackToTheAllowHead() throws {
+        let config = try isolatedGateDirectory()
+        let workspace = try isolatedGateDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: config)
+            try? FileManager.default.removeItem(at: workspace)
+        }
+        let store = TypedRuleStore(baseDirectory: config)
+        let predicate = PolicyPredicate.gitPush(force: .exactly(.force), branch: "main")
+        try store.saveRepo(
+            PolicyDocument(rules: [gateRule(predicate, verdict: .allow)]),
+            workspace: workspace
+        )
+        try FileManager.default.removeItem(at: TypedRuleStore.repoFileURL(workspace: workspace))
+        let rows = [
+            TypedRule(
+                id: RuleID(pack: .coreGit, pattern: "first"),
+                predicate: predicate, verdict: .allow, origin: .repo
+            ),
+            TypedRule(
+                id: RuleID(pack: .coreGit, pattern: "second"),
+                predicate: predicate, verdict: .deny, origin: .repo
+            ),
+        ]
+        let json = try JSONEncoder().encode(LegacyTypedRulesFile(schemaVersion: 1, rules: rows))
+        try json.write(to: TypedRuleStore.repoLegacyJSONURL(workspace: workspace))
+
+        let report = try expectBlockedReport {
+            try store.rollbackRepo(to: 1, workspace: workspace)
+        }
+
+        #expect(report.blockingFindings.contains {
+            $0.kind == .verdictRelaxed && $0.detail.hasSuffix("deny->allow")
+        })
+        #expect(
+            FileManager.default.fileExists(
+                atPath: TypedRuleStore.repoFileURL(workspace: workspace).path
+            ) == false
+        )
+        #expect(try store.listRepoRevisions(workspace: workspace).map(\.revision) == [1])
+    }
+
+    @Test func machineRollbackRereadsTheLiveFileUnderThePolicyLock() throws {
+        let config = try isolatedGateDirectory()
+        defer { try? FileManager.default.removeItem(at: config) }
+        let store = TypedRuleStore(baseDirectory: config)
+        let keep = protectiveRule("keep", verdict: .deny, predicate: .gitPush(force: .exactly(.force), branch: "main"))
+        let narrowing = protectiveRule("narrowing", verdict: .allow, predicate: .gitReset(mode: nil))
+        let planted = protectiveRule("planted", verdict: .deny, predicate: .gitDiscardWorktree(pathspec: nil))
+        try store.saveMachine(PolicyDocument(rules: [keep]))
+        try store.saveMachine(PolicyDocument(rules: [keep, narrowing]))
+        let lock = RVPolicyPaths.policyLockFile(inConfigDir: config)
+        let probe = RollbackLockProbe()
+        let plantedDocument = PolicyDocument(rules: [keep, narrowing, planted])
+
+        let report = try expectBlockedReport {
+            try store.rollbackMachine(toRevision: 2, interlock: RollbackInterlock(
+                beforeLiveRead: {
+                    probe.readLockHeld = RollbackInterlock.policyLockIsHeld(at: lock)
+                    try? Data(PolicyDocumentTOML.render(plantedDocument).utf8)
+                        .write(to: store.machineFileURL)
+                },
+                beforeWrite: {
+                    probe.writeRan = true
+                }
+            ))
+        }
+
+        #expect(probe.readLockHeld)
+        #expect(probe.writeRan == false)
+        #expect(report.blockingFindings.contains {
+            $0.kind == .verdictRelaxed && $0.detail == "core.git:planted deny->removed"
+        })
+        #expect(
+            try Data(contentsOf: store.machineFileURL)
+                == Data(PolicyDocumentTOML.render(plantedDocument).utf8)
+        )
+        #expect(try store.machineHistory().map(\.revision) == [1, 2])
+    }
+
+    @Test func machineRollbackWriteStaysInsideThePolicyLock() throws {
+        let config = try isolatedGateDirectory()
+        defer { try? FileManager.default.removeItem(at: config) }
+        let store = TypedRuleStore(baseDirectory: config)
+        let keep = protectiveRule("keep", verdict: .deny, predicate: .gitPush(force: .exactly(.force), branch: "main"))
+        let allow = protectiveRule("dropped", verdict: .allow, predicate: .gitDiscardWorktree(pathspec: nil))
+        try store.saveMachine(PolicyDocument(rules: [keep]))
+        try store.saveMachine(PolicyDocument(rules: [keep, allow]))
+        let lock = RVPolicyPaths.policyLockFile(inConfigDir: config)
+        let probe = RollbackLockProbe()
+
+        _ = try store.rollbackMachine(toRevision: 1, interlock: RollbackInterlock(
+            beforeLiveRead: {
+                probe.readLockHeld = RollbackInterlock.policyLockIsHeld(at: lock)
+            },
+            beforeWrite: {
+                probe.writeLockHeld = RollbackInterlock.policyLockIsHeld(at: lock)
+                probe.writeRan = true
+            }
+        ))
+
+        #expect(probe.readLockHeld)
+        #expect(probe.writeRan)
+        #expect(probe.writeLockHeld)
+        #expect(try store.loadMachineDocument().rules == [keep])
+    }
+
+    /// Rollback is the repair path for an unparseable live file: the
+    /// sealed head alone gates, so the head restores but a weaker
+    /// revision still refuses and leaves the corrupt bytes untouched.
+    @Test func corruptMachineFileRollsBackToTheHeadButNotWeaker() throws {
+        let root = try isolatedGateDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TypedRuleStore(baseDirectory: root)
+        let predicate = PolicyPredicate.gitPush(force: .exactly(.force), branch: "main")
+        try store.saveMachine(PolicyDocument(rules: [gateRule(predicate, verdict: .allow)]))
+        try store.saveMachine(PolicyDocument(rules: [gateRule(predicate, verdict: .deny)]))
+        let corrupt = Data("not [valid toml".utf8)
+        try corrupt.write(to: store.machineFileURL)
+
+        let report = try expectBlockedReport {
+            try store.rollbackMachine(toRevision: 1)
+        }
+        #expect(report.blockingFindings.contains { $0.kind == .verdictRelaxed })
+        #expect(try Data(contentsOf: store.machineFileURL) == corrupt)
+
+        _ = try store.rollbackMachine(toRevision: 2)
+        #expect(try store.loadMachineDocument().rules == [gateRule(predicate, verdict: .deny)])
+    }
+
+    @Test func corruptRepoFileRollsBackToTheHeadButNotWeaker() throws {
+        let config = try isolatedGateDirectory()
+        let workspace = try isolatedGateDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: config)
+            try? FileManager.default.removeItem(at: workspace)
+        }
+        let store = TypedRuleStore(baseDirectory: config)
+        let predicate = PolicyPredicate.gitPush(force: .exactly(.force), branch: "main")
+        try store.saveRepo(
+            PolicyDocument(rules: [gateRule(predicate, verdict: .allow)]),
+            workspace: workspace
+        )
+        try store.saveRepo(
+            PolicyDocument(rules: [gateRule(predicate, verdict: .deny)]),
+            workspace: workspace
+        )
+        let file = TypedRuleStore.repoFileURL(workspace: workspace)
+        let corrupt = Data("not [valid toml".utf8)
+        try corrupt.write(to: file)
+
+        let report = try expectBlockedReport {
+            try store.rollbackRepo(to: 1, workspace: workspace)
+        }
+        #expect(report.blockingFindings.contains { $0.kind == .verdictRelaxed })
+        #expect(try Data(contentsOf: file) == corrupt)
+
+        _ = try store.rollbackRepo(to: 2, workspace: workspace)
+        #expect(
+            try store.loadRepoDocument(workspace: workspace).rules
+                == [gateRule(predicate, verdict: .deny)]
+        )
+    }
 }
 
 private struct LegacyTypedRulesFile: Codable {

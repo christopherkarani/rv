@@ -184,11 +184,11 @@ public enum PolicyRevisionIdentity {
     }
 }
 
-/// Test hooks for `rollbackRepo`. Both closures run on the calling thread
-/// while `.policy.lock` is held: `beforeLiveRead` before the live file is
-/// loaded, `beforeWrite` after the gate and before the rename. Production
-/// passes nil.
-struct RepoRollbackInterlock {
+/// Test hooks for the rollbacks. Both closures run on the calling
+/// thread while `.policy.lock` is held: `beforeLiveRead` before the
+/// live file is loaded, `beforeWrite` after the gate and before the
+/// write. Production passes nil.
+struct RollbackInterlock {
     var beforeLiveRead: (() -> Void)?
     var beforeWrite: (() -> Void)?
 
@@ -204,6 +204,8 @@ struct RepoRollbackInterlock {
         }
     }
 }
+
+typealias RepoRollbackInterlock = RollbackInterlock
 
 /// Load/save/merge for compiled typed rules. I/O lives here; matching stays in Domain.
 public struct TypedRuleStore: Sendable {
@@ -304,10 +306,20 @@ public struct TypedRuleStore: Sendable {
     /// written. The gate compares the restored document with the live file
     /// and with the sealed head (see `refuseRelaxingRollback`). A deleted
     /// or already-weakened `policy.toml` cannot launder a revision weaker
-    /// than the sealed head. Dropping an allow still succeeds.
+    /// than the sealed head. An unparseable `policy.toml` is gated
+    /// against the sealed head alone, so rollback stays the repair path
+    /// for a corrupt hand-edit. Dropping an allow still succeeds.
     /// Returns the new head revision carrying the restored bytes.
     @discardableResult
     public func rollbackMachine(toRevision target: Int) throws -> PolicyRevision {
+        try rollbackMachine(toRevision: target, interlock: nil)
+    }
+
+    @discardableResult
+    func rollbackMachine(
+        toRevision target: Int,
+        interlock: RollbackInterlock?
+    ) throws -> PolicyRevision {
         try withFileLock(at: machineLogLockURL) {
             let records = try reconcileInterruptedSave(
                 verified: try loadVerifiedLogForRead()
@@ -345,7 +357,8 @@ public struct TypedRuleStore: Sendable {
                 // predicate set is unchanged. The sealed head is the other
                 // baseline: deleting or weakening the file must not let an
                 // older revision seal a posture the head already refused.
-                let live = try loadMachineDocument()
+                interlock?.beforeLiveRead?()
+                let live = try liveDocumentForRollbackGate { try loadMachineDocument() }
                 try Self.refuseRelaxingRollback(
                     live: live,
                     historyHead: sealedHead.document,
@@ -357,6 +370,7 @@ public struct TypedRuleStore: Sendable {
                     revisionsURL: machineRevisionsURL,
                     recordedAtMs: recordedAtMs
                 )
+                interlock?.beforeWrite?()
                 try writeFileBytes(data, to: machineFileURL)
                 if let pending {
                     try appendRevisionLine(pending, to: machineRevisionsURL)
@@ -566,7 +580,7 @@ public struct TypedRuleStore: Sendable {
     func rollbackRepo(
         to revision: Int,
         workspace: URL,
-        interlock: RepoRollbackInterlock?
+        interlock: RollbackInterlock?
     ) throws -> PolicyRevision {
         let file = Self.repoFileURL(workspace: workspace)
         let lock = file.deletingLastPathComponent()
@@ -585,7 +599,9 @@ public struct TypedRuleStore: Sendable {
             // deny after an earlier unlocked read must still be visible
             // to the gate, and the write below stays in this same hold.
             interlock?.beforeLiveRead?()
-            let live = try loadRepoDocument(workspace: workspace)
+            let live = try liveDocumentForRollbackGate {
+                try loadRepoDocument(workspace: workspace)
+            }
             try Self.refuseRelaxingRollback(
                 live: live,
                 historyHead: head.document,
@@ -622,13 +638,33 @@ public struct TypedRuleStore: Sendable {
     /// Dropping an allow is narrowing and does not refuse. Reviving an
     /// allow is advisory and does not block. Reviving a deny or ask
     /// tightens.
+    /// `live == nil` is an unparseable live file: rollback is the
+    /// repair path for exactly that state, so the history head alone
+    /// gates the restore. The head baseline still refuses anything
+    /// weaker than sealed, and a corrupt file holds no enforceable
+    /// posture to compare against (loads fail closed on it too).
     private static func refuseRelaxingRollback(
-        live: PolicyDocument,
+        live: PolicyDocument?,
         historyHead: PolicyDocument,
         incoming: PolicyDocument
     ) throws {
-        try refuseRelaxingRollback(existing: live, incoming: incoming)
+        if let live {
+            try refuseRelaxingRollback(existing: live, incoming: incoming)
+        }
         try refuseRelaxingRollback(existing: historyHead, incoming: incoming)
+    }
+
+    /// Loads the live document for the rollback gate. Only
+    /// `invalidFile` degrades to the head-only gate; every other
+    /// failure still throws.
+    private func liveDocumentForRollbackGate(
+        _ load: () throws -> PolicyDocument
+    ) throws -> PolicyDocument? {
+        do {
+            return try load()
+        } catch TypedRuleStoreError.invalidFile {
+            return nil
+        }
     }
 
     /// One baseline. Callers compare the live file and the history head.

@@ -161,7 +161,13 @@ func compileFirstSliceLandlock(
     if raw.contains("\n") || raw.contains("\0") {
         return .failure(.workspacePathUnsafe)
     }
-    let resolved = resolvedWorkspacePath(workspace)
+    let resolved: String
+    switch compileResolvedWorkspacePath(workspace) {
+    case .success(let path):
+        resolved = path
+    case .failure(let error):
+        return .failure(error)
+    }
     if resolved.isEmpty {
         return .failure(.workspacePathUnresolvable)
     }
