@@ -1392,7 +1392,10 @@ public enum MCPSandbox {
         #if canImport(Darwin)
         let fd = open(path, O_SEARCH | O_NOFOLLOW | O_CLOEXEC)
         #else
-        let fd = open(path, O_PATH | O_NOFOLLOW | O_CLOEXEC)
+        // Swift's Glibc module does not export O_PATH; value from
+        // asm-generic/fcntl.h (same fallback as landlock_apply.c).
+        let oPath: Int32 = 0o10000000
+        let fd = open(path, oPath | O_NOFOLLOW | O_CLOEXEC)
         #endif
         guard fd >= 0 else { return (nil, false) }
         defer { close(fd) }
