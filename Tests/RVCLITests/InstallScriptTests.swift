@@ -9,6 +9,10 @@ private func repoRootURL() -> URL {
         .deletingLastPathComponent()
 }
 
+/// Mounted codesign/spctl shim tests need Linux user namespaces
+/// (`/usr/bin/unshare`); hosts without it skip them, Linux CI runs them.
+private let hostHasUnshare = FileManager.default.fileExists(atPath: "/usr/bin/unshare")
+
 private func installScriptURL() -> URL {
     repoRootURL().appendingPathComponent("install.sh")
 }
@@ -718,7 +722,7 @@ private func writeCurlShim(
     )
 }
 
-@Test func installSh_downloadsReleaseTrioWhenInstallBinUnset() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_downloadsReleaseTrioWhenInstallBinUnset() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -790,7 +794,7 @@ private func writeCurlShim(
     #expect(marker.contains("setup"))
 }
 
-@Test func installSh_missingPackTarballStillInstallsTrio() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_missingPackTarballStillInstallsTrio() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-install-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -1173,7 +1177,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try? FileManager.default.removeItem(at: run.home.deletingLastPathComponent())
 }
 
-@Test func installSh_signedNotarizedReleaseInstallsWithoutWarning() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_signedNotarizedReleaseInstallsWithoutWarning() throws {
     let run = try runSignedDownloadInstall(environment: ["RV_INSTALL_TEAM_ID": "TEAMRV1234"])
     defer { removeTemporaryRoot(of: run) }
 
@@ -1193,7 +1197,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     #expect(spctlLines.contains { $0.hasSuffix(".dylib") } == false)
 }
 
-@Test func installSh_downloadsAndInstallsPTYClaimWhenReleased() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_downloadsAndInstallsPTYClaimWhenReleased() throws {
     let run = try runSignedDownloadInstall(environment: ["RV_INSTALL_TEAM_ID": "TEAMRV1234"])
     defer { removeTemporaryRoot(of: run) }
 
@@ -1203,7 +1207,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     #expect(try String(contentsOf: claim, encoding: .utf8).contains("release-claim"))
 }
 
-@Test func installSh_missingCodesignRefusesADownload() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_missingCodesignRefusesADownload() throws {
     let run = try runSignedDownloadInstall(previousInstall: true, withSignatureShims: false)
     defer { removeTemporaryRoot(of: run) }
 
@@ -1215,7 +1219,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_identifierPhraseDoesNotSkipTheEmptyTeamCheck() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_identifierPhraseDoesNotSkipTheEmptyTeamCheck() throws {
     let run = try runSignedDownloadInstall(
         environment: ["RV_TEST_CODESIGN": "phrase"], previousInstall: true)
     defer { removeTemporaryRoot(of: run) }
@@ -1227,7 +1231,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_identifierNewlineUnderDashDoesNotPass() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_identifierNewlineUnderDashDoesNotPass() throws {
     let shell = (try? FileManager.default.destinationOfSymbolicLink(atPath: "/bin/sh")) ?? ""
     #expect(shell.contains("dash"))
     let run = try runSignedDownloadInstall(
@@ -1242,7 +1246,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_tmpdirNewlineDoesNotForgeTheTeamOrSourceLine() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_tmpdirNewlineDoesNotForgeTheTeamOrSourceLine() throws {
     let parent = FileManager.default.temporaryDirectory
         .appendingPathComponent("rv-install-nl-\(UUID().uuidString)", isDirectory: true)
     let nasty = parent.appendingPathComponent(
@@ -1266,7 +1270,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_adHocDylibDoesNotSkipSpctl() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_adHocDylibDoesNotSkipSpctl() throws {
     let run = try runSignedDownloadInstall(
         environment: [
             "RV_TEST_CODESIGN": "adhoc-forged",
@@ -1285,7 +1289,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_identifierContainingThePinnedTeamDoesNotPass() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_identifierContainingThePinnedTeamDoesNotPass() throws {
     let run = try runSignedDownloadInstall(
         environment: ["RV_TEST_CODESIGN": "identifier-team", "RV_INSTALL_TEAM_ID": "TEAMRV1234"],
         previousInstall: true
@@ -1298,7 +1302,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_notarizationPhraseInThePathDoesNotPass() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_notarizationPhraseInThePathDoesNotPass() throws {
     let tmp = FileManager.default.temporaryDirectory
         .appendingPathComponent("source=Notarized Developer ID-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -1319,7 +1323,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_environmentTeamIDCannotRepinTrust() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_environmentTeamIDCannotRepinTrust() throws {
     // The pin baked into the script (TEAMRV1234, what the shims sign with)
     // must win over a different RV_INSTALL_TEAM_ID in the environment.
     let run = try runSignedDownloadInstall(
@@ -1333,7 +1337,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     #expect(run.status == 0, "\(run.stderr)")
 }
 
-@Test func installSh_rejectedVerdictWithNotarizedSourceRefuses() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_rejectedVerdictWithNotarizedSourceRefuses() throws {
     // spctl prints "source=Notarized Developer ID" for a rejected binary too
     // (e.g. revoked certificate); only an accepted verdict may install.
     let run = try runSignedDownloadInstall(
@@ -1350,7 +1354,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_pathCodesignCannotSkipTheTeamCheck() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_pathCodesignCannotSkipTheTeamCheck() throws {
     let run = try runSignedDownloadInstall(
         environment: ["RV_TEST_CODESIGN": "unsigned"],
         previousInstall: true,
@@ -1366,7 +1370,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_unsignedReleaseWarnsWhileSignedReleasesIsOff() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_unsignedReleaseWarnsWhileSignedReleasesIsOff() throws {
     let run = try runSignedDownloadInstall(environment: ["RV_TEST_CODESIGN": "unsigned"])
     defer { removeTemporaryRoot(of: run) }
 
@@ -1376,7 +1380,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     #expect(FileManager.default.isExecutableFile(atPath: run.destBin.appendingPathComponent("rv").path))
 }
 
-@Test func installSh_tamperedSignatureRefusesAndKeepsPreviousInstall() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_tamperedSignatureRefusesAndKeepsPreviousInstall() throws {
     let run = try runSignedDownloadInstall(
         environment: [
             "RV_TEST_CODESIGN_TAMPERED": "rvd", "RV_INSTALL_ALLOW_UNSIGNED": "1", "RV_INSTALL_TEAM_ID": "TEAMRV1234",
@@ -1390,7 +1394,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_adHocSignatureIsNotDeveloperID() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_adHocSignatureIsNotDeveloperID() throws {
     let run = try runSignedDownloadInstall(environment: ["RV_TEST_CODESIGN": "adhoc"], previousInstall: true)
     defer { removeTemporaryRoot(of: run) }
 
@@ -1399,7 +1403,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_signedReleaseWithoutPinnedTeamRefuses() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_signedReleaseWithoutPinnedTeamRefuses() throws {
     let run = try runSignedDownloadInstall(previousInstall: true)
     defer { removeTemporaryRoot(of: run) }
 
@@ -1409,7 +1413,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_foreignTeamRefuses() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_foreignTeamRefuses() throws {
     let pinned = try runSignedDownloadInstall(environment: ["RV_INSTALL_TEAM_ID": "TEAMRV1234"])
     defer { removeTemporaryRoot(of: pinned) }
     let foreign = try runSignedDownloadInstall(environment: ["RV_INSTALL_TEAM_ID": "OTHERTEAM9"], previousInstall: true)
@@ -1421,7 +1425,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(foreign)
 }
 
-@Test func installSh_certificateLabelAcceptedDoesNotReplaceTheVerdict() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_certificateLabelAcceptedDoesNotReplaceTheVerdict() throws {
     let run = try runSignedDownloadInstall(
         environment: [
             "RV_TEST_SPCTL": "label-accepted",
@@ -1437,7 +1441,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_oneLineOriginStillRefuses() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_oneLineOriginStillRefuses() throws {
     let run = try runSignedDownloadInstall(
         environment: [
             "RV_TEST_SPCTL": "origin-only",
@@ -1452,7 +1456,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_parentheticalRejectionDoesNotArm() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_parentheticalRejectionDoesNotArm() throws {
     let run = try runSignedDownloadInstall(
         environment: [
             "RV_TEST_SPCTL": "parenthetical",
@@ -1467,7 +1471,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_certificateContinuationDoesNotRearmTheVerdict() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_certificateContinuationDoesNotRearmTheVerdict() throws {
     let slash = try runSignedDownloadInstall(
         environment: [
             "RV_TEST_SPCTL": "slash-accepted",
@@ -1495,7 +1499,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(west)
 }
 
-@Test func installSh_identifierNewlineDoesNotInventAnAuthority() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_identifierNewlineDoesNotInventAnAuthority() throws {
     let run = try runSignedDownloadInstall(
         environment: [
             "RV_TEST_CODESIGN": "identifier-authority",
@@ -1515,7 +1519,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_formatInsideIdentifierStillRunsSpctl() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_formatInsideIdentifierStillRunsSpctl() throws {
     let run = try runSignedDownloadInstall(
         environment: [
             "RV_TEST_CODESIGN": "format-inside-identifier",
@@ -1534,7 +1538,7 @@ private func removeTemporaryRoot(of run: SignedInstallRun) {
     try expectPreviousInstallKept(run)
 }
 
-@Test(arguments: [
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare"), arguments: [
     "Format=Mach-O thin (arm64)",
     "Format=Mach-O",
     "Format=bundle with Mach-O thin (arm64)",
@@ -1562,7 +1566,7 @@ func installSh_plantedFormatInsideIdentifierStillRunsSpctl(_ planted: String) th
     try expectPreviousInstallKept(run)
 }
 
-@Test(arguments: [
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare"), arguments: [
     "Format=Mach-O thin (arm64)|Format=generic",
     "Format=Mach-O thin (arm64)|Format=disk image",
     "Format=Mach-O|Format=generic",
@@ -1593,7 +1597,7 @@ func installSh_genericOrDiskImageFormatDoesNotEndTheIdentifierEarly(_ spec: Stri
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_authorityContinuationStillRunsSpctl() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_authorityContinuationStillRunsSpctl() throws {
     let run = try runSignedDownloadInstall(
         environment: [
             "RV_TEST_CODESIGN": "authority-continuation",
@@ -1612,7 +1616,7 @@ func installSh_genericOrDiskImageFormatDoesNotEndTheIdentifierEarly(_ spec: Stri
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_dylibLeafNameDoesNotSkipSpctl() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_dylibLeafNameDoesNotSkipSpctl() throws {
     let run = try runSignedDownloadInstall(
         environment: [
             "RV_TEST_CODESIGN": "leaf-name",
@@ -1632,7 +1636,7 @@ func installSh_genericOrDiskImageFormatDoesNotEndTheIdentifierEarly(_ spec: Stri
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_unnotarizedReleaseRefuses() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_unnotarizedReleaseRefuses() throws {
     let run = try runSignedDownloadInstall(
         environment: ["RV_TEST_SPCTL": "reject", "RV_INSTALL_TEAM_ID": "TEAMRV1234"], previousInstall: true)
     defer { removeTemporaryRoot(of: run) }
@@ -1642,7 +1646,7 @@ func installSh_genericOrDiskImageFormatDoesNotEndTheIdentifierEarly(_ spec: Stri
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_mixedSignedAndUnsignedRefuses() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_mixedSignedAndUnsignedRefuses() throws {
     let run = try runSignedDownloadInstall(
         environment: [
             "RV_TEST_CODESIGN_UNSIGNED": "rvd", "RV_INSTALL_ALLOW_UNSIGNED": "1", "RV_INSTALL_TEAM_ID": "TEAMRV1234",
@@ -1656,7 +1660,7 @@ func installSh_genericOrDiskImageFormatDoesNotEndTheIdentifierEarly(_ spec: Stri
     try expectPreviousInstallKept(run)
 }
 
-@Test func installSh_signedReleasesSwitchRefusesUnsignedUnlessAllowed() throws {
+@Test(.enabled(if: hostHasUnshare, "mounted signature shims need /usr/bin/unshare")) func installSh_signedReleasesSwitchRefusesUnsignedUnlessAllowed() throws {
     let text = try String(contentsOf: installScriptURL(), encoding: .utf8)
     #expect(text.contains("\nsigned_releases=0\n"))
     let flippedText = text.replacingOccurrences(of: "\nsigned_releases=0\n", with: "\nsigned_releases=1\n")
