@@ -106,6 +106,30 @@ struct AuditChainTests {
         #expect(AuditChain.head(fileURL: missing) == nil)
     }
 
+    @Test func duplicateNonStringAndOversizedLinesBreakTheChain() {
+        let genesis = AuditChain.genesis
+        let duplicate = "{\"prev\":\"" + genesis + "\",\"prev\":\"" + genesis + "\",\"decision\":\"allowed\",\"kind\":\"mcp.call\",\"subject\":\"a\"}"
+        #expect(AuditChain.verify(Data((duplicate + "\n").utf8)).firstBreak
+            == AuditChainReport.Break(line: 1, reason: "duplicate key"))
+        let escapedDuplicate = "{\"prev\":\"" + genesis + "\",\"\\u0070rev\":\"" + genesis + "\",\"decision\":\"allowed\",\"kind\":\"mcp.call\",\"subject\":\"a\"}"
+        #expect(AuditChain.verify(Data((escapedDuplicate + "\n").utf8)).firstBreak?.reason == "duplicate key")
+        let numericPrev = #"{"prev":7,"decision":"allowed","kind":"mcp.call","subject":"a"}"#
+        #expect(AuditChain.verify(Data((numericPrev + "\n").utf8)).firstBreak?.reason == "prev is not a string")
+        let oversized = String(repeating: "x", count: AuditChain.maximumLineBytes + 1)
+        #expect(AuditChain.verify(Data((oversized + "\n").utf8)).firstBreak?.reason.contains("larger") == true)
+    }
+
+    @Test func verifyRefusesSymlinks() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(AuditLog.append(event("a"), configDirectory: dir))
+        let link = dir.appendingPathComponent("link.jsonl")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: AuditLog.fileURL(configDirectory: dir))
+        if case .success = AuditChain.verify(fileURL: link) {
+            Issue.record("verifying through a symlink must fail")
+        }
+    }
+
     @Test func forwardedEventsCarryTheirLinkAndHead() throws {
         let dir = try scratch()
         defer { try? FileManager.default.removeItem(at: dir) }

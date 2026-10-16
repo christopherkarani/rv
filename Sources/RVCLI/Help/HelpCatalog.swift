@@ -391,9 +391,9 @@ enum HelpCatalog {
                 HelpRow(name: "forward", description: "POSTs new events in batches; cursor advances only on 2xx (at-least-once)"),
                 HelpRow(name: "forward --to", description: "https, or http to localhost; default is the org policy audit.forward"),
                 HelpRow(name: "--install", description: "macOS LaunchAgent every 5 min; prints a LaunchDaemon template for root"),
-                HelpRow(name: "chain", description: "Each audit.jsonl line holds prev, the SHA-256 of the line before it"),
-                HelpRow(name: "verify", description: "Finds edits, deletions, and reordering; exit 1 at the first break"),
-                HelpRow(name: "head", description: "Forwarded events carry rv_chain_head, so cutting the end shows up in the SIEM"),
+                HelpRow(name: "chain", description: "Each audit.jsonl line holds prev, the SHA-256 of the line before it (unkeyed: anchoring needs the forwarded head)"),
+                HelpRow(name: "verify", description: "Finds edits, deletions, and reordering that did not recompute the chain; exit 1 at the first break"),
+                HelpRow(name: "head", description: "Forwarded events carry rv_chain_head; compare it off-machine to spot a cut or recomputed tail"),
             ]),
         ],
         examples: [

@@ -30,10 +30,23 @@ enum AuditForwardInstall {
         }
     }
 
+    /// Values of `flag` in both `--flag value` and `--flag=value` spellings.
+    static func values(forFlag flag: String, in arguments: [String]) -> [String] {
+        var values: [String] = []
+        for (index, argument) in arguments.enumerated() {
+            if argument == flag, index + 1 < arguments.count {
+                values.append(arguments[index + 1])
+            } else if argument.hasPrefix(flag + "=") {
+                values.append(String(argument.dropFirst(flag.count + 1)))
+            }
+        }
+        return values
+    }
+
     /// `--to` is copied into the plist. Refuse it here too, so a direct install
     /// cannot write a destination `AuditForwardRun.destination` would reject.
     static func refusedDestination(_ arguments: [String]) -> CommandFailure? {
-        for (flag, value) in zip(arguments, arguments.dropFirst()) where flag == "--to" {
+        for value in values(forFlag: "--to", in: arguments) {
             if case .failure(let failure) = AuditForwardRun.destination(value) { return failure }
         }
         return nil
@@ -42,9 +55,8 @@ enum AuditForwardInstall {
     /// Header values end up in the plist, so they must name secrets, not hold them.
     /// A literal beside `${secret:NAME}` is still a secret.
     static func plaintextHeader(_ arguments: [String]) -> String? {
-        zip(arguments, arguments.dropFirst()).first { flag, value in
-            flag == "--header" && headerCarriesLiteral(value)
-        }.map { _, value in String(value.prefix { $0 != "=" }) }
+        values(forFlag: "--header", in: arguments).first { headerCarriesLiteral($0) }
+            .map { value in String(value.prefix { $0 != "=" }) }
     }
 
     /// True unless every credential in the header is a `${secret:NAME}` reference.
@@ -133,7 +145,9 @@ enum AuditForwardInstall {
 
     /// launchd is macOS only; elsewhere print the equivalent crontab line.
     static func cronHint(_ plan: Plan) -> String {
-        let command = plan.programArguments.map { "'" + $0.replacingOccurrences(of: "'", with: #"'\''"#) + "'" }
+        // crontab rewrites an unescaped % to a newline, so quote and escape.
+        let command = plan.programArguments
+            .map { "'" + $0.replacingOccurrences(of: "'", with: #"'\''"#).replacingOccurrences(of: "%", with: "\\%") + "'" }
             .joined(separator: " ")
         return "launchd is macOS only; add this line with `crontab -e` instead:\n*/5 * * * * \(command)\n"
     }

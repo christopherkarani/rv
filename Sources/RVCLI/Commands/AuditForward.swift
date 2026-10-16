@@ -153,6 +153,18 @@ enum AuditForwardRun {
         case .failure(let failure): return .failure(failure)
         case .success(let loaded): cursor = loaded ?? AuditCursor()
         }
+        // Never forward past a break: the cursor would commit beyond it and
+        // the gap would look intentional off-machine. Refuse loudly instead.
+        switch AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: configDirectory)) {
+        case .failure(let error):
+            return .failure(CommandFailure("audit chain cannot be checked (\(error.message)); refusing to forward"))
+        case .success(let report) where report.isIntact == false:
+            let broken = report.firstBreak
+            return .failure(CommandFailure(
+                "audit chain break at line \(broken?.line ?? 0) (\(broken?.reason ?? "unknown")); refusing to forward — run `rv audit verify`"))
+        case .success:
+            break
+        }
         let ledger = AuditLedger(configDirectory: configDirectory)
         var sent = 0
         var batches = 0
@@ -208,6 +220,9 @@ enum AuditForwardRun {
             case .failure(let error): return .failure(CommandFailure("header secret \(name): \(error.message)"))
             case .success(let value):
                 guard let text = String(validating: value.revealed(), as: UTF8.self) else { return .failure(CommandFailure("header secret \(name) is not text")) }
+                guard text.contains("\r") == false, text.contains("\n") == false, text.contains("\0") == false else {
+                    return .failure(CommandFailure("header secret \(name) contains a line break"))
+                }
                 values[name] = text
             }
         }
