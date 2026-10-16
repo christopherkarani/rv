@@ -66,6 +66,22 @@ struct MCPRemoteTransportTests {
         #expect(origin("http://127.0.0.1:9/sse", "http://127.0.0.1:10/m") == false)
         #expect(origin("https://a.example/sse", "http://a.example/m") == false)
         #expect(origin("https://a.example/sse", "https://b.example/m") == false)
+        let base = try #require(URL(string: "https://a.example/sse"))
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://a.example/sse", relativeTo: base) == nil)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("/sse", relativeTo: base) == nil)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://a.example/messages", relativeTo: base)?
+            .contains("MCP server's URL") == true)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://a.example/sse/", relativeTo: base)?
+            .contains("MCP server's URL") == true)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://a.example/sse?x=1", relativeTo: base)?
+            .contains("MCP server's URL") == true)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://a.example/%73se", relativeTo: base)?
+            .contains("MCP server's URL") == true)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://user:pw@a.example/messages", relativeTo: base)?
+            .contains("without credentials") == true)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://a.example/messages?api_key=zzz", relativeTo: base)?
+            .contains("secret in its query") == true)
+        #expect(MCPRemoteUpstream.messageEndpointRefusal("https://b.example/messages", relativeTo: base) == "on another origin")
     }
 
     @Test func plannerResolvesHeaderSecretsAndSkipsTheSandboxRuleForRemoteServers() throws {
@@ -164,7 +180,7 @@ struct MCPRemoteRuntimeTests {
         let logs = RecordedLogs()
         let core = MCPGatewayCore(
             configuration: configuration, upstreams: planned.map { $0.0 },
-            approvals: MCPApprovalGate(consumeGrant: { _, _, _ in .none }, request: { _, _, _, _ in nil }))
+            approvals: MCPApprovalGate(consumeGrant: { _, _, _, _ in .none }, request: { _, _, _, _ in nil }))
         let runtime = MCPGatewayRuntime(
             core: core, connections: planned.map { $0.1 },
             input: client.toGateway.fileHandleForReading.fileDescriptor,
@@ -226,7 +242,7 @@ struct MCPRemoteRuntimeTests {
         }
         let requests = fixture.stop()
         #expect(requests.contains("REQ GET /sse session="), "\(requests)")
-        #expect(requests.contains("REQ POST /messages tools/call session="), "\(requests)")
+        #expect(requests.contains("REQ POST /sse tools/call session="), "\(requests)")
     }
 
     @Test func refusedCredentialsAndForeignEndpointsFailTheServerNotTheGateway() throws {

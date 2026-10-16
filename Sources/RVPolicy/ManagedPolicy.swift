@@ -140,15 +140,23 @@ public struct ManagedPolicyError: Error, Sendable, Equatable {
 
 extension ManagedPolicy {
     public static let maximumBytes = 256 * 1024
+    public static let maximumToolRules = 1024
 
     /// Strict: unknown keys are errors, so a typo cannot silently weaken policy.
     public static func decode(_ data: Data) -> Result<ManagedPolicy, ManagedPolicyError> {
         guard data.count <= maximumBytes else { return .failure(.init("policy.json is larger than 256 KiB")) }
-        guard let root = try? JSONDecoder().decode(JSONValue.self, from: data), case .object(let object) = root else {
+        guard let literal = JSONLiteral.parse(data), case .object(let object) = literal.domainValue() else {
             return .failure(.init("policy.json is not a JSON object"))
         }
         do {
-            return .success(try policy(object))
+            var decoded = try policy(object)
+            if object["serial"] != nil {
+                guard case .number(let token)? = literal.object?["serial"],
+                    let exact = JSONLiteral.nonNegativeInteger(token)
+                else { return .failure(.init("\"serial\" must be a non-negative integer")) }
+                decoded.serial = exact
+            }
+            return .success(decoded)
         } catch let error as ManagedPolicyError {
             return .failure(error)
         } catch {
@@ -163,12 +171,9 @@ extension ManagedPolicy {
         }
         var policy = ManagedPolicy()
         policy.organization = try optionalString(object["organization"], "organization")
-        if let raw = object["serial"] {
-            guard case .number(let serial) = raw, serial >= 0, serial == serial.rounded(), serial < 1e15 else {
-                throw ManagedPolicyError("\"serial\" must be a non-negative integer")
-            }
-            policy.serial = Int(serial)
-        }
+        // `serial` is read from the source spelling in `decode`. A `Double`
+        // cannot hold every integer, and a rounded one can look newer than
+        // the exact serial already accepted.
         if let raw = object["mcp"] {
             guard case .object(let mcp) = raw else { throw ManagedPolicyError("\"mcp\" must be an object") }
             try keys(mcp, allowed: ["blocked", "allowDirect", "requireSandbox", "deny", "ask", "allow", "defaultDecision"], context: "mcp")
@@ -184,6 +189,9 @@ extension ManagedPolicy {
                 }
                 policy.mcp.rules += rules
             }
+            guard policy.mcp.rules.count <= Self.maximumToolRules else {
+                throw ManagedPolicyError("\"mcp\" holds more than \(Self.maximumToolRules) argument rules")
+            }
             if let text = try optionalString(mcp["defaultDecision"], "mcp.defaultDecision") {
                 guard let decision = Decision(rawValue: text) else {
                     throw ManagedPolicyError("\"mcp.defaultDecision\" must be allow, ask, or deny")
@@ -197,7 +205,8 @@ extension ManagedPolicy {
             if secrets["allowedSources"] != nil {
                 let kinds = try strings(secrets["allowedSources"], "secrets.allowedSources")
                 if let unknown = kinds.first(where: { secretSourceKinds.contains($0) == false }) {
-                    throw ManagedPolicyError("unknown secret source \"\(unknown)\" in secrets.allowedSources")
+                    throw ManagedPolicyError(
+                        "unknown secret source \"\(DisplayedText.field(unknown))\" in secrets.allowedSources")
                 }
                 policy.secrets.allowedSources = kinds
             }
@@ -221,8 +230,8 @@ extension ManagedPolicy {
                         throw ManagedPolicyError("\"audit.forward.headers\" must be an object of strings")
                     }
                     for (name, value) in map {
-                        guard case .string(let text) = value else {
-                            throw ManagedPolicyError("\"audit.forward.headers.\(name)\" must be a string")
+                        guard case .string(let text) = value, isNumberSpelling(text) == false else {
+                            throw ManagedPolicyError("\"audit.forward.headers.\(DisplayedText.field(name))\" must be a string")
                         }
                         headers[name] = text
                     }
@@ -235,13 +244,22 @@ extension ManagedPolicy {
 
     private static func keys(_ object: [String: JSONValue], allowed: Set<String>, context: String) throws {
         if let unknown = object.keys.sorted().first(where: { allowed.contains($0) == false }) {
-            throw ManagedPolicyError("unknown key \"\(unknown)\" in \(context)")
+            throw ManagedPolicyError("unknown key \"\(DisplayedText.field(unknown))\" in \(context)")
         }
+    }
+
+    /// A `.string` the literal converter produced from a JSON number. String
+    /// fields must be JSON strings: a number there is a typo that would
+    /// otherwise become a never-matching value instead of an invalid policy.
+    private static func isNumberSpelling(_ text: String) -> Bool {
+        text.hasPrefix(JSONExactInteger.numberMarker)
     }
 
     private static func optionalString(_ value: JSONValue?, _ name: String) throws -> String? {
         guard let value else { return nil }
-        guard case .string(let text) = value else { throw ManagedPolicyError("\"\(name)\" must be a string") }
+        guard case .string(let text) = value, isNumberSpelling(text) == false else {
+            throw ManagedPolicyError("\"\(name)\" must be a string")
+        }
         return text
     }
 
@@ -262,7 +280,7 @@ extension ManagedPolicy {
         var rules: [ToolArgumentRule.Decided] = []
         for item in items {
             switch item {
-            case .string(let text) where text.isEmpty == false:
+            case .string(let text) where text.isEmpty == false && text.count <= 256 && isNumberSpelling(text) == false:
                 globs.append(text)
             case .object:
                 do {
@@ -281,7 +299,9 @@ extension ManagedPolicy {
         guard let value else { return [] }
         guard case .array(let items) = value else { throw ManagedPolicyError("\"\(name)\" must be an array of strings") }
         return try items.map { item in
-            guard case .string(let text) = item, text.isEmpty == false else {
+            guard case .string(let text) = item, text.isEmpty == false, text.count <= 256,
+                isNumberSpelling(text) == false
+            else {
                 throw ManagedPolicyError("\"\(name)\" must be an array of non-empty strings")
             }
             return text

@@ -234,13 +234,21 @@ for name in "${binaries[@]}"; do
     continue
   fi
   # The ticket can take a moment to become visible to Gatekeeper's lookup.
+  # Accepted means spctl exits 0, the verdict line for this exact path says
+  # accepted, and the source is Notarized — a rejected binary can still
+  # print a Notarized source line.
   verdict=""
+  accepted=0
   for _ in 1 2 3 4 5 6; do
-    verdict="$(spctl -a -t open --context context:primary-signature -vv "$stage/$name" 2>&1 || true)"
-    [[ "$verdict" == *"source=Notarized Developer ID"* ]] && break
+    if verdict="$(spctl -a -t open --context context:primary-signature -vv "$stage/$name" 2>&1)" \
+      && printf '%s\n' "$verdict" | grep -Fqx -- "$stage/$name: accepted" \
+      && printf '%s\n' "$verdict" | grep -Fqx -- "source=Notarized Developer ID"; then
+      accepted=1
+      break
+    fi
     sleep 10
   done
-  [[ "$verdict" == *"source=Notarized Developer ID"* ]] || fail "Gatekeeper does not accept $name as notarized: $verdict"
+  [[ "$accepted" -eq 1 ]] || fail "Gatekeeper does not accept $name as notarized: $verdict"
 done
 if [[ "$dry_run" -eq 1 ]]; then
   say "Dry run: nothing was signed"

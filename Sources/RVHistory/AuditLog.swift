@@ -43,6 +43,7 @@ public enum AuditLog {
             guard let tail = lastLine(fd) else { return false }
             var chained = event
             chained.prev = tail.hash
+            chained.chainHead = nil
             guard let encoded = try? encoder.encode(chained) else { return false }
             var data = Data()
             if tail.isTorn { data.append(UInt8(ascii: "\n")) }
@@ -55,6 +56,9 @@ public enum AuditLog {
 
     /// Hash of the last line (genesis for an empty file) and whether it lacks
     /// its newline. Scans back for the line start, then hashes forward.
+    /// The scan is bounded: a tail longer than the verifier's line cap is
+    /// already a break, and rescanning it on every append (under the
+    /// global lock) would stall all writers — appends refuse instead.
     private static func lastLine(_ fd: Int32) -> (hash: String, isTorn: Bool)? {
         var info = stat()
         guard fstat(fd, &info) == 0 else { return nil }
@@ -64,14 +68,16 @@ public enum AuditLog {
         let end = final == UInt8(ascii: "\n") ? size - 1 : size
         var start = end
         let chunk: Int64 = 4096
-        scan: while start > 0 {
-            let from = max(0, start - chunk)
+        let earliest = max(Int64(0), end - Int64(AuditChain.maximumLineBytes))
+        scan: while start > earliest {
+            let from = max(earliest, start - chunk)
             guard let bytes = readBytes(fd, at: from, count: Int(start - from)) else { return nil }
             if let newline = bytes.lastIndex(of: UInt8(ascii: "\n")) {
                 start = from + Int64(newline) + 1
                 break scan
             }
             start = from
+            if start == earliest, earliest > 0 { return nil }
         }
         var digest = RVSHA256Digest()
         var offset = start

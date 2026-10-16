@@ -46,7 +46,7 @@ struct ScanSessionsFlags: ParsableArguments {
         ids.reserveCapacity(packs.count)
         for token in packs {
             guard let id = PackID(validating: token) else {
-                throw ValidationError("unknown pack id: \(token)")
+                throw ValidationError("unknown pack id: \(DisplayedText.field(token))")
             }
             ids.append(id)
         }
@@ -105,13 +105,13 @@ struct ScanSessions: AsyncParsableCommand {
                 )
             )
         } catch ScanRun.Error.pathNotFound(let missing) {
-            try ctx.fail("rv scan: path not found: \(missing)\n")
+            try ctx.fail("rv scan: path not found: \(DisplayedText.field(missing))\n")
         } catch ScanRun.Error.listingFailed(let path) {
-            try ctx.fail("rv scan: listing failed: \(path)\n")
+            try ctx.fail("rv scan: listing failed: \(DisplayedText.field(path))\n")
         } catch ScanRun.Error.unreadableStore(let path) {
-            try ctx.fail("rv scan: unreadable store: \(path)\n")
+            try ctx.fail("rv scan: unreadable store: \(DisplayedText.field(path))\n")
         } catch ScanRun.Error.prepareFailed(let path) {
-            try ctx.fail("rv scan: prepare failed: \(path)\n")
+            try ctx.fail("rv scan: prepare failed: \(DisplayedText.field(path))\n")
         } catch ScanRun.Error.packsUnavailable {
             try ctx.fail("rv scan: packs unavailable\n")
         } catch {

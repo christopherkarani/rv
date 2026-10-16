@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVDomain
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -70,7 +71,8 @@ public struct SecretResolver: Sendable {
             switch source {
             case .keychain(let service, let account):
                 guard let data = KeychainReader.live.read(service, account) else {
-                    return .failure(.notFound("keychain item \(service) / \(account)"))
+                    return .failure(.notFound(
+                        "keychain item \(DisplayedText.field(service)) / \(DisplayedText.field(account))"))
                 }
                 return value(Array(data), from: "keychain item \(service) / \(account)")
             case .hostEnvironment(let variable):

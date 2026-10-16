@@ -214,7 +214,7 @@ enum SecretsDecoding {
 
     static func onlyKeys(_ object: [String: Any], _ allowed: Set<String>, at place: String) throws {
         if let unknown = object.keys.first(where: { allowed.contains($0) == false }) {
-            throw Failure("unknown key \(unknown) in \(place)")
+            throw Failure("unknown key \(DisplayedText.field(unknown)) in \(place)")
         }
     }
 
@@ -342,7 +342,7 @@ enum SecretsDecoding {
             let version = try optionalToken(fields["version"], "\(place).version")
             return .azure(vault: vault, name: secretName, version: version)
         default:
-            throw Failure("\(secret).source kind \(kind) is not supported")
+            throw Failure("\(secret).source kind \(DisplayedText.field(kind)) is not supported")
         }
     }
 
@@ -367,7 +367,7 @@ enum SecretsDecoding {
             }
             return .gateway(SecretGatewayBinding(upstream: upstream, baseURLEnv: baseURLEnv, placeholderPrefix: prefix))
         default:
-            throw Failure("\(secret).delivery kind \(kind) is not supported")
+            throw Failure("\(secret).delivery kind \(DisplayedText.field(kind)) is not supported")
         }
     }
 
@@ -404,7 +404,12 @@ enum SecretsDecoding {
 
     static func label(_ value: String, max: Int) -> Bool {
         value.isEmpty == false && value.utf8.count <= max
-            && value.unicodeScalars.allSatisfy { $0.properties.generalCategory != .control }
+            && value.unicodeScalars.allSatisfy { scalar in
+                switch scalar.properties.generalCategory {
+                case .control, .format, .lineSeparator, .paragraphSeparator: false
+                default: true
+                }
+            }
     }
 
     static func placeholderByte(_ byte: UInt8) -> Bool {

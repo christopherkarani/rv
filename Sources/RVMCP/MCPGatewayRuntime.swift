@@ -31,14 +31,19 @@ public enum MCPLaunchError: Error, Sendable, Equatable {
     case secretUndefined(server: String, secret: String)
     case secretUnavailable(server: String, secret: String, reason: String)
     case sandbox(String)
+    /// mcp.json was not written by rv. A remote entry would send stored
+    /// tokens and header secrets to whatever URL the file now names.
+    case untrustedRemote(String)
 
     public var message: String {
         switch self {
-        case .unknownServer(let name): "mcp.json has no server named \(name)"
-        case .blocked(let name): "\(name) is blocked by mcp.json or organization policy"
+        case .unknownServer(let name): "mcp.json has no server named \(MCPDisplayedText.field(name))"
+        case .blocked(let name): "\(MCPDisplayedText.field(name)) is blocked by mcp.json or organization policy"
         case .secretUndefined(let server, let secret): "\(server) uses secret \(secret), which secrets.json does not define"
         case .secretUnavailable(let server, let secret, let reason): "\(server) could not read secret \(secret): \(reason)"
         case .sandbox(let reason): "sandbox: \(reason)"
+        case .untrustedRemote(let name):
+            "\(name) is in an untrusted mcp.json, so rv will not start it, resolve its secrets, or send its tokens"
         }
     }
 }
@@ -59,6 +64,7 @@ public enum MCPLaunchPlanner {
     ) -> Result<[(MCPGatewayCore.Upstream, MCPUpstreamConnection)], MCPLaunchError> {
         var planned: [(MCPGatewayCore.Upstream, MCPUpstreamConnection)] = []
         for name in names {
+            if configuration.untrusted { return .failure(.untrustedRemote(name)) }
             if configuration.isBlocked(name) { return .failure(.blocked(name)) }
             guard let definition = configuration.server(named: name) else { return .failure(.unknownServer(name)) }
             if let remote = definition.remote {
@@ -71,7 +77,13 @@ public enum MCPLaunchPlanner {
                 case .success(let values): resolved = values
                 }
                 let headers = remote.headers.mapValues { MCPSecretReference.substitute($0, values: resolved) }
-                let tokens = remote.headers.keys.contains { $0.lowercased() == "authorization" } ? nil : oauthTokens(name)
+                let loaded = remote.headers.keys.contains { $0.lowercased() == "authorization" } ? nil : oauthTokens(name)
+                let tokens = loaded.flatMap { candidate -> MCPOAuthTokens? in
+                    guard let resource = URL(string: candidate.resource), MCPOAuth.sameResource(resource, remote.url) else {
+                        return nil
+                    }
+                    return candidate
+                }
                 let launch = MCPRemoteLaunch(
                     server: name, url: remote.url, headers: headers, transport: remote.transport, oauth: tokens)
                 let scrubbed = named(resolved) + (tokens.map(MCPGatewayCore.oauthSecrets) ?? [])
@@ -104,7 +116,11 @@ public enum MCPLaunchPlanner {
             switch sandbox(definition, launch) {
             case .failure(let error): return .failure(error)
             case .success(let caged):
-                planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: named(resolved)), .process(caged)))
+                var scrubbed = named(resolved)
+                if let credential = MCPSandbox.proxyCredential(in: caged.environment) {
+                    scrubbed.append((name: "HTTPS_PROXY", value: credential))
+                }
+                planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: scrubbed), .process(caged)))
             }
         }
         return .success(planned)
@@ -233,9 +249,16 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         if let directory = launch.workingDirectory { process.currentDirectoryURL = URL(fileURLWithPath: directory) }
         let stdin = Pipe()
         let stdout = Pipe()
+        let stderr = Pipe()
         process.standardInput = stdin
         process.standardOutput = stdout
-        process.standardError = FileHandle.standardError
+        process.standardError = stderr
+        let stderrReader = stderr.fileHandleForReading
+        Thread.detachNewThread {
+            Self.relayStderr(stderrReader.fileDescriptor) { data in
+                Self.writeStderr(data)
+            }
+        }
         do {
             try process.run()
         } catch {
@@ -330,6 +353,27 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
         processes = [:]
     }
 
+    private static let stderrLock = NSLock()
+
+    /// Serialized raw-fd stderr write shared by every upstream relay thread.
+    /// `FileHandle.write` raises on EPIPE/closed fd, which would crash the
+    /// gateway if a child writes after stderr closes; `write(2)` just fails.
+    static func writeStderr(_ data: Data) {
+        let bytes = [UInt8](data)
+        stderrLock.lock()
+        defer { stderrLock.unlock() }
+        var written = 0
+        while written < bytes.count {
+            let n = bytes.withUnsafeBytes { raw -> Int in
+                guard let base = raw.baseAddress else { return -1 }
+                return write(STDERR_FILENO, base + written, raw.count - written)
+            }
+            if n < 0, errno == EINTR { continue }
+            guard n > 0 else { return }
+            written += n
+        }
+    }
+
     static func writeLine(_ fd: Int32, _ message: JSONValue) {
         let bytes = Array((message.compactText + "\n").utf8)
         var written = 0
@@ -377,5 +421,72 @@ public final class MCPGatewayRuntime: @unchecked Sendable {
             }
         }
         if overflowing == false, line.isEmpty == false { body(Data(line)) }
+    }
+
+    /// Child stderr is escaped before it reaches the gateway stderr, which is
+    /// also where the confirmation code is printed. The child does not share
+    /// that file descriptor.
+    static func displayedStderr(_ data: Data) -> Data {
+        Data(MCPDisplayedText.field(String(decoding: data, as: UTF8.self)).utf8)
+    }
+
+    /// Bytes that form complete UTF-8 scalars, and a trailing incomplete
+    /// sequence of at most three bytes. A split U+2028 or U+202E is not
+    /// escaped until the rest of the scalar arrives.
+    static func completeUTF8Prefix(_ data: Data) -> (complete: Data, rest: Data) {
+        if data.isEmpty { return (Data(), Data()) }
+        let bytes = [UInt8](data)
+        var index = bytes.count - 1
+        var continuation = 0
+        while index >= 0 && continuation < 3 && (bytes[index] & 0xC0) == 0x80 {
+            continuation += 1
+            index -= 1
+        }
+        if index < 0 { return (data, Data()) }
+        let lead = bytes[index]
+        let needed: Int
+        if lead < 0x80 {
+            needed = 1
+        } else if lead & 0xE0 == 0xC0 {
+            needed = 2
+        } else if lead & 0xF0 == 0xE0 {
+            needed = 3
+        } else if lead & 0xF8 == 0xF0 {
+            needed = 4
+        } else {
+            needed = 1
+        }
+        let have = bytes.count - index
+        if have < needed {
+            return (Data(bytes[..<index]), Data(bytes[index...]))
+        }
+        return (data, Data())
+    }
+
+    /// Read `fd` until EOF and write the escaped bytes. Does not wait for a
+    /// newline: a child can clear the screen with no trailing line break.
+    static func relayStderr(_ fd: Int32, write: (Data) -> Void) {
+        var pending = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = buffer.withUnsafeMutableBytes { raw -> Int in
+                guard let base = raw.baseAddress else { return -1 }
+                return read(fd, base, raw.count)
+            }
+            if count < 0 {
+                if errno == EINTR { continue }
+                break
+            }
+            if count == 0 { break }
+            pending.append(contentsOf: buffer.prefix(count))
+            let split = completeUTF8Prefix(pending)
+            pending = split.rest
+            if split.complete.isEmpty == false {
+                write(displayedStderr(split.complete))
+            }
+        }
+        if pending.isEmpty == false {
+            write(displayedStderr(pending))
+        }
     }
 }

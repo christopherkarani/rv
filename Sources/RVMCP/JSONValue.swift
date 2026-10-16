@@ -88,6 +88,8 @@ public struct JSONObject: Sendable, Equatable {
 public enum JSONParseError: Error, Sendable, Equatable {
     case invalid(offset: Int)
     case tooDeep
+    /// The same object key appears twice. The last value must not hide an earlier one.
+    case duplicateKey
 }
 
 extension JSONValue {
@@ -166,6 +168,15 @@ extension JSONValue {
             case "\u{0C}": output += "\\f"
             case "\u{2028}": output += "\\u2028"
             case "\u{2029}": output += "\\u2029"
+            case "\u{202A}": output += "\\u202a"
+            case "\u{202B}": output += "\\u202b"
+            case "\u{202C}": output += "\\u202c"
+            case "\u{202D}": output += "\\u202d"
+            case "\u{202E}": output += "\\u202e"
+            case "\u{2066}": output += "\\u2066"
+            case "\u{2067}": output += "\\u2067"
+            case "\u{2068}": output += "\\u2068"
+            case "\u{2069}": output += "\\u2069"
             default:
                 if scalar.value < 0x20 {
                     output += String(format: "\\u%04x", scalar.value)
@@ -261,6 +272,7 @@ private struct JSONParser {
             try skipWhitespace()
             guard index < bytes.count, bytes[index] == UInt8(ascii: "\"") else { throw invalid }
             let key = try parseString()
+            if object[key] != nil { throw JSONParseError.duplicateKey }
             try skipWhitespace()
             guard index < bytes.count, bytes[index] == UInt8(ascii: ":") else { throw invalid }
             index += 1

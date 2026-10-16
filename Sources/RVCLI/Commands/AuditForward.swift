@@ -46,10 +46,41 @@ enum AuditForwardRun {
         var batchSize = 500
     }
 
-    /// https anywhere; plain http only to this machine.
+    /// https anywhere; plain http only to this machine. No userinfo, fragment,
+    /// path secret, or query secret (including a query value that is a URL
+    /// with userinfo). `--install` copies `--to` into a plist and a crontab
+    /// line, so a refusal names the problem and not the secret.
     static func destination(_ text: String) -> Result<URL, CommandFailure> {
-        guard let url = URL(string: text), let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else {
+        guard let url = URL(string: text),
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+            let scheme = components.scheme?.lowercased(), let rawHost = components.host, rawHost.isEmpty == false
+        else {
             return .failure("--to must be an absolute URL")
+        }
+        let host = rawHost.lowercased()
+        if components.user != nil || components.password != nil {
+            return .failure("--to must not include a username or password")
+        }
+        if components.fragment != nil {
+            return .failure("--to must not have a fragment")
+        }
+        if MCPRedaction.hostCarriesSecret(rawHost) || MCPRedaction.hostCarriesSecret(components.percentEncodedHost ?? "")
+            || MCPRedaction.authorityCarriesPassword(text)
+        {
+            return .failure("--to must not carry a secret in its host")
+        }
+        if MCPRedaction.pathCarriesSecret(components.percentEncodedPath) {
+            return .failure("--to must not carry a secret in its path")
+        }
+        let rawQuery = components.percentEncodedQuery ?? MCPRedaction.rawQuery(text)
+        if MCPRedaction.queryCarriesSecret(encoded: rawQuery, items: components.queryItems)
+            || MCPRedaction.rawQuery(text).map({ MCPRedaction.queryCarriesSecret(encoded: $0, items: nil) }) == true
+        {
+            return .failure("--to must not carry a secret in its query")
+        }
+        // `user:/su?password@host` is split into a path and a query before those checks.
+        if components.user == nil, components.password == nil, MCPRedaction.containsUserinfoSpelling(text) {
+            return .failure("--to must not carry a secret in its path")
         }
         if scheme == "https" { return .success(url) }
         if scheme == "http", ["127.0.0.1", "localhost", "::1", "[::1]"].contains(host) { return .success(url) }
@@ -70,11 +101,11 @@ enum AuditForwardRun {
         case .success(nil): return .success(nil)
         case .success(let data?):
             guard let cursor = try? JSONDecoder().decode(AuditCursor.self, from: data) else {
-                return .failure(CommandFailure("\(url.path) is not a forward cursor; delete it to start over"))
+                return .failure(CommandFailure("\(DisplayedText.field(url.path)) is not a forward cursor; delete it to start over"))
             }
             return .success(cursor)
-        case .failure(.unsafe(let reason)): return .failure(CommandFailure("\(url.path): \(reason)"))
-        case .failure: return .failure(CommandFailure("cannot read \(url.path)"))
+        case .failure(.unsafe(let reason)): return .failure(CommandFailure("\(DisplayedText.field(url.path)): \(reason)"))
+        case .failure: return .failure(CommandFailure("cannot read \(DisplayedText.field(url.path))"))
         }
     }
 
@@ -102,7 +133,7 @@ enum AuditForwardRun {
     static func startFromNow(options: Options, configDirectory: URL) -> Result<String, CommandFailure> {
         let url = cursorURL(configDirectory, destination: options.url)
         guard saveCursor(AuditLedger(configDirectory: configDirectory).endCursor(), to: url) else {
-            return .failure("could not write \(url.path)")
+            return .failure("could not write \(DisplayedText.field(url.path))")
         }
         return .success("forward cursor for \(options.url.absoluteString) set to now; older events will not be sent\n")
     }
@@ -122,6 +153,23 @@ enum AuditForwardRun {
         case .failure(let failure): return .failure(failure)
         case .success(let loaded): cursor = loaded ?? AuditCursor()
         }
+        // Never forward past a break: the cursor would commit beyond it and
+        // the gap would look intentional off-machine. Refuse loudly instead.
+        switch AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: configDirectory)) {
+        case .failure(let error):
+            return .failure(CommandFailure("audit chain cannot be checked (\(error.message)); refusing to forward"))
+        case .success(let report) where report.isIntact == false && report.firstBreak?.reason == "no prev on any line":
+            // A wholly pre-chain (legacy) file has no head to protect and
+            // no self-recovery: it anchors at its next append, but the
+            // backlog must not deadlock until then.
+            FileHandle.standardError.write(Data("rv audit forward: audit.jsonl predates the hash chain; forwarding without a chain head\n".utf8))
+        case .success(let report) where report.isIntact == false:
+            let broken = report.firstBreak
+            return .failure(CommandFailure(
+                "audit chain break at line \(broken?.line ?? 0) (\(broken?.reason ?? "unknown")); refusing to forward — run `rv audit verify`"))
+        case .success:
+            break
+        }
         let ledger = AuditLedger(configDirectory: configDirectory)
         var sent = 0
         var batches = 0
@@ -129,7 +177,7 @@ enum AuditForwardRun {
             let (events, next) = ledger.events(after: cursor, limit: options.batchSize)
             if events.isEmpty {
                 if next != cursor, saveCursor(next, to: cursorFile) == false {
-                    return .failure("could not write \(cursorFile.path)")
+                    return .failure("could not write \(DisplayedText.field(cursorFile.path))")
                 }
                 break
             }
@@ -146,7 +194,9 @@ enum AuditForwardRun {
                 return .failure(CommandFailure(
                     "sent \(sent) events, then HTTP \(status); the cursor is kept, rerun to retry"))
             case .success:
-                guard saveCursor(next, to: cursorFile) else { return .failure("could not write \(cursorFile.path)") }
+                guard saveCursor(next, to: cursorFile) else {
+                    return .failure("could not write \(DisplayedText.field(cursorFile.path))")
+                }
                 cursor = next
                 sent += events.count
                 batches += 1
@@ -171,12 +221,17 @@ enum AuditForwardRun {
         var values: [String: String] = [:]
         for name in names.sorted() {
             guard let secret = configuration.secret(named: name) else {
-                return .failure(CommandFailure("header secret \(name) is not defined in secrets.json"))
+                return .failure(CommandFailure("header secret \(DisplayedText.field(name)) is not defined in secrets.json"))
             }
             switch resolver.resolve(secret.source) {
-            case .failure(let error): return .failure(CommandFailure("header secret \(name): \(error.message)"))
+            case .failure(let error): return .failure(CommandFailure("header secret \(DisplayedText.field(name)): \(error.message)"))
             case .success(let value):
-                guard let text = String(validating: value.revealed(), as: UTF8.self) else { return .failure(CommandFailure("header secret \(name) is not text")) }
+                guard let text = String(validating: value.revealed(), as: UTF8.self) else {
+                    return .failure(CommandFailure("header secret \(DisplayedText.field(name)) is not text"))
+                }
+                guard text.contains("\r") == false, text.contains("\n") == false, text.contains("\0") == false else {
+                    return .failure(CommandFailure("header secret \(DisplayedText.field(name)) contains a line break"))
+                }
                 values[name] = text
             }
         }
@@ -187,7 +242,7 @@ enum AuditForwardRun {
         var headers: [String: String] = [:]
         for item in raw {
             guard let equals = item.firstIndex(of: "="), equals != item.startIndex else {
-                return .failure(CommandFailure("--header takes NAME=VALUE, got \(item)"))
+                return .failure(CommandFailure("--header takes NAME=VALUE, got \(DisplayedText.field(item))"))
             }
             headers[String(item[..<equals])] = String(item[item.index(after: equals)...])
         }
@@ -266,10 +321,12 @@ struct AuditForward: AsyncParsableCommand {
         var options = AuditForwardRun.Options(url: url, format: format, batchSize: batchSize)
         if install {
             if fromNow { try ctx.fail("rv audit forward: --install and --from-now cannot be combined; run --from-now once first\n") }
+            guard let userName = AuditForwardInstall.accountName() else {
+                try ctx.fail("rv audit forward: could not read the account name from the passwd entry\n")
+            }
             let plan = AuditForwardInstall.Plan(
                 home: URL(fileURLWithPath: home.rawValue, isDirectory: true), rvExecutable: MCPExecutable.currentPath(),
-                userID: getuid(), userName: ProcessInfo.processInfo.environment["USER"] ?? NSUserName(),
-                forwardArguments: scheduledArguments)
+                userID: getuid(), userName: userName, forwardArguments: scheduledArguments)
             #if os(macOS)
             switch AuditForwardInstall.install(plan) {
             case .failure(let failure): try ctx.fail("rv audit forward: \(failure.message)\n")

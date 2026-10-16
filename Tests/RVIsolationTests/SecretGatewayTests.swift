@@ -217,6 +217,40 @@ struct SecretGatewayTests {
         #expect(upstream.requests.first?.headers["expect"] == nil)
     }
 
+    @Test func headWithIllegalBodyFramingIsRefused() throws {
+        let upstream = RecordingUpstream()
+        let audit = AuditRecords()
+        let (gateway, port, placeholder) = try harness(upstream: upstream, audit: audit)
+        defer { gateway.stop() }
+        let overflow = try gatewayExchange(port: port,
+            "HEAD /s/OPENAI_API_KEY/x HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n"
+                + "Transfer-Encoding: chunked\r\n\r\n1\r\nA\r\n7fffffffffffffff\r\n")
+        #expect(overflow.status == 413)
+        let oversized = try gatewayExchange(port: port,
+            "HEAD /s/OPENAI_API_KEY/x HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n"
+                + "Content-Length: \(SecretGateway.maximumBodyBytes + 1)\r\n\r\n")
+        #expect(oversized.status == 413)
+        let invalid = try gatewayExchange(port: port,
+            "HEAD /s/OPENAI_API_KEY/x HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n"
+                + "Content-Length: nope\r\n\r\n")
+        #expect(invalid.status == 413)
+        let secondLength = try gatewayExchange(port: port,
+            "HEAD /s/OPENAI_API_KEY/x HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n"
+                + "Content-Length: 0\r\nContent-Length: \(SecretGateway.maximumBodyBytes + 1)\r\n\r\n")
+        #expect(secondLength.status == 413)
+        let disagree = try gatewayExchange(port: port,
+            "HEAD /s/OPENAI_API_KEY/x HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n"
+                + "Content-Length: 0\r\nContent-Length: 1\r\n\r\n")
+        #expect(disagree.status == 413)
+        let besideChunked = try gatewayExchange(port: port,
+            "HEAD /s/OPENAI_API_KEY/x HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n"
+                + "Transfer-Encoding: chunked\r\nContent-Length: \(SecretGateway.maximumBodyBytes + 1)\r\n\r\n"
+                + "0\r\n\r\n")
+        #expect(besideChunked.status == 413)
+        #expect(upstream.requests.isEmpty)
+        #expect(audit.items.withLock { $0.allSatisfy { $0.allowed == false } && $0.isEmpty == false })
+    }
+
     @Test func headResponsesCarryNoBodyFraming() throws {
         let upstream = RecordingUpstream(status: 200, headers: [("ETag", "x")])
         let audit = AuditRecords()
@@ -227,6 +261,12 @@ struct SecretGatewayTests {
         #expect(response.status == 200)
         #expect(response.headers["transfer-encoding"] == nil)
         #expect(response.body.isEmpty)
+        let zero = try gatewayExchange(port: port,
+            "HEAD /s/OPENAI_API_KEY/models HTTP/1.1\r\nAuthorization: Bearer \(placeholder.text)\r\n"
+                + "Content-Length: 0\r\n\r\n")
+        #expect(zero.status == 200)
+        #expect(zero.body.isEmpty)
+        #expect(upstream.requests.count == 2)
     }
 
     @Test func oversizedBodiesAreRefused() throws {
@@ -301,6 +341,38 @@ struct SecretGatewayTests {
         #expect(portAccepts(port) == false)
         let restarted = try gateway.start().get()
         #expect(try gatewayExchange(port: restarted, "GET /nope HTTP/1.1\r\n\r\n").status == 404)
+        gateway.stop()
+        #expect(portAccepts(restarted) == false)
+    }
+
+    @Test func startBindingWhileStopRunsDoesNotPublishAListener() throws {
+        let gateway = SecretGateway(transport: RecordingUpstream().transport) { _ in }
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        gateway.beforeListenerPublish = {
+            entered.signal()
+            _ = release.wait(timeout: .now() + 10)
+        }
+        let outcome = Mutex<Result<Int, EgressStartError>?>(nil)
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { group.leave() }
+            outcome.withLock { $0 = gateway.start() }
+        }
+        #expect(entered.wait(timeout: .now() + 5) == .success)
+        gateway.stop()
+        release.signal()
+        #expect(group.wait(timeout: .now() + 5) == .success)
+        gateway.beforeListenerPublish = nil
+        let result = try #require(outcome.withLock { $0 })
+        if case .success(let leaked) = result {
+            Issue.record("start published port \(leaked) after stop")
+            #expect(portAccepts(leaked) == false)
+        }
+        #expect(gateway.port == nil)
+        // A later start still works and stop still closes it.
+        let restarted = try gateway.start().get()
         gateway.stop()
         #expect(portAccepts(restarted) == false)
     }

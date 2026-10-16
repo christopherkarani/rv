@@ -7,18 +7,20 @@ import Glibc
 import Security
 #endif
 import Foundation
+import RVDomain
 
 extension SecretSource {
     /// Where the value lives, safe to print. Never the value.
     public var locator: String {
         switch self {
-        case .keychain(let service, let account): "keychain \(service)/\(account)"
-        case .hostEnvironment(let variable): "host $\(variable)"
-        case .onePassword(let reference): reference
+        case .keychain(let service, let account):
+            "keychain \(DisplayedText.field(service))/\(DisplayedText.field(account))"
+        case .hostEnvironment(let variable): "host $\(DisplayedText.field(variable))"
+        case .onePassword(let reference): DisplayedText.field(reference)
         case .vault(let path, let field, let address):
-            "vault \(address.map { "\($0.host ?? "")/" } ?? "")\(path)#\(field)"
+            "vault \(address.map { "\($0.host ?? "")/" } ?? "")\(DisplayedText.field(path))#\(DisplayedText.field(field))"
         case .awsSecretsManager(let secretID, let field, let region):
-            "aws \(region.map { "\($0):" } ?? "")\(secretID)\(field.map { "#\($0)" } ?? "")"
+            "aws \(region.map { "\(DisplayedText.field($0)):" } ?? "")\(DisplayedText.field(secretID))\(field.map { "#\(DisplayedText.field($0))" } ?? "")"
         case .infisical(let name, let project, let environment, let path):
             "infisical \(project.map { "\($0)/" } ?? "")\(environment.map { "\($0):" } ?? "")\(name)\(path.map { " \($0)" } ?? "")"
         case .bitwarden(let id): "bitwarden \(id)"

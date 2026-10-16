@@ -36,28 +36,28 @@
       "pattern": "wrangler(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+dns-records\\s+delete\\b",
       "severity": "high",
       "description": "wrangler dns-records delete removes a Cloudflare DNS record.",
-      "explanation": "Deleting a DNS record can immediately break connectivity to your website, API, \\ or mail server. Propagation is fast on Cloudflare, so traffic may fail within \\ seconds.\n\n\\ Safer alternatives: \\ - wrangler dns-records list to review records first \\ - Export zone file as backup before deletion \\ - Use Cloudflare dashboard for confirmation prompts"
+      "explanation": "Deleting a DNS record can immediately break connectivity to your website, API, or mail server. Propagation is fast on Cloudflare, so traffic may fail within seconds.\n\nSafer alternatives:\n- wrangler dns-records list to review records first\n- Export zone file as backup before deletion\n- Use Cloudflare dashboard for confirmation prompts"
     },
     {
       "name": "cloudflare-api-delete-dns-record",
       "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*\\bapi\\.cloudflare\\.com\\b[^\\s]*?/dns_records/[^\\s]+).*",
       "severity": "high",
       "description": "curl -X DELETE against /dns_records/{id} deletes a Cloudflare DNS record.",
-      "explanation": "API deletion of a DNS record takes effect immediately across Cloudflare's network. \\ There is no confirmation prompt when using curl directly.\n\n\\ Safer alternatives: \\ - GET the record first to verify the ID is correct \\ - Use Terraform or Pulumi for auditable, reversible changes \\ - Export zone configuration as backup before deletion"
+      "explanation": "API deletion of a DNS record takes effect immediately across Cloudflare's network. There is no confirmation prompt when using curl directly.\n\nSafer alternatives:\n- GET the record first to verify the ID is correct\n- Use Terraform or Pulumi for auditable, reversible changes\n- Export zone configuration as backup before deletion"
     },
     {
       "name": "cloudflare-api-delete-zone",
       "pattern": "(?i)\\bcurl\\b(?=.*(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)(?=.*\\bapi\\.cloudflare\\.com\\b[^\\s]*?/zones/[^\\s]+).*",
       "severity": "critical",
       "description": "curl -X DELETE against /zones/{id} deletes a Cloudflare zone.",
-      "explanation": "Deleting a zone removes ALL DNS records, page rules, firewall rules, and \\ settings for that domain. This can cause complete outage for all services \\ on the domain with no easy recovery.\n\n\\ Safer alternatives: \\ - Export full zone configuration first \\ - Remove individual records instead of the entire zone \\ - Transfer domain to another Cloudflare account if needed"
+      "explanation": "Deleting a zone removes ALL DNS records, page rules, firewall rules, and settings for that domain. This can cause complete outage for all services on the domain with no easy recovery.\n\nSafer alternatives:\n- Export full zone configuration first\n- Remove individual records instead of the entire zone\n- Transfer domain to another Cloudflare account if needed"
     },
     {
       "name": "cloudflare-terraform-destroy-record",
       "pattern": "terraform\\b.*?\\s+destroy\\s+.*-target=(?:resource\\.)?cloudflare_record\\.",
       "severity": "high",
       "description": "terraform destroy -target=cloudflare_record deletes specific DNS records.",
-      "explanation": "Terraform destroy removes DNS records from Cloudflare. While Terraform state \\ tracks the change, the DNS deletion is immediate and can break services.\n\n\\ Safer alternatives: \\ - terraform plan -destroy -target=... to preview first \\ - Remove from terraform config and run terraform apply instead \\ - Use terraform state rm to stop managing without deleting"
+      "explanation": "Terraform destroy removes DNS records from Cloudflare. While Terraform state tracks the change, the DNS deletion is immediate and can break services.\n\nSafer alternatives:\n- terraform plan -destroy -target=... to preview first\n- Remove from terraform config and run terraform apply instead\n- Use terraform state rm to stop managing without deleting"
     }
   ]
 }

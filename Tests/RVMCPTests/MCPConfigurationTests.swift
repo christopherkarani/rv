@@ -88,6 +88,15 @@ struct MCPConfigurationTests {
         #expect(try MCPConfiguration.load(configDirectory: directory).get() == configuration)
         #expect(configuration.encoded().compactText.contains(#""deny":["drop_*",{"tool":"query","when":{"/sql":{"glob":"DROP *"}}}]"#))
 
+        // A >2^53 rule value must rewrite as a JSON number, never the
+        // domain number-marker string, and still match after reload.
+        let big = try decode(
+            #"{"version":1,"servers":[{"name":"db","command":"x","tools":{"deny":[{"tool":"q","when":{"/id":{"==":9007199254740993}}}]}}]}"#).get()
+        let text = big.encoded().compactText
+        #expect(text.contains("\u{0}") == false, "\(text)")
+        #expect(text.contains("9007199254740993"), "\(text)")
+        #expect(try MCPConfiguration.decode(Data(text.utf8)).get() == big)
+
         guard case .failure(let error) = decode(
             #"{"version":1,"servers":[{"name":"db","command":"x","tools":{"ask":[{"tool":"q"}]}}]}"#)
         else {
@@ -151,6 +160,84 @@ struct MCPConfigurationTests {
             (server(#""url":"ftp://a.example""#), "url must be https"),
             (server(#""url":"not a url""#), "url must be https"),
             (server(#""url":"https://a.example/#frag""#), "fragment"),
+            (server(#""url":"https://a.example/mcp?api_key=zzz""#), "secret in its query"),
+            (server(#""url":"https://a.example/mcp?x=0123456789abcdefghijklmnop""#), "secret in its query"),
+            (server(#""url":"https://a.example/mcp?next=https://user:pw@evil.example/x""#), "secret in its query"),
+            (server(#""url":"https://a.example/mcp?next=https://evil.example/ghp_1234567890abcdefghij""#), "secret in its query"),
+            (server(#""url":"https://a.example/mcp?next=//user:pw@evil.example""#), "secret in its query"),
+            (server(#""url":"https://a.example/mcp?next=https%253A%252F%252Fuser%253Apw%2540evil.example""#), "secret in its query"),
+            (server(#""url":"https://a.example/mcp?q=.ghp_1234567890abcdefghij""#), "secret in its query"),
+            (server(#""url":"https://a.example/user:pw@evil.example/mcp""#), "secret in its path"),
+            (server(#""url":"https://a.example/ingest%23ghp_1234567890abcdefghij""#), "secret in its path"),
+            (server(#""url":"https://ghp_1234567890abcdefghij.example/hook""#), "secret in its host"),
+            (server(#""url":"https://user%3Apw%40evil.example/hook""#), "secret in its host"),
+            (server(#""url":"https://a.example/sk-1234567890abcdefghijklmnop/mcp""#), "secret in its path"),
+            (server(#""url":"https://a.example/.ghp_1234567890abcdefghij""#), "secret in its path"),
+            (server(#""url":"https://a.example/ingest/~ghp_1234567890abcdefghij""#), "secret in its path"),
+            (server(#""url":"https://a.example/opt/ghp_1234567890abcdefghij""#), "secret in its path"),
+            (server(#""url":"https://a.example/mcp?next=~ghp_1234567890abcdefghij""#), "secret in its query"),
+            (server(#""url":"https://a.example/mcp?next=/opt/ghp_1234567890abcdefghij""#), "secret in its query"),
+            (server(#""url":"https://a.example/mcp?next=https://user:pw@evil.example/a%20b""#), "secret in its query"),
+            (server(#""url":"https://a.example/ingest%3Bghp_1234567890abcdefghij""#), "secret in its path"),
+            (server(#""url":"https://a.example/hook%3Ftoken=ghp_1234567890abcdefghij""#), "secret in its path"),
+            (server(#""url":"https://a.example/ingest%00ghp_1234567890abcdefghij""#), "secret in its path"),
+            (server(#""url":"https://a.example/:pwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/mcp?next=https%253A%252F%252Fuser%253Apwsecretvalue%2540evil.example%25""#), "secret in its query"),
+            (server(#""url":"https://a.example/ingest%252Fghp_1234567890abcdefghij%25""#), "secret in its path"),
+            (server(#""url":"https://a.example/ingest|ghp_1234567890abcdefghij""#), "secret in its path"),
+            (server(#""url":"https://a.example/ingest%257Cghp_1234567890abcdefghij""#), "secret in its path"),
+            (server(#""url":"https://a.example/ingest%2540ghp_1234567890abcdefghij""#), "secret in its path"),
+            (server(#""url":"https://a.example/mcp?token=ghp_1234567890abcdefghij%""#), "secret in its query"),
+            (server(#""url":"https://a.example/:su&pwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/user:su%26pwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/user:su%3Fpwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/:su%5Cpwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/mcp?next=/:su&pwsecretvalue@evil.example""#), "secret in its query"),
+            (server(#""url":"https://a.example/ingest|t=ghp_1234567890abcdef""#), "secret in its path"),
+            (server(#""url":"https://a.example/ingest%2540t=ghp_12345678""#), "secret in its path"),
+            (server(#""url":"https://a.example/user:su%2Fpwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/:%2Fpwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/mcp?next=user:su&pwsecretvalue%2Fmore@evil.example""#), "secret in its query"),
+            (server(#""url":"https://a.example/in+ghp_12345678""#), "secret in its path"),
+            (server(#""url":"https://a.example/mcp?token=%22ghp_1234567890abcdefghij%""#), "secret in its query"),
+            (server(#""url":"https://a.example/ingest%E2%80%8Bghp_1234567890abcdefghij""#), "secret in its path"),
+            (server(#""url":"https://a.example/x_ghp_12345678""#), "secret in its path"),
+            (server(#""url":"https://a.example/x-ghp_12345678""#), "secret in its path"),
+            (server(#""url":"https://a.example/mcp?t=x_ghp_12345678""#), "secret in its query"),
+            (server(#""url":"https://a.example/user~:su&pwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/user:su/pwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/user:%2Fpwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/user:/pwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/mcp?next=user:%2Fsu&pwsecretvalue@evil.example""#), "secret in its query"),
+            (server(#""url":"https://a.example/user~:/pwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/user!:/pwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/user%3A%2Fpwsecretvalue%40evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/mcp?next=user:/su&pwsecretvalue@evil.example""#), "secret in its query"),
+            (server(#""url":"http://127.0.0.1/user:/pwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/user://pwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/user:/%2Fpwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/user:/%5Cpwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/mcp?next=user://su&pwsecretvalue@evil.example""#), "secret in its query"),
+            (server(#""url":"https://a.example/user:/su?pwsecretvalue@evil.example""#), "secret in its path"),
+            (server(#""url":"https://a.example/user:@pwsecretvalue@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/http://supersecretpassword@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/https://supersecretpassword@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/wss://supersecretpassword@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/postgres://supersecretpassword@db.example/app""#), "secret in its path"),
+            (server(#""url":"https://a.example/HTTP://supersecretpassword@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/HTTPS://supersecretpassword@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/http:%2F%2Fsupersecretpassword@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/https:%2F%2Fsupersecretpassword@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/%68%74%74%70://supersecretpassword@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/https:\\supersecretpassword@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/https:\\\\supersecretpassword@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/https://user:supersecretpassword@evil.example/hook""#), "secret in its path"),
+            (server(#""url":"https://a.example/hook?next=https://supersecretpassword@collector.example""#), "secret in its query"),
+            (server(#""url":"https://a.example/hook?next=https://supersecretpassword%40collector.example""#), "secret in its query"),
+            (server(#""url":"https://supersecretpassword@evil.example/hook""#), "without credentials"),
+            (server(#""url":"https://supersecretpassword%40evil.example/hook""#), "secret in its host"),
+            (server(#""url":"https://supersecretpassword%2540evil.example/hook""#), "secret in its host"),
+            (server(#""url":"HTTPS://supersecretpassword%40evil.example/hook""#), "secret in its host"),
             (server(#""url":"https://a.example","transport":"ws""#), #"transport must be "http" or "sse""#),
             (server(#""url":"https://a.example","headers":{"Mcp-Session-Id":"x"}"#), "rv sets Mcp-Session-Id"),
             (server(#""url":"https://a.example","headers":{"host":"x"}"#), "rv sets host"),
@@ -167,17 +254,46 @@ struct MCPConfigurationTests {
             }
             #expect(error.message.contains(fragment), "\(text) -> \(error.message)")
         }
-        for loopback in ["http://localhost:9/mcp", "http://127.0.0.1/mcp", "http://[::1]:8080/sse"] {
+        for loopback in ["http://localhost:9/mcp", "http://127.0.0.1/mcp", "http://127.0.0.2/mcp", "http://[::1]:8080/sse", "http://[::ffff:127.0.0.1]/mcp"] {
             #expect((try? decode(server(#""url":"\#(loopback)""#)).get()) != nil, "\(loopback)")
         }
+        // Browser/aton spellings of 127.0.0.1 are not canonical hosts.
+        for disguised in ["http://127.1/mcp", "http://2130706433/mcp", "http://0x7f000001/mcp", "http://0177.0.0.1/mcp", "https://127.1/mcp", "http://localhost./mcp", "http://[fe80::1%25eth0]/mcp"] {
+            #expect((try? decode(server(#""url":"\#(disguised)""#)).get()) == nil, "\(disguised)")
+        }
+        #expect((try? decode(server(#""url":"https://a.example/mcp?v=1""#)).get()) != nil)
     }
 
     @Test func largeIntegersCompareExactly() throws {
         let big = try JSONValue.parse(Data("9007199254740993".utf8))
-        #expect(big.domainValue == .string("9007199254740993"))
+        #expect(big.domainValue == .string("\u{0}" + "9007199254740993"))
+        #expect(big.domainValue != (try JSONValue.parse(Data("\"9007199254740993\"".utf8))).domainValue)
         #expect(try JSONValue.parse(Data("12.5".utf8)).domainValue == .number(12.5))
         #expect(try JSONValue.parse(Data(#"{"a":[true,null]}"#.utf8)).domainValue
             == .object(["a": .array([.bool(true), .null])]))
+        for spelling in ["9007199254740993.0", "9007199254740993e0", "9.007199254740993e15"] {
+            let value = try JSONValue.parse(Data(spelling.utf8)).domainValue
+            #expect(value == .string("\u{0}" + "9007199254740993"))
+        }
+        #expect(try JSONValue.parse(Data("4611686018427387905.0".utf8)).domainValue == .string("\u{0}" + "4611686018427387905"))
+        #expect(try JSONValue.parse(Data("-9007199254740993.0".utf8)).domainValue == .string("\u{0}" + "-9007199254740993"))
+        #expect(try JSONValue.parse(Data("2.0".utf8)).domainValue == .number(2))
+        #expect(try JSONValue.parse(Data("-12.5".utf8)).domainValue == .number(-12.5))
+        for spelling in ["12.50", "1.25e1", "125e-1"] {
+            #expect(try JSONValue.parse(Data(spelling.utf8)).domainValue == .number(12.5), "\(spelling)")
+        }
+        #expect(try JSONValue.parse(Data("10.5".utf8)).domainValue == .number(10.5))
+        #expect(try JSONValue.parse(Data("10.25".utf8)).domainValue == .number(10.25))
+        #expect(try JSONValue.parse(Data("2251799813685248.5".utf8)).domainValue == .number(2251799813685248.5))
+        #expect(try JSONValue.parse(Data("4503599627370495.5".utf8)).domainValue == .number(4503599627370495.5))
+        for spelling in [
+            "9007199254740991.4", "9007199254740990.1", "9007199254740990.9", "-9007199254740990.1",
+            "4503599627370496.4", "1.0000000000000001",
+            "2251799813685248.4", "2251799813685248.6", "4503599627370495.4", "4503599627370495.6",
+            "12.500000000000001",
+        ] {
+            #expect(try JSONValue.parse(Data(spelling.utf8)).domainValue == .string("\u{0}" + spelling))
+        }
     }
 
     @Test func globs() {
@@ -237,5 +353,25 @@ struct MCPConfigurationTests {
             Issue.record("group-writable mcp.json was accepted")
             return
         }
+    }
+
+    @Test func unknownKeysAreEscaped() {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let top = "{\"version\":1,\"\\u001b[2J\\u001b[H\(sentence)\":true}"
+        guard case .failure(let topError) = decode(top) else {
+            Issue.record("unknown key was accepted")
+            return
+        }
+        #expect(topError.message.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(topError.message.contains("\\u001b[2J"))
+        #expect(topError.message.contains("unknown key"))
+        let line = "{\"version\":1,\"servers\":[{\"name\":\"github\",\"command\":\"x\",\"env\":{\"\\u2028\(sentence)\":\"v\"}}]}"
+        guard case .failure(let envError) = decode(line) else {
+            Issue.record("env key was accepted")
+            return
+        }
+        #expect(envError.message.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(envError.message.contains("\\u2028"))
+        #expect(envError.message.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" }).map(String.init).contains(sentence) == false)
     }
 }

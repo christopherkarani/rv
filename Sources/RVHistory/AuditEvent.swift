@@ -69,11 +69,13 @@ public struct AuditEvent: Sendable, Equatable, Codable {
     public var detail: [String: String]
     /// SHA-256 of the previous `audit.jsonl` line; set by `AuditLog.append`.
     public var prev: String?
-    /// SHA-256 of this event's own `audit.jsonl` line, when read from it. Not stored.
+    /// SHA-256 of this event's own `audit.jsonl` line, when read from it.
+    /// Never written to the ledger (appends carry none); forwarded in `rv`
+    /// format so a recipient can check each event against the next `prev`.
     public var chainHead: String? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case schema, time, kind, decision, subject, reason, workspace, runtime, agent, source, detail, prev
+        case schema, time, kind, decision, subject, reason, workspace, runtime, agent, source, detail, prev, chainHead
     }
 
     public init(

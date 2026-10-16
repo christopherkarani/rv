@@ -76,6 +76,9 @@ enum ReportRun {
             var total: Int
             var byKind: [String: [String: Int]]
             var lastEventAt: String?
+            /// Hash-chain state of audit.jsonl; nil when it cannot be read.
+            var chainIntact: Bool?
+            var chainHead: String?
         }
 
         struct Sandbox: Encodable, Equatable {
@@ -99,6 +102,7 @@ enum ReportRun {
         var compliant: Bool {
             managed.state != "invalid" && mcp.ok && secrets.error == nil
                 && secrets.items.allSatisfy { $0.policyViolation == nil }
+                && audit.chainIntact != false
         }
     }
 
@@ -184,25 +188,29 @@ enum ReportRun {
         let events = AuditLedger(configDirectory: inputs.configDirectory).events(AuditFilter(since: since))
         var byKind: [String: [String: Int]] = [:]
         for event in events { byKind[event.kind.rawValue, default: [:]][event.decision.rawValue, default: 0] += 1 }
+        let chain = AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: inputs.configDirectory))
         return Report.AuditSummary(
-            since: iso8601(since), total: events.count, byKind: byKind, lastEventAt: events.last.map { iso8601($0.time) })
+            since: iso8601(since), total: events.count, byKind: byKind, lastEventAt: events.last.map { iso8601($0.time) },
+            chainIntact: (try? chain.get())?.isIntact, chainHead: (try? chain.get())?.head)
     }
 
     static func text(_ report: Report) -> String {
+        let hostName = DisplayedText.field(report.host.name)
+        let user = DisplayedText.field(report.host.user)
         var lines = [
-            "rv \(report.rv.version) on \(report.host.name) (\(report.host.user)): "
+            "rv \(report.rv.version) on \(hostName) (\(user)): "
                 + (report.compliant ? "compliant" : "NOT compliant"),
             "",
             ManagedRun.statusText(report.managed).trimmingCharacters(in: .newlines),
         ]
         if let error = report.mcp.error, report.mcp.ok == false, report.mcp.counts.isEmpty {
-            lines.append("mcp: \(error)")
+            lines.append("mcp: \(DisplayedText.field(error))")
         } else {
             let counts = report.mcp.counts.sorted { $0.key < $1.key }.map { "\($0.value) \($0.key)" }
             lines.append("mcp: \(report.mcp.ok ? "ok" : "FAIL"), \(report.mcp.servers) gateway servers; "
                 + (counts.isEmpty ? "no host entries" : counts.joined(separator: ", ")))
-            lines += report.mcp.failing.map { "  \($0.status)  \($0.name)  \($0.host)" }
-            if let error = report.mcp.error { lines.append("  " + error) }
+            lines += report.mcp.failing.map { "  \($0.status)  \(DisplayedText.field($0.name))  \($0.host)" }
+            if let error = report.mcp.error { lines.append("  " + DisplayedText.field(error)) }
             if report.mcp.plaintextCredentials > 0 {
                 lines.append("  \(report.mcp.plaintextCredentials) plaintext credential(s) in host configs")
             }
@@ -223,7 +231,7 @@ enum ReportRun {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         guard let data = try? encoder.encode(report), let text = String(data: data, encoding: .utf8) else { return "{}\n" }
-        return text + "\n"
+        return DisplayedText.escapeJSONScalars(text) + "\n"
     }
 
     static var platform: String {

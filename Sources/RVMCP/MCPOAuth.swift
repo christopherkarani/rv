@@ -55,16 +55,44 @@ public struct MCPOAuthTokens: Sendable, Equatable {
         return Data(JSONValue.object(object).compactText.utf8)
     }
 
+    /// A stored token blob is revalidated on load, never trusted as written:
+    /// a tampered or copied store must not aim the refresh POST (which
+    /// carries the refresh token and client secret) at an endpoint D22
+    /// would refuse, and every field that reaches a header, the audit log,
+    /// or an error message is bounded printable ASCII.
     public static func decode(_ data: Data) -> MCPOAuthTokens? {
         guard let root = try? JSONValue.parse(data), root["version"]?.intValue == 1,
             let access = root["accessToken"]?.stringValue, let endpoint = root["tokenEndpoint"]?.stringValue.flatMap(URL.init(string:)),
             let clientID = root["clientID"]?.stringValue, let resource = root["resource"]?.stringValue
         else { return nil }
+        func usable(_ text: String?, maximum: Int) -> Bool {
+            guard let text else { return true }
+            return text.utf8.count <= maximum && text.unicodeScalars.allSatisfy { (0x21...0x7E).contains($0.value) || $0.value == 0x20 }
+        }
+        // Fields that only ever travel percent-encoded in a form body (never
+        // raw in a header or log line) may hold non-ASCII — an IDN resource
+        // or a Unicode client secret issued verbatim must not read as
+        // corruption and silently log the user out. Controls still refuse.
+        func formUsable(_ text: String?, maximum: Int) -> Bool {
+            guard let text else { return true }
+            return text.utf8.count <= maximum && text.unicodeScalars.allSatisfy {
+                $0.properties.generalCategory != .control && $0.properties.generalCategory != .format
+            }
+        }
+        let refresh = root["refreshToken"]?.stringValue
+        let scope = root["scope"]?.stringValue
+        guard MCPRemoteServer.endpointProblem(endpoint) == nil,
+            usable(access, maximum: 16 * 1024), access.isEmpty == false,
+            usable(refresh, maximum: 16 * 1024),
+            usable(clientID, maximum: 512), clientID.isEmpty == false,
+            formUsable(root["clientSecret"]?.stringValue, maximum: 4096),
+            usable(scope, maximum: 1024), formUsable(resource, maximum: 2048)
+        else { return nil }
         return MCPOAuthTokens(
-            accessToken: access, refreshToken: root["refreshToken"]?.stringValue,
+            accessToken: access, refreshToken: refresh,
             expiresAt: root["expiresAt"]?.intValue.map { Date(timeIntervalSince1970: TimeInterval($0)) },
             tokenEndpoint: endpoint, clientID: clientID, clientSecret: root["clientSecret"]?.stringValue, resource: resource,
-            scope: root["scope"]?.stringValue)
+            scope: scope)
     }
 }
 
@@ -93,32 +121,25 @@ public enum MCPOAuthHTTP {
     static let maximumBodyBytes = 1024 * 1024
 
     /// No cookies, cache, or redirects; nil on a network error, timeout, or a body over 1 MiB.
+    /// The body accumulates through the delegate and the task is cancelled
+    /// the moment it passes the cap, so a hostile endpoint cannot make
+    /// URLSession buffer an unbounded response before the check runs.
     public static let live: MCPHTTPClient = { request in
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.urlCache = nil
-        let delegate = MCPNoRedirects()
+        let delegate = MCPBoundedOneShot(limit: maximumBodyBytes)
         let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
         defer { session.invalidateAndCancel() }
-        let done = DispatchSemaphore(value: 0)
-        let result = Mutex<MCPHTTPResponse?>(nil)
-        session.dataTask(with: request) { data, response, _ in
-            if let http = response as? HTTPURLResponse, (data?.count ?? 0) <= maximumBodyBytes {
-                var headers: [String: String] = [:]
-                for (key, value) in http.allHeaderFields {
-                    if let key = key as? String, let value = value as? String { headers[key] = value }
-                }
-                result.withLock { $0 = MCPHTTPResponse(status: http.statusCode, headers: headers, body: data ?? Data()) }
-            }
-            done.signal()
-        }.resume()
+        session.dataTask(with: request).resume()
         let timeout = request.timeoutInterval > 0 ? request.timeoutInterval : 30
-        guard done.wait(timeout: .now() + timeout + 1) == .success else { return nil }
-        return result.withLock { $0 }
+        guard delegate.done.wait(timeout: .now() + timeout + 1) == .success else { return nil }
+        return delegate.result.withLock { $0 }
     }
 
 }
+
 
 /// OAuth 2.1 pieces the MCP authorization spec uses: protected-resource
 /// metadata (RFC 9728), authorization-server metadata (RFC 8414), PKCE S256
@@ -183,6 +204,17 @@ public enum MCPOAuth {
         return path
     }
 
+    /// Scheme, host, port, and the exact percent-encoded path and query.
+    /// Trailing slashes and `%` escapes are different resources. Discovery
+    /// still uses `trimmedPath`; this check does not.
+    static func sameResource(_ lhs: URL, _ rhs: URL) -> Bool {
+        guard MCPHTTPExchange.sameOrigin(lhs, rhs) else { return false }
+        let left = URLComponents(url: lhs, resolvingAgainstBaseURL: false)
+        let right = URLComponents(url: rhs, resolvingAgainstBaseURL: false)
+        return left?.percentEncodedPath == right?.percentEncodedPath
+            && left?.percentEncodedQuery == right?.percentEncodedQuery
+    }
+
     public static func base64URL(_ bytes: [UInt8]) -> String {
         Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
@@ -209,10 +241,21 @@ public enum MCPOAuth {
         }.joined(separator: "&")
     }
 
+    /// Query names an authorization endpoint may not pre-seed: rv appends its
+    /// own values, and a first-wins server would honor the preset ones.
+    static let reservedAuthorizationParameters: Set<String> = [
+        "response_type", "client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "resource", "scope",
+    ]
+
     public static func authorizationURL(
         endpoint: URL, clientID: String, redirectURI: String, state: String, challenge: String, resource: String,
         scope: String?
     ) -> URL? {
+        if let items = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)?.queryItems,
+            items.contains(where: { reservedAuthorizationParameters.contains($0.name.lowercased()) })
+        {
+            return nil
+        }
         var pairs = [
             ("response_type", "code"), ("client_id", clientID), ("redirect_uri", redirectURI), ("state", state),
             ("code_challenge", challenge), ("code_challenge_method", "S256"), ("resource", resource),
@@ -274,6 +317,9 @@ public enum MCPOAuth {
     }
 
     public static func refresh(_ tokens: MCPOAuthTokens, http: MCPHTTPClient, now: Date) -> Result<MCPOAuthTokens, MCPOAuthError> {
+        guard MCPRemoteServer.endpointProblem(tokens.tokenEndpoint) == nil else {
+            return .failure(MCPOAuthError("the stored token endpoint is not one rv will POST credentials to; run `rv mcp connect` again"))
+        }
         guard let refreshToken = tokens.refreshToken else { return .failure(MCPOAuthError("no refresh token; run `rv mcp connect` again")) }
         var pairs = [("grant_type", "refresh_token"), ("refresh_token", refreshToken), ("resource", tokens.resource)]
         if let scope = tokens.scope { pairs.append(("scope", scope)) }
@@ -325,7 +371,7 @@ public struct MCPOAuthFlow: Sendable {
         case .success(let found): resourceMetadata = found
         }
         let metadata: ServerMetadata
-        switch authorizationServer(resourceMetadata.issuer) {
+        switch authorizationServer(resourceMetadata.issuer, server: launch.url) {
         case .failure(let error): return .failure(error)
         case .success(let found): metadata = found
         }
@@ -350,7 +396,7 @@ public struct MCPOAuthFlow: Sendable {
             challenge: MCPOAuth.challenge(verifier: verifier), resource: resourceMetadata.resource, scope: scope)
         else { return .failure(MCPOAuthError("could not build the authorization URL")) }
         present(url)
-        guard let callback = listener.wait(timeout: timeout) else {
+        guard let callback = listener.wait(timeout: timeout, state: state) else {
             return .failure(MCPOAuthError("no sign-in arrived within \(Int(timeout)) seconds"))
         }
         if let error = callback["error"] {
@@ -399,32 +445,45 @@ public struct MCPOAuthFlow: Sendable {
     }
 
     func protectedResource(server: URL, hinted: URL?) -> Result<(resource: String, issuer: URL, scopes: String?), MCPOAuthError> {
+        if let hinted {
+            if let problem = MCPRemoteServer.endpointProblem(hinted) {
+                return .failure(MCPOAuthError("resource metadata URL \(problem)"))
+            }
+            guard MCPHTTPExchange.sameOrigin(hinted, server) else {
+                return .failure(MCPOAuthError("resource metadata URL is not the MCP server's origin"))
+            }
+        }
         let candidates = hinted.map { [$0] } ?? MCPOAuth.protectedResourceMetadataURLs(for: server)
         for url in candidates {
-            if let problem = MCPRemoteServer.endpointProblem(url) {
+            if hinted == nil, let problem = MCPRemoteServer.endpointProblem(url) {
                 return .failure(MCPOAuthError("resource metadata URL \(problem)"))
             }
             guard let response = http(MCPOAuth.jsonRequest(url)), response.status == 200,
                 let json = try? JSONValue.parse(response.body), let issuers = json["authorization_servers"]?.stringArray,
                 let first = issuers.first, let issuer = URL(string: first)
             else { continue }
-            let resource = json["resource"]?.stringValue ?? server.absoluteString
-            guard let resourceURL = URL(string: resource), MCPHTTPExchange.sameOrigin(resourceURL, server) else {
-                return .failure(MCPOAuthError("resource metadata names a resource on another origin (\(resource))"))
+            guard let resource = json["resource"]?.stringValue else {
+                return .failure(MCPOAuthError("resource metadata does not name this MCP server"))
             }
-            return .success((resource, issuer, json["scopes_supported"]?.stringArray?.joined(separator: " ")))
+            guard let resourceURL = URL(string: resource) else {
+                return .failure(MCPOAuthError("resource metadata names a resource that is not this MCP URL (\(MCPOAuth.safeCode(resource)))"))
+            }
+            guard MCPHTTPExchange.sameOrigin(resourceURL, server) else {
+                return .failure(MCPOAuthError("resource metadata names a resource on another origin (\(MCPOAuth.safeCode(resource)))"))
+            }
+            guard MCPOAuth.sameResource(resourceURL, server) else {
+                return .failure(MCPOAuthError("resource metadata names a different URL than this MCP server (\(MCPOAuth.safeCode(resource)))"))
+            }
+            if let problem = Self.endpointBindingProblem(issuer, issuer: issuer, server: server) {
+                return .failure(MCPOAuthError("authorization server \(problem)"))
+            }
+            return .success((server.absoluteString, issuer, json["scopes_supported"]?.stringArray?.joined(separator: " ")))
         }
-        guard var origin = URLComponents(url: server, resolvingAgainstBaseURL: false) else {
-            return .failure(MCPOAuthError("no protected resource metadata found"))
-        }
-        origin.path = ""
-        origin.query = nil
-        guard let issuer = origin.url else { return .failure(MCPOAuthError("no protected resource metadata found")) }
-        return .success((server.absoluteString, issuer, nil))
+        return .failure(MCPOAuthError("no protected resource metadata found"))
     }
 
-    func authorizationServer(_ issuer: URL) -> Result<ServerMetadata, MCPOAuthError> {
-        if let problem = MCPRemoteServer.endpointProblem(issuer) {
+    func authorizationServer(_ issuer: URL, server: URL) -> Result<ServerMetadata, MCPOAuthError> {
+        if let problem = Self.endpointBindingProblem(issuer, issuer: issuer, server: server) {
             return .failure(MCPOAuthError("authorization server \(problem)"))
         }
         for url in MCPOAuth.authorizationServerMetadataURLs(issuer: issuer) {
@@ -443,9 +502,40 @@ public struct MCPOAuthFlow: Sendable {
             guard json["code_challenge_methods_supported"]?.stringArray?.contains("S256") == true else {
                 return .failure(MCPOAuthError("the authorization server does not offer PKCE S256; rv will not sign in without it"))
             }
+            guard let declared = json["issuer"]?.stringValue.flatMap(URL.init(string:)),
+                Self.sameIdentifier(declared, issuer)
+            else {
+                return .failure(MCPOAuthError(
+                    "authorization server metadata issuer does not match \(issuer.absoluteString)"))
+            }
+            for (label, endpoint) in [("authorization", authorize), ("token", token)] + (registration.map { [("registration", $0)] } ?? []) {
+                if let problem = Self.endpointBindingProblem(endpoint, issuer: issuer, server: server) {
+                    return .failure(MCPOAuthError("\(label) endpoint \(problem)"))
+                }
+            }
             return .success(ServerMetadata(authorizationEndpoint: authorize, tokenEndpoint: token, registrationEndpoint: registration))
         }
         return .failure(MCPOAuthError("no authorization server metadata at \(issuer.absoluteString)"))
+    }
+
+    /// The discovery URL and the metadata `issuer` name the same identifier.
+    static func sameIdentifier(_ lhs: URL, _ rhs: URL) -> Bool {
+        MCPHTTPExchange.sameOrigin(lhs, rhs) && MCPOAuth.trimmedPath(lhs) == MCPOAuth.trimmedPath(rhs)
+    }
+
+    /// `endpointProblem`, plus the endpoint's origin is the issuer's, and
+    /// loopback HTTP only when the MCP server itself is loopback.
+    static func endpointBindingProblem(_ endpoint: URL, issuer: URL, server: URL) -> String? {
+        if let problem = MCPRemoteServer.endpointProblem(endpoint) { return problem }
+        guard MCPHTTPExchange.sameOrigin(endpoint, issuer) else {
+            return "is not on the authorization server's origin"
+        }
+        let endpointIsLoopback = endpoint.host.map(MCPRemoteServer.isLoopback) ?? false
+        let serverIsLoopback = server.host.map(MCPRemoteServer.isLoopback) ?? false
+        if endpointIsLoopback, serverIsLoopback == false {
+            return "is loopback but the MCP server is not"
+        }
+        return nil
     }
 
     func register(_ endpoint: URL?, redirectURI: String) -> Result<(id: String, secret: String?), MCPOAuthError> {
@@ -507,31 +597,52 @@ struct MCPLoopbackRedirect: ~Copyable {
         return MCPLoopbackRedirect(fd: fd, port: Int(UInt16(bigEndian: actual.sin_port)))
     }
 
-    /// Query parameters of the first `GET /callback`; other requests get 404.
-    func wait(timeout: TimeInterval) -> [String: String]? {
+    /// Query parameters of the `GET /callback` whose state matches; other
+    /// requests get 404 and a state mismatch gets 400, and waiting
+    /// continues — any local process can knock on the port, so the first
+    /// knock must neither consume the sign-in nor leak its descriptor(s).
+    func wait(timeout: TimeInterval, state expectedState: String) -> [String: String]? {
         let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
+        var attempts = 0
+        while Date() < deadline, attempts < 32 {
             var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
             let remaining = Int32(max(1, min(1000, deadline.timeIntervalSinceNow * 1000)))
             guard poll(&poller, 1, remaining) > 0 else { continue }
             let connection = accept(fd, nil, nil)
             guard connection >= 0 else { continue }
-            defer { close(connection) }
-            guard let target = Self.requestTarget(connection), let components = URLComponents(string: target),
-                components.path == "/callback"
-            else {
+            attempts += 1
+            let parameters = Self.callbackParameters(connection)
+            guard let parameters else {
                 Self.respond(connection, status: "404 Not Found", text: "Not found")
+                close(connection)
                 continue
             }
-            var parameters: [String: String] = [:]
-            for item in components.queryItems ?? [] where parameters[item.name] == nil { parameters[item.name] = item.value ?? "" }
+            guard parameters["state"] == expectedState else {
+                Self.respond(connection, status: "400 Bad Request", text: "rv: that sign-in link does not match this attempt.")
+                close(connection)
+                // A knock carrying a code or an error is the browser flow
+                // itself, gone wrong: fail fast. A bare knock (a port scan,
+                // a stray tab) must not consume the attempt — keep waiting.
+                if parameters["code"] != nil || parameters["error"] != nil { return parameters }
+                continue
+            }
             let failed = parameters["error"] != nil
             Self.respond(
                 connection, status: "200 OK",
                 text: failed ? "rv: sign-in was refused. You can close this window." : "rv: signed in. You can close this window.")
+            close(connection)
             return parameters
         }
         return nil
+    }
+
+    private static func callbackParameters(_ connection: Int32) -> [String: String]? {
+        guard let target = requestTarget(connection), let components = URLComponents(string: target),
+            components.path == "/callback"
+        else { return nil }
+        var parameters: [String: String] = [:]
+        for item in components.queryItems ?? [] where parameters[item.name] == nil { parameters[item.name] = item.value ?? "" }
+        return parameters
     }
 
     /// The target of a `GET` request line, read within 5 seconds and 8 KiB.
@@ -571,14 +682,44 @@ public struct MCPOAuthTokenStore: Sendable {
     public var save: @Sendable (String, MCPOAuthTokens) -> Bool
     /// True when nothing is stored afterwards.
     public var remove: @Sendable (String) -> Bool
+    /// Runs `body` holding the per-server interprocess lock, so two
+    /// `rv mcp serve` processes cannot refresh one rotating token at the
+    /// same time (the second refresh reads as token reuse and the family
+    /// is revoked). False when the lock could not be taken in time.
+    public var withExclusiveLock: @Sendable (String, @Sendable () -> Void) -> Bool
 
     public init(
         load: @escaping @Sendable (String) -> MCPOAuthTokens?, save: @escaping @Sendable (String, MCPOAuthTokens) -> Bool,
-        remove: @escaping @Sendable (String) -> Bool
+        remove: @escaping @Sendable (String) -> Bool,
+        withExclusiveLock: @escaping @Sendable (String, @Sendable () -> Void) -> Bool = { _, body in body(); return true }
     ) {
         self.load = load
         self.save = save
         self.remove = remove
+        self.withExclusiveLock = withExclusiveLock
+    }
+
+    /// flock on `mcp-oauth/.<server>.lock`, bounded past the refresh HTTP
+    /// timeout so a peer mid-refresh is waited out, not raced.
+    static func interprocessLock(configDirectory: URL) -> @Sendable (String, @Sendable () -> Void) -> Bool {
+        { server, body in
+            let directory = configDirectory.appendingPathComponent(directoryName, isDirectory: true)
+            try? FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let fd = open(directory.appendingPathComponent(".\(server).lock").path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+            guard fd >= 0 else { return false }
+            defer { close(fd) }
+            for attempt in 0..<400 {
+                if flock(fd, LOCK_EX | LOCK_NB) == 0 {
+                    body()
+                    _ = flock(fd, LOCK_UN)
+                    return true
+                }
+                if errno != EWOULDBLOCK && errno != EINTR { return false }
+                if attempt < 399 { usleep(100_000) }
+            }
+            return false
+        }
     }
 
     public static let none = MCPOAuthTokenStore(load: { _ in nil }, save: { _, _ in false }, remove: { _ in true })
@@ -595,7 +736,8 @@ public struct MCPOAuthTokenStore: Sendable {
                 return MCPOAuthTokens.decode(Data(value.revealed()))
             },
             save: { server, tokens in writer.store(keychainService, server, tokens.encoded()) },
-            remove: { server in writer.delete(keychainService, server) })
+            remove: { server in writer.delete(keychainService, server) },
+            withExclusiveLock: interprocessLock(configDirectory: configDirectory))
         #else
         return file(configDirectory: configDirectory)
         #endif
@@ -606,7 +748,7 @@ public struct MCPOAuthTokenStore: Sendable {
         @Sendable func url(_ server: String) -> URL { directory.appendingPathComponent("\(server).json", isDirectory: false) }
         return MCPOAuthTokenStore(
             load: { server in
-                guard case .success(let data?) = OwnerOnlyFile.read(url(server), maximumBytes: 256 * 1024) else { return nil }
+                guard case .success(let data?) = OwnerOnlyFile.read(url(server), maximumBytes: 256 * 1024, confidential: true) else { return nil }
                 return MCPOAuthTokens.decode(data)
             },
             save: { server, tokens in
@@ -614,7 +756,8 @@ public struct MCPOAuthTokenStore: Sendable {
                     at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
                 return OwnerOnlyFile.write(tokens.encoded(), to: url(server))
             },
-            remove: { server in unlink(url(server).path) == 0 || errno == ENOENT })
+            remove: { server in unlink(url(server).path) == 0 || errno == ENOENT },
+            withExclusiveLock: interprocessLock(configDirectory: configDirectory))
     }
 }
 
@@ -631,18 +774,35 @@ extension MCPRemoteAuthorizer {
         let gate = Mutex(0)
         let refresh: @Sendable (String?) -> Bool = { rejected in
             gate.withLock { _ in
-                let held = current.withLock { $0 }
-                if let rejected, held.accessToken != rejected { return true }
-                switch MCPOAuth.refresh(held, http: http, now: clock()) {
-                case .failure(let error):
-                    log("MCP server \(server): could not refresh its OAuth token: \(error.message)")
-                    return false
-                case .success(let next):
-                    current.withLock { $0 = next }
-                    if store.save(server, next) == false { log("MCP server \(server): could not save its refreshed OAuth token") }
-                    refreshed(next)
-                    return true
+                // Under the interprocess lock: reload first, since a peer
+                // process may already have rotated the token; refreshing the
+                // spent one would read as reuse and revoke the family.
+                let outcome = Mutex(false)
+                let locked = store.withExclusiveLock(server) {
+                    var held = current.withLock { $0 }
+                    if let stored = store.load(server), stored.accessToken != held.accessToken {
+                        held = stored
+                        current.withLock { $0 = stored }
+                        refreshed(stored)
+                    }
+                    if let rejected, held.accessToken != rejected {
+                        outcome.withLock { $0 = true }
+                        return
+                    }
+                    switch MCPOAuth.refresh(held, http: http, now: clock()) {
+                    case .failure(let error):
+                        log("MCP server \(server): could not refresh its OAuth token: \(error.message)")
+                    case .success(let next):
+                        current.withLock { $0 = next }
+                        if store.save(server, next) == false { log("MCP server \(server): could not save its refreshed OAuth token") }
+                        refreshed(next)
+                        outcome.withLock { $0 = true }
+                    }
                 }
+                if locked == false {
+                    log("MCP server \(server): another rv process is refreshing its OAuth token; not racing it")
+                }
+                return outcome.withLock { $0 }
             }
         }
         return MCPRemoteAuthorizer(

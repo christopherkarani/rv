@@ -25,6 +25,7 @@ _rv() {
     'managed:Organization policy: status, verify, keygen, sign'
     'report:Governance posture of this machine (MDM, --json)'
     'operator:Propose and poll identity launches'
+    'egress:Review blocked network egress'
   )
   _arguments '1: :->cmds' '*:: :->args'
   case $state in
@@ -53,7 +54,7 @@ _rv() {
           ;;
         policy)
           local -a po
-          po=('show:List rules' 'draft:Compile English' 'validate:Validate' 'export:Export' 'apply:Apply')
+          po=('show:List rules' 'list:List policy revisions' 'draft:Compile English' 'validate:Validate' 'export:Export' 'apply:Apply')
           _describe -t commands 'policy' po
           ;;
         scan)
@@ -71,10 +72,10 @@ _rv() {
           op=('propose:Propose one identity launch' 'proposal-status:Poll one proposal status')
           _describe -t commands 'operator' op
           ;;
-        secrets)
-          local -a se
-          se=('list:List secrets' 'check:Resolve and fingerprint' 'set:Store a value' 'remove:Delete' 'scan:Scan a tree' 'describe:Metadata only' 'import:Import a Varlock schema' 'hook:Git pre-commit hook')
-          _describe -t commands 'secrets' se
+        egress)
+          local -a eg
+          eg=('pending:List network proposals awaiting a human' 'show:Show one network proposal' 'approve:Approve one network proposal' 'deny:Deny one network proposal' 'denials:Show recent proxy denials')
+          _describe -t commands 'egress' eg
           ;;
       esac
       ;;

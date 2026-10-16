@@ -496,4 +496,68 @@ struct AllowOnceCommandRunTests {
         _ = try AllowOnceClear.parse([])
         _ = try AllowOnceMint.parse(["git", "status"])
     }
+
+    @Test func listEscapesCwd() async throws {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let raw = "/tmp/p\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence
+        let home = try isolatedHome()
+        let store = AllowOnceCLI.store(home: home)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        _ = try await store.mint(
+            matchingView: MatchingView("git status"), cwd: wd(raw), ruleID: nil, tty: tty, now: now)
+        let rows = await store.list(now: now)
+        let json = try RobotDocument.allowOnceList(allowOnceRobotRows(from: rows)).render()
+        #expect(json.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(json.unicodeScalars.contains { $0.value == 0x2029 } == false)
+        #expect(json.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(json.contains("\\u2028"))
+        #expect(json.contains("\\u2029"))
+        #expect(json.contains("\\u202e"))
+        let parsed = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
+        #expect(parsed.contains { $0["cwd"] as? String == raw })
+        let text = try await captureStdout {
+            try await withCLIProcess(home: home) {
+                var command = try AllowOnceList.parse([])
+                try await command.run()
+            }
+        }
+        #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x2029 } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(text.contains("cwd="))
+        #expect(text.contains("\\u001b[2J"))
+        #expect(text.contains("\\u2028"))
+        #expect(text.contains("\\u2029"))
+        #expect(text.contains("\\u202e"))
+        let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+        #expect(lines.contains(sentence) == false)
+    }
+
+    @Test func listEscapesCommandAndInvocationTag() async throws {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let word = "x\u{1B}[2J\u{1B}[H" + sentence + "\u{202E}" + sentence
+        let tag = "/tmp/bin\u{1B}[2J\u{202E}rv"
+        let home = try isolatedHome()
+        let store = AllowOnceCLI.store(home: home)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let tty = TTYCapability(stdinIsTTY: true, stdoutIsTTY: true, ci: false)
+        _ = try await store.mint(
+            matchingView: MatchingView(word), cwd: wd("/tmp/work"), ruleID: nil, tty: tty, now: now,
+            invocationDisplay: tag)
+        let text = try await captureStdout {
+            try await withCLIProcess(home: home) {
+                var command = try AllowOnceList.parse([])
+                try await command.run()
+            }
+        }
+        #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(text.contains("\\u001b[2J"))
+        #expect(text.contains("\\u202e"))
+        #expect(text.contains("cwd=/tmp/work"))
+        let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+        #expect(lines.contains(sentence) == false)
+    }
 }

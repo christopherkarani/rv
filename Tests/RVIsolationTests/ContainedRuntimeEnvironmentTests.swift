@@ -182,6 +182,8 @@ import Testing
 }
 
 @Test func terminalEnvironmentPassesGatewayThrough() {
+    // Gateway routing survives on the default config via the generic
+    // projection; live host keys do not.
     let values = containedRuntimeEnvironment(
         workspace: "/tmp/ws", io: .pseudoTerminal(rows: 24, columns: 80),
         agentBin: "/opt/rv/bin/rv-agent-bin",
@@ -193,11 +195,23 @@ import Testing
     )
     #expect(values.contains("ANTHROPIC_BASE_URL=http://127.0.0.1:10100"))
     #expect(values.contains("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1"))
-    #expect(values.contains("ANTHROPIC_API_KEY=host-key-value"))
+    #expect(values.contains("ANTHROPIC_API_KEY=rv-cage-gateway-placeholder"))
+    #expect(values.allSatisfy { $0 != "ANTHROPIC_API_KEY=host-key-value" })
     #expect(values.allSatisfy { $0.hasPrefix("CLAUDE_CODE_AUTO_COMPACT_WINDOW=") == false })
+    // Explicit legacy-keys opt-in restores the host value.
+    let optedIn = containedRuntimeEnvironment(
+        workspace: "/tmp/ws", io: .pseudoTerminal(rows: 24, columns: 80),
+        agentBin: "/opt/rv/bin/rv-agent-bin",
+        hostEnvironment: ["ANTHROPIC_API_KEY": "host-key-value"],
+        credentialDelivery: .legacyOptIn
+    )
+    #expect(optedIn.contains("ANTHROPIC_API_KEY=host-key-value"))
 }
 
 @Test func terminalEnvironmentKeyPolicy() {
+    // F2 default closed: live host keys never reach the cage, even with an
+    // agent bin installed. The gateway placeholder stands in for the
+    // missing key, never empty/absent.
     let values = containedRuntimeEnvironment(
         workspace: "/tmp/ws", io: .pseudoTerminal(rows: 24, columns: 80),
         agentBin: "/opt/rv/bin/rv-agent-bin",
@@ -206,24 +220,33 @@ import Testing
             "OPENAI_API_KEY": "must-not-pass",
         ]
     )
-    #expect(values.contains("META_API_KEY=keychain-captive"))
+    #expect(values.allSatisfy { $0.hasPrefix("META_API_KEY=") == false })
     #expect(values.allSatisfy { $0.hasPrefix("OPENAI_API_KEY=") == false })
-    // No host key: the gateway placeholder stands in, never empty/absent.
     #expect(values.contains("ANTHROPIC_API_KEY=rv-cage-gateway-placeholder"))
-    // A host key wins over the placeholder.
-    let explicit = containedRuntimeEnvironment(
+    // Explicit legacy-keys opt-in restores the pre-F2 behavior for the two
+    // compat keys only; other provider keys stay blocked. A host key wins
+    // over the placeholder.
+    let optedIn = containedRuntimeEnvironment(
         workspace: "/tmp/ws", io: .pseudoTerminal(rows: 24, columns: 80),
         agentBin: "/opt/rv/bin/rv-agent-bin",
-        hostEnvironment: ["ANTHROPIC_API_KEY": "host-key-value"]
+        hostEnvironment: [
+            "META_API_KEY": "keychain-captive",
+            "OPENAI_API_KEY": "must-not-pass",
+            "ANTHROPIC_API_KEY": "host-key-value",
+        ],
+        credentialDelivery: .legacyOptIn
     )
-    #expect(explicit.contains("ANTHROPIC_API_KEY=host-key-value"))
-    #expect(explicit.allSatisfy { $0 != "ANTHROPIC_API_KEY=rv-cage-gateway-placeholder" })
-    // AgentBin key compat applies to one-shot runs too: agents authenticate
+    #expect(optedIn.contains("META_API_KEY=keychain-captive"))
+    #expect(optedIn.contains("ANTHROPIC_API_KEY=host-key-value"))
+    #expect(optedIn.allSatisfy { $0.hasPrefix("OPENAI_API_KEY=") == false })
+    #expect(optedIn.allSatisfy { $0 != "ANTHROPIC_API_KEY=rv-cage-gateway-placeholder" })
+    // Opt-in key compat applies to one-shot runs too: agents authenticate
     // the same way in both modes. A host key wins over the placeholder.
     let oneShot = containedRuntimeEnvironment(
         workspace: "/tmp/ws", io: .inherit,
         agentBin: "/opt/rv/bin/rv-agent-bin",
-        hostEnvironment: ["META_API_KEY": "x", "ANTHROPIC_API_KEY": "x"]
+        hostEnvironment: ["META_API_KEY": "x", "ANTHROPIC_API_KEY": "x"],
+        credentialDelivery: .legacyOptIn
     )
     #expect(oneShot.contains("META_API_KEY=x"))
     #expect(oneShot.contains("ANTHROPIC_API_KEY=x"))
@@ -549,5 +572,63 @@ import Testing
     developerHome.writeShim(name: "test-shim", content: "v2")
     #expect(try String(contentsOfFile: path, encoding: .utf8) == "v2")
     #expect(try FileManager.default.contentsOfDirectory(atPath: bin.path) == ["test-shim"])
+}
+
+@Test func cagedEnvironmentDeniesCredentialClassByDefault() {
+    // End-to-end through the real builder: credential host values never
+    // cross — neither names nor values — while toolchain selectors survive.
+    let host = [
+        "GH_TOKEN": "test-fake-secret-1",
+        "AWS_SECRET_ACCESS_KEY": "test-fake-secret-2",
+        "SSH_AUTH_SOCK": "/tmp/ssh-agent.sock",
+        "KUBECONFIG": "/Users/test/.kube/config",
+        "RUSTUP_TOOLCHAIN": "stable",
+        "TOKENIZERS_PARALLELISM": "false",
+    ]
+    for io in [IsolatedIO.inherit, .pseudoTerminal(rows: 24, columns: 80)] {
+        let values = containedRuntimeEnvironment(
+            workspace: "/tmp/ws", io: io, hostEnvironment: host
+        )
+        for name in ["GH_TOKEN", "AWS_SECRET_ACCESS_KEY", "SSH_AUTH_SOCK", "KUBECONFIG"] {
+            #expect(values.allSatisfy { $0.hasPrefix(name + "=") == false })
+        }
+        #expect(values.allSatisfy { $0.contains("test-fake-secret") == false })
+        #expect(values.contains("RUSTUP_TOOLCHAIN=stable"))
+        #expect(values.contains("TOKENIZERS_PARALLELISM=false"))
+    }
+}
+
+@Test func cagedEnvironmentKeepsToolchainSelectors() {
+    let toolchain = [
+        "RUSTUP_TOOLCHAIN": "stable-aarch64-apple-darwin",
+        "RUSTUP_HOME": "/Users/test/.rustup",
+        "CARGO_HOME": "/Users/test/.cargo",
+        "PYENV_VERSION": "3.12.1",
+        "PYENV_ROOT": "/Users/test/.pyenv",
+        "NODE_VERSION": "20.11.0",
+        "NVM_DIR": "/Users/test/.nvm",
+        "GOENV_VERSION": "1.22.0",
+        "JAVA_HOME": "/Library/Java/Home",
+        "SDKMAN_DIR": "/Users/test/.sdkman",
+        "CONDA_PREFIX": "/Users/test/miniconda3",
+        "VOLTA_HOME": "/Users/test/.volta",
+        "DENO_DIR": "/Users/test/.deno",
+        "BUN_INSTALL": "/Users/test/.bun",
+        "MISE_DATA_DIR": "/Users/test/.mise",
+        "ASDF_DIR": "/Users/test/.asdf",
+        "SWIFTLY_HOME": "/Users/test/.swiftly",
+        "PYTHON_VERSION": "3.12",
+        "RUBY_VERSION": "3.3",
+        "TOKENIZERS_PARALLELISM": "false",
+        "HF_HUB_OFFLINE": "1",
+    ]
+    for io in [IsolatedIO.inherit, .pseudoTerminal(rows: 24, columns: 80)] {
+        let values = containedRuntimeEnvironment(
+            workspace: "/tmp/ws", io: io, hostEnvironment: toolchain
+        )
+        for (name, value) in toolchain {
+            #expect(values.contains("\(name)=\(value)"), "toolchain survives builder: \(name)")
+        }
+    }
 }
 #endif

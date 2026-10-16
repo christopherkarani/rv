@@ -2,6 +2,7 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+import Synchronization
 
 /// How to reach one remote upstream; header secrets are already substituted.
 public struct MCPRemoteLaunch: Sendable, Equatable {
@@ -67,7 +68,7 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
     private struct Exchange {
         enum Kind {
             case post(JSONValue, retried: Bool)
-            case stream
+            case stream(retried: Bool)
         }
 
         var kind: Kind
@@ -129,12 +130,23 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         let session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
         locked { self.session = session }
         guard launch.transport == .sse else { return }
+        openStream(session: session, retried: false)
+    }
+
+    private func openStream(session: URLSession, retried: Bool) {
+        let (sent, token) = headers()
         var request = MCPHTTPExchange.request(
-            url: launch.url, method: "GET", headers: headers().headers, sessionID: nil, protocolVersion: nil, body: nil)
+            url: launch.url, method: "GET", headers: sent, sessionID: nil, protocolVersion: nil, body: nil)
         request.timeoutInterval = 24 * 60 * 60
-        let task = session.dataTask(with: request)
-        locked { exchanges[task.taskIdentifier] = Exchange(kind: .stream) }
-        task.resume()
+        // Create under the lock stop() holds while invalidating: a task
+        // created on an invalidated session raises instead of failing.
+        let task: URLSessionDataTask? = locked {
+            guard stopped == false, self.session === session else { return nil }
+            let task = session.dataTask(with: request)
+            exchanges[task.taskIdentifier] = Exchange(kind: .stream(retried: retried), token: token)
+            return task
+        }
+        task?.resume()
     }
 
     func send(_ message: JSONValue) {
@@ -256,7 +268,15 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
             return
         }
         switch exchange.kind {
-        case .stream:
+        case .stream(let retried):
+            // The GET stream gets the same one-shot 401 refresh as a POST:
+            // an expired token at startup must not kill the connection.
+            if exchange.status == 401, retried == false, let authorizer, authorizer.refresh(exchange.token),
+                locked({ stopped }) == false
+            {
+                openStream(session: session, retried: true)
+                return
+            }
             let reason = exchange.status == 200 || exchange.status == 0
                 ? (error.map { "event stream failed: \($0.localizedDescription)" } ?? "event stream closed")
                 : "event stream refused (HTTP \(exchange.status))"
@@ -316,22 +336,26 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         guard message["method"] == nil, let id = message["id"] else { return }
         if case .post(let request, _) = exchange.kind, request["id"] == id { exchange.answered = true }
         locked {
+            // The version goes back out as a header value, so it gets the
+            // same visible-ASCII rule as a session ID.
             if id == initializeID, let version = message["result"]?["protocolVersion"]?.stringValue,
-                version.isEmpty == false, version.utf8.count <= 64
+                MCPHTTPExchange.isSessionID(version)
             {
                 protocolVersion = version
             }
         }
     }
 
-    /// Legacy SSE: the stream names where to POST. It must be same-origin,
-    /// or headers and tokens would go to a host the user never reviewed.
+    /// Legacy SSE: the stream names where to POST. The bearer stays on this
+    /// server's exact URL. A different path or query, a foreign origin, or a
+    /// URL `mcp.json` would refuse is not a place to send it.
     private func useEndpoint(_ text: String, stream: URLSessionDataTask) {
-        guard let url = URL(string: text.trimmingCharacters(in: .whitespaces), relativeTo: launch.url)?.absoluteURL,
-            MCPHTTPExchange.sameOrigin(url, launch.url)
-        else {
-            log("MCP server \(name) named a message endpoint on another origin; refused")
+        if let problem = Self.messageEndpointRefusal(text, relativeTo: launch.url) {
+            log("MCP server \(name) named a message endpoint \(problem); refused")
             stream.cancel()
+            return
+        }
+        guard let url = URL(string: text.trimmingCharacters(in: .whitespaces), relativeTo: launch.url)?.absoluteURL else {
             return
         }
         let flushed: [JSONValue] = locked {
@@ -342,14 +366,71 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         }
         for message in flushed { post(message, to: url, retried: false) }
     }
+
+    /// Nil when `text` may receive the bearer token. The refusal is a phrase
+    /// that finishes "named a message endpoint …".
+    static func messageEndpointRefusal(_ text: String, relativeTo base: URL) -> String? {
+        guard let url = URL(string: text.trimmingCharacters(in: .whitespaces), relativeTo: base)?.absoluteURL else {
+            return "that is not a URL"
+        }
+        // Origin first: a foreign URL is refused even when it also fails the
+        // https check, which is the log the legacy SSE stream already emits.
+        if MCPHTTPExchange.sameOrigin(url, base) == false { return "on another origin" }
+        if let problem = MCPRemoteServer.endpointProblem(url) { return "that \(problem)" }
+        if MCPOAuth.sameResource(url, base) == false { return "other than this MCP server's URL" }
+        return nil
+    }
 }
 
-/// Refuses every redirect (D22) for one-shot OAuth requests.
-final class MCPNoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+/// One-shot response accumulator: refuses redirects and aborts past `limit`.
+final class MCPBoundedOneShot: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    let limit: Int
+    let done = DispatchSemaphore(value: 0)
+    let result = Mutex<MCPHTTPResponse?>(nil)
+    private let state = Mutex<(status: Int, headers: [String: String], body: Data, overflow: Bool)>((0, [:], Data(), false))
+
+    init(limit: Int) { self.limit = limit }
+
     func urlSession(
         _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
         newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
     ) {
         completionHandler(nil)
+    }
+
+    func urlSession(
+        _ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        guard let http = response as? HTTPURLResponse else {
+            completionHandler(.cancel)
+            return
+        }
+        var headers: [String: String] = [:]
+        for (key, value) in http.allHeaderFields {
+            if let key = key as? String, let value = value as? String { headers[key] = value }
+        }
+        state.withLock { $0.status = http.statusCode; $0.headers = headers }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        let overflow = state.withLock { current -> Bool in
+            if current.body.count + data.count > limit {
+                current.overflow = true
+                return true
+            }
+            current.body.append(data)
+            return false
+        }
+        if overflow { dataTask.cancel() }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        let finished = state.withLock { $0 }
+        if error == nil, finished.overflow == false, finished.status > 0 {
+            result.withLock { $0 = MCPHTTPResponse(status: finished.status, headers: finished.headers, body: finished.body) }
+        }
+        done.signal()
     }
 }

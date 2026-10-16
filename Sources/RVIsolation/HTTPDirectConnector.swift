@@ -5,17 +5,28 @@ import Synchronization
 /// Dials the address already stored on an authorized HTTPS GET.
 ///
 /// The contained process is not given a socket. This type does not choose
-/// policy. A name is not resolved again here.
+/// policy. A name is not resolved again here. `credential` is the broker
+/// injection the admission gate granted for this exact action, passed as
+/// an argument (return-value correlated, no request-ID lookup); its value
+/// becomes the request's single `Authorization` header, or nothing is
+/// added when nil.
 enum HTTPDirectExecutor {
     static func perform(
         _ action: HTTPAction,
+        credential: BrokeredCredentialInjection? = nil,
         cancellation: HTTPCancellation,
         shouldStop: @escaping @Sendable () -> Bool
     ) -> Result<HTTPExecutionReceipt, HTTPEgressFailure> {
         #if os(macOS)
-        return openAndExchange(action, cancellation: cancellation, shouldStop: shouldStop)
+        return openAndExchange(
+            action,
+            credential: credential?.value,
+            cancellation: cancellation,
+            shouldStop: shouldStop
+        )
         #else
         _ = action
+        _ = credential
         _ = cancellation
         _ = shouldStop
         return .failure(.notOpened(.unavailable))
@@ -114,6 +125,7 @@ enum DirectHTTPConnection {
 
 private func openAndExchange(
     _ action: HTTPAction,
+    credential: String?,
     cancellation: HTTPCancellation,
     shouldStop: @escaping @Sendable () -> Bool
 ) -> Result<HTTPExecutionReceipt, HTTPEgressFailure> {
@@ -157,7 +169,8 @@ private func openAndExchange(
             destination: action.destination,
             transfer: transfer,
             deadline: deadline,
-            shouldStop: shouldStop
+            shouldStop: shouldStop,
+            credential: credential
         )
     }
 }

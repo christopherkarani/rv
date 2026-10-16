@@ -87,6 +87,93 @@ enum SeatbeltMachPolicy {
     }
 }
 
+/// Sysctl posture for the first-slice profile. `.coarse` keeps the
+/// production `(allow sysctl-read)` toolchains require;
+/// `.perMIBExperiment` compiles the T9 R4 experiment shape instead. The
+/// experiment is tests-only: `compileSeatbeltProfile` never selects it,
+/// and T10 owns the ship decision plus the full toolchain-MIB matrix.
+enum SeatbeltSysctlPolicy: Sendable, Equatable {
+    case coarse
+    case perMIBExperiment
+}
+
+/// R4 per-MIB experiment (T9, spec Item 6: SEC-6-1, REQ-6-2, AC-6).
+///
+/// Shape borrowed from OpenShell policy: deny-by-default with explicit
+/// allows ("OpenShell denies anything the policy does not allow",
+/// https://docs.nvidia.com/openshell/latest/how-it-works/policies/overview)
+/// and per-call mediation in the kernel (the seccomp user-notification
+/// broker, https://raw.githubusercontent.com/NVIDIA/OpenShell/main/crates/openshell-driver-docker/README.md).
+/// The enforcement point is Seatbelt-native: `sysctl-name` allowlist plus
+/// same-sandbox pidinfo scoping, per spec CON-6-3.
+///
+/// Measured on Darwin 27 (T9, `SeatbeltPerMIBExperimentTests` locks it in):
+/// KERN_PROCARGS2 consults the sysctl branch OR the process-info-pidinfo
+/// branch, so either half alone leaves same-user host argv+env readable
+/// and only both halves together deny host reads while keeping self
+/// reads. `sysctl-name` matching is exact (a `"kern"` entry matches
+/// nothing); KERN_PROC_ALL and KERN_PROCARGS2 are nameless structural
+/// MIBs (`sysctl kern.proc.all` / `kern.procargs2` do not exist), so no
+/// filtered allow reopens them — only the coarse unfiltered allow does.
+/// Consequence: the experiment also hides the host process table, which
+/// is fence-tightening, not weakening.
+///
+/// T10 gate: every allowlist addition must re-verify host-denial
+/// (`HOST errno=`, no `HOST read bytes=`) — an entry can only reopen a
+/// named leaf, but the check is cheap and the property is the point.
+enum SeatbeltSysctlExperiment {
+    /// Allowlisted leaf MIBs, each with its observed consumer.
+    /// uname(3) quintet: swift --version fails ("requires a minimum
+    /// deployment target") until kern.hostname, kern.version, and
+    /// hw.machine join the kern.ostype/kern.osrelease base.
+    /// hw.ncpu/hw.memsize: parallelism and memory topology every build
+    /// system queries; verified not to reopen host procargs.
+    /// hw.pagesize_compat: getpagesize(3) and therefore
+    /// sysconf(_SC_PAGESIZE) issue the numeric MIB
+    /// {CTL_HW, HW_PAGESIZE}. That OID is the int node
+    /// `hw.pagesize_compat`, not the quad `hw.pagesize` (OID_AUTO).
+    /// Node's abseil LowLevelAlloc casts a failed sysconf to
+    /// `(size_t)-1` and aborts in CheckedAdd (`sum >= a`). Allowing
+    /// the quad name leaves the numeric query EPERM. The compat leaf
+    /// is still a named leaf, so it does not reopen nameless
+    /// KERN_PROCARGS2.
+    static let allowlistedNames: [String] = [
+        "kern.ostype",
+        "kern.osrelease",
+        "kern.hostname",
+        "kern.version",
+        "hw.machine",
+        "hw.ncpu",
+        "hw.memsize",
+        "hw.pagesize_compat",
+    ]
+
+    /// SBPL fragment for the sysctl posture. The coarse arm is the
+    /// production line byte-for-byte; the experiment arm is deny-first
+    /// plus the allowlist plus pidinfo scoping (both halves required).
+    static func sbplRules(policy: SeatbeltSysctlPolicy) -> String {
+        switch policy {
+        case .coarse:
+            return "(allow sysctl-read)"
+        case .perMIBExperiment:
+            let names = allowlistedNames
+                .map { "(sysctl-name \"\($0)\")" }
+                .joined(separator: "\n    ")
+            return """
+            ;; R4 per-MIB experiment (T9): deny-first sysctl plus
+            ;; same-sandbox pidinfo. Either half alone leaves host
+            ;; KERN_PROCARGS2 readable; both halves deny host reads and
+            ;; keep self reads. T10 owns shipping this shape.
+            (deny sysctl-read)
+            (allow sysctl-read
+                \(names))
+            (deny process-info-pidinfo)
+            (allow process-info-pidinfo (target same-sandbox))
+            """
+        }
+    }
+}
+
 /// SBPL text compiled from a contained `IsolationPlan`. Production construction
 /// is `compileSeatbeltProfile` only.
 public struct SeatbeltProfile: Sendable, Equatable {
@@ -209,7 +296,11 @@ public struct SeatbeltProfile: Sendable, Equatable {
     /// Productive workspace grants: the RV-managed home/cache/tmp roots
     /// (read/write/execute), toolchain and PATH-implied trees
     /// (read/execute), developer-configuration reads, and explicit denies
-    /// for sensitive paths that take precedence over every allow.
+    /// for sensitive paths. SBPL is last-match: the sensitive denies are
+    /// ordered after the broad toolchain/home allows they must override,
+    /// but the confstr tmp grant emits after the denies, so a sensitive
+    /// path under the per-user tmp dir would be re-allowed (accepted R3
+    /// posture, pinned by SeatbeltR3TmpPostureTests).
     func allowingProductiveWorkspace(_ resolution: ProductiveWorkspaceResolution) -> SeatbeltProfile {
         var additions = ""
         if let home = resolution.developerHome {
@@ -293,18 +384,36 @@ public struct SeatbeltProfile: Sendable, Equatable {
                 \(literals))
             """
         }
-        // Fallback temp for tools whose tasks do not inherit TMPDIR.
-        // SwiftBuild backend tasks run with a constructed environment (PATH
-        // plus settings) that drops TMPDIR/TEMP/TMP, so the Swift driver
-        // falls back to the confstr per-user temp dir: link temp files
-        // need it writable (`permissionDenied` without), and test-bundle
-        // plist processing creates temp dirs there with backup exclusion,
-        // which needs read-back too. This opens same-user transient temp
-        // files to the cage; macOS itself isolates those per-user only
-        // (every process the user runs can already read them), and the
-        // persistent secrets (home, keychains, caches, the catalog above)
-        // stay denied. Upstream: SwiftPM should propagate the temp vars
-        // to SwiftBuild tasks; narrow or remove this grant when it does.
+        // R3 ACCEPTED RISK (T11, 2026-10-10): fallback temp for tools
+        // whose tasks do not inherit TMPDIR. SwiftBuild backend tasks run
+        // with a constructed environment (PATH plus settings) that drops
+        // TMPDIR/TEMP/TMP, so the Swift driver falls back to the confstr
+        // per-user temp dir: link temp files need it writable
+        // (`permissionDenied` without), and test-bundle plist processing
+        // creates temp dirs there with backup exclusion, which needs
+        // read-back too. The grant is therefore read-write over the whole
+        // confstr dir, and the cage can read and write same-user transient
+        // temp files. macOS isolates that dir per-user only (every process
+        // the user runs can already read it); persistent secrets (home,
+        // keychains, caches, the catalog above) stay denied, and the
+        // shared `/tmp` root outside the confstr dir stays content-denied.
+        // Narrowing was rejected, not overlooked: write-only breaks the
+        // test-bundle read-back, a subdir grant breaks SwiftBuild's own
+        // temp names, and Seatbelt subpaths are prefix-only so the grant
+        // cannot be scoped to cage-created files. Dedicated cage uid is
+        // the structural fix (joint R3+R4) but is DEFERRED per T10, which
+        // ships the per-MIB posture instead. OpenShell grants its own
+        // `/tmp` read-write too, but that tmp is container-private
+        // (https://docs.nvidia.com/openshell/latest/how-it-works/policies/default-policy);
+        // rv has no container boundary on macOS, so this grant stays
+        // host-shared until uid separation or upstream SwiftPM temp-var
+        // propagation lands — narrow or remove it when either does.
+        // OPERATOR: do not stage secrets in the per-user temp dir during
+        // contained runs; treat caged temp access as same-user access.
+        // Lock-ins: `containedChildReadsPlantedPerUserTmpFile` (read pin),
+        // `siblingTmpOutsideWorkspaceStaysContentDenied` (scope control),
+        // `productiveProfileGrantsSystemTemporaryDirectoryReadWrite`
+        // (profile-text pin), `SeatbeltR3TmpPostureTests` (this posture).
         if let systemTmp = resolution.systemTemporaryDirectory {
             additions += """
 
@@ -518,7 +627,8 @@ public func resolveProductiveWorkspace(
     hostEnvironment: [String: String]? = nil,
     agentBin: String? = nil,
     probe: ContainedPATHProbe = .live,
-    gitIdentity: (@Sendable (String) -> (name: String?, email: String?))? = nil
+    gitIdentity: (@Sendable (String) -> (name: String?, email: String?))? = nil,
+    credentialDelivery: ContainedCredentialDelivery = .closed
 ) -> ProductiveWorkspaceResolution {
     let host = hostEnvironment ?? ProcessInfo.processInfo.environment
     guard let hostHome = host["HOME"], isUsableAbsolutePath(hostHome) else {
@@ -564,14 +674,18 @@ public func resolveProductiveWorkspace(
         pathValue: sanitized.value,
         pathDirectories: sanitized.directories,
         toolchainTrees: toolchainTrees,
-        sensitiveDenies: ContainedSensitivePaths.denyPaths(hostHome: hostHome, excluding: []),
+        sensitiveDenies: ContainedSensitivePaths.denyPaths(
+            hostHome: hostHome, excluding: [], credentialDelivery: credentialDelivery
+        ),
         sensitiveFileDenies: sanitized.sensitiveFiles,
         walkMetadataRoots: productiveWalkMetadataRoots(paths: walkPaths),
         systemTemporaryDirectory: productiveSystemTemporaryDirectory()
     )
 }
 
-/// Host confstr per-user temp dir for the write-only fallback grant.
+/// Host confstr per-user temp dir for the read-write fallback grant
+/// (R3 ACCEPTED RISK, T11 — the test-bundle read-back needs reads; see
+/// the posture note at the grant site).
 /// confstr is authoritative (it does not read `$TMPDIR`, so a hostile or
 /// odd host value cannot redirect the grant). Nil when unresolvable,
 /// unusable, or missing; the caller then omits the grant.
@@ -636,19 +750,21 @@ enum AgentHomeStaging {
         let uid = getuid()
         return ["/tmp/claude-\(uid)", "/private/tmp/claude-\(uid)"]
     }
-    /// Gateway routing passes through so agents use the host's model
-    /// gateway instead of direct provider endpoints.
+    /// Gateway routing so agents use the host's model gateway instead of
+    /// direct provider endpoints. Delivered by the generic environment
+    /// projection, never re-injected: no name here matches a denied rule.
     static let gatewayPassthrough = [
         "ANTHROPIC_BASE_URL",
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
     ]
-    /// Provider keys that pass through when set on the host. muse keeps
-    /// its token in the host keychain (unreachable in the cage) and honors
-    /// only META_API_KEY otherwise. claude gates on login state bound to
-    /// the passwd home, which a workspace HOME can never satisfy; a key
-    /// selects key auth and skips the gate. Other provider keys stay
-    /// blocked: codex and opencode authenticate from staged files.
+    /// Provider keys that pass through only under explicit legacy-keys
+    /// opt-in. muse keeps its token in the host keychain (unreachable in
+    /// the cage) and honors only META_API_KEY otherwise. claude gates on
+    /// login state bound to the passwd home, which a workspace HOME can
+    /// never satisfy; a key selects key auth and skips the gate. Other
+    /// provider keys stay blocked: codex and opencode authenticate from
+    /// staged files.
     static let apiKeyPassthrough = [
         "META_API_KEY",
         "ANTHROPIC_API_KEY",
@@ -668,16 +784,23 @@ enum AgentHomeStaging {
 /// but cannot create it: /tmp itself stays metadata-only). Skips any
 /// destination that already exists so user-owned agent state wins.
 /// Best-effort: failures leave the agent to report its own missing
-/// credentials.
+/// credentials. F2 default closed: credential symlinks are created only
+/// under explicit credential-files opt-in; the non-secret scratch roots
+/// stay unconditional.
 ///
 /// Portable FileManager logic, so it lives in this unguarded file next to
 /// `AgentHomeStaging` rather than in the macOS-only supervisor.
-func stageAgentHomes(cageHome: String, hostHome: String? = nil) {
+func stageAgentHomes(
+    cageHome: String,
+    hostHome: String? = nil,
+    credentialDelivery: ContainedCredentialDelivery = .closed
+) {
     let manager = FileManager.default
     let hostHome = hostHome ?? ProcessInfo.processInfo.environment["HOME"] ?? ""
     for root in AgentHomeStaging.claudeScratchRoots() {
         try? manager.createDirectory(atPath: root, withIntermediateDirectories: true)
     }
+    guard credentialDelivery.legacyCredentialFiles else { return }
     guard cageHome.hasPrefix("/"), cageHome.contains("\0") == false else { return }
     guard hostHome.hasPrefix("/"), hostHome.contains("\0") == false else { return }
     var isDirectory: ObjCBool = false
@@ -738,10 +861,14 @@ public enum AgentBin {
     /// Per-spawn grants. `home` is the host user's home, owner of the
     /// credential files the cage reads (never writes). Filesystem access
     /// goes through `probe` so tests run hermetic; production passes live.
+    /// F2 default closed: credential originals resolve only under explicit
+    /// credential-files opt-in; executables, support trees, and scratch
+    /// dirs are non-secret and resolve as before.
     public static func resolve(
         binDirectory: String,
         home: String,
-        probe: ContainedPATHProbe = .live
+        probe: ContainedPATHProbe = .live,
+        credentialDelivery: ContainedCredentialDelivery = .closed
     ) -> AgentBinResolution {
         var resolution = AgentBinResolution(directory: binDirectory)
         for name in names {
@@ -812,6 +939,11 @@ public enum AgentBin {
                 break
             }
         }
+        // Cleared after the loop rather than guarded per site, so no future
+        // append can bypass the opt-in by missing its own check.
+        if credentialDelivery.legacyCredentialFiles == false {
+            resolution.credentials = []
+        }
         return resolution
     }
 }
@@ -874,43 +1006,97 @@ func verifySeatbeltPlan(_ plan: IsolationPlan) -> Result<WorkingDirectory, Isola
 /// Prepare / spawn never use this fallback: an existing directory that
 /// `realpath` cannot resolve is `workspacePathUnresolvable`.
 func resolvedWorkspacePath(_ workspace: WorkingDirectory) -> String {
-    posixRealpath(workspace.rawValue)
-        ?? URL(fileURLWithPath: workspace.rawValue).resolvingSymlinksInPath().path
+    switch posixRealpathRead(workspace.rawValue) {
+    case .path(let resolved):
+        return resolved
+    case .stopped:
+        // A stopped `realpath` is not an unresolved compile fixture.
+        // `resolvingSymlinksInPath` would stat the path on this thread.
+        return workspace.rawValue
+    case .unresolved:
+        return URL(fileURLWithPath: workspace.rawValue).resolvingSymlinksInPath().path
+    }
+}
+
+/// Resolution for profile compilation. A stopped `realpath` must not
+/// feed the unresolved symlink spelling into the unsafe check or the
+/// SBPL/Landlock grants: the kernel path is unknown, so compilation
+/// fails closed. A genuinely unresolved path keeps the fixture
+/// fallback above (prepare re-checks existence separately).
+func compileResolvedWorkspacePath(
+    _ workspace: WorkingDirectory
+) -> Result<String, IsolationApplyError> {
+    switch posixRealpathRead(workspace.rawValue) {
+    case .path(let resolved):
+        return .success(resolved)
+    case .stopped:
+        return .failure(.workspacePathUnresolvable)
+    case .unresolved:
+        return .success(
+            URL(fileURLWithPath: workspace.rawValue).resolvingSymlinksInPath().path
+        )
+    }
 }
 
 func existingResolvedWorkspacePath(
     _ workspace: WorkingDirectory
 ) -> Result<String, IsolationApplyError> {
-    if let resolved = posixRealpath(workspace.rawValue) {
-        var isDirectory: ObjCBool = false
-        let exists = FileManager.default.fileExists(atPath: resolved, isDirectory: &isDirectory)
-        guard exists, isDirectory.boolValue else {
+    switch posixRealpathRead(workspace.rawValue) {
+    case .stopped:
+        return .failure(.workspacePathUnresolvable)
+    case .path(let resolved):
+        switch diskImageDirectoryPresence(resolved) {
+        case .directory:
+            if isUnsafeResolvedWorkspace(resolved) {
+                return .failure(.workspacePathUnsafe)
+            }
+            return .success(resolved)
+        case .stopped:
+            return .failure(.workspacePathUnresolvable)
+        case .missing, .notDirectory:
             return .failure(.workspaceDoesNotExist)
         }
-        if isUnsafeResolvedWorkspace(resolved) {
-            return .failure(.workspacePathUnsafe)
+    case .unresolved:
+        switch diskImageDirectoryPresence(workspace.rawValue) {
+        case .directory:
+            return .failure(.workspacePathUnresolvable)
+        case .stopped:
+            return .failure(.workspacePathUnresolvable)
+        case .missing, .notDirectory:
+            return .failure(.workspaceDoesNotExist)
         }
-        return .success(resolved)
     }
-    var isDirectory: ObjCBool = false
-    let exists = FileManager.default.fileExists(
-        atPath: workspace.rawValue,
-        isDirectory: &isDirectory
-    )
-    if exists, isDirectory.boolValue {
-        return .failure(.workspacePathUnresolvable)
+}
+
+/// `realpath` off the caller. `.stopped` is the copy clock, not a missing path.
+/// The worker frees the buffer after the call returns, including when the
+/// caller has already left.
+enum PosixRealpathRead {
+    case path(String)
+    case unresolved
+    case stopped
+}
+
+func posixRealpathRead(_ path: String) -> PosixRealpathRead {
+    final class Box: @unchecked Sendable {
+        var text: String?
     }
-    return .failure(.workspaceDoesNotExist)
+    let box = Box()
+    let ok = diskImagePerformWithinCopyClock {
+        let resolved = path.withCString { realpath($0, nil) }
+        guard let resolved else { return false }
+        box.text = String(cString: resolved)
+        free(resolved)
+        return true
+    }
+    if ok == nil { return .stopped }
+    if let text = box.text { return .path(text) }
+    return .unresolved
 }
 
 func posixRealpath(_ path: String) -> String? {
-    path.withCString { source in
-        guard let buffer = realpath(source, nil) else {
-            return nil
-        }
-        defer { free(buffer) }
-        return String(cString: buffer)
-    }
+    if case let .path(text) = posixRealpathRead(path) { return text }
+    return nil
 }
 
 /// Canonicalize one resource path for profile grants. The prepare
@@ -927,9 +1113,16 @@ func canonicalResourcePath(_ path: String) -> String {
 }
 
 func compileFirstSliceProfile(
-    workspace: WorkingDirectory
+    workspace: WorkingDirectory,
+    sysctlPolicy: SeatbeltSysctlPolicy = .coarse
 ) -> Result<SeatbeltProfile, IsolationApplyError> {
-    compileFirstSliceProfile(workspace: workspace, resolvedWorkspace: resolvedWorkspacePath(workspace))
+    compileResolvedWorkspacePath(workspace).flatMap { resolved in
+        compileFirstSliceProfile(
+            workspace: workspace,
+            resolvedWorkspace: resolved,
+            sysctlPolicy: sysctlPolicy
+        )
+    }
 }
 
 /// Pure first-slice assembly over a pre-resolved workspace path. The
@@ -937,7 +1130,8 @@ func compileFirstSliceProfile(
 /// pass facts. No syscalls.
 func compileFirstSliceProfile(
     workspace: WorkingDirectory,
-    resolvedWorkspace: String
+    resolvedWorkspace: String,
+    sysctlPolicy: SeatbeltSysctlPolicy = .coarse
 ) -> Result<SeatbeltProfile, IsolationApplyError> {
     let raw = workspace.rawValue
     guard raw.hasPrefix("/") else {
@@ -976,7 +1170,7 @@ func compileFirstSliceProfile(
     ;; writing the PTY. An untargeted signal allow would let the agent signal
     ;; processes outside this sandbox.
     (allow signal (target same-sandbox))
-    (allow sysctl-read)
+    \(SeatbeltSysctlExperiment.sbplRules(policy: sysctlPolicy))
     \(SeatbeltMachPolicy.sbplRules())
     (allow file-read-data (literal "/"))
     (allow file-read-metadata (literal "/"))

@@ -38,7 +38,7 @@ struct MCPImportTests {
         #expect(context7.args == ["-y", "@upstash/context7-mcp", "--api-key", "${secret:CONTEXT7_API_KEY}"])
         #expect(context7.secrets == ["GITHUB_TOKEN": "GITHUB_TOKEN"])
         #expect(context7.environment == ["LOG_LEVEL": "info"])
-        #expect(context7.tools.defaultDecision == nil)
+        #expect(context7.tools.defaultDecision == .ask)
         #expect(plan.notes.contains { $0.contains("PROXY") })
 
         let bare = try #require(plan.servers.first { $0.name == "bare" })
@@ -54,6 +54,32 @@ struct MCPImportTests {
         #expect(encoded.contains("ctx7sk") == false && encoded.contains("ghp_") == false && encoded.contains("sk-proj") == false)
         #expect(encoded.contains("secret@") == false)
         #expect(try MCPConfiguration.decode(Data(encoded.utf8)).get().servers.count == 3)
+    }
+
+    @Test func askImportStoresAskEvenWhenTheFileAllows() throws {
+        var configuration = MCPConfiguration(defaultDecision: .allow, servers: [
+            MCPServerDefinition(name: "kept", command: "safe-bin")
+        ])
+        let plan = MCPImport.plan(
+            entries: [
+                entry(
+                    "notes", transport: .stdio(command: "git", args: ["status"]),
+                    environment: [
+                        "PATH": "/tmp/evil", "GIT_SSH_COMMAND": "evil-ssh", "LD_PRELOAD": "/tmp/p.so",
+                        "GITHUB_TOKEN": "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+                    ])
+            ],
+            configuration: configuration, secrets: SecretsConfiguration(), allowTools: false)
+        let notes = try #require(plan.servers.first { $0.name == "notes" })
+        #expect(notes.tools.defaultDecision == .ask)
+        #expect(notes.environment == ["PATH": "/tmp/evil", "GIT_SSH_COMMAND": "evil-ssh", "LD_PRELOAD": "/tmp/p.so"])
+        #expect(notes.secrets == ["GITHUB_TOKEN": "GITHUB_TOKEN"])
+        configuration.servers.append(notes)
+        #expect(configuration.defaultDecision == .allow)
+        #expect(configuration.decision(server: notes, tool: "status") == .ask)
+        let kept = try #require(configuration.server(named: "kept"))
+        #expect(kept.tools.defaultDecision == nil)
+        #expect(configuration.decision(server: kept, tool: "anything") == .allow)
     }
 
     @Test func skipsGovernedRemoteExistingAndAvoidsSecretNameCollisions() {
@@ -102,7 +128,7 @@ struct MCPImportTests {
         #expect(plan.secrets.map(\.definition.name).sorted() == ["LEGACY_X_API_KEY", "LINEAR_AUTHORIZATION"])
         #expect(plan.secrets.first { $0.definition.name == "LINEAR_AUTHORIZATION" }?.value == "lin_api_abcdefghijklmnopqrstuvwx")
 
-        #expect(plan.skipped.first { $0.name == "leaky" }?.reason.contains("URL carries a credential") == true)
+        #expect(plan.skipped.first { $0.name == "leaky" }?.reason.contains("secret in its query") == true)
         #expect(plan.skipped.first { $0.name == "plain" }?.reason == "url must be https (http only to localhost)")
         let encoded = MCPConfiguration(servers: plan.servers).encoded().prettyText
         #expect(encoded.contains("lin_api_") == false && encoded.contains("k_0123") == false)
@@ -319,15 +345,97 @@ struct MCPHostSetupTests {
         ])
         #expect(codex.changed.isEmpty)
     }
+
+    @Test func setupEscapesTheConfigPathAndTheRvPath() throws {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let raw = "\u{1B}[2J\u{1B}[H" + sentence
+        let broken = "\u{2028}" + sentence
+        let reversed = "\u{202E}" + sentence
+        func escaped(_ text: String) {
+            #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+            let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+            #expect(lines.contains(sentence) == false)
+        }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-setup-path-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("proj" + broken, isDirectory: true)
+        let config = root.appendingPathComponent("config", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        let hostFile = project.appendingPathComponent(".cursor/mcp.json")
+        try FileManager.default.createDirectory(at: hostFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let body = #"{"mcpServers":{"wax":{"command":"wax-mcp"}}}"#
+        try Data(body.utf8).write(to: hostFile)
+        let file = MCPHostFile(
+            host: .cursor, scope: .project(project.path), path: hostFile,
+            format: .json(keyPath: ["mcpServers"], lenient: false, opencode: false))
+        let changed = try MCPHostSetup.setup(
+            files: [file], configuration: configuration, servers: nil, rvPath: "/opt/rv",
+            configDirectory: config
+        ).get()
+        let changedText = changed.changed.joined(separator: "\n")
+        escaped(changedText)
+        #expect(changedText.contains("wax"))
+        #expect(changedText.contains("\\u2028"))
+
+        let unread = project.appendingPathComponent("broken" + raw, isDirectory: true)
+        try FileManager.default.createDirectory(at: unread, withIntermediateDirectories: true)
+        let bad = unread.appendingPathComponent("mcp.json")
+        try Data("{".utf8).write(to: bad)
+        let failed = MCPHostSetup.setup(
+            files: [MCPHostFile(
+                host: .cursor, scope: .project(unread.path), path: bad,
+                format: .json(keyPath: ["mcpServers"], lenient: true, opencode: false))],
+            configuration: configuration, servers: nil, rvPath: "/opt/rv",
+            configDirectory: config)
+        guard case .failure(let error) = failed else {
+            Issue.record("unreadable setup was accepted")
+            return
+        }
+        escaped(error.message)
+        #expect(error.message.contains("could not read"))
+        #expect(error.message.contains("\\u001b[2J"))
+
+        let record = MCPSetupRecord(
+            host: MCPHost.cursor.rawValue, configPath: project.path + reversed, keyPath: ["mcpServers"],
+            name: "wax", original: .object([:]), written: .object([:]))
+        #expect(MCPHostSetup.saveManifest([record], config))
+        let undo = try MCPHostSetup.undo(host: .cursor, servers: nil, configDirectory: config).get()
+        let undoText = undo.skipped.joined(separator: "\n")
+        escaped(undoText)
+        #expect(undoText.contains("missing or unreadable"))
+        #expect(undoText.contains("\\u202e"))
+
+        let codexHome = root.appendingPathComponent("codex-home", isDirectory: true)
+        try FileManager.default.createDirectory(at: codexHome.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+        try Data("[mcp_servers.wax]\ncommand = \"npx\"\n".utf8).write(to: codexHome.appendingPathComponent(".codex/config.toml"))
+        let codex = try MCPHostSetup.setup(
+            files: MCPHostFile.all(home: codexHome, project: nil, environment: [:]).filter { $0.host == .codex },
+            configuration: configuration, servers: nil, rvPath: raw,
+            configDirectory: config
+        ).get()
+        let manual = codex.manualSteps.joined(separator: "\n")
+        escaped(manual)
+        #expect(manual.contains("--"))
+        #expect(manual.contains("\\u001b[2J"))
+        #expect(manual.contains("'wax'"))
+    }
 }
 
 #if os(macOS)
 @Suite("MCPSandbox (live sandbox-exec)")
 struct MCPSandboxLiveTests {
     @Test func cagedServerCannotReadCredentialsOrWriteOutsideScratch() throws {
-        // Not under a temp directory: those stay writable inside the cage by design.
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent(".build/rv-mcp-cage-\(UUID().uuidString)")
+        // Not under a temp directory: those stay writable inside the cage by
+        // design — and not under the checkout either, since a checkout in
+        // /tmp is under a temp root. The real home directory is outside every
+        // writable prefix the profile grants.
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".rv-cage-test-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let home = root.appendingPathComponent("home")
         let config = home.appendingPathComponent(".config/rv")
@@ -350,8 +458,17 @@ struct MCPSandboxLiveTests {
         definition.sandbox = MCPSandboxPolicy(network: false)
         let launch = MCPUpstreamLaunch(
             server: "caged", executable: "/usr/bin/env", arguments: ["/bin/sh", "-c", script], environment: [:])
-        let hook = MCPSandbox.apply(configDirectory: config, home: home)
-        let caged = try hook(definition, launch).get()
+        // Built from profile() directly: apply() refuses a home that is not
+        // the passwd home, and this fixture's home is deliberately fake.
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/caged", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let text = try MCPSandbox.profile(
+            policy: try #require(definition.sandbox), scratch: scratch.path, home: home.path,
+            configDirectory: config.path, temporaryDirectory: NSTemporaryDirectory()).get()
+        var caged = launch
+        caged.executable = MCPSandbox.sandboxExec
+        caged.arguments = ["-p", text, launch.executable] + launch.arguments
+        caged.workingDirectory = scratch.path
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: caged.executable)

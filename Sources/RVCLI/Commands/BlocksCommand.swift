@@ -23,9 +23,9 @@ enum BlocksRun {
             iso8601(record.timestamp),
             record.host.rawValue,
             record.tool.rawValue,
-            record.ruleID.rawValue,
+            DisplayedText.field(record.ruleID.rawValue),
             record.category.rawValue,
-            record.path,
+            DisplayedText.field(record.path),
         ].joined(separator: "  ")
     }
 
@@ -38,7 +38,7 @@ enum BlocksRun {
         else {
             return "[]\n"
         }
-        return text + "\n"
+        return DisplayedText.escapeJSONScalars(text) + "\n"
     }
 
     private static func iso8601(_ date: Date) -> String {

@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVIsolation
 import RVPolicy
@@ -125,15 +130,90 @@ public struct MCPRemoteServer: Sendable, Equatable {
             let scheme = components.scheme?.lowercased(), let host = components.host, host.isEmpty == false
         else { return "must be https (http only to localhost)" }
         guard scheme == "https" || (scheme == "http" && isLoopback(host)) else { return "must be https (http only to localhost)" }
+        if nonCanonicalIPSpelling(host) { return "must name its host as a canonical IP address or DNS name" }
         if components.user != nil || components.password != nil {
             return "must be given without credentials (send them as headers with ${secret:NAME})"
         }
         if components.fragment != nil { return "must not have a fragment" }
+        if let rawHost = components.host,
+            MCPRedaction.hostCarriesSecret(rawHost) || MCPRedaction.hostCarriesSecret(components.percentEncodedHost ?? "")
+            || MCPRedaction.authorityCarriesPassword(url.absoluteString)
+        {
+            return "must not carry a secret in its host (send it as a header with ${secret:NAME})"
+        }
+        let rawQuery = components.percentEncodedQuery ?? MCPRedaction.rawQuery(url.absoluteString)
+        if MCPRedaction.queryCarriesSecret(encoded: rawQuery, items: components.queryItems)
+            || MCPRedaction.rawQuery(url.absoluteString).map({ MCPRedaction.queryCarriesSecret(encoded: $0, items: nil) }) == true
+        {
+            return "must not carry a secret in its query (send it as a header with ${secret:NAME})"
+        }
+        if MCPRedaction.pathCarriesSecret(components.percentEncodedPath) {
+            return "must not carry a secret in its path (send it as a header with ${secret:NAME})"
+        }
+        if components.user == nil, components.password == nil,
+            MCPRedaction.containsUserinfoSpelling(url.absoluteString)
+        {
+            return "must not carry a secret in its path (send it as a header with ${secret:NAME})"
+        }
         return nil
     }
 
+    /// Loopback by parsed address, not by string list: `127.1`,
+    /// `2130706433`, `0x7f000001`, and `localhost.` are spellings browsers
+    /// and `getaddrinfo` resolve to 127.0.0.1, so a literal list both
+    /// misses real loopback and admits lookalikes. Non-canonical IP
+    /// spellings are refused outright by `endpointProblem`.
     static func isLoopback(_ host: String) -> Bool {
-        ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host.lowercased())
+        let bare = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()
+        if bare == "localhost" { return true }
+        var v4 = in_addr()
+        if inet_pton(AF_INET, bare, &v4) == 1 {
+            return (UInt32(bigEndian: v4.s_addr) >> 24) == 127
+        }
+        var v6 = in6_addr()
+        if inet_pton(AF_INET6, bare, &v6) == 1 {
+            var text = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+            guard inet_ntop(AF_INET6, &v6, &text, socklen_t(text.count)) != nil else { return false }
+            let canonical = String(cString: text)
+            if canonical == "::1" { return true }
+            if canonical.hasPrefix("::ffff:127.") { return true }
+            return false
+        }
+        return false
+    }
+
+    /// An IP address written so `inet_pton` (and therefore rv) reads it one
+    /// way while a browser's WHATWG parser or `inet_aton` reads it as
+    /// another address: short forms, one-integer and hex forms, leading
+    /// zeros, trailing dots, and IPv6 zone IDs.
+    static func nonCanonicalIPSpelling(_ host: String) -> Bool {
+        let bare = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()
+        if bare.contains("@") { return false }
+        // Zone IDs, named or numeric (`fe80::1%eth0`): only IPv6 literals
+        // carry them, and inet_pton refuses them either way.
+        if bare.contains("%"), bare.contains(":") { return true }
+        if bare.contains(":"), bare.allSatisfy({ $0.isHexDigit || $0 == ":" || $0 == "." || $0 == "%" }) {
+            var v6 = in6_addr()
+            return inet_pton(AF_INET6, bare, &v6) != 1
+        }
+        // Any 0x-prefixed label (`0x7f.1`, `0x7f000001`) is an inet_aton
+        // spelling of an address, never a DNS name worth accepting.
+        if bare.split(separator: ".", omittingEmptySubsequences: false)
+            .contains(where: { $0.hasPrefix("0x") && $0.count > 2 && $0.dropFirst(2).allSatisfy(\.isHexDigit) })
+        {
+            return true
+        }
+        let digitsAndDots = bare.isEmpty == false && bare.allSatisfy { $0.isNumber || $0 == "." }
+        if digitsAndDots {
+            var v4 = in_addr()
+            guard inet_pton(AF_INET, bare, &v4) == 1 else { return true }
+            var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            guard inet_ntop(AF_INET, &v4, &text, socklen_t(text.count)) != nil else { return true }
+            return String(cString: text) != bare
+        }
+        if bare.hasPrefix("0x") && bare.dropFirst(2).allSatisfy({ $0.isHexDigit }) && bare.count > 2 { return true }
+        if bare.allSatisfy(\.isNumber) && bare.isEmpty == false { return true }
+        return false
     }
 }
 
@@ -296,6 +376,8 @@ public struct MCPConfiguration: Sendable, Equatable {
         let root: JSONValue
         do {
             root = try JSONValue.parse(data, maximumDepth: 16)
+        } catch JSONParseError.duplicateKey {
+            return .failure(.invalid("repeats a JSON key"))
         } catch {
             return .failure(.invalid("not valid JSON"))
         }
@@ -614,7 +696,8 @@ enum MCPConfigurationDecoding {
         var map: [String: String] = [:]
         for (key, raw) in object.entries {
             guard SecretsConfiguration.isVariableName(key), let text = raw.stringValue, text.contains("\0") == false else {
-                throw MCPConfigurationError.invalid("\(context).\(key) must be a variable name with a string value")
+                throw MCPConfigurationError.invalid(
+                    "\(context).\(MCPDisplayedText.field(key)) must be a variable name with a string value")
             }
             map[key] = text
         }
@@ -628,7 +711,7 @@ enum MCPConfigurationDecoding {
 
     private static func allowOnly(_ object: JSONObject, _ keys: Set<String>, _ context: String) throws {
         if let unknown = object.keys.first(where: { keys.contains($0) == false }) {
-            throw MCPConfigurationError.invalid("\(context) has unknown key \(unknown)")
+            throw MCPConfigurationError.invalid("\(context) has unknown key \(MCPDisplayedText.field(unknown))")
         }
     }
 

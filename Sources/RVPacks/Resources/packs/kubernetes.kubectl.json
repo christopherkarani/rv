@@ -67,84 +67,84 @@
       "pattern": "kubectl\\b.*?\\bdelete\\s+(?:namespace|ns)\\b",
       "severity": "critical",
       "description": "kubectl delete namespace removes the entire namespace and ALL resources within it.",
-      "explanation": "Deleting a namespace destroys EVERYTHING inside it:\n\n\\ - All deployments, pods, services \\ - All configmaps and secrets \\ - All persistent volume claims (data may be lost) \\ - All ingresses and network policies \\ - All RBAC resources scoped to the namespace\n\n\\ This is irreversible. Even if you recreate the namespace, all resources are gone.\n\n\\ Preview what would be deleted: \\ kubectl get all -n <namespace> \\ kubectl get pvc -n <namespace>\n\n\\ Safer approach: \\ kubectl delete deployment <name> -n <namespace> # Delete specific resources"
+      "explanation": "Deleting a namespace destroys EVERYTHING inside it:\n\n- All deployments, pods, services\n- All configmaps and secrets\n- All persistent volume claims (data may be lost)\n- All ingresses and network policies\n- All RBAC resources scoped to the namespace\n\nThis is irreversible. Even if you recreate the namespace, all resources are gone.\n\nPreview what would be deleted: kubectl get all -n <namespace> kubectl get pvc -n <namespace>\n\nSafer approach: kubectl delete deployment <name> -n <namespace> # Delete specific resources"
     },
     {
       "name": "delete-all",
       "pattern": "kubectl\\b.*?\\bdelete\\s+.*--all\\b",
       "severity": "high",
       "description": "kubectl delete --all removes ALL resources of that type. Use --dry-run=client first.",
-      "explanation": "The --all flag deletes EVERY resource of the specified type in the namespace.\n\n\\ For example: \\ - kubectl delete pods --all: Kills all pods (services go down) \\ - kubectl delete svc --all: Removes all services (networking breaks) \\ - kubectl delete pvc --all: May delete all persistent data\n\n\\ Always preview first: \\ kubectl delete <resource> --all --dry-run=client\n\n\\ Safer alternative: \\ kubectl delete <resource> -l app=myapp # Use label selectors"
+      "explanation": "The --all flag deletes EVERY resource of the specified type in the namespace.\n\nFor example:\n- kubectl delete pods --all: Kills all pods (services go down)\n- kubectl delete svc --all: Removes all services (networking breaks)\n- kubectl delete pvc --all: May delete all persistent data\n\nAlways preview first: kubectl delete <resource> --all --dry-run=client\n\nSafer alternative: kubectl delete <resource> -l app=myapp # Use label selectors"
     },
     {
       "name": "delete-all-namespaces",
       "pattern": "kubectl\\b.*?\\bdelete\\s+.*(?:-A\\b|--all-namespaces)",
       "severity": "critical",
       "description": "kubectl delete with -A/--all-namespaces affects ALL namespaces. Very dangerous!",
-      "explanation": "The -A/--all-namespaces flag expands deletion to EVERY namespace in the cluster. \\ This can take down your entire cluster:\n\n\\ - Production, staging, and dev environments affected \\ - System namespaces (kube-system) may be impacted \\ - Cross-namespace resources and dependencies break\n\n\\ This is almost never what you want. Always specify a namespace: \\ kubectl delete <resource> -n <namespace>\n\n\\ Preview cluster-wide resources: \\ kubectl get <resource> -A"
+      "explanation": "The -A/--all-namespaces flag expands deletion to EVERY namespace in the cluster. This can take down your entire cluster:\n\n- Production, staging, and dev environments affected\n- System namespaces (kube-system) may be impacted\n- Cross-namespace resources and dependencies break\n\nThis is almost never what you want. Always specify a namespace: kubectl delete <resource> -n <namespace>\n\nPreview cluster-wide resources: kubectl get <resource> -A"
     },
     {
       "name": "drain-node",
       "pattern": "kubectl\\b.*?\\bdrain\\b",
       "severity": "high",
       "description": "kubectl drain evicts all pods from a node. Ensure proper pod disruption budgets.",
-      "explanation": "kubectl drain evicts ALL pods from a node, typically for maintenance. \\ This can cause service disruption:\n\n\\ - All pods are evicted (respecting PodDisruptionBudgets) \\ - DaemonSet pods remain unless --ignore-daemonsets is used \\ - Pods with local storage fail unless --delete-emptydir-data is used \\ - Without replicas elsewhere, services go down\n\n\\ Before draining: \\ kubectl get pods -o wide | grep <node> # Check what's running \\ kubectl get pdb -A # Check disruption budgets\n\n\\ Safer approach: \\ kubectl cordon <node> # Prevent new pods first, then drain gradually"
+      "explanation": "kubectl drain evicts ALL pods from a node, typically for maintenance. This can cause service disruption:\n\n- All pods are evicted (respecting PodDisruptionBudgets)\n- DaemonSet pods remain unless --ignore-daemonsets is used\n- Pods with local storage fail unless --delete-emptydir-data is used\n- Without replicas elsewhere, services go down\n\nBefore draining: kubectl get pods -o wide | grep <node> # Check what's running kubectl get pdb -A # Check disruption budgets\n\nSafer approach: kubectl cordon <node> # Prevent new pods first, then drain gradually"
     },
     {
       "name": "cordon-node",
       "pattern": "kubectl\\b.*?\\bcordon\\b",
       "severity": "medium",
       "description": "kubectl cordon marks a node unschedulable. Existing pods continue running.",
-      "explanation": "kubectl cordon marks a node as unschedulable. Existing pods continue running, \\ but no new pods will be scheduled to this node.\n\n\\ Use cases: \\ - Preparing for maintenance \\ - Investigating node issues \\ - Gradual migration\n\n\\ To reverse: \\ kubectl uncordon <node>\n\n\\ Check node status: \\ kubectl get nodes \\ kubectl describe node <node> | grep Taints"
+      "explanation": "kubectl cordon marks a node as unschedulable. Existing pods continue running, but no new pods will be scheduled to this node.\n\nUse cases:\n- Preparing for maintenance\n- Investigating node issues\n- Gradual migration\n\nTo reverse: kubectl uncordon <node>\n\nCheck node status: kubectl get nodes kubectl describe node <node> | grep Taints"
     },
     {
       "name": "taint-noexecute",
       "pattern": "kubectl\\b.*?\\btaint\\s+.*:NoExecute",
       "severity": "high",
       "description": "kubectl taint with NoExecute evicts existing pods that don't tolerate the taint.",
-      "explanation": "A NoExecute taint immediately evicts pods that don't have a matching toleration. \\ This is more aggressive than NoSchedule:\n\n\\ - Existing pods are evicted (not just new scheduling blocked) \\ - Can cause immediate service disruption \\ - Pods may not have time for graceful shutdown\n\n\\ Check current taints: \\ kubectl describe node <node> | grep Taints\n\n\\ Consider NoSchedule first: \\ kubectl taint nodes <node> key=value:NoSchedule\n\n\\ Remove taint: \\ kubectl taint nodes <node> key=value:NoExecute-"
+      "explanation": "A NoExecute taint immediately evicts pods that don't have a matching toleration. This is more aggressive than NoSchedule:\n\n- Existing pods are evicted (not just new scheduling blocked)\n- Can cause immediate service disruption\n- Pods may not have time for graceful shutdown\n\nCheck current taints: kubectl describe node <node> | grep Taints\n\nConsider NoSchedule first: kubectl taint nodes <node> key=value:NoSchedule\n\nRemove taint: kubectl taint nodes <node> key=value:NoExecute-"
     },
     {
       "name": "delete-workload",
       "pattern": "kubectl\\b.*?\\bdelete\\s+(?:deployment|statefulset|daemonset|replicaset)\\b",
       "severity": "high",
       "description": "kubectl delete deployment/statefulset/daemonset removes the workload. Use --dry-run first.",
-      "explanation": "Deleting a workload terminates all its pods:\n\n\\ - Deployment: All replicas terminated, service goes down \\ - StatefulSet: Ordered shutdown, PVCs may be orphaned \\ - DaemonSet: Removed from all nodes \\ - ReplicaSet: Pods terminated (usually managed by Deployment)\n\n\\ Preview first: \\ kubectl delete <type> <name> --dry-run=client \\ kubectl get pods -l app=<name> # Check affected pods\n\n\\ Consider scaling down first: \\ kubectl scale deployment <name> --replicas=0"
+      "explanation": "Deleting a workload terminates all its pods:\n\n- Deployment: All replicas terminated, service goes down\n- StatefulSet: Ordered shutdown, PVCs may be orphaned\n- DaemonSet: Removed from all nodes\n- ReplicaSet: Pods terminated (usually managed by Deployment)\n\nPreview first: kubectl delete <type> <name> --dry-run=client kubectl get pods -l app=<name> # Check affected pods\n\nConsider scaling down first: kubectl scale deployment <name> --replicas=0"
     },
     {
       "name": "delete-pvc",
       "pattern": "kubectl\\b.*?\\bdelete\\s+(?:pvc|persistentvolumeclaim)\\b",
       "severity": "critical",
       "description": "kubectl delete pvc may permanently delete data if ReclaimPolicy is Delete.",
-      "explanation": "Deleting a PVC can cause permanent data loss depending on the PV's reclaimPolicy:\n\n\\ - Delete: Underlying storage is deleted (DATA LOST) \\ - Retain: PV is kept but becomes 'Released' (manual recovery needed) \\ - Recycle: Deprecated, data scrubbed\n\n\\ Check the reclaim policy: \\ kubectl get pv <pv-name> -o jsonpath='{.spec.persistentVolumeReclaimPolicy}'\n\n\\ Backup first: \\ kubectl exec <pod> -- tar czf - /data > backup.tar.gz\n\n\\ Preview: \\ kubectl delete pvc <name> --dry-run=client"
+      "explanation": "Deleting a PVC can cause permanent data loss depending on the PV's reclaimPolicy:\n\n- Delete: Underlying storage is deleted (DATA LOST)\n- Retain: PV is kept but becomes 'Released' (manual recovery needed)\n- Recycle: Deprecated, data scrubbed\n\nCheck the reclaim policy: kubectl get pv <pv-name> -o jsonpath='{.spec.persistentVolumeReclaimPolicy}'\n\nBackup first: kubectl exec <pod> -- tar czf - /data > backup.tar.gz\n\nPreview: kubectl delete pvc <name> --dry-run=client"
     },
     {
       "name": "delete-pv",
       "pattern": "kubectl\\b.*?\\bdelete\\s+(?:pv|persistentvolume)\\b",
       "severity": "critical",
       "description": "kubectl delete pv may permanently delete the underlying storage.",
-      "explanation": "Deleting a PersistentVolume can permanently destroy the underlying storage:\n\n\\ - Cloud disks (EBS, GCE PD, Azure Disk) may be deleted \\ - NFS mounts become orphaned \\ - Local storage data is lost\n\n\\ Even with Retain policy, deleting the PV may trigger storage cleanup.\n\n\\ Check what's using the PV: \\ kubectl get pvc -A | grep <pv-name>\n\n\\ Check storage class policy: \\ kubectl get storageclass <class> -o yaml\n\n\\ Preview: \\ kubectl delete pv <name> --dry-run=client"
+      "explanation": "Deleting a PersistentVolume can permanently destroy the underlying storage:\n\n- Cloud disks (EBS, GCE PD, Azure Disk) may be deleted\n- NFS mounts become orphaned\n- Local storage data is lost\n\nEven with Retain policy, deleting the PV may trigger storage cleanup.\n\nCheck what's using the PV: kubectl get pvc -A | grep <pv-name>\n\nCheck storage class policy: kubectl get storageclass <class> -o yaml\n\nPreview: kubectl delete pv <name> --dry-run=client"
     },
     {
       "name": "scale-to-zero",
       "pattern": "kubectl\\b.*?\\bscale\\s+.*--replicas=0",
       "severity": "high",
       "description": "kubectl scale --replicas=0 stops all pods for the workload.",
-      "explanation": "Scaling to zero replicas terminates ALL pods for the workload:\n\n\\ - Service becomes unavailable \\ - Endpoints are removed from Service \\ - In-flight requests are dropped \\ - StatefulSets: Ordered shutdown from highest ordinal\n\n\\ This is often intentional but can cause outages if done accidentally.\n\n\\ Check current replicas: \\ kubectl get deployment <name> -o jsonpath='{.spec.replicas}'\n\n\\ To restore: \\ kubectl scale deployment <name> --replicas=<N>"
+      "explanation": "Scaling to zero replicas terminates ALL pods for the workload:\n\n- Service becomes unavailable\n- Endpoints are removed from Service\n- In-flight requests are dropped\n- StatefulSets: Ordered shutdown from highest ordinal\n\nThis is often intentional but can cause outages if done accidentally.\n\nCheck current replicas: kubectl get deployment <name> -o jsonpath='{.spec.replicas}'\n\nTo restore: kubectl scale deployment <name> --replicas=<N>"
     },
     {
       "name": "delete-force",
       "pattern": "kubectl\\b.*?\\bdelete\\s+.*--force.*--grace-period=0|kubectl\\b.*?\\bdelete\\s+.*--grace-period=0.*--force",
       "severity": "critical",
       "description": "kubectl delete --force --grace-period=0 immediately removes resources without graceful shutdown.",
-      "explanation": "Force deletion with zero grace period is dangerous:\n\n\\ - Pods are killed immediately (no SIGTERM, just gone) \\ - In-flight requests fail \\ - Data corruption risk if writes in progress \\ - Finalizers may be skipped (resource leak)\n\n\\ Kubernetes warns against this. Use only for stuck pods that won't terminate.\n\n\\ Try graceful deletion first: \\ kubectl delete pod <name> # Default 30s grace \\ kubectl delete pod <name> --grace-period=60 # Extended grace\n\n\\ Check why pod is stuck: \\ kubectl describe pod <name> | grep -A5 Status"
+      "explanation": "Force deletion with zero grace period is dangerous:\n\n- Pods are killed immediately (no SIGTERM, just gone)\n- In-flight requests fail\n- Data corruption risk if writes in progress\n- Finalizers may be skipped (resource leak)\n\nKubernetes warns against this. Use only for stuck pods that won't terminate.\n\nTry graceful deletion first: kubectl delete pod <name> # Default 30s grace kubectl delete pod <name> --grace-period=60 # Extended grace\n\nCheck why pod is stuck: kubectl describe pod <name> | grep -A5 Status"
     },
     {
       "name": "apply-force",
       "pattern": "kubectl\\b.*?\\bapply\\s+.*--force\\b",
       "severity": "high",
       "description": "kubectl apply --force deletes and recreates resources, causing downtime.",
-      "explanation": "kubectl apply --force deletes the resource and recreates it from the manifest. \\ This causes:\n\n\\ - Downtime as pods are terminated before new ones start \\ - Loss of any runtime modifications \\ - Potential data loss for stateful workloads \\ - Disruption to in-flight requests\n\n\\ Use this only when you cannot update resources normally due to immutable field changes.\n\n\\ Preview changes first: \\ kubectl diff -f <file>\n\n\\ Try server-side apply for safer updates: \\ kubectl apply --server-side -f <file>"
+      "explanation": "kubectl apply --force deletes the resource and recreates it from the manifest. This causes:\n\n- Downtime as pods are terminated before new ones start\n- Loss of any runtime modifications\n- Potential data loss for stateful workloads\n- Disruption to in-flight requests\n\nUse this only when you cannot update resources normally due to immutable field changes.\n\nPreview changes first: kubectl diff -f <file>\n\nTry server-side apply for safer updates: kubectl apply --server-side -f <file>"
     },
     {
       "name": "delete-from-stdin",
@@ -158,7 +158,7 @@
       "pattern": "kubectl\\b.*?\\bdelete\\s+-f\\s+\\.\\s*$|kubectl\\b.*?\\bdelete\\s+-f\\s+\\./|kubectl\\b.*?\\bdelete\\s+--recursive\\s+-f|kubectl\\b.*?\\bdelete\\s+-f.*--recursive",
       "severity": "high",
       "description": "kubectl delete -f with directories or --recursive deletes many resources at once.",
-      "explanation": "Deleting from a directory or recursively removes ALL resources defined in those files:\n\n\\ - Multiple deployments, services, configmaps deleted at once \\ - Hard to recover if wrong directory \\ - No confirmation or preview by default\n\n\\ Always preview first: \\ kubectl diff -f <directory> \\ ls -la <directory>/*.yaml\n\n\\ Delete specific files instead: \\ kubectl delete -f <specific-file.yaml>"
+      "explanation": "Deleting from a directory or recursively removes ALL resources defined in those files:\n\n- Multiple deployments, services, configmaps deleted at once\n- Hard to recover if wrong directory\n- No confirmation or preview by default\n\nAlways preview first: kubectl diff -f <directory> ls -la <directory>/*.yaml\n\nDelete specific files instead: kubectl delete -f <specific-file.yaml>"
     }
   ]
 }

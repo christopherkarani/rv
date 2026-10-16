@@ -68,6 +68,27 @@ struct AuditCursorTests {
         #expect(ledger.events(after: whole.next, limit: 10).events.map(\.subject) == ["rotated.example:443"])
     }
 
+    @Test func rewritePreservingTheFirstLineStillRestarts() throws {
+        let ledgers = try Ledgers()
+        let ledger = AuditLedger(configDirectory: ledgers.directory)
+        let firstLine = ledgers.egress("a.example", at: 100)
+        try ledgers.append("egress-denials.jsonl", firstLine + ledgers.egress("b.example", at: 101))
+        let first = ledger.events(after: AuditCursor(), limit: 10)
+        #expect(first.events.map(\.subject) == ["a.example:443", "b.example:443"])
+
+        // Same inode, same first line, forged second line: the first-line
+        // fingerprint alone would resume at the old offset; the last-line
+        // hash must not.
+        let url = ledgers.directory.appendingPathComponent("egress-denials.jsonl")
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: Data((firstLine + ledgers.egress("forged.example", at: 101)).utf8))
+        try handle.close()
+
+        let after = ledger.events(after: first.next, limit: 10)
+        #expect(after.events.map(\.subject) == ["a.example:443", "forged.example:443"])
+    }
+
     @Test func fileRewrittenInPlaceWithSameInodeRestarts() throws {
         let ledgers = try Ledgers()
         let ledger = AuditLedger(configDirectory: ledgers.directory)

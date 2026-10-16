@@ -142,11 +142,12 @@ jobs:
               *"Authority=Developer ID Application:"*"(runtime)"*|*"(runtime)"*"Authority=Developer ID Application:"*) ;;
               *) printf 'sequoia: %s is not hardened Developer ID code\n' "$bin" >&2; exit 1 ;;
             esac
-            verdict="$(spctl -a -t open --context context:primary-signature -vv "$bin" 2>&1 || true)"
-            case "$verdict" in
-              *"source=Notarized Developer ID"*) ;;
-              *) printf 'sequoia: Gatekeeper rejects %s\n%s\n' "$bin" "$verdict" >&2; exit 1 ;;
-            esac
+            verdict="$(spctl -a -t open --context context:primary-signature -vv "$bin" 2>&1)" || {
+              printf 'sequoia: Gatekeeper rejects %s\n%s\n' "$bin" "$verdict" >&2; exit 1; }
+            printf '%s\n' "$verdict" | grep -Fqx -- "$bin: accepted" || {
+              printf 'sequoia: Gatekeeper rejects %s\n%s\n' "$bin" "$verdict" >&2; exit 1; }
+            printf '%s\n' "$verdict" | grep -Fqx -- "source=Notarized Developer ID" || {
+              printf 'sequoia: Gatekeeper rejects %s\n%s\n' "$bin" "$verdict" >&2; exit 1; }
           done
           if [ -f stage/libswiftCompatibilitySpan.dylib ]; then
             codesign --verify --strict --verbose=2 stage/libswiftCompatibilitySpan.dylib

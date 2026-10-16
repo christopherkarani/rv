@@ -41,6 +41,7 @@ extension SetupRun {
         let configArtifacts =
             analytics.uninstallArtifacts
             + RVPolicyPaths.uninstallArtifacts(inConfigDir: configDir)
+            + RVPolicyPaths.repoRevisionLogs(inConfigDir: configDir)
             + DenialLedgerPaths(configDirectory: configDir).uninstallArtifacts
         let configExisted = configArtifacts.contains { files.fileExists($0.path) }
         for artifact in configArtifacts {

@@ -125,6 +125,11 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
     let resources: RuntimeResourceManifest?
     /// Only explicit legacy launches may inherit ambient agent integration.
     let legacyAgentIntegration: Bool
+    /// F2 default closed: host keys and credential files reach the cage
+    /// only under explicit opt-in. Non-secret agent integration (bin dir on
+    /// PATH, compat flags, gateway routing) still follows
+    /// `legacyAgentIntegration` above.
+    let credentialDelivery: ContainedCredentialDelivery
     /// Test-only. Production launches leave this nil. A fault fails the
     /// launch before the payload is reported running.
     let spawnFault: RuntimeSpawnFault?
@@ -171,7 +176,8 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         resources: RuntimeResourceManifest? = nil,
         spawnFault: RuntimeSpawnFault? = nil,
         productive: ProductiveWorkspaceResolution? = nil,
-        legacyAgentIntegration: Bool = true
+        legacyAgentIntegration: Bool = true,
+        credentialDelivery: ContainedCredentialDelivery = .closed
     ) {
         switch (launch, plan.mode) {
         case (.seatbelt, .contained):
@@ -193,6 +199,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         self.spawnFault = spawnFault
         self.productive = productive
         self.legacyAgentIntegration = legacyAgentIntegration
+        self.credentialDelivery = credentialDelivery
     }
 
     func withIO(_ io: IsolatedIO) -> IsolatedLaunchRequest {
@@ -217,6 +224,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
         self.spawnFault = spawnFault
         self.productive = request.productive
         self.legacyAgentIntegration = request.legacyAgentIntegration
+        self.credentialDelivery = request.credentialDelivery
     }
 
     public static func == (lhs: IsolatedLaunchRequest, rhs: IsolatedLaunchRequest) -> Bool {
@@ -229,6 +237,7 @@ public struct IsolatedLaunchRequest: Sendable, Equatable {
             && lhs.spawnFault == rhs.spawnFault
             && lhs.productive == rhs.productive
             && lhs.legacyAgentIntegration == rhs.legacyAgentIntegration
+            && lhs.credentialDelivery == rhs.credentialDelivery
     }
 
     /// Executable `run` will start. Observed / mediated never use a helper.
@@ -484,7 +493,8 @@ func prepareSeatbelt(
     _ command: IsolatedCommand,
     resourceProfile: RuntimeResourceProfile? = nil,
     legacyAgentIntegration: Bool = true,
-    gitIdentity: (@Sendable (String) -> (name: String?, email: String?))? = nil
+    gitIdentity: (@Sendable (String) -> (name: String?, email: String?))? = nil,
+    credentialDelivery: ContainedCredentialDelivery = .closed
 ) -> Result<IsolatedLaunchRequest, IsolationApplyError> {
     // Pure gate first: non-contained modes refuse with zero filesystem work.
     guard case .contained = plan.mode else {
@@ -494,11 +504,13 @@ func prepareSeatbelt(
         plan, command,
         resourceProfile: resourceProfile,
         legacyAgentIntegration: legacyAgentIntegration,
-        gitIdentity: gitIdentity
+        gitIdentity: gitIdentity,
+        credentialDelivery: credentialDelivery
     ).flatMap {
         compileSeatbeltRequest(
             plan: plan, command: command, facts: $0,
-            legacyAgentIntegration: legacyAgentIntegration
+            legacyAgentIntegration: legacyAgentIntegration,
+            credentialDelivery: credentialDelivery
         )
     }
 }
@@ -547,7 +559,8 @@ func resolveSeatbeltFacts(
     _ command: IsolatedCommand,
     resourceProfile: RuntimeResourceProfile? = nil,
     legacyAgentIntegration: Bool = true,
-    gitIdentity: (@Sendable (String) -> (name: String?, email: String?))? = nil
+    gitIdentity: (@Sendable (String) -> (name: String?, email: String?))? = nil,
+    credentialDelivery: ContainedCredentialDelivery = .closed
 ) -> Result<SeatbeltLaunchFacts, IsolationApplyError> {
     let base: SeatbeltProfile
     switch compileSeatbeltProfile(plan) {
@@ -563,7 +576,9 @@ func resolveSeatbeltFacts(
     if let directory = agentBinDirectory,
         let home = ProcessInfo.processInfo.environment["HOME"]
     {
-        agentBin = AgentBin.resolve(binDirectory: directory, home: home)
+        agentBin = AgentBin.resolve(
+            binDirectory: directory, home: home, credentialDelivery: credentialDelivery
+        )
     } else {
         agentBin = nil
     }
@@ -591,7 +606,8 @@ func resolveSeatbeltFacts(
     let productive = resolveProductiveWorkspace(
         workspacePath: resolved,
         agentBin: agentBinDirectory,
-        gitIdentity: gitIdentity
+        gitIdentity: gitIdentity,
+        credentialDelivery: credentialDelivery
     )
     let profile = resources?.profile
     let canonical = CanonicalResources(
@@ -620,7 +636,8 @@ func compileSeatbeltRequest(
     plan: IsolationPlan,
     command: IsolatedCommand,
     facts: SeatbeltLaunchFacts,
-    legacyAgentIntegration: Bool = true
+    legacyAgentIntegration: Bool = true,
+    credentialDelivery: ContainedCredentialDelivery = .closed
 ) -> Result<IsolatedLaunchRequest, IsolationApplyError> {
     var profile = facts.base
         .allowingExecutable(callerPath: command.executable, realPath: facts.executableRealpath)
@@ -652,7 +669,8 @@ func compileSeatbeltRequest(
             launch: .seatbelt(profile),
             resources: facts.resources,
             productive: facts.productive,
-            legacyAgentIntegration: legacyAgentIntegration
+            legacyAgentIntegration: legacyAgentIntegration,
+            credentialDelivery: credentialDelivery
         )
     else {
         // The init fails only on mode/launch mismatch.
@@ -867,17 +885,34 @@ func rejectWorkspaceInodeAlias(_ root: String) -> Result<Void, IsolationApplyErr
     let keys: Set<URLResourceKey> = [
         .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .linkCountKey,
     ]
-    for case let url as URL in enumerator {
-        if scan.failed {
-            return .failure(.workspaceContainsInodeAlias)
-        }
-        do {
-            let values = try url.resourceValues(forKeys: keys)
-            let isRootChild = url.deletingLastPathComponent().standardizedFileURL == rootURL.standardizedFileURL
+    let walk = AliasWalk(enumerator, scan: scan)
+    // The whole walk runs in one clocked worker: the caller still
+    // returns at the copy-clock stop (and parks the walk), while a
+    // fast scan does not pay a thread per entry. When a cancel clock
+    // is already armed, the worker also re-checks it between entries
+    // so it stops scanning soon after the stop; the thread-local
+    // flag itself is not visible on the worker thread.
+    let armedClock = CooperativeLaunchStop.cancelClock
+    let scanned = diskImagePerformWithinCopyClock {
+        while let url = walk.enumerator.nextObject() as? URL {
+            if scan.failed { return false }
+            if let armedClock,
+                DiskImageCancelBudget.copyMayContinue(deadline: armedClock.deadline, now: Date()) == false
+            {
+                return false
+            }
+            let values: URLResourceValues
+            do {
+                values = try url.resourceValues(forKeys: keys)
+            } catch {
+                return false
+            }
             var status = stat()
             guard url.path.withCString({ lstat($0, &status) == 0 }) else {
-                return .failure(.workspaceContainsInodeAlias)
+                return false
             }
+            let isRootChild = diskImageCanonicalPath(url.deletingLastPathComponent().path)
+                == diskImageCanonicalPath(root)
             if WorkspaceFilesystemMetadata.shouldSkip(
                 name: url.lastPathComponent,
                 isRootChild: isRootChild,
@@ -886,27 +921,60 @@ func rejectWorkspaceInodeAlias(_ root: String) -> Result<Void, IsolationApplyErr
                 ownerUid: status.st_uid,
                 ownersIgnored: ownersIgnored
             ) {
-                enumerator.skipDescendants()
+                walk.enumerator.skipDescendants()
                 continue
             }
             if values.isSymbolicLink == true {
                 continue
             }
             if values.isRegularFile == true, let count = values.linkCount, count > 1 {
-                return .failure(.workspaceContainsInodeAlias)
+                return false
             }
-        } catch {
-            return .failure(.workspaceContainsInodeAlias)
         }
+        return scan.failed == false
     }
-    if scan.failed {
+    if scanned == nil {
+        diskImageRetainAcrossPark(walk)
+        return .failure(.workspaceContainsInodeAlias)
+    }
+    guard scanned == true else {
         return .failure(.workspaceContainsInodeAlias)
     }
     return .success(())
 }
 
-/// Mutable flag for `rejectWorkspaceInodeAlias`. The directory walk is synchronous.
-/// Not Sendable: FileManager calls the error handler on the scanning thread.
-private final class InodeAliasScan {
+/// The workspace is back at its original path only when teardown succeeds.
+/// `.cancelled` is that result only when teardown also succeeded, so the
+/// volume is unmounted. A failed detach stays the teardown error. A caller
+/// that treats `.cancelled` as "stopped" must not see it while the mount
+/// is still there.
+func containedLaunchResult(
+    child: Result<IsolatedRunResult, IsolationApplyError>,
+    teardown: Result<Void, IsolationApplyError>
+) -> Result<IsolatedRunResult, IsolationApplyError> {
+    switch teardown {
+    case .failure(let error):
+        return .failure(error)
+    case .success:
+        return child
+    }
+}
+
+/// Mutable flag for `rejectWorkspaceInodeAlias`. FileManager calls the error
+/// handler on the scanning thread, which is the copy-clock worker.
+private final class InodeAliasScan: @unchecked Sendable {
     var failed = false
+}
+
+/// The enumerator a clocked scan walks. Not Sendable on its own; the
+/// walk runs off the caller and this box crosses that boundary, and a
+/// parked walk retains it until the worker leaves the call.
+private final class AliasWalk: @unchecked Sendable {
+    let enumerator: FileManager.DirectoryEnumerator
+    private let scan: InodeAliasScan
+
+    init(_ enumerator: FileManager.DirectoryEnumerator, scan: InodeAliasScan) {
+        self.enumerator = enumerator
+        self.scan = scan
+    }
 }

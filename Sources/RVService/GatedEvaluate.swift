@@ -1,6 +1,7 @@
 import Foundation
 import RVDomain
 import RVEngine
+import RVFileStore
 import RVHistory
 import RVPolicy
 
@@ -76,13 +77,17 @@ public struct GatedEvaluate: Sendable {
         host: LedgerHost = .tty,
         now: Date = Date()
     ) -> EvaluationResult {
-        let allowPaths = SecretAllowPaths.loadEffective(
+        let workspace = Self.workspaceURL(cwd: cwd)
+        let detailed = SecretAllowPaths.loadEffectiveDetailed(home: home, workspace: workspace)
+        Self.auditDroppedRepoLiterals(
+            detailed.droppedRepoLiterals,
             home: home,
-            workspace: Self.workspaceURL(cwd: cwd)
+            workspace: workspace,
+            now: now
         )
         let result = evaluateFileTool(
             action,
-            allowPaths: allowPaths,
+            allowPaths: detailed.effective,
             home: home
         )
         recordDenialIfNeeded(
@@ -254,7 +259,7 @@ public struct GatedEvaluate: Sendable {
         host: LedgerHost,
         tool: LedgerTool
     ) async -> EvaluationResult {
-        let result = evaluateWithSemantics(request, cwd: cwd, home: home)
+        let result = evaluateWithSemantics(request, cwd: cwd, home: home, now: now)
         // Fast path: allow/indeterminate never touch PolicyGate or the
         // allowlist loader; PolicyGate returns them unchanged anyway.
         let finished: EvaluationResult
@@ -346,9 +351,17 @@ public struct GatedEvaluate: Sendable {
     private func evaluateWithSemantics(
         _ request: EvaluationRequest,
         cwd: WorkingDirectory?,
-        home: HomeDirectory? = nil
+        home: HomeDirectory? = nil,
+        now: Date = Date()
     ) -> EvaluationResult {
         let workspace = Self.workspaceURL(cwd: cwd)
+        let detailed = SecretAllowPaths.loadEffectiveDetailed(home: home, workspace: workspace)
+        Self.auditDroppedRepoLiterals(
+            detailed.droppedRepoLiterals,
+            home: home,
+            workspace: workspace,
+            now: now
+        )
         let policy: EffectiveActionPolicy
         do {
             policy = EffectiveActionPolicy(rules: try Self.loadTypedRules(cwd: cwd, home: home))
@@ -370,7 +383,7 @@ public struct GatedEvaluate: Sendable {
         return resolvedSession().evaluateWithSemantics(
             request,
             safety: SafetyStore.loadEffective(home: home, workspace: workspace),
-            allowPaths: SecretAllowPaths.loadEffective(home: home, workspace: workspace),
+            allowPaths: detailed.effective,
             home: home,
             workingDirectory: cwd,
             gitProbe: { unwrapped in
@@ -471,5 +484,71 @@ public struct GatedEvaluate: Sendable {
             ),
             now: now
         )
+    }
+}
+
+extension GatedEvaluate {
+    /// One JSONL row in `exemption-drops.jsonl`: repo-layer literals dropped
+    /// for lack of machine blessing at one evaluation. Dropped literals are
+    /// exemption patterns from `policy.toml`, never secret values.
+    ///
+    /// The boundary-check audit is borrowed from OpenShell: a candidate that
+    /// allows beyond the boundary is reported, not applied.
+    /// https://docs.nvidia.com/openshell/latest/how-it-works/policies/prover
+    struct ExemptionDropRecord: Sendable, Equatable, Codable {
+        var dropped: [String]
+        var workspace: String?
+        var recordedAt: TimeInterval
+    }
+
+    static let exemptionDropsFileName = "exemption-drops.jsonl"
+
+    static func exemptionDropsFileURL(home: HomeDirectory) -> URL {
+        RVPolicyPaths.exemptionDropsFile(
+            inConfigDir: RVPolicyPaths.configDirectory(home: home))
+    }
+
+    /// Best-effort post-evaluation audit write: lock, I/O, or encode failures
+    /// drop the row silently. Enforcement is unaffected — the effective set
+    /// stands whether or not the audit row persists. Nil home or an empty
+    /// dropped set writes nothing. Rows prune to `RVHistory.maxRows`, newest
+    /// last. The row describes repo policy state observed at evaluation, not
+    /// the decision, so peek audits the same as apply.
+    ///
+    /// Backed by `FileLockedJSONLStore` (cross-process `LOCK_EX` around
+    /// load-modify-save): rvd, hook processes, and CLI fallback evaluate
+    /// concurrently, and the previous in-process-lock rewrite lost rows to
+    /// last-writer-wins between processes. A row identical in dropped set
+    /// and workspace to the newest row is suppressed, so repeated hook
+    /// checks against one unblessed repo cannot churn the cap and evict
+    /// other workspaces' history.
+    static func auditDroppedRepoLiterals(
+        _ dropped: [String],
+        home: HomeDirectory?,
+        workspace: URL?,
+        now: Date
+    ) {
+        guard dropped.isEmpty == false, let home else { return }
+        let store = FileLockedJSONLStore<ExemptionDropRecord>(
+            baseDirectory: RVPolicyPaths.configDirectory(home: home),
+            fileName: exemptionDropsFileName
+        )
+        _ = try? store.withLock {
+            var rows = store.load()
+            if let last = rows.last,
+                last.dropped == dropped,
+                last.workspace == workspace?.path
+            {
+                return
+            }
+            rows.append(
+                ExemptionDropRecord(
+                    dropped: dropped,
+                    workspace: workspace?.path,
+                    recordedAt: now.timeIntervalSince1970
+                )
+            )
+            try store.save(Array(rows.suffix(RVHistory.maxRows)))
+        }
     }
 }

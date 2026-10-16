@@ -34,6 +34,14 @@ import Testing
     #expect(policy.allowsLoopbackTarget(host: "localhost", port: 70_000) == false)
 }
 
+@Test func mcpHostAllowlistDoesNotRelayLoopback() {
+    let policy = EgressHostPolicy(allowedHosts: ["api.example.com"], relaysLoopback: false)
+    #expect(policy.allows(host: "api.example.com", port: 443))
+    #expect(policy.allowsLoopbackTarget(host: "127.0.0.1", port: 9) == false)
+    #expect(policy.allowsLoopbackTarget(host: "localhost", port: 443) == false)
+    #expect(policy.allowsLoopbackTarget(host: "127.0.0.2", port: 8080) == false)
+}
+
 @Test func egressPolicyRejectsWrongPortAndUnknownHosts() {
     let policy = EgressHostPolicy.agentAPIs
     #expect(policy.allows(host: "api.anthropic.com", port: 80) == false)
@@ -73,6 +81,31 @@ import Testing
     #expect(policy.allows(host: "", port: 443) == false)
     #expect(policy.allows(host: "api..example.com", port: 443) == false)
     #expect(policy.allows(host: String(repeating: "a", count: 64) + ".com", port: 443) == false)
+}
+
+@Test func egressGrantBindsRightsToOnePrincipal() {
+    // Sibling principals hold different grants: the narrow sibling cannot
+    // inherit the wide sibling's rights through the grant value itself.
+    let wide = EgressGrant(
+        principal: EgressPrincipal(rawValue: "runtime-a"),
+        policy: .publicHTTPS
+    )
+    let narrow = EgressGrant(
+        principal: EgressPrincipal(rawValue: "runtime-b"),
+        policy: EgressHostPolicy(allowedHosts: ["api.anthropic.com"])
+    )
+    #expect(wide != narrow)
+    #expect(wide.principal != narrow.principal)
+    #expect(wide.policy.allows(host: "registry.npmjs.org", port: 443))
+    #expect(narrow.policy.allows(host: "registry.npmjs.org", port: 443) == false)
+    #expect(narrow.policy.allows(host: "api.anthropic.com", port: 443))
+    // Same principal, same policy: equal. Same policy, other principal:
+    // a different grant, never interchangeable.
+    #expect(wide == EgressGrant(principal: EgressPrincipal(rawValue: "runtime-a"), policy: .publicHTTPS))
+    #expect(
+        wide
+            != EgressGrant(principal: EgressPrincipal(rawValue: "runtime-b"), policy: .publicHTTPS)
+    )
 }
 
 @Test func egressPolicyRejectsIPAndUserinfoBypassShapes() {

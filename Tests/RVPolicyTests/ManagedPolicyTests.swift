@@ -52,6 +52,13 @@ struct ManagedPolicyTests {
         #expect(message(#"{"version": 1, "mcp": {"deny": [""]}}"#) != nil)
         #expect(message(#"{"version": 1, "audit": {"forward": {}}}"#) == "\"audit.forward.url\" is required")
         #expect(message("[]") == "policy.json is not a JSON object")
+        #expect(message(#"{"version":1,"mcp":{"defaultDecision":"deny"},"mcp":{"defaultDecision":"allow"}}"#) != nil)
+        #expect(message(#"{"version":1,"serial":1,"serial":2}"#) != nil)
+        if case .success(let policy) = ManagedPolicy.decode(
+            Data(#"{"version":1,"mcp":{"defaultDecision":"deny"},"mcp":{"defaultDecision":"allow"}}"#.utf8))
+        {
+            Issue.record("a repeated mcp key applied \(policy.mcp.defaultDecision)")
+        }
     }
 
     @Test func decisionOrderIsDenyAskAllowDefault() throws {
@@ -75,7 +82,7 @@ struct ManagedPolicyTests {
             """
         let policy = try ManagedPolicy.decode(Data(text.utf8)).get()
         func args(_ json: String) throws -> JSONValue {
-            try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
+            try #require(JSONLiteral.parse(Data(json.utf8))).domainValue()
         }
         #expect(policy.mcp.allow == ["db/*"])
         #expect(policy.mcp.rules.map(\.decision) == [.ask, .deny])
@@ -230,6 +237,20 @@ struct ManagedPolicyLocationTests {
         try bundle.write("policy.json", Data(#"{"version": 1, "mcp": {"block": ["x"]}}"#.utf8))
         #expect(bundle.location().load() == .invalid("unknown key \"block\" in mcp"))
     }
+
+    @Test func numbersInStringFieldsAreInvalidNotNeverMatchingGlobs() {
+        for text in [
+            #"{"version": 1, "mcp": {"deny": [9007199254740993]}}"#,
+            #"{"version": 1, "mcp": {"blocked": [9007199254740993]}}"#,
+            #"{"version": 1, "organization": 9007199254740993}"#,
+            #"{"version": 1, "mcp": {"deny": [{"tool": 9007199254740993, "when": {"/a": {"==": 1}}}]}}"#,
+        ] {
+            guard case .failure = ManagedPolicy.decode(Data(text.utf8)) else {
+                Issue.record("expected invalid policy: \(text)")
+                continue
+            }
+        }
+    }
 }
 
 @Suite("ManagedSerialRecord")
@@ -278,6 +299,27 @@ struct ManagedSerialRecordTests {
         #expect(ManagedPolicyState.invalid("x").checkedForRollback(against: record).state == .invalid("x"))
     }
 
+    @Test func serialsAboveTwoToTheFiftyThreeStayExact() throws {
+        let high = 9_007_199_254_740_995
+        let low = 9_007_199_254_740_994
+        let decoded = try ManagedPolicy.decode(Data(#"{"version": 1, "serial": \#(high)}"#.utf8)).get()
+        #expect(decoded.serial == high)
+        #expect(throws: (any Error).self) { try ManagedPolicy.decode(Data(#"{"version": 1, "serial": 1.5}"#.utf8)).get() }
+        #expect(throws: (any Error).self) { try ManagedPolicy.decode(Data(#"{"version": 1, "serial": 1e2}"#.utf8)).get() }
+        #expect(throws: (any Error).self) { try ManagedPolicy.decode(Data(#"{"version": 1, "serial": "5"}"#.utf8)).get() }
+
+        let remembered = ManagedSerialRecord(highest: ["/etc/rv/managed": low])
+        let newer = try active(serial: high).checkedForRollback(against: remembered)
+        #expect(newer.raised == ManagedSerialRecord(highest: ["/etc/rv/managed": high]))
+        let older = try active(serial: low).checkedForRollback(against: ManagedSerialRecord(highest: ["/etc/rv/managed": high]))
+        #expect(older.state.invalidReason?.contains("serial \(low) is lower than serial \(high)") == true)
+
+        let record = ManagedSerialRecord(highest: ["/etc/rv/managed": high])
+        #expect(try ManagedSerialRecord.decode(record.encoded()).get() == record)
+        let legacy = Data(#"{"version":1,"highest":{"/etc/rv/managed":\#(low)}}"#.utf8)
+        #expect(try ManagedSerialRecord.decode(legacy).get().highest["/etc/rv/managed"] == low)
+    }
+
     @Test func recordRoundTripsAndRejectsGarbage() throws {
         let record = ManagedSerialRecord(highest: ["/etc/rv/managed": 12])
         #expect(try ManagedSerialRecord.decode(record.encoded()).get() == record)
@@ -285,5 +327,24 @@ struct ManagedSerialRecordTests {
         #expect(throws: (any Error).self) {
             try ManagedSerialRecord.decode(Data(#"{"version": 1, "highest": {"/a": -1}}"#.utf8)).get()
         }
+    }
+
+    @Test func unknownKeyAndHeaderNameAreEscaped() {
+        func message(_ json: String) -> String? {
+            if case .failure(let error) = ManagedPolicy.decode(Data(json.utf8)) { return error.message }
+            return nil
+        }
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let key = message("{\"version\":1,\"\\u2028\(sentence)\":true}")
+        #expect(key?.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(key?.contains("\\u2028") == true)
+        #expect(key?.contains("unknown key") == true)
+        let header = message(
+            "{\"version\":1,\"audit\":{\"forward\":{\"url\":\"https://example.com\",\"headers\":{\"\\u001b[2J\\u001b[H\(sentence)\":true}}}}"
+        )
+        #expect(header?.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(header?.contains("\\u001b[2J") == true)
+        #expect(header?.contains("audit.forward.headers.") == true)
+        #expect(header?.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" }).map(String.init).contains(sentence) == false)
     }
 }

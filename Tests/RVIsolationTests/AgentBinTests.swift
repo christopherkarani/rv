@@ -81,11 +81,21 @@ private struct AgentBinFixture {
     let claudeSettings = fixture.home.appendingPathComponent(".claude/settings.json")
     try Data("{}".utf8).write(to: claudeSettings)
 
-    let resolution = AgentBin.resolve(binDirectory: fixture.bin.path, home: fixture.home.path)
+    // F2 default closed: non-secret grants resolve, credential originals
+    // do not.
+    let closed = AgentBin.resolve(binDirectory: fixture.bin.path, home: fixture.home.path)
+    #expect(closed.credentials.isEmpty)
+    let resolution = AgentBin.resolve(
+        binDirectory: fixture.bin.path, home: fixture.home.path,
+        credentialDelivery: .legacyOptIn
+    )
     // Resolution realpaths every target (/var resolves under /private/var).
     let claudeReal = try #require(posixRealpath(claudeTarget.path))
     let codexReal = try #require(posixRealpath(codexTarget.path))
     let packageReal = try #require(posixRealpath(fixture.home.appendingPathComponent("pkg").path))
+    #expect(closed.executables == resolution.executables)
+    #expect(closed.trees == resolution.trees)
+    #expect(closed.writableTrees == resolution.writableTrees)
     #expect(resolution.directory == fixture.bin.path)
     #expect(resolution.executables.contains("\(fixture.bin.path)/claude"))
     #expect(resolution.executables.contains(claudeReal))
@@ -124,7 +134,12 @@ private struct AgentBinFixture {
     )
     try Data("{}".utf8).write(to: auth)
 
-    let resolution = AgentBin.resolve(binDirectory: fixture.bin.path, home: fixture.home.path)
+    let closed = AgentBin.resolve(binDirectory: fixture.bin.path, home: fixture.home.path)
+    #expect(closed.credentials.isEmpty)
+    let resolution = AgentBin.resolve(
+        binDirectory: fixture.bin.path, home: fixture.home.path,
+        credentialDelivery: .legacyOptIn
+    )
     let installReal = try #require(posixRealpath(install.path))
     #expect(resolution.executables.contains("\(installReal)/muse-bin-1.0"))
     #expect(resolution.executables.contains("\(installReal)/.muse-version"))
@@ -148,7 +163,13 @@ private struct AgentBinFixture {
             $0 == "/home/.claude/.credentials.json" || $0 == "/home/.codex/auth.json"
         }
     )
-    let resolution = AgentBin.resolve(binDirectory: "/bin", home: "/home", probe: probe)
+    let closed = AgentBin.resolve(binDirectory: "/bin", home: "/home", probe: probe)
+    #expect(closed.credentials.isEmpty)
+    #expect(closed.executables.isEmpty == false)
+    let resolution = AgentBin.resolve(
+        binDirectory: "/bin", home: "/home", probe: probe,
+        credentialDelivery: .legacyOptIn
+    )
     #expect(resolution.directory == "/bin")
     #expect(
         resolution.executables
@@ -204,7 +225,9 @@ private struct AgentBinFixture {
     let settingsSource = home.appendingPathComponent(".claude/settings.json")
     try Data("{}".utf8).write(to: settingsSource)
 
-    stageAgentHomes(cageHome: cageHome.path, hostHome: home.path)
+    stageAgentHomes(
+        cageHome: cageHome.path, hostHome: home.path, credentialDelivery: .legacyOptIn
+    )
 
     let link = cageHome.appendingPathComponent(".claude/.credentials.json")
     #expect(FileManager.default.fileExists(atPath: link.path))

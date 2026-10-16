@@ -3,8 +3,11 @@ import RVDomain
 import Testing
 @testable import RVPolicy
 
+/// The production path: policy and argument values reach the rules through
+/// `JSONLiteral`, which keeps number spellings exact. Decoding fixtures with
+/// `JSONDecoder` would round what production compares exactly.
 private func json(_ text: String) throws -> JSONValue {
-    try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
+    try #require(JSONLiteral.parse(Data(text.utf8))).domainValue()
 }
 
 private func rule(_ text: String) throws -> ToolArgumentRule {
@@ -29,7 +32,13 @@ struct ToolArgumentRuleTests {
         .init(rule: #"{"tool":"push","when":{"/branch":{"!=":"main"}}}"#, arguments: #"{}"#, matches: false),
         .init(rule: #"{"tool":"pay","when":{"/amount":{">":100}}}"#, arguments: #"{"amount":250}"#, matches: true),
         .init(rule: #"{"tool":"pay","when":{"/amount":{">":100}}}"#, arguments: #"{"amount":100}"#, matches: false),
-        .init(rule: #"{"tool":"pay","when":{"/amount":{">":100}}}"#, arguments: #"{"amount":"250"}"#, matches: false),
+        .init(rule: #"{"tool":"pay","when":{"/amount":{">":100}}}"#, arguments: #"{"amount":"250"}"#, matches: true),
+        .init(rule: #"{"tool":"pay","when":{"/amount":{">":100}}}"#, arguments: #"{"amount":"50"}"#, matches: false),
+        .init(rule: #"{"tool":"pay","when":{"/amount":{">":100}}}"#, arguments: #"{"amount":"999999"}"#, matches: true),
+        .init(rule: #"{"tool":"pay","when":{"/amount":{">":"100"}}}"#, arguments: #"{"amount":"250"}"#, matches: true),
+        .init(rule: #"{"tool":"pay","when":{"/amount":{">":100}}}"#, arguments: #"{"amount":9007199254740993}"#, matches: true),
+        .init(rule: #"{"tool":"pay","when":{"/amount":{">":9007199254740994}}}"#, arguments: #"{"amount":9007199254740993}"#, matches: false),
+        .init(rule: #"{"tool":"pay","when":{"/amount":{"<":9007199254740995}}}"#, arguments: #"{"amount":9007199254740994}"#, matches: true),
         .init(rule: #"{"tool":"pay","when":{"/amount":{"<":10.5}}}"#, arguments: #"{"amount":10.25}"#, matches: true),
         .init(rule: #"{"tool":"pay","when":{"/amount":{">":0,"<":10}}}"#, arguments: #"{"amount":5}"#, matches: true),
         .init(rule: #"{"tool":"pay","when":{"/amount":{">":0,"<":10}}}"#, arguments: #"{"amount":15}"#, matches: false),
@@ -49,6 +58,13 @@ struct ToolArgumentRuleTests {
         .init(rule: #"{"tool":"q","when":{"/a":{"==":1},"/b":{"==":2}}}"#, arguments: #"{"a":1,"b":2}"#, matches: true),
         .init(rule: #"{"tool":"q","when":{"/a":{"==":1},"/b":{"==":2}}}"#, arguments: #"{"a":1,"b":3}"#, matches: false),
         .init(rule: #"{"tool":"q","when":{"/id":{"==":9007199254740993}}}"#, arguments: #"{"id":9007199254740992}"#, matches: false),
+        .init(rule: #"{"tool":"q","when":{"/id":{"==":9007199254740993}}}"#, arguments: #"{"id":9007199254740993}"#, matches: true),
+        .init(rule: #"{"tool":"q","when":{"/id":{"==":"9007199254740993"}}}"#, arguments: #"{"id":9007199254740993}"#, matches: false),
+        .init(rule: #"{"tool":"q","when":{"/id":{"==":9007199254740993}}}"#, arguments: #"{"id":"9007199254740993"}"#, matches: false),
+        .init(rule: #"{"tool":"q","when":{"/id":{"in":[9007199254740993]}}}"#, arguments: #"{"id":"9007199254740993"}"#, matches: false),
+        .init(rule: #"{"tool":"q","when":{"/id":{"glob":"900*"}}}"#, arguments: #"{"id":9007199254740993}"#, matches: false),
+        .init(rule: #"{"tool":"q","when":{"/n":{"==":0}}}"#, arguments: #"{"n":0e-2}"#, matches: true),
+        .init(rule: #"{"tool":"q","when":{"/n":{"==":0}}}"#, arguments: #"{"n":0.00e-10}"#, matches: true),
         .init(rule: #"{"tool":"q","when":{"/id":{"==":9007199254740993}}}"#, arguments: #"{"id":9007199254740993}"#, matches: true),
     ]
 
@@ -84,9 +100,12 @@ struct ToolArgumentRuleTests {
         .init(rule: #"{"tool":"push","when":{"/a":{}}}"#, message: "needs at least one operator"),
         .init(rule: #"{"tool":"push","when":{"/a":"main"}}"#, message: "needs at least one operator"),
         .init(rule: #"{"tool":"push","when":{"/a":{"~=":1}}}"#, message: "unknown operator \"~=\""),
-        .init(rule: #"{"tool":"push","when":{"/a":{">":"10"}}}"#, message: "\">\" needs a number"),
+        .init(rule: #"{"tool":"push","when":{"/a":{">":"10.0"}}}"#, message: "\">\" needs a number"),
         .init(rule: #"{"tool":"push","when":{"/a":{"<":true}}}"#, message: "\"<\" needs a number"),
-        .init(rule: #"{"tool":"push","when":{"/a":{"in":"x"}}}"#, message: "\"in\" needs an array"),
+        .init(rule: #"{"tool":"push","when":{"/a":{"in":"x"}}}"#, message: "\"in\" needs a non-empty array"),
+        .init(rule: #"{"tool":"push","when":{"/a":{"in":[]}}}"#, message: "\"in\" needs a non-empty array"),
+        .init(rule: #"{"tool":9007199254740993,"when":{"/a":{"==":1}}}"#, message: "needs a \"tool\" glob"),
+        .init(rule: #"{"tool":"push","when":{"/a":{"glob":9007199254740993}}}"#, message: "\"glob\" needs a non-empty string"),
         .init(rule: #"{"tool":"push","when":{"/a":{"glob":1}}}"#, message: "\"glob\" needs a non-empty string"),
     ]
 
@@ -119,5 +138,25 @@ struct ToolArgumentRuleTests {
         #expect(ToolArgumentRule.strictest(rules, tool: "q", arguments: try json(#"{"db":"billing"}"#)) == .deny)
         #expect(ToolArgumentRule.strictest(rules, tool: "q", arguments: try json(#"{}"#)) == nil)
         #expect(ToolArgumentRule.strictest(rules, tool: "other", arguments: try json(#"{"db":"prod"}"#)) == nil)
+    }
+
+    @Test func aPresentNonNumberDoesNotRevealAWeakerDecision() throws {
+        let deny = ToolArgumentRule.Decided(decision: .deny, rule: try rule(#"{"tool":"pay","when":{"/amount":{">":100}}}"#))
+        let allow = ToolArgumentRule.Decided(decision: .allow, rule: try rule(#"{"tool":"pay","when":{"/amount":{">":100}}}"#))
+        for arguments in [#"{"amount":"nope"}"#, #"{"amount":true}"#, #"{"amount":"999999.0"}"#] {
+            #expect(ToolArgumentRule.strictest([deny], tool: "pay", arguments: try json(arguments)) == .deny)
+            #expect(ToolArgumentRule.strictest([allow], tool: "pay", arguments: try json(arguments)) == .deny)
+        }
+        #expect(ToolArgumentRule.strictest([deny], tool: "pay", arguments: try json(#"{}"#)) == nil)
+        #expect(try rule(#"{"tool":"pay","when":{"/amount":{">":9007199254740993}}}"#).matches(
+            tool: "pay", arguments: try json(#"{"amount":9007199254740994}"#)))
+    }
+}
+
+extension ToolArgumentRuleTests {
+    @Test func nestedMarkedValuesSummarizeWithoutTheMarker() throws {
+        let parsed = try rule(#"{"tool":"q","when":{"/id":{"in":[9007199254740993]}}}"#)
+        #expect(parsed.summary.contains("\u{0}") == false, "\(parsed.summary)")
+        #expect(parsed.summary.contains("9007199254740993"))
     }
 }

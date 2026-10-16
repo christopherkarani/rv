@@ -16,6 +16,11 @@ extern "C" {
  * the trampoline must exit 125 and must not exec. ABI 2 is fail-closed
  * because it cannot handle TRUNCATE (truncate(2) / O_TRUNC would stay
  * allowed outside the workspace).
+ *
+ * Phase 6 handles read+write FS bits beneath the workspace. The system
+ * read-only layer, EXECUTE, network, and process controls are still not
+ * installed, so Swift refuses contained before exec and this entry point
+ * stays unreachable from production launch.
  */
 int rv_landlock_restrict_self_to_workspace(const char *workspace);
 

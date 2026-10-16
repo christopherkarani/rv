@@ -1,3 +1,4 @@
+import RVDomain
 import RVPresentation
 import RVTheme
 
@@ -15,7 +16,11 @@ public struct ScanPrettyRenderer: FrameRenderer {
         }
         for warning in model.warnings {
             lines.append(
-                paint("warning \(warning.code): \(warning.message)", slot: palette.mark, reset: palette.reset)
+                paint(
+                    "warning \(warning.code): \(DisplayedText.field(warning.message))",
+                    slot: palette.mark,
+                    reset: palette.reset
+                )
             )
         }
         lines.append(summaryLine(model, palette: palette))
@@ -33,7 +38,7 @@ public struct ScanPrettyRenderer: FrameRenderer {
 
     private func findingLine(_ row: ScanFindingRow, palette: Palette) -> String {
         let rule = paint(row.ruleLabel, slot: palette.deny, reset: palette.reset)
-        let command = paint(row.commandDisplay, slot: palette.fact, reset: palette.reset)
+        let command = paint(DisplayedText.field(row.commandDisplay), slot: palette.fact, reset: palette.reset)
         let countSuffix = row.count > 1 ? paint(" ×\(row.count)", slot: palette.muted, reset: palette.reset) : ""
         return "\(rule)  \(command)\(countSuffix)"
     }

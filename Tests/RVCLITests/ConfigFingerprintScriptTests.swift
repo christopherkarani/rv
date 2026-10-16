@@ -70,6 +70,25 @@ struct ConfigFingerprintScriptTests {
         #expect(try fingerprint(config) != chmodded)
     }
 
+    @Test func writesThroughSymlinksChangeTheFingerprint() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("real/inner.txt", "one\n")
+        try FileManager.default.createSymbolicLink(
+            at: config.appendingPathComponent("linked-dir"),
+            withDestinationURL: config.appendingPathComponent("real"))
+        try FileManager.default.createSymbolicLink(
+            at: config.appendingPathComponent("linked-file"),
+            withDestinationURL: config.appendingPathComponent("real/inner.txt"))
+        let before = try fingerprint(config)
+
+        try write("real/inner.txt", "two\n")
+        #expect(try fingerprint(config) != before)
+
+        let afterEdit = try fingerprint(config)
+        try write("real/added.txt", "x\n")
+        #expect(try fingerprint(config) != afterEdit)
+    }
+
     @Test func ignoreSkipsOnlyTheNamedTopLevelEntry() throws {
         defer { try? FileManager.default.removeItem(at: root) }
         try write("audit.jsonl", "x\n")

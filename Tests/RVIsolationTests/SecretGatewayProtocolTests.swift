@@ -34,6 +34,51 @@ struct SecretGatewayProtocolTests {
         #expect(head("GET / HTTP/1.1\r\n" + many) == nil)
     }
 
+    @Test func duplicateContentLengthIsRefused() {
+        let maximum = 32 * 1024 * 1024
+        #expect(gatewayBodyFraming(
+            transferEncodings: [],
+            contentLengths: ["0", "\(maximum + 1)"],
+            maximum: maximum
+        ) == .refused)
+        #expect(gatewayBodyFraming(
+            transferEncodings: [],
+            contentLengths: ["0", "1"],
+            maximum: maximum
+        ) == .refused)
+        #expect(gatewayBodyFraming(
+            transferEncodings: ["chunked"],
+            contentLengths: ["\(maximum + 1)"],
+            maximum: maximum
+        ) == .refused)
+        #expect(gatewayBodyFraming(
+            transferEncodings: [],
+            contentLengths: ["\(maximum + 1)"],
+            maximum: maximum
+        ) == .refused)
+        #expect(gatewayBodyFraming(
+            transferEncodings: ["gzip"],
+            contentLengths: [],
+            maximum: maximum
+        ) == .refused)
+        #expect(gatewayBodyFraming(
+            transferEncodings: [],
+            contentLengths: ["0"],
+            maximum: maximum
+        ) == .empty)
+        #expect(gatewayBodyFraming(
+            transferEncodings: [],
+            contentLengths: [],
+            maximum: maximum
+        ) == .empty)
+        #expect(gatewayBodyFraming(
+            transferEncodings: ["chunked"],
+            contentLengths: [],
+            maximum: maximum
+        ) == .chunked)
+        #expect(contentLengthsRefuseBody(["0", "0"], maximum: maximum) == false)
+    }
+
     @Test func routesOnlyNamedSecretPaths() throws {
         let route = try #require(GatewayRoute(target: "/s/OPENAI_API_KEY/v1/models?limit=2"))
         #expect(route.secret == "OPENAI_API_KEY")

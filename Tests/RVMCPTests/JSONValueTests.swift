@@ -13,9 +13,12 @@ struct JSONValueTests {
     }
 
     @Test func escapesSoCompactTextIsOneLine() throws {
-        let value = JSONValue.string("line1\nline2\u{2028}\"q\"\\\u{01}")
+        let value = JSONValue.string("line1\nline2\u{2028}\"q\"\\\u{01}\u{202E}")
         let text = value.compactText
         #expect(text.contains("\n") == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(text.contains("\\u202e"))
+        #expect(text.contains("\\\\u202e") == false)
         #expect(try JSONValue.parse(text) == value)
     }
 

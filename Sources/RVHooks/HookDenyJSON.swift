@@ -1,4 +1,5 @@
 import Foundation
+import RVDomain
 
 /// Official Antigravity honor path: explicit `decision: allow` + exit 0.
 /// Empty stdout fails protojson unmarshal and blocks, so allow is never empty.
@@ -68,8 +69,12 @@ func jsonQuoted(_ value: String) -> String {
         case "\t":
             output += "\\t"
         default:
-            if scalar.value < 0x20 {
-                output += String(format: "\\u%04x", scalar.value)
+            if DisplayedText.needsEscape(scalar) {
+                // Controls, separators, and format/bidi scalars: raw, they
+                // could reorder or hide the blocked command in the host UI.
+                for unit in String(scalar).utf16 {
+                    output += String(format: "\\u%04x", unit)
+                }
             } else {
                 output.unicodeScalars.append(scalar)
             }

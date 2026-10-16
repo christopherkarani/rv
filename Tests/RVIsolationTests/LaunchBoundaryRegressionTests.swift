@@ -54,10 +54,7 @@ struct LaunchBoundaryRegressionTests {
         #expect(values["SWIFTPM_MODULECACHE_OVERRIDE"] == home.cache + "/swift-modulecache")
         #expect(values["PWD"] == root)
         // Representative secret, loader, and interpreter names never pass,
-        // whatever the runner environment holds. The two agentBin compat
-        // keys are covered by terminalEnvironmentKeyPolicy instead: with an
-        // install they carry host values, otherwise they stay absent.
-        let compatKeys = Set(["ANTHROPIC_API_KEY", "META_API_KEY"])
+        // whatever the runner environment holds.
         for denied in [
             "OPENAI_API_KEY",
             "NPM_TOKEN", "GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY",
@@ -66,9 +63,19 @@ struct LaunchBoundaryRegressionTests {
         ] {
             #expect(values[denied] == nil)
         }
+        // F2 default closed end to end: no live host keys reach the cage
+        // even with an agent install. Without one, both compat keys stay
+        // absent; with one, META stays absent and ANTHROPIC carries only
+        // the public gateway placeholder, never the runner's live value.
+        // terminalEnvironmentKeyPolicy covers the opt-in restoration.
         if AgentBin.installedDirectory() == nil {
-            for key in compatKeys {
-                #expect(values[key] == nil)
+            #expect(values["ANTHROPIC_API_KEY"] == nil)
+            #expect(values["META_API_KEY"] == nil)
+        } else {
+            #expect(values["META_API_KEY"] == nil)
+            #expect(values["ANTHROPIC_API_KEY"] == AgentHomeStaging.anthropicGatewayPlaceholder)
+            if let live = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] {
+                #expect(values["ANTHROPIC_API_KEY"] != live)
             }
         }
     }
