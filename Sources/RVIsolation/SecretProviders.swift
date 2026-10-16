@@ -388,10 +388,12 @@ enum BoundedProcess {
                 kill(process.processIdentifier, SIGKILL)
                 _ = exited.wait(timeout: .now() + 2)
             }
-            drained.wait()
+            // Bounded: a grandchild can hold the pipes open past the kill.
+            _ = drained.wait(timeout: .now() + 2)
             return nil
         }
-        drained.wait()
+        // Bounded for the same reason: exit does not mean the pipes EOF.
+        _ = drained.wait(timeout: .now() + 2)
         return Outcome(status: process.terminationStatus, stdout: stdout.bytes, stderr: stderr.bytes)
     }
 
