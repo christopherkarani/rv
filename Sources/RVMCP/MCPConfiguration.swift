@@ -696,7 +696,8 @@ enum MCPConfigurationDecoding {
         var map: [String: String] = [:]
         for (key, raw) in object.entries {
             guard SecretsConfiguration.isVariableName(key), let text = raw.stringValue, text.contains("\0") == false else {
-                throw MCPConfigurationError.invalid("\(context).\(key) must be a variable name with a string value")
+                throw MCPConfigurationError.invalid(
+                    "\(context).\(MCPDisplayedText.field(key)) must be a variable name with a string value")
             }
             map[key] = text
         }
@@ -710,7 +711,7 @@ enum MCPConfigurationDecoding {
 
     private static func allowOnly(_ object: JSONObject, _ keys: Set<String>, _ context: String) throws {
         if let unknown = object.keys.first(where: { keys.contains($0) == false }) {
-            throw MCPConfigurationError.invalid("\(context) has unknown key \(unknown)")
+            throw MCPConfigurationError.invalid("\(context) has unknown key \(MCPDisplayedText.field(unknown))")
         }
     }
 
