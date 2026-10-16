@@ -67,7 +67,7 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
     private struct Exchange {
         enum Kind {
             case post(JSONValue, retried: Bool)
-            case stream
+            case stream(retried: Bool)
         }
 
         var kind: Kind
@@ -129,11 +129,16 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         let session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
         locked { self.session = session }
         guard launch.transport == .sse else { return }
+        openStream(session: session, retried: false)
+    }
+
+    private func openStream(session: URLSession, retried: Bool) {
+        let (sent, token) = headers()
         var request = MCPHTTPExchange.request(
-            url: launch.url, method: "GET", headers: headers().headers, sessionID: nil, protocolVersion: nil, body: nil)
+            url: launch.url, method: "GET", headers: sent, sessionID: nil, protocolVersion: nil, body: nil)
         request.timeoutInterval = 24 * 60 * 60
         let task = session.dataTask(with: request)
-        locked { exchanges[task.taskIdentifier] = Exchange(kind: .stream) }
+        locked { exchanges[task.taskIdentifier] = Exchange(kind: .stream(retried: retried), token: token) }
         task.resume()
     }
 
@@ -256,7 +261,15 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
             return
         }
         switch exchange.kind {
-        case .stream:
+        case .stream(let retried):
+            // The GET stream gets the same one-shot 401 refresh as a POST:
+            // an expired token at startup must not kill the connection.
+            if exchange.status == 401, retried == false, let authorizer, authorizer.refresh(exchange.token),
+                locked({ stopped }) == false
+            {
+                openStream(session: session, retried: true)
+                return
+            }
             let reason = exchange.status == 200 || exchange.status == 0
                 ? (error.map { "event stream failed: \($0.localizedDescription)" } ?? "event stream closed")
                 : "event stream refused (HTTP \(exchange.status))"
@@ -316,8 +329,10 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         guard message["method"] == nil, let id = message["id"] else { return }
         if case .post(let request, _) = exchange.kind, request["id"] == id { exchange.answered = true }
         locked {
+            // The version goes back out as a header value, so it gets the
+            // same visible-ASCII rule as a session ID.
             if id == initializeID, let version = message["result"]?["protocolVersion"]?.stringValue,
-                version.isEmpty == false, version.utf8.count <= 64
+                MCPHTTPExchange.isSessionID(version)
             {
                 protocolVersion = version
             }
@@ -360,12 +375,3 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
     }
 }
 
-/// Refuses every redirect (D22) for one-shot OAuth requests.
-final class MCPNoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    func urlSession(
-        _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
-    ) {
-        completionHandler(nil)
-    }
-}

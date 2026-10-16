@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import RVIsolation
 import RVPolicy
@@ -125,6 +130,7 @@ public struct MCPRemoteServer: Sendable, Equatable {
             let scheme = components.scheme?.lowercased(), let host = components.host, host.isEmpty == false
         else { return "must be https (http only to localhost)" }
         guard scheme == "https" || (scheme == "http" && isLoopback(host)) else { return "must be https (http only to localhost)" }
+        if nonCanonicalIPSpelling(host) { return "must name its host as a canonical IP address or DNS name" }
         if components.user != nil || components.password != nil {
             return "must be given without credentials (send them as headers with ${secret:NAME})"
         }
@@ -152,8 +158,53 @@ public struct MCPRemoteServer: Sendable, Equatable {
         return nil
     }
 
+    /// Loopback by parsed address, not by string list: `127.1`,
+    /// `2130706433`, `0x7f000001`, and `localhost.` are spellings browsers
+    /// and `getaddrinfo` resolve to 127.0.0.1, so a literal list both
+    /// misses real loopback and admits lookalikes. Non-canonical IP
+    /// spellings are refused outright by `endpointProblem`.
     static func isLoopback(_ host: String) -> Bool {
-        ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host.lowercased())
+        let bare = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()
+        if bare == "localhost" { return true }
+        var v4 = in_addr()
+        if inet_pton(AF_INET, bare, &v4) == 1 {
+            return (UInt32(bigEndian: v4.s_addr) >> 24) == 127
+        }
+        var v6 = in6_addr()
+        if inet_pton(AF_INET6, bare, &v6) == 1 {
+            var text = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+            guard inet_ntop(AF_INET6, &v6, &text, socklen_t(text.count)) != nil else { return false }
+            let canonical = String(cString: text)
+            if canonical == "::1" { return true }
+            if canonical.hasPrefix("::ffff:127.") { return true }
+            return false
+        }
+        return false
+    }
+
+    /// An IP address written so `inet_pton` (and therefore rv) reads it one
+    /// way while a browser's WHATWG parser or `inet_aton` reads it as
+    /// another address: short forms, one-integer and hex forms, leading
+    /// zeros, trailing dots, and IPv6 zone IDs.
+    static func nonCanonicalIPSpelling(_ host: String) -> Bool {
+        let bare = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()
+        if bare.contains("@") { return false }
+        if bare.contains(":"), bare.allSatisfy({ $0.isHexDigit || $0 == ":" || $0 == "." || $0 == "%" }) {
+            // Also covers zone IDs (`fe80::1%eth0`): inet_pton refuses them.
+            var v6 = in6_addr()
+            return inet_pton(AF_INET6, bare, &v6) != 1
+        }
+        let digitsAndDots = bare.isEmpty == false && bare.allSatisfy { $0.isNumber || $0 == "." }
+        if digitsAndDots {
+            var v4 = in_addr()
+            guard inet_pton(AF_INET, bare, &v4) == 1 else { return true }
+            var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            guard inet_ntop(AF_INET, &v4, &text, socklen_t(text.count)) != nil else { return true }
+            return String(cString: text) != bare
+        }
+        if bare.hasPrefix("0x") && bare.dropFirst(2).allSatisfy({ $0.isHexDigit }) && bare.count > 2 { return true }
+        if bare.allSatisfy(\.isNumber) && bare.isEmpty == false { return true }
+        return false
     }
 }
 

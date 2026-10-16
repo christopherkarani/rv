@@ -96,6 +96,22 @@ struct MCPOAuthTests {
             accessToken: "at-1", refreshToken: "rt-1", expiresAt: now.addingTimeInterval(30), tokenEndpoint: endpoint,
             clientID: "c", resource: "https://a.example/mcp", scope: "s"))
 
+        // A tampered store cannot aim the refresh POST at a plain-http or
+        // credential-carrying endpoint, or smuggle header-breaking fields.
+        for hostile in [
+            #"{"version":1,"accessToken":"at","refreshToken":"rt","tokenEndpoint":"http://evil.example/token","clientID":"c","resource":"https://a.example/mcp"}"#,
+            #"{"version":1,"accessToken":"at","refreshToken":"rt","tokenEndpoint":"https://u:p@auth.example/token","clientID":"c","resource":"https://a.example/mcp"}"#,
+            #"{"version":1,"accessToken":"a\r\nb","tokenEndpoint":"https://auth.example/token","clientID":"c","resource":"https://a.example/mcp"}"#,
+            #"{"version":1,"accessToken":"at","tokenEndpoint":"https://auth.example/token","clientID":"c","resource":"https://a.example/mcp","scope":"ok\r\nX-Evil: 1"}"#,
+        ] {
+            #expect(MCPOAuthTokens.decode(Data(hostile.utf8)) == nil, "\(hostile)")
+        }
+        // An authorization endpoint may not pre-seed rv's own parameters.
+        #expect(MCPOAuth.authorizationURL(
+            endpoint: try #require(URL(string: "https://auth.example/authorize?redirect_uri=https://evil.example/cb&response_type=token")),
+            clientID: "c", redirectURI: "http://127.0.0.1:5/callback", state: "s", challenge: "ch",
+            resource: "https://a.example/mcp", scope: nil) == nil)
+
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-oauth-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MCPOAuthTokenStore.file(configDirectory: directory)

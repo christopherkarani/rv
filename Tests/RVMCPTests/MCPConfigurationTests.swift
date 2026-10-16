@@ -245,8 +245,12 @@ struct MCPConfigurationTests {
             }
             #expect(error.message.contains(fragment), "\(text) -> \(error.message)")
         }
-        for loopback in ["http://localhost:9/mcp", "http://127.0.0.1/mcp", "http://[::1]:8080/sse"] {
+        for loopback in ["http://localhost:9/mcp", "http://127.0.0.1/mcp", "http://127.0.0.2/mcp", "http://[::1]:8080/sse", "http://[::ffff:127.0.0.1]/mcp"] {
             #expect((try? decode(server(#""url":"\#(loopback)""#)).get()) != nil, "\(loopback)")
+        }
+        // Browser/aton spellings of 127.0.0.1 are not canonical hosts.
+        for disguised in ["http://127.1/mcp", "http://2130706433/mcp", "http://0x7f000001/mcp", "http://0177.0.0.1/mcp", "https://127.1/mcp", "http://localhost./mcp", "http://[fe80::1%25eth0]/mcp"] {
+            #expect((try? decode(server(#""url":"\#(disguised)""#)).get()) == nil, "\(disguised)")
         }
         #expect((try? decode(server(#""url":"https://a.example/mcp?v=1""#)).get()) != nil)
     }
