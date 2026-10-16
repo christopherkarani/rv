@@ -61,12 +61,15 @@ public struct ManagedSerialStore: Sendable {
         let lockURL = directory.appendingPathComponent(".\(state.lastPathComponent).lock")
         let fd = open(lockURL.path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { return nil }
-        for _ in 0..<16 {
-            if flock(fd, LOCK_EX) == 0 { return fd }
-            if errno != EINTR {
+        // Bounded: a stopped process holding the lock must fail the check
+        // closed, not hang every later startup behind a blocking flock.
+        for attempt in 0..<50 {
+            if flock(fd, LOCK_EX | LOCK_NB) == 0 { return fd }
+            if errno != EWOULDBLOCK && errno != EINTR {
                 close(fd)
                 return nil
             }
+            if attempt < 49 { usleep(20_000) }
         }
         close(fd)
         return nil
