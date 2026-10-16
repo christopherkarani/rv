@@ -123,7 +123,7 @@ enum SecretCommandProviders {
             return .failure(.timedOut("1Password read of \(reference)"))
         }
         guard run.status == 0 else {
-            return .failure(.failed("op read \(reference) exited \(run.status)"))
+            return .failure(.failed("op read \(reference) exited \(run.status): \(run.stderrSummary)"))
         }
         return SecretResolver.value(run.stdout, from: reference)
     }
@@ -146,7 +146,7 @@ enum SecretCommandProviders {
             return .failure(.timedOut("AWS Secrets Manager read of \(secretID)"))
         }
         guard run.status == 0 else {
-            return .failure(.failed("aws secretsmanager \(secretID) exited \(run.status)"))
+            return .failure(.failed("aws secretsmanager \(secretID) exited \(run.status): \(run.stderrSummary)"))
         }
         guard let field else { return SecretResolver.value(run.stdout, from: secretID) }
         guard let object = try? JSONSerialization.jsonObject(with: Data(run.stdout)) as? [String: Any],
@@ -335,6 +335,12 @@ enum BoundedProcess {
         var status: Int32
         var stdout: [UInt8]
         var stderr: [UInt8]
+
+        var stderrSummary: String {
+            let text = String(decoding: stderr.prefix(200), as: UTF8.self)
+            let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+            return DisplayedText.field(line)
+        }
     }
 
     static func run(

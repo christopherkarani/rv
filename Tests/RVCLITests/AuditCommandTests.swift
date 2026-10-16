@@ -179,36 +179,3 @@ struct AuditVerifyTests {
         #expect(AuditVerifyRun.text(empty, path: "/x") == "no audit lines yet (/x)\n")
     }
 }
-
-@Suite("rv audit verify")
-struct AuditVerifyTests {
-    @Test func reportsAnIntactChainAndTheFirstBreak() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-verify-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
-        for subject in ["a", "b", "c"] {
-            _ = AuditLog.append(
-                AuditEvent(time: Date(), kind: .mcpCall, decision: .allowed, subject: subject, source: "test"),
-                configDirectory: directory)
-        }
-        let url = AuditLog.fileURL(configDirectory: directory)
-        let intact = try AuditVerifyRun.check(url).get()
-        #expect(AuditVerifyRun.text(intact, path: url.path).hasPrefix("audit chain intact: 3 lines, head "))
-
-        var lines = try String(contentsOf: url, encoding: .utf8).split(separator: "\n").map(String.init)
-        lines[1] = lines[1].replacingOccurrences(of: #""subject":"b""#, with: #""subject":"x""#)
-        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: url)
-        let broken = try AuditVerifyRun.check(url).get()
-        #expect(AuditVerifyRun.text(broken, path: url.path)
-            == "audit chain BROKEN at line 3 of \(url.path): prev does not match line 2\n"
-            + "  lines 1-2 are intact; line 3 or the one before it was edited, removed, inserted, or reordered\n")
-    }
-
-    @Test func notesLinesWrittenBeforeTheChain() {
-        let report = AuditChainReport(lines: 5, unchained: 2, head: String(repeating: "a", count: 64), firstBreak: nil)
-        #expect(AuditVerifyRun.text(report, path: "/x")
-            == "audit chain intact: 5 lines, head \(String(repeating: "a", count: 64))\n"
-            + "  the first 2 lines predate the chain and are not covered\n")
-        let empty = AuditChainReport(lines: 0, unchained: 0, head: AuditChain.genesis, firstBreak: nil)
-        #expect(AuditVerifyRun.text(empty, path: "/x") == "no audit lines yet (/x)\n")
-    }
-}

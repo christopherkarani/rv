@@ -376,6 +376,8 @@ struct SecretsCommandTests {
         #expect(try String(contentsOf: work.appendingPathComponent(".git/hooks/pre-commit.rv-saved"), encoding: .utf8) == original)
         _ = try SecretGitHook.uninstall(workTree: work).get()
         #expect(try String(contentsOf: foreign, encoding: .utf8) == original)
+    }
+
     @Test func secretsRobotJSONEscapesLineAndBidiScalars() throws {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let row = SecretsRun.CheckRow(
