@@ -197,6 +197,62 @@ struct PolicyCommandTests {
         #expect(show.contains("loadRepoDocument()"))
     }
 
+    @Test func ruleTextAndRobotEscapeIdBranchAndPathspec() throws {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let raw = "x\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence
+        try withTempPolicyContext { home, workspace in
+            let rules = [
+                TypedRule(
+                    id: RuleID(pack: .coreGit, pattern: raw),
+                    predicate: .gitPush(force: .exactly(.force), branch: raw),
+                    verdict: .deny,
+                    origin: .builtin
+                ),
+                TypedRule(
+                    id: RuleID(pack: .coreGit, pattern: "discard"),
+                    predicate: .gitDiscardWorktree(pathspec: raw),
+                    verdict: .deny,
+                    origin: .builtin
+                ),
+            ]
+            let snapshot = try PolicyShowRun.load(home: home, workspace: workspace, builtin: rules)
+            let text = PolicyShowRun.pretty(snapshot)
+            #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x2029 } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+            #expect(text.contains("\\u001b[2J"))
+            #expect(text.contains("\\u2028"))
+            #expect(text.contains("branch="))
+            #expect(text.contains("pathspec="))
+            let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+            #expect(lines.contains(sentence) == false)
+            let json = try PolicyShowRun.robot(snapshot)
+            #expect(json.unicodeScalars.contains { $0.value == 0x2028 } == false)
+            #expect(json.unicodeScalars.contains { $0.value == 0x2029 } == false)
+            #expect(json.unicodeScalars.contains { $0.value == 0x202E } == false)
+            #expect(json.contains("\\u2028"))
+            #expect(json.contains("\\u2029"))
+            #expect(json.contains("\\u202e"))
+            let parsed = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+            #expect(jsonStrings(parsed).contains { $0.contains(raw) })
+        }
+    }
+
+    @Test func applyRiskEvaluatesShareAskNotMergedOutcome() throws {
+        // The merge is tighten-only, so an existing-vs-merged diff could never
+        // flag a relaxation; apply must diff the share ask against the layer.
+        let source = try String(contentsOf: policyCommandSourceURL(), encoding: .utf8)
+        #expect(source.contains("evaluateShare(existing: existing, incoming: incoming)"))
+        #expect(source.contains("oldDocument: existing, newDocument: merged") == false)
+    }
+}
+
+private func jsonStrings(_ value: Any) -> [String] {
+    if let text = value as? String { return [text] }
+    if let array = value as? [Any] { return array.flatMap(jsonStrings) }
+    if let object = value as? [String: Any] { return object.values.flatMap(jsonStrings) }
+    return []
 }
 
 private func withTempPolicyContext(_ body: (HomeDirectory, URL) throws -> Void) throws {

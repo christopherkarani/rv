@@ -17,14 +17,75 @@ enum LocalExecutorError: Error, Sendable, Equatable {
 /// The watch loop runs on a dedicated thread, so it reads this flag instead.
 enum CooperativeLaunchStop {
     final class Flag: NSObject, Sendable {
-        private let value = Mutex(false)
+        private struct State: Sendable {
+            var set = false
+            var cancelledAt: Date?
+            var cancelledMonotonic: ContinuousClock.Instant?
+            var clock: DiskImageCancelClock?
+        }
 
+        private let state = Mutex(State())
+        private let monotonicBase = ContinuousClock()
+
+        /// Arms the one cancel clock at the instant cancel is requested.
+        /// Leader reap, the session-death poll, and disk detach all consume
+        /// that clock. A later `arm` does not start a fresh 7.75s.
         func cancel() {
-            value.withLock { $0 = true }
+            state.withLock { value in
+                value.set = true
+                if value.cancelledAt == nil {
+                    value.cancelledAt = Date()
+                    value.cancelledMonotonic = monotonicBase.now
+                }
+                if value.clock == nil {
+                    let clock = DiskImageCancelClock()
+                    clock.arm(now: value.cancelledAt ?? Date())
+                    value.clock = clock
+                }
+            }
+        }
+
+        /// Records cancel on this thread when the watch sees `stop` before
+        /// `cancel()` has armed the clock. Does not set the flag by itself.
+        func noteCancel(now: Date = Date()) {
+            state.withLock { value in
+                if value.cancelledAt == nil {
+                    value.cancelledAt = now
+                    let elapsed = max(0, Date().timeIntervalSince(now))
+                    value.cancelledMonotonic = monotonicBase.now.advanced(by: .seconds(-elapsed))
+                }
+                if value.clock == nil {
+                    let clock = DiskImageCancelClock()
+                    clock.arm(now: value.cancelledAt ?? now)
+                    value.clock = clock
+                }
+            }
+        }
+
+        /// Monotonic elapsed since cancel, so a wall-clock step cannot
+        /// distort the spent figure the budget helpers consume.
+        var monotonicSpent: TimeInterval? {
+            state.withLock { value in
+                guard let start = value.cancelledMonotonic else { return nil }
+                let spent = start.duration(to: monotonicBase.now)
+                return max(
+                    0,
+                    TimeInterval(spent.components.seconds)
+                        + TimeInterval(spent.components.attoseconds) / 1e18
+                )
+            }
         }
 
         var isSet: Bool {
-            value.withLock { $0 }
+            state.withLock { $0.set }
+        }
+
+        var cancelledAt: Date? {
+            state.withLock { $0.cancelledAt }
+        }
+
+        var clock: DiskImageCancelClock? {
+            state.withLock { $0.clock }
         }
     }
 
@@ -39,7 +100,35 @@ enum CooperativeLaunchStop {
     }
 
     static var isRequested: Bool {
-        (Thread.current.threadDictionary[key] as? Flag)?.isSet ?? false
+        installed?.isSet ?? false
+    }
+
+    /// The clock `cancel()` armed, when this thread is the executor worker.
+    static var cancelClock: DiskImageCancelClock? {
+        installed?.clock
+    }
+
+    static func spentSinceCancel(now: Date = Date()) -> TimeInterval {
+        if let spent = installed?.monotonicSpent { return spent }
+        guard let start = installed?.cancelledAt else { return 0 }
+        return max(0, now.timeIntervalSince(start))
+    }
+
+    static func noteCancel(now: Date = Date()) {
+        installed?.noteCancel(now: now)
+    }
+
+    /// Prefer the clock armed at cancel. A fresh local clock would grant
+    /// another 7.75s after the leader reap and the session-death poll.
+    static func adoptCancelClock(_ local: DiskImageCancelClock) -> DiskImageCancelClock {
+        if let shared = cancelClock, shared.deadline != nil {
+            return shared
+        }
+        return local
+    }
+
+    private static var installed: Flag? {
+        Thread.current.threadDictionary[key] as? Flag
     }
 }
 

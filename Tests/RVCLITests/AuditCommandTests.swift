@@ -95,6 +95,56 @@ struct AuditCommandTests {
         #expect(AuditRun.jsonLines(all).contains("STRIPE_SECRET_KEY"))
         #expect(AuditRun.jsonArray(all).hasPrefix("["))
     }
+
+    @Test func toolNameIsEscapedOnSubjectReasonRobotAndExport() throws {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let raw = "\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{202E}" + sentence
+        let event = AuditEvent(
+            time: Date(timeIntervalSince1970: 1_700_000_000),
+            kind: .mcpCall,
+            decision: .denied,
+            subject: "github/\(raw)",
+            reason: "rv policy denies github tool \(raw)",
+            agent: raw,
+            source: "audit.jsonl"
+        )
+        let pretty = AuditRun.pretty([event])
+        #expect(pretty.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(pretty.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(pretty.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(pretty.contains("\\u001b[2J"))
+        #expect(pretty.contains("\\u2028"))
+        #expect(pretty.contains("\\u202e"))
+        #expect(pretty.contains("github/"))
+        #expect(pretty.contains("reason="))
+        let lines = pretty.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+        #expect(lines.contains(sentence) == false)
+
+        let robot = AuditRun.jsonArray([event])
+        let exported = AuditRun.jsonLines([event])
+        func row(_ text: String) throws -> [String: Any] {
+            #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+            #expect(text.contains("\\u2028"))
+            #expect(text.contains("\\u202e"))
+            #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
+            let parsed = try JSONSerialization.jsonObject(with: Data(text.utf8))
+            if let rows = parsed as? [[String: Any]], let first = rows.first { return first }
+            return try #require(parsed as? [String: Any])
+        }
+        let robotRow = try row(robot)
+        let exportedRow = try row(exported)
+        #expect(robotRow["subject"] as? String == "github/\(raw)")
+        #expect(robotRow["reason"] as? String == "rv policy denies github tool \(raw)")
+        #expect(exportedRow["subject"] as? String == "github/\(raw)")
+        #expect(exportedRow["reason"] as? String == "rv policy denies github tool \(raw)")
+        let ocsf = try #require(AuditOCSF.jsonLine(event, hostName: "h"))
+        #expect(ocsf.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(ocsf.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(ocsf.contains("\\u2028"))
+        #expect(ocsf.contains("\\u202e"))
+        #expect(try JSONSerialization.jsonObject(with: Data(ocsf.utf8)) is [String: Any])
+    }
 }
 
 @Suite("rv audit verify")

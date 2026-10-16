@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import RVDomain
 import RVHistory
 import RVPolicy
 
@@ -38,10 +39,10 @@ enum AuditRun {
                 iso8601(event.time),
                 event.decision.rawValue.padding(toLength: 7, withPad: " ", startingAt: 0),
                 event.kind.rawValue,
-                event.subject,
+                DisplayedText.field(event.subject),
             ]
-            if let agent = event.agent { parts.append("agent=\(agent)") }
-            if let reason = event.reason { parts.append("reason=\(reason)") }
+            if let agent = event.agent { parts.append("agent=\(DisplayedText.field(agent))") }
+            if let reason = event.reason { parts.append("reason=\(DisplayedText.field(reason))") }
             return parts.joined(separator: "  ")
         }.joined(separator: "\n") + "\n"
     }
@@ -50,13 +51,13 @@ enum AuditRun {
         guard let data = try? encoder.encode(events), let text = String(data: data, encoding: .utf8) else {
             return "[]\n"
         }
-        return text + "\n"
+        return DisplayedText.escapeJSONScalars(text) + "\n"
     }
 
     static func jsonLines(_ events: [AuditEvent]) -> String {
         events.compactMap { event in
             (try? encoder.encode(event)).flatMap { String(data: $0, encoding: .utf8) }
-        }.map { $0 + "\n" }.joined()
+        }.map { DisplayedText.escapeJSONScalars($0) + "\n" }.joined()
     }
 
     private static let encoder: JSONEncoder = {

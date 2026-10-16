@@ -33,6 +33,7 @@ enum HelpCatalog {
         case .opencode: opencode
         case .workspace: workspace
         case .`operator`: operatorHelp
+        case .egress: egress
         }
     }
 
@@ -61,11 +62,12 @@ enum HelpCatalog {
                 HelpRow(name: "audit", description: "Unified audit trail; export for SIEM"),
                 HelpRow(name: "secrets", description: "Secrets agents use through placeholders"),
                 HelpRow(name: "mcp", description: "Find, review, and govern MCP servers"),
+                HelpRow(name: "egress", description: "Review blocked network egress"),
                 HelpRow(name: "service", description: "Is rvd running, down, or skewed"),
             ]),
             HelpSection(heading: "Advanced", rows: [
                 HelpRow(name: "packs", description: "List and enable or disable packs"),
-                HelpRow(name: "policy", description: "Show, draft, or share typed rules"),
+                HelpRow(name: "policy", description: "Show, list, draft, or share typed rules"),
                 HelpRow(name: "allowlist", description: "Permanent user-layer exceptions"),
                 HelpRow(name: "hook", description: "Host stdin adapter (Pi / Grok / OpenCode / Claude / OpenClaw / Hermes / Codex / Cursor / Antigravity)"),
                 HelpRow(name: "uninstall", description: "Remove rv-owned hooks, config, and LaunchAgent"),
@@ -464,7 +466,7 @@ enum HelpCatalog {
                 HelpRow(name: "missing", description: "A rule never matches an argument the call left out; keep a non-allow default"),
                 HelpRow(name: "deny", description: "Hidden from the agent; calls fail"),
                 HelpRow(name: "ask", description: "Approved in the host's prompt, or `rv mcp approve`; one identical call"),
-                HelpRow(name: "approve", description: "Needs you present: Touch ID/password, or the code `rv mcp serve` printed"),
+                HelpRow(name: "approve", description: "Needs Touch ID or your password. A pseudo-terminal cannot approve"),
                 HelpRow(name: "secrets", description: "\"secrets\": {\"VAR\": \"NAME\"} or ${secret:NAME} in args; values scrubbed"),
                 HelpRow(
                     name: "sandbox",
@@ -488,7 +490,8 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "config", description: "~/.config/rv/mcp.json (owner-only)"),
-                HelpRow(name: "integrity", description: "rv signs mcp.json; after an outside edit allow acts as ask until `rv mcp trust`"),
+                HelpRow(name: "integrity", description: "An outside edit does not launch until `rv mcp trust` (needs you present)"),
+                HelpRow(name: "import", description: "Copying a host command into mcp.json needs you present"),
                 HelpRow(name: "limits", description: "A process running as you can still edit or delete ~/.config/rv; rv flags it"),
                 HelpRow(
                     name: "hosts",
@@ -549,6 +552,36 @@ enum HelpCatalog {
         examples: [
             "rv report",
             "rv report --json",
+        ]
+    )
+
+
+    static let egress = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv egress pending [--json] [--robot] [--plain] [--no-color]"),
+                HelpRow(name: "rv egress show <id> [--json] [--robot] [--plain] [--no-color]"),
+                HelpRow(name: "rv egress approve <id>"),
+                HelpRow(name: "rv egress deny <id> --reason <text>"),
+                HelpRow(name: "rv egress denials [--limit N] [--json] [--robot] [--plain] [--no-color]"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(
+                    name: "review",
+                    description: "Blocked CONNECTs become scoped host:port proposals; approval loads the rule live"
+                ),
+                HelpRow(
+                    name: "mutations",
+                    description: "approve and deny refuse until authenticated service routes land"
+                ),
+            ]),
+        ],
+        examples: [
+            "rv egress pending",
+            "rv egress show <id>",
+            "rv egress denials --limit 20",
         ]
     )
 
@@ -642,7 +675,8 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv policy show"),
+                HelpRow(name: "rv policy show [--base] [--effective]"),
+                HelpRow(name: "rv policy list [--repo]"),
                 HelpRow(name: "rv policy draft --english <text> [--save]"),
                 HelpRow(name: "rv policy validate"),
                 HelpRow(name: "rv policy export"),

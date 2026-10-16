@@ -93,7 +93,7 @@ struct AllowlistAdd: AsyncParsableCommand {
         )
         do {
             try AllowlistCLI.store(home: try ctx.requireHome()).add(entry, tty: ctx.tty)
-            ctx.writeStdout("added \(ruleID.rawValue)\n")
+            ctx.writeStdout("added \(DisplayedText.field(ruleID.rawValue))\n")
         } catch AllowOnceError.ttyRequired {
             try ctx.fail("rv allowlist add: requires an interactive TTY\n", exitCode: 2)
         } catch AllowlistStoreError.lockFailed {
@@ -227,9 +227,9 @@ struct AllowlistList: AsyncParsableCommand {
                     let mark = entry.isActive(at: now) ? "" : " (expired)"
                     switch entry.selector {
                     case .rule(let ruleID):
-                        ctx.writeStdout("rule \(ruleID.rawValue) — \(entry.reason)\(mark)\n")
+                        ctx.writeStdout("rule \(DisplayedText.field(ruleID.rawValue)) — \(DisplayedText.field(entry.reason))\(mark)\n")
                     case .exactCommand(let command):
-                        ctx.writeStdout("exact \(command.rawValue) — \(entry.reason)\(mark)\n")
+                        ctx.writeStdout("exact \(DisplayedText.field(command.rawValue)) — \(DisplayedText.field(entry.reason))\(mark)\n")
                     }
                 }
             }

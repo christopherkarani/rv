@@ -48,77 +48,77 @@
       "pattern": "atmos\\b.*?\\b(?:terraform|tofu|opentofu|tf)\\b.*?\\splan\\s+.*-destroy",
       "severity": "medium",
       "description": "atmos terraform plan -destroy previews destruction. Review carefully before deploying.",
-      "explanation": "atmos terraform plan -destroy shows a destruction preview:\n\n\\ - Read-only (safe to run), but shows what WOULD be destroyed \\ - Review the output carefully before applying/deploying\n\n\\ This is the safe way to preview a destroy."
+      "explanation": "atmos terraform plan -destroy shows a destruction preview:\n\n- Read-only (safe to run), but shows what WOULD be destroyed\n- Review the output carefully before applying/deploying\n\nThis is the safe way to preview a destroy."
     },
     {
       "name": "atmos-destroy",
       "pattern": "atmos\\b.*?\\b(?:terraform|tofu|opentofu|tf)\\b.*?\\sdestroy(?=\\s|$)",
       "severity": "critical",
       "description": "atmos terraform destroy removes ALL managed infrastructure for the component/stack.",
-      "explanation": "atmos terraform destroy removes managed infrastructure:\n\n\\ - Every resource in the component's state is destroyed \\ - --affected / --all destroy across MANY components at once \\ - Cannot be undone without backups/recreation\n\n\\ Preview first: atmos terraform plan -destroy <component> -s <stack>"
+      "explanation": "atmos terraform destroy removes managed infrastructure:\n\n- Every resource in the component's state is destroyed\n- --affected / --all destroy across MANY components at once\n- Cannot be undone without backups/recreation\n\nPreview first: atmos terraform plan -destroy <component> -s <stack>"
     },
     {
       "name": "atmos-deploy",
       "pattern": "atmos\\b.*?\\b(?:terraform|tofu|opentofu|tf)\\b.*?\\sdeploy(?=\\s|$)",
       "severity": "high",
       "description": "atmos terraform deploy runs apply with -auto-approve (no confirmation). Preview with 'atmos terraform plan' first.",
-      "explanation": "atmos terraform deploy auto-approves an apply:\n\n\\ - Atmos rewrites 'deploy' to 'apply' and injects -auto-approve \\ - Changes are applied immediately, with no confirmation prompt \\ - May destroy or recreate resources\n\n\\ Preview first: atmos terraform plan <component> -s <stack>"
+      "explanation": "atmos terraform deploy auto-approves an apply:\n\n- Atmos rewrites 'deploy' to 'apply' and injects -auto-approve\n- Changes are applied immediately, with no confirmation prompt\n- May destroy or recreate resources\n\nPreview first: atmos terraform plan <component> -s <stack>"
     },
     {
       "name": "atmos-apply-auto-approve",
       "pattern": "atmos\\b.*?\\b(?:terraform|tofu|opentofu|tf)\\b.*?\\sapply\\s+.*-auto-approve",
       "severity": "high",
       "description": "atmos terraform apply -auto-approve skips confirmation. Remove -auto-approve for safety.",
-      "explanation": "atmos terraform apply -auto-approve skips confirmation:\n\n\\ - No opportunity to review the plan before applying \\ - Intended for CI/CD, not interactive use \\ - Changes may destroy or recreate resources\n\n\\ For safety: drop -auto-approve and review the plan"
+      "explanation": "atmos terraform apply -auto-approve skips confirmation:\n\n- No opportunity to review the plan before applying\n- Intended for CI/CD, not interactive use\n- Changes may destroy or recreate resources\n\nFor safety: drop -auto-approve and review the plan"
     },
     {
       "name": "atmos-clean",
       "pattern": "atmos\\b.*?\\b(?:terraform|tofu|opentofu|tf)\\b.*?\\sclean(?=\\s|$)",
       "severity": "high",
       "description": "atmos terraform clean deletes local Terraform state and generated files (.terraform/, varfiles, backend config; --everything also removes terraform.tfstate*).",
-      "explanation": "atmos terraform clean removes local Terraform working files:\n\n\\ - Deletes .terraform/, generated varfiles, and backend config \\ - --everything also removes local state (terraform.tfstate*) \\ - --force skips the confirmation prompt \\ - Back up any local-only state before running\n\n\\ Inspect what would be removed before using --everything --force"
+      "explanation": "atmos terraform clean removes local Terraform working files:\n\n- Deletes .terraform/, generated varfiles, and backend config\n- --everything also removes local state (terraform.tfstate*)\n- --force skips the confirmation prompt\n- Back up any local-only state before running\n\nInspect what would be removed before using --everything --force"
     },
     {
       "name": "atmos-taint",
       "pattern": "atmos\\b.*?\\b(?:terraform|tofu|opentofu|tf)\\b.*?\\staint\\b",
       "severity": "high",
       "description": "atmos terraform taint marks a resource to be destroyed and recreated on next apply.",
-      "explanation": "atmos terraform taint marks a resource for recreation:\n\n\\ - The resource is destroyed and recreated on next apply/deploy \\ - May cause downtime; identifiers/IPs may change\n\n\\ Prefer -replace in plan/apply (Terraform 0.15.2+)"
+      "explanation": "atmos terraform taint marks a resource for recreation:\n\n- The resource is destroyed and recreated on next apply/deploy\n- May cause downtime; identifiers/IPs may change\n\nPrefer -replace in plan/apply (Terraform 0.15.2+)"
     },
     {
       "name": "atmos-state-rm",
       "pattern": "atmos\\b.*?\\b(?:terraform|tofu|opentofu|tf)\\b.*?\\sstate\\s+rm\\b",
       "severity": "high",
       "description": "atmos terraform state rm removes a resource from state without destroying it. Resource becomes unmanaged.",
-      "explanation": "atmos terraform state rm orphans a resource:\n\n\\ - Removed from Terraform state, but the cloud resource remains \\ - The resource becomes unmanaged (Terraform ignores it) \\ - May cause drift between state and reality\n\n\\ Back up state first (atmos terraform state pull)"
+      "explanation": "atmos terraform state rm orphans a resource:\n\n- Removed from Terraform state, but the cloud resource remains\n- The resource becomes unmanaged (Terraform ignores it)\n- May cause drift between state and reality\n\nBack up state first (atmos terraform state pull)"
     },
     {
       "name": "atmos-state-mv",
       "pattern": "atmos\\b.*?\\b(?:terraform|tofu|opentofu|tf)\\b.*?\\sstate\\s+mv\\b",
       "severity": "high",
       "description": "atmos terraform state mv moves resources in state. Incorrect moves can cause resource recreation.",
-      "explanation": "atmos terraform state mv rewrites resource addresses:\n\n\\ - A wrong move can cause destruction/recreation \\ - Does not affect the actual cloud resources\n\n\\ Preview the move and back up state first"
+      "explanation": "atmos terraform state mv rewrites resource addresses:\n\n- A wrong move can cause destruction/recreation\n- Does not affect the actual cloud resources\n\nPreview the move and back up state first"
     },
     {
       "name": "atmos-force-unlock",
       "pattern": "atmos\\b.*?\\b(?:terraform|tofu|opentofu|tf)\\b.*?\\sforce-unlock\\b",
       "severity": "high",
       "description": "atmos terraform force-unlock removes a state lock. Only use if the lock is stale.",
-      "explanation": "atmos terraform force-unlock removes a state lock:\n\n\\ - May corrupt state if another operation is in progress \\ - Only use when you are sure no other run is active\n\n\\ Verify no other operations: CI/CD pipelines, other operators"
+      "explanation": "atmos terraform force-unlock removes a state lock:\n\n- May corrupt state if another operation is in progress\n- Only use when you are sure no other run is active\n\nVerify no other operations: CI/CD pipelines, other operators"
     },
     {
       "name": "atmos-workspace-delete",
       "pattern": "atmos\\b.*?\\b(?:terraform|tofu|opentofu|tf)\\b.*?\\sworkspace\\s+delete\\b",
       "severity": "medium",
       "description": "atmos terraform workspace delete removes a workspace and its state.",
-      "explanation": "atmos terraform workspace delete removes a workspace:\n\n\\ - The workspace and its state file are deleted \\ - Does NOT destroy actual infrastructure (resources orphaned)\n\n\\ Destroy resources first, then delete the workspace"
+      "explanation": "atmos terraform workspace delete removes a workspace:\n\n- The workspace and its state file are deleted\n- Does NOT destroy actual infrastructure (resources orphaned)\n\nDestroy resources first, then delete the workspace"
     },
     {
       "name": "atmos-helmfile-destroy",
       "pattern": "atmos\\b.*?\\b(?:helmfile|hf)\\b.*?\\sdestroy(?=\\s|$)",
       "severity": "critical",
       "description": "atmos helmfile destroy removes Helm releases from the cluster.",
-      "explanation": "atmos helmfile destroy tears down Helm releases:\n\n\\ - Deletes the component's Helm releases from the cluster \\ - Workloads, services, and their data may be removed \\ - Cannot be undone without redeploying\n\n\\ Inspect first: atmos helmfile diff <component> -s <stack>"
+      "explanation": "atmos helmfile destroy tears down Helm releases:\n\n- Deletes the component's Helm releases from the cluster\n- Workloads, services, and their data may be removed\n- Cannot be undone without redeploying\n\nInspect first: atmos helmfile diff <component> -s <stack>"
     }
   ]
 }

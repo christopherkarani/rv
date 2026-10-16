@@ -32,7 +32,12 @@ private func splitMarkedBullets(_ paragraph: String) -> [String] {
     var lines: [String] = []
     if let head = parts.first {
         let trimmed = stripMarkdownInline(flattenWrap(head))
-        if !trimmed.isEmpty {
+        if trimmed.hasPrefix("- ") {
+            let item = String(trimmed.dropFirst(2))
+            if !item.isEmpty {
+                lines.append("• \(item)")
+            }
+        } else if !trimmed.isEmpty {
             lines.append(trimmed)
         }
     }
@@ -102,7 +107,8 @@ private func stripInlineMarkup(_ text: String) -> String {
 }
 
 private func flattenWrap(_ text: String) -> String {
-    collapseSpaces(text.replacingOccurrences(of: "\\", with: " "))
+    // Only backslash-space wrap markers are artifacts; keep content backslashes.
+    collapseSpaces(text.replacingOccurrences(of: "\\ ", with: " "))
 }
 
 private func collapseSpaces(_ text: String) -> String {

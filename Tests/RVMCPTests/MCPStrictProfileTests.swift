@@ -86,14 +86,14 @@ struct MCPStrictProfileTests {
 
     @Test func profileTextLetsTheCageReachOnlyItsProxy() {
         let policy = MCPSandboxPolicy(network: false, hosts: ["api.example.com"])
-        let proxied = MCPSandbox.profile(
-            policy: policy, scratch: "/s", home: "/h", configDirectory: "/h/.config/rv", temporaryDirectory: "/t", proxyPort: 4321)
+        let proxied = try! MCPSandbox.profile(
+            policy: policy, scratch: "/s", home: "/h", configDirectory: "/h/.config/rv", temporaryDirectory: "/t", proxyPort: 4321).get()
         #expect(proxied.contains("(deny network*)\n(allow network-outbound (remote tcp \"localhost:4321\"))"))
         // The proxy port is the only localhost reach the profile grants.
         #expect(proxied.components(separatedBy: "localhost:").count == 2)
-        let closed = MCPSandbox.profile(
+        let closed = try! MCPSandbox.profile(
             policy: MCPSandboxPolicy(network: false), scratch: "/s", home: "/h", configDirectory: "/h/.config/rv",
-            temporaryDirectory: "/t")
+            temporaryDirectory: "/t").get()
         #expect(closed.contains("(deny network*)") && closed.contains("network-outbound") == false)
     }
 
@@ -101,7 +101,7 @@ struct MCPStrictProfileTests {
         let environment = MCPSandbox.proxyEnvironment(
             ["NO_PROXY": "*", "no_proxy": "*", "PATH": "/bin"], port: 4321, credential: "abc")
         for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"] {
-            #expect(environment[key] == "http://rv:abc@127.0.0.1:4321", "\(key)")
+            #expect(environment[key] == "http://abc@127.0.0.1:4321", "\(key)")
         }
         #expect(environment["NODE_USE_ENV_PROXY"] == "1")
         #expect(environment["NO_PROXY"] == nil && environment["no_proxy"] == nil)
@@ -177,7 +177,7 @@ struct MCPSandboxHostsLiveTests {
         process.waitUntilExit()
         let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
 
-        #expect(output.contains("proxy=http://rv:") && output.contains("@127.0.0.1:"), "\(output)")
+        #expect(output.contains("proxy=http://") && output.contains("@127.0.0.1:"), "\(output)")
         #expect(output.contains("PROXY_OK"), "\(output)")
         #expect(output.contains("DIRECT_OK") == false, "\(output)")
         #expect(output.contains("DNS_OK") == false, "\(output)")

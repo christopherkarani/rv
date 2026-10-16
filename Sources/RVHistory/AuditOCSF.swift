@@ -84,7 +84,8 @@ public enum AuditOCSF {
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]) else {
             return nil
         }
-        return String(data: data, encoding: .utf8)
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        return DisplayedText.escapeJSONScalars(text)
     }
 
     /// Stable id so a SIEM can drop the duplicates at-least-once delivery may send.

@@ -114,14 +114,55 @@ public struct HTTPTransfer: Sendable {
 
 enum HTTPRequestMessage {
     static func bytes(for destination: HTTPDestination) -> Data {
-        let head = [
+        frame(destination: destination, authorization: nil)
+    }
+
+    /// Frames the fixed GET with exactly one `Authorization` header when a
+    /// brokered credential is present, none otherwise. Nil fails the
+    /// exchange closed before a single byte is framed: a provisioned value
+    /// carrying control bytes (or nothing at all) must never reach the
+    /// wire, and the exchange must not silently downgrade to
+    /// unauthenticated. The value is the complete header value verbatim,
+    /// scheme included when the credential needs one.
+    ///
+    /// Borrowed: OpenShell resolves supervisor-held credentials into the
+    /// request header value immediately before forwarding
+    /// (https://docs.nvidia.com/openshell/latest/how-it-works/providers/overview,
+    /// "How Credential Injection Works"). OpenShell excludes opaque tunnels
+    /// from rewrite, and rv's CONNECT tunnels are opaque with no MITM CA,
+    /// so the rewrite point is the admission dialer instead of the proxy.
+    static func bytes(for destination: HTTPDestination, credential: String?) -> Data? {
+        if let credential {
+            // Byte-level on purpose: CRLF is a single Swift Character
+            // (grapheme) that equals neither lone CR nor lone LF, so
+            // Character-element `contains` would miss a CRLF injection.
+            // Header values must not carry control bytes at all, and
+            // provisioned credentials never legitimately contain them.
+            // 8 KiB bounds the framed header: real bearer values are far
+            // smaller, and a misprovisioned multi-MB value must fail
+            // closed here instead of being framed whole.
+            guard credential.isEmpty == false,
+                credential.utf8.count <= 8192,
+                credential.utf8.contains(where: { $0 < 0x20 || $0 == 0x7F }) == false
+            else {
+                return nil
+            }
+        }
+        return frame(destination: destination, authorization: credential)
+    }
+
+    private static func frame(destination: HTTPDestination, authorization: String?) -> Data {
+        var head = [
             "GET \(destination.requestTarget) HTTP/1.1",
             "Host: \(destination.hostHeader)",
             "User-Agent: \(HTTPEgressLimits.userAgent)",
             "Accept: */*",
             "Connection: close",
-        ].joined(separator: "\r\n")
-        return Data((head + "\r\n\r\n").utf8)
+        ]
+        if let authorization {
+            head.append("Authorization: \(authorization)")
+        }
+        return Data((head.joined(separator: "\r\n") + "\r\n\r\n").utf8)
     }
 }
 
@@ -129,13 +170,18 @@ enum HTTPRequestMessage {
 ///
 /// Redirects are returned. They are not a second connection.
 public enum HTTPExchange {
+    /// `credential` is the brokered header value the admission gate granted
+    /// for this destination, or nil to send the fixed five-header GET. A
+    /// malformed value fails closed before any byte is written; it never
+    /// sends unauthenticated in place of a grant.
     public static func perform(
         destination: HTTPDestination,
         transfer: HTTPTransfer,
         deadline: Date,
         now: @escaping @Sendable () -> Date = { Date() },
         shouldStop: @escaping @Sendable () -> Bool = { false },
-        limits: HTTPExchangeLimits = .production
+        limits: HTTPExchangeLimits = .production,
+        credential: String? = nil
     ) -> Result<HTTPExecutionReceipt, HTTPEgressFailure> {
         guard destination.isPublicPinned else {
             return .failure(.notOpened(.forbiddenDestination))
@@ -145,10 +191,13 @@ public enum HTTPExchange {
         {
             return .failure(.notOpened(.unavailable))
         }
+        guard let request = HTTPRequestMessage.bytes(for: destination, credential: credential) else {
+            return .failure(.notOpened(.unavailable))
+        }
         if shouldStop() {
             return .failure(.notOpened(.cancelled))
         }
-        switch transfer.write(HTTPRequestMessage.bytes(for: destination)) {
+        switch transfer.write(request) {
         case .failure(let fault):
             transfer.stop()
             switch fault {

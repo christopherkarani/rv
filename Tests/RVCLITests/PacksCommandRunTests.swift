@@ -161,6 +161,37 @@ struct PacksCommandRunTests {
         }
     }
 
+    @Test func info_escapesUnknownPackID() async throws {
+        let home = try isolatedHome()
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let id = "x\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence
+        var threw = false
+        let text = try await withCLIProcess(home: home) {
+            try await captureStderr {
+                let info = try Packs.Info.parse([id])
+                do {
+                    try await info.run()
+                } catch is ExitCode {
+                    threw = true
+                }
+            }
+        }
+        #expect(threw)
+        let line = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            .first { $0.contains("unknown pack id: ") } ?? ""
+        #expect(line.hasPrefix("unknown pack id: "))
+        #expect(line.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(line.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(line.unicodeScalars.contains { $0.value == 0x2029 } == false)
+        #expect(line.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(line.contains("\\u001b[2J"))
+        #expect(line.contains("\\u2028"))
+        #expect(line.contains("\\u2029"))
+        #expect(line.contains("\\u202e"))
+        let split = line.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+        #expect(split.contains(sentence) == false)
+    }
+
     @Test func prettyFormat_prettyAppearance() {
         let model = packsViewModel(
             enabled: [.coreGit],

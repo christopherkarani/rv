@@ -291,6 +291,30 @@ private func decodedJSON(_ text: String) throws -> [String: Any] {
     }
 }
 
+@Test func scanRobot_pathEscapesLineAndBidiScalars() throws {
+    try withTempScanHome { home, homeURL in
+        let marker = "p\u{1B}[2J\u{2028}\u{2029}\u{202E}ok"
+        let projects = homeURL.appendingPathComponent(".claude/projects/\(marker)", isDirectory: true)
+        try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
+        let reset = try scanFixtureURL("claude/projects/-tmp-rv-scan-fixture/ac001-reset-hard.jsonl")
+        let destination = projects.appendingPathComponent("ac001-reset-hard.jsonl")
+        try FileManager.default.copyItem(at: reset, to: destination)
+        let report = try ScanRun.run(.fixture(home: home))
+        let json = try renderScanSessionsRobot(from: report, showCommand: false)
+        #expect(json.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(json.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(json.unicodeScalars.contains { $0.value == 0x2029 } == false)
+        #expect(json.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(json.contains("\\u001b"))
+        #expect(json.contains("\\u2028"))
+        #expect(json.contains("\\u2029"))
+        #expect(json.contains("\\u202e"))
+        let object = try decodedJSON(json)
+        let findings = try #require(object["findings"] as? [[String: Any]])
+        #expect(findings.first?["path"] as? String == destination.path)
+    }
+}
+
 @Test func scanPretty_defaultRedaction_hidesFullArgv() throws {
     try withTempScanHome { home, homeURL in
         try installClaudeFixture(into: homeURL)

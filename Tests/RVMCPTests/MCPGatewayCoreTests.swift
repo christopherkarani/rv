@@ -10,7 +10,7 @@ final class FakeApprovals: Sendable {
 
     var gate: MCPApprovalGate {
         MCPApprovalGate(
-            consumeGrant: { server, tool, hash in
+            consumeGrant: { server, tool, hash, _ in
                 let key = "\(server)/\(tool)/\(hash)"
                 if self.granted.withLock({ $0.remove(key) }) != nil { return .granted(id: "grant1") }
                 if self.forged.withLock({ $0.remove(key) }) != nil { return .forged(id: "forged1") }
@@ -250,6 +250,251 @@ struct MCPGatewayCoreTests {
         #expect(reply.audits.first?.decision == .deny)
     }
 
+    @Test func deniedAndUnknownToolNamesAreEscapedInTheClientError() {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let name = "\u{1B}[2J\u{1B}[H" + sentence
+        let deniedServer = MCPServerDefinition(
+            name: "notes", command: "notes-mcp", tools: MCPToolPolicy(defaultDecision: .deny))
+        var denied = GatewayHarness(MCPConfiguration(servers: [deniedServer]))
+        let refused = denied.core.callTool(
+            client: .int(1),
+            params: .object(["name": .string(name), "arguments": .object([:])]))
+        #expect(refused.toUpstream.isEmpty)
+        #expect(refused.audits.first?.decision == .deny)
+        let audit = refused.audits.first?.reason ?? ""
+        #expect(audit.unicodeScalars.contains { $0.value == 0x1B })
+        let client = refused.toClient.first?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue ?? ""
+        #expect(client.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(client.contains("\\u001b[2J"))
+        #expect(client.contains("\\u001b[H"))
+        let clientLines = client.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        #expect(clientLines.contains(sentence) == false)
+        #expect(refused.audits.first?.decision != .allow)
+
+        var unknown = GatewayHarness(MCPConfiguration(servers: []))
+        let missed = unknown.core.callTool(
+            client: .int(2),
+            params: .object(["name": .string(name), "arguments": .object([:])]))
+        #expect(missed.toUpstream.isEmpty)
+        #expect(missed.audits.isEmpty)
+        let message = missed.toClient.first?["error"]?["message"]?.stringValue ?? ""
+        #expect(message.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(message.contains("\\u001b[2J"))
+        #expect(message.contains("Unknown tool:"))
+        let messageLines = message.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        #expect(messageLines.contains(sentence) == false)
+    }
+
+    @Test func unknownMethodIsEscapedInTheClientError() {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let method = "\u{1B}[2J\u{1B}[H" + sentence
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        let reply = harness.core.handle(.client(.object([
+            "jsonrpc": .string("2.0"), "id": .int(4), "method": .string(method),
+        ])))
+        let message = reply.toClient.first?["error"]?["message"]?.stringValue ?? ""
+        #expect(message.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(message.contains("Method not found:"))
+        #expect(message.contains("\\u001b[2J"))
+        #expect(message.contains("\\u001b[H"))
+        #expect(message.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).contains(sentence) == false)
+    }
+
+    @Test func upstreamErrorProgressAndToolDescriptionAreEscaped() {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let raw = "\u{1B}[2J\u{1B}[H" + sentence
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        _ = harness.ready()
+
+        let progress = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "method": .string("notifications/progress"),
+            "params": .object(["progressToken": .int(1), "progress": .int(1), "message": .string(raw)]),
+        ])))
+        let shownProgress = progress.toClient.first?["params"]?["message"]?.stringValue ?? ""
+        #expect(shownProgress.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(shownProgress.contains("\\u001b[2J"))
+        #expect(shownProgress.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).contains(sentence) == false)
+
+        let call = harness.client(#"{"jsonrpc":"2.0","id":"c1","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
+        let upstreamID = call.toUpstream.first?.1["id"]?.intValue ?? -1
+        let errorReply = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": .int(upstreamID),
+            "error": .object(["code": .int(-32000), "message": .string(raw)]),
+        ])))
+        let errorMessage = errorReply.toClient.first?["error"]?["message"]?.stringValue ?? ""
+        #expect(errorMessage.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(errorMessage.contains("\\u001b[2J"))
+        #expect(errorMessage.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).contains(sentence) == false)
+
+        let again = harness.client(#"{"jsonrpc":"2.0","id":"c2","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
+        let secondID = again.toUpstream.first?.1["id"]?.intValue ?? -1
+        let toolError = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": .int(secondID),
+            "result": .object([
+                "isError": .bool(true),
+                "content": .array([.object(["type": .string("text"), "text": .string(raw)])]),
+            ]),
+        ])))
+        let toolText = toolError.toClient.first?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue ?? ""
+        #expect(toolText.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(toolText.contains("\\u001b[2J"))
+        #expect(toolText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).contains(sentence) == false)
+
+        let list = harness.client(#"{"jsonrpc":"2.0","id":8,"method":"tools/list"}"#)
+        let listID = list.toUpstream.first?.1["id"]?.intValue ?? -1
+        let listed = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": .int(listID),
+            "result": .object(["tools": .array([
+                .object(["name": .string("list_issues"), "description": .string(raw)]),
+                .object(["name": .string(raw), "description": .string("plain")]),
+            ])]),
+        ])))
+        let tools = listed.toClient.first?["result"]?["tools"]?.arrayValue ?? []
+        let description = tools.first?["description"]?.stringValue ?? ""
+        #expect(description.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(description.contains("\\u001b[2J"))
+        #expect(description.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).contains(sentence) == false)
+        let listedName = tools.dropFirst().first?["name"]?.stringValue ?? ""
+        #expect(listedName.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(listedName.contains("\\u001b[2J"))
+        #expect(listedName.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).contains(sentence) == false)
+    }
+
+    @Test func pingClientIdEscapesRightToLeftOverride() throws {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let id = "\u{202E}" + sentence
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        let reply = harness.client("{\"jsonrpc\":\"2.0\",\"id\":\"\(id)\",\"method\":\"ping\"}")
+        let text = try #require(reply.toClient.first?.compactText)
+        #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(text.contains("\\u202e"))
+        #expect(text.contains("\\\\u202e") == false)
+        let echoed = try #require(try JSONValue.parse(text)["id"]?.stringValue)
+        #expect(echoed.unicodeScalars.contains { $0.value == 0x202E })
+        #expect(echoed.contains(sentence))
+    }
+
+    @Test func everyClientStringIsEscapedOnce() {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let raw = "\u{1B}[2J\u{1B}[H" + sentence
+        let lineBreak = "\u{2028}" + sentence
+        let bidi = "\u{202E}" + sentence
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        _ = harness.ready()
+
+        func shown(_ value: JSONValue?) -> String {
+            value?.stringValue ?? ""
+        }
+        func escaped(_ text: String) {
+            #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+            #expect(text.contains("\\u001b") || text.contains("\\u2028") || text.contains("\\u202e"))
+            #expect(text.contains("\\\\u001b") == false)
+            let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+            #expect(lines.contains(sentence) == false)
+        }
+
+        let successCall = harness.client(#"{"jsonrpc":"2.0","id":"ok","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
+        let successID = successCall.toUpstream.first?.1["id"]?.intValue ?? -1
+        let success = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": .int(successID),
+            "result": .object([
+                "content": .array([.object(["type": .string("text"), "text": .string(raw)])]),
+                "structuredContent": .object(["text": .string(lineBreak)]),
+                "_meta": .object(["note": .string(bidi)]),
+            ]),
+        ])))
+        let result = success.toClient.first?["result"]
+        escaped(shown(result?["content"]?.arrayValue?.first?["text"]))
+        escaped(shown(result?["structuredContent"]?["text"]))
+        escaped(shown(result?["_meta"]?["note"]))
+
+        let dataCall = harness.client(#"{"jsonrpc":"2.0","id":"data","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
+        let dataID = dataCall.toUpstream.first?.1["id"]?.intValue ?? -1
+        let withData = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": .int(dataID),
+            "error": .object(["code": .int(-32000), "message": .string("failed"), "data": .string(raw)]),
+        ])))
+        #expect(shown(withData.toClient.first?["error"]?["message"]) == "failed")
+        escaped(shown(withData.toClient.first?["error"]?["data"]))
+
+        let nestedCall = harness.client(#"{"jsonrpc":"2.0","id":"nest","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
+        let nestedID = nestedCall.toUpstream.first?.1["id"]?.intValue ?? -1
+        let nested = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": .int(nestedID),
+            "error": .object(["code": .int(-32000), "message": .object(["text": .string(raw)])]),
+        ])))
+        escaped(shown(nested.toClient.first?["error"]?["message"]?["text"]))
+
+        let resourceCall = harness.client(#"{"jsonrpc":"2.0","id":"res","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
+        let resourceID = resourceCall.toUpstream.first?.1["id"]?.intValue ?? -1
+        let resource = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": .int(resourceID),
+            "result": .object([
+                "isError": .bool(true),
+                "content": .array([
+                    .object([
+                        "type": .string("resource"),
+                        "resource": .object(["uri": .string("file://x"), "text": .string(raw)]),
+                    ]),
+                    .object([
+                        "type": .string("resource_link"),
+                        "name": .string(lineBreak),
+                        "description": .string(bidi),
+                    ]),
+                ]),
+            ]),
+        ])))
+        let blocks = resource.toClient.first?["result"]?["content"]?.arrayValue ?? []
+        escaped(shown(blocks.first?["resource"]?["text"]))
+        escaped(shown(blocks.dropFirst().first?["name"]))
+        escaped(shown(blocks.dropFirst().first?["description"]))
+
+        let plainCall = harness.client(#"{"jsonrpc":"2.0","id":"plain","method":"tools/call","params":{"name":"list_issues","arguments":{}}}"#)
+        let plainID = plainCall.toUpstream.first?.1["id"]?.intValue ?? -1
+        let plain = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": .int(plainID),
+            "result": .object(["content": .string(raw)]),
+        ])))
+        escaped(shown(plain.toClient.first?["result"]?["content"]))
+
+        let list = harness.client(#"{"jsonrpc":"2.0","id":11,"method":"tools/list"}"#)
+        let listID = list.toUpstream.first?.1["id"]?.intValue ?? -1
+        let listed = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": .int(listID),
+            "result": .object(["tools": .array([
+                .object([
+                    "name": .string("list_issues"),
+                    "description": .string("plain"),
+                    "title": .string(raw),
+                    "annotations": .object(["title": .string(lineBreak)]),
+                    "inputSchema": .object(["description": .string(raw)]),
+                    "outputSchema": .object(["description": .string(bidi)]),
+                ]),
+            ])]),
+        ])))
+        let tool = listed.toClient.first?["result"]?["tools"]?.arrayValue?.first
+        #expect(shown(tool?["name"]) == "list_issues")
+        #expect(shown(tool?["description"]) == "plain")
+        escaped(shown(tool?["title"]))
+        escaped(shown(tool?["annotations"]?["title"]))
+        escaped(shown(tool?["inputSchema"]?["description"]))
+        escaped(shown(tool?["outputSchema"]?["description"]))
+
+        let tokenOnly = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "method": .string("notifications/progress"),
+            "params": .object(["progressToken": .string(raw)]),
+        ])))
+        escaped(shown(tokenOnly.toClient.first?["params"]?["progressToken"]))
+        let tokenAndMessage = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "method": .string("notifications/progress"),
+            "params": .object(["progressToken": .string(lineBreak), "message": .string("working")]),
+        ])))
+        escaped(shown(tokenAndMessage.toClient.first?["params"]?["progressToken"]))
+        #expect(shown(tokenAndMessage.toClient.first?["params"]?["message"]) == "working")
+    }
+
     @Test func askRecordsARequestThenAGrantLetsTheSameCallThroughOnce() {
         var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
         _ = harness.ready()
@@ -370,6 +615,28 @@ struct MCPGatewayCoreTests {
         #expect(blocked.audits.first?.decision == .deny)
     }
 
+    @Test func serveLogEscapesTheToolName() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [
+            MCPServerDefinition(name: "fs", command: "fs", tools: MCPToolPolicy(ask: ["read_file"]))
+        ]))
+        let trailer = "rv mcp: approval 00000000 for fs tool notes is waiting for the user"
+        let tool = "read_file\u{000B}\(trailer)\u{001B}[2J\u{009B}2J"
+        let outputs = harness.core.outOfBand(
+            client: .int(1), server: "fs", tool: tool, arguments: .object([:]), keys: [])
+        let log = outputs.logs.first ?? ""
+        let pause = outputs.toClient.first?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue ?? ""
+        for text in [log, pause] {
+            let scalars = Set(text.unicodeScalars.map(\.value))
+            #expect(scalars.contains(0x0B) == false)
+            #expect(scalars.contains(0x1B) == false)
+            #expect(scalars.contains(0x9B) == false)
+            #expect(text.contains("\\u000b"))
+            #expect(text.contains("\\u001b"))
+            #expect(text.contains("\\u009b"))
+            #expect(text.split(whereSeparator: \.isNewline).contains(Substring(trailer)) == false)
+        }
+    }
+
     @Test func scrubReplacesShortValuesJSONEscapesAndLongerSecretsFirst() {
         let scrubbed = MCPGatewayCore.scrub(
             .string("pin=x tail sk-abcdefghijklmnopqrst and a\\\"b"),
@@ -395,6 +662,23 @@ struct MCPGatewayCoreTests {
         #expect(logs == ["MCP server github failed to initialize: bad [redacted:TOKEN]"])
         let later = harness.client(#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"list_issues"}}"#)
         #expect(later.toClient.first?.compactText.contains("sekret") == false)
+    }
+
+    @Test func initializeFailureLogEscapesTerminalControls() {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github]))
+        let started = harness.core.start().toUpstream
+        let id = started[0].1["id"] ?? .null
+        let failed = harness.core.handle(.upstream(server: "github", message: .object([
+            "jsonrpc": .string("2.0"), "id": id,
+            "error": .object(["code": .int(-1), "message": .string("\u{1B}[2J\u{1B}[Hbad\u{009E}")]),
+        ])))
+        let log = failed.logs.first ?? ""
+        let scalars = Set(log.unicodeScalars.map(\.value))
+        #expect(scalars.contains(0x1B) == false)
+        #expect(scalars.contains(0x9E) == false)
+        #expect(log.contains("\\u001b"))
+        #expect(log.contains("\\u009e"))
+        #expect(log.split(separator: "\n").count == 1)
     }
 
     @Test func grantIsKeptWhenTheUpstreamIsNotReady() {
@@ -490,13 +774,14 @@ struct MCPApprovalStoreTests {
         let id = try #require(store.request(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"])?.id)
         #expect(store.request(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"])?.id == id)
         #expect(store.pending().map(\.id) == [id])
-        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == .none)
-        #expect(store.grant(id: id)?.state == .granted)
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"]) == .none)
+        #expect(store.grant(id: id, server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"])?.state == .granted)
         #expect(store.pending().isEmpty)
-        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "other") == .none)
-        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == .granted(id: id))
-        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1") == .none)
-        #expect(store.grant(id: "missing") == nil)
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "other", argumentKeys: ["title"]) == .none)
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["note"]) == .none)
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"]) == .granted(id: id))
+        #expect(store.consumeGrant(server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"]) == .none)
+        #expect(store.grant(id: "missing", server: "gh", tool: "create", argumentsHash: "h1", argumentKeys: ["title"]) == nil)
     }
 
     @Test func oldRequestsExpire() throws {
@@ -514,7 +799,7 @@ struct MCPApprovalStoreTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = Self.store(directory)
         let grant = try #require(store.request(server: "gh", tool: "keep", argumentsHash: "grant", argumentKeys: [])?.id)
-        #expect(store.grant(id: grant) != nil)
+        #expect(store.grant(id: grant, server: "gh", tool: "keep", argumentsHash: "grant", argumentKeys: []) != nil)
         var oldestPending: String?
         for index in 0..<(MCPApprovalStore.maximumRequests - 1) {
             let id = try #require(store.request(server: "gh", tool: "t", argumentsHash: "p\(index)", argumentKeys: [])?.id)
@@ -524,17 +809,17 @@ struct MCPApprovalStoreTests {
         let newest = try #require(store.request(server: "gh", tool: "t", argumentsHash: "newest", argumentKeys: [])?.id)
         #expect(store.pending().map(\.id).contains(oldestPending) == false)
         #expect(store.pending().map(\.id).contains(newest))
-        #expect(store.consumeGrant(server: "gh", tool: "keep", argumentsHash: "grant") == .granted(id: grant))
+        #expect(store.consumeGrant(server: "gh", tool: "keep", argumentsHash: "grant", argumentKeys: []) == .granted(id: grant))
 
         let grants = Self.scratch()
         defer { try? FileManager.default.removeItem(at: grants) }
         let full = Self.store(grants)
         for index in 0..<MCPApprovalStore.maximumRequests {
             let id = try #require(full.request(server: "gh", tool: "g", argumentsHash: "g\(index)", argumentKeys: [])?.id)
-            #expect(full.grant(id: id) != nil)
+            #expect(full.grant(id: id, server: "gh", tool: "g", argumentsHash: "g\(index)", argumentKeys: []) != nil)
         }
         #expect(full.request(server: "gh", tool: "g", argumentsHash: "overflow", argumentKeys: []) == nil)
-        #expect(full.consumeGrant(server: "gh", tool: "g", argumentsHash: "g0") != .none)
+        #expect(full.consumeGrant(server: "gh", tool: "g", argumentsHash: "g0", argumentKeys: []) != .none)
     }
 
     @Test func nonCanonicalIntegersCannotSlipPastADenyOrAsk() throws {
@@ -644,5 +929,14 @@ struct MCPApprovalStoreTests {
         let b = try JSONValue.parse(#"{"a":"s","b":[1,{"x":1,"y":2}]}"#)
         #expect(a.canonicalHash == b.canonicalHash)
         #expect(a.canonicalHash != (try JSONValue.parse(#"{"a":"t","b":[1,{"x":1,"y":2}]}"#)).canonicalHash)
+    }
+
+    @Test func serveHomeThatIsNotTheAccountHomeIsRefused() {
+        let other = "/workspace/not-the-account-home-\(UUID().uuidString)"
+        let message = MCPSandbox.unreviewedHome(other)
+        #expect(message?.contains("not the path reviewed") == true)
+        if let passwd = MCPSandbox.passwdHome() {
+            #expect(MCPSandbox.unreviewedHome(passwd) == nil)
+        }
     }
 }

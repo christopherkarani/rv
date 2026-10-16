@@ -23,7 +23,7 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 3 MCP governance | `governance/phase-3-mcp` | [#414](https://github.com/christopherkarani/rv/pull/414) | merged |
 | 4 Enterprise client features | `governance/phase-4-enterprise` | [#415](https://github.com/christopherkarani/rv/pull/415) | merged |
 | 5 Launch readiness | human-owned | n/a | not started |
-| 6 Security blockers | `governance/phase-6-hardening` (from `main`) | [#417](https://github.com/christopherkarani/rv/pull/417) (draft) | in progress |
+| 6 Security blockers | `governance/phase-6-hardening` (from `main`) | [#417](https://github.com/christopherkarani/rv/pull/417) | merged |
 | 7 Enterprise hardening | `governance/phase-7-enterprise-hardening` (from phase 6) | [#418](https://github.com/christopherkarani/rv/pull/418) (draft) | in progress |
 | 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | _not opened yet_ | not started |
 

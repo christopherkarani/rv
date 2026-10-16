@@ -112,7 +112,7 @@ enum PolicyDraftRun {
             case .refuse(let reason):
                 data = try encoder.encode(PolicyDraftRobotRefuse(refuse: reason))
             }
-            return String(decoding: data, as: UTF8.self)
+            return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
         }
         switch result {
         case .preview(let preview):
@@ -128,7 +128,7 @@ struct PolicyDraftRobotRefuse: Equatable, Sendable, Codable {
 }
 
 func formatDocumentRule(_ rule: PolicyDocumentRule) -> String {
-    "\(rule.id.rawValue) \(rule.verdict.rawValue) \(predicateText(rule.predicate))"
+    "\(DisplayedText.field(rule.id.rawValue)) \(rule.verdict.rawValue) \(predicateText(rule.predicate))"
 }
 
 func predicateText(_ predicate: PolicyPredicate) -> String {
@@ -141,10 +141,10 @@ func predicateText(_ predicate: PolicyPredicate) -> String {
         case .exactly(let value):
             forceText = value.rawValue
         }
-        let branchText = branch ?? "-"
+        let branchText = branch.map { DisplayedText.field($0) } ?? "-"
         return "gitPush force=\(forceText) branch=\(branchText)"
     case .gitDiscardWorktree(let pathspec):
-        return "gitDiscardWorktree pathspec=\(pathspec ?? "-")"
+        return "gitDiscardWorktree pathspec=\(pathspec.map { DisplayedText.field($0) } ?? "-")"
     case .gitReset(let mode):
         return "gitReset mode=\(mode?.rawValue ?? "-")"
     case .gitClean(let force, let directories):

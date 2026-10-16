@@ -36,49 +36,49 @@
       "pattern": "\\bsquare\\b(?:\\s+--?\\S+(?:\\s+\\S+)?)*\\s+catalog\\s+delete\\b",
       "severity": "high",
       "description": "square catalog delete removes catalog objects, impacting products and inventory.",
-      "explanation": "Deleting catalog objects removes products, variations, modifiers, or categories \\ from your Square catalog. POS systems, online stores, and invoicing that \\ reference these items will show errors or missing products.\n\n\\ Safer alternatives: \\ - square catalog list to review items first \\ - Set item visibility to hidden instead of deleting \\ - Export catalog backup before bulk deletions"
+      "explanation": "Deleting catalog objects removes products, variations, modifiers, or categories from your Square catalog. POS systems, online stores, and invoicing that reference these items will show errors or missing products.\n\nSafer alternatives:\n- square catalog list to review items first\n- Set item visibility to hidden instead of deleting\n- Export catalog backup before bulk deletions"
     },
     {
       "name": "square-api-delete-catalog-object",
       "pattern": "(?i)\\bcurl\\b(?:[^\\n]*?(?:-X\\s*|--request(?:=|\\s+))DELETE\\b[^\\n]*?https?://(?:api\\.squareup\\.com|connect\\.squareup(?:sandbox)?\\.com)[^\\s'\"]*/v2/catalog/object/[^\\s'\"]+|[^\\n]*?https?://(?:api\\.squareup\\.com|connect\\.squareup(?:sandbox)?\\.com)[^\\s'\"]*/v2/catalog/object/[^\\s'\"]+[^\\n]*?(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)",
       "severity": "high",
       "description": "Square API DELETE /v2/catalog/object/{id} deletes a catalog object.",
-      "explanation": "Direct API deletion of catalog objects bypasses CLI safety checks. Products, \\ categories, taxes, discounts, and modifiers can be permanently removed, \\ breaking POS workflows and e-commerce integrations.\n\n\\ Safer alternatives: \\ - GET /v2/catalog/object/{id} to verify before deletion \\ - Use batch operations with careful ID validation \\ - Test in Square sandbox environment first"
+      "explanation": "Direct API deletion of catalog objects bypasses CLI safety checks. Products, categories, taxes, discounts, and modifiers can be permanently removed, breaking POS workflows and e-commerce integrations.\n\nSafer alternatives:\n- GET /v2/catalog/object/{id} to verify before deletion\n- Use batch operations with careful ID validation\n- Test in Square sandbox environment first"
     },
     {
       "name": "square-api-batch-delete-catalog-objects",
       "pattern": "(?i)\\bcurl\\b(?:[^\\n]*?(?:-X\\s*|--request(?:=|\\s+))POST\\b[^\\n]*?https?://(?:api\\.squareup\\.com|connect\\.squareup(?:sandbox)?\\.com)[^\\s'\"]*/v2/catalog/batch-delete(?:[^\\s'\"]*)?|[^\\n]*?https?://(?:api\\.squareup\\.com|connect\\.squareup(?:sandbox)?\\.com)[^\\s'\"]*/v2/catalog/batch-delete(?:[^\\s'\"]*)?[^\\n]*?(?:-X\\s*|--request(?:=|\\s+))POST\\b)",
       "severity": "critical",
       "description": "Square API POST /v2/catalog/batch-delete deletes multiple catalog objects.",
-      "explanation": "Batch deleting catalog objects can remove up to 200 products, variations, \\ modifiers, categories, or related objects in one call. Deletion cascades to \\ dependent catalog objects, so a wrong ID list can remove more than the \\ immediate targets.\n\n\\ Safer alternatives: \\ - Retrieve and review every object ID before deletion \\ - Export a catalog backup before batch deletion \\ - Test the request against Square sandbox first"
+      "explanation": "Batch deleting catalog objects can remove up to 200 products, variations, modifiers, categories, or related objects in one call. Deletion cascades to dependent catalog objects, so a wrong ID list can remove more than the immediate targets.\n\nSafer alternatives:\n- Retrieve and review every object ID before deletion\n- Export a catalog backup before batch deletion\n- Test the request against Square sandbox first"
     },
     {
       "name": "square-api-delete-customer",
       "pattern": "(?i)\\bcurl\\b(?:[^\\n]*?(?:-X\\s*|--request(?:=|\\s+))DELETE\\b[^\\n]*?https?://(?:api\\.squareup\\.com|connect\\.squareup(?:sandbox)?\\.com)[^\\s'\"]*/v2/customers/[^\\s'\"]+|[^\\n]*?https?://(?:api\\.squareup\\.com|connect\\.squareup(?:sandbox)?\\.com)[^\\s'\"]*/v2/customers/[^\\s'\"]+[^\\n]*?(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)",
       "severity": "critical",
       "description": "Square API DELETE /v2/customers/{id} deletes a customer.",
-      "explanation": "Deleting a Square customer removes their profile, cards on file, and loyalty \\ data. Transaction history loses customer context, affecting reporting and \\ CRM. Repeat customers will need to re-register.\n\n\\ Safer alternatives: \\ - GET /v2/customers/{id} to verify customer before deletion \\ - Remove cards on file instead of full deletion \\ - Export customer data before deletion for compliance"
+      "explanation": "Deleting a Square customer removes their profile, cards on file, and loyalty data. Transaction history loses customer context, affecting reporting and CRM. Repeat customers will need to re-register.\n\nSafer alternatives:\n- GET /v2/customers/{id} to verify customer before deletion\n- Remove cards on file instead of full deletion\n- Export customer data before deletion for compliance"
     },
     {
       "name": "square-api-delete-payment-link",
       "pattern": "(?i)\\bcurl\\b(?:[^\\n]*?(?:-X\\s*|--request(?:=|\\s+))DELETE\\b[^\\n]*?https?://(?:api\\.squareup\\.com|connect\\.squareup(?:sandbox)?\\.com)[^\\s'\"]*/v2/online-checkout/payment-links/[^\\s'\"]+|[^\\n]*?https?://(?:api\\.squareup\\.com|connect\\.squareup(?:sandbox)?\\.com)[^\\s'\"]*/v2/online-checkout/payment-links/[^\\s'\"]+[^\\n]*?(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)",
       "severity": "high",
       "description": "Square API DELETE /v2/online-checkout/payment-links/{id} deletes a payment link.",
-      "explanation": "Deleting a Square payment link cancels the associated checkout order and makes \\ the shared link unusable. Customers who already received the link cannot pay \\ through it after deletion.\n\n\\ Safer alternatives: \\ - Retrieve the payment link and order before deletion \\ - Deactivate or replace the link intentionally through Square Dashboard \\ - Notify customers before invalidating a shared checkout link"
+      "explanation": "Deleting a Square payment link cancels the associated checkout order and makes the shared link unusable. Customers who already received the link cannot pay through it after deletion.\n\nSafer alternatives:\n- Retrieve the payment link and order before deletion\n- Deactivate or replace the link intentionally through Square Dashboard\n- Notify customers before invalidating a shared checkout link"
     },
     {
       "name": "square-api-delete-location",
       "pattern": "(?i)\\bcurl\\b(?:[^\\n]*?(?:-X\\s*|--request(?:=|\\s+))DELETE\\b[^\\n]*?https?://(?:api\\.squareup\\.com|connect\\.squareup(?:sandbox)?\\.com)[^\\s'\"]*/v2/locations/[^\\s'\"]+|[^\\n]*?https?://(?:api\\.squareup\\.com|connect\\.squareup(?:sandbox)?\\.com)[^\\s'\"]*/v2/locations/[^\\s'\"]+[^\\n]*?(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)",
       "severity": "critical",
       "description": "Square API DELETE /v2/locations/{id} deletes a location.",
-      "explanation": "Deleting a location removes a business location from Square. This affects \\ payment processing, inventory tracking, and employee management for that \\ location. Transactions cannot be processed at a deleted location.\n\n\\ Safer alternatives: \\ - Set location status to inactive instead of deleting \\ - GET /v2/locations/{id} to verify location details first \\ - Transfer inventory and employees before deletion"
+      "explanation": "Deleting a location removes a business location from Square. This affects payment processing, inventory tracking, and employee management for that location. Transactions cannot be processed at a deleted location.\n\nSafer alternatives:\n- Set location status to inactive instead of deleting\n- GET /v2/locations/{id} to verify location details first\n- Transfer inventory and employees before deletion"
     },
     {
       "name": "square-api-delete-webhook-subscription",
       "pattern": "(?i)\\bcurl\\b(?:[^\\n]*?(?:-X\\s*|--request(?:=|\\s+))DELETE\\b[^\\n]*?https?://(?:api\\.squareup\\.com|connect\\.squareup(?:sandbox)?\\.com)[^\\s'\"]*/v2/webhooks/subscriptions/[^\\s'\"]+|[^\\n]*?https?://(?:api\\.squareup\\.com|connect\\.squareup(?:sandbox)?\\.com)[^\\s'\"]*/v2/webhooks/subscriptions/[^\\s'\"]+[^\\n]*?(?:-X\\s*|--request(?:=|\\s+))DELETE\\b)",
       "severity": "high",
       "description": "Square API DELETE /v2/webhooks/subscriptions/{id} deletes a webhook subscription.",
-      "explanation": "Deleting a webhook subscription stops event notifications for payments, \\ refunds, inventory changes, and other business events. Your application \\ will miss critical updates until the subscription is recreated.\n\n\\ Safer alternatives: \\ - Disable the webhook subscription instead of deleting \\ - GET /v2/webhooks/subscriptions to verify subscription ID \\ - Set up backup notification channels before removal"
+      "explanation": "Deleting a webhook subscription stops event notifications for payments, refunds, inventory changes, and other business events. Your application will miss critical updates until the subscription is recreated.\n\nSafer alternatives:\n- Disable the webhook subscription instead of deleting\n- GET /v2/webhooks/subscriptions to verify subscription ID\n- Set up backup notification channels before removal"
     }
   ]
 }

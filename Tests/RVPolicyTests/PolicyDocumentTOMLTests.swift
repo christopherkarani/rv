@@ -30,6 +30,60 @@ struct PolicyDocumentTOMLTests {
         #expect(again == document)
     }
 
+    @Test func exportEscapesIdBranchAndPathspec() {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let raw = "x\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence
+        let document = PolicyDocument(rules: [
+            PolicyDocumentRule(
+                id: RuleID(pack: .typedGit, pattern: raw),
+                verdict: .deny,
+                predicate: .gitPush(force: .exactly(.force), branch: raw)),
+            PolicyDocumentRule(
+                id: RuleID(pack: .typedGit, pattern: "discard"),
+                verdict: .deny,
+                predicate: .gitDiscardWorktree(pathspec: raw)),
+        ])
+        let rendered = PolicyDocumentTOML.render(document)
+        #expect(rendered.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(rendered.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(rendered.unicodeScalars.contains { $0.value == 0x2029 } == false)
+        #expect(rendered.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(rendered.contains("\\u001b[2J"))
+        #expect(rendered.contains("\\u2028"))
+        #expect(rendered.contains("\\u2029"))
+        #expect(rendered.contains("\\u202e"))
+        let lines = rendered.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+        #expect(lines.contains(sentence) == false)
+    }
+
+    @Test func exportEscapesEnglishAndAllowPaths() {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let raw = "x\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence
+        let document = PolicyDocument(
+            rules: [
+                PolicyDocumentRule(
+                    id: RuleID(pack: .typedGit, pattern: "force-push-main"),
+                    verdict: .deny,
+                    predicate: .gitPush(force: .exactly(.force), branch: "main"),
+                    english: raw),
+            ],
+            allowPaths: [raw]
+        )
+        let rendered = PolicyDocumentTOML.render(document)
+        #expect(rendered.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(rendered.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(rendered.unicodeScalars.contains { $0.value == 0x2029 } == false)
+        #expect(rendered.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(rendered.contains("english = \""))
+        #expect(rendered.contains("secret.allow_paths = ["))
+        #expect(rendered.contains("\\u001b[2J"))
+        #expect(rendered.contains("\\u2028"))
+        #expect(rendered.contains("\\u2029"))
+        #expect(rendered.contains("\\u202e"))
+        let lines = rendered.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+        #expect(lines.contains(sentence) == false)
+    }
+
     @Test func unknownKey_refuses() {
         let source = """
         schema_version = 1

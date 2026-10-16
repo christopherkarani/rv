@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import RVDomain
 import RVIsolation
 import RVPolicy
 
@@ -52,13 +53,13 @@ enum ManagedRun {
             default: "unsigned"
             }
             var lines = [
-                "organization policy active: \(status.organization ?? "unnamed")"
+                "organization policy active: \(DisplayedText.field(status.organization ?? "unnamed"))"
                     + (status.serial.map { " serial \($0)" } ?? ""),
                 "  \(signature) sha256 \(status.sha256 ?? "")",
             ]
             if let highest = status.highestSerial { lines.append("  anti-rollback: highest serial accepted here is \(highest)") }
             let rules = status.restrictions ?? []
-            lines += rules.isEmpty ? ["  no restrictions"] : rules.map { "  " + $0 }
+            lines += rules.isEmpty ? ["  no restrictions"] : rules.map { "  " + DisplayedText.field($0) }
             return lines.joined(separator: "\n") + "\n"
         }
     }
@@ -91,7 +92,7 @@ enum ManagedRun {
             try? Data(contentsOf: directory.appendingPathComponent(name))
         }
         guard let policy = read(ManagedPolicyLocation.policyFile) else {
-            return .failure(CommandFailure("\(directory.path) has no \(ManagedPolicyLocation.policyFile)"))
+            return .failure(CommandFailure("\(DisplayedText.field(directory.path)) has no \(ManagedPolicyLocation.policyFile)"))
         }
         let state = ManagedPolicyVerifier.verify(
             policy: policy, signature: read(ManagedPolicyLocation.signatureFile),
@@ -104,7 +105,7 @@ enum ManagedRun {
         let publicURL = directory.appendingPathComponent(ManagedPolicyLocation.publicKeyFile)
         let privateURL = directory.appendingPathComponent("org-key.private")
         for url in [publicURL, privateURL] where FileManager.default.fileExists(atPath: url.path) {
-            return .failure(CommandFailure("\(url.path) already exists; refusing to overwrite a key"))
+            return .failure(CommandFailure("\(DisplayedText.field(url.path)) already exists; refusing to overwrite a key"))
         }
         let pair = ManagedPolicyVerifier.generateKeyPair()
         do {
@@ -112,35 +113,55 @@ enum ManagedRun {
             guard FileManager.default.createFile(
                 atPath: privateURL.path, contents: Data((pair.privateKey + "\n").utf8),
                 attributes: [.posixPermissions: 0o600])
-            else { return .failure(CommandFailure("could not write \(privateURL.path)")) }
+            else { return .failure(CommandFailure("could not write \(DisplayedText.field(privateURL.path))")) }
             try Data((pair.publicKey + "\n").utf8).write(to: publicURL)
         } catch {
-            return .failure(CommandFailure("could not write keys to \(directory.path)"))
+            return .failure(CommandFailure("could not write keys to \(DisplayedText.field(directory.path))"))
         }
         return .success("""
-            wrote \(publicURL.path) (install it in the managed directory)
-            wrote \(privateURL.path) (keep it off managed machines)
+            wrote \(DisplayedText.field(publicURL.path)) (install it in the managed directory)
+            wrote \(DisplayedText.field(privateURL.path)) (keep it off managed machines)
 
             """)
     }
 
     static func sign(policy policyURL: URL, key keyURL: URL, output: URL?) -> Result<String, CommandFailure> {
         guard let policy = try? Data(contentsOf: policyURL) else {
-            return .failure(CommandFailure("cannot read \(policyURL.path)"))
+            return .failure(CommandFailure("cannot read \(DisplayedText.field(policyURL.path))"))
         }
         if case .failure(let error) = ManagedPolicy.decode(policy) {
-            return .failure(CommandFailure("\(policyURL.lastPathComponent): \(error.message); not signed"))
+            return .failure(CommandFailure("\(DisplayedText.field(policyURL.lastPathComponent)): \(error.message); not signed"))
         }
         guard let key = try? Data(contentsOf: keyURL), let signature = ManagedPolicyVerifier.sign(policy, privateKey: key) else {
-            return .failure(CommandFailure("\(keyURL.path) is not a base64 Ed25519 private key"))
+            return .failure(CommandFailure("\(DisplayedText.field(keyURL.path)) is not a base64 Ed25519 private key"))
         }
         let destination = output ?? policyURL.deletingLastPathComponent().appendingPathComponent(ManagedPolicyLocation.signatureFile)
         do {
             try Data((signature + "\n").utf8).write(to: destination)
         } catch {
-            return .failure(CommandFailure("could not write \(destination.path)"))
+            return .failure(CommandFailure("could not write \(DisplayedText.field(destination.path))"))
         }
-        return .success("wrote \(destination.path)\n")
+        return .success("wrote \(DisplayedText.field(destination.path))\n")
+    }
+
+    /// Robot JSON for `rv managed`. `JSONEncoder` already writes ESC as
+    /// `\u001b`. U+2028, U+2029, and U+202E stay raw unless they are replaced
+    /// after encoding. The result is still valid JSON. Policy strings are not
+    /// fielded first: that would turn ESC into the literal spelling `\\u001b`.
+    static func robotJSON<T: Encodable>(_ value: T) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(value), var text = String(data: data, encoding: .utf8) else { return "{}\n" }
+        text += "\n"
+        let scalars: [(Character, String)] = [
+            ("\u{2028}", "\\u2028"),
+            ("\u{2029}", "\\u2029"),
+            ("\u{202E}", "\\u202e"),
+        ]
+        for (scalar, escaped) in scalars {
+            text = text.replacingOccurrences(of: String(scalar), with: escaped)
+        }
+        return text
     }
 }
 
@@ -164,7 +185,7 @@ struct ManagedStatus: AsyncParsableCommand {
         let status = ManagedRun.status(
             ManagedRun.installed(home: home), directory: ManagedPolicyLocation.installedDirectory)
         if ctx.explicitRobot {
-            ctx.writeStdout(jsonText(status))
+            ctx.writeStdout(ManagedRun.robotJSON(status))
         } else {
             ctx.writeStdout(ManagedRun.statusText(status))
         }
@@ -183,7 +204,7 @@ struct ManagedVerify: AsyncParsableCommand {
         let ctx = CommandContext.current(command: "managed verify", format: format)
         switch ManagedRun.verify(directory: URL(fileURLWithPath: directory, isDirectory: true)) {
         case .failure(let failure): try ctx.fail("rv managed verify: \(failure.message)\n")
-        case .success(let status): ctx.writeStdout(ctx.explicitRobot ? jsonText(status) : ManagedRun.statusText(status))
+        case .success(let status): ctx.writeStdout(ctx.explicitRobot ? ManagedRun.robotJSON(status) : ManagedRun.statusText(status))
         }
     }
 }
@@ -222,9 +243,3 @@ struct ManagedSign: AsyncParsableCommand {
     }
 }
 
-private func jsonText<T: Encodable>(_ value: T) -> String {
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-    guard let data = try? encoder.encode(value), let text = String(data: data, encoding: .utf8) else { return "{}\n" }
-    return text + "\n"
-}

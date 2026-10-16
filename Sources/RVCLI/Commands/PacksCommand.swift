@@ -151,7 +151,7 @@ struct Packs: AsyncParsableCommand {
             let row: PacksListRow
             do {
                 guard let packID = PackID(validating: id) else {
-                    try ctx.fail("unknown pack id: \(id)\n")
+                    try ctx.fail("unknown pack id: \(DisplayedText.field(id))\n")
                 }
                 row = try PacksFacade.info(home: home, id: packID)
             } catch PacksCommandError.packNotFound {

@@ -185,6 +185,13 @@ private let resetHard = ShellCommand(rawValue: "git reset --hard")
     )
 }
 
+@Test func explanationLines_cleanBulletsBecomeBulletLines() {
+    #expect(
+        explanationLines(from: "Why this is dangerous:\n- Gone\n- Lost")
+            == ["Why this is dangerous:", "• Gone", "• Lost"]
+    )
+}
+
 @Test func explanationLines_keepsBrokenMarkupAndDropsBlankBullets() {
     #expect(explanationLines(from: "See [docs") == ["See [docs"])
     #expect(explanationLines(from: "See [docs] later") == ["See [docs] later"])

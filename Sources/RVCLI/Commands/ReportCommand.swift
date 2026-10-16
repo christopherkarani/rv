@@ -195,20 +195,22 @@ enum ReportRun {
     }
 
     static func text(_ report: Report) -> String {
+        let hostName = DisplayedText.field(report.host.name)
+        let user = DisplayedText.field(report.host.user)
         var lines = [
-            "rv \(report.rv.version) on \(report.host.name) (\(report.host.user)): "
+            "rv \(report.rv.version) on \(hostName) (\(user)): "
                 + (report.compliant ? "compliant" : "NOT compliant"),
             "",
             ManagedRun.statusText(report.managed).trimmingCharacters(in: .newlines),
         ]
         if let error = report.mcp.error, report.mcp.ok == false, report.mcp.counts.isEmpty {
-            lines.append("mcp: \(error)")
+            lines.append("mcp: \(DisplayedText.field(error))")
         } else {
             let counts = report.mcp.counts.sorted { $0.key < $1.key }.map { "\($0.value) \($0.key)" }
             lines.append("mcp: \(report.mcp.ok ? "ok" : "FAIL"), \(report.mcp.servers) gateway servers; "
                 + (counts.isEmpty ? "no host entries" : counts.joined(separator: ", ")))
-            lines += report.mcp.failing.map { "  \($0.status)  \($0.name)  \($0.host)" }
-            if let error = report.mcp.error { lines.append("  " + error) }
+            lines += report.mcp.failing.map { "  \($0.status)  \(DisplayedText.field($0.name))  \($0.host)" }
+            if let error = report.mcp.error { lines.append("  " + DisplayedText.field(error)) }
             if report.mcp.plaintextCredentials > 0 {
                 lines.append("  \(report.mcp.plaintextCredentials) plaintext credential(s) in host configs")
             }
@@ -229,7 +231,7 @@ enum ReportRun {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         guard let data = try? encoder.encode(report), let text = String(data: data, encoding: .utf8) else { return "{}\n" }
-        return text + "\n"
+        return DisplayedText.escapeJSONScalars(text) + "\n"
     }
 
     static var platform: String {

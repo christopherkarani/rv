@@ -1179,15 +1179,18 @@ extension WorkspaceRecovery {
     private static func loadSnapshot(
         _ identity: WorkspaceDurableIdentity
     ) -> Result<[String: WorkspaceInodeStamp], IsolationApplyError> {
-        var status = stat()
-        guard identity.snapshotPath.withCString({ lstat($0, &status) == 0 }),
-            UInt64(status.st_dev) == identity.snapshotDevice,
-            UInt64(status.st_ino) == identity.snapshotInode,
-            (status.st_mode & S_IFMT) == S_IFREG
-        else {
+        switch diskImageObservePath(identity.snapshotPath) {
+        case .stopped, .missing:
             return .failure(.workspaceInodeBoundaryFailed)
+        case .value(let snapshot):
+            guard snapshot.device == identity.snapshotDevice,
+                snapshot.inode == identity.snapshotInode,
+                (snapshot.mode & S_IFMT) == S_IFREG
+            else {
+                return .failure(.workspaceInodeBoundaryFailed)
+            }
         }
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: identity.snapshotPath)),
+        guard let data = diskImageReadWholeFileWithinCopyClock(identity.snapshotPath),
             let file = try? JSONDecoder().decode(SnapshotFile.self, from: data)
         else {
             return .failure(.workspaceInodeBoundaryFailed)
@@ -1209,16 +1212,7 @@ extension WorkspaceRecovery {
 
     private static func removeOwnedFile(path: String?, device: UInt64?, inode: UInt64?) -> Bool {
         guard let path, let device, let inode else { return true }
-        var status = stat()
-        let exists = path.withCString { lstat($0, &status) == 0 }
-        if exists == false { return true }
-        guard UInt64(status.st_dev) == device,
-            UInt64(status.st_ino) == inode,
-            (status.st_mode & S_IFMT) == S_IFREG
-        else {
-            return true
-        }
-        return path.withCString { unlink($0) == 0 }
+        return diskImageRemoveOwnedRegular(path: path, device: device, inode: inode)
     }
 
     private static func writeExclusiveFile(
@@ -1337,8 +1331,12 @@ enum RVIsolationMount {
         volumeDevice: UInt64,
         mountSource: String
     ) -> WorkspaceMountObservation {
-        let saved = workspacePathIdentity(savedPath)
-        let projectIdentity = workspacePathIdentity(project)
+        let savedRead = diskImageObservePath(savedPath)
+        let projectRead = diskImageObservePath(project)
+        if case .stopped = savedRead { return .ambiguous }
+        if case .stopped = projectRead { return .ambiguous }
+        let saved = workspaceIdentity(savedRead)
+        let projectIdentity = workspaceIdentity(projectRead)
         let facts = workspaceMountFacts(project)
         let savedMatches = saved?.device == savedDevice && saved?.inode == savedInode && saved?.isDirectory == true
         let projectIsSaved = projectIdentity?.device == savedDevice
@@ -1346,11 +1344,23 @@ enum RVIsolationMount {
             && projectIdentity?.isDirectory == true
         let ownedDevice = projectIdentity?.device == volumeDevice
         let ownedSource = facts?.source == mountSource
-        let projectCanonical = posixRealpath(project) ?? project
-        let pointCanonical = facts.map { posixRealpath($0.point) ?? $0.point }
+        guard let projectCanonical = canonicalPathOrRaw(project) else { return .ambiguous }
+        let pointCanonical: String?
+        if let facts {
+            guard let point = canonicalPathOrRaw(facts.point) else { return .ambiguous }
+            pointCanonical = point
+        } else {
+            pointCanonical = nil
+        }
         let mountedHere = pointCanonical == projectCanonical
         if ownedDevice && ownedSource {
             return savedMatches ? .ownedMount : .savedTreeMismatch
+        }
+        // On the volume device but mount facts unavailable (clock-skipped
+        // statfs): the mount may still be ours. Calling it missing would
+        // mark mount cleanup complete without detaching.
+        if ownedDevice && facts == nil {
+            return .ambiguous
         }
         if mountedHere {
             return .unrelatedMount
@@ -1365,6 +1375,28 @@ enum RVIsolationMount {
             return .savedTreeMismatch
         }
         return .ambiguous
+    }
+}
+
+private func workspaceIdentity(_ observation: DiskImagePathObservation) -> WorkspacePathIdentity? {
+    guard case let .value(snapshot) = observation else { return nil }
+    return WorkspacePathIdentity(
+        device: snapshot.device,
+        inode: snapshot.inode,
+        isDirectory: (snapshot.mode & S_IFMT) == S_IFDIR
+    )
+}
+
+/// `.stopped` is nil so the caller does not treat an unfinished `realpath`
+/// as the raw path. A finished failure keeps the raw path.
+private func canonicalPathOrRaw(_ path: String) -> String? {
+    switch posixRealpathRead(path) {
+    case .stopped:
+        return nil
+    case .path(let resolved):
+        return resolved
+    case .unresolved:
+        return path
     }
 }
 #endif

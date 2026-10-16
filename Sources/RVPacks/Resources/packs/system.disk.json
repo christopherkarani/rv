@@ -436,21 +436,21 @@
       "pattern": "(?i)diskutil\\s+(?:eraseDisk|eraseVolume|reformat|zeroDisk|randomDisk|secureErase)\\b",
       "severity": "critical",
       "description": "diskutil erase operations DESTROY all data on the target disk or volume.",
-      "explanation": "diskutil eraseDisk/eraseVolume/reformat/zeroDisk/randomDisk/secureErase \\ overwrite the target's contents. On APFS this removes every volume in \\ the container. There is no recovery without backups.\n\n\\ Inspect the target first: \\ diskutil list \\ diskutil info <disk>"
+      "explanation": "diskutil eraseDisk/eraseVolume/reformat/zeroDisk/randomDisk/secureErase overwrite the target's contents. On APFS this removes every volume in the container. There is no recovery without backups.\n\nInspect the target first: diskutil list diskutil info <disk>"
     },
     {
       "name": "diskutil-partition",
       "pattern": "(?i)diskutil\\s+(?:partitionDisk|splitPartition|mergePartitions|resetFusion)\\b",
       "severity": "critical",
       "description": "diskutil partitioning operations rewrite the partition map and erase data.",
-      "explanation": "diskutil partitionDisk erases the entire disk before writing the new \\ partition map; splitPartition and mergePartitions destroy the contents \\ of the partitions they reshape (merge preserves only the first when \\ asked); resetFusion wipes both constituent devices.\n\n\\ Preview the current layout first: \\ diskutil list <disk>"
+      "explanation": "diskutil partitionDisk erases the entire disk before writing the new partition map; splitPartition and mergePartitions destroy the contents of the partitions they reshape (merge preserves only the first when asked); resetFusion wipes both constituent devices.\n\nPreview the current layout first: diskutil list <disk>"
     },
     {
       "name": "diskutil-apfs-delete",
       "pattern": "(?i)diskutil\\s+(?:apfs|ap)\\s+(?:deleteContainer|deleteVolume|eraseVolume|deleteSnapshot)\\b",
       "severity": "critical",
       "description": "diskutil apfs delete/erase operations permanently remove APFS containers, volumes, or snapshots.",
-      "explanation": "Deleting an APFS container destroys every volume inside it; deleting or \\ erasing a volume destroys that volume's data; deleting a snapshot \\ removes a restore point. None of these are recoverable without \\ backups.\n\n\\ List APFS structure first: \\ diskutil apfs list"
+      "explanation": "Deleting an APFS container destroys every volume inside it; deleting or erasing a volume destroys that volume's data; deleting a snapshot removes a restore point. None of these are recoverable without backups.\n\nList APFS structure first: diskutil apfs list"
     }
   ]
 }

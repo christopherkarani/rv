@@ -136,4 +136,59 @@ struct SecretsConfigurationTests {
         try FileManager.default.createSymbolicLink(at: file, withDestinationURL: real)
         #expect(SecretsConfiguration.load(configDirectory: directory) == .failure(.unsafeFile("symlink")))
     }
+
+    @Test func unknownKeyAndSourceKindAreEscaped() {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let key = invalidReason("{\"version\":1,\"\\u202e\(sentence)\":true}")
+        #expect(key?.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(key?.contains("\\u202e") == true)
+        #expect(key?.contains("unknown key") == true)
+        let kind = invalidReason(
+            "{\"version\":1,\"secrets\":[{\"name\":\"TOKEN\",\"source\":{\"\\u001b[2J\\u001b[H\(sentence)\":{}},\"delivery\":{\"environment\":{}}}]}"
+        )
+        #expect(kind?.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(kind?.contains("\\u001b[2J") == true)
+        #expect(kind?.contains("source kind") == true)
+        let delivery = invalidReason(
+            "{\"version\":1,\"secrets\":[{\"name\":\"TOKEN\",\"source\":{\"hostEnvironment\":{\"variable\":\"X\"}},\"delivery\":{\"\\u2029\(sentence)\":{}}}]}"
+        )
+        #expect(delivery?.unicodeScalars.contains { $0.value == 0x2029 } == false)
+        #expect(delivery?.contains("\\u2029") == true)
+        #expect(delivery?.contains("delivery kind") == true)
+    }
+
+    @Test func keychainAccountRejectsLineAndBidiScalars() {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let line = invalidReason(
+            "{\"version\":1,\"secrets\":[{\"name\":\"TOKEN\",\"source\":{\"keychain\":{\"service\":\"rv.secrets\",\"account\":\"\\u2028\(sentence)\"}},\"delivery\":{\"environment\":{}}}]}"
+        )
+        #expect(line != nil)
+        #expect(line?.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(line?.contains(sentence) == false)
+        let reversed = invalidReason(
+            "{\"version\":1,\"secrets\":[{\"name\":\"TOKEN\",\"source\":{\"keychain\":{\"service\":\"rv.secrets\",\"account\":\"\\u202e\(sentence)\"}},\"delivery\":{\"environment\":{}}}]}"
+        )
+        #expect(reversed != nil)
+        #expect(reversed?.unicodeScalars.contains { $0.value == 0x202E } == false)
+        let source = SecretSource.keychain(service: "rv.secrets", account: "\u{2028}" + sentence + "\u{202E}" + sentence)
+        #expect(source.locator.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(source.locator.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(source.locator.contains("\\u2028"))
+        #expect(source.locator.contains("\\u202e"))
+        let stderr = Array(("\u{1B}[2J\u{1B}[H" + sentence + "\u{202E}" + sentence).utf8)
+        let summary = BoundedProcess.Outcome(status: 1, stdout: [], stderr: stderr).stderrSummary
+        #expect(summary.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(summary.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(summary.contains("\\u001b[2J"))
+        #expect(summary.contains("\\u202e"))
+        #expect(summary.contains("\\\\u001b") == false)
+        guard case .failure(let missing) = SecretResolver.live(home: "/tmp").resolve(source) else {
+            Issue.record("a missing keychain item was resolved")
+            return
+        }
+        #expect(missing.message.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(missing.message.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(missing.message.contains("\\u2028"))
+        #expect(missing.message.contains("not found: keychain item"))
+    }
 }

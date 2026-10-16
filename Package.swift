@@ -106,7 +106,7 @@ let coreLibraryTargets: [Target] = [
     .target(name: "RVAnalytics", dependencies: ["RVDomain"]),
     .target(name: "RVMCP", dependencies: ["RVDomain", "RVHistory", "RVIsolation", "RVPolicy"]),
     .target(name: "RVPresentation", dependencies: ["RVDomain", "RVTheme"]),
-    .target(name: "RVTUI", dependencies: ["RVTheme", "RVPresentation"]),
+    .target(name: "RVTUI", dependencies: ["RVDomain", "RVTheme", "RVPresentation"]),
     .target(
         name: "RVWorkspaceTUI",
         dependencies: [
@@ -213,7 +213,7 @@ let serviceLibraryAndDaemon: [Target] = [
         name: "RVService",
         dependencies: [
             "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVHooks", "RVIPC", "RVHistory",
-            "RVAnalytics", "RVIsolation",
+            "RVAnalytics", "RVIsolation", "RVFileStore",
         ]
     ),
     .executableTarget(

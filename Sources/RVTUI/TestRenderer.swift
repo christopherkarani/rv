@@ -1,3 +1,4 @@
+import RVDomain
 import RVPresentation
 import RVTheme
 
@@ -36,7 +37,7 @@ public struct TestRenderer: FrameRenderer {
 
 private func denyBriefing(_ model: TestViewModel) -> (pack: String?, pattern: String?, reason: String?) {
     if let deny = model.deny {
-        return (deny.packID.rawValue, deny.ruleID.pattern, deny.packReason)
+        return (deny.packID.rawValue, DisplayedText.field(deny.ruleID.pattern), deny.packReason)
     }
     return (model.packDisplay, model.patternName, model.reason)
 }
@@ -48,7 +49,7 @@ private let bulletHang = "    "
 private func commandBlock(_ model: TestViewModel, palette: Palette, width: Int) -> [String] {
     let budget = max(16, width - commandLabel.count)
     let window = windowCommand(
-        model.command.rawValue,
+        DisplayedText.field(model.command.rawValue),
         start: model.span?.start,
         end: model.span?.end,
         width: budget

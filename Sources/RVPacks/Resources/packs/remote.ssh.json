@@ -65,42 +65,42 @@
       "pattern": "ssh\\s+(?:\\S+\\s+)*(?:-[A-Za-z]+\\s+)*\\S+[@:]?\\S*\\s+['\"]?.*\\brm\\s+-[a-zA-Z]*r[a-zA-Z]*f",
       "severity": "critical",
       "description": "SSH remote execution contains destructive rm -rf command.",
-      "explanation": "Executing rm -rf on a remote system via SSH can cause irreversible data loss. \\ Remote systems often have different directory structures and you may not have \\ the same safety mechanisms in place.\n\n\\ Safer alternatives: \\ - SSH in and run commands interactively with confirmation \\ - Use --dry-run or preview flags when available \\ - Ensure backups exist on the remote system"
+      "explanation": "Executing rm -rf on a remote system via SSH can cause irreversible data loss. Remote systems often have different directory structures and you may not have the same safety mechanisms in place.\n\nSafer alternatives:\n- SSH in and run commands interactively with confirmation\n- Use --dry-run or preview flags when available\n- Ensure backups exist on the remote system"
     },
     {
       "name": "ssh-remote-git-reset-hard",
       "pattern": "ssh\\s+(?:\\S+\\s+)*(?:-[A-Za-z]+\\s+)*\\S+[@:]?\\S*\\s+['\"]?.*\\bgit\\s+reset\\s+--hard\\b",
       "severity": "high",
       "description": "SSH remote execution contains destructive git reset --hard command.",
-      "explanation": "Running git reset --hard on a remote server discards all uncommitted changes. \\ On production servers, this might destroy deployment state or configuration \\ changes made directly on the server.\n\n\\ Safer alternatives: \\ - git stash on the remote first to save changes \\ - Use git status remotely to check for uncommitted work \\ - Consider proper deployment pipelines instead of direct remote git"
+      "explanation": "Running git reset --hard on a remote server discards all uncommitted changes. On production servers, this might destroy deployment state or configuration changes made directly on the server.\n\nSafer alternatives:\n- git stash on the remote first to save changes\n- Use git status remotely to check for uncommitted work\n- Consider proper deployment pipelines instead of direct remote git"
     },
     {
       "name": "ssh-remote-git-clean",
       "pattern": "ssh\\s+(?:\\S+\\s+)*(?:-[A-Za-z]+\\s+)*\\S+[@:]?\\S*\\s+['\"]?.*\\bgit\\s+clean\\s+-[a-zA-Z]*f",
       "severity": "high",
       "description": "SSH remote execution contains destructive git clean -f command.",
-      "explanation": "Running git clean -f on a remote server permanently removes untracked files. \\ This might delete logs, uploads, or configuration files that were never \\ committed to the repository.\n\n\\ Safer alternatives: \\ - Run git clean -n first to preview what would be deleted \\ - Use .gitignore to protect important untracked files \\ - Back up untracked files before cleaning"
+      "explanation": "Running git clean -f on a remote server permanently removes untracked files. This might delete logs, uploads, or configuration files that were never committed to the repository.\n\nSafer alternatives:\n- Run git clean -n first to preview what would be deleted\n- Use .gitignore to protect important untracked files\n- Back up untracked files before cleaning"
     },
     {
       "name": "ssh-keygen-remove-host",
       "pattern": "ssh-keygen\\s+(?:\\S+\\s+)*-R\\b",
       "severity": "medium",
       "description": "ssh-keygen -R removes entries from known_hosts file.",
-      "explanation": "Removing entries from known_hosts weakens protection against man-in-the-middle \\ attacks. The next connection will trust any key presented by the remote host.\n\n\\ Safer alternatives: \\ - Verify the new host key fingerprint before removing old entry \\ - Use ssh-keyscan to preview the new key \\ - Update entry rather than removing (add new key, then remove old)"
+      "explanation": "Removing entries from known_hosts weakens protection against man-in-the-middle attacks. The next connection will trust any key presented by the remote host.\n\nSafer alternatives:\n- Verify the new host key fingerprint before removing old entry\n- Use ssh-keyscan to preview the new key\n- Update entry rather than removing (add new key, then remove old)"
     },
     {
       "name": "ssh-add-delete-all",
       "pattern": "ssh-add\\s+-[dD]\\b",
       "severity": "medium",
       "description": "ssh-add -d/-D removes identities from the SSH agent.",
-      "explanation": "Removing SSH identities from the agent will require re-authentication for \\ subsequent connections. Using -D removes ALL identities, which may interrupt \\ active sessions or scripts.\n\n\\ Safer alternatives: \\ - Use -d to remove specific keys rather than -D for all \\ - List keys with ssh-add -l before removing \\ - Re-add keys immediately if needed"
+      "explanation": "Removing SSH identities from the agent will require re-authentication for subsequent connections. Using -D removes ALL identities, which may interrupt active sessions or scripts.\n\nSafer alternatives:\n- Use -d to remove specific keys rather than -D for all\n- List keys with ssh-add -l before removing\n- Re-add keys immediately if needed"
     },
     {
       "name": "ssh-remote-sudo-rm",
       "pattern": "ssh\\s+(?:\\S+\\s+)*\\S+[@:]?\\S*\\s+['\"]?.*\\bsudo\\s+rm\\b",
       "severity": "critical",
       "description": "SSH remote execution with sudo rm is high-risk.",
-      "explanation": "Executing sudo rm on a remote system bypasses normal permission restrictions \\ and can delete system files. Combined with SSH, there's no interactive \\ confirmation and errors may not be visible.\n\n\\ Safer alternatives: \\ - SSH in and run sudo commands interactively \\ - Use mv to a backup location instead of rm \\ - Implement proper cleanup scripts with safety checks"
+      "explanation": "Executing sudo rm on a remote system bypasses normal permission restrictions and can delete system files. Combined with SSH, there's no interactive confirmation and errors may not be visible.\n\nSafer alternatives:\n- SSH in and run sudo commands interactively\n- Use mv to a backup location instead of rm\n- Implement proper cleanup scripts with safety checks"
     }
   ]
 }

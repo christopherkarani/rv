@@ -355,6 +355,32 @@ struct OperatorCommandRunTests {
         }
     }
 
+    @Test func scanPacksEscapesUnknownPackID() async throws {
+        let home = try isolatedHome()
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let id = "x\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence
+        let message = try await withCLIProcess(home: home) {
+            do {
+                try await ScanSessions.parse(["--packs", id]).run()
+                Issue.record("scan accepted \(id)")
+                return ""
+            } catch let error as ValidationError {
+                return error.message
+            }
+        }
+        #expect(message.hasPrefix("unknown pack id: "))
+        #expect(message.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(message.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(message.unicodeScalars.contains { $0.value == 0x2029 } == false)
+        #expect(message.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(message.contains("\\u001b[2J"))
+        #expect(message.contains("\\u2028"))
+        #expect(message.contains("\\u2029"))
+        #expect(message.contains("\\u202e"))
+        let split = message.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+        #expect(split.contains(sentence) == false)
+    }
+
     @Test func doctorAndServiceStatus_run() async throws {
         try await withCLIProcess(environment: [:]) {
             await #expect(throws: ExitCode(1)) {

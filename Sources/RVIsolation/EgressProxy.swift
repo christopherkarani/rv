@@ -6,24 +6,75 @@ import Glibc
 import Dispatch
 import Foundation
 import RVDomain
+import RVPolicy
 import Synchronization
 
 /// Why one CONNECT was denied. Raw values are the `egress-denials.jsonl`
 /// spellings: existing values are preserved, and the old catch-all
 /// `dial-failed` now covers only connect failures (DNS and filter
-/// refusals record precisely).
+/// refusals record precisely). `denied-credential` covers only credentialed
+/// mode: a missing, malformed, or unknown proxy credential.
 public enum EgressDenialReason: String, Sendable, Equatable, CaseIterable {
     case headerTooLarge = "header-too-large"
     case deniedPolicy = "denied-policy"
+    case deniedCredential = "denied-credential"
     case malformed = "malformed"
     case dnsFailed = "dns-failed"
     case addressFiltered = "address-filtered"
     case dialFailed = "dial-failed"
-    /// The listener requires a client credential and this connection did not present it.
-    case unauthenticated = "unauthenticated"
+    /// Binary-scoped policy: the bound runtime binary is not admitted or
+    /// its admission-time pin no longer matches (hash changed, unreadable,
+    /// never pinned, or the pin cache refused a new entry). Fail closed.
+    case binaryMismatch = "binary-mismatch"
+    /// Binary-scoped policy on an unattributed proxy instance: no runtime
+    /// binding, so no peer can be attributed. Fail closed.
+    case unattributedPeer = "unattributed-peer"
     /// The TLS ClientHello named a different server than the CONNECT
-    /// authority (or was not TLS with an SNI at all).
+    /// authority (or was not TLS with an SNI at all) on a credentialed
+    /// proxy, which binds each tunnel to the origin it dials.
     case sniMismatch = "sni-mismatch"
+}
+
+/// Unguessable token binding one proxy client to its grant.
+///
+/// The supervisor mints one credential per runtime (or per approval), maps it
+/// to that principal's `EgressGrant`, and delivers the token to that runtime
+/// alone over its private channel. Every request through a credentialed proxy
+/// must present a mapped token; a sibling runtime holds a different token and
+/// is judged against its own grant, so it cannot ride another grant's rights.
+/// Equality is constant-time over equal lengths. The token is never written
+/// to the denial log.
+public struct EgressProxyCredential: Hashable, Sendable {
+    public var rawValue: String
+
+    /// Mints a fresh 256-bit token, lowercase hex.
+    public init() {
+        var generator = SystemRandomNumberGenerator()
+        let bytes = (0..<32).map { _ in UInt8.random(in: 0...255, using: &generator) }
+        self.rawValue = bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Names a credential the supervisor already minted, for distribution and
+    /// tests. Naming a token grants nothing by itself; the proxy maps it to
+    /// a grant only when the supervisor configured that mapping.
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public static func == (left: Self, right: Self) -> Bool {
+        let a = Array(left.rawValue.utf8)
+        let b = Array(right.rawValue.utf8)
+        guard a.count == b.count else { return false }
+        var diff: UInt8 = 0
+        for (x, y) in zip(a, b) {
+            diff |= x ^ y
+        }
+        return diff == 0
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(rawValue)
+    }
 }
 
 /// One denied CONNECT, recorded for the allowlist learning loop.
@@ -32,12 +83,21 @@ public struct EgressProxyDenial: Sendable, Equatable {
     public var port: Int
     public var reason: EgressDenialReason
     public var recordedAt: Date
+    /// Observed runtime binary for binary-scope denials; nil otherwise.
+    public var binaryPath: String?
 
-    public init(host: String, port: Int, reason: EgressDenialReason, recordedAt: Date) {
+    public init(
+        host: String,
+        port: Int,
+        reason: EgressDenialReason,
+        recordedAt: Date,
+        binaryPath: String? = nil
+    ) {
         self.host = host
         self.port = port
         self.reason = reason
         self.recordedAt = recordedAt
+        self.binaryPath = binaryPath
     }
 }
 
@@ -60,30 +120,76 @@ enum DialOutcome: Sendable, Equatable {
     case connected(Int32)
     /// No address resolved.
     case dnsFailed
-    /// Every resolved address failed the public-unicast filter.
+    /// Any resolved address failed the public-unicast filter (external
+    /// verdict is consensus over the whole answer set: a mixed answer is
+    /// refused without dialing, like the admission GET door).
     case addressFiltered
-    /// A usable address existed but socket or connect failed on all of them.
+    /// Every resolved address passed the filter but socket or connect
+    /// failed on all of them.
     case connectFailed
+}
+
+/// One resolved dial candidate: a copied sockaddr plus the socket parameters
+/// `dial` needs. Internal so tests pin the admission verdict with synthetic
+/// addresses instead of live DNS.
+struct EgressDialCandidate: Sendable {
+    var family: Int32
+    var socktype: Int32
+    var proto: Int32
+    var address: sockaddr_storage
+    var length: socklen_t
 }
 
 /// HTTP CONNECT proxy for contained agent runtimes.
 ///
 /// Binds 127.0.0.1 on an ephemeral port; the cage reaches it through the
 /// seatbelt `localhost` rule and can dial nothing else directly. Each
-/// CONNECT is admitted by `EgressHostPolicy` (generic public web hosts
-/// in Standard mode, or loopback targets on any port) and resolved here,
-/// host-side: clients never supply IPs, and non-public addresses never
-/// relay. Denials are logged; allowed streams relay as opaque bytes. One
-/// proxy per workspace host; `stop` ends new accepts and lets in-flight
-/// relays drain.
+/// CONNECT is admitted by policy (generic public web hosts in Standard
+/// mode, or loopback targets on any port) and resolved here, host-side:
+/// clients never supply IPs. Resolution happens once per admission and the
+/// proxy dials exactly the filtered sockaddr it resolved, so there is no
+/// check-to-use race and no pin cache a poisoned first answer can persist
+/// in; external names whose answer set is not entirely public-unicast are
+/// refused without dialing. Denials are logged; allowed streams relay as
+/// opaque bytes. One proxy per runtime (REQ-2-1); `stop` ends new accepts and
+/// lets in-flight relays drain.
+///
+/// Binary scope (per-runtime attribution): TCP loopback carries no peer
+/// credentials, so there is deliberately no per-connection PID lookup —
+/// attribution is the instance. A proxy bound to one runtime's admitted
+/// binary enforces `EgressBinaryPolicy` plus the endpoint policy on every
+/// request (OpenShell `endpoint_allowed + binary_allowed`); an unbound
+/// instance under a binary-scoped policy fails closed.
+///
+/// Scope. The shared-loopback interface has no per-workspace isolation, so
+/// the open mode below (`init(policy:)`) serves any local process that can
+/// reach the port: it is host-loopback-reachable, not a workspace or runtime
+/// boundary, and one open instance cannot give co-tenants different rights.
+/// Workspace/runtime scoping requires credentialed mode (`init(grants:)`):
+/// every request must present a supervisor-mapped credential and is judged
+/// against that principal's grant only.
+///
+/// Residual. The relay is opaque bytes: the proxy cannot verify the origin's
+/// TLS identity, so a resolver that controls every answer for a name can
+/// still steer one connection to its own address. The backstop is end-to-end
+/// TLS verification by the client, which a poisoned address cannot forge.
+/// A client that skips hostname verification is exposed by its own choice.
 public final class EgressProxy: @unchecked Sendable {
+    /// Shared policy for open mode. Nil grants means open mode; non-nil
+    /// (even empty, which denies everything) means credentialed mode.
     private let policy: EgressHostPolicy
+    private let binaryPolicy: EgressBinaryPolicy
+    private let attribution: EgressRuntimeAttribution?
+    private let pins: EgressBinaryPinCache
+    private let grants: [EgressProxyCredential: EgressGrant]?
     private let record: @Sendable (EgressProxyDenial) -> Void
-    /// When set, CONNECT and absolute-URI requests must present this secret
-    /// as `Proxy-Authorization: Basic` for `rv:<credential>`. An open
-    /// 127.0.0.1 listener is otherwise a relay for any local client.
-    private let clientCredential: String?
     private let lock = NSLock()
+    /// Phase 4 live supplement: human-approved exact host/port rules loaded
+    /// without restart. Additive to the startup policy; every admission
+    /// still dials through the public-unicast filter, so a supplement
+    /// cannot open loopback, LAN, or metadata endpoints.
+    private var supplementRules: Set<LiveNetworkRule> = []
+    private var supplementGeneration: UInt64 = 0
     private var listenFD: Int32 = -1
     private var running = false
     private let acceptQueue = DispatchQueue(label: "rv.egress.accept", qos: .userInitiated)
@@ -91,14 +197,70 @@ public final class EgressProxy: @unchecked Sendable {
         label: "rv.egress.relay", qos: .userInitiated, attributes: .concurrent
     )
 
+    /// Open mode: any local connector is judged against `policy`. This mode
+    /// cannot scope rights per runtime or per workspace; prefer
+    /// `init(grants:)` wherever co-tenants must not share rights.
     public init(
         policy: EgressHostPolicy = .publicHTTPS,
-        record: (@Sendable (EgressProxyDenial) -> Void)? = nil,
-        clientCredential: String? = nil
+        binaryPolicy: EgressBinaryPolicy = EgressBinaryPolicy(),
+        attribution: EgressRuntimeAttribution? = nil,
+        pins: EgressBinaryPinCache = EgressBinaryPinCache(),
+        record: (@Sendable (EgressProxyDenial) -> Void)? = nil
     ) {
         self.policy = policy
+        self.binaryPolicy = binaryPolicy
+        self.attribution = attribution
+        self.pins = pins
+        self.grants = nil
         self.record = record ?? EgressProxy.productionDenialLog()
-        self.clientCredential = clientCredential
+        admitAttributionPin()
+    }
+
+    /// Credentialed mode: each request must present a mapped credential and
+    /// is judged against that principal's grant only. Missing, malformed, or
+    /// unknown credentials are denied with 407 (`denied-credential`) before
+    /// policy runs, so an unauthenticated sibling cannot ride any grant.
+    /// Binary scope composes: when `binaryPolicy` is scoped, the instance
+    /// attribution gate runs before credential authentication in both modes.
+    public init(
+        grants: [EgressProxyCredential: EgressGrant],
+        binaryPolicy: EgressBinaryPolicy = EgressBinaryPolicy(),
+        attribution: EgressRuntimeAttribution? = nil,
+        pins: EgressBinaryPinCache = EgressBinaryPinCache(),
+        record: (@Sendable (EgressProxyDenial) -> Void)? = nil
+    ) {
+        self.policy = .publicHTTPS
+        self.binaryPolicy = binaryPolicy
+        self.attribution = attribution
+        self.pins = pins
+        self.grants = grants
+        self.record = record ?? EgressProxy.productionDenialLog()
+        admitAttributionPin()
+    }
+
+    /// Single-credential spelling for the per-server MCP sandbox proxy:
+    /// one principal, judged against `policy`. A nil credential is open
+    /// mode. Clients present the token as the proxy URL's userinfo
+    /// (`http://<token>@127.0.0.1:<port>`), the same convention the grants
+    /// mode parses.
+    public convenience init(
+        policy: EgressHostPolicy = .publicHTTPS,
+        record: (@Sendable (EgressProxyDenial) -> Void)? = nil,
+        clientCredential: String?
+    ) {
+        guard let clientCredential else {
+            self.init(policy: policy, record: record)
+            return
+        }
+        self.init(
+            grants: [
+                EgressProxyCredential(rawValue: clientCredential): EgressGrant(
+                    principal: EgressPrincipal(rawValue: "rv:single-credential"),
+                    policy: policy
+                )
+            ],
+            record: record
+        )
     }
 
     /// Bound port after `start` succeeds.
@@ -110,18 +272,52 @@ public final class EgressProxy: @unchecked Sendable {
 
     private var boundPort: Int = 0
 
+    /// Generation the proxy currently enforces (0 until the first push).
+    public var currentSupplementGeneration: UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return supplementGeneration
+    }
+
+    /// Whether live supplement rules are enforced by this instance.
+    /// Credentialed instances judge every request against the presenting
+    /// grant alone (see `supplementAdmits`), so a supplement push loads
+    /// but never admits there; supervisors must not record it as loaded.
+    public var enforcesSupplement: Bool { grants == nil }
+
+    /// Load a live rule set. Applies only when `generation` is newer than
+    /// the enforced one (OpenShell generation guard): stale or reordered
+    /// pushes are ignored, so enforcement only ever moves forward.
+    /// Returns the enforced generation after the call.
+    @discardableResult
+    public func updateSupplement(
+        _ rules: Set<LiveNetworkRule>,
+        generation: UInt64
+    ) -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        if generation > supplementGeneration {
+            supplementRules = rules
+            supplementGeneration = generation
+        }
+        return supplementGeneration
+    }
+
     /// Bind 127.0.0.1:0, listen, and serve until `stop`. Returns the bound
     /// port, or the phase plus errno when the socket cannot be established
     /// (fail closed: without a proxy the cage has no route out at all).
     /// Starting a running proxy returns the bound port again.
     public func start() -> Result<Int, EgressStartError> {
+        // The lock is held through bind/listen (numeric loopback only, so
+        // no resolver wait): start and stop are atomic against each other,
+        // concurrent starts cannot leak a listen fd or double the accept
+        // loop, and a stop during the bind window cannot be undone when
+        // start publishes `running`.
         lock.lock()
+        defer { lock.unlock() }
         if running {
-            let port = boundPort
-            lock.unlock()
-            return .success(port)
+            return .success(boundPort)
         }
-        lock.unlock()
         var hints = addrinfo()
         memset(&hints, 0, MemoryLayout<addrinfo>.size)
         hints.ai_family = AF_INET
@@ -167,12 +363,10 @@ public final class EgressProxy: @unchecked Sendable {
             close(fd)
             return .failure(.addressFailed(errno: savedErrno))
         }
-        lock.lock()
         listenFD = fd
         boundPort = bound
         running = true
-        lock.unlock()
-        acceptQueue.async { [weak self] in self?.acceptLoop() }
+        acceptQueue.async { [weak self] in self?.acceptLoop(listen: fd) }
         return .success(bound)
     }
 
@@ -202,33 +396,49 @@ public final class EgressProxy: @unchecked Sendable {
         return running
     }
 
-    private func acceptLoop() {
+    /// Serves exactly the listen fd `start` bound. The fd is passed by
+    /// value and never re-read from shared state: re-reading after a
+    /// concurrent `stop()` closed the number could accept on a reused fd
+    /// belonging to a sibling runtime's listener and serve that client
+    /// under this proxy's grant. Ownership: `stop()` owns closing
+    /// `listen`; this loop owns every accepted fd until `serve` takes it.
+    private func acceptLoop(listen: Int32) {
         while isRunning() {
             var peer = sockaddr_storage()
             var peerLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
             var acceptError: Int32 = 0
             let fd: Int32 = withUnsafeMutablePointer(to: &peer) { pointer in
                 pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { address in
-                    lock.lock()
-                    let listen = listenFD
-                    lock.unlock()
-                    guard listen >= 0 else { return Int32(-1) }
                     let accepted = accept(listen, address, &peerLength)
                     if accepted < 0 { acceptError = errno }
                     return accepted
                 }
             }
+            // stop() may have run while blocked in accept (its shutdown
+            // wakes us). If the fd number was already reused, a successful
+            // accept may hold a sibling's client: close it unserved.
+            lock.lock()
+            let stillMine = running && listenFD == listen
+            lock.unlock()
+            guard stillMine else {
+                if fd >= 0 { close(fd) }
+                return
+            }
             guard fd >= 0 else {
-                if isRunning() {
-                    // Accept failures are abnormal; surface the errno instead
-                    // of spinning silently (under load these would otherwise
-                    // surface only as client-side timeouts).
-                    Self.complain("rv.egress: accept failed errno=\(acceptError)")
-                    usleep(50_000)
-                }
+                // Accept failures are abnormal; surface the errno instead
+                // of spinning silently (under load these would otherwise
+                // surface only as client-side timeouts).
+                Self.complain("rv.egress: accept failed errno=\(acceptError)")
+                usleep(50_000)
                 continue
             }
-            relayQueue.async { [weak self] in self?.serve(client: fd) }
+            relayQueue.async { [weak self] in
+                guard let self else {
+                    close(fd)
+                    return
+                }
+                self.serve(client: fd)
+            }
         }
     }
 
@@ -248,33 +458,45 @@ public final class EgressProxy: @unchecked Sendable {
     }
 
     private func serveRequest(client: Int32, header: String, leftover: [UInt8]) {
-        if let credential = clientCredential {
-            let expected = "rv:\(credential)"
-            let presented = EgressProxy.basicProxyCredential(header) ?? ""
-            guard EgressProxy.constantTimeEquals(presented, expected) else {
-                deny(client: client, host: "", port: 0, reason: .unauthenticated)
+        if let target = EgressProxy.parseCONNECT(header: header) {
+            // Authenticate before the binary gate: an unauthenticated
+            // caller must not trigger per-request rehashing (up to the
+            // 256 MiB bound on the mismatch path) or learn binary state
+            // from a 403-vs-407 distinction.
+            guard
+                let effective = authenticatedPolicy(
+                    header: header, host: target.host, port: target.port, client: client
+                )
+            else {
                 return
             }
-        }
-        if let target = EgressProxy.parseCONNECT(header: header) {
-            let external = policy.allows(host: target.host, port: target.port)
-            let loopback = policy.allowsLoopbackTarget(host: target.host, port: target.port)
+            if let gate = binaryGate() {
+                deny(client: client, host: target.host, port: target.port, reason: gate.reason, binaryPath: gate.binaryPath)
+                return
+            }
+            let external = effective.allows(host: target.host, port: target.port)
+                || supplementAdmits(host: target.host, port: target.port)
+            let loopback = effective.allowsLoopbackTarget(host: target.host, port: target.port)
             guard external || loopback else {
                 deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
                 return
             }
-            // The credentialed (per-server sandbox) proxy binds the tunnel
-            // to the TLS origin it dials: a CONNECT to an allowed host must
-            // carry a ClientHello whose SNI is that host, so a co-hosted
-            // tenant on the same address is not reachable through it. The
-            // 200 goes first (clients wait for it before starting TLS),
-            // then the first record is read and checked before dialing.
+            // A credentialed proxy binds each external TLS tunnel to the
+            // origin it dials: a CONNECT to an allowed host on the TLS
+            // port must carry a ClientHello whose SNI is that host, so a
+            // co-hosted tenant on the same address is not reachable
+            // through it. The 200 goes first (clients wait for it before
+            // starting TLS), then the first record is read and checked
+            // before dialing. Port-80 tunnels stay plaintext-shaped, as
+            // in open mode.
             var hello = leftover
-            if clientCredential != nil, external {
+            var established = false
+            if grants != nil, external, target.port == EgressHostPolicy.httpsPort {
                 guard EgressProxy.writeAll(client, bytes: Array("HTTP/1.1 200 Connection established\r\n\r\n".utf8)) else {
                     close(client)
                     return
                 }
+                established = true
                 guard let first = EgressProxy.readClientHello(client: client, initial: leftover),
                     let serverName = EgressProxy.tlsServerName(first),
                     EgressProxy.dnsNamesMatch(serverName, target.host)
@@ -285,7 +507,6 @@ public final class EgressProxy: @unchecked Sendable {
                 }
                 hello = first
             }
-            let established = clientCredential != nil && external
             guard
                 let upstream = dialUpstream(
                     host: target.host,
@@ -314,20 +535,36 @@ public final class EgressProxy: @unchecked Sendable {
             deny(client: client, host: "", port: 0, reason: .malformed)
             return
         }
-        // The credentialed sandbox proxy is CONNECT-only: its allowlist is
-        // port 443, so absolute-URI could only speak plaintext to a TLS
-        // port — never a capability a caged server needs.
-        if clientCredential != nil, policy.allows(host: target.host, port: target.port) {
-            deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
-            return
-        }
         // Absolute-URI is the plaintext shape: loopback gateways and
         // servers (the cage reaches loopback directly, so relaying grants
         // no new capability) plus public port-80 traffic under the same
         // policy and public-unicast dial filter as CONNECT. Tunneling
         // plaintext grants no capability that tunneling TLS does not.
-        let external = policy.allows(host: target.host, port: target.port)
-        let loopback = policy.allowsLoopbackTarget(host: target.host, port: target.port)
+        // Authenticate first, mirroring the CONNECT branch.
+        guard
+            let effective = authenticatedPolicy(
+                header: header, host: target.host, port: target.port, client: client
+            )
+        else {
+            return
+        }
+        if let gate = binaryGate() {
+            deny(client: client, host: target.host, port: target.port, reason: gate.reason, binaryPath: gate.binaryPath)
+            return
+        }
+        // A credentialed proxy never speaks plaintext absolute-URI to the
+        // TLS port of an allowed host: the per-server sandbox allowlist is
+        // port 443, so that shape could only smuggle cleartext where the
+        // grant meant TLS. Port-80 absolute-URI is unaffected.
+        if grants != nil, target.port == EgressHostPolicy.httpsPort,
+            effective.allows(host: target.host, port: target.port)
+        {
+            deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
+            return
+        }
+        let external = effective.allows(host: target.host, port: target.port)
+            || supplementAdmits(host: target.host, port: target.port)
+        let loopback = effective.allowsLoopbackTarget(host: target.host, port: target.port)
         guard external || loopback else {
             deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
             return
@@ -344,8 +581,11 @@ public final class EgressProxy: @unchecked Sendable {
         }
         EgressProxy.suppressSIGPIPE(upstream)
         // Origin servers accept absolute-URI (RFC 7230 5.3.2): forward the
-        // request bytes unchanged, then relay both directions.
-        guard EgressProxy.writeAll(upstream, bytes: Array(header.utf8) + leftover) else {
+        // request with hop-by-hop proxy credentials consumed (LEAK-1: the
+        // authenticated Proxy-Authorization field must not travel upstream),
+        // then relay both directions.
+        let forwarded = EgressProxy.stripProxyAuthorization(header: header)
+        guard EgressProxy.writeAll(upstream, bytes: Array(forwarded.utf8) + leftover) else {
             close(client)
             close(upstream)
             return
@@ -355,17 +595,199 @@ public final class EgressProxy: @unchecked Sendable {
         relay(client: client, upstream: upstream)
     }
 
-    private func deny(client: Int32, host: String, port: Int, reason: EgressDenialReason) {
+    /// Establish the golden pin at bind time: construction of a bound
+    /// instance is the admission moment for a per-runtime proxy, so the
+    /// bytes measured here — not first-CONNECT bytes — are the trusted
+    /// ones (OpenShell trust fixed at creation:
+    /// https://docs.nvidia.com/openshell/latest/how-it-works/policies/manage-policies).
+    /// Admits exactly when the gate below would consult the pin (scoped +
+    /// attributed + policy match), so unbound instances and policy
+    /// mismatches never `stat`/hash. A failed admission pins nothing and
+    /// every request then denies fail-closed via `verifyAdmitted`.
+    private func admitAttributionPin() {
+        guard binaryPolicy.isBinaryScoped else { return }
+        guard let attribution else { return }
+        guard binaryPolicy.match(forBinaryPath: attribution.binaryPath) != nil else { return }
+        _ = pins.admit(canonicalPath: attribution.binaryPath)
+    }
+
+    /// Binary-scope verdict for one parsed request. Nil admits to the
+    /// endpoint policy. Runs per request (not once at bind) so a binary
+    /// swapped mid-runtime denies from the next CONNECT on; the pin
+    /// cache makes the steady-state cost one `stat` per request.
+    /// Verifies against the admission-time pin only: unknown paths deny
+    /// without pinning, so a first sighting never both creates the golden
+    /// and admits the creating request (OpenShell `verify_or_cache`
+    /// compare/update shape:
+    /// https://raw.githubusercontent.com/NVIDIA/OpenShell/f88aecfd92e02cb1b5388041f09930d78065979a/crates/navigator-sandbox/src/identity.rs).
+    private func binaryGate() -> (reason: EgressDenialReason, binaryPath: String?)? {
+        guard binaryPolicy.isBinaryScoped else { return nil }
+        guard let attribution else {
+            return (.unattributedPeer, nil)
+        }
+        guard binaryPolicy.match(forBinaryPath: attribution.binaryPath) != nil else {
+            return (.binaryMismatch, attribution.binaryPath)
+        }
+        switch pins.verifyAdmitted(canonicalPath: attribution.binaryPath) {
+        case .pinned, .match:
+            return nil
+        case .mismatch, .unreadable:
+            return (.binaryMismatch, attribution.binaryPath)
+        }
+    }
+
+    /// Exact live-rule match on canonical host plus port. Supplement rules
+    /// are DNS-only by construction and always dial the filtered external
+    /// path, so this admits no loopback, LAN, or metadata target.
+    /// Open mode only: supplement rules are instance-wide, so honoring them
+    /// in credentialed mode would let one principal ride a rule approved for
+    /// another. Credentialed requests are judged against their grant alone.
+    private func supplementAdmits(host: String, port: Int) -> Bool {
+        guard grants == nil else { return false }
+        guard let rule = LiveNetworkRule(host: host, port: port) else {
+            return false
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        return supplementRules.contains(rule)
+    }
+
+    private func deny(
+        client: Int32,
+        host: String,
+        port: Int,
+        reason: EgressDenialReason,
+        binaryPath: String? = nil
+    ) {
         _ = EgressProxy.writeAll(client, bytes: Array("HTTP/1.1 403 Forbidden\r\n\r\n".utf8))
         close(client)
-        record(EgressProxyDenial(host: host, port: port, reason: reason, recordedAt: Date()))
+        record(
+            EgressProxyDenial(
+                host: host,
+                port: port,
+                reason: reason,
+                recordedAt: Date(),
+                binaryPath: binaryPath
+            )
+        )
+    }
+
+    /// Policy judging this request: the shared policy in open mode, or the
+    /// presenting credential's grant in credentialed mode. Denies with 407
+    /// and returns nil when credentialed mode cannot authenticate the
+    /// request. The presented token is never logged.
+    private func authenticatedPolicy(header: String, host: String, port: Int, client: Int32)
+        -> EgressHostPolicy?
+    {
+        guard let grants else { return policy }
+        guard let token = Self.proxyCredentialToken(header: header),
+            let grant = grants[EgressProxyCredential(rawValue: token)]
+        else {
+            denyProxyAuthRequired(client: client, host: host, port: port)
+            return nil
+        }
+        return grant.policy
+    }
+
+    private func denyProxyAuthRequired(client: Int32, host: String, port: Int) {
+        _ = EgressProxy.writeAll(
+            client,
+            bytes: Array(
+                "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Bearer\r\nConnection: close\r\n\r\n"
+                    .utf8
+            )
+        )
+        close(client)
+        record(EgressProxyDenial(host: host, port: port, reason: .deniedCredential, recordedAt: Date()))
+    }
+
+    /// Presented proxy credential from a header block, or nil when absent or
+    /// malformed. Accepts `Bearer <token>` and `Basic base64("<token>:...")`
+    /// (the username carries the token: stock HTTP clients send `*_PROXY`
+    /// URL userinfo as Basic). The first `Proxy-Authorization` field wins;
+    /// field name match is case-insensitive, the token never crosses a line.
+    static func proxyCredentialToken(header: String) -> String? {
+        for line in header.components(separatedBy: "\r\n") {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let name = line[..<colon].trimmingCharacters(in: .whitespaces)
+            guard name.lowercased() == "proxy-authorization" else { continue }
+            let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            guard value.isEmpty == false else { return nil }
+            let parts = value.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            guard parts.count == 2 else { return nil }
+            let scheme = parts[0].lowercased()
+            let parameter = String(parts[1])
+            if scheme == "bearer" {
+                return validToken(parameter)
+            }
+            if scheme == "basic" {
+                guard let decoded = Data(base64Encoded: parameter),
+                    let pair = String(data: decoded, encoding: .utf8),
+                    let mark = pair.firstIndex(of: ":")
+                else {
+                    return nil
+                }
+                return validToken(String(pair[..<mark]))
+            }
+            return nil
+        }
+        return nil
+    }
+
+    /// Hop-by-hop proxy credential removal for upstream forwards (LEAK-1,
+    /// RFC 7235 section 3.2: a proxy MUST NOT forward Proxy-Authorization).
+    /// Drops every `Proxy-Authorization` field line plus its obs-fold
+    /// continuations, using the same name match as `proxyCredentialToken`
+    /// (case-insensitive, trimmed) extended to colon-less malformed lines;
+    /// all other bytes round-trip unchanged, so a header without the field
+    /// is byte-identical after stripping.
+    static func stripProxyAuthorization(header: String) -> String {
+        var kept: [String] = []
+        kept.reserveCapacity(16)
+        var droppingContinuation = false
+        for line in header.components(separatedBy: "\r\n") {
+            if droppingContinuation, line.hasPrefix(" ") || line.hasPrefix("\t") {
+                continue
+            }
+            droppingContinuation = false
+            if isProxyAuthorizationLine(line) {
+                droppingContinuation = true
+                continue
+            }
+            kept.append(line)
+        }
+        return kept.joined(separator: "\r\n")
+    }
+
+    private static func isProxyAuthorizationLine(_ line: String) -> Bool {
+        let lower = line.trimmingCharacters(in: .whitespaces).lowercased()
+        guard lower.hasPrefix("proxy-authorization") else {
+            return false
+        }
+        let rest = lower.dropFirst("proxy-authorization".count)
+        return rest.isEmpty || rest.first == ":" || rest.first == " " || rest.first == "\t"
+    }
+
+    /// Non-empty token without whitespace or controls. Minted tokens are
+    /// lowercase hex; anything else fails the grant lookup safely, but
+    /// rejecting smuggling shapes here keeps the comparison input clean.
+    private static func validToken(_ raw: String) -> String? {
+        guard raw.isEmpty == false, raw.utf8.count <= 256 else { return nil }
+        guard raw.allSatisfy({ character in
+            guard let ascii = character.asciiValue else { return false }
+            return ascii > 32 && ascii < 127
+        }) else {
+            return nil
+        }
+        return raw
     }
 
     /// Dials for a relay, denying with the precise reason on failure.
     /// Returns nil after denying; shared by the CONNECT and absolute-URI
-    /// paths so the outcome mapping lives in one place. Once a CONNECT is
-    /// established (the SNI-checked path already sent 200), failure just
-    /// closes: a 403 written into a live tunnel is meaningless bytes.
+    /// paths so the outcome mapping lives in one place. When the tunnel
+    /// is already established (the SNI-checked path already sent 200),
+    /// failure just closes and records instead of writing a 403 into a
+    /// tunnel the client believes is open.
     private func dialUpstream(host: String, port: Int, external: Bool, client: Int32, established: Bool = false) -> Int32? {
         let reason: EgressDenialReason
         switch EgressProxy.dial(host: host, port: port, external: external) {
@@ -388,10 +810,8 @@ public final class EgressProxy: @unchecked Sendable {
     }
 
     private func relay(client: Int32, upstream: Int32) {
-        // One activity clock for the tunnel: a long one-way download must
-        // not be severed by the silent direction's idle bound.
-        let activity = Mutex(Date())
         let group = DispatchGroup()
+        let activity = Mutex(Date())
         group.enter()
         relayQueue.async { [weak self] in
             EgressProxy.copy(from: client, to: upstream, activity: activity, shouldStop: { self?.isRunning() != true })
@@ -408,37 +828,6 @@ public final class EgressProxy: @unchecked Sendable {
             close(client)
             close(upstream)
         }
-    }
-
-    /// `Proxy-Authorization: Basic` decoded as text, or nil when the header is absent.
-    /// A present but unusable header is an empty string, which never matches.
-    static func basicProxyCredential(_ header: String) -> String? {
-        var found = false
-        var decoded = ""
-        for line in header.split(separator: "\r\n").dropFirst() {
-            guard let colon = line.firstIndex(of: ":") else { continue }
-            let name = line[..<colon].trimmingCharacters(in: .whitespaces)
-            guard name.lowercased() == "proxy-authorization" else { continue }
-            found = true
-            let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
-            let parts = value.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
-            guard parts.count == 2, parts[0].lowercased() == "basic",
-                let data = Data(base64Encoded: String(parts[1])),
-                let text = String(data: data, encoding: .utf8)
-            else {
-                decoded = ""
-                continue
-            }
-            decoded = text
-        }
-        return found ? decoded : nil
-    }
-
-    private static func constantTimeEquals(_ lhs: String, _ rhs: String) -> Bool {
-        let left = Array(lhs.utf8)
-        let right = Array(rhs.utf8)
-        guard left.count == right.count else { return false }
-        return zip(left, right).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) } == 0
     }
 
     /// CONNECT target from a header block. Strict: exactly `CONNECT
@@ -476,7 +865,7 @@ public final class EgressProxy: @unchecked Sendable {
     /// (loopback gateways, MCP servers) speak this instead of CONNECT.
     /// Strict: http scheme only, ASCII-uppercase method, no userinfo or
     /// brackets, explicit or default (:80) port, HTTP/1.x. Policy decides
-    /// relay vs deny; external targets parse but are never relayed.
+    /// relay vs deny in `serveRequest` (loopback plus filtered public).
     static func parseAbsoluteHTTP(header: String) -> (host: String, port: Int)? {
         guard let lineEnd = header.range(of: "\r\n") else { return nil }
         let parts = header[..<lineEnd.lowerBound].split(separator: " ", omittingEmptySubsequences: false)
@@ -558,12 +947,10 @@ public final class EgressProxy: @unchecked Sendable {
         return nil
     }
 
-    /// Dial one relay upstream. `external == false` skips the
-    /// public-unicast filter entirely, so it is only valid for hosts the
-    /// policy already admitted via `allowsLoopbackTarget`; passing an
-    /// unadmitted host here would let a DNS-rebinding attacker reach
-    /// loopback, LAN, or metadata endpoints.
-    static func dial(host: String, port: Int, external: Bool) -> DialOutcome {
+    /// Resolves one relay target to copied sockaddrs. The port is baked into
+    /// each sockaddr by `getaddrinfo`, as before; `dial` connects exactly
+    /// these addresses without resolving again.
+    static func resolveDialCandidates(host: String, port: Int) -> [EgressDialCandidate] {
         var hints = addrinfo()
         memset(&hints, 0, MemoryLayout<addrinfo>.size)
         hints.ai_family = AF_UNSPEC
@@ -574,37 +961,136 @@ public final class EgressProxy: @unchecked Sendable {
         #endif
         var info: UnsafeMutablePointer<addrinfo>?
         guard getaddrinfo(host, String(port), &hints, &info) == 0, let first = info else {
-            return .dnsFailed
+            return []
         }
         defer { freeaddrinfo(first) }
-        var sawUsable = false
+        var candidates: [EgressDialCandidate] = []
         var current: UnsafeMutablePointer<addrinfo>? = first
         while let node = current {
-            // A compromised resolver must not rebind an allowlisted name
-            // onto loopback, LAN, link-local, or metadata addresses and
-            // have the proxy relay there. The filtered sockaddr is the one
-            // we would connect, so there is no check-to-use race.
-            if external, isPublicUnicast(node.pointee.ai_addr) == false {
-                current = node.pointee.ai_next
-                continue
+            if let source = node.pointee.ai_addr, node.pointee.ai_addrlen > 0,
+                node.pointee.ai_addrlen <= socklen_t(MemoryLayout<sockaddr_storage>.size)
+            {
+                var storage = sockaddr_storage()
+                withUnsafeMutableBytes(of: &storage) { target in
+                    let sourceBytes = UnsafeRawBufferPointer(
+                        start: UnsafeRawPointer(source),
+                        count: Int(node.pointee.ai_addrlen)
+                    )
+                    target.copyMemory(from: sourceBytes)
+                }
+                candidates.append(
+                    EgressDialCandidate(
+                        family: node.pointee.ai_family,
+                        socktype: node.pointee.ai_socktype,
+                        proto: node.pointee.ai_protocol,
+                        address: storage,
+                        length: node.pointee.ai_addrlen
+                    )
+                )
             }
-            // Loopback relays are filtered too: the *name* was admitted, so
-            // whatever it resolves to must actually be loopback.
-            if external == false, isLoopbackAddress(node.pointee.ai_addr) == false {
-                current = node.pointee.ai_next
-                continue
+            current = node.pointee.ai_next
+        }
+        return candidates
+    }
+
+    static func dial(host: String, port: Int, external: Bool) -> DialOutcome {
+        dial(host: host, port: port, external: external, resolve: resolveDialCandidates)
+    }
+
+    /// Dial one relay upstream. `external == false` replaces the
+    /// public-unicast filter with a loopback-only candidate check, so it
+    /// is only valid for hosts the policy already admitted via
+    /// `allowsLoopbackTarget`; both directions verify every resolved
+    /// candidate, never just the name.
+    ///
+    /// The external verdict is consensus over the whole answer set, mirroring
+    /// the admission GET door (`selectHTTPAddresses`): when any resolved
+    /// address fails the public-unicast filter the name is refused without
+    /// dialing, so a resolver that can poison or mix one answer into the set
+    /// cannot steer the relay onto a remaining address. A compromised
+    /// resolver must not rebind an admitted name onto loopback, LAN,
+    /// link-local, or metadata addresses and have the proxy relay there.
+    /// The dialed sockaddr is the filtered one, so there is no
+    /// check-to-use race.
+    static func dial(
+        host: String,
+        port: Int,
+        external: Bool,
+        resolve: (String, Int) -> [EgressDialCandidate]
+    ) -> DialOutcome {
+        let candidates = resolve(host, port)
+        guard candidates.isEmpty == false else { return .dnsFailed }
+        if external {
+            for candidate in candidates {
+                var storage = candidate.address
+                let publicUnicast = withUnsafePointer(to: &storage) { pointer in
+                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1, isPublicUnicast)
+                }
+                if publicUnicast == false {
+                    return .addressFiltered
+                }
             }
-            sawUsable = true
-            let fd = socket(node.pointee.ai_family, node.pointee.ai_socktype, node.pointee.ai_protocol)
+        } else {
+            // Loopback dials verify the candidates, not just the name:
+            // a resolver that answers `localhost` with a non-loopback
+            // address (search-domain expansion, misconfiguration) must
+            // not turn the name check into an unfiltered dial.
+            for candidate in candidates {
+                var storage = candidate.address
+                let loopback = withUnsafePointer(to: &storage) { pointer in
+                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1, isLoopbackAddress)
+                }
+                if loopback == false {
+                    return .addressFiltered
+                }
+            }
+        }
+        for candidate in candidates {
+            let fd = socket(candidate.family, candidate.socktype, candidate.proto)
             if fd >= 0 {
-                if connectWithTimeout(fd, address: node.pointee.ai_addr, length: node.pointee.ai_addrlen, seconds: 10) {
+                var storage = candidate.address
+                let connected = withUnsafePointer(to: &storage) { pointer in
+                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { address in
+                        connectWithTimeout(
+                            fd, address: address, length: candidate.length, seconds: 10
+                        )
+                    }
+                }
+                if connected {
                     return .connected(fd)
                 }
                 close(fd)
             }
-            current = node.pointee.ai_next
         }
-        return sawUsable ? .connectFailed : .addressFiltered
+        return .connectFailed
+    }
+
+    /// True when `address` is loopback: 127.0.0.0/8, ::1, or an
+    /// IPv4-mapped loopback. Unknown families fail closed.
+    static func isLoopbackAddress(_ address: UnsafePointer<sockaddr>?) -> Bool {
+        guard let address else { return false }
+        switch Int32(address.pointee.sa_family) {
+        case AF_INET:
+            return address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { socket in
+                UInt32(bigEndian: socket.pointee.sin_addr.s_addr) & 0xFF00_0000 == 0x7F00_0000
+            }
+        case AF_INET6:
+            return address.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { socket in
+                withUnsafeBytes(of: socket.pointee.sin6_addr) { raw in
+                    guard raw.count == 16 else { return false }
+                    let bytes = (0..<16).map { raw[$0] }
+                    if bytes.prefix(15).allSatisfy({ $0 == 0 }), bytes[15] == 1 {
+                        return true
+                    }
+                    if Array(bytes.prefix(12)) == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF] {
+                        return bytes[12] == 127
+                    }
+                    return false
+                }
+            }
+        default:
+            return false
+        }
     }
 
     /// True when `address` is a globally routable unicast destination.
@@ -623,32 +1109,6 @@ public final class EgressProxy: @unchecked Sendable {
             return address.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { socket in
                 withUnsafeBytes(of: socket.pointee.sin6_addr) { raw in
                     isPublicIPv6(raw)
-                }
-            }
-        default:
-            return false
-        }
-    }
-
-    /// True when `address` is in 127.0.0.0/8 or is ::1 (including the
-    /// IPv4-mapped spelling). Unknown families fail closed.
-    static func isLoopbackAddress(_ address: UnsafePointer<sockaddr>?) -> Bool {
-        guard let address else { return false }
-        switch Int32(address.pointee.sa_family) {
-        case AF_INET:
-            return address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { socket in
-                (UInt32(bigEndian: socket.pointee.sin_addr.s_addr) >> 24) == 127
-            }
-        case AF_INET6:
-            return address.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { socket in
-                withUnsafeBytes(of: socket.pointee.sin6_addr) { raw in
-                    guard raw.count == 16 else { return false }
-                    let bytes = (0..<16).map { raw[$0] }
-                    if bytes.prefix(15).allSatisfy({ $0 == 0 }), bytes[15] == 1 { return true }
-                    if Array(bytes.prefix(12)) == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF] {
-                        return bytes[12] == 127
-                    }
-                    return false
                 }
             }
         default:
@@ -687,26 +1147,6 @@ public final class EgressProxy: @unchecked Sendable {
         if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x0D, bytes[3] == 0xB8 {
             return false // 2001:db8::/32 documentation
         }
-        if bytes[0] == 0x01, bytes[1] == 0x00, bytes[2] == 0, bytes[3] == 0, bytes[4] == 0, bytes[5] == 0, bytes[6] == 0, bytes[7] == 0 {
-            return false // 100::/64 discard-only
-        }
-        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x00, bytes[3] == 0x02 {
-            return false // 2001:2::/48 benchmarking
-        }
-        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x00, bytes[3] == 0x00 {
-            return false // 2001::/32 Teredo (embeds an obfuscated IPv4)
-        }
-        if bytes[0] == 0x00, bytes[1] == 0x64, bytes[2] == 0xFF, bytes[3] == 0x9B {
-            if bytes[4] == 0x00, bytes[5] == 0x01 {
-                return false // 64:ff9b:1::/48 local-use NAT64
-            }
-            if bytes[4...11].allSatisfy({ $0 == 0 }) {
-                // 64:ff9b::/96 well-known NAT64: on a DNS64 network a rebound
-                // A record synthesizes this form, so the embedded IPv4 decides.
-                return isPublicIPv4(v4(bytes[12], bytes[13], bytes[14], bytes[15]))
-            }
-            return false
-        }
         if Array(bytes.prefix(12)) == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF] {
             return isPublicIPv4(v4(bytes[12], bytes[13], bytes[14], bytes[15])) // ::ffff:0:0/96
         }
@@ -716,6 +1156,32 @@ public final class EgressProxy: @unchecked Sendable {
         }
         if bytes[0] == 0x20, bytes[1] == 0x02 { // 2002::/16 6to4
             return isPublicIPv4(v4(bytes[2], bytes[3], bytes[4], bytes[5]))
+        }
+        if bytes[0] == 0x00, bytes[1] == 0x64, bytes[2] == 0xFF, bytes[3] == 0x9B {
+            // NAT64: 64:ff9b::/96 embeds the IPv4 in the last 32 bits;
+            // the 64:ff9b:1::/48 local-use form embeds it at bits 48-79.
+            // On a NAT64/CLAT host the dial reaches the embedded address,
+            // so it must pass the same public-unicast verdict.
+            if bytes[4] == 0x00, bytes[5] == 0x01 {
+                return isPublicIPv4(v4(bytes[6], bytes[7], bytes[8], bytes[9]))
+            }
+            return isPublicIPv4(v4(bytes[12], bytes[13], bytes[14], bytes[15]))
+        }
+        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x00, bytes[3] == 0x00 {
+            return false // 2001::/32 Teredo (encapsulates an IPv4 peer)
+        }
+        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x00, bytes[3] & 0xF0 == 0x20 {
+            return false // 2001:20::/28 ORCHIDv2
+        }
+        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x00, bytes[3] == 0x02,
+            bytes[4] == 0x00, bytes[5] == 0x00
+        {
+            return false // 2001:2::/48 benchmarking
+        }
+        if bytes[0] == 0x01, bytes[1] == 0x00, bytes[2] == 0x00, bytes[3] == 0x00,
+            bytes[4] == 0x00, bytes[5] == 0x00, bytes[6] == 0x00, bytes[7] == 0x00
+        {
+            return false // 100::/64 discard-only
         }
         return true
     }
@@ -851,8 +1317,9 @@ public final class EgressProxy: @unchecked Sendable {
                 break
             }
             if ready == 0 {
-                // Idle bound: a tunnel neither direction speaks on for an
-                // hour is closed instead of holding descriptors forever.
+                // Idle bound shared by both directions: a tunnel neither
+                // side speaks on for an hour is closed instead of holding
+                // descriptors forever.
                 if activity.withLock({ Date().timeIntervalSince($0) }) >= 3600 { break }
                 continue
             }
@@ -928,7 +1395,9 @@ public final class EgressProxy: @unchecked Sendable {
 
     private static let denialLogLock = Mutex<Void>(())
 
-    private static func productionDenialLog() -> @Sendable (EgressProxyDenial) -> Void {
+    /// Module-visible so the supervisor can chain review-queue intake
+    /// ahead of the production denial log without replacing it.
+    static func productionDenialLog() -> @Sendable (EgressProxyDenial) -> Void {
         { denial in
             denialLogLock.withLock { _ in
                 recordDenial(denial)
@@ -961,12 +1430,15 @@ public final class EgressProxy: @unchecked Sendable {
         to url: URL,
         diagnose: (String) -> Void
     ) -> Bool {
-        let record = [
+        var record = [
             "host": denial.host,
             "port": String(denial.port),
             "reason": denial.reason.rawValue,
             "recordedAt": String(denial.recordedAt.timeIntervalSince1970),
         ]
+        if let binaryPath = denial.binaryPath {
+            record["binary"] = binaryPath
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: record),
             let line = String(data: data, encoding: .utf8)
         else {

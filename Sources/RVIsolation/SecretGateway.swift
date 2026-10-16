@@ -67,6 +67,9 @@ public final class SecretGateway: @unchecked Sendable {
 
     public static let maximumBodyBytes = 32 * 1024 * 1024
     static let maximumConnections = 64
+    /// Above the spawn floors (8 and 16). Gateway sockets must not remain
+    /// on a descriptor `relocateDescriptor` has just closed.
+    static let socketFloor: Int32 = 64
 
     private let transport: SecretUpstreamTransport
     private let audit: @Sendable (SecretUseRecord) -> Void
@@ -74,7 +77,13 @@ public final class SecretGateway: @unchecked Sendable {
     private var entries: [String: Entry] = [:]
     /// Every listener `start` handed to an accept loop. `stop` closes all of them.
     private var listenFDs: [Int32] = []
+    /// Signaled when that fd's accept loop has left the socket, so `stop`
+    /// can close it after Darwin would otherwise keep the port accepting.
+    private var acceptExited: [Int32: DispatchSemaphore] = [:]
     private var boundPort: Int?
+    /// Bumped by `stop`. A `start` that was binding while `stop` ran must
+    /// not publish its listener afterwards.
+    private var lifecycleGeneration = 0
     private let slots = DispatchSemaphore(value: SecretGateway.maximumConnections)
     private let acceptQueue = DispatchQueue(label: "rv.secret-gateway.accept", qos: .userInitiated)
     /// Test seam, nil in production. Runs after the fast-path check and before
@@ -133,24 +142,48 @@ public final class SecretGateway: @unchecked Sendable {
         return entries[token]
     }
 
+    /// A TCP stream socket that is close-on-exec before the caller uses it.
+    /// Linux passes `SOCK_CLOEXEC` to `socket`. Darwin does not define that
+    /// flag, so the descriptor that survives is the one `F_DUPFD_CLOEXEC`
+    /// creates. The original is closed once, including when `socket`
+    /// returned 0, 1, or 2, because that slot was free and the number is
+    /// this socket. `close` is not retried.
+    private static func openStreamSocket() -> Int32 {
+        #if canImport(Darwin)
+        return publishCloexecSocket(raw: socket(AF_INET, SOCK_STREAM, 0), above: socketFloor)
+        #else
+        return socket(
+            AF_INET,
+            Int32(SOCK_STREAM.rawValue) | Int32(SOCK_CLOEXEC.rawValue),
+            0
+        )
+        #endif
+    }
+
     public func start() -> Result<Int, EgressStartError> {
         lock.lock()
         if let boundPort {
             lock.unlock()
             return .success(boundPort)
         }
+        let generation = lifecycleGeneration
         let overlap = beforeListenerPublish
         lock.unlock()
         overlap?()
-        #if canImport(Darwin)
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        #else
-        let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
-        #endif
+        var fd = Self.openStreamSocket()
         guard fd >= 0 else { return .failure(.socketFailed(errno: errno)) }
-        _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
+        // A listener that stays below the spawn floor occupies a number
+        // relocate just closed. Move it up before bind. The owned-socket
+        // form also closes a stdio-slot original, which `socket` may
+        // have returned on Linux when that slot was free.
+        guard relocateOwnedSocket(&fd, above: Self.socketFloor) else {
+            // The failed move already closed the original once.
+            return .failure(.socketFailed(errno: errno))
+        }
+        let listener = fd
+        _ = fcntl(listener, F_SETFD, FD_CLOEXEC)
         var one: Int32 = 1
-        _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
+        _ = setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
         var address = sockaddr_in()
         #if canImport(Darwin)
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
@@ -161,85 +194,179 @@ public final class SecretGateway: @unchecked Sendable {
         let bound = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { pointer -> Int32 in
                 #if canImport(Darwin)
-                Darwin.bind(fd, pointer, socklen_t(MemoryLayout<sockaddr_in>.size))
+                Darwin.bind(listener, pointer, socklen_t(MemoryLayout<sockaddr_in>.size))
                 #else
-                Glibc.bind(fd, pointer, socklen_t(MemoryLayout<sockaddr_in>.size))
+                Glibc.bind(listener, pointer, socklen_t(MemoryLayout<sockaddr_in>.size))
                 #endif
             }
         }
         guard bound == 0 else {
             let code = errno
-            close(fd)
+            close(listener)
             return .failure(.bindFailed(errno: code))
         }
-        guard listen(fd, 64) == 0 else {
+        guard listen(listener, 64) == 0 else {
             let code = errno
-            close(fd)
+            close(listener)
             return .failure(.listenFailed(errno: code))
         }
         var actual = sockaddr_in()
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
         let named = withUnsafeMutablePointer(to: &actual) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listener, $0, &length) }
         }
         guard named == 0 else {
             let code = errno
-            close(fd)
+            close(listener)
             return .failure(.addressFailed(errno: code))
         }
         let port = Int(UInt16(bigEndian: actual.sin_port))
         lock.lock()
+        // A stop ran while this socket was binding. Do not publish a
+        // listener after stop returned.
+        if lifecycleGeneration != generation {
+            lock.unlock()
+            close(listener)
+            return .failure(.socketFailed(errno: ECANCELED))
+        }
         // Another start published while this socket was binding. Close the
         // extra listener; callers must use the port that was already published.
         if let published = boundPort {
             lock.unlock()
-            close(fd)
+            close(listener)
             return .success(published)
         }
-        listenFDs.append(fd)
+        let exited = DispatchSemaphore(value: 0)
+        acceptExited[listener] = exited
+        listenFDs.append(listener)
         boundPort = port
-        acceptQueue.async { [weak self] in self?.acceptLoop(fd) }
+        let flags = fcntl(listener, F_GETFL, 0)
+        if flags >= 0 {
+            _ = fcntl(listener, F_SETFL, flags | O_NONBLOCK)
+        }
+        acceptQueue.async { [weak self] in
+            self?.acceptLoop(listener)
+            exited.signal()
+        }
         lock.unlock()
         return .success(port)
     }
 
     public func stop() {
         lock.lock()
+        lifecycleGeneration += 1
         let fds = listenFDs
+        let port = boundPort
+        let waits = fds.compactMap { acceptExited[$0] }
         listenFDs.removeAll()
+        acceptExited.removeAll()
         boundPort = nil
         entries.removeAll()
         lock.unlock()
+        if let port {
+            wakeListeningPort(port)
+        }
         for fd in fds where fd >= 0 {
             shutdown(fd, Int32(SHUT_RDWR))
+        }
+        for wait in waits {
+            _ = wait.wait(timeout: .now() + 2)
+        }
+        for fd in fds where fd >= 0 {
             close(fd)
+        }
+    }
+
+    /// A loopback connect makes `poll` see the listener so the accept loop
+    /// can leave the fd. `close` before that leaves the port accepting on Darwin.
+    /// The connect runs on a high fd: a non-blocking `EINPROGRESS` socket must
+    /// not remain on a number below the spawn floor.
+    private func wakeListeningPort(_ port: Int) {
+        var fd = Self.openStreamSocket()
+        guard fd >= 0 else { return }
+        // Owned-socket form: a failed move already closed the original.
+        if relocateOwnedSocket(&fd, above: Self.socketFloor) == false {
+            return
+        }
+        defer { close(fd) }
+        let flags = fcntl(fd, F_GETFL, 0)
+        if flags >= 0 {
+            _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        }
+        var address = sockaddr_in()
+        #if canImport(Darwin)
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        #endif
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(port).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        _ = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
         }
     }
 
     private func acceptLoop(_ fd: Int32) {
         while true {
-            let client = accept(fd, nil, nil)
-            if client < 0 {
+            lock.lock()
+            let live = listenFDs.contains(fd)
+            lock.unlock()
+            if live == false { return }
+            var state = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let polled = poll(&state, 1, 200)
+            if polled < 0 {
                 if errno == EINTR { continue }
                 return
             }
-            _ = fcntl(client, F_SETFD, FD_CLOEXEC)
-            #if canImport(Darwin)
-            var one: Int32 = 1
-            _ = setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
-            #endif
-            var timeout = timeval(tv_sec: 30, tv_usec: 0)
-            _ = setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-            guard slots.wait(timeout: .now()) == .success else {
-                GatewaySocket.writeAll(client, GatewaySocket.plainResponse(status: 503, reason: "gateway busy"))
+            lock.lock()
+            let still = listenFDs.contains(fd)
+            lock.unlock()
+            if still == false { return }
+            if polled == 0 { continue }
+            let client = accept(fd, nil, nil)
+            if client < 0 {
+                if errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
+                return
+            }
+            lock.lock()
+            let serve = listenFDs.contains(fd)
+            lock.unlock()
+            if serve == false {
                 close(client)
+                return
+            }
+            // Darwin inherits `O_NONBLOCK` from the listener. A read that
+            // races the client's write is `EAGAIN`, and that is not a
+            // malformed request. The accepted number is closed once before
+            // the handler blocks, including when `accept` returned 0, 1, or
+            // 2. `F_SETFD` on the duplicate does not cover that original.
+            var held = client
+            guard relocateOwnedSocket(&held, above: Self.socketFloor) else {
                 continue
             }
+            let flags = fcntl(held, F_GETFL, 0)
+            if flags >= 0 {
+                _ = fcntl(held, F_SETFL, flags & ~O_NONBLOCK)
+            }
+            _ = fcntl(held, F_SETFD, FD_CLOEXEC)
+            #if canImport(Darwin)
+            var one: Int32 = 1
+            _ = setsockopt(held, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+            #endif
+            var timeout = timeval(tv_sec: 30, tv_usec: 0)
+            _ = setsockopt(held, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+            guard slots.wait(timeout: .now()) == .success else {
+                GatewaySocket.writeAll(held, GatewaySocket.plainResponse(status: 503, reason: "gateway busy"))
+                close(held)
+                continue
+            }
+            let clientFD = held
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                defer { close(client) }
+                defer { close(clientFD) }
                 guard let self else { return }
                 defer { self.slots.signal() }
-                self.handle(client)
+                self.handle(clientFD)
             }
         }
     }
@@ -310,13 +437,28 @@ public final class SecretGateway: @unchecked Sendable {
     }
 
     private func readBody(_ reader: GatewaySocket.Reader, head: GatewayRequestHead) -> Data? {
-        if let encoding = head.header("Transfer-Encoding") {
-            guard encoding.lowercased() == "chunked" else { return nil }
-            return reader.readChunked(limit: Self.maximumBodyBytes)
+        // The same framing limits apply to HEAD. An illegal or oversized
+        // body is refused before the placeholder is treated as empty.
+        // Missing `Content-Length` is not a malformed request and must not
+        // wait for bytes that will not arrive.
+        let framed: Data?
+        switch gatewayBodyFraming(
+            transferEncodings: head.headerValues("Transfer-Encoding"),
+            contentLengths: head.headerValues("Content-Length"),
+            maximum: Self.maximumBodyBytes
+        ) {
+        case .refused:
+            return nil
+        case .chunked:
+            framed = reader.readChunked(limit: Self.maximumBodyBytes)
+        case .empty:
+            framed = Data()
+        case .fixed(let length):
+            framed = reader.readExactly(length)
         }
-        guard let lengthText = head.header("Content-Length") else { return Data() }
-        guard let length = Int(lengthText), length >= 0, length <= Self.maximumBodyBytes else { return nil }
-        return reader.readExactly(length)
+        guard let framed else { return nil }
+        if head.method == "HEAD" { return Data() }
+        return framed
     }
 
     private func refuse(_ client: Int32, _ refusal: GatewayRefusal, method: String, path: String, secret: String?) {
@@ -457,6 +599,14 @@ enum GatewaySocket {
             while true {
                 let n = chunk.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
                 if n < 0, errno == EINTR { continue }
+                if n < 0, errno == EAGAIN || errno == EWOULDBLOCK {
+                    // A not-yet-arrived HEAD is not the end of the request.
+                    var state = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                    let waited = poll(&state, 1, 30_000)
+                    if waited < 0, errno == EINTR { continue }
+                    if waited > 0 { continue }
+                    return false
+                }
                 guard n > 0 else { return false }
                 buffer += chunk.prefix(n)
                 return true

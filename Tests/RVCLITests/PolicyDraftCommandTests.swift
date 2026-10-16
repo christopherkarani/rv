@@ -35,6 +35,38 @@ struct PolicyDraftCommandTests {
         }
     }
 
+    @Test func robotEscapesEnglishSeparators() async throws {
+        try await withTempPolicyContext { home, workspace in
+            let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+            let english = "x\u{1B}" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence
+            let result = try await PolicyDraftRun.execute(
+                english: english,
+                save: false,
+                robot: true,
+                home: home,
+                workspace: workspace,
+                compiler: PreviewEnglishCompiler()
+            )
+            #expect(result.outcome == .preview(saved: false))
+            #expect(result.text.unicodeScalars.contains { $0.value == 0x1B } == false)
+            #expect(result.text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+            #expect(result.text.unicodeScalars.contains { $0.value == 0x2029 } == false)
+            #expect(result.text.unicodeScalars.contains { $0.value == 0x202E } == false)
+            #expect(result.text.contains("\\u001b"))
+            #expect(result.text.contains("\\u2028"))
+            #expect(result.text.contains("\\u2029"))
+            #expect(result.text.contains("\\u202e"))
+            #expect(result.text.contains("\"english\""))
+            let object = try JSONSerialization.jsonObject(with: Data(result.text.utf8))
+            let dictionary = try #require(object as? [String: Any])
+            let rule = try #require(dictionary["rule"] as? [String: Any])
+            #expect(rule["english"] as? String != nil)
+            let split = result.text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+            #expect(split.contains(sentence) == false)
+            assertNoPolicyWrites(home: home, workspace: workspace)
+        }
+    }
+
     @Test func draftEnglish_robotJSON_includesGitPushAndAllowedToSave() async throws {
         try await withTempPolicyContext { home, workspace in
             let result = try await PolicyDraftRun.execute(
@@ -319,9 +351,12 @@ struct PolicyDocumentCommandTests {
     }
 
     @Test func validate_missingFile_isOK() throws {
+        let home = try isolatedHome()
+        let homeURL = URL(fileURLWithPath: home.rawValue, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: homeURL) }
         let missing = URL(fileURLWithPath: "/tmp/rv-missing-policy-\(UUID().uuidString).toml")
         #expect(FileManager.default.fileExists(atPath: missing.path) == false)
-        try PolicyValidateRun.validate(.file(missing))
+        try PolicyValidateRun.validate(.file(missing, home))
     }
 
     @Test func validate_defaultPath_invalidLegacyJSON_failsClosed() throws {
@@ -355,6 +390,92 @@ struct PolicyDocumentCommandTests {
             try PolicyValidateRun.validate(.machine(home))
         }
     }
+
+    @Test func validate_shareAskingRelaxation_blocks() throws {
+        let home = try isolatedHome()
+        let homeURL = URL(fileURLWithPath: home.rawValue, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: homeURL) }
+        let store = TypedRuleStore(
+            baseDirectory: RVPolicyPaths.configDirectory(home: home)
+        )
+        let predicate = PolicyPredicate.gitPush(force: .exactly(.force), branch: "main")
+        try store.saveMachine(
+            PolicyDocument(
+                rules: [
+                    PolicyDocumentRule(
+                        id: RuleID(pack: .coreGit, pattern: "force-push-main"),
+                        verdict: .deny,
+                        predicate: predicate
+                    )
+                ]
+            )
+        )
+        let share = homeURL.appendingPathComponent("share.toml")
+        try PolicyDocumentTOML.render(
+            PolicyDocument(
+                rules: [
+                    PolicyDocumentRule(
+                        id: RuleID(pack: .typedGit, pattern: "share-allow"),
+                        verdict: .allow,
+                        predicate: predicate
+                    )
+                ]
+            )
+        ).write(to: share, atomically: true, encoding: .utf8)
+
+        let report = try PolicyValidateRun.riskReport(.file(share, home))
+        #expect(report.hasBlockingFindings)
+        #expect(
+            report.findings == [
+                PolicyDiffRiskFinding(
+                    kind: .verdictRelaxed,
+                    severity: .blocking,
+                    detail: "typed.git:share-allow deny->allow"
+                )
+            ]
+        )
+        #expect(throws: PolicyDiffRiskError.blockedByFindings(report)) {
+            try PolicyValidateRun.validate(.file(share, home))
+        }
+    }
+
+    @Test func validate_partialShareOmittingMachineRules_isClean() throws {
+        let home = try isolatedHome()
+        let homeURL = URL(fileURLWithPath: home.rawValue, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: homeURL) }
+        let store = TypedRuleStore(
+            baseDirectory: RVPolicyPaths.configDirectory(home: home)
+        )
+        try store.saveMachine(
+            PolicyDocument(
+                rules: [
+                    PolicyDocumentRule(
+                        id: RuleID(pack: .coreGit, pattern: "force-push-main"),
+                        verdict: .deny,
+                        predicate: .gitPush(force: .exactly(.force), branch: "main")
+                    )
+                ]
+            )
+        )
+        // A share that never mentions the machine deny omits it; the merge
+        // preserves it, so validation must not read a removal.
+        let share = homeURL.appendingPathComponent("share.toml")
+        try PolicyDocumentTOML.render(
+            PolicyDocument(
+                rules: [
+                    PolicyDocumentRule(
+                        id: RuleID(pack: .typedGit, pattern: "tighten"),
+                        verdict: .deny,
+                        predicate: .gitDiscardWorktree(pathspec: nil)
+                    )
+                ]
+            )
+        ).write(to: share, atomically: true, encoding: .utf8)
+
+        let report = try PolicyValidateRun.riskReport(.file(share, home))
+        #expect(report.findings.isEmpty)
+        try PolicyValidateRun.validate(.file(share, home))
+    }
 }
 
 private func withTempPolicyContext(
@@ -378,6 +499,23 @@ private func policyDraftCommandSourceURL() -> URL {
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .appendingPathComponent("Sources/RVCLI/Commands/PolicyDraftCommand.swift")
+}
+
+private struct PreviewEnglishCompiler: EnglishCompiler {
+    func compile(_ english: String) async throws -> EnglishCompileResult {
+        .preview(
+            TypedRulePreview(
+                sentence: "Always block force-push to main",
+                rule: PolicyDocumentRule(
+                    id: RuleID(pack: .typedGit, pattern: "force-push-main"),
+                    verdict: .deny,
+                    predicate: .gitPush(force: .exactly(.force), branch: "main"),
+                    english: english
+                ),
+                allowedToSave: true
+            )
+        )
+    }
 }
 
 private struct UnavailableEnglishCompiler: EnglishCompiler {

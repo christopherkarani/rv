@@ -101,11 +101,11 @@ enum AuditForwardRun {
         case .success(nil): return .success(nil)
         case .success(let data?):
             guard let cursor = try? JSONDecoder().decode(AuditCursor.self, from: data) else {
-                return .failure(CommandFailure("\(url.path) is not a forward cursor; delete it to start over"))
+                return .failure(CommandFailure("\(DisplayedText.field(url.path)) is not a forward cursor; delete it to start over"))
             }
             return .success(cursor)
-        case .failure(.unsafe(let reason)): return .failure(CommandFailure("\(url.path): \(reason)"))
-        case .failure: return .failure(CommandFailure("cannot read \(url.path)"))
+        case .failure(.unsafe(let reason)): return .failure(CommandFailure("\(DisplayedText.field(url.path)): \(reason)"))
+        case .failure: return .failure(CommandFailure("cannot read \(DisplayedText.field(url.path))"))
         }
     }
 
@@ -133,7 +133,7 @@ enum AuditForwardRun {
     static func startFromNow(options: Options, configDirectory: URL) -> Result<String, CommandFailure> {
         let url = cursorURL(configDirectory, destination: options.url)
         guard saveCursor(AuditLedger(configDirectory: configDirectory).endCursor(), to: url) else {
-            return .failure("could not write \(url.path)")
+            return .failure("could not write \(DisplayedText.field(url.path))")
         }
         return .success("forward cursor for \(options.url.absoluteString) set to now; older events will not be sent\n")
     }
@@ -177,7 +177,7 @@ enum AuditForwardRun {
             let (events, next) = ledger.events(after: cursor, limit: options.batchSize)
             if events.isEmpty {
                 if next != cursor, saveCursor(next, to: cursorFile) == false {
-                    return .failure("could not write \(cursorFile.path)")
+                    return .failure("could not write \(DisplayedText.field(cursorFile.path))")
                 }
                 break
             }
@@ -194,7 +194,9 @@ enum AuditForwardRun {
                 return .failure(CommandFailure(
                     "sent \(sent) events, then HTTP \(status); the cursor is kept, rerun to retry"))
             case .success:
-                guard saveCursor(next, to: cursorFile) else { return .failure("could not write \(cursorFile.path)") }
+                guard saveCursor(next, to: cursorFile) else {
+                    return .failure("could not write \(DisplayedText.field(cursorFile.path))")
+                }
                 cursor = next
                 sent += events.count
                 batches += 1
@@ -219,14 +221,16 @@ enum AuditForwardRun {
         var values: [String: String] = [:]
         for name in names.sorted() {
             guard let secret = configuration.secret(named: name) else {
-                return .failure(CommandFailure("header secret \(name) is not defined in secrets.json"))
+                return .failure(CommandFailure("header secret \(DisplayedText.field(name)) is not defined in secrets.json"))
             }
             switch resolver.resolve(secret.source) {
-            case .failure(let error): return .failure(CommandFailure("header secret \(name): \(error.message)"))
+            case .failure(let error): return .failure(CommandFailure("header secret \(DisplayedText.field(name)): \(error.message)"))
             case .success(let value):
-                guard let text = String(validating: value.revealed(), as: UTF8.self) else { return .failure(CommandFailure("header secret \(name) is not text")) }
+                guard let text = String(validating: value.revealed(), as: UTF8.self) else {
+                    return .failure(CommandFailure("header secret \(DisplayedText.field(name)) is not text"))
+                }
                 guard text.contains("\r") == false, text.contains("\n") == false, text.contains("\0") == false else {
-                    return .failure(CommandFailure("header secret \(name) contains a line break"))
+                    return .failure(CommandFailure("header secret \(DisplayedText.field(name)) contains a line break"))
                 }
                 values[name] = text
             }
@@ -238,7 +242,7 @@ enum AuditForwardRun {
         var headers: [String: String] = [:]
         for item in raw {
             guard let equals = item.firstIndex(of: "="), equals != item.startIndex else {
-                return .failure(CommandFailure("--header takes NAME=VALUE, got \(item)"))
+                return .failure(CommandFailure("--header takes NAME=VALUE, got \(DisplayedText.field(item))"))
             }
             headers[String(item[..<equals])] = String(item[item.index(after: equals)...])
         }
