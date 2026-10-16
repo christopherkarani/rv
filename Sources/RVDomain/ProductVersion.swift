@@ -1,3 +1,3 @@
 public enum ProductVersion: Sendable {
-    public static let semver = "0.1.5"
+    public static let semver = "0.2.0"
 }
