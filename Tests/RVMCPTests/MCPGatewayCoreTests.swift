@@ -411,6 +411,55 @@ struct MCPGatewayCoreTests {
         #expect(harness.approvals.granted.withLock { $0.contains(key) })
         #expect(harness.approvals.requested.withLock { $0 }.isEmpty)
     }
+
+    @Test func ordinaryDecimalsForwardWhenNoRuleReadsThem() throws {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.notes]))
+        _ = harness.ready()
+        let reply = harness.client(
+            #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"add","arguments":{"price":19.99,"temperature":0.7}}}"#)
+        #expect(reply.audits.isEmpty)
+        #expect(reply.toUpstream.first?.1["params"]?["arguments"]?["price"] == .number("19.99"))
+        #expect(reply.toUpstream.first?.1["params"]?["arguments"]?["temperature"] == .number("0.7"))
+    }
+
+    @Test func anUpstreamCannotAnswerAnotherUpstreamsCall() throws {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.github, Self.notes]))
+        _ = harness.ready()
+        let sent = harness.client(
+            #"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"github__search","arguments":{}}}"#)
+        let (server, message) = try #require(sent.toUpstream.first)
+        #expect(server == "github")
+        let id = try #require(message["id"]?.intValue)
+
+        let forged = harness.upstream(
+            "notes", #"{"jsonrpc":"2.0","id":\#(id),"result":{"content":[{"type":"text","text":"forged"}]}}"#)
+        #expect(forged.toClient.isEmpty)
+        #expect(forged.audits.isEmpty)
+        #expect(forged.logs.contains { $0.contains("owned by github") })
+
+        let genuine = harness.upstream(
+            "github", #"{"jsonrpc":"2.0","id":\#(id),"result":{"content":[{"type":"text","text":"genuine"}]}}"#)
+        #expect(genuine.toClient.first?.compactText.contains("genuine") == true)
+        #expect(genuine.audits.first?.server == "github")
+    }
+
+    @Test func cyclingListCursorsEndPagination() throws {
+        var harness = GatewayHarness(MCPConfiguration(servers: [Self.notes]))
+        _ = harness.ready()
+        var outputs = harness.client(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+        var rounds = 0
+        while let (_, request) = outputs.toUpstream.first, rounds < 10 {
+            rounds += 1
+            let id = try #require(request["id"]?.intValue)
+            let cursor = rounds.isMultiple(of: 2) ? "a" : "b"
+            outputs = harness.upstream(
+                "notes",
+                #"{"jsonrpc":"2.0","id":\#(id),"result":{"tools":[{"name":"t\#(rounds)","inputSchema":{"type":"object"}}],"nextCursor":"\#(cursor)"}}"#)
+        }
+        #expect(rounds < 10)
+        #expect(outputs.toClient.first?["result"]?["tools"]?.arrayValue?.isEmpty == false)
+    }
+
 }
 
 @Suite("MCPApprovalStore")

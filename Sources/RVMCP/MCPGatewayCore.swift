@@ -93,6 +93,15 @@ public struct MCPGatewayCore {
         case list(fanout: Int, server: String)
         case call(client: JSONValue, server: String, tool: String, keys: [String], approval: Approval?, started: Date)
         case cancelled
+
+        /// The upstream that owns this request; nil once cancelled. A reply
+        /// from any other upstream must not consume the entry.
+        var owner: String? {
+            switch self {
+            case .initialize(let server), .list(_, let server), .call(_, let server, _, _, _, _): server
+            case .cancelled: nil
+            }
+        }
     }
 
     struct ListFanout {
@@ -101,7 +110,15 @@ public struct MCPGatewayCore {
         var tools: [JSONValue]
         /// Set when the listing answers `rv_search_tools` instead of `tools/list`.
         var search: Search?
+        /// `server\0cursor` pairs already followed; a repeat ends that server's pages.
+        var seenCursors: Set<String> = []
+        /// Pages fetched per server; capped so a cycling upstream cannot page forever.
+        var pages: [String: Int] = [:]
     }
+
+    /// Pagination bounds for one `tools/list` fanout.
+    static let maximumListPagesPerServer = 64
+    static let maximumListedTools = 4096
 
     struct Search {
         var terms: [String]
@@ -332,16 +349,26 @@ public struct MCPGatewayCore {
             unwrapped["arguments"] = arguments
             return callTool(client: client, params: .object(unwrapped))
         }
+        // Search mode is presentation-only: a direct call by exposed name takes
+        // the same policy, approval, and audit path as one via rv_call_tool.
         guard let (server, tool) = route(exposed), let upstream = upstreams[server] else {
             return [.toClient(Self.error(id: client, code: -32602, message: "Unknown tool: \(exposed)"))]
         }
         let rawArguments = params?["arguments"] ?? .object([:])
-        guard let arguments = rawArguments.withExactNumbers() else {
-            let reason = "rv will not forward a number it cannot read exactly"
-            return [
-                .audit(MCPCallRecord(server: server, tool: tool, decision: .deny, argumentKeys: [], isError: true, reason: reason)),
-                .toClient(Self.toolError(id: client, "\(reason). Do not retry; ask the user if you need it.")),
-            ]
+        // Exactness matters only where argument rules read the numbers. A call
+        // no rule inspects forwards its original spellings (0.7, 19.99, …).
+        let arguments: JSONValue
+        if configuration.hasArgumentRules(server: upstream.definition, tool: tool) {
+            guard let exact = rawArguments.withExactNumbers() else {
+                let reason = "rv will not forward a number it cannot read exactly"
+                return [
+                    .audit(MCPCallRecord(server: server, tool: tool, decision: .deny, argumentKeys: [], isError: true, reason: reason)),
+                    .toClient(Self.toolError(id: client, "\(reason). Do not retry; ask the user if you need it.")),
+                ]
+            }
+            arguments = exact
+        } else {
+            arguments = rawArguments
         }
         let keys = arguments.objectValue?.keys.sorted() ?? []
         let decision = configuration.decision(server: upstream.definition, tool: tool, arguments: arguments)
@@ -497,7 +524,14 @@ public struct MCPGatewayCore {
                 return []
             }
         }
-        guard let id = message["id"]?.intValue, let entry = pending.removeValue(forKey: id) else { return [] }
+        guard let id = message["id"]?.intValue, let entry = pending[id] else { return [] }
+        // A pending request belongs to one upstream. A reply from another does
+        // not consume it: request IDs are sequential, so any upstream could
+        // otherwise race a forged result for a peer's tool call.
+        if let owner = entry.owner, owner != server {
+            return [.log("MCP server \(server) answered request \(id) owned by \(owner); ignoring")]
+        }
+        pending.removeValue(forKey: id)
         switch entry {
         case .initialize:
             if message["result"]?.objectValue != nil {
@@ -533,11 +567,21 @@ public struct MCPGatewayCore {
         var outputs: [MCPGatewayOutput] = []
         if let upstream = upstreams[server], let tools = message["result"]?["tools"]?.arrayValue {
             state.tools += tools.compactMap { exposedTool($0, upstream: upstream) }
-            if let cursor = message["result"]?["nextCursor"]?.stringValue, cursor.isEmpty == false {
-                fanouts[fanout] = state
-                let id = allocate(.list(fanout: fanout, server: server))
-                return [.toUpstream(server: server, message: Self.request(
-                    id: .int(id), method: "tools/list", params: .object(["cursor": .string(cursor)])))]
+            state.pages[server, default: 0] += 1
+            if state.tools.count > Self.maximumListedTools {
+                state.tools = Array(state.tools.prefix(Self.maximumListedTools))
+                outputs.append(.log("MCP tool listing exceeded \(Self.maximumListedTools) tools; truncating"))
+            } else if let cursor = message["result"]?["nextCursor"]?.stringValue, cursor.isEmpty == false {
+                let key = server + "\0" + cursor
+                if state.seenCursors.contains(key) || state.pages[server, default: 0] >= Self.maximumListPagesPerServer {
+                    outputs.append(.log("MCP server \(server) cycled or over-paged its tool list; stopping pagination"))
+                } else {
+                    state.seenCursors.insert(key)
+                    fanouts[fanout] = state
+                    let id = allocate(.list(fanout: fanout, server: server))
+                    return outputs + [.toUpstream(server: server, message: Self.request(
+                        id: .int(id), method: "tools/list", params: .object(["cursor": .string(cursor)])))]
+                }
             }
         } else {
             outputs.append(.log("MCP server \(server) did not list tools"))
@@ -549,7 +593,12 @@ public struct MCPGatewayCore {
         }
         fanouts[fanout] = nil
         if let search = state.search {
-            return outputs + [.toClient(Self.searchResult(id: state.client, tools: state.tools, search: search))]
+            return outputs + [
+                .audit(MCPCallRecord(
+                    server: "rv", tool: Self.searchToolName, decision: .allow, argumentKeys: ["query", "limit"],
+                    isError: false, reason: "searched \(state.tools.count) tools")),
+                .toClient(Self.searchResult(id: state.client, tools: state.tools, search: search)),
+            ]
         }
         return outputs + [.toClient(Self.result(id: state.client, .object(["tools": .array(state.tools)])))]
     }
@@ -697,7 +746,9 @@ public struct MCPGatewayCore {
             return .array(items.map { scrub($0, secrets: secrets) })
         case .object(let object):
             var scrubbed = JSONObject()
-            for (key, item) in object.entries { scrubbed[key] = scrub(item, secrets: secrets) }
+            for (key, item) in object.entries {
+                scrubbed[scrubText(key, secrets: secrets)] = scrub(item, secrets: secrets)
+            }
             return .object(scrubbed)
         default:
             return value
