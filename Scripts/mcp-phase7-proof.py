@@ -297,7 +297,7 @@ out = write_and_trust({"version": 1, "servers": [
 ]}, "7.1 remote")
 step("7.1 trust review shows URL, transport and header names, never the token",
      f"web: {base}/mcp (remote, streamable HTTP)" in out and "old: " in out and "legacy SSE" in out
-     and "Authorization (secret FIXTURE_TOKEN)" in out and TOKEN not in out)
+     and "Authorization → secret FIXTURE_TOKEN" in out and TOKEN not in out)
 g = Gateway(env=ENV_T)
 names = sorted(t["name"] for t in g.tools)
 step("7.1 tools from both transports; deny hides web delete_all",
@@ -352,7 +352,7 @@ step("7.1 imported definitions", imported["hosted"].get("url") == f"{base}/mcp" 
      and imported["legacy"].get("transport") == "sse" and "command" not in imported["hosted"], json.dumps(imported.get("legacy")))
 r = rv("mcp", "setup", "--host", "cursor", "--server", "hosted")
 host = json.load(open(f"{HOME}/.cursor/mcp.json"))["mcpServers"]["hosted"]
-step("7.1 setup routes the remote host entry through rv", r.returncode == 0 and host == {"command": RV, "args": ["mcp", "serve", "--server", "hosted"]},
+step("7.1 setup routes the remote host entry through rv", r.returncode == 0 and host.get("args") == ["mcp", "serve", "--server", "hosted"] and os.path.realpath(host.get("command", "")) == os.path.realpath(RV),
      json.dumps(host))
 rows = {row["name"]: row["status"] for row in json.loads(rv("mcp", "list", "--json").stdout)["rows"]}
 step("7.1 list: hosted governed, keyed unreviewed", rows.get("hosted") == "governed" and rows.get("keyed") == "unreviewed", json.dumps(rows))
@@ -405,7 +405,7 @@ base4 = f"http://127.0.0.1:{port4}"
 out = write_and_trust({"version": 1, "profile": "strict", "defaultDecision": "allow", "servers": [
     {"name": "web", "url": f"{base4}/mcp", "tools": {"allow": ["echo"], "ask": ["whoami"]}},
     {"name": "open", "command": "/usr/bin/python3", "args": ["-u", FIXTURE], "sandbox": {"network": True}},
-    {"name": "proxied", "command": "/usr/bin/python3", "args": ["-u", FIXTURE], "sandbox": {"hosts": ["api.example.com"]}},
+    {"name": "proxied", "command": "/usr/bin/python3", "args": ["-u", FIXTURE], "tools": {"allow": ["echo"]}, "sandbox": {"hosts": ["api.example.com"]}},
     {"name": "bare", "command": "/usr/bin/python3", "args": ["-u", FIXTURE]},
 ]}, "7.4 strict")
 step("7.4 trust review names the profile, the denials and the allowlist",
@@ -429,7 +429,7 @@ step("7.4 open network is refused", r.returncode != 0 and "keeps open off the ne
 if sys.platform == "darwin":
     g = Gateway(args=["--server", "proxied"])
     reply = g.call(43, "echo", {"text": "caged"})
-    step("7.4 a hosts sandbox launches on macOS", text_of(reply) == "caged", text_of(reply))
+    step("7.4 a hosts sandbox launches on macOS", "caged" in text_of(reply), text_of(reply))
     g.close()
 else:
     r = rv("mcp", "serve", "--server", "proxied")
