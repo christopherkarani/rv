@@ -7,8 +7,8 @@ public enum MCPRedaction {
     public static let mask = "<redacted>"
 
     static let secretWords: Set<String> = [
-        "TOKEN", "KEY", "APIKEY", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "CREDENTIALS",
-        "AUTH", "AUTHORIZATION", "BEARER", "PAT", "COOKIE",
+        "TOKEN", "KEY", "APIKEY", "SECRET", "PASSWORD", "PASSWD", "PASS", "PWD", "PASSPHRASE",
+        "CREDENTIAL", "CREDENTIALS", "AUTH", "AUTHORIZATION", "BEARER", "PAT", "COOKIE", "DSN", "WEBHOOK",
     ]
 
     static let tokenPrefixes = [
@@ -18,9 +18,34 @@ public enum MCPRedaction {
     ]
 
     /// Env var, header or flag names that usually carry a credential.
+    /// Words split on non-alphanumerics and camelCase humps, so
+    /// `clientSecret`, `accessToken`, and `oauth2Token` read as their parts.
     public static func isSecretName(_ name: String) -> Bool {
-        let words = name.uppercased().split { $0.isLetter == false && $0.isNumber == false }
-        return words.contains { secretWords.contains(String($0)) }
+        nameWords(name).contains { secretWords.contains($0) }
+    }
+
+    private static func nameWords(_ name: String) -> [String] {
+        let characters = Array(name)
+        var words: [String] = []
+        var current = ""
+        func flush() {
+            if current.isEmpty == false { words.append(current.uppercased()) }
+            current = ""
+        }
+        for index in characters.indices {
+            let character = characters[index]
+            guard character.isLetter || character.isNumber else {
+                flush()
+                continue
+            }
+            if character.isUppercase, let previous = current.last {
+                let nextIsLower = index + 1 < characters.count && characters[index + 1].isLowercase
+                if previous.isLowercase || previous.isNumber || (previous.isUppercase && nextIsLower) { flush() }
+            }
+            current.append(character)
+        }
+        flush()
+        return words
     }
 
     /// `${VAR}`, `$VAR`, `${env:VAR}`, `{env:VAR}`, `${input:id}`: a pointer, not a value.
@@ -37,12 +62,20 @@ public enum MCPRedaction {
     }
 
     public static func looksLikeToken(_ value: String) -> Bool {
+        if tokenShape(value) { return true }
+        // A token spelled in compatibility lookalikes (fullwidth, circled)
+        // reads as itself once folded.
+        let folded = value.precomposedStringWithCompatibilityMapping
+        return folded != value && tokenShape(folded)
+    }
+
+    private static func tokenShape(_ value: String) -> Bool {
         if value.contains("://") || value.hasPrefix("/") || value.hasPrefix("~") || value.hasPrefix(".") { return false }
         if value.contains(" ") { return false }
         if tokenPrefixes.contains(where: { value.hasPrefix($0) && value.count >= $0.count + 8 }) { return true }
         guard value.count >= 24, value.contains("/") == false, value.contains("@") == false else { return false }
         let allowed = value.unicodeScalars.allSatisfy {
-            ($0.isASCII && CharacterSet.alphanumerics.contains($0)) || "-_.=+".unicodeScalars.contains($0)
+            ($0.isASCII && CharacterSet.alphanumerics.contains($0)) || "-_.=+:".unicodeScalars.contains($0)
         }
         let digits = value.filter(\.isNumber).count
         let letters = value.filter(\.isLetter).count
@@ -67,8 +100,16 @@ public enum MCPRedaction {
 
     /// A known prefix such as `ghp_` or `sk-` counts even when `_`, `+`, or `-` hides it.
     /// Zero-width characters are removed first so they cannot split `ghp_`.
+    /// The compatibility-folded spelling is searched too, so a prefix written
+    /// in fullwidth or circled letters (`ｇｈｐ＿…`) still reads as itself.
     private static func containsEmbeddedPrefix(_ text: String) -> Bool {
-        let text = withoutInvisibleBreaks(text)
+        let stripped = withoutInvisibleBreaks(text)
+        if containsPrefixSpelling(stripped) { return true }
+        let folded = stripped.precomposedStringWithCompatibilityMapping
+        return folded != stripped && containsPrefixSpelling(folded)
+    }
+
+    private static func containsPrefixSpelling(_ text: String) -> Bool {
         for prefix in tokenPrefixes {
             var search = text.startIndex
             while let range = text.range(of: prefix, range: search..<text.endIndex) {
@@ -79,25 +120,57 @@ public enum MCPRedaction {
         return false
     }
 
-    /// Strip by scalar. `U+200C`, `U+200D`, and grapheme extenders glue to the neighboring letter,
-    /// so a `Character` filter would keep them. Variation selectors, including U+E0100–U+E01EF, glue
-    /// the same way. C0 controls other than LF and CR, DEL, and C1 controls other than U+0085 are
-    /// removed before a prefix or length check. U+0020 stays, so a space still separates two intact prefixes.
+    /// Strip by scalar, classified by Unicode property rather than by listed
+    /// codepoint: grapheme extenders, default-ignorable scalars, format
+    /// characters (Cf, including bidi controls and tag characters), controls
+    /// other than LF and CR, and whitespace other than U+0020 and U+0085 are
+    /// removed before a prefix or length check. U+0020 stays, so a space
+    /// still separates two intact prefixes.
+    ///
+    /// A scalar whose compatibility fold is whitespace and marks only (a
+    /// spacing mark that folds to space plus a combining mark) is dropped;
+    /// every other scalar keeps its own spelling. Compatibility-lookalike
+    /// prefixes (`ｇｈｐ＿…`) are caught by the folded second pass in the
+    /// prefix searches, not by rewriting text here — rewriting would turn
+    /// an inserted ① into a material digit and split the prefix it hides.
     private static func withoutInvisibleBreaks(_ text: String) -> String {
-        String(String.UnicodeScalarView(text.unicodeScalars.filter { scalar in
-            if scalar.properties.isGraphemeExtend { return false }
-            switch scalar.value {
-            case 0x0000...0x0009, 0x000B...0x000C, 0x000E...0x001F, 0x007F, 0x0080...0x0084, 0x0086...0x009F:
-                return false
-            case 0x00A0, 0x00AD, 0x034F, 0x061C, 0x180B, 0x180C, 0x180D, 0x180E,
-                0x2007, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2028, 0x2029, 0x202F, 0xFEFF:
-                return false
-            case 0x202A...0x202E, 0x2060...0x206F, 0xFE00...0xFE0F, 0xE0100...0xE01EF:
-                return false
-            default:
-                return true
+        var output = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            if invisibleBreak(scalar) { continue }
+            let folded = String(scalar).decomposedStringWithCompatibilityMapping.unicodeScalars
+            if folded.count == 1, folded.first == scalar {
+                output.append(scalar)
+            } else if folded.contains(where: isLetterOrNumber)
+                || folded.allSatisfy({ $0.properties.isWhitespace == false })
+            {
+                output.append(scalar)
             }
-        }))
+        }
+        return String(output)
+    }
+
+    private static func invisibleBreak(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar.properties.isGraphemeExtend { return true }
+        if scalar.properties.isDefaultIgnorableCodePoint { return true }
+        switch scalar.properties.generalCategory {
+        case .format, .unassigned, .privateUse:
+            return true
+        case .control:
+            return scalar.value != 0x0A && scalar.value != 0x0D
+        default:
+            break
+        }
+        return scalar.properties.isWhitespace && scalar.value != 0x20 && scalar.value != 0x85
+    }
+
+    private static func isLetterOrNumber(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.properties.generalCategory {
+        case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter,
+            .decimalNumber, .letterNumber, .otherNumber:
+            return true
+        default:
+            return false
+        }
     }
 
     /// Percent-decode to a fixed point. A dangling `%` does not stop the other
@@ -745,29 +818,16 @@ public enum MCPRedaction {
         return String(String.UnicodeScalarView(scalars))
     }
 
-    /// An ASCII scalar other than a letter, a digit, `-`, or `_` splits `ghp_`, the same way `$` and `#` do.
-    /// U+0020 is whitespace and is not removed from the value. U+2044 and U+2215 are separators, so a
-    /// vulgar fraction or a square sign whose NFKD contains one is dropped. A self-NFKD solidus or slash
-    /// glyph is a separator, including U+2298 and U+2F03, as are the circled operators U+2295–U+229B,
-    /// U+229C–U+22A1, the tacks and turnstiles U+22A2–U+22AF, U+22B0–U+22C4, U+22C8–U+22E9, and
-    /// U+22EE–U+2307, U+230C–U+2328, U+232B–U+233E, U+2343–U+2348, U+234A–U+2426, U+2440–U+2449,
-    /// and U+2460–U+2473, U+24B6–U+2570, and U+FFE8. The Unicode 15 Prepend letters
-    /// U+0D4E, U+111C2–U+111C3, U+1193F, U+11941, U+11A3A, U+11A84–U+11A89, U+11D46,
-    /// and U+11F02 are separators, as is the Unicode 16 Prepend letter U+113D1, so a port URL
-    /// still joins after one of them is glued to `@`.
-    /// U+2574–U+2612 and the halfwidth twins U+FFED and U+FFEE are separators. U+2613 stays listed.
-    /// U+2614 UMBRELLA WITH RAIN DROPS, U+2615 HOT BEVERAGE, U+2616 WHITE SHOGI PIECE, U+2617 BLACK SHOGI PIECE, and U+2618 SHAMROCK are separators. The list does not continue past U+2618.
-    /// U+22C5–U+22C7 stay listed beside them. U+22EA–U+22ED stay unlisted and drop through their fold.
-    /// U+2308, U+2329, and U+232A stay unlisted. U+233F–U+2342 and U+2349 stay listed. U+2427–U+243F stay unlisted. U+244A stays listed. U+2474–U+24B5 stay unlisted and drop through their fold. U+2212, U+22C5, U+2219, U+02D7, and
-    /// U+E002F. A self-NFKD box-drawing diagonal is a separator too: U+2571–U+2573, U+1FBA0–U+1FBAE,
-    /// U+1FBBD–U+1FBBF, the block diagonals U+1FB3C–U+1FB67, and U+292B / U+292C. U+292F and U+2930
-    /// are the diagonal crossings next to those. Saltires are separators too: U+1FBC0, U+2613, U+26DD,
-    /// U+26DE, U+2B59, and U+1F7A8–U+1F7AE. U+2213, U+2214, U+2217, U+2218, U+22C6, U+22C7, and U+27CC sit
-    /// next to those listed operators and are separators as well.
-    /// A default-ignorable scalar such as U+E0001 is a separator too, as is a format scalar
-    /// the property does not mark, including U+FFF9–U+FFFB. U+0020 is not one.
-    /// Non-ASCII punctuation is a separator even when it folds to `-` or `_`. A decomposition that
-    /// contains one of these separators is dropped too, including U+2025 (`..`) and U+2260.
+    /// A scalar splits a token prefix unless it can be part of one. Only
+    /// letters and numbers stay (ASCII letters, digits, `-`, and `_` are the
+    /// prefix alphabet itself); every other scalar — any symbol, mark,
+    /// punctuation, separator, format, control, or unassigned codepoint —
+    /// separates, classified by Unicode general category rather than by
+    /// listed range, so the next dingbat (U+2619 and beyond) separates too.
+    /// The Unicode 15/16 Prepend letters (category Lo) are listed explicitly:
+    /// they glue to the following character, so a port or `@` behind one must
+    /// still join. A compatibility twin (NFKD) of a separator separates too
+    /// (handled in `dropsForPrefixCount`).
     private static func dropsForPrefixCount(_ scalar: Unicode.Scalar) -> Bool {
         if isPrefixSeparator(scalar) { return true }
         let folded = String(scalar).decomposedStringWithCompatibilityMapping
@@ -776,40 +836,37 @@ public enum MCPRedaction {
 
     private static func isPrefixSeparator(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.value {
-        case 0x2044, 0x2215, 0xFF0E,
-            0x2216, 0x29F5, 0x29F6, 0x29F7, 0x29F8, 0x29F9, 0x2AFD, 0x2AFB, 0x1F67C, 0x1F67D,
-            0x2212, 0x2213, 0x2214, 0x22C5, 0x22C6, 0x22C7, 0x2217, 0x2218, 0x2219, 0x02D7, 0xE002F,
-            0x2295...0x22AF, 0x22B0...0x22C4, 0x22C8...0x22E9, 0x22EE...0x2307, 0x230C...0x2328, 0x232B...0x233E, 0x2343...0x2348, 0x234A...0x2426, 0x2440...0x2449, 0x2460...0x2473, 0x24B6...0x2570, 0xFFE8,
-            0x0D4E, 0x111C2, 0x111C3, 0x1193F, 0x11941, 0x11A3A, 0x11A84...0x11A89, 0x11D46, 0x11F02, 0x113D1,
-            0x29B8, 0x233F, 0x2340, 0x2341, 0x2342, 0x2349, 0x244A,
-            0x27C8, 0x27C9, 0x27CB, 0x27CC, 0x27CD, 0x292B, 0x292C, 0x292F, 0x2930, 0x29C4, 0x29C5, 0x2F03,
-            0x2571...0x2573, 0x2574...0x2612, 0xFFED, 0xFFEE, 0x2613, 0x2614, 0x2615, 0x2616, 0x2617, 0x2618, 0x26DD, 0x26DE, 0x2B59, 0x1F7A8...0x1F7AE, 0x1FBA0...0x1FBAE,
-            0x1FBBD...0x1FBC0, 0x1FB3C...0x1FB67:
+        case 0x0D4E, 0x111C2, 0x111C3, 0x1193F, 0x11941, 0x11A3A, 0x11A84...0x11A89, 0x11D46, 0x11F02, 0x113D1:
             return true
         default:
             break
         }
         if scalar.properties.isDefaultIgnorableCodePoint { return true }
-        // U+FFF9–U+FFFB are format and are not marked default-ignorable here.
-        if scalar.properties.generalCategory == .format { return true }
-        if scalar.isASCII == false, isPunctuation(scalar) { return true }
-        guard scalar.isASCII else { return false }
-        switch scalar.value {
-        case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x2D, 0x5F:
-            return false
-        default:
-            return true
+        if scalar.isASCII {
+            switch scalar.value {
+            case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x2D, 0x5F:
+                return false
+            default:
+                return true
+            }
         }
-    }
-
-    /// ASCII `-` and `_` are not punctuation here. `sk-` and `ghp_` still match.
-    private static func isPunctuation(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.properties.generalCategory {
-        case .connectorPunctuation, .dashPunctuation, .openPunctuation, .closePunctuation,
-            .initialPunctuation, .finalPunctuation, .otherPunctuation:
+        case .letterNumber, .otherNumber:
+            // Enclosed and styled numbers (circled, negative-circled, roman,
+            // fractions) are never the material digits of a prefix. Foundation
+            // does not fold every one of them — ⓫ stays ⓫ — so they separate
+            // by category instead of by fold.
             return true
+        case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter,
+            .decimalNumber:
+            // Genuine letters and decimal digits stay. Compatibility
+            // lookalikes whose fold is plain ASCII — fullwidth forms,
+            // superscripts — separate, so inserting one inside `ghp_` joins
+            // the prefix instead of splitting it.
+            let folded = String(scalar).decomposedStringWithCompatibilityMapping
+            return folded.unicodeScalars.allSatisfy(\.isASCII)
         default:
-            return false
+            return true
         }
     }
 
@@ -820,6 +877,13 @@ public enum MCPRedaction {
     /// `g.hp_`, `g/hp_`, and `g hp_` without removing U+0020 from the value itself. A space
     /// between two intact prefixes still counts as two.
     private static func secretPrefixCount(_ text: String) -> Int {
+        // The folded spelling counts too: a prefix in fullwidth or circled
+        // letters is still a prefix for the second-secret check.
+        let folded = text.precomposedStringWithCompatibilityMapping
+        return max(prefixCount(text), folded == text ? 0 : prefixCount(folded))
+    }
+
+    private static func prefixCount(_ text: String) -> Int {
         let text = textForPrefixCount(text)
         var count = 0
         var index = text.startIndex
@@ -920,6 +984,15 @@ public enum MCPRedaction {
         character == "/" || character == "?" || character == "#" || character == "&" || character == "\\" || character.isWhitespace
     }
 
+    /// A value `rv mcp list` must not print: a refused-secret argument, a
+    /// path or URL carrying one, or userinfo in any spelling.
+    public static func valueCarriesSecret(_ value: String) -> Bool {
+        if argumentCarriesRefusedSecret(value) || pathCarriesSecret(value) || containsUserinfoSpelling(value) {
+            return true
+        }
+        return value.contains("://") && url(value).leaked
+    }
+
     /// Args with credentials masked, plus what was masked (flag names or positions).
     public static func args(_ args: [String]) -> (shown: [String], credentials: [String]) {
         var shown: [String] = []
@@ -938,7 +1011,7 @@ public enum MCPRedaction {
                 if let equals = body.firstIndex(of: "=") {
                     let flag = String(arg[arg.startIndex..<equals])
                     let value = String(body[body.index(after: equals)...])
-                    if isSecretName(String(body[..<equals])) || looksLikeToken(value) {
+                    if isSecretName(String(body[..<equals])) || looksLikeToken(value) || valueCarriesSecret(value) {
                         shown.append(flag + "=" + mask)
                         credentials.append(flag)
                         continue
@@ -951,7 +1024,7 @@ public enum MCPRedaction {
                 let (display, leaked) = url(arg)
                 shown.append(display)
                 if leaked { credentials.append("argument \(index + 1) URL") }
-            } else if looksLikeToken(arg) {
+            } else if looksLikeToken(arg) || valueCarriesSecret(arg) {
                 shown.append(mask)
                 credentials.append("argument \(index + 1)")
             } else {
@@ -983,6 +1056,8 @@ public enum MCPRedaction {
     }
 
     /// Names of env vars or headers that hold a literal credential.
+    /// Deliberately name/token-based only: a URL with userinfo stays a
+    /// literal the trust review shows for signing, not a silent secret.
     public static func literalCredentials(_ values: [String: String]) -> [String] {
         values.compactMap { name, value in
             guard value.isEmpty == false, isReference(value) == false else { return nil }

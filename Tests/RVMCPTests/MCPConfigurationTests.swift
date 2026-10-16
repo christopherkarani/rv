@@ -253,16 +253,17 @@ struct MCPConfigurationTests {
 
     @Test func largeIntegersCompareExactly() throws {
         let big = try JSONValue.parse(Data("9007199254740993".utf8))
-        #expect(big.domainValue == .string("9007199254740993"))
+        #expect(big.domainValue == .string("\u{0}" + "9007199254740993"))
+        #expect(big.domainValue != (try JSONValue.parse(Data("\"9007199254740993\"".utf8))).domainValue)
         #expect(try JSONValue.parse(Data("12.5".utf8)).domainValue == .number(12.5))
         #expect(try JSONValue.parse(Data(#"{"a":[true,null]}"#.utf8)).domainValue
             == .object(["a": .array([.bool(true), .null])]))
         for spelling in ["9007199254740993.0", "9007199254740993e0", "9.007199254740993e15"] {
             let value = try JSONValue.parse(Data(spelling.utf8)).domainValue
-            #expect(value == .string("9007199254740993"))
+            #expect(value == .string("\u{0}" + "9007199254740993"))
         }
-        #expect(try JSONValue.parse(Data("4611686018427387905.0".utf8)).domainValue == .string("4611686018427387905"))
-        #expect(try JSONValue.parse(Data("-9007199254740993.0".utf8)).domainValue == .string("-9007199254740993"))
+        #expect(try JSONValue.parse(Data("4611686018427387905.0".utf8)).domainValue == .string("\u{0}" + "4611686018427387905"))
+        #expect(try JSONValue.parse(Data("-9007199254740993.0".utf8)).domainValue == .string("\u{0}" + "-9007199254740993"))
         #expect(try JSONValue.parse(Data("2.0".utf8)).domainValue == .number(2))
         #expect(try JSONValue.parse(Data("-12.5".utf8)).domainValue == .number(-12.5))
         for spelling in ["12.50", "1.25e1", "125e-1"] {
@@ -278,7 +279,7 @@ struct MCPConfigurationTests {
             "2251799813685248.4", "2251799813685248.6", "4503599627370495.4", "4503599627370495.6",
             "12.500000000000001",
         ] {
-            #expect(try JSONValue.parse(Data(spelling.utf8)).domainValue == .string(spelling))
+            #expect(try JSONValue.parse(Data(spelling.utf8)).domainValue == .string("\u{0}" + spelling))
         }
     }
 

@@ -483,7 +483,14 @@ public struct MCPInventoryRow: Sendable, Equatable {
         switch entry.transport {
         case .stdio(let command, let args):
             let masked = MCPRedaction.args(args)
-            display = ([command] + masked.shown).joined(separator: " ")
+            let shownCommand: String
+            if MCPRedaction.looksLikeToken(command) || MCPRedaction.valueCarriesSecret(command) {
+                shownCommand = MCPRedaction.mask
+                credentials.append("command")
+            } else {
+                shownCommand = command
+            }
+            display = ([shownCommand] + masked.shown).joined(separator: " ")
             credentials += masked.credentials
         case .remote(let url):
             let shown = MCPRedaction.url(url)
