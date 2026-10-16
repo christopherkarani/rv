@@ -9,7 +9,7 @@ code `rv mcp trust` shows, and drives `rv mcp serve` as an MCP client would.
 On macOS rv keeps its approvals key in the login Keychain, so the script
 refuses there unless RV_LIVE_KEYCHAIN=1. Exit 0 when every step passes.
 """
-import json, os, pty, re, select, shutil, subprocess, sys, tempfile, time
+import atexit, json, os, pty, re, select, shutil, subprocess, sys, tempfile, time
 
 if len(sys.argv) != 2:
     sys.exit(__doc__)
@@ -21,6 +21,34 @@ HOME = f"{ROOT}/home"
 CONFIG = f"{HOME}/.config/rv"
 os.makedirs(CONFIG, mode=0o700, exist_ok=True)
 ENV = {"HOME": HOME, "PATH": "/usr/bin:/bin", "USER": os.environ.get("USER", "ubuntu"), "LANG": "C.UTF-8"}
+
+
+def ephemeral_keychain():
+    """macOS file-keychain lookup honors $HOME, so a throwaway HOME has no
+    login keychain and SecItemAdd fails (or prompts). Create one inside
+    the throwaway HOME and restore the user's search list verbatim."""
+    def listed():
+        out = subprocess.run(["security", "list-keychains", "-d", "user"],
+                             capture_output=True, text=True).stdout
+        return re.findall(r'"([^"]+)"', out)
+
+    original = listed()
+    keychains = f"{HOME}/Library/Keychains"
+    os.makedirs(keychains, exist_ok=True)
+    created = f"{keychains}/login.keychain-db"
+    subprocess.run(["security", "create-keychain", "-p", "", created], check=True, capture_output=True)
+
+    def restore():
+        subprocess.run(["security", "delete-keychain", created], capture_output=True)
+        if original:
+            subprocess.run(["security", "list-keychains", "-d", "user", "-s", *original],
+                           capture_output=True)
+
+    atexit.register(restore)
+
+
+if sys.platform == "darwin":
+    ephemeral_keychain()
 FIXTURE = f"{ROOT}/fixture.py"
 STEPS = []
 
