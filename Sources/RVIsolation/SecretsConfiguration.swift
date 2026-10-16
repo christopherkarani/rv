@@ -17,6 +17,14 @@ public enum SecretSource: Sendable, Equatable {
     case vault(path: String, field: String, address: URL?)
     /// AWS Secrets Manager via the AWS CLI. `field` picks a key from a JSON secret.
     case awsSecretsManager(secretID: String, field: String?, region: String?)
+    /// Infisical via `infisical secrets get`. `environment` is the Infisical env slug.
+    case infisical(name: String, project: String?, environment: String?, path: String?)
+    /// Bitwarden Secrets Manager via `bws secret get`. `id` is the secret UUID.
+    case bitwarden(id: String)
+    /// Google Secret Manager via `gcloud secrets versions access`.
+    case gcp(secret: String, project: String?, version: String)
+    /// Azure Key Vault via `az keyvault secret show`.
+    case azure(vault: String, name: String, version: String?)
 
     public var kind: String {
         switch self {
@@ -25,6 +33,10 @@ public enum SecretSource: Sendable, Equatable {
         case .onePassword: "onePassword"
         case .vault: "vault"
         case .awsSecretsManager: "awsSecretsManager"
+        case .infisical: "infisical"
+        case .bitwarden: "bitwarden"
+        case .gcp: "gcp"
+        case .azure: "azure"
         }
     }
 }
@@ -58,19 +70,23 @@ public struct SecretDefinition: Sendable, Equatable {
     public var agents: [String]?
     public var source: SecretSource
     public var delivery: SecretDelivery
+    /// Varlock `@type`, when the secret was imported from a schema. Not a value.
+    public var type: String?
 
     public init(
         name: String,
         description: String? = nil,
         agents: [String]? = nil,
         source: SecretSource,
-        delivery: SecretDelivery
+        delivery: SecretDelivery,
+        type: String? = nil
     ) {
         self.name = name
         self.description = description
         self.agents = agents
         self.source = source
         self.delivery = delivery
+        self.type = type
     }
 
     func stages(forAgent agent: String?) -> Bool {
@@ -205,7 +221,7 @@ enum SecretsDecoding {
     static func secret(_ value: Any, index: Int) throws -> SecretDefinition {
         let place = "secrets[\(index)]"
         guard let object = value as? [String: Any] else { throw Failure("\(place) must be an object") }
-        try onlyKeys(object, ["name", "description", "agents", "source", "delivery"], at: place)
+        try onlyKeys(object, ["name", "description", "agents", "source", "delivery", "type"], at: place)
         guard let name = object["name"] as? String, variable(name), reservedVariables.contains(name) == false else {
             throw Failure("\(place).name must be an environment variable name")
         }
@@ -223,10 +239,17 @@ enum SecretsDecoding {
             else { throw Failure("\(name).agents must be up to 8 distinct agent tags") }
             agents = list.isEmpty ? nil : list
         }
+        var typeName: String?
+        if let raw = object["type"] {
+            guard let text = raw as? String, label(text, max: 128) else {
+                throw Failure("\(name).type must be short text")
+            }
+            typeName = text
+        }
         let source = try self.source(object["source"], secret: name)
         let delivery = try self.delivery(object["delivery"], secret: name)
         return SecretDefinition(
-            name: name, description: description, agents: agents, source: source, delivery: delivery)
+            name: name, description: description, agents: agents, source: source, delivery: delivery, type: typeName)
     }
 
     static func single(_ value: Any?, secret: String, field: String) throws -> (String, [String: Any]) {
@@ -287,6 +310,37 @@ enum SecretsDecoding {
                 region = text
             }
             return .awsSecretsManager(secretID: secretID, field: field, region: region)
+        case "infisical":
+            try onlyKeys(fields, ["name", "project", "environment", "path"], at: place)
+            guard let secretName = fields["name"] as? String, cliToken(secretName) else {
+                throw Failure("\(place).name is required")
+            }
+            let project = try optionalToken(fields["project"], "\(place).project")
+            let environment = try optionalToken(fields["environment"], "\(place).environment")
+            let path = try optionalToken(fields["path"], "\(place).path")
+            return .infisical(name: secretName, project: project, environment: environment, path: path)
+        case "bitwarden":
+            try onlyKeys(fields, ["id"], at: place)
+            guard let id = fields["id"] as? String, uuid(id) else {
+                throw Failure("\(place).id must be a UUID")
+            }
+            return .bitwarden(id: id.lowercased())
+        case "gcp":
+            try onlyKeys(fields, ["secret", "project", "version"], at: place)
+            guard let secretName = fields["secret"] as? String, cliToken(secretName) else {
+                throw Failure("\(place).secret is required")
+            }
+            let project = try optionalToken(fields["project"], "\(place).project")
+            let version = (fields["version"] as? String) ?? "latest"
+            guard cliToken(version) else { throw Failure("\(place).version is invalid") }
+            return .gcp(secret: secretName, project: project, version: version)
+        case "azure":
+            try onlyKeys(fields, ["vault", "name", "version"], at: place)
+            guard let vault = fields["vault"] as? String, cliToken(vault),
+                let secretName = fields["name"] as? String, cliToken(secretName)
+            else { throw Failure("\(place) needs vault and name") }
+            let version = try optionalToken(fields["version"], "\(place).version")
+            return .azure(vault: vault, name: secretName, version: version)
         default:
             throw Failure("\(secret).source kind \(DisplayedText.field(kind)) is not supported")
         }
@@ -324,6 +378,28 @@ enum SecretsDecoding {
         return value.utf8.allSatisfy {
             ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122) || ($0 >= 48 && $0 <= 57) || $0 == 95
         }
+    }
+
+    /// A CLI argument: no leading dash, no whitespace, no NUL.
+    static func cliToken(_ value: String) -> Bool {
+        value.isEmpty == false && value.utf8.count <= 256 && value.hasPrefix("-") == false
+            && value.unicodeScalars.allSatisfy { scalar in
+                scalar.isASCII && scalar.value > 32 && scalar != "\"" && scalar != "'" && scalar != "\\"
+            }
+    }
+
+    static func optionalToken(_ value: Any?, _ place: String) throws -> String? {
+        guard let value else { return nil }
+        guard let text = value as? String, cliToken(text) else { throw Failure("\(place) is invalid") }
+        return text
+    }
+
+    static func uuid(_ value: String) -> Bool {
+        let parts = value.split(separator: "-", omittingEmptySubsequences: false).map(String.init)
+        let lengths = [8, 4, 4, 4, 12]
+        guard parts.count == 5, zip(parts, lengths).allSatisfy({ $0.count == $1 }) else { return false }
+        let hex = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        return parts.joined().unicodeScalars.allSatisfy { hex.contains($0) }
     }
 
     static func label(_ value: String, max: Int) -> Bool {

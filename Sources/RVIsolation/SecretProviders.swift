@@ -88,6 +88,15 @@ public struct SecretResolver: Sendable {
             case .awsSecretsManager(let secretID, let field, let region):
                 return SecretCommandProviders.aws(
                     secretID: secretID, field: field, region: region, environment: environment)
+            case .infisical(let name, let project, let environmentName, let path):
+                return SecretCommandProviders.infisical(
+                    name: name, project: project, environmentName: environmentName, path: path, environment: environment)
+            case .bitwarden(let id):
+                return SecretCommandProviders.bitwarden(id: id, environment: environment)
+            case .gcp(let secret, let project, let version):
+                return SecretCommandProviders.gcp(secret: secret, project: project, version: version, environment: environment)
+            case .azure(let vault, let name, let version):
+                return SecretCommandProviders.azure(vault: vault, name: name, version: version, environment: environment)
             }
         }
     }
@@ -144,6 +153,76 @@ enum SecretCommandProviders {
             let picked = object[field] as? String
         else { return .failure(.notFound("field \(field) in \(secretID)")) }
         return SecretResolver.value(Array(picked.utf8), from: "\(secretID).\(field)")
+    }
+
+    static func infisical(
+        name: String, project: String?, environmentName: String?, path: String?, environment: [String: String]
+    ) -> Result<SecretValue, SecretResolutionError> {
+        guard let binary = executable("infisical", environment: environment) else {
+            return .failure(.providerUnavailable("Infisical CLI `infisical` is not installed"))
+        }
+        var arguments = ["secrets", "get", name, "--plain", "--silent"]
+        if let project { arguments += ["--projectId", project] }
+        if let environmentName { arguments += ["--env", environmentName] }
+        if let path { arguments += ["--path", path] }
+        return command(binary, arguments, environment: environment, label: "infisical \(name)") { $0 }
+    }
+
+    static func bitwarden(id: String, environment: [String: String]) -> Result<SecretValue, SecretResolutionError> {
+        guard let binary = executable("bws", environment: environment) else {
+            return .failure(.providerUnavailable("Bitwarden Secrets Manager CLI `bws` is not installed"))
+        }
+        return command(binary, ["secret", "get", id], environment: environment, label: "bws \(id)") { stdout in
+            guard let object = try? JSONSerialization.jsonObject(with: Data(stdout)) as? [String: Any],
+                let value = object["value"] as? String
+            else { return nil }
+            return Array(value.utf8)
+        }
+    }
+
+    static func gcp(
+        secret: String, project: String?, version: String, environment: [String: String]
+    ) -> Result<SecretValue, SecretResolutionError> {
+        guard let binary = executable("gcloud", environment: environment) else {
+            return .failure(.providerUnavailable("Google Cloud CLI `gcloud` is not installed"))
+        }
+        var arguments = ["secrets", "versions", "access", version, "--secret", secret]
+        if let project { arguments += ["--project", project] }
+        return command(binary, arguments, environment: environment, label: "gcloud \(secret)") { $0 }
+    }
+
+    static func azure(
+        vault: String, name: String, version: String?, environment: [String: String]
+    ) -> Result<SecretValue, SecretResolutionError> {
+        guard let binary = executable("az", environment: environment) else {
+            return .failure(.providerUnavailable("Azure CLI `az` is not installed"))
+        }
+        var arguments = [
+            "keyvault", "secret", "show", "--vault-name", vault, "--name", name, "--query", "value", "-o", "tsv",
+        ]
+        if let version { arguments += ["--version", version] }
+        return command(binary, arguments, environment: environment, label: "az \(vault)/\(name)") { $0 }
+    }
+
+    /// Runs a provider CLI. `extract` returns the secret bytes, or nil when the
+    /// output is the wrong shape. The raw output is never put in an error.
+    static func command(
+        _ executable: String, _ arguments: [String], environment: [String: String], label: String,
+        extract: ([UInt8]) -> [UInt8]?
+    ) -> Result<SecretValue, SecretResolutionError> {
+        guard let run = BoundedProcess.run(executable, arguments, environment: environment) else {
+            return .failure(.timedOut("\(label) did not finish within 30 seconds"))
+        }
+        guard run.status == 0 else {
+            return .failure(.failed("\(label) exited \(run.status)"))
+        }
+        guard run.stdout.count < 1_048_576 else {
+            return .failure(.invalidValue("\(label) returned 1 MiB or more"))
+        }
+        guard let bytes = extract(run.stdout) else {
+            return .failure(.failed("\(label) did not return a usable value"))
+        }
+        return SecretResolver.value(bytes, from: label)
     }
 
     static func executable(_ name: String, environment: [String: String]) -> String? {
@@ -281,19 +360,40 @@ enum BoundedProcess {
         process.standardError = err
         let stdout = Collector()
         let stderr = Collector()
-        out.fileHandleForReading.readabilityHandler = { stdout.append($0.availableData) }
-        err.fileHandleForReading.readabilityHandler = { stderr.append($0.availableData) }
+        // terminationHandler, not a GCD block: the global pool can starve
+        // for longer than the deadline under full-suite parallel load, and
+        // a finished child then looks like a timeout.
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         do { try process.run() } catch { return nil }
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning, Date() < deadline { usleep(10_000) }
-        out.fileHandleForReading.readabilityHandler = nil
-        err.fileHandleForReading.readabilityHandler = nil
-        if process.isRunning {
+        // Drain both pipes on dedicated threads while waiting: polling
+        // isRunning plus a post-exit readDataToEndOfFile never observes the
+        // exit under swift-corelibs, so a finished child looked like a
+        // 30-second timeout on Linux.
+        let drained = DispatchGroup()
+        for (handle, collector) in [(out.fileHandleForReading, stdout), (err.fileHandleForReading, stderr)] {
+            drained.enter()
+            Thread.detachNewThread {
+                while true {
+                    let chunk = handle.availableData
+                    if chunk.isEmpty { break }
+                    collector.append(chunk)
+                }
+                drained.leave()
+            }
+        }
+        guard exited.wait(timeout: .now() + timeout) == .success else {
             process.terminate()
+            if exited.wait(timeout: .now() + 2) != .success {
+                kill(process.processIdentifier, SIGKILL)
+                _ = exited.wait(timeout: .now() + 2)
+            }
+            // Bounded: a grandchild can hold the pipes open past the kill.
+            _ = drained.wait(timeout: .now() + 2)
             return nil
         }
-        stdout.append(out.fileHandleForReading.readDataToEndOfFile())
-        stderr.append(err.fileHandleForReading.readDataToEndOfFile())
+        // Bounded for the same reason: exit does not mean the pipes EOF.
+        _ = drained.wait(timeout: .now() + 2)
         return Outcome(status: process.terminationStatus, stdout: stdout.bytes, stderr: stderr.bytes)
     }
 

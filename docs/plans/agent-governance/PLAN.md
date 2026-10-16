@@ -24,8 +24,8 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 4 Enterprise client features | `governance/phase-4-enterprise` | [#415](https://github.com/christopherkarani/rv/pull/415) | merged |
 | 5 Launch readiness | human-owned | n/a | not started |
 | 6 Security blockers | `governance/phase-6-hardening` (from `main`) | [#417](https://github.com/christopherkarani/rv/pull/417) | merged |
-| 7 Enterprise hardening | `governance/phase-7-enterprise-hardening` (from phase 6) | [#418](https://github.com/christopherkarani/rv/pull/418) (draft) | in progress |
-| 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | _not opened yet_ | not started |
+| 7 Enterprise hardening | `governance/phase-7-enterprise-hardening` (from phase 6) | [#418](https://github.com/christopherkarani/rv/pull/418) | merged |
+| 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | [#419](https://github.com/christopherkarani/rv/pull/419) | in progress |
 
 **Next action:** Phase 7 on `governance/phase-7-enterprise-hardening` (from
 phase 6). 7.2, 7.5, 7.6, 7.3, 7.1 and 7.4 are done. 7.7 stays blocked on

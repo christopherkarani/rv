@@ -418,6 +418,9 @@ enum HelpCatalog {
                 HelpRow(name: "rv secrets set <name> [--gateway <url> --base-url-env <var> | --environment]"),
                 HelpRow(name: "rv secrets remove <name>"),
                 HelpRow(name: "rv secrets scan [<dir>] [--json]"),
+                HelpRow(name: "rv secrets describe [--json]"),
+                HelpRow(name: "rv secrets import --varlock <.env.schema> [--dry-run]"),
+                HelpRow(name: "rv secrets hook install | uninstall"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--gateway", description: "https upstream the real value may be sent to"),
@@ -432,7 +435,13 @@ enum HelpCatalog {
                     name: "gateway",
                     description: "Agents hold a per-launch placeholder; rv swaps in the value toward the upstream only"
                 ),
-                HelpRow(name: "sources", description: "keychain, hostEnvironment, onePassword, vault, awsSecretsManager"),
+                HelpRow(
+                    name: "sources",
+                    description: "keychain, hostEnvironment, onePassword, vault, aws, infisical, bitwarden, gcp, azure"
+                ),
+                HelpRow(name: "describe", description: "Names, descriptions, types, and delivery for agents; never a value"),
+                HelpRow(name: "varlock", description: "import --varlock reads @sensitive, @type, and provider refs; literals are skipped"),
+                HelpRow(name: "hook", description: "pre-commit scans staged files and prints file:line:name; an existing hook is kept"),
                 HelpRow(name: "audit", description: "rv audit --kind secret.use shows each use with a fingerprint"),
             ]),
         ],

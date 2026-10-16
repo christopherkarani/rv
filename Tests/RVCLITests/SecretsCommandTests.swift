@@ -241,6 +241,143 @@ struct SecretsCommandTests {
         #expect(text == ".env:2  GH_TOKEN\n")
     }
 
+    @Test func describeAndVarlockImportNeverCarryAValue() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let schema = fixture.directory.appendingPathComponent("app.env.schema")
+        let literal = "sk-live-abcdefghijklmnopqrstuvwxyz"
+        try Data("""
+            # @defaultSensitive=false
+            # ---
+            # OpenAI
+            # @sensitive @type=string(startsWith=sk-)
+            OPENAI_API_KEY=op(op://Eng/OpenAI/credential)
+            # @sensitive
+            LITERAL=\(literal)
+            PORT=3000
+            """.utf8).write(to: schema)
+        let imported = try SecretsRun.importVarlock(path: schema, dryRun: true, environment: fixture.environment()).get()
+        #expect(imported.contains("import OPENAI_API_KEY: onePassword (type string(startsWith=sk-))"))
+        #expect(imported.contains("dry run: nothing written"))
+        #expect(imported.contains(literal) == false)
+        #expect(FileManager.default.fileExists(atPath: fixture.secretsFile.path) == false)
+        _ = try SecretsRun.importVarlock(path: schema, dryRun: false, environment: fixture.environment()).get()
+        let stored = try String(contentsOf: fixture.secretsFile, encoding: .utf8)
+        #expect(stored.contains(literal) == false)
+        #expect(stored.contains("op://Eng/OpenAI/credential"))
+        let again = try SecretsRun.importVarlock(path: schema, dryRun: false, environment: fixture.environment()).get()
+        #expect(again.contains("already defines it"))
+        let report = SecretsRun.describe(try SecretsRun.configuration(fixture.environment()).get())
+        #expect(report.secrets == [
+            SecretsRun.DescribeRow(
+                name: "OPENAI_API_KEY", description: "OpenAI", type: "string(startsWith=sk-)",
+                delivery: "environment", source: "onePassword"),
+        ])
+        let text = SecretsRun.describeText(report)
+        #expect(text.contains("op://") == false)
+        #expect(text.contains("OPENAI_API_KEY  onePassword  environment"))
+        let json = SecretsRun.json(report)
+        #expect(json.contains("\"source\" : \"onePassword\"") || json.contains("\"source\": \"onePassword\""))
+    }
+
+    @Test func hookInstallIsIdempotentAndScansTheIndex() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        func run(_ args: [String]) throws {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = args
+            try process.run()
+            process.waitUntilExit()
+            #expect(process.terminationStatus == 0)
+        }
+        try run(["-C", work.path, "init", "-q"])
+        let foreign = work.appendingPathComponent(".git/hooks/pre-commit")
+        try Data("#!/bin/sh\necho foreign\n".utf8).write(to: foreign)
+        chmod(foreign.path, 0o755)
+        let installed = try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get()
+        #expect(installed.contains("installed"))
+        let hook = try String(contentsOf: foreign, encoding: .utf8)
+        #expect(hook.contains("# rv-secrets-hook"))
+        #expect(hook.contains("'/usr/bin/true'"))
+        let saved = try String(contentsOf: work.appendingPathComponent(".git/hooks/pre-commit.rv-saved"), encoding: .utf8)
+        #expect(saved == "#!/bin/sh\necho foreign\n")
+        _ = try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get()
+        #expect(try String(contentsOf: work.appendingPathComponent(".git/hooks/pre-commit.rv-saved"), encoding: .utf8) == saved)
+
+        let value = "hook-secret-value-xyz"
+        var configuration = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "GH_TOKEN", source: .hostEnvironment(variable: "GH_TOKEN"), delivery: .environment),
+        ])
+        _ = try configuration.write(configDirectory: fixture.directory).get()
+        let environment = fixture.environment(host: ["GH_TOKEN": value])
+        try Data("clean\n".utf8).write(to: work.appendingPathComponent("clean.txt"))
+        try Data("\(value)\n".utf8).write(to: work.appendingPathComponent("leak.txt"))
+        try run(["-C", work.path, "add", "clean.txt"])
+        let clean = try SecretsRun.hookRun(workTree: work, environment: environment).get()
+        #expect(clean.failed == false)
+        #expect(clean.text.contains(value) == false)
+        try run(["-C", work.path, "add", "leak.txt"])
+        let leaked = try SecretsRun.hookRun(workTree: work, environment: environment).get()
+        #expect(leaked.failed)
+        #expect(leaked.text.contains("leak.txt:1:GH_TOKEN"))
+        #expect(leaked.text.contains(value) == false)
+
+        let removed = try SecretGitHook.uninstall(workTree: work).get()
+        #expect(removed.contains("restored"))
+        #expect(try String(contentsOf: foreign, encoding: .utf8) == saved)
+    }
+
+    private func git(_ work: URL, _ args: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-C", work.path] + args
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+    }
+
+    @Test func hookInstallHonorsHooksPathAndLinkedWorktrees() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-hooks-path")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let custom = fixture.directory.appendingPathComponent("custom-hooks")
+        try FileManager.default.createDirectory(at: custom, withIntermediateDirectories: true)
+        try git(work, ["config", "core.hooksPath", custom.path])
+        _ = try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get()
+        #expect(FileManager.default.fileExists(atPath: custom.appendingPathComponent("pre-commit").path))
+        #expect(FileManager.default.fileExists(atPath: work.appendingPathComponent(".git/hooks/pre-commit").path) == false)
+
+        let main = fixture.directory.appendingPathComponent("repo-worktree")
+        try FileManager.default.createDirectory(at: main, withIntermediateDirectories: true)
+        try git(main, ["init", "-q"])
+        try git(main, ["-c", "user.email=a@b.c", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"])
+        let linked = fixture.directory.appendingPathComponent("linked")
+        try git(main, ["worktree", "add", "-q", linked.path])
+        _ = try SecretGitHook.install(workTree: linked, rvPath: "/usr/bin/true").get()
+        #expect(FileManager.default.fileExists(atPath: main.appendingPathComponent(".git/hooks/pre-commit").path))
+    }
+
+    @Test func hookMentioningTheMarkerIsBackedUpNotOverwritten() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-marker")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let foreign = work.appendingPathComponent(".git/hooks/pre-commit")
+        let original = "#!/bin/sh\n# rv-secrets-hook mentioned in a comment\necho foreign\n"
+        try Data(original.utf8).write(to: foreign)
+        chmod(foreign.path, 0o755)
+        _ = try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get()
+        #expect(try String(contentsOf: work.appendingPathComponent(".git/hooks/pre-commit.rv-saved"), encoding: .utf8) == original)
+        _ = try SecretGitHook.uninstall(workTree: work).get()
+        #expect(try String(contentsOf: foreign, encoding: .utf8) == original)
+    }
+
     @Test func secretsRobotJSONEscapesLineAndBidiScalars() throws {
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let row = SecretsRun.CheckRow(
