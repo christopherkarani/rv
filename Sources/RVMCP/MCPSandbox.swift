@@ -217,8 +217,11 @@ public enum MCPSandbox {
             return "\(MCPDisplayedText.field(scratch)) resolves to \(MCPDisplayedText.field(resolved)), which was not the path reviewed"
         }
         if resolveExisting(scratch) == nil {
+            // Not created yet: creation is pinned to the held ancestors, so
+            // an honest missing path is fine. One that resolves through a
+            // symlinked ancestor to a different tree is not the reviewed path.
             let resolved = realPath(scratch)
-            if sameReviewedDirectory(scratch, resolved) {
+            if sameReviewedDirectory(scratch, resolved) == false {
                 return "\(MCPDisplayedText.field(scratch)) resolves to \(MCPDisplayedText.field(resolved)), which was not the path reviewed"
             }
         }
@@ -277,7 +280,15 @@ public enum MCPSandbox {
     /// to a different tree is not the same directory.
     static func sameReviewedDirectory(_ reviewed: String, _ resolved: String) -> Bool {
         if reviewed == resolved { return true }
-        return tmpAlias(reviewed) == tmpAlias(resolved)
+        return tmpAlias(directorySpelling(reviewed)) == tmpAlias(directorySpelling(resolved))
+    }
+
+    /// Directory spellings compared without a trailing slash:
+    /// `NSTemporaryDirectory()` keeps one and `realpath` drops it.
+    private static func directorySpelling(_ path: String) -> String {
+        var spelling = path
+        while spelling.count > 1, spelling.hasSuffix("/") { spelling.removeLast() }
+        return spelling
     }
 
     static func tmpAlias(_ path: String) -> String {

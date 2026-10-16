@@ -481,17 +481,18 @@ public final class EgressProxy: @unchecked Sendable {
                 deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
                 return
             }
-            // A credentialed proxy binds each external TLS tunnel to the
-            // origin it dials: a CONNECT to an allowed host on the TLS
-            // port must carry a ClientHello whose SNI is that host, so a
-            // co-hosted tenant on the same address is not reachable
-            // through it. The 200 goes first (clients wait for it before
-            // starting TLS), then the first record is read and checked
-            // before dialing. Port-80 tunnels stay plaintext-shaped, as
-            // in open mode.
+            // A credentialed allowlist proxy (the per-server MCP sandbox
+            // shape) binds each external TLS tunnel to the origin it
+            // dials: a CONNECT to an allowed host on the TLS port must
+            // carry a ClientHello whose SNI is that host, so a co-hosted
+            // tenant on the same address is not reachable through it. The
+            // 200 goes first (clients wait for it before starting TLS),
+            // then the first record is read and checked before dialing.
+            // Generic public-HTTPS grants keep dial-first semantics, and
+            // port-80 tunnels stay plaintext-shaped, as in open mode.
             var hello = leftover
             var established = false
-            if grants != nil, external, target.port == EgressHostPolicy.httpsPort {
+            if grants != nil, external, target.port == EgressHostPolicy.httpsPort, effective.mode == .allowlist {
                 guard EgressProxy.writeAll(client, bytes: Array("HTTP/1.1 200 Connection established\r\n\r\n".utf8)) else {
                     close(client)
                     return

@@ -306,9 +306,14 @@ enum MCPRun {
     }
 
     /// A review that still contains a raw control or bidi mark would hide text on a terminal.
+    /// True when the rendered review still carries a raw scalar the display
+    /// layer escapes (controls, separators, format/bidi) — such a scalar
+    /// could redraw or reorder what the person approved. This is the
+    /// renderer's own predicate: scalars it deliberately leaves raw
+    /// (joiners, variation selectors) are shown, not concealing.
     static func reviewConceals(_ review: String) -> Bool {
         review.unicodeScalars.contains { scalar in
-            scalar != "\n" && concealsOnATerminal(scalar)
+            scalar != "\n" && DisplayedText.needsEscape(scalar)
         }
     }
 
@@ -531,8 +536,8 @@ enum MCPRun {
             return .success("mcp.json already matches rv's signature; nothing to trust\n")
         }
         let digest = RVDigest.sha256Hex([UInt8](data))
-        let review = trustReview(configuration) + "\nsha256: \(digest)"
-        guard review.contains("sha256: \(digest)"), trustReviewShowsEveryLiteral(configuration, review) else {
+        let review = trustReview(configuration) + "\nsha256 \(digest)"
+        guard review.contains("sha256 \(digest)"), trustReviewShowsEveryLiteral(configuration, review) else {
             return .failure("trust review omitted a literal value; nothing signed")
         }
         show(review + "\n")
@@ -574,7 +579,7 @@ enum MCPRun {
                 let transport = remote.transport == .sse ? "legacy SSE" : "streamable HTTP"
                 let redacted = MCPRedaction.url(remote.url.absoluteString)
                 let shown = redacted.leaked ? "\(redacted.display) (credential-like part hidden)" : remote.url.absoluteString
-                lines.append("  \(server.name): \(visible(shown)) (remote, \(transport))")
+                lines.append("  \(reviewField(server.name)): \(visible(shown)) (remote, \(transport))")
                 for name in remote.headers.keys.sorted() {
                     let value = remote.headers[name] ?? ""
                     lines.append("    \(name): \(visible(value))")
@@ -584,8 +589,7 @@ enum MCPRun {
                     }
                 }
             } else {
-                let command = ([server.command] + server.args).map(visible).joined(separator: " ")
-                lines.append("  \(server.name): \(command)")
+                lines.append("  \(reviewField(server.name)): \(quotedReviewFields([server.command] + server.args))")
                 lines.append("    command: \(visible(server.command))")
                 for arg in server.args {
                     lines.append("    argument: \(visible(arg))")
@@ -600,6 +604,7 @@ enum MCPRun {
             for variable in server.secrets.keys.sorted() {
                 lines.append("    \(variable) → secret \(visible(server.secrets[variable] ?? ""))")
             }
+            lines += bindingLines(server, indent: "    ")
             let tools = server.tools
             if tools.allow.isEmpty == false { rules.append("allow " + tools.allow.map(visible).joined(separator: ", ")) }
             if tools.ask.isEmpty == false { rules.append("ask " + tools.ask.map(visible).joined(separator: ", ")) }
@@ -626,10 +631,18 @@ enum MCPRun {
             } else if server.remote == nil {
                 rules.append("no sandbox")
             }
+            if server.remote == nil { lines += sandboxLines(server, indent: "    ") }
+            if let fallback = tools.defaultDecision {
+                lines.append("    other tools \(fallback.rawValue)")
+            }
             if rules.isEmpty == false { lines.append("    " + rules.joined(separator: " · ")) }
         }
-        if configuration.direct.isEmpty == false { lines.append("  direct: " + configuration.direct.joined(separator: ", ")) }
-        if configuration.blocked.isEmpty == false { lines.append("  blocked: " + configuration.blocked.joined(separator: ", ")) }
+        if configuration.direct.isEmpty == false {
+            lines.append("  direct: " + quotedReviewFields(configuration.direct))
+        }
+        if configuration.blocked.isEmpty == false {
+            lines.append("  blocked: " + quotedReviewFields(configuration.blocked))
+        }
         return lines.joined(separator: "\n")
     }
 
@@ -864,6 +877,7 @@ enum MCPRun {
         let lines = servers.flatMap { server -> [String] in
             let command = reviewField(server.name) + ": " + quotedReviewFields([server.command] + server.args)
             return ["\(command) (\(policy))"] + bindingLines(server) + sandboxLines(server)
+                + reviewedServerLines(server, allowTools: allowTools)
         }
         let body = (["tools: \(policy)"] + lines).joined(separator: "\n")
         let digest = RVDigest.sha256Hex(Array(body.utf8))
@@ -936,12 +950,12 @@ enum MCPRun {
             return .failure(CommandFailure(
                 "\(secret.definition.name) is empty, contains NUL, or is over \(SecretValue.maximumBytes) bytes; nothing imported"))
         }
-        let review = importReview(plan, allowTools: allowTools)
-        guard reviewShowsEveryLiteral(plan, review) else {
+        let review = importPresenceReview(servers: plan.servers, allowTools: allowTools)
+        guard reviewShowsEveryLiteral(plan, review.shown) else {
             return .failure(CommandFailure("import review omitted a literal value; nothing imported"))
         }
-        show(review + "\n")
-        let outcome = await environment.presence.confirm("rv: import MCP servers into mcp.json\n\(review)", .deviceOwner)
+        show(review.shown)
+        let outcome = await environment.presence.confirm(review.reason, .deviceOwner)
         guard case .confirmed = outcome else {
             let refusal = if case .refused(let why) = outcome { why } else { "not confirmed" }
             return .failure(CommandFailure("not imported: \(refusal); nothing imported"))

@@ -207,7 +207,7 @@ struct MCPCommandTests {
         let promptedAfterReview = Mutex(false)
         let presence = UserPresence { reason, _ in
             let review = shown.withLock { $0 }
-            promptedAfterReview.withLock { $0 = review.contains("https://mcp.example/mcp") && reason.contains("as shown") }
+            promptedAfterReview.withLock { $0 = review.contains("https://mcp.example/mcp") && reason.contains("https://mcp.example/mcp") }
             return .refused("declined")
         }
         let dryShown = Mutex(false)
@@ -552,7 +552,7 @@ struct MCPCommandTests {
         let presence = UserPresence { _, _ in
             let review = shown.withLock { $0 }
             let seen = review.contains(password) && review.contains(marker) && review.contains(raw) == false
-                && review.contains("sha256: ")
+                && review.contains("sha256 ")
             if seen && environment.integrity.isTrusted == false { return .confirmed(method: "terminal confirmation") }
             return .refused("value was not shown")
         }
@@ -564,8 +564,8 @@ struct MCPCommandTests {
         #expect(review.contains(marker))
         #expect(review.contains(raw) == false)
         let signed = fixture.approvalEvents().last?.detail["sha256"]
-        let shownHash = review.split(separator: "\n").first { $0.hasPrefix("sha256: ") }.map {
-            String($0.dropFirst("sha256: ".count))
+        let shownHash = review.split(separator: "\n").first { $0.hasPrefix("sha256 ") }.map {
+            String($0.dropFirst("sha256 ".count))
         }
         #expect(shownHash == signed)
         #expect(shownHash?.isEmpty == false)
@@ -3789,7 +3789,7 @@ struct MCPCommandTests {
         #expect(missing.failureMessage?.contains("no pending") == true)
         let events = fixture.approvalEvents()
         #expect(events.map(\.decision) == [.allowed, .allowed])
-        #expect(events.first?.detail["method"] == "test")
+        #expect(events.first?.detail["method"] == "terminal confirmation code")
         #expect(events.last?.detail["always"] == "true")
     }
 
@@ -5460,7 +5460,7 @@ struct MCPCommandTests {
             shown.withLock { $0 += text }
         })
         #expect(refused.failureMessage == "not trusted: this process has no terminal")
-        #expect(shown.withLock { $0 }.contains("fs: fs-mcp"))
+        #expect(shown.withLock { $0 }.contains("fs: \"fs-mcp\""))
         #expect(shown.withLock { $0 }.contains("ask zz_*"))
         #expect(environment.integrity.isTrusted == false)
 

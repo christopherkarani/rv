@@ -458,8 +458,17 @@ struct MCPSandboxLiveTests {
         definition.sandbox = MCPSandboxPolicy(network: false)
         let launch = MCPUpstreamLaunch(
             server: "caged", executable: "/usr/bin/env", arguments: ["/bin/sh", "-c", script], environment: [:])
-        let hook = MCPSandbox.apply(configDirectory: config, home: home)
-        let caged = try hook(definition, launch).get()
+        // Built from profile() directly: apply() refuses a home that is not
+        // the passwd home, and this fixture's home is deliberately fake.
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/caged", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let text = try MCPSandbox.profile(
+            policy: try #require(definition.sandbox), scratch: scratch.path, home: home.path,
+            configDirectory: config.path, temporaryDirectory: NSTemporaryDirectory()).get()
+        var caged = launch
+        caged.executable = MCPSandbox.sandboxExec
+        caged.arguments = ["-p", text, launch.executable] + launch.arguments
+        caged.workingDirectory = scratch.path
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: caged.executable)

@@ -4,6 +4,7 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVDomain
 import RVIsolation
 import Testing
 @testable import RVMCP
@@ -85,15 +86,23 @@ struct MCPStrictProfileTests {
     }
 
     @Test func profileTextLetsTheCageReachOnlyItsProxy() {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-strict-profile-\(UUID().uuidString)", isDirectory: true)
+        try! FileManager.default.createDirectory(
+            at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let scratch = root.appendingPathComponent("scratch").path
+        let home = root.appendingPathComponent("home").path
         let policy = MCPSandboxPolicy(network: false, hosts: ["api.example.com"])
         let proxied = try! MCPSandbox.profile(
-            policy: policy, scratch: "/s", home: "/h", configDirectory: "/h/.config/rv", temporaryDirectory: "/t", proxyPort: 4321).get()
+            policy: policy, scratch: scratch, home: home, configDirectory: home + "/.config/rv",
+            temporaryDirectory: root.appendingPathComponent("tmp").path, proxyPort: 4321).get()
         #expect(proxied.contains("(deny network*)\n(allow network-outbound (remote tcp \"localhost:4321\"))"))
         // The proxy port is the only localhost reach the profile grants.
         #expect(proxied.components(separatedBy: "localhost:").count == 2)
         let closed = try! MCPSandbox.profile(
-            policy: MCPSandboxPolicy(network: false), scratch: "/s", home: "/h", configDirectory: "/h/.config/rv",
-            temporaryDirectory: "/t").get()
+            policy: MCPSandboxPolicy(network: false), scratch: scratch, home: home, configDirectory: home + "/.config/rv",
+            temporaryDirectory: root.appendingPathComponent("tmp").path).get()
         #expect(closed.contains("(deny network*)") && closed.contains("network-outbound") == false)
     }
 
@@ -164,7 +173,24 @@ struct MCPSandboxHostsLiveTests {
         definition.sandbox = MCPSandboxPolicy(network: false, hosts: ["api.example.com"])
         let launch = MCPUpstreamLaunch(
             server: "proxied", executable: "/usr/bin/env", arguments: ["/bin/sh", "-c", script], environment: ["PATH": "/usr/bin:/bin"])
-        let caged = try MCPSandbox.apply(configDirectory: config, home: home)(definition, launch).get()
+        // Built from profile() directly: apply() refuses a home that is not
+        // the passwd home, and this fixture's home is deliberately fake.
+        let scratch = home.appendingPathComponent("Library/Caches/rv-mcp/proxied", isDirectory: true)
+        #expect(MCPSandbox.createCheckedDirectory(scratch.path))
+        let credential = MCPSandbox.proxyCredential()
+        let proxy = EgressProxy(
+            policy: EgressHostPolicy(allowedHosts: ["api.example.com"], relaysLoopback: false),
+            record: { _ in }, clientCredential: credential)
+        let port = try proxy.start().get()
+        defer { proxy.stop() }
+        let text = try MCPSandbox.profile(
+            policy: try #require(definition.sandbox), scratch: scratch.path, home: home.path,
+            configDirectory: config.path, temporaryDirectory: NSTemporaryDirectory(), proxyPort: port).get()
+        var caged = launch
+        caged.environment = MCPSandbox.proxyEnvironment(launch.environment, port: port, credential: credential)
+        caged.executable = MCPSandbox.sandboxExec
+        caged.arguments = ["-p", text, launch.executable] + launch.arguments
+        caged.workingDirectory = scratch.path
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: caged.executable)
