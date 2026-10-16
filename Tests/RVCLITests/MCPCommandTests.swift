@@ -3990,3 +3990,19 @@ private extension Result where Failure == CommandFailure {
         return nil
     }
 }
+
+@Suite("rv mcp trust review visibility")
+struct MCPTrustVisibilityTests {
+    @Test func everyInvisibleClassIsEscapedNotPrinted() {
+        // Zero-width space, word joiner, BOM, a tag character, and a
+        // variation selector all render invisibly; each must come out as text.
+        for scalar in ["\u{200B}", "\u{200C}", "\u{200D}", "\u{2060}", "\u{FEFF}", "\u{E0041}", "\u{FE0F}", "\u{00AD}"] {
+            let shown = MCPRun.visible("delete_\(scalar)*")
+            #expect(shown.unicodeScalars.contains { $0.value == scalar.unicodeScalars.first?.value } == false, "\(String(reflecting: scalar)) -> \(shown)")
+            #expect(shown.contains("\\u{"), "\(shown)")
+            #expect(MCPRun.reviewConceals(shown) == false)
+        }
+        #expect(MCPRun.visible("café") == "café")
+        #expect(MCPRun.visible("plain") == "plain")
+    }
+}

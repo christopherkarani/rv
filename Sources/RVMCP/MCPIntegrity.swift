@@ -46,12 +46,17 @@ public enum MCPIntegrity {
     }
 
     public static func status(configDirectory: URL, keys: MCPApprovalKeyStore) -> MCPIntegrityStatus {
-        let data: Data
         switch OwnerOnlyFile.read(MCPConfiguration.fileURL(configDirectory: configDirectory), maximumBytes: MCPConfiguration.maximumBytes) {
-        case .success(nil): return .noConfiguration
-        case .success(let bytes?): data = bytes
+        case .success(let bytes): return status(of: bytes, configDirectory: configDirectory, keys: keys)
         case .failure: return .untrusted("unreadable")
         }
+    }
+
+    /// The status of bytes already in hand, so the caller verifies exactly
+    /// what it decoded instead of re-reading the file (a swap between the
+    /// two reads would verify one file and run another).
+    public static func status(of data: Data?, configDirectory: URL, keys: MCPApprovalKeyStore) -> MCPIntegrityStatus {
+        guard let data else { return .noConfiguration }
         guard let signer = keys.load() else { return .untrusted("rv has no approvals key to check it with") }
         guard case .success(let stored?) = OwnerOnlyFile.read(url(configDirectory), maximumBytes: 4096),
             let mac = (try? JSONValue.parse(stored))?["mcpJSON"]?.stringValue

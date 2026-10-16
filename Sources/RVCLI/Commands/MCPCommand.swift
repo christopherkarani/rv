@@ -5,6 +5,7 @@ import RVHistory
 import RVIsolation
 import RVMCP
 import RVPolicy
+import Synchronization
 
 /// Seams for `rv mcp`: where rv and the hosts keep configuration.
 struct MCPEnvironment: Sendable {
@@ -77,15 +78,31 @@ enum MCPRun {
     }
 
     /// mcp.json with organization policy applied. An invalid managed policy fails closed.
+    /// One read: the signature check runs on the same bytes that are decoded,
+    /// so a file swapped between two reads cannot verify as another file.
     static func configuration(_ environment: MCPEnvironment) -> Result<MCPConfiguration, CommandFailure> {
         if let reason = environment.managed.invalidReason {
             return .failure(CommandFailure("organization policy is invalid, so MCP is disabled: \(reason)"))
         }
-        return MCPConfiguration.load(configDirectory: environment.configDirectory)
+        let data: Data?
+        switch OwnerOnlyFile.read(
+            MCPConfiguration.fileURL(configDirectory: environment.configDirectory),
+            maximumBytes: MCPConfiguration.maximumBytes)
+        {
+        case .success(let bytes): data = bytes
+        case .failure(.unsafe(let reason)): return .failure(CommandFailure(MCPConfigurationError.unsafeFile(reason).message))
+        case .failure(.oversized): return .failure(CommandFailure(MCPConfigurationError.oversized.message))
+        case .failure(.unreadable): return .failure(CommandFailure(MCPConfigurationError.unreadable.message))
+        }
+        let decoded: Result<MCPConfiguration, MCPConfigurationError> =
+            if let data { MCPConfiguration.decode(data) } else { .success(MCPConfiguration()) }
+        return decoded
             .map { configuration in
                 var configuration = configuration
                 configuration.managed = environment.managed.policy
-                configuration.untrusted = environment.integrity.isTrusted == false
+                configuration.untrusted = MCPIntegrity.status(
+                    of: data, configDirectory: environment.configDirectory, keys: environment.approvalKeys
+                ).isTrusted == false
                 return configuration
             }
             .mapError { CommandFailure($0.message) }
@@ -222,17 +239,19 @@ enum MCPRun {
         }
     }
 
-    /// C0 (including VT and FF), DEL, C1 (including NEXT LINE), line and paragraph
-    /// separators, and every Bidi_Control scalar.
+    /// Anything invisible or text-reordering on a terminal, classified by
+    /// property: controls, format characters (zero-width spaces, bidi
+    /// controls, tag characters), line/paragraph separators, unassigned
+    /// scalars, and default-ignorable code points (variation selectors,
+    /// the combining grapheme joiner). Ordinary combining accents print.
     static func concealsOnATerminal(_ scalar: Unicode.Scalar) -> Bool {
-        let value = scalar.value
-        if value < 0x20 || value == 0x7F { return true }
-        if (0x80...0x9F).contains(value) { return true }
-        if value == 0x2028 || value == 0x2029 { return true }
-        if value == 0x061C || value == 0x200E || value == 0x200F { return true }
-        if (0x202A...0x202E).contains(value) { return true }
-        if (0x2066...0x2069).contains(value) { return true }
-        return false
+        if scalar.properties.isDefaultIgnorableCodePoint { return true }
+        switch scalar.properties.generalCategory {
+        case .control, .format, .lineSeparator, .paragraphSeparator, .unassigned, .privateUse:
+            return true
+        default:
+            return false
+        }
     }
 
     static func summary(_ report: Report) -> String {
@@ -359,7 +378,7 @@ enum MCPRun {
     ) {
         var detail = ["approval": request.id, "always": always ? "true" : "false"]
         if let method { detail["method"] = method }
-        _ = AuditLog.append(
+        auditOrLog(
             AuditEvent(
                 time: Date(), kind: .mcpApproval, decision: decision, subject: "\(request.server)/\(request.tool)",
                 reason: reason, source: "rv mcp approve", detail: detail),
@@ -384,7 +403,7 @@ enum MCPRun {
         case .failure(let error): return .failure(CommandFailure(error.message))
         case .success(let decoded): configuration = decoded
         }
-        if environment.integrity == .trusted {
+        if MCPIntegrity.status(of: data, configDirectory: environment.configDirectory, keys: environment.approvalKeys) == .trusted {
             return .success("mcp.json already matches rv's signature; nothing to trust\n")
         }
         let digest = RVDigest.sha256Hex([UInt8](data))
@@ -407,7 +426,7 @@ enum MCPRun {
         guard environment.integrity == .trusted else {
             return .failure("mcp.json changed while you reviewed it; run `rv mcp trust` again")
         }
-        _ = AuditLog.append(
+        auditOrLog(
             AuditEvent(
                 time: Date(), kind: .mcpApproval, decision: .allowed, subject: MCPConfiguration.fileName,
                 reason: "mcp.json trusted", source: "rv mcp trust",
@@ -506,7 +525,7 @@ enum MCPRun {
             return .failure(CommandFailure("\(name) runs a local command; only remote (url) servers sign in with OAuth"))
         }
         func audit(_ reason: String, _ detail: [String: String]) {
-            _ = AuditLog.append(
+            MCPRun.auditOrLog(
                 AuditEvent(
                     time: Date(), kind: .mcpApproval, decision: .allowed, subject: name, reason: reason, source: "rv mcp connect",
                     detail: detail),
@@ -563,8 +582,16 @@ enum MCPRun {
         #endif
     }
 
+    /// Appends, or says so on stderr: silently losing audit on a full disk
+    /// would let calls proceed unrecorded.
+    static func auditOrLog(_ event: AuditEvent, configDirectory: URL) {
+        if AuditLog.append(event, configDirectory: configDirectory) == false {
+            FileHandle.standardError.write(Data("rv mcp: could not append the audit log\n".utf8))
+        }
+    }
+
     static func auditRecord(_ record: MCPCallRecord, configDirectory: URL) {
-        _ = AuditLog.append(record.auditEvent(), configDirectory: configDirectory)
+        auditOrLog(record.auditEvent(), configDirectory: configDirectory)
     }
 
     static func importServers(
@@ -944,7 +971,8 @@ struct MCPServe: AsyncParsableCommand {
         case .failure(let failure): try fail(failure.message)
         case .success(let loaded): configuration = loaded
         }
-        let names = servers.isEmpty ? configuration.servers.map(\.name) : servers
+        var seen = Set<String>()
+        let names = (servers.isEmpty ? configuration.servers.map(\.name) : servers).filter { seen.insert($0).inserted }
         guard names.isEmpty == false else { try fail("mcp.json defines no servers; see `rv mcp import`") }
         let secrets: SecretsConfiguration
         switch SecretsConfiguration.load(configDirectory: environment.configDirectory) {
@@ -958,13 +986,7 @@ struct MCPServe: AsyncParsableCommand {
             oauthTokens: environment.oauthTokens.load,
             sandbox: MCPSandbox.apply(
                 configDirectory: environment.configDirectory, home: environment.home,
-                denied: { [configDirectory = environment.configDirectory] server, denial in
-                    _ = AuditLog.append(
-                        AuditEvent(
-                            time: denial.recordedAt, kind: .egressDenied, decision: .denied, subject: "\(denial.host):\(denial.port)",
-                            reason: denial.reason.rawValue, source: "rv mcp serve", detail: ["server": server]),
-                        configDirectory: configDirectory)
-                }))
+                denied: DenialAudit.forwarder(configDirectory: environment.configDirectory)))
         {
         case .failure(let error): try fail(error.message)
         case .success(let result): planned = result
@@ -975,7 +997,7 @@ struct MCPServe: AsyncParsableCommand {
         }
         if let problem = environment.integrity.problem {
             log("\(problem); every allowed tool asks until then")
-            _ = AuditLog.append(
+            MCPRun.auditOrLog(
                 AuditEvent(
                     time: Date(), kind: .mcpApproval, decision: .info, subject: MCPConfiguration.fileName,
                     reason: problem, source: "rv mcp serve", detail: ["integrity": "untrusted"]),
@@ -990,7 +1012,7 @@ struct MCPServe: AsyncParsableCommand {
             connections: planned.map { $0.1 },
             oauthStore: environment.oauthTokens,
             audit: { MCPRun.auditRecord($0, configDirectory: configDirectory) },
-            event: { _ = AuditLog.append($0, configDirectory: configDirectory) },
+            event: { MCPRun.auditOrLog($0, configDirectory: configDirectory) },
             log: log)
         runtime.run()
     }
@@ -1149,6 +1171,37 @@ struct MCPSetupCommand: AsyncParsableCommand {
         {
         case .failure(let failure): try ctx.fail("rv mcp setup: \(failure.message)\n")
         case .success(let text): ctx.writeStdout(text)
+        }
+    }
+}
+
+/// Coalesces egress-denial audit: every refused CONNECT used to be one
+/// fsync'd audit append, so any local process that found the proxy port
+/// could force unbounded audit growth. One denial per (server, host, port,
+/// reason) is audited per minute; repeats are counted into the next entry.
+enum DenialAudit {
+    static func forwarder(configDirectory: URL) -> @Sendable (String, EgressProxyDenial) -> Void {
+        let state = Mutex<[String: (last: Date, suppressed: Int)]>([:])
+        return { server, denial in
+            let key = "\(server)\u{0}\(denial.host)\u{0}\(denial.port)\u{0}\(denial.reason.rawValue)"
+            let suppressed: Int? = state.withLock { table in
+                if let entry = table[key], denial.recordedAt.timeIntervalSince(entry.last) < 60 {
+                    table[key] = (entry.last, entry.suppressed + 1)
+                    return nil
+                }
+                let count = table[key]?.suppressed ?? 0
+                table[key] = (denial.recordedAt, 0)
+                return count
+            }
+            guard let suppressed else { return }
+            var detail = ["server": server]
+            if suppressed > 0 { detail["suppressed"] = "\(suppressed)" }
+            MCPRun.auditOrLog(
+                AuditEvent(
+                    time: denial.recordedAt, kind: .egressDenied, decision: .denied,
+                    subject: "\(denial.host):\(denial.port)",
+                    reason: denial.reason.rawValue, source: "rv mcp serve", detail: detail),
+                configDirectory: configDirectory)
         }
     }
 }
