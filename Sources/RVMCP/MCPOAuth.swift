@@ -130,58 +130,6 @@ public enum MCPOAuthHTTP {
 
 }
 
-/// One-shot response accumulator: refuses redirects and aborts past `limit`.
-final class MCPBoundedOneShot: NSObject, URLSessionDataDelegate, @unchecked Sendable {
-    let limit: Int
-    let done = DispatchSemaphore(value: 0)
-    let result = Mutex<MCPHTTPResponse?>(nil)
-    private let state = Mutex<(status: Int, headers: [String: String], body: Data, overflow: Bool)>((0, [:], Data(), false))
-
-    init(limit: Int) { self.limit = limit }
-
-    func urlSession(
-        _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
-    ) {
-        completionHandler(nil)
-    }
-
-    func urlSession(
-        _ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
-        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
-    ) {
-        guard let http = response as? HTTPURLResponse else {
-            completionHandler(.cancel)
-            return
-        }
-        var headers: [String: String] = [:]
-        for (key, value) in http.allHeaderFields {
-            if let key = key as? String, let value = value as? String { headers[key] = value }
-        }
-        state.withLock { $0.status = http.statusCode; $0.headers = headers }
-        completionHandler(.allow)
-    }
-
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        let overflow = state.withLock { current -> Bool in
-            if current.body.count + data.count > limit {
-                current.overflow = true
-                return true
-            }
-            current.body.append(data)
-            return false
-        }
-        if overflow { dataTask.cancel() }
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        let finished = state.withLock { $0 }
-        if error == nil, finished.overflow == false, finished.status > 0 {
-            result.withLock { $0 = MCPHTTPResponse(status: finished.status, headers: finished.headers, body: finished.body) }
-        }
-        done.signal()
-    }
-}
 
 /// OAuth 2.1 pieces the MCP authorization spec uses: protected-resource
 /// metadata (RFC 9728), authorization-server metadata (RFC 8414), PKCE S256
