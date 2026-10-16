@@ -104,7 +104,7 @@ struct WorkspaceHostTests {
         Issue.record("new workspaces rooted at home must fail before host launch")
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func clientsAttachDetachAndCancelWithoutSharingAuthority() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func clientsAttachDetachAndCancelWithoutSharingAuthority() throws {
         let opened = try TestHost()
         defer { opened.close() }
         let first = try WorkspaceClient.connect(opened.server.endpoint).get()
@@ -172,7 +172,7 @@ struct WorkspaceHostTests {
         #expect(opened.supervisor.publishCount == 1)
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func malformedFramesAndForeignTokensDoNotMutate() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func malformedFramesAndForeignTokensDoNotMutate() throws {
         let opened = try TestHost()
         defer { opened.close() }
         let client = try WorkspaceClient.connect(opened.server.endpoint).get()
@@ -235,7 +235,7 @@ struct WorkspaceHostTests {
         #expect(WorkspaceSocketMode.isOwnerDirectory(parent))
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func hostSurvivesTheCreatingClientAndAKilledClient() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func hostSurvivesTheCreatingClientAndAKilledClient() throws {
         let home = try shortDirectory(prefix: "/tmp/rvw")
         defer { try? FileManager.default.removeItem(at: home) }
         let workspace = home.appendingPathComponent("ws", isDirectory: true)
@@ -317,7 +317,7 @@ struct WorkspaceHostTests {
         restarted.waitUntilExit()
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func hostDeathDuringAPtyRuntimeIsOrphanedNotReattachable() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func hostDeathDuringAPtyRuntimeIsOrphanedNotReattachable() throws {
         let home = try shortDirectory(prefix: "/tmp/rvp")
         defer { try? FileManager.default.removeItem(at: home) }
         let workspace = home.appendingPathComponent("ws", isDirectory: true)
@@ -395,7 +395,7 @@ struct WorkspaceHostTests {
         restarted.waitUntilExit()
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func workspaceStartLeavesALiveHostAfterTheClientExits() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func workspaceStartLeavesALiveHostAfterTheClientExits() throws {
         let home = try shortDirectory(prefix: "/tmp/rvs")
         defer { try? FileManager.default.removeItem(at: home) }
         let workspace = home.appendingPathComponent("ws", isDirectory: true)
@@ -420,7 +420,7 @@ struct WorkspaceHostTests {
         #expect(try client.closeWorkspace().get().phase == .closed)
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func rvSpawnedHostDiesOnSIGTERM() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func rvSpawnedHostDiesOnSIGTERM() throws {
         let home = try shortDirectory(prefix: "/tmp/rvk")
         defer { try? FileManager.default.removeItem(at: home) }
         let workspace = home.appendingPathComponent("ws", isDirectory: true)
@@ -456,7 +456,7 @@ struct WorkspaceHostTests {
         #expect(try closing.closeWorkspace().get().phase == .closed)
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func simultaneousCreatorsProduceOneOwner() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func simultaneousCreatorsProduceOneOwner() throws {
         let home = try shortDirectory(prefix: "/tmp/rvr")
         defer { try? FileManager.default.removeItem(at: home) }
         let workspace = home.appendingPathComponent("ws", isDirectory: true)
@@ -532,7 +532,7 @@ struct WorkspaceHostTests {
         #expect(opened.supervisor.runtimeFacts().contains { $0.id == first.id.rawValue && $0.running })
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func oneClientSerializesOverlappedCalls() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func oneClientSerializesOverlappedCalls() throws {
         let opened = try TestHost()
         defer { opened.close() }
         let client = try WorkspaceClient.connect(opened.server.endpoint).get()
@@ -554,7 +554,7 @@ struct WorkspaceHostTests {
         }
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func streamingClientMultiplexesOverlappedCalls() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func streamingClientMultiplexesOverlappedCalls() throws {
         let opened = try TestHost()
         defer { opened.close() }
         let client = try WorkspaceClient.connect(opened.server.endpoint).get()
@@ -678,7 +678,7 @@ struct WorkspaceHostTests {
         #expect(WorkspaceClient.negotiatedFeatures(from: .success(wrongOp)).isFailure)
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func legacyHostStaysUsableAndGatesProfilesPerCall() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func legacyHostStaysUsableAndGatesProfilesPerCall() throws {
         let opened = try TestHost(advertisedFeatures: [WorkspaceControlFeature.ensureTerminalRuntime])
         defer { opened.close() }
         let client = try WorkspaceClient.connect(opened.server.endpoint).get()
@@ -698,7 +698,7 @@ struct WorkspaceHostTests {
         #expect(client.cancelRuntime(plain.runtime).isSuccess)
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func explicitProfilesKeepSyntheticCredentialsAndSupportDisjoint() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func explicitProfilesKeepSyntheticCredentialsAndSupportDisjoint() throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }
         let config = tree.rootURL.appendingPathComponent("config", isDirectory: true)
@@ -780,7 +780,7 @@ struct WorkspaceHostTests {
             == false)
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func hookAndProfileStayOrthogonalAtLaunch() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func hookAndProfileStayOrthogonalAtLaunch() throws {
         let opened = try TestHost()
         defer { opened.close() }
         let client = try WorkspaceClient.connect(opened.server.endpoint).get()
@@ -837,7 +837,7 @@ struct WorkspaceHostTests {
         #expect(WorkspaceClient.negotiatedFeatures(from: .success(unknownOp)).isFailure)
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func unknownOperationReceivesAnInvalidRequestEcho() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func unknownOperationReceivesAnInvalidRequestEcho() throws {
         let opened = try TestHost()
         defer { opened.close() }
         let fd = try WorkspaceControlSocket.connect(
@@ -878,7 +878,7 @@ struct WorkspaceHostTests {
         #expect(opened.supervisor.runtimeFacts().isEmpty)
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func legacyEnsureReusesARunningTerminalAndLaunchesWhenEmpty() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func legacyEnsureReusesARunningTerminalAndLaunchesWhenEmpty() throws {
         let opened = try TestHost()
         defer { opened.close() }
         let client = try WorkspaceClient.connect(opened.server.endpoint).get()
@@ -906,7 +906,7 @@ struct WorkspaceHostTests {
         #expect(client.cancelRuntime(created.runtime).isSuccess)
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func ensureTerminalRuntimeIsExecutableAgnosticByContract() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func ensureTerminalRuntimeIsExecutableAgnosticByContract() throws {
         // Canonical-shell contract: ensure converges concurrent callers
         // on one runtime. The executable selects the command only when
         // creating; a different executable re-attaches, it never forks.
@@ -931,7 +931,7 @@ struct WorkspaceHostTests {
         #expect(client.cancelRuntime(created.runtime).isSuccess)
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func ensureTerminalRuntimeNeverRelabelsTheExistingPrincipal() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func ensureTerminalRuntimeNeverRelabelsTheExistingPrincipal() throws {
         // Spec section 10: reattachment may attach to the existing runtime,
         // but it must not relabel it. A request naming a different hook
         // gets the existing principal back explicitly, never mutated.
@@ -1079,7 +1079,7 @@ struct WorkspaceHostTests {
         #expect(legacyLaunchHookSelection("") == .failure(.invalidRequest))
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func malformedHookTagIsRefusedBeforeSpawn() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func malformedHookTagIsRefusedBeforeSpawn() throws {
         let opened = try TestHost()
         defer { opened.close() }
         let factsBefore = opened.supervisor.runtimeFacts().count
@@ -1118,7 +1118,7 @@ struct WorkspaceHostTests {
     }
 
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func controlLaunchBounds_fitDeveloperCommands() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func controlLaunchBounds_fitDeveloperCommands() throws {
         let opened = try TestHost()
         defer { opened.close() }
         let client = try WorkspaceClient.connect(opened.server.endpoint).get()
@@ -1159,7 +1159,7 @@ struct WorkspaceHostTests {
         #expect(try client.listRuntimes().get().contains { $0.runtime == launched.runtime })
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func hostBinaryRunsTheProductionAdmission() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func hostBinaryRunsTheProductionAdmission() throws {
         let home = try shortDirectory(prefix: "/tmp/rva")
         defer { try? FileManager.default.removeItem(at: home) }
         let workspace = home.appendingPathComponent("ws", isDirectory: true)

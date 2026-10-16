@@ -1033,3 +1033,30 @@ private func runningDoctorSnapshot(packs: [PackID] = dayOnePackIDs) -> DoctorSna
     #expect(DoctorEnvironment.live(environment: ["HOME": ""]) == nil)
     #expect(DoctorEnvironment.live(environment: [:]) == nil)
 }
+
+@Test func doctor_reportsInjectedLeftoversWithoutChangingTheExitCode() throws {
+    try withDoctorHome { _, _, base in
+        var environment = base
+        let quiet = DoctorRun.run(environment: environment, diagnostics: localReady, appearance: .pretty(colorOffPalette))
+        environment.leftovers = .summary(DoctorLeftoversSummary(sessions: 1, strandedImages: 0, unattachedImageFiles: 2))
+        let found = DoctorRun.run(environment: environment, diagnostics: localReady, appearance: .pretty(colorOffPalette))
+        let robot = DoctorRun.run(environment: environment, diagnostics: localReady, appearance: .robot)
+
+        #expect(quiet.stdout.contains("Workspaces") == false)
+        #expect(found.exitCode == quiet.exitCode)
+        #expect(found.stdout.contains("1 unfinished session · 0 stranded images · 2 unattached image files"))
+        #expect(found.stdout.contains("→  rv workspace leftovers"))
+        #expect(robot.stdout.contains(#""leftovers":{"applicable":true,"sessions":1,"stranded_images":0,"unattached_image_files":2}"#))
+    }
+}
+
+@Test func doctor_liveLeftoversProbeMatchesThePlatform() {
+#if os(macOS)
+    guard case .summary = DoctorEnvironment.liveLeftovers(probe: .init(sessions: { 0 }, disk: { (0, 0) })) else {
+        Issue.record("macOS doctor summarizes leftovers")
+        return
+    }
+#else
+    #expect(DoctorEnvironment.liveLeftovers() == .notApplicable)
+#endif
+}

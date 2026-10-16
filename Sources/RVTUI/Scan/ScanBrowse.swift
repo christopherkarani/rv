@@ -1,3 +1,4 @@
+import RVDomain
 import RVPresentation
 import RVTheme
 
@@ -70,7 +71,11 @@ public struct ScanBrowseRenderer: FrameRenderer {
         }
         for warning in state.model.warnings {
             lines.append(
-                paint("warning \(warning.code): \(warning.message)", slot: palette.mark, reset: palette.reset)
+                paint(
+                    "warning \(warning.code): \(DisplayedText.field(warning.message))",
+                    slot: palette.mark,
+                    reset: palette.reset
+                )
             )
         }
         lines.append("")
@@ -97,7 +102,7 @@ public func scanBrowseRender(_ state: ScanBrowseState, palette: Palette) -> [Str
 private func browseListLine(_ row: ScanFindingRow, selected: Bool, palette: Palette) -> String {
     let marker = selected ? paint("›", slot: palette.mark, reset: palette.reset) : " "
     let rule = paint(row.ruleLabel, slot: selected ? palette.deny : palette.fact, reset: palette.reset)
-    let command = paint(row.commandDisplay, slot: palette.fact, reset: palette.reset)
+    let command = paint(DisplayedText.field(row.commandDisplay), slot: palette.fact, reset: palette.reset)
     let countSuffix = row.count > 1 ? paint(" ×\(row.count)", slot: palette.muted, reset: palette.reset) : ""
     return "\(marker) \(rule)  \(command)\(countSuffix)"
 }
@@ -107,11 +112,11 @@ private func browseDetail(_ row: ScanFindingRow, palette: Palette) -> [String] {
         .leaf(label: "Host", value: row.host.rawValue, emphasis: .fact),
         .leaf(label: "Pack", value: row.packID.rawValue, emphasis: .plain),
         .leaf(label: "Rule", value: row.ruleLabel, emphasis: .deny),
-        .leaf(label: "Command", value: row.commandDisplay, emphasis: .fact),
-        .leaf(label: "Path", value: row.sourcePath, emphasis: .muted),
+        .leaf(label: "Command", value: DisplayedText.field(row.commandDisplay), emphasis: .fact),
+        .leaf(label: "Path", value: DisplayedText.field(row.sourcePath), emphasis: .muted),
     ]
     if let sessionID = row.sessionID {
-        children.append(.leaf(label: "Session", value: sessionID, emphasis: .plain))
+        children.append(.leaf(label: "Session", value: DisplayedText.field(sessionID), emphasis: .plain))
     }
     if row.count > 1 {
         children.append(.leaf(label: "Count", value: String(row.count), emphasis: .plain))

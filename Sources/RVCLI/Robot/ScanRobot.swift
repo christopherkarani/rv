@@ -77,7 +77,7 @@ func renderScanSessionsRobot(
     let payload = scanSessionsRobotPayload(from: report, showCommand: showCommand, setupNudge: setupNudge)
     do {
         let data = try encoder.encode(payload)
-        return String(decoding: data, as: UTF8.self)
+        return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
     } catch {
         throw RobotRenderError.encodingFailed(String(describing: error))
     }

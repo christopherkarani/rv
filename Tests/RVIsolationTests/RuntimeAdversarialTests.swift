@@ -307,6 +307,65 @@ struct RuntimeAdversarialTests {
         }
     }
 
+    @Test func rvControlPlaneFilesCannotBeReadOrRewritten() async throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let config = tree.siblingURL.appendingPathComponent("fake-home/.config/rv")
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        let files = ["mcp.json", "mcp-approvals.json", "mcp-integrity.json", "secrets.json", "audit.key", "approvals.key"]
+        for (index, name) in files.enumerated() {
+            let target = config.appendingPathComponent(name)
+            let synthetic = "RV-SYNTHETIC-CONTROL-\(index)"
+            try Data(synthetic.utf8).write(to: target)
+            let copy = tree.workspaceURL.appendingPathComponent("control-\(index)")
+            let read = try await runShell(tree.contained, "/bin/cat \(quote(target.path)) > \(quote(copy.path))")
+            #expect(read.exitStatus != 0, "\(name) readable")
+            if exists(copy) {
+                #expect(try String(contentsOf: copy, encoding: .utf8) != synthetic)
+            }
+            let write = try await runShell(tree.contained, "printf '{\"granted\":true}' > \(quote(target.path))")
+            #expect(write.exitStatus != 0, "\(name) writable")
+            #expect(try String(contentsOf: target, encoding: .utf8) == synthetic)
+        }
+        let planted = config.appendingPathComponent("mcp-approvals.json.new")
+        let create = try await runShell(tree.contained, "printf x > \(quote(planted.path))")
+        #expect(create.exitStatus != 0)
+        #expect(!exists(planted))
+        print("adversarial technique=rv-control-plane-files verdict=READ-WRITE-DENIED")
+    }
+
+    @Test func gitConfigCannotPlantHooksPathOrFsmonitor() async throws {
+        let tree = try ContainmentTree()
+        defer { tree.tearDown() }
+        let initialize = Process()
+        initialize.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        initialize.arguments = ["init", "-q", tree.workspaceURL.path]
+        initialize.standardOutput = FileHandle.nullDevice
+        initialize.standardError = FileHandle.nullDevice
+        try initialize.run()
+        initialize.waitUntilExit()
+        let gitConfig = tree.workspaceURL.appendingPathComponent(".git/config")
+        guard initialize.terminationStatus == 0, let original = try? String(contentsOf: gitConfig, encoding: .utf8) else {
+            print("adversarial technique=git-config coverage=NOT-TESTED reason=no-host-git")
+            return
+        }
+        let workspace = quote(tree.workspaceURL.path)
+        let probe = try await runShell(tree.contained, "cd \(workspace) && /usr/bin/git rev-parse --git-dir")
+        guard probe.exitStatus == 0 else {
+            print("adversarial technique=git-config coverage=NOT-TESTED reason=git-unavailable-in-cage")
+            return
+        }
+        for setting in ["core.hooksPath planted", "core.fsmonitor ./planted", "core.sshCommand ./planted"] {
+            let run = try await runShell(tree.contained, "cd \(workspace) && /usr/bin/git config \(setting)")
+            #expect(run.exitStatus != 0, "git config \(setting)")
+            #expect(try String(contentsOf: gitConfig, encoding: .utf8) == original)
+        }
+        let include = try await runShell(tree.contained, "cd \(workspace) && /usr/bin/git config include.path ../planted")
+        #expect(include.exitStatus != 0)
+        #expect(try String(contentsOf: gitConfig, encoding: .utf8) == original)
+        print("adversarial technique=git-config verdict=WRITE-DENIED")
+    }
+
     @Test func workspaceGitHooksAndRVConfigurationDenyWrites() async throws {
         let tree = try ContainmentTree()
         defer { tree.tearDown() }

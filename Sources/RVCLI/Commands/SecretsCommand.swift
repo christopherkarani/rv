@@ -128,7 +128,7 @@ enum SecretsRun {
             var picked: [SecretDefinition] = []
             for name in names {
                 guard let secret = configuration.secret(named: name) else {
-                    return .failure("\(name) is not defined in secrets.json")
+                    return .failure("\(DisplayedText.field(name)) is not defined in secrets.json")
                 }
                 picked.append(secret)
             }
@@ -187,15 +187,15 @@ enum SecretsRun {
         if let existing = current.secret(named: name) {
             guard existing.source == source else {
                 return .failure(CommandFailure(
-                    "\(name) reads from \(existing.source.locator); rv secrets set only stores values it reads "
+                    "\(DisplayedText.field(name)) reads from \(existing.source.locator); rv secrets set only stores values it reads "
                         + "from \(SecretKeychain.service)"))
             }
             guard definition == nil, agents.isEmpty, description == nil else {
-                return .failure("\(name) is already defined; edit secrets.json to change its delivery")
+                return .failure("\(DisplayedText.field(name)) is already defined; edit secrets.json to change its delivery")
             }
         } else {
             guard let definition else {
-                return .failure("\(name) is new: pass --gateway URL --base-url-env VAR, or --environment")
+                return .failure("\(DisplayedText.field(name)) is new: pass --gateway URL --base-url-env VAR, or --environment")
             }
             let delivery: SecretDelivery
             switch definition {
@@ -222,16 +222,16 @@ enum SecretsRun {
             return .failure(CommandFailure("organization policy: \(reason)"))
         }
         guard environment.keychain.store(SecretKeychain.service, name, value) else {
-            return .failure("could not store \(name) in the Keychain")
+            return .failure("could not store \(DisplayedText.field(name)) in the Keychain")
         }
         if updated != current, case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
             return .failure(CommandFailure(error.message))
         }
-        guard let secret = updated.secret(named: name) else { return .failure("\(name) was not saved") }
-        var text = "Stored \(name) in the Keychain (\(SecretKeychain.service)). Delivery: \(secret.delivery.summary).\n"
+        guard let secret = updated.secret(named: name) else { return .failure("\(DisplayedText.field(name)) was not saved") }
+        var text = "Stored \(DisplayedText.field(name)) in the Keychain (\(SecretKeychain.service)). Delivery: \(secret.delivery.summary).\n"
         let users = profiles(environment).filter { $0.secrets.contains(name) }.map(\.id)
         if users.isEmpty {
-            text += "Add \"\(name)\" to a profile's \"secrets\" in runtime-resources.json to use it.\n"
+            text += "Add \"\(DisplayedText.field(name))\" to a profile's \"secrets\" in runtime-resources.json to use it.\n"
         } else {
             text += "Used by profiles: \(users.joined(separator: ", ")).\n"
         }
@@ -249,9 +249,9 @@ enum SecretsRun {
         var lines: [String] = []
         if existing == nil || existing?.source == ownSource {
             guard environment.keychain.delete(SecretKeychain.service, name) else {
-                return .failure("could not delete \(name) from the Keychain")
+                return .failure("could not delete \(DisplayedText.field(name)) from the Keychain")
             }
-            lines.append("Deleted \(name) from the Keychain (\(SecretKeychain.service)).")
+            lines.append("Deleted \(DisplayedText.field(name)) from the Keychain (\(SecretKeychain.service)).")
         } else if let existing {
             lines.append("Left the value in place at \(existing.source.locator).")
         }
@@ -261,11 +261,11 @@ enum SecretsRun {
             if case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
                 return .failure(CommandFailure(error.message))
             }
-            lines.append("Removed \(name) from secrets.json.")
+            lines.append("Removed \(DisplayedText.field(name)) from secrets.json.")
         }
         let users = profiles(environment).filter { $0.secrets.contains(name) }.map(\.id)
         if users.isEmpty == false {
-            lines.append("warning: profiles \(users.joined(separator: ", ")) still list \(name); their launches will fail until you remove it.")
+            lines.append("warning: profiles \(users.joined(separator: ", ")) still list \(DisplayedText.field(name)); their launches will fail until you remove it.")
         }
         return .success(lines.joined(separator: "\n") + "\n")
     }
@@ -289,8 +289,13 @@ enum SecretsRun {
         return ScanReport(findings: SecretLeakScanner.scan(root: root, secrets: values), skipped: skipped)
     }
 
+    /// Human refusal when `rv secrets scan` is pointed at a file, not a directory.
+    static func scanNotADirectory(_ path: String) -> String {
+        "\(DisplayedText.field(path)) is not a directory"
+    }
+
     static func scanText(_ report: ScanReport) -> String {
-        var lines = report.findings.map { "\($0.path):\($0.line)  \($0.secret)" }
+        var lines = report.findings.map { "\(DisplayedText.field($0.path)):\($0.line)  \($0.secret)" }
         if report.findings.isEmpty { lines.append("No secret values found.") }
         lines += report.skipped.map { "could not check \($0)" }
         return lines.joined(separator: "\n") + "\n"
@@ -301,6 +306,22 @@ enum SecretsRun {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes, .prettyPrinted]
         guard let data = try? encoder.encode(value), let text = String(data: data, encoding: .utf8) else { return "{}\n" }
         return text + "\n"
+    }
+
+    /// Robot JSON for `rv secrets`. `JSONEncoder` already writes ESC as
+    /// `\u001b`. U+2028, U+2029, and U+202E stay raw unless they are replaced
+    /// after encoding. The result is still valid JSON. `json` itself is unchanged.
+    static func robotJSON<T: Encodable>(_ value: T) -> String {
+        var text = json(value)
+        let scalars: [(Character, String)] = [
+            ("\u{2028}", "\\u2028"),
+            ("\u{2029}", "\\u2029"),
+            ("\u{202E}", "\\u202e"),
+        ]
+        for (scalar, escaped) in scalars {
+            text = text.replacingOccurrences(of: String(scalar), with: escaped)
+        }
+        return text
     }
 
     /// The secret value: hidden prompt on a terminal, otherwise all of stdin
@@ -347,7 +368,7 @@ struct SecretsList: AsyncParsableCommand {
             try ctx.fail("rv secrets list: \(failure.message)\n")
         case .success(let configuration):
             let report = SecretsRun.list(configuration, profiles: SecretsRun.profiles(environment))
-            ctx.writeStdout(ctx.explicitRobot ? SecretsRun.json(report) : SecretsRun.listText(report))
+            ctx.writeStdout(ctx.explicitRobot ? SecretsRun.robotJSON(report) : SecretsRun.listText(report))
         }
     }
 }
@@ -369,7 +390,7 @@ struct SecretsCheck: AsyncParsableCommand {
         case .failure(let failure): try ctx.fail("rv secrets check: \(failure.message)\n")
         case .success(let checked): rows = checked
         }
-        let text = ctx.explicitRobot ? SecretsRun.json(rows) : SecretsRun.checkText(rows)
+        let text = ctx.explicitRobot ? SecretsRun.robotJSON(rows) : SecretsRun.checkText(rows)
         if rows.allSatisfy(\.ok) {
             ctx.writeStdout(text)
         } else {
@@ -456,7 +477,7 @@ struct SecretsScan: AsyncParsableCommand {
             .standardizedFileURL
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            try ctx.fail("rv secrets scan: \(root.path) is not a directory\n")
+            try ctx.fail("rv secrets scan: \(SecretsRun.scanNotADirectory(root.path))\n")
         }
         let configuration: SecretsConfiguration
         switch SecretsRun.configuration(environment) {
@@ -464,7 +485,7 @@ struct SecretsScan: AsyncParsableCommand {
         case .success(let loaded): configuration = loaded
         }
         let report = SecretsRun.scan(root: root, configuration: configuration, environment: environment)
-        let text = ctx.explicitRobot ? SecretsRun.json(report) : SecretsRun.scanText(report)
+        let text = ctx.explicitRobot ? SecretsRun.robotJSON(report) : SecretsRun.scanText(report)
         if report.findings.isEmpty {
             ctx.writeStdout(text)
         } else {

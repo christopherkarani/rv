@@ -17,14 +17,37 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 
 | Phase | Branch | PR | Status |
 |---|---|---|---|
-| 0 Plan + reset | `plan/agent-governance` | [#394](https://github.com/christopherkarani/rv/pull/394) | in progress |
-| 1 Trustworthy sandbox | `governance/phase-1-sandbox` | [#395](https://github.com/christopherkarani/rv/pull/395) | agent items done; PR open |
-| 2 Secrets the agent can't leak | `governance/phase-2-secrets` | [#413](https://github.com/christopherkarani/rv/pull/413) | agent items done (PR open); L3 demo needs owner trust |
-| 3 MCP governance | `governance/phase-3-mcp` | [#414](https://github.com/christopherkarani/rv/pull/414) | agent items done (PR open) |
-| 4 Enterprise client features | `governance/phase-4-enterprise` | [#415](https://github.com/christopherkarani/rv/pull/415) | agent items done (PR open) |
+| 0 Plan + reset | `plan/agent-governance` | [#394](https://github.com/christopherkarani/rv/pull/394) | merged |
+| 1 Trustworthy sandbox | `governance/phase-1-sandbox` | [#395](https://github.com/christopherkarani/rv/pull/395) | merged |
+| 2 Secrets the agent can't leak | `governance/phase-2-secrets` | [#413](https://github.com/christopherkarani/rv/pull/413) | merged; L3 demo needs owner trust |
+| 3 MCP governance | `governance/phase-3-mcp` | [#414](https://github.com/christopherkarani/rv/pull/414) | merged |
+| 4 Enterprise client features | `governance/phase-4-enterprise` | [#415](https://github.com/christopherkarani/rv/pull/415) | merged |
 | 5 Launch readiness | human-owned | n/a | not started |
+| 6 Security blockers | `governance/phase-6-hardening` (from `main`) | [#417](https://github.com/christopherkarani/rv/pull/417) (draft) | in progress |
+| 7 Enterprise hardening | `governance/phase-7-enterprise-hardening` (from phase 6) | _not opened yet_ | not started |
+| 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | _not opened yet_ | not started |
 
-**Next action:** All agent-ownable items are done. Watch Linux CI on #394, #395, #413, #414, #415 and fix any failure on the owning branch, then merge forward. Remaining work is owner-only: L3 sudo items (peer trust reinstall, managed-dir install in 4.2), D13, signing/notarization, and Phase 5.
+**Next action:** Phase 7 on `governance/phase-7-enterprise-hardening` (from
+phase 6): 7.1 remote MCP servers first. Phase 6 agent items are done except
+the impro-ref-blocked ones (6.2 cage denies, 6.5 injected config dir, 6.6
+watchdog). Owner items for phase 6: signing secrets + certificate (6.3),
+flip `signed_releases`/`release_team_id` in `install.sh` and set
+`RV_REQUIRE_SIGNED_RELEASE=1` after the first signed release, and the D13
+decision (`RV_CI_PEER_TRUST=1` turns on the drafted job).
+
+Environment note (2026-10-13): Phases 6-8 were started by a cloud agent on a
+Linux VM (Ubuntu 24.04, official Swift 6.4 tarball via
+`Scripts/install-official-swift-linux.sh`), not on the owner's Mac. Linux
+runs L1 suites, the real `rv` binary, and python fixtures. Anything that
+needs macOS (Seatbelt L2 cages, Keychain, LocalAuthentication, codesign) is
+written but marked **unverified on macOS** until the owner or macOS CI runs it.
+Before relying on a fresh Linux VM: install the CI apt list from `pr.yml`
+plus `libstdc++-14-dev` (clang 21 picks GCC 14 headers).
+
+`impro-ref` status: not on `origin/main` as of 2026-10-13 (no
+`NetworkReviewQueue`/`EgressProposal`). Items that edit `SeatbeltProfile`,
+`WorkspaceSessionSupervisor`, `EgressProxy`, `EgressPolicy` or
+`RuntimeAdmission*` stay deferred; each is marked _blocked: impro-ref_.
 
 Gotcha: never run the `rv` binary with a fake `HOME` on a path that writes to
 the Keychain (`rv secrets set`). macOS opens a SecurityAgent "keychain not
@@ -236,6 +259,11 @@ grammar, durable MCP approvals idea, JSON-RPC depth bound.
 | D11 | One PR per phase; split a phase into a stacked series if it exceeds ~5k changed lines | Reviewable units |
 | D12 | Unified audit starts read-side (`rv audit` joins existing ledgers into one schema) before any writer changes | Delivers value without touching hot writers; Phase 2/3 writers emit the same schema natively |
 | D13 | _Open, owner decides:_ how to restore the 55 disabled host E2E tests (CI with dev trust vs owner-run L3) | No safe in-code test seam exists |
+| D14 | MCP `ask` prefers in-band **elicitation** (`elicitation/create`) when the client advertises it; the held call is forwarded only on the user's accept | The client renders the prompt to the human; the model has no channel to answer it |
+| D15 | Out-of-band approvals (`rv mcp approve`) need user presence: LocalAuthentication on macOS, else `/dev/tty` + a code the gateway prints on stderr; otherwise refuse | An agent's shell has no TTY and never sees the code; refusing beats a silent bypass |
+| D16 | One HMAC key signs grants and rv's own mcp.json writes: Keychain service `rv.approvals` on macOS, `approvals.key` (0600) on Linux. Verifiers never create the key | A same-user process can edit files but cannot mint MACs without the key; read-only verification never triggers a Keychain write |
+| D17 | An mcp.json not signed by rv is **untrusted**: `rv mcp check` fails ("edited outside rv"), the gateway turns every user `allow` into `ask`, and rv refuses to sign over it (`import`, `approve --always`) until `rv mcp trust` | Tampering can only tighten policy; rv never launders an outside edit |
+| D18 | Release binaries ship as bare Mach-O files: hardened runtime, no entitlements, identifier `dev.rv.<binary>`, notarized but not stapled (stapling needs a bundle, dmg, or pkg). `install.sh` pins the Team ID and requires `spctl` "Notarized Developer ID", which looks the ticket up online | Same files as today, no packaging change; offline first-run Gatekeeper checks don't apply because `curl` downloads carry no quarantine flag |
 
 ### Coordination with `impro-ref` (owner's uncommitted work)
 
@@ -745,6 +773,293 @@ health from the doctor checks that need no root.
 
 ---
 
+## Phase 6: Security blockers
+
+Branch `governance/phase-6-hardening` from `main` (Phases 0-4 merged). PR base `main`.
+
+### 6.1 Approvals the agent can't forge
+
+Threat: the agent runs as the user. Today it can run `rv mcp approve <id>`
+itself, flip `"state": "granted"` in `mcp-approvals.json`, or add its tool
+to `tools.allow` in `mcp.json`.
+
+Design (D14-D17):
+- **Elicitation first.** The gateway records the client's `initialize`
+  capabilities. A client that advertises `elicitation` (an empty object or
+  one with `form`) gets an `elicitation/create` request for each `ask` call:
+  message names server, tool and a ≤600-char canonical-JSON preview of the
+  arguments; schema is one boolean `approve` (default true). The call is held
+  in gateway memory (pending entry keeps the exact params, so the grant is
+  bound to server + tool + the SHA-256 of the canonical arguments and used
+  once). `accept` with `approve != false` forwards it; anything else
+  (`decline`, `cancel`, `approve: false`) returns a tool error and audits
+  `mcp.call` as `denied` ("declined by the user"). A JSON-RPC error answer
+  (client advertised the capability but can't show it) falls back to the
+  file flow. Client `notifications/cancelled` for the held call drops it and
+  cancels the elicitation. At most 64 unanswered prompts are held; past that,
+  and for clients without the capability, the file flow below applies.
+- **File grants are MAC'd.** `MCPApprovalRequest` gains `grantMAC` and
+  `codeMAC`. `rv mcp approve` writes `grantMAC = HMAC(key, "grant", id,
+  server, tool, argumentsHash)`. The gateway consumes only grants whose MAC
+  verifies; a `granted` entry with a missing/bad MAC is removed and audited
+  as `mcp.approval` `denied` ("forged grant rejected").
+- **User presence for `rv mcp approve` (and `--always`, `rv mcp trust`).**
+  macOS: `LAContext.evaluatePolicy(.deviceOwnerAuthentication)` (Touch ID or
+  login password dialog). When LocalAuthentication is unavailable or not
+  interactive (SSH): open `/dev/tty` (fails with no controlling terminal)
+  and require the confirmation code the gateway printed on its stderr when it
+  recorded the request (`codeMAC = HMAC(key, "code", id, code)`, 10 base32
+  chars = 50 bits). Neither available → refuse with the reason. `rv mcp
+  deny` needs no presence (refusing is always safe).
+- **Key.** 32 random bytes, hex-encoded. macOS: Keychain generic password
+  service `rv.approvals`, account `hmac-key`. Linux: `~/.config/rv/approvals.key`
+  (0600, O_EXCL create). Created only by signers (`approve`, `trust`,
+  `import`, `approve --always`, and the gateway when it records a code).
+- **mcp.json integrity.** `~/.config/rv/mcp-integrity.json` holds
+  `HMAC(key, "mcp.json", sha256(file bytes))`, written by every rv write of
+  mcp.json. Missing or wrong → untrusted (D17). `rv mcp trust` (presence
+  required) prints a per-server summary of the rules and signs the current
+  bytes. `rv report` counts an untrusted mcp.json as not compliant.
+- **Upgrade.** An existing mcp.json has no signature, so it is untrusted
+  until the user runs `rv mcp trust` once; until then `allow` acts as `ask`
+  and `rv mcp check` / `rv report --strict` fail.
+- **Honest limits** (also in `rv mcp --help` Notes and control-plane-spec):
+  - A same-user process outside the cage can still delete or replace config
+    files (and, on Linux, read `approvals.key`), or spawn its own `rv mcp
+    serve` and answer elicitation itself. Integrity makes tampering visible
+    and fail toward `ask`; it does not make the files immutable. The
+    enterprise answer is root-owned managed policy (Phase 4) plus running the
+    agent inside the cage, which denies `~/.config/rv` reads and writes.
+  - The confirmation code goes to the gateway's stderr, which hosts write to
+    their own logs (e.g. Claude Desktop `~/Library/Logs/Claude/`). A same-user
+    process that reads those logs and drives its own pseudo-terminal can
+    approve where LocalAuthentication is unavailable. On macOS with a GUI
+    session the Touch ID / password dialog is the gate.
+  - `rv mcp trust` on a terminal shows a fresh code and asks for it back:
+    that stops scripts with no terminal or piped stdin, not a process that
+    drives its own pseudo-terminal.
+  - `rv mcp list|check`, `rv report`, and `rv mcp serve` now read the
+    `rv.approvals` Keychain item. A build whose code signature changed (ad-hoc
+    dev builds) can get a Keychain access prompt; signed releases (6.3) keep
+    the same designated requirement.
+
+Checklist:
+- [x] Elicitation in `MCPGatewayCore` (capability tracking, held calls,
+      accept/decline/cancel, error → file flow, client cancel, cap of 64),
+      `mcp.call` audit carries `approvedVia`; L1 `MCPGatewayElicitationTests` (8)
+- [x] `MCPApprovalKeyStore` + `MCPSigner` (`Sources/RVMCP/MCPApprovalKey.swift`,
+      `RVDigest.hmacSHA256` shared with secret fingerprints); MAC'd grants and
+      codes in `MCPApprovalStore`; forged grants rejected and audited
+      (`mcp.approval`, OCSF 6003); L1 `MCPApprovalSecurityTests` (6),
+      `RVDigestHMACTests` (RFC 4231)
+- [x] `UserPresence` seam in `rv mcp approve` (LocalAuthentication, `/dev/tty`
+      code, refuse); `rv mcp approve` audits `mcp.approval` allowed/denied with
+      the method; L1 `MCPCommandTests` (approve with absent presence, wrong
+      code, right code)
+- [x] mcp.json integrity (`MCPIntegrity`), `rv mcp trust`, check/list/serve/report
+      behavior, import and `--always` refuse over an untrusted file; help page
+      (completions list top-level commands only); L1 `MCPIntegrityTests`,
+      `MCPCommandTests`, `ManagedCommandTests.reportIsNotCompliantWhileMCPJSONIsUntrusted`
+- [x] L2 test written: `RuntimeAdversarialTests.rvControlPlaneFilesCannotBeReadOrRewritten`
+      (`mcp.json`, `mcp-approvals.json`, `mcp-integrity.json`, `secrets.json`,
+      `audit.key`, `approvals.key`: read, overwrite, create). **Passed on
+      macOS CI** (pr run 38401908672, `macos isolation`, macos-26):
+      `adversarial technique=rv-control-plane-files verdict=READ-WRITE-DENIED`
+- [x] E2E (real binary, Linux): `Scripts/mcp-approvals-proof.py` (42 steps),
+      evidence below. Same CI run: Darwin `RVCLITests` 603/603 (hook grade),
+      Linux `swift test` green
+- [x] ~~Owner L2: `RuntimeAdversarialTests` on a Mac~~: covered by macOS CI above
+- [ ] Owner L4: elicitation through MCP Inspector (UI mode) or Claude Code /
+      Cursor; Touch ID prompt for `rv mcp approve` on a Mac; first run after
+      upgrade asks for `rv mcp trust` once; check for a Keychain prompt on
+      `rv mcp list` with a dev build
+
+E2E evidence (2026-10-13, Linux, `.build/debug/rv`, throwaway HOME under
+`/tmp`; real `~/.config/rv` absent before and after):
+`Scripts/mcp-approvals-proof.py .build/debug/rv` → `42/42 passed`. Steps:
+- `rv mcp import --host cursor` writes `mcp.json`, `mcp-integrity.json`,
+  `approvals.key` (0600); `rv mcp list --json` → `"integrity": "trusted"`.
+- Hand edit (`"allow": ["*"]`): `rv mcp check` exit 1, `untrusted  mcp.json was
+  edited outside rv (contents differ from rv's signature); review it, then run
+  `rv mcp trust``; `rv report --strict` exit 1 `NOT compliant`;
+  `rv mcp import --server fx2` refuses `…; nothing imported`, mcp.json unchanged;
+  a live gateway still pauses `echo` ("rv paused this call").
+- `setsid -w rv mcp trust` → `not trusted: this needs you present: run it
+  yourself in a terminal (this process has no terminal)`; on a pty, typing
+  the shown code → `trusted mcp.json…`, review listed `fx: /usr/bin/python3 …`
+  and `allow *`.
+- Ask call → `rv mcp approve <id>` id in the tool error; serve stderr
+  `approval <id> for fx tool write_note: confirmation code XXXXX-XXXXX`; the
+  code is not in `mcp-approvals.json`. `setsid` approve and pipe-stdin approve
+  refused (no terminal); pty + `AAAAA-AAAAA` → `wrong confirmation code`;
+  pty + printed code (lowercase) → `approved fx write_note once`. Different
+  arguments still pause; the approved call runs once; a repeat pauses.
+- Forged grant (pending entry edited to `"granted"`): call still paused;
+  serve stderr `rejected approval <id> …`; `rv audit --kind mcp.approval`
+  has `forged grant rejected` (denied), the approve with `method: terminal
+  confirmation code`, 3 refused approvals, 2 trusts.
+- Elicitation client (`capabilities.elicitation: {}`): `elicitation/create`
+  names `fx`, `write_note`, `{"note":"elicit"}`; `accept` runs exactly that
+  call; `decline` returns `declined` with `isError`; `mcp.call` audit has
+  `approvedVia: elicitation`.
+- `approve --always` on a pty: allow list gains `write_note`, mcp.json stays
+  trusted, the next call runs without asking.
+
+### 6.2 Protected control-plane paths (PLAN 1.5)
+- [x] Landed before this phase in [#408](https://github.com/christopherkarani/rv/pull/408)
+      (ISO-06): cage writes denied to `.git/hooks`, `.git/config` (literal),
+      the `.git` entry/gitfile, `.rv/**`, `.config/rv/**`, plus the parent-rename
+      bypass; `knownGapWorkspaceGitHooksAndRVConfigurationRemainWritable` became
+      the enforcing `workspaceGitHooksAndRVConfigurationDenyWrites`
+- [x] Enforcing test written: `RuntimeAdversarialTests.gitConfigCannotPlantHooksPathOrFsmonitor`
+      (`git config core.hooksPath|core.fsmonitor|core.sshCommand|include.path`
+      inside the cage fail, `.git/config` unchanged; NOT-TESTED when git can't
+      run in the cage). **Passed on macOS CI** (pr run 38401908672):
+      `adversarial technique=git-config verdict=WRITE-DENIED` (git ran in
+      the cage; not the NOT-TESTED branch)
+- [ ] _blocked: impro-ref (`SeatbeltProfile`)_: finding: `.git/config.worktree`
+      is not denied. In a repo where the host already set
+      `extensions.worktreeConfig`, `git config --worktree core.fsmonitor …`
+      from the cage would plant a command. Add the literal next to `.git/config`
+- [ ] _blocked: impro-ref (`SeatbeltProfile`)_: deny `.git/info/attributes`,
+      `.envrc`, workspace shell rc files (`.zshrc`, `.bashrc`, `.profile`,
+      `.zprofile`, `.bash_profile`); flip the `.zshrc`-stays-writable assertion
+      in `workspaceControlDenyKeepsOrdinaryAndGitMetadataWrites`.
+      `.gitmodules` is left writable: git ignores `update = !cmd` from
+      `.gitmodules`, and denying it breaks submodule edits
+
+### 6.3 Release signing
+Design:
+- `Scripts/sign-macos.sh [--dry-run] [--keychain-from-env] STAGE` signs the
+  staged Mach-O files: `libswiftCompatibilitySpan.dylib` first (library
+  validation under the hardened runtime needs it signed by the same team),
+  then `rv`, `rv-cli`, `rvd`, `rv-workspace-host`, `rv-pty-claim` with
+  `codesign --force --options runtime --timestamp --identifier dev.rv.<name>`.
+  No entitlements: the production peer-trust path
+  (`ProtectedPeerTrustConfiguration`) refuses hardened code carrying
+  injection entitlements and matches `identifier` + Team ID. `rv-agent-bin`
+  symlinks and pack bundles are not code and are not signed.
+- Notarization: zip of the signed files → `xcrun notarytool submit --wait`
+  with the App Store Connect API key; anything but `Accepted` fetches the log
+  and fails. Bare Mach-O files cannot be stapled, so Gatekeeper looks the
+  ticket up online; `spctl -a -t open --context context:primary-signature`
+  is the assessment that works for a bare binary (`-t exec` answers "not an
+  app").
+- `--dry-run` runs anywhere (Linux CI included), needs no secrets, and prints
+  the exact commands with `<DEVELOPER_ID_APP>`-style placeholders. Real runs
+  check that every required variable is set (names only) before anything else.
+- `install.sh` (downloaded release on macOS) checks every downloaded Mach-O
+  before staging: a signature that is present must pass `codesign --verify
+  --strict`, carry `Authority=Developer ID Application`, match the pinned
+  Team ID (`release_team_id`, empty until the owner's first signed release),
+  and pass `spctl` as `Notarized Developer ID`; otherwise refuse and keep the
+  previous install. Unsigned builds only warn while `signed_releases=0`; the
+  owner flips it after the first signed release, after which unsigned needs
+  `RV_INSTALL_ALLOW_UNSIGNED=1`. `RV_INSTALL_BIN` (local stage) is not checked.
+
+- [x] `Scripts/sign-macos.sh` + `Scripts/release.sh` hook
+      (`RV_RELEASE_SIGN=1|dry-run`, validated before the build; unsigned
+      stays the default locally). `pr.yml` hook-grade stages with
+      `RV_RELEASE_SIGN=dry-run`. Tests: `ReleaseSigningScriptTests` (12)
+- [x] `.github/workflows/release.yml`: import the p12 into a temporary
+      keychain from repo secrets, sign + notarize when secrets exist, dry run
+      otherwise (`vars.RV_REQUIRE_SIGNED_RELEASE == '1'` makes missing secrets
+      fail); proofs run on the signed stage; macOS 15 smoke verifies the
+      signature when the gate signed. actionlint clean
+- [x] `install.sh`: signature verification described above; the download
+      path now also fetches `rv-pty-claim` when the release has it (it was
+      never downloaded, so contained PTY launches failed closed on a
+      downloaded install). Tests: 10 new `installSh_*` cases with
+      `codesign`/`spctl` shims (signed, unsigned warn, tampered, ad hoc,
+      foreign team, unnotarized, mixed, switch flipped ± allow, local stage
+      unchecked). `InstallScriptTests` now writes fixtures through
+      `writeExecutableScript` (closed inode): a parallel run hit ETXTBSY once
+- [ ] Owner L4 (macOS, after the secrets exist): push a `v*` tag (or run the
+      workflow) and confirm `Sign and notarize` says `Notarization accepted`,
+      the proofs pass on the hardened binaries, and `macos 15 smoke` runs
+      `Signature verifies on Sequoia`. Then set `signed_releases=1` and
+      `release_team_id="<TEAMID>"` in `install.sh`, set repo variable
+      `RV_REQUIRE_SIGNED_RELEASE=1`, and install once with
+      `curl -fsSL …/install.sh | sh` to see no warning
+- [ ] Owner, after the first signed release: Keychain items written by the
+      old ad hoc builds (`rv secrets`, `rv.approvals`) are tied to the old
+      signature; expect one "allow access" prompt per item, then
+      "Always Allow". Production peer trust uses
+      `requiredIdentifier` `dev.rv.<binary>` + the Team ID
+- [ ] Owner: Developer ID Application certificate (p12 + password), App Store
+      Connect API key; repo secrets `DEVELOPER_ID_APP`, `MACOS_CERT_P12`,
+      `MACOS_CERT_PASSWORD`, `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID`, `NOTARY_KEY_P8`
+
+### 6.4 Test coverage on macOS CI
+- [x] Findings (documented, no workflow fix needed): the `macos-26`/`macos-15`
+      labels are valid and get runners. With an idle queue a macOS job starts
+      in ~10 s (pr run 38401908672, all jobs green). The multi-hour waits
+      (run 38368220402: created 08:17, `macos isolation (A-E)` started 12:03)
+      came from ~8 branches pushing within 10 minutes, each PR run asking for
+      5 macOS jobs against the account's small macOS concurrency.
+      `pr.yml` already cancels superseded runs per ref (`cancel-in-progress`).
+      Mitigation is operational: push phase branches one at a time, or mark
+      older PRs draft-without-push while a new one runs
+- [x] D13 option A draft: `macos-peer-trust` job in `pr.yml`, off unless the
+      repo variable `RV_CI_PEER_TRUST` is `1` (one switch,
+      `continue-on-error: true`); installs dev peer trust with the runner's
+      passwordless sudo, runs the 53 TRANSITIONAL-PEER-AUTH tests (gated by
+      `RV_PEER_TRUST_CI=1` in `Tests/*/PeerTrustCI.swift`; unset they stay
+      skipped exactly as before), then uninstalls trust in an always-run step.
+      **Unverified**: never run (the variable is unset; turning it on is part
+      of the D13 decision, an owner item)
+
+### 6.5 Test hygiene
+- [x] CI check that `~/.config/rv` is untouched by `swift test`: the Linux
+      job fingerprints the tree with `Scripts/config-dir-fingerprint.py`
+      (kind, mode, relative path, SHA-256 or link target per entry) before and
+      after and fails on any diff. Found and fixed one writer:
+      `ServiceRuntimeEvaluateTests.dispatchEvaluate_grantHonorsOnceForCwd`
+      wrote the real `blocks.jsonl`/`blocks.lock` (now an isolated home).
+      E2E: full `swift test` on Linux, 19 bundles green, `diff exit=0`
+- [ ] _blocked: impro-ref (`SeatbeltProfile`, `WorkspaceSessionSupervisor`)_:
+      `workspaces/` is the one known leak, so the check ignores it.
+      `IsolationApply.resolveSeatbeltFacts` calls `resolveProductiveWorkspace`
+      (SeatbeltProfile.swift) with the process HOME, creating
+      `~/.config/rv/workspaces/<slug>-<fnv1a>` from IsolationApplyTests,
+      IsolationApplyLandlockTests and RuntimeResourceAdversarialTests.
+      Fix: thread an injected config dir through both; then drop
+      `--ignore workspaces`. Same dependency: injected config dir instead of
+      `.production` in RVIsolation tests; detach every attached image in a
+      `defer`
+
+### 6.6 Leftovers and crash watchdog
+- [x] `rv doctor` line summarizing `rv workspace leftovers` (macOS; Linux says
+      not applicable). New "Workspaces" section after Config:
+      `N unfinished sessions · N stranded images · N unattached image files`
+      (`stranded images unknown` when `hdiutil info` fails, `no leftovers`
+      when all zero) and a Next action `rv workspace leftovers`. Robot JSON
+      gains an optional `leftovers` object (`applicable`, counts). Never
+      changes the exit code. macOS reuses the read-only
+      `WorkspaceHosts.leftovers()`/`diskLeftovers()` scans (process HOME, like
+      `rv workspace leftovers`); the macOS rendering is **unverified on a
+      Mac** (Linux CI covers the injected probe only). E2E on Linux: real
+      `rv doctor` under a pty prints `Workspaces / not applicable (macOS
+      workspaces only)`; `rv doctor --robot` has `"leftovers":{"applicable":false}`
+- [ ] _blocked: impro-ref (`WorkspaceSessionSupervisor`)_: rvd kqueue
+      `NOTE_EXIT` watchdog on workspace hosts
+
+---
+
+## Phase 7: Enterprise hardening
+
+Branch `governance/phase-7-enterprise-hardening` from phase 6. Checklist is
+filled in when the phase starts (items 7.1-7.7 from the 2026-10-13 brief).
+
+---
+
+## Phase 8: Secrets UX parity
+
+Branch `governance/phase-8-secrets-ux` from phase 7. Checklist is filled in
+when the phase starts (items 8.1-8.4 from the 2026-10-13 brief).
+
+---
+
 ## Risks
 
 | Risk | Mitigation |
@@ -815,3 +1130,26 @@ health from the doctor checks that need no root.
 - 2026-10-13: Merged that rereview into `governance/phase-1-sandbox`. Phase 0
   stays in progress until #394 merges. Phase 1 agent items stay on this
   branch (#395).
+- 2026-10-13: Phase 6.1 landed on `governance/phase-6-hardening`: MCP
+  elicitation approvals held in gateway memory, HMAC-signed grants and
+  confirmation codes (key in Keychain `rv.approvals` / Linux `approvals.key`),
+  forged grants rejected and audited, `rv mcp approve` needs user presence
+  (LocalAuthentication, else `/dev/tty` + the code serve printed, else
+  refuse), mcp.json integrity with `rv mcp trust`, report/check fail on an
+  outside edit. 6.2 git-config cage test written. Suites (Linux): RVMCPTests
+  74, RVCLITests 807, RVHistory/secret broker/HMAC pass; preflight 0
+  failures. `Scripts/mcp-approvals-proof.py` 42/42. macOS-only code paths
+  (LAContext, Seatbelt tests) are unverified here.
+- 2026-10-13: Phase 6.3-6.6 on `governance/phase-6-hardening`. 6.1/6.2 cage
+  tests passed on macOS CI (pr run 38401908672). 6.3: `Scripts/sign-macos.sh`
+  (hardened runtime, timestamp, notarytool; dry-run prints the plan without
+  secret values), `RV_RELEASE_SIGN=1|dry-run` in `release.sh`, release.yml
+  signs when the six secrets exist and verifies on macOS 15, `install.sh`
+  verifies signatures (switch `signed_releases`, off until the first signed
+  release). 6.4: queue waits explained (burst of pushes, not labels); D13
+  option A job drafted behind `RV_CI_PEER_TRUST`. 6.5: CI fails if
+  `swift test` touches `~/.config/rv`; fixed one writer; `workspaces/` leak
+  blocked on impro-ref. 6.6: `rv doctor` Workspaces line. Linux: full
+  `swift test` 4846 tests / 19 bundles green, config untouched, preflight 0
+  failures, shellcheck + actionlint clean. Blocked on impro-ref: 6.5 injected
+  config dir, 6.6 watchdog. Next: Phase 7.

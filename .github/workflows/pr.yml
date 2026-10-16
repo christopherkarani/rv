@@ -47,6 +47,12 @@ jobs:
           restore-keys: |
             swiftpm-test-${{ runner.os }}-${{ runner.arch }}-
 
+      # InstallScriptTests mount codesign/spctl shims over /usr/bin and
+      # /usr/sbin inside an unprivileged user namespace; Ubuntu 24.04
+      # runners restrict those by default (uid_map write fails).
+      - name: Allow unprivileged user namespaces for test shims
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Tarball runtime deps (not apt swift)
         run: |
           sudo apt-get update
@@ -96,6 +102,12 @@ jobs:
               exit 1
               ;;
           esac
+
+      # Tests must not touch the developer's real rv config. `workspaces/` is
+      # the one known leak (IsolationApply resolves the workspace home from
+      # the process HOME; injecting it waits on impro-ref, PLAN 6.5).
+      - name: Fingerprint ~/.config/rv before tests
+        run: python3 Scripts/config-dir-fingerprint.py "$HOME/.config/rv" --ignore workspaces > "$RUNNER_TEMP/config-rv.before"
 
       # T8 ABI gate (Item 5): measure the runner kernel's Landlock ABI with
       # the same VERSION probe the C shim uses
@@ -156,6 +168,14 @@ jobs:
 
       - name: Swift tests
         run: swift test
+
+      - name: ~/.config/rv untouched by swift test
+        run: |
+          python3 Scripts/config-dir-fingerprint.py "$HOME/.config/rv" --ignore workspaces > "$RUNNER_TEMP/config-rv.after"
+          if ! diff -u "$RUNNER_TEMP/config-rv.before" "$RUNNER_TEMP/config-rv.after"; then
+            echo "::error::swift test changed ~/.config/rv (diff above)"
+            exit 1
+          fi
 
       - name: C hook units
         run: Sources/rv-c/tests/run.sh
@@ -357,6 +377,7 @@ jobs:
       - name: Stage release binaries
         env:
           RV_RELEASE_SKIP_C_UNITS: "1"
+          RV_RELEASE_SIGN: dry-run
         run: Scripts/release.sh
 
       - name: C hook process proof
@@ -451,3 +472,63 @@ jobs:
 
       - name: C units on the Sequoia clang
         run: Sources/rv-c/tests/run.sh
+
+  # D13 option A draft (PLAN 6.4). One switch: repo variable
+  # RV_CI_PEER_TRUST=1. Installs development peer trust with the runner's
+  # passwordless sudo, runs the 55 TRANSITIONAL-PEER-AUTH tests, and always
+  # removes the trust. Non-blocking while the tests still connect from the
+  # unhardened test runner (no component role); the D13 rewrite drives the
+  # installed, pinned rv CLI instead.
+  macos-peer-trust:
+    name: macos peer trust (draft)
+    if: vars.RV_CI_PEER_TRUST == '1'
+    runs-on: macos-26
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Swift toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Toolchains/swift-6.4-RELEASE.xctoolchain
+            ~/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain
+          key: swift-6.4-RELEASE-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Swift 6.4
+        run: Scripts/install-official-swift-macos.sh
+
+      - name: Cache SwiftPM packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/checkouts
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.swift-version', 'Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build products and tests
+        run: Scripts/swift-6.4 build --build-tests
+
+      - name: Install development peer trust
+        run: |
+          set -euo pipefail
+          bin="$(Scripts/swift-6.4 build --show-bin-path)"
+          sudo Scripts/phase2a-development-trust.sh install \
+            --host "$bin/rv-workspace-host" --service "$bin/rvd" --cli "$bin/rv"
+
+      - name: TRANSITIONAL-PEER-AUTH tests
+        env:
+          RV_PEER_TRUST_CI: "1"
+        run: >-
+          Scripts/swift-6.4 test --skip-build --filter
+          'WorkspaceHostTests|RuntimeTerminalTests|RuntimeResourceAdversarialTests|LocalTerminalRestoreTests|WorkspaceTUIIntegrationTests|OpenCodeCommandTests'
+
+      - name: Remove development peer trust
+        if: always()
+        run: |
+          if [ -e "/Library/Application Support/RV/peer-trust.json" ]; then
+            sudo Scripts/phase2a-development-trust.sh uninstall
+          fi

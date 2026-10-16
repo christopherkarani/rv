@@ -82,7 +82,8 @@ public enum AuditOCSF {
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]) else {
             return nil
         }
-        return String(data: data, encoding: .utf8)
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        return DisplayedText.escapeJSONScalars(text)
     }
 
     /// Stable id so a SIEM can drop the duplicates at-least-once delivery may send.
@@ -96,7 +97,7 @@ public enum AuditOCSF {
 
     static func mappedClass(_ event: AuditEvent) -> Class {
         let kind = event.kind
-        if kind == .mcpCall || kind == .secretUse {
+        if kind == .mcpCall || kind == .mcpApproval || kind == .secretUse {
             return Class(uid: 6003, name: "API Activity", category: 6, categoryName: "Application Activity", activity: 99, activityName: "Other")
         }
         if kind == .egressDenied {

@@ -416,14 +416,14 @@ enum PolicyShowRun {
             secretAllowPaths: exemptions
         )
         let data = try encoder.encode(document)
-        return String(decoding: data, as: UTF8.self)
+        return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
     }
 
     static func robotEffective(_ rules: [TypedRule]) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let data = try encoder.encode(PolicyShowEffectiveSnapshot(effective: rules))
-        return String(decoding: data, as: UTF8.self)
+        return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
     }
 
     static func robotCombined(
@@ -442,7 +442,7 @@ enum PolicyShowRun {
                 secretAllowPaths: exemptions
             )
         )
-        return String(decoding: data, as: UTF8.self)
+        return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
     }
 }
 
@@ -483,7 +483,7 @@ enum PolicyListRun {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let data = try encoder.encode(revisions)
-        return String(decoding: data, as: UTF8.self)
+        return DisplayedText.escapeJSONScalars(String(decoding: data, as: UTF8.self))
     }
 }
 
@@ -592,5 +592,5 @@ private func prettyOrigin(_ origin: TypedRuleOrigin, _ rules: [TypedRule]) -> St
 }
 
 private func formatRule(_ rule: TypedRule) -> String {
-    "\(rule.id.rawValue) \(rule.verdict.rawValue) \(predicateText(rule.predicate))"
+    "\(DisplayedText.field(rule.id.rawValue)) \(rule.verdict.rawValue) \(predicateText(rule.predicate))"
 }

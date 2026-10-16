@@ -160,6 +160,77 @@ struct AuditForwardTests {
         #expect(resolved == ["Authorization": "Bearer tok123", "X-Plain": "p"])
         #expect((try? AuditForwardRun.resolveHeaders(
             ["A": "${secret:NOPE}"], secrets: { .success(secrets) }, resolver: resolver).get()) == nil)
+
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let raw = "\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{202E}" + sentence
+        guard case .failure(let header) = AuditForwardRun.parseHeaders([raw]) else {
+            Issue.record("header without '=' was accepted")
+            return
+        }
+        #expect(header.message.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(header.message.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(header.message.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(header.message.contains("got "))
+        #expect(header.message.contains("\\u001b[2J"))
+        #expect(header.message.contains("\\u2028"))
+        #expect(header.message.contains("\\u202e"))
+        #expect(header.message.contains("\\\\u001b") == false)
+        guard case .failure(let secret) = AuditForwardRun.resolveHeaders(
+            ["A": "${secret:\(raw)}"], secrets: { .success(secrets) }, resolver: resolver)
+        else {
+            Issue.record("unknown header secret was accepted")
+            return
+        }
+        #expect(secret.message.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(secret.message.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(secret.message.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(secret.message.contains("header secret "))
+        #expect(secret.message.contains("\\u001b[2J"))
+        #expect(secret.message.contains("\\u202e"))
+        #expect(secret.message.contains("\\\\u001b") == false)
+    }
+
+    @Test func cursorPathEscapesControlsFromHome() throws {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let home = URL(fileURLWithPath: "/tmp/h\u{1B}[2J\u{1B}[H\u{2028}\(sentence)\u{202E}\(sentence)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let config = home.appendingPathComponent(".config/rv", isDirectory: true)
+        let url = try AuditForwardRun.destination("https://example.com").get()
+        let cursor = AuditForwardRun.cursorURL(config, destination: url)
+        try FileManager.default.createDirectory(at: cursor.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("not-a-cursor".utf8).write(to: cursor)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: cursor.path)
+
+        let receiver = Receiver()
+        let failed = AuditForwardRun.forward(
+            options: AuditForwardRun.Options(url: url), configDirectory: config, hostName: "h", transport: receiver.transport)
+        guard case .failure(let failure) = failed else {
+            Issue.record("a non-cursor file must fail")
+            return
+        }
+        func spelled(_ text: String) {
+            #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+            #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+            #expect(text.contains("\\u001b[2J"))
+            #expect(text.contains("\\u2028"))
+            #expect(text.contains("\\u202e"))
+            #expect(text.contains("\\\\u001b") == false)
+            let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+            #expect(lines.contains(sentence) == false)
+        }
+        #expect(failure.message.contains("is not a forward cursor"))
+        spelled(failure.message)
+
+        try FileManager.default.removeItem(at: cursor)
+        try FileManager.default.createDirectory(at: cursor, withIntermediateDirectories: true)
+        let blocked = AuditForwardRun.startFromNow(options: AuditForwardRun.Options(url: url), configDirectory: config)
+        guard case .failure(let write) = blocked else {
+            Issue.record("a directory at the cursor path must fail")
+            return
+        }
+        #expect(write.message.contains("could not write "))
+        spelled(write.message)
     }
 }
 

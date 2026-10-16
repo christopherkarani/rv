@@ -152,6 +152,36 @@ public struct DoctorHostView: Equatable, Sendable {
     }
 }
 
+/// Counts behind `rv workspace leftovers`.
+public struct DoctorLeftoversSummary: Equatable, Sendable {
+    /// Workspace sessions the lifecycle log never closed.
+    public var sessions: Int
+    /// Attached rv images no live host owns; nil when `hdiutil info` failed.
+    public var strandedImages: Int?
+    /// rv image files in the temporary directory that nothing has attached.
+    public var unattachedImageFiles: Int
+
+    /// Creates leftover counts.
+    public init(sessions: Int, strandedImages: Int?, unattachedImageFiles: Int) {
+        self.sessions = sessions
+        self.strandedImages = strandedImages
+        self.unattachedImageFiles = unattachedImageFiles
+    }
+
+    /// Whether every count is known to be zero.
+    public var isEmpty: Bool {
+        sessions == 0 && strandedImages == 0 && unattachedImageFiles == 0
+    }
+}
+
+/// Workspace leftovers as doctor reports them. Informational: never grades health.
+public enum DoctorLeftoversView: Equatable, Sendable {
+    /// Contained workspaces exist only on macOS.
+    case notApplicable
+    /// Leftover counts on a platform with contained workspaces.
+    case summary(DoctorLeftoversSummary)
+}
+
 /// Complete read-only health model for doctor output.
 public struct DoctorViewModel: Equatable, Sendable {
     /// Service health facts.
@@ -168,6 +198,8 @@ public struct DoctorViewModel: Equatable, Sendable {
     public var safety: SafetyLevel
     /// Whether the denial ledger is writing.
     public var blocksEnabled: Bool
+    /// Workspace leftovers, when the caller probed for them.
+    public var leftovers: DoctorLeftoversView?
 
     /// Creates a complete doctor health model.
     public init(
@@ -177,7 +209,8 @@ public struct DoctorViewModel: Equatable, Sendable {
         config: DoctorConfigState,
         grade: DoctorProtectionGrade = .hook,
         safety: SafetyLevel = .normal,
-        blocksEnabled: Bool = true
+        blocksEnabled: Bool = true,
+        leftovers: DoctorLeftoversView? = nil
     ) {
         self.service = service
         self.packs = packs
@@ -186,6 +219,7 @@ public struct DoctorViewModel: Equatable, Sendable {
         self.grade = grade
         self.safety = safety
         self.blocksEnabled = blocksEnabled
+        self.leftovers = leftovers
     }
 
     /// Whether doctor should return a successful exit code. Graded from

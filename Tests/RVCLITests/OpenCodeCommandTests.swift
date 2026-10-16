@@ -9,7 +9,7 @@ import Testing
 #if os(macOS)
 /// Transitional peer-auth disables apply on macOS only; the Linux
 /// direct-spawn path in these tests keeps running.
-private let disableForTransitionalPeerAuth = true
+private let disableForTransitionalPeerAuth = !peerTrustCI
 #else
 private let disableForTransitionalPeerAuth = false
 #endif
@@ -175,7 +175,7 @@ struct OpenCodeCommandTests {
 /// the persistent workspace host instead of owning a workspace.
 @Suite("OpenCode frontend", .serialized)
 struct OpenCodeFrontendTests {
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func frontend_runsOnThePersistentHost() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func frontend_runsOnThePersistentHost() throws {
         let fixture = try OpenCodeFrontendFixture()
         defer { fixture.remove() }
         let started = try runRV(
@@ -210,7 +210,7 @@ struct OpenCodeFrontendTests {
         #expect(status.stdout.contains("phase active"))
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func frontend_childExitStatusPropagates() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func frontend_childExitStatusPropagates() throws {
         let fixture = try OpenCodeFrontendFixture()
         defer { fixture.remove() }
         let launched = try runRV(
@@ -223,7 +223,7 @@ struct OpenCodeFrontendTests {
         #expect(launched.status == 37)
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func frontend_defaultExecutableSearchesAbsolutePATH() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func frontend_defaultExecutableSearchesAbsolutePATH() throws {
         let fixture = try OpenCodeFrontendFixture()
         defer { fixture.remove() }
         let bin = fixture.root.appendingPathComponent("bin", isDirectory: true)
@@ -261,7 +261,7 @@ struct OpenCodeFrontendTests {
         #expect(try String(contentsOf: marker, encoding: .utf8) == "installed")
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func frontend_longCommandLineSurvivesTheControlProtocol() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func frontend_longCommandLineSurvivesTheControlProtocol() throws {
         let fixture = try OpenCodeFrontendFixture()
         defer { fixture.remove() }
         // 4 KiB single argument: past the old 256-byte cliff, inside the
@@ -295,7 +295,7 @@ struct OpenCodeFrontendTests {
         #expect(FileManager.default.fileExists(atPath: marker.path) == false)
     }
 
-    @Test(.disabled("TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func frontend_matchesWorkspaceRunEnvironment() throws {
+    @Test(.enabled(if: peerTrustCI, "TRANSITIONAL-PEER-AUTH: code-identity roles reject test binaries and scoped operator permits deny launch/terminal ops; re-enable when test trust + permits land")) func frontend_matchesWorkspaceRunEnvironment() throws {
         let fixture = try OpenCodeFrontendFixture()
         defer { fixture.remove() }
         let viaRun = try runRV(

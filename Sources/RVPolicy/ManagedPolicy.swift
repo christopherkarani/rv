@@ -176,7 +176,8 @@ extension ManagedPolicy {
             if secrets["allowedSources"] != nil {
                 let kinds = try strings(secrets["allowedSources"], "secrets.allowedSources")
                 if let unknown = kinds.first(where: { secretSourceKinds.contains($0) == false }) {
-                    throw ManagedPolicyError("unknown secret source \"\(unknown)\" in secrets.allowedSources")
+                    throw ManagedPolicyError(
+                        "unknown secret source \"\(DisplayedText.field(unknown))\" in secrets.allowedSources")
                 }
                 policy.secrets.allowedSources = kinds
             }
@@ -201,7 +202,7 @@ extension ManagedPolicy {
                     }
                     for (name, value) in map {
                         guard case .string(let text) = value else {
-                            throw ManagedPolicyError("\"audit.forward.headers.\(name)\" must be a string")
+                            throw ManagedPolicyError("\"audit.forward.headers.\(DisplayedText.field(name))\" must be a string")
                         }
                         headers[name] = text
                     }
@@ -214,7 +215,7 @@ extension ManagedPolicy {
 
     private static func keys(_ object: [String: JSONValue], allowed: Set<String>, context: String) throws {
         if let unknown = object.keys.sorted().first(where: { allowed.contains($0) == false }) {
-            throw ManagedPolicyError("unknown key \"\(unknown)\" in \(context)")
+            throw ManagedPolicyError("unknown key \"\(DisplayedText.field(unknown))\" in \(context)")
         }
     }
 

@@ -90,7 +90,8 @@ struct MCPConfigurationTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("rv-mcp-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let configuration = try decode(Self.example).get()
-        _ = try configuration.write(configDirectory: directory).get()
+        let signer = try #require(MCPApprovalKeyStore.file(configDirectory: directory).loadOrCreate())
+        _ = try configuration.write(configDirectory: directory, signer: signer).get()
         var info = stat()
         #expect(stat(MCPConfiguration.fileURL(configDirectory: directory).path, &info) == 0)
         #expect(info.st_mode & 0o777 == 0o600)
@@ -109,5 +110,25 @@ struct MCPConfigurationTests {
             Issue.record("group-writable mcp.json was accepted")
             return
         }
+    }
+
+    @Test func unknownKeysAreEscaped() {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let top = "{\"version\":1,\"\\u001b[2J\\u001b[H\(sentence)\":true}"
+        guard case .failure(let topError) = decode(top) else {
+            Issue.record("unknown key was accepted")
+            return
+        }
+        #expect(topError.message.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(topError.message.contains("\\u001b[2J"))
+        #expect(topError.message.contains("unknown key"))
+        let line = "{\"version\":1,\"servers\":[{\"name\":\"github\",\"command\":\"x\",\"env\":{\"\\u2028\(sentence)\":\"v\"}}]}"
+        guard case .failure(let envError) = decode(line) else {
+            Issue.record("env key was accepted")
+            return
+        }
+        #expect(envError.message.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(envError.message.contains("\\u2028"))
+        #expect(envError.message.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" }).map(String.init).contains(sentence) == false)
     }
 }

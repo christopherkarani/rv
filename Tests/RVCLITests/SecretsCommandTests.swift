@@ -5,6 +5,7 @@ import Glibc
 #endif
 import Foundation
 import RVIsolation
+import RVPolicy
 import Synchronization
 import Testing
 @testable import RVCLI
@@ -238,6 +239,114 @@ struct SecretsCommandTests {
         #expect(report.findings == [SecretLeakFinding(path: ".env", line: 2, secret: "GH_TOKEN")])
         let text = SecretsRun.scanText(report)
         #expect(text == ".env:2  GH_TOKEN\n")
+    }
+
+    @Test func secretsRobotJSONEscapesLineAndBidiScalars() throws {
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let row = SecretsRun.CheckRow(
+            name: "TOKEN",
+            source: "keychain rv.secrets/\u{2028}" + sentence,
+            ok: false,
+            fingerprint: nil,
+            error: "\u{2029}" + sentence + "\u{202E}" + sentence)
+        let robot = SecretsRun.robotJSON([row])
+        #expect(robot.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(robot.unicodeScalars.contains { $0.value == 0x2029 } == false)
+        #expect(robot.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(robot.contains("\\u2028"))
+        #expect(robot.contains("\\u2029"))
+        #expect(robot.contains("\\u202e"))
+        let parsed = try JSONSerialization.jsonObject(with: Data(robot.utf8)) as? [[String: Any]]
+        #expect(parsed?.first?["name"] as? String == "TOKEN")
+        #expect(parsed?.first?["ok"] as? Bool == false)
+    }
+
+    @Test func secretNameAndScanPathAreEscaped() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let name = "\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{202E}" + sentence
+        let environment = fixture.environment()
+        let configuration = SecretsConfiguration(secrets: [])
+        guard case .failure(let missing) = SecretsRun.check(configuration, names: [name], environment: environment) else {
+            Issue.record("undefined name was accepted")
+            return
+        }
+        #expect(missing.message.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(missing.message.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(missing.message.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(missing.message.contains("\\u001b[2J"))
+        #expect(missing.message.contains("\\u2028"))
+        #expect(missing.message.contains("\\u202e"))
+        #expect(missing.message.contains("is not defined in secrets.json"))
+        #expect(missing.message.contains("\\\\u001b") == false)
+
+        guard case .failure(let created) = SecretsRun.set(
+            name: name, value: Data("x".utf8), definition: nil, agents: [], description: nil, environment: environment)
+        else {
+            Issue.record("new name was stored")
+            return
+        }
+        #expect(created.message.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(created.message.contains("\\u001b[2J"))
+        #expect(created.message.contains("is new: pass --gateway"))
+        #expect(created.message.contains("\\\\u001b") == false)
+
+        let removed = try SecretsRun.remove(name: name, environment: environment).get()
+        #expect(removed.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(removed.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(removed.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(removed.contains("Deleted "))
+        #expect(removed.contains("\\u001b[2J"))
+        #expect(removed.contains("\\u202e"))
+        let removedLines = removed.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+        #expect(removedLines.contains(sentence) == false)
+
+        let refusal = SecretsRun.scanNotADirectory("/tmp/" + name)
+        #expect(refusal.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(refusal.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(refusal.contains("\\u001b[2J"))
+        #expect(refusal.contains("is not a directory"))
+        #expect(refusal.contains("\\\\u001b") == false)
+
+        let scan = SecretsRun.scanText(SecretsRun.ScanReport(
+            findings: [SecretLeakFinding(path: name, line: 4, secret: "GH_TOKEN")], skipped: []))
+        #expect(scan.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(scan.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(scan.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(scan.contains("\\u001b[2J"))
+        #expect(scan.contains("\\u2028"))
+        #expect(scan.contains(":4  GH_TOKEN"))
+        let scanLines = scan.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+        #expect(scanLines.contains(sentence) == false)
+    }
+
+    @Test func secretsCheckPrintsAnEscapedUnknownSource() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let carrier = "\\u001b[2J\\u001b[H\(sentence)\\u2028\(sentence)\\u202e\(sentence)"
+        let policy = "{\"version\":1,\"secrets\":{\"allowedSources\":[\"\(carrier)\"]}}"
+        guard case .failure(let error) = ManagedPolicy.decode(Data(policy.utf8)) else {
+            Issue.record("unknown source was accepted")
+            return
+        }
+        try Data("""
+            {"version":1,"secrets":[{"name":"GH","source":{"hostEnvironment":{"variable":"GH"}},"delivery":{"environment":{}}}]}
+            """.utf8).write(to: fixture.secretsFile)
+        chmod(fixture.secretsFile.path, 0o600)
+        var environment = fixture.environment(host: ["GH": "value-good-12345678"])
+        environment.managed = .invalid(error.message)
+        let rows = try SecretsRun.check(
+            try SecretsRun.configuration(environment).get(), names: [], environment: environment).get()
+        let text = SecretsRun.checkText(rows)
+        #expect(text.contains("FAIL"))
+        #expect(text.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(text.unicodeScalars.contains { $0.value == 0x202E } == false)
+        #expect(text.contains("\\u001b[2J"))
+        #expect(text.contains("\\u202e"))
+        #expect(text.contains("\\\\u001b") == false)
     }
 }
 

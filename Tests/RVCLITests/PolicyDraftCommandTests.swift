@@ -35,6 +35,38 @@ struct PolicyDraftCommandTests {
         }
     }
 
+    @Test func robotEscapesEnglishSeparators() async throws {
+        try await withTempPolicyContext { home, workspace in
+            let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+            let english = "x\u{1B}" + sentence + "\u{2028}" + sentence + "\u{2029}" + sentence + "\u{202E}" + sentence
+            let result = try await PolicyDraftRun.execute(
+                english: english,
+                save: false,
+                robot: true,
+                home: home,
+                workspace: workspace,
+                compiler: PreviewEnglishCompiler()
+            )
+            #expect(result.outcome == .preview(saved: false))
+            #expect(result.text.unicodeScalars.contains { $0.value == 0x1B } == false)
+            #expect(result.text.unicodeScalars.contains { $0.value == 0x2028 } == false)
+            #expect(result.text.unicodeScalars.contains { $0.value == 0x2029 } == false)
+            #expect(result.text.unicodeScalars.contains { $0.value == 0x202E } == false)
+            #expect(result.text.contains("\\u001b"))
+            #expect(result.text.contains("\\u2028"))
+            #expect(result.text.contains("\\u2029"))
+            #expect(result.text.contains("\\u202e"))
+            #expect(result.text.contains("\"english\""))
+            let object = try JSONSerialization.jsonObject(with: Data(result.text.utf8))
+            let dictionary = try #require(object as? [String: Any])
+            let rule = try #require(dictionary["rule"] as? [String: Any])
+            #expect(rule["english"] as? String != nil)
+            let split = result.text.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" || $0 == "\u{2029}" }).map(String.init)
+            #expect(split.contains(sentence) == false)
+            assertNoPolicyWrites(home: home, workspace: workspace)
+        }
+    }
+
     @Test func draftEnglish_robotJSON_includesGitPushAndAllowedToSave() async throws {
         try await withTempPolicyContext { home, workspace in
             let result = try await PolicyDraftRun.execute(
@@ -467,6 +499,23 @@ private func policyDraftCommandSourceURL() -> URL {
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .appendingPathComponent("Sources/RVCLI/Commands/PolicyDraftCommand.swift")
+}
+
+private struct PreviewEnglishCompiler: EnglishCompiler {
+    func compile(_ english: String) async throws -> EnglishCompileResult {
+        .preview(
+            TypedRulePreview(
+                sentence: "Always block force-push to main",
+                rule: PolicyDocumentRule(
+                    id: RuleID(pack: .typedGit, pattern: "force-push-main"),
+                    verdict: .deny,
+                    predicate: .gitPush(force: .exactly(.force), branch: "main"),
+                    english: english
+                ),
+                allowedToSave: true
+            )
+        )
+    }
 }
 
 private struct UnavailableEnglishCompiler: EnglishCompiler {

@@ -266,6 +266,15 @@ public enum RVDigest {
         return hash.digest()
     }
 
+    /// RFC 2104 HMAC over this SHA-256, so MACs match on every platform.
+    public static func hmacSHA256(key: [UInt8], message: [UInt8]) -> [UInt8] {
+        let blockSize = 64
+        var block = key.count > blockSize ? sha256(key) : key
+        block += [UInt8](repeating: 0, count: blockSize - block.count)
+        let inner = sha256(block.map { $0 ^ 0x36 } + message)
+        return sha256(block.map { $0 ^ 0x5c } + inner)
+    }
+
     /// Chunked SHA-256 over file bytes. Nil when the file cannot be read.
     /// `maxBytes` refuses a file that grows past the cap instead of hashing to EOF.
     public static func sha256HexOfFile(atPath path: String, maxBytes: UInt64? = nil) -> String? {

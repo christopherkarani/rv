@@ -79,3 +79,25 @@ private let missingHosts = HookHost.setupSlotOrder.map {
 
     #expect(model.isHealthy == false)
 }
+
+@Test func doctorViewModel_leftoversNeverChangeHealth() {
+    var model = DoctorViewModel(
+        service: DoctorServiceView(
+            state: .running,
+            protocolName: "rv.ipc.v1",
+            serviceSemver: "1.0.0",
+            label: "dev.rv.evaluate",
+            fallback: .ready,
+            launchAgent: .loaded
+        ),
+        packs: DoctorPacksView(enabled: dayOnePackIDs, registry: .ready),
+        hosts: [],
+        config: .readable
+    )
+    #expect(model.leftovers == nil)
+    #expect(model.isHealthy)
+    model.leftovers = .summary(DoctorLeftoversSummary(sessions: 3, strandedImages: 100, unattachedImageFiles: 484))
+    #expect(model.isHealthy)
+    #expect(DoctorLeftoversSummary(sessions: 0, strandedImages: 0, unattachedImageFiles: 0).isEmpty)
+    #expect(DoctorLeftoversSummary(sessions: 0, strandedImages: nil, unattachedImageFiles: 0).isEmpty == false)
+}

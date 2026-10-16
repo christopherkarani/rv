@@ -17,6 +17,8 @@ public struct AuditEventKind: RawRepresentable, Sendable, Hashable, Codable {
     public static let runtimeEnded = AuditEventKind(rawValue: "runtime.ended")
     public static let secretUse = AuditEventKind(rawValue: "secret.use")
     public static let mcpCall = AuditEventKind(rawValue: "mcp.call")
+    /// Approvals granted, refused, or rejected as forged; trust of mcp.json.
+    public static let mcpApproval = AuditEventKind(rawValue: "mcp.approval")
 
     public static func workspace(_ phase: String) -> AuditEventKind {
         AuditEventKind(rawValue: "workspace.\(phase)")

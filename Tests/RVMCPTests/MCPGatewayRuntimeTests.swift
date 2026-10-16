@@ -114,7 +114,7 @@ struct MCPGatewayRuntimeTests {
         let audits = RecordedAudits()
         let core = MCPGatewayCore(
             configuration: configuration, upstreams: planned.map { $0.0 },
-            approvals: MCPApprovalGate(consumeGrant: { _, _, _ in nil }, request: { _, _, _, _ in nil }))
+            approvals: MCPApprovalGate(consumeGrant: { _, _, _, _ in .none }, request: { _, _, _, _ in nil }))
         let runtime = MCPGatewayRuntime(
             core: core, launches: planned.map { $0.1 },
             input: client.toGateway.fileHandleForReading.fileDescriptor,

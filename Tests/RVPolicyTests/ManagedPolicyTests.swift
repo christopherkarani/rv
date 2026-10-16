@@ -169,4 +169,23 @@ struct ManagedPolicyLocationTests {
         try bundle.write("policy.json", Data(#"{"version": 1, "mcp": {"block": ["x"]}}"#.utf8))
         #expect(bundle.location().load() == .invalid("unknown key \"block\" in mcp"))
     }
+
+    @Test func unknownKeyAndHeaderNameAreEscaped() {
+        func message(_ json: String) -> String? {
+            if case .failure(let error) = ManagedPolicy.decode(Data(json.utf8)) { return error.message }
+            return nil
+        }
+        let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
+        let key = message("{\"version\":1,\"\\u2028\(sentence)\":true}")
+        #expect(key?.unicodeScalars.contains { $0.value == 0x2028 } == false)
+        #expect(key?.contains("\\u2028") == true)
+        #expect(key?.contains("unknown key") == true)
+        let header = message(
+            "{\"version\":1,\"audit\":{\"forward\":{\"url\":\"https://example.com\",\"headers\":{\"\\u001b[2J\\u001b[H\(sentence)\":true}}}}"
+        )
+        #expect(header?.unicodeScalars.contains { $0.value == 0x1B } == false)
+        #expect(header?.contains("\\u001b[2J") == true)
+        #expect(header?.contains("audit.forward.headers.") == true)
+        #expect(header?.split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" }).map(String.init).contains(sentence) == false)
+    }
 }

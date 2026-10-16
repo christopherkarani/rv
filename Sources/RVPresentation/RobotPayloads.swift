@@ -81,6 +81,21 @@ public struct DoctorRobotPayload: Equatable, Sendable, Encodable {
         }
     }
 
+    /// Counts are omitted when not applicable; `stranded_images` also when unknown.
+    public struct Leftovers: Equatable, Sendable, Encodable {
+        public var applicable: Bool
+        public var sessions: Int?
+        public var strandedImages: Int?
+        public var unattachedImageFiles: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case applicable
+            case sessions
+            case strandedImages = "stranded_images"
+            case unattachedImageFiles = "unattached_image_files"
+        }
+    }
+
     public var schema: String
     public var service: Service
     public var packs: Packs
@@ -88,6 +103,7 @@ public struct DoctorRobotPayload: Equatable, Sendable, Encodable {
     public var config: String
     public var grade: String
     public var isHealthy: Bool
+    public var leftovers: Leftovers?
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -97,6 +113,7 @@ public struct DoctorRobotPayload: Equatable, Sendable, Encodable {
         case config
         case grade
         case isHealthy = "ok"
+        case leftovers
     }
 }
 
@@ -217,8 +234,23 @@ public func doctorRobotPayload(from model: DoctorViewModel) -> DoctorRobotPayloa
         ),
         config: model.config.rawValue,
         grade: model.grade.rawValue,
-        isHealthy: model.isHealthy
+        isHealthy: model.isHealthy,
+        leftovers: model.leftovers.map(doctorRobotLeftovers)
     )
+}
+
+private func doctorRobotLeftovers(_ view: DoctorLeftoversView) -> DoctorRobotPayload.Leftovers {
+    switch view {
+    case .notApplicable:
+        DoctorRobotPayload.Leftovers(applicable: false)
+    case .summary(let summary):
+        DoctorRobotPayload.Leftovers(
+            applicable: true,
+            sessions: summary.sessions,
+            strandedImages: summary.strandedImages,
+            unattachedImageFiles: summary.unattachedImageFiles
+        )
+    }
 }
 
 public func packsRobotPayload(

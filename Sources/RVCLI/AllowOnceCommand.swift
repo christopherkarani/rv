@@ -325,7 +325,7 @@ struct AllowOnceRedeem: AsyncParsableCommand {
                 )
             }
             ctx.writeStdout(
-                "granted \(redeemed.row.commandRedacted) (cwd \(redeemed.row.cwd.rawValue))\n"
+                "granted \(DisplayedText.field(redeemed.row.commandRedacted)) (cwd \(DisplayedText.field(redeemed.row.cwd.rawValue)))\n"
             )
         } catch AllowOnceError.ttyRequired {
             try ctx.fail(
@@ -465,11 +465,11 @@ struct AllowOnceList: AsyncParsableCommand {
         for row in rows {
             let invoked: String
             if let tag = row.invocationDisplay {
-                invoked = "\(tag) \(row.commandRedacted)"
+                invoked = "\(DisplayedText.field(tag)) \(DisplayedText.field(row.commandRedacted))"
             } else {
-                invoked = row.commandRedacted
+                invoked = DisplayedText.field(row.commandRedacted)
             }
-            ctx.writeStdout("\(row.kind.rawValue) \(invoked) cwd=\(row.cwd.rawValue)\n")
+            ctx.writeStdout("\(row.kind.rawValue) \(invoked) cwd=\(DisplayedText.field(row.cwd.rawValue))\n")
         }
     }
 }

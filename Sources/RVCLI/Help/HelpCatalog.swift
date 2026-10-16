@@ -446,11 +446,13 @@ enum HelpCatalog {
                 HelpRow(name: "rv mcp setup --host <host> [--server <name>...] [--rv-path <path>] [--undo]"),
                 HelpRow(name: "rv mcp serve --server <name> [--server <name>...]"),
                 HelpRow(name: "rv mcp pending | approve <id> [--always] | deny <id>"),
+                HelpRow(name: "rv mcp trust"),
             ]),
             HelpSection(heading: "Tool policy", rows: [
                 HelpRow(name: "order", description: "deny glob > ask glob > allow glob > server default > defaultDecision"),
                 HelpRow(name: "deny", description: "Hidden from the agent; calls fail"),
-                HelpRow(name: "ask", description: "Paused until `rv mcp approve`; a grant covers one identical call"),
+                HelpRow(name: "ask", description: "Approved in the host's prompt, or `rv mcp approve`; one identical call"),
+                HelpRow(name: "approve", description: "Needs Touch ID or your password. A pseudo-terminal cannot approve"),
                 HelpRow(name: "secrets", description: "\"secrets\": {\"VAR\": \"NAME\"} or ${secret:NAME} in args; values scrubbed"),
                 HelpRow(name: "sandbox", description: "\"sandbox\": {\"network\": false} cages the server (macOS)"),
             ]),
@@ -464,6 +466,9 @@ enum HelpCatalog {
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "config", description: "~/.config/rv/mcp.json (owner-only)"),
+                HelpRow(name: "integrity", description: "An outside edit does not launch until `rv mcp trust` (needs you present)"),
+                HelpRow(name: "import", description: "Copying a host command into mcp.json needs you present"),
+                HelpRow(name: "limits", description: "A process running as you can still edit or delete ~/.config/rv; rv flags it"),
                 HelpRow(
                     name: "hosts",
                     description: "Claude Code, Claude Desktop, Cursor, Codex, OpenCode, Gemini, Antigravity, VS Code, Windsurf"

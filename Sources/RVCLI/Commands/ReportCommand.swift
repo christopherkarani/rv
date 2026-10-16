@@ -22,6 +22,7 @@ enum ReportRun {
         var userName: String
         var userID: UInt32
         var fileExists: @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+        var approvalKeys: MCPApprovalKeyStore = .unavailable
     }
 
     struct Report: Encodable, Equatable {
@@ -137,7 +138,8 @@ enum ReportRun {
         let environment = MCPEnvironment(
             configDirectory: inputs.configDirectory, home: inputs.home, processEnvironment: inputs.processEnvironment,
             keychain: SecretKeychainWriter(store: { _, _, _ in false }, delete: { _, _ in false }),
-            managed: inputs.managed)
+            managed: inputs.managed,
+            approvalKeys: inputs.approvalKeys)
         switch MCPRun.configuration(environment) {
         case .failure(let failure):
             return Report.MCPSummary(ok: false, error: failure.message, servers: 0, counts: [:], failing: [], plaintextCredentials: 0)
@@ -148,7 +150,7 @@ enum ReportRun {
             for row in report.rows { counts[row.status, default: 0] += 1 }
             return Report.MCPSummary(
                 ok: report.passes,
-                error: report.problems.isEmpty ? nil : report.problems.map { "\($0.path): \($0.message)" }.joined(separator: "; "),
+                error: mcpError(report),
                 servers: report.servers,
                 counts: counts,
                 failing: report.failing.map {
@@ -156,6 +158,11 @@ enum ReportRun {
                 },
                 plaintextCredentials: report.rows.reduce(0) { $0 + $1.plaintextCredentials.count })
         }
+    }
+
+    static func mcpError(_ report: MCPRun.Report) -> String? {
+        let messages = report.problems.map { "\($0.path): \($0.message)" } + [report.integrityProblem].compactMap { $0 }
+        return messages.isEmpty ? nil : messages.joined(separator: "; ")
     }
 
     static func secretSummary(_ inputs: Inputs) -> Report.SecretSummary {
@@ -182,19 +189,22 @@ enum ReportRun {
     }
 
     static func text(_ report: Report) -> String {
+        let hostName = DisplayedText.field(report.host.name)
+        let user = DisplayedText.field(report.host.user)
         var lines = [
-            "rv \(report.rv.version) on \(report.host.name) (\(report.host.user)): "
+            "rv \(report.rv.version) on \(hostName) (\(user)): "
                 + (report.compliant ? "compliant" : "NOT compliant"),
             "",
             ManagedRun.statusText(report.managed).trimmingCharacters(in: .newlines),
         ]
         if let error = report.mcp.error, report.mcp.ok == false, report.mcp.counts.isEmpty {
-            lines.append("mcp: \(error)")
+            lines.append("mcp: \(DisplayedText.field(error))")
         } else {
             let counts = report.mcp.counts.sorted { $0.key < $1.key }.map { "\($0.value) \($0.key)" }
             lines.append("mcp: \(report.mcp.ok ? "ok" : "FAIL"), \(report.mcp.servers) gateway servers; "
                 + (counts.isEmpty ? "no host entries" : counts.joined(separator: ", ")))
-            lines += report.mcp.failing.map { "  \($0.status)  \($0.name)  \($0.host)" }
+            lines += report.mcp.failing.map { "  \($0.status)  \(DisplayedText.field($0.name))  \($0.host)" }
+            if let error = report.mcp.error { lines.append("  " + DisplayedText.field(error)) }
             if report.mcp.plaintextCredentials > 0 {
                 lines.append("  \(report.mcp.plaintextCredentials) plaintext credential(s) in host configs")
             }
@@ -215,7 +225,7 @@ enum ReportRun {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         guard let data = try? encoder.encode(report), let text = String(data: data, encoding: .utf8) else { return "{}\n" }
-        return text + "\n"
+        return DisplayedText.escapeJSONScalars(text) + "\n"
     }
 
     static var platform: String {
@@ -247,8 +257,9 @@ struct ReportCommand: AsyncParsableCommand {
     func run() throws {
         let ctx = CommandContext.current(command: "report", format: format)
         let home = try ctx.requireHome()
+        let configDirectory = RVPolicyPaths.configDirectory(home: home)
         let report = ReportRun.build(ReportRun.Inputs(
-            configDirectory: RVPolicyPaths.configDirectory(home: home),
+            configDirectory: configDirectory,
             home: URL(fileURLWithPath: home.rawValue, isDirectory: true),
             processEnvironment: ProcessInfo.processInfo.environment,
             managed: ManagedPolicyLocation.installed.load(),
@@ -256,7 +267,8 @@ struct ReportCommand: AsyncParsableCommand {
             now: Date(),
             hostName: ProcessInfo.processInfo.hostName,
             userName: ProcessInfo.processInfo.environment["USER"] ?? NSUserName(),
-            userID: getuid()))
+            userID: getuid(),
+            approvalKeys: .live(configDirectory: configDirectory, home: home.rawValue)))
         ctx.writeStdout(ctx.explicitRobot ? ReportRun.json(report) : ReportRun.text(report))
         if strict, report.compliant == false { throw ExitCode(1) }
     }

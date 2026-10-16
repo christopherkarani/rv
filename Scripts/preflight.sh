@@ -107,6 +107,8 @@ check_value_types() {
   #            Domain/Engine/Packs/Presentation remain value-only.
   #   RVMCP/MCPGatewayRuntime.swift — owns upstream processes and reader
   #            threads; the rest of RVMCP stays value-only.
+  #   RVMCP/MCPSandbox.swift HeldDirectory — owns one directory fd and
+  #            closes it on deinit; arrays of held ancestors rely on that.
   # A leading attribute (@MainActor, @objc, @unchecked Sendable, …) or access
   # modifier (public/internal/…/final) must not hide a declaration, so we match
   # the keyword on a line that may start with any run of those tokens.
@@ -115,7 +117,8 @@ check_value_types() {
   matches=$(grep -rnE "$pat" "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/RVService/' | grep -v 'Sources/RVPolicy/' | grep -v 'Sources/RVAnalytics/' \
     | grep -v 'Sources/RVIsolation/' | grep -v 'Sources/RVWorkspaceTUI/' \
-    | grep -v 'Sources/RVOperatorUI/' | grep -v 'Sources/RVMCP/MCPGatewayRuntime.swift:' || true)
+    | grep -v 'Sources/RVOperatorUI/' | grep -v 'Sources/RVMCP/MCPGatewayRuntime.swift:' \
+    | grep -v 'Sources/RVMCP/MCPSandbox.swift:.*final class HeldDirectory' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -eq 0 ]; then

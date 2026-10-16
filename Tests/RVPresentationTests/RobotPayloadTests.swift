@@ -184,3 +184,25 @@ private let readyService = DoctorServiceView(
     #expect(encodedRow["safe_pattern_count"] as? Int == 1)
     #expect(encodedRow["destructive_pattern_count"] as? Int == 2)
 }
+
+@Test func doctorRobotPayload_leftoversAreOptionalAndCounted() throws {
+    var model = DoctorViewModel(
+        service: readyService,
+        packs: DoctorPacksView(enabled: dayOnePackIDs, registry: .ready),
+        hosts: [],
+        config: .readable
+    )
+    #expect(try object(from: doctorRobotPayload(from: model))["leftovers"] == nil)
+
+    model.leftovers = .summary(DoctorLeftoversSummary(sessions: 1, strandedImages: nil, unattachedImageFiles: 4))
+    let found = try #require(try object(from: doctorRobotPayload(from: model))["leftovers"] as? [String: Any])
+    #expect(found["applicable"] as? Bool == true)
+    #expect(found["sessions"] as? Int == 1)
+    #expect(found["stranded_images"] == nil)
+    #expect(found["unattached_image_files"] as? Int == 4)
+
+    model.leftovers = .notApplicable
+    let linux = try #require(try object(from: doctorRobotPayload(from: model))["leftovers"] as? [String: Any])
+    #expect(Set(linux.keys) == ["applicable"])
+    #expect(linux["applicable"] as? Bool == false)
+}
