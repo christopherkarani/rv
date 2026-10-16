@@ -21,6 +21,9 @@ public enum EgressDenialReason: String, Sendable, Equatable, CaseIterable {
     case dialFailed = "dial-failed"
     /// The listener requires a client credential and this connection did not present it.
     case unauthenticated = "unauthenticated"
+    /// The TLS ClientHello named a different server than the CONNECT
+    /// authority (or was not TLS with an SNI at all).
+    case sniMismatch = "sni-mismatch"
 }
 
 /// One denied CONNECT, recorded for the allowlist learning loop.
@@ -260,19 +263,43 @@ public final class EgressProxy: @unchecked Sendable {
                 deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
                 return
             }
+            // The credentialed (per-server sandbox) proxy binds the tunnel
+            // to the TLS origin it dials: a CONNECT to an allowed host must
+            // carry a ClientHello whose SNI is that host, so a co-hosted
+            // tenant on the same address is not reachable through it. The
+            // 200 goes first (clients wait for it before starting TLS),
+            // then the first record is read and checked before dialing.
+            var hello = leftover
+            if clientCredential != nil, external {
+                guard EgressProxy.writeAll(client, bytes: Array("HTTP/1.1 200 Connection established\r\n\r\n".utf8)) else {
+                    close(client)
+                    return
+                }
+                guard let first = EgressProxy.readClientHello(client: client, initial: leftover),
+                    let serverName = EgressProxy.tlsServerName(first),
+                    serverName.lowercased() == target.host.lowercased()
+                else {
+                    close(client)
+                    record(EgressProxyDenial(host: target.host, port: target.port, reason: .sniMismatch, recordedAt: Date()))
+                    return
+                }
+                hello = first
+            }
+            let established = clientCredential != nil && external
             guard
                 let upstream = dialUpstream(
                     host: target.host,
                     port: target.port,
                     external: external,
-                    client: client
+                    client: client,
+                    established: established
                 )
             else {
                 return
             }
             EgressProxy.suppressSIGPIPE(upstream)
-            guard EgressProxy.writeAll(client, bytes: Array("HTTP/1.1 200 Connection established\r\n\r\n".utf8)),
-                leftover.isEmpty || EgressProxy.writeAll(upstream, bytes: leftover)
+            guard (established || EgressProxy.writeAll(client, bytes: Array("HTTP/1.1 200 Connection established\r\n\r\n".utf8))),
+                hello.isEmpty || EgressProxy.writeAll(upstream, bytes: hello)
             else {
                 close(client)
                 close(upstream)
@@ -285,6 +312,13 @@ public final class EgressProxy: @unchecked Sendable {
         }
         guard let target = EgressProxy.parseAbsoluteHTTP(header: header) else {
             deny(client: client, host: "", port: 0, reason: .malformed)
+            return
+        }
+        // The credentialed sandbox proxy is CONNECT-only: its allowlist is
+        // port 443, so absolute-URI could only speak plaintext to a TLS
+        // port — never a capability a caged server needs.
+        if clientCredential != nil, policy.allows(host: target.host, port: target.port) {
+            deny(client: client, host: target.host, port: target.port, reason: .deniedPolicy)
             return
         }
         // Absolute-URI is the plaintext shape: loopback gateways and
@@ -329,21 +363,28 @@ public final class EgressProxy: @unchecked Sendable {
 
     /// Dials for a relay, denying with the precise reason on failure.
     /// Returns nil after denying; shared by the CONNECT and absolute-URI
-    /// paths so the outcome mapping lives in one place.
-    private func dialUpstream(host: String, port: Int, external: Bool, client: Int32) -> Int32? {
+    /// paths so the outcome mapping lives in one place. Once a CONNECT is
+    /// established (the SNI-checked path already sent 200), failure just
+    /// closes: a 403 written into a live tunnel is meaningless bytes.
+    private func dialUpstream(host: String, port: Int, external: Bool, client: Int32, established: Bool = false) -> Int32? {
+        let reason: EgressDenialReason
         switch EgressProxy.dial(host: host, port: port, external: external) {
         case .connected(let fd):
             return fd
         case .dnsFailed:
-            deny(client: client, host: host, port: port, reason: .dnsFailed)
-            return nil
+            reason = .dnsFailed
         case .addressFiltered:
-            deny(client: client, host: host, port: port, reason: .addressFiltered)
-            return nil
+            reason = .addressFiltered
         case .connectFailed:
-            deny(client: client, host: host, port: port, reason: .dialFailed)
-            return nil
+            reason = .dialFailed
         }
+        if established {
+            close(client)
+            record(EgressProxyDenial(host: host, port: port, reason: reason, recordedAt: Date()))
+        } else {
+            deny(client: client, host: host, port: port, reason: reason)
+        }
+        return nil
     }
 
     private func relay(client: Int32, upstream: Int32) {
@@ -544,6 +585,12 @@ public final class EgressProxy: @unchecked Sendable {
                 current = node.pointee.ai_next
                 continue
             }
+            // Loopback relays are filtered too: the *name* was admitted, so
+            // whatever it resolves to must actually be loopback.
+            if external == false, isLoopbackAddress(node.pointee.ai_addr) == false {
+                current = node.pointee.ai_next
+                continue
+            }
             sawUsable = true
             let fd = socket(node.pointee.ai_family, node.pointee.ai_socktype, node.pointee.ai_protocol)
             if fd >= 0 {
@@ -573,6 +620,32 @@ public final class EgressProxy: @unchecked Sendable {
             return address.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { socket in
                 withUnsafeBytes(of: socket.pointee.sin6_addr) { raw in
                     isPublicIPv6(raw)
+                }
+            }
+        default:
+            return false
+        }
+    }
+
+    /// True when `address` is in 127.0.0.0/8 or is ::1 (including the
+    /// IPv4-mapped spelling). Unknown families fail closed.
+    static func isLoopbackAddress(_ address: UnsafePointer<sockaddr>?) -> Bool {
+        guard let address else { return false }
+        switch Int32(address.pointee.sa_family) {
+        case AF_INET:
+            return address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { socket in
+                (UInt32(bigEndian: socket.pointee.sin_addr.s_addr) >> 24) == 127
+            }
+        case AF_INET6:
+            return address.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { socket in
+                withUnsafeBytes(of: socket.pointee.sin6_addr) { raw in
+                    guard raw.count == 16 else { return false }
+                    let bytes = (0..<16).map { raw[$0] }
+                    if bytes.prefix(15).allSatisfy({ $0 == 0 }), bytes[15] == 1 { return true }
+                    if Array(bytes.prefix(12)) == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF] {
+                        return bytes[12] == 127
+                    }
+                    return false
                 }
             }
         default:
@@ -610,6 +683,26 @@ public final class EgressProxy: @unchecked Sendable {
         if bytes[0] == 0xFF { return false } // ff00::/8
         if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x0D, bytes[3] == 0xB8 {
             return false // 2001:db8::/32 documentation
+        }
+        if bytes[0] == 0x01, bytes[1] == 0x00, bytes[2] == 0, bytes[3] == 0, bytes[4] == 0, bytes[5] == 0, bytes[6] == 0, bytes[7] == 0 {
+            return false // 100::/64 discard-only
+        }
+        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x00, bytes[3] == 0x02 {
+            return false // 2001:2::/48 benchmarking
+        }
+        if bytes[0] == 0x20, bytes[1] == 0x01, bytes[2] == 0x00, bytes[3] == 0x00 {
+            return false // 2001::/32 Teredo (embeds an obfuscated IPv4)
+        }
+        if bytes[0] == 0x00, bytes[1] == 0x64, bytes[2] == 0xFF, bytes[3] == 0x9B {
+            if bytes[4] == 0x00, bytes[5] == 0x01 {
+                return false // 64:ff9b:1::/48 local-use NAT64
+            }
+            if bytes[4...11].allSatisfy({ $0 == 0 }) {
+                // 64:ff9b::/96 well-known NAT64: on a DNS64 network a rebound
+                // A record synthesizes this form, so the embedded IPv4 decides.
+                return isPublicIPv4(v4(bytes[12], bytes[13], bytes[14], bytes[15]))
+            }
+            return false
         }
         if Array(bytes.prefix(12)) == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF] {
             return isPublicIPv4(v4(bytes[12], bytes[13], bytes[14], bytes[15])) // ::ffff:0:0/96
@@ -654,8 +747,86 @@ public final class EgressProxy: @unchecked Sendable {
         return true
     }
 
+    /// Reads exactly one TLS record (the ClientHello) from a just-established
+    /// CONNECT client, starting from bytes already read past the headers.
+    /// The client's 10-second socket timeout bounds the wait. Nil on EOF,
+    /// error, a non-handshake first byte, or an oversized record.
+    static func readClientHello(client: Int32, initial: [UInt8]) -> [UInt8]? {
+        var bytes = initial
+        var chunk = [UInt8](repeating: 0, count: 8192)
+        while true {
+            if bytes.count >= 5 {
+                guard bytes[0] == 0x16 else { return nil }
+                let length = Int(bytes[3]) << 8 | Int(bytes[4])
+                guard length <= 16_384 else { return nil }
+                if bytes.count >= 5 + length { return bytes }
+            }
+            guard bytes.count <= 16_389 else { return nil }
+            let count = chunk.withUnsafeMutableBytes { pointer -> Int in
+                guard let base = pointer.baseAddress else { return -1 }
+                return recv(client, base, pointer.count, 0)
+            }
+            if count < 0, errno == EINTR { continue }
+            guard count > 0 else { return nil }
+            bytes += chunk[..<count]
+        }
+    }
+
+    /// The SNI host_name of a TLS ClientHello record, parsed with every
+    /// length checked against the buffer. Nil for anything malformed,
+    /// truncated, or without a host_name — callers fail closed.
+    static func tlsServerName(_ bytes: [UInt8]) -> String? {
+        func at(_ index: Int) -> UInt8? { bytes.indices.contains(index) ? bytes[index] : nil }
+        func u16(_ index: Int) -> Int? {
+            guard let high = at(index), let low = at(index + 1) else { return nil }
+            return Int(high) << 8 | Int(low)
+        }
+        guard at(0) == 0x16, let recordLength = u16(3), bytes.count >= 5 + recordLength else { return nil }
+        guard at(5) == 0x01 else { return nil }
+        var cursor = 5 + 4 + 2 + 32 // handshake header, client version, random
+        guard let sessionLength = at(cursor).map(Int.init) else { return nil }
+        cursor += 1 + sessionLength
+        guard let suitesLength = u16(cursor) else { return nil }
+        cursor += 2 + suitesLength
+        guard let compressionLength = at(cursor).map(Int.init) else { return nil }
+        cursor += 1 + compressionLength
+        guard let extensionsLength = u16(cursor) else { return nil }
+        cursor += 2
+        let extensionsEnd = cursor + extensionsLength
+        guard extensionsEnd <= 5 + recordLength else { return nil }
+        while cursor + 4 <= extensionsEnd {
+            guard let kind = u16(cursor), let length = u16(cursor + 2) else { return nil }
+            let dataStart = cursor + 4
+            let dataEnd = dataStart + length
+            guard dataEnd <= extensionsEnd else { return nil }
+            if kind == 0x0000 {
+                guard let listLength = u16(dataStart) else { return nil }
+                var entry = dataStart + 2
+                let listEnd = entry + listLength
+                guard listEnd <= dataEnd else { return nil }
+                while entry + 3 <= listEnd {
+                    guard let nameType = at(entry), let nameLength = u16(entry + 1) else { return nil }
+                    let nameStart = entry + 3
+                    let nameEnd = nameStart + nameLength
+                    guard nameEnd <= listEnd else { return nil }
+                    if nameType == 0 {
+                        let name = String(decoding: bytes[nameStart..<nameEnd], as: UTF8.self)
+                        return name.isEmpty ? nil : name
+                    }
+                    entry = nameEnd
+                }
+                return nil
+            }
+            cursor = dataEnd
+        }
+        return nil
+    }
+
     private static func copy(from source: Int32, to destination: Int32, shouldStop: @escaping () -> Bool) {
         var buffer = [UInt8](repeating: 0, count: 32_768)
+        // Idle bound: a tunnel neither side speaks on for an hour is
+        // closed instead of holding its descriptors forever.
+        var idlePolls = 0
         while shouldStop() == false {
             var item = pollfd(fd: source, events: Int16(POLLIN), revents: 0)
             let ready = poll(&item, 1, 1000)
@@ -663,7 +834,12 @@ public final class EgressProxy: @unchecked Sendable {
                 if errno == EINTR { continue }
                 break
             }
-            if ready == 0 { continue }
+            if ready == 0 {
+                idlePolls += 1
+                if idlePolls >= 3600 { break }
+                continue
+            }
+            idlePolls = 0
             if item.revents & Int16(POLLERR | POLLNVAL) != 0 { break }
             let count = buffer.withUnsafeMutableBytes { pointer -> Int in
                 guard let base = pointer.baseAddress else { return -1 }

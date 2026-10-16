@@ -116,7 +116,11 @@ public enum MCPLaunchPlanner {
             switch sandbox(definition, launch) {
             case .failure(let error): return .failure(error)
             case .success(let caged):
-                planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: named(resolved)), .process(caged)))
+                var scrubbed = named(resolved)
+                if let credential = MCPSandbox.proxyCredential(in: caged.environment) {
+                    scrubbed.append((name: "HTTPS_PROXY", value: credential))
+                }
+                planned.append((MCPGatewayCore.Upstream(definition: definition, secretValues: scrubbed), .process(caged)))
             }
         }
         return .success(planned)

@@ -28,6 +28,24 @@ public enum MCPSandbox {
     /// Allowlist proxies for `sandbox.hosts`; they live as long as `rv mcp serve`.
     static let proxies = Mutex<[EgressProxy]>([])
 
+    /// Stops every proxy this process started; called when serve exits.
+    public static func stopProxies() {
+        proxies.withLock { running in
+            running.forEach { $0.stop() }
+            running = []
+        }
+    }
+
+    /// The proxy credential a caged launch carries in its proxy URL, so the
+    /// gateway can scrub it from anything the server echoes back.
+    public static func proxyCredential(in environment: [String: String]) -> String? {
+        guard let url = environment["HTTPS_PROXY"], url.hasPrefix("http://rv:"),
+            let at = url.firstIndex(of: "@")
+        else { return nil }
+        let credential = String(url[url.index(url.startIndex, offsetBy: "http://rv:".count)..<at])
+        return credential.isEmpty ? nil : credential
+    }
+
     /// The planner hook `rv mcp serve` passes to `MCPLaunchPlanner.plan`.
     /// `denied` hears each CONNECT a `sandbox.hosts` proxy refuses.
     public static func apply(
@@ -111,10 +129,20 @@ public enum MCPSandbox {
             "(allow file-write* " + paths(writable) + ")",
             "(deny file-read* file-write* " + paths(unreadable) + ")",
         ]
-        if policy.network == false {
+        // `hosts` is the stronger statement: with an allowlist the network is
+        // caged to the proxy even if `network` was also set (the decoder
+        // already refuses that combination; the profile must not depend on it).
+        if policy.network == false || proxyPort != nil {
             lines.append("(deny network*)")
-            if let proxyPort { lines.append("(allow network-outbound (remote tcp \"127.0.0.1:\(proxyPort)\"))") }
+            // Seatbelt network addresses accept only `*` or `localhost` as
+            // the host; `127.0.0.1:<port>` fails to compile and the server
+            // never starts.
+            if let proxyPort { lines.append("(allow network-outbound (remote tcp \"localhost:\(proxyPort)\"))") }
         }
+        // No mach-lookup rule for the resolver: verified live on macOS that
+        // (deny network*) alone makes getaddrinfo fail inside this profile
+        // (the dnssd service deny neither helps nor is needed), and the live
+        // cage test probes that a caged process cannot resolve names.
         return lines.joined(separator: "\n")
     }
 

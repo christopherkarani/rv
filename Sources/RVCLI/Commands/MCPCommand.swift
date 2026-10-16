@@ -1015,6 +1015,7 @@ struct MCPServe: AsyncParsableCommand {
             event: { MCPRun.auditOrLog($0, configDirectory: configDirectory) },
             log: log)
         runtime.run()
+        MCPSandbox.stopProxies()
     }
 }
 

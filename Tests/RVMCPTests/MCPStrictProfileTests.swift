@@ -88,8 +88,9 @@ struct MCPStrictProfileTests {
         let policy = MCPSandboxPolicy(network: false, hosts: ["api.example.com"])
         let proxied = MCPSandbox.profile(
             policy: policy, scratch: "/s", home: "/h", configDirectory: "/h/.config/rv", temporaryDirectory: "/t", proxyPort: 4321)
-        #expect(proxied.contains("(deny network*)\n(allow network-outbound (remote tcp \"127.0.0.1:4321\"))"))
-        #expect(proxied.contains("localhost:") == false)
+        #expect(proxied.contains("(deny network*)\n(allow network-outbound (remote tcp \"localhost:4321\"))"))
+        // The proxy port is the only localhost reach the profile grants.
+        #expect(proxied.components(separatedBy: "localhost:").count == 2)
         let closed = MCPSandbox.profile(
             policy: MCPSandboxPolicy(network: false), scratch: "/s", home: "/h", configDirectory: "/h/.config/rv",
             temporaryDirectory: "/t")
@@ -144,8 +145,10 @@ struct MCPSandboxHostsLiveTests {
     }
 
     @Test func cagedServerReachesItsProxyButNothingElse() throws {
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent(".build/rv-mcp-hosts-\(UUID().uuidString)")
+        // Under the real home directory, never the checkout: a checkout
+        // under /tmp sits inside the cage's writable temp roots by design.
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".rv-cage-test-hosts-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let home = root.appendingPathComponent("home")
         let config = home.appendingPathComponent(".config/rv")
@@ -154,6 +157,7 @@ struct MCPSandboxHostsLiveTests {
         let script = """
             nc -z -G 2 127.0.0.1 \(other.port) && echo DIRECT_OK
             nc -z -G 2 127.0.0.1 "${HTTPS_PROXY##*:}" && echo PROXY_OK
+            /usr/bin/python3 -c 'import socket; socket.getaddrinfo("www.apple.com", 443)' 2>/dev/null && echo DNS_OK
             echo "proxy=$HTTPS_PROXY"
             """
         var definition = MCPServerDefinition(name: "proxied", command: "/bin/sh", args: ["-c", script])
@@ -176,6 +180,7 @@ struct MCPSandboxHostsLiveTests {
         #expect(output.contains("proxy=http://rv:") && output.contains("@127.0.0.1:"), "\(output)")
         #expect(output.contains("PROXY_OK"), "\(output)")
         #expect(output.contains("DIRECT_OK") == false, "\(output)")
+        #expect(output.contains("DNS_OK") == false, "\(output)")
     }
 }
 #endif

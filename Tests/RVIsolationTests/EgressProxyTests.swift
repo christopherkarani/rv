@@ -526,6 +526,7 @@ private final class AuditDiagnosticCollector: @unchecked Sendable {
             "dns-failed",
             "header-too-large",
             "malformed",
+            "sni-mismatch",
             "unauthenticated",
         ]
     )
@@ -590,6 +591,14 @@ private func egressIsPublicUnicast(family: Int32, _ text: String) -> Bool? {
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "::10.0.0.1")) == false)
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "2002:808:808::1")))
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "2002:a00:1::1")) == false)
+    // NAT64 synthesis must not smuggle a non-public IPv4 past the filter.
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b::808:808")))
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b::a9fe:a9fe")) == false)
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b::7f00:1")) == false)
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b:1::808:808")) == false)
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "2001::1")) == false)
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "100::1")) == false)
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "2001:2::1")) == false)
 
     #expect(EgressProxy.isPublicUnicast(nil) == false)
     var zero = sockaddr_storage()
@@ -597,4 +606,39 @@ private func egressIsPublicUnicast(family: Int32, _ text: String) -> Bool? {
         pointer.withMemoryRebound(to: sockaddr.self, capacity: 1, EgressProxy.isPublicUnicast)
     }
     #expect(unknownFamily == false)
+}
+
+@Test func egressProxyParsesClientHelloSNIAndRejectsMalformed() {
+    func hello(_ host: String?) -> [UInt8] {
+        var body: [UInt8] = [0x03, 0x03] + [UInt8](repeating: 0xAB, count: 32) + [0x00]
+        body += [0x00, 0x02, 0x13, 0x01, 0x01, 0x00]
+        var extensions: [UInt8] = []
+        if let host {
+            let name = Array(host.utf8)
+            let entry: [UInt8] = [0x00, UInt8(name.count >> 8), UInt8(name.count & 0xFF)] + name
+            let sni: [UInt8] = [UInt8(entry.count >> 8), UInt8(entry.count & 0xFF)] + entry
+            extensions += [0x00, 0x00, UInt8(sni.count >> 8), UInt8(sni.count & 0xFF)] + sni
+        }
+        body += [UInt8(extensions.count >> 8), UInt8(extensions.count & 0xFF)] + extensions
+        var record: [UInt8] = [0x16, 0x03, 0x01, 0x00, 0x00, 0x01,
+                               UInt8((body.count >> 16) & 0xFF), UInt8((body.count >> 8) & 0xFF), UInt8(body.count & 0xFF)] + body
+        let length = record.count - 5
+        record[3] = UInt8(length >> 8)
+        record[4] = UInt8(length & 0xFF)
+        return record
+    }
+    #expect(EgressProxy.tlsServerName(hello("api.example.com")) == "api.example.com")
+    #expect(EgressProxy.tlsServerName(hello(nil)) == nil)
+    #expect(EgressProxy.tlsServerName([]) == nil)
+    #expect(EgressProxy.tlsServerName([0x16, 0x03, 0x01]) == nil)
+    #expect(EgressProxy.tlsServerName(Array(hello("api.example.com").prefix(20))) == nil)
+    var truncated = hello("api.example.com")
+    truncated[3] = 0xFF
+    #expect(EgressProxy.tlsServerName(truncated) == nil)
+    var notTLS = hello("api.example.com")
+    notTLS[0] = 0x17
+    #expect(EgressProxy.tlsServerName(notTLS) == nil)
+    var huge = hello("api.example.com")
+    huge[5 + 4 + 2 + 32] = 0xFF // session id length runs past the record
+    #expect(EgressProxy.tlsServerName(huge) == nil)
 }

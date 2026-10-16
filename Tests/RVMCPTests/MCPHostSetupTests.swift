@@ -325,9 +325,12 @@ struct MCPHostSetupTests {
 @Suite("MCPSandbox (live sandbox-exec)")
 struct MCPSandboxLiveTests {
     @Test func cagedServerCannotReadCredentialsOrWriteOutsideScratch() throws {
-        // Not under a temp directory: those stay writable inside the cage by design.
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent(".build/rv-mcp-cage-\(UUID().uuidString)")
+        // Not under a temp directory: those stay writable inside the cage by
+        // design — and not under the checkout either, since a checkout in
+        // /tmp is under a temp root. The real home directory is outside every
+        // writable prefix the profile grants.
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".rv-cage-test-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let home = root.appendingPathComponent("home")
         let config = home.appendingPathComponent(".config/rv")
