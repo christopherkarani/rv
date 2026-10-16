@@ -92,6 +92,7 @@ struct MCPStrictProfileTests {
             at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let scratch = root.appendingPathComponent("scratch").path
+        try! FileManager.default.createDirectory(atPath: scratch, withIntermediateDirectories: true)
         let home = root.appendingPathComponent("home").path
         let policy = MCPSandboxPolicy(network: false, hosts: ["api.example.com"])
         let proxied = try! MCPSandbox.profile(

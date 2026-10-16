@@ -77,7 +77,8 @@ public enum MCPSandbox {
                 return .failure(.sandbox(scratchCreationFailure(scratch.path)))
             }
             if let widened = unreviewedWrite(
-                policy: policy, scratch: scratch.path, home: home.path, temporaryDirectory: temporary)
+                policy: policy, scratch: scratch.path, home: home.path, temporaryDirectory: temporary,
+                scratchMustExist: false)
             {
                 return .failure(.sandbox(widened))
             }
@@ -203,7 +204,8 @@ public enum MCPSandbox {
     /// The real path when it is not the path the review named. `/tmp` and
     /// `/private/tmp` are the same directory. Any other symlink target is refused.
     static func unreviewedWrite(
-        policy: MCPSandboxPolicy, scratch: String, home: String, temporaryDirectory: String
+        policy: MCPSandboxPolicy, scratch: String, home: String, temporaryDirectory: String,
+        scratchMustExist: Bool = true
     ) -> String? {
         func expand(_ path: String) -> String {
             path.hasPrefix("~/") ? home + path.dropFirst(1) : path
@@ -216,12 +218,15 @@ public enum MCPSandbox {
             let resolved = realPath(scratch)
             return "\(MCPDisplayedText.field(scratch)) resolves to \(MCPDisplayedText.field(resolved)), which was not the path reviewed"
         }
-        if resolveExisting(scratch) == nil {
-            // Not created yet: creation is pinned to the held ancestors, so
-            // an honest missing path is fine. One that resolves through a
-            // symlinked ancestor to a different tree is not the reviewed path.
+        if scratchMustExist, resolveExisting(scratch) == nil {
+            // profile() runs after createPinned: a scratch that is not there
+            // was never created under the held ancestors (or was swapped
+            // away), so it is not a write root rv reviewed. apply()'s
+            // pre-creation check passes scratchMustExist: false; the paths
+            // check below still refuses a missing path that resolves through
+            // a symlinked ancestor to a different tree.
             let resolved = realPath(scratch)
-            if sameReviewedDirectory(scratch, resolved) == false {
+            if sameReviewedDirectory(scratch, resolved) {
                 return "\(MCPDisplayedText.field(scratch)) resolves to \(MCPDisplayedText.field(resolved)), which was not the path reviewed"
             }
         }
