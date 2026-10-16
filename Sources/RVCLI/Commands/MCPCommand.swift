@@ -1019,14 +1019,6 @@ enum MCPRun {
     /// tool glob, and secret binding is listed. Controls are escaped so a
     /// terminal cannot erase the password. Classified secrets stay in the
     /// Keychain and appear here only as names.
-    static func importReview(_ plan: MCPImportPlan, allowTools: Bool) -> String {
-        var lines = ["import into mcp.json:"]
-        for server in plan.servers {
-            lines.append(contentsOf: reviewedServerLines(server, allowTools: allowTools))
-        }
-        return lines.joined(separator: "\n")
-    }
-
     /// Nothing in the plan is signed unless the review the device owner sees
     /// contains each value in the same spelling the terminal will show.
     static func reviewShowsEveryLiteral(_ plan: MCPImportPlan, _ review: String) -> Bool {
