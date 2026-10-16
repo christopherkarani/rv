@@ -32,6 +32,11 @@ extension JSONValue {
     /// below 2^53. A fraction `Double` would round onto an integer is not forwarded.
     func withExactNumbers() -> JSONValue? {
         switch self {
+        case .string(let text):
+            // A client-supplied string carrying the number marker would
+            // compare equal to a numeric rule value. Only the converters
+            // may produce the marker; in client input it fails closed.
+            return text.hasPrefix(JSONExactInteger.numberMarker) ? nil : self
         case .number(let spelling):
             if let digits = JSONExactInteger.digits(spelling) { return .number(digits) }
             guard JSONExactInteger.finiteNonInteger(spelling) != nil else { return nil }
@@ -59,7 +64,20 @@ extension JSONValue {
         switch value {
         case .null: self = .null
         case .bool(let flag): self = .bool(flag)
-        case .string(let text): self = .string(text)
+        case .string(let text):
+            // A marked string is a JSON number in the domain model; writing
+            // it back (mcp.json rewrites) must emit the number spelling,
+            // never a "\u0000…" string other readers cannot match.
+            if text.hasPrefix(JSONExactInteger.numberMarker) {
+                let spelling = String(text.dropFirst(JSONExactInteger.numberMarker.count))
+                if spelling.first.map({ $0.isNumber || $0 == "-" }) == true, spelling.count > (spelling.first == "-" ? 1 : 0) {
+                    self = .number(spelling)
+                } else {
+                    self = .string(text)
+                }
+            } else {
+                self = .string(text)
+            }
         case .array(let items): self = .array(items.map(JSONValue.init(domain:)))
         case .object(let members):
             var object = JSONObject()

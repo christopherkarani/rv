@@ -412,6 +412,17 @@ struct MCPGatewayCoreTests {
         #expect(harness.approvals.requested.withLock { $0 }.isEmpty)
     }
 
+    @Test func forgedNumberMarkerStringIsRefusedWhenRulesApply() throws {
+        let config = try MCPConfiguration.decode(Data(
+            #"{"version":1,"servers":[{"name":"notes","command":"fixture","tools":{"allow":[{"tool":"add","when":{"/account":{"==":9007199254740993}}}]}}]}"#.utf8)).get()
+        var harness = GatewayHarness(config)
+        _ = harness.ready()
+        let reply = harness.client(
+            #"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"add","arguments":{"account":"\u00009007199254740993"}}}"#)
+        #expect(reply.toUpstream.isEmpty)
+        #expect(reply.audits.first?.decision == .deny)
+    }
+
     @Test func ordinaryDecimalsForwardWhenNoRuleReadsThem() throws {
         var harness = GatewayHarness(MCPConfiguration(servers: [Self.notes]))
         _ = harness.ready()

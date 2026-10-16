@@ -143,3 +143,10 @@ struct AuditChainTests {
         #expect(unmapped["rv_chain_head"] as? String == hash(written[1]))
     }
 }
+
+extension AuditChainTests {
+    @Test func surrogateEscapedDuplicateKeysBreakTheChain() {
+        let line = "{\"\\ud83d\\ude00\":1,\"prev\":\"" + AuditChain.genesis + "\",\"prev\":\"" + AuditChain.genesis + "\",\"decision\":\"allowed\",\"kind\":\"mcp.call\",\"subject\":\"a\"}"
+        #expect(AuditChain.verify(Data((line + "\n").utf8)).firstBreak?.reason == "duplicate key")
+    }
+}

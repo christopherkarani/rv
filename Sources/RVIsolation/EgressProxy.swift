@@ -277,7 +277,7 @@ public final class EgressProxy: @unchecked Sendable {
                 }
                 guard let first = EgressProxy.readClientHello(client: client, initial: leftover),
                     let serverName = EgressProxy.tlsServerName(first),
-                    serverName.lowercased() == target.host.lowercased()
+                    EgressProxy.dnsNamesMatch(serverName, target.host)
                 else {
                     close(client)
                     record(EgressProxyDenial(host: target.host, port: target.port, reason: .sniMismatch, recordedAt: Date()))
@@ -388,15 +388,18 @@ public final class EgressProxy: @unchecked Sendable {
     }
 
     private func relay(client: Int32, upstream: Int32) {
+        // One activity clock for the tunnel: a long one-way download must
+        // not be severed by the silent direction's idle bound.
+        let activity = Mutex(Date())
         let group = DispatchGroup()
         group.enter()
         relayQueue.async { [weak self] in
-            EgressProxy.copy(from: client, to: upstream, shouldStop: { self?.isRunning() != true })
+            EgressProxy.copy(from: client, to: upstream, activity: activity, shouldStop: { self?.isRunning() != true })
             group.leave()
         }
         group.enter()
         relayQueue.async { [weak self] in
-            EgressProxy.copy(from: upstream, to: client, shouldStop: { self?.isRunning() != true })
+            EgressProxy.copy(from: upstream, to: client, activity: activity, shouldStop: { self?.isRunning() != true })
             group.leave()
         }
         group.notify(queue: relayQueue) {
@@ -783,6 +786,13 @@ public final class EgressProxy: @unchecked Sendable {
         }
         guard at(0) == 0x16, let recordLength = u16(3), bytes.count >= 5 + recordLength else { return nil }
         guard at(5) == 0x01 else { return nil }
+        // Bound every walk to the handshake message the server will parse,
+        // not just the record: rv-visible bytes past the handshake end
+        // must not satisfy the check.
+        guard let b6 = at(6), let b7 = at(7), let b8 = at(8) else { return nil }
+        let handshakeLength = Int(b6) << 16 | Int(b7) << 8 | Int(b8)
+        guard handshakeLength == recordLength - 4 else { return nil }
+        let handshakeEnd = 5 + 4 + handshakeLength
         var cursor = 5 + 4 + 2 + 32 // handshake header, client version, random
         guard let sessionLength = at(cursor).map(Int.init) else { return nil }
         cursor += 1 + sessionLength
@@ -793,7 +803,7 @@ public final class EgressProxy: @unchecked Sendable {
         guard let extensionsLength = u16(cursor) else { return nil }
         cursor += 2
         let extensionsEnd = cursor + extensionsLength
-        guard extensionsEnd <= 5 + recordLength else { return nil }
+        guard extensionsEnd <= handshakeEnd else { return nil }
         while cursor + 4 <= extensionsEnd {
             guard let kind = u16(cursor), let length = u16(cursor + 2) else { return nil }
             let dataStart = cursor + 4
@@ -822,11 +832,17 @@ public final class EgressProxy: @unchecked Sendable {
         return nil
     }
 
-    private static func copy(from source: Int32, to destination: Int32, shouldStop: @escaping () -> Bool) {
+    /// DNS equality ignoring case and one trailing dot per side.
+    static func dnsNamesMatch(_ lhs: String, _ rhs: String) -> Bool {
+        func normalized(_ name: String) -> String {
+            let lowered = name.lowercased()
+            return lowered.hasSuffix(".") ? String(lowered.dropLast()) : lowered
+        }
+        return normalized(lhs) == normalized(rhs)
+    }
+
+    private static func copy(from source: Int32, to destination: Int32, activity: borrowing Mutex<Date>, shouldStop: @escaping () -> Bool) {
         var buffer = [UInt8](repeating: 0, count: 32_768)
-        // Idle bound: a tunnel neither side speaks on for an hour is
-        // closed instead of holding its descriptors forever.
-        var idlePolls = 0
         while shouldStop() == false {
             var item = pollfd(fd: source, events: Int16(POLLIN), revents: 0)
             let ready = poll(&item, 1, 1000)
@@ -835,11 +851,12 @@ public final class EgressProxy: @unchecked Sendable {
                 break
             }
             if ready == 0 {
-                idlePolls += 1
-                if idlePolls >= 3600 { break }
+                // Idle bound: a tunnel neither direction speaks on for an
+                // hour is closed instead of holding descriptors forever.
+                if activity.withLock({ Date().timeIntervalSince($0) }) >= 3600 { break }
                 continue
             }
-            idlePolls = 0
+            activity.withLock { $0 = Date() }
             if item.revents & Int16(POLLERR | POLLNVAL) != 0 { break }
             let count = buffer.withUnsafeMutableBytes { pointer -> Int in
                 guard let base = pointer.baseAddress else { return -1 }

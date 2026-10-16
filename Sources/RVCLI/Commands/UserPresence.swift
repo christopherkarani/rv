@@ -47,7 +47,11 @@ struct UserPresence: Sendable {
                 return .refused("authentication failed")
             }
             return .confirmed(method: "device owner authentication")
-        } catch let error as LAError where error.code == .notInteractive {
+        } catch let error as LAError where error.code == .notInteractive || error.code == .systemCancel {
+            // The system could not prompt here (no GUI attach, another
+            // authentication already running): the terminal challenge is
+            // the documented fallback. A user pressing Cancel is .userCancel
+            // and still refuses below.
             return nil
         } catch {
             return .refused("authentication was cancelled or failed")

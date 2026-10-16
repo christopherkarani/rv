@@ -189,10 +189,19 @@ public struct MCPRemoteServer: Sendable, Equatable {
     static func nonCanonicalIPSpelling(_ host: String) -> Bool {
         let bare = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()
         if bare.contains("@") { return false }
+        // Zone IDs, named or numeric (`fe80::1%eth0`): only IPv6 literals
+        // carry them, and inet_pton refuses them either way.
+        if bare.contains("%"), bare.contains(":") { return true }
         if bare.contains(":"), bare.allSatisfy({ $0.isHexDigit || $0 == ":" || $0 == "." || $0 == "%" }) {
-            // Also covers zone IDs (`fe80::1%eth0`): inet_pton refuses them.
             var v6 = in6_addr()
             return inet_pton(AF_INET6, bare, &v6) != 1
+        }
+        // Any 0x-prefixed label (`0x7f.1`, `0x7f000001`) is an inet_aton
+        // spelling of an address, never a DNS name worth accepting.
+        if bare.split(separator: ".", omittingEmptySubsequences: false)
+            .contains(where: { $0.hasPrefix("0x") && $0.count > 2 && $0.dropFirst(2).allSatisfy(\.isHexDigit) })
+        {
+            return true
         }
         let digitsAndDots = bare.isEmpty == false && bare.allSatisfy { $0.isNumber || $0 == "." }
         if digitsAndDots {

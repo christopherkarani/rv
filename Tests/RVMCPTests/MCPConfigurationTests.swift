@@ -88,6 +88,15 @@ struct MCPConfigurationTests {
         #expect(try MCPConfiguration.load(configDirectory: directory).get() == configuration)
         #expect(configuration.encoded().compactText.contains(#""deny":["drop_*",{"tool":"query","when":{"/sql":{"glob":"DROP *"}}}]"#))
 
+        // A >2^53 rule value must rewrite as a JSON number, never the
+        // domain number-marker string, and still match after reload.
+        let big = try decode(
+            #"{"version":1,"servers":[{"name":"db","command":"x","tools":{"deny":[{"tool":"q","when":{"/id":{"==":9007199254740993}}}]}}]}"#).get()
+        let text = big.encoded().compactText
+        #expect(text.contains("\u{0}") == false, "\(text)")
+        #expect(text.contains("9007199254740993"), "\(text)")
+        #expect(try MCPConfiguration.decode(Data(text.utf8)).get() == big)
+
         guard case .failure(let error) = decode(
             #"{"version":1,"servers":[{"name":"db","command":"x","tools":{"ask":[{"tool":"q"}]}}]}"#)
         else {

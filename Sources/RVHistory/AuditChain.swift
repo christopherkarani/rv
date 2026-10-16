@@ -98,7 +98,7 @@ public enum AuditChain {
 
     /// Hash of the file's last line, or nil when there is no line yet.
     public static func head(fileURL: URL) -> String? {
-        guard case .success(let report) = verify(fileURL: fileURL), report.lines > 0 else { return nil }
+        guard case .success(let report) = verify(fileURL: fileURL), report.lines > 0, report.isIntact else { return nil }
         return report.head
     }
 
@@ -210,12 +210,33 @@ public enum AuditChain {
                 let escaped = bytes[index + 1]
                 switch escaped {
                 case UInt8(ascii: "u"):
-                    guard index + 5 < bytes.count,
-                        let hex = String(bytes: bytes[(index + 2)...(index + 5)], encoding: .utf8),
-                        let value = UInt32(hex, radix: 16), let scalar = Unicode.Scalar(value)
-                    else { return nil }
-                    output.unicodeScalars.append(scalar)
+                    // Combine surrogate pairs; a lone or malformed escape
+                    // decodes deterministically to U+FFFD so key comparison
+                    // never bails open on valid JSON.
+                    func hex4(_ at: Int) -> UInt32? {
+                        guard at + 3 < bytes.count,
+                            let hex = String(bytes: bytes[at...(at + 3)], encoding: .utf8)
+                        else { return nil }
+                        return UInt32(hex, radix: 16)
+                    }
+                    guard let first = hex4(index + 2) else {
+                        output.unicodeScalars.append("\u{FFFD}")
+                        index += 2
+                        continue
+                    }
                     index += 6
+                    if (0xD800...0xDBFF).contains(first),
+                        index + 5 < bytes.count, bytes[index] == UInt8(ascii: "\\"), bytes[index + 1] == UInt8(ascii: "u"),
+                        let second = hex4(index + 2), (0xDC00...0xDFFF).contains(second),
+                        let scalar = Unicode.Scalar(0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00))
+                    {
+                        output.unicodeScalars.append(scalar)
+                        index += 6
+                    } else if let scalar = Unicode.Scalar(first) {
+                        output.unicodeScalars.append(scalar)
+                    } else {
+                        output.unicodeScalars.append("\u{FFFD}")
+                    }
                 case UInt8(ascii: "n"): output += "\n"; index += 2
                 case UInt8(ascii: "r"): output += "\r"; index += 2
                 case UInt8(ascii: "t"): output += "\t"; index += 2

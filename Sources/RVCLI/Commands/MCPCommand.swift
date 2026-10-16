@@ -341,15 +341,20 @@ enum MCPRun {
     static func allowListed(
         _ request: MCPApprovalRequest, environment: MCPEnvironment
     ) -> Result<(MCPConfiguration, MCPSigner), CommandFailure> {
-        let signer: MCPSigner
-        switch signerForWrite(environment) {
-        case .failure(let failure): return .failure(failure)
-        case .success(let loaded): signer = loaded
-        }
+        // Load (and verify) first: signing must cover exactly the bytes
+        // that were checked, so refuse here on the loaded copy's trust.
         var configuration: MCPConfiguration
         switch self.configuration(environment) {
         case .failure(let failure): return .failure(failure)
         case .success(let loaded): configuration = loaded
+        }
+        guard configuration.untrusted == false else {
+            return .failure(CommandFailure(environment.integrity.problem ?? "mcp.json is not trusted; run `rv mcp trust` first"))
+        }
+        let signer: MCPSigner
+        switch signerForWrite(environment) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let loaded): signer = loaded
         }
         guard let index = configuration.servers.firstIndex(where: { $0.name == request.server }) else {
             return .failure("mcp.json no longer defines \(request.server)")
@@ -532,7 +537,13 @@ enum MCPRun {
                 configDirectory: environment.configDirectory)
         }
         if forget {
-            guard environment.oauthTokens.remove(name) else {
+            // Under the same interprocess lock as refresh, or a concurrent
+            // serve can re-save the tokens being deleted.
+            let removed = Mutex<Bool?>(nil)
+            _ = environment.oauthTokens.withExclusiveLock(name) {
+                removed.withLock { $0 = environment.oauthTokens.remove(name) }
+            }
+            guard removed.withLock({ $0 }) == true else {
                 return .failure(CommandFailure("could not delete the stored OAuth tokens for \(name)"))
             }
             audit("OAuth tokens deleted", [:])
@@ -564,7 +575,11 @@ enum MCPRun {
         case .failure(let error): return .failure(CommandFailure("\(name): \(error.message)"))
         case .success(let issued): tokens = issued
         }
-        guard environment.oauthTokens.save(name, tokens) else {
+        let saved = Mutex(false)
+        _ = environment.oauthTokens.withExclusiveLock(name) {
+            saved.withLock { $0 = environment.oauthTokens.save(name, tokens) }
+        }
+        guard saved.withLock({ $0 }) else {
             return .failure(CommandFailure("could not store the OAuth tokens for \(name) (\(oauthStoreLabel(name, environment)))"))
         }
         audit("OAuth connected", ["resource": tokens.resource, "scope": tokens.scope ?? "", "client": tokens.clientID])
@@ -1191,6 +1206,12 @@ enum DenialAudit {
                     return nil
                 }
                 let count = table[key]?.suppressed ?? 0
+                // Host is attacker-chosen: bound the table or it grows with
+                // distinct names for the life of the serve process.
+                if table[key] == nil, table.count >= 512 {
+                    table = table.filter { denial.recordedAt.timeIntervalSince($0.value.last) < 60 }
+                    if table.count >= 512 { return 0 }
+                }
                 table[key] = (denial.recordedAt, 0)
                 return count
             }

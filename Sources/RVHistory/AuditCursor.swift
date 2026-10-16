@@ -52,12 +52,18 @@ extension AuditLedger {
             var consumed = chunk.start
             var lineStart = chunk.bytes.startIndex
             var lastHash = chunk.start > 0 ? cursor.positions[source.rawValue]?.lastLineHash : nil
+            // A chunk resuming with no recorded hash after a chunk-skip
+            // starts mid-line: its first segment is a remainder whose full
+            // line can never be re-hashed by the bounded scan-back, so
+            // storing its hash would restart the cursor on every call.
+            var firstSegment = chunk.start > 0 && lastHash == nil && cursor.positions[source.rawValue] != nil
             for index in chunk.bytes.indices where chunk.bytes[index] == UInt8(ascii: "\n") {
                 if events.count >= limit { break }
                 let lineBytes = Array(chunk.bytes[lineStart..<index])
                 let line = String(decoding: lineBytes, as: UTF8.self)
                 if let event = Self.event(fromLine: Substring(line), source: source) { events.append(event) }
-                lastHash = RVDigest.sha256Hex(lineBytes)
+                lastHash = firstSegment ? nil : RVDigest.sha256Hex(lineBytes)
+                firstSegment = false
                 consumed = chunk.start + UInt64(index - chunk.bytes.startIndex + 1)
                 lineStart = index + 1
             }

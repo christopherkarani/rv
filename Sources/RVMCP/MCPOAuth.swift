@@ -69,14 +69,24 @@ public struct MCPOAuthTokens: Sendable, Equatable {
             guard let text else { return true }
             return text.utf8.count <= maximum && text.unicodeScalars.allSatisfy { (0x21...0x7E).contains($0.value) || $0.value == 0x20 }
         }
+        // Fields that only ever travel percent-encoded in a form body (never
+        // raw in a header or log line) may hold non-ASCII — an IDN resource
+        // or a Unicode client secret issued verbatim must not read as
+        // corruption and silently log the user out. Controls still refuse.
+        func formUsable(_ text: String?, maximum: Int) -> Bool {
+            guard let text else { return true }
+            return text.utf8.count <= maximum && text.unicodeScalars.allSatisfy {
+                $0.properties.generalCategory != .control && $0.properties.generalCategory != .format
+            }
+        }
         let refresh = root["refreshToken"]?.stringValue
         let scope = root["scope"]?.stringValue
         guard MCPRemoteServer.endpointProblem(endpoint) == nil,
             usable(access, maximum: 16 * 1024), access.isEmpty == false,
             usable(refresh, maximum: 16 * 1024),
             usable(clientID, maximum: 512), clientID.isEmpty == false,
-            usable(root["clientSecret"]?.stringValue, maximum: 4096),
-            usable(scope, maximum: 1024), usable(resource, maximum: 2048)
+            formUsable(root["clientSecret"]?.stringValue, maximum: 4096),
+            usable(scope, maximum: 1024), formUsable(resource, maximum: 2048)
         else { return nil }
         return MCPOAuthTokens(
             accessToken: access, refreshToken: refresh,

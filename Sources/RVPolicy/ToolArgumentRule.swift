@@ -334,7 +334,21 @@ public struct ToolArgumentRule: Sendable, Equatable {
         if let digits = JSONExactInteger.markedDigits(value) { return digits }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(value) else { return "?" }
+        guard let data = try? encoder.encode(unmarked(value)) else { return "?" }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Display form: marked number strings print as their digits, nested too.
+    private static func unmarked(_ value: JSONValue) -> JSONValue {
+        switch value {
+        case .string(let text) where text.hasPrefix(JSONExactInteger.numberMarker):
+            return .string(String(text.dropFirst(JSONExactInteger.numberMarker.count)))
+        case .array(let items):
+            return .array(items.map(unmarked))
+        case .object(let members):
+            return .object(members.mapValues(unmarked))
+        default:
+            return value
+        }
     }
 }

@@ -21,7 +21,16 @@ public enum MCPRedaction {
     /// Words split on non-alphanumerics and camelCase humps, so
     /// `clientSecret`, `accessToken`, and `oauth2Token` read as their parts.
     public static func isSecretName(_ name: String) -> Bool {
-        nameWords(name).contains { secretWords.contains($0) }
+        // Trailing digits do not rename a credential: TOKEN2, apiKey2.
+        nameWords(name).contains { word in
+            secretWords.contains(word) || secretWords.contains(trimmed(ofTrailingDigits: word))
+        }
+    }
+
+    private static func trimmed(ofTrailingDigits word: String) -> String {
+        var word = word
+        while word.last?.isNumber == true { word.removeLast() }
+        return word
     }
 
     private static func nameWords(_ name: String) -> [String] {
@@ -984,6 +993,19 @@ public enum MCPRedaction {
         character == "/" || character == "?" || character == "#" || character == "&" || character == "\\" || character.isWhitespace
     }
 
+    /// A secret named inline — `X-Api-Key: hunter2`, `{"password":"hunter2"}` —
+    /// where the generic token shape alone would miss a short value.
+    public static func namedValueCarriesSecret(_ value: String) -> Bool {
+        for separator in [":", "="] {
+            guard let at = value.firstIndex(of: Character(separator)) else { continue }
+            let name = value[..<at]
+            let rest = value[value.index(after: at)...]
+            let trimmed = rest.trimmingCharacters(in: CharacterSet(charactersIn: " \t\"',}"))
+            if isSecretName(String(name)), trimmed.isEmpty == false, isReference(trimmed) == false { return true }
+        }
+        return false
+    }
+
     /// A value `rv mcp list` must not print: a refused-secret argument, a
     /// path or URL carrying one, or userinfo in any spelling.
     public static func valueCarriesSecret(_ value: String) -> Bool {
@@ -1018,13 +1040,20 @@ public enum MCPRedaction {
                     }
                 } else if isSecretName(String(body)) {
                     maskNext = arg
+                    shown.append(arg)
+                    continue
+                } else if looksLikeToken(String(body)) || valueCarriesSecret(arg) || namedValueCarriesSecret(arg) {
+                    // An attached short-flag value (`-a<token>`) has no `=` to split on.
+                    shown.append(mask)
+                    credentials.append(arg)
+                    continue
                 }
                 shown.append(arg)
             } else if arg.contains("://") {
                 let (display, leaked) = url(arg)
                 shown.append(display)
                 if leaked { credentials.append("argument \(index + 1) URL") }
-            } else if looksLikeToken(arg) || valueCarriesSecret(arg) {
+            } else if looksLikeToken(arg) || valueCarriesSecret(arg) || namedValueCarriesSecret(arg) {
                 shown.append(mask)
                 credentials.append("argument \(index + 1)")
             } else {

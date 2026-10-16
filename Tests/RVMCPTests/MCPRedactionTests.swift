@@ -45,3 +45,17 @@ struct MCPRedactionClassificationTests {
         #expect(credentials == ["--database-url", "--config", "--pass", "argument 4"])
     }
 }
+
+extension MCPRedactionClassificationTests {
+    @Test func rereviewMaskingGapsStayClosed() {
+        #expect(MCPRedaction.isSecretName("TOKEN2"))
+        #expect(MCPRedaction.isSecretName("apiKey2"))
+        let (shown, _) = MCPRedaction.args([
+            "-aghp_1234567890abcdefghij",
+            "X-Api-Key: hunter2",
+            #"{"password":"hunter2"}"#,
+            "--verbose",
+        ])
+        #expect(shown == ["<redacted>", "<redacted>", "<redacted>", "--verbose"], "\(shown)")
+    }
+}

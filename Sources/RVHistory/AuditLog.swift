@@ -43,6 +43,7 @@ public enum AuditLog {
             guard let tail = lastLine(fd) else { return false }
             var chained = event
             chained.prev = tail.hash
+            chained.chainHead = nil
             guard let encoded = try? encoder.encode(chained) else { return false }
             var data = Data()
             if tail.isTorn { data.append(UInt8(ascii: "\n")) }

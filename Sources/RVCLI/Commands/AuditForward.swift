@@ -158,6 +158,11 @@ enum AuditForwardRun {
         switch AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: configDirectory)) {
         case .failure(let error):
             return .failure(CommandFailure("audit chain cannot be checked (\(error.message)); refusing to forward"))
+        case .success(let report) where report.isIntact == false && report.firstBreak?.reason == "no prev on any line":
+            // A wholly pre-chain (legacy) file has no head to protect and
+            // no self-recovery: it anchors at its next append, but the
+            // backlog must not deadlock until then.
+            FileHandle.standardError.write(Data("rv audit forward: audit.jsonl predates the hash chain; forwarding without a chain head\n".utf8))
         case .success(let report) where report.isIntact == false:
             let broken = report.firstBreak
             return .failure(CommandFailure(

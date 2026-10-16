@@ -138,9 +138,15 @@ final class MCPRemoteUpstream: NSObject, URLSessionDataDelegate, @unchecked Send
         var request = MCPHTTPExchange.request(
             url: launch.url, method: "GET", headers: sent, sessionID: nil, protocolVersion: nil, body: nil)
         request.timeoutInterval = 24 * 60 * 60
-        let task = session.dataTask(with: request)
-        locked { exchanges[task.taskIdentifier] = Exchange(kind: .stream(retried: retried), token: token) }
-        task.resume()
+        // Create under the lock stop() holds while invalidating: a task
+        // created on an invalidated session raises instead of failing.
+        let task: URLSessionDataTask? = locked {
+            guard stopped == false, self.session === session else { return nil }
+            let task = session.dataTask(with: request)
+            exchanges[task.taskIdentifier] = Exchange(kind: .stream(retried: retried), token: token)
+            return task
+        }
+        task?.resume()
     }
 
     func send(_ message: JSONValue) {

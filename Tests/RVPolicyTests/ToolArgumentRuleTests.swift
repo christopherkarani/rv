@@ -152,3 +152,11 @@ struct ToolArgumentRuleTests {
             tool: "pay", arguments: try json(#"{"amount":9007199254740994}"#)))
     }
 }
+
+extension ToolArgumentRuleTests {
+    @Test func nestedMarkedValuesSummarizeWithoutTheMarker() throws {
+        let parsed = try rule(#"{"tool":"q","when":{"/id":{"in":[9007199254740993]}}}"#)
+        #expect(parsed.summary.contains("\u{0}") == false, "\(parsed.summary)")
+        #expect(parsed.summary.contains("9007199254740993"))
+    }
+}
