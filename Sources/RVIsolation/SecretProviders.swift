@@ -360,6 +360,11 @@ enum BoundedProcess {
         process.standardError = err
         let stdout = Collector()
         let stderr = Collector()
+        // terminationHandler, not a GCD block: the global pool can starve
+        // for longer than the deadline under full-suite parallel load, and
+        // a finished child then looks like a timeout.
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         do { try process.run() } catch { return nil }
         // Drain both pipes on dedicated threads while waiting: polling
         // isRunning plus a post-exit readDataToEndOfFile never observes the
@@ -376,11 +381,6 @@ enum BoundedProcess {
                 }
                 drained.leave()
             }
-        }
-        let exited = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
-            process.waitUntilExit()
-            exited.signal()
         }
         guard exited.wait(timeout: .now() + timeout) == .success else {
             process.terminate()
