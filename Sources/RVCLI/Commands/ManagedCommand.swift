@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import RVDomain
+import RVIsolation
 import RVPolicy
 
 /// `rv managed`: inspect, prepare, and sign the organization policy bundle.
@@ -13,7 +14,14 @@ enum ManagedRun {
         var serial: Int?
         var sha256: String?
         var signed: Bool?
+        var signingKey: Int?
+        var highestSerial: Int?
         var restrictions: [String]?
+    }
+
+    /// The installed policy after the anti-rollback check against the user's serial record.
+    static func installed(home: HomeDirectory) -> ManagedPolicyState {
+        ManagedPolicyLocation.installed.load(serialsIn: RVPolicyPaths.configDirectory(home: home))
     }
 
     static func status(_ state: ManagedPolicyState, directory: String) -> Status {
@@ -26,6 +34,7 @@ enum ManagedRun {
             return Status(
                 state: "active", directory: bundle.directory, organization: bundle.policy.organization,
                 serial: bundle.policy.serial, sha256: bundle.sha256, signed: bundle.isSigned,
+                signingKey: bundle.signingKey, highestSerial: bundle.highestSerial,
                 restrictions: restrictions(bundle.policy))
         }
     }
@@ -38,11 +47,17 @@ enum ManagedRun {
             return "organization policy INVALID: \(status.reason ?? "unknown")\n"
                 + "MCP and secret staging are disabled until it is fixed (\(status.directory))\n"
         default:
+            let signature = switch (status.signed, status.signingKey) {
+            case (true, let key?): "signed by key \(key) in \(ManagedPolicyLocation.publicKeyFile)"
+            case (true, nil): "signed (\(ManagedPolicyLocation.publicKeyFile) pinned)"
+            default: "unsigned"
+            }
             var lines = [
                 "organization policy active: \(DisplayedText.field(status.organization ?? "unnamed"))"
                     + (status.serial.map { " serial \($0)" } ?? ""),
-                "  \(status.signed == true ? "signed (org-key.pub pinned)" : "unsigned") sha256 \(status.sha256 ?? "")",
+                "  \(signature) sha256 \(status.sha256 ?? "")",
             ]
+            if let highest = status.highestSerial { lines.append("  anti-rollback: highest serial accepted here is \(highest)") }
             let rules = status.restrictions ?? []
             lines += rules.isEmpty ? ["  no restrictions"] : rules.map { "  " + DisplayedText.field($0) }
             return lines.joined(separator: "\n") + "\n"
@@ -54,10 +69,13 @@ enum ManagedRun {
         let mcp = policy.mcp
         if mcp.blocked.isEmpty == false { lines.append("mcp blocked servers: " + mcp.blocked.joined(separator: ", ")) }
         if mcp.allowDirect == false { lines.append("mcp: servers may not run outside rv (direct ignored)") }
-        if mcp.requireSandbox { lines.append("mcp: every served server must be sandboxed") }
+        if mcp.requireSandbox {
+            lines.append("mcp: every local server must be sandboxed (remote servers are exempt)")
+        }
         if mcp.deny.isEmpty == false { lines.append("mcp deny: " + mcp.deny.joined(separator: ", ")) }
         if mcp.ask.isEmpty == false { lines.append("mcp ask: " + mcp.ask.joined(separator: ", ")) }
         if mcp.allow.isEmpty == false { lines.append("mcp allow: " + mcp.allow.joined(separator: ", ")) }
+        for ruled in mcp.rules { lines.append("mcp \(ruled.decision.rawValue): \(ruled.rule.summary)") }
         if mcp.defaultDecision != .allow { lines.append("mcp default for other tools: \(mcp.defaultDecision.rawValue)") }
         if let sources = policy.secrets.allowedSources {
             lines.append("secret sources allowed: " + (sources.isEmpty ? "none" : sources.joined(separator: ", ")))
@@ -163,8 +181,9 @@ struct ManagedStatus: AsyncParsableCommand {
 
     func run() throws {
         let ctx = CommandContext.current(command: "managed status", format: format)
+        let home = try ctx.requireHome()
         let status = ManagedRun.status(
-            ManagedPolicyLocation.installed.load(), directory: ManagedPolicyLocation.installedDirectory)
+            ManagedRun.installed(home: home), directory: ManagedPolicyLocation.installedDirectory)
         if ctx.explicitRobot {
             ctx.writeStdout(ManagedRun.robotJSON(status))
         } else {

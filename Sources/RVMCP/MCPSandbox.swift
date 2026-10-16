@@ -4,6 +4,8 @@ import Darwin
 import Glibc
 #endif
 import Foundation
+import RVDomain
+import RVIsolation
 import Synchronization
 
 /// Seatbelt cage for upstream MCP servers that set `sandbox` in mcp.json.
@@ -40,9 +42,31 @@ public enum MCPSandbox {
         "~/Library/Application Support/Claude", "~/.netrc", "~/.npmrc", "~/.pypirc",
     ]
 
+    /// Allowlist proxies for `sandbox.hosts`; they live as long as `rv mcp serve`.
+    static let proxies = Mutex<[EgressProxy]>([])
+
+    /// Stops every proxy this process started; called when serve exits.
+    public static func stopProxies() {
+        proxies.withLock { running in
+            running.forEach { $0.stop() }
+            running = []
+        }
+    }
+
+    /// The proxy credential a caged launch carries in its proxy URL, so the
+    /// gateway can scrub it from anything the server echoes back.
+    public static func proxyCredential(in environment: [String: String]) -> String? {
+        guard let url = environment["HTTPS_PROXY"], url.hasPrefix("http://"),
+            let at = url.firstIndex(of: "@")
+        else { return nil }
+        let credential = String(url[url.index(url.startIndex, offsetBy: "http://".count)..<at])
+        return credential.isEmpty ? nil : credential
+    }
+
     /// The planner hook `rv mcp serve` passes to `MCPLaunchPlanner.plan`.
+    /// `denied` hears each CONNECT a `sandbox.hosts` proxy refuses.
     public static func apply(
-        configDirectory: URL, home: URL
+        configDirectory: URL, home: URL, denied: @escaping @Sendable (String, EgressProxyDenial) -> Void = { _, _ in }
     ) -> (MCPServerDefinition, MCPUpstreamLaunch) -> Result<MCPUpstreamLaunch, MCPLaunchError> {
         { definition, launch in
             guard let policy = definition.sandbox else { return .success(launch) }
@@ -53,23 +77,40 @@ public enum MCPSandbox {
                 return .failure(.sandbox(scratchCreationFailure(scratch.path)))
             }
             if let widened = unreviewedWrite(
-                policy: policy, scratch: scratch.path, home: home.path, temporaryDirectory: temporary)
+                policy: policy, scratch: scratch.path, home: home.path, temporaryDirectory: temporary,
+                scratchMustExist: false)
             {
                 return .failure(.sandbox(widened))
             }
             if let widened = unreviewedHome(home.path) {
                 return .failure(.sandbox(widened))
             }
+            var environment = launch.environment
+            var proxyPort: Int?
+            if policy.hosts.isEmpty == false {
+                let server = definition.name
+                let credential = proxyCredential()
+                let proxy = EgressProxy(
+                    policy: EgressHostPolicy(allowedHosts: Set(policy.hosts), relaysLoopback: false),
+                    record: { denied(server, $0) }, clientCredential: credential)
+                guard case .success(let port) = proxy.start() else {
+                    return .failure(.sandbox("could not start the egress proxy for \(server)"))
+                }
+                proxies.withLock { $0.append(proxy) }
+                proxyPort = port
+                environment = proxyEnvironment(environment, port: port, credential: credential)
+            }
             guard createPinned(scratch.path, pinned: pinned) else {
                 return .failure(.sandbox(scratchCreationFailure(scratch.path)))
             }
             switch profile(
                 policy: policy, scratch: scratch.path, home: home.path, configDirectory: configDirectory.path,
-                temporaryDirectory: temporary)
+                temporaryDirectory: temporary, proxyPort: proxyPort)
             {
             case .failure(let error): return .failure(error)
             case .success(let text):
                 var caged = launch
+                caged.environment = environment
                 caged.executable = sandboxExec
                 caged.arguments = ["-p", text, launch.executable] + launch.arguments
                 caged.workingDirectory = scratch.path
@@ -81,8 +122,31 @@ public enum MCPSandbox {
         }
     }
 
+    /// 32 random bytes, hex. The proxy requires this as `Proxy-Authorization`.
+    static func proxyCredential() -> String {
+        (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+    }
+
+    /// Points HTTP clients at the proxy; Node's fetch needs `NODE_USE_ENV_PROXY`.
+    /// The credential is the userinfo of the proxy URL — the token-as-username
+    /// convention the egress proxy parses — so clients send it as proxy basic
+    /// auth. A process that can only dial 127.0.0.1 does not have it.
+    public static func proxyEnvironment(_ base: [String: String], port: Int, credential: String) -> [String: String] {
+        var environment = base
+        let url = "http://\(credential)@127.0.0.1:\(port)"
+        for key in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
+            environment[key] = url
+            environment[key.lowercased()] = url
+        }
+        environment["NODE_USE_ENV_PROXY"] = "1"
+        environment["NO_PROXY"] = nil
+        environment["no_proxy"] = nil
+        return environment
+    }
+
     public static func profile(
-        policy: MCPSandboxPolicy, scratch: String, home: String, configDirectory: String, temporaryDirectory: String
+        policy: MCPSandboxPolicy, scratch: String, home: String, configDirectory: String, temporaryDirectory: String,
+        proxyPort: Int? = nil
     ) -> Result<String, MCPLaunchError> {
         func expand(_ path: String) -> String {
             path.hasPrefix("~/") ? home + path.dropFirst(1) : path
@@ -114,9 +178,20 @@ public enum MCPSandbox {
             lines.append("(allow file-read* file-write* " + writeAllow + ")")
             lines.append(credentialDeny)
         }
-        if policy.network == false {
+        // `hosts` is the stronger statement: with an allowlist the network is
+        // caged to the proxy even if `network` was also set (the decoder
+        // already refuses that combination; the profile must not depend on it).
+        if policy.network == false || proxyPort != nil {
             lines.append("(deny network*)")
+            // Seatbelt network addresses accept only `*` or `localhost` as
+            // the host; `127.0.0.1:<port>` fails to compile and the server
+            // never starts.
+            if let proxyPort { lines.append("(allow network-outbound (remote tcp \"localhost:\(proxyPort)\"))") }
         }
+        // No mach-lookup rule for the resolver: verified live on macOS that
+        // (deny network*) alone makes getaddrinfo fail inside this profile
+        // (the dnssd service deny neither helps nor is needed), and the live
+        // cage test probes that a caged process cannot resolve names.
         return .success(lines.joined(separator: "\n"))
     }
 
@@ -129,7 +204,8 @@ public enum MCPSandbox {
     /// The real path when it is not the path the review named. `/tmp` and
     /// `/private/tmp` are the same directory. Any other symlink target is refused.
     static func unreviewedWrite(
-        policy: MCPSandboxPolicy, scratch: String, home: String, temporaryDirectory: String
+        policy: MCPSandboxPolicy, scratch: String, home: String, temporaryDirectory: String,
+        scratchMustExist: Bool = true
     ) -> String? {
         func expand(_ path: String) -> String {
             path.hasPrefix("~/") ? home + path.dropFirst(1) : path
@@ -142,7 +218,13 @@ public enum MCPSandbox {
             let resolved = realPath(scratch)
             return "\(MCPDisplayedText.field(scratch)) resolves to \(MCPDisplayedText.field(resolved)), which was not the path reviewed"
         }
-        if resolveExisting(scratch) == nil {
+        if scratchMustExist, resolveExisting(scratch) == nil {
+            // profile() runs after createPinned: a scratch that is not there
+            // was never created under the held ancestors (or was swapped
+            // away), so it is not a write root rv reviewed. apply()'s
+            // pre-creation check passes scratchMustExist: false; the paths
+            // check below still refuses a missing path that resolves through
+            // a symlinked ancestor to a different tree.
             let resolved = realPath(scratch)
             if sameReviewedDirectory(scratch, resolved) {
                 return "\(MCPDisplayedText.field(scratch)) resolves to \(MCPDisplayedText.field(resolved)), which was not the path reviewed"
@@ -203,7 +285,15 @@ public enum MCPSandbox {
     /// to a different tree is not the same directory.
     static func sameReviewedDirectory(_ reviewed: String, _ resolved: String) -> Bool {
         if reviewed == resolved { return true }
-        return tmpAlias(reviewed) == tmpAlias(resolved)
+        return tmpAlias(directorySpelling(reviewed)) == tmpAlias(directorySpelling(resolved))
+    }
+
+    /// Directory spellings compared without a trailing slash:
+    /// `NSTemporaryDirectory()` keeps one and `realpath` drops it.
+    private static func directorySpelling(_ path: String) -> String {
+        var spelling = path
+        while spelling.count > 1, spelling.hasSuffix("/") { spelling.removeLast() }
+        return spelling
     }
 
     static func tmpAlias(_ path: String) -> String {

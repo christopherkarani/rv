@@ -51,12 +51,12 @@ final class SecretLaunchBroker: @unchecked Sendable {
         resolver: SecretResolver,
         transport: SecretUpstreamTransport = .urlSession,
         workspace: String?,
-        managed: @escaping @Sendable () -> ManagedPolicyState = { ManagedPolicyLocation.installed.load() }
+        managed: (@Sendable () -> ManagedPolicyState)? = nil
     ) {
         self.configDirectory = configDirectory
         self.resolver = resolver
         self.workspace = workspace
-        self.managed = managed
+        self.managed = managed ?? { ManagedPolicyLocation.installed.load(serialsIn: configDirectory) }
         let directory = configDirectory
         gateway = SecretGateway(transport: transport) { record in
             _ = AuditLog.append(Self.auditEvent(record, workspace: workspace), configDirectory: directory)

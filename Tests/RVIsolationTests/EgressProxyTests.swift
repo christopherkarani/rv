@@ -263,6 +263,45 @@ private func egressAwaitDenials(_ collector: EgressDenialCollector, count: Int, 
     }
 }
 
+@Test func egressProxyRefusesLoopbackWhenTheCageCannotDialIt() throws {
+    let collector = EgressDenialCollector()
+    let proxy = EgressProxy(
+        policy: EgressHostPolicy(allowedHosts: ["api.example.com"], relaysLoopback: false), record: { collector.record($0) })
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let client = try #require(egressConnect(port: port))
+    defer { close(client) }
+    #expect(egressSend(client, text: "CONNECT 127.0.0.1:9 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"))
+    let response = egressReadUntil403(client)
+    #expect(response.contains("HTTP/1.1 403"))
+    egressAwaitDenials(collector, count: 1)
+    #expect(collector.all.first?.reason == .deniedPolicy)
+    #expect(collector.all.first?.host == "127.0.0.1")
+}
+
+@Test func credentialedProxyIsNotAnOpenRelay() throws {
+    let collector = EgressDenialCollector()
+    let proxy = EgressProxy(
+        policy: EgressHostPolicy(allowedHosts: ["api.example.com"], relaysLoopback: false),
+        record: { collector.record($0) }, clientCredential: "secret-token")
+    let port = try proxy.start().get()
+    defer { proxy.stop() }
+    let anonymous = try #require(egressConnect(port: port))
+    defer { close(anonymous) }
+    #expect(egressSend(anonymous, text: "CONNECT api.example.com:443 HTTP/1.1\r\nHost: api.example.com:443\r\n\r\n"))
+    #expect(egressReadUntil403(anonymous).contains("HTTP/1.1 407"))
+
+    let encoded = Data("secret-token:x".utf8).base64EncodedString()
+    let authed = try #require(egressConnect(port: port))
+    defer { close(authed) }
+    #expect(egressSend(
+        authed,
+        text: "CONNECT 127.0.0.1:9 HTTP/1.1\r\nHost: 127.0.0.1:9\r\nProxy-Authorization: Basic \(encoded)\r\n\r\n"))
+    #expect(egressReadUntil403(authed).contains("HTTP/1.1 403"))
+    egressAwaitDenials(collector, count: 2)
+    #expect(collector.all.map(\.reason) == [.deniedCredential, .deniedPolicy])
+}
+
 @Test func egressProxyRelaysLoopbackTargets() throws {
     let stub = try #require(EgressStubServer(reply: "PONG\n"))
     let collector = EgressDenialCollector()
@@ -520,7 +559,9 @@ private final class AuditDiagnosticCollector: @unchecked Sendable {
     // `address-filtered` values. Binary scope adds `binary-mismatch`
     // (bound binary not admitted or TOFU pin broken) and
     // `unattributed-peer` (binary-scoped policy on an unbound instance),
-    // and credentialed-mode auth failures record as `denied-credential`.
+    // credentialed-mode auth failures record as `denied-credential`, and
+    // a credentialed tunnel whose ClientHello SNI is not the CONNECT
+    // authority records as `sni-mismatch`.
     #expect(
         EgressDenialReason.allCases.map(\.rawValue).sorted() == [
             "address-filtered",
@@ -531,6 +572,7 @@ private final class AuditDiagnosticCollector: @unchecked Sendable {
             "dns-failed",
             "header-too-large",
             "malformed",
+            "sni-mismatch",
             "unattributed-peer",
         ]
     )
@@ -598,8 +640,10 @@ private func egressIsPublicUnicast(family: Int32, _ text: String) -> Bool? {
     // NAT64 embeddings recurse into the v4 verdict; special ranges deny.
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b::808:808")))
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b::a9fe:a9fe")) == false)
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b::7f00:1")) == false)
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b:1:808:808::")))
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b:1:a00:1::")) == false)
+    #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "64:ff9b:1::808:808")) == false)
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "2001::1")) == false)
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "2001:20::1")) == false)
     #expect(try #require(egressIsPublicUnicast(family: AF_INET6, "2001:2::1")) == false)
@@ -611,6 +655,41 @@ private func egressIsPublicUnicast(family: Int32, _ text: String) -> Bool? {
         pointer.withMemoryRebound(to: sockaddr.self, capacity: 1, EgressProxy.isPublicUnicast)
     }
     #expect(unknownFamily == false)
+}
+
+@Test func egressProxyParsesClientHelloSNIAndRejectsMalformed() {
+    func hello(_ host: String?) -> [UInt8] {
+        var body: [UInt8] = [0x03, 0x03] + [UInt8](repeating: 0xAB, count: 32) + [0x00]
+        body += [0x00, 0x02, 0x13, 0x01, 0x01, 0x00]
+        var extensions: [UInt8] = []
+        if let host {
+            let name = Array(host.utf8)
+            let entry: [UInt8] = [0x00, UInt8(name.count >> 8), UInt8(name.count & 0xFF)] + name
+            let sni: [UInt8] = [UInt8(entry.count >> 8), UInt8(entry.count & 0xFF)] + entry
+            extensions += [0x00, 0x00, UInt8(sni.count >> 8), UInt8(sni.count & 0xFF)] + sni
+        }
+        body += [UInt8(extensions.count >> 8), UInt8(extensions.count & 0xFF)] + extensions
+        var record: [UInt8] = [0x16, 0x03, 0x01, 0x00, 0x00, 0x01,
+                               UInt8((body.count >> 16) & 0xFF), UInt8((body.count >> 8) & 0xFF), UInt8(body.count & 0xFF)] + body
+        let length = record.count - 5
+        record[3] = UInt8(length >> 8)
+        record[4] = UInt8(length & 0xFF)
+        return record
+    }
+    #expect(EgressProxy.tlsServerName(hello("api.example.com")) == "api.example.com")
+    #expect(EgressProxy.tlsServerName(hello(nil)) == nil)
+    #expect(EgressProxy.tlsServerName([]) == nil)
+    #expect(EgressProxy.tlsServerName([0x16, 0x03, 0x01]) == nil)
+    #expect(EgressProxy.tlsServerName(Array(hello("api.example.com").prefix(20))) == nil)
+    var truncated = hello("api.example.com")
+    truncated[3] = 0xFF
+    #expect(EgressProxy.tlsServerName(truncated) == nil)
+    var notTLS = hello("api.example.com")
+    notTLS[0] = 0x17
+    #expect(EgressProxy.tlsServerName(notTLS) == nil)
+    var huge = hello("api.example.com")
+    huge[5 + 4 + 2 + 32] = 0xFF // session id length runs past the record
+    #expect(EgressProxy.tlsServerName(huge) == nil)
 }
 
 /// Scripted `stat`/hash backend for binary-gate tests: no filesystem,

@@ -76,6 +76,9 @@ enum ReportRun {
             var total: Int
             var byKind: [String: [String: Int]]
             var lastEventAt: String?
+            /// Hash-chain state of audit.jsonl; nil when it cannot be read.
+            var chainIntact: Bool?
+            var chainHead: String?
         }
 
         struct Sandbox: Encodable, Equatable {
@@ -99,6 +102,7 @@ enum ReportRun {
         var compliant: Bool {
             managed.state != "invalid" && mcp.ok && secrets.error == nil
                 && secrets.items.allSatisfy { $0.policyViolation == nil }
+                && audit.chainIntact != false
         }
     }
 
@@ -184,8 +188,10 @@ enum ReportRun {
         let events = AuditLedger(configDirectory: inputs.configDirectory).events(AuditFilter(since: since))
         var byKind: [String: [String: Int]] = [:]
         for event in events { byKind[event.kind.rawValue, default: [:]][event.decision.rawValue, default: 0] += 1 }
+        let chain = AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: inputs.configDirectory))
         return Report.AuditSummary(
-            since: iso8601(since), total: events.count, byKind: byKind, lastEventAt: events.last.map { iso8601($0.time) })
+            since: iso8601(since), total: events.count, byKind: byKind, lastEventAt: events.last.map { iso8601($0.time) },
+            chainIntact: (try? chain.get())?.isIntact, chainHead: (try? chain.get())?.head)
     }
 
     static func text(_ report: Report) -> String {
@@ -262,7 +268,7 @@ struct ReportCommand: AsyncParsableCommand {
             configDirectory: configDirectory,
             home: URL(fileURLWithPath: home.rawValue, isDirectory: true),
             processEnvironment: ProcessInfo.processInfo.environment,
-            managed: ManagedPolicyLocation.installed.load(),
+            managed: ManagedRun.installed(home: home),
             managedDirectory: ManagedPolicyLocation.installedDirectory,
             now: Date(),
             hostName: ProcessInfo.processInfo.hostName,

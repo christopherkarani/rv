@@ -375,6 +375,8 @@ enum HelpCatalog {
                 HelpRow(name: "rv audit [tail] [-n <count>] [--since <duration>] [--kind <kind>]... [--json]"),
                 HelpRow(name: "rv audit export [--since <duration>] [--kind <kind>]... [--format rv|ocsf]"),
                 HelpRow(name: "rv audit forward [--to <url>] [--header NAME=VALUE]... [--format ocsf|rv] [--from-now]"),
+                HelpRow(name: "rv audit forward --install [--to <url>] [--header NAME=${secret:X}]..."),
+                HelpRow(name: "rv audit verify [--json]"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "-n, --limit", description: "Newest events to show (default 50)"),
@@ -390,6 +392,10 @@ enum HelpCatalog {
                 HelpRow(name: "export", description: "JSON Lines, oldest first, for SIEM ingest (OCSF 1.3.0 with --format ocsf)"),
                 HelpRow(name: "forward", description: "POSTs new events in batches; cursor advances only on 2xx (at-least-once)"),
                 HelpRow(name: "forward --to", description: "https, or http to localhost; default is the org policy audit.forward"),
+                HelpRow(name: "--install", description: "macOS LaunchAgent every 5 min; prints a LaunchDaemon template for root"),
+                HelpRow(name: "chain", description: "Each audit.jsonl line holds prev, the SHA-256 of the line before it (unkeyed: anchoring needs the forwarded head)"),
+                HelpRow(name: "verify", description: "Finds edits, deletions, and reordering that did not recompute the chain; exit 1 at the first break"),
+                HelpRow(name: "head", description: "Forwarded events carry rv_chain_head; compare it off-machine to spot a cut or recomputed tail"),
             ]),
         ],
         examples: [
@@ -397,6 +403,8 @@ enum HelpCatalog {
             "rv audit --kind egress --since 24h",
             "rv audit export --since 7d > rv-audit.jsonl",
             "rv audit forward --to https://siem.example.com/rv --header 'Authorization=Bearer ${secret:SIEM_TOKEN}'",
+            "rv audit forward --install",
+            "rv audit verify",
         ]
     )
 
@@ -447,14 +455,30 @@ enum HelpCatalog {
                 HelpRow(name: "rv mcp serve --server <name> [--server <name>...]"),
                 HelpRow(name: "rv mcp pending | approve <id> [--always] | deny <id>"),
                 HelpRow(name: "rv mcp trust"),
+                HelpRow(name: "rv mcp connect <server> [--client-id <id>] [--scope <s>] [--no-browser] [--forget]"),
             ]),
             HelpSection(heading: "Tool policy", rows: [
-                HelpRow(name: "order", description: "deny glob > ask glob > allow glob > server default > defaultDecision"),
+                HelpRow(name: "order", description: "Strictest matching glob or rule (deny > ask > allow), else default"),
+                HelpRow(
+                    name: "rules",
+                    description: "{\"tool\": \"query\", \"when\": {\"/db\": {\"==\": \"prod\"}}}; ops == != < > in glob"
+                ),
+                HelpRow(name: "missing", description: "A rule never matches an argument the call left out; keep a non-allow default"),
                 HelpRow(name: "deny", description: "Hidden from the agent; calls fail"),
                 HelpRow(name: "ask", description: "Approved in the host's prompt, or `rv mcp approve`; one identical call"),
                 HelpRow(name: "approve", description: "Needs Touch ID or your password. A pseudo-terminal cannot approve"),
                 HelpRow(name: "secrets", description: "\"secrets\": {\"VAR\": \"NAME\"} or ${secret:NAME} in args; values scrubbed"),
-                HelpRow(name: "sandbox", description: "\"sandbox\": {\"network\": false} cages the server (macOS)"),
+                HelpRow(
+                    name: "sandbox",
+                    description: "\"sandbox\" cages the server (macOS); \"hosts\" allows those names on port 443 through a proxy"
+                ),
+                HelpRow(
+                    name: "profile",
+                    description: "\"strict\": unlisted tools deny, local servers need a sandbox, network only via sandbox.hosts"
+                ),
+                HelpRow(name: "toolMode", description: "\"search\" lists only rv_search_tools and rv_call_tool; same policy per call"),
+                HelpRow(name: "remote", description: "\"url\": https://… (\"transport\": http|sse, \"headers\" with ${secret:NAME}); no sandbox"),
+                HelpRow(name: "oauth", description: "`rv mcp connect <server>` signs in once; rv stores, sends and refreshes the token"),
             ]),
             HelpSection(heading: "Statuses", rows: [
                 HelpRow(name: "governed", description: "Host runs it through `rv mcp serve`"),
@@ -498,6 +522,8 @@ enum HelpCatalog {
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "location", description: "\(ManagedPolicyLocation.installedDirectory) (root-owned)"),
                 HelpRow(name: "files", description: "policy.json; org-key.pub pins a key, then policy.json.sig is required"),
+                HelpRow(name: "rotation", description: "org-key.pub may list several keys, one per line (# comments); any one verifies"),
+                HelpRow(name: "serial", description: "A serial lower than one already accepted is a rollback and makes the policy invalid"),
                 HelpRow(name: "restrict-only", description: "Org rules only tighten mcp.json and secrets.json; deny > ask > allow"),
                 HelpRow(name: "invalid", description: "A bad owner, mode, signature, or key disables MCP and secret staging"),
             ]),

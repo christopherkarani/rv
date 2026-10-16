@@ -62,6 +62,9 @@ struct AuditForwardTests {
         #expect(receiver.bodies.map(\.count) == [2, 2, 1])
         let firstEvent = receiver.bodies.first?.first as? [String: Any]
         #expect(firstEvent?["class_uid"] as? Int == 6003)
+        let lastUnmapped = (receiver.bodies.last?.last as? [String: Any])?["unmapped"] as? [String: Any]
+        #expect(lastUnmapped?["rv_chain_head"] as? String
+            == AuditChain.head(fileURL: AuditLog.fileURL(configDirectory: config.directory)))
 
         #expect(try AuditForwardRun.forward(
             options: options(), configDirectory: config.directory, hostName: "h", transport: receiver.transport
@@ -147,6 +150,35 @@ struct AuditForwardTests {
         #expect((try? AuditForwardRun.destination("http://127.0.0.1:9000/x").get()) != nil)
         #expect((try? AuditForwardRun.destination("http://siem.example.com").get()) == nil)
         #expect((try? AuditForwardRun.destination("not a url").get()) == nil)
+        #expect((try? AuditForwardRun.destination("https://siem.example/hook?v=1").get()) != nil)
+        let userinfo = AuditForwardRun.destination("https://user:pass@siem.example/ingest")
+        guard case .failure(let userinfoFailure) = userinfo else {
+            Issue.record("userinfo must be refused")
+            return
+        }
+        #expect(userinfoFailure.message.contains("username or password"))
+        #expect(userinfoFailure.message.contains("user:pass") == false)
+        let query = AuditForwardRun.destination("https://siem.example/hook?token=abc123")
+        guard case .failure(let queryFailure) = query else {
+            Issue.record("a query secret must be refused")
+            return
+        }
+        #expect(queryFailure.message.contains("secret in its query"))
+        #expect(queryFailure.message.contains("abc123") == false)
+        let pathSecret = "ghp_1234567890abcdefghij"
+        let nestedSecret = "supersecretpassword"
+        let secretDestinations = concealedAuditDestinations(pathSecret: pathSecret, nestedSecret: nestedSecret)
+        for (text, fragment) in secretDestinations {
+            guard case .failure(let failure) = AuditForwardRun.destination(text) else {
+                Issue.record("refused \(fragment)")
+                continue
+            }
+            #expect(failure.message.contains(fragment), "\(fragment)")
+            #expect(failure.message.contains(pathSecret) == false)
+            #expect(failure.message.contains(nestedSecret) == false)
+            #expect(failure.message.contains("user:\(nestedSecret)") == false)
+        }
+        #expect((try? AuditForwardRun.destination("https://siem.example/hook?next=https://collector.example/v1").get()) != nil)
         #expect(try AuditForwardRun.parseHeaders(["Authorization=Bearer x=y"]).get() == ["Authorization": "Bearer x=y"])
         #expect((try? AuditForwardRun.parseHeaders(["=x"]).get()) == nil)
 
@@ -266,7 +298,7 @@ private final class RedirectSink: @unchecked Sendable {
                 bind(fd, sock, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
-        guard bound == 0, listen(fd, 1) == 0 else {
+        guard bound == 0, listen(fd, 8) == 0 else {
             close(fd)
             throw RedirectSinkError()
         }
@@ -287,7 +319,10 @@ private final class RedirectSink: @unchecked Sendable {
             throw RedirectSinkError()
         }
         let sink = RedirectSink(url: url, listenFD: fd)
-        DispatchQueue.global().async {
+        // A dedicated thread, not the GCD global pool: under full-suite
+        // parallel load the pool can starve for longer than the client's
+        // 30-second timeout, and the connection is never accepted.
+        Thread.detachNewThread {
             let client = accept(fd, nil, nil)
             if client < 0 { return }
             sink.hits.withLock { $0 += 1 }
@@ -342,3 +377,269 @@ private final class RedirectSink: @unchecked Sendable {
 }
 
 private struct RedirectSinkError: Error {}
+
+@Suite("rv audit forward --install")
+struct AuditForwardInstallTests {
+    final class Home {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rv-install-\(UUID().uuidString)")
+        deinit { try? FileManager.default.removeItem(at: url) }
+    }
+
+    private func plan(_ arguments: [String] = [], home: Home) -> AuditForwardInstall.Plan {
+        AuditForwardInstall.Plan(
+            home: home.url, rvExecutable: "/usr/local/bin/rv", userID: 501, userName: "alice", forwardArguments: arguments)
+    }
+
+    private func plist(_ data: Data) throws -> [String: Any] {
+        try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+    }
+
+    @Test func writesAUserAgentEveryFiveMinutesAndPrintsTheDaemonTemplate() throws {
+        let home = Home()
+        let plan = plan(["--to", "https://siem.example.com/rv", "--header", "Authorization=Bearer ${secret:SIEM}"], home: home)
+        let text = try AuditForwardInstall.install(plan).get()
+
+        let agentURL = home.url.appendingPathComponent("Library/LaunchAgents/dev.rv.audit-forward.plist")
+        let agent = try plist(try Data(contentsOf: agentURL))
+        #expect(agent["Label"] as? String == "dev.rv.audit-forward")
+        #expect(agent["StartInterval"] as? Int == 300)
+        #expect(agent["RunAtLoad"] as? Bool == true)
+        #expect(agent["ProgramArguments"] as? [String] == [
+            "/usr/local/bin/rv", "audit", "forward", "--to", "https://siem.example.com/rv",
+            "--header", "Authorization=Bearer ${secret:SIEM}",
+        ])
+        #expect(agent["StandardErrorPath"] as? String == home.url.path + "/.config/rv/audit-forward/launchd.log")
+        var info = stat()
+        #expect(stat(agentURL.path, &info) == 0 && info.st_mode & 0o022 == 0)
+
+        #expect(text.contains("wrote \(agentURL.path)"))
+        #expect(text.contains("launchctl bootstrap gui/501 \(AuditForwardInstall.shellQuote(agentURL.path))"))
+        #expect(text.contains("<key>UserName</key>\n\t<string>alice</string>"))
+        #expect(text.contains(
+            "sudo launchctl bootstrap system \(AuditForwardInstall.shellQuote("/Library/LaunchDaemons/dev.rv.audit-forward.alice.plist"))"))
+
+        let daemon = try plist(AuditForwardInstall.daemonPlist(plan))
+        #expect(daemon["Label"] as? String == "dev.rv.audit-forward.alice")
+        #expect(daemon["UserName"] as? String == "alice")
+        #expect((daemon["EnvironmentVariables"] as? [String: String])?["HOME"] == home.url.path)
+        #expect(daemon["ProgramArguments"] as? [String] == agent["ProgramArguments"] as? [String])
+    }
+
+    @Test func refusesPlaintextHeadersSoThePlistHoldsNoCredential() {
+        let home = Home()
+        let result = AuditForwardInstall.install(plan(["--header", "Authorization=Bearer abc123"], home: home))
+        guard case .failure(let failure) = result else {
+            Issue.record("a plaintext header must be refused")
+            return
+        }
+        #expect(failure.message.contains("${secret:NAME}"))
+        #expect(failure.message.contains("abc123") == false)
+        #expect(FileManager.default.fileExists(atPath: home.url.appendingPathComponent("Library").path) == false)
+
+        let mixed = AuditForwardInstall.install(
+            plan(["--header", "Authorization=Bearer real-token ${secret:PLACEHOLDER}"], home: home))
+        guard case .failure(let mixedFailure) = mixed else {
+            Issue.record("a literal beside a secret reference must be refused")
+            return
+        }
+        #expect(mixedFailure.message.contains("${secret:NAME}"))
+        #expect(mixedFailure.message.contains("real-token") == false)
+        #expect(FileManager.default.fileExists(atPath: home.url.appendingPathComponent("Library").path) == false)
+
+        let pathSecret = "ghp_1234567890abcdefghij"
+        let nestedSecret = "supersecretpassword"
+        for (text, _) in concealedAuditDestinations(pathSecret: pathSecret, nestedSecret: nestedSecret) {
+            let installed = AuditForwardInstall.install(plan(["--to", text], home: home))
+            guard case .failure(let failure) = installed else {
+                Issue.record("install must refuse a secret destination")
+                continue
+            }
+            #expect(failure.message.contains(pathSecret) == false)
+            #expect(failure.message.contains(nestedSecret) == false)
+            #expect(failure.message.contains("user:\(nestedSecret)") == false)
+        }
+        #expect(FileManager.default.fileExists(atPath: home.url.appendingPathComponent("Library").path) == false)
+    }
+
+    @Test func shellMetacharactersInTheAccountNameAreQuoted() throws {
+        let home = Home()
+        var hostile = plan(["--to", "https://siem.example.com/rv"], home: home)
+        hostile.userName = "alice';touch /tmp/pwned"
+        let text = try AuditForwardInstall.install(hostile).get()
+        let path = "/Library/LaunchDaemons/dev.rv.audit-forward.alice';touch /tmp/pwned.plist"
+        #expect(text.contains("sudo launchctl bootstrap system \(AuditForwardInstall.shellQuote(path))"))
+        #expect(text.contains("sudo launchctl bootstrap system \(path)") == false)
+        let saved = ProcessInfo.processInfo.environment["USER"]
+        setenv("USER", "alice;rm -rf /", 1)
+        defer { if let saved { setenv("USER", saved, 1) } else { unsetenv("USER") } }
+        #expect(AuditForwardInstall.accountName() != "alice;rm -rf /")
+        #expect(AuditForwardInstall.accountName()?.isEmpty == false)
+    }
+
+    @Test func linuxGetsACronLineInsteadOfAnInstall() {
+        let text = AuditForwardInstall.cronHint(plan(["--to", "https://siem.example.com/rv"], home: Home()))
+        #expect(text.contains("*/5 * * * * '/usr/local/bin/rv' 'audit' 'forward' '--to' 'https://siem.example.com/rv'"))
+    }
+}
+
+/// Destinations that must be refused without echoing the secret. The fragment is the
+/// failure text `--to` returns.
+private func concealedAuditDestinations(pathSecret: String, nestedSecret: String) -> [(String, String)] {
+    let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+    return [
+        ("https://siem.example/ingest/\(pathSecret)", "secret in its path"),
+        ("https://siem.example/.\(pathSecret)", "secret in its path"),
+        ("https://siem.example/\(pathSecret)%20x", "secret in its path"),
+        ("https://siem.example/ingest#\(pathSecret)", "fragment"),
+        ("https://siem.example/hook?next=https://user:\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/hook?next=//user:\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/hook?next=https://collector.example/ingest/\(pathSecret)", "secret in its query"),
+        ("https://siem.example/hook?next=https://collector.example/hook%23\(pathSecret)", "secret in its query"),
+        ("https://siem.example/hook?next=https%3A%2F%2Fcollector.example%2Fhook%3Ftoken%3D\(pathSecret)", "secret in its query"),
+        ("https://siem.example/hook?next=https://collector.example/?api_key=\(pathSecret)", "secret in its query"),
+        ("https://siem.example/hook?next=https%253A%252F%252Fuser%253A\(nestedSecret)%2540collector.example", "secret in its query"),
+        ("https://siem.example/hook?next=https%253A%252F%252Fcollector.example%252F\(pathSecret)", "secret in its query"),
+        ("https://siem.example/hook?next=%252F%252Fuser%253A\(nestedSecret)%2540collector.example", "secret in its query"),
+        ("https://siem.example/hook?next=https%253A%252F%252Fcollector.example%252Fhook%2523\(pathSecret)", "secret in its query"),
+        ("https://siem.example/ingest\\\(pathSecret)", "secret in its path"),
+        ("https://siem.example/hook?next=https://collector.example/ingest\\\(pathSecret)", "secret in its query"),
+        ("https://siem.example/hook?next=https:\\\\user:\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/user:\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/hook?next=https://collector.example/user:\(nestedSecret)@evil.example/x", "secret in its query"),
+        ("https://siem.example/hook?next=/user:\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/hook?next=user:\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://\(pathSecret).example/hook", "secret in its host"),
+        ("https://\(pathSecret)/hook", "secret in its host"),
+        ("https://\(jwt).example/hook", "secret in its host"),
+        ("https://user%3A\(nestedSecret)%40collector.example/hook", "secret in its host"),
+        ("https://siem.example/hook?next=https://\(pathSecret).collector.example/v1", "secret in its query"),
+        ("https://siem.example/hook?q=.\(pathSecret)", "secret in its query"),
+        ("https://siem.example/hook?next=.\(pathSecret)", "secret in its query"),
+        ("https://siem.example/hook?next=~\(pathSecret)", "secret in its query"),
+        ("https://siem.example/hook?next=/opt/\(pathSecret)", "secret in its query"),
+        ("https://siem.example/ingest/~\(pathSecret)", "secret in its path"),
+        ("https://siem.example/opt/\(pathSecret)", "secret in its path"),
+        ("https://siem.example/hook?q=\(pathSecret)%20x", "secret in its query"),
+        ("https://siem.example/hook?next=\(pathSecret)%20x", "secret in its query"),
+        ("https://siem.example/hook?\(pathSecret)=1", "secret in its query"),
+        ("https://siem.example/hook?next=https://user:\(nestedSecret)@collector.example/a%20b", "secret in its query"),
+        ("https://siem.example/ingest%23\(pathSecret)", "secret in its path"),
+        ("https://siem.example/ingest%3B\(pathSecret)", "secret in its path"),
+        ("https://siem.example/ingest;\(pathSecret)", "secret in its path"),
+        ("https://siem.example/hook;token=\(pathSecret)", "secret in its path"),
+        ("https://siem.example/hook?q=ingest%3B\(pathSecret)", "secret in its query"),
+        ("https://siem.example/hook?next=https://collector.example/ingest%3B\(pathSecret)", "secret in its query"),
+        ("https://siem.example/hook%3Ftoken=\(pathSecret)", "secret in its path"),
+        ("https://siem.example/hook%26token=\(pathSecret)", "secret in its path"),
+        ("https://siem.example/ingest%3A\(pathSecret)", "secret in its path"),
+        ("https://siem.example/ingest%2C\(pathSecret)", "secret in its path"),
+        ("https://siem.example/ingest%00\(pathSecret)", "secret in its path"),
+        ("https://siem.example/:\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/:user:\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/hook?next=:\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/hook?a=1&x=:\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/hook?next=https://collector.example/:\(nestedSecret)@evil.example/x", "secret in its query"),
+        ("https://siem.example/hook?next=https%253A%252F%252Fuser%253A\(nestedSecret)%2540collector.example%25", "secret in its query"),
+        ("https://siem.example/ingest%252F\(pathSecret)%25", "secret in its path"),
+        ("https://siem.example/hook?next=https%253A%252F%252Fcollector.example%252F\(pathSecret)%25", "secret in its query"),
+        ("https://siem.example/ingest|\(pathSecret)", "secret in its path"),
+        ("https://siem.example/ingest%7C\(pathSecret)", "secret in its path"),
+        ("https://siem.example/ingest%257C\(pathSecret)", "secret in its path"),
+        ("https://siem.example/hook?q=ingest|\(pathSecret)", "secret in its query"),
+        ("https://siem.example/hook?next=https://collector.example/ingest|\(pathSecret)", "secret in its query"),
+        ("https://siem.example/ingest@\(pathSecret)", "secret in its path"),
+        ("https://siem.example/ingest%40\(pathSecret)", "secret in its path"),
+        ("https://siem.example/ingest%2540\(pathSecret)", "secret in its path"),
+        ("https://siem.example/hook?token=\(pathSecret)%", "secret in its query"),
+        ("https://siem.example/hook?next=https://user:\(nestedSecret)@collector.example%", "secret in its query"),
+        ("https://siem.example/:su&\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/:\(nestedSecret)%23@collector.example/hook", "secret in its path"),
+        ("https://siem.example/:super%20\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/ingest%\(String(repeating: "25", count: 12))3B\(pathSecret)", "secret in its path"),
+        ("https://siem.example/ingest%\(String(repeating: "25", count: 40))3B\(pathSecret)", "secret in its path"),
+        ("https://siem.example/user:su%26\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:su%20\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:su%23\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:su%3F\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/hook?next=https://collector.example/user:su%26\(nestedSecret)@db.example/x", "secret in its query"),
+        ("https://siem.example/hook?next=/:su&\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/hook?next=user:su&\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/:su%5C\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/:su%2F\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/ingest|t=ghp_1234567890abcdef", "secret in its path"),
+        ("https://siem.example/ingest%257Ct=ghp_1234567890abcdef", "secret in its path"),
+        ("https://siem.example/ingest%2540t=ghp_12345678", "secret in its path"),
+        ("http://127.0.0.1/:\(nestedSecret)@collector.example", "secret in its path"),
+        ("https://siem.example/user:su%2F\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:su%5C\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/:%2F\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/:%5C\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/hook?next=user:su&\(nestedSecret)%2Fmore@collector.example", "secret in its query"),
+        ("https://siem.example/hook?next=/:%2Fsu&\(nestedSecret)@collector.example", "secret in its query"),
+        ("http://127.0.0.1/:%2F\(nestedSecret)@collector.example", "secret in its path"),
+        ("http://127.0.0.1/user:su%2F\(nestedSecret)@collector.example", "secret in its path"),
+        ("https://siem.example/in+ghp_12345678", "secret in its path"),
+        ("https://siem.example/hook?next=in+ghp_12345678", "secret in its query"),
+        ("https://siem.example/ingest|t=%22ghp_1234567890abcdef", "secret in its path"),
+        ("https://siem.example/ingest%E2%80%8B\(pathSecret)", "secret in its path"),
+        ("https://siem.example/hook?token=%22\(pathSecret)%", "secret in its query"),
+        ("https://siem.example/x_ghp_12345678", "secret in its path"),
+        ("https://siem.example/x+ghp_12345678", "secret in its path"),
+        ("https://siem.example/x-ghp_12345678", "secret in its path"),
+        ("https://siem.example/hook?t=x_ghp_12345678", "secret in its query"),
+        ("https://siem.example/user~:su&\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user+:su&\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/hook?next=user~:su&\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/user:su/\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:su\\\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:%2F\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:%5C\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:/\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:\\\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/hook?next=user:%2Fsu&\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/user~:/\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user+:%2F\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user!:/\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user%3A%2F\(nestedSecret)%40collector.example/hook", "secret in its path"),
+        ("https://siem.example/hook?next=user:/su&\(nestedSecret)@collector.example", "secret in its query"),
+        ("http://127.0.0.1/user:/\(nestedSecret)@collector.example", "secret in its path"),
+        ("https://siem.example/user://\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:\\/\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:/\\\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:%2F%2F\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:%5C%5C\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:%2F%5C\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:%5C%2F\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:%252F%252F\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:/%2F\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/user:/%5C\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/hook?next=user://su&\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/hook?next=user://su?\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/hook?next=user:/%2Fsu&\(nestedSecret)@collector.example", "secret in its query"),
+        ("http://127.0.0.1/user://\(nestedSecret)@collector.example", "secret in its path"),
+        ("https://siem.example/user:/su?\(nestedSecret)@collector.example", "secret in its path"),
+        ("http://127.0.0.1/user:/su?\(nestedSecret)@collector.example", "secret in its path"),
+        ("https://siem.example/user:@\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("http://127.0.0.1/user:@\(nestedSecret)@collector.example", "secret in its path"),
+        ("https://siem.example/http://\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/https://\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/wss://\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/postgres://\(nestedSecret)@db.example/app", "secret in its path"),
+        ("https://siem.example/HTTP://\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/HTTPS://\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/http:%2F%2F\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/https:%2F%2F\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/%68%74%74%70://\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/https:\\\\\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/https:\\\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("http://127.0.0.1/http://\(nestedSecret)@collector.example", "secret in its path"),
+        ("http://127.0.0.1/https://\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/https://user:\(nestedSecret)@collector.example/hook", "secret in its path"),
+        ("https://siem.example/hook?next=https://\(nestedSecret)@collector.example", "secret in its query"),
+        ("https://siem.example/hook?next=https://\(nestedSecret)%40collector.example", "secret in its query"),
+        ("https://\(nestedSecret)@collector.example/hook", "username or password"),
+        ("https://\(nestedSecret)%40collector.example/hook", "secret in its host"),
+        ("https://\(nestedSecret)%2540collector.example/hook", "secret in its host"),
+        ("HTTPS://\(nestedSecret)%40collector.example/hook", "secret in its host"),
+    ]
+}

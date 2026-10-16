@@ -23,12 +23,14 @@ works the next unchecked box, and appends to **Progress log** before stopping.
 | 3 MCP governance | `governance/phase-3-mcp` | [#414](https://github.com/christopherkarani/rv/pull/414) | merged |
 | 4 Enterprise client features | `governance/phase-4-enterprise` | [#415](https://github.com/christopherkarani/rv/pull/415) | merged |
 | 5 Launch readiness | human-owned | n/a | not started |
-| 6 Security blockers | `governance/phase-6-hardening` (from `main`) | [#417](https://github.com/christopherkarani/rv/pull/417) (draft) | in progress |
-| 7 Enterprise hardening | `governance/phase-7-enterprise-hardening` (from phase 6) | _not opened yet_ | not started |
+| 6 Security blockers | `governance/phase-6-hardening` (from `main`) | [#417](https://github.com/christopherkarani/rv/pull/417) | merged |
+| 7 Enterprise hardening | `governance/phase-7-enterprise-hardening` (from phase 6) | [#418](https://github.com/christopherkarani/rv/pull/418) (draft) | in progress |
 | 8 Secrets UX parity | `governance/phase-8-secrets-ux` (from phase 7) | _not opened yet_ | not started |
 
 **Next action:** Phase 7 on `governance/phase-7-enterprise-hardening` (from
-phase 6): 7.1 remote MCP servers first. Phase 6 agent items are done except
+phase 6). 7.2, 7.5, 7.6, 7.3, 7.1 and 7.4 are done. 7.7 stays blocked on
+impro-ref. Next is Phase 8 on `governance/phase-8-secrets-ux` (from phase 7);
+its checklist is filled in when that phase starts. Phase 6 agent items are done except
 the impro-ref-blocked ones (6.2 cage denies, 6.5 injected config dir, 6.6
 watchdog). Owner items for phase 6: signing secrets + certificate (6.3),
 flip `signed_releases`/`release_team_id` in `install.sh` and set
@@ -264,6 +266,10 @@ grammar, durable MCP approvals idea, JSON-RPC depth bound.
 | D16 | One HMAC key signs grants and rv's own mcp.json writes: Keychain service `rv.approvals` on macOS, `approvals.key` (0600) on Linux. Verifiers never create the key | A same-user process can edit files but cannot mint MACs without the key; read-only verification never triggers a Keychain write |
 | D17 | An mcp.json not signed by rv is **untrusted**: `rv mcp check` fails ("edited outside rv"), the gateway turns every user `allow` into `ask`, and rv refuses to sign over it (`import`, `approve --always`) until `rv mcp trust` | Tampering can only tighten policy; rv never launders an outside edit |
 | D18 | Release binaries ship as bare Mach-O files: hardened runtime, no entitlements, identifier `dev.rv.<binary>`, notarized but not stapled (stapling needs a bundle, dmg, or pkg). `install.sh` pins the Team ID and requires `spctl` "Notarized Developer ID", which looks the ticket up online | Same files as today, no packaging change; offline first-run Gatekeeper checks don't apply because `curl` downloads carry no quarantine flag |
+| D19 | Argument rules match only arguments that are present; the strictest matching rule wins. A deny rule keyed on an argument the agent can omit needs a non-allow `default` behind it (documented in `rv mcp --help`) | Inventing values for missing arguments would guess the upstream's defaults; strictest-wins keeps one ordering for globs and rules |
+| D20 | Remote servers run behind the gateway, which holds headers and OAuth tokens; the agent's host config only ever names `rv mcp serve` | Tokens never reach the agent's process or its config files |
+| D21 | Org anti-rollback state lives in the user's config (`managed-state.json`), so it stops replay of an older signed policy by anyone who can write the root-owned directory but not by the user themselves | Only root can install policy files; the user can already delete their own config, so this is the strongest user-space check |
+| D22 | A remote server's URL must be https (http only to loopback, for local servers and tests) with no credentials in it; rv never follows redirects for it, and a legacy SSE `endpoint` must be same-origin. OAuth endpoints follow the same rule. `sandbox`/`requireSandbox` do not apply to remote entries (no local process) | Headers and bearer tokens go only to the origin the user reviewed in `rv mcp trust` |
 
 ### Coordination with `impro-ref` (owner's uncommitted work)
 
@@ -1048,8 +1054,240 @@ Design:
 
 ## Phase 7: Enterprise hardening
 
-Branch `governance/phase-7-enterprise-hardening` from phase 6. Checklist is
-filled in when the phase starts (items 7.1-7.7 from the 2026-10-13 brief).
+Branch `governance/phase-7-enterprise-hardening` from phase 6 (PR targets
+`governance/phase-6-hardening` until #417 merges). Work order: 7.2, 7.5, 7.6,
+7.3, 7.1, 7.4 (small policy pieces first; remote transport and the egress
+allowlist build on them). Nothing here edits an impro-ref file: 7.4 uses
+`EgressProxy`/`EgressHostPolicy` as they are and its own `MCPSandbox` profile.
+
+### 7.2 Argument-aware rules
+- [x] `ToolArgumentRule` (RVPolicy): `{"tool": "<glob>", "when": {"<JSON
+      pointer>": {"<op>": value, ...}, ...}}`; ops `==` `!=` `<` `>` `in`
+      `glob`; every condition must hold; a missing path never matches.
+      Table-driven tests (`ToolArgumentRuleTests`: match/invalid tables, round
+      trip, summary, strictest). Limits: 16 conditions, 256 `in` items, 256
+      chars per glob. Integers beyond 2^53 compare as exact digit strings
+- [x] mcp.json `tools.allow|ask|deny` accept rule objects next to globs;
+      strictest matching rule wins (deny > ask > allow), then `default`, then
+      `defaultDecision`. `tools/list` hides only on an unconditional deny and
+      marks allowed tools with conditional rules (`[rv: some arguments need
+      the user's approval or are refused]`). `rv mcp approve --always` refuses
+      a tool with argument rules (an allow entry would not cover every call)
+- [x] Org policy `mcp.deny|ask|allow` accept the same objects (`tool` is a
+      `server/tool` glob); `rv managed status` lists them (`mcp deny:
+      github/merge_* when /branch == "main"`) and `rv mcp trust` shows the
+      mcp.json ones in its review. `rv mcp list` stays a host inventory (it
+      never showed tool policy)
+- [x] E2E: gateway fixture, same tool allowed for one argument value, asked
+      for another, denied for a third. `Scripts/mcp-phase7-proof.py
+      .build/debug/rv` (Linux, 2026-10-13): 10/10 — trust on a pty, review
+      lists rules, listing marks the tool, `database:test` runs, `prod` asks,
+      `DROP` denied, `limit > 1000` denied, missing `database` falls through to
+      the default, `--always` refused, audit records the denial
+
+### 7.5 Org keys and anti-rollback
+- [x] `org-key.pub` holds one or more base64 Ed25519 keys (one per line,
+      `#` comments, at most 16); any key verifies the signature (rotation).
+      Status names the key ("signed by key 2 in org-key.pub", robot
+      `signingKey`). Real binary (Linux, 2026-10-13): two keygens, a
+      commented two-key `org-key.pub`; `rv managed verify` is active when
+      signed by either key (key 1 / key 2), exit 1 with "does not verify
+      against any key in org-key.pub" for a third key and "org-key.pub line 5
+      is not a base64 Ed25519 public key" for a bad line
+- [x] Highest accepted `serial` remembered per policy directory in
+      `~/.config/rv/managed-state.json` (owner-only, 0600); a lower serial,
+      or no serial after one was accepted, is invalid ("rollback: …"), so
+      MCP and secret staging fail closed and `rv report` is not compliant.
+      An unreadable or unsafe record also fails closed. Status shows
+      "anti-rollback: highest serial accepted here is N" (robot
+      `highestSerial`). Every live loader uses it (`rv mcp`, `rv secrets`,
+      `rv report`, `rv managed status`, `rv audit forward`, the secret launch
+      broker). Tests: `ManagedSerialRecordTests` (3),
+      `ManagedSerialStoreTests` (2, real signed bundle in a temp dir:
+      3 accepted → 2 rollback → unnumbered rollback → 4 accepted; garbage and
+      0666 record fail closed), `statusNamesTheSigningKeyAndTheHighestSerial`.
+      `rv managed status` with no installed policy writes nothing
+- [ ] Owner L3 (sudo, macOS): install a signed bundle with `"serial": 5`
+      (`sudo mkdir -p "/Library/Application Support/RV/managed" && sudo cp
+      bundle/{policy.json,policy.json.sig,org-key.pub} "/Library/Application
+      Support/RV/managed/" && sudo chown -R root:wheel "/Library/Application
+      Support/RV/managed"`), run `rv managed status` (expect "anti-rollback:
+      highest serial accepted here is 5"), re-sign the same policy with
+      `"serial": 4`, copy it in the same way, run `rv managed status` (expect
+      exit 1, "rollback: policy.json serial 4 is lower than serial 5") and
+      `rv report` (not compliant). Clean up with `sudo rm -rf
+      "/Library/Application Support/RV/managed"` and `rm
+      ~/.config/rv/managed-state.json`
+
+### 7.6 Tamper-evident audit
+- [x] Each audit line carries `prev` = SHA-256 of the previous line's bytes
+      (first line: 64 zeros); `rv audit verify` reports the first break.
+      `AuditLog.append` reads the last line under its existing lock; a torn
+      last line is closed with a newline first so it stays one bad line.
+      Lines written before the chain are counted as "predate the chain".
+      Scope: `audit.jsonl` only (the other ledgers have their own writers,
+      some in impro-ref files). Truncating the end is not detectable locally;
+      the forwarded head covers that. Tests: `AuditChainTests` (6, incl. a
+      table for edit/delete/insert/reorder), `AuditVerifyTests` (2)
+- [x] OCSF forward includes the chain head (`unmapped.rv_chain_head`, the
+      hash of that event's own line) and `unmapped.rv_prev`, so a SIEM can
+      check continuity across batches
+- [x] `rv audit forward --install`: user LaunchAgent (every 5 min,
+      `~/Library/LaunchAgents/dev.rv.audit-forward.plist`, owner-only) written
+      and printed with the `launchctl bootstrap gui/<uid>` line; LaunchDaemon
+      template (`UserName`, `HOME`) printed only, with the `sudo install` +
+      `launchctl bootstrap system` lines. Header values must be
+      `${secret:NAME}` (the plist holds no credential). On Linux it exits 1
+      with a crontab line. Plist content tested on Linux
+      (`AuditForwardInstallTests`, 3); loading it with launchctl is
+      **unverified on macOS**
+- [x] E2E (Linux, 2026-10-13): `Scripts/mcp-phase7-proof.py .build/debug/rv`
+      19/19 — the 7.2 run's 6 real audit lines are linked, `rv audit verify`
+      intact (text and `--json`), `rv audit forward` to a local receiver sends
+      `rv_prev`/`rv_chain_head` that chain and end at the verify head, an
+      edited line → "BROKEN at line 5 … prev does not match line 4" (exit 1),
+      a deleted line → "BROKEN at line 2", restored → intact, `--install`
+      prints the cron line on Linux, a literal header is refused without
+      echoing it
+- [ ] Owner (macOS): `rv audit forward --install --to <https url>`, run the
+      printed `launchctl bootstrap` line, and check
+      `~/.config/rv/audit-forward/launchd.log` after 5 minutes
+
+### 7.3 Search tool mode
+- [x] `"toolMode": "search"` (top level): `tools/list` returns only
+      `rv_search_tools` and `rv_call_tool`; calls route through the same
+      policy, approvals, and audit as direct calls. `rv_search_tools`
+      (`query`, `limit` 1-50, default 10) lists the upstreams on demand and
+      returns matches (every term in name or description, name matches
+      first) with their schemas and rv markers in `structuredContent`; denied
+      tools never appear. `rv_call_tool` (`name`, `arguments`) unwraps to the
+      normal call path, so audit and approvals name the real server/tool.
+      `rv mcp trust` names the mode; help row `toolMode`. Tests:
+      `searchModeListsTwoToolsAndRoutesCallsThroughTheSamePolicy`,
+      `toolModeRoundTripsAndDefaultsToDirect`, trust review
+- [x] E2E (Linux, 2026-10-13): `Scripts/mcp-phase7-proof.py` 28/28; the
+      7.3 section uses two fixture servers: only the two rv tools listed,
+      search finds `db__query` and `wh__query`, a denied tool is not
+      searchable, `rv_call_tool` runs an allowed call, pauses an `ask` call,
+      refuses a denied one, and the audit log names `db/query`, `wh/query`,
+      `db/tables`
+
+### 7.1 Remote MCP servers
+Design: the gateway core is unchanged (it already speaks JSON-RPC by
+request id); `MCPGatewayRuntime` gains a remote upstream beside processes.
+Any HTTP failure becomes a JSON-RPC error for that request id, so the core's
+existing initialize/list/call paths handle it. URL rules in D22.
+- [x] mcp.json server with `"url"` (instead of `command`) and `"headers"`
+      (values may hold `${secret:NAME}`); `"transport": "http"` (streamable
+      HTTP, default) or `"sse"` (legacy). `url` excludes `command`, `args`,
+      `env`, `secrets`, `sandbox`; rv-managed headers (`Mcp-Session-Id`,
+      `MCP-Protocol-Version`, `Host`, `Content-*`, …) are refused. `rv mcp
+      trust` shows URL, transport and header names with their secret names,
+      never values; a URL whose path or query looks like a credential is
+      shown as `scheme://host/… (credential-like part hidden)`. Tests:
+      `remoteServersDecodeAndRoundTrip`, remote refusals in
+      `MCPConfigurationTests`, `trustReviewShowsRemoteOriginsAndHeaderNamesButNoValues`
+- [x] Gateway transport: POST JSON-RPC, JSON or SSE replies,
+      `Mcp-Session-Id`, `MCP-Protocol-Version`, best-effort `DELETE` on
+      exit; legacy SSE `endpoint` event must be same-origin; redirects are
+      never followed. Header secrets and OAuth tokens are scrubbed from
+      replies like process secrets. The optional streamable-HTTP GET stream
+      (server pushes) is not opened: the gateway only forwards `list_changed`.
+      Tests: `MCPRemoteTransportTests` (incremental SSE parser: BOM, CR/LF/
+      CRLF, comments, multi-line data, size cap), `MCPRemoteRuntimeTests`
+      against `Scripts/mcp-remote-fixture.py`
+- [x] `rv mcp connect <server> [--client-id] [--scope] [--no-browser]
+      [--forget]`: OAuth 2.1 + PKCE (S256), RFC 9728 protected-resource and
+      RFC 8414 authorization-server metadata discovery, RFC 7591 dynamic
+      client registration, 127.0.0.1 one-shot redirect listener with state
+      check, RFC 8707 `resource` indicator; refuses a local server, a server
+      that already sends `Authorization`, a blocked server, and an untrusted
+      mcp.json (`--forget` still works). Tokens in the Keychain
+      (`rv.mcp.oauth`, account = server) on macOS, `mcp-oauth/<server>.json`
+      (0600) on Linux. `rv mcp serve` sends the token, refreshes it 60 s
+      before expiry or after a 401 (one refresh at a time), saves rotated
+      tokens, and scrubs every token it has seen. Audit: `mcp.approval`
+      "OAuth connected" / "OAuth tokens deleted" with resource, scope,
+      client. Tests: `MCPOAuthTests` (challenge parsing, metadata URLs, PKCE
+      cross-checked against Python hashlib, token parsing, store 0600, spec
+      refusals: no 401, foreign resource, no S256, http token endpoint, no
+      registration, forged state, refused sign-in),
+      `connectThenServeRefreshesAfterA401AndScrubsEveryToken`,
+      `connectSignsInToARemoteServerAndForgetDeletesTheTokens`.
+      _Unverified on macOS_: the Keychain token store and `open` for the
+      browser
+- [x] `rv mcp import` converts host `url` entries: Cursor/Claude/VS Code
+      `"type": "sse"`, Gemini `url` (SSE) vs `httpUrl` become `"transport"`;
+      credential headers move to rv secrets with the auth scheme kept literal
+      (`Bearer ${secret:LINEAR_AUTHORIZATION}`); headers that point at host
+      variables or that rv owns are dropped with a note; non-https and
+      credential-in-URL entries are skipped with the reason. `rv mcp setup`
+      already rewrites remote host entries to `rv mcp serve`. Tests:
+      `remoteEntriesImportWithHeaderCredentialsAsSecrets`,
+      `hostRemoteEntriesCarryTheirTransport`
+- [x] Org `allowDirect: false` covers remote entries: a host `url` entry
+      listed in `direct` is `unreviewed` under the org policy
+      (`blockedAndDirectFollowTheOrganization`)
+- [x] E2E (Linux, 2026-10-13): `Scripts/mcp-phase7-proof.py` 57/57 (7.1
+      section 29 steps on the real binary): streamable HTTP and legacy SSE
+      upstreams with `Authorization: Bearer ${secret:…}` from a
+      hostEnvironment secret; whoami replies come back
+      `[redacted:FIXTURE_TOKEN]`; deny hides a remote tool, ask pauses one;
+      `DELETE` ends the session; audit names `web/whoami` etc. and holds no
+      token; a wrong token lists no tools from those servers. Import dry run
+      converts `url` entries and names `KEYED_AUTHORIZATION`; the real import
+      of the keyed entry refuses on Linux (no Keychain) with nothing written
+      or printed; hosted + legacy import; setup rewrites the host entry;
+      list shows `governed`. OAuth fixture: `rv mcp connect acme
+      --no-browser` prints the PKCE S256 sign-in URL, the token file is 0600,
+      no token in output or audit; `rv mcp serve` sends it; after
+      `/auth/expire` the gateway refreshes, retries and saves rotated tokens;
+      `--forget` deletes the file.
+      Owner (macOS): run the proof with `RV_LIVE_KEYCHAIN=1` to cover the
+      Keychain token store (it writes `rv.mcp.oauth` / `acme`; delete it
+      after) and import of a keyed entry.
+      Not done: `${secret:NAME}` inside a URL (servers that put a key in the
+      path, e.g. Zapier) — import skips them; a follow-up if wanted
+
+### 7.4 Strict profile and per-server egress
+- [x] `"profile": "strict"`: a tool no list names is denied (the server's
+      own default becomes deny; an explicit allow, ask or deny still wins,
+      strictest match as in D19). A local server needs `"sandbox"`, and that
+      sandbox cannot set `"network": true`; name hosts in `sandbox.hosts`
+      instead. A remote (`url`) server has no process to cage, so strict
+      does not ask it for a sandbox. `rv mcp trust` says "profile strict"
+      and "other tools deny". Help row `profile`. Tests:
+      `strictProfileAndHostsRoundTripAndUnlistedToolsDeny`,
+      `plannerHoldsStrictServersToASandboxWithoutOpenNetwork`, the strict
+      case in `alwaysRefusesToolsWithArgumentRules`
+- [x] `sandbox.hosts`: exact DNS names (no scheme, port, wildcard or IP; at
+      most 32; lowercased, duplicates dropped). `"network": true` beside
+      `hosts` is invalid. For each such server `rv mcp serve` starts one
+      `EgressProxy` (`EgressHostPolicy` allowlist, port 443 — the proxy's
+      allowlist admits one port, and 443 is its default), sets
+      `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and their lowercase twins to
+      `http://127.0.0.1:<port>`, sets `NODE_USE_ENV_PROXY=1`, and drops
+      `NO_PROXY`. The Seatbelt profile denies the network and then allows
+      only `(remote tcp "localhost:<port>")`. A refused CONNECT is audited
+      as `egress.denied` (subject `host:port`, detail `server`). Uses
+      `EgressProxy`'s public `init`/`start()`; no impro-ref file changes.
+      Help row `sandbox`. Tests: `refusesBadProfilesAndHosts`,
+      `profileTextLetsTheCageReachOnlyItsProxy`,
+      `proxyEnvironmentPointsEveryClientAtTheProxy`. The live cage test
+      `cagedServerReachesItsProxyButNothingElse` is **unverified on macOS**
+- [x] E2E (Linux, 2026-10-13): `Scripts/mcp-phase7-proof.py` 66/66. The 7.4
+      section trusts a strict file (review names the profile and
+      `api.example.com`), serves the remote server (unlisted `delete_all`
+      is hidden and a call is denied, `echo` runs, `whoami` asks), refuses
+      a local server with no sandbox, refuses `"network": true`, and
+      refuses `sandbox.hosts` on Linux because the cage is macOS-only. On
+      macOS that last step launches the proxied server instead.
+      Owner (macOS): run `Scripts/mcp-phase7-proof.py` (the 7.4 section
+      writes no Keychain items) so the live cage test and the proxied
+      launch run
+
+### 7.7 Identity on the default launch door
+- [ ] _blocked: impro-ref (`RuntimeAdmission*`, `WorkspaceSessionSupervisor`)_
 
 ---
 
@@ -1153,3 +1391,46 @@ when the phase starts (items 8.1-8.4 from the 2026-10-13 brief).
   `swift test` 4846 tests / 19 bundles green, config untouched, preflight 0
   failures, shellcheck + actionlint clean. Blocked on impro-ref: 6.5 injected
   config dir, 6.6 watchdog. Next: Phase 7.
+- 2026-10-13: Phase 7.2 on `governance/phase-7-enterprise-hardening`:
+  `ToolArgumentRule` (JSON pointer conditions, six operators) in mcp.json
+  server tool lists and org `mcp.*` lists; strictest match wins (D19);
+  gateway decides each call by its arguments; `--always` refused for ruled
+  tools; help rows for rules and missing arguments. Linux: RVMCP/RVPolicy/
+  RVCLI 835 tests green, preflight 0 failures,
+  `Scripts/mcp-phase7-proof.py` 10/10. Next: 7.5.
+- 2026-10-13: Phase 7.5: several keys in `org-key.pub` (rotation) and serial
+  anti-rollback in `~/.config/rv/managed-state.json` (D21), applied by every
+  live policy loader; status/report show the signing key and the highest
+  serial. Linux: RVPolicy 423, RVIsolation 325, RVCLI 836 tests green, help
+  tests green, preflight 0 failures; real-binary `rv managed verify`
+  multi-key run recorded under 7.5. Owner L3: the installed-directory
+  rollback run (needs sudo). Next: 7.6.
+- 2026-10-13: Phase 7.6: `audit.jsonl` hash chain (`prev`), `rv audit
+  verify`, `rv_prev`/`rv_chain_head` in OCSF forward, `rv audit forward
+  --install` (LaunchAgent + printed LaunchDaemon template; cron line on
+  Linux). Linux: full `swift test` green (RVHistory 43, RVCLI 841),
+  preflight 0 failures, proof 19/19. Owner: load the LaunchAgent on macOS.
+  Next: 7.3. CI note: on #417 and #418 the macOS "isolation (A-E)" shard
+  failed in untouched supervisor suites (#417 hung until cancelled in
+  `ActionApprovalPark`/`AgentInstanceRegistry` tests; #418 got
+  `revoked:runtimeEnded` instead of `revoked:cancelled` in
+  `supervisorLaunchMintsActivatesAndFinishesInstance`). Neither branch
+  changes those sources; Linux `swift test` passed on both. Treated as
+  macOS runner flakes in impro-ref-owned code; rerun before merging.
+- 2026-10-13: Phase 7.3: `"toolMode": "search"` with `rv_search_tools` and
+  `rv_call_tool` through the normal policy path. Linux: RVMCP 80, RVCLI
+  841 green, preflight 0 failures, proof 28/28. Next: 7.1.
+- 2026-10-13: Phase 7.1: remote MCP servers (`url`, `headers`,
+  `transport`), streamable HTTP + legacy SSE upstreams, `rv mcp connect`
+  (OAuth 2.1, PKCE S256, discovery, registration, refresh), import of host
+  `url` entries, D22 URL rules. Linux: RVMCP + RVCLI 937 tests green,
+  preflight 0 failures (URLSession delegates exempted in
+  `MCPRemoteUpstream.swift`), proof 57/57. Owner (macOS): Keychain token
+  store via the proof with `RV_LIVE_KEYCHAIN=1`. Next: 7.4.
+- 2026-10-13: Phase 7.4: `"profile": "strict"` (unlisted tools deny, local
+  servers need a sandbox, no open network) and `sandbox.hosts` (per-server
+  `EgressProxy` allowlist on port 443, proxy env, Seatbelt limited to that
+  loopback port, denials audited as `egress.denied`). Remote servers are
+  exempt from the sandbox requirement. Linux: RVMCP + RVCLI tests for the
+  new suites green, proof 66/66. The live cage test is unverified on macOS.
+  7.7 stays blocked on impro-ref. Next: Phase 8.

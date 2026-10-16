@@ -108,7 +108,7 @@ struct MCPGatewayRuntimeTests {
             servers: ["fixture"], configuration: configuration, secrets: secrets, resolver: resolver,
             baseEnvironment: base
         ).get()
-        #expect(planned[0].1.environment["FIXTURE_TOKEN"] == "tok_live_9f8e7d6c5b4a")
+        #expect(planned[0].1.process?.environment["FIXTURE_TOKEN"] == "tok_live_9f8e7d6c5b4a")
 
         let client = LineClient()
         let audits = RecordedAudits()
@@ -116,7 +116,7 @@ struct MCPGatewayRuntimeTests {
             configuration: configuration, upstreams: planned.map { $0.0 },
             approvals: MCPApprovalGate(consumeGrant: { _, _, _, _ in .none }, request: { _, _, _, _ in nil }))
         let runtime = MCPGatewayRuntime(
-            core: core, launches: planned.map { $0.1 },
+            core: core, connections: planned.map { $0.1 },
             input: client.toGateway.fileHandleForReading.fileDescriptor,
             output: client.fromGateway.fileHandleForWriting.fileDescriptor,
             audit: { record in audits.items.withLock { $0.append(record) } },
@@ -171,5 +171,82 @@ struct MCPGatewayRuntimeTests {
         #expect(plan("zzz") == .unknownServer("zzz"))
         #expect(plan("b") == .blocked("b"))
         #expect(plan("a") == .secretUndefined(server: "a", secret: "MISSING"))
+    }
+
+    @Test func untrustedConfigurationDoesNotOpenARemoteServer() throws {
+        let remote = MCPServerDefinition(
+            name: "remote",
+            remote: MCPRemoteServer(
+                url: try #require(URL(string: "https://a.example/mcp")),
+                headers: ["Authorization": "Bearer ${secret:TOKEN}"]))
+        var configuration = MCPConfiguration(servers: [remote, MCPServerDefinition(name: "local", command: "echo")])
+        configuration.untrusted = true
+        let secrets = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "TOKEN", source: .hostEnvironment(variable: "TOKEN"), delivery: .environment),
+        ])
+        final class Calls: @unchecked Sendable { var count = 0 }
+        let calls = Calls()
+        let resolver = SecretResolver { _ in
+            calls.count += 1
+            return .success(SecretValue("super-secret-token")!)
+        }
+        var askedForToken = false
+        let failed = MCPLaunchPlanner.plan(
+            servers: ["remote", "local"], configuration: configuration, secrets: secrets, resolver: resolver,
+            baseEnvironment: [:], oauthTokens: { _ in
+                askedForToken = true
+                return MCPOAuthTokens(
+                    accessToken: "at", tokenEndpoint: URL(string: "https://auth.example/token")!, clientID: "c",
+                    resource: "https://a.example/mcp")
+            })
+        guard case .failure(.untrustedRemote("remote")) = failed else {
+            Issue.record("untrusted mcp.json planned a remote server")
+            return
+        }
+        #expect(calls.count == 0)
+        #expect(askedForToken == false)
+        let localSecrets = SecretsConfiguration(secrets: [
+            SecretDefinition(name: "TOKEN", source: .hostEnvironment(variable: "TOKEN"), delivery: .environment),
+        ])
+        var localConfiguration = configuration
+        localConfiguration.servers = [
+            MCPServerDefinition(name: "local", command: "echo", secrets: ["T": "TOKEN"])
+        ]
+        let local = MCPLaunchPlanner.plan(
+            servers: ["local"], configuration: localConfiguration, secrets: localSecrets, resolver: resolver,
+            baseEnvironment: [:])
+        guard case .failure(.untrustedRemote("local")) = local else {
+            Issue.record("untrusted mcp.json planned a local server")
+            return
+        }
+        #expect(calls.count == 0)
+    }
+
+    @Test func oauthTokenStaysOnTheResourceURLItWasIssuedFor() throws {
+        let issued = MCPOAuthTokens(
+            accessToken: "super-token", tokenEndpoint: URL(string: "https://auth.example/token")!, clientID: "c",
+            resource: "https://good.example/mcp")
+        func plan(_ url: String) throws -> MCPRemoteLaunch? {
+            let configuration = MCPConfiguration(servers: [
+                MCPServerDefinition(name: "api", remote: MCPRemoteServer(url: try #require(URL(string: url))))
+            ])
+            let planned = try MCPLaunchPlanner.plan(
+                servers: ["api"], configuration: configuration, secrets: SecretsConfiguration(),
+                resolver: SecretResolver { _ in .failure(.notFound("x")) }, baseEnvironment: [:],
+                oauthTokens: { _ in issued }
+            ).get()
+            return planned[0].1.remote
+        }
+        let same = try #require(try plan("https://good.example/mcp"))
+        #expect(same.oauth?.accessToken == "super-token")
+        for url in [
+            "https://evil.example/mcp", "https://good.example/mcp/evil", "https://good.example/api",
+            "https://good.example/mcp?x=1", "https://good.example/mcp/", "https://good.example/mcp%2F",
+            "https://good.example/%6Dcp",
+        ] {
+            let moved = try #require(try plan(url))
+            #expect(moved.oauth == nil)
+            #expect(moved.headers["Authorization"] == nil)
+        }
     }
 }

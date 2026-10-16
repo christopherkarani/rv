@@ -88,6 +88,8 @@ public struct JSONObject: Sendable, Equatable {
 public enum JSONParseError: Error, Sendable, Equatable {
     case invalid(offset: Int)
     case tooDeep
+    /// The same object key appears twice. The last value must not hide an earlier one.
+    case duplicateKey
 }
 
 extension JSONValue {
@@ -270,6 +272,7 @@ private struct JSONParser {
             try skipWhitespace()
             guard index < bytes.count, bytes[index] == UInt8(ascii: "\"") else { throw invalid }
             let key = try parseString()
+            if object[key] != nil { throw JSONParseError.duplicateKey }
             try skipWhitespace()
             guard index < bytes.count, bytes[index] == UInt8(ascii: ":") else { throw invalid }
             index += 1

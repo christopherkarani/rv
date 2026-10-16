@@ -73,6 +73,8 @@ public enum AuditOCSF {
         if let workspace = event.workspace { unmapped["rv_workspace"] = workspace }
         if let runtime = event.runtime { unmapped["rv_runtime"] = runtime }
         if event.detail.isEmpty == false { unmapped["rv_detail"] = event.detail }
+        if let prev = event.prev { unmapped["rv_prev"] = prev }
+        if let head = event.chainHead { unmapped["rv_chain_head"] = head }
         object["unmapped"] = unmapped
         return object
     }

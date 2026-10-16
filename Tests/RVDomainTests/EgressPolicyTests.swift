@@ -34,6 +34,14 @@ import Testing
     #expect(policy.allowsLoopbackTarget(host: "localhost", port: 70_000) == false)
 }
 
+@Test func mcpHostAllowlistDoesNotRelayLoopback() {
+    let policy = EgressHostPolicy(allowedHosts: ["api.example.com"], relaysLoopback: false)
+    #expect(policy.allows(host: "api.example.com", port: 443))
+    #expect(policy.allowsLoopbackTarget(host: "127.0.0.1", port: 9) == false)
+    #expect(policy.allowsLoopbackTarget(host: "localhost", port: 443) == false)
+    #expect(policy.allowsLoopbackTarget(host: "127.0.0.2", port: 8080) == false)
+}
+
 @Test func egressPolicyRejectsWrongPortAndUnknownHosts() {
     let policy = EgressHostPolicy.agentAPIs
     #expect(policy.allows(host: "api.anthropic.com", port: 80) == false)

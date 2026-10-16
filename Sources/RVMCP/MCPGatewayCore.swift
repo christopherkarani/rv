@@ -93,13 +93,41 @@ public struct MCPGatewayCore {
         case list(fanout: Int, server: String)
         case call(client: JSONValue, server: String, tool: String, keys: [String], approval: Approval?, started: Date)
         case cancelled
+
+        /// The upstream that owns this request; nil once cancelled. A reply
+        /// from any other upstream must not consume the entry.
+        var owner: String? {
+            switch self {
+            case .initialize(let server), .list(_, let server), .call(_, let server, _, _, _, _): server
+            case .cancelled: nil
+            }
+        }
     }
 
     struct ListFanout {
         var client: JSONValue
         var remaining: Set<String>
         var tools: [JSONValue]
+        /// Set when the listing answers `rv_search_tools` instead of `tools/list`.
+        var search: Search?
+        /// `server\0cursor` pairs already followed; a repeat ends that server's pages.
+        var seenCursors: Set<String> = []
+        /// Pages fetched per server; capped so a cycling upstream cannot page forever.
+        var pages: [String: Int] = [:]
     }
+
+    /// Pagination bounds for one `tools/list` fanout.
+    static let maximumListPagesPerServer = 64
+    static let maximumListedTools = 4096
+
+    struct Search {
+        var terms: [String]
+        var limit: Int
+    }
+
+    static let searchToolName = "rv_search_tools"
+    static let callToolName = "rv_call_tool"
+    static let searchLimits = (default: 10, maximum: 50)
 
     /// An `ask` call waiting for the user's answer to an elicitation. The
     /// exact params are kept, so the answer applies to these arguments only.
@@ -116,6 +144,7 @@ public struct MCPGatewayCore {
         var heldAt: Date
     }
 
+    static let argumentPreviewLimit = 600
     /// Unanswered elicitations past this fall back to `rv mcp approve`.
     static let maximumHeld = 64
     /// Longest arguments text an elicitation prompt may carry. Past this a
@@ -126,7 +155,7 @@ public struct MCPGatewayCore {
     static let heldLifetime: TimeInterval = 300
 
     let configuration: MCPConfiguration
-    let upstreams: [String: Upstream]
+    var upstreams: [String: Upstream]
     let order: [String]
     let approvals: MCPApprovalGate
     let clock: () -> Date
@@ -155,7 +184,19 @@ public struct MCPGatewayCore {
         self.version = version
     }
 
+    /// A value the upstream holds from now on (a refreshed OAuth token), scrubbed like the rest.
+    public mutating func addSecret(server: String, name: String, value: String) {
+        guard value.isEmpty == false, upstreams[server]?.secretValues.contains(where: { $0.value == value }) == false else { return }
+        upstreams[server]?.secretValues.append((name: name, value: value))
+    }
+
+    static func oauthSecrets(_ tokens: MCPOAuthTokens) -> [(name: String, value: String)] {
+        [(name: "OAUTH_ACCESS_TOKEN", value: tokens.accessToken)]
+            + (tokens.refreshToken.map { [(name: "OAUTH_REFRESH_TOKEN", value: $0)] } ?? [])
+    }
+
     var prefixesTools: Bool { order.count > 1 }
+    var searchMode: Bool { configuration.toolMode == .search }
 
     var allSettled: Bool { phases.values.allSatisfy { $0 != .starting } }
 
@@ -316,6 +357,7 @@ public struct MCPGatewayCore {
             id: .int(upstreamID), method: "tools/call", params: .object(call.params)))]
     }
 
+
     mutating func clientNotification(_ method: String, _ params: JSONValue?) -> [MCPGatewayOutput] {
         guard method == "notifications/cancelled", let target = params?["requestId"] else { return [] }
         if let key = held.first(where: { $0.value.client == target })?.key {
@@ -336,13 +378,20 @@ public struct MCPGatewayCore {
     }
 
     mutating func listTools(client: JSONValue) -> [MCPGatewayOutput] {
+        if searchMode { return [.toClient(Self.result(id: client, .object(["tools": .array(Self.metaTools)])))] }
+        return fanOutList(client: client, search: nil)
+    }
+
+    mutating func fanOutList(client: JSONValue, search: Search?) -> [MCPGatewayOutput] {
         let ready = order.filter { phases[$0] == .ready }
         guard ready.isEmpty == false else {
-            return [.toClient(Self.result(id: client, .object(["tools": .array([])])))]
+            let empty = JSONValue.array([])
+            return [.toClient(search.map { Self.searchResult(id: client, tools: [], search: $0) }
+                ?? Self.result(id: client, .object(["tools": empty])))]
         }
         let fanout = nextID
         nextID += 1
-        fanouts[fanout] = ListFanout(client: client, remaining: Set(ready), tools: [])
+        fanouts[fanout] = ListFanout(client: client, remaining: Set(ready), tools: [], search: search)
         return ready.map { server in
             let id = allocate(.list(fanout: fanout, server: server))
             return .toUpstream(server: server, message: Self.request(id: .int(id), method: "tools/list", params: nil))
@@ -353,13 +402,50 @@ public struct MCPGatewayCore {
         guard let exposed = params?["name"]?.stringValue else {
             return [.toClient(Self.error(id: client, code: -32602, message: "tools/call needs a name"))]
         }
+        if searchMode, exposed == Self.searchToolName {
+            let arguments = params?["arguments"]
+            let terms = (arguments?["query"]?.stringValue ?? "").lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
+            let limit = min(max(arguments?["limit"]?.intValue ?? Self.searchLimits.default, 1), Self.searchLimits.maximum)
+            return fanOutList(client: client, search: Search(terms: terms, limit: limit))
+        }
+        if searchMode, exposed == Self.callToolName {
+            let wrapped = params?["arguments"]
+            guard let target = wrapped?["name"]?.stringValue, target != Self.callToolName, target != Self.searchToolName else {
+                return [.toClient(Self.toolError(id: client, "rv_call_tool needs the name of a tool from rv_search_tools"))]
+            }
+            let arguments = wrapped?["arguments"] ?? .object([:])
+            guard arguments.objectValue != nil else {
+                return [.toClient(Self.toolError(id: client, "rv_call_tool arguments must be an object"))]
+            }
+            var unwrapped = params?.objectValue ?? JSONObject()
+            unwrapped["name"] = .string(target)
+            unwrapped["arguments"] = arguments
+            return callTool(client: client, params: .object(unwrapped))
+        }
+        // Search mode is presentation-only: a direct call by exposed name takes
+        // the same policy, approval, and audit path as one via rv_call_tool.
         guard let (server, tool) = route(exposed), let upstream = upstreams[server] else {
             let shown = MCPDisplayedText.field(exposed)
             return [.toClient(Self.error(id: client, code: -32602, message: "Unknown tool: \(shown)"))]
         }
-        let arguments = params?["arguments"] ?? .object([:])
+        let rawArguments = params?["arguments"] ?? .object([:])
+        // Exactness matters only where argument rules read the numbers. A call
+        // no rule inspects forwards its original spellings (0.7, 19.99, …).
+        let arguments: JSONValue
+        if configuration.hasArgumentRules(server: upstream.definition, tool: tool) {
+            guard let exact = rawArguments.withExactNumbers() else {
+                let reason = "rv will not forward a number it cannot read exactly"
+                return [
+                    .audit(MCPCallRecord(server: server, tool: tool, decision: .deny, argumentKeys: [], isError: true, reason: reason)),
+                    .toClient(Self.toolError(id: client, "\(reason). Do not retry; ask the user if you need it.")),
+                ]
+            }
+            arguments = exact
+        } else {
+            arguments = rawArguments
+        }
         let keys = arguments.objectValue?.keys.sorted() ?? []
-        let decision = configuration.decision(server: upstream.definition, tool: tool)
+        let decision = configuration.decision(server: upstream.definition, tool: tool, arguments: arguments)
         if decision == .deny {
             let reason = "rv policy denies \(server) tool \(tool)"
             let shown = "rv policy denies \(MCPDisplayedText.field(server)) tool \(MCPDisplayedText.field(tool))"
@@ -558,7 +644,14 @@ public struct MCPGatewayCore {
                 return []
             }
         }
-        guard let id = message["id"]?.intValue, let entry = pending.removeValue(forKey: id) else { return [] }
+        guard let id = message["id"]?.intValue, let entry = pending[id] else { return [] }
+        // A pending request belongs to one upstream. A reply from another does
+        // not consume it: request IDs are sequential, so any upstream could
+        // otherwise race a forged result for a peer's tool call.
+        if let owner = entry.owner, owner != server {
+            return [.log("MCP server \(server) answered request \(id) owned by \(owner); ignoring")]
+        }
+        pending.removeValue(forKey: id)
         switch entry {
         case .initialize:
             if message["result"]?.objectValue != nil {
@@ -594,11 +687,21 @@ public struct MCPGatewayCore {
         var outputs: [MCPGatewayOutput] = []
         if let upstream = upstreams[server], let tools = message["result"]?["tools"]?.arrayValue {
             state.tools += tools.compactMap { exposedTool($0, upstream: upstream) }
-            if let cursor = message["result"]?["nextCursor"]?.stringValue, cursor.isEmpty == false {
-                fanouts[fanout] = state
-                let id = allocate(.list(fanout: fanout, server: server))
-                return [.toUpstream(server: server, message: Self.request(
-                    id: .int(id), method: "tools/list", params: .object(["cursor": .string(cursor)])))]
+            state.pages[server, default: 0] += 1
+            if state.tools.count > Self.maximumListedTools {
+                state.tools = Array(state.tools.prefix(Self.maximumListedTools))
+                outputs.append(.log("MCP tool listing exceeded \(Self.maximumListedTools) tools; truncating"))
+            } else if let cursor = message["result"]?["nextCursor"]?.stringValue, cursor.isEmpty == false {
+                let key = server + "\0" + cursor
+                if state.seenCursors.contains(key) || state.pages[server, default: 0] >= Self.maximumListPagesPerServer {
+                    outputs.append(.log("MCP server \(server) cycled or over-paged its tool list; stopping pagination"))
+                } else {
+                    state.seenCursors.insert(key)
+                    fanouts[fanout] = state
+                    let id = allocate(.list(fanout: fanout, server: server))
+                    return outputs + [.toUpstream(server: server, message: Self.request(
+                        id: .int(id), method: "tools/list", params: .object(["cursor": .string(cursor)])))]
+                }
             }
         } else {
             outputs.append(.log("MCP server \(server) did not list tools"))
@@ -609,10 +712,75 @@ public struct MCPGatewayCore {
             return outputs
         }
         fanouts[fanout] = nil
+        if let search = state.search {
+            return outputs + [
+                .audit(MCPCallRecord(
+                    server: "rv", tool: Self.searchToolName, decision: .allow, argumentKeys: ["query", "limit"],
+                    isError: false, reason: "searched \(state.tools.count) tools")),
+                .toClient(Self.searchResult(id: state.client, tools: state.tools, search: search)),
+            ]
+        }
         return outputs + [.toClient(Self.result(id: state.client, .object(["tools": .array(state.tools)])))]
     }
 
-    /// Denied tools are hidden; `ask` tools say so in their description.
+    /// Tools whose name or description holds every term; name matches first.
+    static func searchResult(id: JSONValue, tools: [JSONValue], search: Search) -> JSONValue {
+        func holdsAll(_ text: String) -> Bool {
+            let lowered = text.lowercased()
+            return search.terms.allSatisfy { lowered.contains($0) }
+        }
+        let matches = tools.filter {
+            holdsAll(($0["name"]?.stringValue ?? "") + " " + ($0["description"]?.stringValue ?? ""))
+        }
+        let byName = matches.filter { holdsAll($0["name"]?.stringValue ?? "") }
+        let rest = matches.filter { holdsAll($0["name"]?.stringValue ?? "") == false }
+        let found = JSONValue.object([
+            "tools": .array(Array((byName + rest).prefix(search.limit))),
+            "total": .int(matches.count),
+        ])
+        return result(id: id, .object([
+            "content": .array([.object(["type": .string("text"), "text": .string(found.compactText)])]),
+            "structuredContent": found,
+        ]))
+    }
+
+    static let metaTools: [JSONValue] = [
+        .object([
+            "name": .string(searchToolName),
+            "description": .string(
+                "Search the tools rv serves by words in their names and descriptions. Returns each match with its "
+                    + "input schema; call one with rv_call_tool."),
+            "inputSchema": .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "query": .object([
+                        "type": .string("string"),
+                        "description": .string("Words every match must contain; empty lists every tool"),
+                    ]),
+                    "limit": .object([
+                        "type": .string("integer"), "minimum": .int(1), "maximum": .int(searchLimits.maximum),
+                        "default": .int(searchLimits.default),
+                    ]),
+                ]),
+            ]),
+        ]),
+        .object([
+            "name": .string(callToolName),
+            "description": .string(
+                "Call a tool found with rv_search_tools. rv applies the same policy and approvals as a direct call."),
+            "inputSchema": .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "name": .object(["type": .string("string"), "description": .string("Tool name from rv_search_tools")]),
+                    "arguments": .object(["type": .string("object"), "description": .string("The tool's arguments")]),
+                ]),
+                "required": .array([.string("name")]),
+            ]),
+        ]),
+    ]
+
+    /// Denied tools are hidden; `ask` tools say so in their description, and
+    /// so do tools whose arguments can change the decision.
     /// Routing uses the raw name. Every other string the client can read,
     /// including title and schemas, is escaped once.
     func exposedTool(_ tool: JSONValue, upstream: Upstream) -> JSONValue? {
@@ -638,6 +806,9 @@ public struct MCPGatewayCore {
         guard var walked = displayedContent(.object(object)).objectValue else { return nil }
         if configuration.decision(server: upstream.definition, tool: name) == .ask {
             walked["description"] = .string("[rv: needs the user's approval] " + MCPDisplayedText.field(rawDescription ?? ""))
+        } else if configuration.hasArgumentRules(server: upstream.definition, tool: name) {
+            walked["description"] = .string(
+                "[rv: some arguments need the user's approval or are refused] " + MCPDisplayedText.field(rawDescription ?? ""))
         }
         walked["name"] = .string(MCPDisplayedText.field(listedName))
         return .object(walked)
@@ -743,7 +914,9 @@ public struct MCPGatewayCore {
             return .array(items.map { scrub($0, secrets: secrets) })
         case .object(let object):
             var scrubbed = JSONObject()
-            for (key, item) in object.entries { scrubbed[key] = scrub(item, secrets: secrets) }
+            for (key, item) in object.entries {
+                scrubbed[scrubText(key, secrets: secrets)] = scrub(item, secrets: secrets)
+            }
             return .object(scrubbed)
         default:
             return value

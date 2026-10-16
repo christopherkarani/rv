@@ -46,10 +46,41 @@ enum AuditForwardRun {
         var batchSize = 500
     }
 
-    /// https anywhere; plain http only to this machine.
+    /// https anywhere; plain http only to this machine. No userinfo, fragment,
+    /// path secret, or query secret (including a query value that is a URL
+    /// with userinfo). `--install` copies `--to` into a plist and a crontab
+    /// line, so a refusal names the problem and not the secret.
     static func destination(_ text: String) -> Result<URL, CommandFailure> {
-        guard let url = URL(string: text), let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else {
+        guard let url = URL(string: text),
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+            let scheme = components.scheme?.lowercased(), let rawHost = components.host, rawHost.isEmpty == false
+        else {
             return .failure("--to must be an absolute URL")
+        }
+        let host = rawHost.lowercased()
+        if components.user != nil || components.password != nil {
+            return .failure("--to must not include a username or password")
+        }
+        if components.fragment != nil {
+            return .failure("--to must not have a fragment")
+        }
+        if MCPRedaction.hostCarriesSecret(rawHost) || MCPRedaction.hostCarriesSecret(components.percentEncodedHost ?? "")
+            || MCPRedaction.authorityCarriesPassword(text)
+        {
+            return .failure("--to must not carry a secret in its host")
+        }
+        if MCPRedaction.pathCarriesSecret(components.percentEncodedPath) {
+            return .failure("--to must not carry a secret in its path")
+        }
+        let rawQuery = components.percentEncodedQuery ?? MCPRedaction.rawQuery(text)
+        if MCPRedaction.queryCarriesSecret(encoded: rawQuery, items: components.queryItems)
+            || MCPRedaction.rawQuery(text).map({ MCPRedaction.queryCarriesSecret(encoded: $0, items: nil) }) == true
+        {
+            return .failure("--to must not carry a secret in its query")
+        }
+        // `user:/su?password@host` is split into a path and a query before those checks.
+        if components.user == nil, components.password == nil, MCPRedaction.containsUserinfoSpelling(text) {
+            return .failure("--to must not carry a secret in its path")
         }
         if scheme == "https" { return .success(url) }
         if scheme == "http", ["127.0.0.1", "localhost", "::1", "[::1]"].contains(host) { return .success(url) }
@@ -122,6 +153,23 @@ enum AuditForwardRun {
         case .failure(let failure): return .failure(failure)
         case .success(let loaded): cursor = loaded ?? AuditCursor()
         }
+        // Never forward past a break: the cursor would commit beyond it and
+        // the gap would look intentional off-machine. Refuse loudly instead.
+        switch AuditChain.verify(fileURL: AuditLog.fileURL(configDirectory: configDirectory)) {
+        case .failure(let error):
+            return .failure(CommandFailure("audit chain cannot be checked (\(error.message)); refusing to forward"))
+        case .success(let report) where report.isIntact == false && report.firstBreak?.reason == "no prev on any line":
+            // A wholly pre-chain (legacy) file has no head to protect and
+            // no self-recovery: it anchors at its next append, but the
+            // backlog must not deadlock until then.
+            FileHandle.standardError.write(Data("rv audit forward: audit.jsonl predates the hash chain; forwarding without a chain head\n".utf8))
+        case .success(let report) where report.isIntact == false:
+            let broken = report.firstBreak
+            return .failure(CommandFailure(
+                "audit chain break at line \(broken?.line ?? 0) (\(broken?.reason ?? "unknown")); refusing to forward — run `rv audit verify`"))
+        case .success:
+            break
+        }
         let ledger = AuditLedger(configDirectory: configDirectory)
         var sent = 0
         var batches = 0
@@ -181,6 +229,9 @@ enum AuditForwardRun {
                 guard let text = String(validating: value.revealed(), as: UTF8.self) else {
                     return .failure(CommandFailure("header secret \(DisplayedText.field(name)) is not text"))
                 }
+                guard text.contains("\r") == false, text.contains("\n") == false, text.contains("\0") == false else {
+                    return .failure(CommandFailure("header secret \(DisplayedText.field(name)) contains a line break"))
+                }
                 values[name] = text
             }
         }
@@ -232,13 +283,25 @@ struct AuditForward: AsyncParsableCommand {
     @Option(help: "Payload: ocsf or rv.") var format: AuditForwardRun.Format = .ocsf
     @Option(help: "Events per POST (1-5000).") var batchSize = 500
     @Flag(help: "Start from the current end of the audit trail instead of sending history.") var fromNow = false
+    @Flag(help: "Write a user LaunchAgent that runs this forward every 5 minutes, and print a LaunchDaemon template.")
+    var install = false
+
+    /// These options again, for the scheduled run.
+    var scheduledArguments: [String] {
+        var arguments: [String] = []
+        if let to { arguments += ["--to", to] }
+        for header in headers { arguments += ["--header", header] }
+        if format != .ocsf { arguments += ["--format", format.rawValue] }
+        if batchSize != 500 { arguments += ["--batch-size", String(batchSize)] }
+        return arguments
+    }
 
     func run() throws {
         let ctx = CommandContext.current(command: "audit forward", json: false, robot: false, plain: true, noColor: true)
         let home = try ctx.requireHome()
         let configDirectory = RVPolicyPaths.configDirectory(home: home)
         guard (1...5_000).contains(batchSize) else { try ctx.fail("rv audit forward: --batch-size must be 1-5000\n") }
-        let managed = ManagedPolicyLocation.installed.load()
+        let managed = ManagedRun.installed(home: home)
         if let reason = managed.invalidReason, to == nil {
             try ctx.fail("rv audit forward: organization policy is invalid: \(reason)\n")
         }
@@ -256,6 +319,27 @@ struct AuditForward: AsyncParsableCommand {
         case .success(let parsed): url = parsed
         }
         var options = AuditForwardRun.Options(url: url, format: format, batchSize: batchSize)
+        if install {
+            if fromNow { try ctx.fail("rv audit forward: --install and --from-now cannot be combined; run --from-now once first\n") }
+            guard let userName = AuditForwardInstall.accountName() else {
+                try ctx.fail("rv audit forward: could not read the account name from the passwd entry\n")
+            }
+            let plan = AuditForwardInstall.Plan(
+                home: URL(fileURLWithPath: home.rawValue, isDirectory: true), rvExecutable: MCPExecutable.currentPath(),
+                userID: getuid(), userName: userName, forwardArguments: scheduledArguments)
+            #if os(macOS)
+            switch AuditForwardInstall.install(plan) {
+            case .failure(let failure): try ctx.fail("rv audit forward: \(failure.message)\n")
+            case .success(let text): ctx.writeStdout(text)
+            }
+            return
+            #else
+            if let header = AuditForwardInstall.plaintextHeader(plan.forwardArguments) {
+                try ctx.fail("rv audit forward: header \(header) must use ${secret:NAME} in a scheduled command\n")
+            }
+            try ctx.fail("rv audit forward: " + AuditForwardInstall.cronHint(plan))
+            #endif
+        }
         if fromNow {
             switch AuditForwardRun.startFromNow(options: options, configDirectory: configDirectory) {
             case .failure(let failure): try ctx.fail("rv audit forward: \(failure.message)\n")

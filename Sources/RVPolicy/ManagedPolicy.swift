@@ -40,6 +40,8 @@ public struct ManagedPolicy: Sendable, Equatable {
         public var deny: [String] = []
         public var ask: [String] = []
         public var allow: [String] = []
+        /// Rule objects from the same three lists; `tool` is a `server/tool` glob.
+        public var rules: [ToolArgumentRule.Decided] = []
         public var defaultDecision: Decision = .allow
 
         public init() {}
@@ -78,12 +80,22 @@ public struct ManagedPolicy: Sendable, Equatable {
         mcp.blocked.contains { Self.glob($0, server) }
     }
 
-    public func mcpDecision(server: String, tool: String) -> Decision {
+    /// The strictest matching glob or rule, else `defaultDecision`. Without
+    /// arguments (a listing), only plain globs apply.
+    public func mcpDecision(server: String, tool: String, arguments: JSONValue? = nil) -> Decision {
         let subject = "\(server)/\(tool)"
-        if mcp.deny.contains(where: { Self.glob($0, subject) }) { return .deny }
-        if mcp.ask.contains(where: { Self.glob($0, subject) }) { return .ask }
-        if mcp.allow.contains(where: { Self.glob($0, subject) }) { return .allow }
-        return mcp.defaultDecision
+        var matched: [Decision] = []
+        if mcp.deny.contains(where: { Self.glob($0, subject) }) { matched.append(.deny) }
+        if mcp.ask.contains(where: { Self.glob($0, subject) }) { matched.append(.ask) }
+        if mcp.allow.contains(where: { Self.glob($0, subject) }) { matched.append(.allow) }
+        if let arguments, let ruled = ToolArgumentRule.strictest(mcp.rules, tool: subject, arguments: arguments) {
+            matched.append(ruled)
+        }
+        return matched.max() ?? mcp.defaultDecision
+    }
+
+    public func mcpHasArgumentRules(server: String, tool: String) -> Bool {
+        mcp.rules.contains { $0.rule.namesTool("\(server)/\(tool)") }
     }
 
     public func allowsSecretSource(_ kind: String) -> Bool {
@@ -125,15 +137,23 @@ public struct ManagedPolicyError: Error, Sendable, Equatable {
 
 extension ManagedPolicy {
     public static let maximumBytes = 256 * 1024
+    public static let maximumToolRules = 1024
 
     /// Strict: unknown keys are errors, so a typo cannot silently weaken policy.
     public static func decode(_ data: Data) -> Result<ManagedPolicy, ManagedPolicyError> {
         guard data.count <= maximumBytes else { return .failure(.init("policy.json is larger than 256 KiB")) }
-        guard let root = try? JSONDecoder().decode(JSONValue.self, from: data), case .object(let object) = root else {
+        guard let literal = JSONLiteral.parse(data), case .object(let object) = literal.domainValue() else {
             return .failure(.init("policy.json is not a JSON object"))
         }
         do {
-            return .success(try policy(object))
+            var decoded = try policy(object)
+            if object["serial"] != nil {
+                guard case .number(let token)? = literal.object?["serial"],
+                    let exact = JSONLiteral.nonNegativeInteger(token)
+                else { return .failure(.init("\"serial\" must be a non-negative integer")) }
+                decoded.serial = exact
+            }
+            return .success(decoded)
         } catch let error as ManagedPolicyError {
             return .failure(error)
         } catch {
@@ -148,21 +168,27 @@ extension ManagedPolicy {
         }
         var policy = ManagedPolicy()
         policy.organization = try optionalString(object["organization"], "organization")
-        if let raw = object["serial"] {
-            guard case .number(let serial) = raw, serial >= 0, serial == serial.rounded(), serial < 1e15 else {
-                throw ManagedPolicyError("\"serial\" must be a non-negative integer")
-            }
-            policy.serial = Int(serial)
-        }
+        // `serial` is read from the source spelling in `decode`. A `Double`
+        // cannot hold every integer, and a rounded one can look newer than
+        // the exact serial already accepted.
         if let raw = object["mcp"] {
             guard case .object(let mcp) = raw else { throw ManagedPolicyError("\"mcp\" must be an object") }
             try keys(mcp, allowed: ["blocked", "allowDirect", "requireSandbox", "deny", "ask", "allow", "defaultDecision"], context: "mcp")
             policy.mcp.blocked = try strings(mcp["blocked"], "mcp.blocked")
             policy.mcp.allowDirect = try bool(mcp["allowDirect"], "mcp.allowDirect") ?? true
             policy.mcp.requireSandbox = try bool(mcp["requireSandbox"], "mcp.requireSandbox") ?? false
-            policy.mcp.deny = try strings(mcp["deny"], "mcp.deny")
-            policy.mcp.ask = try strings(mcp["ask"], "mcp.ask")
-            policy.mcp.allow = try strings(mcp["allow"], "mcp.allow")
+            for decision in [Decision.allow, .ask, .deny] {
+                let (globs, rules) = try toolRules(mcp[decision.rawValue], decision: decision, "mcp.\(decision.rawValue)")
+                switch decision {
+                case .deny: policy.mcp.deny = globs
+                case .ask: policy.mcp.ask = globs
+                case .allow: policy.mcp.allow = globs
+                }
+                policy.mcp.rules += rules
+            }
+            guard policy.mcp.rules.count <= Self.maximumToolRules else {
+                throw ManagedPolicyError("\"mcp\" holds more than \(Self.maximumToolRules) argument rules")
+            }
             if let text = try optionalString(mcp["defaultDecision"], "mcp.defaultDecision") {
                 guard let decision = Decision(rawValue: text) else {
                     throw ManagedPolicyError("\"mcp.defaultDecision\" must be allow, ask, or deny")
@@ -201,7 +227,7 @@ extension ManagedPolicy {
                         throw ManagedPolicyError("\"audit.forward.headers\" must be an object of strings")
                     }
                     for (name, value) in map {
-                        guard case .string(let text) = value else {
+                        guard case .string(let text) = value, isNumberSpelling(text) == false else {
                             throw ManagedPolicyError("\"audit.forward.headers.\(DisplayedText.field(name))\" must be a string")
                         }
                         headers[name] = text
@@ -219,9 +245,18 @@ extension ManagedPolicy {
         }
     }
 
+    /// A `.string` the literal converter produced from a JSON number. String
+    /// fields must be JSON strings: a number there is a typo that would
+    /// otherwise become a never-matching value instead of an invalid policy.
+    private static func isNumberSpelling(_ text: String) -> Bool {
+        text.hasPrefix(JSONExactInteger.numberMarker)
+    }
+
     private static func optionalString(_ value: JSONValue?, _ name: String) throws -> String? {
         guard let value else { return nil }
-        guard case .string(let text) = value else { throw ManagedPolicyError("\"\(name)\" must be a string") }
+        guard case .string(let text) = value, isNumberSpelling(text) == false else {
+            throw ManagedPolicyError("\"\(name)\" must be a string")
+        }
         return text
     }
 
@@ -231,11 +266,39 @@ extension ManagedPolicy {
         return flag
     }
 
+    private static func toolRules(
+        _ value: JSONValue?, decision: Decision, _ name: String
+    ) throws -> ([String], [ToolArgumentRule.Decided]) {
+        guard let value else { return ([], []) }
+        guard case .array(let items) = value else {
+            throw ManagedPolicyError("\"\(name)\" must hold non-empty strings or rule objects")
+        }
+        var globs: [String] = []
+        var rules: [ToolArgumentRule.Decided] = []
+        for item in items {
+            switch item {
+            case .string(let text) where text.isEmpty == false && text.count <= 256 && isNumberSpelling(text) == false:
+                globs.append(text)
+            case .object:
+                do {
+                    rules.append(.init(decision: decision, rule: try ToolArgumentRule.decode(item)))
+                } catch let error as ToolArgumentRuleError {
+                    throw ManagedPolicyError("\(name): \(error.message)")
+                }
+            default:
+                throw ManagedPolicyError("\"\(name)\" must hold non-empty strings or rule objects")
+            }
+        }
+        return (globs, rules)
+    }
+
     private static func strings(_ value: JSONValue?, _ name: String) throws -> [String] {
         guard let value else { return [] }
         guard case .array(let items) = value else { throw ManagedPolicyError("\"\(name)\" must be an array of strings") }
         return try items.map { item in
-            guard case .string(let text) = item, text.isEmpty == false else {
+            guard case .string(let text) = item, text.isEmpty == false, text.count <= 256,
+                isNumberSpelling(text) == false
+            else {
                 throw ManagedPolicyError("\"\(name)\" must be an array of non-empty strings")
             }
             return text
@@ -249,12 +312,21 @@ public struct ManagedPolicyBundle: Sendable, Equatable {
     public var sha256: String
     public var isSigned: Bool
     public var directory: String
+    /// 1-based position among the keys in `org-key.pub` of the key that verified.
+    public var signingKey: Int?
+    /// Highest serial accepted from `directory`, once the rollback check has run.
+    public var highestSerial: Int?
 
-    public init(policy: ManagedPolicy, sha256: String, isSigned: Bool, directory: String) {
+    public init(
+        policy: ManagedPolicy, sha256: String, isSigned: Bool, directory: String, signingKey: Int? = nil,
+        highestSerial: Int? = nil
+    ) {
         self.policy = policy
         self.sha256 = sha256
         self.isSigned = isSigned
         self.directory = directory
+        self.signingKey = signingKey
+        self.highestSerial = highestSerial
     }
 }
 
@@ -413,28 +485,57 @@ public struct ManagedPolicyLocation: Sendable {
 }
 
 /// Ed25519 over the exact policy bytes. Keys and signatures are base64 text.
+/// `org-key.pub` may pin several keys (one per line, `#` comments) so an
+/// organization can rotate: any pinned key verifies.
 public enum ManagedPolicyVerifier {
+    public static let maximumKeys = 16
+
     public static func verify(policy data: Data, signature: Data?, publicKey: Data?, directory: String) -> ManagedPolicyState {
-        var signed = false
+        var signingKey: Int?
         if let publicKey {
-            guard let keyBytes = base64(publicKey), let key = try? Curve25519.Signing.PublicKey(rawRepresentation: keyBytes) else {
-                return .invalid("\(ManagedPolicyLocation.publicKeyFile) is not a base64 Ed25519 public key")
+            let keys: [Curve25519.Signing.PublicKey]
+            switch publicKeys(publicKey) {
+            case .failure(let error): return .invalid(error.message)
+            case .success(let parsed): keys = parsed
             }
             guard let signature else {
                 return .invalid("\(ManagedPolicyLocation.publicKeyFile) is pinned but \(ManagedPolicyLocation.signatureFile) is missing")
             }
-            guard let signatureBytes = base64(signature), key.isValidSignature(signatureBytes, for: data) else {
-                return .invalid("\(ManagedPolicyLocation.signatureFile) does not verify against \(ManagedPolicyLocation.publicKeyFile)")
+            guard let signatureBytes = base64(signature),
+                let index = keys.firstIndex(where: { $0.isValidSignature(signatureBytes, for: data) })
+            else {
+                let target = keys.count == 1 ? ManagedPolicyLocation.publicKeyFile : "any key in \(ManagedPolicyLocation.publicKeyFile)"
+                return .invalid("\(ManagedPolicyLocation.signatureFile) does not verify against \(target)")
             }
-            signed = true
+            signingKey = index + 1
         }
         switch ManagedPolicy.decode(data) {
         case .failure(let error):
             return .invalid(error.message)
         case .success(let policy):
             let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-            return .active(ManagedPolicyBundle(policy: policy, sha256: digest, isSigned: signed, directory: directory))
+            return .active(ManagedPolicyBundle(
+                policy: policy, sha256: digest, isSigned: signingKey != nil, directory: directory, signingKey: signingKey))
         }
+    }
+
+    static func publicKeys(_ data: Data) -> Result<[Curve25519.Signing.PublicKey], ManagedPolicyError> {
+        let file = ManagedPolicyLocation.publicKeyFile
+        var keys: [Curve25519.Signing.PublicKey] = []
+        for (number, line) in String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
+            .enumerated()
+        {
+            let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.isEmpty || text.hasPrefix("#") { continue }
+            guard let bytes = Data(base64Encoded: text), let key = try? Curve25519.Signing.PublicKey(rawRepresentation: bytes) else {
+                return .failure(ManagedPolicyError("\(file) line \(number + 1) is not a base64 Ed25519 public key"))
+            }
+            guard keys.count < maximumKeys else {
+                return .failure(ManagedPolicyError("\(file) holds more than \(maximumKeys) keys"))
+            }
+            keys.append(key)
+        }
+        return keys.isEmpty ? .failure(ManagedPolicyError("\(file) holds no key")) : .success(keys)
     }
 
     /// (public, private) as base64 raw representations.

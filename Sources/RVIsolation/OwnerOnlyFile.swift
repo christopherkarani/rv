@@ -14,8 +14,9 @@ public enum OwnerOnlyFileError: Error, Sendable, Equatable {
 /// Reads and atomic writes for rv configuration that only its owner may change.
 public enum OwnerOnlyFile {
     /// Nil when the file does not exist. Anything that is not a regular,
-    /// owner-owned, non-group/world-writable file is refused.
-    public static func read(_ url: URL, maximumBytes: Int) -> Result<Data?, OwnerOnlyFileError> {
+    /// owner-owned, non-group/world-writable file is refused. A
+    /// `confidential` read also refuses group/world-readable files.
+    public static func read(_ url: URL, maximumBytes: Int, confidential: Bool = false) -> Result<Data?, OwnerOnlyFileError> {
         let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
         if fd < 0 {
             if errno == ENOENT { return .success(nil) }
@@ -28,6 +29,7 @@ public enum OwnerOnlyFile {
         guard (info.st_mode & S_IFMT) == S_IFREG else { return .failure(.unsafe("not a regular file")) }
         guard info.st_uid == getuid() else { return .failure(.unsafe("owned by another user")) }
         guard (info.st_mode & 0o022) == 0 else { return .failure(.unsafe("group or world writable")) }
+        if confidential, (info.st_mode & 0o044) != 0 { return .failure(.unsafe("group or world readable")) }
         guard info.st_size <= maximumBytes else { return .failure(.oversized) }
         var bytes = [UInt8](repeating: 0, count: Int(info.st_size) + 1)
         var count = 0
@@ -74,7 +76,14 @@ public enum OwnerOnlyFile {
             unlink(temporary.path)
             return false
         }
-        return true
+        // The rename itself is only durable once the directory is synced;
+        // without it a crash can resurrect the previous file (for the serial
+        // watermark, that re-opens the rollback window).
+        let directoryFD = open(directory.path, O_RDONLY | O_CLOEXEC)
+        guard directoryFD >= 0 else { return false }
+        let directorySynced = fsync(directoryFD) == 0
+        close(directoryFD)
+        return directorySynced
     }
 }
 

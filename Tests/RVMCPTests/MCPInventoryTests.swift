@@ -31,6 +31,14 @@ struct MCPRedactionTests {
         #expect(MCPRedaction.url("https://x.dev/mcp?api_key=zzz").leaked)
         #expect(MCPRedaction.url("https://user:pw@x.dev/").leaked)
         #expect(MCPRedaction.url("https://x.dev/k/sk-proj-abcdefghijklmnop1234").leaked)
+        let nested = MCPRedaction.url("https://mcp.example/mcp?next=https://user:supersecretpassword@evil.example/x")
+        #expect(nested.leaked)
+        #expect(nested.display.contains("supersecretpassword") == false)
+        let nestedPath = MCPRedaction.url("https://mcp.example/mcp?next=https://evil.example/ghp_1234567890abcdefghij")
+        #expect(nestedPath.leaked)
+        #expect(nestedPath.display.contains("ghp_") == false)
+        #expect(MCPRedaction.url("https://mcp.example/mcp?next=https://collector.example/v1").leaked == false)
+        #expect(MCPRedaction.url("https://mcp.example/.ghp_1234567890abcdefghij").leaked)
     }
 
     @Test func literalCredentialsIgnoreReferences() {

@@ -61,15 +61,21 @@ public struct EgressHostPolicy: Sendable, Equatable {
     /// `.publicHTTPS`, which admits the web ports (80/443).
     public private(set) var allowedPort: Int
     public private(set) var mode: ExternalMode
+    /// When false, loopback CONNECT and absolute-URI targets are denied.
+    /// A cage that can dial only the proxy (MCP `sandbox.hosts`) must set
+    /// this: relaying `127.0.0.1` on any port would reach other listeners.
+    public private(set) var relaysLoopback: Bool
 
     public init(
         allowedHosts: Set<String>,
         allowedPort: Int = httpsPort,
-        mode: ExternalMode = .allowlist
+        mode: ExternalMode = .allowlist,
+        relaysLoopback: Bool = true
     ) {
         self.allowedHosts = Set(allowedHosts.compactMap(canonicalEgressDNSName))
         self.allowedPort = allowedPort
         self.mode = mode
+        self.relaysLoopback = relaysLoopback
     }
 
     public func allows(host: String, port: Int) -> Bool {
@@ -84,11 +90,11 @@ public struct EgressHostPolicy: Sendable, Equatable {
         }
     }
 
-    /// Loopback CONNECT targets on any port. The cage reaches loopback
-    /// directly, so proxying there grants no new capability; it only keeps
-    /// proxied clients (agents with HTTPS_PROXY set and no NO_PROXY) able
-    /// to use local gateways and loopback MCP servers.
+    /// Loopback CONNECT targets on any port. Workspace cages can already
+    /// dial loopback, so relaying it grants them nothing. A cage that
+    /// cannot (`relaysLoopback == false`) is refused here instead.
     public func allowsLoopbackTarget(host: String, port: Int) -> Bool {
+        guard relaysLoopback else { return false }
         guard (1...65535).contains(port) else { return false }
         guard let name = canonicalEgressLoopbackName(host) else { return false }
         return name == "localhost" || isEgressLoopbackIPv4(name)

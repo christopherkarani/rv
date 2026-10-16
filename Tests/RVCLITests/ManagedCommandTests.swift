@@ -66,6 +66,30 @@ struct ManagedCommandTests {
             output: nil))?.contains("not signed") == true)
     }
 
+    @Test func statusNamesTheSigningKeyAndTheHighestSerial() throws {
+        let policy = try ManagedPolicy.decode(Data(#"{"version": 1, "organization": "Acme", "serial": 8}"#.utf8)).get()
+        let status = ManagedRun.status(
+            .active(ManagedPolicyBundle(
+                policy: policy, sha256: "abc", isSigned: true, directory: "/managed", signingKey: 2, highestSerial: 8)),
+            directory: "/managed")
+        #expect(status.signingKey == 2)
+        #expect(status.highestSerial == 8)
+        let text = ManagedRun.statusText(status)
+        #expect(text.contains("organization policy active: Acme serial 8\n"))
+        #expect(text.contains("  signed by key 2 in org-key.pub sha256 abc\n"))
+        #expect(text.contains("  anti-rollback: highest serial accepted here is 8\n"))
+
+        let rollback = ManagedRun.statusText(ManagedRun.status(
+            .invalid("rollback: policy.json serial 2 is lower than serial 8 already accepted from /managed"),
+            directory: "/managed"))
+        #expect(rollback.hasPrefix("organization policy INVALID: rollback: policy.json serial 2"))
+    }
+
+    @Test func requireSandboxSaysRemoteServersAreExempt() throws {
+        let policy = try ManagedPolicy.decode(Data(#"{"version":1,"mcp":{"requireSandbox":true}}"#.utf8)).get()
+        #expect(ManagedRun.restrictions(policy) == ["mcp: every local server must be sandboxed (remote servers are exempt)"])
+    }
+
     @Test func mcpCommandsFollowTheOrganization() async throws {
         let scratch = Scratch()
         var environment = MCPEnvironment(
@@ -95,6 +119,16 @@ struct ManagedCommandTests {
             }
         }
         #expect(try await MCPRun.approve(id: ticket.id, always: false, environment: environment).get().contains("once"))
+
+        environment.managed = try active(#"""
+            {"version": 1, "mcp": {"deny": [{"tool": "github/merge_*", "when": {"/branch": {"==": "main"}}}]}}
+            """#)
+        let merge = try #require(
+            environment.approvals.request(server: "github", tool: "merge_pr", argumentsHash: "h", argumentKeys: []))
+        #expect(failure(await MCPRun.approve(id: merge.id, always: true, environment: environment))?
+            .contains("has argument rules") == true)
+        #expect(ManagedRun.restrictions(try #require(environment.managed.policy))
+            == [#"mcp deny: github/merge_* when /branch == "main""#])
 
         try scratch.write("home/.cursor/mcp.json", """
             {"mcpServers": {"svc": {"command": "svc", "env": {"API_TOKEN": "tok_live_abcdefghijklmnopqrstu"}}}}
