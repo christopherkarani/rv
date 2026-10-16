@@ -74,6 +74,11 @@ public enum VarlockSchema {
         case skip(String)
     }
 
+    private enum SourceMapped {
+        case resolved(SecretSource)
+        case skip(String)
+    }
+
     private static func parse(_ text: String) -> Document {
         var document = Document()
         var comments: [String] = []
@@ -177,51 +182,80 @@ public enum VarlockSchema {
         if value.hasPrefix("op://") == false, functionCall(value) == nil {
             return .skip("literal value not copied")
         }
-        guard let source = source(item, inits: inits) else {
-            return .skip("no supported provider reference")
+        switch source(item, inits: inits) {
+        case .skip(let reason): return .skip(reason)
+        case .resolved(let resolved):
+            return .secret(SecretDefinition(
+                name: item.name, description: description, source: resolved, delivery: .environment, type: type))
         }
-        return .secret(SecretDefinition(
-            name: item.name, description: description, source: source, delivery: .environment, type: type))
     }
 
     /// A literal value is never a provider reference, so it is not imported.
-    private static func source(_ item: Item, inits: [String: [Init]]) -> SecretSource? {
+    private static func source(_ item: Item, inits: [String: [Init]]) -> SourceMapped {
         let value = stripTrailingComment(item.value).trimmingCharacters(in: .whitespaces)
-        if value.hasPrefix("op://") { return onePassword(value) }
-        guard let call = functionCall(value) else { return nil }
+        if value.hasPrefix("op://") {
+            guard let resolved = onePassword(value) else { return .skip("no supported provider reference") }
+            return .resolved(resolved)
+        }
+        guard let call = functionCall(value) else { return .skip("no supported provider reference") }
+        let providerInits = inits[initName(call.name)] ?? []
         let instance = call.positional.first.flatMap { token in
-            inits[initName(call.name)]?.contains { $0.id == token } == true ? token : nil
+            providerInits.contains { $0.id == token } ? token : nil
+        }
+        // With named instances declared, a leading positional that matches
+        // none of them followed by another positional reads as
+        // (instance, name) with a mistyped instance. Binding it as the
+        // secret name would silently point at the wrong secret.
+        if instance == nil, call.positional.count >= 2, providerInits.contains(where: { $0.id != nil }),
+            let first = call.positional.first
+        {
+            return .skip("instance \(first) is not one of the declared instances")
         }
         let positional = instance == nil ? call.positional : Array(call.positional.dropFirst())
-        let chosen = pick(inits[initName(call.name)] ?? [], id: instance)
+        let chosen = pick(providerInits, id: instance)
         switch call.name {
         case "op":
-            return positional.first { $0.hasPrefix("op://") }.flatMap(onePassword)
+            guard let resolved = positional.first(where: { $0.hasPrefix("op://") }).flatMap(onePassword) else {
+                return .skip("no supported provider reference")
+            }
+            return .resolved(resolved)
         case "infisical":
             let name = call.named["secretName"] ?? positional.first ?? item.name
-            guard SecretsDecoding.cliToken(name) else { return nil }
-            return .infisical(
+            guard SecretsDecoding.cliToken(name) else { return .skip("no supported provider reference") }
+            return .resolved(.infisical(
                 name: name, project: chosen?["projectId"], environment: chosen?["environment"],
-                path: call.named["secretPath"] ?? call.named["path"] ?? chosen?["path"])
+                path: call.named["secretPath"] ?? call.named["path"] ?? chosen?["path"]))
         case "bitwarden":
-            guard let id = positional.first, SecretsDecoding.uuid(id) else { return nil }
-            return .bitwarden(id: id.lowercased())
+            guard let id = positional.first, SecretsDecoding.uuid(id) else {
+                return .skip("no supported provider reference")
+            }
+            return .resolved(.bitwarden(id: id.lowercased()))
         case "gsm":
-            return gcp(positional.first ?? item.name, project: chosen?["projectId"])
+            guard let resolved = gcp(positional.first ?? item.name, project: chosen?["projectId"]) else {
+                return .skip("no supported provider reference")
+            }
+            return .resolved(resolved)
         case "azureSecret":
-            return azure(positional.first ?? kebab(item.name), vaultURL: chosen?["vaultUrl"])
+            guard let resolved = azure(positional.first ?? kebab(item.name), vaultURL: chosen?["vaultUrl"]) else {
+                return .skip("no supported provider reference")
+            }
+            return .resolved(resolved)
         case "vaultSecret":
             guard let path = positional.first, SecretsDecoding.vaultPath(path),
                 let field = call.named["field"], SecretsDecoding.label(field, max: 128)
-            else { return nil }
-            return .vault(path: path, field: field, address: nil)
+            else { return .skip("no supported provider reference") }
+            return .resolved(.vault(path: path, field: field, address: nil))
         case "awsSecretsManager":
-            guard let id = positional.first, SecretsDecoding.cliToken(id), id.hasPrefix("-") == false else { return nil }
+            guard let id = positional.first, SecretsDecoding.cliToken(id), id.hasPrefix("-") == false else {
+                return .skip("no supported provider reference")
+            }
             let field = call.named["field"]
-            guard field == nil || SecretsDecoding.label(field ?? "", max: 128) else { return nil }
-            return .awsSecretsManager(secretID: id, field: field, region: call.named["region"])
+            guard field == nil || SecretsDecoding.label(field ?? "", max: 128) else {
+                return .skip("no supported provider reference")
+            }
+            return .resolved(.awsSecretsManager(secretID: id, field: field, region: call.named["region"]))
         default:
-            return nil
+            return .skip("no supported provider reference")
         }
     }
 
@@ -328,7 +362,7 @@ public enum VarlockSchema {
     private static func assignment(_ line: String) -> (name: String, value: String)? {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard let eq = trimmed.firstIndex(of: "=") else { return nil }
-        let name = String(trimmed[..<eq])
+        let name = String(trimmed[..<eq]).trimmingCharacters(in: .whitespaces)
         guard SecretsConfiguration.isVariableName(name) else { return nil }
         return (name, String(trimmed[trimmed.index(after: eq)...]))
     }

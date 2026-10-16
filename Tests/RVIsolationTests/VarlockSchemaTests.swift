@@ -98,6 +98,25 @@ struct VarlockSchemaTests {
         #expect(prefix.secrets.map(\.name) == ["PUBLIC_OVERRIDE", "PRIVATE"])
     }
 
+    @Test func unmatchedInstanceIsSkippedNotRebound() throws {
+        let plan = try VarlockSchema.plan("""
+            # @initInfisical(id=prod, projectId=PROJPROD)
+            # @initInfisical(id=dev, projectId=PROJDEV)
+            # @sensitive
+            K=infisical("typo-id", "MYSECRET")
+            # @sensitive
+            J=infisical("prod", "OTHER")
+            """).get()
+        #expect(plan.secrets.map(\.name) == ["J"])
+        #expect(plan.secrets.first?.source == .infisical(name: "OTHER", project: "PROJPROD", environment: nil, path: nil))
+        #expect(plan.notes.contains { $0.contains("typo-id") && $0.contains("not one of the declared instances") })
+    }
+
+    @Test func spacedAssignmentImports() throws {
+        let plan = try VarlockSchema.plan("# @sensitive\nSPACED = op(op://v/i/f)\n").get()
+        #expect(plan.secrets.map(\.name) == ["SPACED"])
+    }
+
     @Test func roundTripsTheNewSourceKinds() throws {
         let secret = SecretDefinition(
             name: "DB", description: "database", source: .azure(vault: "my-vault", name: "db", version: nil),

@@ -16,7 +16,7 @@ public enum SecretGitHook {
         let hook = hooks.appendingPathComponent("pre-commit")
         let saved = hooks.appendingPathComponent(savedName)
         let existing = (try? String(contentsOf: hook, encoding: .utf8)) ?? ""
-        if existing.contains(marker) == false, existing.isEmpty == false {
+        if ownsHook(existing) == false, existing.isEmpty == false {
             guard FileManager.default.fileExists(atPath: saved.path) == false else {
                 return .failure(SecretGitHookError("pre-commit is not rv's hook, and \(savedName) already exists"))
             }
@@ -57,7 +57,7 @@ public enum SecretGitHook {
         let hook = hooks.appendingPathComponent("pre-commit")
         let saved = hooks.appendingPathComponent(savedName)
         let existing = (try? String(contentsOf: hook, encoding: .utf8)) ?? ""
-        guard existing.contains(marker) else {
+        guard ownsHook(existing) else {
             return .failure(SecretGitHookError("pre-commit is not an rv secrets hook"))
         }
         guard unlink(hook.path) == 0 else { return .failure(SecretGitHookError("could not remove \(hook.path)")) }
@@ -115,19 +115,50 @@ public enum SecretGitHook {
         }
     }
 
+    /// True only when the file is the hook rv generated: the marker alone
+    /// on a line. A foreign hook that merely mentions the marker in prose
+    /// is still backed up, never overwritten.
+    static func ownsHook(_ existing: String) -> Bool {
+        existing.split(whereSeparator: \.isNewline).contains {
+            $0.trimmingCharacters(in: .whitespaces) == marker
+        }
+    }
+
+    /// The hooks directory git will actually run from: core.hooksPath when
+    /// configured (relative resolves against the work tree), else the
+    /// common git dir's hooks — which is also where linked worktrees look.
     static func hooksDirectory(_ workTree: URL) -> URL? {
+        if let configured = gitOutput(workTree, ["config", "--get", "core.hooksPath"]),
+            configured.isEmpty == false
+        {
+            let url = configured.hasPrefix("/")
+                ? URL(fileURLWithPath: configured, isDirectory: true)
+                : workTree.appendingPathComponent(configured, isDirectory: true)
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return url
+        }
+        guard let common = gitOutput(workTree, ["rev-parse", "--git-common-dir"]), common.isEmpty == false else {
+            return nil
+        }
+        let base = common.hasPrefix("/")
+            ? URL(fileURLWithPath: common, isDirectory: true)
+            : workTree.appendingPathComponent(common, isDirectory: true)
+        let url = base.appendingPathComponent("hooks", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private static func gitOutput(_ workTree: URL, _ arguments: [String]) -> String? {
         guard let git = SecretCommandProviders.executable("git", environment: ProcessInfo.processInfo.environment),
             let run = BoundedProcess.run(
-                git, ["-C", workTree.path, "rev-parse", "--absolute-git-dir"],
+                git, ["-C", workTree.path] + arguments,
                 environment: ["PATH": ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin",
                     "HOME": ProcessInfo.processInfo.environment["HOME"] ?? "/tmp"]),
             run.status == 0
         else { return nil }
         let text = String(decoding: run.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard text.hasPrefix("/"), text.contains("\n") == false else { return nil }
-        let url = URL(fileURLWithPath: text).appendingPathComponent("hooks", isDirectory: true)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
+        guard text.contains("\n") == false else { return nil }
+        return text
     }
 
     static func shellQuote(_ text: String) -> String {

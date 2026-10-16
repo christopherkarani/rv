@@ -121,7 +121,7 @@ enum SecretCommandProviders {
             return .failure(.timedOut("1Password read of \(reference)"))
         }
         guard run.status == 0 else {
-            return .failure(.failed("op read \(reference) exited \(run.status): \(run.stderrSummary)"))
+            return .failure(.failed("op read \(reference) exited \(run.status)"))
         }
         return SecretResolver.value(run.stdout, from: reference)
     }
@@ -144,7 +144,7 @@ enum SecretCommandProviders {
             return .failure(.timedOut("AWS Secrets Manager read of \(secretID)"))
         }
         guard run.status == 0 else {
-            return .failure(.failed("aws secretsmanager \(secretID) exited \(run.status): \(run.stderrSummary)"))
+            return .failure(.failed("aws secretsmanager \(secretID) exited \(run.status)"))
         }
         guard let field else { return SecretResolver.value(run.stdout, from: secretID) }
         guard let object = try? JSONSerialization.jsonObject(with: Data(run.stdout)) as? [String: Any],
@@ -333,11 +333,6 @@ enum BoundedProcess {
         var status: Int32
         var stdout: [UInt8]
         var stderr: [UInt8]
-
-        var stderrSummary: String {
-            let text = String(decoding: stderr.prefix(200), as: UTF8.self)
-            return text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
-        }
     }
 
     static func run(
@@ -357,19 +352,38 @@ enum BoundedProcess {
         process.standardError = err
         let stdout = Collector()
         let stderr = Collector()
-        out.fileHandleForReading.readabilityHandler = { stdout.append($0.availableData) }
-        err.fileHandleForReading.readabilityHandler = { stderr.append($0.availableData) }
         do { try process.run() } catch { return nil }
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning, Date() < deadline { usleep(10_000) }
-        out.fileHandleForReading.readabilityHandler = nil
-        err.fileHandleForReading.readabilityHandler = nil
-        if process.isRunning {
+        // Drain both pipes on dedicated threads while waiting: polling
+        // isRunning plus a post-exit readDataToEndOfFile never observes the
+        // exit under swift-corelibs, so a finished child looked like a
+        // 30-second timeout on Linux.
+        let drained = DispatchGroup()
+        for (handle, collector) in [(out.fileHandleForReading, stdout), (err.fileHandleForReading, stderr)] {
+            drained.enter()
+            Thread.detachNewThread {
+                while true {
+                    let chunk = handle.availableData
+                    if chunk.isEmpty { break }
+                    collector.append(chunk)
+                }
+                drained.leave()
+            }
+        }
+        let exited = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            process.waitUntilExit()
+            exited.signal()
+        }
+        guard exited.wait(timeout: .now() + timeout) == .success else {
             process.terminate()
+            if exited.wait(timeout: .now() + 2) != .success {
+                kill(process.processIdentifier, SIGKILL)
+                _ = exited.wait(timeout: .now() + 2)
+            }
+            drained.wait()
             return nil
         }
-        stdout.append(out.fileHandleForReading.readDataToEndOfFile())
-        stderr.append(err.fileHandleForReading.readDataToEndOfFile())
+        drained.wait()
         return Outcome(status: process.terminationStatus, stdout: stdout.bytes, stderr: stderr.bytes)
     }
 

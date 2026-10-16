@@ -5,13 +5,13 @@ import Foundation
 /// upstream names. Every other host stays a blind tunnel. This does not
 /// listen, mint a certificate, or change `EgressProxy`; that integration
 /// waits until the proxy can host it without a second, weaker filter.
-public enum TransparentConnect: Sendable, Equatable {
+enum TransparentConnect: Sendable, Equatable {
     case tunnel
     case terminate
 }
 
-public enum TransparentHTTPS {
-    public static func decision(host: String, secretUpstreams: [String]) -> TransparentConnect {
+enum TransparentHTTPS {
+    static func decision(host: String, secretUpstreams: [String]) -> TransparentConnect {
         guard let name = canonical(host) else { return .tunnel }
         return secretUpstreams.contains { canonical($0) == name } ? .terminate : .tunnel
     }

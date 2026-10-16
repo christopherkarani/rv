@@ -328,6 +328,54 @@ struct SecretsCommandTests {
         #expect(removed.contains("restored"))
         #expect(try String(contentsOf: foreign, encoding: .utf8) == saved)
     }
+
+    private func git(_ work: URL, _ args: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-C", work.path] + args
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+    }
+
+    @Test func hookInstallHonorsHooksPathAndLinkedWorktrees() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-hooks-path")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let custom = fixture.directory.appendingPathComponent("custom-hooks")
+        try FileManager.default.createDirectory(at: custom, withIntermediateDirectories: true)
+        try git(work, ["config", "core.hooksPath", custom.path])
+        _ = try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get()
+        #expect(FileManager.default.fileExists(atPath: custom.appendingPathComponent("pre-commit").path))
+        #expect(FileManager.default.fileExists(atPath: work.appendingPathComponent(".git/hooks/pre-commit").path) == false)
+
+        let main = fixture.directory.appendingPathComponent("repo-worktree")
+        try FileManager.default.createDirectory(at: main, withIntermediateDirectories: true)
+        try git(main, ["init", "-q"])
+        try git(main, ["-c", "user.email=a@b.c", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"])
+        let linked = fixture.directory.appendingPathComponent("linked")
+        try git(main, ["worktree", "add", "-q", linked.path])
+        _ = try SecretGitHook.install(workTree: linked, rvPath: "/usr/bin/true").get()
+        #expect(FileManager.default.fileExists(atPath: main.appendingPathComponent(".git/hooks/pre-commit").path))
+    }
+
+    @Test func hookMentioningTheMarkerIsBackedUpNotOverwritten() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let work = fixture.directory.appendingPathComponent("repo-marker")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(work, ["init", "-q"])
+        let foreign = work.appendingPathComponent(".git/hooks/pre-commit")
+        let original = "#!/bin/sh\n# rv-secrets-hook mentioned in a comment\necho foreign\n"
+        try Data(original.utf8).write(to: foreign)
+        chmod(foreign.path, 0o755)
+        _ = try SecretGitHook.install(workTree: work, rvPath: "/usr/bin/true").get()
+        #expect(try String(contentsOf: work.appendingPathComponent(".git/hooks/pre-commit.rv-saved"), encoding: .utf8) == original)
+        _ = try SecretGitHook.uninstall(workTree: work).get()
+        #expect(try String(contentsOf: foreign, encoding: .utf8) == original)
+    }
 }
 
 /// Real login Keychain: set → check → remove through the CLI logic.
