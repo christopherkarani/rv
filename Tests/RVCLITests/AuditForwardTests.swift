@@ -298,7 +298,7 @@ private final class RedirectSink: @unchecked Sendable {
                 bind(fd, sock, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
-        guard bound == 0, listen(fd, 1) == 0 else {
+        guard bound == 0, listen(fd, 8) == 0 else {
             close(fd)
             throw RedirectSinkError()
         }
@@ -319,7 +319,10 @@ private final class RedirectSink: @unchecked Sendable {
             throw RedirectSinkError()
         }
         let sink = RedirectSink(url: url, listenFD: fd)
-        DispatchQueue.global().async {
+        // A dedicated thread, not the GCD global pool: under full-suite
+        // parallel load the pool can starve for longer than the client's
+        // 30-second timeout, and the connection is never accepted.
+        Thread.detachNewThread {
             let client = accept(fd, nil, nil)
             if client < 0 { return }
             sink.hits.withLock { $0 += 1 }
