@@ -3,8 +3,11 @@ import RVDomain
 import Testing
 @testable import RVPolicy
 
+/// The production path: policy and argument values reach the rules through
+/// `JSONLiteral`, which keeps number spellings exact. Decoding fixtures with
+/// `JSONDecoder` would round what production compares exactly.
 private func json(_ text: String) throws -> JSONValue {
-    try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
+    try #require(JSONLiteral.parse(Data(text.utf8))).domainValue()
 }
 
 private func rule(_ text: String) throws -> ToolArgumentRule {
@@ -56,6 +59,13 @@ struct ToolArgumentRuleTests {
         .init(rule: #"{"tool":"q","when":{"/a":{"==":1},"/b":{"==":2}}}"#, arguments: #"{"a":1,"b":3}"#, matches: false),
         .init(rule: #"{"tool":"q","when":{"/id":{"==":9007199254740993}}}"#, arguments: #"{"id":9007199254740992}"#, matches: false),
         .init(rule: #"{"tool":"q","when":{"/id":{"==":9007199254740993}}}"#, arguments: #"{"id":9007199254740993}"#, matches: true),
+        .init(rule: #"{"tool":"q","when":{"/id":{"==":"9007199254740993"}}}"#, arguments: #"{"id":9007199254740993}"#, matches: false),
+        .init(rule: #"{"tool":"q","when":{"/id":{"==":9007199254740993}}}"#, arguments: #"{"id":"9007199254740993"}"#, matches: false),
+        .init(rule: #"{"tool":"q","when":{"/id":{"in":[9007199254740993]}}}"#, arguments: #"{"id":"9007199254740993"}"#, matches: false),
+        .init(rule: #"{"tool":"q","when":{"/id":{"glob":"900*"}}}"#, arguments: #"{"id":9007199254740993}"#, matches: false),
+        .init(rule: #"{"tool":"q","when":{"/n":{"==":0}}}"#, arguments: #"{"n":0e-2}"#, matches: true),
+        .init(rule: #"{"tool":"q","when":{"/n":{"==":0}}}"#, arguments: #"{"n":0.00e-10}"#, matches: true),
+        .init(rule: #"{"tool":"q","when":{"/id":{"==":9007199254740993}}}"#, arguments: #"{"id":9007199254740993}"#, matches: true),
     ]
 
     @Test(arguments: matchCases)
@@ -92,7 +102,10 @@ struct ToolArgumentRuleTests {
         .init(rule: #"{"tool":"push","when":{"/a":{"~=":1}}}"#, message: "unknown operator \"~=\""),
         .init(rule: #"{"tool":"push","when":{"/a":{">":"10.0"}}}"#, message: "\">\" needs a number"),
         .init(rule: #"{"tool":"push","when":{"/a":{"<":true}}}"#, message: "\"<\" needs a number"),
-        .init(rule: #"{"tool":"push","when":{"/a":{"in":"x"}}}"#, message: "\"in\" needs an array"),
+        .init(rule: #"{"tool":"push","when":{"/a":{"in":"x"}}}"#, message: "\"in\" needs a non-empty array"),
+        .init(rule: #"{"tool":"push","when":{"/a":{"in":[]}}}"#, message: "\"in\" needs a non-empty array"),
+        .init(rule: #"{"tool":9007199254740993,"when":{"/a":{"==":1}}}"#, message: "needs a \"tool\" glob"),
+        .init(rule: #"{"tool":"push","when":{"/a":{"glob":9007199254740993}}}"#, message: "\"glob\" needs a non-empty string"),
         .init(rule: #"{"tool":"push","when":{"/a":{"glob":1}}}"#, message: "\"glob\" needs a non-empty string"),
     ]
 

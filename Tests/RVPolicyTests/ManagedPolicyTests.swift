@@ -82,7 +82,7 @@ struct ManagedPolicyTests {
             """
         let policy = try ManagedPolicy.decode(Data(text.utf8)).get()
         func args(_ json: String) throws -> JSONValue {
-            try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
+            try #require(JSONLiteral.parse(Data(json.utf8))).domainValue()
         }
         #expect(policy.mcp.allow == ["db/*"])
         #expect(policy.mcp.rules.map(\.decision) == [.ask, .deny])
@@ -236,6 +236,20 @@ struct ManagedPolicyLocationTests {
         let bundle = try Bundle()
         try bundle.write("policy.json", Data(#"{"version": 1, "mcp": {"block": ["x"]}}"#.utf8))
         #expect(bundle.location().load() == .invalid("unknown key \"block\" in mcp"))
+    }
+
+    @Test func numbersInStringFieldsAreInvalidNotNeverMatchingGlobs() {
+        for text in [
+            #"{"version": 1, "mcp": {"deny": [9007199254740993]}}"#,
+            #"{"version": 1, "mcp": {"blocked": [9007199254740993]}}"#,
+            #"{"version": 1, "organization": 9007199254740993}"#,
+            #"{"version": 1, "mcp": {"deny": [{"tool": 9007199254740993, "when": {"/a": {"==": 1}}}]}}"#,
+        ] {
+            guard case .failure = ManagedPolicy.decode(Data(text.utf8)) else {
+                Issue.record("expected invalid policy: \(text)")
+                continue
+            }
+        }
     }
 }
 

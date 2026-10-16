@@ -23,7 +23,7 @@ extension JSONValue {
             if let number = JSONExactInteger.finiteNonInteger(spelling) {
                 return .number(number)
             }
-            return .string(spelling)
+            return .string(JSONExactInteger.numberMarker + spelling)
         }
     }
 

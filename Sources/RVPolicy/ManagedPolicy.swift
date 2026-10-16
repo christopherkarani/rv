@@ -137,6 +137,7 @@ public struct ManagedPolicyError: Error, Sendable, Equatable {
 
 extension ManagedPolicy {
     public static let maximumBytes = 256 * 1024
+    public static let maximumToolRules = 1024
 
     /// Strict: unknown keys are errors, so a typo cannot silently weaken policy.
     public static func decode(_ data: Data) -> Result<ManagedPolicy, ManagedPolicyError> {
@@ -185,6 +186,9 @@ extension ManagedPolicy {
                 }
                 policy.mcp.rules += rules
             }
+            guard policy.mcp.rules.count <= Self.maximumToolRules else {
+                throw ManagedPolicyError("\"mcp\" holds more than \(Self.maximumToolRules) argument rules")
+            }
             if let text = try optionalString(mcp["defaultDecision"], "mcp.defaultDecision") {
                 guard let decision = Decision(rawValue: text) else {
                     throw ManagedPolicyError("\"mcp.defaultDecision\" must be allow, ask, or deny")
@@ -222,7 +226,7 @@ extension ManagedPolicy {
                         throw ManagedPolicyError("\"audit.forward.headers\" must be an object of strings")
                     }
                     for (name, value) in map {
-                        guard case .string(let text) = value else {
+                        guard case .string(let text) = value, isNumberSpelling(text) == false else {
                             throw ManagedPolicyError("\"audit.forward.headers.\(name)\" must be a string")
                         }
                         headers[name] = text
@@ -240,9 +244,18 @@ extension ManagedPolicy {
         }
     }
 
+    /// A `.string` the literal converter produced from a JSON number. String
+    /// fields must be JSON strings: a number there is a typo that would
+    /// otherwise become a never-matching value instead of an invalid policy.
+    private static func isNumberSpelling(_ text: String) -> Bool {
+        text.hasPrefix(JSONExactInteger.numberMarker)
+    }
+
     private static func optionalString(_ value: JSONValue?, _ name: String) throws -> String? {
         guard let value else { return nil }
-        guard case .string(let text) = value else { throw ManagedPolicyError("\"\(name)\" must be a string") }
+        guard case .string(let text) = value, isNumberSpelling(text) == false else {
+            throw ManagedPolicyError("\"\(name)\" must be a string")
+        }
         return text
     }
 
@@ -263,7 +276,7 @@ extension ManagedPolicy {
         var rules: [ToolArgumentRule.Decided] = []
         for item in items {
             switch item {
-            case .string(let text) where text.isEmpty == false:
+            case .string(let text) where text.isEmpty == false && text.count <= 256 && isNumberSpelling(text) == false:
                 globs.append(text)
             case .object:
                 do {
@@ -282,7 +295,9 @@ extension ManagedPolicy {
         guard let value else { return [] }
         guard case .array(let items) = value else { throw ManagedPolicyError("\"\(name)\" must be an array of strings") }
         return try items.map { item in
-            guard case .string(let text) = item, text.isEmpty == false else {
+            guard case .string(let text) = item, text.isEmpty == false, text.count <= 256,
+                isNumberSpelling(text) == false
+            else {
                 throw ManagedPolicyError("\"\(name)\" must be an array of non-empty strings")
             }
             return text

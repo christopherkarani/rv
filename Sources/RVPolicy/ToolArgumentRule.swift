@@ -102,7 +102,9 @@ public struct ToolArgumentRule: Sendable, Equatable {
         if let unknown = object.keys.sorted().first(where: { $0 != "tool" && $0 != "when" }) {
             throw ToolArgumentRuleError("tool rule has unknown key \"\(unknown)\"")
         }
-        guard let tool = object["tool"]?.string, tool.isEmpty == false, tool.count <= 256 else {
+        guard let tool = object["tool"]?.string, tool.isEmpty == false, tool.count <= 256,
+            tool.hasPrefix(JSONExactInteger.numberMarker) == false
+        else {
             throw ToolArgumentRuleError("tool rule needs a \"tool\" glob")
         }
         guard let when = object["when"]?.asObject, when.isEmpty == false else {
@@ -138,11 +140,13 @@ public struct ToolArgumentRule: Sendable, Equatable {
         case .less, .greater:
             guard exactQuantity(value) != nil else { throw ToolArgumentRuleError("\"\(op.rawValue)\" needs a number (\(at))") }
         case .oneOf:
-            guard let items = value.asArray, items.count <= maximumListItems else {
-                throw ToolArgumentRuleError("\"in\" needs an array of at most \(maximumListItems) values (\(at))")
+            guard let items = value.asArray, items.isEmpty == false, items.count <= maximumListItems else {
+                throw ToolArgumentRuleError("\"in\" needs a non-empty array of at most \(maximumListItems) values (\(at))")
             }
         case .glob:
-            guard let pattern = value.string, pattern.isEmpty == false, pattern.count <= 256 else {
+            guard let pattern = value.string, pattern.isEmpty == false, pattern.count <= 256,
+                pattern.hasPrefix(JSONExactInteger.numberMarker) == false
+            else {
                 throw ToolArgumentRuleError("\"glob\" needs a non-empty string (\(at))")
             }
         }
@@ -168,14 +172,22 @@ public struct ToolArgumentRule: Sendable, Equatable {
     }
 
     /// A `<` or `>` points at a value that is present and not an exact number,
-    /// or at two quantities that cannot be compared without rounding.
+    /// or at two quantities that cannot be compared without rounding. Only a
+    /// rule whose other conditions all hold refuses: a call a sibling
+    /// condition already excludes falls through to the default decision.
     func refusesIncomparable(_ arguments: JSONValue) -> Bool {
         conditions.contains { condition in
             guard condition.op == .less || condition.op == .greater else { return false }
             guard let actual = Self.resolve(condition.pointer, in: arguments) else { return false }
             guard let lhs = Self.exactQuantity(actual), let rhs = Self.exactQuantity(condition.value),
                 Self.compareQuantities(lhs, rhs) != nil
-            else { return true }
+            else {
+                return conditions.allSatisfy { other in
+                    other == condition
+                        || (Self.resolve(other.pointer, in: arguments)
+                            .map { Self.holds(other.op, actual: $0, expected: other.value) } ?? false)
+                }
+            }
             return false
         }
     }
@@ -201,7 +213,11 @@ public struct ToolArgumentRule: Sendable, Equatable {
             }
             return .real(number)
         case .string(let text):
-            return digitInteger(text).map(Quantity.integer)
+            // A marked string is a JSON number the converters could not hold in
+            // a Double; a plain digit string coerces the same way for < and >.
+            let digits = text.hasPrefix(JSONExactInteger.numberMarker)
+                ? String(text.dropFirst(JSONExactInteger.numberMarker.count)) : text
+            return digitInteger(digits).map(Quantity.integer)
         default:
             return nil
         }
@@ -287,7 +303,7 @@ public struct ToolArgumentRule: Sendable, Equatable {
                 guard let next = object[token] else { return nil }
                 current = next
             case .array(let items):
-                guard token == "0" || (token.first != "0" && token.allSatisfy(\.isASCII)),
+                guard token == "0" || (token.first != "0" && token.allSatisfy(isDigit) && token.isEmpty == false),
                     let index = Int(token), items.indices.contains(index)
                 else { return nil }
                 current = items[index]
@@ -315,6 +331,7 @@ public struct ToolArgumentRule: Sendable, Equatable {
     }
 
     static func text(_ value: JSONValue) -> String {
+        if let digits = JSONExactInteger.markedDigits(value) { return digits }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         guard let data = try? encoder.encode(value) else { return "?" }

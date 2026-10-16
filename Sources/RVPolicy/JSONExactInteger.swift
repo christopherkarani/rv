@@ -54,6 +54,8 @@ public enum JSONExactInteger {
         }
         guard index == bytes.count else { return nil }
         let significand = integer + fraction
+        // Zero is zero at any scale: `0e-2`, `0.00e-10`, and `0e999999` are exact.
+        if significand.allSatisfy({ $0 == "0" }) { return "0" }
         let scale = exponent - fraction.count
         let digits: String
         if scale >= 0 {
@@ -72,7 +74,18 @@ public enum JSONExactInteger {
         return negative ? "-" + trimmed : trimmed
     }
 
-    /// `.number` when `Double` holds `digits` exactly, otherwise the digit string.
+    /// Marks a domain `.string` that came from a JSON number spelling, so rule
+    /// equality never confuses the number `9007199254740993` with the string
+    /// `"9007199254740993"`. Only the literal/bridge converters produce it.
+    public static let numberMarker = "\u{0}"
+
+    /// The digits when `value` is a marked exact-integer string, else nil.
+    public static func markedDigits(_ value: JSONValue) -> String? {
+        guard case .string(let text) = value, text.hasPrefix(numberMarker) else { return nil }
+        return String(text.dropFirst(numberMarker.count))
+    }
+
+    /// `.number` when `Double` holds `digits` exactly, otherwise the marked digit string.
     public static func domainValue(_ digits: String) -> JSONValue {
         if let whole = Int64(digits), Int64(exactly: Double(whole)) == whole {
             return .number(Double(whole))
@@ -80,7 +93,7 @@ public enum JSONExactInteger {
         if digits.hasPrefix("-") == false, let whole = UInt64(digits), UInt64(exactly: Double(whole)) == whole {
             return .number(Double(whole))
         }
-        return .string(digits)
+        return .string(numberMarker + digits)
     }
 
     /// A finite `Double` strictly below 2^53 that is not an integer, and that
