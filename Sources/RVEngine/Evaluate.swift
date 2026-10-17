@@ -11,6 +11,7 @@ public func evaluate<E: PatternEngine>(
     safety: SafetyLevel = .normal,
     allowPaths: SecretAllowPathSet = .empty,
     home: HomePath? = nil,
+    pathResolution: SecretPathResolution? = nil,
     engine: E,
     compiled: CompiledPacks<E.Compiled>
 ) -> EvaluationResult {
@@ -39,7 +40,8 @@ public func evaluate<E: PatternEngine>(
             catalog: secrets,
             safety: safety,
             allowPaths: allowPaths,
-            home: home
+            home: home,
+            resolution: pathResolution
         )
     }
 
@@ -80,7 +82,8 @@ public func evaluate<E: PatternEngine>(
             catalog: secrets,
             safety: safety,
             allowPaths: allowPaths,
-            home: home
+            home: home,
+            resolution: pathResolution
         )
     }
     return foldSecretPathIfAllow(
@@ -88,7 +91,8 @@ public func evaluate<E: PatternEngine>(
         catalog: secrets,
         safety: safety,
         allowPaths: allowPaths,
-        home: home
+        home: home,
+        resolution: pathResolution
     )
 }
 
@@ -97,7 +101,8 @@ private func foldSecretPathIfAllow(
     catalog: SecretPathCatalog,
     safety: SafetyLevel,
     allowPaths: SecretAllowPathSet,
-    home: HomePath?
+    home: HomePath?,
+    resolution: SecretPathResolution? = nil
 ) -> EvaluationResult {
     switch result.outcome {
     case .quickRejected, .plain, .safeOnly, .hit:
@@ -109,14 +114,10 @@ private func foldSecretPathIfAllow(
     guard let matched = SecretPathGuard.firstHit(
         in: result.matchingView,
         catalog: catalog,
-        includeMetadata: safety == .strict
+        includeMetadata: safety == .strict,
+        resolution: resolution,
+        exempts: { path, rule in allowPaths.exempts(path, rule: rule, home: home) }
     ) else {
-        return result
-    }
-    if let path = matched.matchedText,
-       let rule = catalog.firstMatch(of: path),
-       allowPaths.exempts(path, rule: rule, home: home)
-    {
         return result
     }
     return EvaluationResult(

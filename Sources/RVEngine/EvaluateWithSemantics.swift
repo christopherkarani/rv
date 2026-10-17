@@ -15,6 +15,7 @@ public func evaluateWithSemantics<E: PatternEngine>(
     safety: SafetyLevel = .normal,
     allowPaths: SecretAllowPathSet = .empty,
     home: HomePath? = nil,
+    pathResolution: SecretPathResolution? = nil,
     engine: E,
     compiled: CompiledPacks<E.Compiled>,
     workingDirectory: WorkingDirectory? = nil,
@@ -29,6 +30,7 @@ public func evaluateWithSemantics<E: PatternEngine>(
         safety: safety,
         allowPaths: allowPaths,
         home: home,
+        pathResolution: pathResolution,
         engine: engine,
         compiled: compiled
     )
