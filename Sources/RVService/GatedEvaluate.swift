@@ -88,7 +88,11 @@ public struct GatedEvaluate: Sendable {
         let result = evaluateFileTool(
             action,
             allowPaths: detailed.effective,
-            home: home
+            home: home,
+            pathResolution: SecretPathCandidateResolver.resolution(
+                home: home,
+                cwd: cwd
+            )
         )
         recordDenialIfNeeded(
             result,
@@ -380,25 +384,40 @@ public struct GatedEvaluate: Sendable {
                 matchingView: Normalize.matchingView(of: request.command)
             )
         }
-        return resolvedSession().evaluateWithSemantics(
-            request,
-            safety: SafetyStore.loadEffective(home: home, workspace: workspace),
-            allowPaths: detailed.effective,
-            home: home,
-            workingDirectory: cwd,
-            gitProbe: { unwrapped in
-                GitLiveProbe.world(unwrapped: unwrapped, fallbackCwd: cwd)
-            },
-            filesystemProbe: { unwrapped in
-                FilesystemLiveProbe.context(
-                    unwrapped: unwrapped,
-                    command: request.command,
-                    cwd: cwd,
-                    homeDirectory: home
-                )
-            },
-            policy: policy
-        )
+        func run(_ pathResolution: SecretPathResolution?) -> EvaluationResult {
+            resolvedSession().evaluateWithSemantics(
+                request,
+                safety: SafetyStore.loadEffective(home: home, workspace: workspace),
+                allowPaths: detailed.effective,
+                home: home,
+                pathResolution: pathResolution,
+                workingDirectory: cwd,
+                gitProbe: { unwrapped in
+                    GitLiveProbe.world(unwrapped: unwrapped, fallbackCwd: cwd)
+                },
+                filesystemProbe: { unwrapped in
+                    FilesystemLiveProbe.context(
+                        unwrapped: unwrapped,
+                        command: request.command,
+                        cwd: cwd,
+                        homeDirectory: home
+                    )
+                },
+                policy: policy
+            )
+        }
+        // First pass without resolution: packs and semantics own their
+        // denials with the rich analysis they attach. Only when that pass
+        // would allow does the alias-resolution seam run, escalating allows
+        // whose candidates really land on secret paths (F-2: symlinks
+        // disarming path rules must not buy an allow).
+        let stance = run(nil)
+        switch stance.outcome {
+        case .deny, .indeterminate, .hit:
+            return stance
+        case .quickRejected, .plain, .safeOnly:
+            return run(SecretPathCandidateResolver.resolution(home: home, cwd: cwd))
+        }
     }
 
     /// Machine from `$HOME/.config/rv`; repo from `<cwd>/.rv`. Missing file is empty.

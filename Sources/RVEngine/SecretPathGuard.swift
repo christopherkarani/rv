@@ -6,7 +6,9 @@ enum SecretPathGuard {
     static func firstHit(
         in matchingView: MatchingView,
         catalog: SecretPathCatalog,
-        includeMetadata: Bool = false
+        includeMetadata: Bool = false,
+        resolution: SecretPathResolution? = nil,
+        exempts: SecretPathExemption? = nil
     ) -> RuleMatch? {
         guard !catalog.rules.isEmpty else { return nil }
         let view = matchingView.rawValue
@@ -17,7 +19,9 @@ enum SecretPathGuard {
                     inHaystack: segment,
                     catalog: catalog,
                     searchText: view,
-                    includeMetadata: includeMetadata
+                    includeMetadata: includeMetadata,
+                    resolution: resolution,
+                    exempts: exempts
                 ) {
                     return hit
                 }
@@ -27,7 +31,9 @@ enum SecretPathGuard {
             inHaystack: view,
             catalog: catalog,
             searchText: view,
-            includeMetadata: includeMetadata
+            includeMetadata: includeMetadata,
+            resolution: resolution,
+            exempts: exempts
         )
     }
 
@@ -35,22 +41,58 @@ enum SecretPathGuard {
         inHaystack haystack: String,
         catalog: SecretPathCatalog,
         searchText: String,
-        includeMetadata: Bool
+        includeMetadata: Bool,
+        resolution: SecretPathResolution? = nil,
+        exempts: SecretPathExemption? = nil
     ) -> RuleMatch? {
         for candidate in candidates(in: haystack, includeMetadata: includeMetadata) {
-            if let rule = catalog.firstMatch(of: candidate) {
-                let ruleID = RuleID(pack: .coreSecrets, pattern: rule.pattern)
-                return RuleMatch(
-                    ruleID: ruleID,
-                    severity: .high,
-                    reason: rule.reason,
-                    regex: nil,
-                    matchedText: candidate,
-                    searchText: searchText
-                )
+            // The resolved spelling is authoritative: a symlinked operand
+            // IS its target, so the typed spelling participates only when
+            // no distinct target exists. An exemption on one spelling never
+            // vouches for the other, so scanning continues until a
+            // non-exempt hit breaks out.
+            let spelling = resolved(candidate, resolution: resolution) ?? candidate
+            if let rule = catalog.firstMatch(of: spelling),
+               !isExempt(spelling, rule, exempts: exempts) {
+                return hit(spelling, rule: rule, searchText: searchText)
             }
         }
         return nil
+    }
+
+    private static func resolved(
+        _ candidate: String,
+        resolution: SecretPathResolution?
+    ) -> String? {
+        guard let resolution else { return nil }
+        guard let target = resolution.resolve(candidate), !target.isEmpty else {
+            return nil
+        }
+        // Identity expansion carries no new information.
+        return target == candidate ? nil : target
+    }
+
+    private static func isExempt(
+        _ path: String,
+        _ rule: SecretPathRule,
+        exempts: SecretPathExemption?
+    ) -> Bool {
+        exempts?(path, rule) ?? false
+    }
+
+    private static func hit(
+        _ path: String,
+        rule: SecretPathRule,
+        searchText: String
+    ) -> RuleMatch {
+        RuleMatch(
+            ruleID: RuleID(pack: .coreSecrets, pattern: rule.pattern),
+            severity: .high,
+            reason: rule.reason,
+            regex: nil,
+            matchedText: path,
+            searchText: searchText
+        )
     }
 
     private static func candidates(in haystack: String, includeMetadata: Bool) -> [String] {
