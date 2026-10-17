@@ -46,14 +46,26 @@ jobs:
           restore-keys: |
             swiftpm-pkgs-hook-${{ runner.os }}-${{ runner.arch }}-
 
+      # RVIsolationTests run sharded exactly as in pr.yml: all 598 tests in
+      # one process collapse shared-runner throughput (blocking waits
+      # saturate the small pool and queueing spirals past any job timeout).
       - name: Preflight + module tests
         run: |
           Scripts/gate.sh \
             RVDomainTests RVEngineTests RVPacksTests RVPolicyTests \
             RVHooksTests RVIPCTests RVPresentationTests \
             RVThemeTests RVTUITests RVHistoryTests RVAnalyticsTests \
-            RVCorpusTests RVIsolationTests
+            RVCorpusTests
           Scripts/swift-6.4 test --filter 'RVServiceTests|RVCLITests' --skip 'injectedOneSecondIdleFiresWithoutKeepAlive|CHookPipeTests.cHookProof'
+
+      - name: Isolation tests (A-E)
+        run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter 'RVIsolationTests\.[A-Ea-e]'
+
+      - name: Isolation tests (F-M)
+        run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter 'RVIsolationTests\.[F-Mf-m]'
+
+      - name: Isolation tests (N-Z)
+        run: Scripts/swift-6.4 test --skip-build --test-product RVIsolationTests --filter 'RVIsolationTests\.[N-Zn-z]'
 
       - name: Stage release binaries
         run: Scripts/release.sh
