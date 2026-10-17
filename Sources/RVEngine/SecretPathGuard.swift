@@ -3,6 +3,12 @@ import RVDomain
 enum SecretPathGuard {
     static let candidateCap = 64
 
+    /// Synthetic ruleID for commands whose operand count makes them
+    /// unverifiable: more path candidates exist than `candidateCap` scans.
+    /// Fail closed instead of silently skipping the excess operands.
+    static let overflowPatternName = "operand-overflow"
+    static let overflowDenialReason = "Too many path operands to analyze; refusing without a secret-path scan."
+
     static func firstHit(
         in matchingView: MatchingView,
         catalog: SecretPathCatalog,
@@ -17,17 +23,30 @@ enum SecretPathGuard {
                     inHaystack: segment,
                     catalog: catalog,
                     searchText: view,
-                    includeMetadata: includeMetadata
+                    includeMetadata: includeMetadata,
+                    treatOverflowAsDenial: true
                 ) {
                     return hit
                 }
             }
+            // Whole-view fallback: every segment scan already ran to
+            // completion (an overflow denies above), so an operand drop from
+            // the joined scan is an aggregate of fully scanned segments, not
+            // a scan defect. Only a rule hit is significant here.
+            return firstHit(
+                inHaystack: view,
+                catalog: catalog,
+                searchText: view,
+                includeMetadata: includeMetadata,
+                treatOverflowAsDenial: false
+            )
         }
         return firstHit(
             inHaystack: view,
             catalog: catalog,
             searchText: view,
-            includeMetadata: includeMetadata
+            includeMetadata: includeMetadata,
+            treatOverflowAsDenial: true
         )
     }
 
@@ -35,9 +54,14 @@ enum SecretPathGuard {
         inHaystack haystack: String,
         catalog: SecretPathCatalog,
         searchText: String,
-        includeMetadata: Bool
+        includeMetadata: Bool,
+        treatOverflowAsDenial: Bool
     ) -> RuleMatch? {
-        for candidate in candidates(in: haystack, includeMetadata: includeMetadata) {
+        let scan = candidates(in: haystack, includeMetadata: includeMetadata)
+        if treatOverflowAsDenial, scan.overflowed {
+            return overflowHit(searchText: searchText)
+        }
+        for candidate in scan.candidates {
             if let rule = catalog.firstMatch(of: candidate) {
                 let ruleID = RuleID(pack: .coreSecrets, pattern: rule.pattern)
                 return RuleMatch(
@@ -53,7 +77,21 @@ enum SecretPathGuard {
         return nil
     }
 
-    private static func candidates(in haystack: String, includeMetadata: Bool) -> [String] {
+    /// Deny-by-default match for unverifiable input. `matchedText` stays nil
+    /// so exemption lookup can never suppress it.
+    private static func overflowHit(searchText: String) -> RuleMatch {
+        let ruleID = RuleID(pack: .coreSecrets, pattern: overflowPatternName)
+        return RuleMatch(
+            ruleID: ruleID,
+            severity: .high,
+            reason: overflowDenialReason,
+            regex: nil,
+            matchedText: nil,
+            searchText: searchText
+        )
+    }
+
+    private static func candidates(in haystack: String, includeMetadata: Bool) -> OperandScan {
         // C1: lex via the shared pipeline, then route on the head word. The
         // args array is built manually (not via Argv(tokens:)) so newline
         // lexemes survive: they are load-bearing operands below, exactly as
@@ -63,23 +101,35 @@ enum SecretPathGuard {
         // Routing happens first so `.nonPath` and metadata-excluded inputs
         // return before the args array is materialized.
         let tokens = ShellPipeline.tokenize(haystack)
-        guard let head = tokens.first else { return [] }
+        guard let head = tokens.first else { return .empty }
         let kind = headKind(basename(head.lexeme))
         // Deferred so only the consuming arm pays for materialization.
         func args() -> [String] { tokens.dropFirst().map(\.lexeme) }
         switch kind {
         case .nonPath:
-            return []
+            return .empty
         case .grep:
             return grepCandidates(args())
         case .find:
             return findCandidates(args())
         case .metadata:
-            guard includeMetadata else { return [] }
+            guard includeMetadata else { return .empty }
             return otherCandidates(args())
         case .other:
             return otherCandidates(args())
         }
+    }
+
+    /// Full per-segment scan: the candidates retained up to `candidateCap`
+    /// (perf bound) plus whether any candidate operand was dropped because
+    /// of that bound. Dropped operands are exactly what a padded
+    /// `cat 1 … 64 ~/.ssh/id_rsa` relies on, so callers must treat overflow
+    /// as denial, not as a skip.
+    fileprivate struct OperandScan: Sendable {
+        var candidates: [String]
+        var overflowed: Bool
+
+        static let empty = OperandScan(candidates: [], overflowed: false)
     }
 }
 
@@ -191,21 +241,26 @@ private func operandCandidate(_ decoded: String) -> String? {
 /// flips to positional mode, `-e`/`-f`/`--files` mark the pattern as given,
 /// and otherwise the first positional is the pattern. Newline words classify
 /// as `.positional` and count as positionals, as before.
-private func grepCandidates(_ words: [String]) -> [String] {
+private func grepCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
     var collected: [String] = []
+    var overflowed = false
     var skipFirstPositional = true
     var expectRegexp = false
     var expectFile = false
     var afterDoubleDash = false
 
     func add(_ value: String) {
-        guard collected.count < SecretPathGuard.candidateCap else { return }
         guard !value.isEmpty else { return }
+        if collected.count >= SecretPathGuard.candidateCap {
+            // A real candidate dropped for the scan cap: the guard cannot
+            // vouch for this command. The caller fails closed on this flag.
+            overflowed = true
+            return
+        }
         collected.append(value)
     }
 
     for word in words {
-        if collected.count >= SecretPathGuard.candidateCap { break }
         if expectRegexp {
             expectRegexp = false
             continue
@@ -223,8 +278,8 @@ private func grepCandidates(_ words: [String]) -> [String] {
             add(word)
             continue
         }
-        // Classified lazily so the cap break and the consuming states above
-        // skip the work on long argvs.
+        // Classified lazily so the token work stops at the loop boundary
+        // once every remaining word is a non-candidate.
         let token = FlagToken.classify(word)
         if case .terminator = token {
             afterDoubleDash = true
@@ -259,7 +314,7 @@ private func grepCandidates(_ words: [String]) -> [String] {
         }
         add(word)
     }
-    return collected
+    return SecretPathGuard.OperandScan(candidates: collected, overflowed: overflowed)
 }
 
 /// Find candidate extraction: path operands before the first predicate word.
@@ -268,24 +323,30 @@ private func grepCandidates(_ words: [String]) -> [String] {
 /// every dash-led word (all non-`.positional` grammar cases) plus the bare
 /// `(`, `!`, and `;` operands. The `-name`/`-iname`/`-path` literals skip
 /// their value, since patterns are not paths.
-private func findCandidates(_ words: [String]) -> [String] {
+private func findCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
     var collected: [String] = []
+    var overflowed = false
     var beforePredicate = true
     var skipValue = false
 
     func add(_ value: String) {
-        guard collected.count < SecretPathGuard.candidateCap else { return }
         guard !value.isEmpty else { return }
+        if collected.count >= SecretPathGuard.candidateCap {
+            // A real path operand dropped for the scan cap: fail closed.
+            overflowed = true
+            return
+        }
         collected.append(value)
     }
 
     for word in words {
-        if collected.count >= SecretPathGuard.candidateCap { break }
         if skipValue {
             skipValue = false
             continue
         }
-        // Classified lazily so the cap break skips the work on long argvs.
+        // Classified lazily so the state machine keeps walking predicate
+        // starts and value skips even after the cap: those call sites do not
+        // add candidates and must not mask a real dropped operand.
         switch FlagToken.classify(word) {
         case .positional("("), .positional("!"), .positional(";"):
             beforePredicate = false
@@ -303,18 +364,23 @@ private func findCandidates(_ words: [String]) -> [String] {
             }
         }
     }
-    return collected
+    return SecretPathGuard.OperandScan(candidates: collected, overflowed: overflowed)
 }
 
 /// Default candidate extraction: every non-flag operand word verbatim.
-private func otherCandidates(_ words: [String]) -> [String] {
+private func otherCandidates(_ words: [String]) -> SecretPathGuard.OperandScan {
     var collected: [String] = []
+    var overflowed = false
     for word in words {
-        if collected.count >= SecretPathGuard.candidateCap { break }
         guard let candidate = operandCandidate(word), !candidate.isEmpty else {
             continue
         }
-        collected.append(candidate)
+        if collected.count >= SecretPathGuard.candidateCap {
+            // A real operand dropped for the scan cap: fail closed.
+            overflowed = true
+        } else {
+            collected.append(candidate)
+        }
     }
-    return collected
+    return SecretPathGuard.OperandScan(candidates: collected, overflowed: overflowed)
 }
