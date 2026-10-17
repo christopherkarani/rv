@@ -50,7 +50,8 @@ private func run(
     safety: SafetyLevel = .normal,
     allowPaths: SecretAllowPathSet = .empty,
     home: HomePath? = nil,
-    budget: EvaluationBudget? = nil
+    budget: EvaluationBudget? = nil,
+    nameResolution: SecretPathResolution? = nil
 ) throws -> EvaluationResult {
     let packs = packs ?? samplePacks()
     let engine = ICUPatternEngine()
@@ -66,6 +67,7 @@ private func run(
         safety: safety,
         allowPaths: allowPaths,
         home: home,
+        pathResolution: nameResolution,
         engine: engine,
         compiled: compiled
     )
@@ -515,5 +517,78 @@ struct SecretPathGuardTests {
         )
         #expect(hit?.ruleID.rawValue == "core.secrets:env")
         #expect(hit?.matchedText == ".env")
+    }
+
+    // MARK: - Alias resolution (symlink aliases must not disarm path rules)
+
+    private static func mapping(
+        _ pairs: [String: String]
+    ) -> SecretPathResolution {
+        SecretPathResolution { candidate in pairs[candidate] }
+    }
+
+    @Test func evaluate_symlinkedPath_resolvesToSecretDeny() throws {
+        let result = try run(
+            "cat ~/ss/k",
+            nameResolution: Self.mapping(["~/ss/k": "~/.ssh/id_rsa"])
+        )
+        guard case .deny(let deny, let matched) = result.outcome else {
+            Issue.record("expected deny for symlinked id_rsa")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.secrets:id-rsa")
+        #expect(matched?.matchedText == "~/.ssh/id_rsa")
+    }
+
+    @Test func evaluate_resolvedMatch_stillExemptable() throws {
+        let result = try run(
+            "cat ~/proj/.env",
+            allowPaths: SecretAllowPathSet(literals: ["~/.env"]),
+            nameResolution: Self.mapping(["~/proj/.env": "~/.env"])
+        )
+        #expect(result.decision == .allow)
+    }
+
+    @Test func evaluate_identityResolution_doesNotDoubleCount() throws {
+        let result = try run(
+            "cat .env",
+            nameResolution: SecretPathResolution { candidate in candidate }
+        )
+        guard case .deny(let deny, _) = result.outcome else {
+            Issue.record("expected deny for .env")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.secrets:env")
+    }
+
+    @Test func evaluate_exemptedTypedCandidateDoesNotMaskResolvedHit() throws {
+        let result = try run(
+            "cat ~/b/.env ./rel",
+            allowPaths: SecretAllowPathSet(literals: ["~/b/.env"]),
+            nameResolution: Self.mapping(["./rel": "~/.aws/config"])
+        )
+        guard case .deny(let deny, _) = result.outcome else {
+            Issue.record("expected deny for resolved aws config")
+            return
+        }
+        #expect(deny.ruleID.rawValue == "core.secrets:home-aws")
+    }
+
+    @Test func secretPathGuard_firstHit_resolvedCandidatesWithoutExempts() {
+        let hit = SecretPathGuard.firstHit(
+            in: MatchingView("grep -e pat ~/ss/k"),
+            catalog: .dayOne,
+            resolution: Self.mapping(["~/ss/k": "~/.ssh/id_rsa"])
+        )
+        #expect(hit?.ruleID.rawValue == "core.secrets:id-rsa")
+        #expect(hit?.matchedText == "~/.ssh/id_rsa")
+    }
+
+    @Test func evaluate_resolvedToBenign_overridesTypedMatch() throws {
+        let result = try run(
+            "cat .env",
+            nameResolution: Self.mapping([".env": "/tmp/ok.txt"])
+        )
+        #expect(result.decision == .allow)
     }
 }

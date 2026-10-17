@@ -75,3 +75,65 @@ import RVDomain
     #expect(deny.ruleID.rawValue == "core.secrets:host-claude-auth")
     #expect(UnlockableDeny.isPinned(result))
 }
+
+// MARK: - Alias resolution (F-2: symlink aliases must not disarm path rules)
+
+private func mapping(_ pairs: [String: String]) -> SecretPathResolution {
+    SecretPathResolution { candidate in pairs[candidate] }
+}
+
+@Test func evaluateFileTool_symlinkResolvesToSecretPath() {
+    let result = evaluateFileTool(
+        FileToolAction(kind: .read, path: FileToolPath(rawValue: "$HOME/ss/k")),
+        pathResolution: mapping(["$HOME/ss/k": "~/.ssh/id_rsa"])
+    )
+    guard case .deny(let deny, _) = result.outcome else {
+        Issue.record("expected deny for resolved id_rsa")
+        return
+    }
+    #expect(deny.ruleID.rawValue == "core.secrets:id-rsa")
+    #expect(UnlockableDeny.isPinned(result))
+}
+
+@Test func evaluateFileTool_resolvedAliasExemptable() {
+    let result = evaluateFileTool(
+        FileToolAction(kind: .read, path: FileToolPath(rawValue: "$HOME/ss/k")),
+        allowPaths: SecretAllowPathSet(literals: ["~/.env"]),
+        pathResolution: mapping(["$HOME/ss/k": "~/.env"])
+    )
+    #expect(result.decision == .allow)
+}
+
+@Test func evaluateFileTool_typedExemptDoesNotExemptResolved() {
+    let result = evaluateFileTool(
+        FileToolAction(kind: .read, path: FileToolPath(rawValue: "~/b/.env")),
+        allowPaths: SecretAllowPathSet(literals: ["~/b/.env"]),
+        pathResolution: mapping(["~/b/.env": "~/.aws/config"])
+    )
+    guard case .deny(let deny, _) = result.outcome else {
+        Issue.record("expected deny for resolved aws config")
+        return
+    }
+    #expect(deny.ruleID.rawValue == "core.secrets:home-aws")
+}
+
+@Test func evaluateFileTool_resolvedToBenignPath_overridesTypedMatch() {
+    // The file genuinely is /tmp/ok.txt; a typed .env spelling resolving
+    // to it must not deny on cosmetics.
+    let result = evaluateFileTool(
+        FileToolAction(kind: .read, path: FileToolPath(rawValue: "~/.env")),
+        pathResolution: mapping(["~/.env": "/tmp/ok.txt"])
+    )
+    #expect(result.decision == .allow)
+}
+
+@Test func evaluateFileTool_noResolution_keepsTypedOnlyBehavior() {
+    let result = evaluateFileTool(
+        FileToolAction(kind: .read, path: FileToolPath(rawValue: "~/.ssh/id_rsa"))
+    )
+    guard case .deny(let deny, _) = result.outcome else {
+        Issue.record("expected deny for id_rsa")
+        return
+    }
+    #expect(deny.ruleID.rawValue == "core.secrets:id-rsa")
+}

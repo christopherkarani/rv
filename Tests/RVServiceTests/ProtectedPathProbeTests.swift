@@ -83,6 +83,29 @@ struct ProtectedPathProbeTests {
         #expect(result.analysis.filesystemAction?.explainCatalogRule == "core.secrets/home-ssh")
     }
 
+    @Test func readSymlinkToSSH_escalatesFromAllowToSecretDeny() async throws {
+        // F-2: reads have no filesystem action for the probe to resolve, so
+        // the first pass lets `cat` through; the alias-resolution seam must
+        // escalate to a secret-path deny.
+        let repo = try makeProtectedRepo()
+        let home = try isolatedHomeDirectory()
+        try seedSSH(in: home)
+        try FileManager.default.createSymbolicLink(
+            atPath: repo.appendingPathComponent("ssh-link").path,
+            withDestinationPath: home.appendingPathComponent(".ssh/config").path
+        )
+        let result = try await peek(
+            "cat ssh-link",
+            cwd: repo,
+            home: HomeDirectory(validating: home.path)
+        )
+        guard case .deny(let deny) = result.decision else {
+            Issue.record("read through ssh-link must deny, got \(result.decision)")
+            return
+        }
+        #expect(deny.ruleID.pack == .coreSecrets)
+    }
+
     @Test func allowlistCannotWhitelistEchoRedirectToSSH() async throws {
         let repo = try makeProtectedRepo()
         let home = try isolatedHomeDirectory()
