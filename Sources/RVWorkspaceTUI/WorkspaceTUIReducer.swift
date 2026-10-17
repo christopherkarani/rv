@@ -1,5 +1,6 @@
 import Foundation
 import RVDomain
+import RVHistory
 
 /// Identity of one bound pane: the pane, the runtime it shows, and the
 /// binding generation. Always bound (no optional members): every RPC
@@ -82,6 +83,9 @@ struct WorkspaceTUIState: Equatable, Sendable {
     /// `derivedLifecycle`). Records without bindings are launch intents
     /// for fresh panes.
     var panes: [PaneID: PaneRuntime] = [:]
+    /// Live audit tails for ops panes, keyed by pane. Closing a pane drops
+    /// its whole record, like `panes`.
+    var ops: [PaneID: OpsPaneState] = [:]
     var shouldExit: Bool
     var initialLaunchRequested: Bool
     var viewSize: ViewSize?
@@ -208,9 +212,16 @@ struct WorkspaceTUIState: Equatable, Sendable {
             // test path assigns nil to a live pane.
             panes[paneID] = nil
         }
+        // Binding a runtime makes the pane a terminal: every launch path
+        // funnels through here, so an explicit shell in an ops pane takes
+        // the pane over instead of stranding a hybrid.
+        if value != nil {
+            ops.removeValue(forKey: paneID)
+        }
         view = view.updatingPane(WorkspacePane(
             id: paneID, userTitle: oldPane.userTitle, binding: binding,
-            lifecycle: oldPane.lifecycle, lastOutcome: outcome
+            lifecycle: oldPane.lifecycle, lastOutcome: outcome,
+            content: value == nil ? oldPane.content : .terminal
         )) ?? view
         syncPaneLifecycle(paneID)
     }
@@ -515,6 +526,18 @@ enum WorkspaceTUIReducerEvent: Equatable, Sendable {
     case resizeCompleted(binding: PaneBindingKey, rows: Int, columns: Int, outcome: TUIRPCOutcome, now: Date)
     case attachCompleted(binding: PaneBindingKey, context: TUIAttachContext, outcome: SessionAttachOutcome)
     case detachRequested
+    case opsOpened(pane: PaneID)
+    case opsHistory(pane: PaneID, events: [AuditEvent], cursor: AuditCursor)
+    case opsPolled(pane: PaneID, events: [AuditEvent], cursor: AuditCursor)
+    case opsFilterNext
+    case opsFollowToggle
+    case opsFollowOn
+    case opsCursor(delta: Int)
+    case opsScroll(delta: Int)
+    case opsDetailOpened
+    case opsDetailClosed
+    case opsAnchorToggled
+    case opsCopy(mode: OpsCopyMode)
 }
 
 /// One runtime action for the shell to execute. Effects never dispatch
@@ -554,6 +577,13 @@ enum TUIRuntimeEffect: Equatable, Sendable {
     case feedEmulator(binding: PaneBindingKey, data: Data)
     case resizeEmulator(binding: PaneBindingKey, rows: Int, columns: Int)
     case dropEmulator(binding: PaneBindingKey)
+    /// Local ledger read: the history seed plus its end cursor. The
+    /// runtime feeds the result back as `.opsHistory`.
+    case loadOpsHistory(pane: PaneID)
+    /// Local ledger read: up to `OpsPaneState.pollLimit` events after
+    /// the cursor. The runtime feeds the result back as `.opsPolled`.
+    case pollOps(pane: PaneID, cursor: AuditCursor)
+    case copyOpsText(text: String)
 }
 
 /// Why an attach was issued. Each origin handles attach failure
@@ -683,7 +713,8 @@ enum WorkspaceTUIReducer {
 
         case .launchDefaultRequested:
             guard next.lifecycle == .connected, next.shouldExit == false,
-                  next.terminal == nil, next.initialLaunchRequested == false else { break }
+                  next.terminal == nil, next.initialLaunchRequested == false,
+                  next.view.focusedPane?.content != .ops else { break }
             next.initialLaunchRequested = true
             guard let shell = Self.defaultShell(next) else {
                 next.mode = .launcher
@@ -695,7 +726,8 @@ enum WorkspaceTUIReducer {
 
         case .ensureSucceeded(let target, let runtime, let shell):
             guard next.lifecycle == .connected, next.shouldExit == false,
-                  Self.target(next) == target, next.terminal == nil else { break }
+                  Self.target(next) == target, next.terminal == nil,
+                  next.view.panes[target.pane]?.content != .ops else { break }
             let rows = runtime.rows.map(Self.bound) ?? next.initialRows
             let columns = runtime.columns.map(Self.bound) ?? next.initialColumns
             let title: String
@@ -717,7 +749,7 @@ enum WorkspaceTUIReducer {
             if error == .disconnected {
                 Self.applyDisconnect(to: &next, presentationChanged: &presentationChanged)
                 next.lifecycle = .disconnected
-            } else if next.terminal == nil {
+            } else if next.terminal == nil, next.view.panes[target.pane]?.content != .ops {
                 // A failed auto-shell drops to the launcher; the denial
                 // renders in the footer so the cause is not silent. A
                 // raced launch that already has a candidate in flight
@@ -763,6 +795,19 @@ enum WorkspaceTUIReducer {
                 next.feedback = "Pane changed; cancelled"
                 next.feedbackTicks = 60
                 presentationChanged = true
+                break
+            }
+            // An ops pane owns its keys: they drive the audit list, never a
+            // runtime. Only Ctrl-B escapes to the prefix. Overlays keep
+            // priority (mode must be .terminal) and the disconnected-Enter
+            // reconnect above keeps its behavior on ops panes too.
+            if next.mode == .terminal, key != .control("b"),
+               let pane = next.activePaneID,
+               next.view.panes[pane]?.content == .ops {
+                Self.applyOpsKey(
+                    key, pane: pane, in: &next,
+                    effects: &effects, presentationChanged: &presentationChanged
+                )
                 break
             }
             // The router consumes these positions into the next mode; capture
@@ -873,6 +918,7 @@ enum WorkspaceTUIReducer {
                         // behind for dead panes, observable only as garbage
                         // in snapshots.
                         next.panes.removeValue(forKey: pane)
+                        next.ops.removeValue(forKey: pane)
                         next.view = updated
                         next.shouldExit = updated.tabs.isEmpty
                         presentationChanged = true
@@ -1033,6 +1079,34 @@ enum WorkspaceTUIReducer {
                 next.feedback = "Unknown Ctrl-B command"
                 next.feedbackTicks = 60
                 presentationChanged = true
+            case .openOpsPane:
+                // An empty focused pane becomes ops in place; anything else
+                // opens a fresh tab so the running pane keeps its output.
+                if next.activePaneID == nil {
+                    guard let updated = next.view.addingTab() else {
+                        next.feedback = "Pane limit reached"
+                        next.feedbackTicks = 60
+                        presentationChanged = true
+                        break
+                    }
+                    next.view = updated
+                }
+                guard let pane = next.activePaneID else { break }
+                if next.view.panes[pane]?.content == .ops {
+                    // Idempotent: ensures the seed without touching the list.
+                    Self.openOpsPane(pane, in: &next, effects: &effects, presentationChanged: &presentationChanged)
+                } else if Self.isEmptyPane(pane, in: next) {
+                    Self.openOpsPane(pane, in: &next, effects: &effects, presentationChanged: &presentationChanged)
+                } else if let updated = next.view.addingTab() {
+                    next.view = updated
+                    if let fresh = next.activePaneID {
+                        Self.openOpsPane(fresh, in: &next, effects: &effects, presentationChanged: &presentationChanged)
+                    }
+                } else {
+                    next.feedback = "Pane limit reached"
+                    next.feedbackTicks = 60
+                    presentationChanged = true
+                }
             case .detach, .help, .dismissOverlay, .finishResize, .exitNavigator, .dismissConfirm, nil:
                 break
             }
@@ -1216,8 +1290,15 @@ enum WorkspaceTUIReducer {
             next.viewSize = .init(rows: rows + 2, columns: columns + 2)
 
         case .paneSizeNoted(let pane, let rows, let columns, let now):
-            guard next.lifecycle == .connected, next.terminal(for: pane) != nil else { break }
-            next.updateTerminal(pane) { $0.resize.record(rows: rows, columns: columns, now: now) }
+            guard next.lifecycle == .connected else { break }
+            if next.terminal(for: pane) != nil {
+                next.updateTerminal(pane) { $0.resize.record(rows: rows, columns: columns, now: now) }
+            }
+            // Sizes the ops page step and viewport copies. Not a
+            // presentation change: the next frame reads the new height.
+            if next.ops[pane] != nil {
+                next.ops[pane]?.viewportRows = max(1, rows)
+            }
 
         case .viewportNoted(let rows, let columns):
             next.viewSize = .init(rows: rows, columns: columns)
@@ -1235,6 +1316,22 @@ enum WorkspaceTUIReducer {
                     next.feedback = nil
                     presentationChanged = true
                 }
+            }
+            // Ops polling reads the local ledger, so it runs on every
+            // lifecycle but detached. Restored ops panes seed lazily here:
+            // creating the entry stops re-emission until history lands.
+            for paneID in next.view.panes.keys.sorted(by: { $0.rawValue.uuidString < $1.rawValue.uuidString }) {
+                guard next.view.panes[paneID]?.content == .ops else { continue }
+                guard var ops = next.ops[paneID] else {
+                    Self.openOpsPane(paneID, in: &next, effects: &effects, presentationChanged: &presentationChanged)
+                    continue
+                }
+                guard ops.loaded else { continue }
+                if let lastPoll = ops.lastPollAt,
+                   now.timeIntervalSince(lastPoll) < OpsPaneState.pollInterval { continue }
+                ops.lastPollAt = now
+                next.ops[paneID] = ops
+                effects.append(.pollOps(pane: paneID, cursor: ops.cursor))
             }
             if next.lifecycle == .disconnected {
                 Self.tickReconnect(now: now, to: &next, effects: &effects, presentationChanged: &presentationChanged)
@@ -1769,6 +1866,70 @@ enum WorkspaceTUIReducer {
                 }
             }
 
+        case .opsOpened(let pane):
+            guard next.view.panes[pane] != nil else { break }
+            Self.openOpsPane(pane, in: &next, effects: &effects, presentationChanged: &presentationChanged)
+
+        case .opsHistory(let pane, let events, let cursor):
+            // A close that races the seed lands after the record is gone.
+            guard next.ops[pane] != nil else { break }
+            next.ops[pane]?.seed(events: events, cursor: cursor)
+            presentationChanged = true
+
+        case .opsPolled(let pane, let events, let cursor):
+            guard next.ops[pane] != nil else { break }
+            next.ops[pane]?.appendPolled(events, cursor: cursor)
+            if events.isEmpty == false {
+                presentationChanged = true
+            }
+
+        case .opsFilterNext:
+            guard let pane = next.activePaneID, next.ops[pane] != nil else { break }
+            next.ops[pane]?.cycleFilter()
+            presentationChanged = true
+
+        case .opsFollowToggle:
+            guard let pane = next.activePaneID, next.ops[pane] != nil else { break }
+            next.ops[pane]?.toggleFollow()
+            presentationChanged = true
+
+        case .opsFollowOn:
+            guard let pane = next.activePaneID, next.ops[pane] != nil else { break }
+            next.ops[pane]?.setFollow(true)
+            presentationChanged = true
+
+        case .opsCursor(let delta):
+            guard let pane = next.activePaneID, next.ops[pane] != nil else { break }
+            next.ops[pane]?.moveCursor(by: delta)
+            presentationChanged = true
+
+        case .opsScroll(let delta):
+            guard let pane = next.activePaneID, next.ops[pane] != nil else { break }
+            next.ops[pane]?.scroll(by: delta)
+            presentationChanged = true
+
+        case .opsDetailOpened:
+            guard let pane = next.activePaneID, next.ops[pane] != nil else { break }
+            next.ops[pane]?.openDetail()
+            presentationChanged = true
+
+        case .opsDetailClosed:
+            guard let pane = next.activePaneID, next.ops[pane] != nil else { break }
+            next.ops[pane]?.closeDetail()
+            presentationChanged = true
+
+        case .opsAnchorToggled:
+            guard let pane = next.activePaneID, next.ops[pane] != nil else { break }
+            next.ops[pane]?.toggleAnchor()
+            presentationChanged = true
+
+        case .opsCopy(let mode):
+            guard let pane = next.activePaneID else { break }
+            Self.copyOps(
+                pane: pane, mode: mode, in: &next,
+                effects: &effects, presentationChanged: &presentationChanged
+            )
+
         case .detachRequested:
             guard next.lifecycle != .detached else { break }
             next.lifecycle = .detached
@@ -2145,6 +2306,117 @@ enum WorkspaceTUIReducer {
         case nil:
             return binding == nil
         }
+    }
+
+    /// Converts one pane to ops content and starts its history seed.
+    /// Idempotent: a pane with a record keeps its list, filter, and
+    /// position, so a repeated open never resets the user's place.
+    private static func openOpsPane(
+        _ pane: PaneID,
+        in next: inout WorkspaceTUIState,
+        effects: inout [TUIRuntimeEffect],
+        presentationChanged: inout Bool
+    ) {
+        guard next.view.panes[pane] != nil else { return }
+        if next.view.panes[pane]?.content != .ops {
+            next.updatePane(pane) { $0.content = .ops }
+            presentationChanged = true
+        }
+        guard next.ops[pane] == nil else { return }
+        next.ops[pane] = OpsPaneState.initial()
+        effects.append(.loadOpsHistory(pane: pane))
+        presentationChanged = true
+    }
+
+    /// A pane the o-command converts in place: unbound, terminal content,
+    /// and holding no runtime or ops record.
+    private static func isEmptyPane(_ pane: PaneID, in state: WorkspaceTUIState) -> Bool {
+        guard let viewPane = state.view.panes[pane], viewPane.binding == nil,
+              viewPane.content == .terminal else { return false }
+        return state.panes[pane] == nil && state.ops[pane] == nil
+    }
+
+    /// Drives the focused ops list from one key. Every key is consumed:
+    /// nothing reaches a runtime from an ops pane.
+    private static func applyOpsKey(
+        _ key: TUIKey,
+        pane: PaneID,
+        in next: inout WorkspaceTUIState,
+        effects: inout [TUIRuntimeEffect],
+        presentationChanged: inout Bool
+    ) {
+        guard var ops = next.ops[pane] else { return }
+        // An open detail owns Enter and Escape; other keys wait for it.
+        if ops.detailIndex != nil {
+            switch key {
+            case .enter, .escape:
+                ops.closeDetail()
+                next.ops[pane] = ops
+                presentationChanged = true
+            default:
+                break
+            }
+            return
+        }
+        switch key {
+        case .character("j"), .arrow(.down), .arrow(.right):
+            ops.moveCursor(by: 1)
+        case .character("k"), .arrow(.up), .arrow(.left):
+            ops.moveCursor(by: -1)
+        case .pageDown:
+            ops.scroll(by: ops.viewportRows)
+        case .pageUp:
+            ops.scroll(by: -ops.viewportRows)
+        case .character("f"), .character("G"):
+            ops.setFollow(true)
+        case .character("F"):
+            ops.toggleFollow()
+        case .character("/"), .character("."):
+            ops.cycleFilter()
+        case .enter:
+            ops.openDetail()
+        case .character("v"):
+            ops.toggleAnchor()
+        case .character("y"):
+            Self.copyOps(
+                pane: pane, mode: ops.selectionAnchor == nil ? .line : .range, in: &next,
+                effects: &effects, presentationChanged: &presentationChanged
+            )
+            return
+        case .character("Y"):
+            Self.copyOps(
+                pane: pane, mode: .viewport, in: &next,
+                effects: &effects, presentationChanged: &presentationChanged
+            )
+            return
+        case .escape:
+            return
+        default:
+            return
+        }
+        next.ops[pane] = ops
+        presentationChanged = true
+    }
+
+    private static func copyOps(
+        pane: PaneID,
+        mode: OpsCopyMode,
+        in next: inout WorkspaceTUIState,
+        effects: inout [TUIRuntimeEffect],
+        presentationChanged: inout Bool
+    ) {
+        guard let ops = next.ops[pane], let text = ops.copyText(mode) else {
+            next.feedback = "Nothing to copy"
+            next.feedbackTicks = 60
+            presentationChanged = true
+            return
+        }
+        // Yanking a range exits visual, like vim.
+        if mode == .range {
+            next.ops[pane]?.selectionAnchor = nil
+            presentationChanged = true
+        }
+        effects.append(.copyOpsText(text: text))
     }
 
     private static func target(_ state: WorkspaceTUIState) -> PrefixTarget? {

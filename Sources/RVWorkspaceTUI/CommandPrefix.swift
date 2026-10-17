@@ -87,6 +87,7 @@ public enum TUICommand: Equatable, Sendable {
     case acquireInput
     case releaseInput
     case relaunchShell
+    case openOpsPane
 }
 
 /// Arrow-key direction, shared by terminal input and spatial pane focus.
@@ -146,6 +147,7 @@ public enum CommandPrefix {
         (.character("["), .enterScroll),
         (.character("w"), .enterNavigator),
         (.character("!"), .enterConfirmCancel),
+        (.character("o"), .openOpsPane),
     ]
 
     /// Ctrl-B is the RV prefix. It is never forwarded to the runtime.

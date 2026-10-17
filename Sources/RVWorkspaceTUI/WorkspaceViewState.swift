@@ -41,19 +41,24 @@ public struct WorkspacePane: Equatable, Sendable {
     public var binding: RuntimeBinding?
     public var lifecycle: WorkspacePaneLifecycle
     public var lastOutcome: WorkspacePaneOutcome?
+    /// What the pane shows. Panes compare by content, so it persists
+    /// through `equalIgnoringFocus` like any other durable field.
+    public var content: PaneContent
 
     public init(
         id: PaneID,
         userTitle: String? = nil,
         binding: RuntimeBinding? = nil,
         lifecycle: WorkspacePaneLifecycle = .empty,
-        lastOutcome: WorkspacePaneOutcome? = nil
+        lastOutcome: WorkspacePaneOutcome? = nil,
+        content: PaneContent = .terminal
     ) {
         self.id = id
         self.userTitle = userTitle
         self.binding = binding
         self.lifecycle = lifecycle
         self.lastOutcome = lastOutcome
+        self.content = content
     }
 }
 

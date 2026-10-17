@@ -420,7 +420,8 @@ private struct SavedLayout: Codable {
         panes = view.panes.values.sorted { $0.id.rawValue.uuidString < $1.id.rawValue.uuidString }
             .map { SavedPane(id: $0.id, title: $0.userTitle,
                              binding: $0.binding.map { SavedBinding(workspace: $0.workspace.rawValue,
-                                                                     runtime: $0.runtime.rawValue) }) }
+                                                                     runtime: $0.runtime.rawValue) },
+                             content: $0.content) }
     }
 
     func makeView(id: ViewID? = nil) -> WorkspaceView {
@@ -430,7 +431,8 @@ private struct SavedLayout: Codable {
                           binding: pane.binding.map {
                               RuntimeBinding(workspace: WorkspaceSessionID(rawValue: $0.workspace),
                                              runtime: RuntimeSessionID(rawValue: $0.runtime), generation: 0)
-                          }, lifecycle: pane.binding == nil ? .empty : .disconnected)
+                          }, lifecycle: pane.binding == nil ? .empty : .disconnected,
+                          content: pane.content ?? .terminal)
         }
         return WorkspaceView(id: restoredID,
                              tabs: tabs.map { WorkspaceTab(id: $0.id, userTitle: $0.title,
@@ -451,6 +453,8 @@ private struct SavedPane: Codable {
     let id: PaneID
     let title: String?
     let binding: SavedBinding?
+    /// Nil in layouts saved before ops panes existed; those restore as terminal.
+    let content: PaneContent?
 }
 
 private struct SavedBinding: Codable {

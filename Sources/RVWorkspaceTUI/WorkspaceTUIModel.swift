@@ -1,4 +1,8 @@
 import Foundation
+import RVHistory
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Presentation state for one workspace shell.
 ///
@@ -11,6 +15,9 @@ import Foundation
 public final class WorkspaceTUIModel: @unchecked Sendable {
     private let session: any WorkspaceTUISession
     private let emulators: any TerminalEmulatorFactory
+    /// Local audit ledgers for ops panes. Nil (tests, ledgerless hosts)
+    /// seeds and polls empty instead of failing.
+    private let opsLedger: AuditLedger?
     private let lock = NSLock()
     /// Lifecycle RPCs use a separate Workspace Host connection. Cancellation
     /// can wait for child teardown without blocking terminal I/O.
@@ -54,10 +61,12 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         rows: Int = 24,
         columns: Int = 80,
         restoredView: WorkspaceView? = nil,
-        initialViewID: ViewID? = nil
+        initialViewID: ViewID? = nil,
+        opsLedger: AuditLedger? = nil
     ) {
         self.session = session
         self.emulators = emulators
+        self.opsLedger = opsLedger
         let acceptedView = restoredView.flatMap { view -> WorkspaceView? in
             // A restored view suppresses the initial launch, so it must be
             // able to host a terminal: structurally valid, workspace-bound,
@@ -153,7 +162,7 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         drain(.key(key), route: {
             switch $0 {
             case .queueSend, .queueKey, .queuePaste, .queueEmulatorResponse, .releaseInput: .terminal
-            case .queueLaunch, .refreshInventory: .command
+            case .queueLaunch, .refreshInventory, .loadOpsHistory, .pollOps: .command
             default: .inline
             }
         })
@@ -203,7 +212,9 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             // Tick-emitted attach/observe carry blocking subscribe RPCs;
             // they must not run synchronously on the MainActor tick.
             case .resize, .acquire, .attach, .observe: .terminal
-            case .reconnectQuery: .command
+            // Ledger reads are local but unbounded (one tail scan per
+            // source); they ride the command queue like other queries.
+            case .reconnectQuery, .loadOpsHistory, .pollOps: .command
             default: .inline
             }
         })
@@ -233,7 +244,8 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
             reconnecting: state.lifecycle == .disconnected
                 && (state.reconnectInflight || state.reconnectFiresAt != nil
                     || state.reconnectAttempt < WorkspaceTUIReducer.maxReconnectAttempts),
-            frameRevisions: emulatorSlots.mapValues(\.revision)
+            frameRevisions: emulatorSlots.mapValues(\.revision),
+            ops: state.ops
         )
     }
 
@@ -644,6 +656,30 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         case .detach:
             session.close()
 
+        case .loadOpsHistory(let pane):
+            // History-then-live: the cursor is read first so a line that
+            // lands mid-seed is re-read (and deduped) by the first poll
+            // instead of lost between the seed and the cursor.
+            let seedCursor = opsLedger?.endCursor() ?? AuditCursor()
+            let seed = opsLedger?.events(AuditFilter(limit: OpsPaneState.historySeedLimit)) ?? []
+            followups.append(.opsHistory(pane: pane, events: seed, cursor: seedCursor))
+
+        case .pollOps(let pane, let cursor):
+            guard let ledger = opsLedger else {
+                followups.append(.opsPolled(pane: pane, events: [], cursor: cursor))
+                return
+            }
+            let polled = ledger.events(after: cursor, limit: OpsPaneState.pollLimit)
+            followups.append(.opsPolled(pane: pane, events: polled.events, cursor: polled.next))
+
+        case .copyOpsText(let text):
+            #if canImport(AppKit)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            #else
+            followups.append(.notice("Copy unavailable on this platform"))
+            #endif
+
         case .acquire(let binding):
             // Narrow the race between the reducer's gate and the RPC: a
             // detach that lands in between skips the call. A success that
@@ -743,6 +779,14 @@ public final class WorkspaceTUIModel: @unchecked Sendable {
         if case .reconnectQuery = effect {
             return state.lifecycle == .disconnected && state.shouldExit == false
         }
+        // Ops reads are local ledger scans, not host RPCs: they run on any
+        // lifecycle but detached, so a pane stays live across outages.
+        if case .loadOpsHistory = effect {
+            return state.lifecycle != .detached && state.shouldExit == false
+        }
+        if case .pollOps = effect {
+            return state.lifecycle != .detached && state.shouldExit == false
+        }
         return state.lifecycle == .connected && state.shouldExit == false
     }
 
@@ -782,6 +826,7 @@ public struct WorkspaceTUISnapshot: Equatable, Sendable {
     public var knownRuntimes: [ListedRuntime]
     public var reconnecting: Bool
     public var frameRevisions: [PaneID: UInt64]
+    public var ops: [PaneID: OpsPaneState]
 }
 
 struct WorkspaceTUIRefreshGate {

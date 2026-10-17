@@ -111,6 +111,7 @@ let coreLibraryTargets: [Target] = [
         name: "RVWorkspaceTUI",
         dependencies: [
             "RVDomain",
+            "RVHistory",
             "RVIsolation",
             .product(name: "SwiftTUICLI", package: "swift-tui"),
             .product(name: "SwiftTerm", package: "SwiftTerm"),
@@ -169,7 +170,7 @@ let coreTestTargets: [Target] = [
     ),
     .testTarget(
         name: "RVWorkspaceTUITests",
-        dependencies: ["RVWorkspaceTUI", "RVIsolation"]
+        dependencies: ["RVWorkspaceTUI", "RVIsolation", "RVHistory"]
     ),
     .testTarget(name: "RVHistoryTests", dependencies: ["RVHistory"]),
     .testTarget(name: "RVAnalyticsTests", dependencies: ["RVAnalytics"]),

@@ -3,6 +3,7 @@ import Foundation
 import RVDomain
 #if os(macOS)
 import Darwin
+import RVHistory
 import RVIsolation
 import RVPolicy
 import RVWorkspaceTUI
@@ -77,13 +78,17 @@ enum WorkspaceTUICommand {
             else { return RuntimeLaunchChoice.shellID }
             return "\(RuntimeLaunchChoice.shellID):\(want)"
         }()
+        let opsLedger = HomeDirectory.process().map {
+            AuditLedger(configDirectory: RVPolicyPaths.configDirectory(home: $0))
+        }
         let model = WorkspaceTUIModel(
             session: session,
             summary: described,
             launcher: launcher,
             defaultShellID: defaultShellID,
             restoredView: openedLayout.session.revision == 0 ? nil : openedLayout.session.view,
-            initialViewID: openedLayout.session.viewID
+            initialViewID: openedLayout.session.viewID,
+            opsLedger: opsLedger
         )
         switch openedLayout.notice {
         case .corrupt:
