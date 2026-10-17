@@ -17,7 +17,7 @@ jobs:
   gate:
     if: github.event_name != 'pull_request'
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 120
     outputs:
       signed: ${{ steps.sign.outputs.signed }}
     steps:
