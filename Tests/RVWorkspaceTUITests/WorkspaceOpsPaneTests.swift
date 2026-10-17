@@ -431,6 +431,41 @@ private func opsSeededState(count: Int = 5) -> WorkspaceTUIState {
         #expect(transition.state.feedback == "Nothing to copy")
     }
 
+    @Test func copyViewportClampsOverscrolledOffsetToVisiblePage() {
+        // A page scroll clamps to the last row, not the last page; the copy
+        // must still cover the visible page, not the single stored row.
+        var before = opsSeededState(count: 30)
+        before.ops[opsPaneID]?.scroll(by: 24)
+        #expect(before.ops[opsPaneID]?.scrollOffset == 29)
+        let transition = WorkspaceTUIReducer.reduce(before, .opsCopy(mode: .viewport))
+        guard transition.effects.count == 1, case .copyOpsText(let text) = transition.effects[0] else {
+            Issue.record("expected one copy effect, got \(transition.effects)")
+            return
+        }
+        let rows = text.split(separator: "\n")
+        #expect(rows.count == 24)
+        #expect(rows.first?.hasSuffix("event-6") == true)
+        #expect(rows.last?.hasSuffix("event-29") == true)
+    }
+
+    @Test func copiesSanitizeControlBytesLikeTheDisplay() {
+        var before = opsSeededState(count: 3)
+        before.ops[opsPaneID]?.events[2] = opsEvent(seconds: 2, subject: "x\u{1b}[2Jy\nz")
+        let line = WorkspaceTUIReducer.reduce(before, .opsCopy(mode: .line))
+        #expect(line.effects == [.copyOpsText(text: "00:00:02 runtime.session info x[2Jy z")])
+        var ranged = opsSeededState(count: 3)
+        ranged.ops[opsPaneID]?.events[0] = opsEvent(seconds: 0, subject: "a\nb")
+        ranged.ops[opsPaneID]?.events[1] = opsEvent(seconds: 1, subject: "c\u{07}d")
+        ranged.ops[opsPaneID]?.moveCursor(by: -2)
+        ranged.ops[opsPaneID]?.toggleAnchor()
+        ranged.ops[opsPaneID]?.moveCursor(by: 1)
+        let yanked = WorkspaceTUIReducer.reduce(ranged, .opsCopy(mode: .range))
+        #expect(yanked.effects == [.copyOpsText(text: """
+            00:00:00 runtime.session info a b
+            00:00:01 runtime.session info cd
+            """)])
+    }
+
     @Test func anchorTogglesAtCursor() {
         let before = opsSeededState()
         let set = WorkspaceTUIReducer.reduce(before, .opsAnchorToggled)

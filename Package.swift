@@ -170,7 +170,7 @@ let coreTestTargets: [Target] = [
     ),
     .testTarget(
         name: "RVWorkspaceTUITests",
-        dependencies: ["RVWorkspaceTUI", "RVIsolation", "RVHistory"]
+        dependencies: ["RVWorkspaceTUI", "RVIsolation"]
     ),
     .testTarget(name: "RVHistoryTests", dependencies: ["RVHistory"]),
     .testTarget(name: "RVAnalyticsTests", dependencies: ["RVAnalytics"]),

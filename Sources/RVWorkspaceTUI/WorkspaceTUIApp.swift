@@ -330,6 +330,7 @@ enum WorkspaceHelp {
     ^B c new tab       ^B n/p next/previous tab       ^B x close pane
     ^B r resize        ^B [ scroll        ^B w runtimes      ^B a launcher
     ^B ! cancel runtime (confirm)         ^B q detach       ^B ^B literal Ctrl-B
+    ^B o ops pane (audit tail)
     Esc closes help and menus
     """
 }

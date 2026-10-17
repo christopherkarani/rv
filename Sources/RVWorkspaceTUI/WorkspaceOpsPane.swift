@@ -204,23 +204,34 @@ public struct OpsPaneState: Equatable, Sendable {
     }
 
     /// Plain-text rows for one copy. Nil when there is nothing to copy.
-    /// The caller clears the anchor after a range copy.
+    /// Rows are sanitized like the display, so a yanked "line" is one line
+    /// even when the audit subject carries newlines or control bytes. The
+    /// caller clears the anchor after a range copy.
     public func copyText(_ mode: OpsCopyMode) -> String? {
         let rows = filtered
         switch mode {
         case .line:
             guard rows.indices.contains(cursorIndex) else { return nil }
-            return OpsPaneFormat.row(rows[cursorIndex])
+            return OpsPaneFormat.sanitize(OpsPaneFormat.row(rows[cursorIndex]))
         case .viewport:
-            let end = min(rows.count, scrollOffset + max(1, viewportRows))
-            guard scrollOffset < end else { return nil }
-            return rows[scrollOffset..<end].map(OpsPaneFormat.row).joined(separator: "\n")
+            // The stored offset can sit past the window start (a page scroll
+            // clamps to the last row, not the last page), so the start is
+            // re-derived exactly like the rendered window.
+            let span = max(1, viewportRows)
+            let start = min(max(0, scrollOffset), max(0, rows.count - span))
+            let end = min(rows.count, start + span)
+            guard start < end else { return nil }
+            return rows[start..<end]
+                .map { OpsPaneFormat.sanitize(OpsPaneFormat.row($0)) }
+                .joined(separator: "\n")
         case .range:
             guard rows.isEmpty == false else { return nil }
             let anchor = selectionAnchor ?? cursorIndex
             let range = min(anchor, cursorIndex)...max(anchor, cursorIndex)
             let clamped = range.clamped(to: 0...(rows.count - 1))
-            return rows[clamped].map(OpsPaneFormat.row).joined(separator: "\n")
+            return rows[clamped]
+                .map { OpsPaneFormat.sanitize(OpsPaneFormat.row($0)) }
+                .joined(separator: "\n")
         }
     }
 
@@ -324,6 +335,25 @@ public enum OpsPaneFormat {
             }
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// Drops the same bytes `WorkspacePaneChrome.safe` drops (control
+    /// characters and bidi overrides) without truncating or trimming, so
+    /// audit subjects cannot inject layout or escape sequences. Single-line
+    /// callers get newlines and tabs as spaces and carriage returns dropped;
+    /// block callers keep newlines and drop carriage returns.
+    public static func sanitize(_ raw: String, preserveNewlines: Bool = false) -> String {
+        let space = UnicodeScalar(" ")
+        let scalars = raw.unicodeScalars.compactMap { scalar -> UnicodeScalar? in
+            if scalar == UnicodeScalar("\n") { return preserveNewlines ? scalar : space }
+            if scalar == UnicodeScalar("\r") { return nil }
+            if scalar == UnicodeScalar("\t") { return space }
+            if CharacterSet.controlCharacters.contains(scalar) { return nil }
+            if (0x202A...0x202E).contains(scalar.value)
+                || (0x2066...0x2069).contains(scalar.value) { return nil }
+            return scalar
+        }
+        return String(String.UnicodeScalarView(scalars))
     }
 
     public static func clock(_ date: Date) -> String {

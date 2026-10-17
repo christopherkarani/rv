@@ -58,23 +58,10 @@ enum WorkspaceOpsPaneText {
             + sanitize(OpsPaneFormat.detail(ops.filtered[index]), preserveNewlines: true)
     }
 
-    /// Drops the same bytes `WorkspacePaneChrome.safe` drops (control
-    /// characters and bidi overrides) without truncating or trimming, so
-    /// audit subjects cannot inject layout or escape sequences. Single-line
-    /// callers get newlines, carriage returns, and tabs as spaces; block
-    /// callers keep newlines and drop carriage returns.
+    /// Row and overlay scrubbing, shared with yanked copies so the display
+    /// and the clipboard agree. See `OpsPaneFormat.sanitize`.
     static func sanitize(_ raw: String, preserveNewlines: Bool = false) -> String {
-        let space = UnicodeScalar(" ")
-        let scalars = raw.unicodeScalars.compactMap { scalar -> UnicodeScalar? in
-            if scalar == UnicodeScalar("\n") { return preserveNewlines ? scalar : space }
-            if scalar == UnicodeScalar("\r") { return nil }
-            if scalar == UnicodeScalar("\t") { return space }
-            if CharacterSet.controlCharacters.contains(scalar) { return nil }
-            if (0x202A...0x202E).contains(scalar.value)
-                || (0x2066...0x2069).contains(scalar.value) { return nil }
-            return scalar
-        }
-        return String(String.UnicodeScalarView(scalars))
+        OpsPaneFormat.sanitize(raw, preserveNewlines: preserveNewlines)
     }
 
     // MARK: - Private
