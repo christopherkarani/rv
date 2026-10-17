@@ -169,6 +169,11 @@ struct WorkspaceShellView: View {
                 Text(WorkspaceOverlayText.confirmText(paneTitle: title))
                     .foregroundStyle(Color.red)
             }
+            if let pane = snapshot.view.focusedPane,
+               let detail = WorkspaceOpsPaneText.detailOverlay(pane: pane, ops: snapshot.ops[pane.id]) {
+                Text(detail)
+                    .foregroundStyle(Color.yellow)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }

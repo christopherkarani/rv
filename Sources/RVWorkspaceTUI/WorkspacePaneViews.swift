@@ -27,23 +27,34 @@ struct WorkspacePaneViewport: View {
                     PaneCanvasLayout(viewport: plan.viewport, placements: plan.placements) {
                         ForEach(plan.placements, id: \.id) { placement in
                             if let pane = snapshot.view.panes[placement.id] {
-                                WorkspacePanePanel(
-                                    pane: pane,
-                                    terminal: snapshot.terminals[placement.id],
-                                    frame: frame(
-                                        for: placement.id, placement: placement,
-                                        scrollPane: scrollPane
-                                    ),
-                                    placement: placement,
-                                    focused: placement.id == plan.focusedPaneID,
-                                    recentOutputOnly: snapshot.recentOutputOnly.contains(placement.id),
-                                    scrolling: scrollPane == placement.id,
-                                    hasNewOutput: hasNewOutput(
-                                        paneID: placement.id, scrollPane: scrollPane
+                                if pane.content == .ops {
+                                    WorkspaceOpsPanePanel(
+                                        pane: pane,
+                                        ops: snapshot.ops[placement.id],
+                                        placement: placement,
+                                        focused: placement.id == plan.focusedPaneID
                                     )
-                                )
-                                .id(placement.id)
-                                .layoutValue(key: PaneLayoutID.self, value: placement.id)
+                                    .id(placement.id)
+                                    .layoutValue(key: PaneLayoutID.self, value: placement.id)
+                                } else {
+                                    WorkspacePanePanel(
+                                        pane: pane,
+                                        terminal: snapshot.terminals[placement.id],
+                                        frame: frame(
+                                            for: placement.id, placement: placement,
+                                            scrollPane: scrollPane
+                                        ),
+                                        placement: placement,
+                                        focused: placement.id == plan.focusedPaneID,
+                                        recentOutputOnly: snapshot.recentOutputOnly.contains(placement.id),
+                                        scrolling: scrollPane == placement.id,
+                                        hasNewOutput: hasNewOutput(
+                                            paneID: placement.id, scrollPane: scrollPane
+                                        )
+                                    )
+                                    .id(placement.id)
+                                    .layoutValue(key: PaneLayoutID.self, value: placement.id)
+                                }
                             }
                         }
                     }
