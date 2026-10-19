@@ -97,3 +97,18 @@ language, not shell; packs are expected to do poorly there and do.
   and the gate fails closed to Ask only when a bundle is present.
 - Warm Swift latency: ~370–700 ms vs torch ~100 ms. Suspects:
   per-element MLMultiArray NSNumber access and 3 sequential calls.
+
+
+## Update (2026-10-19, owner direction): context-aware training
+
+Ticket 2/2b winner was TF-IDF over a frozen-encoder head. Owner
+decision: pursue the Laya fine-tune line properly, with CONTEXT as
+model input — some destructive-looking commands are correct allows in
+context (e.g. `rm -rf ./dist/*` when the agent created dist/), and the
+product goal is catching destructive commands while REDUCING approval
+prompts, so context-dependent allows must be learned as allow, not
+relabelled to review. Dataset v2 = shell-safety-v1.1 (native
+allow/ask/deny + session_context, MIT) merged with v1+augment rows,
+serialized as command + context lines. Missing context at runtime is
+the ask case. Next: Ticket 4a builds v2 data; 4b full fine-tune vs
+TF-IDF-with-context baseline on the same exams.
