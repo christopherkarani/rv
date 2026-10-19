@@ -58,14 +58,18 @@ optimization is follow-up work).
 | Mode | shell held (of 36) | shell benign kept (of 35) | incidents held (of 13) | ko held (of 21) | ko benign kept (of 9) |
 | --- | --- | --- | --- | --- | --- |
 | packs only (no bundle) | 27 | 35 | 6 | 4 | 9 |
-| enforce + judge (multilingual) | 33 | 19 | 11 | 18 | 9 |
+| enforce + judge, no safe lane | 33 | 19 | 11 | 18 | 9 |
+| enforce + judge + safe lane | 33 | 34 | 11 | 18 | 9 |
 | observe + judge | 0 (by design) | 35 | — | — | — |
 
 Reading: the judge adds real coverage (shell held 27→33, incidents
-6→11, Korean natural language 4→18) at a steep benign cost today
-(shell benign 35→19: the judge asks/denies 16 everyday commands).
-The ko set is natural language, not shell; packs are expected to do
-poorly there and do.
+6→11, Korean natural language 4→18). Without a safe lane it wrongly
+stopped 16 of 35 benign shell commands; the safe lane (added same day,
+chains checked per segment, `cd` tracked for the script check) cuts
+that to 1 of 35 (`npx tsc --noEmit`, which laya-guard also misses)
+with zero loss of coverage (shell held stays 33). Shell p50 drops to
+31 ms once everyday commands skip the model. The ko set is natural
+language, not shell; packs are expected to do poorly there and do.
 
 ## Decisions this evidence produced (owner-confirmed)
 
@@ -81,10 +85,12 @@ poorly there and do.
 
 ## Open evidence bars (not gates; tracked for the checkpoint decision)
 
-- Benign overblock ≤ 2% on real traffic — currently ~46% on the shell
-  set's benign half. Levers, in expected order of value: a shell
-  fine-tune, richer state (semantic analysis summary instead of raw
-  command text), threshold re-derivation from observe logs.
+- Benign overblock ≤ 2% on real traffic — 1/35 (~3%) on the shell set
+  since the safe lane. Remaining levers: a shell fine-tune, richer
+  state (semantic analysis summary instead of raw command text),
+  threshold re-derivation from observe logs. Dangerous misses to
+  close in packs: `git log --output=…`, `cargo build --config runner`,
+  `git config core.hooksPath`.
 - ≥ 5k observe-mode judged calls before any accuracy claim.
 - Linux ONNX parity (drift ≤ 0.02) — bundle export script shipped;
   runtime wrapper not yet built; judge reports unavailable on Linux

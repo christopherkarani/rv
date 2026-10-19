@@ -1,16 +1,16 @@
 # Plan: destructive-command guard modeled on laya-guard (Laya judge in rvd)
 
 Goal: rv judges every ambiguous tool call the way
-[laya-guard](https://github.com/scs0209/laya-guard) does, with two parts
-only: the packs settle what they know, and a small local classifier (Laya)
-decides everything else as allow / review / block with a numeric risk
+[laya-guard](https://github.com/scs0209/laya-guard) does, in laya-guard order: packs,
+safe lane, judge as allow / review / block with a numeric risk
 score. The model is the centerpiece, not an optional extra. The packs can
 only raise its verdict, never lower it.
 
 Owner decisions (2026-10-19):
-- No safe-command lane. Laya-guard has one; rv skips it for now. If the
-  numbers show the model overblocking or slowing down everyday commands,
-  a small measured safe list can be added later as its own change.
+- Safe-command lane included (added 2026-10-19 after benchmarks showed
+  the model wrongly stopping 16/35 benign shell commands): packs first,
+  proven-safe single commands skip the judge (laya-guard allowlist +
+  `swift build|test`), installs/pushes/secret paths never enter.
 - One guard posture switch, `guard.mode`: `enforce` (shipped default —
   packs deny as today) or `observe` (packs and judge both evaluate and
   log the would-be verdict; nothing blocks). Observe is the trial mode
@@ -359,7 +359,7 @@ hook (8 hosts) / rv test / rv explain → rvd (owner-auth IPC)
 
 ## Decisions (resolved 2026-10-19; remaining)
 
-Resolved: two parts only (packs + judge, no safe lane); `guard.mode`
+Resolved: three parts (packs + judge, no safe lane); `guard.mode`
 enforce-by-default with observe as the opt-in trial posture; judge on
 whenever a bundle is installed (binds in enforce, logs in observe);
 laya-guard `review` = rv Ask.

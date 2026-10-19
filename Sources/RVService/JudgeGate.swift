@@ -80,6 +80,10 @@ public enum JudgeRuntime {
         now: Date = Date()
     ) -> EvaluationResult {
         guard case .allow = result.decision else { return result }
+        if SafeCommandLane.isSafe(command.rawValue) {
+            log(home: home, live: result, wouldBe: nil, verdict: nil, note: "safe-lane", now: now)
+            return result
+        }
         guard bundleDir(home: home) != nil else { return result }
         let verdict = runJudge(command: command, home: home)
         log(home: home, live: result, wouldBe: nil, verdict: verdict, now: now)
@@ -102,10 +106,11 @@ public enum JudgeRuntime {
         now: Date = Date()
     ) -> EvaluationResult {
         var verdict: LayaVerdict?
-        if bundleDir(home: home) != nil, case .allow = result.decision {
+        let safe = SafeCommandLane.isSafe(command.rawValue)
+        if !safe, bundleDir(home: home) != nil, case .allow = result.decision {
             verdict = runJudge(command: command, home: home)
         }
-        log(home: home, live: nil, wouldBe: result, verdict: verdict, now: now)
+        log(home: home, live: nil, wouldBe: result, verdict: verdict, note: safe ? "safe-lane" : nil, now: now)
         return EvaluationResult(
             outcome: .plain,
             matchingView: result.matchingView,
@@ -146,6 +151,7 @@ public enum JudgeRuntime {
         live: EvaluationResult?,
         wouldBe: EvaluationResult?,
         verdict: LayaVerdict?,
+        note: String? = nil,
         now: Date
     ) {
         guard let home else { return }
@@ -173,6 +179,7 @@ public enum JudgeRuntime {
             case .indeterminate: row["live"] = "indeterminate"
             }
         }
+        if let note { row["note"] = note }
         if let verdict {
             row["choice"] = verdict.choice
             row["action"] = verdict.action().rawValue

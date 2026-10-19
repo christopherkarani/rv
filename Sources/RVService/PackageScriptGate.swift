@@ -18,8 +18,20 @@ enum PackageScriptGate {
         session: EvaluateSession,
         enabledPacks: [PackID]
     ) -> EvaluationResult? {
-        guard let cwd, let names = scriptNames(in: command.rawValue) else { return nil }
-        guard let packageDir = nearestPackageJSON(from: cwd.rawValue) else { return nil }
+        guard let cwd else { return nil }
+        // Track `cd` across chain segments so `cd app && npm test`
+        // checks app/package.json, not the launch directory's.
+        var effectiveCwd = cwd.rawValue
+        var names: [String]?
+        for segment in shellChainSegments(command.rawValue) {
+            let tokens = segment.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+            if tokens.first == "cd", tokens.count >= 2 {
+                effectiveCwd = resolveCD(tokens[1], from: effectiveCwd)
+                continue
+            }
+            if let found = scriptNames(in: segment) { names = found; break }
+        }
+        guard let names, let packageDir = nearestPackageJSON(from: effectiveCwd) else { return nil }
         guard let scripts = loadScripts(packageDir) else { return nil }
         for name in names {
             if let hit = checkScript(name, scripts: scripts, session: session, enabledPacks: enabledPacks, depth: 0) {
@@ -64,6 +76,12 @@ enum PackageScriptGate {
             }
         }
         return nil
+    }
+
+    private static func resolveCD(_ target: String, from cwd: String) -> String {
+        if target.hasPrefix("/") { return target }
+        if target == "~" || target.hasPrefix("~/") { return target }
+        return (cwd as NSString).appendingPathComponent(target)
     }
 
     private static func nearestPackageJSON(from cwd: String) -> URL? {
