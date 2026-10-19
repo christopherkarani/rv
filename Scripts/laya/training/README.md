@@ -164,3 +164,88 @@ embeddings extended incrementally (only new texts encoded). Residuals:
 still allows 2/19 adversarial block rows with unseen `cargo` heads;
 2 pre-existing within-train normalized label twins (`mvn install
 -DskipTests`, `npm ci`) kept as-is.
+
+## Dataset v2 (Ticket 4a — session context, built 2026-10-19)
+
+`prepare_data_v2.py` (new; `prepare_data.py` untouched) builds
+`/tmp/laya-train/v2/{train,validation}.jsonl`: rows
+`{text, command, label}` where `text` is the command plus serialized
+session context. Why: some commands are only safe IN CONTEXT (e.g.
+`rm -rf ./dist/*` is allow when the agent created `dist/`); command-only
+training turns those rows into label noise. The model must see context
+to learn allow-in-the-right-situation, and context-dependent allows
+stay allow — never relabelled to review to play safe.
+
+### Input format spec (training and future runtime must match)
+
+Input text = command, then only the context lines that are known, each
+on its own line, in this order:
+
+```
+<command>
+cwd-inside-repo: yes|no
+agent-touched: <comma-joined agentTouchedFiles, max 8, sorted>
+git: untracked <n>, modified <n>, staged <n>
+```
+
+- `cwd-inside-repo`: yes if v1.1 `gitRemote` is non-empty, else no.
+- `agent-touched`: `",".join(sorted(agentTouchedFiles)[:8])`; the whole
+  line is omitted when the list is empty.
+- `git`: lengths of the `gitStatus` untracked/modified/staged lists;
+  the line is omitted when `gitStatus` is absent.
+- No other fields. No JSON. Deterministic. Rows without context
+  (v1/augment) are the bare command, teaching the model to use context
+  when present and be conservative when absent.
+- Per-row `target_touched` (a path-like command token falls under an
+  agentTouchedFiles entry) is derived for analysis only and stored in
+  `stats.json`, never in the training text.
+
+### Sources + license
+
+- `tomngdev/shell-safety-v1.1` (MIT), POSIX rows only, train/validation
+  splits kept separate: `/tmp/ss11-{train,validation}.jsonl`
+  (30,002 / 3,002 rows in; 24,002 / 2,402 POSIX kept). Label map:
+  allow→allow, ask→review, deny→block. Its test split
+  (`/tmp/ss11-test.jsonl`) stays an extra exam, never trained on.
+- v1 rows `/tmp/laya-train/train.jsonl` (9,294) + `augment.jsonl`
+  (1,360, all already inside v1 train) → train only;
+  `/tmp/laya-train/validation.jsonl` (542) → validation only.
+  (v1 outputs untouched, kept for comparison.)
+- Held-out exams (normalized-command match, all intersections zero):
+  `testset_shell/incidents/ko_30.jsonl`, `adversarial-suffixes.jsonl`,
+  v1.1 test split (all shells, superset of POSIX).
+
+### Counts
+
+- Train 19,763 rows (allow 8,826 / review 4,181 / block 6,756;
+  16,658 unique normalized commands; sha `d8e153ea`), 55.0% with
+  context. Validation 1,086 rows (allow 453 / review 199 / block 434;
+  sha `5cd0c2b0`), 57.6% with context.
+- Dedup on normalized COMMAND: within-split same-label keeps up to 2
+  text variants in train (3,495 extra kept), 1 in validation;
+  cross-split train wins (1,097 validation rows dropped, 134 label
+  mismatches); exam collisions drop the row (926 train / 260
+  validation, mostly vs the v1.1 test split: 1,151 first-match).
+- `target_touched` rate overall: allow 1.6%, review 1.5%, block 0.4%
+  (low because touched lists are random fixtures rarely referenced by
+  the command; the signal is the context lines, not this sidecar bit).
+
+### Context-dependent-rows finding
+
+472 train normalized commands carry conflicting labels (strictest kept:
+414 review/block, 56 allow/review, 2 three-way). 460 are cross-source
+policy conflicts — e.g. v1 maps unsafe `cloud` rows to block while v1.1
+labels the same commands ask→review (`aws s3 rb … --force`,
+`az keyvault secret delete …`) — not true context dependence. Only 12
+are within-v1.1 (same command, different context, different source
+label), e.g. `cargo build` allow with `agent-touched: ./.cache/,./.tmp/`
+vs review with `agent-touched: Cargo.lock`. True allow-in-context
+learning comes from the agreeing rows instead: 66 train rows are
+`rm`/`rmdir` labelled allow WITH agent-touched context (e.g.
+`rm -rf ./dist/*.js.map` + `agent-touched: ./out/,./target/`).
+
+Caveats: 2,139/20,849 v1.1 commands contain embedded newlines, so
+`text` is `command + "\n" + context lines` (runtime must construct it
+identically, not split on the first newline); the 12 within-v1.1
+disagreements kept the stricter label per the ticket rule, so a handful
+of genuine context-dependent allows are currently taught as review.
