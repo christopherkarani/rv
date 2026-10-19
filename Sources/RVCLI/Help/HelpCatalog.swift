@@ -468,6 +468,10 @@ enum HelpCatalog {
                     name: "sources",
                     description: "keychain, hostEnvironment, onePassword, vault, aws, infisical, bitwarden, gcp, azure"
                 ),
+                HelpRow(
+                    name: "defaults",
+                    description: "OPENAI_API_KEY, ANTHROPIC_API_KEY, STRIPE_SECRET_KEY, GITHUB_TOKEN, GH_TOKEN default to their gateway"
+                ),
                 HelpRow(name: "describe", description: "Names, descriptions, types, and delivery for agents; never a value"),
                 HelpRow(name: "varlock", description: "import --varlock reads @sensitive, @type, and provider refs; literals are skipped"),
                 HelpRow(name: "hook", description: "pre-commit scans staged files and prints file:line:name; an existing hook is kept"),

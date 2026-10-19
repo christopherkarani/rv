@@ -230,8 +230,14 @@ enum InitRun {
             lines.append("wrote runtime-resources.json")
         }
         lines.append(
-            "next: rv opencode --workspace \(project) --resource-profile \(plan.profile.id) -- run '...'")
+            "next: rv opencode --workspace \(shellWord(project)) --resource-profile \(plan.profile.id) -- run '...'")
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// Quotes a path for the suggested next command when pasting it raw
+    /// would split. Displayed paths elsewhere stay unquoted.
+    static func shellWord(_ path: String) -> String {
+        path.contains(where: \.isWhitespace) ? "'\(path)'" : path
     }
 }
 
@@ -281,7 +287,9 @@ struct Init: AsyncParsableCommand {
         var importedNames: [String] = []
         if let schemaURL {
             if dryRun {
-                let text = (try? String(contentsOf: schemaURL, encoding: .utf8)) ?? ""
+                guard let text = try? String(contentsOf: schemaURL, encoding: .utf8) else {
+                    try ctx.fail("rv init: could not read \(schemaURL.path)\n")
+                }
                 let current: SecretsConfiguration
                 switch SecretsRun.configuration(secretsEnvironment) {
                 case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")

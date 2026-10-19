@@ -209,6 +209,11 @@ struct InitCommandTests {
         #expect(decoded == policy)
     }
 
+    @Test func shellWordQuotesSpacedPaths() {
+        #expect(InitRun.shellWord("/plain/path") == "/plain/path")
+        #expect(InitRun.shellWord("/my proj/dir") == "'/my proj/dir'")
+    }
+
     @Test func planTextNamesRemediesAndNextStep() throws {
         let profile = RuntimeResourceProfile(id: "main", projects: ["/proj"], secrets: ["A_KEY", "B_KEY"])
         let plan = InitRun.Plan(profile: profile, notes: ["a note"])
