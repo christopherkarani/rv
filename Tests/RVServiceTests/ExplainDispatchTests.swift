@@ -1,13 +1,16 @@
+import Foundation
 import Testing
 import RVDomain
 import RVIPC
 import RVPacks
+import RVPolicy
 @testable import RVService
 
 struct ExplainDispatchTests {
     @Test func denyEmitsTTYStageNamesWithZeroElapsed() async throws {
         let runtime = ServiceRuntime(
             catalog: PackCatalog(),
+            home: try isolatedJudgeHome(),
             allowOnceDirectory: try isolatedAllowOnceDirectory()
         )
         let response = await runtime.dispatch(
@@ -44,6 +47,7 @@ struct ExplainDispatchTests {
     @Test func quickRejectAllowEmitsSkipWalkWithZeroElapsed() async throws {
         let runtime = ServiceRuntime(
             catalog: PackCatalog(),
+            home: try isolatedJudgeHome(),
             allowOnceDirectory: try isolatedAllowOnceDirectory()
         )
         let response = await runtime.dispatch(
@@ -73,6 +77,7 @@ struct ExplainDispatchTests {
     @Test func explainPeeksGrantWithoutSpending() async throws {
         let runtime = ServiceRuntime(
             catalog: PackCatalog(),
+            home: try isolatedJudgeHome(),
             allowOnceDirectory: try isolatedAllowOnceDirectory()
         )
         try await runtime.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
@@ -100,6 +105,7 @@ struct ExplainDispatchTests {
     @Test func classifyRiskFollowsDerivation() async throws {
         let runtime = ServiceRuntime(
             catalog: PackCatalog(),
+            home: try isolatedJudgeHome(),
             allowOnceDirectory: try isolatedAllowOnceDirectory()
         )
         let allowed = await runtime.dispatch(
@@ -149,6 +155,7 @@ struct ExplainDispatchTests {
     @Test func classifyPeeksGrantWithoutSpending() async throws {
         let runtime = ServiceRuntime(
             catalog: PackCatalog(),
+            home: try isolatedJudgeHome(),
             allowOnceDirectory: try isolatedAllowOnceDirectory()
         )
         try await runtime.insertGranted(matchingView: "git reset --hard", cwd: wd("/tmp/ws"))
@@ -172,4 +179,13 @@ struct ExplainDispatchTests {
         )
         #expect(denied.result == .error(.authorizationDenied))
     }
+}
+
+/// Isolated HOME with no judge bundle and no config, so machine state
+/// (an installed Laya bundle) cannot leak verdicts into explain tests.
+private func isolatedJudgeHome() throws -> HomeDirectory {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("rv-explain-home-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return try #require(HomeDirectory(validating: url.path))
 }

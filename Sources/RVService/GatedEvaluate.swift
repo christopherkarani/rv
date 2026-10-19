@@ -259,6 +259,25 @@ public struct GatedEvaluate: Sendable {
         host: LedgerHost,
         tool: LedgerTool
     ) async -> EvaluationResult {
+        // Observe: evaluate everything, log the would-be verdict, allow.
+        // Grants are never spent and denials never recorded on this path.
+        if JudgeRuntime.guardMode(home: home) == .observe {
+            var wouldBe = evaluateWithSemantics(request, cwd: cwd, home: home, now: now)
+            if case .allow = wouldBe.decision,
+               let scriptHit = PackageScriptGate.check(
+                   command: request.command, cwd: cwd,
+                   session: resolvedSession(), enabledPacks: request.enabledPacks
+               ) {
+                wouldBe = EvaluationResult(
+                    outcome: scriptHit.outcome, matchingView: wouldBe.matchingView,
+                    analysis: wouldBe.analysis, boundReview: scriptHit.boundReview
+                )
+            }
+            return JudgeRuntime.observe(
+                wouldBe: wouldBe, command: request.command, home: home,
+                provenance: request.provenance, now: now
+            )
+        }
         let result = evaluateWithSemantics(request, cwd: cwd, home: home, now: now)
         // Fast path: allow/indeterminate never touch PolicyGate or the
         // allowlist loader; PolicyGate returns them unchanged anyway.
@@ -290,10 +309,28 @@ public struct GatedEvaluate: Sendable {
                 )
             }
         }
-        if verb.recordsDenial {
-            recordDenialIfNeeded(finished, path: nil, home: home, host: host, tool: tool, now: now)
+        // Packs allowed: check what a runner command would really execute,
+        // then let the judge score what the packs could not settle.
+        var judged = finished
+        if case .allow = finished.decision,
+           let scriptHit = PackageScriptGate.check(
+               command: request.command,
+               cwd: cwd,
+               session: resolvedSession(),
+               enabledPacks: request.enabledPacks
+           ) {
+            judged = EvaluationResult(
+                outcome: scriptHit.outcome,
+                matchingView: finished.matchingView,
+                analysis: finished.analysis,
+                boundReview: scriptHit.boundReview
+            )
         }
-        return finished
+        judged = JudgeRuntime.apply(to: judged, command: request.command, home: home, provenance: request.provenance, now: now)
+        if verb.recordsDenial {
+            recordDenialIfNeeded(judged, path: nil, home: home, host: host, tool: tool, now: now)
+        }
+        return judged
     }
 
     private static func applyPolicy(

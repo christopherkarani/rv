@@ -1,6 +1,7 @@
 import RVDomain
 import RVIPC
 import RVPacks
+import RVPolicy
 
 public enum DoctorSnapshotBuilder {
     public static func make(
@@ -35,6 +36,7 @@ public enum DoctorSnapshotBuilder {
             DoctorCheck(id: .grok, status: .skipped, message: "T7"),
             DoctorCheck(id: .opencode, status: .skipped, message: "T7"),
         ]
+        checks.append(judgeCheck())
         if lastError != nil {
             checks.append(DoctorCheck(id: .lastError, status: .warning, message: "see lastError"))
         }
@@ -46,6 +48,16 @@ public enum DoctorSnapshotBuilder {
             lastError: lastError,
             checks: checks
         )
+    }
+
+    /// Degraded guard visibility: judge state is reported, never assumed.
+    private static func judgeCheck() -> DoctorCheck {
+        let home = HomeDirectory.process()
+        let mode = JudgeRuntime.guardMode(home: home)
+        if let bundle = JudgeRuntime.bundleDir(home: home) {
+            return DoctorCheck(id: .judge, status: .ok, message: "laya judge on (guard \(mode.rawValue)), bundle \(bundle.lastPathComponent)")
+        }
+        return DoctorCheck(id: .judge, status: .skipped, message: "no laya bundle installed; packs only (guard \(mode.rawValue))")
     }
 
     private static var dayOnePacksLoadedMessage: String {

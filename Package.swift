@@ -101,6 +101,13 @@ let coreLibraryTargets: [Target] = [
         dependencies: ["RVDomain"],
         resources: [.embedInCode("Resources/hosts")]
     ),
+    .target(
+        name: "RVLaya",
+        dependencies: ["RVDomain"],
+        linkerSettings: [
+            .linkedFramework("CoreML", .when(platforms: [.macOS])),
+        ]
+    ),
     .target(name: "RVIPC", dependencies: ["RVDomain"]),
     .target(name: "RVHistory", dependencies: ["RVDomain", "RVFileStore"]),
     .target(name: "RVAnalytics", dependencies: ["RVDomain"]),
@@ -127,6 +134,7 @@ let coreProducts: [Product] = [
     .library(name: "RVScan", targets: ["RVScan"]),
     .library(name: "RVPolicy", targets: ["RVPolicy"]),
     .library(name: "RVHooks", targets: ["RVHooks"]),
+    .library(name: "RVLaya", targets: ["RVLaya"]),
     .library(name: "RVIPC", targets: ["RVIPC"]),
     .library(name: "RVPresentation", targets: ["RVPresentation"]),
     .library(name: "RVTheme", targets: ["RVTheme"]),
@@ -159,6 +167,7 @@ let coreTestTargets: [Target] = [
         dependencies: ["RVHooks", "RVEngine"],
         exclude: ["Fixtures"]
     ),
+    .testTarget(name: "RVLayaTests", dependencies: ["RVLaya"]),
     .testTarget(name: "RVIPCTests", dependencies: ["RVIPC"]),
     .testTarget(name: "RVPresentationTests", dependencies: ["RVPresentation"]),
     .testTarget(name: "RVThemeTests", dependencies: ["RVTheme"]),
@@ -213,7 +222,7 @@ let serviceLibraryAndDaemon: [Target] = [
         name: "RVService",
         dependencies: [
             "RVDomain", "RVEngine", "RVPacks", "RVPolicy", "RVHooks", "RVIPC", "RVHistory",
-            "RVAnalytics", "RVIsolation", "RVFileStore",
+            "RVAnalytics", "RVIsolation", "RVFileStore", "RVLaya",
         ]
     ),
     .executableTarget(
@@ -255,10 +264,15 @@ let cliTargets: [Target] = [
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ]
     ),
+    .executableTarget(
+        name: "rv-judge",
+        dependencies: ["RVLaya"]
+    ),
 ]
 let cliProducts: [Product] = [
     .library(name: "RVCLI", targets: ["RVCLI"]),
     .executable(name: "rv", targets: ["rv"]),
+    .executable(name: "rv-judge", targets: ["rv-judge"]),
 ]
 let cliTestTargets: [Target] = [
     .testTarget(

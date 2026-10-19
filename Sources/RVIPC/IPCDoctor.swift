@@ -16,7 +16,7 @@ public enum DoctorCheckStatus: String, Sendable, Equatable, Codable {
 }
 
 public enum DoctorCheckID: String, Codable, Hashable, Sendable {
-    case xpc, `protocol`, packs, launchd, lastError, grok, pi, opencode
+    case xpc, `protocol`, packs, launchd, lastError, grok, pi, opencode, judge
 }
 
 public struct DoctorCheck: Sendable, Equatable, Codable {
