@@ -72,3 +72,44 @@ sorted order, and an empty intersection with the held-out set.
   overlap; splits were processed independently, not decontaminated
   against each other).
 - 33 texts carry conflicting source labels across rows; strictest won.
+
+## Results (Ticket 2 — frozen-encoder head vs TF-IDF, measured 2026-10-19)
+
+`train_head.py` trains a 3-class head on frozen Laya multilingual encoder
+embeddings (mean-pool last hidden state, 768-dim, truncate 512) plus a
+TF-IDF baseline (char_wb(3,5) 40k + word(1,2) 20k, LR C=4), both on the
+train split above, evaluated on validation + the 3 held-out exam sets.
+Encoder actually used: jhu-clsp/mmBERT-base-architecture weights
+(`encoder.*` tensors) from the `convaiinnovations/laya` multilingual
+checkpoint + checkpoint config/tokenizer (AutoModel on the config-only
+`encoder/` dir fails, so the documented fallback applied). Device: MPS.
+Head: LogisticRegression with `class_weight="balanced"` (review is
+361/7937 = 4.55% of train; the 1-hidden-layer MLP candidate scored
+531/563 = 94.3% on validation vs LR 504/563 = 89.5%, a 4.8pt gap that
+does not clear the >5pt switch rule, so LR shipped).
+
+Metric definitions: exact = pred == expected (review-expected also
+accepts block; "any"-expected accepts everything); held = pred in
+{review, block} among expected {review, block}; kept = pred == allow
+among expected allow.
+
+```
+[head] validation exact 504/563 (89.5%) | held 268/295 (90.8%) | kept 240/268 (89.6%)
+[head] shell      exact 58/71 (81.7%)   | held 28/36 (77.8%)   | kept 32/35 (91.4%)
+[head] incidents  exact 14/17 (82.4%)   | held 10/13 (76.9%)   | kept n/a (0 rows)
+[head] ko         exact 19/30 (63.3%)   | held 14/21 (66.7%)   | kept 5/9 (55.6%)
+[tfidf] validation exact 552/563 (98.0%) | held 285/295 (96.6%) | kept 268/268 (100.0%)
+[tfidf] shell      exact 66/71 (93.0%)   | held 33/36 (91.7%)   | kept 33/35 (94.3%)
+[tfidf] incidents  exact 15/17 (88.2%)   | held 11/13 (84.6%)   | kept n/a (0 rows)
+[tfidf] ko         exact 22/30 (73.3%)   | held 13/21 (61.9%)   | kept 9/9 (100.0%)
+```
+
+Winner rule (highest shell held, then highest shell kept): shell held
+head 28/36 vs tfidf 33/36 → **tfidf**. It beats the stock-judge shell
+baselines (held 23/36, kept 19/35) on both, and matches the earlier
+binary TF-IDF (held 33/36, kept 32/35) with one fewer benign stop.
+Winner + full metrics saved under `/tmp/laya-train/best/`
+(`head.joblib`, `tfidf.joblib`, `labels.json`, `metrics.json`).
+Run: `cd Scripts/laya/training && PYTHONPATH=/tmp/laya-pylibs:/tmp/laya-torchlibs
+HF_HUB_DISABLE_XET=1 /tmp/laya-venv/bin/python train_head.py`
+(~70 s cold on MPS, ~7 s warm via the `/tmp/laya-train/embeddings/` cache).
