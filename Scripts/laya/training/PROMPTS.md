@@ -23,32 +23,66 @@ split (`kontext-security/ShellRisk-Bench`).
 
 ## Ticket 1 — Data prep
 
+(copy also at /tmp/ticket1-prompt.txt on the orchestrator machine; expanded gates version below)
+
 ```
-Read docs/plans/laya-judge-decision-record.md in the worktree
-.worktrees/laya-judge first.
+You are starting from a FRESH context with no memory of prior sessions. Everything you need is in this prompt. Do not ask clarifying questions; if something below is truly impossible, stop and report exactly why.
 
-Build Scripts/laya/training/prepare_data.py and run it:
+## Where you are
+- Repo: rv (Swift macOS/Linux CLI guarding AI coding agents).
+- Work in worktree: /Users/chriskarani/CodingProjects/rv/.worktrees/laya-judge (branch feat/laya-judge). cd there first.
+- Read first (2 files, in order): docs/plans/laya-judge-decision-record.md, then Scripts/laya/training/PROMPTS.md (you are Ticket 1; ignore Tickets 2-3).
+- Python: /tmp/laya-venv/bin/python with PYTHONPATH=/tmp/laya-pylibs. Do NOT install anything into system python or a new venv.
 
-1. Load tomngdev/shell-safety medium split (already at
-   /tmp/shelldata/{train,validation,test}.jsonl, else download from
-   https://huggingface.co/datasets/tomngdev/shell-safety/resolve/main/md/).
-   POSIX rows only.
-2. Emit /tmp/laya-train/{train,validation}.jsonl with rows
-   {"text": ..., "label": "allow"|"review"|"block"}.
-   Mapping: safe->allow, unsafe->block. Derive "review" from unsafe
-   rows whose category is mid-severity (you choose and DOCUMENT the
-   category list in the script header: e.g. package installs, plain
-   downloads, permission changes — things a human should confirm, not
-   instant-block). Keep the rule simple and printed.
-3. Dedupe exact texts; drop rows whose text appears in ANY held-out
-   file listed in PROMPTS.md.
-4. Print: counts per split per label, category distribution, 5 sample
-   rows per label. Eyeball label quality and report problems.
-5. Write Scripts/laya/training/README.md: run instructions (project
-   venv style: cd Scripts/laya/training && /tmp/laya-venv/bin/python
-   prepare_data.py), label rules, sources + licenses, quality caveats.
+## Goal (one sentence)
+Build a labelled training dataset {text, label in allow|review|block} from the shell-safety dataset, saved as JSONL, with zero rows from our held-out exam sets.
 
-Return the printed summary verbatim + file paths. Do not commit.
+## Inputs
+- Preferred: /tmp/shelldata/train.jsonl (20001 rows), validation.jsonl (2003), test.jsonl (ignore test). If missing, download medium split from https://huggingface.co/datasets/tomngdev/shell-safety/resolve/main/md/{train,validation}.jsonl
+- Row shape: {"command": str, "session_context": {...}, "safe": bool, "category": str, "shell": "posix"|..., "reason": str}
+- Held-out files (NEVER emit any row whose normalized command text appears in these): Scripts/laya/testset_shell.jsonl, Scripts/laya/testset_incidents.jsonl, Scripts/laya/testset_ko_30.jsonl (field is "tool_call" there).
+
+## Deliverables (write files, do NOT commit, do NOT push)
+1. `Scripts/laya/training/prepare_data.py` — runnable as: cd Scripts/laya/training && PYTHONPATH=/tmp/laya-pylibs /tmp/laya-venv/bin/python prepare_data.py
+2. `/tmp/laya-train/train.jsonl` and `/tmp/laya-train/validation.jsonl` — one JSON object per line: {"text": <command>, "label": "allow"|"review"|"block"}
+3. `Scripts/laya/training/README.md` — run instructions, label rules, sources + licenses, quality caveats.
+
+## Processing rules (exact)
+1. Keep only rows with shell == "posix".
+2. text = command stripped of leading/trailing whitespace. Drop empty. Drop rows longer than 2000 chars.
+3. Label mapping: safe=true -> "allow". safe=false -> "block", EXCEPT the review rule in step 4.
+4. Review rule: unsafe rows whose `category` is in a mid-severity set become "review". You choose the set from the categories actually present. It must only cover "human should confirm" behavior (e.g. installs, plain downloads, permission changes, chained commands) and must NEVER include categories about deletion, exfiltration, credential access, or code execution from the network. Print the chosen set in the script header as a Python constant named REVIEW_CATEGORIES, and list it in your final report.
+5. Dedupe by exact text (after strip). If the same text appears with different labels, keep the STRICTER label (block > review > allow) and count it as a conflict.
+6. Leakage filter: drop any row whose stripped text appears in any held-out file's tool_call set. Count drops.
+7. Deterministic: sort output rows by (label, text). No randomness.
+
+## Acceptance gates (ALL must pass; report each explicitly)
+G1. Script runs end-to-end with exit code 0 using the exact run command above.
+G2. Both output files exist; every line parses as JSON with keys exactly {"text","label"} and label in {allow, review, block} (validate in the script, assert it).
+G3. Train rows >= 10,000 and validation rows >= 1,000 (POSIX-filtered medium split should land near 16k/1.6k; if yours differ by >20%, explain why).
+G4. Each of the 3 labels is >= 5% of train rows. If review < 5%, say so and what fraction it is — do NOT widen REVIEW_CATEGORIES to force the number.
+G5. Leakage check inside the script: assert intersection between output texts and held-out tool_call set is EMPTY; print the count checked.
+G6. Re-running the script produces byte-identical outputs (run twice, sha256sum both files, show they match).
+G7. git status in the worktree shows ONLY your three new files as changes (prepare_data.py, README.md modified/created under Scripts/laya/training/). No commits made (git log -1 unchanged = "docs(training): fine-tune tickets as standalone prompts").
+
+## What to print during the run (script stdout, in this order)
+- input counts per split (raw, after POSIX filter)
+- counts per split per label
+- conflicts resolved by stricter label: N
+- leakage drops: N; leakage check: PASS/FAIL
+- categories table: category -> count (train, before relabel)
+- 5 sample rows per label (text truncated to 100 chars)
+
+## Your final reply (EXACTLY this shape, nothing else)
+VERDICT: DONE or BLOCKED (+ one-line reason if BLOCKED)
+FILES: <3 paths>
+GATES: G1 PASS/FAIL ... G7 PASS/FAIL (one per line or semicolon-separated)
+SUMMARY:
+<paste the script's full stdout>
+REVIEW_CATEGORIES: <the list>
+CONCERNS: <label-quality problems you saw in samples, or "none">
+
+Do not commit. Do not start Ticket 2. Do not modify any other files.
 ```
 
 ## Ticket 2 — Train head + eval (needs Ticket 1 output)
