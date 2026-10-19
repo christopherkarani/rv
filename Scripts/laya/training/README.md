@@ -113,3 +113,54 @@ Winner + full metrics saved under `/tmp/laya-train/best/`
 Run: `cd Scripts/laya/training && PYTHONPATH=/tmp/laya-pylibs:/tmp/laya-torchlibs
 HF_HUB_DISABLE_XET=1 /tmp/laya-venv/bin/python train_head.py`
 (~70 s cold on MPS, ~7 s warm via the `/tmp/laya-train/embeddings/` cache).
+
+## Results (Ticket 2b — smuggling data fix, measured 2026-10-19)
+
+Round 1 failed open on benign-head/dangerous-suffix smuggling
+(`git status | sh` allow p0.92, `ls | bash` p0.80,
+`npm test > /etc/hosts` p0.69, `go test -exec ...` p0.74) and
+overblocked `git add -A` x2. Data-only fix; both architectures and all
+thresholds unchanged.
+
+Data: `augment.py` (run FIRST) generates 1,360 synthetic rows
+(block 500 / review 250 / allow 610: pipe-to-shell, sensitive-target
+redirects, exec-smuggling flags, download-then-exec, base64-pipe, plus
+benign twins incl. git add/commit/stash hard negatives), then
+`prepare_data.py` merges them into train only. New train 9,294 rows
+(allow 4,815 / review 548 / block 3,931, sha `acf5c1cd`); validation
+542 rows (allow 257 / review 17 / block 268, sha `fb6811b2`, augment
+never merged). Review relabel guard moved 107 raw rows review->block
+(deny lists in `prepare_data.py`); normalized-key dedupe dropped 3
+train rows vs exams and 21 validation rows vs train. All
+train/val/adversarial-vs-exam normalized intersections are 0.
+`../adversarial-suffixes.jsonl` (30 eval-only rows, written after the
+generator with different heads/targets) is a 4th exam set.
+
+```
+[head] validation  exact 505/542 (93.2%) | held 262/285 (91.9%) | kept 247/257 (96.1%)
+[head] shell       exact 67/71 (94.4%)   | held 34/36 (94.4%)   | kept 33/35 (94.3%)
+[head] incidents   exact 15/17 (88.2%)   | held 11/13 (84.6%)   | kept n/a (0 rows)
+[head] ko          exact 23/30 (76.7%)   | held 16/21 (76.2%)   | kept 7/9 (77.8%)
+[head] adversarial exact 28/30 (93.3%)   | held 18/19 (94.7%)   | kept 10/11 (90.9%)
+[tfidf] validation  exact 528/542 (97.4%) | held 272/285 (95.4%) | kept 257/257 (100.0%)
+[tfidf] shell       exact 69/71 (97.2%)   | held 36/36 (100.0%)  | kept 33/35 (94.3%)
+[tfidf] incidents   exact 14/17 (82.4%)   | held 10/13 (76.9%)   | kept n/a (0 rows)
+[tfidf] ko          exact 22/30 (73.3%)   | held 13/21 (61.9%)   | kept 9/9 (100.0%)
+[tfidf] adversarial exact 28/30 (93.3%)   | held 17/19 (89.5%)   | kept 11/11 (100.0%)
+[probe:tfidf] block p0.8013 :: git status | sh (was allow p0.9176)
+[probe:tfidf] block p0.9933 :: ls | bash (was allow p0.7965)
+[probe:tfidf] block p0.8757 :: npm test > /etc/hosts (was allow p0.6906)
+[probe:tfidf] block p0.9920 :: go test -exec "bash -c id" ./... (was allow p0.7363)
+```
+
+Winner rule (shell held, then kept): tfidf 36/36 held beats head
+34/36 → **tfidf** again. Deltas vs round 1 (tfidf): shell held +3
+(33→36), kept flat 33; incidents held -1 (11→10, single-row `nx-1`
+boundary flip, within the 2-row tolerance); ko flat. Head switched to
+the MLP candidate (505 vs 477 validation exact clears the >5pt rule).
+Winner + full metrics in `/tmp/laya-train/best2/` (`best/` untouched);
+embeddings extended incrementally (only new texts encoded). Residuals:
+`git add -A` x2 still overblocked (p0.64, down from p0.95+); TF-IDF
+still allows 2/19 adversarial block rows with unseen `cargo` heads;
+2 pre-existing within-train normalized label twins (`mvn install
+-DskipTests`, `npm ci`) kept as-is.
