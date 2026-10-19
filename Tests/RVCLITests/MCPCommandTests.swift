@@ -5920,7 +5920,7 @@ struct MCPCommandTests {
     }
 }
 
-private extension Result where Failure == CommandFailure {
+extension Result where Failure == CommandFailure {
     var failureMessage: String? {
         if case .failure(let failure) = self { return failure.message }
         return nil

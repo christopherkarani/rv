@@ -15,6 +15,7 @@ _rv() {
     'service:Service status'
     'hook:Host hook child'
     'setup:Install hooks'
+    'init:Generate a runtime resource profile'
     'uninstall:Remove rv-owned files'
     'doctor:Read-only health'
     'safety:Show or set normal or strict'

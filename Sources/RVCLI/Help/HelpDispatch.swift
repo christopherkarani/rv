@@ -18,6 +18,7 @@ public enum HelpTopic: Equatable, Sendable {
     case serviceStatus
     case hook
     case setup
+    case initialize
     case uninstall
     case doctor
     case allowOnce
@@ -120,6 +121,8 @@ public enum HelpDispatch {
             return isHookPath(rest) ? .hook : nil
         case "setup":
             return rest.allSatisfy(isSetupFlag) ? .setup : nil
+        case "init":
+            return .initialize
         case "uninstall":
             return rest.allSatisfy(isFormatFlag) ? .uninstall : nil
         case "doctor":

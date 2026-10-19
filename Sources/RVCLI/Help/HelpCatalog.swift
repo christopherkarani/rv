@@ -16,6 +16,7 @@ enum HelpCatalog {
         case .serviceStatus: serviceStatus
         case .hook: hook
         case .setup: setup
+        case .initialize: initialize
         case .uninstall: uninstall
         case .doctor: doctor
         case .allowOnce: allowOnce
@@ -48,6 +49,7 @@ enum HelpCatalog {
                     HelpRow(name: "opencode", description: "Launch OpenCode in a workspace sandbox (contained runtime, macOS only)"),
                     HelpRow(name: "workspace", description: "Attach to the persistent workspace host (contained runtime, macOS only)"),
                     HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
+                    HelpRow(name: "init", description: "Generate a runtime resource profile for this project"),
                     HelpRow(name: "test", description: "Try a command before it runs"),
                     HelpRow(name: "doctor", description: "Check service, packs, and hosts"),
                 ],
@@ -279,6 +281,32 @@ enum HelpCatalog {
         ]
     )
 
+    static let initialize = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv init [--project <dir>] [--profile-id <id>] [--agent <tag>...] [--secret <name>...] [--varlock <file>] [--dry-run]"),
+            ]),
+            HelpSection(heading: "Flags", rows: [
+                HelpRow(name: "--profile-id", description: "Profile id to create. Default: main"),
+                HelpRow(name: "--agent", description: "Serve this agent tag (repeatable). Default: detect installed agents"),
+                HelpRow(name: "--secret", description: "Wire this secret name into the profile (repeatable)"),
+                HelpRow(name: "--varlock", description: ".env.schema to import. Default: <project>/.env.schema when present"),
+                HelpRow(name: "--dry-run", description: "Show the plan; write nothing"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "writes", description: "Appends one profile to ~/.config/rv/runtime-resources.json; other profiles untouched"),
+                HelpRow(name: "detects", description: "Agent binaries on PATH plus installed credential files (claude, codex, opencode, muse)"),
+                HelpRow(name: "explicit", description: "Launches still name the profile with --resource-profile; nothing is auto-selected"),
+            ]),
+        ],
+        examples: [
+            "rv init --dry-run",
+            "rv init --secret OPENAI_API_KEY",
+        ]
+    )
+
     /// No Example — uninstall is destructive if pasted blindly.
     static let uninstall = HelpViewModel(
         title: "",
@@ -415,7 +443,7 @@ enum HelpCatalog {
             HelpSection(heading: "Usage", rows: [
                 HelpRow(name: "rv secrets [list] [--json]"),
                 HelpRow(name: "rv secrets check [<name>...] [--json]"),
-                HelpRow(name: "rv secrets set <name> [--gateway <url> --base-url-env <var> | --environment]"),
+                HelpRow(name: "rv secrets set <name> [--gateway <url> --base-url-env <var> | --environment] [--resource-profile <id>]"),
                 HelpRow(name: "rv secrets remove <name>"),
                 HelpRow(name: "rv secrets scan [<dir>] [--json]"),
                 HelpRow(name: "rv secrets describe [--json]"),
@@ -428,6 +456,7 @@ enum HelpCatalog {
                 HelpRow(name: "--placeholder-prefix", description: "Prefix kept on the placeholder, e.g. sk-"),
                 HelpRow(name: "--environment", description: "Real value in the cage env instead (weaker)"),
                 HelpRow(name: "--agent", description: "Only stage for this agent tag (repeatable)"),
+                HelpRow(name: "--resource-profile", description: "Wire the secret into this runtime profile (see `rv init`)"),
             ]),
             HelpSection(heading: "Notes", rows: [
                 HelpRow(name: "config", description: "~/.config/rv/secrets.json; profiles list names in \"secrets\""),
@@ -446,7 +475,7 @@ enum HelpCatalog {
             ]),
         ],
         examples: [
-            "rv secrets set OPENAI_API_KEY --gateway https://api.openai.com/v1 --base-url-env OPENAI_BASE_URL",
+            "rv secrets set OPENAI_API_KEY --resource-profile main",
             "rv secrets check",
             "rv secrets scan .",
         ]
@@ -460,6 +489,7 @@ enum HelpCatalog {
                 HelpRow(name: "rv mcp [list] [--project <dir>] [--json]"),
                 HelpRow(name: "rv mcp check [--project <dir>] [--json]"),
                 HelpRow(name: "rv mcp import --host <host> [--server <name>...] [--allow-tools] [--dry-run]"),
+                HelpRow(name: "rv mcp onboard --host <host> [--server <name>...] [--allow-tools] [--dry-run]"),
                 HelpRow(name: "rv mcp setup --host <host> [--server <name>...] [--rv-path <path>] [--undo]"),
                 HelpRow(name: "rv mcp serve --server <name> [--server <name>...]"),
                 HelpRow(name: "rv mcp pending | approve <id> [--always] | deny <id>"),
@@ -512,8 +542,8 @@ enum HelpCatalog {
         ],
         examples: [
             "rv mcp list",
-            "rv mcp import --host cursor --dry-run",
-            "rv mcp setup --host cursor",
+            "rv mcp onboard --host cursor --dry-run",
+            "rv mcp onboard --host cursor",
             "rv mcp check",
         ]
     )

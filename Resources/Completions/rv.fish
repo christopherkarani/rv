@@ -11,6 +11,7 @@ complete -c rv -n "__fish_use_subcommand" -a "allowlist" -d "Manage permanent us
 complete -c rv -n "__fish_use_subcommand" -a "service" -d "Service status"
 complete -c rv -n "__fish_use_subcommand" -a "hook" -d "Host hook child"
 complete -c rv -n "__fish_use_subcommand" -a "setup" -d "Install hooks"
+complete -c rv -n "__fish_use_subcommand" -a "init" -d "Generate a runtime resource profile"
 complete -c rv -n "__fish_use_subcommand" -a "uninstall" -d "Remove rv-owned files"
 complete -c rv -n "__fish_use_subcommand" -a "doctor" -d "Read-only health"
 complete -c rv -n "__fish_use_subcommand" -a "safety" -d "Show or set normal or strict"

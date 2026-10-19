@@ -258,12 +258,16 @@ enum MCPRun {
         if report.passes {
             lines.append("ok: every MCP server is governed by rv, allowed direct, or disabled (\(report.rows.count) checked)")
         } else {
-            if let problem = report.integrityProblem { lines.append("untrusted  " + reviewField(problem)) }
+            if let problem = report.integrityProblem {
+                lines.append("untrusted  " + reviewField(problem))
+                lines.append("  Fix: review with `rv mcp list`, then `rv mcp trust`")
+            }
             for row in report.failing {
                 let status = MCPEntryStatus(rawValue: row.status)
                 lines.append(
                     "\(reviewField(row.status))  \(reviewField(row.name))  \(reviewField(row.host)) \(reviewField(abbreviate(row.configPath, home: home)))")
                 if let status { lines.append("  \(status.explanation)") }
+                if let status, let fix = fixLine(status: status, row: row) { lines.append(fix) }
             }
             lines += problemLines(report, home: home)
             lines.append(summary(report))
@@ -275,6 +279,26 @@ enum MCPRun {
                     + leaks.map { reviewField($0.name) }.joined(separator: ", ") + "); `rv mcp import` moves them into rv secrets")
         }
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// The exact next command for a failing row. Names and hosts go through
+    /// the same review escaping as the rest of the output, so a hostile
+    /// server name cannot redraw the terminal or forge the suggestion.
+    static func fixLine(status: MCPEntryStatus, row: Row) -> String? {
+        let host = reviewField(row.host)
+        let name = quotedReviewFields([row.name])
+        switch status {
+        case .bypass:
+            return "  Fix: `rv mcp setup --host \(host) --server \(name)`"
+        case .unreviewed:
+            return "  Fix: `rv mcp onboard --host \(host) --server \(name)`"
+        case .dangling:
+            return "  Fix: `rv mcp setup --host \(host) --server \(name) --undo`, or define \(name) in mcp.json"
+        case .blocked:
+            return "  Fix: remove \(name) from \"blocked\" in mcp.json to review it"
+        case .governed, .direct, .disabled:
+            return nil
+        }
     }
 
     static func capped(_ names: [String], limit: Int = 4) -> String {
@@ -886,6 +910,7 @@ enum MCPRun {
 
     static func importServers(
         host: MCPHost, names: [String], project: URL?, allowTools: Bool, dryRun: Bool, environment: MCPEnvironment,
+        toolModeForFreshConfig: MCPToolMode? = nil,
         show: @escaping @Sendable (String) -> Void = { _ in }
     ) async -> Result<String, CommandFailure> {
         let base: MCPStoredConfiguration
@@ -988,6 +1013,12 @@ enum MCPRun {
         }
         var updated = configuration
         updated.servers += plan.servers
+        // A first import chooses the compact tool listing: clients see only
+        // rv_search_tools and rv_call_tool instead of every upstream schema.
+        // Existing configs keep whatever mode the operator already chose.
+        if let toolModeForFreshConfig, configuration.servers.isEmpty {
+            updated.toolMode = toolModeForFreshConfig
+        }
         if case .failure(let error) = updated.write(configDirectory: environment.configDirectory, signer: signer) {
             let restoredSecrets: Bool
             if plan.secrets.isEmpty {
@@ -1007,11 +1038,44 @@ enum MCPRun {
             return .failure(CommandFailure("mcp.json changed while it was being signed"))
         }
         lines.append("wrote mcp.json\(plan.secrets.isEmpty ? "" : " and secrets.json (values in the Keychain, service \(SecretKeychain.service))")")
+        if toolModeForFreshConfig != nil, configuration.servers.isEmpty {
+            lines.append("tool mode search: clients see only rv_search_tools and rv_call_tool")
+        }
         if allowTools == false {
             lines.append("every tool asks for approval until you allow it (mcp.json \"tools\" or `rv mcp approve <id> --always`)")
         }
         lines.append("next: `rv mcp setup --host \(host.rawValue)` routes the host through rv")
         return .success(lines.joined(separator: "\n") + "\n")
+    }
+
+    /// One-command onboarding: import the host's servers, then route the host
+    /// through `rv mcp serve`. The import asks for presence once; setup asks
+    /// nothing, so the whole flow needs a single confirmation.
+    static func onboard(
+        host: MCPHost, names: [String], project: URL?, allowTools: Bool, dryRun: Bool,
+        rvPath: String, environment: MCPEnvironment,
+        show: @escaping @Sendable (String) -> Void = { _ in }
+    ) async -> Result<String, CommandFailure> {
+        let imported: String
+        switch await importServers(
+            host: host, names: names, project: project, allowTools: allowTools, dryRun: dryRun,
+            environment: environment, toolModeForFreshConfig: .search, show: show)
+        {
+        case .failure(let failure): return .failure(failure)
+        case .success(let text): imported = text
+        }
+        if dryRun {
+            return .success(imported + "dry run: setup not run\n")
+        }
+        switch setup(
+            host: host, names: names, project: project, undo: false, rvPath: rvPath,
+            environment: environment)
+        {
+        case .failure(let failure):
+            return .failure(CommandFailure(imported + "setup failed: \(failure.message)"))
+        case .success(let routed):
+            return .success(imported + routed)
+        }
     }
 
     /// What the device owner sees before secrets are stored or mcp.json is signed.
@@ -1187,8 +1251,8 @@ struct MCP: AsyncParsableCommand {
         commandName: "mcp",
         abstract: "Find, review, and govern the MCP servers your agents use.",
         subcommands: [
-            MCPList.self, MCPCheck.self, MCPImportCommand.self, MCPSetupCommand.self, MCPServe.self, MCPPending.self,
-            MCPApprove.self, MCPDeny.self, MCPTrust.self, MCPConnect.self,
+            MCPList.self, MCPCheck.self, MCPImportCommand.self, MCPSetupCommand.self, MCPOnboard.self, MCPServe.self,
+            MCPPending.self, MCPApprove.self, MCPDeny.self, MCPTrust.self, MCPConnect.self,
         ],
         defaultSubcommand: MCPList.self
     )
@@ -1430,6 +1494,32 @@ struct MCPImportCommand: AsyncParsableCommand {
             environment: environment, show: { ctx.writeStdout($0) })
         {
         case .failure(let failure): try ctx.fail("rv mcp import: \(failure.message)\n")
+        case .success(let text): ctx.writeStdout(text)
+        }
+    }
+}
+
+struct MCPOnboard: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "onboard",
+        abstract: "Import a host's MCP servers and route the host through rv in one step.")
+
+    @Option(help: "Host to onboard: \(MCPHost.allCases.map(\.rawValue).joined(separator: ", ")).") var host: MCPHost
+    @Option(name: .customLong("server"), help: "Only this server (repeatable).") var servers: [String] = []
+    @Option(help: "Project directory for project-scoped configs. Default: current directory.") var project: String?
+    @Flag(help: "Allow every tool of the imported servers instead of asking.") var allowTools = false
+    @Flag(help: "Show what would change; write nothing.") var dryRun = false
+    @Option(help: "rv path the host should launch. Default: this rv.") var rvPath: String?
+
+    func run() async throws {
+        let ctx = CommandContext.current(command: "mcp onboard", json: false, robot: false, plain: true, noColor: true)
+        let environment = MCPEnvironment.live(home: try ctx.requireHome())
+        let path = rvPath ?? MCPRun.rvExecutablePath(environment: environment.processEnvironment)
+        switch await MCPRun.onboard(
+            host: host, names: servers, project: MCPRun.projectURL(project), allowTools: allowTools,
+            dryRun: dryRun, rvPath: path, environment: environment, show: { ctx.writeStdout($0) })
+        {
+        case .failure(let failure): try ctx.fail("rv mcp onboard: \(failure.message)\n")
         case .success(let text): ctx.writeStdout(text)
         }
     }

@@ -192,10 +192,10 @@ struct WorkspaceAbandon: AsyncParsableCommand {
 enum WorkspaceCommandRun {
     /// Mirror of the `rv opencode` warning for `rv workspace run`: without a
     /// profile the host stages no credentials. Warn instead of failing so
-    /// keyless runs (local models, `--help`) keep working. No CLI command
-    /// lists profiles, so the remedy names the file that defines the IDs.
+    /// keyless runs (local models, `--help`) keep working. The remedy names
+    /// the flag, the file that defines the IDs, and `rv init`, which writes one.
     static let missingProfileWarning =
-        "rv workspace run: no --resource-profile selected; provider credentials are unstaged and agent auth will fail. Pass --resource-profile <id> to stage them (profile IDs are defined in ~/.config/rv/runtime-resources.json).\n"
+        "rv workspace run: no --resource-profile selected; provider credentials are unstaged and agent auth will fail. Pass --resource-profile <id> to stage them (profile IDs are defined in ~/.config/rv/runtime-resources.json). Run `rv init` in the project to generate one.\n"
 
     /// Failed connect after `WorkspaceHosts.ensure` (`start`, `run`, and the
     /// workspace shell's first connect). Ensure may already have published
