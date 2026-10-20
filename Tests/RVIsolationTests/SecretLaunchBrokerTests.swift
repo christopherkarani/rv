@@ -76,7 +76,7 @@ struct SecretLaunchBrokerTests {
         let fixture = try SecretsFixture(SecretsFixture.standard)
         defer { fixture.tearDown() }
         let broker = SecretLaunchBroker(
-            configDirectory: fixture.directory, resolver: fakeResolver,
+            configDirectory: fixture.directory, makeResolver: { fakeResolver },
             transport: RecordingUpstream().transport, workspace: "W1")
         defer { broker.stop() }
 
@@ -103,7 +103,7 @@ struct SecretLaunchBrokerTests {
         let fixture = try SecretsFixture(SecretsFixture.standard)
         defer { fixture.tearDown() }
         let broker = SecretLaunchBroker(
-            configDirectory: fixture.directory, resolver: fakeResolver, workspace: nil)
+            configDirectory: fixture.directory, makeResolver: { fakeResolver }, workspace: nil)
         defer { broker.stop() }
         let lease = try broker.lease(names: ["OPENAI_API_KEY", "GH_TOKEN"], agent: "claude").get()
         #expect(lease.environment.map(\.name) == ["GH_TOKEN"])
@@ -119,7 +119,7 @@ struct SecretLaunchBrokerTests {
             ]}
             """)
         defer { fixture.tearDown() }
-        let broker = SecretLaunchBroker(configDirectory: fixture.directory, resolver: fakeResolver, workspace: nil)
+        let broker = SecretLaunchBroker(configDirectory: fixture.directory, makeResolver: { fakeResolver }, workspace: nil)
         defer { broker.stop() }
         guard case .failure(.unknownSecret("NOT_DEFINED")) = broker.lease(names: ["NOT_DEFINED"], agent: nil) else {
             Issue.record("undefined secret must fail")
@@ -138,7 +138,7 @@ struct SecretLaunchBrokerTests {
         let fixture = try SecretsFixture(SecretsFixture.standard)
         defer { fixture.tearDown() }
         let broker = SecretLaunchBroker(
-            configDirectory: fixture.directory, resolver: fakeResolver,
+            configDirectory: fixture.directory, makeResolver: { fakeResolver },
             transport: RecordingUpstream().transport, workspace: nil)
         defer { broker.stop() }
         let first = try broker.lease(names: ["OPENAI_API_KEY"], agent: "codex").get()
@@ -157,7 +157,7 @@ struct SecretLaunchBrokerTests {
         let fixture = try SecretsFixture(SecretsFixture.standard)
         defer { fixture.tearDown() }
         chmod(SecretsConfiguration.fileURL(configDirectory: fixture.directory).path, 0o666)
-        let broker = SecretLaunchBroker(configDirectory: fixture.directory, resolver: fakeResolver, workspace: nil)
+        let broker = SecretLaunchBroker(configDirectory: fixture.directory, makeResolver: { fakeResolver }, workspace: nil)
         #expect(throws: SecretLeaseError.configuration(.unsafeFile("group or world writable"))) {
             try broker.lease(names: ["GH_TOKEN"], agent: nil).get()
         }
@@ -168,7 +168,7 @@ struct SecretLaunchBrokerTests {
         defer { fixture.tearDown() }
         func broker(_ state: ManagedPolicyState) -> SecretLaunchBroker {
             SecretLaunchBroker(
-                configDirectory: fixture.directory, resolver: fakeResolver,
+                configDirectory: fixture.directory, makeResolver: { fakeResolver },
                 transport: RecordingUpstream().transport, workspace: nil, managed: { state })
         }
         var policy = ManagedPolicy()

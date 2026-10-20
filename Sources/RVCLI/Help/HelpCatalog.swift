@@ -31,6 +31,7 @@ enum HelpCatalog {
         case .mcp: mcp
         case .managed: managed
         case .report: report
+        case .run: run
         case .opencode: opencode
         case .workspace: workspace
         case .`operator`: operatorHelp
@@ -46,6 +47,7 @@ enum HelpCatalog {
                 heading: "Get started",
                 rows: [
                     HelpRow(name: "rv", description: "Open the workspace shell in the current project (contained runtime, macOS only)"),
+                    HelpRow(name: "run", description: "Run a command with the profile's secrets staged (contained runtime, macOS only)"),
                     HelpRow(name: "opencode", description: "Launch OpenCode in a workspace sandbox (contained runtime, macOS only)"),
                     HelpRow(name: "workspace", description: "Attach to the persistent workspace host (contained runtime, macOS only)"),
                     HelpRow(name: "setup", description: "Wire host hooks and start rvd"),
@@ -100,6 +102,28 @@ enum HelpCatalog {
                 HelpRow(name: "rv help service status"),
             ]),
         ]
+    )
+
+    static let run = HelpViewModel(
+        title: "",
+        blurb: "",
+        sections: [
+            HelpSection(heading: "Usage", rows: [
+                HelpRow(name: "rv run [--workspace <absolute-path>] [--resource-profile <id>] -- <command> [args...]"),
+            ]),
+            HelpSection(heading: "Flags", rows: [
+                HelpRow(name: "--workspace", description: "Writable workspace; default is the current directory"),
+                HelpRow(name: "--resource-profile", description: "Owner-authorized resource profile ID; its secrets stage for the command"),
+                HelpRow(name: "--", description: "Pass all following arguments to the command, including --help"),
+            ]),
+            HelpSection(heading: "Notes", rows: [
+                HelpRow(name: "command", description: "Bare names search absolute PATH directories; paths must be absolute (unlike `rv workspace run`, which never searches PATH)"),
+                HelpRow(name: "secrets", description: "Every source kind stages, including dotenv (.env values read host-side). Agent-tagged secrets do not stage: `rv run` passes no agent tag"),
+                HelpRow(name: "profile", description: "Without --resource-profile nothing stages; with dotenv-bound secrets that fails closed instead of warning"),
+                HelpRow(name: "platform", description: "Contained runtime is macOS-only today; on Linux this launch is refused instead of using a weaker sandbox"),
+            ]),
+        ],
+        examples: ["rv run --resource-profile main -- python main.py", "rv run --workspace /path/to/repo --resource-profile main -- npm test"]
     )
 
     static let opencode = HelpViewModel(
@@ -286,13 +310,14 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv init [--project <dir>] [--profile-id <id>] [--agent <tag>...] [--secret <name>...] [--varlock <file>] [--dry-run]"),
+                HelpRow(name: "rv init [--project <dir>] [--profile-id <id>] [--agent <tag>...] [--secret <name>...] [--varlock <file>] [--dotenv] [--dry-run]"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--profile-id", description: "Profile id to create. Default: main"),
                 HelpRow(name: "--agent", description: "Serve this agent tag (repeatable). Default: detect installed agents"),
                 HelpRow(name: "--secret", description: "Wire this secret name into the profile (repeatable)"),
                 HelpRow(name: "--varlock", description: ".env.schema to import. Default: <project>/.env.schema when present"),
+                HelpRow(name: "--dotenv", description: "Bind <project>/.env by reference; values stay in .env (v1 binds exactly this one file)"),
                 HelpRow(name: "--dry-run", description: "Show the plan; write nothing"),
             ]),
             HelpSection(heading: "Notes", rows: [
@@ -448,6 +473,8 @@ enum HelpCatalog {
                 HelpRow(name: "rv secrets scan [<dir>] [--json]"),
                 HelpRow(name: "rv secrets describe [--json]"),
                 HelpRow(name: "rv secrets import --varlock <.env.schema> [--dry-run]"),
+                HelpRow(name: "rv secrets import --dotenv <.env> [--dry-run]"),
+                HelpRow(name: "rv secrets harden <name> | --all"),
                 HelpRow(name: "rv secrets hook install | uninstall"),
             ]),
             HelpSection(heading: "Flags", rows: [
@@ -466,7 +493,7 @@ enum HelpCatalog {
                 ),
                 HelpRow(
                     name: "sources",
-                    description: "keychain, hostEnvironment, onePassword, vault, aws, infisical, bitwarden, gcp, azure"
+                    description: "keychain, hostEnvironment, onePassword, vault, aws, infisical, bitwarden, gcp, azure, dotenv (.env file; values stay in the file)"
                 ),
                 HelpRow(
                     name: "defaults",
@@ -474,6 +501,8 @@ enum HelpCatalog {
                 ),
                 HelpRow(name: "describe", description: "Names, descriptions, types, and delivery for agents; never a value"),
                 HelpRow(name: "varlock", description: "import --varlock reads @sensitive, @type, and provider refs; literals are skipped"),
+                HelpRow(name: "dotenv", description: "import --dotenv binds .env names by reference; values stay in the file. harden moves a value into the Keychain"),
+                HelpRow(name: "load", description: "Use `rv secrets check` to resolve every secret and show fingerprints"),
                 HelpRow(name: "hook", description: "pre-commit scans staged files and prints file:line:name; an existing hook is kept"),
                 HelpRow(name: "audit", description: "rv audit --kind secret.use shows each use with a fingerprint"),
             ]),

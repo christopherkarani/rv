@@ -49,9 +49,15 @@ struct SecretsCLIFixture {
     let keychain = FakeKeychain()
 
     init() throws {
-        directory = FileManager.default.temporaryDirectory
+        let created = FileManager.default.temporaryDirectory
             .appendingPathComponent("rv-secrets-cli-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: created, withIntermediateDirectories: true)
+        // Canonicalized (realpath, not resolvingSymlinksInPath, which keeps
+        // /var unresolved): dotenv bindings store canonical paths, so
+        // fixture paths must already be canonical for exact comparisons.
+        directory = DotenvLiveReader.canonicalPath(created.path).map {
+            URL(fileURLWithPath: $0, isDirectory: true)
+        } ?? created
     }
 
     func environment(host: [String: String] = [:]) -> SecretsEnvironment {
@@ -124,7 +130,9 @@ struct SecretsCommandTests {
         let environment = fixture.environment()
         #expect(SecretsRun.set(
             name: "NEW", value: Data("v-12345678".utf8), definition: nil, agents: [], description: nil,
-            environment: environment) == .failure("NEW is new: pass --gateway URL --base-url-env VAR, or --environment"))
+            environment: environment) == .failure(CommandFailure(
+                "NEW is new: pass --gateway URL --base-url-env VAR, or --environment; "
+                    + "to bind a value already in a .env file instead, use `rv secrets import --dotenv <file>`")))
         #expect(SecretsRun.set(
             name: "NEW", value: Data(), definition: .environment, agents: [], description: nil,
             environment: environment) == .failure("the value must be 1 byte to 16 KiB with no NUL bytes"))

@@ -65,9 +65,11 @@ public struct SecretResolver: Sendable {
 
     public static func live(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        home: String
+        home: String,
+        dotenvReader: @escaping DotenvReaderFunction = { DotenvLiveReader.read(path: $0) }
     ) -> SecretResolver {
-        SecretResolver { source in
+        let dotenvCache = DotenvSnapshotCache()
+        return SecretResolver { source in
             switch source {
             case .keychain(let service, let account):
                 guard let data = KeychainReader.live.read(service, account) else {
@@ -97,6 +99,8 @@ public struct SecretResolver: Sendable {
                 return SecretCommandProviders.gcp(secret: secret, project: project, version: version, environment: environment)
             case .azure(let vault, let name, let version):
                 return SecretCommandProviders.azure(vault: vault, name: name, version: version, environment: environment)
+            case .dotenv(let path, let variable):
+                return dotenvCache.resolve(path: path, variable: variable, reader: dotenvReader)
             }
         }
     }

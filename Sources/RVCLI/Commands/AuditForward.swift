@@ -209,10 +209,15 @@ enum AuditForwardRun {
     /// `${secret:NAME}` in header values, resolved through secrets.json.
     static func resolveHeaders(
         _ headers: [String: String], secrets: () -> Result<SecretsConfiguration, SecretsConfigurationError>,
-        resolver: SecretResolver
+        resolver: SecretResolver, managed: ManagedPolicyState
     ) -> Result<[String: String], CommandFailure> {
         let names = Set(headers.values.flatMap { MCPSecretReference.names(in: $0) ?? [] })
         guard names.isEmpty == false else { return .success(headers) }
+        // This path sends values off-host: an invalid or forbidding policy
+        // fails closed here regardless of how the destination was chosen.
+        if let reason = managed.invalidReason {
+            return .failure(CommandFailure("organization policy is invalid: \(reason)"))
+        }
         let configuration: SecretsConfiguration
         switch secrets() {
         case .failure(let error): return .failure(CommandFailure(error.message))
@@ -222,6 +227,9 @@ enum AuditForwardRun {
         for name in names.sorted() {
             guard let secret = configuration.secret(named: name) else {
                 return .failure(CommandFailure("header secret \(DisplayedText.field(name)) is not defined in secrets.json"))
+            }
+            if let reason = SecretOrganizationRules.violation(secret, policy: managed.policy) {
+                return .failure(CommandFailure("organization policy: \(reason)"))
             }
             switch resolver.resolve(secret.source) {
             case .failure(let error): return .failure(CommandFailure("header secret \(DisplayedText.field(name)): \(error.message)"))
@@ -349,7 +357,7 @@ struct AuditForward: AsyncParsableCommand {
         }
         switch AuditForwardRun.resolveHeaders(
             headerMap, secrets: { SecretsConfiguration.load(configDirectory: configDirectory) },
-            resolver: .live(home: home.rawValue))
+            resolver: .live(home: home.rawValue), managed: managed)
         {
         case .failure(let failure): try ctx.fail("rv audit forward: \(failure.message)\n")
         case .success(let resolved): options.headers = resolved

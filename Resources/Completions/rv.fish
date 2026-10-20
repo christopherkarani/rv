@@ -1,4 +1,5 @@
 complete -c rv -f
+complete -c rv -n "__fish_use_subcommand" -a "run" -d "Run a command with profile secrets staged"
 complete -c rv -n "__fish_use_subcommand" -a "opencode" -d "Launch OpenCode with workspace write containment"
 complete -c rv -n "__fish_use_subcommand" -a "workspace" -d "Attach to the persistent workspace host"
 complete -c rv -n "__fish_use_subcommand" -a "test" -d "Evaluate a command"
@@ -60,5 +61,6 @@ complete -c rv -n "__fish_seen_subcommand_from secrets" -a "set" -d "Store a val
 complete -c rv -n "__fish_seen_subcommand_from secrets" -a "remove" -d "Delete"
 complete -c rv -n "__fish_seen_subcommand_from secrets" -a "scan" -d "Scan a tree"
 complete -c rv -n "__fish_seen_subcommand_from secrets" -a "describe" -d "Metadata only"
-complete -c rv -n "__fish_seen_subcommand_from secrets" -a "import" -d "Import a Varlock schema"
+complete -c rv -n "__fish_seen_subcommand_from secrets" -a "import" -d "Import a Varlock schema or .env"
+complete -c rv -n "__fish_seen_subcommand_from secrets" -a "harden" -d "Move a .env value into the Keychain"
 complete -c rv -n "__fish_seen_subcommand_from secrets" -a "hook" -d "Git pre-commit hook"

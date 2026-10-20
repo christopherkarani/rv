@@ -25,6 +25,9 @@ public enum SecretSource: Sendable, Equatable {
     case gcp(secret: String, project: String?, version: String)
     /// Azure Key Vault via `az keyvault secret show`.
     case azure(vault: String, name: String, version: String?)
+    /// A `.env` file read host-side at lease time. `path` is absolute;
+    /// `variable` is the key inside the file. Values stay in the file.
+    case dotenv(path: String, variable: String)
 
     public var kind: String {
         switch self {
@@ -37,6 +40,7 @@ public enum SecretSource: Sendable, Equatable {
         case .bitwarden: "bitwarden"
         case .gcp: "gcp"
         case .azure: "azure"
+        case .dotenv: "dotenv"
         }
     }
 }
@@ -138,6 +142,11 @@ extension SecretsConfiguration {
     /// The environment variable grammar secret names and exported variables use.
     public static func isVariableName(_ name: String) -> Bool {
         SecretsDecoding.variable(name)
+    }
+
+    /// Names the cage environment owns; a secret may never export one.
+    public static func isReservedVariable(_ name: String) -> Bool {
+        SecretsDecoding.reservedVariables.contains(name)
     }
 
     /// A missing file is an empty configuration. Anything else that is not a
@@ -331,8 +340,7 @@ enum SecretsDecoding {
                 throw Failure("\(place).secret is required")
             }
             let project = try optionalToken(fields["project"], "\(place).project")
-            let version = (fields["version"] as? String) ?? "latest"
-            guard cliToken(version) else { throw Failure("\(place).version is invalid") }
+            let version = try optionalToken(fields["version"], "\(place).version") ?? "latest"
             return .gcp(secret: secretName, project: project, version: version)
         case "azure":
             try onlyKeys(fields, ["vault", "name", "version"], at: place)
@@ -341,6 +349,15 @@ enum SecretsDecoding {
             else { throw Failure("\(place) needs vault and name") }
             let version = try optionalToken(fields["version"], "\(place).version")
             return .azure(vault: vault, name: secretName, version: version)
+        case "dotenv":
+            try onlyKeys(fields, ["path", "variable"], at: place)
+            guard let path = fields["path"] as? String, dotenvPath(path) else {
+                throw Failure("\(place).path must be an absolute path without empty or '..' components")
+            }
+            guard let variable = fields["variable"] as? String, self.variable(variable) else {
+                throw Failure("\(place).variable must be an environment variable name")
+            }
+            return .dotenv(path: path, variable: variable)
         default:
             throw Failure("\(secret).source kind \(DisplayedText.field(kind)) is not supported")
         }
@@ -361,6 +378,9 @@ enum SecretsDecoding {
             guard let baseURLEnv = fields["baseURLEnv"] as? String, variable(baseURLEnv),
                 reservedVariables.contains(baseURLEnv) == false, baseURLEnv != secret
             else { throw Failure("\(place).baseURLEnv must be a distinct environment variable name") }
+            if let rawPrefix = fields["placeholderPrefix"], rawPrefix is String == false {
+                throw Failure("\(place).placeholderPrefix must be a string")
+            }
             let prefix = fields["placeholderPrefix"] as? String ?? ""
             guard prefix.utf8.count <= 32, prefix.utf8.allSatisfy(placeholderByte) else {
                 throw Failure("\(place).placeholderPrefix must be up to 32 letters, digits, _ or -")
@@ -422,6 +442,15 @@ enum SecretsDecoding {
             && value.split(separator: "/", omittingEmptySubsequences: false).allSatisfy {
                 $0.isEmpty == false && $0 != "." && $0 != ".."
                     && $0.utf8.allSatisfy { placeholderByte($0) || $0 == 46 }
+            }
+    }
+
+    /// Lexical only: decode never touches the filesystem, so a missing bound
+    /// `.env` cannot make config writes fail. Trust checks happen at read time.
+    static func dotenvPath(_ value: String) -> Bool {
+        value.hasPrefix("/") && value.count > 1 && label(value, max: 512)
+            && value.split(separator: "/", omittingEmptySubsequences: false).dropFirst().allSatisfy {
+                $0.isEmpty == false && $0 != ".."
             }
     }
 

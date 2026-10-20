@@ -28,6 +28,8 @@ extension SecretSource {
             "gcp \(project.map { "\($0)/" } ?? "")\(secret)@\(version)"
         case .azure(let vault, let name, let version):
             "azure \(vault)/\(name)\(version.map { "@\($0)" } ?? "")"
+        case .dotenv(let path, let variable):
+            "dotenv \(DisplayedText.field(path))#\(DisplayedText.field(variable))"
         }
     }
 }
@@ -141,6 +143,8 @@ extension SecretsConfiguration {
                 var fields: [String: Any] = ["vault": vault, "name": name]
                 if let version { fields["version"] = version }
                 entry["source"] = ["azure": fields]
+            case .dotenv(let path, let variable):
+                entry["source"] = ["dotenv": ["path": path, "variable": variable]]
             }
             switch secret.delivery {
             case .environment:

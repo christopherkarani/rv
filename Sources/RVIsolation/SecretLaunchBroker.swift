@@ -38,7 +38,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
     static let maximumEnvironmentValueBytes = 8_192
 
     private let configDirectory: URL
-    private let resolver: SecretResolver
+    private let makeResolver: @Sendable () -> SecretResolver
     private let gateway: SecretGateway
     private let workspace: String?
     private let managed: @Sendable () -> ManagedPolicyState
@@ -48,13 +48,17 @@ final class SecretLaunchBroker: @unchecked Sendable {
 
     init(
         configDirectory: URL,
-        resolver: SecretResolver,
+        // A factory, not an instance: each lease builds a fresh resolver so
+        // dotenv snapshots are lease-scoped. Reusing one resolver across
+        // leases would keep its snapshot cache alive and fail every later
+        // lease once a bound file changes.
+        makeResolver: @escaping @Sendable () -> SecretResolver,
         transport: SecretUpstreamTransport = .urlSession,
         workspace: String?,
         managed: (@Sendable () -> ManagedPolicyState)? = nil
     ) {
         self.configDirectory = configDirectory
-        self.resolver = resolver
+        self.makeResolver = makeResolver
         self.workspace = workspace
         self.managed = managed ?? { ManagedPolicyLocation.installed.load(serialsIn: configDirectory) }
         let directory = configDirectory
@@ -71,7 +75,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
             .appendingPathComponent(".config", isDirectory: true)
             .appendingPathComponent("rv", isDirectory: true)
         return SecretLaunchBroker(
-            configDirectory: directory, resolver: .live(home: home), workspace: workspace)
+            configDirectory: directory, makeResolver: { .live(home: home) }, workspace: workspace)
     }
 
     deinit {
@@ -105,6 +109,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
             }
             definitions.append(definition)
         }
+        let resolver = makeResolver()
         var placeholders: [SecretPlaceholder] = []
         var environment: [(name: String, value: String)] = []
         var staged: [AuditEvent] = []

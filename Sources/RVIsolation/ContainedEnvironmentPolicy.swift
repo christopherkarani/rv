@@ -49,6 +49,26 @@ public enum ContainedEnvironmentPolicy {
         return false
     }
 
+    /// Names whose *value* steers code execution (dynamic loaders,
+    /// interpreter hooks, git transport helpers). Binding one as an
+    /// environment-delivered secret would let a data file choose code that
+    /// runs in every later launch, so ingestion paths refuse them even
+    /// though ordinary credential names (`*_TOKEN`, `*_KEY`) bind fine.
+    public static func isLoaderOrInterpreterVariableName(_ name: String) -> Bool {
+        let folded = name.uppercased()
+        if folded.hasPrefix("DYLD_") || folded.hasPrefix("LD_") { return true }
+        return loaderOrInterpreterNames.contains(folded)
+    }
+
+    private static let loaderOrInterpreterNames: Set<String> = [
+        "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONBREAKPOINT", "PYTHONINSPECT",
+        "RUBYOPT", "RUBYLIB", "RUBYPATH",
+        "NODE_OPTIONS", "NODE_PATH",
+        "PERL5LIB", "PERL5OPT",
+        "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS",
+        "BASH_ENV", "ENV", "ZDOTDIR",
+    ]
+
     /// Whether `name` must be stripped. Case-insensitive: `npm_config_cache`
     /// and `NPM_CONFIG_CACHE` are the same variable to most tools.
     public static func isBlockedVariableName(_ name: String) -> Bool {
