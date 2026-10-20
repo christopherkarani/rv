@@ -332,6 +332,9 @@ enum SecretsRun {
         }
         let selected = all ? current.secrets.map(\.name) : names
         var lines: [String] = []
+        // Success wording is buffered: if a later name blocks the write,
+        // nothing was rebound and the rotation checklists must not print.
+        var successLines: [String] = []
         var failed = false
         var rebound: [String: SecretDefinition] = [:]
         var events: [AuditEvent] = []
@@ -384,22 +387,26 @@ enum SecretsRun {
                     "to": target.locator,
                     "verified": "true",
                 ]))
-            lines.append(
+            successLines.append(
                 "hardened \(name): \(definition.source.locator) -> \(target.locator) (delivery unchanged: \(definition.delivery.kind); stored value verified)")
             if let reason = SecretOrganizationRules.violation(hardened, policy: environment.managed.policy) {
-                lines.append("warning: organization policy: \(reason)")
+                successLines.append("warning: organization policy: \(reason)")
             }
-            lines.append("rotation checklist for \(name):")
-            lines.append("  - rotate the value at the provider (the old value is still live in .env)")
-            lines.append("  - remove the \(variable) line from \(DisplayedText.field(path)) (rv never edits .env)")
-            lines.append("  - until removed, `rv secrets scan` will keep flagging the unrotated .env")
+            successLines.append("rotation checklist for \(name):")
+            successLines.append("  - rotate the value at the provider (the old value is still live in .env)")
+            successLines.append("  - remove the \(variable) line from \(DisplayedText.field(path)) (rv never edits .env)")
+            successLines.append("  - until removed, `rv secrets scan` will keep flagging the unrotated .env")
         }
         if failed, rebound.isEmpty == false {
             // All-or-nothing: a failed name blocks the config write. Values
             // already copied to the Keychain are benign; a retry overwrites.
-            lines.append("nothing rebound: fix the failures and run harden again")
+            // Keep the .env lines: the bindings still resolve from them.
+            lines.append(
+                "nothing rebound: \(rebound.count) value\(rebound.count == 1 ? "" : "s") copied to the Keychain but still bound to .env; "
+                    + "fix the failures and run harden again (do not remove any .env lines yet)")
             return .success((lines.joined(separator: "\n") + "\n", true))
         }
+        lines += successLines
         if rebound.isEmpty == false {
             var updated = current
             updated.secrets = updated.secrets.map { rebound[$0.name] ?? $0 }

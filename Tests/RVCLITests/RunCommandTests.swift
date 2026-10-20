@@ -89,6 +89,8 @@ struct RunCommandTests {
         #expect(RunRun.dotenvBoundCount(environment: ["HOME": home.path]) == 0)
         try Data("{not json".utf8).write(to: config.appendingPathComponent("secrets.json"))
         #expect(RunRun.dotenvBoundCount(environment: ["HOME": home.path]) == nil)
+        #expect(RunRun.dotenvBoundCount(environment: [:]) == nil)
+        #expect(RunRun.dotenvBoundCount(environment: ["HOME": "relative"]) == nil)
     }
 
     @Test func dotenvBoundCountAndRefusalWording() {

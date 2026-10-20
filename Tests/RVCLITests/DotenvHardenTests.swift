@@ -166,6 +166,9 @@ struct DotenvHardenTests {
 
         let crashed = try SecretsRun.harden(names: [], all: true, environment: environment).get()
         #expect(crashed.failed)
+        #expect(crashed.text.contains("nothing rebound"))
+        #expect(crashed.text.contains("hardened FIRST_KEY:") == false)
+        #expect(crashed.text.contains("rotation checklist") == false)
         #expect(try String(contentsOf: fixture.secretsFile, encoding: .utf8) == before)
 
         environment.keychain = SecretKeychainWriter(

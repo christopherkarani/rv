@@ -71,7 +71,7 @@ extension RunRun {
     /// no lease, so an unreadable configuration must not read as zero
     /// bindings (that would degrade fail-closed to a warning).
     static func dotenvBoundCount(environment: [String: String]) -> Int? {
-        guard let home = environment["HOME"], home.hasPrefix("/"), home.contains("\0") == false else { return 0 }
+        guard let home = environment["HOME"], home.hasPrefix("/"), home.contains("\0") == false else { return nil }
         let directory = URL(fileURLWithPath: home, isDirectory: true)
             .appendingPathComponent(".config", isDirectory: true)
             .appendingPathComponent("rv", isDirectory: true)
