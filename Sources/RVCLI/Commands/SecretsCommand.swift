@@ -39,6 +39,8 @@ enum SecretsRun {
         var profiles: [String]
         /// Environment delivery puts the real value in the cage.
         var weaker: Bool
+        /// Value lives in a `.env` file rv reads at lease time.
+        var fileBacked: Bool
     }
 
     struct ListReport: Encodable, Equatable {
@@ -113,7 +115,8 @@ enum SecretsRun {
                 baseURLEnv: baseURLEnv,
                 agents: secret.agents,
                 profiles: profiles.filter { $0.secrets.contains(secret.name) }.map(\.id),
-                weaker: secret.delivery == .environment
+                weaker: secret.delivery == .environment && secret.source.kind != "dotenv",
+                fileBacked: secret.source.kind == "dotenv"
             )
         }
         var warnings: [String] = []
@@ -137,6 +140,7 @@ enum SecretsRun {
             line += "  profiles: \(row.profiles.isEmpty ? "-" : row.profiles.joined(separator: ","))"
             if let agents = row.agents { line += "  agents: \(agents.joined(separator: ","))" }
             if row.weaker { line += "  [weaker]" }
+            if row.fileBacked { line += "  [file-backed]" }
             return line
         }
         lines += report.warnings.map { "warning: \($0)" }
@@ -211,9 +215,13 @@ enum SecretsRun {
         var updated = current
         if let existing = current.secret(named: name) {
             guard existing.source == source else {
-                return .failure(CommandFailure(
+                var message =
                     "\(DisplayedText.field(name)) reads from \(existing.source.locator); rv secrets set only stores values it reads "
-                        + "from \(SecretKeychain.service)"))
+                    + "from \(SecretKeychain.service)"
+                if existing.source.kind == "dotenv" {
+                    message += "\nuse `rv secrets harden \(name)` to move this value into the Keychain"
+                }
+                return .failure(CommandFailure(message))
             }
             guard definition == nil, agents.isEmpty, description == nil else {
                 return .failure("\(DisplayedText.field(name)) is already defined; edit secrets.json to change its delivery")
@@ -306,6 +314,12 @@ enum SecretsRun {
         var values: [(name: String, value: SecretValue)] = []
         var skipped: [String] = []
         for secret in configuration.secrets {
+            if let reason = environment.managed.invalidReason
+                ?? SecretOrganizationRules.violation(secret, policy: environment.managed.policy)
+            {
+                skipped.append("\(secret.name): organization policy: \(reason)")
+                continue
+            }
             switch environment.resolver.resolve(secret.source) {
             case .success(let value): values.append((secret.name, value))
             case .failure(let error): skipped.append("\(secret.name): \(error.message)")
@@ -415,6 +429,12 @@ enum SecretsRun {
         var values: [(name: String, value: SecretValue)] = []
         var skipped: [String] = []
         for secret in configuration.secrets {
+            if let reason = environment.managed.invalidReason
+                ?? SecretOrganizationRules.violation(secret, policy: environment.managed.policy)
+            {
+                skipped.append("could not check \(secret.name): organization policy: \(reason)")
+                continue
+            }
             switch environment.resolver.resolve(secret.source) {
             case .success(let value): values.append((secret.name, value))
             case .failure(let error): skipped.append("could not check \(secret.name): \(error.message)")

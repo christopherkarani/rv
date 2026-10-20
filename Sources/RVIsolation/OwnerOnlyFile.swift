@@ -17,7 +17,8 @@ public enum OwnerOnlyFile {
     /// owner-owned, non-group/world-writable file is refused. A
     /// `confidential` read also refuses group/world-readable files.
     public static func read(_ url: URL, maximumBytes: Int, confidential: Bool = false) -> Result<Data?, OwnerOnlyFileError> {
-        let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        // O_NONBLOCK so a FIFO cannot hang open() before the S_ISREG check.
+        let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
         if fd < 0 {
             if errno == ENOENT { return .success(nil) }
             if errno == ELOOP { return .failure(.unsafe("symlink")) }
@@ -31,6 +32,7 @@ public enum OwnerOnlyFile {
         guard (info.st_mode & 0o022) == 0 else { return .failure(.unsafe("group or world writable")) }
         if confidential, (info.st_mode & 0o044) != 0 { return .failure(.unsafe("group or world readable")) }
         guard info.st_size <= maximumBytes else { return .failure(.oversized) }
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK)
         var bytes = [UInt8](repeating: 0, count: Int(info.st_size) + 1)
         var count = 0
         while count < bytes.count {

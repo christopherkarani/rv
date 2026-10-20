@@ -38,7 +38,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
     static let maximumEnvironmentValueBytes = 8_192
 
     private let configDirectory: URL
-    private let resolver: SecretResolver
+    private let makeResolver: @Sendable () -> SecretResolver
     private let gateway: SecretGateway
     private let workspace: String?
     private let managed: @Sendable () -> ManagedPolicyState
@@ -51,10 +51,12 @@ final class SecretLaunchBroker: @unchecked Sendable {
         resolver: SecretResolver,
         transport: SecretUpstreamTransport = .urlSession,
         workspace: String?,
-        managed: (@Sendable () -> ManagedPolicyState)? = nil
+        managed: (@Sendable () -> ManagedPolicyState)? = nil,
+        makeResolver: (@Sendable () -> SecretResolver)? = nil
     ) {
         self.configDirectory = configDirectory
-        self.resolver = resolver
+        // Fresh resolver per lease so dotenv snapshots are lease-scoped.
+        self.makeResolver = makeResolver ?? { resolver }
         self.workspace = workspace
         self.managed = managed ?? { ManagedPolicyLocation.installed.load(serialsIn: configDirectory) }
         let directory = configDirectory
@@ -71,7 +73,8 @@ final class SecretLaunchBroker: @unchecked Sendable {
             .appendingPathComponent(".config", isDirectory: true)
             .appendingPathComponent("rv", isDirectory: true)
         return SecretLaunchBroker(
-            configDirectory: directory, resolver: .live(home: home), workspace: workspace)
+            configDirectory: directory, resolver: .live(home: home), workspace: workspace,
+            makeResolver: { .live(home: home) })
     }
 
     deinit {
@@ -105,6 +108,7 @@ final class SecretLaunchBroker: @unchecked Sendable {
             }
             definitions.append(definition)
         }
+        let resolver = makeResolver()
         var placeholders: [SecretPlaceholder] = []
         var environment: [(name: String, value: String)] = []
         var staged: [AuditEvent] = []

@@ -1,0 +1,194 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+import Foundation
+import Testing
+@testable import RVIsolation
+
+@Suite("DotenvFile")
+struct DotenvFileTests {
+    private func parse(_ text: String) throws -> DotenvParse {
+        try DotenvFile.parse(Data(text.utf8)).get()
+    }
+
+    @Test func parsesBareQuotedExportAndComments() throws {
+        let parsed = try parse("""
+            # heading
+            STRIPE_SECRET_KEY = sk-live-123
+            export OPENAI_API_KEY="sk open # not comment"
+            SINGLE='literal $HOME \\n'
+            DEBUG=true # trailing comment
+            HASHY=abc#def
+
+            """)
+        #expect(parsed.malformedLine == nil)
+        #expect(parsed.value(for: "STRIPE_SECRET_KEY") == "sk-live-123")
+        #expect(parsed.value(for: "OPENAI_API_KEY") == "sk open # not comment")
+        #expect(parsed.value(for: "SINGLE") == "literal $HOME \\n")
+        #expect(parsed.value(for: "DEBUG") == "true")
+        #expect(parsed.value(for: "HASHY") == "abc#def")
+        #expect(parsed.entries.map(\.name) == ["STRIPE_SECRET_KEY", "OPENAI_API_KEY", "SINGLE", "DEBUG", "HASHY"])
+    }
+
+    @Test func stripsBOMAndAcceptsCRLF() throws {
+        let parsed = try parse("\u{FEFF}FIRST=one\r\nSECOND=two\r\n")
+        #expect(parsed.value(for: "FIRST") == "one")
+        #expect(parsed.value(for: "SECOND") == "two")
+    }
+
+    @Test func emptyValueParsesAsEmpty() throws {
+        let parsed = try parse("EMPTY=\nALSO_EMPTY=  \n")
+        #expect(parsed.value(for: "EMPTY") == "")
+        #expect(parsed.value(for: "ALSO_EMPTY") == "")
+    }
+
+    @Test func duplicateIsRecordedAndFirstKeptForDisplay() throws {
+        let parsed = try parse("KEY=one\nKEY=two\nOTHER=x\n")
+        #expect(parsed.duplicates == ["KEY"])
+        #expect(parsed.value(for: "KEY") == "one")
+        #expect(parsed.entries.map(\.name) == ["KEY", "OTHER"])
+    }
+
+    @Test func malformedLineIsPerFileError() throws {
+        let parsed = try parse("GOOD=1\nthis is not an assignment\nALSO=2\n")
+        #expect(parsed.malformedLine == 2)
+        #expect(parsed.value(for: "GOOD") == "1")
+    }
+
+    @Test func invalidVariableNameIsMalformed() throws {
+        let parsed = try parse("9BAD=x\n")
+        #expect(parsed.malformedLine == 1)
+    }
+
+    @Test func unterminatedQuoteIsMalformed() throws {
+        let parsed = try parse("KEY=\"open\n")
+        #expect(parsed.malformedLine == 1)
+    }
+
+    @Test func rejectsNULNonUTF8AndOversize() {
+        #expect(throws: DotenvFileError.self) { try DotenvFile.parse(Data([0x4B, 0x00])).get() }
+        #expect(throws: DotenvFileError.self) { try DotenvFile.parse(Data([0xFF, 0xFE, 0x3D])).get() }
+        let big = Data(repeating: UInt8(ascii: "a"), count: DotenvFile.maximumBytes + 1)
+        guard case .failure(.oversized) = DotenvFile.parse(big) else {
+            Issue.record("expected oversized")
+            return
+        }
+        let exact = Data(("K=" + String(repeating: "v", count: DotenvFile.maximumBytes - 2)).utf8)
+        #expect(exact.count == DotenvFile.maximumBytes)
+        guard case .success = DotenvFile.parse(exact) else {
+            Issue.record("exact cap must parse")
+            return
+        }
+    }
+
+    @Test func strictnessLintNotesLiteralDifferentials() throws {
+        let parsed = try parse("A=$HOME/x\nB=plain\nC=`whoami`\nD=a\\b\n")
+        #expect(parsed.lintNotes.contains { $0.contains("A") && $0.contains("literally") })
+        #expect(parsed.lintNotes.contains { $0.contains("C") })
+        #expect(parsed.lintNotes.contains { $0.contains("D") })
+        #expect(parsed.lintNotes.contains { $0.contains("B") } == false)
+    }
+
+    @Test func resolverReadsDotenvAndFailsClosed() {
+        let reader: DotenvReaderFunction = { _ in
+            .success(DotenvFileSnapshot(
+                canonicalPath: "/proj/.env", data: Data("KEY=one\nKEY=two\nGOOD=ok\n".utf8), identity: "1"))
+        }
+        let resolver = SecretResolver.live(environment: [:], home: "/nonexistent", dotenvReader: reader)
+        switch resolver.resolve(.dotenv(path: "/proj/.env", variable: "GOOD")) {
+        case .success(let value): #expect(value.text == "ok")
+        case .failure(let error): Issue.record("GOOD must resolve: \(error.message)")
+        }
+        switch resolver.resolve(.dotenv(path: "/proj/.env", variable: "KEY")) {
+        case .success: Issue.record("duplicate must fail closed")
+        case .failure(let error):
+            #expect(error.message.contains("duplicate"))
+            #expect(error.message.contains("one") == false)
+            #expect(error.message.contains("two") == false)
+        }
+        switch resolver.resolve(.dotenv(path: "/proj/.env", variable: "MISSING")) {
+        case .success: Issue.record("missing variable must fail")
+        case .failure(let error): #expect(error.message.contains("MISSING"))
+        }
+    }
+
+    @Test func resolverSnapshotRejectsIdentityChangeMidLease() {
+        final class Box: @unchecked Sendable { var identity = "1" }
+        let box = Box()
+        let reader: DotenvReaderFunction = { _ in
+            .success(DotenvFileSnapshot(
+                canonicalPath: "/proj/.env", data: Data("A=1\nB=2\n".utf8), identity: box.identity))
+        }
+        let resolver = SecretResolver.live(environment: [:], home: "/nonexistent", dotenvReader: reader)
+        guard case .success = resolver.resolve(.dotenv(path: "/proj/.env", variable: "A")) else {
+            Issue.record("first resolve must succeed")
+            return
+        }
+        box.identity = "2"
+        switch resolver.resolve(.dotenv(path: "/proj/.env", variable: "B")) {
+        case .success: Issue.record("identity change must fail")
+        case .failure(let error): #expect(error.message.contains("changed"))
+        }
+    }
+
+    @Test func liveReaderTrustChecks() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-dotenv-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let good = directory.appendingPathComponent(".env")
+        try Data("KEY=value\n".utf8).write(to: good)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: good.path)
+        guard case .success(let snapshot) = DotenvLiveReader.read(path: good.path) else {
+            Issue.record("0644 owner file must read")
+            return
+        }
+        #expect(snapshot.canonicalPath == DotenvLiveReader.canonicalPath(good.path))
+
+        let link = directory.appendingPathComponent("linked.env")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: good)
+        guard case .success = DotenvLiveReader.read(path: link.path) else {
+            Issue.record("symlink to safe target must read")
+            return
+        }
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o664], ofItemAtPath: good.path)
+        guard case .failure(let error) = DotenvLiveReader.read(path: good.path) else {
+            Issue.record("group-writable must be refused")
+            return
+        }
+        #expect(error.message.contains("writable"))
+
+        guard case .failure = DotenvLiveReader.read(path: directory.appendingPathComponent("nope.env").path) else {
+            Issue.record("missing file must fail")
+            return
+        }
+    }
+
+    @Test func liveReaderRefusesFIFOWithoutHanging() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-dotenv-fifo-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fifo = directory.appendingPathComponent("fifo.env")
+        #expect(mkfifo(fifo.path, 0o600) == 0)
+        // Watchdog: a blocking open would hang the suite; run on a thread.
+        final class Done: @unchecked Sendable { var finished = false }
+        let done = Done()
+        let semaphore = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            _ = DotenvLiveReader.read(path: fifo.path)
+            done.finished = true
+            semaphore.signal()
+        }
+        #expect(semaphore.wait(timeout: .now() + 10) == .success)
+        #expect(done.finished)
+        guard case .failure = DotenvLiveReader.read(path: fifo.path) else {
+            Issue.record("FIFO must be refused")
+            return
+        }
+    }
+}

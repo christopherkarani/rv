@@ -144,6 +144,11 @@ public enum MCPLaunchPlanner {
                     server: server, secret: secretName,
                     reason: "organization policy does not allow \(secret.source.kind) secrets"))
             }
+            if let reason = SecretOrganizationRules.violation(secret, policy: configuration.managed) {
+                return .failure(.secretUnavailable(
+                    server: server, secret: secretName,
+                    reason: "organization policy: \(reason)"))
+            }
             switch resolver.resolve(secret.source) {
             case .failure(let error):
                 return .failure(.secretUnavailable(server: server, secret: secretName, reason: error.message))

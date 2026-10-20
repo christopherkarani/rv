@@ -25,6 +25,9 @@ public enum SecretSource: Sendable, Equatable {
     case gcp(secret: String, project: String?, version: String)
     /// Azure Key Vault via `az keyvault secret show`.
     case azure(vault: String, name: String, version: String?)
+    /// A `.env` file read host-side at lease time. `path` is absolute;
+    /// `variable` is the key inside the file. Values stay in the file.
+    case dotenv(path: String, variable: String)
 
     public var kind: String {
         switch self {
@@ -37,6 +40,7 @@ public enum SecretSource: Sendable, Equatable {
         case .bitwarden: "bitwarden"
         case .gcp: "gcp"
         case .azure: "azure"
+        case .dotenv: "dotenv"
         }
     }
 }
@@ -341,6 +345,15 @@ enum SecretsDecoding {
             else { throw Failure("\(place) needs vault and name") }
             let version = try optionalToken(fields["version"], "\(place).version")
             return .azure(vault: vault, name: secretName, version: version)
+        case "dotenv":
+            try onlyKeys(fields, ["path", "variable"], at: place)
+            guard let path = fields["path"] as? String, dotenvPath(path) else {
+                throw Failure("\(place).path must be an absolute path without empty or '..' components")
+            }
+            guard let variable = fields["variable"] as? String, self.variable(variable) else {
+                throw Failure("\(place).variable must be an environment variable name")
+            }
+            return .dotenv(path: path, variable: variable)
         default:
             throw Failure("\(secret).source kind \(DisplayedText.field(kind)) is not supported")
         }
@@ -422,6 +435,15 @@ enum SecretsDecoding {
             && value.split(separator: "/", omittingEmptySubsequences: false).allSatisfy {
                 $0.isEmpty == false && $0 != "." && $0 != ".."
                     && $0.utf8.allSatisfy { placeholderByte($0) || $0 == 46 }
+            }
+    }
+
+    /// Lexical only: decode never touches the filesystem, so a missing bound
+    /// `.env` cannot make config writes fail. Trust checks happen at read time.
+    static func dotenvPath(_ value: String) -> Bool {
+        value.hasPrefix("/") && value.count > 1 && label(value, max: 512)
+            && value.split(separator: "/", omittingEmptySubsequences: false).dropFirst().allSatisfy {
+                $0.isEmpty == false && $0 != ".."
             }
     }
 

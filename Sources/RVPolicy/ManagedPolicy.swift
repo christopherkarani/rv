@@ -68,7 +68,7 @@ public struct ManagedPolicy: Sendable, Equatable {
 
     public static let secretSourceKinds = [
         "keychain", "hostEnvironment", "onePassword", "vault", "awsSecretsManager",
-        "infisical", "bitwarden", "gcp", "azure",
+        "infisical", "bitwarden", "gcp", "azure", "dotenv",
     ]
 
     public var organization: String?
