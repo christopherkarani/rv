@@ -19,8 +19,15 @@ Owner decisions (2026-10-19):
   enforce mode and only logs in observe mode. No bundle means packs-only
   operation, reported by `rv doctor`.
 
-Status: plan only. No code changes. Rewritten 2026-10-19 around two existing
-ports that remove the Python/PyTorch blocker:
+Status: SHIPPED in PR #423 (2026-10-20), with one owner-directed change
+from this plan: the production judge is the fine-tuned single-pass
+model (`laya-ft-v2-coreml`, Ticket 4b/5), not the stock three-question
+checkpoint; the stock judge remains selectable via `judge.engine`.
+This document is the design record; measured outcomes and the
+production-flip entry live in
+[laya-judge-decision-record.md](laya-judge-decision-record.md).
+Originally rewritten 2026-10-19 around two existing ports that remove
+the Python/PyTorch blocker:
 
 - macOS: [mizorewww/laya-coreml](https://github.com/mizorewww/laya-coreml) —
   Core ML bundles with tokenizer, config, checksums, packaging validation.

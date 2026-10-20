@@ -58,6 +58,9 @@ HELDOUT_FILES = [
     os.path.join(HERE, "..", "testset_shell.jsonl"),
     os.path.join(HERE, "..", "testset_incidents.jsonl"),
     os.path.join(HERE, "..", "testset_ko_30.jsonl"),
+    # Adversarial suffixes are an exam set too; omitting them let
+    # near-duplicates of exam rows train in the v1 pipeline.
+    os.path.join(HERE, "..", "adversarial-suffixes.jsonl"),
 ]
 SPLITS = ("train", "validation")
 MAX_LEN = 2000

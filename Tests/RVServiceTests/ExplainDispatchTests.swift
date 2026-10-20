@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 import Testing
 import RVDomain
@@ -183,9 +188,16 @@ struct ExplainDispatchTests {
 
 /// Isolated HOME with no judge bundle and no config, so machine state
 /// (an installed Laya bundle) cannot leak verdicts into explain tests.
+/// JudgeRuntime also reads RV_* env knobs process-wide; empty values
+/// read as unset there, so scrubbing them keeps a developer's live
+/// RV_FT_BUNDLE/RV_GUARD_MODE out of this target's process. One reused
+/// per-process directory: temp homes do not accumulate per test.
 private func isolatedJudgeHome() throws -> HomeDirectory {
+    for key in ["RV_FT_BUNDLE", "RV_LAYA_BUNDLE", "RV_GUARD_MODE", "RV_JUDGE_ENGINE"] {
+        setenv(key, "", 1)
+    }
     let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("rv-explain-home-\(UUID().uuidString)", isDirectory: true)
+        .appendingPathComponent("rv-explain-home-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return try #require(HomeDirectory(validating: url.path))
 }

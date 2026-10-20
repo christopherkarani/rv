@@ -13,7 +13,10 @@ import Foundation
 public struct LayaTokenizer: Sendable {
     var byteVocab: [[UInt8]: Int32]
     var mergeRanks: [PairKey: Int]
-    var addedTokens: [(bytes: [UInt8], id: Int32)]
+    var addedTokens: [(bytes: [UInt8], id: Int32, lstrip: Bool, rstrip: Bool)]
+    /// Added tokens by first byte: the per-cursor scan must stay
+    /// near-linear on long untrusted input.
+    var addedByFirstByte: [UInt8: [(bytes: [UInt8], id: Int32, lstrip: Bool, rstrip: Bool)]] = [:]
 
     public var padID: Int32 { byteVocab[Array("<pad>".utf8)] ?? 0 }
     public var clsID: Int32 { byteVocab[Array("<bos>".utf8)] ?? 2 }
@@ -33,7 +36,12 @@ public struct LayaTokenizer: Sendable {
     }
 
     public init(tokenizerJSON file: URL) throws {
-        var data = try Data(contentsOf: file)
+        var data: Data
+        do {
+            data = try Data(contentsOf: file)
+        } catch {
+            throw LayaError.badBundle("tokenizer.json unreadable at \(file.path)")
+        }
         // U+FEFF inside keys collapses one layer earlier: NSString compares
         // BOM-insensitively, so parsing already drops entries and reassigns
         // common ids ("#" kept "\u{FEFF}#"s id). Swap FEFF for a private-use
@@ -47,8 +55,18 @@ public struct LayaTokenizer: Sendable {
         }
         raw = Self.replacingSequence(raw, feff, standIn)
         data = Data(raw)
+        let root: [String: Any]
+        do {
+            guard let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw LayaError.badBundle("tokenizer.json missing model.vocab/merges")
+            }
+            root = parsed
+        } catch let error as LayaError {
+            throw error
+        } catch {
+            throw LayaError.badBundle("tokenizer.json is not valid JSON")
+        }
         guard
-            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
             let model = root["model"] as? [String: Any],
             let merges = model["merges"] as? [[String]]
         else {
@@ -73,16 +91,32 @@ public struct LayaTokenizer: Sendable {
         byteVocab = vocab
         var ranks: [PairKey: Int] = [:]
         ranks.reserveCapacity(merges.count)
-        for (rank, pair) in merges.enumerated() where pair.count == 2 {
+        for (rank, pair) in merges.enumerated() {
+            guard pair.count == 2 else {
+                throw LayaError.badBundle("tokenizer.json merge \(rank) is not a pair")
+            }
             ranks[PairKey(a: Self.unstand(Array(pair[0].utf8)), b: Self.unstand(Array(pair[1].utf8)))] = rank
         }
         mergeRanks = ranks
         let added = root["added_tokens"] as? [[String: Any]] ?? []
-        addedTokens = added.compactMap { entry in
-            guard let text = entry["content"] as? String,
-                  let id = (entry["id"] as? NSNumber)?.int32Value else { return nil }
-            return (Self.unstand(Array(text.utf8)), id)
+        addedTokens = try added.map { entry in
+            guard let text = entry["content"] as? String, !text.isEmpty,
+                  let id = (entry["id"] as? NSNumber)?.int32Value else {
+                // An empty or malformed added token can never match
+                // safely (empty would loop the splitter forever).
+                throw LayaError.badBundle("tokenizer.json has malformed added_tokens entry")
+            }
+            return (
+                Self.unstand(Array(text.utf8)), id,
+                (entry["lstrip"] as? NSNumber)?.boolValue ?? false,
+                (entry["rstrip"] as? NSNumber)?.boolValue ?? false
+            )
         }.sorted { $0.bytes.count > $1.bytes.count }
+        for token in addedTokens {
+            if let first = token.bytes.first {
+                addedByFirstByte[first, default: []].append(token)
+            }
+        }
     }
 
     /// Exact byte-subsequence search.
@@ -120,18 +154,41 @@ public struct LayaTokenizer: Sendable {
 
     /// Encode without special tokens, matching HF with `add_special_tokens=False`.
     public func encode(_ text: String) -> [Int32] {
+        encodeBounded(text, maxTokens: .max).ids
+    }
+
+    /// Bounded encode for untrusted input. Stops once the token budget
+    /// is exceeded and symbol-caps each spaceless piece relative to the
+    /// budget, so a 64 KB base64 blob cannot turn the O(n²) merge loop
+    /// into a minute-long hang. `truncated` is honest: it is set when
+    /// tokens were dropped for the budget OR when a piece hit the
+    /// symbol cap (merges can hide a capped piece under the budget, so
+    /// token count alone cannot detect it).
+    public func encodeBounded(
+        _ text: String, maxTokens: Int
+    ) -> (ids: [Int32], truncated: Bool) {
         var ids: [Int32] = []
+        var truncated = false
+        let cap = maxTokens == .max ? Int.max : max(256, maxTokens * 2)
         for chunk in splitAddedTokens(text) {
             switch chunk {
             case .added(let id):
                 ids.append(id)
             case .plain(let plain):
                 for piece in metaspacePieces(plain) {
-                    ids.append(contentsOf: encodePiece(piece))
+                    let encoded = encodePieceCapped(piece, symbolCap: cap)
+                    if encoded.capped { truncated = true }
+                    ids.append(contentsOf: encoded.ids)
+                    if ids.count > maxTokens {
+                        return (Array(ids.prefix(maxTokens)), true)
+                    }
                 }
             }
+            if ids.count > maxTokens {
+                return (Array(ids.prefix(maxTokens)), true)
+            }
         }
-        return ids
+        return (ids, truncated)
     }
 
     enum Chunk {
@@ -142,44 +199,57 @@ public struct LayaTokenizer: Sendable {
     /// Exact byte-level added-token split: earliest match wins, longest
     /// pattern breaks ties. Byte matching is boundary-safe (a lead byte
     /// never equals a continuation byte), so matches always land on
-    /// character boundaries.
+    /// character boundaries. HF `lstrip`/`rstrip` flags are honored:
+    /// lstrip consumes whitespace immediately before the token, rstrip
+    /// whitespace immediately after (`<mask>` ships lstrip in the Laya
+    /// bundles, so dropping the flags mistokenizes real input).
     func splitAddedTokens(_ text: String) -> [Chunk] {
         let bytes = Array(text.utf8)
         guard !bytes.isEmpty else { return [] }
         var chunks: [Chunk] = []
+        var plain: [UInt8] = []
         var cursor = 0
-        var plainStart = 0
-        func flushPlain(upTo end: Int) {
-            guard plainStart < end else { return }
-            chunks.append(.plain(String(bytes: bytes[plainStart..<end], encoding: .utf8)!))
+        func flushPlain() {
+            guard !plain.isEmpty else { return }
+            chunks.append(.plain(String(decoding: plain, as: UTF8.self)))
+            plain = []
         }
+        func isWhitespaceByte(_ b: UInt8) -> Bool { b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D }
         while cursor < bytes.count {
-            var best: (index: Int, length: Int, id: Int32)?
-            for token in addedTokens {
-                if token.bytes.count > bytes.count - cursor { continue }
+            var best: (length: Int, id: Int32, lstrip: Bool, rstrip: Bool)?
+            for token in addedByFirstByte[bytes[cursor]] ?? [] {
+                if token.bytes.isEmpty || token.bytes.count > bytes.count - cursor { continue }
                 if bytes[cursor..<(cursor + token.bytes.count)].elementsEqual(token.bytes) {
-                    if best == nil || token.bytes.count > best!.length {
-                        best = (cursor, token.bytes.count, token.id)
+                    if best == nil || token.bytes.count > (best?.length ?? 0) {
+                        best = (token.bytes.count, token.id, token.lstrip, token.rstrip)
                     }
                 }
             }
             // Earliest match wins: only a match AT the cursor splits here;
             // anything later is found as the cursor advances.
-            if let match = best, match.index == cursor {
-                flushPlain(upTo: cursor)
+            if let match = best {
+                if match.lstrip {
+                    while let last = plain.last, isWhitespaceByte(last) { plain.removeLast() }
+                }
+                flushPlain()
                 chunks.append(.added(match.id))
                 cursor += match.length
-                plainStart = cursor
+                if match.rstrip {
+                    while cursor < bytes.count, isWhitespaceByte(bytes[cursor]) { cursor += 1 }
+                }
             } else {
-                // Advance one scalar (not one byte) so the cursor stays on
-                // character boundaries for the plain-text slices. The cursor
-                // is always boundary-aligned (matches are boundary-safe),
-                // so every plain slice below is valid UTF-8.
+                // Advance one scalar (not one byte) so plain slices stay
+                // on character boundaries. The cursor is always
+                // boundary-aligned (matches are boundary-safe), so every
+                // plain chunk is valid UTF-8.
                 let lead = bytes[cursor]
-                cursor += lead < 0x80 ? 1 : utf8ScalarLength(lead)
+                let step = lead < 0x80 ? 1 : utf8ScalarLength(lead)
+                let end = min(cursor + step, bytes.count)
+                plain.append(contentsOf: bytes[cursor..<end])
+                cursor = end
             }
         }
-        flushPlain(upTo: bytes.count)
+        flushPlain()
         return chunks
     }
 
@@ -211,7 +281,14 @@ public struct LayaTokenizer: Sendable {
     }
 
     func encodePiece(_ piece: String) -> [Int32] {
+        encodePieceCapped(piece, symbolCap: .max).ids
+    }
+
+    func encodePieceCapped(
+        _ piece: String, symbolCap: Int
+    ) -> (ids: [Int32], capped: Bool) {
         var symbols: [[UInt8]] = []
+        var capped = false
         for scalar in piece.unicodeScalars {
             let bytes = Array(String(scalar).utf8)
             if byteVocab[bytes] != nil {
@@ -219,6 +296,13 @@ public struct LayaTokenizer: Sendable {
             } else {
                 // Byte fallback: each UTF-8 byte becomes a <0xXX> token.
                 symbols.append(contentsOf: bytes.map { Array(String(format: "<0x%02X>", $0).utf8) })
+            }
+            // The merge loop below is O(n²) in symbol count; a caller
+            // with a token budget caps the piece before merging.
+            if symbols.count >= symbolCap {
+                symbols = Array(symbols.prefix(symbolCap))
+                capped = true
+                break
             }
         }
         while symbols.count > 1 {
@@ -235,13 +319,14 @@ public struct LayaTokenizer: Sendable {
             symbols[index] += symbols[index + 1]
             symbols.remove(at: index + 1)
         }
-        return symbols.flatMap { symbol -> [Int32] in
+        let ids = symbols.flatMap { symbol -> [Int32] in
             if let id = byteVocab[symbol] { return [id] }
             let bytes = symbol.flatMap { byte -> [Int32] in
                 byteVocab[Array(String(format: "<0x%02X>", byte).utf8)].map { [$0] } ?? [unkID]
             }
             return bytes.isEmpty ? [unkID] : bytes
         }
+        return (ids, capped)
     }
 }
 

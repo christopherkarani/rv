@@ -609,7 +609,18 @@ def main():
                     help="ignore cached /tmp/laya-train/ft/ artifacts")
     args = ap.parse_args()
     t_start = time.time()
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    # joblib.load below unpickles from OUT_DIR, and /tmp is world-
+    # writable: refuse any artifact directory another user could have
+    # written to. Pickle is only ever loaded from owner-only dirs.
+    for d in (OUT_DIR, EMB_DIR):
+        d.mkdir(parents=True, exist_ok=True)
+        st = os.stat(d)
+        if st.st_uid != os.getuid() or (st.st_mode & 0o077):
+            raise SystemExit(
+                f"artifact dir {d} is not owner-only "
+                f"(uid {st.st_uid}, mode {oct(st.st_mode & 0o777)}); "
+                "refusing to load pickles from it"
+            )
     seed_all(SEED)
 
     # ---- L1: verify audited inputs before anything else ----

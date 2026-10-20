@@ -110,24 +110,34 @@ public final class FineTunedJudge: @unchecked Sendable {
             }
             if let c = cfg["checkpoint"] as? String, !c.isEmpty { checkpoint = c }
         }
+        // Unknown or permuted-to-wrong-meaning labels must never load:
+        // probabilities are read by label name, so a label set without
+        // exactly allow/review/block would silently score risk 0.
+        guard labels.count == 3, Set(labels) == ["allow", "review", "block"] else {
+            throw LayaError.badBundle("config labels are not exactly allow/review/block")
+        }
+        guard (16...8192).contains(maxLen) else {
+            throw LayaError.badBundle("implausible max_len in config.json")
+        }
+        let validLengths = Array(Set(lengths.filter { (1...8192).contains($0) })).sorted()
+        guard !validLengths.isEmpty else {
+            throw LayaError.badBundle("no usable lengths in config.json")
+        }
         self.labels = labels
         self.maxLen = maxLen
-        self.lengths = lengths
+        self.lengths = validLengths
         self.checkpoint = checkpoint
 
         let package = bundleDir.appendingPathComponent("model.mlpackage")
         guard fm.fileExists(atPath: package.path) else {
             throw LayaError.badBundle("model.mlpackage missing in \(bundleDir.path)")
         }
-        let compiled = try MLModel.compileModel(at: package)
-        let configuration = MLModelConfiguration()
-        // cpuAndGPU like LayaCoreMLJudge. (An earlier cpuOnly pin here was a
-        // misdiagnosis: the per-process flips then were mistokenization —
-        // String-keyed vocab tables resolving homoglyph twins — fixed in
-        // LayaTokenizer by byte-exact keys, verified 0/348 id mismatches vs
-        // HF. Same inputs now give same verdicts every process.)
-        configuration.computeUnits = .cpuAndGPU
-        model = try MLModel(contentsOf: compiled, configuration: configuration)
+        // Via CompiledModelCache (cpuAndGPU). (An earlier cpuOnly pin
+        // here was a misdiagnosis: the per-process flips then were
+        // mistokenization — String-keyed vocab tables resolving
+        // homoglyph twins — fixed in LayaTokenizer by byte-exact keys,
+        // verified 0/348 id mismatches vs HF.)
+        model = try CompiledModelCache.load(package: package)
     }
 
     /// Judge one command with pre-rendered context lines (JudgeContext.lines()
@@ -136,10 +146,16 @@ public final class FineTunedJudge: @unchecked Sendable {
     public func judge(_ command: String, contextLines: [String] = []) throws -> LayaVerdict {
         let start = Date()
         let text = ([command] + contextLines).joined(separator: "\n")
-        let raw = tokenizer.encode(text)
-        let body = Array(raw.prefix(max(0, maxLen - 2)))
-        let ids = [tokenizer.clsID] + body + [tokenizer.sepID]
+        // Bounded encode: detects truncation (token budget or symbol
+        // cap) without paying the quadratic BPE cost of the whole
+        // untrusted input.
+        let budget = max(0, maxLen - 2)
+        let encoded = tokenizer.encodeBounded(text, maxTokens: budget)
+        let truncated = encoded.truncated
+        let body = encoded.ids
+        var ids = [tokenizer.clsID] + body + [tokenizer.sepID]
         let length = lengths.first { $0 >= ids.count } ?? maxLen
+        if ids.count > length { ids = Array(ids.prefix(length)) }
 
         func array(_ shape: [Int], fill: Int32 = 0) throws -> MLMultiArray {
             let a = try MLMultiArray(shape: shape.map(NSNumber.init(value:)), dataType: .int32)
@@ -164,6 +180,9 @@ public final class FineTunedJudge: @unchecked Sendable {
             throw LayaError.predictionFailed("missing logits output")
         }
         let z: [Double] = (0..<labels.count).map { logits[$0].doubleValue }
+        guard z.allSatisfy(\.isFinite) else {
+            throw LayaError.predictionFailed("non-finite logits")
+        }
         let peak = z.max() ?? 0
         let exps = z.map { exp($0 - peak) }
         let total = exps.reduce(0, +)
@@ -178,6 +197,9 @@ public final class FineTunedJudge: @unchecked Sendable {
         let risk = min(1.0, max(0.0,
             (probabilities["block"] ?? 0) + 0.5 * (probabilities["review"] ?? 0)))
         let malicious = probabilities["block"] ?? 0
+        guard risk.isFinite, malicious.isFinite else {
+            throw LayaError.predictionFailed("non-finite verdict")
+        }
         return LayaVerdict(
             choice: choice,
             probabilities: probabilities,
@@ -185,7 +207,8 @@ public final class FineTunedJudge: @unchecked Sendable {
             malicious: malicious,
             risk: risk,
             checkpoint: checkpoint,
-            latencyMilliseconds: Date().timeIntervalSince(start) * 1000
+            latencyMilliseconds: Date().timeIntervalSince(start) * 1000,
+            truncated: truncated
         )
     }
 
@@ -196,9 +219,17 @@ public final class FineTunedJudge: @unchecked Sendable {
 }
 #else
 /// Linux seam: CoreML is unavailable, so the fine-tuned judge cannot run.
-/// The gate treats this as abstain; it never invents an allow.
+/// The gate treats this as unavailable; it never invents an allow.
 public struct FineTunedJudge: Sendable {
     public init(bundleDir: URL) throws {
+        throw LayaError.modelUnavailable("CoreML unavailable on this platform")
+    }
+
+    public func judge(_ command: String, contextLines: [String] = []) throws -> LayaVerdict {
+        throw LayaError.modelUnavailable("CoreML unavailable on this platform")
+    }
+
+    public func judge(_ command: String, context: JudgeContext) throws -> LayaVerdict {
         throw LayaError.modelUnavailable("CoreML unavailable on this platform")
     }
 }

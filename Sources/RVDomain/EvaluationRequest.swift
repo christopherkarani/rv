@@ -52,7 +52,10 @@ public struct EvaluationRequest: Sendable, Equatable, Codable {
         command = try container.decode(ShellCommand.self, forKey: .command)
         enabledPacks = try container.decode([PackID].self, forKey: .enabledPacks)
         budget = try container.decodeIfPresent(EvaluationBudget.self, forKey: .budget)
-        provenance = try container.decodeIfPresent(ActionProvenance.self, forKey: .provenance) ?? .unknown
+        // Tolerant: an unknown provenance raw value from a newer host
+        // degrades to .unknown instead of failing the whole frame decode.
+        let rawProvenance = try container.decodeIfPresent(String.self, forKey: .provenance)
+        provenance = rawProvenance.flatMap(ActionProvenance.init(rawValue:)) ?? .unknown
     }
 
     public func encode(to encoder: Encoder) throws {

@@ -21,7 +21,18 @@ public enum HookAuthorization: Sendable, Equatable {
         if case .deny = result.boundReview {
             return .skip
         }
+        // IPC projection strips `boundReview`; re-derive the judge block
+        // pin from its rule ID so a decoded block cannot become unlockable.
+        if isJudgeBlock(result) {
+            return .skip
+        }
         return .consider
+    }
+
+    /// Judge block denies pin by rule ID, with or without `boundReview`.
+    static func isJudgeBlock(_ result: EvaluationResult) -> Bool {
+        guard case .deny(let deny) = result.decision else { return false }
+        return deny.ruleID.pack == .coreJudge && deny.ruleID.pattern == "laya-block"
     }
 
     /// Pinned when no human transport may ever allow it.
@@ -35,6 +46,7 @@ public enum HookAuthorization: Sendable, Equatable {
         if case .deny = result.boundReview { return true }
         guard case .deny(let deny) = result.decision else { return false }
         if deny.ruleID.pack == .coreSecrets { return true }
+        if isJudgeBlock(result) { return true }
         if deny.ruleID.pack == ActionPolicyEngine.Builtin.pack {
             // A carried mandatory-human bind is an explicit human-review
             // request: human transports may oblige. Any other builtin

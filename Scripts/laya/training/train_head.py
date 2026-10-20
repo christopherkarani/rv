@@ -87,6 +87,17 @@ HF_CACHE_CKPT = (
     Path.home()
     / ".cache/huggingface/hub/models--convaiinnovations--laya/snapshots"
 )
+# Pinned base checkpoint: HF snapshot revision + the multilingual
+# weights' SHA-256. The first snapshot in a shared HF cache is not a
+# reproducible (or trustworthy) input; both values are asserted before
+# any tensor is read. Override via env only together with a code change.
+EXPECTED_BASE_REVISION = os.environ.get(
+    "LAYA_BASE_REVISION", "7b928d828b7b0e022f929d9bd2e44165aa270148"
+)
+EXPECTED_BASE_SHA256 = os.environ.get(
+    "LAYA_BASE_SHA256",
+    "9d628fd971b700382ac6f65920a86f149777b2e748e0c955fb3b19695aa8f204",
+)
 
 
 def sha_prefix(path, n=8):
@@ -121,13 +132,26 @@ def normalize(text):
 
 
 def find_ckpt_dir():
-    cands = sorted(HF_CACHE_CKPT.glob("*/multilingual"))
-    for c in cands:
-        if (c / "model.safetensors").exists():
-            return c
-    raise FileNotFoundError(
-        f"no laya multilingual checkpoint under {HF_CACHE_CKPT}"
-    )
+    ckpt = HF_CACHE_CKPT / EXPECTED_BASE_REVISION / "multilingual"
+    weights = ckpt / "model.safetensors"
+    if not weights.exists():
+        raise FileNotFoundError(
+            f"pinned base checkpoint {EXPECTED_BASE_REVISION} not in "
+            f"{HF_CACHE_CKPT}; download that exact revision first"
+        )
+    digest = hashlib.sha256()
+    with open(weights, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    actual = digest.hexdigest()
+    if actual != EXPECTED_BASE_SHA256:
+        raise RuntimeError(
+            f"base weights sha256 mismatch: got {actual} "
+            f"want {EXPECTED_BASE_SHA256} -- STOP"
+        )
+    print(f"base checkpoint pinned: revision {EXPECTED_BASE_REVISION} "
+          f"sha256 {actual[:16]}... verified")
+    return ckpt
 
 
 def load_encoder(ckpt):

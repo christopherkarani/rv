@@ -94,7 +94,9 @@ language, not shell; packs are expected to do poorly there and do.
 - ≥ 5k observe-mode judged calls before any accuracy claim.
 - Linux ONNX parity (drift ≤ 0.02) — bundle export script shipped;
   runtime wrapper not yet built; judge reports unavailable on Linux
-  and the gate fails closed to Ask only when a bundle is present.
+  and the gate runs packs-only (doctor warns when a bundle is present
+  but unusable). Fail-closed Ask is reserved for a loaded judge that
+  errors mid-prediction.
 - Warm Swift latency: ~370–700 ms vs torch ~100 ms. Suspects:
   per-element MLMultiArray NSNumber access and 3 sequential calls.
 
@@ -130,3 +132,40 @@ CoreML conversion for macOS + Swift runtime for the single-pass
 3-class graph, runtime context supply, install/observe rollout.
 Known miss preserved at p~1.0: `git add -A` (training labels say
 block; safe lane covers it in the full system).
+
+## Update (2026-10-20): production flip (PR #423) + waivers
+
+The fine-tuned judge is the production default when its bundle is
+installed at `~/.config/rv/models/laya-ft-v2-coreml` (model.mlpackage
++ tokenizer.json + config.json); weights distribution remains the open
+decision from the plan, so a fresh install runs packs-only and doctor
+says so. Conversion is `Scripts/laya/training/convert_ft.py`; its
+drift/size gates now fail the run (non-zero exit, sidecars withheld).
+
+Evidence-bar waivers accepted for this flip:
+
+- Benign overblock bar (≤2% on real traffic) is NOT yet met by
+  measurement (1/35 on shell). Waiver basis: the judge binds only on
+  machines that install a bundle, `guard.mode: observe` is the
+  recommended trial posture, and judge reviews are unlockable Asks —
+  only judge blocks pin.
+- The ≥5k observe-calls bar for accuracy claims stands unmet; no
+  accuracy claim is made for production traffic until observe logs
+  exist. The numbers above are exam-set numbers.
+- Runtime context is PARTIAL relative to training: the runtime
+  supplies the command plus `cwd-inside-repo` only; git counts and
+  agent-touched files are not yet wired (judge-log rows carry
+  `context: partial`). Context-ablation showed context mainly catches
+  dangerous commands; the context-dependent *allow* cases from the
+  2026-10-19 direction (e.g. deleting agent-created build output)
+  cannot trigger until agent-touched tracking ships. Treat current
+  behavior as command+cwd judging.
+- Training scripts under `Scripts/laya/training/` include exploratory
+  arms (TF-IDF/head baselines, dataset-v1 builder). The artifact path
+  is `prepare_data_v2.py` → `finetune.py` → `convert_ft.py`, with
+  `train_head.py` providing the pinned encoder loader; the rest is
+  measuring-stick code kept for reproduction, not product surface.
+  Splitting it out is a follow-up, not part of this flip.
+- Provenance thresholds (0.60/0.30 for toolOutput/web/email) are
+  wire-ready but dormant: no host sends `provenance` yet, so every
+  call judges at the default profile until hosts opt in.

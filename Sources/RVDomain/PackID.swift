@@ -30,6 +30,10 @@ public struct PackID: RawRepresentable, Hashable, Sendable, Equatable, Codable {
     public static let coreFilesystem = PackID(rawValue: "core.filesystem")
     public static let coreGit = PackID(rawValue: "core.git")
     public static let coreSecrets = PackID(rawValue: "core.secrets")
+    /// Laya judge denies (`laya-block` pins, `laya-review` asks). Not a
+    /// loadable pack; the ID exists so pin derivation survives IPC, where
+    /// `boundReview` is intentionally stripped.
+    public static let coreJudge = PackID(rawValue: "core.judge")
     public static let systemDisk = PackID(rawValue: "system.disk")
 
     public static func isValid(_ rawValue: String) -> Bool {

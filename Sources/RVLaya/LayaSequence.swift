@@ -47,6 +47,9 @@ public struct LayaSequence: Sendable, Equatable {
     public var ids: [Int32]
     public var markers: [Int32]
     public var qtype: Int32
+    /// The state did not fit the sequence budget (or an option marker
+    /// fell outside it): the model is answering about a partial input.
+    public var truncated: Bool = false
 
     public static func build(
         tokenizer: LayaTokenizer,
@@ -78,11 +81,16 @@ public struct LayaSequence: Sendable, Equatable {
         }
         ids.append(tokenizer.sepID)
         let room = max(0, maxLen - ids.count - 1)
-        let stateIDs = tokenizer.encode(unmasked(state))
-        ids.append(contentsOf: stateIDs.prefix(room))
+        // Bounded encode: truncation (token or symbol-cap) is reported
+        // without encoding the whole untrusted state first.
+        let state = tokenizer.encodeBounded(unmasked(state), maxTokens: room)
+        var truncated = state.truncated
+        ids.append(contentsOf: state.ids)
         ids.append(tokenizer.sepID)
         ids = Array(ids.prefix(maxLen))
-        markers = markers.filter { Int($0) < maxLen }
-        return LayaSequence(ids: ids, markers: markers, qtype: question.kind.qtype)
+        let keptMarkers = markers.filter { Int($0) < maxLen }
+        if keptMarkers.count != markers.count { truncated = true }
+        markers = keptMarkers
+        return LayaSequence(ids: ids, markers: markers, qtype: question.kind.qtype, truncated: truncated)
     }
 }

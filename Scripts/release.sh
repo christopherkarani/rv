@@ -185,8 +185,17 @@ if [[ "$OS" == "Darwin" ]]; then
   chmod 755 "$STAGE/rv-pty-claim"
   strip -x "$STAGE/rv-pty-claim"
 
+  # Bench/diagnostics CLI for the Laya judge bundles (CoreML; Darwin only).
+  if [[ ! -x "$BIN_DIR/rv-judge" ]]; then
+    printf "release: expected executable rv-judge in %s\n" "$BIN_DIR" >&2
+    exit 1
+  fi
+  cp "$BIN_DIR/rv-judge" "$STAGE/rv-judge"
+  chmod 755 "$STAGE/rv-judge"
+  strip -x "$STAGE/rv-judge"
+
   needs_span=0
-  for staged in "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host" "$STAGE/rv-pty-claim"; do
+  for staged in "$STAGE/rv-cli" "$STAGE/rvd" "$STAGE/rv-workspace-host" "$STAGE/rv-pty-claim" "$STAGE/rv-judge"; do
     if otool -L "$staged" | grep -q 'libswiftCompatibilitySpan.dylib'; then
       needs_span=1
     fi

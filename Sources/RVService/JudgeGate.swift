@@ -56,18 +56,28 @@ public enum JudgeRuntime {
 
     public static func guardMode(home: HomeDirectory?) -> GuardMode {
         if let raw = ProcessInfo.processInfo.environment["RV_GUARD_MODE"],
-           let mode = GuardMode(rawValue: raw) {
+           let mode = GuardMode(rawValue: raw.lowercased()) {
             return mode
         }
-        if let raw = configValue("guard.mode", home: home), let mode = GuardMode(rawValue: raw) {
+        if let raw = configGuardMode(loadConfigDict(home: home)),
+           let mode = GuardMode(rawValue: raw.lowercased()) {
             return mode
         }
         return .enforce
     }
 
-    static func configValue(_ key: String, home: HomeDirectory?) -> String? {
-        guard let root = loadConfigDict(home: home) else { return nil }
-        return root[key] as? String
+    /// Reads `guard.mode` from a parsed config object, nested
+    /// (`{"guard": {"mode": "observe"}}`) or flat dotted form.
+    static func configGuardMode(_ config: [String: Any]?) -> String? {
+        guard let config else { return nil }
+        if let nested = config["guard"] as? [String: Any],
+           let mode = nested["mode"] as? String, !mode.isEmpty {
+            return mode
+        }
+        if let flat = config["guard.mode"] as? String, !flat.isEmpty {
+            return flat
+        }
+        return nil
     }
 
     static func loadConfigDict(home: HomeDirectory?) -> [String: Any]? {
@@ -104,14 +114,17 @@ public enum JudgeRuntime {
     /// (`bundlePresent` false): the gate goes packs-only with an
     /// `engine-missing` note rather than failing closed or silently
     /// switching engines.
+    static func explicitEngine(env: [String: String], config: [String: Any]?) -> JudgeEngine? {
+        env["RV_JUDGE_ENGINE"].flatMap { JudgeEngine(rawValue: $0.lowercased()) }
+            ?? configEngine(config).flatMap { JudgeEngine(rawValue: $0.lowercased()) }
+    }
+
     static func resolveEngine(
         env: [String: String],
         config: [String: Any]?,
         bundleExists: (JudgeEngine) -> Bool
     ) -> (engine: JudgeEngine, bundlePresent: Bool) {
-        let explicit: JudgeEngine? =
-            env["RV_JUDGE_ENGINE"].flatMap { JudgeEngine(rawValue: $0.lowercased()) }
-            ?? configEngine(config).flatMap { JudgeEngine(rawValue: $0.lowercased()) }
+        let explicit: JudgeEngine? = explicitEngine(env: env, config: config)
         if let explicit {
             return (explicit, bundleExists(explicit))
         }
@@ -149,6 +162,81 @@ public enum JudgeRuntime {
         return (engine, bundle)
     }
 
+    /// Bundle state for doctor: distinguishes absent (packs-only is a
+    /// choice) from present-but-invalid (a broken install that would
+    /// silently run packs-only).
+    public enum BundleHealth: Sendable {
+        case ok(engine: JudgeEngine, bundle: URL)
+        case invalid(engine: JudgeEngine, dir: URL, problems: [String])
+        case missing(engine: JudgeEngine, expected: URL?)
+    }
+
+    public static func bundleHealth(home: HomeDirectory?) -> BundleHealth {
+        if let resolved = resolvedJudge(home: home) {
+            let problems = bundleProblems(engine: resolved.engine, dir: resolved.bundle)
+            return problems.isEmpty
+                ? .ok(engine: resolved.engine, bundle: resolved.bundle)
+                : .invalid(engine: resolved.engine, dir: resolved.bundle, problems: problems)
+        }
+        // No runnable bundle. If an install dir exists at all, it is a
+        // broken install, not an absence. Check the explicit engine,
+        // else FT (production default) before stock — the resolver
+        // falls back to stock precisely because FT did not validate.
+        let explicitChoice = explicitEngine(
+            env: ProcessInfo.processInfo.environment, config: loadConfigDict(home: home)
+        )
+        for engine in explicitChoice.map { [$0] } ?? [JudgeEngine.ft, .laya] {
+            if let expected = expectedBundleDir(engine: engine, home: home),
+               FileManager.default.fileExists(atPath: expected.path) {
+                return .invalid(
+                    engine: engine, dir: expected,
+                    problems: bundleProblems(engine: engine, dir: expected)
+                )
+            }
+        }
+        // Nothing installed: point at the production (FT) bundle unless
+        // another engine was explicitly selected.
+        let explicit = explicitEngine(
+            env: ProcessInfo.processInfo.environment, config: loadConfigDict(home: home)
+        )
+        let installEngine = explicit ?? .ft
+        return .missing(
+            engine: installEngine,
+            expected: expectedBundleDir(engine: installEngine, home: home)
+        )
+    }
+
+    static func bundleProblems(engine: JudgeEngine, dir: URL) -> [String] {
+        let fm = FileManager.default
+        var problems: [String] = []
+        if !fm.fileExists(atPath: dir.appendingPathComponent("model.mlpackage").path) {
+            problems.append("model.mlpackage missing")
+        }
+        switch engine {
+        case .ft:
+            let tok = fm.fileExists(atPath: dir.appendingPathComponent("tokenizer.json").path)
+                || fm.fileExists(atPath: dir.appendingPathComponent("tokenizer/tokenizer.json").path)
+            if !tok { problems.append("tokenizer.json missing") }
+            let configURL = dir.appendingPathComponent("config.json")
+            if fm.fileExists(atPath: configURL.path) {
+                if let data = try? Data(contentsOf: configURL),
+                   let cfg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    let labels = (cfg["logit_order"] as? [String]) ?? (cfg["labels"] as? [String])
+                    if let labels, Set(labels) != ["allow", "review", "block"] {
+                        problems.append("config labels are not allow/review/block")
+                    }
+                } else {
+                    problems.append("config.json unparseable")
+                }
+            }
+        case .laya:
+            if !fm.fileExists(atPath: dir.appendingPathComponent("tokenizer/tokenizer.json").path) {
+                problems.append("tokenizer/tokenizer.json missing")
+            }
+        }
+        return problems
+    }
+
     /// Expected install dir for an engine (valid or not). Used by doctor
     /// to name where the missing bundle should go.
     static func expectedBundleDir(engine: JudgeEngine, home: HomeDirectory?) -> URL? {
@@ -163,9 +251,11 @@ public enum JudgeRuntime {
     /// `model.mlpackage` is in it.
     public static func ftBundleDir(home: HomeDirectory?) -> URL? {
         func valid(_ dir: URL) -> URL? {
-            FileManager.default.fileExists(
-                atPath: dir.appendingPathComponent("model.mlpackage").path
-            ) ? dir : nil
+            let fm = FileManager.default
+            let hasModel = fm.fileExists(atPath: dir.appendingPathComponent("model.mlpackage").path)
+            let hasTokenizer = fm.fileExists(atPath: dir.appendingPathComponent("tokenizer.json").path)
+                || fm.fileExists(atPath: dir.appendingPathComponent("tokenizer/tokenizer.json").path)
+            return hasModel && hasTokenizer ? dir : nil
         }
         if let raw = ProcessInfo.processInfo.environment["RV_FT_BUNDLE"], !raw.isEmpty {
             return valid(URL(fileURLWithPath: raw))
@@ -178,10 +268,12 @@ public enum JudgeRuntime {
     /// anything else (unset, empty, wrong path) means packs-only.
     public static func bundleDir(home: HomeDirectory?) -> URL? {
         func valid(_ dir: URL) -> URL? {
+            // Only the CoreML judge is wired; an ONNX-only directory is
+            // not a runnable bundle and must not read as judge-on.
             let fm = FileManager.default
             let hasModel = fm.fileExists(atPath: dir.appendingPathComponent("model.mlpackage").path)
-                || fm.fileExists(atPath: dir.appendingPathComponent("laya.onnx").path)
-            return hasModel ? dir : nil
+            let hasTokenizer = fm.fileExists(atPath: dir.appendingPathComponent("tokenizer/tokenizer.json").path)
+            return hasModel && hasTokenizer ? dir : nil
         }
         if let raw = ProcessInfo.processInfo.environment["RV_LAYA_BUNDLE"], !raw.isEmpty {
             return valid(URL(fileURLWithPath: raw))
@@ -237,53 +329,79 @@ public enum JudgeRuntime {
     }
 
     /// Enforce path: judge may raise a pack-allow. Deny untouched.
+    ///
+    /// `allowSafeLane` is false when the package-script graph could not
+    /// be resolved: such a command must reach the judge (or a human),
+    /// never the judge-skipping lane. `isPeek` only tags the log row.
     public static func apply(
         to result: EvaluationResult,
         command: ShellCommand,
         home: HomeDirectory?,
         provenance: ActionProvenance = .unknown,
         now: Date = Date(),
-        cwd: WorkingDirectory? = nil
+        cwd: WorkingDirectory? = nil,
+        allowSafeLane: Bool = true,
+        isPeek: Bool = false
     ) -> EvaluationResult {
         guard case .allow = result.decision else { return result }
         let context = judgeContext(cwd: cwd)
         let partial = contextIsPartial(context)
-        if SafeCommandLane.isSafe(command.rawValue) {
+        if allowSafeLane, SafeCommandLane.isSafe(command.rawValue) {
             log(
-                home: home, live: result, wouldBe: nil, verdict: nil,
+                home: home, live: result, wouldBe: nil, verdict: nil, action: nil,
                 engine: selectedEngine(home: home),
-                note: noteFor("safe-lane", contextPartial: partial), now: now
+                note: noteFor("safe-lane", contextPartial: partial), now: now, isPeek: isPeek
             )
             return result
         }
         // Bundle-missing for the SELECTED engine is packs-only with an
         // engine-missing note — NOT fail-closed. Fail-closed Ask applies
-        // only when a loaded judge errors mid-prediction (nil verdict
-        // below).
+        // only when a loaded judge errors mid-prediction (`.failed`).
+        // A bundle that cannot LOAD is unavailable: packs-only plus a
+        // note (doctor surfaces it), never an eternal Ask loop.
         guard let resolved = resolvedJudge(home: home) else {
             log(
-                home: home, live: result, wouldBe: nil, verdict: nil,
+                home: home, live: result, wouldBe: nil, verdict: nil, action: nil,
                 engine: selectedEngine(home: home),
-                note: noteFor("engine-missing", contextPartial: partial), now: now
+                note: noteFor("engine-missing", contextPartial: partial), now: now, isPeek: isPeek
             )
             return result
         }
-        let verdict = runJudge(
+        switch runJudge(
             command: command.rawValue, context: context,
             engine: resolved.engine, bundle: resolved.bundle
-        )
-        log(
-            home: home, live: result, wouldBe: nil, verdict: verdict,
-            engine: resolved.engine,
-            note: noteFor(nil, contextPartial: partial), now: now
-        )
-        guard let verdict else { return raise(result, verdict: nil) }
-        let t = thresholds(provenance: provenance)
-        switch verdict.action(blockThreshold: t.block, reviewThreshold: t.review) {
-        case .allow:
+        ) {
+        case .unavailable(let note):
+            log(
+                home: home, live: result, wouldBe: nil, verdict: nil, action: nil,
+                engine: resolved.engine,
+                note: noteFor("judge-unavailable: \(note)", contextPartial: partial),
+                now: now, isPeek: isPeek
+            )
             return result
-        case .review, .block:
-            return raise(result, verdict: verdict)
+        case .failed:
+            let raised = raise(result, verdict: nil, action: .review)
+            log(
+                home: home, live: raised, wouldBe: nil, verdict: nil, action: .review,
+                engine: resolved.engine,
+                note: noteFor("prediction-failed", contextPartial: partial),
+                now: now, isPeek: isPeek
+            )
+            return raised
+        case .verdict(let verdict):
+            let t = thresholds(provenance: provenance)
+            var action = verdict.action(blockThreshold: t.block, reviewThreshold: t.review)
+            // The model never saw the truncated tail; an allow on a
+            // partial view goes to a human instead of binding.
+            if verdict.truncated, action == .allow { action = .review }
+            let outcome = action == .allow ? result : raise(result, verdict: verdict, action: action)
+            log(
+                home: home, live: outcome, wouldBe: nil, verdict: verdict, action: action,
+                engine: resolved.engine,
+                note: noteFor(verdict.truncated ? "truncated" : nil, contextPartial: partial),
+                now: now, isPeek: isPeek
+            )
+            return outcome
         }
     }
 
@@ -294,24 +412,44 @@ public enum JudgeRuntime {
         home: HomeDirectory?,
         provenance: ActionProvenance = .unknown,
         now: Date = Date(),
-        cwd: WorkingDirectory? = nil
+        cwd: WorkingDirectory? = nil,
+        allowSafeLane: Bool = true,
+        isPeek: Bool = false
     ) -> EvaluationResult {
         let context = judgeContext(cwd: cwd)
         let partial = contextIsPartial(context)
-        let safe = SafeCommandLane.isSafe(command.rawValue)
+        let safe = allowSafeLane && SafeCommandLane.isSafe(command.rawValue)
         var verdict: LayaVerdict?
+        var action: LayaVerdict.Action?
+        var wouldBeFinal = result
         var engine = selectedEngine(home: home)
+        var note: String? = safe ? "safe-lane" : nil
         if !safe, let resolved = resolvedJudge(home: home), case .allow = result.decision {
             engine = resolved.engine
-            verdict = runJudge(
+            switch runJudge(
                 command: command.rawValue, context: context,
                 engine: resolved.engine, bundle: resolved.bundle
-            )
+            ) {
+            case .verdict(let v):
+                verdict = v
+                let t = thresholds(provenance: provenance)
+                var a = v.action(blockThreshold: t.block, reviewThreshold: t.review)
+                if v.truncated, a == .allow { a = .review }
+                action = a
+                if a != .allow { wouldBeFinal = raise(result, verdict: v, action: a) }
+                if v.truncated { note = "truncated" }
+            case .unavailable(let n):
+                note = "judge-unavailable: \(n)"
+            case .failed:
+                action = .review
+                wouldBeFinal = raise(result, verdict: nil, action: .review)
+                note = "prediction-failed"
+            }
         }
         log(
-            home: home, live: nil, wouldBe: result, verdict: verdict,
+            home: home, live: nil, wouldBe: wouldBeFinal, verdict: verdict, action: action,
             engine: engine,
-            note: noteFor(safe ? "safe-lane" : nil, contextPartial: partial), now: now
+            note: noteFor(note, contextPartial: partial), now: now, isPeek: isPeek
         )
         return EvaluationResult(
             outcome: .plain,
@@ -320,32 +458,58 @@ public enum JudgeRuntime {
         )
     }
 
+    /// Load failure is distinct from prediction failure: the first is a
+    /// broken install (packs-only, doctor-visible), the second is a
+    /// loaded judge that cannot answer this input (fail-closed Ask).
+    enum JudgeRun {
+        case verdict(LayaVerdict)
+        case unavailable(String)
+        case failed
+    }
+
     static func runJudge(
         command: String,
         context: JudgeContext,
         engine: JudgeEngine,
         bundle: URL
-    ) -> LayaVerdict? {
+    ) -> JudgeRun {
         #if canImport(CoreML)
-        switch engine {
-        case .laya:
-            return try? slot.stockJudge(bundleDir: bundle).judge(command)
-        case .ft:
-            return try? slot.ftJudge(bundleDir: bundle).judge(command, context: context)
+        do {
+            switch engine {
+            case .laya:
+                let judge = try slot.stockJudge(bundleDir: bundle)
+                do { return .verdict(try judge.judge(command)) }
+                catch { return .failed }
+            case .ft:
+                let judge = try slot.ftJudge(bundleDir: bundle)
+                do { return .verdict(try judge.judge(command, context: context)) }
+                catch { return .failed }
+            }
+        } catch let error as LayaError {
+            switch error {
+            case .badBundle(let why), .modelUnavailable(let why): return .unavailable(why)
+            case .predictionFailed: return .failed
+            }
+        } catch {
+            return .unavailable("load failed")
         }
         #else
-        return nil
+        return .unavailable("CoreML unavailable on this platform")
         #endif
     }
 
-    /// Judge block pins (boundReview .deny); review/abstain unlockable (Ask).
-    static func raise(_ result: EvaluationResult, verdict: LayaVerdict?) -> EvaluationResult {
-        let isBlock = verdict.map { $0.action() == .block } ?? false
+    /// Judge block pins (boundReview .deny); review/abstain unlockable
+    /// (Ask). `action` is the caller's threshold-resolved action — never
+    /// re-derived here at default thresholds.
+    static func raise(
+        _ result: EvaluationResult, verdict: LayaVerdict?, action: LayaVerdict.Action
+    ) -> EvaluationResult {
+        let isBlock = action == .block
         let reason = verdict.map {
             "Laya judge: \($0.choice) (risk \(String(format: "%.2f", $0.risk)))"
         } ?? "Laya judge unavailable; failing closed"
         let deny = Deny(
-            ruleID: RuleID(pack: PackID(rawValue: "core.judge"), pattern: isBlock ? "laya-block" : "laya-review"),
+            ruleID: RuleID(pack: .coreJudge, pattern: isBlock ? "laya-block" : "laya-review"),
             reason: reason
         )
         return EvaluationResult(
@@ -356,15 +520,21 @@ public enum JudgeRuntime {
         )
     }
 
+    private static let logLock = UnfairLock<Bool>(true)
+
     /// Hash-only log (never command text), laya-guard parity.
+    /// `live`/`wouldBe` are post-judge results and `action` is the
+    /// threshold-resolved action, so would-block rates read correctly.
     static func log(
         home: HomeDirectory?,
         live: EvaluationResult?,
         wouldBe: EvaluationResult?,
         verdict: LayaVerdict?,
+        action: LayaVerdict.Action?,
         engine: JudgeEngine,
         note: String? = nil,
-        now: Date
+        now: Date,
+        isPeek: Bool = false
     ) {
         guard let home else { return }
         let subject = wouldBe ?? live
@@ -393,24 +563,30 @@ public enum JudgeRuntime {
             }
         }
         if let note { row["note"] = note }
+        if isPeek { row["peek"] = true }
         if let verdict {
             row["choice"] = verdict.choice
-            row["action"] = verdict.action().rawValue
+            row["action"] = (action ?? verdict.action()).rawValue
             row["risk"] = (verdict.risk * 1000).rounded() / 1000
             row["malicious"] = (verdict.malicious * 10000).rounded() / 10000
             row["checkpoint"] = verdict.checkpoint
             row["ms"] = (verdict.latencyMilliseconds * 10).rounded() / 10
+            if verdict.truncated { row["truncated"] = true }
         }
         guard let data = try? JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]) else { return }
         var line = data
         line.append(0x0A)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        if let handle = try? FileHandle(forWritingTo: file) {
-            defer { try? handle.close() }
-            _ = try? handle.seekToEnd()
-            try? handle.write(contentsOf: line)
-        } else {
-            try? line.write(to: file, options: .atomic)
+        // Serialized in-process; seek-to-end + single write keeps rows
+        // whole against other daemon writers on the same file.
+        logLock.withLock { _ in
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            if let handle = try? FileHandle(forWritingTo: file) {
+                defer { try? handle.close() }
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: line)
+            } else {
+                try? line.write(to: file, options: .atomic)
+            }
         }
     }
 }
@@ -418,42 +594,76 @@ public enum JudgeRuntime {
 #if canImport(CoreML)
 /// One cached judge per engine: the stock three-question judge and the
 /// fine-tuned single-pass judge load different bundles and must not share
-/// a slot.
+/// a slot. Cache entries are keyed by bundle dir, so an upgraded bundle
+/// is picked up; a load failure is cached only against the bundle's
+/// model modification time, so repairing the bundle retries the load.
+/// Compilation runs outside the lock (a racing duplicate load is wasted
+/// work, not a stalled evaluate door).
 final class JudgeSlot: @unchecked Sendable {
-    private var stock: LayaCoreMLJudge?
-    private var ft: FineTunedJudge?
-    private var failedStock: URL?
-    private var failedFT: URL?
+    private var stock: (dir: URL, judge: LayaCoreMLJudge)?
+    private var ft: (dir: URL, judge: FineTunedJudge)?
+    private var failedStock: (dir: URL, stamp: TimeInterval)?
+    private var failedFT: (dir: URL, stamp: TimeInterval)?
     private let lock = NSLock()
 
+    private static func stamp(_ bundleDir: URL) -> TimeInterval {
+        let package = bundleDir.appendingPathComponent("model.mlpackage")
+        let date = (try? FileManager.default.attributesOfItem(atPath: package.path))?[.modificationDate] as? Date
+        return date?.timeIntervalSince1970 ?? 0
+    }
+
     func stockJudge(bundleDir: URL) throws -> LayaCoreMLJudge {
+        let stamp = Self.stamp(bundleDir)
         lock.lock()
-        defer { lock.unlock() }
-        if let stock { return stock }
-        if failedStock == bundleDir { throw LayaError.modelUnavailable("cached load failure") }
+        if let stock, stock.dir == bundleDir { lock.unlock(); return stock.judge }
+        if let failedStock, failedStock.dir == bundleDir, failedStock.stamp == stamp {
+            lock.unlock()
+            throw LayaError.modelUnavailable("cached load failure")
+        }
+        lock.unlock()
         do {
             let judge = try LayaCoreMLJudge(bundleDir: bundleDir)
-            stock = judge
+            lock.lock()
+            if let stock, stock.dir == bundleDir { lock.unlock(); return stock.judge }
+            stock = (bundleDir, judge)
+            failedStock = nil
+            lock.unlock()
             return judge
         } catch {
-            failedStock = bundleDir
+            lock.lock()
+            failedStock = (bundleDir, stamp)
+            lock.unlock()
             throw error
         }
     }
 
     func ftJudge(bundleDir: URL) throws -> FineTunedJudge {
+        let stamp = Self.stamp(bundleDir)
         lock.lock()
-        defer { lock.unlock() }
-        if let ft { return ft }
-        if failedFT == bundleDir { throw LayaError.modelUnavailable("cached load failure") }
+        if let ft, ft.dir == bundleDir { lock.unlock(); return ft.judge }
+        if let failedFT, failedFT.dir == bundleDir, failedFT.stamp == stamp {
+            lock.unlock()
+            throw LayaError.modelUnavailable("cached load failure")
+        }
+        lock.unlock()
         do {
             let judge = try FineTunedJudge(bundleDir: bundleDir)
-            ft = judge
+            lock.lock()
+            if let ft, ft.dir == bundleDir { lock.unlock(); return ft.judge }
+            ft = (bundleDir, judge)
+            failedFT = nil
+            lock.unlock()
             return judge
         } catch {
-            failedFT = bundleDir
+            lock.lock()
+            failedFT = (bundleDir, stamp)
+            lock.unlock()
             throw error
         }
     }
 }
+#else
+/// Linux seam: no CoreML judge exists, every load is unavailable and
+/// the gate runs packs-only. Referenced unconditionally above.
+final class JudgeSlot: @unchecked Sendable {}
 #endif

@@ -2,18 +2,23 @@ import Foundation
 import Testing
 @testable import RVLaya
 
+// File-level (not a suite static): @Suite trait conditions referencing
+// the suite's own statics are a circular macro reference.
+private func layaBundleURL() -> URL? {
+    ProcessInfo.processInfo.environment["RV_LAYA_BUNDLE"].map(URL.init(fileURLWithPath:))
+}
+
 /// Golden IDs generated with HF `tokenizers` over the multilingual
 /// bundle's tokenizer.json (add_special_tokens=False). Set
-/// RV_LAYA_BUNDLE to a downloaded bundle to run; skipped otherwise.
-@Suite("Laya tokenizer goldens")
+/// RV_LAYA_BUNDLE to a downloaded bundle to run; the suites report as
+/// skipped otherwise (never a vacuous pass).
+@Suite("Laya tokenizer goldens", .enabled(if: layaBundleURL() != nil))
 struct LayaTokenizerTests {
-    static var bundle: URL? {
-        ProcessInfo.processInfo.environment["RV_LAYA_BUNDLE"].map(URL.init(fileURLWithPath:))
-    }
+    static var bundle: URL? { layaBundleURL() }
 
     @Test("encodings match HF tokenizers byte for byte")
     func goldens() throws {
-        guard let bundle = Self.bundle else { return }
+        let bundle = try #require(Self.bundle)
         let tok = try LayaTokenizer(bundleDir: bundle)
         #expect(tok.encode("ls -la") == [33403, 728, 522])
         #expect(
@@ -32,28 +37,55 @@ struct LayaTokenizerTests {
         #expect(tok.encode("echo hello world") == [8163, 25612, 2134])
     }
 
-    @Test("sequence shape matches upstream build_sequence")
+    @Test("sequence matches the HF-computed upstream layout byte for byte")
     func sequenceShape() throws {
-        guard let bundle = Self.bundle else { return }
+        let bundle = try #require(Self.bundle)
         let tok = try LayaTokenizer(bundleDir: bundle)
         let seq = LayaSequence.build(
             tokenizer: tok, state: "ls -la", question: LayaQuestions.guardQuestions.action
         )
-        #expect(seq.ids.first == tok.clsID)
-        #expect(seq.ids.last == tok.sepID)
-        #expect(seq.markers.count == 3)
+        // Computed with HF tokenizers over the stock tokenizer.json
+        // following the documented build_sequence layout + budgets.
+        #expect(seq.ids == [
+            2, 6241, 2872, 235292, 11464, 7217, 235298, 4925, 236392, 53355,
+            242950, 237458, 168788, 149735, 113859, 235336, 2765, 235293,
+            238179, 237045, 235269, 3221, 235293, 236417, 238912, 239854,
+            236589, 126942, 235269, 3963, 235293, 242579, 236569, 238597,
+            238335, 1, 4, 2765, 235292, 229288, 236386, 31087, 237545,
+            164024, 235269, 70685, 237045, 236511, 32929, 237047, 211896,
+            4, 3221, 235292, 72510, 236939, 235269, 155718, 235269, 235248,
+            75259, 237045, 239673, 235269, 155280, 236511, 239042, 237392,
+            728, 64691, 88936, 126942, 4, 3963, 235292, 59994, 242453,
+            235269, 46355, 238483, 235269, 30743, 242989, 239109, 235269,
+            27941, 237611, 241982, 238368, 238483, 235269, 30743, 239907,
+            237312, 237880, 1, 33403, 728, 522, 1,
+        ])
+        #expect(seq.markers == [36, 51, 72])
         #expect(seq.qtype == 0)
-        for marker in seq.markers {
-            #expect(seq.ids[Int(marker)] == tok.maskID)
-        }
+        #expect(!seq.truncated)
+    }
+
+    @Test("state past the sequence budget reports truncated")
+    func sequenceTruncation() throws {
+        let bundle = try #require(Self.bundle)
+        let tok = try LayaTokenizer(bundleDir: bundle)
+        let seq = LayaSequence.build(
+            tokenizer: tok, state: String(repeating: "echo hello ", count: 500),
+            question: LayaQuestions.guardQuestions.action, maxLen: 128, headMaxLen: 64
+        )
+        #expect(seq.truncated)
+        #expect(seq.ids.count <= 128)
     }
 }
 
-@Suite("Laya judge (CoreML, bundle-gated)")
+@Suite(
+    "Laya judge (CoreML, bundle-gated)",
+    .enabled(if: layaBundleURL() != nil)
+)
 struct LayaJudgeTests {
     @Test("probabilities match the Python/CoreML oracle within drift")
     func oracleParity() throws {
-        guard let bundle = LayaTokenizerTests.bundle else { return }
+        let bundle = try #require(LayaTokenizerTests.bundle)
         #if canImport(CoreML)
         let judge = try LayaCoreMLJudge(bundleDir: bundle)
         // Oracle (laya-coreml Python, multilingual bundle): ls -la ->

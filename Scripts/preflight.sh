@@ -117,7 +117,7 @@ check_value_types() {
   local matches
   matches=$(grep -rnE "$pat" "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/RVService/' | grep -v 'Sources/RVPolicy/' | grep -v 'Sources/RVAnalytics/' \
-    | grep -v 'Sources/RVIsolation/' | grep -v 'Sources/RVWorkspaceTUI/' \
+    | grep -v 'Sources/RVIsolation/' | grep -v 'Sources/RVWorkspaceTUI/' | grep -v 'Sources/RVLaya/' \
     | grep -v 'Sources/RVOperatorUI/' | grep -v 'Sources/RVMCP/MCPGatewayRuntime.swift:' \
     | grep -v 'Sources/RVMCP/MCPRemoteUpstream.swift:' \
     | grep -v 'Sources/RVMCP/MCPSandbox.swift:.*final class HeldDirectory' || true)
@@ -371,7 +371,7 @@ check_no_main_in_library() {
   matches=$(find "$SOURCES" -name 'main.swift' \
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
     | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' \
-    | grep -v 'Sources/rv-operator-ui/' || true)
+    | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' || true)
   local count
   count=$(echo "$matches" | grep -c . || true)
   if [ "$count" -gt 0 ]; then
@@ -386,7 +386,7 @@ check_no_main_in_library() {
   amatches=$(grep -rn '@main' "$SOURCES" --include='*.swift' \
     | grep -v 'Sources/rv/' | grep -v 'Sources/rvd/' \
     | grep -v 'Sources/rv-workspace-host/' | grep -v 'Sources/rv-terminal-probe/' \
-    | grep -v 'Sources/rv-operator-ui/' || true)
+    | grep -v 'Sources/rv-operator-ui/' | grep -v 'Sources/rv-judge/' || true)
   local acount
   acount=$(echo "$amatches" | grep -c . || true)
   if [ "$acount" -gt 0 ]; then

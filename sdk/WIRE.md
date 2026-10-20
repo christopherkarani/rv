@@ -264,7 +264,12 @@ encoders must emit only valid values.
 ### 5.1 EvaluationRequest
 
 `EvaluationRequest.swift`: `{command: string, enabledPacks: [PackID], budget?:
-{maxPatternAttempts: int}}`. Day-one walk set is exactly
+{maxPatternAttempts: int}, provenance?: string}`. `provenance` is one of
+`unknown|userTyped|agentPlan|toolOutput|web|email`; it is omitted when
+`unknown` (pre-provenance frames stay byte-identical), and decoders must
+map any unrecognized value to `unknown`, never reject the frame. Untrusted
+values (`toolOutput|web|email`) select stricter Laya judge thresholds.
+Day-one walk set is exactly
 `["core.filesystem", "core.git", "system.disk"]` (`RVDomain.swift`), in order.
 `ShellCommand` is an unconstrained string newtype; `WorkingDirectory` is a
 nonempty string (`""` is unrepresentable — decoders reject it, except the

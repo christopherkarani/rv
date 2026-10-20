@@ -358,7 +358,9 @@ def convert_coreml(model_fp32_cpu, out_pkg):
         outputs=[ct.TensorType(name="logits", dtype=np.float32)],
         convert_to="mlprogram",
         compute_precision=ct.precision.FLOAT16,
-        minimum_deployment_target=ct.target.iOS18,
+        # The bundle runs on macOS (Package.swift floor is macOS 15);
+        # iOS18 encoded the same floor only implicitly.
+        minimum_deployment_target=getattr(ct.target, "macOS15", ct.target.iOS18),
     )
     if out_pkg.exists():
         shutil.rmtree(out_pkg)
@@ -469,6 +471,14 @@ def main():
     got_coreml = coreml_probs(texts, tokenizer, mlmodel)
     d_coreml, a_coreml, ok_coreml = drift_report("coreml-fp16", ref, got_coreml)
 
+    # Drift gates are gates, not reports: a failing bundle must never
+    # reach the sidecar copy below (which is what makes it installable).
+    if not (ok_onnx and ok_coreml):
+        raise SystemExit(
+            f"drift gate FAIL (onnx ok={ok_onnx}, coreml ok={ok_coreml}); "
+            "bundle sidecars withheld"
+        )
+
     # Bundle sidecars.
     shutil.copy(FT_DIR / "tokenizer.json", COREML_DIR / "tokenizer.json")
     cfg = {
@@ -503,6 +513,8 @@ def main():
           f"{'PASS' if ok_coreml else 'FAIL'}", flush=True)
     print(f"drift onnx-fp16 max={d_onnx:.4f} argmax={a_onnx * 100:.2f}% "
           f"{'PASS' if ok_onnx else 'FAIL'}", flush=True)
+    if onnx_sz > 650_000_000:
+        raise SystemExit(f"size gate FAIL: onnx bundle {_mb(onnx_sz)} > 650 MB")
     print(f"done in {time.time() - t0:.0f}s", flush=True)
 
 

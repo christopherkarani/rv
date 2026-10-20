@@ -2,17 +2,31 @@ import Foundation
 import Testing
 @testable import RVLaya
 
+// File-level (not suite statics): @Suite trait conditions referencing
+// the suite's own statics are a circular macro reference.
+private func ftBundleURL() -> URL? {
+    ProcessInfo.processInfo.environment["RV_FT_BUNDLE"].map(URL.init(fileURLWithPath:))
+}
+
+private func ftGoldenURL() -> URL {
+    ProcessInfo.processInfo.environment["RV_FT_GOLDEN"]
+        .map(URL.init(fileURLWithPath:))
+        ?? URL(fileURLWithPath: "/tmp/laya-train/ft/golden.json")
+}
+
 /// Parity + exam gates for the Ticket 5a fine-tuned judge. The golden file
 /// is the fp32 torch oracle written by Scripts/laya/training/convert_ft.py.
 /// Set RV_FT_BUNDLE to a bundle dir (model.mlpackage + tokenizer.json +
-/// config.json) to run; skipped otherwise.
-@Suite("Fine-tuned judge (CoreML, bundle-gated)")
+/// config.json) and RV_FT_GOLDEN to the golden file to run; the suite
+/// reports as skipped otherwise (never a vacuous pass).
+@Suite(
+    "Fine-tuned judge (CoreML, bundle-gated)",
+    .enabled(if: ftBundleURL() != nil
+        && FileManager.default.fileExists(atPath: ftGoldenURL().path))
+)
 struct FineTunedJudgeTests {
-    static var bundle: URL? {
-        ProcessInfo.processInfo.environment["RV_FT_BUNDLE"].map(URL.init(fileURLWithPath:))
-    }
-
-    static let goldenURL = URL(fileURLWithPath: "/tmp/laya-train/ft/golden.json")
+    static var bundle: URL? { ftBundleURL() }
+    static var goldenURL: URL { ftGoldenURL() }
 
     struct GoldenRow: Decodable {
         var set: String
@@ -37,7 +51,7 @@ struct FineTunedJudgeTests {
 
     @Test("swift probabilities match the fp32 golden within drift")
     func goldenParity() throws {
-        guard let bundle = Self.bundle else { return }
+        let bundle = try #require(Self.bundle)
         #if canImport(CoreML)
         let judge = try FineTunedJudge(bundleDir: bundle)
         let golden = try Self.loadGolden()
@@ -69,7 +83,7 @@ struct FineTunedJudgeTests {
 
     @Test("swift exam scores hold the ship minimums")
     func examScores() throws {
-        guard let bundle = Self.bundle else { return }
+        let bundle = try #require(Self.bundle)
         #if canImport(CoreML)
         let judge = try FineTunedJudge(bundleDir: bundle)
         let golden = try Self.loadGolden()
@@ -99,6 +113,17 @@ struct FineTunedJudgeTests {
         #expect(adv.held.0 >= 17)
         #endif
     }
+
+    @Test("overlong input reports truncated instead of silently judging the head")
+    func truncatedVerdict() throws {
+        let bundle = try #require(Self.bundle)
+        #if canImport(CoreML)
+        let judge = try FineTunedJudge(bundleDir: bundle)
+        let long = "echo " + String(repeating: "a", count: 20000)
+        let verdict = try judge.judge(long)
+        #expect(verdict.truncated)
+        #endif
+    }
 }
 
 /// Tokenizer exactness (bundle-gated): the FT vocab contains twin keys
@@ -107,11 +132,14 @@ struct FineTunedJudgeTests {
 /// plus BOM-prefixed keys NSString strips (which reassigned common ids:
 /// "#" kept "\u{FEFF}#"s id). The tokenizer keys on UTF-8 bytes with a
 /// FEFF stand-in swap instead; these HF-verified ids pin that behavior.
-@Suite("Tokenizer exactness (bundle-gated)")
+@Suite(
+    "Tokenizer exactness (bundle-gated)",
+    .enabled(if: ftBundleURL() != nil)
+)
 struct TokenizerExactnessTests {
     @Test("confusable keys resolve to distinct HF-matching ids")
     func confusables() throws {
-        guard let bundle = FineTunedJudgeTests.bundle else { return }
+        let bundle = try #require(FineTunedJudgeTests.bundle)
         let tok = try LayaTokenizer(tokenizerJSON: bundle.appendingPathComponent("tokenizer.json"))
         #expect(tok.byteVocab.count == 256000)
         #expect(tok.encode(";") == [2161])
@@ -119,6 +147,28 @@ struct TokenizerExactnessTests {
         #expect(tok.encode("#") == [1700])
         #expect(tok.encode("\r") == [2722])
         #expect(tok.encode(";") == tok.encode(";"))
+    }
+
+    @Test("added-token lstrip matches HF (<mask> ships lstrip)")
+    func maskLstrip() throws {
+        let bundle = try #require(FineTunedJudgeTests.bundle)
+        let tok = try LayaTokenizer(tokenizerJSON: bundle.appendingPathComponent("tokenizer.json"))
+        // HF tokenizers: "a <mask> b" -> [476, 4, 518]; without lstrip
+        // the space before <mask> tokenizes separately.
+        #expect(tok.encode("a <mask> b") == [476, 4, 518])
+        #expect(tok.encode("x<mask>y") == [1141, 4, 597])
+    }
+
+    @Test("bounded encode caps tokens and work on spaceless blobs")
+    func boundedEncode() throws {
+        let bundle = try #require(FineTunedJudgeTests.bundle)
+        let tok = try LayaTokenizer(tokenizerJSON: bundle.appendingPathComponent("tokenizer.json"))
+        let blob = String(repeating: "aGVsbG8td29ybGQ", count: 2000)
+        let start = Date()
+        let encoded = tok.encodeBounded(blob, maxTokens: 64)
+        #expect(encoded.ids.count == 64)
+        #expect(encoded.truncated)
+        #expect(Date().timeIntervalSince(start) < 2.0)
     }
 }
 
