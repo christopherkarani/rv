@@ -132,6 +132,16 @@ struct OnboardingFastPathTests {
         #expect(fix.contains("rv mcp onboard --host cursor"))
     }
 
+    @Test func fixLineKeepsShellExpansionsInert() throws {
+        let row = MCPRun.Row(
+            host: "cursor", scope: "user", configPath: "/tmp/mcp.json",
+            name: "$(touch pwned)`id`", status: "unreviewed", command: "npx",
+            environmentNames: [], headerNames: [], plaintextCredentials: [], governedServer: nil)
+        let fix = try #require(MCPRun.fixLine(status: .unreviewed, row: row))
+        // Inside the double quotes the expansion must be backslash-escaped.
+        #expect(fix.contains("\\$(touch pwned)\\`id\\`"))
+    }
+
     @Test func checkTextShowsFixLinesForFailingRows() {
         let report = MCPRun.Report(
             servers: 0, direct: 0, blocked: 0, integrity: "none",

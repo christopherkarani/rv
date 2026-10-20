@@ -286,7 +286,7 @@ enum MCPRun {
     /// server name cannot redraw the terminal or forge the suggestion.
     static func fixLine(status: MCPEntryStatus, row: Row) -> String? {
         let host = reviewField(row.host)
-        let name = quotedReviewFields([row.name])
+        let name = shellQuotedReviewFields([row.name])
         switch status {
         case .bypass:
             return "  Fix: `rv mcp setup --host \(host) --server \(name)`"
@@ -796,6 +796,20 @@ enum MCPRun {
             let quoted = reviewField(value)
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "\"", with: "\\\"")
+            return "\"\(quoted)\""
+        }.joined(separator: ", ")
+    }
+
+    /// Double-quoted values safe to paste into a shell command: inside
+    /// double quotes `$` and backticks still expand, so escape them (and
+    /// the quote/backslash `quotedReviewFields` already handles).
+    static func shellQuotedReviewFields(_ values: [String]) -> String {
+        values.map { value in
+            let quoted = reviewField(value)
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+                .replacingOccurrences(of: "$", with: "\\$")
+                .replacingOccurrences(of: "`", with: "\\`")
             return "\"\(quoted)\""
         }.joined(separator: ", ")
     }

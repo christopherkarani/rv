@@ -214,6 +214,24 @@ struct InitCommandTests {
         #expect(InitRun.shellWord("/my proj/dir") == "'/my proj/dir'")
     }
 
+    @Test func shellWordKeepsShellExpansionsInert() {
+        // No whitespace, but pasting this raw would run the substitution.
+        #expect(InitRun.shellWord("/tmp/$(touch pwned)") == "'/tmp/$(touch pwned)'")
+        #expect(InitRun.shellWord("/tmp/a;b") == "'/tmp/a;b'")
+        #expect(InitRun.shellWord("/tmp/`id`") == "'/tmp/`id`'")
+        #expect(InitRun.shellWord("/tmp/a'b") == "'/tmp/a'\\''b'")
+    }
+
+    @Test func ensureProfileCanBeAddedRejectsDuplicates() throws {
+        let fixture = Fixture()
+        defer { fixture.tearDown() }
+        _ = try InitRun.writeProfile(
+            RuntimeResourceProfile(id: "main", projects: ["/proj"]), configDirectory: fixture.config).get()
+        let duplicate = InitRun.ensureProfileCanBeAdded("main", configDirectory: fixture.config)
+        #expect(duplicate.failureMessage?.contains("already exists") == true)
+        _ = try InitRun.ensureProfileCanBeAdded("other", configDirectory: fixture.config).get()
+    }
+
     @Test func planTextNamesRemediesAndNextStep() throws {
         let profile = RuntimeResourceProfile(id: "main", projects: ["/proj"], secrets: ["A_KEY", "B_KEY"])
         let plan = InitRun.Plan(profile: profile, notes: ["a note"])

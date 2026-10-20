@@ -234,10 +234,34 @@ enum InitRun {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    /// Quotes a path for the suggested next command when pasting it raw
-    /// would split. Displayed paths elsewhere stay unquoted.
+    /// Quotes a word for the suggested next command when pasting it raw
+    /// would split or expand. Displayed paths elsewhere stay unquoted.
+    /// Single quotes are the only quoting in which `$`, backticks, and
+    /// `;` stay inert; an embedded `'` is written as `'\''`.
     static func shellWord(_ path: String) -> String {
-        path.contains(where: \.isWhitespace) ? "'\(path)'" : path
+        let safe = path.isEmpty == false && path.allSatisfy { character in
+            character.isLetter || character.isNumber
+                || "/._-:=%@+,".contains(character)
+        }
+        if safe { return path }
+        return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// Fails with the duplicate-id message when `profileID` is already
+    /// taken, so callers can refuse before producing any side effect.
+    static func ensureProfileCanBeAdded(
+        _ profileID: String, configDirectory: URL
+    ) -> Result<Void, CommandFailure> {
+        switch RuntimeResourcePolicyStore.load(from: configDirectory) {
+        case .failure(let error):
+            return .failure(CommandFailure(RuntimeResourcePolicyFile.message(error)))
+        case .success(let policy):
+            if policy.profiles.contains(where: { $0.id == profileID }) {
+                return .failure(
+                    "profile \(DisplayedText.field(profileID)) already exists; pass --profile-id or edit runtime-resources.json")
+            }
+            return .success(())
+        }
     }
 }
 
@@ -285,37 +309,32 @@ struct Init: AsyncParsableCommand {
         let secretsEnvironment = SecretsEnvironment.live(home: home)
         var varlockLines: [String] = []
         var importedNames: [String] = []
+        // Read and plan the schema before any write, so invalid input,
+        // a bad plan, or a duplicate profile id fails with nothing
+        // imported and nothing written.
+        var schemaText: String?
         if let schemaURL {
+            guard let data = try? Data(contentsOf: schemaURL),
+                data.count <= VarlockSchema.maximumBytes,
+                let text = String(data: data, encoding: .utf8)
+            else {
+                try ctx.fail("rv init: could not read \(schemaURL.path)\n")
+            }
+            schemaText = text
+            let current: SecretsConfiguration
+            switch SecretsRun.configuration(secretsEnvironment) {
+            case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
+            case .success(let loaded): current = loaded
+            }
+            if case .success(let schemaPlan) = VarlockSchema.plan(text) {
+                // Every schema name is defined once the import below has
+                // run: fresh names land, existing names already are.
+                importedNames = schemaPlan.secrets.map(\.name)
+            }
             if dryRun {
-                guard let text = try? String(contentsOf: schemaURL, encoding: .utf8) else {
-                    try ctx.fail("rv init: could not read \(schemaURL.path)\n")
-                }
-                let current: SecretsConfiguration
-                switch SecretsRun.configuration(secretsEnvironment) {
-                case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
-                case .success(let loaded): current = loaded
-                }
-                importedNames = InitRun.varlockFreshNames(text: text, current: current)
+                let fresh = InitRun.varlockFreshNames(text: text, current: current)
                 varlockLines.append(
-                    "varlock \(schemaURL.path): would import \(importedNames.count) secret\(importedNames.count == 1 ? "" : "s")")
-            } else {
-                switch SecretsRun.importVarlock(path: schemaURL, dryRun: false, environment: secretsEnvironment) {
-                case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
-                case .success(let text):
-                    varlockLines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
-                    let current: SecretsConfiguration
-                    switch SecretsRun.configuration(secretsEnvironment) {
-                    case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
-                    case .success(let loaded): current = loaded
-                    }
-                    // Wire every schema name secrets.json defines, including
-                    // names from this run's import and names defined earlier.
-                    let schemaText = (try? String(contentsOf: schemaURL, encoding: .utf8)) ?? ""
-                    if case .success(let plan) = VarlockSchema.plan(schemaText) {
-                        importedNames = plan.secrets.map(\.name)
-                            .filter { current.secret(named: $0) != nil }
-                    }
-                }
+                    "varlock \(schemaURL.path): would import \(fresh.count) secret\(fresh.count == 1 ? "" : "s")")
             }
         }
         let plan: InitRun.Plan
@@ -327,6 +346,17 @@ struct Init: AsyncParsableCommand {
         case .success(let built): plan = built
         }
         if dryRun == false {
+            switch InitRun.ensureProfileCanBeAdded(profileID, configDirectory: environment.configDirectory) {
+            case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
+            case .success: break
+            }
+            if let schemaURL, schemaText != nil {
+                switch SecretsRun.importVarlock(path: schemaURL, dryRun: false, environment: secretsEnvironment) {
+                case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
+                case .success(let text):
+                    varlockLines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+                }
+            }
             switch InitRun.writeProfile(plan.profile, configDirectory: environment.configDirectory) {
             case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
             case .success: break
