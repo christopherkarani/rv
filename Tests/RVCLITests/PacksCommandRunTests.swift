@@ -177,8 +177,11 @@ struct PacksCommandRunTests {
             }
         }
         #expect(threw)
+        // captureStderr is a process-global FD: parallel tests print
+        // their own "unknown pack id:" lines into the same capture.
+        // This test's line is the one whose id starts with `x`.
         let line = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-            .first { $0.contains("unknown pack id: ") } ?? ""
+            .first { $0.contains("unknown pack id: x") } ?? ""
         #expect(line.hasPrefix("unknown pack id: "))
         #expect(line.unicodeScalars.contains { $0.value == 0x1B } == false)
         #expect(line.unicodeScalars.contains { $0.value == 0x2028 } == false)

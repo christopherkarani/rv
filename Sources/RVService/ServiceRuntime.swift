@@ -710,7 +710,8 @@ public actor ServiceRuntime {
         return DoctorSnapshotBuilder.make(
             catalog: catalog,
             corePacksReady: corePacksReady,
-            idleExitSeconds: idleExitSeconds
+            idleExitSeconds: idleExitSeconds,
+            home: configHome
         )
     }
 

@@ -13,10 +13,24 @@ public enum DoctorCheckStatus: String, Sendable, Equatable, Codable {
     case warning
     case error
     case skipped
+    /// From a newer daemon; unknown statuses must not lose the snapshot.
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = DoctorCheckStatus(rawValue: raw) ?? .unknown
+    }
 }
 
 public enum DoctorCheckID: String, Codable, Hashable, Sendable {
-    case xpc, `protocol`, packs, launchd, lastError, grok, pi, opencode
+    case xpc, `protocol`, packs, launchd, lastError, grok, pi, opencode, judge
+    /// From a newer daemon; unknown check IDs must not lose the snapshot.
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = DoctorCheckID(rawValue: raw) ?? .unknown
+    }
 }
 
 public struct DoctorCheck: Sendable, Equatable, Codable {

@@ -255,7 +255,13 @@ struct LiveWorkspaceHostRegistryTests {
         try await register(registry, ref, host)
         let context = try await registry.resolve(ref, hostPeer: host)
         let log = PrincipalProbeLog()
-        let runtime = ServiceRuntime(log: log)
+        // Isolated home: evaluateAgent writes judge-log.jsonl under the
+        // runtime home; the process HOME must stay untouched in tests.
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("rv-principal-home-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = try #require(HomeDirectory(validating: root.path))
+        let runtime = ServiceRuntime(home: home, log: log)
         let requestID = UUID()
         let command = ShellCommand(rawValue: "echo bridge")
         _ = await runtime.evaluateAgent(EvaluateParams(request: .makeDayOne(command: command)),

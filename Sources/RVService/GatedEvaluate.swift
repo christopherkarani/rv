@@ -90,6 +90,15 @@ public struct GatedEvaluate: Sendable {
             allowPaths: detailed.effective,
             home: home
         )
+        // Observe is whole-guard: the file door logs-and-allows too,
+        // and records no denial.
+        if JudgeRuntime.guardMode(home: home) == .observe {
+            return EvaluationResult(
+                outcome: .plain,
+                matchingView: result.matchingView,
+                analysis: result.analysis
+            )
+        }
         recordDenialIfNeeded(
             result,
             path: action.path.rawValue,
@@ -259,16 +268,47 @@ public struct GatedEvaluate: Sendable {
         host: LedgerHost,
         tool: LedgerTool
     ) async -> EvaluationResult {
+        // Observe: evaluate everything, log the would-be verdict, allow.
+        // Grants are never spent and denials never recorded on this path.
+        if JudgeRuntime.guardMode(home: home) == .observe {
+            var wouldBe = evaluateWithSemantics(request, cwd: cwd, home: home, now: now)
+            var allowLane = true
+            if case .allow = wouldBe.decision {
+                switch scriptVerdict(for: request, cwd: cwd, home: home, now: now) {
+                case .deny(let hit):
+                    wouldBe = Self.projectScriptHit(hit, over: wouldBe)
+                case .unresolved:
+                    allowLane = false
+                case .clear:
+                    break
+                }
+            }
+            return JudgeRuntime.observe(
+                wouldBe: wouldBe, command: request.command, home: home,
+                provenance: request.provenance, now: now, cwd: cwd,
+                allowSafeLane: allowLane, isPeek: verb == .peek
+            )
+        }
         let result = evaluateWithSemantics(request, cwd: cwd, home: home, now: now)
+        // Order matters: the script check and the judge run BEFORE the
+        // Policy gate, and the gate then sees the final deny exactly
+        // once. A judge/script Ask can therefore redeem the grant its
+        // approval plants (no infinite Ask loop), and an allow-once
+        // grant for a pack deny is never spent on a result the judge
+        // would have re-denied afterwards.
+        let candidate = applyScriptAndJudge(
+            to: result, request: request, cwd: cwd, home: home, now: now,
+            isPeek: verb == .peek
+        )
         // Fast path: allow/indeterminate never touch PolicyGate or the
         // allowlist loader; PolicyGate returns them unchanged anyway.
         let finished: EvaluationResult
-        switch result.decision {
+        switch candidate.decision {
         case .allow, .indeterminate:
-            finished = result
+            finished = candidate
         case .deny:
-            if HookAuthorization.policyGateAccess(for: result) == .skip {
-                finished = result
+            if HookAuthorization.policyGateAccess(for: candidate) == .skip {
+                finished = candidate
             } else {
                 let snapshot = allowlist()
                 let rebasing = GitRebaseProbe.rebaseInProgress(cwd: cwd)
@@ -278,7 +318,7 @@ public struct GatedEvaluate: Sendable {
                 )
                 finished = await Self.applyPolicy(
                     verb,
-                    result: result,
+                    result: candidate,
                     cwd: cwd,
                     snapshot: snapshot,
                     grants: grants,
@@ -294,6 +334,61 @@ public struct GatedEvaluate: Sendable {
             recordDenialIfNeeded(finished, path: nil, home: home, host: host, tool: tool, now: now)
         }
         return finished
+    }
+
+    /// Script check, then judge, over a pack-allow. Anything else is
+    /// returned untouched: a pack deny is a floor neither may lower.
+    private func applyScriptAndJudge(
+        to result: EvaluationResult,
+        request: EvaluationRequest,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory?,
+        now: Date,
+        isPeek: Bool
+    ) -> EvaluationResult {
+        guard case .allow = result.decision else { return result }
+        var allowLane = true
+        switch scriptVerdict(for: request, cwd: cwd, home: home, now: now) {
+        case .deny(let hit):
+            return Self.projectScriptHit(hit, over: result)
+        case .unresolved:
+            allowLane = false
+        case .clear:
+            break
+        }
+        return JudgeRuntime.apply(
+            to: result, command: request.command, home: home,
+            provenance: request.provenance, now: now, cwd: cwd,
+            allowSafeLane: allowLane, isPeek: isPeek
+        )
+    }
+
+    private static func projectScriptHit(
+        _ hit: EvaluationResult, over base: EvaluationResult
+    ) -> EvaluationResult {
+        EvaluationResult(
+            outcome: hit.outcome,
+            matchingView: base.matchingView,
+            analysis: base.analysis,
+            boundReview: hit.boundReview
+        )
+    }
+
+    private func scriptVerdict(
+        for request: EvaluationRequest,
+        cwd: WorkingDirectory?,
+        home: HomeDirectory?,
+        now: Date
+    ) -> PackageScriptGate.Verdict {
+        PackageScriptGate.evaluate(command: request.command, cwd: cwd, home: home) { body, packageCwd in
+            let bodyRequest = EvaluationRequest(
+                command: body,
+                enabledPacks: request.enabledPacks,
+                budget: request.budget,
+                provenance: request.provenance
+            )
+            return evaluateWithSemantics(bodyRequest, cwd: packageCwd, home: home, now: now)
+        }
     }
 
     private static func applyPolicy(
@@ -342,10 +437,35 @@ public struct GatedEvaluate: Sendable {
     /// Phase 2A has no principal-bound human grant transaction. Evaluate the
     /// canonical packs and hard policy without reading or consuming owner grants.
     /// A denied action stays denied until that separate authority flow exists.
+    /// The script check and judge DO apply here — the guard is whole, on
+    /// every door; only grant redemption is absent.
     func evaluateAgent(
         _ request: EvaluationRequest, cwd: WorkingDirectory?, home: HomeDirectory?
     ) -> EvaluationResult {
-        evaluateWithSemantics(request, cwd: cwd, home: home)
+        let now = Date()
+        let result = evaluateWithSemantics(request, cwd: cwd, home: home, now: now)
+        if JudgeRuntime.guardMode(home: home) == .observe {
+            var wouldBe = result
+            var allowLane = true
+            if case .allow = result.decision {
+                switch scriptVerdict(for: request, cwd: cwd, home: home, now: now) {
+                case .deny(let hit):
+                    wouldBe = Self.projectScriptHit(hit, over: result)
+                case .unresolved:
+                    allowLane = false
+                case .clear:
+                    break
+                }
+            }
+            return JudgeRuntime.observe(
+                wouldBe: wouldBe, command: request.command, home: home,
+                provenance: request.provenance, now: now, cwd: cwd,
+                allowSafeLane: allowLane
+            )
+        }
+        return applyScriptAndJudge(
+            to: result, request: request, cwd: cwd, home: home, now: now, isPeek: false
+        )
     }
 
     private func evaluateWithSemantics(

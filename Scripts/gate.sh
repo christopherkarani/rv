@@ -122,6 +122,7 @@ infer_filters() {
         m="${base%%/*}"
         case "$m" in
           rv|rvd) ;;
+          rv-judge) add_filter "RVLayaTests" ;;
           rv-c)
             add_filter "CHookPipeTests"
             RUN_C_UNITS=1

@@ -41,6 +41,25 @@ rv opencode --workspace /absolute/repo -- run 'describe this project'
 
 RV searches absolute `PATH` directories for OpenCode, or accepts `--executable /absolute/opencode`. The command attaches to the persistent workspace host for the project and streams one host-owned terminal, exactly like `rv workspace run`. The runtime receives the productive workspace environment: an RV-managed `HOME`/cache/tmp, a sanitized `PATH` covering installed toolchains, and secret-bearing variables stripped. On macOS the process and its children may read and write only that workspace, plus the system locations needed to execute programs. Public HTTPS goes through the RV proxy and loopback networking is allowed; direct public, LAN, and metadata connections are denied, as are Unix-socket connections to host sockets. Signals to processes outside the sandbox are denied. A workspace that already contains a hard link to another file is refused, and the running workspace path is a separate volume so a new hard link cannot name an outside inode. Linux refuses this launch until its backend enforces the same limits; a write-only sandbox is not used instead. Other host integrations remain hook based.
 
+## Laya judge + observe mode
+
+With a Laya weights bundle installed, commands the packs allow are also
+judged by the local Laya classifier (allow / ask / deny with a risk
+score, CoreML on macOS). The judge can only raise a verdict, never lower
+a pack deny. The production judge is the fine-tuned single-pass model,
+installed at `~/.config/rv/models/laya-ft-v2-coreml` (copy the
+`model.mlpackage` + `tokenizer.json` + `config.json` bundle there; weights
+are never committed to the repo). `"judge.engine": "ft"` (default) uses
+it; `"laya"` forces the stock three-question judge at
+`~/.config/rv/models/laya-multilingual-coreml` instead.
+`RV_JUDGE_ENGINE` overrides the config file. With no explicit engine the
+fine-tuned bundle is used whenever it validates, else stock.
+`"guard.mode": "observe"` in `~/.config/rv/config.json` turns the whole
+guard observe-only: packs and judge evaluate and log the would-be verdict
+(hash only, in `judge-log.jsonl`), nothing blocks. Default is `enforce`.
+Design and measured numbers: `docs/plans/laya-guard-model-plan.md` and
+`docs/plans/laya-judge-decision-record.md`.
+
 ## What it does
 
 | | |
