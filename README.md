@@ -6,105 +6,165 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/christopherkarani/rv/releases/latest"><img src="https://img.shields.io/github/v/release/christopherkarani/rv?label=v0.1.5" alt="Release"></a>
+  <a href="https://github.com/christopherkarani/rv/releases/latest"><img src="https://img.shields.io/github/v/release/christopherkarani/rv" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-0f172a" alt="Apache 2.0"></a>
   <a href="https://github.com/christopherkarani/rv"><img src="https://img.shields.io/github/stars/christopherkarani/rv?style=flat" alt="Stars"></a>
   <a href="https://discord.gg/uZn9MDUYKx"><img src="https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
-  <img src="https://img.shields.io/badge/platform-hook%20guard%20macOS%2BLinux%20%7C%20contained%20runtime%20macOS%20only-111827" alt="Hook guard on macOS and Linux; contained runtime (rv opencode / rv workspace) on macOS only">
-  <img src="https://img.shields.io/badge/hosts-Grok%20%7C%20Pi%20%7C%20OpenCode%20%7C%20Claude%20%7C%20OpenClaw%20%7C%20Hermes%20%7C%20Codex%20%7C%20Cursor-334155" alt="Hosts">
+  <img src="https://img.shields.io/badge/packs-95-7928ca" alt="95 rule packs">
+  <img src="https://img.shields.io/badge/platform-macOS%2015%2B%20(Apple%20Silicon)%20%7C%20Linux-111827" alt="macOS 15+ Apple Silicon and Linux">
 </p>
 
+# rv
 
-# rv (Rykan V)
+**Your coding agent just tried to run `rm -rf /`. rv said no.**
 
-**Control what your agent can do.** rv's **hook-grade** guard blocks destructive shell (and Read / Edit / Write secret-path on Grok, Claude, and Cursor) when the host calls `rv`. Hook evaluation requires the host to invoke it.
+rv is a fail-closed policy gate for AI coding agents. It sits on your
+agent's pre-tool hook and blocks destructive shell commands — and
+secret-file reads/edits — *before* the host runs them. One gate, three
+verdicts: **allow · deny · indeterminate**. It never asks the agent;
+only you can override, with a one-time code.
 
-`rv opencode` runs OpenCode in a host-owned terminal on the persistent per-project workspace host, under a macOS Seatbelt that starts from deny-default. The process may read and write the workspace, and it may read the system locations needed to execute programs. Public HTTPS goes through the RV proxy and loopback networking (including local servers) is allowed; direct public, LAN, and metadata connections are denied, as are Unix-socket connections to host sockets. Seatbelt cannot restrict an allowed TCP listener to loopback addresses, so a runtime with server capability can bind wildcard/LAN interfaces. It can signal processes inside its sandbox, not other host processes. Mach lookup is deny-by-default, Mach registration is denied, and the Keychain is unreachable. A workspace that already contains a hard link is refused. The host mounts the workspace path on a fresh volume so a later hard link to an outside file fails with a cross-device error. The volume belongs to the workspace for its whole life, across every runtime the host launches; each runtime has its own process group and admission capability. A same-user force-unmount of that volume is not covered. Closing a runtime or the workspace kills the owned process group. Linux refuses the launch instead of applying a weaker sandbox. This is not a finished agent isolation boundary. See the [release acceptance audit](docs/security/runtime-acceptance.md).
+```sh
+$ rv test 'git reset --hard'
+{"decision":"deny","pack_id":"core.git","reason":"git reset --hard destroys uncommitted changes","rule_id":"core.git:reset-hard","schema":"rv.test.v1"}
 
-Site: [rykanv.com](https://rykanv.com) · Docs: [rykanv.com/docs/introduction](https://rykanv.com/docs/introduction) · Discord: [discord.gg/uZn9MDUYKx](https://discord.gg/uZn9MDUYKx)
+$ rv test 'git status'
+{"decision":"allow","schema":"rv.test.v1"}
+```
 
-## Why this exists
-
-Agents delete the wrong tree. rv sits on the host's pre-tool hook and denies the command before the host runs it. Install is one curl; `rv setup` writes adapters for hosts it can see.
-
-## Quick start
+## Install (30 seconds)
 
 ```sh
 curl -fsSL https://rykanv.com/install | sh
+rv setup    # auto-detects your agents and wires their hooks
+rv doctor   # verify everything is live
 ```
 
-To launch the currently supported agent from a writable workspace:
+Works with **Claude Code, Codex, Cursor, Grok, OpenCode, Pi, Hermes,
+OpenClaw, and Antigravity**. Hooks are only written for hosts already
+on your machine. Requires macOS 15+ (Apple Silicon) or Linux
+(aarch64/x86_64).
 
-```sh
-rv opencode --workspace /absolute/repo -- run 'describe this project'
+## How it works
+
+Every shell and file-tool call from every host funnels into one daemon
+(`rvd`) and one pipeline:
+
+```text
+agent ─▶ hook ─▶ rvd ─▶ 95 rule packs ─▶ script gate ─▶ on-device judge ─▶ policy ─▶ allow / deny
+                          safe-first       npm bodies     CoreML (Laya)      overrides
+                          deny = floor     evaluated      can only raise
 ```
 
-RV searches absolute `PATH` directories for OpenCode, or accepts `--executable /absolute/opencode`. The command attaches to the persistent workspace host for the project and streams one host-owned terminal, exactly like `rv workspace run`. The runtime receives the productive workspace environment: an RV-managed `HOME`/cache/tmp, a sanitized `PATH` covering installed toolchains, and secret-bearing variables stripped. On macOS the process and its children may read and write only that workspace, plus the system locations needed to execute programs. Public HTTPS goes through the RV proxy and loopback networking is allowed; direct public, LAN, and metadata connections are denied, as are Unix-socket connections to host sockets. Signals to processes outside the sandbox are denied. A workspace that already contains a hard link to another file is refused, and the running workspace path is a separate volume so a new hard link cannot name an outside inode. Linux refuses this launch until its backend enforces the same limits; a write-only sandbox is not used instead. Other host integrations remain hook based.
+- **95 rule packs** — git, filesystem, disks, cloud CLIs, Kubernetes,
+  databases, Terraform, CI/CD, payments, and more. Safe patterns run
+  first; the first blocking hit denies. Three packs are on by default
+  (`core.filesystem`, `core.git`, `system.disk`); enable the rest by
+  pack, category, or preset with `rv packs enable`.
+- **Script gate** — `npm test` can't hide a payload: rv evaluates the
+  actual `pre`/`post`/body scripts in `package.json`, not just the
+  command you see.
+- **On-device neural judge** — with a Laya CoreML bundle installed,
+  pack-allowed commands get a local risk score. The judge can only
+  raise a verdict, never lower a pack deny. Nothing leaves your
+  machine. `"guard.mode": "observe"` logs would-be verdicts without
+  blocking, so you can measure before you enforce.
+- **Policy gate** — a fixed override ladder (rebase recovery → pinned
+  rules → allowlist → allow-once → contained-delete allowance) with
+  `normal`/`strict` safety levels. Indeterminate (too large, budget
+  exhausted, core packs missing) is never overridable.
 
-## Laya judge + observe mode
+## What gets blocked
 
-With a Laya weights bundle installed, commands the packs allow are also
-judged by the local Laya classifier (allow / ask / deny with a risk
-score, CoreML on macOS). The judge can only raise a verdict, never lower
-a pack deny. The production judge is the fine-tuned single-pass model,
-installed at `~/.config/rv/models/laya-ft-v2-coreml` (copy the
-`model.mlpackage` + `tokenizer.json` + `config.json` bundle there; weights
-are never committed to the repo). `"judge.engine": "ft"` (default) uses
-it; `"laya"` forces the stock three-question judge at
-`~/.config/rv/models/laya-multilingual-coreml` instead.
-`RV_JUDGE_ENGINE` overrides the config file. With no explicit engine the
-fine-tuned bundle is used whenever it validates, else stock.
-`"guard.mode": "observe"` in `~/.config/rv/config.json` turns the whole
-guard observe-only: packs and judge evaluate and log the would-be verdict
-(hash only, in `judge-log.jsonl`), nothing blocks. Default is `enforce`.
-Design and measured numbers: `docs/plans/laya-guard-model-plan.md` and
-`docs/plans/laya-judge-decision-record.md`.
-
-## What it does
-
-| | |
+| Category | Examples |
 | --- | --- |
-| Destructive git | `reset --hard`, `checkout --`, `clean -fd`, `push --force`, `stash clear` |
-| Destructive fs | `rm -rf`, `find -delete`, and similar |
-| Secret paths | `.env`, SSH keys, and other known credential files |
-| Allow once | Redeem the code from a block; the next matching call in this working directory runs once |
-| Explain | `rv explain` shows which pack would fire |
-| Hosts | Grok, Pi, OpenCode, Claude, OpenClaw, Hermes, Codex, Cursor. `rv setup` writes a host only when that host is already on the machine. |
-| Platform (hook guard) | `rv hook` hook guard: macOS 15 or newer (Apple Silicon) and Linux aarch64/x86_64. |
-| Platform (contained runtime) | `rv opencode` / `rv workspace` contained runtime: macOS 15 or newer (Apple Silicon) only today. Linux refuses the launch instead of using a weaker sandbox — see [why](docs/security/runtime-boundary.md). |
-| Platform | Foundation Models on macOS 26 or newer. PR CI builds Swift on macos-26 and smokes the binaries on macos-15. Linux PR CI is ubuntu-24.04 x86_64; aarch64 is a supported install, not a PR job. |
+| Destructive git | `reset --hard`, `push --force`, `clean -fd`, `stash clear`, `checkout -- .` |
+| Destructive filesystem | `rm -rf /`, `rm -rf ~`, `find -delete`, fork bombs, disk wipes |
+| Secret paths | `.env`, SSH keys, cloud credentials — shell *and* Read/Edit/Write on Grok, Claude, Cursor |
+| Cloud & infra (opt-in packs) | `terraform destroy`, `kubectl delete`, `aws s3 rm --recursive`, `DROP TABLE`, … |
 
-## Supported hosts
+Not sure why something blocked? `rv explain 'git reset --hard'` shows
+exactly which pack and rule fired.
 
-| Host | After `rv setup` (if detected) | File-tool Read / Edit / Write |
-| --- | --- | --- |
-| Grok | `~/.grok/hooks/rv.json` | yes |
-| Pi | `~/.pi/agent/extensions/rv-guard.ts` | shell only |
-| OpenCode | `~/.config/opencode/plugins/rv-guard.js` | shell only |
-| Claude | settings merge | yes |
-| OpenClaw | `~/.openclaw/extensions/rv-guard/` | shell only |
-| Hermes | `~/.hermes/plugins/rv-guard/` | shell only |
-| Codex | `~/.codex/hooks/rv-guard.py` | shell only |
-| Cursor | `~/.cursor/hooks/rv-guard.py` | yes |
+## When you're blocked (and you meant it)
 
-
-## Commands
+Every hook deny prints a six-character code. Redeem it once, from
+your terminal — the agent can't redeem its own code:
 
 ```sh
-rv setup                         # wire hosts
-rv test 'git reset --hard'       # evaluate, do not run
-rv explain 'git reset --hard'    # which pack would fire
-rv scan                          # session forensics (deny-only findings)
-rv allow-once a1b2c3             # redeem the code from a hook deny
-rv packs                         # catalog
-rv packs enable <pack>           # enable an extra pack (day-one always compiled)
-rv policy show                   # typed rules
-rv allowlist list                # permanent exceptions
-rv doctor                        # health
-rv uninstall                     # remove rv-owned files
+rv allow-once a1b2c3    # next matching call in this directory runs once
 ```
 
-Anonymous usage is on by default. Turn it off with `"analytics.enabled": false` in `~/.config/rv/config.json`. Setup does not print a notice.
+Need it permanently? `rv allowlist add <rule-id>`. Typed rules live in
+`~/.config/rv/policy.toml` (`rv policy show`); `rv safety set strict`
+tightens everything to deny-by-default for generated-output deletes.
+
+## Beyond the shell
+
+rv is one binary, 24 commands. The rest of the surface:
+
+- **Secrets without exposure** — agents see placeholders, never values.
+  Real bytes are injected at the boundary from Keychain, 1Password,
+  Vault, AWS/GCP/Azure, Infisical, or Bitwarden, then scrubbed from
+  everything that comes back. `rv secrets scan` + a git pre-commit hook
+  catch leaks before they land.
+- **MCP governance** — `rv mcp serve` puts every MCP server behind one
+  gateway with per-tool allow/ask/deny, human approval for `ask`, and
+  a full audit trail. `rv mcp check` fails if any server bypasses rv.
+- **Egress control** — contained runtimes reach the network only
+  through a credentialed CONNECT proxy: per-runtime tokens, SNI-bound
+  tunnels, binary pinning, and a human review queue (`rv egress`).
+- **Tamper-evident audit** — every decision lands in a SHA-256
+  hash-chained `audit.jsonl`. Verify with `rv audit verify`, export
+  as OCSF 1.3.0 to your SIEM.
+- **Session forensics** — `rv scan` replays past agent sessions
+  (Claude, Codex, Cursor, Grok, Hermes, OpenClaw, OpenCode, Pi)
+  offline and reports what *would* have been denied.
+- **Signed org policy** — fleet-wide, restrict-only rules signed with
+  Ed25519 and pinned root-owned on disk. User config can never loosen
+  them. `rv report` emits posture for MDM/fleet collection.
+- **Contained workspaces (macOS)** — `rv opencode` / `rv workspace`
+  run agents on a persistent per-project host under a deny-default
+  Seatbelt profile: workspace-only writes, proxied HTTPS, no Keychain,
+  no host signals. Linux refuses rather than downgrade. This is a
+  hardening layer, not a finished isolation boundary — see the
+  [acceptance audit](docs/security/runtime-acceptance.md).
+
+## Everyday commands
+
+```sh
+rv test 'rm -rf /'          # evaluate a command, don't run it
+rv explain 'rm -rf /'       # why would this block?
+rv packs                    # browse the 95 packs
+rv packs enable cloud.aws   # turn on more coverage
+rv blocks                   # what got denied lately?
+rv scan                     # audit past agent sessions
+rv audit verify             # check the audit hash chain
+rv doctor                   # service, packs, hosts, judge health
+rv uninstall                # remove everything rv owns (owner-auth)
+```
+
+All commands speak `--json` / `--robot` / `--plain` / `--no-color`.
+Anonymous usage counters are on by default; opt out with
+`"analytics.enabled": false` in `~/.config/rv/config.json`.
+
+## For developers
+
+```sh
+git clone https://github.com/christopherkarani/rv && cd rv
+swift build --build-tests   # Swift 6.4
+swift test                  # full suite (this is the PR gate)
+```
+
+Architecture in one line: a tiny C front door (`rv`) execs the Swift
+CLI (`rv-cli`), which talks to the `rvd` daemon over a Unix socket
+(XPC on macOS) — 15 IPC methods, one gated evaluation path for every
+door. A Python SDK lives in [`sdk/python`](sdk/python). Security
+model and evidence: [`docs/security`](docs/security).
+
+Site: [rykanv.com](https://rykanv.com) · Docs:
+[rykanv.com/docs/introduction](https://rykanv.com/docs/introduction) ·
+Discord: [discord.gg/uZn9MDUYKx](https://discord.gg/uZn9MDUYKx)
 
 ## License
 
