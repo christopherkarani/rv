@@ -30,6 +30,11 @@ private enum PolicyVerb: Sendable {
 public struct GatedEvaluate: Sendable {
     public var corePacksReady: Bool { resolvedSession().corePacksReady }
 
+    /// Session file-tracking for judge context. Shared per process owner
+    /// (the daemon's ServiceRuntime holds one); direct constructions get a
+    /// fresh per-process store that starts empty.
+    let touched: SessionTouchedStore
+
     private enum Source: Sendable {
         case prepared(EvaluateSession)
         case deferred(
@@ -41,16 +46,18 @@ public struct GatedEvaluate: Sendable {
     private let source: Source
 
     /// Creates a door around an Evaluate session.
-    public init(_ session: EvaluateSession = EvaluateSession()) {
+    public init(_ session: EvaluateSession = EvaluateSession(), touched: SessionTouchedStore? = nil) {
         self.source = .prepared(session)
+        self.touched = touched ?? SessionTouchedStore()
     }
 
     /// Creates a door that defers session construction until first use, then reuses it.
-    package init(lazySession: @escaping @Sendable () -> EvaluateSession) {
+    package init(lazySession: @escaping @Sendable () -> EvaluateSession, touched: SessionTouchedStore? = nil) {
         self.source = .deferred(
             build: lazySession,
             slot: UnfairLock(nil)
         )
+        self.touched = touched ?? SessionTouchedStore()
     }
 
     private func resolvedSession() -> EvaluateSession {
@@ -70,12 +77,14 @@ public struct GatedEvaluate: Sendable {
     }
 
     /// Catalog-only file-tool door. Packs and Policy gate never see the path.
+    /// `session` keys the touched-file record; nil keeps prior behavior.
     public func runFile(
         _ action: FileToolAction,
         home: HomeDirectory? = nil,
         cwd: WorkingDirectory? = nil,
         host: LedgerHost = .tty,
-        now: Date = Date()
+        now: Date = Date(),
+        session: SessionID? = nil
     ) -> EvaluationResult {
         let workspace = Self.workspaceURL(cwd: cwd)
         let detailed = SecretAllowPaths.loadEffectiveDetailed(home: home, workspace: workspace)
@@ -90,6 +99,12 @@ public struct GatedEvaluate: Sendable {
             allowPaths: detailed.effective,
             home: home
         )
+        // Training semantics: the agent created/modified this path. Reads
+        // never record — a read-only view proves nothing was written.
+        if case .allow = result.decision,
+           action.kind == .edit || action.kind == .write {
+            touched.record(paths: [action.path.rawValue], session: session, workspace: cwd, now: now)
+        }
         // Observe is whole-guard: the file door logs-and-allows too,
         // and records no denial.
         if JudgeRuntime.guardMode(home: home) == .observe {
@@ -122,7 +137,8 @@ public struct GatedEvaluate: Sendable {
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost = .tty,
-        tool: LedgerTool = .bash
+        tool: LedgerTool = .bash,
+        session: SessionID? = nil
     ) async -> EvaluationResult {
         switch intent {
         case .peek:
@@ -134,7 +150,8 @@ public struct GatedEvaluate: Sendable {
                 now: now,
                 allowlist: allowlist,
                 host: host,
-                tool: tool
+                tool: tool,
+                session: session
             )
         case .apply:
             await apply(
@@ -145,7 +162,8 @@ public struct GatedEvaluate: Sendable {
                 now: now,
                 allowlist: allowlist,
                 host: host,
-                tool: tool
+                tool: tool,
+                session: session
             )
         }
     }
@@ -159,7 +177,8 @@ public struct GatedEvaluate: Sendable {
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost = .tty,
-        tool: LedgerTool = .bash
+        tool: LedgerTool = .bash,
+        session: SessionID? = nil
     ) async -> EvaluationResult {
         await peek(
             Self.makeRequest(command: command, home: home),
@@ -169,7 +188,8 @@ public struct GatedEvaluate: Sendable {
             now: now,
             allowlist: allowlist,
             host: host,
-            tool: tool
+            tool: tool,
+            session: session
         )
     }
 
@@ -182,7 +202,8 @@ public struct GatedEvaluate: Sendable {
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost = .tty,
-        tool: LedgerTool = .bash
+        tool: LedgerTool = .bash,
+        session: SessionID? = nil
     ) async -> EvaluationResult {
         await apply(
             Self.makeRequest(command: command, home: home),
@@ -192,7 +213,8 @@ public struct GatedEvaluate: Sendable {
             now: now,
             allowlist: allowlist,
             host: host,
-            tool: tool
+            tool: tool,
+            session: session
         )
     }
 
@@ -217,7 +239,8 @@ public struct GatedEvaluate: Sendable {
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost = .tty,
-        tool: LedgerTool = .bash
+        tool: LedgerTool = .bash,
+        session: SessionID? = nil
     ) async -> EvaluationResult {
         await gated(
             PolicyVerb.peek,
@@ -228,7 +251,8 @@ public struct GatedEvaluate: Sendable {
             now: now,
             allowlist: allowlist,
             host: host,
-            tool: tool
+            tool: tool,
+            session: session
         )
     }
 
@@ -242,7 +266,8 @@ public struct GatedEvaluate: Sendable {
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost = .tty,
-        tool: LedgerTool = .bash
+        tool: LedgerTool = .bash,
+        session: SessionID? = nil
     ) async -> EvaluationResult {
         await gated(
             PolicyVerb.apply,
@@ -253,7 +278,8 @@ public struct GatedEvaluate: Sendable {
             now: now,
             allowlist: allowlist,
             host: host,
-            tool: tool
+            tool: tool,
+            session: session
         )
     }
 
@@ -266,7 +292,8 @@ public struct GatedEvaluate: Sendable {
         now: Date,
         allowlist: @escaping @Sendable () -> AllowlistSnapshot,
         host: LedgerHost,
-        tool: LedgerTool
+        tool: LedgerTool,
+        session: SessionID? = nil
     ) async -> EvaluationResult {
         // Observe: evaluate everything, log the would-be verdict, allow.
         // Grants are never spent and denials never recorded on this path.
@@ -283,10 +310,19 @@ public struct GatedEvaluate: Sendable {
                     break
                 }
             }
+            // Observe still records (observation, not enforcement); peek never
+            // records — a read-only view proves nothing was written.
+            if case .apply = verb, case .allow = wouldBe.decision {
+                touched.record(
+                    paths: Self.shellWriteTargets(command: request.command, analysis: wouldBe.analysis),
+                    session: session, workspace: cwd, now: now
+                )
+            }
             return JudgeRuntime.observe(
                 wouldBe: wouldBe, command: request.command, home: home,
                 provenance: request.provenance, now: now, cwd: cwd,
-                allowSafeLane: allowLane, isPeek: verb == .peek
+                allowSafeLane: allowLane, isPeek: verb == .peek,
+                session: session, touched: touched
             )
         }
         let result = evaluateWithSemantics(request, cwd: cwd, home: home, now: now)
@@ -298,7 +334,7 @@ public struct GatedEvaluate: Sendable {
         // would have re-denied afterwards.
         let candidate = applyScriptAndJudge(
             to: result, request: request, cwd: cwd, home: home, now: now,
-            isPeek: verb == .peek
+            isPeek: verb == .peek, session: session, touched: touched
         )
         // Fast path: allow/indeterminate never touch PolicyGate or the
         // allowlist loader; PolicyGate returns them unchanged anyway.
@@ -330,6 +366,15 @@ public struct GatedEvaluate: Sendable {
                 )
             }
         }
+        // Record only the final allowed apply: the judge already scored
+        // this command inside applyScriptAndJudge, and the Policy gate may
+        // have redeemed or kept a deny above.
+        if case .apply = verb, case .allow = finished.decision {
+            touched.record(
+                paths: Self.shellWriteTargets(command: request.command, analysis: finished.analysis),
+                session: session, workspace: cwd, now: now
+            )
+        }
         if verb.recordsDenial {
             recordDenialIfNeeded(finished, path: nil, home: home, host: host, tool: tool, now: now)
         }
@@ -344,7 +389,9 @@ public struct GatedEvaluate: Sendable {
         cwd: WorkingDirectory?,
         home: HomeDirectory?,
         now: Date,
-        isPeek: Bool
+        isPeek: Bool,
+        session: SessionID? = nil,
+        touched: SessionTouchedStore? = nil
     ) -> EvaluationResult {
         guard case .allow = result.decision else { return result }
         var allowLane = true
@@ -359,7 +406,8 @@ public struct GatedEvaluate: Sendable {
         return JudgeRuntime.apply(
             to: result, command: request.command, home: home,
             provenance: request.provenance, now: now, cwd: cwd,
-            allowSafeLane: allowLane, isPeek: isPeek
+            allowSafeLane: allowLane, isPeek: isPeek,
+            session: session, touched: touched
         )
     }
 
@@ -670,5 +718,111 @@ extension GatedEvaluate {
             )
             try store.save(Array(rows.suffix(RVHistory.maxRows)))
         }
+    }
+}
+
+extension GatedEvaluate {
+    /// Written paths for an allowed shell command, for session file-tracking.
+    /// Primary source is the typed analysis: create/overwrite targets and
+    /// move destinations are known writes. Reads, deletes, and chmods never
+    /// record (deletes remove rather than create; the training signal is
+    /// agent-created paths). When analysis yields no write targets, a
+    /// conservative text scan covers the plain redirect/mkdir/touch shapes.
+    static func shellWriteTargets(command: ShellCommand, analysis: SemanticAnalysis) -> [String] {
+        if let action = analysis.filesystemAction {
+            switch action {
+            case .create(let targets), .overwrite(let targets):
+                return targets.map(\.canonical).filter { $0.isEmpty == false }
+            case .move(_, let destination):
+                return destination.canonical.isEmpty ? [] : [destination.canonical]
+            case .delete, .chmod, .read:
+                return []
+            }
+        }
+        return shellRedirectWriteTargets(in: command.rawValue)
+    }
+
+    /// Conservative write-target scan: redirect targets (`> path`), `tee`
+    /// outputs, `mkdir`/`touch` operands. Plain absolute or `./`-relative
+    /// paths only; anything with glob, expansion, assignment, URL, or
+    /// brace characters poisons its whole `&&`/`;`-segment (skipped, never
+    /// guessed). `tee` may follow a pipe, so it matches anywhere;
+    /// `mkdir`/`touch` match as the segment's command only.
+    static func shellRedirectWriteTargets(in command: String) -> [String] {
+        var out: [String] = []
+        var segments = command.split(separator: "\n").flatMap { $0.split(separator: ";") }
+        segments = segments.flatMap { $0.split(separator: "&&") }
+        let dirty: Set<Character> = ["$", "`", "*", "?", "[", "]", "(", ")", "~", "=", "{", "}"]
+        for rawSegment in segments.flatMap({ $0.split(separator: "||") }) {
+            let segment = rawSegment.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard segment.isEmpty == false else { continue }
+            if segment.contains("://") || segment.contains(where: { dirty.contains($0) }) { continue }
+            let tokens = segment.split(whereSeparator: \.isWhitespace).map { stripQuotes(String($0)) }
+            guard tokens.allSatisfy({ $0.contains(where: { dirty.contains($0) }) == false }) else { continue }
+            var index = tokens.startIndex
+            while index < tokens.endIndex {
+                let token = tokens[index]
+                if token == ">" || token == ">>" || isFDRedirect(token) {
+                    let next = tokens.index(after: index)
+                    if next < tokens.endIndex, isPlainPath(tokens[next]) {
+                        out.append(tokens[next])
+                    }
+                } else if let attached = attachedRedirectTarget(token), isPlainPath(attached) {
+                    out.append(attached)
+                } else if token == "tee" {
+                    var next = tokens.index(after: index)
+                    while next < tokens.endIndex {
+                        let operand = tokens[next]
+                        if isPlainPath(operand) { out.append(operand) }
+                        next = tokens.index(after: next)
+                    }
+                } else if index == tokens.startIndex, token == "mkdir" || token == "touch" {
+                    let makeDir = token == "mkdir"
+                    var next = tokens.index(after: index)
+                    while next < tokens.endIndex {
+                        let operand = tokens[next]
+                        if isPlainPath(operand) {
+                            out.append(makeDir && operand.hasSuffix("/") == false ? operand + "/" : operand)
+                        }
+                        next = tokens.index(after: next)
+                    }
+                }
+                index = tokens.index(after: index)
+            }
+        }
+        var seen = Set<String>()
+        return out.filter { seen.insert($0).inserted }
+    }
+
+    private static func stripQuotes(_ token: String) -> String {
+        guard token.count >= 2,
+              (token.hasPrefix("\"") && token.hasSuffix("\""))
+                || (token.hasPrefix("'") && token.hasSuffix("'"))
+        else { return token }
+        return String(token.dropFirst().dropLast())
+    }
+
+    private static func isFDRedirect(_ token: String) -> Bool {
+        var rest = token
+        while let first = rest.first, first.isNumber { rest.removeFirst() }
+        return rest == ">" || rest == ">>"
+    }
+
+    private static func attachedRedirectTarget(_ token: String) -> String? {
+        var rest = token
+        while let first = rest.first, first.isNumber { rest.removeFirst() }
+        guard rest.hasPrefix(">") else { return nil }
+        rest.removeFirst()
+        if rest.hasPrefix(">") { rest.removeFirst() }
+        return rest.isEmpty ? nil : rest
+    }
+
+    private static func isPlainPath(_ token: String) -> Bool {
+        // /dev/null is a sink, not a created file: `2>/dev/null` must not
+        // pollute the touched set with `./null`.
+        guard token != "/dev/null" else { return false }
+        guard token.hasPrefix("/") || token.hasPrefix("./") else { return false }
+        guard token.contains(":") == false else { return false }
+        return token.count > 2
     }
 }

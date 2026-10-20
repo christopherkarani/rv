@@ -33,6 +33,10 @@ public actor ServiceRuntime {
     /// Step 8B.1 sole grant authority: service-held memory, one instance per
     /// daemon lifetime. A restart drops the table and invalidates every grant.
     private let grants: EphemeralAllowOnceTable
+    /// Session file-tracking for judge context (`agent-touched`). One
+    /// instance per daemon lifetime, shared with every `GatedEvaluate` this
+    /// runtime mints; a restart forgets everything (memory only, v1).
+    private let touched: SessionTouchedStore
     private let log: (any ServiceLog)?
     private let analytics: AnalyticsCoordinator?
     private let clock: @Sendable () -> Date
@@ -61,6 +65,7 @@ public actor ServiceRuntime {
         allowOnce: AllowOnceStore? = nil,
         allowOnceDirectory: URL? = nil,
         grants: EphemeralAllowOnceTable? = nil,
+        touched: SessionTouchedStore? = nil,
         idleExitSeconds: Int = IdleWatchdog.defaultSeconds,
         log: (any ServiceLog)? = nil,
         analytics: AnalyticsCoordinator? = nil,
@@ -74,6 +79,7 @@ public actor ServiceRuntime {
             allowOnce: allowOnce,
             allowOnceDirectory: allowOnceDirectory,
             grants: grants,
+            touched: touched,
             idleExitSeconds: idleExitSeconds,
             log: log,
             analytics: analytics,
@@ -90,6 +96,7 @@ public actor ServiceRuntime {
         allowOnce: AllowOnceStore?,
         allowOnceDirectory: URL?,
         grants: EphemeralAllowOnceTable? = nil,
+        touched: SessionTouchedStore? = nil,
         idleExitSeconds: Int,
         log: (any ServiceLog)?,
         analytics: AnalyticsCoordinator?,
@@ -115,7 +122,8 @@ public actor ServiceRuntime {
         )
         self.compiledPackIDs = session.compiledPackIDs
         self.compiledPackIDSet = Set(session.compiledPackIDs)
-        let gated = GatedEvaluate(session)
+        self.touched = touched ?? SessionTouchedStore()
+        let gated = GatedEvaluate(session, touched: self.touched)
         self.gated = gated
         self.corePacksReady = gated.corePacksReady
         if let allowOnce {
@@ -523,16 +531,64 @@ public actor ServiceRuntime {
     ) async -> Result<HookEvaluateReply, IPCError> {
         do {
             rebuildWhenUncovered(wanted: EvaluationWorld.walkedPackIDs(home: configHome))
+            // The hook session rides inside the stdin JSON (HookRequest),
+            // not the IPC frame: decode it here so the touched store keys
+            // on the agent session. Nil session keeps prior behavior.
+            let hookSession = Self.hookSession(host: params.host, stdin: params.stdin)
+            var world = HookEvaluateWorld.live(
+                world: liveWorld(),
+                host: params.host,
+                pending: pendingApprovals,
+                clock: clock,
+                recordDecision: analyticsRecorder()
+            )
+            // Session-aware overrides: the shared world ports drop the
+            // session, so thread it into run/apply directly. The evaluation
+            // itself is identical to LiveEvaluateWorld (same door, grants,
+            // allowlist, ledger); only `session` is added.
+            let gated = self.gated
+            let grants = self.grants
+            let allowOnceBase = self.allowOnce.baseDirectory
+            let home = self.configHome
+            let clock = self.clock
+            let touched = self.touched
+            let ledger = LedgerHost.hook(params.host)
+            let recorder = analyticsRecorder()
+            world.evaluate = { command, cwd in
+                let now = clock()
+                let base = allowOnceBase
+                let result = await gated.run(
+                    .apply,
+                    command: command,
+                    cwd: cwd,
+                    home: home,
+                    grants: grants,
+                    now: now,
+                    allowlist: {
+                        AllowlistStore(baseDirectory: base)
+                            .loadUserSnapshot(workspacePath: cwd?.rawValue, now: now)
+                    },
+                    host: ledger,
+                    tool: .bash,
+                    session: hookSession
+                )
+                recorder(result)
+                return result
+            }
+            world.evaluateFile = { action, cwd in
+                gated.runFile(
+                    action,
+                    home: home,
+                    cwd: cwd,
+                    host: ledger,
+                    now: clock(),
+                    session: hookSession
+                )
+            }
             let reply = try await HookDoor.run(
                 host: params.host,
                 stdin: params.stdin,
-                world: HookEvaluateWorld.live(
-                    world: liveWorld(),
-                    host: params.host,
-                    pending: pendingApprovals,
-                    clock: clock,
-                    recordDecision: analyticsRecorder()
-                )
+                world: world
             )
             return .success(reply)
         } catch let error as IPCError {
@@ -540,6 +596,14 @@ public actor ServiceRuntime {
         } catch {
             return .failure(.hookEvaluateFailed)
         }
+    }
+
+    /// Agent session for a hook call, decoded from the stdin JSON the same
+    /// way the hook door decodes it. Foreign/malformed stdin has none.
+    private static func hookSession(host: HookHost, stdin: String) -> SessionID? {
+        let outcome = productionHostCodec(host).decode(stdin)
+        guard case .request(let request) = outcome else { return nil }
+        return request.session
     }
 
     private func liveWorld() -> LiveEvaluateWorld {
@@ -556,6 +620,12 @@ public actor ServiceRuntime {
     /// time so allow-once does not snapshot `gated` across the ApprovalRuntime hop.
     private func currentGated() -> GatedEvaluate {
         gated
+    }
+
+    /// Test seam: the shared session file-tracking store (assertions on
+    /// hook-door recording use this; production never reads it directly).
+    func touchedStoreForTests() -> SessionTouchedStore {
+        touched
     }
 
     private func runEvaluate(
@@ -799,7 +869,7 @@ public actor ServiceRuntime {
         let compiledPackIDs = session.compiledPackIDs
         self.compiledPackIDs = compiledPackIDs
         compiledPackIDSet = Set(compiledPackIDs)
-        gated = GatedEvaluate(session)
+        gated = GatedEvaluate(session, touched: touched)
     }
 
     /// Wire request walk set. Those IDs must already be compiled, or we rebuild.

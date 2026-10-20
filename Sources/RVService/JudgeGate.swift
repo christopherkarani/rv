@@ -285,38 +285,78 @@ public enum JudgeRuntime {
         )
     }
 
-    /// v1 runtime context. Only signals already available at this layer:
-    /// cwd plus workspace containment (`cwd-inside-repo` via the same
-    /// repository-root probe the filesystem analyzer uses). Git counts stay
-    /// nil — no cheap counts probe exists on this path (GitLiveProbe
-    /// resolves the branch only; EvaluateSession computes no file counts).
-    /// `agentTouched` stays empty — no session file-tracking exists yet,
-    /// and v1 must not invent touched files from command text.
-    static func judgeContext(cwd: WorkingDirectory?) -> JudgeContext {
+    /// v2 runtime context. cwd plus workspace containment (`cwd-inside-repo`
+    /// via the same repository-root probe the filesystem analyzer uses),
+    /// plus `agentTouched` from the session file-tracking store when a
+    /// session is available. Git counts stay nil — no cheap
+    /// counts probe exists on this path (GitLiveProbe resolves the branch
+    /// only; EvaluateSession computes no file counts) — and no longer gate
+    /// fullness: full means session context was actually looked up.
+    static func judgeContext(
+        cwd: WorkingDirectory?,
+        session: SessionID? = nil,
+        touched: SessionTouchedStore? = nil,
+        now: Date = Date()
+    ) -> JudgeContext {
         guard let raw = cwd?.rawValue, resolveExistingDirectory(raw) != nil else {
+            if touchedSupplied(session: session, cwd: cwd, touched: touched) {
+                return JudgeContext(
+                    agentTouched: touched?.lookup(session: session, workspace: cwd, now: now) ?? []
+                )
+            }
             return JudgeContext()
         }
         let inside = FilesystemLiveProbe.discoverRepositoryRoot(from: raw) != nil
-        return JudgeContext(cwdInsideRepo: inside)
+        var context = JudgeContext(cwdInsideRepo: inside)
+        if touchedSupplied(session: session, cwd: cwd, touched: touched) {
+            context.agentTouched = touched?.lookup(session: session, workspace: cwd, now: now) ?? []
+        }
+        return context
+    }
+
+    /// True when a touched lookup actually happened: a store is present and
+    /// a session key exists. A looked-up empty list counts as supplied
+    /// (true negative: the session touched nothing yet), so those rows log
+    /// full rather than partial.
+    static func touchedSupplied(
+        session: SessionID?,
+        cwd _: WorkingDirectory?,
+        touched: SessionTouchedStore?
+    ) -> Bool {
+        touched != nil && session != nil
     }
 
     /// String/bool seam over `judgeContext` for RVServiceTests, which has
     /// no RVLaya dependency edge and must not name `JudgeContext`.
-    static func judgeContextLines(cwd: WorkingDirectory?) -> [String] {
-        judgeContext(cwd: cwd).lines()
+    static func judgeContextLines(
+        cwd: WorkingDirectory?,
+        session: SessionID? = nil,
+        touched: SessionTouchedStore? = nil,
+        now: Date = Date()
+    ) -> [String] {
+        judgeContext(cwd: cwd, session: session, touched: touched, now: now).lines()
     }
 
     /// String/bool seam over `contextIsPartial` (same reason as above).
-    static func judgeContextPartial(cwd: WorkingDirectory?) -> Bool {
-        contextIsPartial(judgeContext(cwd: cwd))
+    static func judgeContextPartial(
+        cwd: WorkingDirectory?,
+        session: SessionID? = nil,
+        touched: SessionTouchedStore? = nil,
+        now: Date = Date()
+    ) -> Bool {
+        let context = judgeContext(cwd: cwd, session: session, touched: touched, now: now)
+        return contextIsPartial(
+            context,
+            touchedSupplied: touchedSupplied(session: session, cwd: cwd, touched: touched)
+        )
     }
 
-    /// True while any context field is unknown. Always true in v1 (git
-    /// counts are never probed), so judge-log rows carry it until v2 wires
-    /// more signals.
-    static func contextIsPartial(_ context: JudgeContext) -> Bool {
-        context.cwdInsideRepo == nil || context.gitUntracked == nil
-            || context.gitModified == nil || context.gitStaged == nil
+    /// True while session context is unknown: no usable cwd, or no touched
+    /// lookup happened (no session/workspace). Git counts stay nil on this
+    /// path and no longer force partial — v1 callers pass no store, so
+    /// their rows still log partial exactly as before.
+    static func contextIsPartial(_ context: JudgeContext, touchedSupplied: Bool = false) -> Bool {
+        context.cwdInsideRepo == nil || !touchedSupplied
     }
 
     static func noteFor(_ base: String?, contextPartial: Bool) -> String? {
@@ -341,11 +381,16 @@ public enum JudgeRuntime {
         now: Date = Date(),
         cwd: WorkingDirectory? = nil,
         allowSafeLane: Bool = true,
-        isPeek: Bool = false
+        isPeek: Bool = false,
+        session: SessionID? = nil,
+        touched: SessionTouchedStore? = nil
     ) -> EvaluationResult {
         guard case .allow = result.decision else { return result }
-        let context = judgeContext(cwd: cwd)
-        let partial = contextIsPartial(context)
+        let context = judgeContext(cwd: cwd, session: session, touched: touched, now: now)
+        let partial = contextIsPartial(
+            context,
+            touchedSupplied: touchedSupplied(session: session, cwd: cwd, touched: touched)
+        )
         if allowSafeLane, SafeCommandLane.isSafe(command.rawValue) {
             log(
                 home: home, live: result, wouldBe: nil, verdict: nil, action: nil,
@@ -414,10 +459,15 @@ public enum JudgeRuntime {
         now: Date = Date(),
         cwd: WorkingDirectory? = nil,
         allowSafeLane: Bool = true,
-        isPeek: Bool = false
+        isPeek: Bool = false,
+        session: SessionID? = nil,
+        touched: SessionTouchedStore? = nil
     ) -> EvaluationResult {
-        let context = judgeContext(cwd: cwd)
-        let partial = contextIsPartial(context)
+        let context = judgeContext(cwd: cwd, session: session, touched: touched, now: now)
+        let partial = contextIsPartial(
+            context,
+            touchedSupplied: touchedSupplied(session: session, cwd: cwd, touched: touched)
+        )
         let safe = allowSafeLane && SafeCommandLane.isSafe(command.rawValue)
         var verdict: LayaVerdict?
         var action: LayaVerdict.Action?
