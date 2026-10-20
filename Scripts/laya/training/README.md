@@ -340,3 +340,41 @@ state_dict), `config.json`, `tokenizer.json` + `tokenizer_config.json`
 (copied), `model.onnx` (+ `.data`), `arm_b_head.joblib`,
 `arm_c_tfidf.joblib`, `metrics.json` (every printed number; self-check
 PASS). No commits; `train_head.py` / `prepare_*` untouched.
+
+## Ticket 5a — shippable artifacts + Swift judge (measured 2026-10-20)
+
+`convert_ft.py` (new; `finetune.py` untouched) quantizes the verified ARM A
+checkpoint and mints the parity oracle. Run: `cd Scripts/laya/training &&
+PYTHONPATH=/tmp/laya-pylibs:/tmp/laya-torchlibs /tmp/laya-venv/bin/python
+convert_ft.py` (exit 0; ~130 s: golden + ONNX fp16 + CoreML + both drifts).
+
+- Golden: `/tmp/laya-train/ft/golden.json` — all exam rows (shell 71,
+  incidents 17, ko 30, adversarial 30 excl. `__meta__`, command-only) + 200
+  validation rows (first 200 sorted by text), fp32 torch probs. Torch argmax
+  on it reproduces the verified scores (shell held 36/36 kept 33/35,
+  adversarial held 18/19 kept 11/11).
+- ONNX fp16: `/tmp/laya-train/ft/model-fp16.onnx(+data)`, plain-fp16 export
+  (no layernorm fallback needed), 616.4 MB total (<= 650 MB PASS); drift vs
+  golden max 0.0045, argmax 100% PASS.
+- CoreML: `/tmp/laya-train/ft/coreml/` (`model.mlpackage` 614.3 MB FP16,
+  enumerated lengths [16,32,64,96,128,192,256,384,512], int32 in / float
+  logits out; `tokenizer.json` + `config.json` sidecars). TorchScript
+  frontend (EXIR chokes on `aten::new_ones` from
+  `masking_utils.and_masks`; replaced with an exactly-equivalent fold —
+  see script). Drift vs golden max 0.0144, argmax 100% PASS.
+- Swift: `Sources/RVLaya/FineTunedJudge.swift` (single-pass judge +
+  `JudgeContext`, exact training serialization) + `rv-judge` `RV_FT_BUNDLE` /
+  `RV_JUDGE_TOUCHED` hooks + `Tests/RVLayaTests/FineTunedJudgeTests.swift`.
+  Swift parity: max drift 0.0144 (bit-identical to the in-script oracle
+  across processes), argmax 348/348; Swift exams shell held 36/36 kept
+  33/35, adversarial held 18/19. Warm single-pass latency ~6 ms (20-call
+  avg, first 47 ms). Smoke: `ls -la` allow 0.997, `git status | sh` block
+  1.000, `rm -rf ./dist` block 0.863 bare vs allow 0.717 with
+  `agent-touched ./dist/` — context-dependent allow learned.
+- Tokenizer fix (`LayaTokenizer.swift`, shared path): Swift `String ==`
+  folds U+003B `;` with U+037E (and 61 NFC pairs), and NSString strips BOM
+  prefixes (6 keys, reassigning common ids: `#` kept `\u{FEFF}#`s id) —
+  together mistokenizing inputs nondeterministically per process (measured
+  drift 0.25, argmax flip). Tables are now byte-keyed with a FEFF stand-in
+  swap; Swift ids match HF on all 348 golden rows (0 mismatches), and the
+  suite pins twin ids + the 256000-entry count.
