@@ -286,13 +286,14 @@ enum HelpCatalog {
         blurb: "",
         sections: [
             HelpSection(heading: "Usage", rows: [
-                HelpRow(name: "rv init [--project <dir>] [--profile-id <id>] [--agent <tag>...] [--secret <name>...] [--varlock <file>] [--dry-run]"),
+                HelpRow(name: "rv init [--project <dir>] [--profile-id <id>] [--agent <tag>...] [--secret <name>...] [--varlock <file>] [--dotenv] [--dry-run]"),
             ]),
             HelpSection(heading: "Flags", rows: [
                 HelpRow(name: "--profile-id", description: "Profile id to create. Default: main"),
                 HelpRow(name: "--agent", description: "Serve this agent tag (repeatable). Default: detect installed agents"),
                 HelpRow(name: "--secret", description: "Wire this secret name into the profile (repeatable)"),
                 HelpRow(name: "--varlock", description: ".env.schema to import. Default: <project>/.env.schema when present"),
+                HelpRow(name: "--dotenv", description: "Bind <project>/.env by reference; values stay in .env (v1 binds exactly this one file)"),
                 HelpRow(name: "--dry-run", description: "Show the plan; write nothing"),
             ]),
             HelpSection(heading: "Notes", rows: [
@@ -448,6 +449,8 @@ enum HelpCatalog {
                 HelpRow(name: "rv secrets scan [<dir>] [--json]"),
                 HelpRow(name: "rv secrets describe [--json]"),
                 HelpRow(name: "rv secrets import --varlock <.env.schema> [--dry-run]"),
+                HelpRow(name: "rv secrets import --dotenv <.env> [--dry-run]"),
+                HelpRow(name: "rv secrets harden <name> | --all"),
                 HelpRow(name: "rv secrets hook install | uninstall"),
             ]),
             HelpSection(heading: "Flags", rows: [
@@ -474,6 +477,8 @@ enum HelpCatalog {
                 ),
                 HelpRow(name: "describe", description: "Names, descriptions, types, and delivery for agents; never a value"),
                 HelpRow(name: "varlock", description: "import --varlock reads @sensitive, @type, and provider refs; literals are skipped"),
+                HelpRow(name: "dotenv", description: "import --dotenv binds .env names by reference; values stay in the file. harden moves a value into the Keychain"),
+                HelpRow(name: "load", description: "Use `rv secrets check` to resolve every secret and show fingerprints"),
                 HelpRow(name: "hook", description: "pre-commit scans staged files and prints file:line:name; an existing hook is kept"),
                 HelpRow(name: "audit", description: "rv audit --kind secret.use shows each use with a fingerprint"),
             ]),

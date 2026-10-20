@@ -33,6 +33,9 @@ _rv() {
     egress)
       COMPREPLY=( $(compgen -W "pending show approve deny denials" -- "$cur") )
       ;;
+    secrets)
+      COMPREPLY=( $(compgen -W "list check set remove scan describe import harden hook" -- "$cur") )
+      ;;
   esac
 }
 complete -F _rv rv

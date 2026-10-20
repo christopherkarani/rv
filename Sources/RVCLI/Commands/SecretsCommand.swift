@@ -132,6 +132,8 @@ enum SecretsRun {
         guard report.secrets.isEmpty == false || report.warnings.isEmpty == false else {
             return "No secrets configured. Add one with:\n"
                 + "  rv secrets set NAME --gateway https://api.example.com --base-url-env EXAMPLE_BASE_URL\n"
+                + "or bind an existing .env by reference (values stay in .env):\n"
+                + "  rv secrets import --dotenv .env\n"
         }
         let width = report.secrets.map(\.name.count).max() ?? 0
         var lines = report.secrets.map { row -> String in
@@ -228,7 +230,9 @@ enum SecretsRun {
             }
         } else {
             guard let definition else {
-                return .failure("\(DisplayedText.field(name)) is new: pass --gateway URL --base-url-env VAR, or --environment")
+                return .failure(CommandFailure(
+                    "\(DisplayedText.field(name)) is new: pass --gateway URL --base-url-env VAR, or --environment; "
+                        + "to bind a value already in a .env file instead, use `rv secrets import --dotenv <file>`"))
             }
             let delivery: SecretDelivery
             switch definition {
@@ -420,6 +424,158 @@ enum SecretsRun {
         }
     }
 
+    /// What a dotenv import would bind, after every pre-filter. Shared by
+    /// `rv secrets import --dotenv` and `rv init --dotenv` so both doors
+    /// review and write the same thing.
+    struct DotenvCandidates {
+        var storedPath: String
+        var fresh: [SecretDefinition]
+        /// Names already defined (any source) that appear in the file.
+        var alreadyDefined: [String]
+        var lines: [String]
+    }
+
+    static func dotenvCandidates(
+        path: URL, current: SecretsConfiguration, hostEnvironment: [String: String]
+    ) -> Result<DotenvCandidates, CommandFailure> {
+        let storedPath = path.standardizedFileURL.path
+        let snapshot: DotenvFileSnapshot
+        switch DotenvLiveReader.read(path: storedPath) {
+        case .failure(let error): return .failure(CommandFailure(error.message))
+        case .success(let loaded): snapshot = loaded
+        }
+        let parsed: DotenvParse
+        switch DotenvFile.parse(snapshot.data) {
+        case .failure(let error): return .failure(CommandFailure(error.message))
+        case .success(let loaded): parsed = loaded
+        }
+        if let malformedLine = parsed.malformedLine {
+            return .failure(CommandFailure(
+                "dotenv file \(DisplayedText.field(snapshot.canonicalPath)) line \(malformedLine) is not a NAME=VALUE assignment; nothing imported"))
+        }
+        var lines = parsed.lintNotes
+        var fresh: [SecretDefinition] = []
+        var alreadyDefined: [String] = []
+        let exported = Set(current.secrets.flatMap { secret -> [String] in
+            if case .gateway(let binding) = secret.delivery { return [secret.name, binding.baseURLEnv] }
+            return [secret.name]
+        })
+        for entry in parsed.entries {
+            let name = entry.name
+            if parsed.duplicates.contains(name) {
+                lines.append("skip \(name): duplicate variable in file")
+                continue
+            }
+            if let existing = current.secret(named: name) {
+                lines.append("skip \(name): already bound to \(existing.source.locator)")
+                alreadyDefined.append(name)
+                continue
+            }
+            if SecretsConfiguration.isVariableName(name) == false {
+                lines.append("skip \(name): not an environment variable name")
+                continue
+            }
+            if SecretsConfiguration.isReservedVariable(name) {
+                lines.append("skip \(name): reserved variable")
+                continue
+            }
+            if exported.contains(name) {
+                lines.append("skip \(name): already exported by another secret")
+                continue
+            }
+            if hostEnvironment[name] != nil {
+                lines.append("skip \(name): already defined in this project's environment")
+                continue
+            }
+            if entry.value.isEmpty {
+                lines.append("skip \(name): empty value cannot stage")
+                continue
+            }
+            if entry.value.utf8.count > 8_192 {
+                lines.append("skip \(name): value exceeds the 8 KiB environment limit")
+                continue
+            }
+            if current.secrets.count + fresh.count >= SecretsConfiguration.maximumSecrets {
+                lines.append("skip \(name): secrets.json already defines the maximum of \(SecretsConfiguration.maximumSecrets) secrets")
+                continue
+            }
+            fresh.append(SecretDefinition(
+                name: name, source: .dotenv(path: storedPath, variable: name), delivery: .environment))
+            lines.append("import \(name): dotenv (delivery environment)")
+        }
+        // The operator's absolutized path is stored; the reader canonicalizes
+        // on every use, so deliberate symlink re-targeting is followed.
+        return .success(DotenvCandidates(
+            storedPath: storedPath, fresh: fresh, alreadyDefined: alreadyDefined, lines: lines))
+    }
+
+    /// Binds `.env` variables by reference. Values stay in the file; the
+    /// file is read through the same trust checks the lease applies, and
+    /// organization policy is checked before the dry-run return.
+    static func importDotenv(
+        path: URL, dryRun: Bool, environment: SecretsEnvironment,
+        hostEnvironment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Result<String, CommandFailure> {
+        let current: SecretsConfiguration
+        switch configuration(environment) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let loaded): current = loaded
+        }
+        let candidates: DotenvCandidates
+        switch dotenvCandidates(path: path, current: current, hostEnvironment: hostEnvironment) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let built): candidates = built
+        }
+        if let reason = environment.managed.invalidReason {
+            return .failure("organization policy is invalid: \(reason); nothing imported")
+        }
+        for secret in candidates.fresh {
+            if let reason = SecretOrganizationRules.violation(secret, policy: environment.managed.policy) {
+                return .failure("organization policy: \(reason); nothing imported")
+            }
+        }
+        var lines = ["storing absolute path: \(candidates.storedPath)"] + candidates.lines
+        let gitLine = gitIgnoreStatus(path: candidates.storedPath)
+        guard candidates.fresh.isEmpty == false else {
+            return .success((lines + [gitLine, "nothing to import"]).joined(separator: "\n") + "\n")
+        }
+        if dryRun {
+            return .success((lines + [gitLine, "dry run: nothing written"]).joined(separator: "\n") + "\n")
+        }
+        var updated = current
+        updated.secrets += candidates.fresh
+        switch updated.write(configDirectory: environment.configDirectory) {
+        case .failure(let error): return .failure(CommandFailure(error.message))
+        case .success:
+            lines.append(
+                "wrote secrets.json (\(candidates.fresh.count) \(candidates.fresh.count == 1 ? "secret" : "secrets"); delivery environment)")
+            lines.append(gitLine)
+            return .success(lines.joined(separator: "\n") + "\n")
+        }
+    }
+
+    /// Informational only; never fails an import.
+    static func gitIgnoreStatus(path: String) -> String {
+        let directory = (path as NSString).deletingLastPathComponent
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-C", directory, "check-ignore", "-q", path]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return "git: not a work tree (skipped)"
+        }
+        switch process.terminationStatus {
+        case 0: return "git: .env is ignored (check-ignore clean)"
+        case 1: return "git: .env is NOT ignored; it may be committed"
+        default: return "git: not a work tree (skipped)"
+        }
+    }
+
     static func hookRun(workTree: URL, environment: SecretsEnvironment) -> Result<(text: String, failed: Bool), CommandFailure> {
         let configuration: SecretsConfiguration
         switch self.configuration(environment) {
@@ -508,7 +664,7 @@ enum SecretsRun {
 struct Secrets: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "secrets",
-        abstract: "Manage secrets agents use through placeholders.",
+        abstract: "Manage secrets agents use through placeholders, including .env-backed ones.",
         subcommands: [
             SecretsList.self, SecretsCheck.self, SecretsSet.self, SecretsRemove.self, SecretsScan.self,
             SecretsDescribe.self, SecretsImport.self, SecretsHook.self,
@@ -714,18 +870,38 @@ struct SecretsDescribe: AsyncParsableCommand {
 struct SecretsImport: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "import",
-        abstract: "Add secrets from a Varlock .env.schema. Literal values are not copied.")
+        abstract: "Add secrets from a Varlock .env.schema or a .env file.",
+        discussion: """
+            --varlock copies provider references from a .env.schema; literal values are not copied.
+            --dotenv binds names by reference to a .env file; values stay in the file.
+            Pass exactly one of --varlock or --dotenv.
+            """)
 
-    @Option(name: .customLong("varlock"), help: "Path to a .env.schema file.") var varlock: String
+    @Option(name: .customLong("varlock"), help: "Path to a .env.schema file.") var varlock: String?
+    @Option(name: .customLong("dotenv"), help: "Path to a .env file to bind by reference.") var dotenv: String?
     @Flag(name: .customLong("dry-run"), help: "Show what would be imported.") var dryRun = false
+
+    func validate() throws {
+        if (varlock == nil) == (dotenv == nil) {
+            throw ValidationError("pass exactly one of --varlock <.env.schema> or --dotenv <.env>")
+        }
+    }
 
     func run() throws {
         let ctx = CommandContext.current(command: "secrets import", json: false, robot: false, plain: true, noColor: true)
         let environment = SecretsEnvironment.live(home: try ctx.requireHome())
-        let path = URL(fileURLWithPath: varlock).standardizedFileURL
-        switch SecretsRun.importVarlock(path: path, dryRun: dryRun, environment: environment) {
-        case .failure(let failure): try ctx.fail("rv secrets import: \(failure.message)\n")
-        case .success(let text): ctx.writeStdout(text)
+        if let varlock {
+            let path = URL(fileURLWithPath: varlock).standardizedFileURL
+            switch SecretsRun.importVarlock(path: path, dryRun: dryRun, environment: environment) {
+            case .failure(let failure): try ctx.fail("rv secrets import: \(failure.message)\n")
+            case .success(let text): ctx.writeStdout(text)
+            }
+        } else if let dotenv {
+            let path = URL(fileURLWithPath: dotenv).standardizedFileURL
+            switch SecretsRun.importDotenv(path: path, dryRun: dryRun, environment: environment) {
+            case .failure(let failure): try ctx.fail("rv secrets import: \(failure.message)\n")
+            case .success(let text): ctx.writeStdout(text)
+            }
         }
     }
 }

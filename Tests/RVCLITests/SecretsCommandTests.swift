@@ -124,7 +124,9 @@ struct SecretsCommandTests {
         let environment = fixture.environment()
         #expect(SecretsRun.set(
             name: "NEW", value: Data("v-12345678".utf8), definition: nil, agents: [], description: nil,
-            environment: environment) == .failure("NEW is new: pass --gateway URL --base-url-env VAR, or --environment"))
+            environment: environment) == .failure(CommandFailure(
+                "NEW is new: pass --gateway URL --base-url-env VAR, or --environment; "
+                    + "to bind a value already in a .env file instead, use `rv secrets import --dotenv <file>`")))
         #expect(SecretsRun.set(
             name: "NEW", value: Data(), definition: .environment, agents: [], description: nil,
             environment: environment) == .failure("the value must be 1 byte to 16 KiB with no NUL bytes"))

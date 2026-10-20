@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import RVDomain
 import RVIsolation
+import RVMCP
 import RVPolicy
 
 /// Seams for `rv init`: where config lives and how the machine is inspected.
@@ -202,9 +203,29 @@ enum InitRun {
         return plan.secrets.map(\.name).filter { current.secret(named: $0) == nil }
     }
 
+    /// Dry-run review for `--dotenv`: every bindable name, annotated. The
+    /// secret-name heuristic only annotates; it never skips a name.
+    static func dotenvReviewLines(_ candidates: SecretsRun.DotenvCandidates) -> [String] {
+        var lines = [
+            "dotenv \(candidates.storedPath): would bind \(candidates.fresh.count) name\(candidates.fresh.count == 1 ? "" : "s") (values stay in .env)"
+        ]
+        for secret in candidates.fresh {
+            var line = "  bind \(secret.name) (dotenv \(secret.name); delivery environment"
+            if MCPRedaction.isSecretName(secret.name) == false { line += "; not secret-looking" }
+            lines.append(line + ")")
+        }
+        lines += candidates.lines.filter { $0.hasPrefix("skip ") || $0.hasPrefix("note ") }
+        return lines
+    }
+
+    /// Names a dry-run dotenv ingestion would wire: fresh binds only.
+    static func dotenvFreshNames(_ candidates: SecretsRun.DotenvCandidates) -> [String] {
+        candidates.fresh.map(\.name)
+    }
+
     static func planText(
         _ plan: Plan, project: String, secretDefined: [String: Bool], varlockLines: [String],
-        dryRun: Bool, wrote: Bool
+        dryRun: Bool, wrote: Bool, dotenvLines: [String] = [], dotenvBound: Bool = false
     ) -> String {
         var lines = ["profile \(DisplayedText.field(plan.profile.id)) for \(DisplayedText.field(project))"]
         for link in plan.profile.executableLinks {
@@ -224,13 +245,19 @@ enum InitRun {
         }
         lines += plan.notes.map { "note: \($0)" }
         lines += varlockLines
+        lines += dotenvLines
         if dryRun {
             lines.append("dry run: nothing written")
         } else if wrote {
             lines.append("wrote runtime-resources.json")
         }
-        lines.append(
-            "next: rv opencode --workspace \(shellWord(project)) --resource-profile \(plan.profile.id) -- run '...'")
+        if dotenvBound {
+            lines.append(
+                "next: rv run --workspace \(shellWord(project)) --resource-profile \(plan.profile.id) -- python main.py")
+        } else {
+            lines.append(
+                "next: rv opencode --workspace \(shellWord(project)) --resource-profile \(plan.profile.id) -- run '...'")
+        }
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -249,6 +276,10 @@ struct Init: AsyncParsableCommand {
             Inspects installed agent binaries and credential files, imports
             .env.schema when present, and appends one profile to
             runtime-resources.json. Launches still name the profile explicitly.
+            With --dotenv, also binds <project>/.env by reference (values stay
+            in .env). Without the flag, an existing .env is only noted: the
+            flag is the attestation, because .env carries values and
+            .env.schema does not. v1 binds exactly one file: <project>/.env.
             """
     )
 
@@ -260,6 +291,8 @@ struct Init: AsyncParsableCommand {
     var secrets: [String] = []
     @Option(name: .customLong("varlock"), help: "Varlock .env.schema to import. Default: <project>/.env.schema when present.")
     var varlock: String?
+    @Flag(name: .customLong("dotenv"), help: "Bind <project>/.env by reference; values stay in .env.")
+    var dotenv = false
     @Flag(name: .customLong("dry-run"), help: "Show the plan; write nothing.") var dryRun = false
 
     func run() throws {
@@ -318,6 +351,54 @@ struct Init: AsyncParsableCommand {
                 }
             }
         }
+        var dotenvLines: [String] = []
+        var dotenvBound = false
+        let dotenvURL = root.appendingPathComponent(".env", isDirectory: false)
+        if dotenv {
+            guard FileManager.default.fileExists(atPath: dotenvURL.path) else {
+                try ctx.fail("rv init: --dotenv given but \(DisplayedText.field(dotenvURL.path)) does not exist\n")
+            }
+            let current: SecretsConfiguration
+            switch SecretsRun.configuration(secretsEnvironment) {
+            case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
+            case .success(let loaded): current = loaded
+            }
+            let candidates: SecretsRun.DotenvCandidates
+            switch SecretsRun.dotenvCandidates(
+                path: dotenvURL, current: current, hostEnvironment: ProcessInfo.processInfo.environment)
+            {
+            case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
+            case .success(let built): candidates = built
+            }
+            if dryRun {
+                // Same policy gate as the write path: a dry run under a
+                // denying policy reports the denial, not a clean plan.
+                switch SecretsRun.importDotenv(path: dotenvURL, dryRun: true, environment: secretsEnvironment) {
+                case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
+                case .success: break
+                }
+                dotenvLines = InitRun.dotenvReviewLines(candidates)
+                importedNames += InitRun.dotenvFreshNames(candidates)
+            } else {
+                switch SecretsRun.importDotenv(path: dotenvURL, dryRun: false, environment: secretsEnvironment) {
+                case .failure(let failure): try ctx.fail("rv init: \(failure.message)\n")
+                case .success(let text):
+                    dotenvLines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+                        .filter { $0.hasPrefix("storing absolute path:") == false }
+                }
+                importedNames += candidates.fresh.map(\.name) + candidates.alreadyDefined
+            }
+            dotenvBound = candidates.fresh.isEmpty == false || candidates.alreadyDefined.isEmpty == false
+        } else if FileManager.default.fileExists(atPath: dotenvURL.path) {
+            var countClause = ""
+            if case .success(let snapshot) = DotenvLiveReader.read(path: dotenvURL.path),
+                case .success(let parsed) = DotenvFile.parse(snapshot.data)
+            {
+                countClause = " with \(parsed.entries.count) entries"
+            }
+            dotenvLines.append(
+                "note: \(dotenvURL.path) exists\(countClause); pass --dotenv to bind them (values stay in .env)")
+        }
         let plan: InitRun.Plan
         switch InitRun.plan(
             profileID: profileID, project: root.path, agents: agents,
@@ -342,6 +423,6 @@ struct Init: AsyncParsableCommand {
         }
         ctx.writeStdout(InitRun.planText(
             plan, project: root.path, secretDefined: defined, varlockLines: varlockLines,
-            dryRun: dryRun, wrote: dryRun == false))
+            dryRun: dryRun, wrote: dryRun == false, dotenvLines: dotenvLines, dotenvBound: dotenvBound))
     }
 }

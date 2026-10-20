@@ -78,6 +78,11 @@ _rv() {
           eg=('pending:List network proposals awaiting a human' 'show:Show one network proposal' 'approve:Approve one network proposal' 'deny:Deny one network proposal' 'denials:Show recent proxy denials')
           _describe -t commands 'egress' eg
           ;;
+        secrets)
+          local -a se
+          se=('list:List secrets' 'check:Resolve and fingerprint' 'set:Store a value' 'remove:Delete' 'scan:Scan a tree' 'describe:Metadata only' 'import:Import a Varlock schema or .env' 'harden:Move a .env value into the Keychain' 'hook:Git pre-commit hook')
+          _describe -t commands 'secrets' se
+          ;;
       esac
       ;;
   esac

@@ -144,6 +144,11 @@ extension SecretsConfiguration {
         SecretsDecoding.variable(name)
     }
 
+    /// Names the cage environment owns; a secret may never export one.
+    public static func isReservedVariable(_ name: String) -> Bool {
+        SecretsDecoding.reservedVariables.contains(name)
+    }
+
     /// A missing file is an empty configuration. Anything else that is not a
     /// regular, owner-owned, non-group/world-writable file is refused.
     public static func load(configDirectory: URL) -> Result<SecretsConfiguration, SecretsConfigurationError> {
