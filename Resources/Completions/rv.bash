@@ -2,7 +2,7 @@ _rv() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
   local cmd="${COMP_WORDS[1]}"
   if [[ $COMP_CWORD -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "opencode workspace test explain packs policy scan allow-once allowlist service hook setup init uninstall doctor safety blocks audit secrets mcp managed report operator egress" -- "$cur") )
+    COMPREPLY=( $(compgen -W "run opencode workspace test explain packs policy scan allow-once allowlist service hook setup init uninstall doctor safety blocks audit secrets mcp managed report operator egress" -- "$cur") )
     return
   fi
   case "$cmd" in

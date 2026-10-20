@@ -20,16 +20,31 @@ enum OpenCodeRun {
         _ explicit: String?,
         environment: [String: String]
     ) -> Result<String, OpenCodeLaunchError> {
+        resolveExecutable(explicit, named: "opencode", environment: environment)
+    }
+
+    /// Shared with `rv run`: an explicit path must be absolute; otherwise the
+    /// name is searched in absolute PATH directories only. Deliberate
+    /// divergence from `rv workspace run`, which requires an absolute path
+    /// and never searches PATH.
+    static func resolveExecutable(
+        _ explicit: String?,
+        named name: String,
+        environment: [String: String]
+    ) -> Result<String, OpenCodeLaunchError> {
         if let explicit {
             guard explicit.hasPrefix("/"), explicit.contains("\0") == false else {
                 return .failure(.executableMustBeAbsolute)
             }
             return usableExecutable(explicit).map(Result.success) ?? .failure(.executableUnavailable)
         }
+        guard name.isEmpty == false, name.contains("/") == false, name.contains("\0") == false else {
+            return .failure(.executableUnavailable)
+        }
         for entry in (environment["PATH"] ?? "/usr/bin:/bin").split(separator: ":") {
             guard entry.hasPrefix("/"), entry.contains("\0") == false else { continue }
             let candidate = URL(fileURLWithPath: String(entry), isDirectory: true)
-                .appendingPathComponent("opencode").path
+                .appendingPathComponent(name).path
             if let path = usableExecutable(candidate) { return .success(path) }
         }
         return .failure(.executableUnavailable)

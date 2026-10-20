@@ -63,6 +63,15 @@ struct DotenvConfigurationTests {
         }
     }
 
+    @Test func taggedDotenvDoesNotStageForNilAgent() {
+        // `rv run` passes hook nil (agent nil): tagged secrets skip.
+        let tagged = SecretDefinition(
+            name: "TAGGED", agents: ["codex"], source: .dotenv(path: "/p/.env", variable: "TAGGED"),
+            delivery: .environment)
+        #expect(tagged.stages(forAgent: nil) == false)
+        #expect(tagged.stages(forAgent: "codex"))
+    }
+
     @Test func dotenvLeaseStagesAndPolicyDenies() throws {
         let json = """
             {"version":1,"secrets":[

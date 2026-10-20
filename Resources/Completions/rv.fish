@@ -1,4 +1,5 @@
 complete -c rv -f
+complete -c rv -n "__fish_use_subcommand" -a "run" -d "Run a command with profile secrets staged"
 complete -c rv -n "__fish_use_subcommand" -a "opencode" -d "Launch OpenCode with workspace write containment"
 complete -c rv -n "__fish_use_subcommand" -a "workspace" -d "Attach to the persistent workspace host"
 complete -c rv -n "__fish_use_subcommand" -a "test" -d "Evaluate a command"
