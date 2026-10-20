@@ -187,11 +187,12 @@ struct AuditForwardTests {
         ])
         let resolver = SecretResolver { _ in .success(SecretValue("tok123")!) }
         let resolved = try AuditForwardRun.resolveHeaders(
-            ["Authorization": "Bearer ${secret:SIEM}", "X-Plain": "p"], secrets: { .success(secrets) }, resolver: resolver
+            ["Authorization": "Bearer ${secret:SIEM}", "X-Plain": "p"], secrets: { .success(secrets) },
+            resolver: resolver, managed: .none
         ).get()
         #expect(resolved == ["Authorization": "Bearer tok123", "X-Plain": "p"])
         #expect((try? AuditForwardRun.resolveHeaders(
-            ["A": "${secret:NOPE}"], secrets: { .success(secrets) }, resolver: resolver).get()) == nil)
+            ["A": "${secret:NOPE}"], secrets: { .success(secrets) }, resolver: resolver, managed: .none).get()) == nil)
 
         let sentence = "ok: every MCP server is governed by rv, allowed direct, or disabled"
         let raw = "\u{1B}[2J\u{1B}[H" + sentence + "\u{2028}" + sentence + "\u{202E}" + sentence
@@ -208,7 +209,7 @@ struct AuditForwardTests {
         #expect(header.message.contains("\\u202e"))
         #expect(header.message.contains("\\\\u001b") == false)
         guard case .failure(let secret) = AuditForwardRun.resolveHeaders(
-            ["A": "${secret:\(raw)}"], secrets: { .success(secrets) }, resolver: resolver)
+            ["A": "${secret:\(raw)}"], secrets: { .success(secrets) }, resolver: resolver, managed: .none)
         else {
             Issue.record("unknown header secret was accepted")
             return

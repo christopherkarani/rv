@@ -80,6 +80,17 @@ struct RunCommandTests {
         }
     }
 
+    @Test func unreadableConfigurationIsNotZeroBindings() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-run-home-\(UUID().uuidString)", isDirectory: true)
+        let config = home.appendingPathComponent(".config/rv", isDirectory: true)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        #expect(RunRun.dotenvBoundCount(environment: ["HOME": home.path]) == 0)
+        try Data("{not json".utf8).write(to: config.appendingPathComponent("secrets.json"))
+        #expect(RunRun.dotenvBoundCount(environment: ["HOME": home.path]) == nil)
+    }
+
     @Test func dotenvBoundCountAndRefusalWording() {
         let configuration = SecretsConfiguration(secrets: [
             SecretDefinition(name: "A", source: .dotenv(path: "/p/.env", variable: "A"), delivery: .environment),

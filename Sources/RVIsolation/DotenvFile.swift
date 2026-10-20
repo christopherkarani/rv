@@ -6,7 +6,7 @@ import Glibc
 import Foundation
 import RVDomain
 
-public struct DotenvEntry: Sendable, Equatable {
+public struct DotenvEntry: Sendable, Equatable, CustomStringConvertible, CustomDebugStringConvertible {
     public var name: String
     public var value: String
     public var line: Int
@@ -16,12 +16,15 @@ public struct DotenvEntry: Sendable, Equatable {
         self.value = value
         self.line = line
     }
+
+    public var description: String { "DotenvEntry(name: \(name), value: <redacted>, line: \(line))" }
+    public var debugDescription: String { description }
 }
 
 /// A parsed `.env`. Duplicates and malformed lines are recorded, not thrown:
 /// the resolver fails closed per-variable (duplicate) or per-file (malformed),
 /// while import stays advisory and names what it skipped.
-public struct DotenvParse: Sendable, Equatable {
+public struct DotenvParse: Sendable, Equatable, CustomStringConvertible, CustomDebugStringConvertible {
     public var entries: [DotenvEntry] = []
     public var duplicates: Set<String> = []
     public var malformedLine: Int?
@@ -30,6 +33,11 @@ public struct DotenvParse: Sendable, Equatable {
     public func value(for name: String) -> String? {
         entries.first { $0.name == name }?.value
     }
+
+    public var description: String {
+        "DotenvParse(entries: \(entries.count), duplicates: \(duplicates.sorted()), malformedLine: \(String(describing: malformedLine)))"
+    }
+    public var debugDescription: String { description }
 }
 
 public enum DotenvFileError: Error, Sendable, Equatable {
@@ -95,7 +103,10 @@ public enum DotenvFile {
         guard let equals = body.firstIndex(of: "=") else { return nil }
         let name = String(body[..<equals]).trimmingCharacters(in: .whitespaces)
         guard SecretsConfiguration.isVariableName(name) else { return nil }
-        let rawValue = String(body[body.index(after: equals)...]).trimmingCharacters(in: .whitespaces)
+        // Strip the comment before trimming: in `KEY= #note` the `#` is
+        // space-preceded in the file and must start a comment.
+        let rawValue = stripTrailingComment(String(body[body.index(after: equals)...]))
+            .trimmingCharacters(in: .whitespaces)
         guard let first = rawValue.first, first == "\"" || first == "'" else {
             return (name, stripTrailingComment(rawValue).trimmingCharacters(in: .whitespaces))
         }
@@ -130,7 +141,7 @@ public enum DotenvFile {
 
 /// One trust-checked read of a bound `.env`, with the `fstat` identity the
 /// per-lease snapshot compares against.
-public struct DotenvFileSnapshot: Sendable, Equatable {
+public struct DotenvFileSnapshot: Sendable, Equatable, CustomStringConvertible, CustomDebugStringConvertible {
     public var canonicalPath: String
     public var data: Data
     public var identity: String
@@ -140,6 +151,11 @@ public struct DotenvFileSnapshot: Sendable, Equatable {
         self.data = data
         self.identity = identity
     }
+
+    public var description: String {
+        "DotenvFileSnapshot(canonicalPath: \(canonicalPath), data: <redacted \(data.count) bytes>, identity: \(identity))"
+    }
+    public var debugDescription: String { description }
 }
 
 public enum DotenvReadError: Error, Sendable, Equatable {
@@ -192,36 +208,19 @@ public enum DotenvLiveReader {
             return .failure(.unreadable(path))
         }
         defer { close(fd) }
-        var info = stat()
-        guard fstat(fd, &info) == 0 else { return .failure(.unreadable(path)) }
-        guard (info.st_mode & S_IFMT) == S_IFREG else {
-            return .failure(.untrustedFile(path: canonical, reason: "not a regular file"))
+        let data: Data
+        let info: stat
+        switch OwnerOnlyFile.checkedRead(fd: fd, maximumBytes: DotenvFile.maximumBytes) {
+        case .success(let (read, statInfo)):
+            data = read
+            info = statInfo
+        case .failure(.unsafe(let reason)):
+            return .failure(.untrustedFile(path: canonical, reason: reason))
+        case .failure(.oversized):
+            return .failure(.oversized(canonical))
+        case .failure(.unreadable):
+            return .failure(.unreadable(path))
         }
-        guard info.st_uid == getuid() else {
-            return .failure(.untrustedFile(path: canonical, reason: "owned by another user"))
-        }
-        guard (info.st_mode & 0o022) == 0 else {
-            return .failure(.untrustedFile(path: canonical, reason: "group or world writable"))
-        }
-        guard info.st_size <= DotenvFile.maximumBytes else { return .failure(.oversized(canonical)) }
-        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK)
-        var bytes = [UInt8](repeating: 0, count: Int(info.st_size) + 1)
-        var count = 0
-        while count < bytes.count {
-            let n = bytes.withUnsafeMutableBytes { raw -> Int in
-                guard let base = raw.baseAddress else { return -1 }
-                #if canImport(Darwin)
-                return Darwin.read(fd, base + count, raw.count - count)
-                #else
-                return Glibc.read(fd, base + count, raw.count - count)
-                #endif
-            }
-            if n < 0, errno == EINTR { continue }
-            guard n >= 0 else { return .failure(.unreadable(path)) }
-            if n == 0 { break }
-            count += n
-        }
-        guard count <= DotenvFile.maximumBytes else { return .failure(.oversized(canonical)) }
         #if canImport(Darwin)
         let mtime = info.st_mtimespec
         #else
@@ -229,7 +228,7 @@ public enum DotenvLiveReader {
         #endif
         let identity = "\(info.st_dev):\(info.st_ino):\(mtime.tv_sec).\(mtime.tv_nsec):\(info.st_size)"
         return .success(DotenvFileSnapshot(
-            canonicalPath: canonical, data: Data(bytes.prefix(count)), identity: identity))
+            canonicalPath: canonical, data: data, identity: identity))
     }
 }
 

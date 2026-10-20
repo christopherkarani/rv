@@ -11,6 +11,12 @@ public enum OwnerOnlyFileError: Error, Sendable, Equatable {
     case oversized
 }
 
+enum CheckedFileReadError: Error, Sendable, Equatable {
+    case unsafe(String)
+    case unreadable
+    case oversized
+}
+
 /// Reads and atomic writes for rv configuration that only its owner may change.
 public enum OwnerOnlyFile {
     /// Nil when the file does not exist. Anything that is not a regular,
@@ -25,6 +31,21 @@ public enum OwnerOnlyFile {
             return .failure(.unreadable)
         }
         defer { close(fd) }
+        switch checkedRead(fd: fd, maximumBytes: maximumBytes, confidential: confidential) {
+        case .success(let (data, _)): return .success(data)
+        case .failure(.unsafe(let reason)): return .failure(.unsafe(reason))
+        case .failure(.oversized): return .failure(.oversized)
+        case .failure(.unreadable): return .failure(.unreadable)
+        }
+    }
+
+    /// Shared trust checks + bounded read for an already-open descriptor
+    /// (opened `O_NOFOLLOW | O_NONBLOCK`): regular file, owner-owned, not
+    /// group/world-writable, `st_size` checked before allocating. Used by
+    /// `read` above and by the dotenv reader, which canonicalizes first.
+    static func checkedRead(
+        fd: Int32, maximumBytes: Int, confidential: Bool = false
+    ) -> Result<(Data, stat), CheckedFileReadError> {
         var info = stat()
         guard fstat(fd, &info) == 0 else { return .failure(.unreadable) }
         guard (info.st_mode & S_IFMT) == S_IFREG else { return .failure(.unsafe("not a regular file")) }
@@ -46,7 +67,7 @@ public enum OwnerOnlyFile {
             count += n
         }
         guard count <= maximumBytes else { return .failure(.oversized) }
-        return .success(Data(bytes.prefix(count)))
+        return .success((Data(bytes.prefix(count)), info))
     }
 
     /// Temp file (0600) + fsync + rename in the same directory, which is

@@ -38,6 +38,25 @@ struct DotenvFileTests {
         #expect(parsed.value(for: "SECOND") == "two")
     }
 
+    @Test func commentedOutValueParsesAsEmpty() throws {
+        let parsed = try parse("KEY= # placeholder\nOTHER=  # also empty\nKEPT=abc#def\n")
+        #expect(parsed.value(for: "KEY") == "")
+        #expect(parsed.value(for: "OTHER") == "")
+        #expect(parsed.value(for: "KEPT") == "abc#def")
+    }
+
+    @Test func secretBearingTypesRedactDescriptions() throws {
+        let parsed = try parse("KEY=hunter2secret\n")
+        #expect(String(describing: parsed).contains("hunter2secret") == false)
+        #expect(String(reflecting: parsed).contains("hunter2secret") == false)
+        let entry = try #require(parsed.entries.first)
+        #expect(String(describing: entry).contains("hunter2secret") == false)
+        let snapshot = DotenvFileSnapshot(
+            canonicalPath: "/p/.env", data: Data("KEY=hunter2secret\n".utf8), identity: "1")
+        #expect(String(describing: snapshot).contains("hunter2secret") == false)
+        #expect(String(reflecting: snapshot).contains("hunter2secret") == false)
+    }
+
     @Test func emptyValueParsesAsEmpty() throws {
         let parsed = try parse("EMPTY=\nALSO_EMPTY=  \n")
         #expect(parsed.value(for: "EMPTY") == "")
@@ -164,6 +183,39 @@ struct DotenvFileTests {
 
         guard case .failure = DotenvLiveReader.read(path: directory.appendingPathComponent("nope.env").path) else {
             Issue.record("missing file must fail")
+            return
+        }
+    }
+
+    @Test func liveReaderRefusesNonOwnerSymlinkToUnsafeAndOversize() throws {
+        // Root-owned on macOS and Linux; not owned by the test user.
+        guard case .failure(let ownerError) = DotenvLiveReader.read(path: "/etc/passwd") else {
+            Issue.record("non-owner file must be refused")
+            return
+        }
+        #expect(ownerError.message.contains("another user"))
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rv-dotenv-unsafe-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let target = directory.appendingPathComponent("target.env")
+        try Data("KEY=value\n".utf8).write(to: target)
+        chmod(target.path, 0o664)
+        let link = directory.appendingPathComponent("link.env")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        guard case .failure(let linkError) = DotenvLiveReader.read(path: link.path) else {
+            Issue.record("symlink to a group-writable target must be refused through the link")
+            return
+        }
+        #expect(linkError.message.contains("writable"))
+
+        let big = directory.appendingPathComponent("big.env")
+        try Data(repeating: UInt8(ascii: "a"), count: DotenvFile.maximumBytes + 1).write(to: big)
+        chmod(big.path, 0o600)
+        guard case .failure(.oversized) = DotenvLiveReader.read(path: big.path) else {
+            Issue.record("oversize file must be refused by size before read")
             return
         }
     }

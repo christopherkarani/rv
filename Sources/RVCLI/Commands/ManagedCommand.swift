@@ -31,7 +31,9 @@ enum ManagedRun {
         case .none:
             return Status(state: "none", directory: directory, dotenv: dotenvLine(state: state, boundCount: dotenvBoundCount))
         case .invalid(let reason):
-            return Status(state: "invalid", directory: directory, reason: reason)
+            return Status(
+                state: "invalid", directory: directory, reason: reason,
+                dotenv: dotenvLine(state: state, boundCount: dotenvBoundCount))
         case .active(let bundle):
             return Status(
                 state: "active", directory: bundle.directory, organization: bundle.policy.organization,
@@ -47,6 +49,9 @@ enum ManagedRun {
     static func dotenvLine(state: ManagedPolicyState, boundCount: Int) -> String? {
         guard boundCount > 0 else { return nil }
         let noun = "\(boundCount) dotenv-bound secret\(boundCount == 1 ? "" : "s")"
+        if case .invalid = state {
+            return "dotenv: organization policy invalid; secret staging disabled; \(noun)"
+        }
         guard let policy = state.policy else {
             return "dotenv: allowed (no organization policy); \(noun)"
         }
@@ -66,8 +71,10 @@ enum ManagedRun {
             if let dotenv = status.dotenv { text += "  \(dotenv)\n" }
             return text
         case "invalid":
-            return "organization policy INVALID: \(status.reason ?? "unknown")\n"
+            var text = "organization policy INVALID: \(status.reason ?? "unknown")\n"
                 + "MCP and secret staging are disabled until it is fixed (\(status.directory))\n"
+            if let dotenv = status.dotenv { text += "  \(dotenv)\n" }
+            return text
         default:
             let signature = switch (status.signed, status.signingKey) {
             case (true, let key?): "signed by key \(key) in \(ManagedPolicyLocation.publicKeyFile)"

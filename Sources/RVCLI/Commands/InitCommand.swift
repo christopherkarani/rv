@@ -207,7 +207,7 @@ enum InitRun {
     /// secret-name heuristic only annotates; it never skips a name.
     static func dotenvReviewLines(_ candidates: SecretsRun.DotenvCandidates) -> [String] {
         var lines = [
-            "dotenv \(candidates.storedPath): would bind \(candidates.fresh.count) name\(candidates.fresh.count == 1 ? "" : "s") (values stay in .env)"
+            "dotenv \(DisplayedText.field(candidates.storedPath)): would bind \(candidates.fresh.count) name\(candidates.fresh.count == 1 ? "" : "s") (values stay in .env)"
         ]
         for secret in candidates.fresh {
             var line = "  bind \(secret.name) (dotenv \(secret.name); delivery environment"
@@ -397,7 +397,7 @@ struct Init: AsyncParsableCommand {
                 countClause = " with \(parsed.entries.count) entries"
             }
             dotenvLines.append(
-                "note: \(dotenvURL.path) exists\(countClause); pass --dotenv to bind them (values stay in .env)")
+                "note: \(DisplayedText.field(dotenvURL.path)) exists\(countClause); pass --dotenv to bind them (values stay in .env)")
         }
         let plan: InitRun.Plan
         switch InitRun.plan(

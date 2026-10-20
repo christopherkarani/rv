@@ -209,7 +209,7 @@ enum AuditForwardRun {
     /// `${secret:NAME}` in header values, resolved through secrets.json.
     static func resolveHeaders(
         _ headers: [String: String], secrets: () -> Result<SecretsConfiguration, SecretsConfigurationError>,
-        resolver: SecretResolver, managed: ManagedPolicyState = .none
+        resolver: SecretResolver, managed: ManagedPolicyState
     ) -> Result<[String: String], CommandFailure> {
         let names = Set(headers.values.flatMap { MCPSecretReference.names(in: $0) ?? [] })
         guard names.isEmpty == false else { return .success(headers) }

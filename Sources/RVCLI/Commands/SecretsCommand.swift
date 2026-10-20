@@ -341,7 +341,7 @@ enum SecretsRun {
                 failed = true
                 continue
             }
-            guard case .dotenv(let path, _) = definition.source else {
+            guard case .dotenv(let path, let variable) = definition.source else {
                 if all {
                     lines.append("skip \(name): reads from \(definition.source.locator) (not dotenv; nothing to harden)")
                 } else {
@@ -391,8 +391,14 @@ enum SecretsRun {
             }
             lines.append("rotation checklist for \(name):")
             lines.append("  - rotate the value at the provider (the old value is still live in .env)")
-            lines.append("  - remove the \(name) line from \(DisplayedText.field(path)) (rv never edits .env)")
+            lines.append("  - remove the \(variable) line from \(DisplayedText.field(path)) (rv never edits .env)")
             lines.append("  - until removed, `rv secrets scan` will keep flagging the unrotated .env")
+        }
+        if failed, rebound.isEmpty == false {
+            // All-or-nothing: a failed name blocks the config write. Values
+            // already copied to the Keychain are benign; a retry overwrites.
+            lines.append("nothing rebound: fix the failures and run harden again")
+            return .success((lines.joined(separator: "\n") + "\n", true))
         }
         if rebound.isEmpty == false {
             var updated = current
@@ -412,18 +418,24 @@ enum SecretsRun {
         /// separately and never fail the gate; any other secret's value in
         /// the same file, or a copy elsewhere, still flags.
         var origins: [SecretLeakFinding] = []
+        /// Set when nothing could be checked (invalid organization policy).
+        /// A scan that checked nothing must not pass the gate.
+        var blocked: String?
         var skipped: [String]
     }
 
     static func scan(
         root: URL, configuration: SecretsConfiguration, environment: SecretsEnvironment
     ) -> ScanReport {
+        if let reason = environment.managed.invalidReason {
+            return ScanReport(
+                findings: [], blocked: "organization policy is invalid: \(reason); nothing was checked",
+                skipped: [])
+        }
         var values: [(name: String, value: SecretValue)] = []
         var skipped: [String] = []
         for secret in configuration.secrets {
-            if let reason = environment.managed.invalidReason
-                ?? SecretOrganizationRules.violation(secret, policy: environment.managed.policy)
-            {
+            if let reason = SecretOrganizationRules.violation(secret, policy: environment.managed.policy) {
                 skipped.append("\(secret.name): organization policy: \(reason)")
                 continue
             }
@@ -459,6 +471,7 @@ enum SecretsRun {
     }
 
     static func scanText(_ report: ScanReport) -> String {
+        if let blocked = report.blocked { return blocked + "\n" }
         var lines: [String] = []
         if report.origins.isEmpty == false {
             lines.append("origin files (bound .env sources; not failures):")
@@ -665,7 +678,7 @@ enum SecretsRun {
                 return .failure("organization policy: \(reason); nothing imported")
             }
         }
-        var lines = ["storing absolute path: \(candidates.storedPath)"] + candidates.lines
+        var lines = ["storing absolute path: \(DisplayedText.field(candidates.storedPath))"] + candidates.lines
         let gitLine = gitIgnoreStatus(path: candidates.storedPath)
         guard candidates.fresh.isEmpty == false else {
             return .success((lines + [gitLine, "nothing to import"]).joined(separator: "\n") + "\n")
@@ -713,12 +726,13 @@ enum SecretsRun {
         case .failure(let failure): return .failure(failure)
         case .success(let loaded): configuration = loaded
         }
+        if let reason = environment.managed.invalidReason {
+            return .failure(CommandFailure("organization policy is invalid: \(reason); nothing was checked"))
+        }
         var values: [(name: String, value: SecretValue)] = []
         var skipped: [String] = []
         for secret in configuration.secrets {
-            if let reason = environment.managed.invalidReason
-                ?? SecretOrganizationRules.violation(secret, policy: environment.managed.policy)
-            {
+            if let reason = SecretOrganizationRules.violation(secret, policy: environment.managed.policy) {
                 skipped.append("could not check \(secret.name): organization policy: \(reason)")
                 continue
             }
@@ -971,7 +985,9 @@ struct SecretsScan: AsyncParsableCommand {
         }
         let report = SecretsRun.scan(root: root, configuration: configuration, environment: environment)
         let text = ctx.explicitRobot ? SecretsRun.robotJSON(report) : SecretsRun.scanText(report)
-        if report.findings.isEmpty {
+        if report.blocked != nil {
+            try ctx.emit(stdout: text, exitCode: 1)
+        } else if report.findings.isEmpty {
             ctx.writeStdout(text)
         } else {
             try ctx.emit(stdout: text, exitCode: 1)

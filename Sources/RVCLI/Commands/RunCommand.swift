@@ -63,7 +63,13 @@ struct Run: AsyncParsableCommand {
             throw ValidationError(error.message)
         }
         if resourceProfile == nil {
-            let dotenvBound = RunRun.dotenvBoundCount(environment: CLIProcess.environment())
+            guard let dotenvBound = RunRun.dotenvBoundCount(environment: CLIProcess.environment()) else {
+                FileHandle.standardOutput.write(Data((
+                    "rv run: secrets.json could not be read, so dotenv bindings cannot be checked. "
+                        + "Fix ~/.config/rv/secrets.json or pass --resource-profile <id> (the lease will report the error).\n"
+                ).utf8))
+                throw ExitCode(1)
+            }
             if dotenvBound > 0 {
                 FileHandle.standardOutput.write(Data(RunRun.missingProfileRefusal(dotenvBoundCount: dotenvBound).utf8))
                 throw ExitCode(1)

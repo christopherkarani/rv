@@ -66,15 +66,16 @@ extension RunRun {
         }
     }
 
-    /// Dotenv-bound secrets in the live configuration. Zero when the
-    /// configuration is missing or unreadable: the lease fails closed on a
-    /// broken configuration by itself.
-    static func dotenvBoundCount(environment: [String: String]) -> Int {
+    /// Dotenv-bound secrets in the live configuration, or nil when a
+    /// configuration exists but cannot be read. A profile-less run takes
+    /// no lease, so an unreadable configuration must not read as zero
+    /// bindings (that would degrade fail-closed to a warning).
+    static func dotenvBoundCount(environment: [String: String]) -> Int? {
         guard let home = environment["HOME"], home.hasPrefix("/"), home.contains("\0") == false else { return 0 }
         let directory = URL(fileURLWithPath: home, isDirectory: true)
             .appendingPathComponent(".config", isDirectory: true)
             .appendingPathComponent("rv", isDirectory: true)
-        guard case .success(let configuration) = SecretsConfiguration.load(configDirectory: directory) else { return 0 }
+        guard case .success(let configuration) = SecretsConfiguration.load(configDirectory: directory) else { return nil }
         return dotenvBoundCount(in: configuration)
     }
 

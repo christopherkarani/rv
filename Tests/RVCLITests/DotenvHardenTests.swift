@@ -132,6 +132,112 @@ struct DotenvHardenTests {
         #expect(result.text.contains("skip PLAIN_KEY: reads from keychain rv.secrets/PLAIN_KEY (not dotenv; nothing to harden)"))
     }
 
+    @Test func writerFailureAfterFirstStoreLeavesConfigUntouchedAndRetryCompletes() throws {
+        let fixture = try SecretsCLIFixture()
+        defer { fixture.tearDown() }
+        let envFile = fixture.directory.appendingPathComponent(".env")
+        try Data("FIRST_KEY=first-value-1\nSECOND_KEY=second-value-2\n".utf8).write(to: envFile)
+        chmod(envFile.path, 0o600)
+        let stored = Mutex<[String: Data]>([:])
+        let attempts = Mutex(0)
+        let flakyWriter = SecretKeychainWriter(
+            store: { service, account, value in
+                let attempt = attempts.withLock { count -> Int in count += 1; return count }
+                if attempt > 1 { return false }
+                stored.withLock { $0["\(service)/\(account)"] = value }
+                return true
+            },
+            delete: { _, _ in true })
+        let live = SecretResolver.live(environment: [:], home: "/nonexistent")
+        let resolver = SecretResolver { source in
+            if case .keychain(let service, let account) = source {
+                guard let data = stored.withLock({ $0["\(service)/\(account)"] }) else {
+                    return .failure(.notFound("keychain"))
+                }
+                return SecretResolver.live(environment: ["V": String(decoding: data, as: UTF8.self)], home: "/")
+                    .resolve(.hostEnvironment(variable: "V"))
+            }
+            return live.resolve(source)
+        }
+        var environment = SecretsEnvironment(
+            configDirectory: fixture.directory, resolver: resolver, keychain: flakyWriter)
+        _ = try SecretsRun.importDotenv(path: envFile, dryRun: false, environment: environment, hostEnvironment: [:]).get()
+        let before = try String(contentsOf: fixture.secretsFile, encoding: .utf8)
+
+        let crashed = try SecretsRun.harden(names: [], all: true, environment: environment).get()
+        #expect(crashed.failed)
+        #expect(try String(contentsOf: fixture.secretsFile, encoding: .utf8) == before)
+
+        environment.keychain = SecretKeychainWriter(
+            store: { service, account, value in
+                stored.withLock { $0["\(service)/\(account)"] = value }
+                return true
+            },
+            delete: { _, _ in true })
+        let retried = try SecretsRun.harden(names: [], all: true, environment: environment).get()
+        #expect(retried.failed == false)
+        let configuration = try SecretsRun.configuration(environment).get()
+        #expect(configuration.secrets.allSatisfy { $0.source.kind == "keychain" })
+    }
+
+    @Test func hardenFailsClosedOnInvalidPolicy() throws {
+        let (fixture, base, _) = try self.fixture()
+        defer { fixture.tearDown() }
+        var environment = base
+        environment.managed = .invalid("bad policy")
+        guard case .failure(let failure) = SecretsRun.harden(
+            names: ["STRIPE_SECRET_KEY"], all: false, environment: environment)
+        else {
+            Issue.record("invalid policy must refuse harden")
+            return
+        }
+        #expect(failure.message.contains("invalid"))
+    }
+
+    @Test func scanAndHookFailClosedOnInvalidPolicy() throws {
+        let (fixture, base, _) = try self.fixture()
+        defer { fixture.tearDown() }
+        var environment = base
+        environment.managed = .invalid("bad policy")
+        let configuration = try SecretsRun.configuration(base).get()
+        let report = SecretsRun.scan(root: fixture.directory, configuration: configuration, environment: environment)
+        #expect(report.blocked != nil)
+        #expect(SecretsRun.scanText(report).contains("organization policy is invalid"))
+        guard case .failure = SecretsRun.hookRun(workTree: fixture.directory, environment: environment) else {
+            Issue.record("hook must fail closed on an invalid policy")
+            return
+        }
+    }
+
+    @Test func scanSkipsPolicyDeniedSecretsUnderValidPolicy() throws {
+        let (fixture, base, _) = try self.fixture()
+        defer { fixture.tearDown() }
+        var deny = ManagedPolicy()
+        deny.secrets.allowedSources = ["keychain"]
+        var environment = base
+        environment.managed = .active(
+            ManagedPolicyBundle(policy: deny, sha256: "", isSigned: false, directory: ""))
+        let configuration = try SecretsRun.configuration(base).get()
+        let report = SecretsRun.scan(root: fixture.directory, configuration: configuration, environment: environment)
+        #expect(report.blocked == nil)
+        #expect(report.skipped.contains { $0.contains("STRIPE_SECRET_KEY") && $0.contains("dotenv source") })
+        #expect(report.findings.isEmpty)
+    }
+
+    @Test func checkAndDescribeRenderDotenvRows() throws {
+        let (fixture, environment, _) = try self.fixture()
+        defer { fixture.tearDown() }
+        let configuration = try SecretsRun.configuration(environment).get()
+        let rows = try SecretsRun.check(configuration, names: [], environment: environment).get()
+        #expect(rows.count == 1)
+        #expect(rows[0].ok)
+        #expect(rows[0].source.contains("dotenv "))
+        #expect(SecretsRun.checkText(rows).contains("sk-live-777") == false)
+        let described = SecretsRun.describe(configuration)
+        #expect(described.secrets.first?.source == "dotenv")
+        #expect(SecretsRun.describeText(described).contains("STRIPE_SECRET_KEY  dotenv  environment"))
+    }
+
     @Test func scanExemptsOnlyTheBoundSecretInItsOriginFile() throws {
         let (fixture, environment, envFile) = try self.fixture()
         defer { fixture.tearDown() }
@@ -167,6 +273,9 @@ struct DotenvHardenTests {
             == "dotenv: allowed by default (policy does not enumerate allowedSources); 1 dotenv-bound secret")
         #expect(ManagedRun.dotenvLine(state: .none, boundCount: 3)
             == "dotenv: allowed (no organization policy); 3 dotenv-bound secrets")
+        #expect(ManagedRun.dotenvLine(state: .invalid("bad policy"), boundCount: 2)
+            == "dotenv: organization policy invalid; secret staging disabled; 2 dotenv-bound secrets")
+        #expect(ManagedRun.status(.invalid("bad policy"), directory: "/d", dotenvBoundCount: 2).dotenv != nil)
         #expect(ManagedRun.dotenvLine(state: deniedState, boundCount: 0) == nil)
         let status = ManagedRun.status(deniedState, directory: "/d", dotenvBoundCount: 2)
         #expect(ManagedRun.statusText(status).contains("dotenv: forbidden"))

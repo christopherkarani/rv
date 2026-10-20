@@ -72,6 +72,33 @@ struct DotenvConfigurationTests {
         #expect(tagged.stages(forAgent: "codex"))
     }
 
+    @Test func dotenvGatewayLeaseStagesPlaceholderOnly() throws {
+        let json = """
+            {"version":1,"secrets":[
+              {"name":"API_KEY","source":{"dotenv":{"path":"/proj/.env","variable":"API_KEY"}},
+               "delivery":{"gateway":{"upstream":"https://api.example.com/v1","baseURLEnv":"API_BASE_URL","placeholderPrefix":"sk-"}}}
+            ]}
+            """
+        let fixture = try SecretsFixture(json)
+        defer { fixture.tearDown() }
+        let resolver = SecretResolver.live(
+            environment: [:], home: "/nonexistent",
+            dotenvReader: { _ in
+                .success(DotenvFileSnapshot(
+                    canonicalPath: "/proj/.env", data: Data("API_KEY=real-secret-value\n".utf8), identity: "1"))
+            })
+        let broker = SecretLaunchBroker(
+            configDirectory: fixture.directory, resolver: resolver,
+            transport: RecordingUpstream().transport, workspace: "W1")
+        let lease = try broker.lease(names: ["API_KEY"], agent: nil).get()
+        #expect(lease.environment.contains { $0.name == "API_BASE_URL" })
+        let staged = try #require(lease.environment.first { $0.name == "API_KEY" })
+        #expect(staged.value.hasPrefix("sk-"))
+        #expect(staged.value.contains("real-secret-value") == false)
+        #expect(fixture.auditText.contains("real-secret-value") == false)
+        broker.stop()
+    }
+
     @Test func dotenvLeaseStagesAndPolicyDenies() throws {
         let json = """
             {"version":1,"secrets":[
