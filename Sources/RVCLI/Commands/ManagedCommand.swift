@@ -17,6 +17,8 @@ enum ManagedRun {
         var signingKey: Int?
         var highestSerial: Int?
         var restrictions: [String]?
+        /// Effective dotenv posture, present whenever a dotenv binding exists.
+        var dotenv: String?
     }
 
     /// The installed policy after the anti-rollback check against the user's serial record.
@@ -24,10 +26,10 @@ enum ManagedRun {
         ManagedPolicyLocation.installed.load(serialsIn: RVPolicyPaths.configDirectory(home: home))
     }
 
-    static func status(_ state: ManagedPolicyState, directory: String) -> Status {
+    static func status(_ state: ManagedPolicyState, directory: String, dotenvBoundCount: Int = 0) -> Status {
         switch state {
         case .none:
-            return Status(state: "none", directory: directory)
+            return Status(state: "none", directory: directory, dotenv: dotenvLine(state: state, boundCount: dotenvBoundCount))
         case .invalid(let reason):
             return Status(state: "invalid", directory: directory, reason: reason)
         case .active(let bundle):
@@ -35,14 +37,34 @@ enum ManagedRun {
                 state: "active", directory: bundle.directory, organization: bundle.policy.organization,
                 serial: bundle.policy.serial, sha256: bundle.sha256, signed: bundle.isSigned,
                 signingKey: bundle.signingKey, highestSerial: bundle.highestSerial,
-                restrictions: restrictions(bundle.policy))
+                restrictions: restrictions(bundle.policy),
+                dotenv: dotenvLine(state: state, boundCount: dotenvBoundCount))
         }
+    }
+
+    /// Names dotenv's effective status whenever a binding exists, including
+    /// the default-allow case a fleet would otherwise gain silently.
+    static func dotenvLine(state: ManagedPolicyState, boundCount: Int) -> String? {
+        guard boundCount > 0 else { return nil }
+        let noun = "\(boundCount) dotenv-bound secret\(boundCount == 1 ? "" : "s")"
+        guard let policy = state.policy else {
+            return "dotenv: allowed (no organization policy); \(noun)"
+        }
+        if policy.allowsSecretSource("dotenv") == false {
+            return "dotenv: forbidden; \(noun) will fail closed"
+        }
+        if policy.secrets.allowedSources == nil {
+            return "dotenv: allowed by default (policy does not enumerate allowedSources); \(noun)"
+        }
+        return "dotenv: allowed; \(noun)"
     }
 
     static func statusText(_ status: Status) -> String {
         switch status.state {
         case "none":
-            return "no organization policy installed (\(status.directory))\n"
+            var text = "no organization policy installed (\(status.directory))\n"
+            if let dotenv = status.dotenv { text += "  \(dotenv)\n" }
+            return text
         case "invalid":
             return "organization policy INVALID: \(status.reason ?? "unknown")\n"
                 + "MCP and secret staging are disabled until it is fixed (\(status.directory))\n"
@@ -60,6 +82,7 @@ enum ManagedRun {
             if let highest = status.highestSerial { lines.append("  anti-rollback: highest serial accepted here is \(highest)") }
             let rules = status.restrictions ?? []
             lines += rules.isEmpty ? ["  no restrictions"] : rules.map { "  " + DisplayedText.field($0) }
+            if let dotenv = status.dotenv { lines.append("  " + dotenv) }
             return lines.joined(separator: "\n") + "\n"
         }
     }
@@ -182,8 +205,15 @@ struct ManagedStatus: AsyncParsableCommand {
     func run() throws {
         let ctx = CommandContext.current(command: "managed status", format: format)
         let home = try ctx.requireHome()
+        var dotenvBound = 0
+        if case .success(let configuration) = SecretsConfiguration.load(
+            configDirectory: RVPolicyPaths.configDirectory(home: home))
+        {
+            dotenvBound = configuration.secrets.count { $0.source.kind == "dotenv" }
+        }
         let status = ManagedRun.status(
-            ManagedRun.installed(home: home), directory: ManagedPolicyLocation.installedDirectory)
+            ManagedRun.installed(home: home), directory: ManagedPolicyLocation.installedDirectory,
+            dotenvBoundCount: dotenvBound)
         if ctx.explicitRobot {
             ctx.writeStdout(ManagedRun.robotJSON(status))
         } else {

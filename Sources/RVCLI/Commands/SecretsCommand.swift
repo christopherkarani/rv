@@ -6,6 +6,7 @@ import Glibc
 #endif
 import Foundation
 import RVDomain
+import RVHistory
 import RVIsolation
 import RVPolicy
 
@@ -307,8 +308,110 @@ enum SecretsRun {
         return .success(lines.joined(separator: "\n") + "\n")
     }
 
+    /// Moves dotenv-bound values into the Keychain and rebinds their
+    /// definitions. Value first, config second: every Keychain write and
+    /// read-back verification happens before the single secrets.json write,
+    /// so a failure leaves definitions untouched (orphaned Keychain copies
+    /// are benign and overwritten on retry). By decision D1 this works
+    /// under a dotenv-deny policy (carve-out, audited); it still requires
+    /// keychain to be an allowed source. rv never edits the `.env`.
+    static func harden(
+        names: [String], all: Bool, environment: SecretsEnvironment
+    ) -> Result<(text: String, failed: Bool), CommandFailure> {
+        let current: SecretsConfiguration
+        switch configuration(environment) {
+        case .failure(let failure): return .failure(failure)
+        case .success(let loaded): current = loaded
+        }
+        if let reason = environment.managed.invalidReason {
+            return .failure(CommandFailure("organization policy is invalid: \(reason)"))
+        }
+        if environment.managed.policy?.allowsSecretSource("keychain") == false {
+            return .failure(CommandFailure(
+                "organization policy: keychain sources are not allowed, so there is nowhere to harden to"))
+        }
+        let selected = all ? current.secrets.map(\.name) : names
+        var lines: [String] = []
+        var failed = false
+        var rebound: [String: SecretDefinition] = [:]
+        var events: [AuditEvent] = []
+        for name in selected {
+            guard let definition = current.secret(named: name) else {
+                lines.append("\(DisplayedText.field(name)) is not defined in secrets.json")
+                failed = true
+                continue
+            }
+            guard case .dotenv(let path, _) = definition.source else {
+                if all {
+                    lines.append("skip \(name): reads from \(definition.source.locator) (not dotenv; nothing to harden)")
+                } else {
+                    lines.append("\(DisplayedText.field(name)) reads from \(definition.source.locator); only dotenv sources can be hardened")
+                    failed = true
+                }
+                continue
+            }
+            let value: SecretValue
+            switch environment.resolver.resolve(definition.source) {
+            case .failure(let error):
+                lines.append("could not harden \(name): \(error.message)")
+                failed = true
+                continue
+            case .success(let resolved): value = resolved
+            }
+            guard environment.keychain.store(SecretKeychain.service, name, Data(value.revealed())) else {
+                lines.append("could not harden \(name): could not store \(DisplayedText.field(name)) in the Keychain")
+                failed = true
+                continue
+            }
+            let target = SecretSource.keychain(service: SecretKeychain.service, account: name)
+            switch environment.resolver.resolve(target) {
+            case .success(let readBack) where readBack == value:
+                break
+            default:
+                lines.append("could not harden \(name): the stored Keychain value does not match the .env value; binding left unchanged")
+                failed = true
+                continue
+            }
+            var hardened = definition
+            hardened.source = target
+            rebound[name] = hardened
+            events.append(AuditEvent(
+                time: Date(), kind: .secretUse, decision: .info, subject: name,
+                reason: "dotenv value moved to the Keychain", source: "secrets-harden",
+                detail: [
+                    "event": "hardened",
+                    "from": definition.source.locator,
+                    "to": target.locator,
+                    "verified": "true",
+                ]))
+            lines.append(
+                "hardened \(name): \(definition.source.locator) -> \(target.locator) (delivery unchanged: \(definition.delivery.kind); stored value verified)")
+            if let reason = SecretOrganizationRules.violation(hardened, policy: environment.managed.policy) {
+                lines.append("warning: organization policy: \(reason)")
+            }
+            lines.append("rotation checklist for \(name):")
+            lines.append("  - rotate the value at the provider (the old value is still live in .env)")
+            lines.append("  - remove the \(name) line from \(DisplayedText.field(path)) (rv never edits .env)")
+            lines.append("  - until removed, `rv secrets scan` will keep flagging the unrotated .env")
+        }
+        if rebound.isEmpty == false {
+            var updated = current
+            updated.secrets = updated.secrets.map { rebound[$0.name] ?? $0 }
+            if case .failure(let error) = updated.write(configDirectory: environment.configDirectory) {
+                return .failure(CommandFailure(error.message))
+            }
+            for event in events { _ = AuditLog.append(event, configDirectory: environment.configDirectory) }
+        }
+        if lines.isEmpty { lines.append("no dotenv-bound secrets to harden") }
+        return .success((lines.joined(separator: "\n") + "\n", failed))
+    }
+
     struct ScanReport: Encodable, Equatable {
         var findings: [SecretLeakFinding]
+        /// Findings inside the very `.env` that secret is bound to. Reported
+        /// separately and never fail the gate; any other secret's value in
+        /// the same file, or a copy elsewhere, still flags.
+        var origins: [SecretLeakFinding] = []
         var skipped: [String]
     }
 
@@ -329,7 +432,25 @@ enum SecretsRun {
             case .failure(let error): skipped.append("\(secret.name): \(error.message)")
             }
         }
-        return ScanReport(findings: SecretLeakScanner.scan(root: root, secrets: values), skipped: skipped)
+        let found = SecretLeakScanner.scan(root: root, secrets: values)
+        let resolvedRoot = root.resolvingSymlinksInPath().path
+        var boundPaths: [String: String] = [:]
+        for secret in configuration.secrets {
+            if case .dotenv(let path, _) = secret.source, let canonical = DotenvLiveReader.canonicalPath(path) {
+                boundPaths[secret.name] = canonical
+            }
+        }
+        var findings: [SecretLeakFinding] = []
+        var origins: [SecretLeakFinding] = []
+        for finding in found {
+            let absolute = finding.path.hasPrefix("/") ? finding.path : resolvedRoot + "/" + finding.path
+            if let bound = boundPaths[finding.secret], DotenvLiveReader.canonicalPath(absolute) == bound {
+                origins.append(finding)
+            } else {
+                findings.append(finding)
+            }
+        }
+        return ScanReport(findings: findings, origins: origins, skipped: skipped)
     }
 
     /// Human refusal when `rv secrets scan` is pointed at a file, not a directory.
@@ -338,7 +459,17 @@ enum SecretsRun {
     }
 
     static func scanText(_ report: ScanReport) -> String {
-        var lines = report.findings.map { "\(DisplayedText.field($0.path)):\($0.line)  \($0.secret)" }
+        var lines: [String] = []
+        if report.origins.isEmpty == false {
+            lines.append("origin files (bound .env sources; not failures):")
+            var byPath: [String: Set<String>] = [:]
+            for origin in report.origins { byPath[origin.path, default: []].insert(origin.secret) }
+            for path in byPath.keys.sorted() {
+                let count = byPath[path]?.count ?? 0
+                lines.append("  \(DisplayedText.field(path)) (\(count) secret\(count == 1 ? "" : "s") bound)")
+            }
+        }
+        lines += report.findings.map { "\(DisplayedText.field($0.path)):\($0.line)  \($0.secret)" }
         if report.findings.isEmpty { lines.append("No secret values found.") }
         lines += report.skipped.map { "could not check \($0)" }
         return lines.joined(separator: "\n") + "\n"
@@ -667,7 +798,7 @@ struct Secrets: AsyncParsableCommand {
         abstract: "Manage secrets agents use through placeholders, including .env-backed ones.",
         subcommands: [
             SecretsList.self, SecretsCheck.self, SecretsSet.self, SecretsRemove.self, SecretsScan.self,
-            SecretsDescribe.self, SecretsImport.self, SecretsHook.self,
+            SecretsDescribe.self, SecretsImport.self, SecretsHarden.self, SecretsHook.self,
         ],
         defaultSubcommand: SecretsList.self
     )
@@ -902,6 +1033,42 @@ struct SecretsImport: AsyncParsableCommand {
             case .failure(let failure): try ctx.fail("rv secrets import: \(failure.message)\n")
             case .success(let text): ctx.writeStdout(text)
             }
+        }
+    }
+}
+
+struct SecretsHarden: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "harden",
+        abstract: "Move dotenv-bound values into the Keychain and rebind their definitions.",
+        discussion: """
+            The stored value is read back and compared before anything is
+            rebound. Works under a dotenv-deny organization policy (the
+            migration path out), but requires keychain to be an allowed
+            source. rv never edits the .env: rotate and remove the line
+            yourself. On Linux the Keychain is unavailable, so harden fails.
+            """)
+
+    @Argument(help: "Secret names to harden.") var names: [String] = []
+    @Flag(help: "Harden every dotenv-bound secret.") var all = false
+
+    func validate() throws {
+        if all, names.isEmpty == false {
+            throw ValidationError("pass secret names, or --all, not both")
+        }
+        if all == false, names.isEmpty {
+            throw ValidationError("pass secret names, or --all")
+        }
+    }
+
+    func run() throws {
+        let ctx = CommandContext.current(command: "secrets harden", json: false, robot: false, plain: true, noColor: true)
+        let environment = SecretsEnvironment.live(home: try ctx.requireHome())
+        switch SecretsRun.harden(names: names, all: all, environment: environment) {
+        case .failure(let failure): try ctx.fail("rv secrets harden: \(failure.message)\n")
+        case .success(let result):
+            if result.failed { try ctx.emit(stdout: result.text, exitCode: 1) }
+            else { ctx.writeStdout(result.text) }
         }
     }
 }
