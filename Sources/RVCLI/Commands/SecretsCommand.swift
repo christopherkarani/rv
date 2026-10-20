@@ -59,6 +59,31 @@ enum SecretsRun {
         case environment
     }
 
+    /// Delivery for `rv secrets set`: explicit flags win; otherwise a new
+    /// secret with a well-known name inherits its curated gateway (an
+    /// explicit --placeholder-prefix still overrides the curated prefix).
+    /// Existing secrets and unknown names resolve to nil, preserving the
+    /// established update-value and pass-a-delivery behaviors.
+    static func definitionForSet(
+        name: String, isNew: Bool, gateway: String?, baseURLEnv: String?,
+        placeholderPrefix: String, environment: Bool
+    ) -> (definition: Definition?, note: String?) {
+        if let gateway, let baseURLEnv {
+            return (
+                .gateway(upstream: gateway, baseURLEnv: baseURLEnv, placeholderPrefix: placeholderPrefix), nil)
+        }
+        if environment {
+            return (.environment, nil)
+        }
+        guard isNew, let known = KnownSecretDefaults.gateway(for: name) else { return (nil, nil) }
+        let prefix = placeholderPrefix.isEmpty ? known.placeholderPrefix : placeholderPrefix
+        let definition = Definition.gateway(
+            upstream: known.upstream, baseURLEnv: known.baseURLEnv, placeholderPrefix: prefix)
+        let note =
+            "Using known defaults for \(DisplayedText.field(name)): gateway \(known.upstream) via $\(known.baseURLEnv).\n"
+        return (definition, note)
+    }
+
     static func configuration(_ environment: SecretsEnvironment) -> Result<SecretsConfiguration, CommandFailure> {
         SecretsConfiguration.load(configDirectory: environment.configDirectory).mapError { CommandFailure($0.message) }
     }
@@ -522,8 +547,11 @@ struct SecretsSet: AsyncParsableCommand {
         commandName: "set",
         abstract: "Store a secret value in the Keychain; define it on first use.",
         discussion: """
-            The value is read from a hidden prompt, or from stdin when piped. New secrets need a delivery:
-              rv secrets set OPENAI_API_KEY --gateway https://api.openai.com/v1 --base-url-env OPENAI_BASE_URL
+            The value is read from a hidden prompt, or from stdin when piped. Well-known names
+            (OPENAI_API_KEY, ANTHROPIC_API_KEY, STRIPE_SECRET_KEY, GITHUB_TOKEN, GH_TOKEN) default
+            to their gateway; anything else needs a delivery:
+              rv secrets set OPENAI_API_KEY --resource-profile main
+              rv secrets set ACME_KEY --gateway https://api.acme.com --base-url-env ACME_BASE_URL
               printf %s "$TOKEN" | rv secrets set GH_TOKEN --environment
             """
     )
@@ -537,6 +565,8 @@ struct SecretsSet: AsyncParsableCommand {
     @Flag(help: "Put the real value in the cage environment instead (weaker).") var environment = false
     @Option(name: .customLong("agent"), help: "Only stage for this agent tag (repeatable).") var agents: [String] = []
     @Option(help: "Short description.") var description: String?
+    @Option(name: .customLong("resource-profile"), help: "Wire the secret into this runtime profile (see `rv init`).")
+    var profile: String?
 
     func validate() throws {
         if environment, gateway != nil { throw ValidationError("pass either --gateway or --environment, not both") }
@@ -547,11 +577,27 @@ struct SecretsSet: AsyncParsableCommand {
     func run() throws {
         let ctx = CommandContext.current(command: "secrets set", json: false, robot: false, plain: true, noColor: true)
         let environment = SecretsEnvironment.live(home: try ctx.requireHome())
-        var definition: SecretsRun.Definition?
-        if let gateway, let baseURLEnv {
-            definition = .gateway(upstream: gateway, baseURLEnv: baseURLEnv, placeholderPrefix: placeholderPrefix)
-        } else if self.environment {
-            definition = .environment
+        let configuration: SecretsConfiguration
+        switch SecretsRun.configuration(environment) {
+        case .failure(let failure): try ctx.fail("rv secrets set: \(failure.message)\n")
+        case .success(let loaded): configuration = loaded
+        }
+        let isNew = configuration.secret(named: name) == nil
+        let resolved = SecretsRun.definitionForSet(
+            name: name, isNew: isNew, gateway: gateway, baseURLEnv: baseURLEnv,
+            placeholderPrefix: placeholderPrefix, environment: self.environment)
+        let definition = resolved.definition
+        let inferredNote = resolved.note
+        if let profile {
+            switch RuntimeResourcePolicyStore.load(from: environment.configDirectory) {
+            case .failure(let error):
+                try ctx.fail("rv secrets set: \(RuntimeResourcePolicyFile.message(error))\n")
+            case .success(let policy):
+                if policy.profiles.contains(where: { $0.id == profile }) == false {
+                    try ctx.fail(
+                        "rv secrets set: profile \(DisplayedText.field(profile)) does not exist; run `rv init` to create it\n")
+                }
+            }
         }
         guard let value = SecretsRun.readValue(name: name, stdinIsTTY: isatty(STDIN_FILENO) == 1) else {
             try ctx.fail("rv secrets set: no value read\n")
@@ -561,7 +607,21 @@ struct SecretsSet: AsyncParsableCommand {
             environment: environment)
         {
         case .failure(let failure): try ctx.fail("rv secrets set: \(failure.message)\n")
-        case .success(let text): ctx.writeStdout(text)
+        case .success(var text):
+            if let inferredNote { text = inferredNote + text }
+            if let profile {
+                switch InitRun.attachSecret(
+                    name, profileID: profile, configDirectory: environment.configDirectory)
+                {
+                case .failure(let failure):
+                    text += "warning: stored but not wired into profile \(DisplayedText.field(profile)): \(failure.message)\n"
+                case .success(true):
+                    text += "Wired \(DisplayedText.field(name)) into profile \(DisplayedText.field(profile)).\n"
+                case .success(false):
+                    break
+                }
+            }
+            ctx.writeStdout(text)
         }
     }
 }

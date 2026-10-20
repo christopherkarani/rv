@@ -14,7 +14,7 @@ enum OpenCodeRun {
     /// and provider auth fails inside the cage. Warn instead of failing so
     /// keyless runs (local models, `--help`) keep working.
     static let missingProfileWarning =
-        "rv opencode: no --resource-profile selected; provider credentials are unstaged and agent auth will fail. Pass --resource-profile <id> to stage them (profile IDs are defined in ~/.config/rv/runtime-resources.json).\n"
+        "rv opencode: no --resource-profile selected; provider credentials are unstaged and agent auth will fail. Pass --resource-profile <id> to stage them (profile IDs are defined in ~/.config/rv/runtime-resources.json). Run `rv init` in the project to generate one.\n"
 
     static func resolveExecutable(
         _ explicit: String?,

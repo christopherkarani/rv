@@ -17,6 +17,7 @@ public struct RV: AsyncParsableCommand {
             Service.self,
             Hook.self,
             Setup.self,
+            Init.self,
             Uninstall.self,
             Doctor.self,
             AllowOnceCommand.self,
