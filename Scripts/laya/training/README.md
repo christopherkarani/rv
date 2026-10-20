@@ -249,3 +249,94 @@ Caveats: 2,139/20,849 v1.1 commands contain embedded newlines, so
 identically, not split on the first newline); the 12 within-v1.1
 disagreements kept the stricter label per the ticket rule, so a handful
 of genuine context-dependent allows are currently taught as review.
+
+## Results (Ticket 4b — full Laya fine-tune on v2, measured 2026-10-20)
+
+`finetune.py` (new; `train_head.py` and both `prepare_*` untouched) runs
+three arms on dataset v2 (train `d8e153ea` 19,763 rows / validation
+`5cd0c2b0` 1,086 rows, both hashes verified) and grades them on 6 sets:
+v2 validation, shell, incidents, ko, adversarial, plus ss11test (v1.1
+test POSIX rows, 803, serialized with `prepare_data_v2.serialize`;
+ask→review, deny→block). Metrics = Ticket 2 definitions (exact forgives
+review-expected→block; held/kept as before). All evals argmax; no
+exam-driven tuning of any kind.
+
+- ARM A (fine-tune): encoder fully trainable (306,939,648 params) +
+  mean-pool + Linear 768→3 (2,307 params). CE with inverse-frequency
+  weights N/(C·n_c) = [0.7464, 1.5756, 0.9751]. Param-group choice:
+  AdamW encoder lr 1e-5, head lr 5e-4, weight_decay 0.01, no scheduler.
+  Batch 16, 3 epochs, best-validation kept (exact count, tie-break
+  lower val loss). Seeds torch+numpy+random = 13. Device MPS.
+- ARM B (control): Ticket 2 pipeline retrained on v2 (frozen-encoder
+  embeddings over context-bearing texts, shared cache extended with
+  v2train/v2val/ss11test splits; v1 cache files untouched). LR 863/1086
+  (79.5%) vs MLP 950/1086 (87.5%) → MLP shipped (>5pt rule).
+- ARM C (measuring stick, NOT a ship candidate): TF-IDF
+  char_wb(3,5)40k+word(1,2)20k + LogReg(C=4) on v2 "text".
+
+```
+[arm_a] validation  exact 1050/1086 (96.7%) | held 618/633 (97.6%) | kept 445/453 (98.2%)
+[arm_a] shell       exact 69/71 (97.2%)     | held 36/36 (100.0%)  | kept 33/35 (94.3%)
+[arm_a] incidents   exact 16/17 (94.1%)     | held 12/13 (92.3%)   | kept n/a (0 rows)
+[arm_a] ko          exact 24/30 (80.0%)     | held 17/21 (81.0%)   | kept 8/9 (88.9%)
+[arm_a] adversarial exact 29/30 (96.7%)     | held 18/19 (94.7%)   | kept 11/11 (100.0%)
+[arm_a] ss11test    exact 768/803 (95.6%)   | held 460/468 (98.3%) | kept 313/335 (93.4%)
+[arm_b] validation  exact 950/1086 (87.5%)  | held 563/633 (88.9%) | kept 406/453 (89.6%)
+[arm_b] shell       exact 69/71 (97.2%)     | held 35/36 (97.2%)   | kept 34/35 (97.1%)
+[arm_b] incidents   exact 15/17 (88.2%)     | held 11/13 (84.6%)   | kept n/a (0 rows)
+[arm_b] ko          exact 24/30 (80.0%)     | held 20/21 (95.2%)   | kept 5/9 (55.6%)
+[arm_b] adversarial exact 27/30 (90.0%)     | held 17/19 (89.5%)   | kept 10/11 (90.9%)
+[arm_b] ss11test    exact 689/803 (85.8%)   | held 416/468 (88.9%) | kept 291/335 (86.9%)
+[arm_c] validation  exact 1019/1086 (93.8%) | held 594/633 (93.8%) | kept 447/453 (98.7%)
+[arm_c] shell       exact 68/71 (95.8%)     | held 36/36 (100.0%)  | kept 32/35 (91.4%)
+[arm_c] incidents   exact 15/17 (88.2%)     | held 11/13 (84.6%)   | kept n/a (0 rows)
+[arm_c] ko          exact 22/30 (73.3%)     | held 13/21 (61.9%)   | kept 9/9 (100.0%)
+[arm_c] adversarial exact 28/30 (93.3%)     | held 17/19 (89.5%)   | kept 11/11 (100.0%)
+[arm_c] ss11test    exact 758/803 (94.4%)   | held 451/468 (96.4%) | kept 316/335 (94.3%)
+[ablation:arm-a] validation command-only exact 1043/1086 (96.0%) (with-context 1050/1086; delta -7)
+[ablation:arm-a] ss11test    command-only exact 759/803 (94.5%)  (with-context 768/803; delta -9)
+```
+
+Winner rule (literal): shell held≥33 AND kept≥33 (36/36 && 33/35 ✓)
+AND adversarial held≥17/19 (18/19 ✓) AND beats ARM B on validation
+exact (1050 vs 950 ✓) → **FT-WINS** on all three legs.
+
+Context ablation (ARM A): stripping context costs -7 validation / -9
+ss11test exact, concentrated in held (-18 val, -21 ss11test) while kept
+barely moves (+2 val, +8 ss11test stripped). Context IS used, mostly to
+catch dangerous commands rather than to save benign ones.
+
+Training: MPS, 3 epochs, best epoch 3, wall 18,881 s (~5.2 h on a
+heavily contended laptop; per-epoch 58/106/151 min), peak MPS 4,947 MB.
+Train loss 0.4013→0.1295→0.0588, val loss 0.2602→0.1778→0.1546, val
+exact 996→1033→1050. Val loss still falling at epoch 3.
+
+ONNX: `/tmp/laya-train/ft/model.onnx` (+ 1.1 GB `.data`), opset 18,
+single graph, int64 input_ids+attention_mask in, [B,3] logits out,
+dynamic batch+seq. ORT verify on 20 val rows: max |logit diff|
+3.386e-05 (< 1e-3 gate); batch-1 shape check 1.168e-05.
+
+Leakage (L4): normalized exam commands vs 16,658 train cmd norms +
+19,633 train text norms — 0 hits on all 5 sets (shell 0/71, incidents
+0/17, ko 0/30, adversarial 0/30, ss11test 0/745). PASS.
+
+Baselines (this README): stock Laya shell 23/36 held, 19/35 kept ·
+TF-IDF v1 round1 33/36, 33/35 (2b: 36/36, 33/35) · frozen head v1data
+round1 28/36 (2b: 34/36). ARM A shell 36/36 + 33/35 matches the best
+prior coverage with equal kept — the first neural arm to do so.
+
+Residuals: ARM A's only 2 shell errors are the known `git add -A` pair
+(allow→block, p 0.9996 / 0.8928) — the 2b hard negatives did not cure
+it and full fine-tuning did not either. ARM B ko kept collapsed to 5/9
+(trigger-happy MLP); ARM A holds 8/9. Run: `cd Scripts/laya/training
+&& PYTHONPATH=/tmp/laya-pylibs:/tmp/laya-torchlibs HF_HUB_DISABLE_XET=1
+/tmp/laya-venv/bin/python finetune.py` (exit 0; ~90 s warm via caches).
+Implementation note: the script ends `main()` with an explicit
+flush + `os._exit(rc)` because the ORT/MPS native teardown segfaults
+during interpreter shutdown after all work and verification complete;
+errors inside `main()` still propagate with traceback + nonzero exit.
+Artifacts under `/tmp/laya-train/ft/`: `best_model.pt` (1.1 GB
+state_dict), `config.json`, `tokenizer.json` + `tokenizer_config.json`
+(copied), `model.onnx` (+ `.data`), `arm_b_head.joblib`,
+`arm_c_tfidf.joblib`, `metrics.json` (every printed number; self-check
+PASS). No commits; `train_head.py` / `prepare_*` untouched.

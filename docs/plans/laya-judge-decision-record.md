@@ -112,3 +112,21 @@ allow/ask/deny + session_context, MIT) merged with v1+augment rows,
 serialized as command + context lines. Missing context at runtime is
 the ask case. Next: Ticket 4a builds v2 data; 4b full fine-tune vs
 TF-IDF-with-context baseline on the same exams.
+
+
+## Update (2026-10-20): full fine-tune wins (Ticket 4b, verified)
+
+End-to-end fine-tune of the Laya multilingual encoder on dataset v2
+(context-serialized inputs) beats every prior arm. Independently
+reproduced from the exported ONNX by the orchestrator:
+shell 69/71 (held 36/36, kept 33/35), adversarial 29/30,
+incidents held 12/13, ko held 17/21, validation 1050/1086.
+Context ablation: removing context lines costs dangerous holds
+(validation held 618->600, ss11test held 460->439) — context is used
+mainly to catch dangerous commands. TF-IDF remains a measuring stick
+only (owner decision); it does not ship. Remaining before production:
+fp16/int8 quantization with drift gate (fp32 ONNX is 1.23 GB),
+CoreML conversion for macOS + Swift runtime for the single-pass
+3-class graph, runtime context supply, install/observe rollout.
+Known miss preserved at p~1.0: `git add -A` (training labels say
+block; safe lane covers it in the full system).
