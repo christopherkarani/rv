@@ -60,6 +60,14 @@ guard observe-only: packs and judge evaluate and log the would-be verdict
 Design and measured numbers: `docs/plans/laya-guard-model-plan.md` and
 `docs/plans/laya-judge-decision-record.md`.
 
+Session file-tracking feeds the judge `agent-touched` context: hook
+Edit/Write allows and shell commands that create/write files are
+remembered per agent session (keyed by session id + workspace, 30-minute
+TTL, memory only — a daemon restart forgets), and the fine-tuned judge
+scores later shell commands with those paths. Session-less callers keep
+v1 behavior. CLI one-shot invocations use a per-process store that starts
+empty, so touched context accrues through the daemon hook path.
+
 ## What it does
 
 | | |
