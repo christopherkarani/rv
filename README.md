@@ -43,15 +43,21 @@ RV searches absolute `PATH` directories for OpenCode, or accepts `--executable /
 
 ## Laya judge + observe mode
 
-With a Laya weights bundle installed at
-`~/.config/rv/models/laya-multilingual-coreml`, commands the packs allow
-are also judged by the local Laya classifier (allow / ask / deny with a
-risk score, CoreML on macOS). The judge can only raise a verdict, never
-lower a pack deny. `"guard.mode": "observe"` in
-`~/.config/rv/config.json` turns the whole guard observe-only: packs and
-judge evaluate and log the would-be verdict (hash only, in
-`judge-log.jsonl`), nothing blocks. Default is `enforce`. Design and
-measured numbers: `docs/plans/laya-guard-model-plan.md` and
+With a Laya weights bundle installed, commands the packs allow are also
+judged by the local Laya classifier (allow / ask / deny with a risk
+score, CoreML on macOS). The judge can only raise a verdict, never lower
+a pack deny. The production judge is the fine-tuned single-pass model,
+installed at `~/.config/rv/models/laya-ft-v2-coreml` (copy the
+`model.mlpackage` + `tokenizer.json` + `config.json` bundle there; weights
+are never committed to the repo). `"judge.engine": "ft"` (default) uses
+it; `"laya"` forces the stock three-question judge at
+`~/.config/rv/models/laya-multilingual-coreml` instead.
+`RV_JUDGE_ENGINE` overrides the config file. With no explicit engine the
+fine-tuned bundle is used whenever it validates, else stock.
+`"guard.mode": "observe"` in `~/.config/rv/config.json` turns the whole
+guard observe-only: packs and judge evaluate and log the would-be verdict
+(hash only, in `judge-log.jsonl`), nothing blocks. Default is `enforce`.
+Design and measured numbers: `docs/plans/laya-guard-model-plan.md` and
 `docs/plans/laya-judge-decision-record.md`.
 
 ## What it does

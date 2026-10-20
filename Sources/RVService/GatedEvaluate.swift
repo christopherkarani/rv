@@ -275,7 +275,7 @@ public struct GatedEvaluate: Sendable {
             }
             return JudgeRuntime.observe(
                 wouldBe: wouldBe, command: request.command, home: home,
-                provenance: request.provenance, now: now
+                provenance: request.provenance, now: now, cwd: cwd
             )
         }
         let result = evaluateWithSemantics(request, cwd: cwd, home: home, now: now)
@@ -326,7 +326,7 @@ public struct GatedEvaluate: Sendable {
                 boundReview: scriptHit.boundReview
             )
         }
-        judged = JudgeRuntime.apply(to: judged, command: request.command, home: home, provenance: request.provenance, now: now)
+        judged = JudgeRuntime.apply(to: judged, command: request.command, home: home, provenance: request.provenance, now: now, cwd: cwd)
         if verb.recordsDenial {
             recordDenialIfNeeded(judged, path: nil, home: home, host: host, tool: tool, now: now)
         }

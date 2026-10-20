@@ -51,13 +51,24 @@ public enum DoctorSnapshotBuilder {
     }
 
     /// Degraded guard visibility: judge state is reported, never assumed.
+    /// Names the resolved engine plus the bundle dir actually in use, or
+    /// the selected engine plus where its bundle should be installed.
     private static func judgeCheck() -> DoctorCheck {
         let home = HomeDirectory.process()
         let mode = JudgeRuntime.guardMode(home: home)
-        if let bundle = JudgeRuntime.bundleDir(home: home) {
-            return DoctorCheck(id: .judge, status: .ok, message: "laya judge on (guard \(mode.rawValue)), bundle \(bundle.lastPathComponent)")
+        if let resolved = JudgeRuntime.resolvedJudge(home: home) {
+            return DoctorCheck(
+                id: .judge, status: .ok,
+                message: "laya-\(resolved.engine.rawValue) judge on (guard \(mode.rawValue)), bundle \(resolved.bundle.path)"
+            )
         }
-        return DoctorCheck(id: .judge, status: .skipped, message: "no laya bundle installed; packs only (guard \(mode.rawValue))")
+        let engine = JudgeRuntime.selectedEngine(home: home)
+        let expected = JudgeRuntime.expectedBundleDir(engine: engine, home: home)?.path
+            ?? engine.rawValue
+        return DoctorCheck(
+            id: .judge, status: .skipped,
+            message: "no \(engine.rawValue) bundle installed at \(expected); packs only (guard \(mode.rawValue))"
+        )
     }
 
     private static var dayOnePacksLoadedMessage: String {
